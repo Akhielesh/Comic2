@@ -26,7 +26,30 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
 /** 'admin' = a parent's short-lived control connection (never in presence). */
 export type MonMode = 'camera' | 'viewer' | 'admin';
-export type BabyState = 'calm' | 'stirring' | 'crying' | 'noisy';
+export type BabyState = 'calm' | 'stirring' | 'awake' | 'noisy' | 'fussing' | 'crying';
+const BABY_STATES: BabyState[] = ['calm', 'stirring', 'awake', 'noisy', 'fussing', 'crying'];
+
+/** Sound categories the camera's on-device detector reports (mirror of live/monitor/soundClasses.ts). */
+export type SoundCat = 'cry' | 'fuss' | 'cough' | 'alarm' | 'crash' | 'loud' | 'babble' | 'laugh' | 'voices' | 'music' | 'dog';
+const SOUND: Record<SoundCat, { headline: string; push: boolean; gapMs: number; ends?: boolean }> = {
+  cry: { headline: '{baby} is crying', push: true, gapMs: 20_000, ends: true },
+  fuss: { headline: '{baby} is fussing', push: true, gapMs: 60_000, ends: true },
+  cough: { headline: '{baby} is coughing', push: true, gapMs: 60_000 },
+  alarm: { headline: 'Alarm sounding in the nursery — check for smoke or CO', push: true, gapMs: 30_000 },
+  crash: { headline: 'Loud bang or crash in the nursery', push: true, gapMs: 60_000 },
+  loud: { headline: 'Loud sound in the nursery', push: true, gapMs: 5 * 60_000 },
+  babble: { headline: '{baby} is awake and babbling', push: false, gapMs: 10 * 60_000 },
+  laugh: { headline: '{baby} is laughing', push: false, gapMs: 10 * 60_000 },
+  voices: { headline: 'Someone is talking in the nursery', push: false, gapMs: 15 * 60_000 },
+  music: { headline: 'Music or TV playing in the nursery', push: false, gapMs: 30 * 60_000 },
+  dog: { headline: 'Dog barking near the nursery', push: false, gapMs: 5 * 60_000 },
+};
+const isSoundCat = (v: unknown): v is SoundCat => typeof v === 'string' && v in SOUND;
+
+/** Background-alert categories a device can opt into (and their defaults). */
+const PUSH_KINDS = ['cry', 'fuss', 'cough', 'alarm', 'crash', 'loud', 'offline', 'battery'] as const;
+type PushKind = (typeof PUSH_KINDS)[number];
+const PUSH_DEFAULTS: Record<PushKind, boolean> = { cry: true, fuss: false, cough: true, alarm: true, crash: true, loud: false, offline: true, battery: true };
 
 export interface MonEnv extends SupabaseEnv {
   MONITOR_ROOM: DurableObjectNamespace;
@@ -61,22 +84,35 @@ export interface CamStatus {
   charging: boolean | null;
   soothing: string | null;
   cry: number;
+  /** Most important sound right now + what the AI hears (top 3, 0–100). */
+  sound: SoundCat | null;
+  conf: number;
+  top: [SoundCat, number][];
+  model: 'off' | 'loading' | 'ready' | 'failed';
+  paused: 'privacy' | 'interrupted' | null;
+  talk: string | null;
+  call: string | null;
 }
 
 export interface MonLog {
   id: string;
   at: number;
-  kind: 'cry' | 'cry_end' | 'noise' | 'motion' | 'offline' | 'online' | 'battery' | 'feed' | 'diaper' | 'sleep' | 'wake' | 'note' | 'ack' | 'soothe' | 'camera' | 'people';
+  kind:
+    | SoundCat
+    | 'cry_end' | 'fuss_end' | 'noise' | 'motion' | 'offline' | 'online' | 'battery' | 'privacy' | 'call'
+    | 'feed' | 'diaper' | 'sleep' | 'wake' | 'note' | 'ack' | 'soothe' | 'camera' | 'people';
   msg: string;
   by?: string;
   dev?: string;
+  secs?: number;
+  conf?: number;
 }
 
 interface PushRec {
   sub: PushSubscriptionJSONLike;
   uid: string;
   name: string;
-  prefs: { cry: boolean; offline: boolean; battery: boolean; noise: boolean };
+  prefs: Record<string, boolean>;
   at: number;
 }
 
@@ -102,8 +138,11 @@ const FRAME_MAX = 8 * 1024;
 const RTC_FRAME_MAX = 64 * 1024;
 const SNAPSHOT_MAX = 256 * 1024;
 const SNAPSHOT_MIN_GAP_MS = 250;
-const STATE_RANK: Record<BabyState, number> = { calm: 1, stirring: 2, noisy: 3, crying: 4 };
-const PUSH_COOLDOWN_MS: Record<string, number> = { offline: 5 * 60_000, battery: 30 * 60_000, noise: 10 * 60_000 };
+const STATE_RANK: Record<BabyState, number> = { calm: 1, stirring: 2, awake: 2, noisy: 3, fussing: 4, crying: 5 };
+const PUSH_COOLDOWN_MS: Record<string, number> = {
+  alarm: 60_000, fuss: 10 * 60_000, cough: 10 * 60_000, crash: 10 * 60_000, loud: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000,
+};
+const PUSH_URGENT = new Set(['cry', 'alarm', 'offline']);
 const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
 const VAPID_SUBJECT = 'https://dreamstreamstudio.ai';
 
@@ -123,6 +162,7 @@ export class MonitorRoom {
   private lastStatus = new Map<string, { st: CamStatus; at: number }>();
   private lastSnapAt = new Map<string, number>();
   private lastStatusAt = new Map<string, number>();
+  private lastSoundAt = new Map<string, number>();
   private curBucket: { t: number; s: number; cry: number } | null = null;
   private lastBucketSave = 0;
   private vapid: VapidKeys | null = null;
@@ -494,7 +534,13 @@ export class MonitorRoom {
     if (now - (this.lastStatusAt.get(a.dev) ?? 0) < 800) return;
     this.lastStatusAt.set(a.dev, now);
     const s = (msg.st ?? {}) as Record<string, unknown>;
-    const state: BabyState = (['calm', 'stirring', 'crying', 'noisy'] as const).includes(s.state as BabyState) ? (s.state as BabyState) : 'calm';
+    const state: BabyState = BABY_STATES.includes(s.state as BabyState) ? (s.state as BabyState) : 'calm';
+    const top = Array.isArray(s.top)
+      ? (s.top as unknown[])
+          .filter((x): x is [SoundCat, number] => Array.isArray(x) && isSoundCat(x[0]))
+          .slice(0, 3)
+          .map(([c, v]) => [c, Math.round(num(v, 0, 100))] as [SoundCat, number])
+      : [];
     const st: CamStatus = {
       state,
       level: Math.round(num(s.level, 0, 90)),
@@ -504,6 +550,13 @@ export class MonitorRoom {
       charging: s.charging == null ? null : Boolean(s.charging),
       soothing: s.soothing ? clip(s.soothing, 20) : null,
       cry: Math.round(num(s.cry, 0, 100)),
+      sound: isSoundCat(s.sound) ? s.sound : null,
+      conf: Math.round(num(s.conf, 0, 100)),
+      top,
+      model: s.model === 'loading' || s.model === 'ready' || s.model === 'failed' ? s.model : 'off',
+      paused: s.paused === 'privacy' || s.paused === 'interrupted' ? s.paused : null,
+      talk: s.talk ? clip(s.talk, 80) : null,
+      call: s.call ? clip(s.call, 60) : null,
     };
     this.lastStatus.set(a.dev, { st, at: now });
     this.broadcast({ t: 'status', dev: a.dev, sid: a.sid, st, at: now }, (x) => x.mode === 'viewer');
@@ -551,6 +604,11 @@ export class MonitorRoom {
     const meta = (await this.state.storage.get<{ name: string; baby: string | null }>('meta')) ?? { name: 'Nursery', baby: null };
     const who = meta.baby || 'Baby';
     const where = a.dn || 'Camera';
+    if (kind === 'sound') return this.onSoundEvent(a, msg, meta, who, where);
+    if (kind === 'privacy') {
+      await this.addLog({ kind: 'privacy', msg: msg.on ? `Video paused for privacy on ${where} — sound monitoring continues` : `Video resumed on ${where}`, dev: a.dev });
+      return;
+    }
     if (kind === 'cry') {
       const entry = await this.addLog({ kind: 'cry', msg: `${who} is crying · ${where}`, dev: a.dev });
       await this.pushAlert('cry', { title: `${who} is crying`, body: `${meta.name} · ${where} — tap to check in`, entryId: entry.id }, a.dev);
@@ -559,7 +617,7 @@ export class MonitorRoom {
       await this.addLog({ kind: 'cry_end', msg: `${who} settled${secs ? ` after ${secs >= 60 ? `${Math.round(secs / 60)} min` : `${secs}s`}` : ''}`, dev: a.dev });
     } else if (kind === 'noise') {
       const entry = await this.addLog({ kind: 'noise', msg: `Loud sound in ${meta.name} · ${where}`, dev: a.dev });
-      await this.pushAlert('noise', { title: 'Loud sound in the nursery', body: `${meta.name} · ${where}`, entryId: entry.id }, a.dev);
+      await this.pushAlert('loud', { title: 'Loud sound in the nursery', body: `${meta.name} · ${where}`, entryId: entry.id }, a.dev);
     } else if (kind === 'motion') {
       await this.addLog({ kind: 'motion', msg: `${who} is moving around · ${where}`, dev: a.dev });
     } else if (kind === 'battery') {
@@ -569,6 +627,29 @@ export class MonitorRoom {
     } else if (kind === 'soothe') {
       await this.addLog({ kind: 'soothe', msg: clip(msg.msg, 120) || `Soothing sounds on ${where}`, dev: a.dev });
     }
+  }
+
+  /** On-device sound detection: start/end of a category (see live/monitor/soundBrain.ts). */
+  private async onSoundEvent(a: Attach, msg: Record<string, unknown>, meta: { name: string; baby: string | null }, who: string, where: string): Promise<void> {
+    if (!a.dev || !isSoundCat(msg.cat)) return;
+    const cat = msg.cat;
+    const info = SOUND[cat];
+    const conf = Math.round(num(msg.conf, 0, 100));
+    if (msg.phase === 'end') {
+      if (!info.ends) return;
+      const secs = Math.round(num(msg.secs, 0, 7200));
+      const dur = secs >= 60 ? `${Math.round(secs / 60)} min` : `${secs}s`;
+      await this.addLog({ kind: cat === 'cry' ? 'cry_end' : 'fuss_end', msg: `${who} settled${secs ? ` after ${dur} of ${cat === 'cry' ? 'crying' : 'fussing'}` : ''}`, dev: a.dev, secs });
+      return;
+    }
+    // A misbehaving camera can't flood the log or everyone's phones.
+    const key = `${a.dev}:${cat}`;
+    const now = Date.now();
+    if (now - (this.lastSoundAt.get(key) ?? 0) < info.gapMs) return;
+    this.lastSoundAt.set(key, now);
+    const title = info.headline.replace('{baby}', who);
+    const entry = await this.addLog({ kind: cat, msg: `${title} · ${where}`, dev: a.dev, conf });
+    if (info.push) await this.pushAlert(cat as PushKind, { title, body: `${meta.name} · ${where} — tap to check in`, entryId: entry.id }, a.dev);
   }
 
   private async onLog(a: Attach, msg: Record<string, unknown>): Promise<void> {
@@ -591,13 +672,15 @@ export class MonitorRoom {
   /** Remote controls for a camera device: soothing sounds, quality, lens. */
   private onCmd(a: Attach, msg: Record<string, unknown>): void {
     const c = String(msg.c ?? '');
-    const allowed = new Set(['soothe', 'soothe_stop', 'quality', 'flip', 'talk']);
+    const allowed = new Set(['soothe', 'soothe_stop', 'quality', 'flip', 'talk', 'video']);
     if (!allowed.has(c)) return;
     if (a.role === 'viewer' && c !== 'quality') return;
     const to = clip(msg.to, 20);
     for (const s of this.authed()) {
       if (s.a.sid === to && s.a.mode === 'camera') {
-        this.send(s.ws, { t: 'cmd', c, v: msg.v ?? null, from: a.sid, by: a.label || a.name });
+        const v = (msg.v ?? null) as Record<string, unknown> | null;
+        this.send(s.ws, { t: 'cmd', c, v, from: a.sid, by: a.label || a.name });
+        if (c === 'video' && v?.on) void this.addLog({ kind: 'call', msg: `${a.label || a.name} video-called ${s.a.dn || 'the nursery'}`, by: a.name, dev: s.a.dev });
         return;
       }
     }
@@ -629,7 +712,12 @@ export class MonitorRoom {
       sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } },
       uid: a.uid!,
       name: a.name || 'Member',
-      prefs: { cry: p.cry !== false, offline: p.offline !== false, battery: p.battery !== false, noise: p.noise === true },
+      prefs: Object.fromEntries(
+        PUSH_KINDS.map((k) => {
+          const v = k === 'loud' && p.loud === undefined ? p.noise : p[k];
+          return [k, typeof v === 'boolean' ? v : PUSH_DEFAULTS[k]];
+        }),
+      ),
       at: Date.now(),
     };
     const all = ((await this.state.storage.get<PushRec[]>('push')) ?? []).filter((r) => r.sub.endpoint !== rec.sub.endpoint);
@@ -659,12 +747,12 @@ export class MonitorRoom {
   }
 
   /** Alert everyone who opted in, with per-kind cooldowns so a long cry doesn't spam. */
-  private async pushAlert(kind: 'cry' | 'offline' | 'battery' | 'noise', note: { title: string; body: string; entryId: string }, dev?: string): Promise<void> {
+  private async pushAlert(kind: PushKind, note: { title: string; body: string; entryId: string }, dev?: string): Promise<void> {
     const now = Date.now();
     const key = `${kind}:${dev ?? '-'}`;
     const last = (await this.state.storage.get<Record<string, number>>('lastPush')) ?? {};
     const settings = await this.settings();
-    const cooldown = kind === 'cry' ? settings.cryRepeatMin * 60_000 : PUSH_COOLDOWN_MS[kind];
+    const cooldown = kind === 'cry' ? settings.cryRepeatMin * 60_000 : PUSH_COOLDOWN_MS[kind] ?? 10 * 60_000;
     if (now - (last[key] ?? 0) < cooldown) return;
     last[key] = now;
     await this.state.storage.put('lastPush', last);
@@ -677,12 +765,12 @@ export class MonitorRoom {
     const gone = new Set<string>();
     await Promise.all(
       subs
-        .filter((r) => r.prefs[kind])
+        .filter((r) => r.prefs[kind] ?? (kind === 'loud' ? r.prefs.noise : undefined) ?? PUSH_DEFAULTS[kind])
         .map(async (r) => {
           const out = await sendWebPush(r.sub, payload, keys, {
             subject: VAPID_SUBJECT,
-            urgency: kind === 'noise' ? 'normal' : 'high',
-            ttlSec: kind === 'cry' ? 300 : 1800,
+            urgency: PUSH_URGENT.has(kind) || kind === 'cough' || kind === 'crash' ? 'high' : 'normal',
+            ttlSec: kind === 'cry' || kind === 'alarm' ? 300 : 1800,
             topic: `${kind}${(nid ?? '').slice(0, 8)}`,
           });
           if (out === 'gone') gone.add(r.sub.endpoint);

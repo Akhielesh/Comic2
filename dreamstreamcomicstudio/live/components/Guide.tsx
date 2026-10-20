@@ -44,19 +44,25 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'monitor-new', title: 'More nurseries', body: 'Grandparents’ house? Daycare? Add up to five.' },
   ],
   nursery: [
-    { target: 'hub-actions', title: 'Camera or viewer', body: 'On the phone in the nursery tap “Be the camera”. On your own phone or laptop tap “Watch”.' },
+    { target: 'hub-checklist', title: 'Your setup checklist', body: 'Five steps from zero to a fully covered nursery. Each has a button that takes you straight there, and they tick off as you go.' },
+    { target: 'hub-actions', title: 'Camera or viewer', body: 'On the phone that stays in the nursery tap “Be the camera”. On your own phone or laptop tap “Watch”.' },
     { target: 'device-name', title: 'Name this device', body: 'So everyone knows which camera is which (“Crib iPhone”, “Playroom tablet”).' },
     { target: 'people', title: 'People & roles', body: 'Search people by name to add them, then pick a role — Parent, Caregiver or Viewer — and how they appear (Grandma, Nanny…). Removing someone cuts them off immediately.' },
   ],
   watch: [
-    { target: 'mv-stage', title: 'Live nursery view', body: 'Tap “hear the nursery” to unmute. Night view brightens dark rooms. If your network blocks direct video, it falls back to a low-bandwidth snapshot mode automatically.' },
-    { target: 'mv-status', title: 'Is the baby alright?', body: 'Calm, stirring, noisy or crying — analyzed on the camera phone from sound and motion — plus how long it’s been that way, battery and room light.' },
-    { target: 'mv-talk', title: 'Talk & soothe', body: 'Talk through the camera phone’s speaker, or play shush, white noise, rain, ocean or a heartbeat for 15–60 minutes.' },
-    { target: 'mv-alerts', title: 'Alerts', body: 'Turn alerts on and you’ll be notified of crying or an offline camera even with the app closed. On iPhone, add Stream Studio to your Home Screen first.' },
-    { target: 'mv-timeline', title: 'Tracking', body: 'A 24-hour picture of calm vs. crying, plus quick logs for feeds, diapers and naps — shared with everyone in the nursery.' },
+    { target: 'mv-stage', title: 'Live nursery view', body: 'Tap Listen (or “Tap to hear”) to unmute. The frame glows in the alert’s colour when something needs you. Night view (moon) brightens dark rooms.' },
+    { target: 'mv-talk', title: 'Talk — like FaceTime', body: 'Tap to open your mic and tap again to stop, or press and hold to talk only while holding. Your voice plays on the nursery phone; it won’t trigger a cry alert.' },
+    { target: 'mv-call', title: 'Video call the nursery', body: 'Shows your face full-screen on the nursery phone (best when it uses its front camera). Your mic turns on with it.' },
+    { target: 'mv-status', title: 'What’s happening now', body: 'Mood, what the smart ears are hearing right now, and the last 2 minutes of sound — all analysed on the camera phone.' },
+    { target: 'mv-activity', title: 'Activity log', body: 'Every cry (and how long it lasted), cough, wake-up, feed and note. Filter by Baby sounds, Alerts, Care or Camera.' },
+    { target: 'mv-alerts', title: 'Alerts your way', body: 'Background notifications per category, plus alert sounds, spoken alerts and vibration while this screen is open. Tap Preview to hear each sound.' },
+    { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
   ],
   camera: [
-    { title: 'Camera phone tips', body: 'Prop it 1–2 m from the crib, plugged in, on Wi-Fi. Keep this page open; dim the screen if the light bothers the baby. Everyone watching is listed on screen.' },
+    { title: 'Make this the nursery camera', body: 'Frame the crib, let the checks turn green, then start. It works like a private FaceTime call: live to your family, never recorded.' },
+    { target: 'cam-lens', title: 'Pick the lens', body: 'Back camera is the sharpest. Ultra wide fits the whole crib. Front lets your baby see you during a video call.' },
+    { target: 'cam-checks', title: 'Automatic checks', body: 'Microphone, smart sound detection, light, power and network. Clap once to test the mic. Only checks that need attention are shown.' },
+    { target: 'cam-start', title: 'Start monitoring', body: 'Prop it 1–2 m from the crib, plugged in. The screen dims itself after 90 s — keep this page open; everyone is alerted if it stops.' },
   ],
 };
 
@@ -76,10 +82,12 @@ const markSeen = (id: TourId) => {
 
 /* ------------------------------------------------------------ controller */
 
-type Listener = (cmd: { tour?: TourId; help?: boolean }) => void;
+type Listener = (cmd: { tour?: TourId; help?: boolean; guide?: string }) => void;
 let listener: Listener | null = null;
 export const startTour = (tour: TourId) => listener?.({ tour });
 export const openHelp = () => listener?.({ help: true });
+/** Open Help straight on a how-to guide (e.g. 'setup'). */
+export const openGuide = (guide: string) => listener?.({ help: true, guide });
 
 /** Auto-start a tour once per device, after the screen has painted. */
 export function useFirstVisitTour(id: TourId, ready = true): void {
@@ -93,10 +101,14 @@ export function useFirstVisitTour(id: TourId, ready = true): void {
 export function GuideHost({ screenTour }: { screenTour: TourId | null }) {
   const [tour, setTour] = useState<TourId | null>(null);
   const [help, setHelp] = useState(false);
+  const [guide, setGuide] = useState<string | null>(null);
 
   useEffect(() => {
     listener = (cmd) => {
-      if (cmd.help) setHelp(true);
+      if (cmd.help) {
+        setGuide(cmd.guide ?? null);
+        setHelp(true);
+      }
       if (cmd.tour) {
         setHelp(false);
         setTour(cmd.tour);
@@ -110,7 +122,7 @@ export function GuideHost({ screenTour }: { screenTour: TourId | null }) {
   return (
     <>
       {tour && <TourOverlay id={tour} onDone={() => { markSeen(tour); setTour(null); }} />}
-      {help && <HelpPanel screenTour={screenTour} onClose={() => setHelp(false)} />}
+      {help && <HelpPanel screenTour={screenTour} initialGuide={guide} onClose={() => setHelp(false)} />}
     </>
   );
 }
@@ -205,6 +217,133 @@ function TourOverlay({ id, onDone }: { id: TourId; onDone: () => void }) {
   );
 }
 
+/* -------------------------------------------------------------- guides */
+
+interface GuideStep {
+  title: string;
+  body: string;
+}
+
+interface HowTo {
+  id: string;
+  title: string;
+  icon: string;
+  mins: number;
+  intro: string;
+  steps: GuideStep[];
+  /** Deep links shown under the steps. */
+  actions?: { label: string; hash: string }[];
+  /** Screens where this guide is most useful (listed first there). */
+  screens: TourId[];
+}
+
+export const GUIDES: HowTo[] = [
+  {
+    id: 'setup', title: 'Set up the baby monitor', icon: 'baby', mins: 3, screens: ['monitor', 'nursery'],
+    intro: 'Two devices: a spare phone that stays in the nursery, and the phone you keep with you.',
+    steps: [
+      { title: 'Create a nursery', body: 'Baby monitor → New nursery. Add your baby’s name so alerts say “Aria is crying”.' },
+      { title: 'Turn the spare phone into the camera', body: 'Sign in on it, open the nursery and tap Be the camera → Allow camera & microphone.' },
+      { title: 'Frame the crib and let the checks go green', body: 'Pick the back camera, point it down at the crib from 1–2 m, clap once for the mic check. Keep it plugged in.' },
+      { title: 'Start monitoring', body: 'Leave the page open — the screen dims itself. If the phone stops, everyone gets an alert.' },
+      { title: 'Watch from your phone', body: 'Open the nursery → Watch → Tap to hear. Talk and video call right from there.' },
+      { title: 'Turn on alerts', body: 'On the watch screen: Alerts on this device. iPhone: add Stream Studio to your Home Screen first (see “Get alerts on iPhone”).' },
+    ],
+    actions: [{ label: 'Open baby monitor', hash: '#/monitor' }],
+  },
+  {
+    id: 'camera', title: 'Use a phone as the nursery camera', icon: 'video', mins: 2, screens: ['camera', 'nursery'],
+    intro: 'Any phone, tablet or laptop with a camera works — an old phone is perfect.',
+    steps: [
+      { title: 'Use the real browser', body: 'Safari on iPhone, Chrome on Android. Links opened inside Instagram, Facebook or Gmail can’t use the camera — tap ⋯ → Open in browser.' },
+      { title: 'Allow camera & microphone', body: 'If you tapped “Don’t allow”: iPhone → aA in the address bar → Website Settings → Allow both. Chrome → icon left of the address → Permissions.' },
+      { title: 'Pick the lens', body: 'Back camera: sharpest. Ultra wide: the whole crib. Front: your baby sees you during video calls. Use the zoom slider where your phone supports it.' },
+      { title: 'Placement', body: '1–2 m (3–6 ft) away, higher than the mattress, pointing down. Phone and cable at least 1 m out of the baby’s reach — never in the crib.' },
+      { title: 'Leave it running', body: 'Don’t switch apps — phones pause cameras in the background. The screen goes dark after 90 s (tap to wake). Turn off Low Power Mode and Do Not Disturb.' },
+      { title: 'Privacy & stopping', body: 'Privacy pauses the video but keeps listening and alerting. Stop ends monitoring — nothing was ever recorded.' },
+    ],
+  },
+  {
+    id: 'talk', title: 'Talk, listen & video call (like FaceTime)', icon: 'phone', mins: 1, screens: ['watch'],
+    intro: 'Everything goes device-to-device, encrypted. Nothing is recorded.',
+    steps: [
+      { title: 'Listen', body: 'Tap Listen (or “Tap to hear the nursery”). Browsers start muted until you tap.' },
+      { title: 'Talk', body: 'Tap Talk to open your mic; tap again to stop. Or press and hold to talk only while holding, like a walkie-talkie.' },
+      { title: 'Video call', body: 'Tap Video: your face fills the nursery phone’s screen, with the nursery in a small window. Tap End video to stop.' },
+      { title: 'Soothe', body: 'Play shush, white noise, rain, ocean or a heartbeat on the nursery phone for 15–60 minutes.' },
+      { title: 'No false alarms from you', body: 'Sound detection ignores the speaker while you talk, so your voice never sets off a cry alert.' },
+    ],
+  },
+  {
+    id: 'alerts', title: 'Understand sound alerts', icon: 'bell', mins: 2, screens: ['watch'],
+    intro: 'The camera phone listens with an on-device AI sound model plus a cry analyser. Audio never leaves the phone.',
+    steps: [
+      { title: 'What it recognizes', body: 'Crying, fussing, coughing, smoke/CO alarms, bangs and crashes, babbling and laughing, voices, music/TV and dogs barking.' },
+      { title: 'Colours', body: 'Red: act now (crying, alarm, camera offline). Amber: check in (fussing, coughing, a bang). Blue/green: good news (babbling, laughing).' },
+      { title: 'Sounds', body: 'Each alert has its own sound — preview them under Alerts on this device. Smoke/CO alarms sound like a siren, take over the screen and are always on.' },
+      { title: '“I’m on it”', body: 'Tells everyone you’re handling it and silences the repeating alert on every device.' },
+      { title: 'Snooze & sensitivity', body: 'Snooze 5m quiets one kind of alert on this device. Parents can set sensitivity (Low / Medium / High) for the whole nursery.' },
+      { title: 'Honest limits', body: 'It’s an attentive ear, not a medical device: it doesn’t monitor breathing, temperature or safe sleep.' },
+    ],
+  },
+  {
+    id: 'iphone-alerts', title: 'Get alerts on iPhone', icon: 'bell', mins: 1, screens: ['watch'],
+    intro: 'Apple only allows web notifications for apps added to the Home Screen.',
+    steps: [
+      { title: 'Add to Home Screen', body: 'In Safari, tap Share (square with an arrow) → Add to Home Screen → Add.' },
+      { title: 'Open it from the Home Screen', body: 'Tap the new Stream Studio icon and sign in there.' },
+      { title: 'Turn alerts on', body: 'Open the nursery → Watch → Alerts on this device → Allow.' },
+      { title: 'Test it', body: 'Tap “Send a test notification”. If nothing arrives, check Settings → Focus and Settings → Notifications → Stream Studio.' },
+    ],
+  },
+  {
+    id: 'android-alerts', title: 'Get alerts on Android & computers', icon: 'bell', mins: 1, screens: ['watch'],
+    intro: 'Chrome, Edge and Firefox deliver alerts even when the page is closed.',
+    steps: [
+      { title: 'Turn alerts on', body: 'Watch → Alerts on this device → Allow notifications.' },
+      { title: 'Choose what wakes you', body: 'Crying, alarms and an offline camera are on by default; add coughing, bangs or fussing if you like.' },
+      { title: 'Test it', body: 'Tap “Send a test notification”. On Android, set Chrome’s battery usage to “Unrestricted” for the fastest alerts.' },
+    ],
+  },
+  {
+    id: 'family', title: 'Invite family & set roles', icon: 'users', mins: 1, screens: ['nursery'],
+    intro: 'Everyone signs in with their own account — new accounts need your invitation code.',
+    steps: [
+      { title: 'Add someone', body: 'Nursery → People & roles → search their name → choose a role and how they appear (Grandma, Nanny…) → Add.' },
+      { title: 'Roles', body: 'Parent: everything, including people and settings. Caregiver: watch, talk, video call, soothe, run a camera, log. Viewer: watch, listen and get alerts.' },
+      { title: 'Removing someone', body: 'Remove them in People & roles — any open session is cut off immediately.' },
+    ],
+  },
+  {
+    id: 'fix-camera', title: 'Fix: the camera won’t start', icon: 'alert', mins: 1, screens: ['camera'],
+    intro: 'Almost always permissions, an in-app browser, or another app holding the camera.',
+    steps: [
+      { title: 'Open in Safari or Chrome', body: 'Not inside Instagram, Facebook, Gmail or other apps.' },
+      { title: 'Allow camera & microphone', body: 'See “Use a phone as the nursery camera” → step 2.' },
+      { title: 'Close other camera apps', body: 'FaceTime, Zoom, WhatsApp calls or the Camera app block other apps from the camera.' },
+      { title: 'Still stuck?', body: 'Fully close and reopen the browser. On iPhone also check Settings → Screen Time → Content & Privacy → Camera.' },
+    ],
+  },
+  {
+    id: 'fix-sound', title: 'Fix: no sound, or they can’t hear me', icon: 'volume', mins: 1, screens: ['watch', 'camera'],
+    intro: 'Both phones need their volume up — browsers never change it for you.',
+    steps: [
+      { title: 'Can’t hear the nursery', body: 'Tap Listen, then turn your volume up. On a computer, check the tab isn’t muted.' },
+      { title: 'They can’t hear you', body: 'Talk must say “Talking”. Turn the nursery phone’s volume up (it plays through its speaker).' },
+      { title: 'Echo', body: 'Lower your volume or use headphones while you talk.' },
+    ],
+  },
+  {
+    id: 'fix-alerts', title: 'Fix: alerts aren’t arriving', icon: 'bell', mins: 1, screens: ['watch'],
+    intro: 'Notifications need permission, the right app (iPhone), and a running camera.',
+    steps: [
+      { title: 'Turned on for this device?', body: 'Watch → Alerts on this device must be on. iPhone: only from the Home Screen app.' },
+      { title: 'Send a test', body: 'If the test doesn’t arrive, check Focus / Do Not Disturb and your browser’s notification settings.' },
+      { title: 'Is the camera running?', body: 'Alerts come from the nursery phone. If it stops, everyone gets “camera offline” within a minute.' },
+    ],
+  },
+];
+
 /* ---------------------------------------------------------------- help */
 
 interface HelpItem {
@@ -263,11 +402,13 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     items: [
       { q: 'Set it up', a: 'Baby monitor → create a nursery. On the phone in the nursery: sign in, open the nursery, tap “Be the camera”. On your phone/laptop: tap “Watch”.' },
       { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC). Our server only passes small connection messages and status numbers. There is no record button.', tags: 'privacy security' },
-      { q: 'How does cry detection work?', a: 'The camera phone listens for the pitch, harmonics and rhythm of a cry (different from fans, white noise or adult voices). It runs on the phone itself. Parents can set sensitivity while watching.' },
+      { q: 'How does sound detection work?', a: 'The camera phone runs an AI sound model (Google’s YAMNet, on the phone itself) plus a pitch-and-rhythm cry analyser and a smoke/CO alarm pattern detector. It recognizes crying, fussing, coughing, alarms, bangs, babbling, laughing, voices, music/TV and dogs — the audio never leaves the phone. Parents can set sensitivity while watching.', tags: 'cry detection ai model cough alarm' },
+      { q: 'Talk and video call like FaceTime', a: 'While watching: tap Talk to open your mic (or press and hold to talk while holding). Tap Video to show your face on the nursery phone. Echo cancellation keeps it clear both ways.', tags: 'two-way audio facetime call' },
       { q: 'Alerts when my phone is locked', a: 'Turn on “Alerts on this device” while watching. Android and computers work right away. iPhone: Share → Add to Home Screen, open it from the Home Screen, then turn alerts on.', tags: 'notifications push iphone' },
       { q: 'Camera offline alert', a: 'If the camera phone loses Wi-Fi, runs out of battery or the page is closed, everyone with alerts gets “camera offline” within about a minute.' },
       { q: 'Roles', a: 'Parent: everything incl. managing people. Caregiver: watch, talk, soothe, run a camera, log. Viewer: watch and get alerts. Each person can also have a name like Grandma or Nanny.' },
-      { q: 'Talk & soothing sounds', a: 'While watching, Talk plays your voice on the camera phone. Soothe plays shush, white noise, rain, ocean or a heartbeat for 15–60 minutes. Cry detection ignores your own talk-back.' },
+      { q: 'Soothing sounds', a: 'Soothe plays shush, white noise, rain, ocean or a heartbeat on the camera phone for 15–60 minutes. Sound detection ignores it.' },
+      { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },
       { q: 'No video on my network', a: 'Some networks block direct device-to-device video. The monitor switches to a low-bandwidth snapshot mode (1 picture per second, no audio) and keeps retrying full video.' },
       { q: 'Is it a medical device?', a: 'No. It watches and listens; it does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.' },
     ],
@@ -284,10 +425,16 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
   },
 ];
 
-function HelpPanel({ screenTour, onClose }: { screenTour: TourId | null; onClose: () => void }) {
+function HelpPanel({ screenTour, initialGuide, onClose }: { screenTour: TourId | null; initialGuide: string | null; onClose: () => void }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<string | null>(null);
+  const [guideId, setGuideId] = useState<string | null>(initialGuide);
   const needle = q.trim().toLowerCase();
+  const guide = GUIDES.find((g) => g.id === guideId) ?? null;
+  const guides = useMemo(() => {
+    const matches = GUIDES.filter((g) => !needle || `${g.title} ${g.intro} ${g.steps.map((st) => `${st.title} ${st.body}`).join(' ')}`.toLowerCase().includes(needle));
+    return screenTour ? [...matches.filter((g) => g.screens.includes(screenTour)), ...matches.filter((g) => !g.screens.includes(screenTour))] : matches;
+  }, [needle, screenTour]);
   const results = HELP.map((s) => ({
     ...s,
     items: s.items.filter((it) => !needle || `${it.q} ${it.a} ${it.tags ?? ''} ${s.section}`.toLowerCase().includes(needle)),
@@ -318,7 +465,29 @@ function HelpPanel({ screenTour, onClose }: { screenTour: TourId | null; onClose
           <Btn variant="soft" size="sm" icon="baby" onClick={() => { onClose(); location.hash = '#/monitor'; window.setTimeout(() => startTour('monitor'), 700); }}>Baby monitor tour</Btn>
         </div>
         <div className="help-body">
-          {results.length === 0 && <div className="faint" style={{ padding: 16 }}>No answers for “{q}”. Try other words, or email contact@dreamstream.com.</div>}
+          {guide ? (
+            <GuideView guide={guide} onBack={() => setGuideId(null)} onAction={(hash) => { onClose(); location.hash = hash; }} />
+          ) : (
+            <>
+          {guides.length > 0 && (
+            <section className="help-sect">
+              <h3><Icon name="book" size={15} />How-to guides</h3>
+              <div className="guide-grid">
+                {guides.slice(0, needle ? 10 : 6).map((g) => (
+                  <button key={g.id} className={cx('guide-card', screenTour && g.screens.includes(screenTour) && 'rel')} onClick={() => setGuideId(g.id)}>
+                    <Icon name={g.icon} size={16} />
+                    <span><b>{g.title}</b><small>{g.steps.length} steps · {g.mins} min</small></span>
+                  </button>
+                ))}
+              </div>
+              {!needle && GUIDES.length > 6 && (
+                <div className="guide-more">
+                  {GUIDES.slice(6).filter((g) => !guides.slice(0, 6).includes(g)).map((g) => <button key={g.id} className="linkish" onClick={() => setGuideId(g.id)}>{g.title}</button>)}
+                </div>
+              )}
+            </section>
+          )}
+          {results.length === 0 && guides.length === 0 && <div className="faint" style={{ padding: 16 }}>No answers for “{q}”. Try other words, or email contact@dreamstream.com.</div>}
           {results.map((s) => (
             <section key={s.section} className="help-sect">
               <h3><Icon name={s.icon} size={15} />{s.section}</h3>
@@ -337,8 +506,39 @@ function HelpPanel({ screenTour, onClose }: { screenTour: TourId | null; onClose
               })}
             </section>
           ))}
+            </>
+          )}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function GuideView({ guide, onBack, onAction }: { guide: HowTo; onBack: () => void; onAction: (hash: string) => void }) {
+  return (
+    <div className="guide-view fade-in">
+      <button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={15} />All help</button>
+      <div className="guide-title">
+        <span className="guide-ic"><Icon name={guide.icon} size={18} /></span>
+        <div>
+          <h3 className="serif">{guide.title}</h3>
+          <small className="faint">{guide.steps.length} steps · about {guide.mins} min</small>
+        </div>
+      </div>
+      <p className="guide-intro">{guide.intro}</p>
+      <ol className="guide-steps">
+        {guide.steps.map((st, i) => (
+          <li key={st.title}>
+            <span className="guide-num">{i + 1}</span>
+            <div><b>{st.title}</b><p>{st.body}</p></div>
+          </li>
+        ))}
+      </ol>
+      {guide.actions && (
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+          {guide.actions.map((a) => <Btn key={a.hash} variant="solid" size="sm" icon="arrowRight" onClick={() => onAction(a.hash)}>{a.label}</Btn>)}
+        </div>
+      )}
     </div>
   );
 }

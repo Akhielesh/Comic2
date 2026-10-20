@@ -86,7 +86,7 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 | D1 | **2**: `dreamstream-backend-env` (id `16181ceb-…`, WNAM) — the backend's secrets, table `backend_env(name, value, source, updated_at)`, read by the `Backend` container at start (binding `BACKEND_ENV`); and `akhielesh-portfolio-analytics` (owner's portfolio analytics), of which DreamStream uses only the `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
 | KV namespaces | **0** |
 | Durable Objects | `EventRoom` + `MonitorRoom` (live-worker), `Sandbox` (studio-worker), `Backend` (api-proxy, container-backed) — all SQLite |
-| Pages | `comic2.pages.dev` + `dreamstreamstudio.ai` (frontend). **Pages Functions:** one middleware (`functions/_middleware.ts`) — the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. |
+| Pages | `comic2.pages.dev` + `dreamstreamstudio.ai` (frontend). **Pages Functions:** one middleware (`functions/_middleware.ts`) — the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. **Static AI model:** `/models/yamnet/yamnet-v1.onnx` (16 MB, Apache-2.0, cached `immutable`) + ONNX Runtime WASM in `/assets` (13 MB / 24 MB, under Pages' 25 MiB file limit) — the baby monitor's on-device sound model (`docs/features/baby-monitor.md`). |
 
 ---
 
@@ -308,3 +308,4 @@ no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 | 2026-06-16 | Initial authoritative map created from live-infra audit. App-Sleeping enabled on Comic2 + SearXNG. |
 | 2026-10-02 | AI-agent gate: Pages middleware (`functions/_middleware.ts`, `public/_routes.json`) + `dreamstream-api` handles `/api/agent-gate*` and 403s AI agents at the edge; D1 binding `AGENT_DB` (shared agent log). `robots.txt` (Content-Signal: search=yes, ai-train=no, ai-input=no) + `llms.txt`. |
 | 2026-10-19 | **Backend moved Railway → Cloudflare Containers** (`Backend` class in `dreamstream-api`, `Dockerfile.cloudflare`, D1 `dreamstream-backend-env` for secrets, `BACKEND_TARGET` switch; Railway kept dormant). Live worker gained `MonitorRoom` (baby monitor) + Supabase member checks. |
+| 2026-10-20 | Baby monitor v2: on-device AI sound model served from Pages (`/models/*`, excluded from Pages Functions), MonitorRoom sound events / video-call commands / per-category push kinds. No new paid resources. |

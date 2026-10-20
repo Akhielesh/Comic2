@@ -4,9 +4,12 @@
  *
  * Roles: every VIEWER is the offerer, the CAMERA always answers — so there's
  * never offer glare. The viewer's offer carries
- *   video: recvonly  (the nursery picture)
- *   audio: sendrecv  (nursery sound in; talk-back out, track attached only
- *                     while the parent holds "Talk" — no renegotiation)
+ *   video: sendrecv  (nursery picture in; the parent's face out, attached only
+ *                     during a video call)
+ *   audio: sendrecv  (nursery sound in; the parent's voice out, attached only
+ *                     while they talk)
+ * Outgoing tracks are swapped with replaceTrack — no renegotiation, no glare,
+ * instant on/off like FaceTime's mute and camera buttons.
  */
 
 import type { MonRtc } from './protocol';
@@ -15,6 +18,26 @@ export type Signal = (to: string, d: MonRtc) => void;
 export type Quality = 'hd' | 'sd' | 'audio';
 
 const QUALITY_BPS: Record<Exclude<Quality, 'audio'>, number> = { hd: 1_600_000, sd: 450_000 };
+/** A parent's face on the nursery screen doesn't need to be HD. */
+const CALLER_VIDEO_BPS = 600_000;
+
+const videoTransceiver = (pc: RTCPeerConnection) =>
+  pc.getTransceivers().find((t) => t.receiver.track?.kind === 'video');
+const audioTransceiver = (pc: RTCPeerConnection) =>
+  pc.getTransceivers().find((t) => t.receiver.track?.kind === 'audio');
+
+async function capBitrate(sender: RTCRtpSender | undefined, bps: number, scaleDown = 1): Promise<void> {
+  if (!sender) return;
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || p.encodings.length === 0) p.encodings = [{}];
+    p.encodings[0].maxBitrate = bps;
+    p.encodings[0].scaleResolutionDownBy = scaleDown;
+    await sender.setParameters(p);
+  } catch {
+    /* older browsers: congestion control still adapts */
+  }
+}
 
 /* ------------------------------------------------------------- camera */
 
@@ -26,7 +49,10 @@ interface CamPeer {
 
 export class CameraHub {
   private peers = new Map<string, CamPeer>();
+  private videoOn = true;
   onTalk: ((sid: string, stream: MediaStream | null, who: string) => void) | null = null;
+  /** A parent's camera (video call) — null when the peer leaves. */
+  onCallerVideo: ((sid: string, stream: MediaStream | null, who: string) => void) | null = null;
   onCount: ((n: number) => void) | null = null;
 
   constructor(
@@ -43,25 +69,29 @@ export class CameraHub {
     return [...this.peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
   }
 
+  private videoFor(peer: CamPeer): MediaStreamTrack | null {
+    return this.videoOn && peer.quality !== 'audio' ? this.tracks().video : null;
+  }
+
   async onSignal(from: string, d: MonRtc, who = 'Someone'): Promise<void> {
     if (d.bye) return this.close(from);
     if (d.sdp?.type === 'offer') {
-      // A fresh offer (new session or ICE restart) — rebuild cleanly unless
-      // it's a restart on a live connection.
       let peer = this.peers.get(from);
       if (!peer || peer.pc.signalingState === 'closed') peer = this.create(from, who);
       const { pc } = peer;
       await pc.setRemoteDescription(d.sdp);
-      const { video, audio } = this.tracks();
-      for (const t of pc.getTransceivers()) {
-        const kind = t.receiver.track?.kind;
-        if (kind === 'video') {
-          t.direction = 'sendonly';
-          await t.sender.replaceTrack(peer.quality === 'audio' ? null : video);
-        } else if (kind === 'audio') {
-          t.direction = 'sendrecv';
-          await t.sender.replaceTrack(audio);
-        }
+      const { audio } = this.tracks();
+      const v = videoTransceiver(pc);
+      if (v) {
+        // sendrecv lets a parent video-call the nursery; an older viewer that
+        // offered recvonly still negotiates down to sendonly.
+        v.direction = 'sendrecv';
+        await v.sender.replaceTrack(this.videoFor(peer));
+      }
+      const a = audioTransceiver(pc);
+      if (a) {
+        a.direction = 'sendrecv';
+        await a.sender.replaceTrack(audio);
       }
       await this.applyQuality(peer);
       await pc.setLocalDescription(await pc.createAnswer());
@@ -78,11 +108,11 @@ export class CameraHub {
     const peer: CamPeer = { pc, quality: 'hd', name: who };
     pc.onicecandidate = (e) => this.signal(sid, { ice: e.candidate ? e.candidate.toJSON() : null });
     pc.ontrack = (e) => {
-      if (e.track.kind !== 'audio') return;
-      // Talk-back: the parent's mic arrives as an audio track; it's silent
-      // (no frames) until they hold Talk.
       const stream = e.streams[0] ?? new MediaStream([e.track]);
-      this.onTalk?.(sid, stream, who);
+      // Both arrive at connect time and stay silent/black until the parent
+      // talks or turns their camera on.
+      if (e.track.kind === 'audio') this.onTalk?.(sid, stream, who);
+      else this.onCallerVideo?.(sid, stream, who);
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.close(sid);
@@ -96,35 +126,33 @@ export class CameraHub {
     const peer = this.peers.get(sid);
     if (!peer) return;
     peer.quality = q;
-    const vSender = peer.pc.getTransceivers().find((t) => t.receiver.track?.kind === 'video')?.sender;
-    if (vSender) await vSender.replaceTrack(q === 'audio' ? null : this.tracks().video).catch(() => undefined);
+    await videoTransceiver(peer.pc)?.sender.replaceTrack(this.videoFor(peer)).catch(() => undefined);
     await this.applyQuality(peer);
   }
 
   private async applyQuality(peer: CamPeer): Promise<void> {
     if (peer.quality === 'audio') return;
-    for (const s of peer.pc.getSenders()) {
-      if (s.track?.kind !== 'video') continue;
-      try {
-        const p = s.getParameters();
-        if (!p.encodings || p.encodings.length === 0) p.encodings = [{}];
-        p.encodings[0].maxBitrate = QUALITY_BPS[peer.quality];
-        p.encodings[0].scaleResolutionDownBy = peer.quality === 'sd' ? 2 : 1;
-        await s.setParameters(p);
-      } catch {
-        /* older browsers: congestion control still adapts */
-      }
+    await capBitrate(videoTransceiver(peer.pc)?.sender, QUALITY_BPS[peer.quality], peer.quality === 'sd' ? 2 : 1);
+  }
+
+  /** Camera flip / lens swap / recovery without renegotiation. */
+  async replaceVideo(): Promise<void> {
+    for (const peer of this.peers.values()) {
+      await videoTransceiver(peer.pc)?.sender.replaceTrack(this.videoFor(peer)).catch(() => undefined);
     }
   }
 
-  /** Camera flip / track swap without renegotiation. */
-  async replaceVideo(track: MediaStreamTrack | null): Promise<void> {
+  async replaceAudio(): Promise<void> {
+    const { audio } = this.tracks();
     for (const peer of this.peers.values()) {
-      if (peer.quality === 'audio') continue;
-      for (const t of peer.pc.getTransceivers()) {
-        if (t.receiver.track?.kind === 'video') await t.sender.replaceTrack(track).catch(() => undefined);
-      }
+      await audioTransceiver(peer.pc)?.sender.replaceTrack(audio).catch(() => undefined);
     }
+  }
+
+  /** Privacy pause: video off for everyone, sound monitoring continues. */
+  async setVideoEnabled(on: boolean): Promise<void> {
+    this.videoOn = on;
+    await this.replaceVideo();
   }
 
   close(sid: string): void {
@@ -132,6 +160,7 @@ export class CameraHub {
     if (!peer) return;
     this.peers.delete(sid);
     this.onTalk?.(sid, null, peer.name);
+    this.onCallerVideo?.(sid, null, peer.name);
     try {
       peer.pc.close();
     } catch { /* closed */ }
@@ -151,6 +180,7 @@ export class ViewerLink {
   private pc: RTCPeerConnection | null = null;
   private camSid: string | null = null;
   private talkTrack: MediaStreamTrack | null = null;
+  private camTrack: MediaStreamTrack | null = null;
   private connectTimer: number | undefined;
   private disconnectedAt: number | null = null;
   private watchdog: number | undefined;
@@ -168,6 +198,10 @@ export class ViewerLink {
     return this.camSid;
   }
 
+  get talking(): boolean {
+    return !!this.talkTrack;
+  }
+
   private setState(s: LinkState): void {
     this.state = s;
     this.onState?.(s);
@@ -179,7 +213,7 @@ export class ViewerLink {
     this.setState('connecting');
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle' });
     this.pc = pc;
-    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('video', { direction: 'sendrecv' });
     pc.addTransceiver('audio', { direction: 'sendrecv' });
     const remote = new MediaStream();
     pc.ontrack = (e) => {
@@ -193,6 +227,8 @@ export class ViewerLink {
         window.clearTimeout(this.connectTimer);
         this.disconnectedAt = null;
         this.setState('connected');
+        // Re-attach a live mic/camera after an ICE restart or reconnect.
+        void this.reattach();
       } else if (s === 'disconnected') {
         this.disconnectedAt ??= Date.now();
         this.setState('reconnecting');
@@ -205,7 +241,6 @@ export class ViewerLink {
     this.connectTimer = window.setTimeout(() => {
       if (this.pc === pc && pc.connectionState !== 'connected') this.setState('failed');
     }, 15_000);
-    // A link stuck "disconnected" for 6 s gets an ICE restart.
     window.clearInterval(this.watchdog);
     this.watchdog = window.setInterval(() => {
       if (this.pc === pc && this.disconnectedAt && Date.now() - this.disconnectedAt > 6000) {
@@ -215,6 +250,16 @@ export class ViewerLink {
     }, 2000);
     await pc.setLocalDescription(await pc.createOffer());
     this.signal(camSid, { sdp: pc.localDescription!.toJSON() });
+  }
+
+  private async reattach(): Promise<void> {
+    if (!this.pc) return;
+    if (this.talkTrack) await audioTransceiver(this.pc)?.sender.replaceTrack(this.talkTrack).catch(() => undefined);
+    if (this.camTrack) {
+      const s = videoTransceiver(this.pc)?.sender;
+      await s?.replaceTrack(this.camTrack).catch(() => undefined);
+      await capBitrate(s, CALLER_VIDEO_BPS);
+    }
   }
 
   private async restartIce(): Promise<void> {
@@ -238,32 +283,60 @@ export class ViewerLink {
     }
   }
 
-  /** Push-to-talk: attach the mic to the pre-negotiated audio sender. */
-  async startTalk(): Promise<boolean> {
-    if (!this.pc) return false;
+  /** Open the mic to the nursery (FaceTime-style unmute). Returns the mic track for a level meter. */
+  async startTalk(): Promise<MediaStreamTrack | null> {
+    if (!this.pc) return null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      this.talkTrack = stream.getAudioTracks()[0] ?? null;
-      const sender = this.pc.getTransceivers().find((t) => t.receiver.track?.kind === 'audio')?.sender;
-      if (!sender || !this.talkTrack) return false;
+      if (!this.talkTrack) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        this.talkTrack = stream.getAudioTracks()[0] ?? null;
+      }
+      const sender = audioTransceiver(this.pc)?.sender;
+      if (!sender || !this.talkTrack) return null;
       await sender.replaceTrack(this.talkTrack);
-      return true;
+      return this.talkTrack;
     } catch {
-      return false;
+      return null;
     }
   }
 
   async stopTalk(): Promise<void> {
-    const sender = this.pc?.getTransceivers().find((t) => t.receiver.track?.kind === 'audio')?.sender;
+    const sender = this.pc ? audioTransceiver(this.pc)?.sender : undefined;
     await sender?.replaceTrack(null).catch(() => undefined);
     this.talkTrack?.stop();
     this.talkTrack = null;
   }
 
+  /** Video call: show this device's camera on the nursery screen. */
+  async startVideo(facing: 'user' | 'environment' = 'user'): Promise<MediaStream | null> {
+    if (!this.pc) return null;
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: facing }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 20, max: 24 } },
+        audio: false,
+      });
+      this.camTrack?.stop();
+      this.camTrack = s.getVideoTracks()[0] ?? null;
+      const sender = videoTransceiver(this.pc)?.sender;
+      if (!sender || !this.camTrack) return null;
+      await sender.replaceTrack(this.camTrack);
+      await capBitrate(sender, CALLER_VIDEO_BPS);
+      return s;
+    } catch {
+      return null;
+    }
+  }
+
+  async stopVideo(): Promise<void> {
+    const sender = this.pc ? videoTransceiver(this.pc)?.sender : undefined;
+    await sender?.replaceTrack(null).catch(() => undefined);
+    this.camTrack?.stop();
+    this.camTrack = null;
+  }
+
   private teardown(notify: boolean): void {
     window.clearTimeout(this.connectTimer);
     window.clearInterval(this.watchdog);
-    void this.stopTalk();
     if (this.pc) {
       if (notify && this.camSid) this.signal(this.camSid, { bye: true });
       try {
@@ -274,8 +347,11 @@ export class ViewerLink {
     this.onStream?.(null);
   }
 
+  /** Full stop: also releases the mic and camera. */
   close(): void {
     if (this.camSid && this.pc) this.signal(this.camSid, { bye: true });
+    void this.stopTalk();
+    void this.stopVideo();
     this.teardown(false);
     this.camSid = null;
     this.setState('closed');

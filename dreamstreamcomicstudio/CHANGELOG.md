@@ -6,6 +6,36 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Baby monitor, rebuilt around the camera, calling and sound (2026-10-20):**
+  - **FaceTime-grade nursery camera:** a guided setup with a full-screen live
+    preview, real lens choice (back, ultra-wide, front) with friendly names, zoom,
+    and automatic checks for microphone, light, power, network and smart sound
+    detection. Clear fixes when something's wrong (in-app browsers, blocked
+    permissions, another app holding the camera), automatic recovery after
+    interruptions, a privacy pause (video off, listening on) and a screen that
+    dims itself.
+  - **Two-way audio and video calls:** tap Talk to open your mic (or press and
+    hold, walkie-talkie style) and your voice plays on the nursery phone's
+    speaker; tap Video and your face fills the nursery screen. Echo cancellation
+    on both ends, and your voice never triggers a cry alert.
+  - **Full baby sound detection, on the phone:** an AI sound model (Google's
+    YAMNet) plus the cry analyser and a smoke/CO alarm pattern detector recognize
+    crying, fussing, coughing, alarms, bangs, babbling, laughing, voices,
+    music/TV and dogs. In testing on real recordings it caught 88–90 % of infant
+    cries with no false "crying" on other household sounds (the old detector:
+    68 %, with false alarms). Audio never leaves the phone.
+  - **Alerts you can see and hear:** colour-coded banners, a glowing video
+    frame, a full-screen takeover for smoke/CO alarms, a distinct sound per
+    alert type, optional spoken alerts, vibration, repeat-until-someone-responds
+    and "I'm on it" that silences every device. Per-device settings with a
+    Preview for every sound; background notifications per category.
+  - **A log worth reading:** "Hearing now" with a 2-minute sound history, and an
+    activity log grouped by day and filterable (Baby sounds, Alerts, Care,
+    Camera), with cry durations and today's totals.
+  - **Help that actually helps:** a "Get set up" checklist on each nursery with
+    one-tap actions, ten step-by-step how-to guides (setup, the camera phone,
+    talking & video, alerts on iPhone/Android, roles, troubleshooting) and
+    refreshed tours for the camera and watch screens.
 - **Baby monitor in Stream Studio (2026-10-19):** turn any phone or laptop you're signed in on
   into a nursery camera and watch from your other devices. Video goes straight between your
   devices (peer-to-peer) and is never recorded or stored. On-device cry detection (pitch +

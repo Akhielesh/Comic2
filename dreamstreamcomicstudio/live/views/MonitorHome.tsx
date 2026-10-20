@@ -23,7 +23,12 @@ import { LABEL_SUGGESTIONS, ROLE_INFO, type MonRole } from '../monitor/protocol'
 import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
 import { Avatar, Btn, Field, Pill, Segmented, cx, type PushToast } from '../ui/primitives';
-import { useFirstVisitTour } from '../components/Guide';
+import { openGuide, useFirstVisitTour } from '../components/Guide';
+import { checkBrowser } from '../monitor/camera';
+import { hideSetup, setupDone, setupHidden, SETUP_STEPS, type SetupStep } from '../monitor/setupProgress';
+
+/** Ask the watch screen to scroll to a section when it opens (e.g. alerts). */
+export const FOCUS_KEY = 'ds-monitor-focus';
 
 const ROLE_ORDER: MonRole[] = ['parent', 'caregiver', 'viewer'];
 
@@ -261,6 +266,8 @@ function NurseryHubBody({ nursery, setNursery, account, device, setDevice, editi
 
       {editing && isParent && <EditNursery nursery={nursery} onSaved={(n) => { setNursery(n); setEditing(false); }} onDeleted={() => nav.monitor()} push={push} canDelete={isOwner} />}
 
+      <SetupChecklist nursery={nursery} nav={nav} />
+
       <div className="hub-actions" data-tour="hub-actions">
         <button className="hub-big" onClick={() => nav.monitorWatch(id)}>
           <span className="hb-icon"><Icon name="eye" size={26} /></span>
@@ -297,6 +304,89 @@ function NurseryHubBody({ nursery, setNursery, account, device, setDevice, editi
       </div>
 
       <PeoplePanel nursery={nursery} push={push} onChanged={load} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------- setup checklist */
+
+function SetupChecklist({ nursery, nav }: { nursery: Nursery; nav: Nav }) {
+  const [hidden, setHidden] = useState(() => setupHidden(nursery.id));
+  const done = setupDone(nursery.id, nursery.member_count);
+  const ios = useMemo(() => checkBrowser().ios, []);
+  const canCam = nursery.my_role !== 'viewer';
+  const isParent = nursery.my_role === 'parent';
+  const watchThen = (focus?: string) => {
+    try {
+      if (focus) sessionStorage.setItem(FOCUS_KEY, focus);
+    } catch { /* storage unavailable */ }
+    nav.monitorWatch(nursery.id);
+  };
+  const steps: Record<SetupStep, { title: string; sub: string; action: { label: string; run: () => void } | null }> = {
+    camera: {
+      title: 'Start the nursery camera',
+      sub: 'On the phone that stays in the nursery: open this nursery → Be the camera. It checks the lens, microphone, light and power for you.',
+      action: canCam ? { label: 'Use this device', run: () => nav.monitorCamera(nursery.id) } : null,
+    },
+    watch: {
+      title: 'Watch from the phone you keep with you',
+      sub: 'Tap Watch, then “Tap to hear the nursery” to unmute. Leave it open at your bedside or put it away — alerts still reach you.',
+      action: { label: 'Watch', run: () => watchThen() },
+    },
+    alerts: {
+      title: 'Turn on alerts on this device',
+      sub: ios
+        ? 'iPhone: tap Share → Add to Home Screen, open Stream Studio from the Home Screen, then Watch → “Alerts on this device”.'
+        : 'Watch → “Alerts on this device”: crying, alarms and an offline camera reach you even with the app closed.',
+      action: { label: 'Set up alerts', run: () => watchThen('alerts') },
+    },
+    talk: {
+      title: 'Try talking and a video call',
+      sub: 'While watching, tap Talk (or press and hold) — your voice plays in the nursery. Video shows your face on the nursery phone.',
+      action: { label: 'Try it', run: () => watchThen() },
+    },
+    family: {
+      title: 'Invite family',
+      sub: 'Search a person’s name below, pick Parent, Caregiver or Viewer, and how they appear (Grandma, Nanny…).',
+      action: isParent ? { label: 'Add people', run: () => document.querySelector('[data-tour="people"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) } : null,
+    },
+  };
+  const count = SETUP_STEPS.filter((s) => done[s]).length;
+  if (hidden) {
+    return (
+      <button className="setup-reopen linkish" onClick={() => { hideSetup(nursery.id, false); setHidden(false); }}>
+        <Icon name="checklist" size={14} />Show the setup checklist ({count}/{SETUP_STEPS.length})
+      </button>
+    );
+  }
+  const next = SETUP_STEPS.find((s) => !done[s]);
+  return (
+    <div className="card setup-card" data-tour="hub-checklist">
+      <div className="setup-head">
+        <Icon name="checklist" size={17} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <b>{count === SETUP_STEPS.length ? 'All set — the nursery is covered' : 'Get set up'}</b>
+          <div className="setup-bar" aria-label={`${count} of ${SETUP_STEPS.length} done`}><i style={{ width: `${(count / SETUP_STEPS.length) * 100}%` }} /></div>
+        </div>
+        <span className="faint mono" style={{ fontSize: 12 }}>{count}/{SETUP_STEPS.length}</span>
+        <Btn variant="subtle" size="sm" icon="book" onClick={() => openGuide('setup')}>Guide</Btn>
+        <button className="iconbtn" aria-label="Hide the checklist" onClick={() => { hideSetup(nursery.id); setHidden(true); }}><Icon name="x" size={15} /></button>
+      </div>
+      <ol className="setup-steps">
+        {SETUP_STEPS.map((k, i) => (
+          <li key={k} className={cx(done[k] && 'done', k === next && 'next')}>
+            <span className="setup-num">{done[k] ? <Icon name="check" size={13} stroke={2.4} /> : i + 1}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <b>{steps[k].title}</b>
+              {(!done[k] || k === next) && <small>{steps[k].sub}</small>}
+            </div>
+            {!done[k] && steps[k].action && (
+              <Btn variant={k === next ? 'solid' : 'soft'} size="sm" onClick={steps[k].action!.run}>{steps[k].action!.label}</Btn>
+            )}
+          </li>
+        ))}
+      </ol>
+      <p className="setup-foot faint">Steps tick off on the device where you do them.</p>
     </div>
   );
 }

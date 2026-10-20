@@ -38,6 +38,11 @@ export default defineConfig(({ mode }) => {
       }
     },
     plugins: [react(), studioIsolation()],
+    // Module workers (the baby monitor's sound-model worker imports ONNX Runtime).
+    worker: { format: 'es' },
+    // ONNX Runtime loads its .wasm next to its own module; pre-bundling it into
+    // .vite/deps breaks that path in dev (production builds emit it correctly).
+    optimizeDeps: { exclude: ['onnxruntime-web'] },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

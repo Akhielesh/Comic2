@@ -8,3 +8,8 @@
 # Baby-monitor alert service worker: always revalidate so fixes reach phones.
 /live-sw.js
   Cache-Control: no-cache
+
+# On-device AI models (baby-monitor sound model). Versioned file names → cache forever.
+/models/*
+  Cache-Control: public, max-age=31536000, immutable
+  Access-Control-Allow-Origin: *
