@@ -20,7 +20,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
   welcome: [
     { title: 'Welcome to Stream Studio 👋', body: 'Go live from your browser — viewers join with just a name — and run a private baby monitor from any of your devices. This 30-second tour shows you around.' },
     { target: 'nav-create', title: 'Start a stream', body: 'Create an event to go live now or schedule one with an invite page. Hosting needs a free account (with your welcome code); watching never does.' },
-    { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with cry detection and alerts.' },
+    { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
     { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys.' },
     { target: 'account', title: 'Your account', body: 'Sign in or create an account here. New accounts need the welcome code you were given — it’s checked securely on our server.' },
     { target: 'help', title: 'Help is always here', body: 'Open Help anytime to search answers or replay a tour for the screen you’re on.' },

@@ -45,12 +45,14 @@ export function MonitorGate({ children }: { children: React.ReactNode }) {
           <h1 className="page-title">Baby monitor</h1>
           <p className="page-sub">
             Turn any phone into a private baby camera and watch from your other devices — live, encrypted
-            device-to-device, and <b>never recorded</b>. Cry detection, calm/awake tracking and alerts included.
+            device-to-device, and <b>never recorded</b>. Talk or video-call into the nursery, and get an alert the
+            moment the camera phone hears crying, coughing or a smoke alarm.
           </p>
           <div className="monitor-points">
             <span><Icon name="lock" size={14} />Private: only people you add, by name</span>
             <span><Icon name="shield" size={14} />Never recorded or stored</span>
-            <span><Icon name="bell" size={14} />Cry &amp; camera-offline alerts</span>
+            <span><Icon name="phone" size={14} />Two-way talk &amp; video calls</span>
+            <span><Icon name="bell" size={14} />Alerts for crying, coughs &amp; smoke alarms</span>
           </div>
           {account.status === 'needs_code' ? (
             <Btn variant="solid" size="lg" icon="lock" onClick={() => openAuth('code')}>Enter your welcome code</Btn>

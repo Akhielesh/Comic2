@@ -357,7 +357,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
             <span className="mp-icon"><Icon name="baby" size={22} /></span>
             <span style={{ flex: 1, textAlign: 'left' }}>
               <b>Baby monitor</b>
-              <small>Use a spare phone as a private, never-recording baby camera — cry alerts included.</small>
+              <small>Use a spare phone as a private, never-recording baby camera — two-way talk, video calls and smart cry &amp; alarm alerts.</small>
             </span>
             <Icon name="chevronRight" size={16} className="faint" />
           </button>
