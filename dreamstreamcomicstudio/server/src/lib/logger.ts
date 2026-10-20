@@ -1,5 +1,5 @@
 // Tiny structured logger: every line is ONE JSON object with an ISO `ts`, so logs
-// are timestamped and greppable wherever stdout is collected (Railway / Cloudflare).
+// are timestamped and greppable wherever stdout is collected (Cloudflare / Railway).
 //
 // Intentionally dependency-free — no winston/pino — to match the existing
 // `console.log(JSON.stringify({ event, … }))` convention in this codebase while

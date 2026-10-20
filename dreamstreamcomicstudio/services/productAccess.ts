@@ -6,7 +6,7 @@
 // Every failure (signed out, table missing, RLS/network error) degrades to null
 // (unrestricted) so a backend hiccup can never lock paying users out of the suite.
 //
-// Admin management of grants goes through the Railway server (service-role writes):
+// Admin management of grants goes through the backend server (service-role writes):
 //   POST /api/admin/product-access  · GET /api/admin/product-access?email=…
 
 import { useEffect, useState } from 'react';

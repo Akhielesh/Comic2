@@ -1,4 +1,4 @@
-// Autopilot control plane — /api/ventures/* (Railway/Express). Epic A1.
+// Autopilot control plane — /api/ventures/* (Express backend). Epic A1.
 //
 // Mounted AFTER the global requireAuth, so req.user is always present. The whole surface is
 // gated: usable only when VENTURES_ENABLED is true OR the caller is an admin (so the owner

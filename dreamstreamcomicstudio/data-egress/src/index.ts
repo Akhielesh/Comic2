@@ -1,7 +1,7 @@
 /**
  * dreamstream-data-egress — allowlisted upstream fetch relay on Cloudflare's edge.
  *
- * Why: the Railway backend's egress IPs are blocked by several market-data
+ * Why: the backend's datacenter egress IPs are blocked by several market-data
  * upstreams (Yahoo Finance chart/quote hosts, Stooq, Treasury FiscalData
  * intermittently) — every stock/metals/ticker widget returned nothing in
  * production while working everywhere else. Cloudflare's edge fetches these

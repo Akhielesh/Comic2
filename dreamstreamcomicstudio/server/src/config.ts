@@ -45,13 +45,13 @@ export const CORS_ORIGIN = CORS_ORIGINS.join(',');
 
 // Production brand domains that are ALWAYS trusted for CORS, in addition to whatever
 // CORS_ORIGIN lists. This keeps the live site working even if CORS_ORIGIN is forgotten or
-// misconfigured on the host (Railway), and covers tokenized Studio preview subdomains
+// misconfigured on the host, and covers tokenized Studio preview subdomains
 // (`<port>-<id>-<token>.dreamstreamstudio.ai`). Apex, `www`, and any subdomain of these are
 // matched. HTTPS-only — http://localhost dev origins still come through CORS_ORIGIN above.
 //
 // `comic2.pages.dev` is the live Cloudflare Pages frontend; trusting it here (plus its
 // `<hash>.comic2.pages.dev` preview deploys) prevents the "network error" the chat/comic
-// flows hit when the browser's CORS check fails because Railway's CORS_ORIGIN wasn't set.
+// flows hit when the browser's CORS check fails because CORS_ORIGIN wasn't set on the host.
 // NOTE: only the project's own `*.comic2.pages.dev` is trusted, NOT all of `pages.dev`.
 const TRUSTED_ORIGIN_DOMAINS = ['dreamstreamstudio.ai', 'dreamstreamstudio.com', 'comic2.pages.dev'];
 
@@ -72,7 +72,7 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
   );
 };
 export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || '10mb';
-// Default to trusting exactly ONE proxy hop in production (Railway's edge), not
+// Default to trusting exactly ONE proxy hop in production (the Cloudflare Worker in front of the container), not
 // `true`: trust=true takes the LEFTMOST X-Forwarded-For value — i.e. whatever the
 // CLIENT sends — so every IP-keyed rate limit and guest quota could be bypassed
 // by rotating a spoofed header. Set TRUST_PROXY explicitly if the topology differs.
@@ -118,7 +118,7 @@ export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-i
 export const ASSISTANT_GEMINI_API_KEY = process.env.ASSISTANT_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
 export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
-// 50s, hard-capped at 55s: Railway's edge proxy cuts non-streaming requests at ~60s with a
+// 50s, hard-capped at 55s: a proxy in front of the backend (Railway's edge did, at ~60s) cuts non-streaming requests with a
 // bare 504, so any model timeout ≥60s means the CLIENT never sees our structured error —
 // production showed naked 504s on /api/text/analyze-script + /story-tool while the server
 // happily waited 90s. Staying under the edge guarantees a JSON timeout error (retryable,
@@ -171,7 +171,7 @@ export const IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
 // AI_PROVIDER gates the unified path: 'gemini' = legacy Google SDK + Pixazo, 'openrouter' = gateway.
 export const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
 
-// --- Named platform keys (set in Railway; secrets — values must never be logged) ----
+// --- Named platform keys (set as Worker secrets; secrets — values must never be logged) ----
 // DREAMSTREAMSTUDIO_ALL — THE OpenRouter key that serves all user traffic. Per-user
 //   spend on it is hard-capped by the monthly platform allowance
 //   (PLATFORM_MONTHLY_ALLOWANCE_USD, default $5/user/month — enforced in

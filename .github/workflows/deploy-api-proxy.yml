@@ -59,12 +59,14 @@ jobs:
         working-directory: dreamstreamcomicstudio/api-proxy
         run: npx tsc -p tsconfig.json
 
+      # GIT_SHA and BUILD_TIMESTAMP become container environment variables (every Worker variable does),
+      # which is what the backend's /api/system build info reads; Railway used to set the equivalents.
       - name: Deploy with wrangler (builds + pushes the backend image)
         working-directory: dreamstreamcomicstudio/api-proxy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy
+        run: npx wrangler deploy --var "GIT_SHA:${GITHUB_SHA}" --var "BUILD_TIMESTAMP:$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       # The first request after a deploy cold-starts the container (image pull + boot;
       # a brand-new container application can also take a few minutes to provision),

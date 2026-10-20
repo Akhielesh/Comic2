@@ -31,7 +31,7 @@
 
   // The worker only needs the WILDCARD route for previews. The bare apex (dreamstreamstudio.ai)
   // and www stay free for your real site/app. The CONTROL endpoint stays on the worker's
-  // *.workers.dev URL — that's what Railway's STUDIO_WORKER_URL points at (control POSTs
+  // *.workers.dev URL — that's what the backend's STUDIO_WORKER_URL points at (control POSTs
   // don't need the domain; only exposePort does, and it uses STUDIO_PREVIEW_DOMAIN above).
   //
   // Requires: `dreamstreamstudio.ai` added to Cloudflare as a zone in THIS account.

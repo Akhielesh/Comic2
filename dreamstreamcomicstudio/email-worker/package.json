@@ -2,7 +2,7 @@
   "name": "dreamstream-email-worker",
   "private": true,
   "type": "module",
-  "description": "Cloudflare Worker that sends branded transactional email via Cloudflare Email Sending, for the Railway backend (HMAC) and the Supabase auth hook.",
+  "description": "Cloudflare Worker that sends branded transactional email via Cloudflare Email Sending, for the backend (HMAC) and the Supabase auth hook.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

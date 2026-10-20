@@ -1362,7 +1362,7 @@ chatRouter.post('/stream', async (req, res) => {
 
   // SSE keep-alive. A tool-grounded turn (web search → weather/places → synthesis) can run
   // 20–60s before the first token, during which the stream sends NO bytes. Mobile carriers,
-  // the Railway/Cloudflare edge and other proxies drop an idle streaming connection after
+  // the Cloudflare edge and other proxies drop an idle streaming connection after
   // ~30s — the browser then surfaces the cut as a bare "network error" and the whole turn
   // fails. A periodic comment line (ignored by the SSE parser) keeps the connection hot
   // until real output flows. Cleared in `finally` so it never outlives the response.

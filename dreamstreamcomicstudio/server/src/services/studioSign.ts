@@ -2,7 +2,7 @@
 //
 // The Cloudflare Studio Worker accepts ONLY requests signed with the shared
 // STUDIO_HMAC_SECRET, so browsers can never reach it directly — every launch/stop goes
-// through this Railway control plane, which authenticates the user first, then signs.
+// through this backend control plane, which authenticates the user first, then signs.
 // The signature scheme matches the Worker's verify (sha256 HMAC of the raw JSON body,
 // formatted `sha256=<hex>`), see studio-worker/src/index.ts.
 
