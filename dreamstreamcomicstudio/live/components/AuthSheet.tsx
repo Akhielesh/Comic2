@@ -1,18 +1,19 @@
 // Sign in / create account / unlock — right inside Stream Studio.
 // New accounts need the welcome code; it's verified on the server only.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   createAccount,
   openAuth,
   redeemWelcomeCode,
   registerAuthOpener,
+  resendConfirmation,
   sendPasswordReset,
   signIn,
   useAccount,
   type AuthMode,
 } from '../account';
 import { Icon } from '../ui/icons';
-import { Btn, type PushToast } from '../ui/primitives';
+import { Btn, cx, type PushToast } from '../ui/primitives';
 
 const maxDob = (() => {
   const d = new Date();
@@ -64,11 +65,29 @@ function AuthSheet({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Waiting for the email link: credentials stay in memory only, so the sheet
+  // can sign in by itself once the address is confirmed — wherever the link opened.
+  const [awaiting, setAwaiting] = useState<{ email: string; password: string; fresh: boolean } | null>(null);
 
   useEffect(() => {
     setErr(null);
     setNotice(null);
+    setAwaiting(null);
   }, [mode]);
+
+  if (awaiting) {
+    return (
+      <ConfirmEmail
+        {...awaiting}
+        onClose={onClose}
+        onBack={() => {
+          setAwaiting(null);
+          onMode(awaiting.fresh ? 'create' : 'signin');
+        }}
+        push={push}
+      />
+    );
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +96,8 @@ function AuthSheet({
     try {
       if (mode === 'signin') {
         const r = await signIn(email, password);
-        if (!r.ok) setErr(r.error || 'Could not sign in.');
+        if (r.unconfirmed) setAwaiting({ email: email.trim(), password, fresh: false });
+        else if (!r.ok) setErr(r.error || 'Could not sign in.');
         else push('Signed in', { icon: 'check' });
       } else if (mode === 'create') {
         if (!agree) {
@@ -90,10 +110,8 @@ function AuthSheet({
         }
         const r = await createAccount({ name, email, password, dob, code });
         if (!r.ok) setErr(r.error || 'Could not create the account.');
-        else if (r.confirmEmail) {
-          setNotice(`Almost there — we sent a confirmation link to ${email.trim()}. Open it, then sign in here. Your welcome code is already applied.`);
-          onMode('signin');
-        } else push('Welcome to Stream Studio!', { icon: 'sparkles' });
+        else if (r.confirmEmail) setAwaiting({ email: email.trim(), password, fresh: true });
+        else push('Welcome to Stream Studio!', { icon: 'sparkles' });
       } else if (mode === 'code') {
         const r = await redeemWelcomeCode(code, name);
         if (!r.ok) setErr(r.error || 'That code did not work.');
@@ -208,6 +226,132 @@ function AuthSheet({
           Codes are checked on our server only, never stored on your device, and repeated wrong guesses are locked out.
         </div>
       </form>
+    </div>
+  );
+}
+
+const POLL_MS = 20_000;
+const POLL_FOR_MS = 15 * 60_000;
+const RESEND_COOLDOWN_S = 60;
+
+/**
+ * "Check your email" — keeps trying to sign in quietly (every 20 s while the
+ * page is visible, and right away when the user comes back to it), so tapping
+ * the link on any device or browser is enough. Stops after 15 minutes.
+ */
+function ConfirmEmail({
+  email,
+  password,
+  fresh,
+  onClose,
+  onBack,
+  push,
+}: {
+  email: string;
+  password: string;
+  fresh: boolean;
+  onClose: () => void;
+  onBack: () => void;
+  push: PushToast;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
+  const [cooldown, setCooldown] = useState(fresh ? RESEND_COOLDOWN_S : 0);
+  const busy = useRef(false);
+  const lastTry = useRef(0);
+
+  const attempt = async (byHand: boolean) => {
+    if (busy.current) return;
+    if (!byHand && Date.now() - lastTry.current < 8000) return;
+    busy.current = true;
+    lastTry.current = Date.now();
+    setChecking(true);
+    try {
+      const r = await signIn(email, password);
+      if (r.ok) push(fresh ? 'Email confirmed — welcome to Stream Studio!' : 'Signed in', { icon: 'sparkles' });
+      else if (byHand) setErr(r.unconfirmed ? 'Not confirmed yet — tap the button in the email first.' : r.error || 'Could not sign in.');
+      else if (!r.unconfirmed) setErr(r.error || 'Could not sign in.');
+    } finally {
+      busy.current = false;
+      setChecking(false);
+    }
+  };
+
+  // Sign in by ourselves as soon as the address is confirmed.
+  useEffect(() => {
+    const started = Date.now();
+    const tick = () => {
+      if (Date.now() - started > POLL_FOR_MS) {
+        setStale(true);
+        return;
+      }
+      if (document.visibilityState === 'visible') void attempt(false);
+    };
+    const timer = window.setInterval(tick, POLL_MS);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', tick);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [email, password]);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [cooldown]);
+
+  const resend = async () => {
+    setErr(null);
+    const r = await resendConfirmation(email);
+    if (r.ok) {
+      setSent('Sent a fresh link — the newest email is the one that works.');
+      setCooldown(RESEND_COOLDOWN_S);
+    } else setErr(r.error || 'Could not send the email.');
+  };
+
+  return (
+    <div className="sheet-scrim" role="dialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="sheet auth-sheet sheet-swap">
+        <div className="sheet-head">
+          <div className="sheet-icon"><Icon name="mail" size={18} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 id="confirm-title" className="sheet-title serif">Check your email</h2>
+            <div className="sheet-sub">We sent a confirmation link to <b className="confirm-email">{email}</b>.</div>
+          </div>
+          <button type="button" className="iconbtn" onClick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
+        </div>
+
+        {sent && <div className="banner info" style={{ marginBottom: 12 }}><Icon name="send" size={15} />{sent}</div>}
+        {err && <div className="banner err" role="alert" style={{ marginBottom: 12 }}><Icon name="alert" size={15} />{err}</div>}
+
+        <ol className="confirm-steps">
+          <li>Open the email from <b>DreamStream</b> — check Spam or Promotions if it isn’t in your inbox.</li>
+          <li>Tap <b>Confirm your email</b>. It’s fine if it opens in a different browser.</li>
+          <li>Come back here — you’ll be signed in automatically{fresh ? ' and your welcome code is already applied' : ''}.</li>
+        </ol>
+
+        <div className="confirm-wait" aria-live="polite">
+          <span className={cx('pill-dot', !stale && 'pulse')} />
+          {stale ? 'Stopped checking — tap below once you’ve confirmed.' : checking ? 'Checking…' : 'Waiting for you to confirm…'}
+        </div>
+
+        <Btn variant="solid" size="lg" className="auth-submit" disabled={checking} onClick={() => void attempt(true)}>
+          {checking ? 'Checking…' : 'I’ve confirmed — continue'}
+        </Btn>
+
+        <div className="auth-switch">
+          <button type="button" className="linkish" disabled={cooldown > 0} onClick={() => void resend()}>
+            {cooldown > 0 ? `Resend email in ${cooldown}s` : 'Resend email'}
+          </button>
+          <button type="button" className="linkish" onClick={onBack}>{fresh ? 'Use a different email' : 'Back to sign in'}</button>
+        </div>
+      </div>
     </div>
   );
 }

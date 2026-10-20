@@ -185,22 +185,85 @@ function clearTicket(): void {
   } catch { /* storage unavailable */ }
 }
 
+/* ------------------------------------------------- email link return */
+
+/** Screens an email link may bring you back to (`/live?after=…`). */
+const RETURN_SCREENS = new Set(['monitor', 'settings', 'create']);
+
+/**
+ * Where confirmation links land. No fragment on purpose: Supabase appends the
+ * session as `#access_token=…`, and a second `#` (as in `#/account`) would
+ * hide it from the client. The screen to return to rides in `?after=`.
+ */
+export function confirmRedirectUrl(): string {
+  const screen = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+  const after = RETURN_SCREENS.has(screen) ? `?after=${screen}` : '';
+  return `${location.origin}/live${after}`;
+}
+
+export type AuthReturn = { confirmed: true } | { error: 'expired' | 'failed'; message?: string };
+
+/**
+ * Back from an email link: let supabase-js adopt the session from the URL,
+ * explain a dead link, and land on the screen the user started from.
+ * Returns null on an ordinary page load.
+ */
+export async function consumeAuthReturn(): Promise<AuthReturn | null> {
+  const url = new URL(location.href);
+  const after = url.searchParams.get('after');
+  const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const hasTokens = hash.has('access_token');
+  const errorCode = hash.get('error_code') || hash.get('error');
+  if (!after && !hasTokens && !errorCode) return null;
+
+  let result: AuthReturn | null = null;
+  if (errorCode) {
+    result = /expired|access_denied/i.test(errorCode)
+      ? { error: 'expired' }
+      : { error: 'failed', message: hash.get('error_description') || undefined };
+  } else if (hasTokens) {
+    const sb = await supa();
+    // getSession() waits for the client to finish reading the tokens from the URL.
+    const session = sb ? (await sb.auth.getSession().catch(() => null))?.data.session : null;
+    result = session ? { confirmed: true } : { error: 'failed' };
+  }
+  url.searchParams.delete('after');
+  const screen = after && RETURN_SCREENS.has(after) ? `#/${after}` : '';
+  history.replaceState(null, '', `${url.pathname}${url.search}${screen}`);
+  return result;
+}
+
 /* ---------------------------------------------------------- actions */
 
-export async function signIn(email: string, password: string): Promise<{ ok: boolean; error?: string }> {
+export async function signIn(email: string, password: string): Promise<{ ok: boolean; error?: string; unconfirmed?: boolean }> {
   const sb = await supa();
   if (!sb) return { ok: false, error: 'Sign-in is unavailable right now.' };
   const { error } = await sb.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
   if (error) {
-    const msg = /email not confirmed/i.test(error.message)
-      ? 'Confirm your email first — check your inbox for the link we sent.'
-      : /invalid login/i.test(error.message)
-        ? 'Email or password is incorrect.'
-        : error.message;
+    if (/email not confirmed/i.test(error.message) || error.code === 'email_not_confirmed') {
+      return { ok: false, unconfirmed: true, error: 'Confirm your email first — check your inbox for the link we sent.' };
+    }
+    const msg = /invalid login/i.test(error.message) ? 'Email or password is incorrect.' : error.message;
     return { ok: false, error: msg };
   }
   await refreshAccount();
   return { ok: true };
+}
+
+/** Send the sign-up confirmation email again (Supabase allows one a minute). */
+export async function resendConfirmation(email: string): Promise<{ ok: boolean; error?: string }> {
+  const sb = await supa();
+  if (!sb) return { ok: false, error: 'Unavailable right now.' };
+  const { error } = await sb.auth.resend({
+    type: 'signup',
+    email: email.trim().toLowerCase(),
+    options: { emailRedirectTo: confirmRedirectUrl() },
+  });
+  if (!error) return { ok: true };
+  if (/security purposes|rate limit|seconds/i.test(error.message)) {
+    return { ok: false, error: 'Just sent one — wait a minute before asking again.' };
+  }
+  return { ok: false, error: error.message };
 }
 
 export async function sendPasswordReset(email: string): Promise<{ ok: boolean; error?: string }> {
@@ -251,7 +314,7 @@ export async function createAccount(input: CreateInput): Promise<{ ok: boolean; 
       email: input.email.trim().toLowerCase(),
       password: input.password,
       options: {
-        emailRedirectTo: `${location.origin}/live.html#/account`,
+        emailRedirectTo: confirmRedirectUrl(),
         data: {
           username,
           first_name: first,

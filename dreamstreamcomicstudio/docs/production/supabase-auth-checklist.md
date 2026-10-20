@@ -4,10 +4,19 @@ Use this checklist to make signup verification and account policies work in prod
 
 ## Auth Console Configuration
 
-1. Open Supabase Dashboard > `Authentication` > `URL Configuration`.
-2. Set `Site URL` to `https://comic2.pages.dev`.
-3. Add redirect URL: `https://comic2.pages.dev/auth/callback`.
-4. If you use previews/custom domains, add each callback URL to Redirect URLs (for example `https://<preview>.pages.dev/auth/callback`).
+1. Open Supabase Dashboard > `Authentication` > `URL Configuration` (project "Comic",
+   ref `bdjfmxfmhqhzvgrhbbzm`).
+2. Set `Site URL` to `https://dreamstreamstudio.ai`. **Never leave it on `localhost`** — any
+   redirect that isn't allowed falls back to the Site URL, so a localhost value sends every
+   confirmation / reset / magic link to a dead page on the user's phone.
+3. Add Redirect URLs:
+   - `https://dreamstreamstudio.ai/**` (main app `/auth/callback`, Stream Studio `/live?after=…`)
+   - `https://comic2.pages.dev/**` and `https://*.comic2.pages.dev/**` (Pages previews)
+   - `http://localhost:*/**` (local development)
+4. Verify without sending email (an invalid token redirects to the URL GoTrue accepted, or
+   to the Site URL if it didn't):
+   `curl -s -o /dev/null -w '%{redirect_url}\n' 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co/auth/v1/verify?token=probe&type=signup&redirect_to=https%3A%2F%2Fdreamstreamstudio.ai%2Flive'`
+   must print `https://dreamstreamstudio.ai/live#error=…`, not `http://localhost:3000/#error=…`.
 5. Open `Authentication` > `Email`.
 6. Enable email confirmation for signups.
 7. Configure SMTP using Resend, Postmark, or SES with a verified sender domain.

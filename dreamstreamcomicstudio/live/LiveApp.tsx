@@ -8,7 +8,7 @@
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
 //                            #/account, #/monitor[/NURSERY[/camera|/watch]]
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
-import { openAuth, signOutEverywhereLocal, useAccount } from './account';
+import { consumeAuthReturn, openAuth, signOutEverywhereLocal, useAccount } from './account';
 import { getEvent } from './api';
 import { AuthSheetHost } from './components/AuthSheet';
 import { GuideHost, openHelp, useFirstVisitTour, type TourId } from './components/Guide';
@@ -223,6 +223,21 @@ export function LiveApp() {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('hashchange', onPop);
     };
+  }, []);
+
+  // Back from a confirmation email: adopt the session, land where the user started.
+  useEffect(() => {
+    void consumeAuthReturn().then((r) => {
+      if (!r) return;
+      setRoute(parseRoute());
+      if ('confirmed' in r) push('Email confirmed — you’re signed in', { icon: 'sparkles' });
+      else if (r.error === 'expired') {
+        openAuth('signin', 'That link has expired or was already used. If you tapped it once already, your email is confirmed — just sign in.');
+      } else {
+        openAuth('signin', `That link didn’t work${r.message ? ` (${r.message})` : ''}. Sign in — we’ll send a fresh link if it’s still needed.`);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const nav: Nav = useMemo(() => {

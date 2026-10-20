@@ -68,6 +68,7 @@ const ICONS: Record<string, React.ReactElement[]> = {
   flag: [P('M4 22V4M4 4h13l-2 4 2 4H4')],
   flip: [P('M12 3v18M7 8L3 12l4 4M17 8l4 4-4 4')],
   send: [P('M22 2L11 13M22 2l-7 20-4-9-9-4z')],
+  mail: [P('M3 5h18v14H3z'), P('M3 6l9 7 9-7')],
   pin: [P('M12 2a6 6 0 0 0-6 6c0 4 6 12 6 12s6-8 6-12a6 6 0 0 0-6-6z'), h('circle', { cx: 12, cy: 8, r: 2 })],
   shield: [P('M12 2l8 4v5c0 5-3.5 9-8 11-4.5-2-8-6-8-11V6z'), P('M9 12l2 2 4-4')],
   // baby monitor + accounts + help

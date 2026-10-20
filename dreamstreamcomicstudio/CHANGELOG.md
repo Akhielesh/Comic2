@@ -62,6 +62,14 @@ All notable user-facing changes. Format loosely follows
   recording is offered back on your next visit.
 
 ### Fixed
+- **Stream Studio sign-up no longer dead-ends after the confirmation email (2026-10-20):**
+  confirmation links pointed at `live.html#/account`, so Supabase's appended session
+  (`#access_token=…`) was unreadable, and with the project's Site URL still on
+  `localhost:3000` the link opened a dead page. Links now return to `/live?after=<screen>`;
+  the app adopts the session, lands you back on the baby monitor (or wherever you
+  started) and explains an expired or already-used link. After signing up — or signing
+  in before confirming — a "Check your email" panel waits and signs you in by itself
+  once the link is tapped on any device or browser, with Resend (rate-limit aware).
 - **Live streams no longer freeze after a few seconds:** the broadcaster keeps its frame clock
   running when the tab is in the background, uploads retry with backoff and adapt the
   bitrate on slow connections, the screen stays awake while live, and viewers skip small
