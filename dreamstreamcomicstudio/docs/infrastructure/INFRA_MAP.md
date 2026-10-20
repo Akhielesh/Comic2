@@ -80,7 +80,7 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 |---|---|
 | Plan | **Workers Paid** ($5/mo) — required for Containers; already in use by `dreamstream-studio`. |
 | Workers (DreamStream) | **5**: `dreamstream-api` (+ the backend container), `dreamstream-data-egress`, `dreamstream-live`, `dreamstream-email`, `dreamstream-studio` |
-| Containers | `Backend` (dreamstream-api, `basic` 1/4 vCPU · 1 GiB · 4 GB, max 2, WNAM) — the Express backend; `Sandbox` (dreamstream-studio, `standard-3`, max 3) |
+| Containers | `Backend` (dreamstream-api, `basic` 1/4 vCPU · 1 GiB · 4 GB, max 2) — the Express backend; `Sandbox` (dreamstream-studio, `standard-3`, max 3) |
 | Workers (other, NOT in this repo) | `akhieleshpersonalwebsite`, `atlasd` — separate projects on the same account |
 | R2 buckets | **1**: `dreamstream-live` (ENAM, Standard) — live-stream segments only |
 | D1 | **2**: `dreamstream-backend-env` (id `16181ceb-…`, WNAM) — the backend's secrets, table `backend_env(name, value, source, updated_at)`, read by the `Backend` container at start (binding `BACKEND_ENV`); and `akhielesh-portfolio-analytics` (owner's portfolio analytics), of which DreamStream uses only the `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
@@ -117,7 +117,7 @@ All 5 are `compatibility_date: 2026-01-01`. Routes are carved out of the
   one `server.mjs`**; only `sharp`, `pyodide` and `sql.js` (native / WASM assets) are installed
   in the runtime stage. ≈450 MB image, ~50 MB of dependencies (vs 1.2 GB for the repo-wide
   `npm ci`), boots in ~1 s at ~90 MB RSS. Runs as the `node` user on port 8080.
-- **Instance:** `basic` (1/4 vCPU, 1 GiB, 4 GB disk), region `WNAM`, one instance (the proxy
+- **Instance:** `basic` (1/4 vCPU, 1 GiB, 4 GB disk), placed near its Durable Object, one instance (the proxy
   always addresses `primary`), `max_instances: 2` for rollouts. `sleepAfter: 15m`.
 - **Env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in D1
   `dreamstream-backend-env` (copied from Railway on 2026-10-19) or Worker secrets (which
