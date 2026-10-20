@@ -1,7 +1,7 @@
 // Web search orchestrator.
 //
 // WHY THIS EXISTS: the chat agent's web_search was scraping-only (DuckDuckGo HTML/
-// Lite + the Instant-Answer API). From a datacenter IP (Railway) DuckDuckGo soft-
+// Lite + the Instant-Answer API). From a datacenter IP (any host) DuckDuckGo soft-
 // blocks the scrapers and the Instant-Answer API only resolves entity/disambiguation
 // queries — so most real research queries came back EMPTY, and the model fabricated
 // "TBD" answers. That made the whole "AI with web access" experience feel broken.

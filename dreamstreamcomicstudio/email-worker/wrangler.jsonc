@@ -11,7 +11,7 @@
 
   // Public, non-secret config. Override per-environment in the dashboard or here.
   // Secrets (NOT here) are set with `wrangler secret put`:
-  //   EMAIL_HMAC_SECRET          — shared with the Railway backend (signs /send calls)
+  //   EMAIL_HMAC_SECRET          — shared with the backend (signs /send calls)
   //   SUPABASE_AUTH_HOOK_SECRET  — Supabase "Send Email Hook" secret (v1,whsec_…); omit to disable /auth-hook
   "vars": {
     "EMAIL_FROM": "notifications@dreamstreamstudio.ai",

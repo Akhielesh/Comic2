@@ -56,7 +56,7 @@ let pyodidePromise: Promise<PyodideInterface> | null = null;
  * COST NOTE: we deliberately do NOT eagerly preload numpy/Pillow/pandas here.
  * Pyodide's WASM linear memory never shrinks once allocated, so preloading pandas
  * (which pulls in numpy) permanently pinned ~500MB+ to the always-on server after a
- * single Python run — the dominant driver of the Railway memory bill. Packages are
+ * single Python run — the dominant driver of the backend's memory bill. Packages are
  * now loaded on demand per run via `loadPackagesFromImports` (see runPython), so a
  * script that doesn't touch pandas never pays for it, and cold starts are faster.
  */

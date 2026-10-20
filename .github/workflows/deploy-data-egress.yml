@@ -1,7 +1,7 @@
 name: Deploy Data Egress Worker
 
 # Allowlisted market-data fetch relay (Yahoo/Stooq/FiscalData) on Cloudflare's
-# edge — the Railway backend's egress IPs are blocked by those upstreams, which
+# edge — the backend's datacenter egress IPs are blocked by those upstreams, which
 # made every stock/metals/ticker widget return nothing in production. Same
 # pattern + secrets as deploy-api-proxy.yml: CLOUDFLARE_API_TOKEN (Workers
 # Scripts:Edit + zone Workers Routes:Edit), CLOUDFLARE_ACCOUNT_ID.

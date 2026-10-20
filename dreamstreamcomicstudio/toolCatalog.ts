@@ -1011,7 +1011,7 @@ export interface ConnectorKeyMeta {
 /**
  * The "set these free keys" onboarding list (June 2026 audit) — every entry has a
  * genuinely free tier and upgrades reliability and/or commercial-use compliance.
- * Informational on the client (env vars live on the server/Railway).
+ * Informational on the client (env vars live on the server).
  */
 export const CONNECTOR_KEYS: ConnectorKeyMeta[] = [
   {
@@ -1040,8 +1040,8 @@ export const CONNECTOR_KEYS: ConnectorKeyMeta[] = [
   },
   {
     env: 'SEARXNG_URL', provider: 'SearXNG (self-hosted)',
-    unlocks: 'Your own metasearch instance — unlimited, private, free (deploy the Railway template).',
-    cost: 'Free software; ~$5/mo of Railway resources.',
+    unlocks: 'Your own metasearch instance — unlimited, private, free (self-host the searxng/searxng container).',
+    cost: 'Free software; ~$5/mo of container hosting.',
     signupUrl: 'https://docs.searxng.org', tools: ['web_search']
   },
   {

@@ -28,6 +28,8 @@ const resolveAppVersion = () => {
 };
 
 const APP_VERSION = resolveAppVersion();
+// GIT_SHA / BUILD_TIMESTAMP are set by the deploy-api-proxy workflow. The RAILWAY_* / VERCEL_* / CF_PAGES_*
+// fallbacks stay so the same image still reports its build on those hosts.
 const GIT_SHA = process.env.GIT_SHA?.trim()
   || process.env.RAILWAY_GIT_COMMIT_SHA?.trim()
   || process.env.VERCEL_GIT_COMMIT_SHA?.trim()

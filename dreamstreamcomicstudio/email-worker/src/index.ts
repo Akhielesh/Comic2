@@ -4,7 +4,7 @@
 // `env.EMAIL.send({ from, to, subject, html, text })`. Two entry points, both authenticated
 // so the sender can never be abused from the open internet:
 //
-//   POST /send       — HMAC-signed (x-email-signature) calls from the Railway backend.
+//   POST /send       — HMAC-signed (x-email-signature) calls from the backend.
 //                      Body: { template, to, params?, subject?, replyTo? }.
 //   POST /auth-hook   — Supabase "Send Email Hook" (Standard Webhooks signature). Turns
 //                      GoTrue's signup/magic-link/recovery/… into branded mail.
@@ -50,7 +50,7 @@ export interface Env {
   EMAIL: EmailSender;
 
   // ── Secrets (set with `wrangler secret put`) ──
-  /** Shared HMAC secret with the Railway backend. Rejects any unsigned /send call. */
+  /** Shared HMAC secret with the backend. Rejects any unsigned /send call. */
   EMAIL_HMAC_SECRET: string;
   /** Supabase auth-hook signing secret (`v1,whsec_…`). Empty ⇒ /auth-hook is disabled. */
   SUPABASE_AUTH_HOOK_SECRET?: string;

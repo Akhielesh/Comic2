@@ -306,7 +306,7 @@ export const ToolsDashboard: React.FC = () => {
       </p>
 
       {/* Connector upgrades — the audited "set these keys" checklist. Informational:
-          the env vars live on the server (Railway), not in the browser. */}
+          the env vars live on the server, not in the browser. */}
       <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
         <div className="flex items-center gap-1.5 mb-1">
           <ShieldCheck className="w-4 h-4 text-emerald-600" />

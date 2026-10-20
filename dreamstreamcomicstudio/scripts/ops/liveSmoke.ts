@@ -51,7 +51,14 @@ export type RunLiveSmokeOptions = {
   targets?: SmokeTarget[];
   timeoutMs?: number;
   fetcher?: SmokeFetcher;
+  /** Wait before re-asking an API target that answered "still starting" (default 5s). Tests set 0. */
+  coldStartRetryDelayMs?: number;
 };
+
+// The backend is a Cloudflare Container that sleeps when idle: its first request after a quiet spell answers
+// 503 (502/504 from the edge) with Retry-After while it boots, and the next one succeeds. Only API targets get this grace.
+const COLD_START_STATUSES = new Set([502, 503, 504]);
+const COLD_START_RETRIES = 4;
 
 export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
@@ -381,7 +388,12 @@ export async function runLiveSmoke(options: RunLiveSmokeOptions = {}): Promise<S
         results.push(await verifyLiveBundle(target, fetcher, timeoutMs));
         continue;
       }
-      const response = await fetchWithTimeout(fetcher, target, timeoutMs);
+      let response = await fetchWithTimeout(fetcher, target, timeoutMs);
+      for (let retry = 0; target.kind === 'api' && COLD_START_STATUSES.has(response.status) && retry < COLD_START_RETRIES; retry++) {
+        await response.text().catch(() => undefined);
+        await new Promise((resolve) => setTimeout(resolve, options.coldStartRetryDelayMs ?? 5_000));
+        response = await fetchWithTimeout(fetcher, target, timeoutMs);
+      }
       const body = await response.text();
       results.push(classifySmokeResponse(target, response, body, Date.now() - started));
     } catch (error) {

@@ -7,7 +7,7 @@ import { studioModelRequest } from './studioModelSelection';
 import type { StudioClarifyResult, StudioBuildPlan, StudioAnswer } from '../apiTypes';
 
 // Both stages are idempotent reads (they call a model and return; no persistent mutation), so it's
-// safe to AUTO-RETRY them — this is what absorbs a Railway cold start instead of dumping the
+// safe to AUTO-RETRY them — this is what absorbs a backend cold start instead of dumping the
 // "Couldn't reach the AI server" error on the user the moment the backend is waking up.
 const PLAN_RETRY = { attempts: 3 } as const;
 
