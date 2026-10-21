@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X, Radio } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X, Radio, Search } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NavDropdown } from './NavDropdown';
@@ -7,6 +7,7 @@ import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
 import { useProductAccess } from '../../services/productAccess';
+import { openAtlasStudio } from '../../services/atlasStudio';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
@@ -53,6 +54,8 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   const showLive = !confined || allowedProducts!.has('stream_studio');
   // Code Studio isn't one of the standalone products — confined accounts never get it.
   const showCode = !confined;
+  // Atlas Studio is a separate app with its own accounts; confined accounts stay focused.
+  const showAtlas = !confined;
 
   // Same products as the desktop nav, flattened for the mobile menu (<1024px).
   const mobileGroups: { heading: string; items: { label: string; onClick: () => void }[] }[] = [
@@ -71,6 +74,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
     { heading: 'Live', items: showLive
       ? [{ label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } }]
       : [{ label: 'Get notified', onClick: notify }] },
+    ...(showAtlas ? [{ heading: 'Atlas Studio', items: [
+      { label: 'Open Atlas Studio', onClick: openAtlasStudio },
+    ] }] : []),
     { heading: 'Models', items: [
       { label: 'Browse Models', onClick: () => onNavigate('models') },
     ] },
@@ -165,6 +171,16 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 caption="🚧 In the workshop"
                 items={[
                   { label: 'Get notified', description: 'Be first to know when Live launches', icon: <Mail size={16} />, onClick: notify },
+                ]}
+              />
+            )}
+            {showAtlas && (
+              <NavDropdown
+                label="Atlas"
+                icon={<Search size={14} />}
+                variant="blue"
+                items={[
+                  { label: 'Open Atlas Studio', description: 'One search across Drive, Gmail, Notion, Slack & more', icon: <Search size={16} />, onClick: openAtlasStudio },
                 ]}
               />
             )}

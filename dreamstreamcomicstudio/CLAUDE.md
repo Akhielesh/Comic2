@@ -141,8 +141,10 @@ for the production push — that's fine, proceed once allowed.)
 awake, on the Workers Paid plan the account already has for the studio container). Deployed
 by `.github/workflows/deploy-api-proxy.yml` on pushes touching `server/**`, `shared/**`,
 `api-proxy/**`, root `package*.json`, etc. The frontend (Pages) and the other Workers
-(`-data-egress`, `-live`, `-email`, `-studio`) are unchanged. (The `atlasd` /
-`akhieleshpersonalwebsite` workers on the same Cloudflare account are *not* DreamStream.)
+(`-data-egress`, `-live`, `-email`, `-studio`) are unchanged. (The `atlas-studio` worker —
+Atlas Studio at `atlas.dreamstreamstudio.ai`, repo `Akhielesh/AtlasD` — plus
+`akhieleshpersonalwebsite` and the unused `atlasd` stub on the same Cloudflare account are
+*not* DreamStream; DreamStream only links to Atlas Studio, via `services/atlasStudio.ts`.)
 
 - **Backend env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in
   D1 `dreamstream-backend-env` (`backend_env(name, value)`) or Worker secrets (which override

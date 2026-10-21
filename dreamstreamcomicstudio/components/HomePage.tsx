@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock, Radio } from 'lucide-react';
+import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock, Radio, Search } from 'lucide-react';
 import { Button } from './Button';
 import { WaitlistForm } from './WaitlistForm';
 import { useAuth } from '../contexts/AuthContext';
+import { ATLAS_STUDIO_SOURCES, ATLAS_STUDIO_URL } from '../services/atlasStudio';
 
 interface HomePageProps {
   onEnterStudio: () => void;
@@ -224,6 +225,33 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 </div>
               </div>
             </div>
+
+            {/* Atlas Studio — separate app, its own accounts and UI */}
+            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col lg:flex-row lg:items-center gap-6 transition-transform duration-300 hover:-translate-y-1 md:col-span-2 lg:col-span-3">
+              <div className="flex flex-col flex-1">
+                <div className="flex items-center justify-between mb-5">
+                  <div className="w-14 h-14 bg-emerald-500 border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform rotate-2 text-white">
+                    <Search size={26} />
+                  </div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 border-2 border-emerald-600 rounded-full px-2.5 py-1">New</span>
+                </div>
+                <h3 className="text-2xl font-display mb-2">Atlas Studio</h3>
+                <p className="text-sm font-comic text-slate-600 leading-relaxed">
+                  One search across your cloud drives, inboxes and team spaces. Find any file, email or page, preview it in place, and open it right where it lives.
+                </p>
+                <a
+                  href={ATLAS_STUDIO_URL}
+                  className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-emerald-700 hover:gap-3 transition-all"
+                >
+                  Open Atlas Studio <ArrowRight size={16} />
+                </a>
+              </div>
+              <ul className="flex flex-wrap gap-2 lg:max-w-xs" aria-label="Sources Atlas Studio connects">
+                {ATLAS_STUDIO_SOURCES.map((source) => (
+                  <li key={source} className="text-xs font-bold bg-slate-50 border-2 border-black rounded-full px-3 py-1">{source}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       </section>
@@ -442,6 +470,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <li><button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button></li>
               <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
               <li><a href="/live.html" className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
+              <li><a href={ATLAS_STUDIO_URL} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Search size={16} /> Atlas Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">New</span></a></li>
               <li><button onClick={scrollToUpdates} className="flex items-center gap-2 text-zinc-500 hover:text-zinc-300 text-left"><Code2 size={16} /> Code <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Soon</span></button></li>
             </ul>
           </div>
