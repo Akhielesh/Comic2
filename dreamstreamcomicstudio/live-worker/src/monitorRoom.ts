@@ -1473,6 +1473,9 @@ export class MonitorRoom {
         tz: (await this.settings()).tz,
       });
     }
+    if (q === 'weeks') {
+      return reply({ days: this.weeks(now, (await this.settings()).tz, Math.round(num(msg.days, 7, 28, 14))) });
+    }
     if (q === 'day') {
       // Today (in the nursery's zone) at a glance.
       const settings = await this.settings();
@@ -1484,6 +1487,55 @@ export class MonitorRoom {
       const sleepMin = sessions.reduce((acc, s) => acc + s.asleep_min, 0);
       return reply({ from, tally: t, sleepMin, naps: sessions.filter((s) => s.kind === 'nap').length, summary: this.summarise(from, now + 1) });
     }
+  }
+
+  /**
+   * What the monitor measured, per local day (oldest first, today last and
+   * partial): sleep the camera saw, night wakings, crying, alerts and how
+   * fast someone answered, and the sound level while the baby slept.
+   */
+  weeks(now: number, tz: string, days = 14): {
+    day: number; sleepMin: number; nightMin: number; naps: number; wakings: number; longestMin: number;
+    cryMin: number; cries: number; alerts: number; responseSec: number | null; sleepLaeq: number | null; loud: number;
+  }[] {
+    const p = localParts(now, tz);
+    const today = now - (p.h * 60 + p.mi) * 60_000 - (now % 60_000);
+    const sessions = this.store.sleepBetween(today - days * 86_400_000, now + 1).filter((x) => !x.summary?.discarded);
+    const out = [];
+    for (let k = days - 1; k >= 0; k--) {
+      const from = today - k * 86_400_000;
+      const to = k === 0 ? now + 1 : from + 86_400_000;
+      const mine = sessions.filter((x) => x.start >= from && x.start < to);
+      const nights = mine.filter((x) => x.kind === 'night');
+      const t = this.store.tally(from, to);
+      const inc = this.store.incidentsBetween(from, to);
+      const answered = inc.filter((i) => i.ack_at != null);
+      // Energy-average LAeq over the minutes the baby was asleep.
+      let e = 0;
+      let n = 0;
+      for (const x of mine) {
+        for (const m of this.store.minutes(x.onset ?? x.start, x.end ?? to)) {
+          if (m.laeq == null) continue;
+          e += 10 ** (m.laeq / 10);
+          n++;
+        }
+      }
+      out.push({
+        day: from,
+        sleepMin: mine.reduce((a, x) => a + x.asleep_min, 0),
+        nightMin: nights.reduce((a, x) => a + x.asleep_min, 0),
+        naps: mine.filter((x) => x.kind === 'nap').length,
+        wakings: nights.reduce((a, x) => a + x.wakings, 0),
+        longestMin: mine.reduce((a, x) => Math.max(a, x.longest_min), 0),
+        cryMin: Math.round((t.cry_end?.secs ?? 0) / 60),
+        cries: t.cry?.n ?? 0,
+        alerts: inc.length,
+        responseSec: answered.length ? Math.round(answered.reduce((a, i) => a + (i.ack_at! - i.at), 0) / answered.length / 1000) : null,
+        sleepLaeq: n ? Math.round(10 * Math.log10(e / n) * 10) / 10 : null,
+        loud: (t.very_loud?.n ?? 0) + (t.loud_db?.n ?? 0),
+      });
+    }
+    return out;
   }
 
   private async onSleepDelete(a: Attach, msg: Record<string, unknown>): Promise<void> {

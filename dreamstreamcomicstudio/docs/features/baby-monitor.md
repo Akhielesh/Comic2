@@ -130,6 +130,15 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
   join, `share_set` / `share_off` / `guest_remove`), `live/monitor/guest.ts`,
   `live/views/MonitorJoin.tsx`, `live/views/monitor/PeopleCard.tsx`.
 
+## This week (monitor analytics)
+
+`q: 'weeks'` rolls up 14 local days in the room (`MonitorRoom.weeks`): camera sleep (total,
+night, naps, longest stretch), night wakings, crying minutes and episodes, alerts and the
+average time to "I'm on it", the energy-averaged LAeq while asleep, and loud events.
+`live/views/monitor/WeekCard.tsx` shows this week vs last (averages over days with data),
+marks a change only past a per-metric threshold, colours it by whether lower or higher is
+better, and writes one headline. The tracker's own Trends cover logged feeds/diapers.
+
 ## Baby tracker (feeds, diapers, sleep, growth…)
 
 The watch screen's **Tracker** layout — Huckleberry-style logging shared live by the

@@ -6,6 +6,11 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **This week, at a glance (2026-10-21):** the All layout opens with six numbers worth
+  knowing from what the monitor measured — sleep the camera saw, night wakings, the
+  longest stretch, crying, how fast someone answered an alert, and the room's sound while
+  the baby slept — each against last week with a 14-day mini chart and one plain headline
+  ("A better week — night wakings improved: 1.2 a night vs 2.4").
 - **Baby tracker, built into the monitor (2026-10-21):** a new **Tracker** layout for
   breastfeeds (a timer that switches sides), bottles (ml or oz), solids, pumping,
   diapers, sleep, medicine, temperature, growth, tummy time and notes — shared live with

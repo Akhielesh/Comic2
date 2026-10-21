@@ -32,6 +32,7 @@ import { PeopleCard } from './monitor/PeopleCard';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { NurserySettings } from './monitor/NurserySettings';
 import { SafetyCard } from './monitor/SafetyCard';
+import { WeekCard } from './monitor/WeekCard';
 import { ReportSheet, SleepCard } from './monitor/SleepCard';
 import { SoundLevelCard } from './monitor/SoundLevelCard';
 import { ZoneEditor } from './monitor/ZoneEditor';
@@ -1347,6 +1348,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             </button>
           ) : (
           <>
+          <WeekCard query={query} baby={baby} />
           <SleepCard query={query} sleep={sleep} tz={settings.tz} baby={baby} hasCrib={camZones.some((z) => z.kind === 'crib')} tracking={settings.sleepTracking !== false} onOpenReport={(session) => setReport({ session })} />
           <SoundLevelCard query={query} dev={cam?.dev ?? null} spl={camStatus?.st.spl} online={!!cam && state !== 'offline' && state !== 'unknown'} liveMinutes={liveMinutes} tz={settings.tz} machineCheck={settings.machineCheck !== false} />
           {timeline}

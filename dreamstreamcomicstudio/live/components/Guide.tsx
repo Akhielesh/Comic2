@@ -58,6 +58,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'mv-activity', title: 'Activity log', body: 'Every cry (and how long it lasted), cough, wake-up, feed and note. Filter by Baby sounds, Alerts, Care or Camera.' },
     { target: 'mv-alerts', title: 'Alerts your way', body: 'Background notifications per category, plus alert sounds, spoken alerts and vibration while this screen is open. Tap Preview to hear each sound.' },
     { target: 'mv-safety', title: 'Safety at a glance', body: 'Anything that needs someone shows here with “I’m on it”, plus every guard the camera runs and how to fix one that isn’t working. Take duty and routine alerts come to you first.' },
+    { target: 'mv-week', title: 'This week', body: 'Six numbers from what the monitor measured — sleep, wakings, the longest stretch, crying, how fast alerts were answered and the room’s sound while asleep — against last week.' },
     { target: 'mv-sound', title: 'Sound level', body: 'The room in decibels, live and over the last hours — and a nudge if a sound machine runs louder than the 50 dB sleep guideline.' },
     { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
     { target: 'mv-people', title: 'People & sharing', body: 'Who’s watching right now. Parents can share a guest link with a passcode for family without an account — and remove anyone in one tap.' },

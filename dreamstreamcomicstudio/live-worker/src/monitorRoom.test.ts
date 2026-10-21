@@ -560,3 +560,28 @@ describe('MonitorRoom tracker', () => {
     expect((mom.msgs('settings').at(-1)!.settings as { baby: unknown }).baby).toEqual({ birth: null, sex: null });
   });
 });
+
+describe('MonitorRoom weekly analytics', () => {
+  it('rolls up sleep, wakings, crying, response times and sleep-time noise per day', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const now = Date.now();
+    const start = now - 3 * 3600_000;
+    room.store.putSleep({ id: 's1', start, end: start + 2 * 3600_000, onset: start, kind: 'night', source: 'auto', asleep_min: 110, awake_min: 10, wakings: 2, longest_min: 70, cry_min: 3, laeq: 38, summary: null });
+    for (let m = 0; m < 3; m++) room.store.putMinute({ dev: 'crib', m: start + m * 60_000, laeq: 40, lmax: 50, l10: 42, l50: 39, l90: 35, lpk: 60, cal: 1, motion: 1, mmax: 2, crib: 1, outside: 0, light: 5, state: 1, sounds: {}, visit: 0 });
+    await say(cam, { t: 'event', kind: 'sound', cat: 'cry', phase: 'start', conf: 90 });
+    const inc = room.store.activeIncidents();
+    expect(inc.length).toBeGreaterThan(0);
+    await say(mom, { t: 'ack', inc: inc[0].id });
+    await say(cam, { t: 'event', kind: 'sound', cat: 'cry', phase: 'end', secs: 150 });
+    const days = room.weeks(Date.now(), 'UTC', 14);
+    expect(days).toHaveLength(14);
+    const today = days.at(-1)!;
+    // The session may start yesterday (UTC) when the suite runs just after midnight.
+    const withSleep = days.find((d) => d.sleepMin > 0)!;
+    expect(withSleep).toMatchObject({ sleepMin: 110, nightMin: 110, wakings: 2, longestMin: 70, sleepLaeq: 40 });
+    expect(today).toMatchObject({ cries: 1, cryMin: 3, alerts: 1 });
+    expect(today.responseSec).not.toBeNull();
+  });
+});
