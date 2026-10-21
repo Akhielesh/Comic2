@@ -99,6 +99,13 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `NANGO_SECRET_KEY` / `NANGO_HOST` | connector SaaS | ⭕ 🔐 | 💸 | In code, not in 58-var set |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URL` | Google connectors | ⭕ 🔐 | — | |
 
+## Admin cost centre (optional live Cloudflare usage)
+
+| Var | Consumer | Req? | Cost | Notes |
+|---|---|---|---|---|
+| `CF_ANALYTICS_API_TOKEN` | `services/costCentre.ts` → `GET /api/admin/costs` | ⭕ 🔐 | — | **Read-only** token with *Account › Account Analytics › Read*. Queries the GraphQL Analytics API (Workers invocations per script, R2 storage). Never logged or returned to the client. Unset ⇒ Admin → Costs shows a setup card; all Supabase-based figures still work |
+| `CLOUDFLARE_ACCOUNT_ID` | `services/costCentre.ts` | ⭕ | — | The account tag for the analytics query; both vars must be set (as `dreamstream-api` Worker secrets or D1 `backend_env` rows) |
+
 ## Studio / live / email workers (set on the workers, mirrored on backend)
 
 | Var | Consumer | Req? | Cost | Notes |

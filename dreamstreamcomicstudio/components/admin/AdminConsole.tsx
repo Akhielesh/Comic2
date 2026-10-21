@@ -16,7 +16,8 @@ import {
     ShieldAlert,
     Ticket,
     UserCog,
-    Users
+    Users,
+    Wallet
 } from 'lucide-react';
 import { Button } from '../Button';
 import { VerificationCenter } from '../VerificationCenter';
@@ -24,6 +25,7 @@ import { AdminAnalytics } from './AdminAnalytics';
 import { InviteManager } from './InviteManager';
 import { EmailConsole } from './EmailConsole';
 import { ProductAccessPanel } from './ProductAccessPanel';
+import { CostCentre } from './CostCentre';
 import type {
     AdminAccessResponse,
     AdminUserRecord,
@@ -58,6 +60,7 @@ type AdminSection =
     | 'studios'
     | 'email'
     | 'analytics'
+    | 'costs'
     | 'verification';
 
 const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; adminOnly?: boolean }> = [
@@ -71,6 +74,7 @@ const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; 
     // adminOnly: the server mounts /api/admin/analytics/* behind requireAdmin, so the
     // section would render nothing but 403s for moderators.
     { id: 'analytics', label: 'Analytics', icon: <Activity size={15} />, adminOnly: true },
+    { id: 'costs', label: 'Costs', icon: <Wallet size={15} />, adminOnly: true },
     { id: 'verification', label: 'Verification', icon: <CheckCircle2 size={15} />, adminOnly: true }
 ];
 
@@ -875,6 +879,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     {section === 'analytics' && (
                         <div className="border-2 border-black rounded-xl bg-white"><AdminAnalytics /></div>
                     )}
+                    {section === 'costs' && isAdmin && <CostCentre />}
                     {section === 'verification' && isAdmin && (
                         <div className="border-2 border-black rounded-xl bg-white"><VerificationCenter /></div>
                     )}
