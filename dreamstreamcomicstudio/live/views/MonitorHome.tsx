@@ -24,6 +24,7 @@ import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
 import { Avatar, Btn, Field, Pill, Segmented, cx, type PushToast } from '../ui/primitives';
 import { openGuide, useFirstVisitTour } from '../components/Guide';
+import { callCenter } from '../calls/callCenter';
 import { checkBrowser } from '../monitor/camera';
 import { hideSetup, setupDone, setupHidden, SETUP_STEPS, type SetupStep } from '../monitor/setupProgress';
 
@@ -114,6 +115,7 @@ function MonitorList({ nav, push }: { nav: Nav; push: PushToast }) {
       return;
     }
     push('Nursery created — now add a camera', { icon: 'check' });
+    void callCenter.refresh(); // the new family can call each other right away
     nav.nursery(r.nursery.id);
   };
 

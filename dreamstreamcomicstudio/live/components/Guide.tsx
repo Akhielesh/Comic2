@@ -14,13 +14,14 @@ export interface TourStep {
   body: string;
 }
 
-export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | 'watch' | 'camera';
+export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | 'watch' | 'camera' | 'calls';
 
 export const TOURS: Record<TourId, TourStep[]> = {
   welcome: [
     { title: 'Welcome to Stream Studio 👋', body: 'Go live from your browser — viewers join with just a name — and run a private baby monitor from any of your devices. This 30-second tour shows you around.' },
     { target: 'nav-create', title: 'Start a stream', body: 'Create an event to go live now or schedule one with an invite page. Hosting needs a free account (with your welcome code); watching never does.' },
     { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
+    { target: 'nav-calls', title: 'Family calls', body: 'FaceTime-style video and voice calls with the people in your nurseries — one person or the whole family, up to four at once.' },
     { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys.' },
     { target: 'account', title: 'Your account', body: 'Sign in or create an account here. New accounts need the welcome code you were given — it’s checked securely on our server.' },
     { target: 'help', title: 'Help is always here', body: 'Open Help anytime to search answers or replay a tour for the screen you’re on.' },
@@ -62,6 +63,12 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'mv-sound', title: 'Sound level', body: 'The room in decibels, live and over the last hours — and a nudge if a sound machine runs louder than the 50 dB sleep guideline.' },
     { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
     { target: 'mv-people', title: 'People & sharing', body: 'Who’s watching right now. Parents can share a guest link with a passcode for family without an account — and remove anyone in one tap.' },
+  ],
+  calls: [
+    { title: 'Family calls', body: 'Video or voice-call anyone in your nurseries — Grandma, the sitter, the other parent. Calls go straight between devices, encrypted, and are never recorded.' },
+    { target: 'calls-ring', title: 'Ring this device', body: 'Turn this on so calls ring even when Stream Studio is closed (on iPhone, from the Home Screen app).' },
+    { target: 'calls-family', title: 'Call someone', body: 'The phone button is a voice call, the camera button a video call. “Call everyone” rings up to three people at once.' },
+    { target: 'calls-recents', title: 'Recent calls', body: 'Who called, how long you talked, and any you missed. Tap one to call back.' },
   ],
   camera: [
     { title: 'Make this the nursery camera', body: 'Frame the crib, let the checks turn green, then start. It works like a private FaceTime call: live to your family, never recorded.' },
@@ -441,6 +448,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },
       { q: 'No video on my network', a: 'Some networks block direct device-to-device video. The monitor switches to a low-bandwidth snapshot mode (1 picture per second, no audio) and keeps retrying full video.' },
       { q: 'What can smart vision see?', a: 'With Smart vision on (camera setup → Make it smarter), the camera phone runs two Google MediaPipe models on its own video about once a second: whether your baby is lying, sitting or standing (and standing in the crib), rolling over, what they’re holding, risky things within reach (scissors, knives, cups, phones, remotes, plants, pets), soft toys near a sleeping baby, and which play area they’re in. Frames never leave the phone. It’s a beta: it can miss things, it can’t see blankets or pillows, and it does not watch breathing or sleep position. Adding the baby’s birthday in the Tracker helps — a baby too young to sit is always reported lying.', tags: 'posture rolling sitting standing objects toys safe sleep vision ai camera' },
+      { q: 'Family video calls', a: 'Calls → tap the camera (video) or phone (voice) button next to anyone in your nurseries, or “Call everyone” for a group call of up to four. Calls ring wherever Stream Studio is open; turn on “Ring this device” to be rung with the app closed. During a call: mute, camera off, flip, add someone, or minimize to keep talking while you use the app. Device to device, encrypted, never recorded.', tags: 'facetime video call voice call family grandma group ring' },
       { q: 'Is it a medical device?', a: 'No. It watches and listens; it does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.' },
     ],
   },

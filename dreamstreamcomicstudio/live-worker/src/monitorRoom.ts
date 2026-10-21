@@ -17,11 +17,15 @@
  *     morning report,
  *   - watches camera heartbeats and raises "camera offline" alerts,
  *   - forwards low-rate JPEG snapshots in memory when a network blocks P2P
- *     (relay mode). Frames are passed through, never stored.
+ *     (relay mode). Frames are passed through, never stored,
+ *   - is the family's switchboard for video calls between members
+ *     (familyCalls.ts): rings their 'line' sockets and phones, relays the
+ *     handshake between the people in a call.
  *
  * The singleton instance named KEY_HOLDER only stores the VAPID key pair.
  */
 
+import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
 import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
@@ -33,8 +37,11 @@ export const KEY_HOLDER = '__vapid_keys__';
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
-/** 'admin' = a parent's short-lived control connection (never in presence). */
-export type MonMode = 'camera' | 'viewer' | 'admin';
+/**
+ * 'admin' = a parent's short-lived control connection (never in presence).
+ * 'line' = a member's app, open anywhere, reachable for family calls (never in presence).
+ */
+export type MonMode = 'camera' | 'viewer' | 'admin' | 'line';
 export type BabyState = 'calm' | 'stirring' | 'awake' | 'noisy' | 'fussing' | 'crying';
 const BABY_STATES: BabyState[] = ['calm', 'stirring', 'awake', 'noisy', 'fussing', 'crying'];
 
@@ -204,6 +211,13 @@ export interface MonLog {
   incident?: string;
 }
 
+/** A device that wants to ring for family calls while the app is closed. */
+interface CallPushRec {
+  sub: PushSubscriptionJSONLike;
+  uid: string;
+  at: number;
+}
+
 interface PushRec {
   sub: PushSubscriptionJSONLike;
   uid: string;
@@ -260,6 +274,9 @@ const LOG_HELLO = 150;
 const TL_BUCKET_MS = 5 * 60_000;
 const TL_KEEP_MS = 7 * 24 * 60 * 60_000;
 const MAX_SOCKETS = 14;
+/** Family members' apps listening for calls (separate from the monitor's devices). */
+const MAX_LINES = 24;
+const CALL_PUSH_CAP = 40;
 const MAX_CAMERAS = 4;
 const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
@@ -289,6 +306,8 @@ const num = (v: unknown, lo: number, hi: number, d = 0) => {
 const numOrNull = (v: unknown, lo: number, hi: number) => (v == null || !Number.isFinite(Number(v)) ? null : num(v, lo, hi));
 const newId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 const dur = (secs: number) => (secs >= 3600 ? `${Math.floor(secs / 3600)} h ${Math.round((secs % 3600) / 60)} min` : secs >= 60 ? `${Math.round(secs / 60)} min` : `${secs}s`);
+/** How a nursery reads in calls: "Aria’s family". */
+const familyOf = (m: { name: string; baby: string | null }) => (m.baby ? `${m.baby}’s family` : m.name);
 const hm = (mins: number) => (mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`);
 
 /** Severity of the log kinds the room writes itself. */
@@ -472,7 +491,7 @@ export class MonitorRoom {
 
     const pair = new WebSocketPair();
     const server = pair[1];
-    if (this.sockets().length >= MAX_SOCKETS + 4) {
+    if (this.sockets().length >= MAX_SOCKETS + MAX_LINES + 4) {
       server.accept();
       try {
         server.send(JSON.stringify({ t: 'error', code: 'full', msg: 'Too many devices are connected to this nursery right now.' }));
@@ -507,10 +526,11 @@ export class MonitorRoom {
     } catch { /* closing */ }
   }
 
+  /** To the nursery's monitor devices (cameras, viewers) — never to call lines. */
   private broadcast(obj: unknown, filter?: (a: Attach) => boolean): void {
     const payload = JSON.stringify(obj);
     for (const { ws, a } of this.authed()) {
-      if (filter && !filter(a)) continue;
+      if (a.mode === 'line' || (filter && !filter(a))) continue;
       try {
         ws.send(payload);
       } catch { /* closing */ }
@@ -563,12 +583,18 @@ export class MonitorRoom {
     } catch {
       return;
     }
-    const big = msg.t === 'rtc' || msg.t === 'auth' || msg.t === 'push_sub' || msg.t === 'stats' || msg.t === 'settings';
+    const big = msg.t === 'rtc' || msg.t === 'call_rtc' || msg.t === 'auth' || msg.t === 'push_sub' || msg.t === 'call_push' || msg.t === 'stats' || msg.t === 'settings';
     if (!big && raw.length > FRAME_MAX) return;
 
     if (!a.authed) {
       if (msg.t === 'auth') await this.onAuth(ws, a, msg);
       return;
+    }
+
+    // A call line only does calls (and keepalive).
+    if (a.mode === 'line') {
+      if (msg.t === 'ping') return this.send(ws, { t: 'pong', at: Date.now() });
+      return this.onCallMsg(ws, a, msg);
     }
 
     switch (msg.t) {
@@ -638,6 +664,7 @@ export class MonitorRoom {
     await this.ready;
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a?.authed) return;
+    if (a.mode === 'line') return this.onLineGone(a);
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -674,7 +701,7 @@ export class MonitorRoom {
   private async onAuth(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (typeof msg.guest === 'string') return this.onGuestAuth(ws, a, msg);
     const token = clip(msg.token, 4096);
-    const mode: MonMode = msg.mode === 'camera' ? 'camera' : msg.mode === 'admin' ? 'admin' : 'viewer';
+    const mode: MonMode = msg.mode === 'camera' ? 'camera' : msg.mode === 'admin' ? 'admin' : msg.mode === 'line' ? 'line' : 'viewer';
     const nid = (await this.state.storage.get<string>('nid')) || '';
     if (!token || !nid) return this.reject(ws, 'auth', 'Sign in again to open this nursery.');
 
@@ -699,6 +726,10 @@ export class MonitorRoom {
     const camCount = this.authed().filter((s) => s.a.mode === 'camera').length;
     if (mode === 'camera' && camCount >= MAX_CAMERAS) {
       return this.reject(ws, 'full', `This nursery already has ${MAX_CAMERAS} cameras running.`);
+    }
+    const lines = this.authed().filter((s) => s.a.mode === 'line').length;
+    if (mode === 'line' ? lines >= MAX_LINES : this.authed().length - lines >= MAX_SOCKETS + 4) {
+      return this.reject(ws, 'full', 'Too many devices are connected to this nursery right now.');
     }
 
     a.authed = true;
@@ -732,6 +763,7 @@ export class MonitorRoom {
     a.dev = clip(msg.dev, 40) || a.sid;
     a.dn = clip(msg.dn, 40) || (mode === 'camera' ? 'Camera' : 'Device');
     ws.serializeAttachment(a);
+    if (mode === 'line') return this.admitLine(ws, a, nid, meta);
 
     // A device re-joining as the same camera replaces its stale socket.
     if (mode === 'camera') {
@@ -1876,15 +1908,23 @@ export class MonitorRoom {
     const res = await callRpc<{ ok?: boolean; ids?: string[] }>(this.env, token, 'monitor_member_ids', { p_nursery: nid });
     if (!res.ok || !res.data.ok || !Array.isArray(res.data.ids)) return;
     const ids = new Set(res.data.ids);
+    const cut: string[] = [];
     for (const s of this.authed()) {
       // Guests aren't Supabase members; their access is the share link's.
       if (s.a.uid && !s.a.guest && !ids.has(s.a.uid)) {
+        cut.push(s.a.sid);
         this.send(s.ws, { t: 'error', code: 'removed', msg: 'You were removed from this nursery.' });
         try {
           s.ws.close(4004, 'removed');
         } catch { /* closed */ }
       }
     }
+    // Removed people leave any family call at once and are never rung again.
+    const book = await this.callBook();
+    const changed = cut.flatMap((sid) => book.leave(sid, Date.now()));
+    if (changed.length) await this.commitCalls(book, changed);
+    const rings = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
+    if (rings.some((r) => !ids.has(r.uid))) await this.state.storage.put('callPush', rings.filter((r) => ids.has(r.uid)));
     await this.addLog({ kind: 'people', msg: `${a.name} updated who can access this nursery`, by: a.name });
     this.broadcast({ t: 'roles_changed' });
   }
@@ -1926,6 +1966,181 @@ export class MonitorRoom {
   }
 
   // ---------------------------------------------------------------- alarm
+  // ---------------------------------------------------------- family calls
+  private async callBook(): Promise<CallBook> {
+    return new CallBook((await this.state.storage.get<Call[]>('calls')) ?? []);
+  }
+
+  /** Line sockets of everyone a call concerns (the caller and everyone asked). */
+  private toCallers(call: Call, obj: unknown): void {
+    const who = new Set([call.from.uid, ...call.invited]);
+    const payload = JSON.stringify(obj);
+    for (const { ws, a } of this.authed()) {
+      if (a.mode !== 'line' || !a.uid || !who.has(a.uid)) continue;
+      try {
+        ws.send(payload);
+      } catch { /* closing */ }
+    }
+  }
+
+  /** Save the book, tell everyone concerned, and log + clear calls that ended. */
+  private async commitCalls(book: CallBook, changed: Call[]): Promise<void> {
+    for (const c of changed) this.toCallers(c, { t: 'call', call: c });
+    const done = book.sweep();
+    await this.state.storage.put('calls', book.toJSON());
+    if (!done.length) return;
+    const log = (await this.state.storage.get<CallRecord[]>('callLog')) ?? [];
+    const meta = await this.meta();
+    for (const c of done) {
+      const rec = toRecord(c);
+      log.push(rec);
+      this.toCallers(c, { t: 'call_log', rec });
+      const missed = missedBy(c);
+      if (missed.length) {
+        await this.callPush(missed, { title: `Missed ${c.video ? 'video' : 'audio'} call`, body: `${c.from.label || c.from.name} · ${familyOf(meta)}`, kind: 'call_missed', call: c.id }, 6 * 3600, 'normal');
+      }
+    }
+    await this.state.storage.put('callLog', log.slice(-CALL_LOG_CAP));
+  }
+
+  /** Ringing calls past their time and devices that never came back. Returns when the next is due. */
+  private async expireCalls(now: number): Promise<number | null> {
+    const book = await this.callBook();
+    const out = book.expire(now);
+    if (out.length) await this.commitCalls(book, out);
+    return book.nextDeadline();
+  }
+
+  /** A member's app, reachable for calls: a light hello (no monitor data). */
+  private async admitLine(ws: WebSocket, a: Attach, nid: string, meta: { name: string; baby: string | null }): Promise<void> {
+    const now = Date.now();
+    await this.expireCalls(now);
+    const book = await this.callBook();
+    const [ice, vapid] = await Promise.all([this.iceServers(), this.vapidKeys()]);
+    const mine = (r: CallRecord) => r.from.uid === a.uid || r.invited.includes(a.uid!);
+    const log = ((await this.state.storage.get<CallRecord[]>('callLog')) ?? []).filter(mine).slice(-30);
+    this.send(ws, {
+      t: 'hello',
+      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode: 'line', dev: a.dev },
+      nursery: { id: nid, ...meta },
+      ice,
+      vapid: vapid?.publicKey ?? null,
+      calls: book.forUser(a.uid!),
+      callLog: log,
+    });
+  }
+
+  private async onLineGone(a: Attach): Promise<void> {
+    const now = Date.now();
+    const book = await this.callBook();
+    const changed = book.drop(a.sid, now);
+    if (!changed.length) return;
+    await this.commitCalls(book, changed);
+    await this.ensureAlarm(Math.max(1000, (book.nextDeadline() ?? now) - now + 500));
+  }
+
+  private async onCallMsg(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (!a.uid || a.guest) return;
+    const now = Date.now();
+    const id = clip(msg.id, 24);
+    const me = { uid: a.uid, name: a.name || 'Member', label: a.label ?? null, sid: a.sid };
+    // Member ids (Supabase UUIDs). Not checked against the member list: only members' sockets and phones are here to ring.
+    const uuids = (v: unknown) => (Array.isArray(v) ? v.slice(0, 16).map((u) => clip(u, 40)).filter((u) => /^[\w-]{1,40}$/.test(u)) : []);
+    switch (msg.t) {
+      case 'call_rtc': {
+        const to = clip(msg.to, 20);
+        if (msg.d == null || typeof msg.d !== 'object') return;
+        if (!(await this.callBook()).canRelay(id, a.sid, to)) return;
+        for (const s of this.authed()) {
+          if (s.a.sid === to && s.a.mode === 'line') return this.send(s.ws, { t: 'call_rtc', id, from: a.sid, d: msg.d });
+        }
+        return;
+      }
+      case 'call_start': {
+        await this.expireCalls(now);
+        const book = await this.callBook();
+        const ref = clip(msg.ref, 20);
+        const call = book.start(me, uuids(msg.to), msg.video !== false, crypto.randomUUID().replace(/-/g, '').slice(0, 16), now);
+        if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, ref });
+        this.send(ws, { t: 'call_started', ref, id: call.id });
+        await this.commitCalls(book, [call]);
+        const meta = await this.meta();
+        await this.callPush(call.invited, { title: me.label || me.name, body: `${call.video ? 'Video' : 'Audio'} call · ${familyOf(meta)}`, kind: 'call', call: call.id }, Math.round(RING_MS / 1000), 'high');
+        await this.ensureAlarm(RING_MS + 500);
+        return;
+      }
+      case 'call_join': {
+        const book = await this.callBook();
+        const call = book.join(id, me, msg.video !== false, now);
+        if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, id });
+        return this.commitCalls(book, [call]);
+      }
+      case 'call_decline': {
+        const book = await this.callBook();
+        const call = book.decline(id, a.uid, now);
+        if (call) await this.commitCalls(book, [call]);
+        return;
+      }
+      case 'call_leave': {
+        const book = await this.callBook();
+        const changed = book.leave(a.sid, now, id);
+        if (changed.length) await this.commitCalls(book, changed);
+        return;
+      }
+      case 'call_media': {
+        const book = await this.callBook();
+        const call = book.setMedia(id, a.sid, msg.mic !== false, msg.cam !== false);
+        if (call) await this.commitCalls(book, [call]);
+        return;
+      }
+      case 'call_invite': {
+        const book = await this.callBook();
+        const r = book.invite(id, a.sid, uuids(msg.to));
+        if (!r || !r.added.length) return;
+        await this.commitCalls(book, [r.call]);
+        const meta = await this.meta();
+        await this.callPush(r.added, { title: me.label || me.name, body: `Join the ${r.call.video ? 'video' : 'audio'} call · ${familyOf(meta)}`, kind: 'call', call: r.call.id }, Math.round(RING_MS / 1000), 'high');
+        return;
+      }
+      case 'call_push': {
+        const sub = msg.sub as PushSubscriptionJSONLike | undefined;
+        if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) return;
+        if (!isAllowedPushEndpoint(sub.endpoint) || sub.endpoint.length > 1024) return this.send(ws, { t: 'call_err', error: 'push' });
+        const rec: CallPushRec = { sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } }, uid: a.uid, at: now };
+        const all = ((await this.state.storage.get<CallPushRec[]>('callPush')) ?? []).filter((r) => r.sub.endpoint !== rec.sub.endpoint);
+        all.push(rec);
+        await this.state.storage.put('callPush', all.slice(-CALL_PUSH_CAP));
+        return;
+      }
+      case 'call_push_off': {
+        const endpoint = String(msg.endpoint ?? '');
+        const all = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
+        // Only the owner of a subscription may remove it.
+        await this.state.storage.put('callPush', all.filter((r) => !(r.sub.endpoint === endpoint && r.uid === a.uid)));
+        return;
+      }
+    }
+  }
+
+  /** Ring (or tell of a missed call) the devices of these people that asked to be rung. */
+  private async callPush(uids: string[], data: { title: string; body: string; kind: 'call' | 'call_missed'; call: string }, ttlSec: number, urgency: 'high' | 'normal'): Promise<void> {
+    const keys = await this.vapidKeys();
+    const all = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
+    const who = new Set(uids);
+    const recs = all.filter((r) => who.has(r.uid));
+    if (!keys || !recs.length) return;
+    const nid = await this.state.storage.get<string>('nid');
+    const gone = new Set<string>();
+    await Promise.all(
+      recs.map(async (r) => {
+        // Same topic: an undelivered ring is replaced by its "missed call".
+        const out = await sendWebPush(r.sub, { ...data, nid, tag: `call-${data.call}`, at: Date.now() }, keys, { subject: VAPID_SUBJECT, urgency, ttlSec, topic: `call${data.call.slice(0, 12)}` });
+        if (out === 'gone') gone.add(r.sub.endpoint);
+      }),
+    );
+    if (gone.size) await this.state.storage.put('callPush', all.filter((r) => !gone.has(r.sub.endpoint)));
+  }
+
   private async ensureAlarm(inMs: number): Promise<void> {
     const cur = await this.state.storage.getAlarm();
     const want = Date.now() + Math.max(1000, inMs);
@@ -2004,10 +2219,15 @@ export class MonitorRoom {
       await this.state.storage.put('purgedAt', now);
     }
 
+    // 7. Family calls nobody picked up.
+    const ringingUntil = await this.expireCalls(now);
+
     if (this.curBucket) await this.saveBucket(this.curBucket);
     // Next wake-up: cameras need heartbeat checks, incidents need escalation,
-    // an open sleep session needs closing if its camera never comes back.
+    // an open sleep session needs closing if its camera never comes back,
+    // a ringing call needs its "no answer".
     let want: number | null = again ? now + ALARM_MS : null;
+    if (ringingUntil != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, ringingUntil + 500));
     const nextInc = this.store.nextIncidentAt();
     if (nextInc != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, nextInc));
     const open = await this.state.storage.get<SleepSm>('sleepSm');

@@ -129,7 +129,7 @@ const FINAL = new Set([4001, 4003, 4004, 4006]);
 
 export function openMonitorSocket(
   nid: string,
-  mode: MonMode | 'admin',
+  mode: MonMode | 'admin' | 'line',
   onMsg: (m: MonServerMsg) => void,
   onBinary: (data: Blob) => void,
   onStatus: (s: MonSocketStatus, detail?: string) => void,

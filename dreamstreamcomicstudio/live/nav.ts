@@ -13,6 +13,8 @@ export interface Nav {
   nursery(id: string): void;
   monitorCamera(id: string): void;
   monitorWatch(id: string): void;
+  /** Family calls. */
+  calls(): void;
 }
 
 const enc = encodeURIComponent;

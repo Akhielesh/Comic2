@@ -326,6 +326,14 @@ describe('meeting scenes & guest links (v5)', async () => {
 
     history.replaceState(null, '', '/live.html?e=abc123&g=legacy-guest-key');
     expect(parseRoute()).toEqual({ view: 'guest', id: 'abc123', g: 'legacy-guest-key' });
+
+    // Family calls: the tab, and a ringing call's notification (it rings on top of Calls).
+    history.replaceState(null, '', '/live.html#/calls');
+    expect(parseRoute()).toEqual({ view: 'calls' });
+    history.replaceState(null, '', '/live.html#/call/11111111-2222-4333-8444-555555555555/0123456789abcdef');
+    expect(parseRoute()).toEqual({ view: 'calls' });
+    history.replaceState(null, '', '/live.html#/call/not-a-nursery/x');
+    expect(parseRoute()).toEqual({ view: 'dashboard' });
   });
 
   it('keeps canvas dimensions even and orientation-faithful (regression)', () => {

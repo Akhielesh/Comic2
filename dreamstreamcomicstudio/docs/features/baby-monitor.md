@@ -23,6 +23,7 @@ relays signaling, status numbers and events.
 | Sound level meter | `live/monitor/soundLevel.ts` | IEC 61672 A-weighting (bilinear biquads) + Fast (125 ms) time weighting in an AudioWorklet; live dB(A), per-minute LAeq / Lmax / L10 / L50 / L90 / peak; two-step calibration (quiet room ≈ 30 dB, or match a meter); never reads below the mic's floor. |
 | Vision | `live/monitor/vision.ts` | 64×48 frames at 4 fps: exposure-normalised cell differences, crib + danger zones, climb-out, visits, lights on/off, dark/covered lens, camera moved (scene signature + phone tilt). |
 | Smart vision (beta) | `live/monitor/scene.ts`, `live/monitor/sceneAi.ts`, `public/models/mediapipe/` | On the camera phone, ~1 fps: Google MediaPipe object detector (EfficientDet-Lite0 int8, 80 COCO classes, CPU) + pose landmarker (BlazePose lite, 33 points, GPU with CPU fallback), both Apache-2.0, SHA-256 verified. `SceneWatch` turns frames into held, cooled-down events: posture, stood in crib, rolled, holding, risky object within reach, soft toy near a lying baby, in/left a play area. |
+| Family calls | `live-worker/src/familyCalls.ts` (rules), `monitorRoom.ts` (switchboard), `live/calls/*` (app), `live/views/calls/*`, `live/views/CallsView.tsx` | FaceTime-style video / voice calls between a nursery's members — see “Family calls” below. |
 | Two-way audio safety | `live/monitor/voice.ts` | Parent's mic: high-pass → compressor → soft fade-in. Camera: howl (feedback) detector mutes the speaker and switches the parent's phone to walkie-talkie; a closed-loop governor holds talk ≤ 65 dB and soothing sounds ≤ 50 dB at the crib. |
 | Screen-on | `live/wakeLock.ts`, `public/keep-awake.mp4` | Wake Lock re-acquired on release + 15 s watchdog; looping-video fallback where it's refused; state shown to the family. |
 | Alarm detector | `live/monitor/alarmTone.ts` | Smoke (T3) / CO (T4) beep patterns from the spectrum — independent of the model. |
@@ -254,6 +255,55 @@ children and adults; nine photos of one baby are an evaluation set, not enough t
 retrain a network. It can miss a baby under a blanket, can't see blankets or
 pillows (only teddy bears among soft things), and does not watch breathing, sleep
 position or face covering. Not a medical device.
+
+## Family calls (2026-10-21)
+
+FaceTime-style video and voice calls between the people in a nursery — one
+person or a group of up to four — from the **Calls** tab (or the call buttons
+next to each person). Device to device (WebRTC, DTLS-SRTP), never recorded.
+
+**Switchboard.** Each nursery's MonitorRoom is that family's switchboard. While a
+member is signed in, the app keeps a light `line` socket to each of their
+nurseries (`mode: 'line'` — authenticated like any member socket via
+`monitor_my_role`, a short hello with no monitor data, never in presence, never
+sent monitor broadcasts; up to 24 per nursery, separate from the 14 monitor
+devices). Share-link guests can't open a line, and a device running as the
+nursery camera closes its lines so the baby's phone never rings.
+
+**Ringing.** `call_start {to, video}` → the room's `CallBook`
+(`familyCalls.ts`, pure and unit-tested) records the call and sends its state to
+the lines of the caller and everyone asked; their app rings full-screen with a
+synthesized ringtone (quiet — it's a home with a baby), vibration and a flashing
+tab title, plus a local notification when the tab is hidden. Devices that turned
+on **Ring this device** also get a Web Push (`call`, urgency high, TTL 45 s,
+topic per call). A call rings for 45 s (the room's alarm ends it as `no_answer`);
+everyone asked can decline; the caller hanging up first is `cancelled`. Those who
+never picked up (and didn't decline) get a **missed call** push that replaces the
+ring (same tag and topic), and a red entry + badge on the Calls tab.
+
+**Media.** A mesh: one RTCPeerConnection per pair, audio + video transceivers
+from the start, so mute / camera off / flip / turning the camera on in a voice
+call are `replaceTrack` or `enabled` — no renegotiation. Of any two people, the
+one who joined later makes the offer (`joinedAfter`), so there's no glare; the
+offerer restarts ICE on failure (three tries). Signaling (`call_rtc`) is relayed
+only between two devices in the same call. Peers are keyed by person, not
+socket, and a line that drops keeps its place for 20 s (`LINE_GRACE_MS`) — the
+app rejoins from its new connection and the media carries on. Video bitrate is
+shared across the uplink (1.5 / 0.9 / 0.6 Mbps for 1 / 2 / 3 others); each
+tile shows a weak-connection hint from packet loss and round-trip time, and
+"Home Wi-Fi" when everyone is on the local network.
+
+**Screen.** Remote video full-bleed (a grid for groups), your picture in a
+draggable corner, controls that fade while you talk (mute, camera, flip, add
+someone from the nursery, end), a call timer, minimize to a floating window
+while using the app, "Camera off" faces, "Reconnecting…" veils, and a clear end
+state ("Grandpa can’t talk right now", "Call again"). The screen stays awake
+during a call. Calls history (last 60 per nursery) shows who, which way, how long
+and missed calls; tap to call back.
+
+**Limits.** Four people per call (each phone uploads a copy per person). Ringing
+with the app closed needs notifications (on iPhone, the Home Screen app). Calls
+reach only members of a nursery you share.
 
 ## Sound level, sleep and history
 

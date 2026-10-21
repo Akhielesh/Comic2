@@ -24,6 +24,7 @@ const nav: Nav = {
   nursery: vi.fn(),
   monitorCamera: vi.fn(),
   monitorWatch: vi.fn(),
+  calls: vi.fn(),
 };
 
 const meta: EventMeta = {

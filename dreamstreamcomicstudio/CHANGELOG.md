@@ -6,6 +6,14 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Family calls (2026-10-21):** a new **Calls** tab — FaceTime-style video and voice
+  calls with anyone in your nurseries, or "Call everyone" for a group of up to four.
+  Calls ring full-screen wherever Stream Studio is open, and with **Ring this device**
+  on, even when it's closed. In a call: mute, camera off, flip, add someone, minimize to
+  a floating window while you check the monitor, and a picture-in-corner of yourself you
+  can drag. Missed calls show in red with a badge; tap any recent call to call back.
+  Device to device, encrypted, never recorded — and the nursery's camera phone never
+  rings.
 - **Smart vision (beta) on the baby camera (2026-10-21):** turn it on in the camera's
   setup ("Make it smarter") and the camera phone itself watches for posture (lying,
   sitting, standing — and standing in the crib), rolling over, what the baby is holding,
