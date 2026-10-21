@@ -50,7 +50,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'people', title: 'People & roles', body: 'Search people by name to add them, then pick a role — Parent, Caregiver or Viewer — and how they appear (Grandma, Nanny…). Removing someone cuts them off immediately.' },
   ],
   watch: [
-    { target: 'mv-views', title: 'Pick a layout', body: 'Monitor shows the picture and what needs you. All adds sleep, sound level, logs and settings. Bedside is a dark nightstand view with a big clock that dims itself and lights up for alerts. Turn your phone sideways for a full-screen picture.' },
+    { target: 'mv-views', title: 'Pick a layout', body: 'Monitor shows the picture and what needs you. Tracker logs feeds, diapers, sleep and growth for the whole family. All adds sleep, sound level, logs and settings. Bedside is a dark nightstand view with a big clock that dims itself and lights up for alerts. Turn your phone sideways for a full-screen picture.' },
     { target: 'mv-stage', title: 'Live nursery view', body: 'Tap Listen (or “Tap to hear”) to unmute. The frame glows in the alert’s colour when something needs you. Night view (moon) brightens dark rooms; Pop out keeps the picture floating while you use other apps.' },
     { target: 'mv-talk', title: 'Talk — like FaceTime', body: 'Tap to open your mic and tap again to stop, or press and hold to talk only while holding. Your voice plays on the nursery phone; it won’t trigger a cry alert.' },
     { target: 'mv-call', title: 'Video call the nursery', body: 'Shows your face full-screen on the nursery phone (best when it uses its front camera). Your mic turns on with it.' },
@@ -317,6 +317,17 @@ export const GUIDES: HowTo[] = [
       { title: 'Roles', body: 'Parent: everything, including people and settings. Caregiver: watch, talk, video call, soothe, run a camera, log. Viewer: watch, listen and get alerts.' },
       { title: 'Removing someone', body: 'Remove them in People & roles — any open session is cut off immediately.' },
       { title: 'No account? Share a link', body: 'Watch → People → Create a share link. Choose a passcode (8+ characters — “Suggest one” makes a memorable one), what guests can do, and how long the link works. Send the link, then tell them the passcode by phone or in a different app.' },
+    ],
+  },
+  {
+    id: 'tracker', title: 'Track feeds, diapers, sleep & growth', icon: 'bottle', mins: 2, screens: ['watch'],
+    intro: 'Watch → Tracker. Everything you log shows on every family member’s phone at once — even logged offline.',
+    steps: [
+      { title: 'Log in one tap', body: 'Tap Bottle, Diaper, Breastfeed, Sleep… Timers (breastfeeding, sleep, pumping, tummy time) keep running on every phone, and anyone can stop them. Forgot? Use “Log a past one”.' },
+      { title: 'Breastfeeding', body: 'Start on the side “Up next” suggests, tap the other side to switch — each side’s minutes are kept.' },
+      { title: 'What’s next', body: 'Add the birthday (Edit) for age-based guidance: the nap sweet spot, the next feed and which side, and when a medicine is due again by the interval you entered.' },
+      { title: 'Trends & growth', body: 'Trends compare this week with last; Growth places weight, length and head on the WHO charts. Download a CSV for the pediatrician.' },
+      { title: 'Good to know', body: 'Checks for wet diapers, stool colour and fevers follow AAP guidance and say when to call your pediatrician — they’re not a diagnosis, and the tracker never calculates doses.' },
     ],
   },
   {

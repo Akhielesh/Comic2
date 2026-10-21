@@ -492,3 +492,71 @@ describe('MonitorRoom guests (share link + passcode)', () => {
     expect(right.status).toBe(429);
   });
 });
+
+describe('MonitorRoom tracker', () => {
+  const T = () => Date.now();
+  it('a caregiver logs a bottle; everyone gets it live, with a line in the activity log', async () => {
+    const { join, say } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    await say(bob, { t: 'track_put', item: { id: 'bottle001', kind: 'bottle', start: T() - 60_000, data: { ml: 120, milk: 'formula', junk: 1 } } });
+    const got = mom.msgs('track')[0].item as { id: string; by: string; data: Record<string, unknown> };
+    expect(got).toMatchObject({ id: 'bottle001', by: 'Bob (Grandpa)', data: { ml: 120, milk: 'formula' } });
+    expect(got.data.junk).toBeUndefined();
+    expect(mom.logs().some((e) => e.msg === 'Bottle · 120 ml formula' && e.sev === 'care')).toBe(true);
+  });
+
+  it('viewers can read but not log; bad entries are explained', async () => {
+    const { join, say } = setup();
+    const cara = await join('tok-viewer', 'viewer', 'tablet');
+    await say(cara, { t: 'track_put', item: { id: 'diaper01', kind: 'diaper', start: T(), data: { pee: true } } });
+    expect(cara.msgs('track')).toHaveLength(0);
+    expect(String(cara.msgs('track_err')[0].msg)).toMatch(/Viewers/);
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'track_put', item: { id: 'bottle02', kind: 'bottle', start: T(), data: {} } });
+    expect(String(mom.msgs('track_err')[0].msg)).toMatch(/how much/);
+  });
+
+  it('a sleep timer started by Mom is stopped by Grandpa, and both show in hello and queries', async () => {
+    const { join, say } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    const start = T() - 45 * 60_000;
+    await say(mom, { t: 'track_put', item: { id: 'nap00001', kind: 'sleep', start, end: null, data: { where: 'crib' } } });
+    const late = await join('tok-care', 'viewer', 'tablet2');
+    expect((late.msgs('hello')[0] as { track: { running: { id: string }[] } }).track.running.map((r) => r.id)).toEqual(['nap00001']);
+    await say(bob, { t: 'track_put', item: { id: 'nap00001', kind: 'sleep', start, end: T(), data: { where: 'crib' } } });
+    const last = mom.msgs('track').at(-1)!.item as { end: number | null; by: string };
+    expect(last.end).not.toBeNull();
+    expect(last.by).toBe('Alice (Mom)');
+    expect(mom.logs().map((e) => e.msg)).toEqual(expect.arrayContaining(['Down for sleep', 'Woke up after 45 min']));
+    await say(mom, { t: 'q', id: 'q1', q: 'track', from: T() - 86400_000, to: T() + 1000 });
+    const r = mom.msgs('r').find((m) => m.id === 'q1') as { items: { id: string }[]; auto: unknown[] };
+    expect(r.items.map((i) => i.id)).toEqual(['nap00001']);
+    expect(Array.isArray(r.auto)).toBe(true);
+  });
+
+  it('deletes reach everyone and sync to phones that were offline', async () => {
+    const { join, say } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const before = T();
+    await say(mom, { t: 'track_put', item: { id: 'note0001', kind: 'note', start: T(), data: { note: 'spit up' } } });
+    await say(mom, { t: 'track_del', id: 'note0001' });
+    expect(mom.msgs('track_del')[0]).toMatchObject({ id: 'note0001' });
+    await say(mom, { t: 'q', id: 'q2', q: 'track_sync', since: before - 1 });
+    const r = mom.msgs('r').find((m) => m.id === 'q2') as { items: { id: string; deleted?: boolean }[] };
+    expect(r.items).toEqual([expect.objectContaining({ id: 'note0001', deleted: true })]);
+  });
+
+  it('parents set the baby’s birth date and sex for age-based guidance', async () => {
+    const { join, say } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    await say(bob, { t: 'settings', baby: { birth: '2026-07-01', sex: 'f' } });
+    expect(bob.msgs('settings').at(-1)?.settings).not.toHaveProperty('baby.birth', '2026-07-01');
+    await say(mom, { t: 'settings', baby: { birth: '2026-07-01', sex: 'f' } });
+    expect((mom.msgs('settings').at(-1)!.settings as { baby: unknown }).baby).toEqual({ birth: '2026-07-01', sex: 'f' });
+    await say(mom, { t: 'settings', baby: { birth: '2999-01-01', sex: 'x' } });
+    expect((mom.msgs('settings').at(-1)!.settings as { baby: unknown }).baby).toEqual({ birth: null, sex: null });
+  });
+});

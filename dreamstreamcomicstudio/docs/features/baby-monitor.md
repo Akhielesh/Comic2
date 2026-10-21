@@ -130,6 +130,36 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
   join, `share_set` / `share_off` / `guest_remove`), `live/monitor/guest.ts`,
   `live/views/MonitorJoin.tsx`, `live/views/monitor/PeopleCard.tsx`.
 
+## Baby tracker (feeds, diapers, sleep, growth…)
+
+The watch screen's **Tracker** layout — Huckleberry-style logging shared live by the
+family, in the same room connection as the monitor.
+
+- **Log**: breastfeeds (timer with left/right switching), bottles (ml/oz, formula /
+  breast milk), solids, pumping, diapers (wet/dirty/both/dry, colour, texture, rash),
+  sleep (timer or after the fact), medicine (name, dose as entered, interval), temperature
+  (°C/°F, method), growth, activities (tummy time, bath…), notes. Any phone can stop a
+  timer another started. The camera's automatic sleep sessions appear alongside manual
+  sleep (manual wins where they overlap).
+- **What's next**: nap "sweet spot" from age-based wake windows blended with the baby's
+  own recent rhythm; next feed from their median interval (start-to-start) and which side
+  to start on; when the next medicine dose is allowed by the interval the parent entered.
+- **Gentle checks**: wet-diaper counts by age (only once the log covers ≥ 8 h), concerning
+  stool colours, AAP fever thresholds by age and method, doses logged sooner than the
+  interval. All worded as guidance with "call your pediatrician" for red flags — never a
+  diagnosis, and no dose calculations.
+- **Trends & growth**: 7/14/30-day sleep (night + naps), feeds, bottle volume and
+  diapers, plus up to four plain-language insights (week over week). Weight, length and
+  head circumference on the **WHO Child Growth Standards** (0–24 months; LMS tables from
+  the CDC-hosted WHO files) with percentiles and a chart.
+- **Sync**: entries are saved optimistically, queued in `localStorage` while offline and
+  sent on the next connection; the room clamps every field (`trackerStore.ts`), soft-deletes
+  so offline phones learn about deletions, and closes timers left running for a day.
+  CSV export for the pediatrician (`/export?what=track`).
+- Code: `live-worker/src/trackerStore.ts` (+ tests), MonitorRoom `track_put` /
+  `track_del` / queries `track`, `track_sync`; `live/monitor/trackTypes.ts`,
+  `trackerSync.ts`, `trackerScience.ts`, `whoGrowth.ts` (+ tests); `live/views/tracker/*`.
+
 ## Sound level, sleep and history
 
 - The camera sends one row per minute (LAeq, Lmax, L10/50/90, peak, motion,

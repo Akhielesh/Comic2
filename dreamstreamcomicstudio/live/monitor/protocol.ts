@@ -3,6 +3,7 @@
  * live-worker/src/monitorRoom.ts — the worker compiles separately).
  */
 
+import type { BabyProfile, TrackItem, TrackKind } from './trackTypes';
 import type { SoundCat } from './soundClasses';
 import type { Zone } from './vision';
 
@@ -123,6 +124,8 @@ export interface MonSettings {
   sleepTracking?: boolean;
   /** Zones per camera device id. */
   zones?: Record<string, Zone[]>;
+  /** For the tracker's age-based guidance. */
+  baby?: BabyProfile;
   /** The nursery's time zone. */
   tz?: string;
 }
@@ -251,11 +254,15 @@ export type MonServerMsg =
       incidents?: Incident[];
       duty?: Duty | null;
       sleep?: SleepStatus;
+      track?: { running: TrackItem[]; latest: Partial<Record<TrackKind, TrackItem>> };
       ice: RTCIceServer[];
       vapid: string | null;
     }
   | { t: 'presence'; cams: CamPresence[]; viewers: ViewerPresence[] }
   | { t: 'share'; share: ShareInfo }
+  | { t: 'track'; item: TrackItem }
+  | { t: 'track_del'; id: string }
+  | { t: 'track_err'; id?: string; msg: string }
   | { t: 'share_err'; msg: string }
   | { t: 'rtc'; from: string; d: MonRtc; name?: string; label?: string | null; role?: MonRole }
   | { t: 'status'; dev: string; sid: string; st: CamStatus; at: number }

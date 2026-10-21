@@ -6,6 +6,15 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Baby tracker, built into the monitor (2026-10-21):** a new **Tracker** layout for
+  breastfeeds (a timer that switches sides), bottles (ml or oz), solids, pumping,
+  diapers, sleep, medicine, temperature, growth, tummy time and notes — shared live with
+  the whole family, so Grandpa can stop the sleep timer Mom started. **Up next** shows the
+  nap sweet spot (from age-based wake windows and the baby's own rhythm), the next feed
+  and which side to start on, and when the next medicine dose is allowed. Gentle checks
+  for wet diapers, stool colour, fevers by age (AAP) and early doses; 7/14/30-day trends
+  with plain-language insights; growth percentiles on the WHO standards; works offline
+  and catches up; CSV for the pediatrician. The camera's automatic sleep shows up too.
 - **Baby monitor layouts (2026-10-21):** pick how the watch screen looks — **Monitor**
   (the picture, controls, status and only the safety checks that need you; the default
   on phones), **All** (sleep, sound level, logs, alerts, people and settings; the default

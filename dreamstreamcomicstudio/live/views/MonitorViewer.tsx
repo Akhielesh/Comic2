@@ -7,7 +7,7 @@
 // per category, spoken alerts, vibration) with an "I'm on it" hand-off
 // across the family, plus a live "what's happening" card, a 24 h timeline
 // and a filterable activity log.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useSyncExternalStore, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
 import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
@@ -22,6 +22,10 @@ import { Icon } from '../ui/icons';
 import { Btn, Meter, Pill, Segmented, Toggle, cx, useMediaQuery, type PushToast } from '../ui/primitives';
 import { ScreenWakeLock, type WakeState } from '../wakeLock';
 import { BedsideView } from './monitor/BedsideView';
+import { TrackerPanel } from './tracker/TrackerPanel';
+import { stopTimer } from './tracker/TimerCard';
+import { TrackerSync } from '../monitor/trackerSync';
+import type { TrackKind } from '../monitor/trackTypes';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
 import { clearGuest, loadGuest, type GuestPass } from '../monitor/guest';
 import { PeopleCard } from './monitor/PeopleCard';
@@ -120,7 +124,7 @@ interface ActiveAlert {
 
 type LogFilter = 'all' | 'baby' | 'alerts' | 'care' | 'room';
 /** monitor: the picture and what needs you · all: every card · bedside: the nightstand view. */
-type ViewMode = 'monitor' | 'all' | 'bedside';
+type ViewMode = 'monitor' | 'track' | 'all' | 'bedside';
 const VIEW_KEY = 'ds-monitor-view';
 /** Log lines worth showing on the nightstand ("Cried 3 min · 2:14"). */
 const BEDSIDE_KINDS = new Set(['cry', 'cry_end', 'fuss', 'fuss_end', 'cough', 'asleep', 'woke', 'resettled', 'zone', 'crib_out', 'alarm', 'glass', 'crash', 'very_loud', 'feed', 'diaper', 'sleep', 'wake', 'note', 'ack', 'resolved']);
@@ -192,13 +196,16 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [view, setViewState] = useState<ViewMode>(() => {
     try {
       const v = localStorage.getItem(VIEW_KEY);
-      if (v === 'monitor' || v === 'all') return v;
+      if (v === 'monitor' || v === 'all' || v === 'track') return v;
     } catch { /* storage unavailable */ }
     return typeof window !== 'undefined' && window.matchMedia?.('(min-width: 980px)').matches ? 'all' : 'monitor';
   });
   const [pip, setPip] = useState(false);
+  const tracker = useMemo(() => new TrackerSync(id), [id]);
+  const trackSnap = useSyncExternalStore(tracker.subscribe, tracker.snapshot);
+  /** Open a tracker sheet from elsewhere (the Monitor view's quick log). */
+  const [trackOpen, setTrackOpen] = useState<{ kind: TrackKind; n: number } | null>(null);
   const [logFilter, setLogFilter] = useState<LogFilter>('all');
-  const [note, setNote] = useState('');
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [duty, setDuty] = useState<Duty | null>(null);
   const [sleep, setSleep] = useState<SleepStatus | null>(null);
@@ -247,6 +254,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
 
     const sockNow = openMonitorSocket(id, 'viewer', (m) => onMsgRef.current(m), onBinary, (s, detail) => {
       setSock(s);
+      if (s !== 'connected') tracker.detach();
       if (s === 'closed') setClosedMsg(detail || 'Disconnected from the nursery.');
     });
     sockRef.current = sockNow;
@@ -355,6 +363,10 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   };
 
   const onMsg = (m: MonServerMsg) => {
+    if (m.t === 'track' || m.t === 'track_del' || m.t === 'track_err') {
+      tracker.handle(m);
+      return;
+    }
     switch (m.t) {
       case 'hello': {
         setMe({ sid: m.you.sid, uid: m.you.uid, role: m.you.role, name: m.you.name, label: m.you.label });
@@ -365,6 +377,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         queryRef.current?.cancelAll();
         queryRef.current = new MonQuery((q) => sockRef.current?.send(q));
         setQuery(queryRef.current);
+        tracker.attach((msg) => sockRef.current?.send(msg), queryRef.current, m.track);
         setNursery(m.nursery);
         setCams(m.cams);
         setViewers(m.viewers);
@@ -754,10 +767,6 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     push(list.length ? `Zones saved — ${cam.dn} watches them now` : 'Zones cleared', { icon: 'check' });
   };
 
-  const quickLog = (kind: 'feed' | 'diaper' | 'sleep' | 'wake' | 'note', text = '') => {
-    sockRef.current?.send({ t: 'log', kind, text });
-    if (kind === 'note') setNote('');
-  };
 
   const updateCues = (patch: Partial<CuePrefs>) => {
     const next = { ...cues, ...patch, cats: { ...cues.cats, ...(patch.cats ?? {}) } };
@@ -1084,18 +1093,26 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   );
 
   /* ------------------------------------------------------------- care */
+  const runningSleep = trackSnap.running.find((r) => r.kind === 'sleep');
+  const openTrack = (kind: TrackKind) => {
+    setView('track');
+    setTrackOpen({ kind, n: Date.now() });
+  };
   const quickLogs = canAct && (
     <div className="card card-pad mv-quick" data-tour="mv-log">
-      <div className="mv-sect-title">Quick log</div>
-      <div className="quick-grid">
-        <button onClick={() => quickLog('feed')}><Icon name="bottle" size={17} />Fed</button>
-        <button onClick={() => quickLog('diaper')}><Icon name="sparkles" size={17} />Diaper</button>
-        <button onClick={() => quickLog('sleep')}><Icon name="moon" size={17} />Asleep</button>
-        <button onClick={() => quickLog('wake')}><Icon name="sun" size={17} />Awake</button>
+      <div className="row" style={{ alignItems: 'center' }}>
+        <div className="mv-sect-title" style={{ margin: 0, flex: 1 }}>Quick log</div>
+        <button className="linkish" onClick={() => setView('track')}>Open the tracker</button>
       </div>
-      <div className="row" style={{ marginTop: 10 }}>
-        <input className="input" value={note} maxLength={160} placeholder="Add a note (e.g. 120 ml, slight fever)…" onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && note.trim() && quickLog('note', note.trim())} aria-label="Note" />
-        <Btn variant="soft" icon="plus" disabled={!note.trim()} onClick={() => quickLog('note', note.trim())}>Add</Btn>
+      <div className="quick-grid">
+        <button onClick={() => openTrack('bottle')}><Icon name="bottle" size={17} />Bottle</button>
+        <button onClick={() => openTrack('breast')}><Icon name="breast" size={17} />Breast</button>
+        <button onClick={() => openTrack('diaper')}><Icon name="diaper" size={17} />Diaper</button>
+        <button onClick={() => {
+          if (!runningSleep) return openTrack('sleep');
+          tracker.put(stopTimer(runningSleep, Date.now()));
+          push(`${baby} woke up — sleep logged`, { icon: 'sun', duration: 2000 });
+        }}><Icon name={runningSleep ? 'sun' : 'moon'} size={17} />{runningSleep ? 'Woke up' : 'Sleep'}</button>
       </div>
     </div>
   );
@@ -1258,6 +1275,9 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           <button role="radio" aria-checked={view === 'monitor'} className={cx(view === 'monitor' && 'sel')} onClick={() => setView('monitor')} title="Monitor — the picture and what needs you">
             <Icon name="video" size={15} /><span>Monitor</span>
           </button>
+          <button role="radio" aria-checked={view === 'track'} className={cx(view === 'track' && 'sel')} onClick={() => setView('track')} title="Tracker — feeds, diapers, sleep, growth and what’s next">
+            <Icon name="bottle" size={15} /><span>Tracker</span>
+          </button>
           <button role="radio" aria-checked={view === 'all'} className={cx(view === 'all' && 'sel')} onClick={() => setView('all')} title="Everything — sleep, sound level, logs and settings">
             <Icon name="grid" size={15} /><span>All</span>
           </button>
@@ -1279,11 +1299,28 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       )}
       <div className={cx('mv-grid', wide && 'wide')}>
         <div className="mv-col">
-          {stage}
-          {nowCard}
-          {quickLogs}
+          {(view !== 'track' || cam) && stage}
+          {view !== 'track' && nowCard}
+          {view !== 'track' && quickLogs}
         </div>
         <div className="mv-col">
+          {view === 'track' ? (
+            <TrackerPanel
+              nid={id}
+              sync={tracker}
+              baby={settings.baby ?? null}
+              babyName={baby}
+              tz={settings.tz}
+              me={me ? (me.label ? `${me.name} (${me.label})` : me.name) : 'Me'}
+              canLog={canAct}
+              isParent={me?.role === 'parent' && !guest}
+              guest={!!guest}
+              open={trackOpen}
+              onSaveBaby={(b) => sockRef.current?.send({ t: 'settings', baby: b })}
+              push={push}
+            />
+          ) : (
+          <>
           <SafetyCard
             incidents={incidents}
             duty={duty}
@@ -1337,6 +1374,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
               }
             }}
           />
+          </>
+          )}
           </>
           )}
         </div>

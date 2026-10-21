@@ -23,7 +23,8 @@
  */
 
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
-import { clockTime, isValidTz, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
+import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
+import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
 import { callRpc, type SupabaseEnv } from './supabaseAuth';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
@@ -213,6 +214,8 @@ export interface Settings {
   zones: Record<string, Zone[]>;
   /** The nursery's time zone (from its camera phone). */
   tz: string;
+  /** The baby, for the tracker's age-based guidance (wake windows, growth percentiles). */
+  baby?: { birth: string | null; sex: 'f' | 'm' | null };
 }
 
 interface Duty {
@@ -306,11 +309,13 @@ export class MonitorRoom {
   private ice: { at: number; servers: unknown[] } | null = null;
   readonly store: MonitorStore;
   readonly guests: GuestAccess;
+  readonly tracker: TrackerStore;
   readonly ready: Promise<void>;
 
   constructor(private state: DurableObjectState, private env: MonEnv) {
     this.store = new MonitorStore(state.storage.sql);
     this.guests = new GuestAccess(state.storage.sql);
+    this.tracker = new TrackerStore(state.storage.sql);
     this.ready = state.blockConcurrencyWhile(() => this.migrate());
   }
 
@@ -399,7 +404,7 @@ export class MonitorRoom {
     if (!res.ok) return json({ error: 'sign in' }, res.status === 401 ? 401 : 502);
     if (!res.data.ok || (res.data.role !== 'parent' && res.data.role !== 'caregiver')) return json({ error: 'forbidden' }, 403);
     const what = url.searchParams.get('what');
-    const kind = what === 'minutes' || what === 'sleep' ? what : 'events';
+    const kind = what === 'minutes' || what === 'sleep' || what === 'track' ? what : 'events';
     // An absent parameter is "default", never 0 (Number(null) === 0).
     const param = (k: string) => url.searchParams.get(k) || undefined;
     const now = Date.now();
@@ -407,7 +412,7 @@ export class MonitorRoom {
     const from = num(param('from'), to - 90 * 24 * 60 * 60_000, to, to - 7 * 24 * 60 * 60_000);
     const settings = await this.settings();
     const meta = await this.meta();
-    const csv = this.store.csv(kind, from, to + 1, settings.tz);
+    const csv = kind === 'track' ? this.tracker.csv(from, to + 1, (t) => localIso(t, settings.tz)) : this.store.csv(kind, from, to + 1, settings.tz);
     const slug = (meta.name || 'nursery').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'nursery';
     return new Response(`﻿${csv}\r\n`, {
       headers: {
@@ -563,6 +568,10 @@ export class MonitorRoom {
         return this.onSettings(a, msg);
       case 'q':
         return this.onQuery(ws, msg);
+      case 'track_put':
+        return this.onTrackPut(ws, a, msg);
+      case 'track_del':
+        return this.onTrackDel(a, msg);
       case 'sleep_delete':
         return this.onSleepDelete(a, msg);
       case 'members_changed':
@@ -713,6 +722,7 @@ export class MonitorRoom {
       tl,
       settings,
       incidents: this.store.activeIncidents(),
+      track: { running: this.tracker.running(), latest: this.tracker.latest() },
       duty,
       sleep,
       ice,
@@ -1226,6 +1236,94 @@ export class MonitorRoom {
     }
   }
 
+  // ------------------------------------------------------------ tracker
+  /** Add or edit a tracker entry (feeds, diapers, sleep…) — parents and caregivers, guests included. */
+  private async onTrackPut(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role === 'viewer') return this.send(ws, { t: 'track_err', id: clip((msg.item as Record<string, unknown> | undefined)?.id, 40), msg: 'Viewers can see the tracker but not log — ask a parent to make you a caregiver.' });
+    const now = Date.now();
+    const who = { name: a.label ? `${a.name} (${a.label})` : a.name || 'Someone', uid: a.uid || a.sid };
+    const r = sanitizeTrack((msg.item ?? {}) as Record<string, unknown>, who, now);
+    if (!r.ok) return this.send(ws, { t: 'track_err', id: clip((msg.item as Record<string, unknown> | undefined)?.id, 40), msg: r.error });
+    const before = this.tracker.get(r.row.id);
+    const saved = this.tracker.put(r.row);
+    if (!saved) return this.send(ws, { t: 'track_del', id: r.row.id });
+    this.broadcast({ t: 'track', item: saved });
+    await this.trackLog(saved, before, a);
+  }
+
+  private async onTrackDel(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role === 'viewer') return;
+    const id = clip(msg.id, 40);
+    if (id && this.tracker.delete(id, Date.now())) this.broadcast({ t: 'track_del', id });
+  }
+
+  /** One line in the activity log when something is logged or a timer stops — and sleep steers the sleep tracker. */
+  private async trackLog(row: TrackRow, before: TrackRow | null, a: Attach): Promise<void> {
+    const started = !before;
+    const stopped = !!before && before.end == null && row.end != null;
+    if (!started && !stopped) return;
+    const d = row.data as Record<string, number | string | boolean | undefined>;
+    const mins = row.end != null ? Math.max(1, Math.round((row.end - row.start) / 60_000)) : 0;
+    const by = a.label ? `${a.name} (${a.label})` : a.name;
+    let kind = 'note';
+    let text: string | null = null;
+    switch (row.kind) {
+      case 'bottle':
+        kind = 'feed';
+        text = `Bottle · ${d.ml} ml${d.milk === 'breast' ? ' breast milk' : d.milk === 'formula' ? ' formula' : ''}`;
+        break;
+      case 'breast':
+        if (row.end == null) return;
+        kind = 'feed';
+        text = `Breastfed ${mins} min${d.left || d.right ? ` (L ${Math.round(Number(d.left ?? 0) / 60)} · R ${Math.round(Number(d.right ?? 0) / 60)})` : ''}`;
+        break;
+      case 'solids':
+        kind = 'feed';
+        text = `Solids${d.foods ? ` · ${d.foods}` : ''}`;
+        break;
+      case 'diaper':
+        kind = 'diaper';
+        text = `Diaper · ${d.pee && d.poo ? 'wet + dirty' : d.poo ? 'dirty' : d.pee ? 'wet' : 'dry'}`;
+        break;
+      case 'sleep':
+        kind = row.end == null ? 'sleep' : 'wake';
+        text = row.end == null ? 'Down for sleep' : `Woke up after ${dur(mins * 60)}`;
+        if (started && row.end != null) text = `Slept ${dur(mins * 60)}`;
+        break;
+      case 'pump':
+        if (row.end == null) return;
+        text = `Pumped ${Number(d.mlLeft ?? 0) + Number(d.mlRight ?? 0)} ml`;
+        break;
+      case 'med':
+        text = `Gave ${d.name}${d.dose ? ` ${d.dose} ${d.unit ?? ''}`.trimEnd() : ''}`;
+        break;
+      case 'temp':
+        text = `Temperature ${d.c} °C${d.method ? ` (${d.method})` : ''}`;
+        break;
+      case 'growth':
+        text = `Measured${d.kg ? ` · ${d.kg} kg` : ''}${d.cm ? ` · ${d.cm} cm` : ''}${d.headCm ? ` · head ${d.headCm} cm` : ''}`;
+        break;
+      case 'activity':
+        if (row.end == null) return;
+        text = `${{ tummy: 'Tummy time', bath: 'Bath', play: 'Play', outdoor: 'Outside', reading: 'Reading', skin: 'Skin-to-skin' }[String(d.type)] ?? 'Activity'} · ${mins} min`;
+        break;
+      case 'note':
+        text = d.note ? `Note — ${String(d.note).slice(0, 140)}` : null;
+        break;
+    }
+    if (!text) return;
+    await this.addLog({ kind, msg: text, by, sev: 'care' });
+    // The sleep timer is the same thing as "Down for sleep" / "Woke up" for the camera's sleep tracker.
+    if (row.kind === 'sleep' && row.start > Date.now() - 10 * 60_000) {
+      const sm = (await this.state.storage.get<SleepSm>('sleepSm')) ?? newSleepSm();
+      const events = row.end == null ? manualSleep(sm, Date.now(), newId()) : stopped ? manualWake(sm, Date.now()) : [];
+      if (events.length) {
+        await this.state.storage.put('sleepSm', sm);
+        await this.onSleepEvents(events);
+      }
+    }
+  }
+
   /** "I'm on it" — tells everyone someone is checking; answers the incident. */
   private async onAck(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role === 'viewer') return;
@@ -1340,6 +1438,19 @@ export class MonitorRoom {
       const limit = Math.round(num(msg.limit, 1, 200, 80));
       const rows = this.store.events({ before: msg.before == null ? undefined : num(msg.before, 0, now + 1), limit: limit + 1, kinds }).map(toLog);
       return reply({ rows: rows.slice(0, limit), more: rows.length > limit });
+    }
+    if (q === 'track') {
+      // The tracker's log for a window, with the camera's automatic sleep sessions alongside.
+      const to = num(msg.to, 0, now + 24 * 60 * 60_000, now + 60_000);
+      const from = num(msg.from, to - 400 * 24 * 60 * 60_000, to, to - 2 * 24 * 60 * 60_000);
+      const auto: TrackRow[] = this.store
+        .sleepBetween(from, to)
+        .filter((x) => !x.summary?.discarded && x.onset != null)
+        .map((x) => ({ id: `ms-${x.id}`, kind: 'sleep', start: x.onset ?? x.start, end: x.end, by: 'Camera', by_uid: 'camera', data: { where: 'crib', wakings: x.wakings }, src: 'monitor', updated: x.end ?? now }));
+      return reply({ from, to, items: this.tracker.range(from, to), auto, settings: { tz: (await this.settings()).tz, baby: (await this.settings()).baby ?? null } });
+    }
+    if (q === 'track_sync') {
+      return reply({ items: this.tracker.changedSince(num(msg.since, 0, now, 0)), now });
     }
     if (q === 'sleep') {
       const days = Math.round(num(msg.days, 1, 60, 14));
@@ -1493,6 +1604,11 @@ export class MonitorRoom {
       else if (msg.noiseDb != null) cur.noiseDb = Math.round(num(msg.noiseDb, 45, 100, 70));
       if (typeof msg.machineCheck === 'boolean') cur.machineCheck = msg.machineCheck;
       if (typeof msg.sleepTracking === 'boolean') cur.sleepTracking = msg.sleepTracking;
+      if (msg.baby && typeof msg.baby === 'object') {
+        const b = msg.baby as Record<string, unknown>;
+        const birth = typeof b.birth === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.birth) && Date.parse(b.birth) <= Date.now() && Date.parse(b.birth) > Date.now() - 6 * 366 * 86400_000 ? b.birth : null;
+        cur.baby = { birth, sex: b.sex === 'f' || b.sex === 'm' ? b.sex : null };
+      }
     }
     if (msg.zones && typeof msg.zones === 'object' && typeof (msg.zones as Record<string, unknown>).dev === 'string') {
       const z = msg.zones as { dev: string; list: unknown };
@@ -1509,7 +1625,6 @@ export class MonitorRoom {
     this.broadcast({ t: 'settings', settings: cur });
   }
 
-  /** A parent changed the member list: drop sockets of anyone removed. */
   // ------------------------------------------------------------- guests
   /** Someone opened the share link and typed the passcode. */
   private async handleGuestJoin(req: Request, url: URL): Promise<Response> {
@@ -1603,6 +1718,7 @@ export class MonitorRoom {
     for (const s of this.authed()) if (s.a.role === 'parent' && !s.a.guest) this.send(s.ws, { t: 'share', share: info });
   }
 
+  /** A parent changed the member list: drop sockets of anyone removed. */
   private async onMembersChanged(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent') return;
     const token = clip(msg.token, 4096);
@@ -1735,6 +1851,7 @@ export class MonitorRoom {
     if (now - purgedAt > PURGE_EVERY_MS) {
       this.store.purge(now);
       this.guests.purge(now);
+      this.tracker.purge(now);
       await this.state.storage.put('purgedAt', now);
     }
 
