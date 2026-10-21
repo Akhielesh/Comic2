@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assertModelAllowedForTier, resolveAllowedModels } from './modelAccessPolicy.js';
+import { IMAGE_MODELS } from '../../../shared/comic/models.js';
+import { assertModelAllowedForTier, resolveAllowedModels, toEffectiveTier } from './modelAccessPolicy.js';
 
 describe('modelAccessPolicy', () => {
   it('coerces free text model to Gemini 2.0 Flash before rollover', () => {
@@ -53,8 +54,43 @@ describe('modelAccessPolicy', () => {
     expect(result.coerced).toBe(false);
   });
 
-  it('keeps free image model list to Flux + Nano Banana', () => {
+  it('keeps free image model list to Flux + Nano Banana (+ Comic Studio Nano Banana 2.1)', () => {
     const allowed = resolveAllowedModels('image', 'free');
-    expect(allowed).toEqual(['pixazo/flux-1-schnell', 'gemini-2.5-flash-image']);
+    expect(allowed).toEqual([
+      'pixazo/flux-1-schnell',
+      'gemini-2.5-flash-image',
+      'gemini-nano-banana-2.1',
+      'google/gemini-nano-banana-2.1'
+    ]);
+  });
+});
+
+describe('modelAccessPolicy — paid plans and Comic Studio image models', () => {
+  it.each(['creator', 'custom', 'pro', 'studio', 'admin'])('treats the paid plan %s as pro', (plan) => {
+    expect(toEffectiveTier(plan)).toBe('pro');
+    const result = assertModelAllowedForTier({ scope: 'image', planTier: plan, requestedModel: 'google/gemini-3-pro-image' });
+    expect(result.effectiveModel).toBe('google/gemini-3-pro-image');
+  });
+
+  it('keeps free and unknown plans on the free tier', () => {
+    expect(toEffectiveTier('free')).toBe('free');
+    expect(toEffectiveTier(undefined)).toBe('free');
+    expect(toEffectiveTier('mystery')).toBe('free');
+  });
+
+  it('gives paid plans every registry image model on both transports', () => {
+    const allowed = resolveAllowedModels('image', 'creator');
+    for (const spec of IMAGE_MODELS) {
+      for (const id of Object.values(spec.routes)) expect(allowed).toContain(id);
+    }
+    expect(allowed).toContain('gemini-3-pro-image-preview');
+    expect(new Set(allowed).size).toBe(allowed.length);
+  });
+
+  it('lets free plans use Nano Banana 2.1 but not Pro', () => {
+    expect(assertModelAllowedForTier({ scope: 'image', planTier: 'free', requestedModel: 'gemini-nano-banana-2.1' }).effectiveModel).toBe(
+      'gemini-nano-banana-2.1'
+    );
+    expect(() => assertModelAllowedForTier({ scope: 'image', planTier: 'free', requestedModel: 'google/gemini-3-pro-image' })).toThrow();
   });
 });
