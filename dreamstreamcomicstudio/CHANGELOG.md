@@ -6,6 +6,16 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Admin Cost centre (2026-10-21):** DreamStream → Account → Admin → **Costs**: what the
+  platform costs to run against what it brings in, on real data — total cost with its
+  trend and run-rate, AI spend (provider vs billable, margin; users' own-key calls kept
+  apart), revenue (MRR from paid subscriptions, comped accounts shown separately), cost per
+  active user, a stacked daily chart with per-day hover breakdowns, where the money goes
+  (each line badged measured / estimated / fixed), and sortable, CSV-exportable tables:
+  products (cost vs requests vs users, with a verdict — e.g. what retiring the Code
+  Studio sandbox saves), AI by model / user, connectors vs their budgets, fixed costs and
+  revenue by tier. Live per-Worker Cloudflare usage appears once a read-only analytics
+  token is added.
 - **Tracker: the week at a glance, and richer logs (2026-10-21):** a Huckleberry-style
   week view (one 24-hour strip per day: sleep, feeds, diapers — tap a day to open it);
   mark a sleep as nap or night and how well it went; how full a diaper was; "skipped this

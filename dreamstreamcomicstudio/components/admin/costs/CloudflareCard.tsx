@@ -40,7 +40,7 @@ export const CloudflareCard: React.FC<{ cloudflare: CloudflareSection; days: num
             <Cloud className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden />
             <div>
               <SurfaceTitle>Live Cloudflare usage</SurfaceTitle>
-              <SurfaceSubtitle>Not connected — Workers requests and R2 storage are optional extras</SurfaceSubtitle>
+              <SurfaceSubtitle>Not connected — optional: per-Worker requests and R2 storage</SurfaceSubtitle>
             </div>
           </div>
         }

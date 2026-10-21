@@ -372,7 +372,7 @@ export const CostCentre: React.FC = () => {
   } else {
     const t = report.totals;
     const noAiSpend = t.aiProviderUsd === 0;
-    const aiNote = report.ai.byokEvents ? `${fmtCount(report.ai.byokEvents)} calls ran on users' own keys (not platform spend).` : null;
+    const aiNote = report.ai.byokEvents ? `${fmtCount(report.ai.byokEvents)} ${report.ai.byokEvents === 1 ? 'call' : 'calls'} ran on users' own keys (not platform spend).` : null;
     body = (
       // Refetch keeps the frame: the previous render dims instead of flashing a skeleton.
       <div className={`space-y-4 transition-opacity duration-200 ${loading ? 'opacity-60' : 'opacity-100'}`} aria-busy={loading}>
