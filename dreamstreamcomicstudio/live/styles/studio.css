@@ -275,3 +275,10 @@
 .sk-strip .sk-cell { width: 26%; }
 .sk-col { display: flex; flex-direction: column; gap: 6%; width: 30%; }
 .sk-col .sk-cell { flex: 1; }
+
+/* Health rail: the status line and delivery path as small visuals, not prose. */
+.health-panel .hs-note { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.hs-pipe { margin: 8px 0 0; }
+.hs-pipe .how-node { width: 52px; }
+.hs-pipe .how-ic { width: 30px; height: 30px; border-radius: 10px; }
+.hs-pipe .how-wire { margin-top: 14px; }

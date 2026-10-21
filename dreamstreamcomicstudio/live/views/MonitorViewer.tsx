@@ -22,6 +22,8 @@ import { Icon } from '../ui/icons';
 import { Btn, Meter, Pill, Segmented, Toggle, cx, useMediaQuery, type PushToast } from '../ui/primitives';
 import { ScreenWakeLock, type WakeState } from '../wakeLock';
 import { BedsideView } from './monitor/BedsideView';
+import { AlertsCard } from './monitor/AlertsCard';
+import { MoodGlyph, type Mood } from './monitor/MoodGlyph';
 import { TrackerPanel } from './tracker/TrackerPanel';
 import { stopTimer } from './tracker/TimerCard';
 import { TrackerSync } from '../monitor/trackerSync';
@@ -47,14 +49,6 @@ const ROOM_KINDS = new Set([
 const BABY_KINDS = new Set(['cry', 'fuss', 'cough', 'sneeze', 'snore', 'hiccup', 'babble', 'laugh', 'cry_end', 'fuss_end', 'asleep', 'woke', 'resettled', 'sleep_report', 'zone', 'crib_out']);
 /** Log kinds that raise an in-app alert (besides the sound categories). */
 const ROOM_ALERTS = new Set<string>(Object.keys(ALERT_META));
-const PUSH_CATS: { k: string; label: string; locked?: boolean }[] = [
-  { k: 'cry', label: 'Crying' }, { k: 'alarm', label: 'Smoke / CO alarm', locked: true }, { k: 'zone', label: 'Danger zones, climbing out & sharp objects' },
-  { k: 'glass', label: 'Breaking glass' }, { k: 'crash', label: 'Bangs & crashes' }, { k: 'cough', label: 'Coughing' },
-  { k: 'noise', label: 'Very loud noise (85 dB+)' }, { k: 'camera', label: 'Camera moved or knocked' }, { k: 'cat', label: 'Cat in the nursery' },
-  { k: 'offline', label: 'Camera offline' }, { k: 'battery', label: 'Camera battery low' }, { k: 'report', label: 'Morning sleep report' },
-  { k: 'insight', label: 'Sound machine too loud' }, { k: 'fuss', label: 'Fussing' }, { k: 'loud', label: 'Noise above your threshold' },
-  { k: 'guest', label: 'New guests & wrong passcodes (parents)' },
-];
 const DEFAULT_PUSH: Record<string, boolean> = {
   cry: true, alarm: true, zone: true, glass: true, crash: true, cough: true, noise: true, camera: true, cat: true,
   offline: true, battery: true, report: true, insight: true, fuss: false, loud: false, guest: true,
@@ -109,7 +103,6 @@ const logMeta = (kind: string) => (SOUND_SET.has(kind) ? { icon: SOUND_INFO[kind
 
 const pushKey = (nid: string) => `ds-monitor-push-${nid}`;
 /** In-app cue settings, most important first. */
-const CUE_ORDER: AlertCat[] = ['cry', 'alarm', 'glass', 'zone', 'crib_out', 'object', 'cough', 'crash', 'cat', 'very_loud', 'moved', 'paused', 'offline', 'battery', 'machine', 'fuss', 'loud', 'babble', 'laugh', 'voices', 'music', 'dog'];
 const camKey = (nid: string) => `ds-monitor-cam-${nid}`;
 
 interface ActiveAlert {
@@ -870,8 +863,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     } catch { /* storage unavailable */ }
   };
 
-  const updatePushPref = (k: string, v: boolean) => {
-    const next = { ...pushPrefs, [k]: v, alarm: true };
+  const setAllPushPrefs = (prefs: Record<string, boolean>) => {
+    const next = { ...prefs, alarm: true };
     setPushPrefs(next);
     try {
       localStorage.setItem(`${pushKey(id)}-prefs`, JSON.stringify(next));
@@ -1044,7 +1037,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const nowCard = (
     <div className={cx('card mv-status', `tone-${info.tone}`)} data-tour="mv-status">
       <div className="mvs-head">
-        <span className={cx('state-dot big', `tone-${info.tone}`)} />
+        <MoodGlyph mood={state as Mood} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="mvs-state">{nursery.baby ? `${nursery.baby} · ` : ''}{info.label}</div>
           <div className="faint" style={{ fontSize: 12.5 }}>
@@ -1241,67 +1234,39 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
 
   /* --------------------------------------------------------- settings */
   const alertsCard = (
-    <div className="card card-pad mv-alertcfg" data-tour="mv-alerts">
-      <div className="row" style={{ gap: 10 }}>
-        <Icon name="bell" size={17} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <b>Alerts on this device</b>
-          <div className="faint" style={{ fontSize: 12.5 }}>
-            {!pushSupported()
-              ? 'This browser can’t alert in the background — keep this page open.'
-              : needsHomeScreen()
-                ? 'iPhone: Share → Add to Home Screen, open it from there, then turn this on.'
-                : 'Notifications even when Stream Studio is closed or the phone is locked.'}
-          </div>
-        </div>
-        <Toggle on={pushOn} onChange={(v) => void (v ? enablePush() : disablePush())} label="Background alerts" />
-      </div>
-      <div className="alert-prefs">
-        {PUSH_CATS.map(({ k, label, locked }) => (
-          <label key={k} title={locked ? 'Always on for safety' : undefined}>
-            <input type="checkbox" checked={locked ? true : pushPrefs[k] ?? false} disabled={locked} onChange={(e) => updatePushPref(k, e.target.checked)} />
-            {label}{locked ? ' · always on' : ''}
+    <AlertsCard
+      pushOn={pushOn}
+      pushNote={
+        !pushSupported()
+          ? 'This browser can’t alert in the background — keep this page open.'
+          : needsHomeScreen()
+            ? 'iPhone: Share → Add to Home Screen, open it from there, then turn this on.'
+            : 'Even when Stream Studio is closed or the phone is locked.'
+      }
+      pushPrefs={pushPrefs}
+      cues={cues}
+      onPushOn={(v) => void (v ? enablePush() : disablePush())}
+      onPushPrefs={setAllPushPrefs}
+      onCues={updateCues}
+      onTest={() => sockRef.current?.send({ t: 'push_test' })}
+      onPreview={(c) => cuesRef.current.preview(c, ROOM_ALERTS.has(c) ? alertInfo(c).label : soundHeadline(c as SoundCat, nursery.baby))}
+      more={
+        <>
+          <label className="al-row">
+            <Toggle size="sm" on={keepAwake} onChange={setKeepAwake} label="Keep screen on" />
+            <span><b>Keep this screen on</b><small>Bedside view does this for you.</small></span>
           </label>
-        ))}
-      </div>
-      {pushOn && <Btn variant="soft" size="sm" icon="bell" onClick={() => sockRef.current?.send({ t: 'push_test' })}>Send a test notification</Btn>}
-
-      <div className="mv-sect-title" style={{ marginTop: 16 }}>While this screen is open</div>
-      <div className="cue-grid">
-        <label className="row" style={{ gap: 8 }}><Toggle size="sm" on={cues.sound} onChange={(v) => updateCues({ sound: v })} label="Alert sounds" />Alert sounds</label>
-        <label className="row" style={{ gap: 8 }}><Toggle size="sm" on={cues.speak} onChange={(v) => updateCues({ speak: v })} label="Speak alerts" />Speak alerts aloud</label>
-        <label className="row" style={{ gap: 8 }}><Toggle size="sm" on={cues.vibrate} onChange={(v) => updateCues({ vibrate: v })} label="Vibrate" />Vibrate (phones)</label>
-        <label className="row" style={{ gap: 8 }}><Toggle size="sm" on={cues.repeat} onChange={(v) => updateCues({ repeat: v })} label="Repeat until answered" />Repeat until someone responds</label>
-      </div>
-      <label className="cue-volume">
-        <Icon name="volume" size={15} />
-        <input type="range" className="slider" min={0} max={1} step={0.05} value={cues.volume} style={{ '--pct': `${cues.volume * 100}%` } as React.CSSProperties} onChange={(e) => updateCues({ volume: Number(e.target.value) })} aria-label="Alert volume" />
-      </label>
-      <div className="cue-cats">
-        {([...CUE_ORDER, ...SOUND_CATS.filter((c) => !CUE_ORDER.includes(c))] as AlertCat[]).map((c) => {
-          const ai = alertInfo(c);
-          return (
-            <div key={c} className={cx('cue-cat', `t-${ai.tone}`)}>
-              <input type="checkbox" checked={c === 'alarm' ? true : cues.cats[c] ?? false} disabled={c === 'alarm'} onChange={(e) => updateCues({ cats: { ...cues.cats, [c]: e.target.checked } })} aria-label={`${ai.label} alerts`} />
-              <Icon name={ai.icon} size={14} />
-              <span>{ai.label}</span>
-              <button className="linkish" onClick={() => cuesRef.current.preview(c, ROOM_ALERTS.has(c) ? ai.label : soundHeadline(c as SoundCat, nursery.baby))}>Preview</button>
-            </div>
-          );
-        })}
-      </div>
-      <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 12 }}>
-        <Toggle size="sm" on={keepAwake} onChange={setKeepAwake} label="Keep screen on" />Keep this screen on (Bedside view does this for you)
-      </label>
-      <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 8 }}>
-        <Toggle size="sm" on={silentHere} onChange={(v) => { setSilentHere(v); writeFlag(`ds-monitor-silent-${id}`, v); }} label="Silent alerts on this device" />
-        Silent alerts on this device — vibrate &amp; screen only (for a phone in the nursery)
-      </label>
-      <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 8 }}>
-        <Toggle size="sm" on={hearWhileTalking} onChange={(v) => { setHearWhileTalking(v); writeFlag('ds-monitor-hear-while-talking', v); }} label="Hear the nursery while talking" />
-        Hear the nursery while I talk (only with headphones — otherwise the phones can howl)
-      </label>
-    </div>
+          <label className="al-row">
+            <Toggle size="sm" on={silentHere} onChange={(v) => { setSilentHere(v); writeFlag(`ds-monitor-silent-${id}`, v); }} label="Silent alerts on this device" />
+            <span><b>Silent here</b><small>Vibrate and screen only — for a phone kept in the nursery.</small></span>
+          </label>
+          <label className="al-row">
+            <Toggle size="sm" on={hearWhileTalking} onChange={(v) => { setHearWhileTalking(v); writeFlag('ds-monitor-hear-while-talking', v); }} label="Hear the nursery while talking" />
+            <span><b>Hear the nursery while I talk</b><small>Headphones only — otherwise the phones can howl.</small></span>
+          </label>
+        </>
+      }
+    />
   );
 
   const lastLine = [...log].reverse().find((e) => BEDSIDE_KINDS.has(e.kind)) ?? null;

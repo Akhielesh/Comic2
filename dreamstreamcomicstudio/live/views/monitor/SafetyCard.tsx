@@ -57,6 +57,7 @@ export function SafetyCard({
   compact?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [picked, setPicked] = useState<string | null>(null);
   const canAct = me?.role === 'parent' || me?.role === 'caregiver';
   const open = incidents.filter((i) => i.status !== 'resolved');
   const smart = status?.model === 'ready';
@@ -149,10 +150,11 @@ export function SafetyCard({
       {compact && !showAll && needs.length === 0 && (
         <div className="guard-sum"><Icon name="check" size={14} stroke={2.4} />All {okCount} checks are working{guards.some((g) => g.state === 'off') ? ' · a few optional ones are off' : ''}</div>
       )}
+      {/* What needs someone reads as a sentence; what's fine is a glanceable grid (tap one for its detail). */}
       <div className="guard-list">
-        {shown.map((g) => (
+        {shown.filter((g) => g.state === 'bad' || g.state === 'warn').map((g) => (
           <div key={g.k} className={cx('guard', `st-${g.state}`)}>
-            <span className="guard-dot">{g.state === 'ok' ? <Icon name="check" size={11} stroke={2.6} /> : g.state === 'off' ? '' : '!'}</span>
+            <span className="guard-dot">!</span>
             <Icon name={g.icon} size={14} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <b>{g.label}</b>
@@ -162,6 +164,26 @@ export function SafetyCard({
           </div>
         ))}
       </div>
+      {shown.some((g) => g.state === 'ok' || g.state === 'off') && (
+        <div className="guard-grid" role="list">
+          {shown.filter((g) => g.state === 'ok' || g.state === 'off').map((g) => (
+            <button key={g.k} role="listitem" className={cx('guard-tile', `st-${g.state}`, picked === g.k && 'sel')} onClick={() => setPicked((o) => (o === g.k ? null : g.k))} aria-expanded={picked === g.k} title={g.sub}>
+              <span className="guard-tile-ic"><Icon name={g.icon} size={16} /><i className="guard-tile-dot" aria-hidden /></span>
+              <span className="guard-tile-lbl">{g.label.replace(/ \(beta\)$/, '')}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {(() => {
+        const g = picked ? shown.find((x) => x.k === picked && (x.state === 'ok' || x.state === 'off')) : null;
+        return g ? (
+          <div className={cx('guard-detail', `st-${g.state}`)}>
+            <Icon name={g.icon} size={14} />
+            <span><b>{g.label}</b> — {g.sub}</span>
+            {g.action && <button className="linkish" onClick={g.action.run}>{g.action.label}</button>}
+          </div>
+        ) : null;
+      })()}
       {compact && (
         <button className="linkish guard-more" onClick={() => setShowAll((v) => !v)}>
           {showAll ? 'Show only what needs attention' : `See all ${guards.length} checks`}
