@@ -15,7 +15,7 @@
 import { SOUND_INFO, type Severity, type SoundCat } from './soundClasses';
 
 /** Alerts that come from the camera's vision, the sound meter or the room — not a sound class. */
-export type RoomAlert = 'offline' | 'battery' | 'zone' | 'crib_out' | 'moved' | 'paused' | 'very_loud' | 'machine';
+export type RoomAlert = 'offline' | 'battery' | 'zone' | 'crib_out' | 'object' | 'moved' | 'paused' | 'very_loud' | 'machine';
 export type AlertCat = SoundCat | RoomAlert;
 
 export const ALERT_META: Record<RoomAlert, { label: string; icon: string; tone: 'red' | 'amber'; severity: Severity }> = {
@@ -23,6 +23,7 @@ export const ALERT_META: Record<RoomAlert, { label: string; icon: string; tone: 
   battery: { label: 'Camera battery low', icon: 'battery', tone: 'amber', severity: 'medium' },
   zone: { label: 'Danger zone', icon: 'target', tone: 'red', severity: 'urgent' },
   crib_out: { label: 'Climbing out of the crib', icon: 'baby', tone: 'red', severity: 'urgent' },
+  object: { label: 'Sharp object within reach', icon: 'alert', tone: 'red', severity: 'urgent' },
   moved: { label: 'Camera moved', icon: 'video', tone: 'amber', severity: 'high' },
   paused: { label: 'Camera video paused', icon: 'videoOff', tone: 'amber', severity: 'high' },
   very_loud: { label: 'Very loud noise', icon: 'volume', tone: 'amber', severity: 'high' },
@@ -61,7 +62,7 @@ export const DEFAULT_CUES: CuePrefs = {
     cry: true, fuss: false, cough: true, alarm: true, crash: true, loud: false,
     babble: false, laugh: false, voices: false, music: false, dog: false,
     glass: true, cat: true, sneeze: false, snore: false, door: false, footsteps: false, water: false,
-    offline: true, battery: true, zone: true, crib_out: true, moved: true, paused: true, very_loud: true, machine: true,
+    offline: true, battery: true, zone: true, crib_out: true, object: true, moved: true, paused: true, very_loud: true, machine: true,
   },
 };
 
@@ -119,6 +120,7 @@ function pattern(cat: AlertCat | 'ack' | 'test'): Note[] {
     case 'battery':
       return [[523, 0, 0.25, 0.5], [523, 0.35, 0.25, 0.5]];
     case 'zone':
+    case 'object':
     case 'crib_out': // urgent triple pip, rising — "go now"
       return [[1046, 0, 0.13, 0.6, 'square'], [1046, 0.18, 0.13, 0.6, 'square'], [1046, 0.36, 0.13, 0.6, 'square'], [1397, 0.56, 0.45, 0.6, 'square']];
     case 'paused':

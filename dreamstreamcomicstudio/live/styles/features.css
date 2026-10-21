@@ -972,3 +972,10 @@
 .wk-delta.bad { color: var(--amber); }
 .wk-note { font-size: 12px; margin: 10px 0 0; line-height: 1.45; }
 .ov-pill.p2p.lan { background: rgba(46, 125, 80, .75); }
+.ze-zone.activity { border-color: #8fb4ff; background: rgba(143, 180, 255, .16); border-style: solid; }
+.beta-tag { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px; background: var(--blue-wash); color: var(--blue); font-size: 10.5px; font-weight: 700; vertical-align: 1px; }
+.tog-pill { flex: none; padding: 3px 10px; border-radius: 999px; background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 700; }
+.tog-pill.on { background: var(--green-wash); color: var(--green); }
+.mv-scene { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 9px 11px; border-radius: var(--r-md); background: var(--panel-2); font-size: 13.5px; }
+.mv-scene span { flex: 1; min-width: 0; }
+.mv-scene small { font-size: 11px; white-space: nowrap; }

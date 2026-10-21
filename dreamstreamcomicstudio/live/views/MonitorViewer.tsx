@@ -48,7 +48,7 @@ const BABY_KINDS = new Set(['cry', 'fuss', 'cough', 'sneeze', 'snore', 'hiccup',
 /** Log kinds that raise an in-app alert (besides the sound categories). */
 const ROOM_ALERTS = new Set<string>(Object.keys(ALERT_META));
 const PUSH_CATS: { k: string; label: string; locked?: boolean }[] = [
-  { k: 'cry', label: 'Crying' }, { k: 'alarm', label: 'Smoke / CO alarm', locked: true }, { k: 'zone', label: 'Danger zones & climbing out' },
+  { k: 'cry', label: 'Crying' }, { k: 'alarm', label: 'Smoke / CO alarm', locked: true }, { k: 'zone', label: 'Danger zones, climbing out & sharp objects' },
   { k: 'glass', label: 'Breaking glass' }, { k: 'crash', label: 'Bangs & crashes' }, { k: 'cough', label: 'Coughing' },
   { k: 'noise', label: 'Very loud noise (85 dB+)' }, { k: 'camera', label: 'Camera moved or knocked' }, { k: 'cat', label: 'Cat in the nursery' },
   { k: 'offline', label: 'Camera offline' }, { k: 'battery', label: 'Camera battery low' }, { k: 'report', label: 'Morning sleep report' },
@@ -109,7 +109,7 @@ const logMeta = (kind: string) => (SOUND_SET.has(kind) ? { icon: SOUND_INFO[kind
 
 const pushKey = (nid: string) => `ds-monitor-push-${nid}`;
 /** In-app cue settings, most important first. */
-const CUE_ORDER: AlertCat[] = ['cry', 'alarm', 'glass', 'zone', 'crib_out', 'cough', 'crash', 'cat', 'very_loud', 'moved', 'paused', 'offline', 'battery', 'machine', 'fuss', 'loud', 'babble', 'laugh', 'voices', 'music', 'dog'];
+const CUE_ORDER: AlertCat[] = ['cry', 'alarm', 'glass', 'zone', 'crib_out', 'object', 'cough', 'crash', 'cat', 'very_loud', 'moved', 'paused', 'offline', 'battery', 'machine', 'fuss', 'loud', 'babble', 'laugh', 'voices', 'music', 'dog'];
 const camKey = (nid: string) => `ds-monitor-cam-${nid}`;
 
 interface ActiveAlert {
@@ -564,6 +564,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       else resolve(dm.cat as SoundCat, dm.secs);
     } else if (dm.kind === 'vision' && (dm.type === 'zone' || dm.type === 'crib_out' || dm.type === 'moved')) {
       raise(dm.type as AlertCat, dm.type === 'zone' ? 'Movement in a danger zone' : dm.type === 'crib_out' ? `Movement outside the crib — ${baby} may be climbing out` : 'The camera was moved', null);
+    } else if (dm.kind === 'scene' && dm.type === 'object_near' && dm.sharp && dm.label) {
+      raise('object', `${dm.label[0].toUpperCase()}${dm.label.slice(1)} within ${baby}’s reach`, null);
     } else if (dm.kind === 'noise' && dm.type === 'very_loud' && dm.phase === 'start') {
       raise('very_loud', `Very loud noise in the nursery${dm.db ? ` (${Math.round(dm.db)} dB)` : ''}`, null);
     }
@@ -1072,6 +1074,26 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
               ))
             )}
           </div>
+          {camStatus.st.scene?.baby && (
+            <div className="mv-scene" data-tour="mv-scene">
+              <Icon name="sparkles" size={14} />
+              <span>
+                {[
+                  camStatus.st.scene.posture ? { lying: 'Lying down', sitting: 'Sitting up', standing: 'Standing' }[camStatus.st.scene.posture] : 'In view',
+                  camStatus.st.scene.where && (camStatus.st.scene.where === 'Crib' ? 'in the crib' : `in the ${camStatus.st.scene.where}`),
+                  camStatus.st.scene.holding && `holding ${/^[aeiou]/i.test(camStatus.st.scene.holding) ? 'an' : 'a'} ${camStatus.st.scene.holding}`,
+                  camStatus.st.scene.adult && 'someone is with them',
+                ].filter(Boolean).join(' · ')}
+              </span>
+              <small className="faint">smart vision · beta</small>
+            </div>
+          )}
+          {camStatus.st.scene?.near?.length ? (
+            <div className="banner warn" style={{ marginTop: 8 }}>
+              <Icon name="alert" size={15} />
+              <span>Within reach: {camStatus.st.scene.near.join(', ')}</span>
+            </div>
+          ) : null}
           <div className="mvs-meters">
             <label><span>Sound · last 2 min</span><Sparkline values={levelHist} max={45} /></label>
             <label><span>Motion</span><Meter value={camStatus.st.motion} max={100} tone={camStatus.st.motion > 35 ? 'amber' : 'green'} /></label>

@@ -21,7 +21,7 @@ export const GRID_H = FRAME_H / CELL; // 12
 /** A rectangle in the camera's own (unmirrored) frame, 0–1. */
 export interface Zone {
   id: string;
-  kind: 'crib' | 'danger';
+  kind: 'crib' | 'danger' | 'activity';
   name: string;
   x: number;
   y: number;

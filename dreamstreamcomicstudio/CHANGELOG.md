@@ -6,6 +6,17 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Smart vision (beta) on the baby camera (2026-10-21):** turn it on in the camera's
+  setup ("Make it smarter") and the camera phone itself watches for posture (lying,
+  sitting, standing — and standing in the crib), rolling over, what the baby is holding,
+  risky things within reach (scissors and knives raise an alert; cups, phones, remotes,
+  plants and pets a warning), soft toys near a sleeping baby (AAP safe sleep), and which
+  play area they're in — mark a play gym, bouncer or play mat in Zones. Viewers see a
+  one-line "Lying down · in the crib · holding a teddy bear" under the picture and each
+  change in the log. Frames never leave the phone. Tuned on real infant photos: it now
+  finds swaddled and overhead babies the detector misses, and uses the baby's age (from
+  the Tracker birthday) and the phone's tilt so a baby on their back, filmed from above,
+  is never called "standing". A beta with honest limits — it doesn't watch breathing.
 - **Keeps working on your home Wi-Fi when the internet drops (2026-10-21):** phones on
   the same Wi-Fi already stream straight to each other; now the camera also sends its
   status and alerts (crying, danger zones, very loud noise) over that same direct link, so

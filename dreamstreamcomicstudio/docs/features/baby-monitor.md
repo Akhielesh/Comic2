@@ -22,6 +22,7 @@ relays signaling, status numbers and events.
 | Fusion | `live/monitor/soundBrain.ts` | Persistence, hysteresis, loudness gating, priority masking, the cat-vs-cry guard, cooldowns → start/end events + mood. `ongoing()` replays what's happening for a room that missed the start. |
 | Sound level meter | `live/monitor/soundLevel.ts` | IEC 61672 A-weighting (bilinear biquads) + Fast (125 ms) time weighting in an AudioWorklet; live dB(A), per-minute LAeq / Lmax / L10 / L50 / L90 / peak; two-step calibration (quiet room ≈ 30 dB, or match a meter); never reads below the mic's floor. |
 | Vision | `live/monitor/vision.ts` | 64×48 frames at 4 fps: exposure-normalised cell differences, crib + danger zones, climb-out, visits, lights on/off, dark/covered lens, camera moved (scene signature + phone tilt). |
+| Smart vision (beta) | `live/monitor/scene.ts`, `live/monitor/sceneAi.ts`, `public/models/mediapipe/` | On the camera phone, ~1 fps: Google MediaPipe object detector (EfficientDet-Lite0 int8, 80 COCO classes, CPU) + pose landmarker (BlazePose lite, 33 points, GPU with CPU fallback), both Apache-2.0, SHA-256 verified. `SceneWatch` turns frames into held, cooled-down events: posture, stood in crib, rolled, holding, risky object within reach, soft toy near a lying baby, in/left a play area. |
 | Two-way audio safety | `live/monitor/voice.ts` | Parent's mic: high-pass → compressor → soft fade-in. Camera: howl (feedback) detector mutes the speaker and switches the parent's phone to walkie-talkie; a closed-loop governor holds talk ≤ 65 dB and soothing sounds ≤ 50 dB at the crib. |
 | Screen-on | `live/wakeLock.ts`, `public/keep-awake.mp4` | Wake Lock re-acquired on release + 15 s watchdog; looping-video fallback where it's refused; state shown to the family. |
 | Alarm detector | `live/monitor/alarmTone.ts` | Smoke (T3) / CO (T4) beep patterns from the spectrum — independent of the model. |
@@ -186,6 +187,73 @@ family, in the same room connection as the monitor.
 - Code: `live-worker/src/trackerStore.ts` (+ tests), MonitorRoom `track_put` /
   `track_del` / queries `track`, `track_sync`; `live/monitor/trackTypes.ts`,
   `trackerSync.ts`, `trackerScience.ts`, `whoGrowth.ts` (+ tests); `live/views/tracker/*`.
+
+## Smart vision (beta)
+
+Turned on in the camera's setup ("Make it smarter"; on by default on phones with 4+
+cores). Frames never leave the camera phone — only conclusions do (`{t:'event',
+kind:'scene'}` to the room, mirrored over the Wi-Fi data channel, and a `scene`
+summary in the camera's status). The models are fetched from our own site and
+refused unless their SHA-256 matches; the WebAssembly runtime is bundled from the
+pinned `@mediapipe/tasks-vision` package. Measured in a headless desktop browser on the CPU: ~1 s for
+the first frame, then ~250–320 ms; the loop backs off to one every 1.5 s or 3 s on slower phones and pauses while the
+video is privacy-paused or the page is hidden.
+
+**What it reports** (each finding must hold for 3–8 s; each kind has a cooldown):
+posture (lying / sitting / standing, with where), standing in the crib (climb-out
+risk), rolled over (face seen, then turned away while lying), holding a toy, a risky
+object within reach (scissors, knife, fork → urgent incident; cup, glass, phone,
+remote, hair dryer, plant, cat/dog → warning), a soft toy in the crib or within reach
+of a lying baby (AAP: keep the sleep space bare), and entering / leaving a play area
+(activity zones: play gym, bouncer, play mat).
+
+**Finding the baby.** The person in the crib or a play area; with no zones, the
+smallest person (a lone person is the baby — an overhead shot fills the frame);
+bigger people are "someone is with them". The detector often misses small or
+swaddled babies, so when it finds no one the pose model's box is used.
+
+**Posture needs context.** From straight above, a baby on their back projects
+exactly like a person standing facing the camera, so an image-angle rule alone gets
+overhead shots wrong. Lying is decided first from:
+- the **baby's age** — the Tracker's birthday reaches the camera with the nursery
+  settings; under 150 days only lying is reported (CDC: sits without support around
+  9 months — 5 months is a deliberately early cut-off), and never "standing in the
+  crib";
+- the **camera's pitch** from the phone's tilt sensor (`downAngle(β, γ)`; the front
+  camera looks the other way) — 50° or more below horizontal is an overhead view;
+- the **head on a detected bed or couch**.
+
+Otherwise the pose decides: torso across the image → lying; upright with legs
+extended to **feet inside the frame** → standing; upright with the thighs
+foreshortened → sitting; legs extended but feet out of frame → unknown. A baby with
+no pose who is too young to sit, and isn't inside an adult's box (being held), is
+reported lying.
+
+**Calibrated on real infant photos (2026-10-21).** The owner shared nine photos of
+their baby: tummy time from the side, awake on a changing pad from straight above
+(one with the phone close enough that the baby fills the frame), and asleep swaddled
+from the side and from above among plush toys with a grown-up lying beside. The
+photos stay private and are not in the repo; the models' output on them — boxes,
+scores and rounded pose points only — is the regression set
+`live/monitor/infantScenes.fixture.ts`, tested in `scene.unit.test.ts`.
+
+| On the nine photos | Before | Now |
+|---|---|---|
+| Baby found | 3 / 9 (detector only) | 9 / 9 (pose fallback) |
+| Called sitting or standing (all were lying) | 6 / 9 where a pose was used | 0 / 9 with no context |
+| Reported lying | — | 7 / 9 with no context · 9 / 9 with the age or the tilt known |
+| Plush toys near the sleeping baby flagged | 0 / 2 | 2 / 2 (side view always; overhead with age or tilt) |
+| Grown-up beside the baby | — | seen as an adult, not the baby |
+
+The full camera → room → viewer path was also run in a browser on two of the photos
+(fed as the camera): the viewer showed "Lying down", the log "Aria is lying down"
+and, for the sleeping baby, the soft-toy warning — and nothing for tummy time.
+
+**Limits (stated in the app).** A beta. Both models were trained mostly on older
+children and adults; nine photos of one baby are an evaluation set, not enough to
+retrain a network. It can miss a baby under a blanket, can't see blankets or
+pillows (only teddy bears among soft things), and does not watch breathing, sleep
+position or face covering. Not a medical device.
 
 ## Sound level, sleep and history
 

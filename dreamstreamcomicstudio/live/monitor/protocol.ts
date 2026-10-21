@@ -47,6 +47,15 @@ export interface CamStatus {
   outside?: number | null;
   /** An adult is in the room right now. */
   visit?: boolean;
+  /** Smart vision (beta) — what the camera can tell about the baby right now. */
+  scene?: {
+    baby: boolean;
+    posture: 'lying' | 'sitting' | 'standing' | null;
+    where: string | null;
+    holding: string | null;
+    near: string[];
+    adult: boolean;
+  } | null;
 }
 
 export interface CamPresence {

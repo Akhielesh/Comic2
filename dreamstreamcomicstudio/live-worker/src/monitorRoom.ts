@@ -85,13 +85,14 @@ const VISION_TYPES: VisionType[] = ['zone', 'crib_out', 'visit_start', 'visit_en
  * person on duty first. `repeatMs`: push again until acknowledged;
  * `escalateMs`: one more push to everyone if nobody answered.
  */
-export type HazardKind = 'alarm' | 'glass' | 'crash' | 'zone' | 'crib_out' | 'cry' | 'very_loud' | 'moved' | 'paused' | 'offline';
+export type HazardKind = 'alarm' | 'glass' | 'crash' | 'zone' | 'crib_out' | 'cry' | 'very_loud' | 'moved' | 'paused' | 'offline' | 'object';
 const HAZARD: Record<HazardKind, { push: PushKind; everyone: boolean; repeatMs?: number; escalateMs?: number; maxPushes: number; staleMs: number }> = {
   alarm: { push: 'alarm', everyone: true, repeatMs: 60_000, maxPushes: 10, staleMs: 60 * 60_000 },
   glass: { push: 'glass', everyone: true, escalateMs: 3 * 60_000, maxPushes: 2, staleMs: 60 * 60_000 },
   crash: { push: 'crash', everyone: false, escalateMs: 5 * 60_000, maxPushes: 2, staleMs: 60 * 60_000 },
   zone: { push: 'zone', everyone: true, repeatMs: 2 * 60_000, maxPushes: 5, staleMs: 30 * 60_000 },
   crib_out: { push: 'zone', everyone: true, repeatMs: 2 * 60_000, maxPushes: 5, staleMs: 30 * 60_000 },
+  object: { push: 'zone', everyone: true, escalateMs: 3 * 60_000, maxPushes: 2, staleMs: 30 * 60_000 },
   cry: { push: 'cry', everyone: false, maxPushes: 4, staleMs: 2 * 60 * 60_000 },
   very_loud: { push: 'noise', everyone: true, maxPushes: 1, staleMs: 30 * 60_000 },
   moved: { push: 'camera', everyone: false, escalateMs: 10 * 60_000, maxPushes: 2, staleMs: 2 * 60 * 60_000 },
@@ -162,7 +163,31 @@ export interface CamStatus {
   outside: number | null;
   /** An adult is in the room right now. */
   visit: boolean;
+  /** Smart vision (beta): what the camera can tell about the baby right now. */
+  scene?: SceneStatus | null;
 }
+
+export interface SceneStatus {
+  baby: boolean;
+  posture: 'lying' | 'sitting' | 'standing' | null;
+  where: string | null;
+  holding: string | null;
+  near: string[];
+  adult: boolean;
+}
+
+/** COCO labels the camera may report (scene.ts). Anything else is dropped. */
+const SCENE_LABELS = new Set([
+  'teddy bear', 'sports ball', 'book', 'bottle', 'spoon', 'toothbrush', 'frisbee', 'kite',
+  'scissors', 'knife', 'fork', 'cup', 'wine glass', 'cell phone', 'remote', 'hair drier', 'potted plant', 'cat', 'dog',
+]);
+const SHARP = new Set(['scissors', 'knife', 'fork']);
+const RISK_WHY: Record<string, string> = {
+  scissors: 'sharp', knife: 'sharp', fork: 'sharp', cup: 'hot drinks can scald', 'wine glass': 'glass can break', 'cell phone': 'cords and small parts',
+  remote: 'button batteries are dangerous if swallowed', 'hair drier': 'cord and heat', 'potted plant': 'soil and leaves can be swallowed', cat: 'a pet close to the baby', dog: 'a pet close to the baby',
+};
+const sceneLabel = (v: unknown): string | null => (typeof v === 'string' && SCENE_LABELS.has(v) ? v : null);
+const a_an = (w: string) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
 
 /** A log line as clients see it. */
 export interface MonLog {
@@ -191,7 +216,7 @@ interface PushRec {
 
 export interface Zone {
   id: string;
-  kind: 'crib' | 'danger';
+  kind: 'crib' | 'danger' | 'activity';
   name: string;
   x: number;
   y: number;
@@ -272,23 +297,37 @@ const KIND_SEV: Record<string, Severity> = {
   feed: 'care', diaper: 'care', sleep: 'care', wake: 'care', note: 'care', ack: 'care', soothe: 'care', camera: 'info', people: 'info',
   paused: 'warn', zone: 'urgent', crib_out: 'urgent', visit_start: 'info', visit_end: 'info', lights_on: 'info', lights_off: 'info', dark: 'warn', moved: 'warn',
   very_loud: 'warn', loud_db: 'warn', machine: 'warn', asleep: 'care', woke: 'care', resettled: 'care', sleep_report: 'care', duty: 'info', resolved: 'info',
+  posture: 'info', rolled: 'info', holding: 'info', object: 'warn', soft_toy: 'warn', stood: 'warn', play: 'info',
 };
+
+export function sanitizeScene(v: unknown): SceneStatus | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  return {
+    baby: Boolean(r.baby),
+    posture: r.posture === 'lying' || r.posture === 'sitting' || r.posture === 'standing' ? r.posture : null,
+    where: r.where == null ? null : clip(r.where, 30) || null,
+    holding: sceneLabel(r.holding),
+    near: Array.isArray(r.near) ? [...new Set(r.near.map(sceneLabel).filter((x): x is string => !!x))].slice(0, 4) : [],
+    adult: Boolean(r.adult),
+  };
+}
 
 export function sanitizeZones(v: unknown): Zone[] {
   if (!Array.isArray(v)) return [];
   const out: Zone[] = [];
-  for (const z of v.slice(0, 6)) {
+  for (const z of v.slice(0, 8)) {
     if (!z || typeof z !== 'object') continue;
     const r = z as Record<string, unknown>;
     const id = clip(r.id, 12).replace(/[^a-z0-9]/gi, '');
-    const kind = r.kind === 'crib' ? 'crib' : r.kind === 'danger' ? 'danger' : null;
+    const kind = r.kind === 'crib' ? 'crib' : r.kind === 'danger' ? 'danger' : r.kind === 'activity' ? 'activity' : null;
     if (!id || !kind) continue;
     const x = num(r.x, 0, 1);
     const y = num(r.y, 0, 1);
     const w = num(r.w, 0, 1 - x);
     const h = num(r.h, 0, 1 - y);
     if (w < 0.02 || h < 0.02) continue;
-    out.push({ id, kind, name: clip(r.name, 30) || (kind === 'crib' ? 'Crib' : 'Danger zone'), x, y, w, h });
+    out.push({ id, kind, name: clip(r.name, 30) || (kind === 'crib' ? 'Crib' : kind === 'activity' ? 'Play area' : 'Danger zone'), x, y, w, h });
   }
   // One crib per camera.
   let crib = false;
@@ -817,6 +856,7 @@ export class MonitorRoom {
       crib: s.crib == null ? null : Math.round(num(s.crib, 0, 100)),
       outside: s.outside == null ? null : Math.round(num(s.outside, 0, 100)),
       visit: Boolean(s.visit),
+      scene: sanitizeScene(s.scene),
     };
     this.lastStatus.set(a.dev, { st, at: now });
     this.broadcast({ t: 'status', dev: a.dev, sid: a.sid, st, at: now }, (x) => x.mode === 'viewer');
@@ -867,6 +907,7 @@ export class MonitorRoom {
     const where = a.dn || 'Camera';
     if (kind === 'sound') return this.onSoundEvent(a, msg, meta, who, where);
     if (kind === 'vision') return this.onVisionEvent(a, msg, meta, who, where);
+    if (kind === 'scene') return this.onSceneEvent(a, msg, meta, who, where);
     if (kind === 'noise') return this.onNoiseEvent(a, msg, meta, where);
     if (kind === 'paused') {
       // The camera page went to the background or the phone locked: the video stops.
@@ -922,6 +963,62 @@ export class MonitorRoom {
     const note = { title, body: `${meta.name} · ${where} — tap to check in`, entryId: entry.id };
     if (info.hazard) await this.raiseHazard(info.hazard, entry, note, a.dev);
     else if (info.push) await this.pushAlert(info.push, note, a.dev, { audience: 'duty' });
+  }
+
+  /** Smart vision (beta): posture, rolling, what's in hand or within reach, play areas (live/monitor/scene.ts). */
+  private async onSceneEvent(a: Attach, msg: Record<string, unknown>, meta: { name: string; baby: string | null }, who: string, where: string): Promise<void> {
+    if (!a.dev || a.mode !== 'camera') return;
+    const type = String(msg.type ?? '');
+    const label = sceneLabel(msg.label);
+    const zoneName = clip(msg.name, 30);
+    const now = Date.now();
+    const key = `${a.dev}:s:${type}:${label || zoneName || String(msg.posture ?? '')}`;
+    const gap = type === 'object_near' ? 5 * 60_000 : type === 'soft_toy' ? 60 * 60_000 : 60_000;
+    if (now - (this.lastSoundAt.get(key) ?? 0) < gap) return;
+    this.lastSoundAt.set(key, now);
+    const inWhat = (w: unknown) => (w === 'Crib' ? ' in the crib' : typeof w === 'string' && w ? ` in the ${clip(w, 30)}` : '');
+    switch (type) {
+      case 'posture': {
+        const p = msg.posture === 'sitting' ? 'is sitting up' : msg.posture === 'standing' ? 'is standing' : msg.posture === 'lying' ? 'is lying down' : null;
+        if (!p) return;
+        await this.addLog({ kind: 'posture', msg: `${who} ${p}${inWhat(msg.where)} · ${where}`, dev: a.dev });
+        return;
+      }
+      case 'stood_in_crib':
+        await this.addLog({ kind: 'stood', msg: `${who} is standing in the crib — keep the mattress at its lowest setting · ${where}`, dev: a.dev });
+        return;
+      case 'rolled':
+        await this.addLog({ kind: 'rolled', msg: `${who} rolled over — face turned away from the camera · ${where}`, dev: a.dev });
+        return;
+      case 'holding':
+        if (!label) return;
+        await this.addLog({ kind: 'holding', msg: `${who} is holding ${a_an(label)} · ${where}`, dev: a.dev });
+        return;
+      case 'object_near': {
+        if (!label || !RISK_WHY[label]) return;
+        const title = SHARP.has(label) ? `${label[0].toUpperCase()}${label.slice(1)} within ${who}’s reach` : `${label[0].toUpperCase()}${label.slice(1)} near ${who}`;
+        const entry = await this.addLog({ kind: 'object', msg: `${title} (${RISK_WHY[label]}) · ${where}`, dev: a.dev, sev: SHARP.has(label) ? 'urgent' : 'warn' });
+        if (SHARP.has(label)) await this.raiseHazard('object', entry, { title, body: `${meta.name} · ${where} — move it out of reach`, entryId: entry.id }, a.dev);
+        return;
+      }
+      case 'soft_toy':
+        await this.addLog({
+          kind: 'soft_toy',
+          msg: msg.inCrib === false
+            ? `A soft toy is within ${who}’s reach while lying down — for sleep, the AAP advises a bare space: no toys, pillows or blankets · ${where}`
+            : `A soft toy is in the crib with ${who} — for sleep, the AAP advises an empty crib · ${where}`,
+          dev: a.dev,
+        });
+        return;
+      case 'in_zone':
+        if (!zoneName) return;
+        await this.addLog({ kind: 'play', msg: `${who} is in the ${zoneName} · ${where}`, dev: a.dev });
+        return;
+      case 'left_zone':
+        if (!zoneName) return;
+        await this.addLog({ kind: 'play', msg: `${who} left the ${zoneName}${msg.secs ? ` after ${dur(Math.round(num(msg.secs, 0, 86_400)))}` : ''} · ${where}`, dev: a.dev });
+        return;
+    }
   }
 
   /** On-device vision: zones, climb-outs, visits, lights, camera moved (see live/monitor/vision.ts). */

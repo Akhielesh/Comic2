@@ -585,3 +585,51 @@ describe('MonitorRoom weekly analytics', () => {
     expect(today.responseSec).not.toBeNull();
   });
 });
+
+describe('MonitorRoom smart vision', () => {
+  it('logs posture, holding and play areas; a sharp object in reach opens an incident', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(cam, { t: 'event', kind: 'scene', type: 'posture', posture: 'sitting', where: 'Crib' });
+    await say(cam, { t: 'event', kind: 'scene', type: 'holding', label: 'teddy bear' });
+    await say(cam, { t: 'event', kind: 'scene', type: 'in_zone', name: 'Play gym' });
+    await say(cam, { t: 'event', kind: 'scene', type: 'holding', label: '<script>' });
+    await say(cam, { t: 'event', kind: 'scene', type: 'object_near', label: 'scissors' });
+    const msgs = mom.logs().map((e) => e.msg);
+    expect(msgs).toEqual(expect.arrayContaining([
+      'Aria is sitting up in the crib · Crib iPhone',
+      'Aria is holding a teddy bear · Crib iPhone',
+      'Aria is in the Play gym · Crib iPhone',
+      'Scissors within Aria’s reach (sharp) · Crib iPhone',
+    ]));
+    expect(msgs.some((m) => m.includes('script'))).toBe(false);
+    expect(mom.msgs('incident').some((m) => (m.inc as { kind: string }).kind === 'object')).toBe(true);
+    // Safe sleep: in the crib, or beside a baby lying anywhere.
+    await say(cam, { t: 'event', kind: 'scene', type: 'soft_toy', inCrib: true });
+    expect(mom.logs().some((e) => e.msg.startsWith('A soft toy is in the crib with Aria'))).toBe(true);
+    // Viewers can't fake scene events.
+    await say(mom, { t: 'event', kind: 'scene', type: 'rolled' });
+    expect(mom.logs().some((e) => /rolled/.test(e.msg))).toBe(false);
+  });
+
+  it('words a soft toy outside the crib for wherever the baby lies', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(cam, { t: 'event', kind: 'scene', type: 'soft_toy', inCrib: false });
+    expect(mom.logs().map((e) => e.msg)).toContainEqual(expect.stringMatching(/^A soft toy is within Aria’s reach while lying down — .*no toys, pillows or blankets/));
+  });
+
+  it('passes the scene in the status, sanitized', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(cam, { t: 'status', st: { state: 'calm', level: 0, motion: 0, light: 50, scene: { baby: true, posture: 'sitting', where: 'Play gym', holding: 'teddy bear', near: ['cup', 'nuclear', 'cup'], adult: false } } });
+    expect(mom.msgs('status')[0].st).toMatchObject({ scene: { baby: true, posture: 'sitting', where: 'Play gym', holding: 'teddy bear', near: ['cup'], adult: false } });
+  });
+
+  it('keeps activity zones', () => {
+    expect(sanitizeZones([{ id: 'g1', kind: 'activity', name: 'Play gym', x: 0.1, y: 0.1, w: 0.3, h: 0.3 }])).toEqual([{ id: 'g1', kind: 'activity', name: 'Play gym', x: 0.1, y: 0.1, w: 0.3, h: 0.3 }]);
+  });
+});

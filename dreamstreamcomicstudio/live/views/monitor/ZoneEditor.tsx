@@ -1,4 +1,4 @@
-// Draw the crib and danger zones on the live picture. Zones are stored in the
+// Draw the crib, danger zones and play areas on the live picture. Zones are stored in the
 // camera's own (unmirrored, uncropped) frame, 0–1 — exactly what the vision
 // engine analyses — so the editor shows the whole frame letterboxed.
 import React, { useEffect, useRef, useState } from 'react';
@@ -8,6 +8,8 @@ import { Btn, cx } from '../../ui/primitives';
 
 const MAX_DANGER = 4;
 const DANGER_SUGGESTIONS = ['the window', 'the door', 'the stairs', 'the dresser', 'the radiator', 'cords & outlets'];
+const MAX_ACTIVITY = 3;
+const ACTIVITY_SUGGESTIONS = ['Play gym', 'Bouncer', 'Play mat', 'Swing', 'High chair'];
 
 export function ZoneEditor({
   stream,
@@ -27,7 +29,7 @@ export function ZoneEditor({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const [zones, setZones] = useState<Zone[]>(initial);
-  const [mode, setMode] = useState<'crib' | 'danger'>(initial.some((z) => z.kind === 'crib') ? 'danger' : 'crib');
+  const [mode, setMode] = useState<'crib' | 'danger' | 'activity'>(initial.some((z) => z.kind === 'crib') ? 'danger' : 'crib');
   const [draft, setDraft] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [aspect, setAspect] = useState(4 / 3);
 
@@ -73,6 +75,14 @@ export function ZoneEditor({
     if (mode === 'crib') {
       setZones((zs) => [...zs.filter((z) => z.kind !== 'crib'), { id: newZoneId(), kind: 'crib', name: 'Crib', x, y, w, h }]);
       setMode('danger');
+    } else if (mode === 'activity') {
+      setZones((zs) => {
+        const acts = zs.filter((z) => z.kind === 'activity');
+        if (acts.length >= MAX_ACTIVITY) return zs;
+        const used = new Set(acts.map((d) => d.name));
+        const name = ACTIVITY_SUGGESTIONS.find((s) => !used.has(s)) ?? `Play area ${acts.length + 1}`;
+        return [...zs, { id: newZoneId(), kind: 'activity', name, x, y, w, h }];
+      });
     } else {
       setZones((zs) => {
         const dangers = zs.filter((z) => z.kind === 'danger');
@@ -94,6 +104,7 @@ export function ZoneEditor({
 
   const crib = zones.find((z) => z.kind === 'crib');
   const dangers = zones.filter((z) => z.kind === 'danger');
+  const acts = zones.filter((z) => z.kind === 'activity');
   const rename = (id: string, name: string) => setZones((zs) => zs.map((z) => (z.id === id ? { ...z, name } : z)));
   const remove = (id: string) => setZones((zs) => zs.filter((z) => z.id !== id));
 
@@ -103,11 +114,13 @@ export function ZoneEditor({
         <div className="sheet-head">
           <div className="sheet-icon"><Icon name="target" size={18} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 id="ze-title" className="sheet-title serif">Crib &amp; danger zones</h2>
+            <h2 id="ze-title" className="sheet-title serif">Crib, danger zones &amp; play areas</h2>
             <div className="sheet-sub ze-sub">
               {mode === 'crib'
                 ? `Drag a box around the crib mattress — ${babyName || 'the baby'}’s movement there drives sleep tracking and climb-out alerts.`
-                : `Drag a box over anywhere ${babyName || 'the baby'} must not reach — a window, the stairs, a dresser. Movement there alerts everyone.`}
+                : mode === 'activity'
+                  ? `Drag a box over a play gym, bouncer or play mat — with smart vision on, the log notes when ${babyName || 'the baby'} is there and for how long.`
+                  : `Drag a box over anywhere ${babyName || 'the baby'} must not reach — a window, the stairs, a dresser. Movement there alerts everyone.`}
             </div>
           </div>
           <button type="button" className="iconbtn" onClick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
@@ -119,6 +132,9 @@ export function ZoneEditor({
           </button>
           <button role="radio" aria-checked={mode === 'danger'} className={cx('cam-chip', mode === 'danger' && 'sel')} disabled={dangers.length >= MAX_DANGER} onClick={() => setMode('danger')}>
             <Icon name="alert" size={13} />Danger zone{dangers.length ? ` (${dangers.length}/${MAX_DANGER})` : ''}
+          </button>
+          <button role="radio" aria-checked={mode === 'activity'} className={cx('cam-chip', mode === 'activity' && 'sel')} disabled={acts.length >= MAX_ACTIVITY} onClick={() => setMode('activity')}>
+            <Icon name="smile" size={13} />Play area{acts.length ? ` (${acts.length}/${MAX_ACTIVITY})` : ''}
           </button>
         </div>
 
@@ -144,8 +160,16 @@ export function ZoneEditor({
           </div>
         </div>
 
-        {dangers.length > 0 && (
+        {(dangers.length > 0 || acts.length > 0) && (
           <div className="ze-list">
+            {acts.map((z) => (
+              <label key={z.id} className="ze-item">
+                <Icon name="smile" size={14} />
+                <span>Play area</span>
+                <input className="input" value={z.name} maxLength={30} onChange={(e) => rename(z.id, e.target.value)} aria-label="Play area name" />
+                <button className="iconbtn" onClick={() => remove(z.id)} aria-label={`Remove ${z.name}`}><Icon name="trash" size={14} /></button>
+              </label>
+            ))}
             {dangers.map((z) => (
               <label key={z.id} className="ze-item">
                 <Icon name="alert" size={14} />
@@ -162,7 +186,7 @@ export function ZoneEditor({
         <div className="row" style={{ gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {zones.length > 0 && <Btn variant="subtle" onClick={() => setZones([])}>Clear all</Btn>}
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="solid" icon="check" onClick={() => onSave(zones.map((z) => ({ ...z, name: z.name.trim() || (z.kind === 'crib' ? 'Crib' : 'danger zone') })))}>Save zones</Btn>
+          <Btn variant="solid" icon="check" onClick={() => onSave(zones.map((z) => ({ ...z, name: z.name.trim() || (z.kind === 'crib' ? 'Crib' : z.kind === 'activity' ? 'Play area' : 'danger zone') })))}>Save zones</Btn>
         </div>
       </div>
     </div>

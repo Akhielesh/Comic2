@@ -10,7 +10,7 @@ import { Btn, cx } from '../../ui/primitives';
 import { fmtClock } from './charts';
 
 const INC_ICON: Record<string, string> = {
-  alarm: 'siren', glass: 'zap', crash: 'zap', zone: 'target', crib_out: 'target', cry: 'baby', very_loud: 'volume', moved: 'video', offline: 'wifi',
+  alarm: 'siren', glass: 'zap', crash: 'zap', zone: 'target', crib_out: 'target', object: 'alert', cry: 'baby', very_loud: 'volume', moved: 'video', offline: 'wifi',
 };
 
 const ago = (t: number) => {
@@ -83,6 +83,10 @@ export function SafetyCard({
           k: 'zones', icon: 'alert', label: 'Danger zones', state: dangers.length ? 'ok' : 'off',
           sub: dangers.length ? `Watching ${dangers.map((d) => d.name).join(', ')}` : 'Optional — e.g. a window, the stairs, a dresser',
           action: canAct ? { label: dangers.length ? 'Edit' : 'Add', run: onZones } : undefined,
+        },
+        {
+          k: 'scene', icon: 'sparkles', label: 'Smart vision (beta)', state: status?.scene ? 'ok' : 'off',
+          sub: status?.scene ? 'Posture, rolling over, what’s within reach, play areas — on the camera phone' : 'Off — turn it on in the camera’s setup (“Make it smarter”)',
         },
         { k: 'pos', icon: 'video', label: 'Camera position', state: moved ? 'warn' : 'ok', sub: moved ? `Moved ${ago(moved.at)} — check it still sees the crib` : 'Steady' },
         {

@@ -61,7 +61,7 @@ export async function netPath(pc: RTCPeerConnection): Promise<NetPath | null> {
 /** Messages on the camera → viewer data channel. */
 export type DirectMsg =
   | { t: 'st'; st: Record<string, unknown>; dev: string }
-  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; at: number; dev: string };
+  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; label?: string; sharp?: boolean; name?: string; at: number; dev: string };
 export type Quality = 'hd' | 'sd' | 'audio';
 
 const QUALITY_BPS: Record<Exclude<Quality, 'audio'>, number> = { hd: 1_600_000, sd: 450_000 };
