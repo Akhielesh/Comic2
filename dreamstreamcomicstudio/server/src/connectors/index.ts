@@ -11,6 +11,7 @@ import { connectorRegistry } from './registry.js';
 import { upsertCatalog } from './store.js';
 import { GmailConnector } from './connectors/gmail.js';
 import { GoogleDriveConnector } from './connectors/googleDrive.js';
+import { GoogleDriveSaveConnector } from './connectors/googleDriveSave.js';
 import { GoogleCalendarConnector } from './connectors/googleCalendar.js';
 import { GoogleSheetsConnector } from './connectors/googleSheets.js';
 import { YouTubeConnector } from './connectors/youtube.js';
@@ -21,6 +22,9 @@ import { GoogleMapsConnector } from './connectors/googleMaps.js';
 connectorRegistry.registerAll([
   new GmailConnector(),
   new GoogleDriveConnector(),
+  // Stream Studio "save recordings to Drive" — write-only, drive.file scope (the app sees
+  // only the files it creates). Separate from the read-only Drive connector above.
+  new GoogleDriveSaveConnector(),
   new GoogleCalendarConnector(),
   new GoogleSheetsConnector(),
   new YouTubeConnector(),

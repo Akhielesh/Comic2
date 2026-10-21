@@ -5,6 +5,16 @@ import React, { useEffect, useState } from 'react';
 import { openAuth, signOutEverywhereLocal, updateDisplayName, useAccount } from '../account';
 import { LIMIT_CHOICES_MIN, limitLabel } from '../limits';
 import { canPickFolder, forgetDriveFolder, getDriveFolder, pickDriveFolder } from '../saveTargets';
+import {
+  DRIVE_PRIVACY_NOTE,
+  DriveError,
+  connectDrive,
+  disconnectDrive,
+  driveErrorMessage,
+  getDriveStatus,
+  openConsentWindow,
+  useDriveStatus,
+} from '../driveUpload';
 import { QUALITY_PRESETS, presetById } from '../config';
 import type { Nav } from '../nav';
 import { DEFAULT_PREFS, LOOK_LABELS, loadPrefs, playChime, savePrefs, type StudioPrefs } from '../prefs';
@@ -57,6 +67,31 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
   const live = useAccount();
   const [displayName, setDisplayName] = useState('');
   const [driveFolder, setDriveFolder] = useState<string | null>(null);
+  const gdrive = useDriveStatus(live.status === 'loading' ? null : live.userId);
+  const [driveBusy, setDriveBusy] = useState<'connect' | 'disconnect' | null>(null);
+
+  const connectGoogleDrive = () => {
+    // Open the consent window inside the tap, or pop-up blockers eat it.
+    const popup = openConsentWindow();
+    if (!popup) {
+      push(driveErrorMessage(new DriveError('popup_blocked')), { icon: 'alert', duration: 5000 });
+      return;
+    }
+    setDriveBusy('connect');
+    void connectDrive({ popup })
+      .then((s) => push(`Google Drive connected${s.email ? ` · ${s.email}` : ''} — recordings upload to “DreamStream Recordings”`, { icon: 'check', duration: 4200 }))
+      .catch((e) => push(driveErrorMessage(e), { icon: 'alert', duration: 5000 }))
+      .finally(() => setDriveBusy(null));
+  };
+
+  const disconnectGoogleDrive = () => {
+    if (!window.confirm('Disconnect Google Drive? Recordings already in your Drive stay there.')) return;
+    setDriveBusy('disconnect');
+    void disconnectDrive()
+      .then(() => push('Google Drive disconnected', { icon: 'check' }))
+      .catch((e) => push(driveErrorMessage(e), { icon: 'alert', duration: 4000 }))
+      .finally(() => setDriveBusy(null));
+  };
 
   useEffect(() => {
     if (live.name) setDisplayName(live.name);
@@ -218,7 +253,60 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                   {LIMIT_CHOICES_MIN.map((m) => <option key={m} value={m}>{limitLabel(m)}</option>)}
                 </select>
               </Row>
-              <Row title="When a recording finishes" desc="Ask lets you pick each time — a folder, Google Drive, Share, or Downloads.">
+              <Row
+                title="Google Drive"
+                desc={
+                  live.status === 'signed_out'
+                    ? 'Sign in, then connect Google Drive — finished recordings upload straight into a “DreamStream Recordings” folder.'
+                    : !gdrive
+                      ? 'Checking your Google Drive connection…'
+                      : !gdrive.available
+                        ? 'Uploading straight to Google Drive isn’t switched on for this server yet — use the Drive for desktop folder below.'
+                        : gdrive.error
+                          ? 'Couldn’t check your Google Drive connection — you may be offline.'
+                          : gdrive.connected && gdrive.expired
+                            ? 'Google needs you to sign in again (or the Drive permission wasn’t ticked) before recordings can upload.'
+                            : gdrive.connected
+                              ? `Recordings upload to “DreamStream Recordings” in ${gdrive.email || 'your Drive'}. ${DRIVE_PRIVACY_NOTE}`
+                              : `One tap to sign in with Google, then recordings upload straight into “DreamStream Recordings”. ${DRIVE_PRIVACY_NOTE}`
+                }
+              >
+                {live.status === 'signed_out' ? (
+                  <Btn variant="soft" size="sm" onClick={() => openAuth('signin', 'Sign in to save recordings to Google Drive')}>Sign in</Btn>
+                ) : live.status === 'loading' || !gdrive ? (
+                  <div className="skeleton" style={{ width: 120, height: 30 }} aria-label="Checking Google Drive" />
+                ) : !gdrive.available ? (
+                  <span className="pill pill-neutral">Not available</span>
+                ) : gdrive.error ? (
+                  <Btn variant="soft" size="sm" icon="refresh" onClick={() => void getDriveStatus({ force: true })}>Retry</Btn>
+                ) : gdrive.connected ? (
+                  <div className="drive-conn">
+                    {gdrive.expired ? (
+                      <span className="pill pill-warn">Needs reconnect</span>
+                    ) : (
+                      <span className="pill pill-ok" title={gdrive.email}>{gdrive.email || 'Connected'}</span>
+                    )}
+                    {gdrive.expired ? (
+                      <Btn variant="solid" size="sm" icon="cloud" disabled={driveBusy != null} onClick={connectGoogleDrive}>
+                        {driveBusy === 'connect' ? 'Waiting for Google…' : 'Reconnect'}
+                      </Btn>
+                    ) : gdrive.folderUrl ? (
+                      <a className="btn btn-ghost btn-sm" href={gdrive.folderUrl} target="_blank" rel="noopener noreferrer">
+                        <Icon name="link" size={15} />
+                        <span>Open folder</span>
+                      </a>
+                    ) : null}
+                    <Btn variant="subtle" size="sm" disabled={driveBusy != null} onClick={disconnectGoogleDrive}>
+                      {driveBusy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
+                    </Btn>
+                  </div>
+                ) : (
+                  <Btn variant="solid" size="sm" icon="cloud" disabled={driveBusy != null} onClick={connectGoogleDrive}>
+                    {driveBusy === 'connect' ? 'Waiting for Google…' : 'Connect Google Drive'}
+                  </Btn>
+                )}
+              </Row>
+              <Row title="When a recording finishes" desc="Ask lets you pick each time — Google Drive, a folder, Share, or Downloads. Google Drive uploads straight to your Drive when it’s connected (otherwise it uses your Drive for desktop folder).">
                 <Segmented
                   label="Save destination"
                   options={[
@@ -231,10 +319,10 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                 />
               </Row>
               <Row
-                title="Google Drive folder"
+                title="Google Drive for desktop folder"
                 desc={canPickFolder()
-                  ? 'With Google Drive for desktop installed, pick your “My Drive” folder once — recordings save straight into it and Drive syncs them. No Google sign-in needed here.'
-                  : 'On phones, choose Drive from the share menu when saving. (Picking a Drive folder needs Chrome or Edge on a computer.)'}
+                  ? 'A no-sign-in fallback that also works offline: with Google Drive for desktop installed, pick your “My Drive” folder once — recordings save straight into it and Drive syncs them.'
+                  : 'Without connecting, you can still choose Drive from the share menu when saving. (Picking a Drive folder needs Chrome or Edge on a computer.)'}
               >
                 {canPickFolder() ? (
                   <div className="row" style={{ gap: 8 }}>

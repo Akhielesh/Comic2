@@ -53,7 +53,8 @@ server/src/connectors/
   index.ts          # >>> register connectors here (the ONE place) + seed catalog <<<
   connectors/
     gmail.ts          # Gmail (OAuth)            ┐
-    googleDrive.ts    # Drive (OAuth)            │ providerGroup: 'google'
+    googleDrive.ts    # Drive (OAuth, read-only) │ providerGroup: 'google'
+    googleDriveSave.ts# Drive — save recordings  │ (drive.file only; Stream Studio uploads)
     googleCalendar.ts # Calendar (OAuth)         │ — one consent screen for
     googleSheets.ts   # Sheets (OAuth, on-demand)│   the whole suite
     youtube.ts        # YouTube own channel(OAuth)┘
@@ -66,6 +67,8 @@ server/src/connectors/
     webhooks.ts     # Gmail/Drive/Calendar push seam (v1 polls)
 
 server/src/routes/connectors.ts   # public OAuth callback router + authed control plane
+server/src/routes/connectorsDrive.ts # /drive/status, /drive/upload-session, /drive/disconnect (Stream Studio)
+server/src/connectors/driveSave.ts   # Drive folder bootstrap + resumable-session init (bytes never hit the backend)
 server/sql/account_connectors.sql        # schema (UP)
 server/sql/account_connectors_down.sql   # schema (DOWN, reversible)
 
