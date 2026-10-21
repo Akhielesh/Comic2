@@ -11,6 +11,8 @@ import {
   doseCheck,
   feedIntervalRange,
   feverCheck,
+  firstFoods,
+  foodList,
   formatDuration,
   fToC,
   growthForItem,
@@ -653,5 +655,62 @@ describe('insights', () => {
     );
     const w = insights(cam, profile, now, UTC).find((i) => i.id === 'night-wakings')!;
     expect(w.text).toBe('Night wakings up from 2.0 to 3.0 per night — often a passing phase (teething, a cold or a new skill).');
+  });
+});
+
+describe('tracker fields adopted from Huckleberry-style trackers', () => {
+  const now = T('2026-06-15T12:00');
+  const profile = bornDaysAgo(240, now);
+  const lastWeek = (d: number, h: number) => startOfLocalDay(now, UTC) - d * D + h * H;
+
+  it('the family’s nap / night call wins over the clock', () => {
+    const afternoon = item('sleep', T('2026-06-14T14:00'), T('2026-06-14T19:30'));
+    expect(isNightSleep(afternoon, UTC)).toBe(true); // ≥ 4 h reads as night by the clock
+    expect(isNightSleep({ ...afternoon, data: { night: false } }, UTC)).toBe(false);
+    const evening = item('sleep', T('2026-06-14T19:00'), T('2026-06-14T19:40'), { night: false });
+    expect(isNightSleep(evening, UTC)).toBe(false);
+  });
+
+  it('a skipped dose is kept for the record but never counts as given', () => {
+    const given = item('med', now - 6 * H, null, { name: 'Ibuprofen', everyH: 6 });
+    const skipped = item('med', now - 1 * H, null, { name: 'Ibuprofen', everyH: 6, skipped: true });
+    const d = nextDose([given, skipped], 'Ibuprofen', now)!;
+    expect(d.last).toBe(given.start);
+    expect(d.ready).toBe(true);
+    expect(d.doses24h).toBe(1);
+  });
+
+  it('reads a foods list and remembers when each was first tried', () => {
+    expect(foodList('Avocado, oatmeal & pear;  sweet  potato')).toEqual(['avocado', 'oatmeal', 'pear', 'sweet potato']);
+    expect(foodList(undefined)).toEqual([]);
+    const first = firstFoods([
+      item('solids', lastWeek(10, 9), null, { foods: 'avocado' }),
+      item('solids', lastWeek(3, 9), null, { foods: 'Avocado, pear' }),
+    ]);
+    expect([...first.keys()]).toEqual(['avocado', 'pear']);
+    expect(first.get('pear')).toBe(lastWeek(3, 9));
+  });
+
+  it('insights: new foods this week — and a noted reaction turns it into a watch', () => {
+    const base = [item('solids', lastWeek(10, 9), null, { foods: 'avocado' }), item('solids', lastWeek(3, 9), null, { foods: 'avocado, pear, egg' })];
+    const calm = insights(base, profile, now, UTC).find((i) => i.id === 'new-foods')!;
+    expect(calm.tone).toBe('good');
+    expect(calm.text).toMatch(/^2 new foods this week: pear, egg\./);
+    const rash = insights([...base, item('solids', lastWeek(2, 9), null, { foods: 'egg', reaction: 'red rash on cheeks' })], profile, now, UTC).find((i) => i.id === 'new-foods')!;
+    expect(rash.tone).toBe('watch');
+    expect(rash.text).toMatch(/call your pediatrician/);
+  });
+
+  it('insights: screen time under 18 months gets a gentle AAP note', () => {
+    const out = insights([item('activity', lastWeek(2, 17), lastWeek(2, 17.5), { type: 'screen' })], profile, now, UTC);
+    expect(out.find((i) => i.id === 'screen')?.text).toMatch(/AAP suggests avoiding screens other than video calls/);
+    const older = insights([item('activity', lastWeek(2, 17), lastWeek(2, 17.5), { type: 'screen' })], bornDaysAgo(700, now), now, UTC);
+    expect(older.some((i) => i.id === 'screen')).toBe(false);
+  });
+
+  it('insights: how well they slept, week over week', () => {
+    const rated = (d: number, q: 1 | 2 | 3 | 4 | 5) => item('sleep', lastWeek(d, 13), lastWeek(d, 14), { quality: q });
+    const items = [...[8, 9, 10, 11].map((d) => rated(d, 2)), ...[1, 2, 3, 4].map((d) => rated(d, 4))];
+    expect(insights(items, profile, now, UTC).find((i) => i.id === 'quality')?.text).toBe('Sleep rated 4.0/5 on average this week, up from 2.0.');
   });
 });

@@ -945,6 +945,18 @@
 .ts-three .ts-num input { font-size: 16px; padding-right: 26px; }
 .ts-three .ts-num label span { right: 6px; }
 .ts-check { gap: 8px; margin-top: 12px; font-size: 13.5px; }
+.ts-foods { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.ts-food { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 99px; background: var(--panel-2); font-size: 13px; text-transform: capitalize; }
+.ts-food.new { background: var(--green-wash); color: var(--green); animation: tsPop .3s ease; }
+.ts-food b { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 99px; background: var(--green); color: #fff; }
+@keyframes tsPop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
+.ts-quality { display: flex; gap: 4px; }
+.ts-q { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 2px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--muted); font: inherit; cursor: pointer; transition: background .15s, border-color .15s; }
+.ts-q small { font-size: 11px; }
+.ts-q-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); transition: background .15s, border-color .15s, transform .15s; }
+.ts-q.lit .ts-q-dot { background: var(--tk-indigo); border-color: var(--tk-indigo); }
+.ts-q.sel { border-color: var(--tk-indigo); color: var(--text); background: var(--panel-2); }
+.ts-q.sel .ts-q-dot { transform: scale(1.2); }
 .ts-small { font-size: 11.5px; margin: 8px 0 0; line-height: 1.45; }
 .ts-when { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 14px; }
 .ts-when label { display: grid; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
@@ -1162,3 +1174,29 @@
 .studio-chip.st-open i { background: var(--green); }
 .studio-chip.st-needs_code i { background: var(--amber); }
 .studio-chip.st-locked { opacity: .65; }
+
+/* ---- tracker: the week at a glance ---- */
+.wkv-legend { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.wkv-legend i { width: 14px; height: 6px; border-radius: 3px; background: var(--tk); margin-left: 6px; }
+.wkv-legend i.dot { width: 6px; height: 6px; border-radius: 50%; }
+.wkv-grid { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.wkv-row { display: grid; grid-template-columns: 58px 1fr 54px; align-items: center; gap: 8px; padding: 3px 4px; border: none; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; animation: wkvIn .35s ease both; }
+.wkv-row:hover { background: var(--hover); }
+.wkv-row.sel { background: var(--accent-wash); }
+@keyframes wkvIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+.wkv-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.wkv-row.sel .wkv-day { color: var(--accent-ink); font-weight: 700; }
+.wkv-track { position: relative; height: 22px; border-radius: 6px; background: repeating-linear-gradient(90deg, var(--panel-2) 0 calc(25% - 1px), var(--line-soft) calc(25% - 1px) 25%); overflow: hidden; }
+.wkv-track i { position: absolute; background: var(--tk); }
+.wkv-track .wkv-sl { top: 3px; bottom: 3px; border-radius: 4px; opacity: .9; }
+.wkv-track .wkv-sl.auto { opacity: .55; background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(255,255,255,.35) 3px 5px); }
+.wkv-track .wkv-sl.live { animation: wkvPulse 1.6s ease-in-out infinite; }
+.wkv-track .dot { width: 5px; height: 5px; border-radius: 50%; margin-left: -2.5px; }
+.wkv-track .wkv-fd.dot { top: 3px; }
+.wkv-track .wkv-dp.dot { bottom: 3px; }
+.wkv-track .wkv-sl.dot { top: 8px; width: 6px; height: 6px; }
+@keyframes wkvPulse { 50% { opacity: .55; } }
+.wkv-sum { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.wkv-hours { display: grid; grid-template-columns: 58px 1fr 54px; gap: 8px; padding: 0 4px; }
+.wkv-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); }
+@media (prefers-reduced-motion: reduce) { .wkv-row, .wkv-track .wkv-sl.live { animation: none; } }

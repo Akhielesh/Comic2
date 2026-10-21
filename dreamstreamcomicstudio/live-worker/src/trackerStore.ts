@@ -78,7 +78,7 @@ export function sanitizeData(kind: TrackKind, d: Record<string, unknown>): Recor
     case 'bottle':
       return clean({ ml: num(d.ml, 0, 1000, 0), milk: pick(d.milk, ['formula', 'breast', 'mixed', 'other'] as const), note });
     case 'solids':
-      return clean({ foods: str(d.foods, 120), amount: pick(d.amount, ['taste', 'some', 'most', 'all'] as const), reaction: str(d.reaction, 120), note });
+      return clean({ foods: str(d.foods, 200), amount: pick(d.amount, ['taste', 'some', 'most', 'all'] as const), reaction: str(d.reaction, 120), note });
     case 'pump':
       return clean({ mlLeft: num(d.mlLeft, 0, 600, 0), mlRight: num(d.mlRight, 0, 600, 0), note });
     case 'diaper':
@@ -86,18 +86,24 @@ export function sanitizeData(kind: TrackKind, d: Record<string, unknown>): Recor
         pee: bool(d.pee), poo: bool(d.poo), rash: bool(d.rash),
         color: pick(d.color, ['yellow', 'green', 'brown', 'black', 'red', 'white', 'orange'] as const),
         texture: pick(d.texture, ['runny', 'seedy', 'soft', 'formed', 'hard'] as const),
+        load: pick(d.load, ['small', 'medium', 'large'] as const),
         note,
       });
     case 'sleep':
-      return clean({ where: pick(d.where, ['crib', 'bassinet', 'arms', 'stroller', 'car', 'bed', 'other'] as const), note });
+      return clean({
+        where: pick(d.where, ['crib', 'bassinet', 'arms', 'stroller', 'car', 'bed', 'other'] as const),
+        night: bool(d.night),
+        quality: [1, 2, 3, 4, 5].includes(d.quality as number) ? d.quality : undefined,
+        note,
+      });
     case 'growth':
       return clean({ kg: num(d.kg, 0.3, 40, 3), cm: num(d.cm, 20, 130, 1), headCm: num(d.headCm, 20, 60, 1), note });
     case 'med':
-      return clean({ name: str(d.name, 60), dose: num(d.dose, 0, 1000, 2), unit: pick(d.unit, ['ml', 'mg', 'drops', 'tablet', 'puff'] as const), everyH: num(d.everyH, 1, 48, 1), note });
+      return clean({ name: str(d.name, 60), dose: num(d.dose, 0, 1000, 2), unit: pick(d.unit, ['ml', 'mg', 'drops', 'tablet', 'puff'] as const), everyH: num(d.everyH, 1, 48, 1), skipped: d.skipped === true ? true : undefined, note });
     case 'temp':
       return clean({ c: num(d.c, 30, 45, 1), method: pick(d.method, ['rectal', 'armpit', 'ear', 'forehead', 'oral'] as const), note });
     case 'activity':
-      return clean({ type: pick(d.type, ['tummy', 'bath', 'play', 'outdoor', 'reading', 'skin'] as const), note });
+      return clean({ type: pick(d.type, ['tummy', 'bath', 'play', 'outdoor', 'reading', 'skin', 'teeth', 'screen', 'other'] as const), note });
     case 'note':
       return clean({ note });
   }

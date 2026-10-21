@@ -6,6 +6,12 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Tracker: the week at a glance, and richer logs (2026-10-21):** a Huckleberry-style
+  week view (one 24-hour strip per day: sleep, feeds, diapers — tap a day to open it);
+  mark a sleep as nap or night and how well it went; how full a diaper was; "skipped this
+  dose" for medicine (kept in the log, never counted as given); foods as a list with
+  **new** badges and quick-picks of foods tried before, plus a weekly "new foods" insight
+  that flags noted reactions; brushing teeth, screen time and other activities.
 - **Your studios (2026-10-21):** one account, every studio — DreamStream (Account →
   Profile) and Stream Studio (Settings → Account & sync, plus chips in the account menu)
   now show the same list: Comic Studio, Chat Studio, Stream Studio, and the baby monitor

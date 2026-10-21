@@ -284,6 +284,8 @@ export function feedIntervalRange(ageDays: number): { min: number; max: number }
  */
 export function isNightSleep(item: TrackItem, tz?: string, now?: number): boolean {
   if (item.kind !== 'sleep') return false;
+  // The family's own call (nap / night) wins over the clock.
+  if (typeof item.data.night === 'boolean') return item.data.night;
   const end = item.end ?? now ?? item.start;
   const h = localHour(item.start, tz);
   if (h >= 18 || h < 5) return true; // evening start, or small hours (covers spanning 02:00 from midnight on)
@@ -616,7 +618,7 @@ export function dayTotals(items: TrackItem[], dayStart: number, dayEnd: number, 
     solids: 0, pumps: 0, pumpMl: 0,
     diapers: { total: 0, wet: 0, dirty: 0, both: 0, dry: 0, wetTotal: 0, dirtyTotal: 0, rash: 0, colors: {} },
     sleep: { totalMin: 0, dayMin: 0, nightMin: 0, naps: 0, longestMin: 0 },
-    activityMin: { tummy: 0, bath: 0, play: 0, outdoor: 0, reading: 0, skin: 0, total: 0 },
+    activityMin: { tummy: 0, bath: 0, play: 0, outdoor: 0, reading: 0, skin: 0, teeth: 0, screen: 0, other: 0, total: 0 },
     meds: 0, medsByName: {}, maxTempC: null,
   };
   const inDay = (ms: number) => ms >= dayStart && ms < dayEnd;
@@ -863,7 +865,8 @@ const validH = (h: unknown): h is number => typeof h === 'number' && Number.isFi
 
 /** When the next dose of `name` is allowed, from the interval the parent entered. Null if never given. */
 export function nextDose(items: TrackItem[], name: string, now: number): DoseTiming | null {
-  const doses = items.filter((i) => i.kind === 'med' && !i.deleted && i.start <= now && sameName(i.data.name, name)).sort(byStart);
+  // A skipped dose was never given: timing runs from the last real one.
+  const doses = items.filter((i) => i.kind === 'med' && !i.deleted && !i.data.skipped && i.start <= now && sameName(i.data.name, name)).sort(byStart);
   if (!doses.length) return null;
   const last = doses[doses.length - 1];
   const withH = [...doses].reverse().find((d) => validH(d.data.everyH));
@@ -897,7 +900,7 @@ export function doseCheck(items: TrackItem[], dose: TrackItem): DoseFlag | null 
   const name = dose.data.name?.trim();
   if (dose.kind !== 'med' || dose.deleted || !name) return null;
   const earlier = items
-    .filter((i) => i.kind === 'med' && !i.deleted && i.id !== dose.id && i.start <= dose.start && sameName(i.data.name, name))
+    .filter((i) => i.kind === 'med' && !i.deleted && !i.data.skipped && i.id !== dose.id && i.start <= dose.start && sameName(i.data.name, name))
     .sort(byStart);
   const prev = earlier[earlier.length - 1];
   if (!prev) return null;
@@ -998,6 +1001,21 @@ function weekStats(items: TrackItem[], sessions: FeedSession[], dayKeys: Set<str
  * and wet diapers. Each needs ≥ 4 days (or nights) of logs this week, and
  * trends need ≥ 3 the week before — nothing is said from a day or two.
  */
+/** "Avocado, oatmeal & pear" → ['avocado', 'oatmeal', 'pear'] (lower-case, trimmed, de-duplicated). */
+export function foodList(foods: string | undefined): string[] {
+  if (!foods) return [];
+  return [...new Set(foods.split(/[,;\n]|\s+(?:and|&)\s+/i).map((f) => f.trim().toLowerCase().replace(/\s+/g, ' ')).filter((f) => f.length >= 2 && f.length <= 40))];
+}
+
+/** When each food first appeared in the log (food → epoch ms). */
+export function firstFoods(items: TrackItem[]): Map<string, number> {
+  const first = new Map<string, number>();
+  for (const i of [...items].filter((x) => x.kind === 'solids' && !x.deleted).sort(byStart)) {
+    for (const f of foodList(i.data.foods)) if (!first.has(f)) first.set(f, i.start);
+  }
+  return first;
+}
+
 export function insights(items: TrackItem[], profile: BabyProfile | null, now: number, tz?: string): Insight[] {
   const past = dedupeSleep(items, now).filter((i) => i.start <= now);
   if (!past.length) return [];
@@ -1092,6 +1110,34 @@ export function insights(items: TrackItem[], profile: BabyProfile | null, now: n
     } else {
       add('tummy', 'info', `Tummy time averaged ${Math.round(perDay)} min a day. Short sessions add up — a few minutes after each diaper change helps toward the 15–30 min daily goal.`, 58);
     }
+  }
+
+  // How well they slept, when the family rates it (1 restless … 5 great).
+  const rated = (days: Set<string>) => past.filter((i) => i.kind === 'sleep' && i.data.quality && days.has(dayKey(i.start, tz))).map((i) => i.data.quality as number);
+  const qa = rated(cur);
+  if (qa.length >= 4) {
+    const qb = rated(prev);
+    const ca = mean(qa);
+    if (qb.length >= 4 && ca - mean(qb) >= 0.5) add('quality', 'good', `Sleep rated ${fmt1(ca)}/5 on average this week, up from ${fmt1(mean(qb))}.`, 55);
+    else if (qb.length >= 4 && mean(qb) - ca >= 0.5) add('quality', 'info', `Sleep rated ${fmt1(ca)}/5 this week, down from ${fmt1(mean(qb))} — rough patches often line up with teething, colds or new skills.`, 50);
+    else add('quality', 'info', `Sleep rated ${fmt1(ca)}/5 on average this week.`, 18);
+  }
+
+  // New foods: the first time each one shows up in the log (one at a time, watch a few days).
+  const fresh = [...firstFoods(past).entries()].filter(([, t]) => cur.has(dayKey(t, tz))).map(([f]) => f);
+  if (fresh.length) {
+    const reacted = past.some((i) => i.kind === 'solids' && cur.has(dayKey(i.start, tz)) && !!i.data.reaction && !/\b(loved|liked|fine|ok|good|happy)\b/i.test(i.data.reaction));
+    add(
+      'new-foods',
+      reacted ? 'watch' : 'good',
+      `${fresh.length} new food${fresh.length > 1 ? 's' : ''} this week: ${fresh.slice(0, 4).join(', ')}${fresh.length > 4 ? '…' : ''}.${reacted ? ' A reaction was noted — if you see hives, swelling, vomiting or trouble breathing after a food, call your pediatrician (or emergency services for breathing trouble).' : ' Introducing one new food at a time makes any reaction easy to pin down.'}`,
+      reacted ? 85 : 48,
+    );
+  }
+
+  // Screen time under 18 months (AAP: avoid, apart from video chatting with family).
+  if (age !== null && age < 548 && past.some((i) => i.kind === 'activity' && i.data.type === 'screen' && cur.has(dayKey(i.start, tz)))) {
+    add('screen', 'info', 'Screen time was logged this week. Before 18 months the AAP suggests avoiding screens other than video calls with family — talking, reading and play do more for language.', 40);
   }
 
   // Wet diapers (after the first days, under a year).

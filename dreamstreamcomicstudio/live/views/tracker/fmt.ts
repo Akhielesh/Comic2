@@ -17,7 +17,10 @@ export const KIND_META: Record<TrackKind, { label: string; icon: string; tone: s
 
 export const ACTIVITY_LABEL: Record<NonNullable<TrackData['type']>, string> = {
   tummy: 'Tummy time', bath: 'Bath', play: 'Play', outdoor: 'Outside', reading: 'Reading', skin: 'Skin-to-skin',
+  teeth: 'Brushing teeth', screen: 'Screen time', other: 'Other',
 };
+
+export const QUALITY_LABEL: Record<1 | 2 | 3 | 4 | 5, string> = { 1: 'Restless', 2: 'Fussy', 3: 'OK', 4: 'Good', 5: 'Great' };
 
 /* ------------------------------------------------------------- units */
 
@@ -142,16 +145,20 @@ export function describe(i: TrackItem, u: { vol: VolUnit; temp: TempUnit }, now 
     }
     case 'diaper': {
       const what = d.pee && d.poo ? 'Wet + dirty' : d.poo ? 'Dirty' : d.pee ? 'Wet' : 'Dry';
-      return `${what} diaper${d.color ? ` · ${d.color}` : ''}${d.texture ? ` · ${d.texture}` : ''}${d.rash ? ' · rash' : ''}`;
+      return `${what} diaper${d.load && d.load !== 'medium' ? ` · ${d.load}` : ''}${d.color ? ` · ${d.color}` : ''}${d.texture ? ` · ${d.texture}` : ''}${d.rash ? ' · rash' : ''}`;
     }
     case 'sleep':
-      return running ? `Asleep ${fmtDur(span)}` : `${i.src === 'monitor' ? 'Slept (camera)' : 'Slept'} ${fmtDur(span)}${d.where ? ` · ${d.where}` : ''}${d.wakings ? ` · ${d.wakings} waking${d.wakings > 1 ? 's' : ''}` : ''}`;
+      return running
+        ? `Asleep ${fmtDur(span)}`
+        : `${i.src === 'monitor' ? 'Slept (camera)' : d.night === true ? 'Night sleep' : d.night === false ? 'Nap' : 'Slept'} ${fmtDur(span)}${d.where ? ` · ${d.where}` : ''}${d.wakings ? ` · ${d.wakings} waking${d.wakings > 1 ? 's' : ''}` : ''}${d.quality ? ` · ${QUALITY_LABEL[d.quality].toLowerCase()}` : ''}`;
     case 'growth':
       return [d.kg != null && (u.vol === 'oz' ? `${Math.floor(d.kg * 2.20462)} lb ${Math.round(((d.kg * 2.20462) % 1) * 16)} oz` : `${d.kg} kg`), d.cm != null && (u.vol === 'oz' ? `${(d.cm / 2.54).toFixed(1)} in` : `${d.cm} cm`), d.headCm != null && `head ${u.vol === 'oz' ? `${(d.headCm / 2.54).toFixed(1)} in` : `${d.headCm} cm`}`]
         .filter(Boolean)
         .join(' · ');
     case 'med':
-      return `${d.name ?? 'Medicine'}${d.dose != null ? ` · ${d.dose} ${d.unit ?? ''}`.trimEnd() : ''}${d.everyH ? ` · every ${d.everyH} h` : ''}`;
+      return d.skipped
+        ? `Skipped · ${d.name ?? 'Medicine'}`
+        : `${d.name ?? 'Medicine'}${d.dose != null ? ` · ${d.dose} ${d.unit ?? ''}`.trimEnd() : ''}${d.everyH ? ` · every ${d.everyH} h` : ''}`;
     case 'temp':
       return `${fmtTemp(d.c, u.temp)}${d.method ? ` · ${d.method}` : ''}`;
     case 'activity':

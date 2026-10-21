@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { accessToken } from '../../account';
 import { WORKER_BASE } from '../../config';
-import { ageDays as ageOf, ageLabel, dayTotals, dedupeSleep, diaperCheck, doseCheck, feverCheck, nextDose, predictNextFeed, predictNextSleep } from '../../monitor/trackerScience';
+import { ageDays as ageOf, ageLabel, dayTotals, dedupeSleep, diaperCheck, doseCheck, feverCheck, firstFoods, nextDose, predictNextFeed, predictNextSleep } from '../../monitor/trackerScience';
 import { newTrackId, type TrackerSync } from '../../monitor/trackerSync';
 import type { BabyProfile, TrackData, TrackItem, TrackKind } from '../../monitor/trackTypes';
 import { Icon } from '../../ui/icons';
@@ -14,6 +14,7 @@ import { GrowthCard } from './GrowthCard';
 import { TimerCard, stopTimer } from './TimerCard';
 import { TrackSheet, type SheetGuidance } from './TrackSheet';
 import { TrendsCard } from './TrendsCard';
+import { WeekView } from './WeekView';
 import { KIND_META, addDays, dayStart, describe, fmtAgo, fmtClock, fmtDay, fmtDur, fmtVol, loadTempUnit, loadVolUnit, saveUnit, type TempUnit, type VolUnit } from './fmt';
 
 const QUICK: TrackKind[] = ['breast', 'bottle', 'diaper', 'sleep', 'pump', 'solids', 'med', 'temp', 'activity', 'growth', 'note'];
@@ -101,6 +102,8 @@ export function TrackerPanel({
     for (const i of [...all].reverse()) if (i.kind === 'med' && i.data.name && !seen.has(i.data.name.toLowerCase())) seen.set(i.data.name.toLowerCase(), { name: i.data.name, dose: i.data.dose, unit: i.data.unit, everyH: i.data.everyH });
     return [...seen.values()].slice(0, 5);
   }, [all]);
+  // Foods already tried (and when) — the sheet marks new ones.
+  const knownFoods = useMemo(() => firstFoods(all), [all]);
   const meds = useMemo(() => recentMeds.map((m) => nextDose(all, m.name, now)).filter((d): d is NonNullable<typeof d> => !!d && d.last > now - 2 * 86_400_000), [recentMeds, all, now]);
   const lastOf = (kinds: TrackKind[]) => [...all].reverse().find((i) => kinds.includes(i.kind));
   const lastFeed = lastOf(['breast', 'bottle']);
@@ -291,6 +294,10 @@ export function TrackerPanel({
         )}
       </div>
 
+      <WeekView items={all} now={now} tz={tz} day={day} onPick={(d) => {
+        setDay(d);
+        document.querySelector('[data-tour="tk-day"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }} />
       <TrendsCard items={all} baby={baby} now={now} tz={tz} vol={units.vol} />
       <GrowthCard items={all} baby={baby} now={now} tz={tz} vol={units.vol} canLog={canLog} onAdd={() => quick('growth')} />
 
@@ -305,6 +312,7 @@ export function TrackerPanel({
           item={sheet.item}
           units={units}
           recentMeds={recentMeds}
+          knownFoods={knownFoods}
           canStartTimer={!sheet.item}
           guidance={guidance}
           onStart={(data) => startTimer(sheet.kind, data)}

@@ -164,6 +164,22 @@ better, and writes one headline. The tracker's own Trends cover logged feeds/dia
 The watch screen's **Tracker** layout — Huckleberry-style logging shared live by the
 family, in the same room connection as the monitor.
 
+**2026-10-21 — compared with finnberry** (an open-source Huckleberry-style tracker,
+github.com/bckenstler/finnberry): it models the classic entries but nothing about
+movement or surroundings (no posture, rolling, objects or room data — our camera's
+smart vision and sound engine go well beyond it). From its data model we adopted:
+sleep **nap / night** set by the family (overrides the clock in every nap/night
+calculation) and **how well** (1 restless … 5 great, with a week-over-week insight);
+diaper **how much** (a little / normal / a lot); a **skipped dose** flag (kept in the
+log, never counted as given — dose timing runs from the last real dose); **foods as a
+list** with each food's first try remembered, "new" badges while logging, quick-picks
+of foods tried before, and a weekly **new foods** insight that turns into a watch
+(with when to call) if a reaction is noted; more activities (**brushing teeth,
+screen time** — with the AAP's under-18-months note — and other); and the
+**week view**: seven 24-hour strips (sleep blocks, feed and diaper ticks, camera
+sleep hatched) — tap a day to open it. Not adopted yet: several children per
+nursery, a configurable day start, email invites with expiry.
+
 - **Log**: breastfeeds (timer with left/right switching), bottles (ml/oz, formula /
   breast milk), solids, pumping, diapers (wet/dirty/both/dry, colour, texture, rash),
   sleep (timer or after the fact), medicine (name, dose as entered, interval), temperature

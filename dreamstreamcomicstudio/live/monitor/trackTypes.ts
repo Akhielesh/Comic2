@@ -29,7 +29,7 @@ export type TrackData = {
   // bottle: millilitres + what
   ml?: number;
   milk?: 'formula' | 'breast' | 'mixed' | 'other';
-  // solids
+  // solids: comma-separated, e.g. "avocado, oatmeal" (new ones are spotted from history)
   foods?: string;
   amount?: 'taste' | 'some' | 'most' | 'all';
   reaction?: string;
@@ -42,10 +42,16 @@ export type TrackData = {
   color?: 'yellow' | 'green' | 'brown' | 'black' | 'red' | 'white' | 'orange';
   texture?: 'runny' | 'seedy' | 'soft' | 'formed' | 'hard';
   rash?: boolean;
+  /** How much was in it. */
+  load?: 'small' | 'medium' | 'large';
   // sleep
   where?: 'crib' | 'bassinet' | 'arms' | 'stroller' | 'car' | 'bed' | 'other';
   /** Camera-detected sleep: wakings during the session. */
   wakings?: number;
+  /** The family says it's a night sleep (true) or a nap (false); unset = by the clock. */
+  night?: boolean;
+  /** How well: 1 restless … 5 great. */
+  quality?: 1 | 2 | 3 | 4 | 5;
   // growth (metric)
   kg?: number;
   cm?: number;
@@ -55,11 +61,13 @@ export type TrackData = {
   dose?: number;
   unit?: 'ml' | 'mg' | 'drops' | 'tablet' | 'puff';
   everyH?: number;
+  /** A dose that was due but not given — kept for the record, never counted as given. */
+  skipped?: boolean;
   // temperature (°C) + method
   c?: number;
   method?: 'rectal' | 'armpit' | 'ear' | 'forehead' | 'oral';
   // activity
-  type?: 'tummy' | 'bath' | 'play' | 'outdoor' | 'reading' | 'skin';
+  type?: 'tummy' | 'bath' | 'play' | 'outdoor' | 'reading' | 'skin' | 'teeth' | 'screen' | 'other';
   note?: string;
 };
 

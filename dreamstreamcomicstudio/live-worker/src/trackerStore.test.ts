@@ -1,7 +1,7 @@
 // @vitest-environment node
 import initSqlJs, { type SqlJsStatic } from 'sql.js';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { sanitizeTrack, TrackerStore } from './trackerStore';
+import { sanitizeData, sanitizeTrack, TrackerStore } from './trackerStore';
 
 let SQL: SqlJsStatic;
 beforeAll(async () => {
@@ -116,4 +116,16 @@ describe('TrackerStore', () => {
     expect(csv.split('\r\n')[0]).toBe('start,end,minutes,type,details,logged_by');
     expect(csv.split('\r\n')[1].endsWith(`"'=HYPERLINK(""x"")"`)).toBe(true);
   });
+
+  it('keeps the newer fields, clamped: nap/night + quality, diaper amount, skipped dose, more activities', () => {
+    expect(sanitizeData('sleep', { night: true, quality: 4, where: 'crib' })).toEqual({ night: true, quality: 4, where: 'crib' });
+    expect(sanitizeData('sleep', { night: 'yes', quality: 9 })).toEqual({});
+    expect(sanitizeData('diaper', { pee: true, load: 'large' })).toEqual({ pee: true, load: 'large' });
+    expect(sanitizeData('diaper', { pee: true, load: 'huge' })).toEqual({ pee: true });
+    expect(sanitizeData('med', { name: 'Ibuprofen', skipped: true })).toEqual({ name: 'Ibuprofen', skipped: true });
+    expect(sanitizeData('med', { name: 'Ibuprofen', skipped: 'no' })).toEqual({ name: 'Ibuprofen' });
+    expect(sanitizeData('activity', { type: 'teeth' })).toEqual({ type: 'teeth' });
+    expect(sanitizeData('activity', { type: 'screen' })).toEqual({ type: 'screen' });
+  });
 });
+

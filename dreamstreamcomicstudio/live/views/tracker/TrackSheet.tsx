@@ -5,7 +5,8 @@ import React, { useMemo, useState } from 'react';
 import type { TrackData, TrackItem, TrackKind } from '../../monitor/trackTypes';
 import { Icon } from '../../ui/icons';
 import { Btn, cx } from '../../ui/primitives';
-import { ACTIVITY_LABEL, KIND_META, cToF, fToC, fromLocalInput, fromOz, toLocalInput, toOz, type TempUnit, type VolUnit } from './fmt';
+import { foodList } from '../../monitor/trackerScience';
+import { ACTIVITY_LABEL, KIND_META, QUALITY_LABEL, cToF, fToC, fromLocalInput, fromOz, toLocalInput, toOz, type TempUnit, type VolUnit } from './fmt';
 
 export interface SheetGuidance {
   level: string;
@@ -47,6 +48,7 @@ export function TrackSheet({
   item,
   units,
   recentMeds,
+  knownFoods,
   canStartTimer,
   guidance,
   onSave,
@@ -59,6 +61,8 @@ export function TrackSheet({
   item: TrackItem | null;
   units: { vol: VolUnit; temp: TempUnit };
   recentMeds: { name: string; dose?: number; unit?: TrackData['unit']; everyH?: number }[];
+  /** Foods already in the log (food → first tried), to mark new ones. */
+  knownFoods?: Map<string, number>;
   canStartTimer: boolean;
   /** Live advice for what's being entered (fever, medicine timing). */
   guidance?: (k: TrackKind, d: TrackData) => SheetGuidance | null;
@@ -137,6 +141,12 @@ export function TrackSheet({
             <Chips label="Texture" value={data.texture} onChange={(texture) => set({ texture })} options={[['runny', 'Runny'], ['seedy', 'Seedy'], ['soft', 'Soft'], ['formed', 'Formed'], ['hard', 'Hard']]} />
           </>
         )}
+        {kind === 'diaper' && (data.pee || data.poo) && (
+          <>
+            <div className="ts-label">How much</div>
+            <Chips label="How much" value={data.load} onChange={(load) => set({ load })} options={[['small', 'A little'], ['medium', 'Normal'], ['large', 'A lot']]} />
+          </>
+        )}
         {kind === 'diaper' && (
           <label className="row ts-check"><input type="checkbox" checked={!!data.rash} onChange={(e) => set({ rash: e.target.checked || undefined })} />Diaper rash</label>
         )}
@@ -178,7 +188,26 @@ export function TrackSheet({
         {kind === 'solids' && (
           <>
             <div className="ts-label">Foods</div>
-            <input className="input" value={data.foods ?? ''} maxLength={120} placeholder="e.g. avocado, oatmeal" onChange={(e) => set({ foods: e.target.value || undefined })} />
+            <input className="input" value={data.foods ?? ''} maxLength={200} placeholder="e.g. avocado, oatmeal" onChange={(e) => set({ foods: e.target.value || undefined })} />
+            {foodList(data.foods).length > 0 && (
+              <div className="ts-foods" aria-live="polite">
+                {foodList(data.foods).map((f) => {
+                  const first = knownFoods?.get(f);
+                  const isNew = first == null || (item != null && first >= item.start);
+                  return <span key={f} className={cx('ts-food', isNew && 'new')}>{f}{isNew && <b>new</b>}</span>;
+                })}
+              </div>
+            )}
+            {!item && knownFoods && knownFoods.size > 0 && (
+              <div className="ts-chips" aria-label="Foods tried before">
+                {[...knownFoods.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([f]) => (
+                  <button key={f} type="button" className={cx('cam-chip', foodList(data.foods).includes(f) && 'sel')} onClick={() => {
+                    const cur = foodList(data.foods);
+                    set({ foods: (cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f]).join(', ') || undefined });
+                  }}>{f}</button>
+                ))}
+              </div>
+            )}
             <div className="ts-label">How much they ate</div>
             <Chips label="Amount" value={data.amount} onChange={(amount) => set({ amount })} options={[['taste', 'A taste'], ['some', 'Some'], ['most', 'Most'], ['all', 'All']]} />
             <div className="ts-label">Reaction (optional)</div>
@@ -188,8 +217,23 @@ export function TrackSheet({
 
         {kind === 'sleep' && (
           <>
+            <div className="ts-label">Nap or night</div>
+            <Chips label="Nap or night" value={data.night === true ? 'night' : data.night === false ? 'nap' : undefined} onChange={(v) => set({ night: v === 'night' ? true : v === 'nap' ? false : undefined })} options={[['nap', 'Nap'], ['night', 'Night']]} />
             <div className="ts-label">Where</div>
             <Chips label="Where" value={data.where} onChange={(where) => set({ where })} options={[['crib', 'Crib'], ['bassinet', 'Bassinet'], ['arms', 'Arms'], ['stroller', 'Stroller'], ['car', 'Car seat'], ['bed', 'Bed']]} />
+            {(item || (mins ?? 0) > 0) && (
+              <>
+                <div className="ts-label">How well (optional)</div>
+                <div className="ts-quality" role="radiogroup" aria-label="How well">
+                  {([1, 2, 3, 4, 5] as const).map((q) => (
+                    <button key={q} type="button" role="radio" aria-checked={data.quality === q} className={cx('ts-q', data.quality === q && 'sel', data.quality != null && q <= data.quality && 'lit')} onClick={() => set({ quality: data.quality === q ? undefined : q })} aria-label={QUALITY_LABEL[q]} title={QUALITY_LABEL[q]}>
+                      <span className="ts-q-dot" />
+                      <small>{QUALITY_LABEL[q]}</small>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -234,7 +278,8 @@ export function TrackSheet({
               <label>Every<Num label="Hours between doses" value={data.everyH} onChange={(everyH) => set({ everyH })} step={1} min={0} max={48} suffix="h" /></label>
             </div>
             <Chips label="Unit" value={data.unit} onChange={(unit) => set({ unit })} options={[['ml', 'ml'], ['mg', 'mg'], ['drops', 'drops'], ['tablet', 'tablet'], ['puff', 'puff']]} />
-            <p className="faint ts-small">Use the dose your pediatrician or the package gives for your baby’s weight — the tracker only keeps time.</p>
+            <label className="row ts-check"><input type="checkbox" checked={!!data.skipped} onChange={(e) => set({ skipped: e.target.checked || undefined })} />Skipped this dose (not given)</label>
+            <p className="faint ts-small">Use the dose your pediatrician or the package gives for your baby’s weight — the tracker only keeps time. Skipped doses stay in the log but don’t count as given.</p>
           </>
         )}
 
