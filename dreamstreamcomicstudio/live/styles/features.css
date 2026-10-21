@@ -971,3 +971,4 @@
 .wk-delta.good { color: var(--green); }
 .wk-delta.bad { color: var(--amber); }
 .wk-note { font-size: 12px; margin: 10px 0 0; line-height: 1.45; }
+.ov-pill.p2p.lan { background: rgba(46, 125, 80, .75); }

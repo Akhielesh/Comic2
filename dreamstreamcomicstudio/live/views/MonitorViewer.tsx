@@ -13,7 +13,7 @@ import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket 
 import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
-import { ViewerLink, type LinkState, type Quality } from '../monitor/rtc';
+import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
 import { SOUND_INFO, SOUND_CATS, soundHeadline, type SoundCat } from '../monitor/soundClasses';
 import { SOOTHE_OPTIONS, type SootheKind } from '../monitor/soothe';
 import { markSetup } from '../monitor/setupProgress';
@@ -176,6 +176,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [settings, setSettings] = useState<MonSettings>({ sensitivity: 'medium', cryRepeatMin: 3 });
   const [camSid, setCamSid] = useState<string | null>(null);
   const [linkState, setLinkState] = useState<LinkState>('idle');
+  const [netPath, setNetPath] = useState<NetPath | null>(null);
   const [relayOn, setRelayOn] = useState(false);
   const [relayUrl, setRelayUrl] = useState<string | null>(null);
   const [hasVideo, setHasVideo] = useState(false);
@@ -227,7 +228,12 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
 
   const canAct = me?.role === 'parent' || me?.role === 'caregiver';
   useFirstVisitTour('watch', sock === 'connected');
-  const cam = cams.find((c) => c.sid === camSid) ?? null;
+  // The room may lose the camera (its internet dropped) while our call with it
+  // still runs over the home Wi-Fi — keep showing it until the call ends.
+  const lastCamRef = useRef<CamPresence | null>(null);
+  const roomCam = cams.find((c) => c.sid === camSid) ?? null;
+  if (roomCam) lastCamRef.current = roomCam;
+  const cam = roomCam ?? (linkState === 'connected' ? lastCamRef.current : null);
   const camStatus = cam ? status[cam.dev] : undefined;
   const baby = nursery.baby || 'Baby';
 
@@ -236,6 +242,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     setClosedMsg(null);
     const link = new ViewerLink((to, d) => sockRef.current?.send({ t: 'rtc', to, d }), []);
     link.onState = setLinkState;
+    link.onPath = setNetPath;
+    link.onDirect = (dm) => onDirectRef.current(dm);
     link.onStream = (s) => {
       const v = videoRef.current;
       if (v && v.srcObject !== s) {
@@ -329,6 +337,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
 
   const pickCam = (list: CamPresence[], current: string | null): string | null => {
     if (current && list.some((c) => c.sid === current)) return current;
+    // Camera gone from the room but the call is still up: hold on to it.
+    if (current && !list.length && linkRef.current?.state === 'connected') return current;
     let preferred: string | null = null;
     try {
       preferred = localStorage.getItem(camKey(id));
@@ -532,6 +542,35 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const onMsgRef = useRef(onMsg);
   onMsgRef.current = onMsg;
 
+  /**
+   * Straight from the camera over the call's data channel. While the room is
+   * reachable it's only a fresher status; when it isn't (the internet is down
+   * but the call runs over the home Wi-Fi), it's how this screen still hears
+   * about crying, danger zones and very loud noise.
+   */
+  const sockStateRef = useRef(sock);
+  sockStateRef.current = sock;
+  const onDirect = (dm: DirectMsg) => {
+    const roomUp = sockStateRef.current === 'connected';
+    if (dm.t === 'st') {
+      const old = statusRef.current[dm.dev];
+      if (roomUp && old && Date.now() - old.at < 6000) return;
+      onMsg({ t: 'status', dev: dm.dev, sid: camSid ?? '', st: dm.st as unknown as CamStatus, at: Date.now() });
+      return;
+    }
+    if (roomUp) return; // the room's log line raises it, with its id
+    if (dm.kind === 'sound' && dm.cat && SOUND_SET.has(dm.cat)) {
+      if (dm.phase === 'start') raise(dm.cat as SoundCat, soundHeadline(dm.cat as SoundCat, nursery.baby), null);
+      else resolve(dm.cat as SoundCat, dm.secs);
+    } else if (dm.kind === 'vision' && (dm.type === 'zone' || dm.type === 'crib_out' || dm.type === 'moved')) {
+      raise(dm.type as AlertCat, dm.type === 'zone' ? 'Movement in a danger zone' : dm.type === 'crib_out' ? `Movement outside the crib — ${baby} may be climbing out` : 'The camera was moved', null);
+    } else if (dm.kind === 'noise' && dm.type === 'very_loud' && dm.phase === 'start') {
+      raise('very_loud', `Very loud noise in the nursery${dm.db ? ` (${Math.round(dm.db)} dB)` : ''}`, null);
+    }
+  };
+  const onDirectRef = useRef(onDirect);
+  onDirectRef.current = onDirect;
+
   // Episodes without an "end" (coughs, bangs…) fade out of the banner area.
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -554,11 +593,22 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     const link = linkRef.current;
     if (!link || sock !== 'connected') return;
     if (!camSid) {
+      if (link.state === 'connected') return;
       link.close();
       setRelayOn(false);
       return;
     }
     if (link.target !== camSid || link.state === 'closed' || link.state === 'idle') {
+      // Same camera back under a new session id, call never dropped: keep it.
+      const prevDev = (() => {
+        try {
+          return localStorage.getItem(camKey(id));
+        } catch {
+          return null;
+        }
+      })();
+      const c0 = cams.find((x) => x.sid === camSid);
+      if (link.target && c0 && prevDev === c0.dev && link.retarget(camSid)) return;
       void link.connect(camSid);
       const c = cams.find((x) => x.sid === camSid);
       if (c) {
@@ -908,7 +958,11 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           </span>
         )}
         {relayOn && <span className="ov-pill">Low-bandwidth · 1 fps · no audio</span>}
-        {linkState === 'connected' && <span className="ov-pill p2p" title="Encrypted, device-to-device"><Icon name="lock" size={11} /><span>Encrypted · P2P</span></span>}
+        {linkState === 'connected' && (
+          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={netPath === 'lan' ? 'Straight over your home Wi-Fi — keeps working if the internet drops' : netPath === 'relay' ? 'Encrypted, through a relay server (your network blocks direct connections)' : 'Encrypted, device-to-device'}>
+            <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{netPath === 'lan' ? 'Home Wi-Fi' : netPath === 'relay' ? 'Encrypted · relay' : 'Encrypted · P2P'}</span>
+          </span>
+        )}
       </div>
       <div className="mv-ov-tr">
         <button className="mv-mini" onClick={() => setNight((v) => !v)} aria-pressed={night} aria-label="Night view" title="Night view"><Icon name="moon" size={16} /></button>
@@ -1289,6 +1343,16 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         <HelpButton />
       </div>
       {alertStack}
+      {sock !== 'connected' && sock !== 'closed' && linkState === 'connected' && (
+        <div className={cx('banner mv-offline', netPath === 'lan' ? 'info' : 'warn')}>
+          <Icon name="wifi" size={15} />
+          <span>
+            {netPath === 'lan'
+              ? 'No internet — still connected to the camera over your home Wi-Fi. The picture, sound and alerts on this screen keep working; phones away from home get alerts again when the internet is back.'
+              : 'Reconnecting to the nursery — the live picture is still coming through.'}
+          </span>
+        </div>
+      )}
       {near && (
         <div className="banner info mv-near">
           <Icon name="volume" size={15} />

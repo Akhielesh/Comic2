@@ -102,6 +102,24 @@ analyser + alarm detector keep working ("Basic ears").
 - **Schema**: `monitor_delete` / `monitor_remove_member` / the nightly sweep are
   part of `server/sql/live_accounts_and_monitor.sql`.
 
+## When the internet drops (home Wi-Fi resilience)
+
+- Devices on the same Wi-Fi connect over host candidates, so media never leaves the
+  house; `netPath()` (rtc.ts) reads the selected ICE pair and the stage shows **Home Wi-Fi**,
+  **Encrypted · P2P** (internet) or **relay**.
+- Each call carries a data channel `mon`: the camera sends its 2-second status and every
+  sound / vision / noise event straight to viewers (`CameraHub.direct`). While the room is
+  reachable that's only a fresher status; when it isn't, the viewer raises alerts from it
+  (`onDirect` in MonitorViewer).
+- A connected call is never torn down by room bookkeeping: `peer_gone` → `release()` keeps
+  a connected peer; a camera that reconnects under a new session id is re-addressed
+  (`ViewerLink.retarget`) rather than renegotiated; a viewer keeps showing a camera the
+  room lost while the call is up.
+- Limits: push notifications and devices away from home need the internet; browsers can't
+  use Bluetooth or Wi-Fi Direct, so two phones with no shared network can't connect; sound
+  events that start and end entirely during an outage reach the log only through the
+  "ongoing" replay on reconnect.
+
 ## Guest access (share link + passcode)
 
 For family or a sitter without an account (accounts need the welcome code).

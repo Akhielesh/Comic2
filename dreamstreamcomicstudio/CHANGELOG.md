@@ -6,6 +6,14 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Keeps working on your home Wi-Fi when the internet drops (2026-10-21):** phones on
+  the same Wi-Fi already stream straight to each other; now the camera also sends its
+  status and alerts (crying, danger zones, very loud noise) over that same direct link, so
+  the picture, sound and alerts on those screens carry on during an internet outage. The
+  picture shows **Home Wi-Fi** when it's on the local network, viewers get a clear banner
+  while the internet is down, the camera shows how many are still watching on Wi-Fi, and
+  the call is no longer rebuilt (a visible blip) when the camera reconnects. Phones away
+  from home get their alerts again once the internet is back.
 - **This week, at a glance (2026-10-21):** the All layout opens with six numbers worth
   knowing from what the monitor measured — sleep the camera saw, night wakings, the
   longest stretch, crying, how fast someone answered an alert, and the room's sound while

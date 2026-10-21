@@ -339,7 +339,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       for (const e of events) sendSound(e);
     };
     ears.onNoise = (events) => {
-      for (const e of events) sockRef.current?.send({ t: 'event', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated });
+      for (const e of events) {
+        sockRef.current?.send({ t: 'event', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated });
+        hubRef.current?.direct({ t: 'ev', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, at: Date.now(), dev: device.id });
+      }
     };
     ears.onMinute = (lv) => addMinute(lv);
     // Feedback (a parent's phone in this room): silence the talk audio at once,
@@ -577,9 +580,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         if (talkersRef.current.size && ears) ears.suppress(3000);
         const talkNames = [...talkersRef.current.values()];
         const callerOn = [...callersRef.current.values()].find((c) => c.on);
-        sockRef.current?.send({
-          t: 'status',
-          st: {
+        const st = {
             state: s.mood as BabyState,
             level: s.level,
             motion: motionVal(),
@@ -600,8 +601,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             awake: wakeRef.current.state,
             talk: talkNames.length ? talkNames.join(' & ') : null,
             call: callerOn?.who ?? null,
-          },
-        });
+        };
+        sockRef.current?.send({ t: 'status', st });
+        // Straight to viewers too — over the home Wi-Fi this keeps working when the internet doesn't.
+        hubRef.current?.direct({ t: 'st', st, dev: device.id });
       }),
     );
     touch();
@@ -628,7 +631,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
    * syncSounds() on the next hello — so a cry already going when monitoring
    * starts still alerts the family, exactly once.
    */
-  const sendSound = (e: BrainEvent) => {
+  const sendSound = (e: BrainEvent, replay = false) => {
+    // Viewers on the same Wi-Fi hear about it directly, room or no room.
+    if (!replay) hubRef.current?.direct({ t: 'ev', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, at: Date.now(), dev: device.id });
     if (!authedRef.current) return;
     sockRef.current?.send({ t: 'event', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, via: e.via });
     if (e.phase === 'start') toldRef.current.add(e.cat);
@@ -638,12 +643,13 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     const brain = earsRef.current?.brain;
     if (!brain) return;
     const now = brain.ongoing();
-    for (const e of now) if (!toldRef.current.has(e.cat)) sendSound(e);
+    for (const e of now) if (!toldRef.current.has(e.cat)) sendSound(e, true);
     const still = new Set(now.map((e) => e.cat));
-    for (const cat of [...toldRef.current]) if (!still.has(cat)) sendSound({ phase: 'end', cat, conf: 0, via: 'ai' });
+    for (const cat of [...toldRef.current]) if (!still.has(cat)) sendSound({ phase: 'end', cat, conf: 0, via: 'ai' }, true);
   };
 
   const sendVision = (e: VisionEvent) => {
+    hubRef.current?.direct({ t: 'ev', kind: 'vision', type: e.type, at: Date.now(), dev: device.id });
     sockRef.current?.send({ t: 'event', kind: 'vision', type: e.type, zone: e.zone, name: e.name, secs: e.secs, via: e.via });
   };
 
@@ -748,7 +754,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         void hubRef.current?.onSignal(m.from, m.d, m.label || m.name || 'Someone');
         break;
       case 'peer_gone':
-        hubRef.current?.close(m.sid);
+        // Their socket left the room; a call that's still up (same Wi-Fi) carries on.
+        hubRef.current?.release(m.sid);
         if (talkersRef.current.delete(m.sid)) setTalkers([...talkersRef.current.values()]);
         break;
       case 'cmd':
@@ -1048,8 +1055,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       )}
 
       <div className="cam-top">
-        <Pill tone={sock === 'connected' ? 'live' : 'warn'} dot pulse={sock === 'connected'}>
-          {sock === 'connected' ? 'MONITORING' : sock === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
+        <Pill tone={sock === 'connected' || p2pCount > 0 ? 'live' : 'warn'} dot pulse={sock === 'connected'}>
+          {sock === 'connected' ? 'MONITORING' : p2pCount > 0 ? `ON WI-FI · ${p2pCount} WATCHING` : sock === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
         </Pill>
         <span className="cam-norec"><Icon name="shield" size={12} />Not recording</span>
         <span className="spacer" />
