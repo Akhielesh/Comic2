@@ -10,6 +10,7 @@ import type { Nav } from '../nav';
 import { DEFAULT_PREFS, LOOK_LABELS, loadPrefs, playChime, savePrefs, type StudioPrefs } from '../prefs';
 import { normalizeQuick } from '../emoji';
 import { QuickBarEditor } from '../components/EmojiPicker';
+import { StudiosCard } from '../components/StudiosCard';
 import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
@@ -170,6 +171,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                       </div>
                     </Row>
                   )}
+                  <StudiosCard />
                   <Row title="Cloud sync" desc="Events, recaps and settings sync to your account automatically.">
                     <Btn
                       variant="soft"

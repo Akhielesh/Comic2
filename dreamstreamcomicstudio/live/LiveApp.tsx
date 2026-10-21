@@ -32,6 +32,7 @@ const MonitorJoin = lazy(() => import('./views/MonitorJoin').then((m) => ({ defa
 const CallsView = lazy(() => import('./views/CallsView').then((m) => ({ default: m.CallsView })));
 import { useCalls } from './calls/callCenter';
 import { CallHost } from './views/calls/CallHost';
+import { StudiosCard } from './components/StudiosCard';
 import { isMissed, CALLS_SEEN_KEY } from './views/callsBadge';
 import { SettingsView } from './views/SettingsView';
 import { StudioView } from './views/StudioView';
@@ -191,6 +192,7 @@ function AccountButton({ onSettings, push, compact }: { onSettings: () => void; 
             <b>{name}</b>
             <span className="faint">{account.email}</span>
           </div>
+          <StudiosCard compact />
           {account.status === 'needs_code' && (
             <button role="menuitem" onClick={() => { setMenu(false); openAuth('code'); }}><Icon name="lock" size={15} />Enter welcome code</button>
           )}

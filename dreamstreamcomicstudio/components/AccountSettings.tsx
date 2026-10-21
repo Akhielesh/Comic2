@@ -31,6 +31,7 @@ import { AdminConsole } from './admin/AdminConsole';
 import { isSettingsTab, type SettingsTab } from './settingsTabs';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
+import { StudiosAccess } from './account/StudiosAccess';
 
 interface AccountSettingsProps {
     onClose: () => void;
@@ -709,6 +710,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     {isSavingProfile ? "Saving..." : "Save Changes"}
                 </Button>
             </div>
+
+            <StudiosAccess />
 
             <div className="border-2 border-black rounded-xl bg-white">
                 <div className="px-4 py-3 font-display text-lg border-b-2 border-black">Invite Friends</div>

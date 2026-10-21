@@ -5,6 +5,14 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Your studios (2026-10-21):** one account, every studio — DreamStream (Account →
+  Profile) and Stream Studio (Settings → Account & sync, plus chips in the account menu)
+  now show the same list: Comic Studio, Chat Studio, Stream Studio, and the baby monitor
+  & family calls, each marked **Yours**, **One step** (welcome code) or **Locked** (ask an
+  admin), with what you have there ("2 nurseries") and a link straight in. Answered once
+  by the server (`GET /api/account/studios`) so the apps can't disagree.
+
 ### Fixed
 - **Stream Studio kept showing your name after you signed out (2026-10-21):** it kept its
   own copy of your display name (and your events, nursery alert opt-ins and call settings)
