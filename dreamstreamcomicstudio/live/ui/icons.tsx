@@ -69,6 +69,8 @@ const ICONS: Record<string, React.ReactElement[]> = {
   flip: [P('M12 3v18M7 8L3 12l4 4M17 8l4 4-4 4')],
   send: [P('M22 2L11 13M22 2l-7 20-4-9-9-4z')],
   mail: [P('M3 5h18v14H3z'), P('M3 6l9 7 9-7')],
+  target: [h('circle', { cx: 12, cy: 12, r: 9 }), h('circle', { cx: 12, cy: 12, r: 5 }), h('circle', { cx: 12, cy: 12, r: 1.4, fill: 'currentColor', stroke: 'none' })],
+  gauge: [P('M4.5 18a9 9 0 1 1 15 0'), P('M12 13l4-5'), h('circle', { cx: 12, cy: 13, r: 1.4, fill: 'currentColor', stroke: 'none' })],
   pin: [P('M12 2a6 6 0 0 0-6 6c0 4 6 12 6 12s6-8 6-12a6 6 0 0 0-6-6z'), h('circle', { cx: 12, cy: 8, r: 2 })],
   shield: [P('M12 2l8 4v5c0 5-3.5 9-8 11-4.5-2-8-6-8-11V6z'), P('M9 12l2 2 4-4')],
   // baby monitor + accounts + help

@@ -15,7 +15,7 @@
  */
 
 import type { DetectorState } from './cryDetector';
-import { HITS_NEEDED, OFF_RATIO, SOUND_CATS, SOUND_INFO, onThreshold, type CatScores, type Sensitivity, type SoundCat } from './soundClasses';
+import { CAT_GUARD, HITS_NEEDED, OFF_RATIO, SOUND_CATS, SOUND_INFO, onThreshold, type CatScores, type Sensitivity, type SoundCat } from './soundClasses';
 
 export type Mood = 'calm' | 'stirring' | 'awake' | 'noisy' | 'fussing' | 'crying';
 export type Via = 'ai' | 'cry-analyser' | 'alarm-pattern' | 'loudness';
@@ -58,6 +58,7 @@ export interface BrainState {
 /** How long a category must be absent before it ends. */
 const HOLD_MS: Record<SoundCat, number> = {
   cry: 8000, fuss: 8000, cough: 6000, alarm: 8000, crash: 2500, loud: 3000, babble: 6000, laugh: 4000, voices: 8000, music: 12000, dog: 5000,
+  sneeze: 3000, snore: 10000, glass: 2500, cat: 6000, door: 3000, footsteps: 4000, water: 8000,
 };
 
 /**
@@ -66,6 +67,7 @@ const HOLD_MS: Record<SoundCat, number> = {
  */
 const MIN_LEVEL: Record<SoundCat, number> = {
   cry: 6, fuss: 5, cough: 6, alarm: 8, crash: 14, loud: 26, babble: 5, laugh: 5, voices: 6, music: 6, dog: 8,
+  sneeze: 6, snore: 4, glass: 12, cat: 6, door: 10, footsteps: 8, water: 6,
 };
 
 const MODEL_STALE_MS = 3000;
@@ -73,7 +75,7 @@ const LOUD_HOLD_MS = 1200;
 const LEVEL_WINDOW_MS = 1500;
 const BABY_SOUNDS = new Set<SoundCat>(['cry', 'fuss', 'cough', 'babble', 'laugh']);
 /** Ignored while a parent talks through the speaker or soothing sounds play. */
-const MUTABLE = new Set<SoundCat>(['cry', 'fuss', 'cough', 'babble', 'laugh', 'voices', 'music', 'loud']);
+const MUTABLE = new Set<SoundCat>(['cry', 'fuss', 'cough', 'babble', 'laugh', 'sneeze', 'snore', 'voices', 'music', 'loud']);
 const SEVERITY_RANK = { urgent: 4, high: 3, medium: 2, info: 1 } as const;
 
 interface Active {
@@ -98,6 +100,9 @@ export class SoundBrain {
   private loudSince: number | null = null;
   private motion = 0;
   private heur: DetectorState = 'calm';
+  /** Last time the model heard a cat, and recent cry/cat evidence (see CAT_GUARD). */
+  private lastCatAt = -Infinity;
+  private catCry: { t: number; cry: number; cat: number }[] = [];
 
   /** Ignore the baby/voice categories for a while (talk-back, soothing sounds). */
   suppress(ms: number, now: number): void {
@@ -118,6 +123,9 @@ export class SoundBrain {
     if (f.scores) {
       this.lastScores = f.scores;
       this.lastScoresAt = now;
+      if ((f.scores.cat ?? 0) >= CAT_GUARD.context) this.lastCatAt = now;
+      this.catCry.push({ t: now, cry: f.scores.cry ?? 0, cat: f.scores.cat ?? 0 });
+      while (this.catCry.length && now - this.catCry[0].t > CAT_GUARD.memorySecs * 1000) this.catCry.shift();
       for (const cat of SOUND_CATS) {
         const h = this.hist.get(cat) ?? [];
         h.push(f.scores[cat] ?? 0);
@@ -128,6 +136,8 @@ export class SoundBrain {
     const ai = this.aiActive(now);
     const cand = new Map<SoundCat, { conf: number; via: Via }>();
     const maxOf = (cat: SoundCat) => Math.max(0, ...(this.hist.get(cat) ?? []));
+    // A cat was heard recently and out-scores the cry: meows the model calls "baby cry" mustn't alert.
+    const catHeard = this.catDominant(now);
 
     // 1. The AI model, with hysteresis: entering needs HITS_NEEDED hops over
     //    "on"; staying needs one hop over OFF_RATIO × "on".
@@ -137,7 +147,8 @@ export class SoundBrain {
         const h = this.hist.get(cat) ?? [];
         const on = onThreshold(cat, this.sensitivity);
         const isActive = this.active.has(cat);
-        const th = isActive ? on * OFF_RATIO : on;
+        // With a cat around, a cry must be unmistakable to start (an active cry continues as usual).
+        const th = isActive ? on * OFF_RATIO : cat === 'cry' && catHeard ? Math.max(on, CAT_GUARD.cryOverride) : on;
         const need = isActive ? 1 : HITS_NEEDED[cat];
         if (h.filter((v) => v >= th).length >= need && peak >= MIN_LEVEL[cat]) {
           cand.set(cat, { conf: Math.round(Math.max(...h) * 100), via: 'ai' });
@@ -148,7 +159,7 @@ export class SoundBrain {
     // 2. The cry analyser: the cry signal on its own when the model isn't
     //    running; with the model, it can confirm a borderline cry as long as
     //    the model doesn't hear adult voices or music instead.
-    if (f.heur === 'crying' && !cand.has('cry')) {
+    if (f.heur === 'crying' && !cand.has('cry') && !(catHeard && !this.active.has('cry'))) {
       if (!ai) cand.set('cry', { conf: Math.max(55, f.heurCryConf), via: 'cry-analyser' });
       else if (maxOf('cry') >= onThreshold('cry', this.sensitivity) * 0.5 && maxOf('voices') < 0.6 && maxOf('music') < 0.5) {
         cand.set('cry', { conf: Math.max(Math.round(maxOf('cry') * 100), f.heurCryConf), via: 'cry-analyser' });
@@ -174,14 +185,19 @@ export class SoundBrain {
 
     // Priority masking: one sound, one name. Cry-like audio (even below the
     // cry threshold) isn't also "laughing" or "a dog".
-    const cryish = cand.has('cry') || (ai && maxOf('cry') >= onThreshold('cry', this.sensitivity) * 0.5);
+    // Near-cry audio (or a crying episode still in its hold) masks the other names — but with a
+    // cat around, only an unmistakable cry does.
+    const cryish =
+      cand.has('cry') || this.active.has('cry') || (ai && maxOf('cry') >= (catHeard ? CAT_GUARD.cryOverride : onThreshold('cry', this.sensitivity) * 0.5));
     if (cryish) {
-      for (const c of ['babble', 'laugh', 'voices', 'dog'] as SoundCat[]) cand.delete(c);
+      for (const c of ['babble', 'laugh', 'voices', 'dog', 'cat', 'sneeze'] as SoundCat[]) cand.delete(c);
       if (cand.has('cry')) cand.delete('fuss');
     }
     if (cand.has('fuss')) cand.delete('babble');
     if (cand.has('alarm')) for (const c of ['loud', 'music'] as SoundCat[]) cand.delete(c);
-    if (cand.has('crash')) cand.delete('loud');
+    if (cand.has('glass')) cand.delete('crash');
+    if (cand.has('crash') || cand.has('glass')) cand.delete('loud');
+    if (cand.has('cough')) cand.delete('sneeze');
 
     const events: BrainEvent[] = [];
     for (const cat of SOUND_CATS) {
@@ -216,6 +232,16 @@ export class SoundBrain {
     return events;
   }
 
+  /**
+   * What's going on right now, as 'start' events — for a room that missed
+   * them (the camera was still in setup, or offline when they began).
+   */
+  ongoing(): BrainEvent[] {
+    const out: BrainEvent[] = [];
+    for (const [cat, a] of this.active) if (!a.silent) out.push({ phase: 'start', cat, conf: a.peak, via: a.via });
+    return out;
+  }
+
   isActive(cat: SoundCat): boolean {
     return this.active.has(cat);
   }
@@ -226,11 +252,11 @@ export class SoundBrain {
       ? 'crying'
       : has('fuss')
         ? 'fussing'
-        : has('alarm') || has('crash') || has('loud') || has('music') || has('dog')
+        : has('alarm') || has('glass') || has('crash') || has('loud') || has('music') || has('dog') || has('cat') || has('door')
           ? 'noisy'
           : has('babble') || has('laugh')
             ? 'awake'
-            : has('cough') || has('voices') || this.motion > 35 || this.heur === 'stirring'
+            : has('cough') || has('sneeze') || has('voices') || has('footsteps') || this.motion > 35 || this.heur === 'stirring'
               ? 'stirring'
               : 'calm';
     let sound: SoundCat | null = null;
@@ -248,8 +274,9 @@ export class SoundBrain {
     const ai = this.aiActive(now);
     // "Hearing now" follows the same one-sound-one-name rule as the alerts:
     // while it's a cry, it isn't also "laughing" or "voices".
-    const cryish = has('cry') || (ai && Math.max(0, ...(this.hist.get('cry') ?? [])) >= onThreshold('cry', this.sensitivity) * 0.5);
-    const masked = new Set<SoundCat>(cryish ? ['laugh', 'babble', 'voices', 'dog', 'loud'] : ['loud']);
+    const catHeard = this.catDominant(now);
+    const cryish = has('cry') || (ai && Math.max(0, ...(this.hist.get('cry') ?? [])) >= (catHeard ? CAT_GUARD.cryOverride : onThreshold('cry', this.sensitivity) * 0.5));
+    const masked = new Set<SoundCat>(cryish ? ['laugh', 'babble', 'voices', 'dog', 'cat', 'sneeze', 'loud'] : ['loud']);
     let top: [SoundCat, number][] =
       ai && this.lastScores
         ? SOUND_CATS.filter((c) => !masked.has(c))
@@ -261,6 +288,18 @@ export class SoundBrain {
     // The sound we're alerting on always leads, at its episode peak.
     if (sound && sound !== 'loud') top = [[sound, Math.max(conf, top.find(([c]) => c === sound)?.[1] ?? 0)] as [SoundCat, number], ...top.filter(([c]) => c !== sound)].slice(0, 3);
     return { mood, sound, conf, top, ai };
+  }
+
+  /** A cat was heard in the last CAT_GUARD.memorySecs and its evidence out-weighs the cry's. */
+  private catDominant(now: number): boolean {
+    if (!this.aiActive(now) || now - this.lastCatAt > CAT_GUARD.memorySecs * 1000) return false;
+    let cry = 0;
+    let cat = 0;
+    for (const e of this.catCry) {
+      cry += e.cry;
+      cat += e.cat;
+    }
+    return cat > cry;
   }
 
   /** True when one of the baby's own sounds is active (for "awake" logic). */

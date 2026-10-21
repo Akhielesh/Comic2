@@ -1,8 +1,46 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MonitorRoom, type MonEnv } from './monitorRoom';
+import initSqlJs, { type SqlJsStatic } from 'sql.js';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+const pushes: { endpoint: string; payload: Record<string, unknown> }[] = [];
+vi.mock('./webpush', () => ({
+  generateVapidKeys: async () => ({ publicKey: 'pub', privateKey: 'priv' }),
+  isAllowedPushEndpoint: () => true,
+  sendWebPush: async (sub: { endpoint: string }, payload: Record<string, unknown>) => {
+    pushes.push({ endpoint: sub.endpoint, payload });
+    return 'sent';
+  },
+}));
+
+import { MonitorRoom, sanitizeZones, type MonEnv } from './monitorRoom';
 
 const NID = '11111111-2222-4333-8444-555555555555';
+let SQL: SqlJsStatic;
+beforeAll(async () => {
+  SQL = await initSqlJs();
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  pushes.length = 0;
+});
+
+/** Durable Object SQL API on top of sql.js. */
+function sqlStorage() {
+  const db = new SQL.Database();
+  return {
+    exec(q: string, ...b: unknown[]) {
+      const st = db.prepare(q);
+      try {
+        st.bind(b.map((v) => (v === undefined ? null : v)) as never);
+        const rows: Record<string, unknown>[] = [];
+        while (st.step()) rows.push(st.getAsObject());
+        return { toArray: () => rows };
+      } finally {
+        st.free();
+      }
+    },
+  };
+}
 
 class FakeWS {
   sent: unknown[] = [];
@@ -23,26 +61,33 @@ class FakeWS {
   msgs(t: string) {
     return this.sent.filter((m) => (m as { t: string }).t === t) as Record<string, unknown>[];
   }
+  logs() {
+    return this.msgs('log').map((m) => m.entry as { id: string; kind: string; msg: string; sev: string; conf?: number; secs?: number; db?: number });
+  }
 }
 
-function setup() {
-  const store = new Map<string, unknown>([['nid', NID]]);
+function setup(preset: Record<string, unknown> = {}) {
+  const store = new Map<string, unknown>([['nid', NID], ...Object.entries(preset)]);
   const sockets: FakeWS[] = [];
+  let alarm: number | null = null;
   const state = {
     storage: {
       get: async (k: string) => structuredClone(store.get(k)),
       put: async (k: string, v: unknown) => void store.set(k, structuredClone(v)),
       delete: async (k: string) => store.delete(k),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
+      getAlarm: async () => alarm,
+      setAlarm: async (t: number) => void (alarm = t),
+      sql: sqlStorage(),
     },
+    blockConcurrencyWhile: <T>(fn: () => Promise<T>) => fn(),
     getWebSockets: () => sockets,
     acceptWebSocket: (ws: FakeWS) => sockets.push(ws),
   };
+  const keyHolder = { fetch: async () => new Response(JSON.stringify({ publicKey: 'pub', privateKey: 'priv' }), { status: 200 }) };
   const env = {
     SUPABASE_URL: 'https://sb.test',
     SUPABASE_PUBLISHABLE_KEY: 'sb_test',
-    MONITOR_ROOM: { idFromName: () => 'x', get: () => ({ fetch: async () => new Response('no', { status: 500 }) }) },
+    MONITOR_ROOM: { idFromName: () => 'x', get: () => keyHolder },
   } as unknown as MonEnv;
   const room = new MonitorRoom(state as never, env);
   // Supabase: the bearer token decides who you are.
@@ -56,18 +101,21 @@ function setup() {
     const r = roles[token];
     return new Response(JSON.stringify(r ? { ok: true, ...r, nursery_name: 'Nursery', baby_name: 'Aria' } : { ok: false }), { status: 200 });
   });
-  const join = async (token: string, mode: 'camera' | 'viewer', dev: string) => {
+  const join = async (token: string, mode: 'camera' | 'viewer', dev: string, extra: Record<string, unknown> = {}) => {
     const ws = new FakeWS();
     ws.serializeAttachment({ sid: `s-${dev}`, at: Date.now(), authed: false });
     state.acceptWebSocket(ws);
-    await room.webSocketMessage(ws as never, JSON.stringify({ t: 'auth', token, mode, dev, dn: dev === 'crib' ? 'Crib iPhone' : 'Laptop' }));
+    await room.webSocketMessage(ws as never, JSON.stringify({ t: 'auth', token, mode, dev, dn: dev === 'crib' ? 'Crib iPhone' : 'Laptop', ...extra }));
     return ws;
   };
   const say = (ws: FakeWS, msg: unknown) => room.webSocketMessage(ws as never, JSON.stringify(msg));
-  return { room, store, join, say };
+  const subscribe = (ws: FakeWS, endpoint: string, prefs: Record<string, boolean> = {}) =>
+    say(ws, { t: 'push_sub', sub: { endpoint, keys: { p256dh: 'p', auth: 'a' } }, prefs: { loud: false, ...prefs } });
+  return { room, store, join, say, subscribe, alarm: () => alarm };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+const minuteNow = () => Math.floor(Date.now() / 60_000) * 60_000;
+const row = (m: number, over: Record<string, unknown> = {}) => ({ m, laeq: 32, lmax: 40, l10: 34, l50: 31, l90: 29, lpk: 50, cal: 1, motion: 2, mmax: 5, crib: 1, outside: 0, light: 20, state: 1, sounds: {}, visit: 0, ...over });
 
 describe('MonitorRoom sound events', () => {
   it('logs a detected cry for everyone, with confidence, and ignores a flood', async () => {
@@ -76,11 +124,11 @@ describe('MonitorRoom sound events', () => {
     const viewer = await join('tok-care', 'viewer', 'laptop');
     await say(cam, { t: 'event', kind: 'sound', cat: 'cry', phase: 'start', conf: 91 });
     await say(cam, { t: 'event', kind: 'sound', cat: 'cry', phase: 'start', conf: 95 }); // within 20 s
-    const logs = viewer.msgs('log').map((m) => m.entry as { kind: string; msg: string; conf?: number });
-    const cries = logs.filter((e) => e.kind === 'cry');
+    const cries = viewer.logs().filter((e) => e.kind === 'cry');
     expect(cries).toHaveLength(1);
     expect(cries[0].msg).toBe('Aria is crying · Crib iPhone');
     expect(cries[0].conf).toBe(91);
+    expect(cries[0].sev).toBe('urgent');
   });
 
   it('records how long an episode lasted, and rejects unknown categories', async () => {
@@ -89,7 +137,7 @@ describe('MonitorRoom sound events', () => {
     const viewer = await join('tok-care', 'viewer', 'laptop');
     await say(cam, { t: 'event', kind: 'sound', cat: 'fuss', phase: 'end', secs: 130 });
     await say(cam, { t: 'event', kind: 'sound', cat: 'explosion', phase: 'start' });
-    const logs = viewer.msgs('log').map((m) => m.entry as { kind: string; msg: string; secs?: number });
+    const logs = viewer.logs();
     expect(logs.map((e) => e.kind)).toEqual(['fuss_end']);
     expect(logs[0].msg).toBe('Aria settled after 2 min of fussing');
     expect(logs[0].secs).toBe(130);
@@ -100,7 +148,16 @@ describe('MonitorRoom sound events', () => {
     await join('tok-parent', 'camera', 'crib');
     const viewer = await join('tok-care', 'viewer', 'laptop');
     await say(viewer, { t: 'event', kind: 'sound', cat: 'alarm', phase: 'start' });
-    expect(viewer.msgs('log').filter((m) => (m.entry as { kind: string }).kind === 'alarm')).toHaveLength(0);
+    expect(viewer.logs().filter((e) => e.kind === 'alarm')).toHaveLength(0);
+  });
+
+  it('keeps the log in the database and moves the old log over once', async () => {
+    const { join, room } = setup({ log: [{ id: 'old1', at: Date.now() - 1000, kind: 'feed', msg: 'Fed', by: 'Mom' }] });
+    const viewer = await join('tok-care', 'viewer', 'laptop');
+    const hello = viewer.msgs('hello')[0] as { log: { id: string; sev: string }[] };
+    expect(hello.log.map((l) => l.id)).toContain('old1');
+    expect(hello.log.find((l) => l.id === 'old1')?.sev).toBe('care');
+    expect(room.store.events({ limit: 10 }).some((e) => e.id === 'old1')).toBe(true);
   });
 });
 
@@ -111,7 +168,10 @@ describe('MonitorRoom status', () => {
     const viewer = await join('tok-care', 'viewer', 'laptop');
     await say(cam, {
       t: 'status',
-      st: { state: 'awake', level: 14, motion: 5, light: 120, cry: 3, sound: 'babble', conf: 77, top: [['babble', 77], ['nope', 50], ['laugh', 240]], model: 'ready', paused: 'privacy', talk: 'Grandpa', call: null },
+      st: {
+        state: 'awake', level: 14, motion: 5, light: 120, cry: 3, sound: 'babble', conf: 77, top: [['babble', 77], ['nope', 50], ['laugh', 240]],
+        model: 'ready', paused: 'privacy', talk: 'Grandpa', call: null, spl: { db: 41.26, leq: 40.4, max: 999, cal: 1 }, crib: 12, outside: null, visit: 1,
+      },
     });
     const st = viewer.msgs('status')[0].st as Record<string, unknown>;
     expect(st.state).toBe('awake');
@@ -120,6 +180,9 @@ describe('MonitorRoom status', () => {
     expect(st.model).toBe('ready');
     expect(st.paused).toBe('privacy');
     expect(st.talk).toBe('Grandpa');
+    expect(st.spl).toEqual({ db: 41.3, leq: 40.4, max: 140, cal: true });
+    expect(st.crib).toBe(12);
+    expect(st.visit).toBe(true);
   });
 });
 
@@ -135,8 +198,8 @@ describe('MonitorRoom calls', () => {
     const cmds = cam.msgs('cmd');
     expect(cmds).toHaveLength(1);
     expect(cmds[0]).toMatchObject({ c: 'video', v: { on: true }, by: 'Grandpa' });
-    const calls = bob.msgs('log').filter((m) => (m.entry as { kind: string }).kind === 'call');
-    expect((calls[0].entry as { msg: string }).msg).toBe('Grandpa video-called Crib iPhone');
+    const calls = bob.logs().filter((e) => e.kind === 'call');
+    expect(calls[0].msg).toBe('Grandpa video-called Crib iPhone');
   });
 });
 
@@ -150,7 +213,184 @@ describe('MonitorRoom push preferences', () => {
       prefs: { cry: true, noise: true, cough: false },
     });
     const prefs = (store.get('push') as { prefs: Record<string, boolean> }[])[0].prefs;
-    expect(prefs).toMatchObject({ cry: true, loud: true, cough: false, alarm: true, offline: true, fuss: false });
+    expect(prefs).toMatchObject({ cry: true, loud: true, cough: false, alarm: true, offline: true, fuss: false, noise: true, report: true });
     expect(v.msgs('push_ok')).toHaveLength(1);
+  });
+
+  it('never lets smoke/CO alarms be switched off', async () => {
+    const { join, subscribe, store } = setup();
+    const v = await join('tok-care', 'viewer', 'laptop');
+    await subscribe(v, 'https://push.test/1', { alarm: false });
+    expect((store.get('push') as { prefs: Record<string, boolean> }[])[0].prefs.alarm).toBe(true);
+  });
+});
+
+describe('MonitorRoom incidents', () => {
+  it('repeats a smoke-alarm alert until someone answers, then records who and how fast', async () => {
+    const { join, say, subscribe, room } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib', { tz: 'America/New_York' });
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    await subscribe(mom, 'https://push.test/mom');
+    await subscribe(bob, 'https://push.test/bob');
+    await say(cam, { t: 'event', kind: 'sound', cat: 'alarm', phase: 'start', conf: 88, pattern: 'T3' });
+    const inc = bob.msgs('incident')[0].inc as { id: string; status: string; next_at: number };
+    expect(inc.status).toBe('open');
+    expect(bob.logs().find((l) => l.kind === 'alarm')?.msg).toContain('smoke-alarm beep pattern');
+    expect(pushes.map((p) => p.endpoint).sort()).toEqual(['https://push.test/bob', 'https://push.test/mom']);
+
+    // Nobody answered within a minute: everyone is alerted again.
+    pushes.length = 0;
+    room.store.updateIncident(inc.id, { next_at: Date.now() - 1 });
+    await room.alarm();
+    expect(pushes).toHaveLength(2);
+    expect(String(pushes[0].payload.title)).toMatch(/still sounding/);
+    expect(bob.logs().some((l) => l.kind === 'escalated')).toBe(true);
+
+    // Grandpa answers: it stops repeating and the log says how fast.
+    await say(bob, { t: 'ack', inc: inc.id });
+    const acked = room.store.incident(inc.id)!;
+    expect(acked.status).toBe('acked');
+    expect(acked.ack_by).toBe('Grandpa');
+    expect(acked.next_at).toBeNull();
+    expect(mom.logs().find((l) => l.kind === 'ack')?.msg).toMatch(/^Grandpa is checking on it — responded in \d+s$/);
+  });
+
+  it('escalates a long cry to everyone and resolves it when the baby settles', async () => {
+    const { join, say, subscribe, room } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    await subscribe(mom, 'https://push.test/mom');
+    await subscribe(bob, 'https://push.test/bob');
+    // Grandpa is on duty tonight: the first cry alert goes to him only.
+    await say(bob, { t: 'duty', on: true, hours: 10 });
+    expect(mom.msgs('duty')[0].duty).toMatchObject({ uid: 'u-care', name: 'Grandpa' });
+    await say(cam, { t: 'event', kind: 'sound', cat: 'cry', phase: 'start', conf: 90 });
+    expect(pushes.map((p) => p.endpoint)).toEqual(['https://push.test/bob']);
+    const inc = room.store.activeIncidents()[0];
+    expect(inc.kind).toBe('cry');
+    expect(inc.next_at! - inc.at).toBe(5 * 60_000);
+
+    pushes.length = 0;
+    room.store.updateIncident(inc.id, { next_at: Date.now() - 1 });
+    await room.alarm();
+    expect(pushes.map((p) => p.endpoint).sort()).toEqual(['https://push.test/bob', 'https://push.test/mom']);
+    expect(String(pushes[0].payload.title)).toMatch(/^Aria has been crying for \d+ min — no one has responded$/);
+
+    await say(cam, { t: 'event', kind: 'sound', cat: 'cry', phase: 'end', secs: 420 });
+    expect(room.store.incident(inc.id)?.status).toBe('resolved');
+    expect(mom.logs().find((l) => l.kind === 'cry_end')?.msg).toBe('Aria settled after 7 min of crying');
+  });
+
+  it('turns a danger-zone movement into an urgent incident using the zone’s name', async () => {
+    const { join, say, room } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'settings', zones: { dev: 'crib', list: [{ id: 'win', kind: 'danger', name: 'the window', x: 0.8, y: 0, w: 0.2, h: 0.4 }] } });
+    await say(cam, { t: 'event', kind: 'vision', type: 'zone', zone: 'win' });
+    expect(mom.logs().find((l) => l.kind === 'zone')).toMatchObject({ msg: 'Movement in the window · Crib iPhone', sev: 'urgent' });
+    expect(room.store.activeIncidents()[0]).toMatchObject({ kind: 'zone', status: 'open' });
+  });
+});
+
+describe('MonitorRoom zones', () => {
+  it('keeps zones inside the picture, one crib per camera', () => {
+    const z = sanitizeZones([
+      { id: 'c1', kind: 'crib', name: 'Crib', x: 0.2, y: 0.2, w: 0.9, h: 0.5 },
+      { id: 'c2', kind: 'crib', name: 'Second crib', x: 0, y: 0, w: 0.3, h: 0.3 },
+      { id: 'd!@1', kind: 'danger', name: '', x: -1, y: 0.5, w: 0.3, h: 0.01 },
+      { id: 'd2', kind: 'danger', name: 'Stairs', x: 0.5, y: 0.5, w: 0.2, h: 0.2 },
+      { id: 'x', kind: 'weird', x: 0, y: 0, w: 1, h: 1 },
+    ]);
+    expect(z.map((x) => x.id)).toEqual(['c1', 'd2']);
+    expect(z[0].w).toBeCloseTo(0.8);
+  });
+});
+
+describe('MonitorRoom history and sleep', () => {
+  it('stores the camera’s minutes and serves them as chart buckets', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-care', 'viewer', 'laptop');
+    const m0 = minuteNow() - 30 * 60_000;
+    await say(cam, { t: 'stats', rows: [row(m0, { laeq: 30 }), row(m0 + 60_000, { laeq: 60, lmax: 72, sounds: { cry: 30, bogus: 9 } })] });
+    expect(cam.msgs('stats_ok')[0].upto).toBe(m0 + 60_000);
+    await say(viewer, { t: 'q', id: 'h1', q: 'history', from: m0 - 60_000, to: m0 + 2 * 60_000 });
+    const r = viewer.msgs('r').find((x) => x.id === 'h1') as { res: number; pts: { t: number; laeq: number; lmax: number; sounds: Record<string, number> }[] };
+    expect(r.res).toBe(60_000);
+    expect(r.pts.map((p) => p.laeq)).toEqual([30, 60]);
+    expect(r.pts[1].sounds).toEqual({ cry: 30 });
+  });
+
+  it('tracks a nap from the camera’s minutes and files a report', async () => {
+    const { join, say, room } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib', { tz: 'UTC' });
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const m0 = minuteNow() - 90 * 60_000;
+    const rows = [
+      ...Array.from({ length: 40 }, (_, i) => row(m0 + i * 60_000)),
+      ...Array.from({ length: 35 }, (_, i) => row(m0 + (40 + i) * 60_000, { state: 2, motion: 40, crib: 40, sounds: { babble: 20 } })),
+    ];
+    await say(cam, { t: 'stats', rows });
+    const kinds = mom.logs().map((l) => l.kind);
+    expect(kinds).toEqual(expect.arrayContaining(['asleep', 'woke', 'sleep_report']));
+    const report = mom.logs().find((l) => l.kind === 'sleep_report')!;
+    expect(report.msg).toMatch(/report: Aria slept 40 min straight through$/);
+    const sessions = room.store.sleepBetween(m0 - 1, minuteNow() + 1);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ asleep_min: 40, wakings: 0, longest_min: 40, onset: m0 });
+    await say(mom, { t: 'q', id: 's1', q: 'sleep', days: 2 });
+    expect((mom.msgs('r').find((x) => x.id === 's1') as { sessions: unknown[] }).sessions).toHaveLength(1);
+    await say(mom, { t: 'q', id: 'rep', q: 'report', session: sessions[0].id });
+    const rep = (mom.msgs('r').find((x) => x.id === 'rep') as { report: { asleep_min: number; pts: unknown[] } }).report;
+    expect(rep.asleep_min).toBe(40);
+    expect(rep.pts.length).toBeGreaterThan(5);
+  });
+
+  it('warns once when a steady sound machine runs above 50 dB for an hour', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const m0 = minuteNow() - 61 * 60_000;
+    const rows = Array.from({ length: 61 }, (_, i) => row(m0 + i * 60_000, { laeq: 56, l10: 57, l90: 54 }));
+    await say(cam, { t: 'stats', rows: rows.slice(0, 40) });
+    await say(cam, { t: 'stats', rows: rows.slice(40) });
+    const warn = mom.logs().filter((l) => l.kind === 'machine');
+    expect(warn).toHaveLength(1);
+    expect(warn[0].msg).toMatch(/^Sound machine may be too loud \(56 dB for the last hour\)/);
+    expect(warn[0].sev).toBe('warn');
+  });
+
+  it('a parent’s "Down for sleep" and "Woke up" taps drive the sleep tracker', async () => {
+    const { join, say, room } = setup();
+    await join('tok-parent', 'camera', 'crib');
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'log', kind: 'sleep' });
+    expect((mom.msgs('sleep').pop()!.sleep as { phase: string }).phase).toBe('settling');
+    await say(mom, { t: 'log', kind: 'wake' });
+    expect((mom.msgs('sleep').pop()!.sleep as { phase: string }).phase).toBe('idle');
+    // Too short to be real sleep: kept out of the history.
+    expect(room.store.lastSleep(5)[0]?.summary).toMatchObject({ discarded: true });
+  });
+});
+
+describe('MonitorRoom export', () => {
+  it('lets parents and caregivers download CSV, not viewers', async () => {
+    const { join, say, room } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    await say(cam, { t: 'event', kind: 'sound', cat: 'cough', phase: 'start', conf: 70 });
+    // A display name is user-controlled: a spreadsheet formula must not survive export.
+    room.store.addEvent({ id: 'f1', at: Date.now() - 5, kind: 'note', sev: 'care', msg: 'Note', by: '=HYPERLINK("http://evil")' });
+    const get = (tok: string) => room.fetch(new Request('https://monitor.internal/export?what=events', { headers: { authorization: `Bearer ${tok}` } }));
+    const ok = await get('tok-care');
+    expect(ok.headers.get('content-type')).toMatch(/text\/csv/);
+    expect(ok.headers.get('content-disposition')).toMatch(/^attachment; filename="nursery-events-\d{4}-\d{2}-\d{2}\.csv"$/);
+    const csv = await ok.text();
+    expect(csv).toContain('"Aria is coughing · Crib iPhone"');
+    expect(csv).toContain(`"'=HYPERLINK(""http://evil"")"`);
+    expect(csv).not.toContain(`"=HYPERLINK`);
+    expect((await get('tok-viewer')).status).toBe(403);
+    expect((await room.fetch(new Request('https://monitor.internal/export'))).status).toBe(401);
   });
 });

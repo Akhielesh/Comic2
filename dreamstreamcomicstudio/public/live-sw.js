@@ -6,15 +6,19 @@ self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 const TITLES = {
-  cry: '👶 ', fuss: '👶 ', cough: '🤧 ', alarm: '🚨 ', crash: '💥 ', loud: '🔊 ', noise: '🔊 ',
-  offline: '⚠️ ', battery: '🔋 ', test: '✅ ',
+  cry: '👶 ', fuss: '👶 ', cough: '🤧 ', alarm: '🚨 ', crash: '💥 ', glass: '💥 ', zone: '🚨 ', cat: '🐈 ', loud: '🔊 ', noise: '🔊 ',
+  camera: '📷 ', offline: '⚠️ ', battery: '🔋 ', report: '🌙 ', insight: '💡 ', test: '✅ ',
 };
 // Wake the phone and keep the notification up until it's handled.
-const URGENT = new Set(['cry', 'alarm', 'offline']);
+const URGENT = new Set(['cry', 'alarm', 'zone', 'glass', 'offline']);
 const VIBRATE = {
   alarm: [600, 200, 600, 200, 600, 200, 600],
+  zone: [600, 200, 600, 200, 600, 200, 600],
+  glass: [300, 120, 300, 120, 600],
   cry: [300, 120, 300, 120, 600],
   offline: [300, 120, 300, 120, 600],
+  report: [80],
+  insight: [80],
 };
 
 self.addEventListener('push', (event) => {

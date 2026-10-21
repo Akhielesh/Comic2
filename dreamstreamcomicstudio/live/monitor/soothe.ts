@@ -45,6 +45,8 @@ export class SoothePlayer {
   private out: GainNode | null = null;
   private stopTimer: number | undefined;
   private beat: number | undefined;
+  private level = 0.4;
+  private ceiling = 0.4;
   current: { kind: SootheKind; endsAt: number } | null = null;
 
   /** Call from a user gesture (Start camera) so iOS lets audio play later. */
@@ -63,8 +65,9 @@ export class SoothePlayer {
     if (!ctx) return;
     this.stop(true);
     const out = ctx.createGain();
+    this.level = this.ceiling = Math.max(0.05, Math.min(0.9, volume));
     out.gain.setValueAtTime(0, ctx.currentTime);
-    out.gain.linearRampToValueAtTime(Math.max(0.05, Math.min(0.9, volume)), ctx.currentTime + 2.5);
+    out.gain.linearRampToValueAtTime(this.level, ctx.currentTime + 2.5);
     out.connect(ctx.destination);
     this.out = out;
 
@@ -117,6 +120,18 @@ export class SoothePlayer {
     }
     this.current = { kind, endsAt: Date.now() + minutes * 60_000 };
     this.stopTimer = window.setTimeout(() => this.stop(), minutes * 60_000);
+  }
+
+  /** Loudness governor: scale the volume (never above what the parent chose). */
+  scale(factor: number): number {
+    const ctx = this.ctx;
+    const out = this.out;
+    if (!ctx || !out) return this.level;
+    this.level = Math.max(0.02, Math.min(this.ceiling, this.level * factor));
+    out.gain.cancelScheduledValues(ctx.currentTime);
+    out.gain.setValueAtTime(out.gain.value, ctx.currentTime);
+    out.gain.linearRampToValueAtTime(this.level, ctx.currentTime + 0.8);
+    return this.level;
   }
 
   stop(immediate = false): void {

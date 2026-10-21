@@ -14,15 +14,25 @@
 
 import { SOUND_INFO, type Severity, type SoundCat } from './soundClasses';
 
-export type AlertCat = SoundCat | 'offline' | 'battery';
+/** Alerts that come from the camera's vision, the sound meter or the room — not a sound class. */
+export type RoomAlert = 'offline' | 'battery' | 'zone' | 'crib_out' | 'moved' | 'paused' | 'very_loud' | 'machine';
+export type AlertCat = SoundCat | RoomAlert;
 
-export const ALERT_META: Record<'offline' | 'battery', { label: string; icon: string; tone: 'red' | 'amber'; severity: Severity }> = {
+export const ALERT_META: Record<RoomAlert, { label: string; icon: string; tone: 'red' | 'amber'; severity: Severity }> = {
   offline: { label: 'Camera offline', icon: 'wifi', tone: 'red', severity: 'high' },
   battery: { label: 'Camera battery low', icon: 'battery', tone: 'amber', severity: 'medium' },
+  zone: { label: 'Danger zone', icon: 'target', tone: 'red', severity: 'urgent' },
+  crib_out: { label: 'Climbing out of the crib', icon: 'baby', tone: 'red', severity: 'urgent' },
+  moved: { label: 'Camera moved', icon: 'video', tone: 'amber', severity: 'high' },
+  paused: { label: 'Camera video paused', icon: 'videoOff', tone: 'amber', severity: 'high' },
+  very_loud: { label: 'Very loud noise', icon: 'volume', tone: 'amber', severity: 'high' },
+  machine: { label: 'Sound machine too loud', icon: 'gauge', tone: 'amber', severity: 'medium' },
 };
 
+const isRoomAlert = (cat: AlertCat): cat is RoomAlert => cat in ALERT_META;
+
 export function alertInfo(cat: AlertCat): { label: string; icon: string; tone: string; severity: Severity } {
-  return cat === 'offline' || cat === 'battery' ? ALERT_META[cat] : SOUND_INFO[cat];
+  return isRoomAlert(cat) ? ALERT_META[cat] : SOUND_INFO[cat];
 }
 
 export interface CuePrefs {
@@ -50,7 +60,8 @@ export const DEFAULT_CUES: CuePrefs = {
   cats: {
     cry: true, fuss: false, cough: true, alarm: true, crash: true, loud: false,
     babble: false, laugh: false, voices: false, music: false, dog: false,
-    offline: true, battery: true,
+    glass: true, cat: true, sneeze: false, snore: false, door: false, footsteps: false, water: false,
+    offline: true, battery: true, zone: true, crib_out: true, moved: true, paused: true, very_loud: true, machine: true,
   },
 };
 
@@ -97,12 +108,26 @@ function pattern(cat: AlertCat | 'ack' | 'test'): Note[] {
       return [[440, 0, 0.18, 0.7], [440, 0.24, 0.3, 0.7]];
     case 'crash':
       return [[700, 0, 0.12, 0.7, 'triangle'], [350, 0.1, 0.4, 0.7, 'triangle']];
+    case 'glass': // a bright shatter, then a low "check now"
+      return [[1568, 0, 0.08, 0.6, 'triangle'], [1319, 0.07, 0.08, 0.6, 'triangle'], [1760, 0.14, 0.08, 0.6, 'triangle'], [440, 0.3, 0.5, 0.6, 'triangle']];
+    case 'cat': // two-note glide up — "something's in the room"
+      return [[494, 0, 0.25, 0.5], [740, 0.22, 0.45, 0.5]];
     case 'fuss':
       return [[520, 0, 0.6, 0.6]];
     case 'loud':
       return [[600, 0, 0.25, 0.6]];
     case 'battery':
       return [[523, 0, 0.25, 0.5], [523, 0.35, 0.25, 0.5]];
+    case 'zone':
+    case 'crib_out': // urgent triple pip, rising — "go now"
+      return [[1046, 0, 0.13, 0.6, 'square'], [1046, 0.18, 0.13, 0.6, 'square'], [1046, 0.36, 0.13, 0.6, 'square'], [1397, 0.56, 0.45, 0.6, 'square']];
+    case 'paused':
+    case 'moved': // a tumble: falling glide
+      return [[880, 0, 0.18, 0.5, 'triangle'], [587, 0.2, 0.18, 0.5, 'triangle'], [392, 0.4, 0.4, 0.5, 'triangle']];
+    case 'very_loud':
+      return [[500, 0, 0.5, 0.6, 'sawtooth'], [500, 0.6, 0.5, 0.6, 'sawtooth']];
+    case 'machine':
+      return [[392, 0, 0.35, 0.4], [330, 0.32, 0.5, 0.4]];
     case 'ack':
       return [[523, 0, 0.18, 0.4], [784, 0.15, 0.3, 0.4]];
     default: // babble, laugh, voices, music, dog, test: a soft sparkle
@@ -119,6 +144,8 @@ interface Ringing {
 
 export class AlertCues {
   prefs: CuePrefs = loadCues();
+  /** This device is in (or near) the nursery: no sounds, vibration and the screen only. */
+  quiet = false;
   private ctx: AudioContext | null = null;
   private ringing = new Map<string, Ringing>();
   private snoozed = new Map<AlertCat, number>();
@@ -205,13 +232,14 @@ export class AlertCues {
   }
 
   private cue(cat: AlertCat, title: string, sev: Severity, repeat = false, force = false): void {
-    if (this.prefs.sound || force) this.play(cat, this.prefs.volume);
+    // A phone near the nursery must never wake the baby with an alert chime.
+    if ((this.prefs.sound && !this.quiet) || force) this.play(cat, this.prefs.volume);
     if (this.prefs.vibrate) {
       try {
         navigator.vibrate?.(VIBES[sev]);
       } catch { /* unsupported */ }
     }
-    if ((this.prefs.speak || force) && !repeat && typeof speechSynthesis !== 'undefined') {
+    if ((this.prefs.speak || force) && (!this.quiet || force) && !repeat && typeof speechSynthesis !== 'undefined') {
       try {
         speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(title);

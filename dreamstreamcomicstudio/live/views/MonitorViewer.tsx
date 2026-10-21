@@ -8,9 +8,10 @@
 // across the family, plus a live "what's happening" card, a 24 h timeline
 // and a filterable activity log.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCues, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
+import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
-import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type TimelineBucket, type ViewerPresence, type BabyState } from '../monitor/protocol';
+import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
+import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
 import { ViewerLink, type LinkState, type Quality } from '../monitor/rtc';
 import { SOUND_INFO, SOUND_CATS, soundHeadline, type SoundCat } from '../monitor/soundClasses';
@@ -22,19 +23,48 @@ import { Btn, Meter, Pill, Segmented, Toggle, cx, useMediaQuery, type PushToast 
 import { ScreenWakeLock } from '../wakeLock';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
+import { NurserySettings } from './monitor/NurserySettings';
+import { SafetyCard } from './monitor/SafetyCard';
+import { ReportSheet, SleepCard } from './monitor/SleepCard';
+import { SoundLevelCard } from './monitor/SoundLevelCard';
+import { ZoneEditor } from './monitor/ZoneEditor';
 
 const BUCKET_MS = 5 * 60_000;
 const SOUND_SET = new Set<string>(SOUND_CATS);
 const CARE = new Set(['feed', 'diaper', 'sleep', 'wake', 'note']);
-const CAMERA_KINDS = new Set(['offline', 'online', 'battery', 'camera', 'privacy', 'call', 'people', 'soothe', 'motion']);
+const ROOM_KINDS = new Set([
+  'offline', 'online', 'battery', 'camera', 'privacy', 'call', 'people', 'soothe', 'motion', 'moved', 'paused', 'dark', 'lights_on', 'lights_off',
+  'visit_start', 'visit_end', 'very_loud', 'loud_db', 'machine', 'noise', 'duty', 'resolved', 'escalated',
+]);
+const BABY_KINDS = new Set(['cry', 'fuss', 'cough', 'sneeze', 'snore', 'hiccup', 'babble', 'laugh', 'cry_end', 'fuss_end', 'asleep', 'woke', 'resettled', 'sleep_report', 'zone', 'crib_out']);
+/** Log kinds that raise an in-app alert (besides the sound categories). */
+const ROOM_ALERTS = new Set<string>(Object.keys(ALERT_META));
 const PUSH_CATS: { k: string; label: string; locked?: boolean }[] = [
-  { k: 'cry', label: 'Crying' }, { k: 'alarm', label: 'Smoke / CO alarm', locked: true }, { k: 'cough', label: 'Coughing' },
-  { k: 'crash', label: 'Bangs & crashes' }, { k: 'fuss', label: 'Fussing' }, { k: 'loud', label: 'Other loud sounds' },
-  { k: 'offline', label: 'Camera offline' }, { k: 'battery', label: 'Camera battery low' },
+  { k: 'cry', label: 'Crying' }, { k: 'alarm', label: 'Smoke / CO alarm', locked: true }, { k: 'zone', label: 'Danger zones & climbing out' },
+  { k: 'glass', label: 'Breaking glass' }, { k: 'crash', label: 'Bangs & crashes' }, { k: 'cough', label: 'Coughing' },
+  { k: 'noise', label: 'Very loud noise (85 dB+)' }, { k: 'camera', label: 'Camera moved or knocked' }, { k: 'cat', label: 'Cat in the nursery' },
+  { k: 'offline', label: 'Camera offline' }, { k: 'battery', label: 'Camera battery low' }, { k: 'report', label: 'Morning sleep report' },
+  { k: 'insight', label: 'Sound machine too loud' }, { k: 'fuss', label: 'Fussing' }, { k: 'loud', label: 'Noise above your threshold' },
 ];
-const DEFAULT_PUSH: Record<string, boolean> = { cry: true, alarm: true, cough: true, crash: true, fuss: false, loud: false, offline: true, battery: true };
+const DEFAULT_PUSH: Record<string, boolean> = {
+  cry: true, alarm: true, zone: true, glass: true, crash: true, cough: true, noise: true, camera: true, cat: true,
+  offline: true, battery: true, report: true, insight: true, fuss: false, loud: false,
+};
 
 const fmtTime = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const readFlag = (k: string) => {
+  try {
+    return localStorage.getItem(k) === '1';
+  } catch {
+    return false;
+  }
+};
+const writeFlag = (k: string, on: boolean) => {
+  try {
+    if (on) localStorage.setItem(k, '1');
+    else localStorage.removeItem(k);
+  } catch { /* storage unavailable */ }
+};
 const fmtAgo = (ms: number) => {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -55,6 +85,11 @@ const dayLabel = (t: number) => {
 
 const LOG_META: Record<string, { icon: string; tone: string }> = {
   cry_end: { icon: 'check', tone: 'green' }, fuss_end: { icon: 'check', tone: 'green' }, noise: { icon: 'volume', tone: 'amber' },
+  zone: { icon: 'target', tone: 'red' }, crib_out: { icon: 'target', tone: 'red' }, moved: { icon: 'video', tone: 'amber' }, paused: { icon: 'videoOff', tone: 'amber' }, dark: { icon: 'eyeOff', tone: 'amber' },
+  lights_on: { icon: 'sun', tone: 'neutral' }, lights_off: { icon: 'moon', tone: 'neutral' }, visit_start: { icon: 'users', tone: 'violet' }, visit_end: { icon: 'users', tone: 'neutral' },
+  very_loud: { icon: 'volume', tone: 'amber' }, loud_db: { icon: 'volume', tone: 'amber' }, machine: { icon: 'gauge', tone: 'amber' },
+  asleep: { icon: 'moon', tone: 'blue' }, woke: { icon: 'sun', tone: 'blue' }, resettled: { icon: 'moon', tone: 'blue' }, sleep_report: { icon: 'moon', tone: 'violet' },
+  duty: { icon: 'heart', tone: 'accent' }, resolved: { icon: 'check', tone: 'green' }, escalated: { icon: 'bell', tone: 'red' },
   motion: { icon: 'activity', tone: 'neutral' }, offline: { icon: 'wifi', tone: 'red' }, online: { icon: 'wifi', tone: 'green' },
   battery: { icon: 'battery', tone: 'amber' }, privacy: { icon: 'eyeOff', tone: 'neutral' }, call: { icon: 'phone', tone: 'violet' },
   feed: { icon: 'bottle', tone: 'blue' }, diaper: { icon: 'sparkles', tone: 'blue' }, sleep: { icon: 'moon', tone: 'blue' },
@@ -64,6 +99,8 @@ const LOG_META: Record<string, { icon: string; tone: string }> = {
 const logMeta = (kind: string) => (SOUND_SET.has(kind) ? { icon: SOUND_INFO[kind as SoundCat].icon, tone: SOUND_INFO[kind as SoundCat].tone } : LOG_META[kind] ?? { icon: 'info', tone: 'neutral' });
 
 const pushKey = (nid: string) => `ds-monitor-push-${nid}`;
+/** In-app cue settings, most important first. */
+const CUE_ORDER: AlertCat[] = ['cry', 'alarm', 'glass', 'zone', 'crib_out', 'cough', 'crash', 'cat', 'very_loud', 'moved', 'paused', 'offline', 'battery', 'machine', 'fuss', 'loud', 'babble', 'laugh', 'voices', 'music', 'dog'];
 const camKey = (nid: string) => `ds-monitor-cam-${nid}`;
 
 interface ActiveAlert {
@@ -77,7 +114,7 @@ interface ActiveAlert {
   secs?: number;
 }
 
-type LogFilter = 'all' | 'baby' | 'alerts' | 'care' | 'camera';
+type LogFilter = 'all' | 'baby' | 'alerts' | 'care' | 'room';
 
 export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: PushToast }) {
   return (
@@ -104,7 +141,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [reconnectKey, setReconnectKey] = useState(0);
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
   const [closedMsg, setClosedMsg] = useState<string | null>(null);
-  const [me, setMe] = useState<{ sid: string; role: MonRole; name: string; label: string | null } | null>(null);
+  const [me, setMe] = useState<{ sid: string; uid: string; role: MonRole; name: string; label: string | null } | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [cams, setCams] = useState<CamPresence[]>([]);
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
@@ -135,6 +172,21 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [keepAwake, setKeepAwake] = useState(false);
   const [logFilter, setLogFilter] = useState<LogFilter>('all');
   const [note, setNote] = useState('');
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [duty, setDuty] = useState<Duty | null>(null);
+  const [sleep, setSleep] = useState<SleepStatus | null>(null);
+  const [liveMinutes, setLiveMinutes] = useState<MinuteRow[]>([]);
+  const [query, setQuery] = useState<MonQuery | null>(null);
+  const queryRef = useRef<MonQuery | null>(null);
+  const [report, setReport] = useState<{ session?: string } | null>(null);
+  const [zoneEdit, setZoneEdit] = useState(false);
+  const [stalled, setStalled] = useState(false);
+  // Two-way audio etiquette: walkie-talkie by default, silent alerts near the nursery.
+  const [hearWhileTalking, setHearWhileTalking] = useState(() => readFlag('ds-monitor-hear-while-talking'));
+  const [silentHere, setSilentHere] = useState(() => readFlag(`ds-monitor-silent-${id}`));
+  const [near, setNear] = useState(false);
+  const loudToldRef = useRef(false);
+  const lastFrameRef = useRef(Date.now());
   const [, setClock] = useState(0);
   const wide = useMediaQuery('(min-width: 980px)');
 
@@ -181,6 +233,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       window.removeEventListener('pointerdown', unlock);
       link.close();
       sockNow.close();
+      queryRef.current?.cancelAll();
       stopMicMeter();
       cues.stopAll();
       if (relayUrlRef.current) URL.revokeObjectURL(relayUrlRef.current);
@@ -189,6 +242,9 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   }, [id, reconnectKey]);
 
   useEffect(() => () => cuesRef.current.close(), []);
+  useEffect(() => {
+    cuesRef.current.quiet = silentHere || near;
+  }, [silentHere, near]);
 
   // Attach the self-view (video call) whenever it mounts.
   useEffect(() => {
@@ -198,6 +254,42 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       void v.play().catch(() => undefined);
     }
   });
+
+  // Notice a frozen picture (e.g. the camera phone locked its screen) even when
+  // the camera can't tell us — it may already be suspended.
+  useEffect(() => {
+    const v = videoRef.current as (HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number; cancelVideoFrameCallback?: (h: number) => void }) | null;
+    if (!v || !hasVideo) {
+      setStalled(false);
+      return;
+    }
+    let alive = true;
+    let handle = 0;
+    let lastTime = -1;
+    const onFrame = () => {
+      lastFrameRef.current = Date.now();
+      if (alive && v.requestVideoFrameCallback) handle = v.requestVideoFrameCallback(onFrame);
+    };
+    lastFrameRef.current = Date.now();
+    if (v.requestVideoFrameCallback) handle = v.requestVideoFrameCallback(onFrame);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') lastFrameRef.current = Date.now();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    const t = window.setInterval(() => {
+      if (!v.requestVideoFrameCallback && v.currentTime !== lastTime) {
+        lastTime = v.currentTime;
+        lastFrameRef.current = Date.now();
+      }
+      setStalled(document.visibilityState === 'visible' && Date.now() - lastFrameRef.current > 6000);
+    }, 2000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+      if (handle && v.cancelVideoFrameCallback) v.cancelVideoFrameCallback(handle);
+    };
+  }, [hasVideo]);
 
   const pickCam = (list: CamPresence[], current: string | null): string | null => {
     if (current && list.some((c) => c.sid === current)) return current;
@@ -238,7 +330,14 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const onMsg = (m: MonServerMsg) => {
     switch (m.t) {
       case 'hello': {
-        setMe({ sid: m.you.sid, role: m.you.role, name: m.you.name, label: m.you.label });
+        setMe({ sid: m.you.sid, uid: m.you.uid, role: m.you.role, name: m.you.name, label: m.you.label });
+        setIncidents((m.incidents ?? []).filter((i) => i.status !== 'resolved'));
+        setDuty(m.duty ?? null);
+        setSleep(m.sleep ?? null);
+        // A fresh query channel per connection: cards reload their history.
+        queryRef.current?.cancelAll();
+        queryRef.current = new MonQuery((q) => sockRef.current?.send(q));
+        setQuery(queryRef.current);
         setNursery(m.nursery);
         setCams(m.cams);
         setViewers(m.viewers);
@@ -262,8 +361,8 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         } catch { /* storage unavailable */ }
         if (m.cams.length) markSetup(id, 'camera');
         // An episode still in progress when we join: show it (no sound).
-        const recent = [...m.log].reverse().find((e) => (e.kind === 'cry' || e.kind === 'alarm') && Date.now() - e.at < 3 * 60_000);
-        if (recent && !m.log.some((e) => e.at > recent.at && (e.kind === 'cry_end' || e.kind === 'ack'))) {
+        const recent = [...m.log].reverse().find((e) => ['cry', 'alarm', 'zone', 'crib_out', 'glass'].includes(e.kind) && Date.now() - e.at < 3 * 60_000);
+        if (recent && !m.log.some((e) => e.at > recent.at && (e.kind === 'cry_end' || e.kind === 'ack' || e.kind === 'resolved'))) {
           raise(recent.kind as AlertCat, recent.msg.split(' · ')[0], recent.id, true);
         }
         void restorePush();
@@ -303,7 +402,13 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         const e = m.entry;
         setLog((l) => [...l.slice(-399), e]);
         if (SOUND_SET.has(e.kind)) raise(e.kind as SoundCat, e.msg.split(' · ')[0], e.id);
-        else if (e.kind === 'cry_end') resolve('cry', e.secs);
+        else if (ROOM_ALERTS.has(e.kind)) raise(e.kind as AlertCat, e.msg.split(' · ')[0], e.id);
+        else if (e.kind === 'escalated') {
+          // Nobody answered: sound the alert again, louder in everyone's ears.
+          const inc = incidentsRef.current.find((i) => i.id === e.incident);
+          const cat = inc && (SOUND_SET.has(inc.kind) || ROOM_ALERTS.has(inc.kind)) ? (inc.kind as AlertCat) : null;
+          if (cat) cuesRef.current.raise(`${e.id}`, cat, e.msg);
+        } else if (e.kind === 'cry_end') resolve('cry', e.secs);
         else if (e.kind === 'fuss_end') resolve('fuss', e.secs);
         else if (e.kind === 'offline') raise('offline', e.msg, e.id);
         else if (e.kind === 'online') resolve('offline');
@@ -319,6 +424,38 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       }
       case 'settings':
         setSettings(m.settings);
+        break;
+      case 'incident': {
+        const inc = m.inc;
+        setIncidents((list) => [inc, ...list.filter((i) => i.id !== inc.id)].filter((i) => i.status !== 'resolved'));
+        if (inc.status === 'resolved' && (SOUND_SET.has(inc.kind) || ROOM_ALERTS.has(inc.kind))) resolve(inc.kind as AlertCat);
+        break;
+      }
+      case 'duty':
+        setDuty(m.duty);
+        break;
+      case 'sleep':
+        setSleep(m.sleep);
+        break;
+      case 'minutes':
+        setLiveMinutes((prev) => [...prev, ...m.rows].slice(-240));
+        break;
+      case 'r':
+        queryRef.current?.handle(m);
+        break;
+      case 'tell':
+        if (m.c === 'talk_gain') {
+          linkRef.current?.scaleTalk(m.v.factor ?? 1);
+          if (!loudToldRef.current) {
+            loudToldRef.current = true;
+            push(`Turned your voice down — it was ${m.v.db ? `about ${m.v.db} dB ` : ''}loud at the crib`, { icon: 'volume', duration: 4500 });
+          }
+        } else if (m.c === 'feedback') {
+          // We're close enough to the camera to howl: break the loop.
+          setNear(true);
+          if (videoRef.current) videoRef.current.muted = true;
+          linkRef.current?.scaleTalk(0.7);
+        }
         break;
       case 'cam_gone':
         if (linkRef.current?.target === m.sid) linkRef.current.close();
@@ -342,6 +479,8 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const pushOnRef = useRef(pushOn);
   pushOnRef.current = pushOn;
+  const incidentsRef = useRef(incidents);
+  incidentsRef.current = incidents;
   const onMsgRef = useRef(onMsg);
   onMsgRef.current = onMsg;
 
@@ -444,7 +583,8 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     } catch { /* no meter */ }
   };
 
-  const startTalk = async (): Promise<boolean> => {
+  /** duplex: a video call stays two-way (unless the phones are howling). */
+  const startTalk = async (opts: { duplex?: boolean } = {}): Promise<boolean> => {
     const link = linkRef.current;
     if (!link || !cam || talk !== 'off') return talk === 'on';
     setTalk('starting');
@@ -460,6 +600,9 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     startMicMeter(track);
     setTalk('on');
     markSetup(id, 'talk');
+    // Walkie-talkie: the nursery's sound pauses on this phone while you talk,
+    // so the two phones can't feed back into each other.
+    if ((near || (!opts.duplex && !hearWhileTalking)) && videoRef.current) videoRef.current.muted = true;
     return true;
   };
 
@@ -468,6 +611,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     await linkRef.current?.stopTalk();
     if (cam) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: false } });
     setTalk('off');
+    if (videoRef.current) videoRef.current.muted = muted;
   };
 
   // Tap = toggle the mic; press and hold = talk only while holding.
@@ -501,7 +645,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     call?.stream.getTracks().forEach((t) => t.stop());
     setCall({ stream: s, facing });
     sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'video', v: { on: true } });
-    if (talk === 'off') void startTalk(); // a video call is a call: mic on too
+    if (talk === 'off') void startTalk({ duplex: true }); // a video call is a call: mic on too
   };
 
   const setQ = (q: Quality) => {
@@ -520,6 +664,25 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     sockRef.current?.send({ t: 'ack', id: a?.entryId ?? '' });
     cuesRef.current.acked();
     setAlerts((list) => list.map((x) => (!x.ended && !x.acked ? { ...x, acked: 'You' } : x)));
+  };
+
+  const ackIncident = (inc: Incident) => {
+    sockRef.current?.send({ t: 'ack', inc: inc.id });
+    cuesRef.current.acked();
+    setAlerts((list) => list.map((x) => (!x.ended && !x.acked ? { ...x, acked: 'You' } : x)));
+  };
+
+  const resolveIncident = (inc: Incident) => {
+    sockRef.current?.send({ t: 'resolve', inc: inc.id });
+    if (SOUND_SET.has(inc.kind) || ROOM_ALERTS.has(inc.kind)) resolve(inc.kind as AlertCat);
+  };
+
+  const camZones: Zone[] = cam ? settings.zones?.[cam.dev] ?? [] : [];
+  const saveZones = (list: Zone[]) => {
+    if (!cam) return;
+    sockRef.current?.send({ t: 'settings', zones: { dev: cam.dev, list } });
+    setZoneEdit(false);
+    push(list.length ? `Zones saved — ${cam.dn} watches them now` : 'Zones cleared', { icon: 'check' });
   };
 
   const quickLog = (kind: 'feed' | 'diaper' | 'sleep' | 'wake' | 'note', text = '') => {
@@ -637,14 +800,28 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           <span>{linkState === 'failed' ? 'Your network blocks direct video — switching to low-bandwidth mode…' : quality === 'audio' ? 'Audio-only mode' : 'Connecting securely to the camera…'}</span>
         </div>
       )}
-      {camStatus?.st.paused && state !== 'offline' && (
+      {camStatus?.st.paused && state !== 'offline' ? (
         <div className="mv-paused">
           <Icon name={camStatus.st.paused === 'privacy' ? 'eyeOff' : 'videoOff'} size={20} />
-          {camStatus.st.paused === 'privacy' ? 'Video paused for privacy — sound monitoring and alerts continue' : 'The camera phone paused the video (a call or another app). Sound monitoring continues.'}
+          {camStatus.st.paused === 'privacy'
+            ? 'Video paused for privacy — sound monitoring and alerts continue'
+            : camStatus.st.paused === 'hidden'
+              ? 'The camera phone locked its screen or left the app, so its video stopped. Open Stream Studio on that phone.'
+              : 'The camera phone paused the video (a call or another app). Sound monitoring continues.'}
         </div>
-      )}
+      ) : stalled && hasVideo && state !== 'offline' ? (
+        <div className="mv-paused">
+          <Icon name="videoOff" size={20} />
+          The picture stopped updating — the camera phone may have locked its screen. Sound and alerts continue; check the camera phone.
+        </div>
+      ) : null}
       <div className="mv-ov-tl">
         <span className={cx('state-chip', `tone-${info.tone}`)}><span className="state-dot" />{info.label}</span>
+        {camStatus?.st.spl && state !== 'offline' && state !== 'unknown' && (
+          <span className={cx('ov-pill db', camStatus.st.spl.db >= 80 ? 'hot' : camStatus.st.spl.db >= 60 && 'warm')} title="Sound level in the nursery (A-weighted)">
+            <Icon name="gauge" size={11} />{camStatus.st.spl.cal ? '' : '≈'}{Math.round(camStatus.st.spl.db)} dB
+          </span>
+        )}
         {relayOn && <span className="ov-pill">Low-bandwidth · 1 fps · no audio</span>}
         {linkState === 'connected' && <span className="ov-pill"><Icon name="lock" size={11} />Encrypted · P2P</span>}
       </div>
@@ -865,7 +1042,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     <div className="card mv-activity" data-tour="mv-activity">
       <div className="card-head"><Icon name="activity" size={15} /><h3>Activity log</h3></div>
       <div className="log-filters" role="tablist" aria-label="Filter the log">
-        {([['all', 'All'], ['baby', 'Baby sounds'], ['alerts', 'Alerts'], ['care', 'Care'], ['camera', 'Camera']] as [LogFilter, string][]).map(([k, l]) => (
+        {([['all', 'All'], ['baby', 'Baby'], ['alerts', 'Alerts'], ['care', 'Care'], ['room', 'Room & camera']] as [LogFilter, string][]).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={logFilter === k} className={cx('log-filter', logFilter === k && 'sel')} onClick={() => setLogFilter(k)}>{l}</button>
         ))}
       </div>
@@ -929,20 +1106,28 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         <input type="range" className="slider" min={0} max={1} step={0.05} value={cues.volume} style={{ '--pct': `${cues.volume * 100}%` } as React.CSSProperties} onChange={(e) => updateCues({ volume: Number(e.target.value) })} aria-label="Alert volume" />
       </label>
       <div className="cue-cats">
-        {(['cry', 'alarm', 'cough', 'crash', 'fuss', 'loud', 'babble', 'laugh', 'voices', 'music', 'dog', 'offline', 'battery'] as AlertCat[]).map((c) => {
+        {([...CUE_ORDER, ...SOUND_CATS.filter((c) => !CUE_ORDER.includes(c))] as AlertCat[]).map((c) => {
           const ai = alertInfo(c);
           return (
             <div key={c} className={cx('cue-cat', `t-${ai.tone}`)}>
-              <input type="checkbox" checked={c === 'alarm' ? true : cues.cats[c]} disabled={c === 'alarm'} onChange={(e) => updateCues({ cats: { ...cues.cats, [c]: e.target.checked } })} aria-label={`${ai.label} alerts`} />
+              <input type="checkbox" checked={c === 'alarm' ? true : cues.cats[c] ?? false} disabled={c === 'alarm'} onChange={(e) => updateCues({ cats: { ...cues.cats, [c]: e.target.checked } })} aria-label={`${ai.label} alerts`} />
               <Icon name={ai.icon} size={14} />
               <span>{ai.label}</span>
-              <button className="linkish" onClick={() => cuesRef.current.preview(c, c === 'offline' || c === 'battery' ? ai.label : soundHeadline(c as SoundCat, nursery.baby))}>Preview</button>
+              <button className="linkish" onClick={() => cuesRef.current.preview(c, ROOM_ALERTS.has(c) ? ai.label : soundHeadline(c as SoundCat, nursery.baby))}>Preview</button>
             </div>
           );
         })}
       </div>
       <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 12 }}>
         <Toggle size="sm" on={keepAwake} onChange={setKeepAwake} label="Keep screen on" />Keep this screen on (bedside mode)
+      </label>
+      <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 8 }}>
+        <Toggle size="sm" on={silentHere} onChange={(v) => { setSilentHere(v); writeFlag(`ds-monitor-silent-${id}`, v); }} label="Silent alerts on this device" />
+        Silent alerts on this device — vibrate &amp; screen only (for a phone in the nursery)
+      </label>
+      <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 8 }}>
+        <Toggle size="sm" on={hearWhileTalking} onChange={(v) => { setHearWhileTalking(v); writeFlag('ds-monitor-hear-while-talking', v); }} label="Hear the nursery while talking" />
+        Hear the nursery while I talk (only with headphones — otherwise the phones can howl)
       </label>
     </div>
   );
@@ -963,17 +1148,6 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           if (window.confirm('Disconnect everyone else watching right now? They can rejoin if they’re still members.')) sockRef.current?.send({ t: 'end_all' });
         }}>End other sessions</Btn>
       )}
-      {me?.role === 'parent' && (
-        <div className="mv-settings">
-          <div className="mv-sect-title" style={{ marginTop: 14 }}>Sound detection (parents)</div>
-          <Segmented label="Sensitivity" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]} value={settings.sensitivity} onChange={(v) => sockRef.current?.send({ t: 'settings', sensitivity: v })} />
-          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>High catches soft whimpers and distant sounds; Low only alerts on clear, close cries.</div>
-          <div className="row" style={{ marginTop: 10, gap: 8 }}>
-            <span style={{ fontSize: 13 }}>Repeat cry notifications every</span>
-            <Segmented label="Repeat" options={[{ value: '2', label: '2m' }, { value: '3', label: '3m' }, { value: '5', label: '5m' }, { value: '10', label: '10m' }]} value={String(settings.cryRepeatMin)} onChange={(v) => sockRef.current?.send({ t: 'settings', cryRepeatMin: Number(v) })} />
-          </div>
-        </div>
-      )}
     </div>
   );
 
@@ -992,6 +1166,15 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         <HelpButton />
       </div>
       {alertStack}
+      {near && (
+        <div className="banner info mv-near">
+          <Icon name="volume" size={15} />
+          <span style={{ flex: 1 }}>
+            This phone is close enough to the camera to cause feedback. The nursery’s sound pauses here while you talk, and alert sounds on this phone are silent (vibrate and screen only) so they don’t reach the baby.
+          </span>
+          <Btn variant="subtle" size="sm" onClick={() => setNear(false)}>I moved away</Btn>
+        </div>
+      )}
       <div className={cx('mv-grid', wide && 'wide')}>
         <div className="mv-col">
           {stage}
@@ -999,12 +1182,47 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           {quickLogs}
         </div>
         <div className="mv-col">
+          <SafetyCard
+            incidents={incidents}
+            duty={duty}
+            me={me}
+            status={camStatus && state !== 'offline' ? camStatus.st : null}
+            online={!!cam && state !== 'offline' && state !== 'unknown'}
+            zones={camZones}
+            log={log}
+            linkState={linkState}
+            relayOn={relayOn}
+            baby={baby}
+            tz={settings.tz}
+            onAck={ackIncident}
+            onResolve={resolveIncident}
+            onDuty={(on) => sockRef.current?.send({ t: 'duty', on, hours: 12 })}
+            onZones={() => (hasVideo ? setZoneEdit(true) : push('Wait for the live picture, then mark the zones', { icon: 'info' }))}
+          />
+          <SleepCard query={query} sleep={sleep} tz={settings.tz} baby={baby} hasCrib={camZones.some((z) => z.kind === 'crib')} tracking={settings.sleepTracking !== false} onOpenReport={(session) => setReport({ session })} />
+          <SoundLevelCard query={query} dev={cam?.dev ?? null} spl={camStatus?.st.spl} online={!!cam && state !== 'offline' && state !== 'unknown'} liveMinutes={liveMinutes} tz={settings.tz} machineCheck={settings.machineCheck !== false} />
           {timeline}
           {activity}
           {alertsCard}
+          <NurserySettings nid={id} nurseryName={nursery.name} role={me?.role ?? null} settings={settings} send={(msg) => sockRef.current?.send(msg)} push={push} />
           {peopleCard}
         </div>
       </div>
+      {report && (
+        <ReportSheet
+          query={query}
+          session={report.session}
+          tz={settings.tz}
+          baby={baby}
+          canDelete={me?.role === 'parent'}
+          onDelete={(session) => sockRef.current?.send({ t: 'sleep_delete', session })}
+          onClose={() => setReport(null)}
+          push={push}
+        />
+      )}
+      {zoneEdit && cam && (
+        <ZoneEditor stream={(videoRef.current?.srcObject as MediaStream | null) ?? null} zones={camZones} onSave={saveZones} onClose={() => setZoneEdit(false)} babyName={nursery.baby} />
+      )}
       <p className="mv-disclaimer">
         Live only — nothing is recorded or stored. Sound detection runs on the camera phone. Not a medical device: it doesn’t monitor breathing or safe sleep.
       </p>
@@ -1058,10 +1276,10 @@ type LogRow = { day: string } | { e: MonLog };
 function filterLog(log: MonLog[], f: LogFilter): LogRow[] {
   const keep = (e: MonLog) =>
     f === 'all' ||
-    (f === 'baby' && ['cry', 'fuss', 'cough', 'babble', 'laugh', 'cry_end', 'fuss_end'].includes(e.kind)) ||
-    (f === 'alerts' && ['cry', 'fuss', 'cough', 'alarm', 'crash', 'loud', 'offline', 'battery', 'noise'].includes(e.kind)) ||
-    (f === 'care' && (CARE.has(e.kind) || e.kind === 'ack')) ||
-    (f === 'camera' && CAMERA_KINDS.has(e.kind));
+    (f === 'baby' && BABY_KINDS.has(e.kind)) ||
+    (f === 'alerts' && (e.sev ? e.sev === 'urgent' || e.sev === 'warn' : ['cry', 'fuss', 'cough', 'alarm', 'crash', 'loud', 'offline', 'battery', 'noise'].includes(e.kind))) ||
+    (f === 'care' && (e.sev === 'care' || CARE.has(e.kind) || e.kind === 'ack')) ||
+    (f === 'room' && (ROOM_KINDS.has(e.kind) || (SOUND_SET.has(e.kind) && !BABY_KINDS.has(e.kind))));
   const rows: LogRow[] = [];
   let lastDay = '';
   for (const e of log.slice().reverse()) {

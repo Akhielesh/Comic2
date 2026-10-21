@@ -149,7 +149,12 @@ export function openMonitorSocket(
     ws = new WebSocket(`${WORKER_BASE.replace(/^http/, 'ws')}/api/monitor/${nid}/ws`);
     ws.binaryType = 'blob';
     ws.onopen = () => {
-      ws?.send(JSON.stringify({ t: 'auth', token, mode, dev: dev.id, dn: dev.name }));
+      // The camera phone's time zone sets the nursery's (reports, night vs nap).
+      let tz: string | undefined;
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch { /* no Intl zone */ }
+      ws?.send(JSON.stringify({ t: 'auth', token, mode, dev: dev.id, dn: dev.name, tz }));
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') {

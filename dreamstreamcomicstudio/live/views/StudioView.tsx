@@ -7,7 +7,7 @@ import { SaveSheet, autoSave } from '../components/SaveSheet';
 import { checkLimit, fmtRemaining, markAlerted } from '../limits';
 import { DiskRecorder, freeSpaceBytes, listUnsavedRecordings, openUnsavedRecording, type FinishedRecording, type UnsavedRecording } from '../recorder';
 import { AbrController, SegmentUploader } from '../uploader';
-import { ScreenWakeLock } from '../wakeLock';
+import { keepAwakeAdvice, ScreenWakeLock, type WakeState } from '../wakeLock';
 import { IS_LOCAL_DEV, SEGMENT_MS, presetById, type QualityPreset } from '../config';
 import { addMyEvent, findMyEvent, updateMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
@@ -120,6 +120,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const [preset, setPreset] = useState<QualityPreset>(presetById(prefs.qualityId));
   const [mime, setMime] = useState<string | null>(null);
   const [status, setStatus] = useState<StreamStatus>('idle');
+  const [wake, setWake] = useState<WakeState>('none');
+  useEffect(() => {
+    wakeRef.current.onChange = setWake;
+  }, []);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [viewers, setViewers] = useState(0);
   const [chat, setChat] = useState<ChatMsg[]>([]);
@@ -995,6 +999,12 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
           {limitBanner.kind === 'stream' && <Btn variant="soft" size="sm" onClick={extendStream}>+15 min</Btn>}
           {limitBanner.kind === 'rec' && <Btn variant="soft" size="sm" onClick={() => void stopRecording()}>Stop &amp; save now</Btn>}
           <button className="iconbtn" aria-label="Dismiss" onClick={() => setLimitBanner(null)}><Icon name="x" size={14} /></button>
+        </div>
+      )}
+      {status === 'live' && isPhone && wake === 'none' && (
+        <div className="banner warn studio-banner" role="alert">
+          <Icon name="alert" size={15} />
+          <span style={{ flex: 1 }}>This phone may lock its screen, which freezes your stream for viewers. {keepAwakeAdvice()}</span>
         </div>
       )}
       {strained && (

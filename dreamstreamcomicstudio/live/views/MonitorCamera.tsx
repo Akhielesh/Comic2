@@ -12,28 +12,71 @@ import {
   setZoom, watchPower, zoomRange, MIC_CONSTRAINTS, type BrowserCheck, type Facing, type Lens, type PowerState, type ZoomRange,
 } from '../monitor/camera';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
-import { MotionTracker } from '../monitor/motion';
-import { STATE_INFO, type BabyState, type MonServerMsg, type MonSettings, type ViewerPresence } from '../monitor/protocol';
+import { STATE_INFO, STATE_RANK, type BabyState, type MonServerMsg, type MonSettings, type ViewerPresence } from '../monitor/protocol';
 import { CameraHub, type Quality } from '../monitor/rtc';
-import { SOUND_INFO } from '../monitor/soundClasses';
+import type { BrainEvent } from '../monitor/soundBrain';
+import { SOUND_INFO, type SoundCat } from '../monitor/soundClasses';
 import { NurseryEars, type EarsSnapshot, type ModelState } from '../monitor/soundEngine';
+import { LEVEL_BAND_INFO, levelBand, loadCalibration, saveCalibration, type Calibration, type MinuteLevels } from '../monitor/soundLevel';
+import { FRAME_H, FRAME_W, VisionWatch, type VisionEvent, type Zone } from '../monitor/vision';
+import { LoudnessGovernor, SOOTHE_CEILING_DB, TALK_CEILING_DB } from '../monitor/voice';
 import { markSetup } from '../monitor/setupProgress';
 import { SOOTHE_OPTIONS, SoothePlayer, type SootheKind } from '../monitor/soothe';
 import { startTicker, type Ticker } from '../studio/ticker';
 import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
 import { Btn, Meter, Pill, cx, type PushToast } from '../ui/primitives';
-import { ScreenWakeLock } from '../wakeLock';
+import { keepAwakeAdvice, ScreenWakeLock, type WakeState } from '../wakeLock';
 import { MonitorGate } from './MonitorHome';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
+import { ZoneEditor } from './monitor/ZoneEditor';
 
 const LENS_KEY = 'ds-monitor-lens';
+const zonesKey = (nid: string) => `ds-monitor-zones-${nid}`;
+const statsKey = (nid: string) => `ds-monitor-stats-${nid}`;
+/** Minutes kept on the phone while the room is unreachable (6 h). */
+const STATS_KEEP = 360;
+
+/** One minute of measurements for the nursery's history. */
+interface StatsRow {
+  m: number;
+  laeq: number;
+  lmax: number;
+  l10: number;
+  l50: number;
+  l90: number;
+  lpk: number;
+  cal: number;
+  motion: number | null;
+  mmax: number | null;
+  crib: number | null;
+  outside: number | null;
+  light: number | null;
+  state: number;
+  sounds: Record<string, number>;
+  visit: number;
+}
+
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || 'null') as T | null;
+    return v ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJson(key: string, v: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(v));
+  } catch { /* storage full or unavailable */ }
+}
 const AUTODIM_KEY = 'ds-monitor-autodim';
 const AUTODIM_MS = 90_000;
 
 type Phase = 'check' | 'starting' | 'setup' | 'running' | 'error';
 
-const EMPTY_SNAP: EarsSnapshot = { mood: 'calm', sound: null, conf: 0, top: [], ai: false, level: 0, cry: 0, model: 'off', modelProgress: 0 };
+const EMPTY_SNAP: EarsSnapshot = { mood: 'calm', sound: null, conf: 0, top: [], ai: false, level: 0, cry: 0, model: 'off', modelProgress: 0, spl: null };
 
 function loadLens(): { id: string | null; facing: Facing } {
   try {
@@ -57,9 +100,29 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const callerRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const sockRef = useRef<MonitorSocket | null>(null);
+  /** The room has said hello on the current connection. */
+  const authedRef = useRef(false);
+  /** Sounds the room has been told have started (and not yet ended). */
+  const toldRef = useRef(new Set<SoundCat>());
   const hubRef = useRef<CameraHub | null>(null);
   const earsRef = useRef<NurseryEars | null>(null);
-  const motionRef = useRef(new MotionTracker());
+  const visionRef = useRef(new VisionWatch());
+  const zonesRef = useRef<Zone[]>(loadJson<Zone[]>(zonesKey(id), []));
+  const pendingZonesRef = useRef<Zone[] | null>(null);
+  const statsRef = useRef<StatsRow[]>(loadJson<StatsRow[]>(statsKey(id), []));
+  const minuteAccRef = useRef<{ sounds: Record<string, number>; worst: number }>({ sounds: {}, worst: 1 });
+  const visionNowRef = useRef<{ crib: number | null; outside: number | null; visit: boolean }>({ crib: null, outside: null, visit: false });
+  const tiltOnRef = useRef(false);
+  // Loudness at the crib: talk ≤ 65 dB, soothing ≤ 50 dB (measured by this phone's meter).
+  const talkGovRef = useRef(new LoudnessGovernor(TALK_CEILING_DB));
+  const sootheGovRef = useRef(new LoudnessGovernor(SOOTHE_CEILING_DB));
+  const bgRef = useRef<number | null>(null);
+  // One stable listener (added/removed by identity) — it only touches refs.
+  const [onTilt] = useState(() => (e: DeviceOrientationEvent) => {
+    for (const ev of visionRef.current.pushTilt(e.beta, e.gamma, Date.now())) {
+      sockRef.current?.send({ t: 'event', kind: 'vision', type: ev.type, via: ev.via });
+    }
+  });
   const sootheRef = useRef(new SoothePlayer());
   const wakeRef = useRef(new ScreenWakeLock());
   const tickersRef = useRef<Ticker[]>([]);
@@ -112,6 +175,12 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [hiddenWarn, setHiddenWarn] = useState(false);
   const [tipsOpen, setTipsOpen] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
+  const [wake, setWake] = useState<WakeState>('none');
+  const [zones, setZones] = useState<Zone[]>(zonesRef.current);
+  const [zoneEdit, setZoneEdit] = useState(false);
+  const [cal, setCal] = useState<Calibration | null>(() => loadCalibration());
+  const [calOpen, setCalOpen] = useState(false);
+  const [calInput, setCalInput] = useState('');
   const [, setClock] = useState(0);
   const device = getDevice();
   useFirstVisitTour('camera', phase === 'setup');
@@ -138,6 +207,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     callersRef.current.clear();
     unwatchPowerRef.current();
     void wakeRef.current.disable();
+    if (tiltOnRef.current) window.removeEventListener('deviceorientation', onTilt);
+    tiltOnRef.current = false;
   };
 
   const phaseRef = useRef<Phase>(phase);
@@ -162,8 +233,15 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   useEffect(() => {
     const t = window.setInterval(() => setClock((n) => n + 1), 1000);
     const onVis = () => {
-      if (document.visibilityState === 'hidden' && phase === 'running') setHiddenWarn(true);
-      if (document.visibilityState === 'visible') void recover();
+      if (document.visibilityState === 'hidden' && phase === 'running') {
+        setHiddenWarn(true);
+        // Say so now — a locked phone may stop running this page any second.
+        sockRef.current?.send({ t: 'event', kind: 'paused', why: 'hidden' });
+      }
+      if (document.visibilityState === 'visible') {
+        if (phase === 'running') sockRef.current?.send({ t: 'event', kind: 'resumed' });
+        void recover();
+      }
     };
     const onUnload = (e: BeforeUnloadEvent) => {
       if (phase === 'running') {
@@ -250,14 +328,28 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     if (vt) afterVideoChange(vt);
     stream.getAudioTracks().forEach((t) => t.addEventListener('ended', () => void recover()));
     void listLenses().then(setLenses);
+    wakeRef.current.onChange = setWake;
     void wakeRef.current.enable();
 
-    // ---- the ears (cry analyser + alarm pattern + AI model download)
-    const ears = new NurseryEars();
+    // ---- the ears (cry analyser + alarm pattern + AI model + sound level meter)
+    const ears = new NurseryEars(loadCalibration());
     earsRef.current = ears;
     ears.onModel = (s, p) => setModel({ s, p });
     ears.onEvents = (events) => {
-      for (const e of events) sockRef.current?.send({ t: 'event', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, via: e.via });
+      for (const e of events) sendSound(e);
+    };
+    ears.onNoise = (events) => {
+      for (const e of events) sockRef.current?.send({ t: 'event', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated });
+    };
+    ears.onMinute = (lv) => addMinute(lv);
+    // Feedback (a parent's phone in this room): silence the talk audio at once,
+    // and tell the talkers so their phones go half-duplex.
+    ears.onHowl = (h) => {
+      for (const el of talkElsRef.current.values()) {
+        el.muted = true;
+        window.setTimeout(() => (el.muted = false), 900);
+      }
+      for (const sid of talkersRef.current.keys()) sockRef.current?.send({ t: 'tell', to: sid, c: 'feedback', v: { freq: h.freq } });
     };
     try {
       await ears.start(stream, { ai: true });
@@ -265,28 +357,46 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       push('Sound analysis isn’t available in this browser — video still works', { icon: 'alert' });
     }
 
-    // ---- motion + light (tiny frames)
+    // ---- vision: motion, zones, visits, lights, camera moved (tiny frames, 4 fps)
     const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 48;
+    canvas.width = FRAME_W;
+    canvas.height = FRAME_H;
     const c2d = canvas.getContext('2d', { willReadFrequently: true });
+    const vision = visionRef.current;
+    vision.setZones(zonesRef.current);
+    let frameN = 0;
     tickersRef.current.push(
-      startTicker(500, () => {
+      startTicker(250, () => {
         const v = videoRef.current;
         if (!c2d || !v || v.readyState < 2 || privacyRef.current) return;
-        c2d.drawImage(v, 0, 0, 64, 48);
-        const m = motionRef.current.push(c2d.getImageData(0, 0, 64, 48).data);
-        earsRef.current?.setMotion(m.motion);
-        setMotion(m.motion);
-        setLight(m.light);
+        c2d.drawImage(v, 0, 0, FRAME_W, FRAME_H);
+        const now = Date.now();
+        const r = vision.push(c2d.getImageData(0, 0, FRAME_W, FRAME_H).data, now);
+        earsRef.current?.setMotion(r.frame.motion);
+        visionNowRef.current = { crib: r.frame.crib, outside: r.frame.outside, visit: vision.inVisit };
+        if (frameN++ % 2 === 0) {
+          setMotion(r.frame.motion);
+          setLight(r.frame.light);
+        }
+        for (const e of r.events) sendVision(e);
         const run = motionRunRef.current;
-        if (m.motion > 35) {
-          run.since ??= Date.now();
-          if (Date.now() - run.since > 5000 && Date.now() - run.lastEvent > 10 * 60_000) {
-            run.lastEvent = Date.now();
+        if (r.frame.motion > 35 && !vision.inVisit) {
+          run.since ??= now;
+          if (now - run.since > 5000 && now - run.lastEvent > 10 * 60_000) {
+            run.lastEvent = now;
             sockRef.current?.send({ t: 'event', kind: 'motion' });
           }
         } else run.since = null;
+      }),
+      // Per-minute tallies: what was heard and the worst state.
+      startTicker(1000, () => {
+        const s = earsRef.current?.snapshot();
+        if (!s) return;
+        const acc = minuteAccRef.current;
+        if (s.sound) acc.sounds[s.sound] = (acc.sounds[s.sound] ?? 0) + 1;
+        acc.worst = Math.max(acc.worst, STATE_RANK[s.mood as BabyState] ?? 1);
+        // Adult sounds tell the vision engine a grown-up is in the room.
+        if (s.sound === 'voices' || (s.sound as string) === 'footsteps' || (s.sound as string) === 'door') vision.hintPresence(Date.now());
       }),
       // Live sound readout for the setup checks and the running screen.
       startTicker(500, () => {
@@ -403,6 +513,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       }
       if (!el) {
         el = remoteAudioEl();
+        el.volume = 0.85; // moderate start (ignored on iPhone — the parent's phone shapes the voice there)
         talkElsRef.current.set(sid, el);
       }
       el.srcObject = s;
@@ -421,12 +532,41 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
     sockRef.current = openMonitorSocket(id, 'camera', onMsg, () => undefined, (st, detail) => {
       setSock(st);
+      if (st !== 'connected') authedRef.current = false;
       if (st === 'closed' && detail) {
         setErr(detail);
         setPhase('error');
         stopAll(false);
       }
     });
+
+    // Loudness governor: what plays here must stay gentle at the crib.
+    tickersRef.current.push(
+      startTicker(1000, () => {
+        const ears = earsRef.current;
+        if (!ears) return;
+        const lv = ears.meter.live(Date.now()).leq1;
+        const talking = talkersRef.current.size > 0;
+        const soothing = !!sootheRef.current.current;
+        if (!talking && !soothing) {
+          // The room's own background, for judging what playback adds.
+          bgRef.current = bgRef.current == null ? lv : bgRef.current * 0.9 + lv * 0.1;
+          return;
+        }
+        if (talking) {
+          const f = talkGovRef.current.step(lv, bgRef.current);
+          if (f < 1) {
+            for (const sid of talkersRef.current.keys()) sockRef.current?.send({ t: 'tell', to: sid, c: 'talk_gain', v: { factor: f, db: Math.round(lv) } });
+            // Where the browser allows it (not iPhone), turn the speaker down here too.
+            for (const el of talkElsRef.current.values()) el.volume = Math.max(0.3, el.volume * f);
+          }
+        }
+        if (soothing) {
+          const f = sootheGovRef.current.step(lv, bgRef.current);
+          if (f !== 1) sootheRef.current.scale(f);
+        }
+      }),
+    );
 
     // Status heartbeat (also the liveness signal the room watches).
     tickersRef.current.push(
@@ -444,6 +584,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             level: s.level,
             motion: motionVal(),
             light: lightVal(),
+            spl: s.spl ? { db: s.spl.db, leq: s.spl.leq1, max: s.spl.max1, cal: s.spl.calibrated } : null,
+            crib: visionNowRef.current.crib,
+            outside: visionNowRef.current.outside,
+            visit: visionNowRef.current.visit,
             battery: powerRef.current.level,
             charging: powerRef.current.charging,
             soothing: sootheRef.current.current?.kind ?? null,
@@ -453,6 +597,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             top: s.top,
             model: s.model,
             paused: privacyRef.current ? 'privacy' : interruptedRef.current ? 'interrupted' : null,
+            awake: wakeRef.current.state,
             talk: talkNames.length ? talkNames.join(' & ') : null,
             call: callerOn?.who ?? null,
           },
@@ -461,7 +606,105 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     );
     touch();
     markSetup(id, 'camera');
+    enableTilt();
     setPhase('running');
+  };
+
+  /** The phone's tilt sensor catches a knocked-over camera (iOS asks inside this tap). */
+  const enableTilt = () => {
+    if (tiltOnRef.current) return;
+    const DOE = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<string> } }).DeviceOrientationEvent;
+    const on = () => {
+      tiltOnRef.current = true;
+      window.addEventListener('deviceorientation', onTilt);
+    };
+    if (DOE?.requestPermission) void DOE.requestPermission().then((r) => r === 'granted' && on()).catch(() => undefined);
+    else if (DOE) on();
+  };
+
+  /**
+   * Sound events reach the room only once it's listening (after 'hello').
+   * Anything that started during setup or while offline is caught up by
+   * syncSounds() on the next hello — so a cry already going when monitoring
+   * starts still alerts the family, exactly once.
+   */
+  const sendSound = (e: BrainEvent) => {
+    if (!authedRef.current) return;
+    sockRef.current?.send({ t: 'event', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, via: e.via });
+    if (e.phase === 'start') toldRef.current.add(e.cat);
+    else toldRef.current.delete(e.cat);
+  };
+  const syncSounds = () => {
+    const brain = earsRef.current?.brain;
+    if (!brain) return;
+    const now = brain.ongoing();
+    for (const e of now) if (!toldRef.current.has(e.cat)) sendSound(e);
+    const still = new Set(now.map((e) => e.cat));
+    for (const cat of [...toldRef.current]) if (!still.has(cat)) sendSound({ phase: 'end', cat, conf: 0, via: 'ai' });
+  };
+
+  const sendVision = (e: VisionEvent) => {
+    sockRef.current?.send({ t: 'event', kind: 'vision', type: e.type, zone: e.zone, name: e.name, secs: e.secs, via: e.via });
+  };
+
+  /** One minute of sound + vision → the history buffer (kept on the phone until the room has it). */
+  const addMinute = (lv: MinuteLevels) => {
+    const vm = visionRef.current.minute();
+    const acc = minuteAccRef.current;
+    minuteAccRef.current = { sounds: {}, worst: 1 };
+    if (phaseRef.current !== 'running') return;
+    const row: StatsRow = {
+      m: lv.m, laeq: lv.laeq, lmax: lv.lmax, l10: lv.l10, l50: lv.l50, l90: lv.l90, lpk: lv.lpk, cal: lv.calibrated ? 1 : 0,
+      motion: vm?.motion ?? null, mmax: vm?.mmax ?? null, crib: vm?.crib ?? null, outside: vm?.outside ?? null, light: vm?.light ?? null,
+      state: acc.worst, sounds: acc.sounds, visit: vm?.visit ? 1 : 0,
+    };
+    statsRef.current = [...statsRef.current.filter((r) => r.m !== row.m), row].slice(-STATS_KEEP);
+    saveJson(statsKey(id), statsRef.current);
+    flushStats();
+  };
+
+  const flushStats = () => {
+    const s = sockRef.current;
+    if (!s?.open || !statsRef.current.length) return;
+    s.send({ t: 'stats', rows: statsRef.current.slice(-240) });
+  };
+
+  const saveZoneList = (list: Zone[]) => {
+    zonesRef.current = list;
+    setZones(list);
+    visionRef.current.setZones(list);
+    saveJson(zonesKey(id), list);
+    if (sockRef.current?.open) sockRef.current.send({ t: 'settings', zones: { dev: device.id, list } });
+    else pendingZonesRef.current = list;
+    setZoneEdit(false);
+    push(list.length ? 'Zones saved — the camera watches them now' : 'Zones cleared', { icon: 'check' });
+  };
+
+  const calibrate = (how: 'quiet' | 'meter' | 'reset') => {
+    const ears = earsRef.current;
+    if (!ears) return;
+    if (how === 'reset') {
+      ears.setCalibration(null);
+      saveCalibration(null);
+      setCal(null);
+      push('Sound meter back to automatic', { icon: 'check' });
+      return;
+    }
+    const reading = Number(calInput.replace(',', '.'));
+    if (how === 'meter' && !(reading >= 20 && reading <= 110)) {
+      push('Enter the other meter’s reading in dB (20–110)', { icon: 'alert' });
+      return;
+    }
+    const c = how === 'quiet' ? ears.meter.calibrateQuiet(Date.now(), 30) : ears.meter.calibrateTo(reading, Date.now());
+    if (!c) {
+      push(how === 'quiet' ? 'Keep the room quiet for 10 seconds, then try again' : 'Give the meter a few seconds of sound, then try again', { icon: 'alert' });
+      return;
+    }
+    saveCalibration(c);
+    setCal(c);
+    setCalOpen(false);
+    setCalInput('');
+    push('Sound meter calibrated on this phone', { icon: 'check' });
   };
 
   const motionNow = useRef(0);
@@ -483,6 +726,17 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         setViewers(m.viewers);
         hubRef.current?.setIce(m.ice);
         applySettings(m.settings);
+        if (pendingZonesRef.current) {
+          sockRef.current?.send({ t: 'settings', zones: { dev: device.id, list: pendingZonesRef.current } });
+          pendingZonesRef.current = null;
+        }
+        flushStats();
+        authedRef.current = true;
+        syncSounds();
+        break;
+      case 'stats_ok':
+        statsRef.current = statsRef.current.filter((r) => r.m > m.upto);
+        saveJson(statsKey(id), statsRef.current);
         break;
       case 'presence':
         setViewers(m.viewers);
@@ -511,6 +765,15 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const applySettings = (s: MonSettings) => {
     earsRef.current?.setSensitivity(s.sensitivity);
+    if (earsRef.current) earsRef.current.noise.threshold = s.noiseDb === undefined ? 70 : s.noiseDb;
+    // Zones placed from a parent's phone reach this camera too.
+    const z = s.zones?.[device.id];
+    if (z && !pendingZonesRef.current) {
+      zonesRef.current = z;
+      setZones(z);
+      visionRef.current.setZones(z);
+      saveJson(zonesKey(id), z);
+    }
   };
 
   const onCmd = (m: Extract<MonServerMsg, { t: 'cmd' }>) => {
@@ -534,6 +797,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       if (v.on) talkersRef.current.set(m.from, m.by);
       else talkersRef.current.delete(m.from);
       setTalkers([...talkersRef.current.values()]);
+      earsRef.current?.setPlayback(talkersRef.current.size > 0);
       // Their voice comes out of this speaker — don't mistake it for the baby.
       // The heartbeat keeps extending this while anyone is still talking.
       earsRef.current?.suppress(v.on ? 3000 : 2000);
@@ -630,6 +894,34 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const soundInfo = snap.sound ? SOUND_INFO[snap.sound] : null;
   const showCaller = phase === 'running' && caller && callersRef.current.get(caller.sid)?.stream;
   const dark = light < 35;
+  const db = snap.spl ? Math.round(snap.spl.db) : null;
+  const band = db != null ? LEVEL_BAND_INFO[levelBand(db)] : null;
+  const dbText = db != null ? `${cal ? '' : '≈'}${db} dB` : '—';
+  const crib = zones.find((z) => z.kind === 'crib');
+  const dangerN = zones.filter((z) => z.kind === 'danger').length;
+  const zoneSummary = crib || dangerN
+    ? `${crib ? 'Crib marked' : 'No crib yet'}${dangerN ? ` · ${dangerN} danger zone${dangerN === 1 ? '' : 's'}` : ''}`
+    : 'Optional — mark the crib for sleep tracking and climb-out alerts';
+
+  const zoneEditor = zoneEdit && (
+    <ZoneEditor stream={streamRef.current} mirror={facing === 'user'} zones={zones} onSave={saveZoneList} onClose={() => setZoneEdit(false)} babyName={nursery.baby} />
+  );
+
+  const calPanel = calOpen && (
+    <div className="cam-cal fade-in">
+      <p>Every phone’s microphone is a little different, so the meter starts approximate. Calibrate it once on this phone:</p>
+      <div className="cam-cal-row">
+        <Btn variant="soft" size="sm" icon="moon" onClick={() => calibrate('quiet')}>The room is quiet now</Btn>
+        <span className="faint">sets a quiet bedroom to 30 dB</span>
+      </div>
+      <div className="cam-cal-row">
+        <input className="input" inputMode="decimal" placeholder="e.g. 42" value={calInput} onChange={(e) => setCalInput(e.target.value)} aria-label="Reading on another sound meter, dB" />
+        <span className="faint">dB on another meter, held next to this phone</span>
+        <Btn variant="soft" size="sm" onClick={() => calibrate('meter')} disabled={!calInput.trim()}>Match</Btn>
+      </div>
+      {cal && <Btn variant="subtle" size="sm" onClick={() => calibrate('reset')}>Reset to automatic</Btn>}
+    </div>
+  );
 
   if (phase === 'setup') {
     const checks: { k: string; ok: boolean | null; label: string; sub: string }[] = [
@@ -644,6 +936,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         k: 'power', ok: power.charging === true ? true : power.charging === false ? false : null, label: 'Power',
         sub: power.charging === true ? `Charging${power.level != null ? ` · ${power.level}%` : ''}` : power.charging === false ? `On battery${power.level != null ? ` (${power.level}%)` : ''} — plug it in for overnight monitoring` : 'Keep it plugged in for overnight monitoring',
       },
+      { k: 'awake', ok: wake !== 'none', label: 'Screen stays on', sub: wake !== 'none' ? 'This phone won’t lock while it’s the camera (the screen can still dim)' : `This phone may lock and pause the video. ${keepAwakeAdvice()}` },
       { k: 'net', ok: networkHint().online ? !networkHint().slow : false, label: 'Network', sub: !networkHint().online ? 'Offline — connect to Wi-Fi' : networkHint().slow ? 'Slow connection — Wi-Fi is better' : networkHint().type === 'cellular' ? 'Mobile data — Wi-Fi is better overnight' : 'Connected' },
     ];
     return (
@@ -700,6 +993,20 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
               </div>
             ))}
           </div>
+          <div className="cam-extras">
+            <div className="cam-extras-title">Make it smarter <span className="faint">· optional</span></div>
+            <button className="cam-extra" onClick={() => setZoneEdit(true)} data-tour="cam-zones">
+              <Icon name="target" size={16} />
+              <span><b>Crib &amp; danger zones</b><small>{zoneSummary}</small></span>
+              <Icon name="chevronRight" size={14} />
+            </button>
+            <button className="cam-extra" onClick={() => setCalOpen((o) => !o)} aria-expanded={calOpen} data-tour="cam-meter">
+              <Icon name="gauge" size={16} />
+              <span><b>Sound level meter</b><small>{band ? `${band.label} — ${band.like}` : 'Starting…'}{cal ? ' · calibrated' : ' · approximate until calibrated'}</small></span>
+              <span className={cx('db-pill', band && `t-${band.tone}`)}>{dbText}</span>
+            </button>
+            {calPanel}
+          </div>
           <button className="cam-tips-toggle" onClick={() => setTipsOpen((o) => !o)} aria-expanded={tipsOpen}>
             <Icon name="checklist" size={15} />Placement &amp; safety tips<Icon name="chevronDown" size={14} />
           </button>
@@ -714,6 +1021,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           )}
           <Btn variant="solid" size="lg" icon="broadcast" onClick={goLive} data-tour="cam-start">Start monitoring</Btn>
         </div>
+        {zoneEditor}
       </div>
     );
   }
@@ -791,9 +1099,19 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           </span>
         </div>
         <div className="cam-meters">
-          <label>Sound<Meter value={snap.level} max={45} tone={snap.level > 24 ? 'live' : snap.level > 12 ? 'amber' : 'green'} /></label>
+          <label>
+            <span className="cam-meter-label">Sound{db != null && <b className={cx('db-val', band && `t-${band.tone}`)}>{dbText}</b>}</span>
+            {db != null
+              ? <Meter value={Math.max(0, db - 25)} max={65} tone={db >= 80 ? 'live' : db >= 60 ? 'amber' : 'green'} />
+              : <Meter value={snap.level} max={45} tone={snap.level > 24 ? 'live' : snap.level > 12 ? 'amber' : 'green'} />}
+          </label>
           <label>Motion<Meter value={motion} max={100} tone={motion > 35 ? 'amber' : 'green'} /></label>
         </div>
+        <div className="cam-links">
+          <button onClick={() => setZoneEdit(true)}><Icon name="target" size={13} />{crib ? `Zones · ${1 + dangerN}` : 'Mark the crib'}</button>
+          <button onClick={() => setCalOpen((o) => !o)} aria-expanded={calOpen}><Icon name="gauge" size={13} />{cal ? 'Meter calibrated' : 'Calibrate meter'}</button>
+        </div>
+        {calPanel}
         {soothing && (
           <div className="cam-soothe">
             <Icon name="music" size={15} />
@@ -824,6 +1142,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           {autoDim ? 'Screen dims by itself after 90 s — tap to keep it on' : 'Screen stays on — tap to let it dim by itself'}
         </button>
       </div>
+      {zoneEditor}
     </div>
   );
 }

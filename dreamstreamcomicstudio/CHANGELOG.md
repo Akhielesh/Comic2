@@ -6,6 +6,28 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Baby monitor v3 — sound meter, safety, sleep and a smarter room (2026-10-21):**
+  - **Decibel meter:** a real A-weighted sound level meter (IEC 61672 weighting,
+    Fast response) on the camera phone, live on every viewer, with 1 h / 6 h /
+    24 h history, average / background / loudest, and a two-step calibration
+    (quiet room or match a meter). Very loud noise (85 dB+) always alerts; a sound
+    machine averaging over the 50 dB infant-sleep guideline is flagged with how
+    to fix it.
+  - **Safety card:** open incidents with who answered and how fast, every guard
+    the camera runs (alarms, glass, crying, crib, danger zones, camera position,
+    screen-on, room noise, power, connection) with a clear fix when one isn't
+    working, and **on duty** — routine alerts go to one person first and
+    escalate to everyone if nobody answers.
+  - **Crib & danger zones:** mark the crib (climb-out alerts, better sleep
+    tracking) and up to three danger zones (a window, the stairs); the camera
+    also notices visits, lights on/off, a covered lens and being knocked over.
+  - **Sleep tracking and a morning report:** naps and nights from the camera's
+    movement and sound, wakings and self-settles, a 7-day chart, and a summary
+    when the night ends. Download the log, sleep or minute-by-minute history as CSV.
+  - **More sounds, fewer false alarms:** glass breaking and cats now alert;
+    sneezing, snoring, knocking, footsteps and running water are logged. Measured
+    on all 2 000 ESC-50 clips: crying still caught 91 %, meows mistaken for crying
+    down from 8.8 % to 2.5 %, sneezes no longer counted as coughs.
 - **Baby monitor, rebuilt around the camera, calling and sound (2026-10-20):**
   - **FaceTime-grade nursery camera:** a guided setup with a full-screen live
     preview, real lens choice (back, ultra-wide, front) with friendly names, zoom,
@@ -62,6 +84,18 @@ All notable user-facing changes. Format loosely follows
   recording is offered back on your next visit.
 
 ### Fixed
+- **Baby monitor video stopping after a few minutes:** the camera phone's screen
+  now stays awake (wake lock re-taken whenever the OS drops it, with a fallback for
+  Low Power Mode), the family is told at once if the camera phone locks or leaves
+  the app, and viewers see when the picture has frozen. Going live from a phone
+  shows the same keep-awake status.
+- **Two-way audio squealing near the camera:** feedback is detected and silenced
+  within a third of a second and the parent's phone switches to walkie-talkie;
+  your voice is compressed and faded in, and the nursery keeps talk under 65 dB
+  and soothing sounds under 50 dB at the crib — measured by the camera's own meter.
+- **A cry already going when monitoring starts now alerts** (it was only reported
+  if it started after the camera went live), and events missed during a network
+  drop are caught up on reconnect.
 - **Stream Studio sign-up no longer dead-ends after the confirmation email (2026-10-20):**
   confirmation links pointed at `live.html#/account`, so Supabase's appended session
   (`#access_token=…`) was unreadable, and with the project's Site URL still on

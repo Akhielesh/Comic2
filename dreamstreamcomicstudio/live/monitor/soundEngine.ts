@@ -3,7 +3,9 @@
  *
  *   mic ─┬─ AnalyserNode ── cry analyser (pitch/rhythm, 10 Hz)
  *        │                 └ smoke/CO beep-pattern detector (20 Hz)
- *        └─ PCM tap (AudioWorklet) ── resample → 16 kHz ── YAMNet worker (every 0.48 s)
+ *        └─ ds-ears (AudioWorklet, every sample)
+ *             ├─ A-weighted Fast level → LevelMeter (dB, per-minute stats) + NoiseGuard
+ *             └─ PCM (once the model is ready) → resample 16 kHz → YAMNet worker (every 0.48 s)
  *                                                            │
  *                         SoundBrain (fusion, events, mood) ◄┘
  *
@@ -16,6 +18,20 @@ import { CryDetector, analyzeFrame, type DetectorState } from './cryDetector';
 import { RollingWindow, StreamResampler } from './resample';
 import { SoundBrain, type BrainEvent, type BrainState } from './soundBrain';
 import type { CatScores, Sensitivity } from './soundClasses';
+import { HowlDetector, type HowlFrame } from './voice';
+import {
+  aWeighting,
+  createLevelKernel,
+  earsWorkletSource,
+  LEVEL_BLOCK_SEC,
+  LevelMeter,
+  NoiseGuard,
+  type Calibration,
+  type LevelBlock,
+  type LiveLevel,
+  type MinuteLevels,
+  type NoiseEvent,
+} from './soundLevel';
 import { startTicker, type Ticker } from '../studio/ticker';
 
 export type ModelState = 'off' | 'loading' | 'ready' | 'failed';
@@ -26,44 +42,37 @@ export interface EarsSnapshot extends BrainState {
   cry: number;
   model: ModelState;
   modelProgress: number;
+  /** Sound level meter, dB(A); null until the meter is running. */
+  spl: LiveLevel | null;
 }
 
 const WINDOW = 15_360; // 0.96 s at 16 kHz — one YAMNet patch
 const HOP = 7_680; // 0.48 s
 
-const TAP_SRC = `
-class DsPcmTap extends AudioWorkletProcessor {
-  constructor() { super(); this.buf = new Float32Array(2048); this.n = 0; }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (ch) {
-      for (let i = 0; i < ch.length; i++) {
-        this.buf[this.n++] = ch[i];
-        if (this.n === this.buf.length) {
-          this.port.postMessage(this.buf, [this.buf.buffer]);
-          this.buf = new Float32Array(2048);
-          this.n = 0;
-        }
-      }
-    }
-    return true;
-  }
-}
-registerProcessor('ds-pcm-tap', DsPcmTap);
-`;
 
 export class NurseryEars {
   readonly cry = new CryDetector('medium');
   readonly alarm = new AlarmToneDetector();
   readonly brain = new SoundBrain();
+  readonly meter: LevelMeter;
+  readonly noise = new NoiseGuard();
   onEvents: ((e: BrainEvent[]) => void) | null = null;
   onModel: ((s: ModelState, progress: number) => void) | null = null;
+  onNoise: ((e: NoiseEvent[]) => void) | null = null;
+  onMinute: ((m: MinuteLevels) => void) | null = null;
+  /** Acoustic feedback while a parent's voice plays in the nursery. */
+  onHowl: ((h: HowlFrame) => void) | null = null;
+  private readonly howl = new HowlDetector();
+  private playback = false;
 
   private ctx: AudioContext | null = null;
   private src: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private tap: AudioNode | null = null;
+  private tapPort: MessagePort | null = null;
+  private pcmOn = false;
   private sink: GainNode | null = null;
+  private meterOn = false;
   private tickers: Ticker[] = [];
   private worker: Worker | null = null;
   private busy = false;
@@ -77,6 +86,11 @@ export class NurseryEars {
   private model: ModelState = 'off';
   private modelProgress = 0;
   private stopped = false;
+
+  constructor(calibration: Calibration | null = null) {
+    this.meter = new LevelMeter(calibration);
+    this.meter.onMinute = (m) => this.onMinute?.(m);
+  }
 
   /** Call inside the user's tap (iOS only lets audio start from a gesture). */
   async start(stream: MediaStream, opts: { ai: boolean }): Promise<void> {
@@ -98,7 +112,15 @@ export class NurseryEars {
     this.tickers.push(
       startTicker(50, () => {
         an.getFloatFrequencyData(spec);
-        this.alarmOn = this.alarm.push(spec, binHz, Date.now()).active;
+        const now = Date.now();
+        this.alarmOn = this.alarm.push(spec, binHz, now).active;
+        if (this.playback) {
+          const h = this.howl.push(spec, binHz, now);
+          if (h.howl) {
+            this.howl.reset();
+            this.onHowl?.(h);
+          }
+        }
       }),
       startTicker(100, () => {
         an.getFloatTimeDomainData(time);
@@ -112,7 +134,9 @@ export class NurseryEars {
       }),
     );
 
+    void this.startTap();
     if (opts.ai) this.startModel();
+    if (import.meta.env?.DEV) (globalThis as unknown as { __dsEars?: unknown }).__dsEars = this;
   }
 
   /** Re-wire to a new mic track (after a camera flip or an interruption). */
@@ -147,7 +171,7 @@ export class NurseryEars {
       if (m.t === 'progress') this.setModel('loading', m.p ?? 0);
       else if (m.t === 'ready') {
         this.setModel('ready', 1);
-        void this.startTap();
+        this.setPcm(true);
       } else if (m.t === 'failed') {
         this.setModel('failed', 0);
         this.stopModel();
@@ -163,6 +187,7 @@ export class NurseryEars {
     worker.postMessage({ t: 'load' });
   }
 
+  /** The per-sample tap: level meter always, PCM for the model when it's ready. */
   private async startTap(): Promise<void> {
     const ctx = this.ctx;
     if (!ctx || !this.src || this.tap) return;
@@ -171,23 +196,57 @@ export class NurseryEars {
     this.sink = ctx.createGain();
     this.sink.gain.value = 0;
     this.sink.connect(ctx.destination);
-    const onChunk = (chunk: Float32Array) => this.feed(chunk);
+    const sos = aWeighting(ctx.sampleRate);
     try {
       if (!ctx.audioWorklet) throw new Error('no worklet');
-      const url = URL.createObjectURL(new Blob([TAP_SRC], { type: 'application/javascript' }));
+      const url = URL.createObjectURL(new Blob([earsWorkletSource()], { type: 'application/javascript' }));
       await ctx.audioWorklet.addModule(url);
       URL.revokeObjectURL(url);
-      const node = new AudioWorkletNode(ctx, 'ds-pcm-tap', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
-      node.port.onmessage = (e) => onChunk(e.data as Float32Array);
+      if (this.stopped || this.tap) return;
+      const node = new AudioWorkletNode(ctx, 'ds-ears', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+        channelCountMode: 'explicit',
+        processorOptions: { sos, block: LEVEL_BLOCK_SEC },
+      });
+      node.port.onmessage = (e) => {
+        const m = e.data as { t: 'lv'; b: LevelBlock[] } | { t: 'pcm'; d: Float32Array };
+        if (m.t === 'lv') this.onLevel(m.b);
+        else this.feed(m.d);
+      };
       this.tap = node;
+      this.tapPort = node.port;
     } catch {
-      // Older Safari: ScriptProcessor still works everywhere.
+      // Older Safari: ScriptProcessor still works everywhere (same kernel, main thread).
+      if (this.stopped || this.tap) return;
+      const kernel = createLevelKernel(sos, ctx.sampleRate, LEVEL_BLOCK_SEC);
       const sp = ctx.createScriptProcessor(4096, 1, 1);
-      sp.onaudioprocess = (e) => onChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+      sp.onaudioprocess = (e) => {
+        const ch = e.inputBuffer.getChannelData(0);
+        const out: LevelBlock[] = [];
+        kernel.process(ch, out);
+        if (out.length) this.onLevel(out);
+        if (this.pcmOn) this.feed(new Float32Array(ch));
+      };
       this.tap = sp;
     }
+    this.meterOn = true;
     this.src.connect(this.tap);
     this.tap.connect(this.sink);
+    if (this.model === 'ready') this.setPcm(true);
+  }
+
+  private setPcm(on: boolean): void {
+    this.pcmOn = on;
+    this.tapPort?.postMessage({ pcm: on });
+  }
+
+  private onLevel(blocks: LevelBlock[]): void {
+    const now = Date.now();
+    this.meter.push(blocks, now);
+    const ev = this.noise.push(this.meter.live(now).db, now);
+    if (ev.length) this.onNoise?.(ev);
   }
 
   private feed(chunk: Float32Array): void {
@@ -209,8 +268,14 @@ export class NurseryEars {
     this.worker?.terminate();
     this.worker = null;
     this.busy = false;
-    this.tap?.disconnect();
-    this.tap = null;
+    // The tap keeps measuring the sound level; only the model's feed stops.
+    this.setPcm(false);
+  }
+
+  /** A parent's voice / video call is playing on this phone's speaker. */
+  setPlayback(on: boolean): void {
+    this.playback = on;
+    if (!on) this.howl.reset();
   }
 
   setMotion(m: number): void {
@@ -229,7 +294,20 @@ export class NurseryEars {
   }
 
   snapshot(): EarsSnapshot {
-    return { ...this.brain.state(Date.now()), level: this.last.level, cry: this.last.cry, model: this.model, modelProgress: this.modelProgress };
+    const now = Date.now();
+    return {
+      ...this.brain.state(now),
+      level: this.last.level,
+      cry: this.last.cry,
+      model: this.model,
+      modelProgress: this.modelProgress,
+      spl: this.meterOn ? this.meter.live(now) : null,
+    };
+  }
+
+  /** Apply (or clear) this phone's sound-meter calibration. */
+  setCalibration(c: Calibration | null): void {
+    this.meter.calibration = c;
   }
 
   get running(): boolean {
@@ -241,6 +319,10 @@ export class NurseryEars {
     this.tickers.forEach((t) => t.stop());
     this.tickers = [];
     this.stopModel();
+    this.tap?.disconnect();
+    this.tap = null;
+    this.tapPort = null;
+    this.meterOn = false;
     this.src?.disconnect();
     this.sink?.disconnect();
     void this.ctx?.close().catch(() => undefined);

@@ -12,6 +12,7 @@
  * instant on/off like FaceTime's mute and camera buttons.
  */
 
+import { TalkProcessor } from './voice';
 import type { MonRtc } from './protocol';
 
 export type Signal = (to: string, d: MonRtc) => void;
@@ -180,6 +181,8 @@ export class ViewerLink {
   private pc: RTCPeerConnection | null = null;
   private camSid: string | null = null;
   private talkTrack: MediaStreamTrack | null = null;
+  private talkRaw: MediaStreamTrack | null = null;
+  private talkProc: TalkProcessor | null = null;
   private camTrack: MediaStreamTrack | null = null;
   private connectTimer: number | undefined;
   private disconnectedAt: number | null = null;
@@ -288,8 +291,14 @@ export class ViewerLink {
     if (!this.pc) return null;
     try {
       if (!this.talkTrack) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-        this.talkTrack = stream.getAudioTracks()[0] ?? null;
+        // No automatic gain: it pumps up room noise and feeds howling. Our own
+        // compressor keeps the voice at a moderate, steady level instead.
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+        this.talkRaw = stream.getAudioTracks()[0] ?? null;
+        if (this.talkRaw) {
+          this.talkProc = TalkProcessor.create(this.talkRaw);
+          this.talkTrack = this.talkProc?.out ?? this.talkRaw;
+        }
       }
       const sender = audioTransceiver(this.pc)?.sender;
       if (!sender || !this.talkTrack) return null;
@@ -303,8 +312,17 @@ export class ViewerLink {
   async stopTalk(): Promise<void> {
     const sender = this.pc ? audioTransceiver(this.pc)?.sender : undefined;
     await sender?.replaceTrack(null).catch(() => undefined);
+    this.talkProc?.close();
+    this.talkProc = null;
+    this.talkRaw?.stop();
+    this.talkRaw = null;
     this.talkTrack?.stop();
     this.talkTrack = null;
+  }
+
+  /** The nursery measured our voice as too loud: scale it (returns the new volume, or null). */
+  scaleTalk(factor: number): number | null {
+    return this.talkProc ? this.talkProc.scale(factor) : null;
   }
 
   /** Video call: show this device's camera on the nursery screen. */

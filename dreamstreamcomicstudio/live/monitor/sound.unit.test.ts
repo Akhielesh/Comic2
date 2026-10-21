@@ -4,7 +4,7 @@ import { AlarmToneDetector } from './alarmTone';
 import { AlertCues, DEFAULT_CUES, alertInfo, loadCues } from './alerts';
 import { RollingWindow, StreamResampler } from './resample';
 import { SoundBrain, type BrainEvent, type BrainFrame } from './soundBrain';
-import { SOUND_INFO, scoreRow, scoreRows, soundHeadline, type CatScores } from './soundClasses';
+import { CAT_GUARD, SOUND_CATS, SOUND_INFO, scoreRow, scoreRows, soundHeadline, type CatScores } from './soundClasses';
 
 const sine = (hz: number, sr: number, secs: number, amp = 0.5) => {
   const x = new Float32Array(Math.round(sr * secs));
@@ -96,7 +96,10 @@ describe('sound categories', () => {
 
 /* ------------------------------------------------------------ brain */
 
-const zero = (): CatScores => ({ cry: 0, fuss: 0, cough: 0, babble: 0, laugh: 0, voices: 0, music: 0, alarm: 0, crash: 0, loud: 0, dog: 0, ambient: 0, silence: 0 });
+const zero = (): CatScores => ({
+  cry: 0, fuss: 0, cough: 0, babble: 0, laugh: 0, voices: 0, music: 0, alarm: 0, crash: 0, loud: 0, dog: 0,
+  sneeze: 0, snore: 0, glass: 0, cat: 0, door: 0, footsteps: 0, water: 0, ambient: 0, silence: 0,
+});
 
 /** Drive the brain at 10 Hz for `secs`, with model output every 0.48 s. */
 function run(brain: SoundBrain, clock: { t: number }, secs: number, frame: Partial<BrainFrame>, scores?: Partial<CatScores> | null): BrainEvent[] {
@@ -116,6 +119,18 @@ function run(brain: SoundBrain, clock: { t: number }, secs: number, frame: Parti
 }
 
 describe('SoundBrain', () => {
+  it('replays what is going on for a room that missed the start (setup, offline)', () => {
+    const b = new SoundBrain();
+    const c = { t: 0 };
+    expect(b.ongoing()).toEqual([]);
+    run(b, c, 4, {}, { cry: 0.9 });
+    expect(b.ongoing().map((e) => `${e.phase}:${e.cat}:${e.via}`)).toEqual(['start:cry:ai']);
+    expect(b.ongoing()[0].conf).toBe(90);
+    // Once it has ended there is nothing to replay.
+    run(b, c, 12, {}, {});
+    expect(b.ongoing()).toEqual([]);
+  });
+
   it('starts a cry after it persists, ends it after a quiet hold, and reports duration', () => {
     const b = new SoundBrain();
     const c = { t: 0 };
@@ -274,5 +289,74 @@ describe('alert cues', () => {
   it('describes camera alerts too', () => {
     expect(alertInfo('offline').severity).toBe('high');
     expect(alertInfo('cough').label).toBe('Coughing');
+  });
+});
+
+/* ------------------------------------------------- ESC-50 study categories */
+
+describe('new categories (ESC-50 study)', () => {
+  const row = (vals: Record<number, number>) => {
+    const r = new Float32Array(521);
+    for (const [i, v] of Object.entries(vals)) r[Number(i)] = v;
+    return r;
+  };
+
+  it('has info and thresholds for every category', () => {
+    for (const c of SOUND_CATS) expect(SOUND_INFO[c].label.length).toBeGreaterThan(0);
+    expect(SOUND_INFO.glass.alertByDefault).toBe(true);
+    expect(SOUND_INFO.cat.alertByDefault).toBe(true);
+  });
+
+  it('keeps a sneeze from also being a cough, and a cough from being a sneeze', () => {
+    const sneeze = scoreRow(row({ 44: 0.8, 42: 0.5 })); // 44 Sneeze, 42 Cough
+    expect(sneeze.sneeze).toBeCloseTo(0.8);
+    expect(sneeze.cough).toBe(0);
+    const cough = scoreRow(row({ 42: 0.8, 44: 0.3 }));
+    expect(cough.cough).toBeCloseTo(0.8);
+    expect(cough.sneeze).toBe(0);
+  });
+
+  it('only calls it snoring when it out-scores plain breathing', () => {
+    expect(scoreRow(row({ 38: 0.9, 36: 0.95 })).snore).toBeCloseTo(0.9); // 38 Snoring, 36 Breathing
+    expect(scoreRow(row({ 38: 0.5, 36: 0.9 })).snore).toBe(0);
+  });
+
+  it('scores breaking glass as glass, not as a generic crash', () => {
+    const s = scoreRow(row({ 437: 0.8 })); // 437 Shatter
+    expect(s.glass).toBeCloseTo(0.8);
+    expect(s.crash).toBe(0);
+    expect(scoreRow(row({ 454: 0.6, 48: 0.7 })).crash).toBe(0); // a thud that is really footsteps
+  });
+
+  it('does not report a meowing cat as a crying baby', () => {
+    const b = new SoundBrain();
+    const c = { t: 0 };
+    // Meows the model half-hears as a cry, while the pitch analyser says "crying".
+    const ev = run(b, c, 6, { heur: 'crying', heurCryConf: 80 }, { cat: 0.7, cry: 0.5 });
+    expect(ev.map((e) => e.cat)).toEqual(['cat']);
+    // …but a long, clear cry after one meow is a cry: the cry's evidence soon out-weighs the cat's.
+    const b2 = new SoundBrain();
+    const c2 = { t: 0 };
+    run(b2, c2, 1, {}, { cat: 0.7 });
+    expect(run(b2, c2, 6, {}, { cry: 0.6 }).map((e) => e.cat)).toEqual(['cry']);
+  });
+
+  it('still alerts on an unmistakable cry with a cat around, and on any cry once the cat is gone', () => {
+    const b = new SoundBrain();
+    const c = { t: 0 };
+    expect(run(b, c, 4, {}, { cry: 0.95, cat: 0.4 }).map((e) => e.cat)).toEqual(['cry']);
+    const b2 = new SoundBrain();
+    const c2 = { t: 0 };
+    run(b2, c2, 1, {}, { cat: 0.6 });
+    run(b2, c2, CAT_GUARD.memorySecs + 2, {}, { cat: 0 });
+    expect(run(b2, c2, 4, {}, { cry: 0.6 }).map((e) => e.cat)).toEqual(['cry']);
+  });
+
+  it('names one sound: breaking glass is not also a crash; a cough is not also a sneeze', () => {
+    expect(run(new SoundBrain(), { t: 0 }, 2, { level: 30 }, { glass: 0.9, crash: 0.9 }).map((e) => e.cat)).toEqual(['glass']);
+    const b = new SoundBrain();
+    const c = { t: 0 };
+    expect(run(b, c, 2, {}, { cough: 0.9 }).map((e) => e.cat)).toEqual(['cough']);
+    expect(run(b, c, 2, {}, { cough: 0.9, sneeze: 0.9 })).toEqual([]); // mid-fit "sneezes" are the cough
   });
 });
