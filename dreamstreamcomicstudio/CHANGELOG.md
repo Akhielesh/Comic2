@@ -6,6 +6,24 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Baby monitor layouts (2026-10-21):** pick how the watch screen looks — **Monitor**
+  (the picture, controls, status and only the safety checks that need you; the default
+  on phones), **All** (sleep, sound level, logs, alerts, people and settings; the default
+  on computers) or **Bedside**: a dark nightstand view with a big clock, how the baby is
+  and the room's decibels, which dims itself to deep red, drifts to protect OLED screens,
+  keeps the screen on and lights up with "I'm on it" the moment something needs you.
+  Turn a phone sideways for a full-screen picture with the controls along the side, and
+  use **Pop out** (picture-in-picture) to keep watching while you use other apps.
+- **Share the baby monitor with a guest link and passcode (2026-10-21):** for
+  grandparents or a sitter without an account. A parent creates a link, picks a
+  passcode (with a "Suggest one" passphrase) and what guests can do (watch &
+  listen, or also talk, soothe and answer alerts), for 1, 7 or 30 days or until
+  turned off. Guests open the link, type their name and the passcode, and watch
+  live — the video still goes straight from the camera, never recorded. Parents
+  are notified when someone joins, see every guest with when they last watched,
+  and can remove one or turn the link off in a tap. Five wrong passcodes lock the
+  link for 15 minutes; twenty turn it off. The passcode and guest passes are only
+  ever stored scrambled.
 - **Baby monitor v3 — sound meter, safety, sleep and a smarter room (2026-10-21):**
   - **Decibel meter:** a real A-weighted sound level meter (IEC 61672 weighting,
     Fast response) on the camera phone, live on every viewer, with 1 h / 6 h /
@@ -84,6 +102,11 @@ All notable user-facing changes. Format loosely follows
   recording is offered back on your next visit.
 
 ### Fixed
+- **Account emails (sign-up, password reset, email change):** the email worker's Supabase
+  hook now handles every Supabase email type — including both emails of a secure email
+  change (it used to send one, to the old address) and security notices — with Stream
+  Studio branding for links back to the live app. Turning it on is a dashboard step for
+  the owner (see `docs/email/SETUP.md` §5).
 - **Baby monitor video stopping after a few minutes:** the camera phone's screen
   now stays awake (wake lock re-taken whenever the OS drops it, with a fallback for
   Low Power Mode), the family is told at once if the camera phone locks or leaves

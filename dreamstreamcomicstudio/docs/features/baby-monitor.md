@@ -102,6 +102,34 @@ analyser + alarm detector keep working ("Basic ears").
 - **Schema**: `monitor_delete` / `monitor_remove_member` / the nightly sweep are
   part of `server/sql/live_accounts_and_monitor.sql`.
 
+## Guest access (share link + passcode)
+
+For family or a sitter without an account (accounts need the welcome code).
+The nursery's MonitorRoom is the authority; nothing about guests lives in Supabase.
+
+- **Link** `/live#/monitor/join/<nursery>/<code>` — 128-bit code kept by the room
+  so parents can copy it again; it sits in the URL fragment, which browsers
+  never send to a server. The join page reveals nothing about the nursery until
+  the passcode is right.
+- **Passcode** chosen by a parent (≥ 8 characters, not a sequence, not built from
+  the baby's or nursery's name; the app and the room share the rule and a test
+  keeps them equal). Stored only as PBKDF2-SHA256, 100 000 rounds (the Workers
+  maximum), per-link salt. Shown to the parent once after creation.
+- **Guessing**: 5 wrong passcodes lock the link for 15 min, 20 since the last
+  success turn it off and sign every guest out; 12 tries per address per 15 min.
+  Parents get a push (`guest` category) for each new guest, a lock, and a
+  shutdown.
+- **Guest pass**: a 256-bit token stored only as SHA-256, kept on the guest's
+  device, sent in the socket's first frame. It ends with the link (1 / 7 / 30
+  days or until turned off; at most 90 days), when a parent removes the guest,
+  or when the link is replaced or turned off. Up to 10 guests per link.
+- **Roles**: "Watch & listen" (viewer) or "Also talk, soothe & answer alerts"
+  (caregiver). Guests can never run a camera, change settings, manage people or
+  download history; Supabase member re-checks never touch them.
+- Code: `live-worker/src/monitorGuests.ts` (+ tests), `MonitorRoom` (`/guest`
+  join, `share_set` / `share_off` / `guest_remove`), `live/monitor/guest.ts`,
+  `live/views/MonitorJoin.tsx`, `live/views/monitor/PeopleCard.tsx`.
+
 ## Sound level, sleep and history
 
 - The camera sends one row per minute (LAeq, Lmax, L10/50/90, peak, motion,

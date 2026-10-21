@@ -394,3 +394,101 @@ describe('MonitorRoom export', () => {
     expect((await room.fetch(new Request('https://monitor.internal/export'))).status).toBe(401);
   });
 });
+
+describe('MonitorRoom guests (share link + passcode)', () => {
+  const joinHttp = (room: MonitorRoom, body: Record<string, unknown>, ip = '9.9.9.9') =>
+    room.fetch(new Request(`https://monitor.internal/guest?nid=${NID}`, { method: 'POST', body: JSON.stringify(body), headers: { 'cf-connecting-ip': ip } }));
+
+  it('only parents can make a link; weak passcodes are refused; parents see the link', async () => {
+    const { join, say } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    expect(mom.msgs('share')[0].share).toMatchObject({ on: false });
+    expect(bob.msgs('share')).toHaveLength(0);
+    await say(bob, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    await say(mom, { t: 'share_set', pass: 'aria2024', role: 'viewer' });
+    expect(mom.msgs('share_err')[0].msg).toMatch(/baby/);
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'caregiver', days: 7 });
+    const info = mom.msgs('share').at(-1)!.share as { on: boolean; code: string; role: string; expires_at: number };
+    expect(info).toMatchObject({ on: true, role: 'caregiver' });
+    expect(info.code).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(info.expires_at).toBeGreaterThan(Date.now() + 6 * 24 * 3600_000);
+    expect(bob.msgs('share')).toHaveLength(0);
+    expect(JSON.stringify(mom.sent)).not.toContain('blue-otter-42');
+  });
+
+  it('a guest joins with the link + passcode, watches with their role, and parents are told', async () => {
+    const { room, join, say, subscribe } = setup();
+    const guestSocket = (token: string, mode: 'camera' | 'viewer' = 'viewer', dev = 'gran-ipad') => join('', mode, dev, { guest: token });
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await subscribe(mom, 'https://push.test/mom');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+
+    const wrong = await joinHttp(room, { code, pass: 'nope-nope-1', name: 'Jo' });
+    expect(wrong.status).toBe(401);
+    expect(await wrong.json()).toMatchObject({ ok: false, reason: 'wrong', left: 4 });
+    const badLink = await joinHttp(room, { code: 'x'.repeat(22), pass: 'blue-otter-42', name: 'Jo' });
+    expect(badLink.status).toBe(404);
+    expect(await badLink.text()).not.toContain('Aria');
+
+    const ok = await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Grandma Jo', dev: 'gran-ipad' });
+    const body = (await ok.json()) as { ok: boolean; token: string; guest: { name: string; role: string }; nursery: { baby: string } };
+    expect(body).toMatchObject({ ok: true, guest: { name: 'Grandma Jo', role: 'viewer' }, nursery: { baby: 'Aria' } });
+    expect(pushes.some((p) => p.endpoint === 'https://push.test/mom' && String(p.payload.title).includes('Grandma Jo'))).toBe(true);
+    expect((mom.msgs('share').at(-1)!.share as { guests: { name: string }[] }).guests.map((g) => g.name)).toEqual(['Grandma Jo']);
+
+    const g = await guestSocket(body.token);
+    const hello = g.msgs('hello')[0] as { you: { role: string; guest: boolean; name: string } };
+    expect(hello.you).toMatchObject({ role: 'viewer', guest: true, name: 'Grandma Jo' });
+    expect(g.msgs('share')).toHaveLength(0);
+    // Viewers can't run commands, and guests can't manage sharing.
+    await say(g, { t: 'share_off' });
+    expect((mom.msgs('share').at(-1)!.share as { on: boolean }).on).toBe(true);
+    // Guests can't be a camera.
+    const cam = await guestSocket(body.token, 'camera', 'gran-cam');
+    expect(cam.closed).toBe(4004);
+  });
+
+  it('member re-checks never kick guests; removing a guest or turning the link off does', async () => {
+    const { room, join, say } = setup();
+    const guestSocket = (token: string, mode: 'camera' | 'viewer' = 'viewer', dev = 'gran-ipad') => join('', mode, dev, { guest: token });
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    const a = (await (await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Jo' })).json()) as { token: string };
+    const b = (await (await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Sam' })).json()) as { token: string };
+    const jo = await guestSocket(a.token, 'viewer', 'jo');
+    const sam = await guestSocket(b.token, 'viewer', 'sam');
+
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true, ids: ['u-parent'] }), { status: 200 }));
+    await say(mom, { t: 'members_changed', token: 'tok-parent' });
+    expect(jo.closed).toBeNull();
+
+    const joId = (mom.msgs('share').at(-1)!.share as { guests: { id: string; name: string }[] }).guests.find((x) => x.name === 'Jo')!.id;
+    await say(mom, { t: 'guest_remove', id: joId });
+    expect(jo.closed).toBe(4004);
+    expect(sam.closed).toBeNull();
+    expect((await guestSocket(a.token, 'viewer', 'jo2')).closed).toBe(4004);
+
+    await say(mom, { t: 'share_off' });
+    expect(sam.closed).toBe(4004);
+    const late = await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Late' });
+    expect(late.status).toBe(410);
+  });
+
+  it('locks after 5 wrong passcodes and tells the parents', async () => {
+    const { room, join, say, subscribe } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await subscribe(mom, 'https://push.test/mom');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    let last: Response | null = null;
+    for (let i = 0; i < 5; i++) last = await joinHttp(room, { code, pass: `guess-${i}-zz`, name: 'X' }, `10.0.0.${i}`);
+    expect(last!.status).toBe(429);
+    expect(mom.logs().some((e) => /locked for 15 minutes/.test(e.msg))).toBe(true);
+    expect(pushes.some((p) => /Wrong passcodes/.test(String(p.payload.title)))).toBe(true);
+    const right = await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Jo' }, '10.0.1.1');
+    expect(right.status).toBe(429);
+  });
+});

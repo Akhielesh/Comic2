@@ -22,6 +22,7 @@
  * The singleton instance named KEY_HOLDER only stores the VAPID key pair.
  */
 
+import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { clockTime, isValidTz, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
 import { callRpc, type SupabaseEnv } from './supabaseAuth';
@@ -37,11 +38,11 @@ export type BabyState = 'calm' | 'stirring' | 'awake' | 'noisy' | 'fussing' | 'c
 const BABY_STATES: BabyState[] = ['calm', 'stirring', 'awake', 'noisy', 'fussing', 'crying'];
 
 /** Background-alert categories a device can opt into (and their defaults). */
-const PUSH_KINDS = ['cry', 'fuss', 'cough', 'alarm', 'glass', 'crash', 'zone', 'cat', 'loud', 'noise', 'camera', 'offline', 'battery', 'report', 'insight'] as const;
+const PUSH_KINDS = ['cry', 'fuss', 'cough', 'alarm', 'glass', 'crash', 'zone', 'cat', 'loud', 'noise', 'camera', 'offline', 'battery', 'report', 'insight', 'guest'] as const;
 export type PushKind = (typeof PUSH_KINDS)[number];
 const PUSH_DEFAULTS: Record<PushKind, boolean> = {
   cry: true, fuss: false, cough: true, alarm: true, glass: true, crash: true, zone: true, cat: true,
-  loud: false, noise: true, camera: true, offline: true, battery: true, report: true, insight: true,
+  loud: false, noise: true, camera: true, offline: true, battery: true, report: true, insight: true, guest: true,
 };
 
 /**
@@ -116,6 +117,8 @@ interface Attach {
   dn?: string;
   /** Viewer: camera device id it wants relayed snapshots from. */
   relay?: string;
+  /** Joined with the share link + passcode (no account): the guest's id. */
+  guest?: string;
 }
 
 export interface SplStatus {
@@ -179,6 +182,8 @@ interface PushRec {
   sub: PushSubscriptionJSONLike;
   uid: string;
   name: string;
+  /** Role when subscribed (parents-only notices, e.g. a new guest). */
+  role?: MonRole;
   prefs: Record<string, boolean>;
   at: number;
 }
@@ -239,7 +244,7 @@ const MACHINE_GAP_MS = 12 * 60 * 60_000;
 const STATE_RANK: Record<BabyState, number> = { calm: 1, stirring: 2, awake: 2, noisy: 3, fussing: 4, crying: 5 };
 const PUSH_COOLDOWN_MS: Record<string, number> = {
   alarm: 60_000, glass: 2 * 60_000, zone: 2 * 60_000, fuss: 10 * 60_000, cough: 10 * 60_000, crash: 10 * 60_000, cat: 15 * 60_000,
-  loud: 10 * 60_000, noise: 10 * 60_000, camera: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000, insight: 6 * 60 * 60_000,
+  loud: 10 * 60_000, noise: 10 * 60_000, camera: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000, insight: 6 * 60 * 60_000, guest: 0,
 };
 const PUSH_URGENT = new Set<PushKind>(['cry', 'alarm', 'glass', 'zone', 'offline', 'noise']);
 const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
@@ -300,10 +305,12 @@ export class MonitorRoom {
   private vapid: VapidKeys | null = null;
   private ice: { at: number; servers: unknown[] } | null = null;
   readonly store: MonitorStore;
+  readonly guests: GuestAccess;
   readonly ready: Promise<void>;
 
   constructor(private state: DurableObjectState, private env: MonEnv) {
     this.store = new MonitorStore(state.storage.sql);
+    this.guests = new GuestAccess(state.storage.sql);
     this.ready = state.blockConcurrencyWhile(() => this.migrate());
   }
 
@@ -329,6 +336,7 @@ export class MonitorRoom {
     if (url.pathname === '/vapid') return this.handleVapid();
     if (url.pathname === '/ws') return this.handleUpgrade(req, url);
     if (url.pathname === '/export') return this.handleExport(req, url);
+    if (url.pathname === '/guest' && req.method === 'POST') return this.handleGuestJoin(req, url);
     return json({ error: 'not found' }, 404);
   }
 
@@ -467,13 +475,13 @@ export class MonitorRoom {
 
   private presence() {
     const cams: { sid: string; dev: string; dn: string; by: string; since: number; status: CamStatus | null; statusAt: number | null }[] = [];
-    const viewers: { sid: string; name: string; label: string | null; role: MonRole; dn: string; relay: boolean }[] = [];
+    const viewers: { sid: string; name: string; label: string | null; role: MonRole; dn: string; relay: boolean; guest?: boolean }[] = [];
     for (const { a } of this.authed()) {
       if (a.mode === 'camera' && a.dev) {
         const ls = this.lastStatus.get(a.dev);
         cams.push({ sid: a.sid, dev: a.dev, dn: a.dn || 'Camera', by: a.name || 'Member', since: a.at, status: ls?.st ?? null, statusAt: ls?.at ?? null });
       } else if (a.mode === 'viewer') {
-        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay });
+        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay, ...(a.guest ? { guest: true } : {}) });
       }
     }
     return { cams, viewers };
@@ -559,6 +567,12 @@ export class MonitorRoom {
         return this.onSleepDelete(a, msg);
       case 'members_changed':
         return this.onMembersChanged(a, msg);
+      case 'share_set':
+        return this.onShareSet(ws, a, msg);
+      case 'share_off':
+        return this.onShareOff(a);
+      case 'guest_remove':
+        return this.onGuestRemove(a, msg);
       case 'end_all':
         return this.onEndAll(a);
       case 'bye':
@@ -610,6 +624,7 @@ export class MonitorRoom {
 
   // ---------------------------------------------------------------- auth
   private async onAuth(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (typeof msg.guest === 'string') return this.onGuestAuth(ws, a, msg);
     const token = clip(msg.token, 4096);
     const mode: MonMode = msg.mode === 'camera' ? 'camera' : msg.mode === 'admin' ? 'admin' : 'viewer';
     const nid = (await this.state.storage.get<string>('nid')) || '';
@@ -643,6 +658,28 @@ export class MonitorRoom {
     a.name = clip(res.data.display_name || 'Member', 40);
     a.role = res.data.role;
     a.label = res.data.label ?? null;
+    const meta = { name: res.data.nursery_name || 'Nursery', baby: res.data.baby_name || null };
+    await this.state.storage.put('meta', meta);
+    return this.admit(ws, a, mode, msg, meta);
+  }
+
+  /** A guest's socket: the token from the share-link join, checked by this room. */
+  private async onGuestAuth(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (msg.mode !== 'viewer') return this.reject(ws, 'forbidden', 'Guests can watch, but not run a camera or manage the nursery.');
+    const g = await this.guests.verify(clip(msg.guest, 100), Date.now());
+    if (!g) return this.reject(ws, 'removed', 'This guest pass has ended — ask a parent for the link and passcode again.');
+    a.authed = true;
+    a.uid = `g:${g.id}`;
+    a.name = clip(g.name, 40);
+    a.role = g.role;
+    a.label = null;
+    a.guest = g.id;
+    return this.admit(ws, a, 'viewer', msg, await this.meta());
+  }
+
+  /** Common to members and guests once they're verified. */
+  private async admit(ws: WebSocket, a: Attach, mode: MonMode, msg: Record<string, unknown>, meta: { name: string; baby: string | null }): Promise<void> {
+    const nid = (await this.state.storage.get<string>('nid')) || '';
     a.mode = mode;
     a.dev = clip(msg.dev, 40) || a.sid;
     a.dn = clip(msg.dn, 40) || (mode === 'camera' ? 'Camera' : 'Device');
@@ -659,9 +696,6 @@ export class MonitorRoom {
       }
     }
 
-    const meta = { name: res.data.nursery_name || 'Nursery', baby: res.data.baby_name || null };
-    await this.state.storage.put('meta', meta);
-
     // The camera phone knows the nursery's time zone (reports, night vs nap).
     let settings = await this.settings();
     if (mode === 'camera' && isValidTz(msg.tz) && msg.tz !== settings.tz) {
@@ -672,7 +706,7 @@ export class MonitorRoom {
     const [tl, ice, vapid, duty, sleep] = await Promise.all([this.timeline(), this.iceServers(), this.vapidKeys(), this.duty(), this.sleepStatus()]);
     this.send(ws, {
       t: 'hello',
-      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev },
+      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev, ...(a.guest ? { guest: true } : {}) },
       nursery: { id: nid, ...meta },
       ...this.presence(),
       log: this.store.events({ limit: LOG_HELLO }).reverse().map(toLog),
@@ -684,6 +718,7 @@ export class MonitorRoom {
       ice,
       vapid: vapid?.publicKey ?? null,
     });
+    if (a.role === 'parent') this.send(ws, { t: 'share', share: this.guests.info(Date.now()) });
 
     if (mode === 'camera') {
       this.markBeat(a.dev);
@@ -1361,6 +1396,7 @@ export class MonitorRoom {
       sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } },
       uid: a.uid!,
       name: a.name || 'Member',
+      role: a.role,
       prefs: Object.fromEntries(
         PUSH_KINDS.map((k) => {
           // Life-safety alerts can't be switched off.
@@ -1403,7 +1439,7 @@ export class MonitorRoom {
    * Alert the people who opted in. `audience: 'duty'` reaches only the person
    * on duty (when someone is); `force` skips the per-kind cooldown (escalations).
    */
-  private async pushAlert(kind: PushKind, note: { title: string; body: string; entryId: string }, dev?: string, opts: { audience?: 'all' | 'duty'; incident?: string; force?: boolean } = {}): Promise<void> {
+  private async pushAlert(kind: PushKind, note: { title: string; body: string; entryId: string }, dev?: string, opts: { audience?: 'all' | 'duty' | 'parents'; incident?: string; force?: boolean } = {}): Promise<void> {
     const now = Date.now();
     const key = `${kind}:${dev ?? '-'}`;
     const last = (await this.state.storage.get<Record<string, number>>('lastPush')) ?? {};
@@ -1424,6 +1460,7 @@ export class MonitorRoom {
       subs
         .filter((r) => (kind === 'alarm' ? true : r.prefs[kind] ?? PUSH_DEFAULTS[kind]))
         .filter((r) => !duty || r.uid === duty.uid)
+        .filter((r) => opts.audience !== 'parents' || r.role === 'parent' || r.role === undefined)
         .map(async (r) => {
           const out = await sendWebPush(r.sub, payload, keys, {
             subject: VAPID_SUBJECT,
@@ -1473,6 +1510,99 @@ export class MonitorRoom {
   }
 
   /** A parent changed the member list: drop sockets of anyone removed. */
+  // ------------------------------------------------------------- guests
+  /** Someone opened the share link and typed the passcode. */
+  private async handleGuestJoin(req: Request, url: URL): Promise<Response> {
+    const nid = await this.state.storage.get<string>('nid');
+    if (!nid || url.searchParams.get('nid') !== nid) return json({ ok: false, reason: 'bad_link' }, 404);
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ ok: false, reason: 'bad_link' }, 400);
+    }
+    const now = Date.now();
+    const r = await this.guests.join(
+      { code: clip(body.code, 64), pass: String(body.pass ?? '').slice(0, 200), name: String(body.name ?? ''), dev: clip(body.dev, 40), ip: req.headers.get('cf-connecting-ip') || undefined },
+      now,
+    );
+    const meta = await this.meta();
+    if (r.ok) {
+      const entry = await this.addLog({ kind: 'people', msg: `${r.guest.name} joined as a guest with the share link`, by: r.guest.name });
+      await this.pushAlert('guest', { title: `${r.guest.name} is now a guest of ${meta.name}`, body: 'They joined with the share link and passcode. Remove them any time in Watch → People.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      this.sendShareInfo();
+      return json({ ok: true, token: r.token, guest: { name: r.guest.name, role: r.guest.role, until: r.guest.expires_at }, nursery: meta });
+    }
+    if (r.disabled) {
+      const entry = await this.addLog({ kind: 'people', sev: 'warn', msg: 'The share link was turned off after too many wrong passcodes — guests were signed out' });
+      await this.pushAlert('guest', { title: `Share link for ${meta.name} turned off`, body: 'Someone kept entering the wrong passcode. Make a new link and passcode if you still want to share.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      this.kickGuests(null);
+      this.sendShareInfo();
+    } else if (r.reason === 'locked' && r.retryAt === now + LOCK_MS) {
+      const entry = await this.addLog({ kind: 'people', sev: 'warn', msg: 'Wrong passcode entered 5 times — the share link is locked for 15 minutes' });
+      await this.pushAlert('guest', { title: `Wrong passcodes for ${meta.name}`, body: 'The share link is locked for 15 minutes. If this wasn’t someone you invited, turn the link off.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      this.sendShareInfo();
+    }
+    const status = r.reason === 'bad_link' ? 404 : r.reason === 'slow_down' || r.reason === 'locked' ? 429 : r.reason === 'wrong' || r.reason === 'name' ? 401 : 410;
+    return json({ ok: false, reason: r.reason, retryAt: r.retryAt ?? null, left: r.left ?? null }, status);
+  }
+
+  private async onShareSet(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const pass = String(msg.pass ?? '');
+    const meta = await this.meta();
+    const problem = passcodeProblem(pass, [meta.baby, meta.name]);
+    if (problem) return this.send(ws, { t: 'share_err', msg: problem });
+    const role: GuestRole = msg.role === 'caregiver' ? 'caregiver' : 'viewer';
+    const days = msg.days === 1 || msg.days === 7 || msg.days === 30 ? msg.days : null;
+    const { removed } = await this.guests.createShare({ pass, role, days, by: a.name || 'A parent' }, Date.now());
+    this.kickGuests(removed);
+    await this.addLog({ kind: 'people', msg: `${a.name} made a new share link (${role === 'caregiver' ? 'watch, talk & answer alerts' : 'watch & listen'}${days ? `, ${days} day${days > 1 ? 's' : ''}` : ''})`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  private async onShareOff(a: Attach): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const removed = this.guests.revokeShare(Date.now());
+    this.kickGuests(removed);
+    await this.addLog({ kind: 'people', msg: `${a.name} turned the share link off${removed.length ? ` and signed out ${removed.length} guest${removed.length > 1 ? 's' : ''}` : ''}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  private async onGuestRemove(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const id = clip(msg.id, 20);
+    const g = this.guests.guests(Date.now()).find((x) => x.id === id);
+    if (!g || !this.guests.removeGuest(id, Date.now())) return;
+    this.kickGuests([id]);
+    await this.addLog({ kind: 'people', msg: `${a.name} removed guest ${g.name}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  /** Close removed guests' sockets and forget their phones (null = every guest). */
+  private kickGuests(ids: string[] | null): void {
+    const set = ids ? new Set(ids) : null;
+    for (const s of this.authed()) {
+      if (s.a.guest && (!set || set.has(s.a.guest))) {
+        this.send(s.ws, { t: 'error', code: 'removed', msg: 'Your guest pass for this nursery has ended.' });
+        try {
+          s.ws.close(4004, 'removed');
+        } catch { /* closed */ }
+      }
+    }
+    if (set && set.size === 0) return;
+    void (async () => {
+      const subs = (await this.state.storage.get<PushRec[]>('push')) ?? [];
+      const keep = subs.filter((r) => !r.uid.startsWith('g:') || (set != null && !set.has(r.uid.slice(2))));
+      if (keep.length !== subs.length) await this.state.storage.put('push', keep);
+    })();
+  }
+
+  private sendShareInfo(): void {
+    const info = this.guests.info(Date.now());
+    for (const s of this.authed()) if (s.a.role === 'parent' && !s.a.guest) this.send(s.ws, { t: 'share', share: info });
+  }
+
   private async onMembersChanged(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent') return;
     const token = clip(msg.token, 4096);
@@ -1482,7 +1612,8 @@ export class MonitorRoom {
     if (!res.ok || !res.data.ok || !Array.isArray(res.data.ids)) return;
     const ids = new Set(res.data.ids);
     for (const s of this.authed()) {
-      if (s.a.uid && !ids.has(s.a.uid)) {
+      // Guests aren't Supabase members; their access is the share link's.
+      if (s.a.uid && !s.a.guest && !ids.has(s.a.uid)) {
         this.send(s.ws, { t: 'error', code: 'removed', msg: 'You were removed from this nursery.' });
         try {
           s.ws.close(4004, 'removed');
@@ -1603,6 +1734,7 @@ export class MonitorRoom {
     const purgedAt = (await this.state.storage.get<number>('purgedAt')) ?? 0;
     if (now - purgedAt > PURGE_EVERY_MS) {
       this.store.purge(now);
+      this.guests.purge(now);
       await this.state.storage.put('purgedAt', now);
     }
 

@@ -17,10 +17,35 @@ Use this checklist to make signup verification and account policies work in prod
    to the Site URL if it didn't):
    `curl -s -o /dev/null -w '%{redirect_url}\n' 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co/auth/v1/verify?token=probe&type=signup&redirect_to=https%3A%2F%2Fdreamstreamstudio.ai%2Flive'`
    must print `https://dreamstreamstudio.ai/live#error=…`, not `http://localhost:3000/#error=…`.
-5. Open `Authentication` > `Email`.
-6. Enable email confirmation for signups.
-7. Configure SMTP using Resend, Postmark, or SES with a verified sender domain.
-8. Confirm email templates for signup and magic link are enabled and non-empty.
+5. Open `Authentication` > `Sign In / Providers` > `Email`: enable **Confirm email** for
+   signups (and decide on **Secure email change** — the worker handles both modes).
+
+## Auth email delivery (Cloudflare — no third-party ESP)
+
+All auth email goes out through **Cloudflare Email Sending** on the verified domain
+`dreamstreamstudio.ai`; there is no Resend/Postmark/SES account. Full steps, commands and the
+per-action mapping: [`docs/email/SETUP.md` §5–6](../email/SETUP.md#5-route-supabase-auth-emails-through-the-worker-send-email-hook).
+
+6. **Primary — Send Email Hook → email worker.** Supabase calls
+   `https://dreamstream-email.akhieleshsrirangam.workers.dev/auth-hook` (Standard Webhooks
+   signed); the worker renders the branded `auth-*` templates (Stream Studio branding for
+   `/live` redirects) and sends from `no-reply@dreamstreamstudio.ai`, reply-to `support@`.
+   **Order:** deploy the worker → set its `SUPABASE_AUTH_HOOK_SECRET` Worker secret (the
+   `v1,whsec_…` value Supabase generates) → verify with the signed no-op → only then enable
+   the hook in `Authentication` > `Hooks`. Enabling it first makes every auth email fail.
+7. **Fallback — Cloudflare SMTP** (used by Supabase only while the hook is off):
+   `Authentication` > `SMTP Settings` → host `smtp.mx.cloudflare.net`, port `465`, username
+   `api_token`, password = a Cloudflare API token with **Email Sending: Edit**, sender
+   `no-reply@dreamstreamstudio.ai`. Paste the branded templates from
+   `npx tsx scripts/email-preview.ts --supabase` into `Authentication` > `Emails`.
+8. **Rate limit:** `Authentication` > `Rate Limits` → raise **Rate limit for sending emails**
+   (custom-SMTP default is 30/hour). It applies to hook-sent mail too and is the only cap on
+   auth mail (backend `EMAIL_MAX_PER_*` covers `/send` only).
+9. **Security notifications** (password/email/phone changed, sign-in or 2-step method
+   added/removed): enable the ones you want in `Authentication` > `Emails`; the worker sends
+   them with the `auth-security-notice` template.
+10. Smoke-test: "Forgot password" on the site → a branded email arrives;
+    `npx wrangler tail dreamstream-email` shows `[auth-hook] sent recovery → …`.
 
 ## SQL Migration Order
 

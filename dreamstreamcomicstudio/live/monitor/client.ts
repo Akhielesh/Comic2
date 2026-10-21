@@ -6,10 +6,13 @@
  *  - The realtime socket authenticates with the member's own Supabase token
  *    in the FIRST frame (never in the URL), and re-authenticates with a fresh
  *    token on every reconnect.
+ *  - Guests (share link + passcode, no account) send the guest pass the
+ *    nursery's room issued instead (see guest.ts).
  */
 
 import { accessToken, supa } from '../account';
 import { WORKER_BASE } from '../config';
+import { clearGuest, loadGuest } from './guest';
 import type { MonMode, MonRole, MonServerMsg } from './protocol';
 
 export interface Nursery {
@@ -139,8 +142,10 @@ export function openMonitorSocket(
 
   const connect = async () => {
     onStatus(attempts === 0 ? 'connecting' : 'reconnecting');
-    const token = await accessToken();
-    if (!token) {
+    // A guest pass for this nursery wins on the watch screen; members otherwise.
+    const guest = mode === 'viewer' ? loadGuest(nid) : null;
+    const token = guest ? null : await accessToken();
+    if (!token && !guest) {
       onStatus('closed', 'Sign in to use the baby monitor.');
       return;
     }
@@ -154,7 +159,7 @@ export function openMonitorSocket(
       try {
         tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       } catch { /* no Intl zone */ }
-      ws?.send(JSON.stringify({ t: 'auth', token, mode, dev: dev.id, dn: dev.name, tz }));
+      ws?.send(JSON.stringify(guest ? { t: 'auth', guest: guest.token, mode, dev: dev.id, dn: dev.name } : { t: 'auth', token, mode, dev: dev.id, dn: dev.name, tz }));
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') {
@@ -175,6 +180,8 @@ export function openMonitorSocket(
       window.clearInterval(ping);
       if (closedByUs) return;
       if (FINAL.has(ev.code) && ev.code !== 4001) {
+        // A removed or expired guest pass is gone for good on this device.
+        if (guest && ev.code === 4004) clearGuest(nid);
         onStatus('closed', lastError);
         return;
       }

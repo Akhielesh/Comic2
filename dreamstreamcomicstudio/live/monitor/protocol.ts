@@ -65,6 +65,22 @@ export interface ViewerPresence {
   role: MonRole;
   dn: string;
   relay: boolean;
+  /** Joined with the share link + passcode (no account). */
+  guest?: boolean;
+}
+
+/** Guest access, as parents see it (never the passcode). */
+export interface ShareInfo {
+  on: boolean;
+  /** The link's secret part (…/join/<nursery>/<code>). */
+  code: string | null;
+  role: 'viewer' | 'caregiver';
+  created_at: number | null;
+  created_by: string | null;
+  expires_at: number | null;
+  /** Too many wrong passcodes: nobody can join until then. */
+  locked_until: number | null;
+  guests: { id: string; name: string; role: 'viewer' | 'caregiver'; created_at: number; last_seen: number; expires_at: number }[];
 }
 
 export type MonLogKind =
@@ -225,7 +241,7 @@ export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'v
 export type MonServerMsg =
   | {
       t: 'hello';
-      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string };
+      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string; guest?: boolean };
       nursery: { id: string; name: string; baby: string | null };
       cams: CamPresence[];
       viewers: ViewerPresence[];
@@ -239,6 +255,8 @@ export type MonServerMsg =
       vapid: string | null;
     }
   | { t: 'presence'; cams: CamPresence[]; viewers: ViewerPresence[] }
+  | { t: 'share'; share: ShareInfo }
+  | { t: 'share_err'; msg: string }
   | { t: 'rtc'; from: string; d: MonRtc; name?: string; label?: string | null; role?: MonRole }
   | { t: 'status'; dev: string; sid: string; st: CamStatus; at: number }
   | { t: 'log'; entry: MonLog }

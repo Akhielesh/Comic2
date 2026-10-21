@@ -7,7 +7,7 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 
 const TITLES = {
   cry: '👶 ', fuss: '👶 ', cough: '🤧 ', alarm: '🚨 ', crash: '💥 ', glass: '💥 ', zone: '🚨 ', cat: '🐈 ', loud: '🔊 ', noise: '🔊 ',
-  camera: '📷 ', offline: '⚠️ ', battery: '🔋 ', report: '🌙 ', insight: '💡 ', test: '✅ ',
+  camera: '📷 ', offline: '⚠️ ', battery: '🔋 ', report: '🌙 ', insight: '💡 ', guest: '🔗 ', test: '✅ ',
 };
 // Wake the phone and keep the notification up until it's handled.
 const URGENT = new Set(['cry', 'alarm', 'zone', 'glass', 'offline']);
@@ -19,6 +19,7 @@ const VIBRATE = {
   offline: [300, 120, 300, 120, 600],
   report: [80],
   insight: [80],
+  guest: [80, 60, 80],
 };
 
 self.addEventListener('push', (event) => {

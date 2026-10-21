@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
-import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
+import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
 import { ViewerLink, type LinkState, type Quality } from '../monitor/rtc';
@@ -20,8 +20,11 @@ import { markSetup } from '../monitor/setupProgress';
 import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
 import { Btn, Meter, Pill, Segmented, Toggle, cx, useMediaQuery, type PushToast } from '../ui/primitives';
-import { ScreenWakeLock } from '../wakeLock';
+import { ScreenWakeLock, type WakeState } from '../wakeLock';
+import { BedsideView } from './monitor/BedsideView';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
+import { clearGuest, loadGuest, type GuestPass } from '../monitor/guest';
+import { PeopleCard } from './monitor/PeopleCard';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { NurserySettings } from './monitor/NurserySettings';
 import { SafetyCard } from './monitor/SafetyCard';
@@ -45,10 +48,11 @@ const PUSH_CATS: { k: string; label: string; locked?: boolean }[] = [
   { k: 'noise', label: 'Very loud noise (85 dB+)' }, { k: 'camera', label: 'Camera moved or knocked' }, { k: 'cat', label: 'Cat in the nursery' },
   { k: 'offline', label: 'Camera offline' }, { k: 'battery', label: 'Camera battery low' }, { k: 'report', label: 'Morning sleep report' },
   { k: 'insight', label: 'Sound machine too loud' }, { k: 'fuss', label: 'Fussing' }, { k: 'loud', label: 'Noise above your threshold' },
+  { k: 'guest', label: 'New guests & wrong passcodes (parents)' },
 ];
 const DEFAULT_PUSH: Record<string, boolean> = {
   cry: true, alarm: true, zone: true, glass: true, crash: true, cough: true, noise: true, camera: true, cat: true,
-  offline: true, battery: true, report: true, insight: true, fuss: false, loud: false,
+  offline: true, battery: true, report: true, insight: true, fuss: false, loud: false, guest: true,
 };
 
 const fmtTime = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -115,8 +119,20 @@ interface ActiveAlert {
 }
 
 type LogFilter = 'all' | 'baby' | 'alerts' | 'care' | 'room';
+/** monitor: the picture and what needs you · all: every card · bedside: the nightstand view. */
+type ViewMode = 'monitor' | 'all' | 'bedside';
+const VIEW_KEY = 'ds-monitor-view';
+/** Log lines worth showing on the nightstand ("Cried 3 min · 2:14"). */
+const BEDSIDE_KINDS = new Set(['cry', 'cry_end', 'fuss', 'fuss_end', 'cough', 'asleep', 'woke', 'resettled', 'zone', 'crib_out', 'alarm', 'glass', 'crash', 'very_loud', 'feed', 'diaper', 'sleep', 'wake', 'note', 'ack', 'resolved']);
+const canPip = () =>
+  typeof document !== 'undefined' &&
+  ((document as Document & { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled === true ||
+    typeof (HTMLVideoElement.prototype as unknown as { webkitSetPresentationMode?: unknown }).webkitSetPresentationMode === 'function');
 
 export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: PushToast }) {
+  // Guests (share link + passcode) watch without an account.
+  const [guest, setGuest] = useState(() => loadGuest(id));
+  if (guest) return <ViewerInner id={id} nav={nav} push={push} guest={guest} onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }} />;
   return (
     <MonitorGate>
       <ViewerInner id={id} nav={nav} push={push} />
@@ -124,7 +140,7 @@ export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: P
   );
 }
 
-function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast }) {
+function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void }) {
   const sockRef = useRef<MonitorSocket | null>(null);
   const linkRef = useRef<ViewerLink | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -141,6 +157,8 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [reconnectKey, setReconnectKey] = useState(0);
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
   const [closedMsg, setClosedMsg] = useState<string | null>(null);
+  const [share, setShare] = useState<ShareInfo | null>(null);
+  const [shareErr, setShareErr] = useState<string | null>(null);
   const [me, setMe] = useState<{ sid: string; uid: string; role: MonRole; name: string; label: string | null } | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [cams, setCams] = useState<CamPresence[]>([]);
@@ -170,6 +188,15 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [pushOn, setPushOn] = useState(false);
   const [pushPrefs, setPushPrefs] = useState<Record<string, boolean>>(DEFAULT_PUSH);
   const [keepAwake, setKeepAwake] = useState(false);
+  const [wake, setWake] = useState<WakeState>('none');
+  const [view, setViewState] = useState<ViewMode>(() => {
+    try {
+      const v = localStorage.getItem(VIEW_KEY);
+      if (v === 'monitor' || v === 'all') return v;
+    } catch { /* storage unavailable */ }
+    return typeof window !== 'undefined' && window.matchMedia?.('(min-width: 980px)').matches ? 'all' : 'monitor';
+  });
+  const [pip, setPip] = useState(false);
   const [logFilter, setLogFilter] = useState<LogFilter>('all');
   const [note, setNote] = useState('');
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -351,7 +378,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         statusRef.current = st;
         setStatus(st);
         setCamSid((cur) => pickCam(m.cams, cur));
-        markSetup(id, 'watch');
+        if (!guest) markSetup(id, 'watch');
         try {
           const focus = sessionStorage.getItem(FOCUS_KEY);
           if (focus) {
@@ -368,6 +395,13 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         void restorePush();
         break;
       }
+      case 'share':
+        setShare(m.share);
+        setShareErr(null);
+        break;
+      case 'share_err':
+        setShareErr(m.msg);
+        break;
       case 'presence':
         if (m.cams.length) markSetup(id, 'camera');
         setCams(m.cams);
@@ -539,10 +573,45 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   }, [linkState, cam?.dev]);
 
   useEffect(() => {
-    if (keepAwake) void wakeRef.current.enable();
+    wakeRef.current.onChange = setWake;
+    if (keepAwake || view === 'bedside') void wakeRef.current.enable();
     else void wakeRef.current.disable();
     return () => void wakeRef.current.disable();
-  }, [keepAwake]);
+  }, [keepAwake, view]);
+
+  const setView = (v: ViewMode) => {
+    setViewState(v);
+    if (v !== 'bedside') {
+      try {
+        localStorage.setItem(VIEW_KEY, v);
+      } catch { /* storage unavailable */ }
+    }
+  };
+
+  /** Pop the picture out (system picture-in-picture) to keep watching in other apps. */
+  const togglePip = async () => {
+    const v = videoRef.current as (HTMLVideoElement & { webkitSetPresentationMode?: (m: string) => void; webkitPresentationMode?: string }) | null;
+    if (!v) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (v.requestPictureInPicture) await v.requestPictureInPicture();
+      else v.webkitSetPresentationMode?.(v.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+    } catch {
+      push('This browser can’t pop the video out right now', { icon: 'info' });
+    }
+  };
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const on = () => setPip(true);
+    const off = () => setPip(false);
+    v.addEventListener('enterpictureinpicture', on);
+    v.addEventListener('leavepictureinpicture', off);
+    return () => {
+      v.removeEventListener('enterpictureinpicture', on);
+      v.removeEventListener('leavepictureinpicture', off);
+    };
+  }, [hasVideo]);
 
   /* ----------------------------------------------------------- actions */
   const listen = (on = true) => {
@@ -774,8 +843,14 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       <div className="page page-narrow">
         <div className="banner warn"><Icon name="lock" size={15} />{closedMsg}</div>
         <div className="row" style={{ marginTop: 14 }}>
-          <Btn variant="ghost" icon="arrowLeft" onClick={() => nav.monitor()}>All nurseries</Btn>
-          <Btn variant="solid" icon="refresh" onClick={() => setReconnectKey((k) => k + 1)}>Try again</Btn>
+          {guest ? (
+            <Btn variant="ghost" icon="logout" onClick={() => onLeave?.()}>Close</Btn>
+          ) : (
+            <>
+              <Btn variant="ghost" icon="arrowLeft" onClick={() => nav.monitor()}>All nurseries</Btn>
+              <Btn variant="solid" icon="refresh" onClick={() => setReconnectKey((k) => k + 1)}>Try again</Btn>
+            </>
+          )}
         </div>
       </div>
     );
@@ -823,10 +898,13 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           </span>
         )}
         {relayOn && <span className="ov-pill">Low-bandwidth · 1 fps · no audio</span>}
-        {linkState === 'connected' && <span className="ov-pill"><Icon name="lock" size={11} />Encrypted · P2P</span>}
+        {linkState === 'connected' && <span className="ov-pill p2p" title="Encrypted, device-to-device"><Icon name="lock" size={11} /><span>Encrypted · P2P</span></span>}
       </div>
       <div className="mv-ov-tr">
         <button className="mv-mini" onClick={() => setNight((v) => !v)} aria-pressed={night} aria-label="Night view" title="Night view"><Icon name="moon" size={16} /></button>
+        {hasVideo && canPip() && (
+          <button className="mv-mini" onClick={() => void togglePip()} aria-pressed={pip} aria-label="Pop out the video" title="Pop out — keep watching in other apps"><Icon name="layers" size={16} /></button>
+        )}
         <button className="mv-mini" onClick={fullscreen} aria-label="Fullscreen" title="Fullscreen"><Icon name="maximize" size={16} /></button>
       </div>
       {cam && muted && hasVideo && (
@@ -1119,7 +1197,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         })}
       </div>
       <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 12 }}>
-        <Toggle size="sm" on={keepAwake} onChange={setKeepAwake} label="Keep screen on" />Keep this screen on (bedside mode)
+        <Toggle size="sm" on={keepAwake} onChange={setKeepAwake} label="Keep screen on" />Keep this screen on (Bedside view does this for you)
       </label>
       <label className="row" style={{ gap: 8, fontSize: 13, marginTop: 8 }}>
         <Toggle size="sm" on={silentHere} onChange={(v) => { setSilentHere(v); writeFlag(`ds-monitor-silent-${id}`, v); }} label="Silent alerts on this device" />
@@ -1132,37 +1210,61 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     </div>
   );
 
-  const peopleCard = (
-    <div className="card card-pad">
-      <div className="mv-sect-title">Watching now</div>
-      <div className="watch-list">
-        {viewers.map((v) => (
-          <div key={v.sid} className="watch-row">
-            <span className="watch-name">{v.label || v.name}{v.sid === me?.sid ? ' (you)' : ''}</span>
-            <span className="faint">{v.dn} · {ROLE_INFO[v.role].label}{v.relay ? ' · low-bandwidth' : ''}</span>
-          </div>
-        ))}
-      </div>
-      {me?.role === 'parent' && viewers.length > 1 && (
-        <Btn variant="danger" size="sm" icon="x" onClick={() => {
-          if (window.confirm('Disconnect everyone else watching right now? They can rejoin if they’re still members.')) sockRef.current?.send({ t: 'end_all' });
-        }}>End other sessions</Btn>
-      )}
-    </div>
+  const lastLine = [...log].reverse().find((e) => BEDSIDE_KINDS.has(e.kind)) ?? null;
+  const bedside = view === 'bedside' && (
+    <BedsideView
+      stream={(videoRef.current?.srcObject as MediaStream | null) ?? null}
+      baby={baby}
+      state={{ label: info.label, tone: info.tone, sub: info.sub }}
+      db={camStatus?.st.spl && state !== 'offline' && state !== 'unknown' ? camStatus.st.spl.db : null}
+      approx={!camStatus?.st.spl?.cal}
+      last={lastLine ? { text: lastLine.msg.split(' · ')[0], at: lastLine.at } : null}
+      alert={
+        top && !top.ended
+          ? {
+              title: top.title,
+              icon: alertInfo(top.cat).icon,
+              tone: alertInfo(top.cat).tone,
+              ringing: !top.acked,
+              sub: top.acked ? `${top.acked === 'You' ? 'You are' : `${top.acked} is`} checking on it` : 'No one has responded yet',
+            }
+          : null
+      }
+      muted={muted}
+      canAct={canAct}
+      talking={talk === 'on'}
+      wake={wake}
+      onListen={(on) => listen(on)}
+      onTalkDown={onTalkDown}
+      onTalkUp={onTalkUp}
+      onAck={() => top && ack(top)}
+      onExit={() => setView('monitor')}
+    />
   );
 
   return (
-    <div className="mv-page fade-in">
+    <div className={cx('mv-page fade-in', `mode-${view}`)}>
+      {bedside}
       {takeover}
       <div className="mv-top">
-        <button className="iconbtn" onClick={() => nav.nursery(id)} aria-label="Back"><Icon name="arrowLeft" size={17} /></button>
+        {!guest && <button className="iconbtn" onClick={() => nav.nursery(id)} aria-label="Back"><Icon name="arrowLeft" size={17} /></button>}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="mv-title">{nursery.name}</div>
+          <div className="mv-title">{nursery.name}{guest && <span className="pill-guest sm">Guest</span>}</div>
           <div className="faint" style={{ fontSize: 12 }}>
             {sock === 'connected' ? `${getDevice().name} · ${me ? ROLE_INFO[me.role].label : ''}` : sock === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
           </div>
         </div>
-        <Pill tone="neutral" icon="eye">{viewers.length}</Pill>
+        <div className="mv-views" role="radiogroup" aria-label="Layout" data-tour="mv-views">
+          <button role="radio" aria-checked={view === 'monitor'} className={cx(view === 'monitor' && 'sel')} onClick={() => setView('monitor')} title="Monitor — the picture and what needs you">
+            <Icon name="video" size={15} /><span>Monitor</span>
+          </button>
+          <button role="radio" aria-checked={view === 'all'} className={cx(view === 'all' && 'sel')} onClick={() => setView('all')} title="Everything — sleep, sound level, logs and settings">
+            <Icon name="grid" size={15} /><span>All</span>
+          </button>
+          <button role="radio" aria-checked={false} onClick={() => setView('bedside')} title="Bedside — a dark nightstand view that dims itself">
+            <Icon name="moon" size={15} /><span>Bedside</span>
+          </button>
+        </div>
         <HelpButton />
       </div>
       {alertStack}
@@ -1198,14 +1300,45 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             onResolve={resolveIncident}
             onDuty={(on) => sockRef.current?.send({ t: 'duty', on, hours: 12 })}
             onZones={() => (hasVideo ? setZoneEdit(true) : push('Wait for the live picture, then mark the zones', { icon: 'info' }))}
+            compact={view === 'monitor'}
           />
+          {view === 'monitor' ? (
+            <button className="mv-more" onClick={() => setView('all')}>
+              <Icon name="grid" size={15} />
+              <span>Sleep, sound level, activity log, alerts &amp; people</span>
+              <Icon name="chevronRight" size={15} />
+            </button>
+          ) : (
+          <>
           <SleepCard query={query} sleep={sleep} tz={settings.tz} baby={baby} hasCrib={camZones.some((z) => z.kind === 'crib')} tracking={settings.sleepTracking !== false} onOpenReport={(session) => setReport({ session })} />
           <SoundLevelCard query={query} dev={cam?.dev ?? null} spl={camStatus?.st.spl} online={!!cam && state !== 'offline' && state !== 'unknown'} liveMinutes={liveMinutes} tz={settings.tz} machineCheck={settings.machineCheck !== false} />
           {timeline}
           {activity}
           {alertsCard}
-          <NurserySettings nid={id} nurseryName={nursery.name} role={me?.role ?? null} settings={settings} send={(msg) => sockRef.current?.send(msg)} push={push} />
-          {peopleCard}
+          {!guest && <NurserySettings nid={id} nurseryName={nursery.name} role={me?.role ?? null} settings={settings} send={(msg) => sockRef.current?.send(msg)} push={push} />}
+          <PeopleCard
+            nid={id}
+            me={me}
+            guest={!!guest}
+            viewers={viewers}
+            share={share}
+            shareErr={shareErr}
+            baby={baby}
+            nurseryName={nursery.name}
+            send={(msg) => {
+              setShareErr(null);
+              sockRef.current?.send(msg);
+            }}
+            push={push}
+            onLeave={() => {
+              if (window.confirm('Leave this nursery? You’ll need the link and passcode to come back.')) {
+                sockRef.current?.send({ t: 'bye' });
+                onLeave?.();
+              }
+            }}
+          />
+          </>
+          )}
         </div>
       </div>
       {report && (

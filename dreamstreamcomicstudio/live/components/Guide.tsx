@@ -50,13 +50,17 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'people', title: 'People & roles', body: 'Search people by name to add them, then pick a role — Parent, Caregiver or Viewer — and how they appear (Grandma, Nanny…). Removing someone cuts them off immediately.' },
   ],
   watch: [
-    { target: 'mv-stage', title: 'Live nursery view', body: 'Tap Listen (or “Tap to hear”) to unmute. The frame glows in the alert’s colour when something needs you. Night view (moon) brightens dark rooms.' },
+    { target: 'mv-views', title: 'Pick a layout', body: 'Monitor shows the picture and what needs you. All adds sleep, sound level, logs and settings. Bedside is a dark nightstand view with a big clock that dims itself and lights up for alerts. Turn your phone sideways for a full-screen picture.' },
+    { target: 'mv-stage', title: 'Live nursery view', body: 'Tap Listen (or “Tap to hear”) to unmute. The frame glows in the alert’s colour when something needs you. Night view (moon) brightens dark rooms; Pop out keeps the picture floating while you use other apps.' },
     { target: 'mv-talk', title: 'Talk — like FaceTime', body: 'Tap to open your mic and tap again to stop, or press and hold to talk only while holding. Your voice plays on the nursery phone; it won’t trigger a cry alert.' },
     { target: 'mv-call', title: 'Video call the nursery', body: 'Shows your face full-screen on the nursery phone (best when it uses its front camera). Your mic turns on with it.' },
     { target: 'mv-status', title: 'What’s happening now', body: 'Mood, what the smart ears are hearing right now, and the last 2 minutes of sound — all analysed on the camera phone.' },
     { target: 'mv-activity', title: 'Activity log', body: 'Every cry (and how long it lasted), cough, wake-up, feed and note. Filter by Baby sounds, Alerts, Care or Camera.' },
     { target: 'mv-alerts', title: 'Alerts your way', body: 'Background notifications per category, plus alert sounds, spoken alerts and vibration while this screen is open. Tap Preview to hear each sound.' },
+    { target: 'mv-safety', title: 'Safety at a glance', body: 'Anything that needs someone shows here with “I’m on it”, plus every guard the camera runs and how to fix one that isn’t working. Take duty and routine alerts come to you first.' },
+    { target: 'mv-sound', title: 'Sound level', body: 'The room in decibels, live and over the last hours — and a nudge if a sound machine runs louder than the 50 dB sleep guideline.' },
     { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
+    { target: 'mv-people', title: 'People & sharing', body: 'Who’s watching right now. Parents can share a guest link with a passcode for family without an account — and remove anyone in one tap.' },
   ],
   camera: [
     { title: 'Make this the nursery camera', body: 'Frame the crib, let the checks turn green, then start. It works like a private FaceTime call: live to your family, never recorded.' },
@@ -312,6 +316,17 @@ export const GUIDES: HowTo[] = [
       { title: 'Add someone', body: 'Nursery → People & roles → search their name → choose a role and how they appear (Grandma, Nanny…) → Add.' },
       { title: 'Roles', body: 'Parent: everything, including people and settings. Caregiver: watch, talk, video call, soothe, run a camera, log. Viewer: watch, listen and get alerts.' },
       { title: 'Removing someone', body: 'Remove them in People & roles — any open session is cut off immediately.' },
+      { title: 'No account? Share a link', body: 'Watch → People → Create a share link. Choose a passcode (8+ characters — “Suggest one” makes a memorable one), what guests can do, and how long the link works. Send the link, then tell them the passcode by phone or in a different app.' },
+    ],
+  },
+  {
+    id: 'share', title: 'Share with a guest link & passcode', icon: 'link', mins: 1, screens: ['watch', 'nursery'],
+    intro: 'For grandparents, a sitter or a friend without an account. They need both the link and the passcode you choose.',
+    steps: [
+      { title: 'Create it', body: 'Watch → People → Create a share link. Pick a passcode, “Watch & listen” or “Also talk, soothe & answer alerts”, and 1 day, 7 days, 30 days or until you turn it off.' },
+      { title: 'Send it safely', body: 'Send the link (Copy or Send), and say the passcode out loud or send it in a different app. The passcode is shown once — we only keep a scrambled version of it.' },
+      { title: 'Stay in control', body: 'You’re told when a guest joins. People shows every guest with when they last watched — Remove ends their pass at once. New link & passcode, or Turn off, signs every guest out.' },
+      { title: 'If someone guesses', body: '5 wrong passcodes lock the link for 15 minutes and 20 turn it off — the parents get a notification either way.' },
     ],
   },
   {
@@ -362,6 +377,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'What is the welcome code?', a: 'An invite code required for new accounts. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
       { q: 'I already had a DreamStream account', a: 'Just sign in — accounts created before Stream Studio accounts launched are unlocked automatically.' },
       { q: 'Finding people', a: 'In a nursery’s People & roles, search by the person’s name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory' },
+      { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent can make a guest link with a passcode (Watch → People → Create a share link). Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents' },
     ],
   },
   {

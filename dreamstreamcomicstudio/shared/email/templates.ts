@@ -10,7 +10,7 @@
 // by the Worker (/send), the Supabase auth hook, or the preview script. Always wrap dynamic
 // values with escapeHtml on the HTML side.
 
-import { BrandConfig, resolveBrand } from './theme.js';
+import { BrandConfig, COLORS, resolveBrand } from './theme.js';
 import {
   button,
   codeBadge,
@@ -49,7 +49,8 @@ export type EmailTemplateName =
   | 'auth-recovery'
   | 'auth-email-change'
   | 'auth-reauthentication'
-  | 'auth-invite';
+  | 'auth-invite'
+  | 'auth-security-notice';
 
 /**
  * Essential = a required account / security / transactional notice. These are NEVER
@@ -77,7 +78,10 @@ export const TEMPLATE_KIND: Record<EmailTemplateName, EmailKind> = {
   'auth-recovery': 'essential',
   'auth-email-change': 'essential',
   'auth-reauthentication': 'essential',
-  'auth-invite': 'essential'
+  'auth-invite': 'essential',
+  // Supabase security notifications (password/email/phone changed, sign-in method or 2-step
+  // method added/removed) — required account-security mail.
+  'auth-security-notice': 'essential'
 };
 
 export const EMAIL_TEMPLATE_NAMES = Object.keys(TEMPLATE_KIND) as EmailTemplateName[];
@@ -111,7 +115,9 @@ export const SENDER_ROLE: Record<EmailTemplateName, SenderRole> = {
   'auth-recovery': 'no-reply',
   'auth-email-change': 'no-reply',
   'auth-reauthentication': 'no-reply',
-  'auth-invite': 'no-reply'
+  'auth-invite': 'no-reply',
+  // Like signin-alert: the copy says "contact support", so replies should reach a human.
+  'auth-security-notice': 'notifications'
 };
 
 export const senderRoleFor = (name: EmailTemplateName): SenderRole => SENDER_ROLE[name];
@@ -609,12 +615,34 @@ const signinAlert: Renderer = (params, brand) => {
 };
 
 // ── Supabase auth-hook templates (link- or code-based) ──────────────────────────
+// Plain-text twin of a small inline-HTML string (tags stripped, the few entities we emit decoded).
+const htmlToText = (html: string): string =>
+  html
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+
 const authLink = (
-  opts: { subjectVerb: string; title: string; intro: string; cta: string; variant?: 'yellow' | 'blue'; preheader: string },
+  opts: {
+    subjectVerb: string;
+    title: string;
+    intro: string;
+    cta: string;
+    variant?: 'yellow' | 'blue';
+    preheader: string;
+    /** Extra safe-HTML line under the code (e.g. "we also emailed your other address"). */
+    note?: string;
+    /** Replaces the default "didn't request it? ignore this email" line. */
+    ignoreLine?: string;
+  },
   params: EmailParams,
   brand: BrandConfig
 ): TemplateOutput => {
   const url = params.actionUrl || brand.appUrl;
+  const ignoreLine = opts.ignoreLine ?? "If you didn't request it, you can ignore this email.";
   return {
     subject: `${opts.subjectVerb} — ${brand.productName}`,
     preheader: opts.preheader,
@@ -624,14 +652,16 @@ const authLink = (
       button(opts.cta, url, opts.variant ?? 'blue') +
       linkFallback(url) +
       (params.token ? muted(`Or enter this code: <strong>${escapeHtml(params.token)}</strong>`) : '') +
-      muted("This link expires soon for your security. If you didn't request it, you can ignore this email."),
+      (opts.note ? muted(opts.note) : '') +
+      muted(`This link expires soon for your security. ${ignoreLine}`),
     text: [
-      opts.intro.replace(/<[^>]+>/g, ''),
+      htmlToText(opts.intro),
       '',
       `${opts.cta}: ${url}`,
       params.token ? `Code: ${params.token}` : '',
+      opts.note ? htmlToText(opts.note) : '',
       '',
-      "This link expires soon. If you didn't request it, ignore this email."
+      `This link expires soon. ${htmlToText(ignoreLine)}`
     ]
       .filter(Boolean)
       .join('\n')
@@ -652,18 +682,45 @@ const authConfirmSignup: Renderer = (params, brand) =>
     brand
   );
 
-const authMagicLink: Renderer = (params, brand) =>
-  authLink(
-    {
-      subjectVerb: 'Your sign-in link',
-      title: 'Sign in to your account',
-      intro: `Tap below to securely sign in to ${escapeHtml(brand.productName)}.`,
-      cta: 'Sign in',
-      preheader: 'Your magic sign-in link is ready.'
-    },
-    params,
-    brand
-  );
+// Magic link, or (params.codeFirst — Supabase's `email` OTP action) a code-first variant:
+// the 6-digit code is the hero and the one-tap link is the backup.
+const authMagicLink: Renderer = (params, brand) => {
+  if (!params.codeFirst || !params.token) {
+    return authLink(
+      {
+        subjectVerb: 'Your sign-in link',
+        title: 'Sign in to your account',
+        intro: `Tap below to securely sign in to ${escapeHtml(brand.productName)}.`,
+        cta: 'Sign in',
+        preheader: 'Your magic sign-in link is ready.'
+      },
+      params,
+      brand
+    );
+  }
+  const url = params.actionUrl || brand.appUrl;
+  return {
+    subject: `Your sign-in code — ${brand.productName}`,
+    preheader: 'Your sign-in code is inside.',
+    content:
+      heading('Your sign-in code') +
+      paragraph(`Enter this code in ${escapeHtml(brand.productName)} to sign in:`) +
+      codeBadge(params.token) +
+      paragraph('Or sign in with one tap:') +
+      button('Sign in', url, 'blue') +
+      linkFallback(url) +
+      muted("This code expires soon for your security. If you didn't request it, you can ignore this email."),
+    text: [
+      `Enter this code in ${brand.productName} to sign in:`,
+      '',
+      params.token,
+      '',
+      `Or sign in with one tap: ${url}`,
+      '',
+      "This code expires soon. If you didn't request it, ignore this email."
+    ].join('\n')
+  };
+};
 
 const authRecovery: Renderer = (params, brand) =>
   authLink(
@@ -678,25 +735,53 @@ const authRecovery: Renderer = (params, brand) =>
     brand
   );
 
-const authEmailChange: Renderer = (params, brand) =>
-  authLink(
+// Email change. `emailChangeStep` picks the recipient's side: 'new' (default — confirm the new
+// address) or 'current' (Secure Email Change: approve the change from the address on file).
+// `bothRequired` = Secure Email Change is on, so the change lands only once BOTH links are used.
+const authEmailChange: Renderer = (params, brand) => {
+  const product = escapeHtml(brand.productName);
+  const newEmail = params.newEmail ? `<strong>${escapeHtml(params.newEmail)}</strong>` : 'a new address';
+  if (params.emailChangeStep === 'current') {
+    return authLink(
+      {
+        subjectVerb: 'Approve your email change',
+        title: 'Approve your email change',
+        intro: `We got a request to change the email on your ${product} account to ${newEmail}. Tap below to approve it from this address.`,
+        cta: 'Approve change',
+        preheader: 'Approve the email change on your account.',
+        note: params.bothRequired
+          ? 'We also sent a link to the new address — the change completes once both links are confirmed.'
+          : undefined,
+        ignoreLine: "Didn't ask for this? Don't tap anything — your email stays the same. Consider changing your password."
+      },
+      params,
+      brand
+    );
+  }
+  return authLink(
     {
       subjectVerb: 'Confirm your new email',
       title: 'Confirm your new email',
       intro: params.newEmail
-        ? `Confirm changing your ${escapeHtml(brand.productName)} email to <strong>${escapeHtml(params.newEmail)}</strong>.`
-        : `Confirm your new email address for ${escapeHtml(brand.productName)}.`,
+        ? `Confirm changing your ${product} email to ${newEmail}.`
+        : `Confirm your new email address for ${product}.`,
       cta: 'Confirm new email',
-      preheader: 'Confirm your new email address.'
+      preheader: 'Confirm your new email address.',
+      note: params.bothRequired
+        ? `For your security we also sent a link to ${
+            params.currentEmail ? `<strong>${escapeHtml(params.currentEmail)}</strong>` : 'your current address'
+          } — the change completes once both links are confirmed.`
+        : undefined
     },
     params,
     brand
   );
+};
 
 const authInvite: Renderer = (params, brand) =>
   authLink(
     {
-      subjectVerb: `You're invited to ${brand.productName}`,
+      subjectVerb: "You're invited",
       title: `You're invited! 🎟️`,
       intro: `You've been invited to join ${escapeHtml(brand.productName)}. Accept your invite to set up your account.`,
       cta: 'Accept invite',
@@ -727,6 +812,124 @@ const authReauthentication: Renderer = (params, brand) => {
   };
 };
 
+// ── Supabase security notifications (password/email/phone changed, sign-in or 2-step method
+// linked/removed). One concise template; `notice` is the action type minus `_notification`.
+const PROVIDER_LABELS: Record<string, string> = {
+  google: 'Google',
+  github: 'GitHub',
+  apple: 'Apple',
+  azure: 'Microsoft',
+  facebook: 'Facebook',
+  discord: 'Discord',
+  twitter: 'X (Twitter)',
+  linkedin_oidc: 'LinkedIn',
+  email: 'Email & password',
+  phone: 'Phone'
+};
+const FACTOR_LABELS: Record<string, string> = { totp: 'authenticator app', phone: 'phone number (SMS)', webauthn: 'security key or passkey' };
+
+const providerLabel = (provider?: string): string => {
+  const p = (provider || '').trim();
+  if (!p) return 'A sign-in provider';
+  return PROVIDER_LABELS[p.toLowerCase()] || p.charAt(0).toUpperCase() + p.slice(1);
+};
+const factorLabel = (factor?: string): string => {
+  const f = (factor || '').trim();
+  return f ? FACTOR_LABELS[f.toLowerCase()] || f : 'verification method';
+};
+
+/** Subject + heading + one-line summary (plain text — escaped where it lands in HTML). */
+const securityNoticeCopy = (params: EmailParams, product: string): { subject: string; title: string; summary: string } => {
+  const from = (v?: string) => (v ? ` from ${v}` : '');
+  const to = (v?: string) => (v ? ` to ${v}` : '');
+  switch (params.notice) {
+    case 'password_changed':
+      return { subject: 'Your password was changed', title: 'Password changed', summary: `The password for your ${product} account was just changed.` };
+    case 'email_changed':
+      return {
+        subject: 'Your account email was changed',
+        title: 'Email address changed',
+        summary: `The email on your ${product} account was changed${from(params.oldEmail)}${to(params.newEmail)}.`
+      };
+    case 'phone_changed':
+      return {
+        subject: 'Your phone number was changed',
+        title: 'Phone number changed',
+        summary: `The phone number on your ${product} account was changed${from(params.oldPhone)}${to(params.phone)}.`
+      };
+    case 'identity_linked':
+      return {
+        subject: 'A new sign-in method was linked',
+        title: 'Sign-in method added',
+        summary: `${providerLabel(params.provider)} was linked as a new way to sign in to your ${product} account.`
+      };
+    case 'identity_unlinked':
+      return {
+        subject: 'A sign-in method was removed',
+        title: 'Sign-in method removed',
+        summary: `${providerLabel(params.provider)} can no longer be used to sign in to your ${product} account.`
+      };
+    case 'mfa_factor_enrolled':
+      return {
+        subject: 'A 2-step verification method was added',
+        title: '2-step method added',
+        summary: `A new ${factorLabel(params.factorType)} was added to your ${product} account's 2-step verification.`
+      };
+    case 'mfa_factor_unenrolled':
+      return {
+        subject: 'A 2-step verification method was removed',
+        title: '2-step method removed',
+        summary: `A ${factorLabel(params.factorType)} was removed from your ${product} account's 2-step verification.`
+      };
+    default:
+      return {
+        subject: 'Your account security settings changed',
+        title: 'Account updated',
+        summary: `A security setting on your ${product} account was just changed.`
+      };
+  }
+};
+
+const authSecurityNotice: Renderer = (params, brand) => {
+  const copy = securityNoticeCopy(params, brand.productName);
+  const secureUrl = params.secureUrl || brand.appUrl;
+  const details = [
+    params.email ? `<strong>Account:</strong> ${escapeHtml(params.email)}` : '',
+    params.time ? `<strong>When:</strong> ${escapeHtml(params.time)}` : '',
+    params.ip ? `<strong>IP:</strong> ${escapeHtml(params.ip)}` : ''
+  ]
+    .filter(Boolean)
+    .join('<br/>');
+  const support = escapeHtml(brand.supportEmail);
+  return {
+    subject: `${copy.subject} — ${brand.productName}`,
+    preheader: copy.summary,
+    content:
+      heading(copy.title) +
+      paragraph(greetName(params)) +
+      paragraph(escapeHtml(copy.summary)) +
+      (details ? infoBox(details) : '') +
+      paragraph('If this was you, you’re all set — no action needed.') +
+      paragraph(
+        `<strong>Didn’t do this?</strong> Secure your account right away and let us know at <a href="mailto:${support}" style="color:${COLORS.blueDark};">${support}</a>.`
+      ) +
+      button('Secure my account', secureUrl, 'blue'),
+    text: [
+      greetNameText(params),
+      '',
+      copy.summary,
+      ...[
+        params.email ? `Account: ${params.email}` : '',
+        params.time ? `When: ${params.time}` : '',
+        params.ip ? `IP: ${params.ip}` : ''
+      ].filter(Boolean),
+      '',
+      'If this was you, no action is needed.',
+      `If not, secure your account: ${secureUrl} — and tell us at ${brand.supportEmail}.`
+    ].join('\n')
+  };
+};
+
 const RENDERERS: Record<EmailTemplateName, Renderer> = {
   'newsletter-confirm': newsletterConfirm,
   'newsletter-welcome': newsletterWelcome,
@@ -742,7 +945,8 @@ const RENDERERS: Record<EmailTemplateName, Renderer> = {
   'auth-recovery': authRecovery,
   'auth-email-change': authEmailChange,
   'auth-reauthentication': authReauthentication,
-  'auth-invite': authInvite
+  'auth-invite': authInvite,
+  'auth-security-notice': authSecurityNotice
 };
 
 /**
@@ -751,7 +955,9 @@ const RENDERERS: Record<EmailTemplateName, Renderer> = {
  *
  * Recognised params (all optional, per template): confirmUrl, actionUrl, ctaUrl, secureUrl,
  * unsubscribeUrl (marketing only), pixelUrl, firstName, token, newEmail, time, device,
- * location, ip, title, body, bodyHtml, subject.
+ * location, ip, title, body, bodyHtml, subject. Auth-hook extras: codeFirst (auth-magic-link),
+ * emailChangeStep / currentEmail / bothRequired (auth-email-change), notice / email / oldEmail /
+ * oldPhone / phone / provider / factorType (auth-security-notice).
  */
 export const renderEmail = (
   name: EmailTemplateName,

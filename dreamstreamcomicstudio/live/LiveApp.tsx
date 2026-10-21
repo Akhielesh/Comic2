@@ -27,6 +27,7 @@ const MonitorHome = lazy(() => import('./views/MonitorHome').then((m) => ({ defa
 const NurseryHub = lazy(() => import('./views/MonitorHome').then((m) => ({ default: m.NurseryHub })));
 const MonitorCamera = lazy(() => import('./views/MonitorCamera').then((m) => ({ default: m.MonitorCamera })));
 const MonitorViewer = lazy(() => import('./views/MonitorViewer').then((m) => ({ default: m.MonitorViewer })));
+const MonitorJoin = lazy(() => import('./views/MonitorJoin').then((m) => ({ default: m.MonitorJoin })));
 import { SettingsView } from './views/SettingsView';
 import { StudioView } from './views/StudioView';
 import { SummaryView } from './views/SummaryView';
@@ -39,6 +40,7 @@ import { Avatar, Btn, cx, useToasts, type PushToast } from './ui/primitives';
 export type Route =
   | { view: 'dashboard' | 'create' | 'settings' | 'monitor' }
   | { view: 'nursery' | 'monitor-camera' | 'monitor-watch'; nid: string }
+  | { view: 'monitor-join'; nid: string; code: string }
   | { view: 'studio' | 'summary'; id: string; k: string }
   | { view: 'guest'; id: string; g: string }
   | { view: 'summary-lookup'; id: string }
@@ -70,6 +72,9 @@ export function parseRoute(): Route {
   if (hash === 'create') return { view: 'create' };
   if (hash === 'settings' || hash === 'account') return { view: 'settings' };
   if (hash === 'monitor') return { view: 'monitor' };
+  // Share link: #/monitor/join/<nursery>/<code> (the passcode is typed, never in the link).
+  const join = hash.match(/^monitor\/join\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{16,64})$/);
+  if (join) return { view: 'monitor-join', nid: join[1], code: join[2] };
   const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch))?$/);
   if (mon) {
     if (mon[2] === 'camera') return { view: 'monitor-camera', nid: mon[1] };
@@ -291,6 +296,8 @@ export function LiveApp() {
         return <MonitorCamera id={route.nid} nav={nav} push={push} />;
       case 'monitor-watch':
         return <MonitorViewer id={route.nid} nav={nav} push={push} />;
+      case 'monitor-join':
+        return <MonitorJoin nid={route.nid} code={route.code} nav={nav} push={push} />;
       case 'dashboard':
       default:
         return <DashboardView nav={nav} push={push} />;
@@ -298,7 +305,7 @@ export function LiveApp() {
   };
 
   // Full-bleed surfaces own the whole viewport — no side rail.
-  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch'].includes(route.view);
+  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch', 'monitor-join'].includes(route.view);
   const activeNav =
     route.view === 'create' ? 'create'
     : route.view === 'settings' ? 'settings'

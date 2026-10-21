@@ -58,6 +58,13 @@ When a cap is hit the send is **skipped** (logged `status='rate_limited'`) and a
 raise `EMAIL_MAX_PER_MONTH` above 3,000.** Usage is countable any time from `email_log`
 (`status='sent'`) or via `getEmailUsageStatus()`.
 
+**Exception — Supabase auth emails.** Once the Send Email Hook is enabled
+(`docs/email/SETUP.md` §5), sign-up / reset / email-change mail goes Supabase →
+`dreamstream-email` `/auth-hook` → Cloudflare directly and does **not** pass the backend caps
+above. Its only throttle is Supabase's *Auth → Rate Limits → emails sent* setting — keep that
+at a level whose worst case (× 24 × 30) still fits your budget, and watch Cloudflare's Email
+Sending logs.
+
 ## Comparison
 
 | Provider | Per 1k | Free tier | Worker-native | Notes |

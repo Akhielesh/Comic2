@@ -20,6 +20,7 @@
  *   GET  /api/monitor/vapid                Web Push public key
  *   GET  /api/monitor/:nurseryId/ws        WebSocket → MonitorRoom (auth = first frame)
  *   GET  /api/monitor/:nurseryId/export    CSV history (Authorization: Bearer; parents & caregivers)
+ *   POST /api/monitor/:nurseryId/guest     share link + passcode → guest pass (no account)
  *
  * Creating an event requires a signed-in Stream Studio member (welcome-code
  * gated; verified against Supabase with the caller's own token). Watching
@@ -99,7 +100,7 @@ export default {
     const pathname = url.pathname.replace(/^\/live-api(?=\/)/, '');
 
     // ---------------------------------------------------------- baby monitor
-    const mon = pathname.match(/^\/api\/monitor\/(vapid|[0-9a-f-]{36})(?:\/(ws|export))?$/);
+    const mon = pathname.match(/^\/api\/monitor\/(vapid|[0-9a-f-]{36})(?:\/(ws|export|guest))?$/);
     if (mon) {
       try {
         if (mon[1] === 'vapid' && req.method === 'GET') {
@@ -113,6 +114,19 @@ export default {
             new Request(`https://monitor.internal/export${url.search}`, { headers: { authorization: req.headers.get('authorization') ?? '' } }),
           );
           return withCors(res, cors);
+        }
+        if (mon[2] === 'guest' && UUID_RE.test(mon[1]) && req.method === 'POST') {
+          // Share link + passcode → a guest pass. The room rate-limits and locks out guessing.
+          const body = await req.text();
+          if (body.length > 2048) return withCors(json({ ok: false, reason: 'bad_link' }, 413), cors);
+          const res = await env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(mon[1])).fetch(
+            new Request(`https://monitor.internal/guest?nid=${mon[1]}`, {
+              method: 'POST',
+              body,
+              headers: { 'content-type': 'application/json', 'cf-connecting-ip': req.headers.get('cf-connecting-ip') ?? '' },
+            }),
+          );
+          return withCors(new Response(res.body, { status: res.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), cors);
         }
         if (mon[2] === 'ws' && UUID_RE.test(mon[1])) {
           // Auth happens on the first frame inside the room (no tokens in URLs/logs).

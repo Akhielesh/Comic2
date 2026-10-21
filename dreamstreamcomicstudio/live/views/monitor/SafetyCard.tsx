@@ -1,7 +1,7 @@
 // Safety at a glance: open incidents (with who answered and how fast), what
 // the camera is watching for and whether each guard is working, and who is
 // on duty tonight.
-import React from 'react';
+import React, { useState } from 'react';
 import type { CamStatus, Duty, Incident, MonLog, MonRole, Zone } from '../../monitor/protocol';
 import type { LinkState } from '../../monitor/rtc';
 import { LEVEL_BAND_INFO, levelBand } from '../../monitor/soundLevel';
@@ -36,6 +36,7 @@ export function SafetyCard({
   onResolve,
   onDuty,
   onZones,
+  compact = false,
 }: {
   incidents: Incident[];
   duty: Duty | null;
@@ -52,7 +53,10 @@ export function SafetyCard({
   onResolve: (inc: Incident) => void;
   onDuty: (on: boolean) => void;
   onZones: () => void;
+  /** Monitor layout: only what needs attention, the full list one tap away. */
+  compact?: boolean;
 }) {
+  const [showAll, setShowAll] = useState(false);
   const canAct = me?.role === 'parent' || me?.role === 'caregiver';
   const open = incidents.filter((i) => i.status !== 'resolved');
   const smart = status?.model === 'ready';
@@ -106,6 +110,9 @@ export function SafetyCard({
       ];
   const issues = open.length + guards.filter((g) => g.state === 'bad').length;
   const mine = duty && me?.uid === duty.uid;
+  const needs = guards.filter((g) => g.state === 'bad' || g.state === 'warn');
+  const shown = compact && !showAll ? needs : guards;
+  const okCount = guards.filter((g) => g.state === 'ok').length;
 
   return (
     <div className="card card-pad safety-card" data-tour="mv-safety">
@@ -135,8 +142,11 @@ export function SafetyCard({
         </div>
       )}
 
+      {compact && !showAll && needs.length === 0 && (
+        <div className="guard-sum"><Icon name="check" size={14} stroke={2.4} />All {okCount} checks are working{guards.some((g) => g.state === 'off') ? ' · a few optional ones are off' : ''}</div>
+      )}
       <div className="guard-list">
-        {guards.map((g) => (
+        {shown.map((g) => (
           <div key={g.k} className={cx('guard', `st-${g.state}`)}>
             <span className="guard-dot">{g.state === 'ok' ? <Icon name="check" size={11} stroke={2.6} /> : g.state === 'off' ? '' : '!'}</span>
             <Icon name={g.icon} size={14} />
@@ -148,22 +158,27 @@ export function SafetyCard({
           </div>
         ))}
       </div>
+      {compact && (
+        <button className="linkish guard-more" onClick={() => setShowAll((v) => !v)}>
+          {showAll ? 'Show only what needs attention' : `See all ${guards.length} checks`}
+        </button>
+      )}
 
-      <div className="duty-row">
+      <div className={cx('duty-row', compact && 'compact')}>
         <Icon name="heart" size={15} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <b>{duty ? `${mine ? 'You are' : `${duty.name} is`} on duty` : 'No one on duty'}</b>
-          <small>
+          {(!compact || duty) && <small>
             {duty
               ? `Until ${fmtClock(duty.until, tz)} — crying and coughing alerts go to ${mine ? 'you' : duty.name} first. Smoke, danger zones and other hazards still reach everyone.`
               : `Everyone gets every alert. Take duty so routine alerts (crying, coughing) come to you first — if no one answers, the rest of the family is alerted.`}
-          </small>
+          </small>}
         </div>
         {canAct && (duty ? (mine || me?.role === 'parent') && <Btn variant="subtle" size="sm" onClick={() => onDuty(false)}>End duty</Btn> : <Btn variant="soft" size="sm" onClick={() => onDuty(true)}>Take duty · 12 h</Btn>)}
       </div>
-      <p className="faint" style={{ fontSize: 11.5, margin: '10px 0 0' }}>
+      {!compact && <p className="faint" style={{ fontSize: 11.5, margin: '10px 0 0' }}>
         {baby}’s monitor is an extra pair of eyes and ears, not a medical device — it can’t detect breathing, temperature or unsafe sleep positions.
-      </p>
+      </p>}
     </div>
   );
 }
