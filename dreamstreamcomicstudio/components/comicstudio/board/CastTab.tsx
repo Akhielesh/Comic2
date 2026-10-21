@@ -94,7 +94,8 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
     <Surface as="article" aria-label={c.name} data-testid="character-card" className="flex flex-col gap-2.5 p-3">
       <ImageFrame
         url={url}
-        aspect={SHEET_ASPECT}
+        // Extras without a sheet get a slim placeholder — they don't need one.
+        aspect={c.tier === 'extra' && !drawn && !busy && status !== 'failed' ? '5 / 2' : SHEET_ASPECT}
         alt={`${c.name} model sheet`}
         render={c.sheet}
         tone="paper"
@@ -195,6 +196,10 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
           {drawn ? (
             <GhostButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet}>
               <Sparkles className="h-3 w-3" aria-hidden /> Re-roll sheet <span className="text-[var(--ds-muted)]">≈ {formatUsd(price)}</span>
+            </GhostButton>
+          ) : c.tier === 'extra' ? (
+            <GhostButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet} title="Optional — extras stay on-model from their description">
+              <Sparkles className="h-3 w-3" aria-hidden /> Draw a sheet anyway <span className="text-[var(--ds-muted)]">≈ {formatUsd(price)}</span>
             </GhostButton>
           ) : (
             <PrimaryButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet}>

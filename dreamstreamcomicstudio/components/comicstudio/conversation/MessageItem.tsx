@@ -92,25 +92,35 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
         </div>
       )}
       {status === 'failed' && (
-        <div role="alert" className="flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1 text-[12px]">
-          <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        // Reason on its own line, actions together under it — never a lone ✕ wrapping onto a row.
+        <div role="alert" className="flex max-w-full flex-col items-end gap-1 text-[12px]">
+          <span className="inline-flex max-w-[92%] items-start gap-1 text-right text-red-600 dark:text-red-300">
+            <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
             Not sent{error ? ` — ${error}` : ''}
           </span>
-          {onRetry && (
-            <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 font-semibold text-[var(--ds-ink)] hover:underline">
-              <RotateCcw className="h-3 w-3" aria-hidden /> Retry
-            </button>
-          )}
-          {onEdit && (
-            <button type="button" onClick={onEdit} className="inline-flex items-center gap-1 font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)]">
-              <Pencil className="h-3 w-3" aria-hidden /> Edit
-            </button>
-          )}
-          {onDismiss && (
-            <button type="button" onClick={onDismiss} aria-label="Discard message" className="text-[var(--ds-muted)] hover:text-[var(--ds-ink)]">
-              <X className="h-3.5 w-3.5" />
-            </button>
+          {(onRetry || onEdit || onDismiss) && (
+            <span className="inline-flex items-center gap-1">
+              {onRetry && (
+                <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]">
+                  <RotateCcw className="h-3 w-3" aria-hidden /> Retry
+                </button>
+              )}
+              {onEdit && (
+                <button type="button" onClick={onEdit} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
+                  <Pencil className="h-3 w-3" aria-hidden /> Edit
+                </button>
+              )}
+              {onDismiss && (
+                <button
+                  type="button"
+                  onClick={onDismiss}
+                  aria-label="Discard message"
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+                >
+                  <X className="h-3 w-3" aria-hidden /> Discard
+                </button>
+              )}
+            </span>
           )}
         </div>
       )}

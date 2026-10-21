@@ -211,7 +211,9 @@ export const plural = (n: number, word: string, pluralWord = `${word}s`) => `${n
 export const formatElapsed = (ms: number): string => {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  const h = Math.floor(s / 3600);
+  return h < 48 ? `${h}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m` : `${Math.floor(h / 24)}d`;
 };
 
 /** Money with enough precision for tiny per-call costs. */

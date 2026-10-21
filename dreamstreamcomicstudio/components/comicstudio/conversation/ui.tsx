@@ -95,7 +95,8 @@ export const ChipButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
     className={cx(
       `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
       selected
-        ? 'border-[#D97757]/40 bg-[#D97757]/10 text-[var(--ds-ink)]'
+        ? // An answered card keeps the chosen chip at full strength; only the others fade.
+          'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)] disabled:opacity-100'
         : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:border-[#D97757]/35 hover:bg-[var(--ds-hover)]',
       className
     )}

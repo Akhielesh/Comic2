@@ -8,7 +8,7 @@ import type { Brief, ComicDoc, SpendKind } from '../../../shared/comic/doc';
 import { TIER_PRESETS, formatUsd } from '../../../shared/comic/models';
 import type { StudioController } from '../types';
 import { KIND_LABEL, SPEND_KIND_LABEL, formatSpend, plural } from './boardModel';
-import { Chip, EmptyHint, InlineField, SectionTitle, Surface, cx } from './ui';
+import { Chip, InlineField, SectionTitle, Surface, cx } from './ui';
 
 const SCRIPT_PREVIEW_LINES = 14;
 const RECENT_SPEND = 8;
@@ -231,14 +231,21 @@ export const StoryTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
   const setBrief = (patch: Partial<Brief>) => void studio.patch([{ op: 'brief', patch }]);
   return (
     <div className="space-y-4 p-4 sm:p-5">
-      {briefIsEmpty(doc) && (
-        <EmptyHint icon={<FileText className="h-7 w-7" />} title="Your story will take shape here">
-          Tell the director what your comic is about. The title, logline, premise, tone and setting fill in as you talk — and you can edit any of
-          it right here.
-        </EmptyHint>
-      )}
-
       <Surface className="p-3 sm:p-4" aria-label="Brief">
+        {briefIsEmpty(doc) && (
+          <div className="mb-3 flex items-start gap-3 rounded-xl bg-[var(--ds-well)] px-3 py-2.5">
+            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]" aria-hidden>
+              <FileText className="h-3.5 w-3.5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[13px] font-semibold text-[var(--ds-ink)]">Your story will take shape here</p>
+              <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ds-muted)]">
+                Tell the director what your comic is about — the title, logline, premise, tone and setting fill in as you talk. You can also type
+                straight into any field below.
+              </p>
+            </div>
+          </div>
+        )}
         <InlineField
           label="Title"
           value={brief.title}
@@ -268,7 +275,7 @@ export const StoryTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
           label="Premise"
           showLabel
           multiline
-          rows={3}
+          rows={2}
           value={brief.premise || ''}
           placeholder="The situation, the characters’ stakes, how it unfolds."
           onCommit={(premise) => setBrief({ premise })}

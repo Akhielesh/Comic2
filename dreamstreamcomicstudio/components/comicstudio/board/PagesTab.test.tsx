@@ -51,7 +51,7 @@ describe('PagesTab', () => {
     const studio = makeStudio();
     render(<PagesTab studio={studio} doc={studio.doc!} />);
     const stale = card(5);
-    expect(within(stale).getByText('Script changed — re-render')).toBeInTheDocument();
+    expect(within(stale).getByText('Out of date — re-render')).toBeInTheDocument();
     fireEvent.click(within(stale).getByRole('button', { name: /^Re-render/ }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_5'], force: true });
   });

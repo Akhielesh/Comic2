@@ -238,16 +238,30 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
         <SectionTitle
           id="style-options-title"
           right={
-            <PrimaryButton
-              size="xs"
-              busy={busyKey === 'explore'}
-              disabled={exploring}
-              onClick={() => fire('explore', () => studio.act({ type: 'render_style_options' }))}
-            >
-              <Sparkles className="h-3 w-3" aria-hidden />
-              {exploring ? 'Drawing options…' : `Explore ${STYLE_DIRECTIONS} directions`}{' '}
-              {!exploring && <span className="font-normal opacity-85">≈ {formatUsd(explorePrice)}</span>}
-            </PrimaryButton>
+            // The primary call only while no look is locked; afterwards exploring is optional.
+            style.status === 'locked' ? (
+              <GhostButton
+                size="xs"
+                busy={busyKey === 'explore'}
+                disabled={exploring}
+                onClick={() => fire('explore', () => studio.act({ type: 'render_style_options' }))}
+              >
+                <Sparkles className="h-3 w-3 text-[var(--ds-accent)]" aria-hidden />
+                {exploring ? 'Drawing options…' : `Explore ${STYLE_DIRECTIONS} directions`}{' '}
+                {!exploring && <span className="text-[var(--ds-muted)]">≈ {formatUsd(explorePrice)}</span>}
+              </GhostButton>
+            ) : (
+              <PrimaryButton
+                size="xs"
+                busy={busyKey === 'explore'}
+                disabled={exploring}
+                onClick={() => fire('explore', () => studio.act({ type: 'render_style_options' }))}
+              >
+                <Sparkles className="h-3 w-3" aria-hidden />
+                {exploring ? 'Drawing options…' : `Explore ${STYLE_DIRECTIONS} directions`}{' '}
+                {!exploring && <span className="font-normal opacity-85">≈ {formatUsd(explorePrice)}</span>}
+              </PrimaryButton>
+            )
           }
         >
           Style options

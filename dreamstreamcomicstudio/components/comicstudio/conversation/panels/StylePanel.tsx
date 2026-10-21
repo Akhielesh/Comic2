@@ -63,7 +63,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
     <div className="space-y-4 p-4">
       <div className="flex flex-col gap-2 sm:flex-row">
         <PrimaryButton
-          className="flex-1"
+          className="sm:flex-1"
           disabled={exploring}
           onClick={() => {
             void act({ type: 'render_style_options' });

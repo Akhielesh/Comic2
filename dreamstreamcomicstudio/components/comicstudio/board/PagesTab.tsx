@@ -12,7 +12,7 @@ import type { StudioController } from '../types';
 import { ComicPageView } from './ComicPageView';
 import { ImageFrame, VersionStrip } from './ImageFrame';
 import { PageScript } from './PageScript';
-import { aspectNumber } from './balloonGeometry';
+import { aspectNumber, pageAspectOf } from './balloonGeometry';
 import {
   byokFromDoc,
   estimateDraw,
@@ -71,7 +71,7 @@ export const PageCard: React.FC<{
           className="h-3.5 w-3.5 shrink-0 accent-[#D97757]"
         />
         <h4 className="text-[13px] font-semibold text-[var(--ds-ink)]">Page {page.n}</h4>
-        <StatusChip status={status} label={status === 'stale' ? 'Script changed' : undefined} />
+        <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} />
         <span className="ml-auto flex items-center">
           {drawn && (
             <IconButton size="sm" label={showScript ? 'Show the art' : 'Show the script'} onClick={() => setShowScript((v) => !v)}>
@@ -85,7 +85,13 @@ export const PageCard: React.FC<{
       </header>
 
       {scriptView ? (
-        <div className="max-h-[420px] overflow-y-auto rounded-xl border border-dashed border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3">
+        // Same footprint as the drawn page (rows stay aligned); long scripts scroll under a fade.
+        <div
+          className="max-h-[480px] overflow-y-auto overscroll-contain rounded-xl border border-dashed border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3 pb-7 [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)]"
+          style={{ aspectRatio: String(pageAspectOf(doc, page)) }}
+          tabIndex={0}
+          aria-label={`Page ${page.n} script`}
+        >
           <PageScript doc={doc} page={page} dense />
         </div>
       ) : (
@@ -107,7 +113,7 @@ export const PageCard: React.FC<{
                 typicalSec={spec.latencySec}
                 error={page.render.error}
                 overImage={drawn && !!imageUrl}
-                staleLabel="Script changed — re-render"
+                staleLabel="Out of date — re-render"
                 compact
               />
             }
@@ -201,9 +207,10 @@ export const CoverCard: React.FC<{ studio: StudioController; doc: ComicDoc; byok
             <Sparkles className="h-3 w-3" aria-hidden /> Redesign <span className="text-[var(--ds-muted)]">≈ {formatUsd(price)}</span>
           </GhostButton>
         ) : (
-          <PrimaryButton size="xs" busy={busyKey === 'cover'} disabled={isBusy(render)} onClick={design}>
-            <Sparkles className="h-3 w-3" aria-hidden /> Design cover <span className="font-normal opacity-80">≈ {formatUsd(price)}</span>
-          </PrimaryButton>
+          // Optional extra — kept quiet so the plan's own "render" stays the one primary action.
+          <GhostButton size="xs" busy={busyKey === 'cover'} disabled={isBusy(render)} onClick={design}>
+            <Sparkles className="h-3 w-3 text-[var(--ds-accent)]" aria-hidden /> Design cover <span className="text-[var(--ds-muted)]">≈ {formatUsd(price)}</span>
+          </GhostButton>
         )}
         <GhostButton size="xs" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
           Cover text {details ? <ChevronUp className="h-3 w-3" aria-hidden /> : <ChevronDown className="h-3 w-3" aria-hidden />}

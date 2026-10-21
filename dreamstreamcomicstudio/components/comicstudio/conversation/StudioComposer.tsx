@@ -26,6 +26,7 @@ import { FormatPanel } from './panels/FormatPanel';
 import { StylePanel } from './panels/StylePanel';
 import { QualityPanel } from './panels/QualityPanel';
 import { AspectGlyph, cx } from './ui';
+import { useMediaQuery } from '../../studio/kit/useMediaQuery';
 
 export const VOICE_AUTOSEND_KEY = 'comicstudio.voiceAutoSend';
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -183,6 +184,29 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const dictationBaseRef = useRef('');
   const dragDepth = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Phones: shorter placeholder; the quality chip lives in the header there.
+  const roomy = useMediaQuery('(min-width: 640px)');
+  // The chip row scrolls sideways when the column is narrow — fade the clipped edge so it reads as "more".
+  const [chipsClipped, setChipsClipped] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
+  const measureChips = useCallback(() => {
+    const el = chipsRef.current;
+    if (!el) return;
+    const start = el.scrollLeft > 2;
+    const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
+    setChipsClipped((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, []);
+  useEffect(() => {
+    const el = chipsRef.current;
+    if (!el) return;
+    measureChips();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measureChips);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureChips]);
+  // Chip labels change width (style name, page count, tier) without resizing the row.
+  useEffect(measureChips, [measureChips, roomy, doc?.style.name, doc?.style.status, doc?.settings.quality, doc?.format.pageAspect, doc?.format.pageCount]);
 
   const ready = !!doc;
   const hasContent = text.trim().length > 0 || attachments.length > 0;
@@ -444,9 +468,11 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     hint ||
     (doc?.conversation.length
       ? 'Reply, or describe a change…'
-      : 'Describe your comic, paste a script, or drop in character photos…');
+      : roomy
+        ? 'Describe your comic, paste a script, or drop in character photos…'
+        : 'Describe your comic or paste a script…');
 
-  const chip = (id: ComposerPanel, label: React.ReactNode, title: string) => (
+  const chip = (id: ComposerPanel, label: React.ReactNode, title: string, extra?: string) => (
     <button
       type="button"
       aria-haspopup="dialog"
@@ -459,7 +485,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
         panel === id
           ? 'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)]'
-          : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+          : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
+        extra
       )}
     >
       {label}
@@ -597,25 +624,41 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 aria-label="Auto-send when I stop talking"
                 title={autoSend ? 'Voice: sends when you stop talking (click to review first)' : 'Voice: fills the box for review (click to auto-send)'}
                 className={cx(
-                  `inline-flex h-8 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium ${TRANSITION}`,
-                  autoSend
-                    ? 'border-[#D97757]/35 bg-[#D97757]/10 text-[var(--ds-accent)]'
-                    : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
+                  // A quiet setting beside the mic, not a call to action: icon only, accent ink when on.
+                  `relative grid h-8 w-8 shrink-0 place-items-center rounded-full ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+                  autoSend ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
                 )}
               >
-                <AudioLines className="h-3.5 w-3.5" aria-hidden />
-                <span className="hidden sm:inline">Auto-send</span>
+                <AudioLines className="h-4 w-4" aria-hidden />
+                {autoSend && <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)] ring-2 ring-[var(--ds-surface)]" aria-hidden />}
               </button>
             </>
           )}
 
-          <div ref={chipsRef} className="flex min-w-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-1 items-center gap-1.5 overflow-x-auto px-0.5 py-0.5" role="toolbar" aria-label="Comic options">
+          <div
+            ref={chipsRef}
+            onScroll={measureChips}
+            className={cx(
+              'flex min-w-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-1 items-center gap-1.5 overflow-x-auto px-0.5 py-0.5',
+              chipsClipped.end && chipsClipped.start
+                ? '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]'
+                : chipsClipped.end
+                  ? '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]'
+                  : chipsClipped.start
+                    ? '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
+                    : ''
+            )}
+            role="toolbar"
+            aria-label="Comic options"
+          >
             {chip(
               'format',
               <>
                 <AspectGlyph aspect={format?.pageAspect || '2:3'} size={13} />
                 <span className="tabular-nums">
-                  {format?.pageAspect || '2:3'} · {format?.pageCount ?? 6}p
+                  {/* Phones: the glyph already shows the page shape. */}
+                  <span className="hidden sm:inline">{format?.pageAspect || '2:3'} · </span>
+                  {format?.pageCount ?? 6}p
                 </span>
               </>,
               'Format: page shape, pages, panels, lettering'
@@ -623,8 +666,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             {chip(
               'style',
               <>
-                <Palette className="h-3.5 w-3.5" aria-hidden />
-                <span className="max-w-[9rem] truncate">{styleName || 'Style'}</span>
+                <Palette className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                <span className="max-w-[5.5rem] truncate sm:max-w-[9rem]">{styleName || 'Style'}</span>
               </>,
               'Art style'
             )}
@@ -634,7 +677,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
                 {tierLabel}
               </>,
-              'Quality and price per page'
+              'Quality and price per page',
+              roomy || panel === 'quality' ? undefined : 'hidden'
             )}
           </div>
 

@@ -266,9 +266,10 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
           value={mode}
           onChange={setMode}
           options={[
-            { value: 'scroll', label: (<><Rows3 className="h-3 w-3" aria-hidden /> Scroll</>), title: 'One long vertical scroll' },
-            { value: 'page', label: (<><Square className="h-3 w-3" aria-hidden /> Page</>), title: 'One page at a time' },
-            { value: 'spread', label: (<><Columns2 className="h-3 w-3" aria-hidden /> Spread</>), title: narrow ? 'Facing pages need a wider screen' : 'Facing pages', disabled: narrow }
+            { value: 'scroll' as ReaderMode, label: (<><Rows3 className="h-3 w-3" aria-hidden /> Scroll</>), title: 'One long vertical scroll' },
+            { value: 'page' as ReaderMode, label: (<><Square className="h-3 w-3" aria-hidden /> Page</>), title: 'One page at a time' },
+            // Facing pages need a wide screen — on a phone the option is left out rather than shown dead.
+            ...(narrow ? [] : [{ value: 'spread' as ReaderMode, label: (<><Columns2 className="h-3 w-3" aria-hidden /> Spread</>), title: 'Facing pages' }])
           ]}
         />
         {mode !== 'scroll' && (
@@ -276,7 +277,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
             <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? current >= views.length - 1 : current <= 0}>
               <ChevronLeft className="h-4 w-4" />
             </IconButton>
-            <span className="min-w-[7rem] text-center text-[12px] tabular-nums text-[var(--ds-muted)]" aria-live="polite" data-testid="reader-counter">
+            <span className="min-w-[5.5rem] text-center text-[12px] tabular-nums text-[var(--ds-muted)] sm:min-w-[7rem]" aria-live="polite" data-testid="reader-counter">
               {counter}
             </span>
             <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? current <= 0 : current >= views.length - 1}>
@@ -287,7 +288,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
         {mode === 'scroll' && <span className="text-[12px] text-[var(--ds-muted)]">{counter}</span>}
         {rtl && <span className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)]">Reads right to left</span>}
         {drawnPages < doc.pages.length && (
-          <span className="text-[11px] text-[var(--ds-muted)]">
+          <span className={cx('text-[11px] text-[var(--ds-muted)]', narrow && 'sr-only')}>
             {drawnPages} of {doc.pages.length} pages drawn
           </span>
         )}

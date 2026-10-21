@@ -52,7 +52,8 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({ url, aspect, alt, render
   );
   const frame = cx(
     'relative w-full overflow-hidden rounded-xl border border-[var(--ds-hairline)]',
-    tone === 'paper' ? 'bg-white' : 'bg-[var(--ds-well)]',
+    // Paper only behind real art: placeholders keep the themed well (readable in dark mode).
+    tone === 'paper' && showImage ? 'bg-white' : 'bg-[var(--ds-well)]',
     className
   );
   const style = { aspectRatio: typeof aspect === 'number' ? String(aspect) : aspect };

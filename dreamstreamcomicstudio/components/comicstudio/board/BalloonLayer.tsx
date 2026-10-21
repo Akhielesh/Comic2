@@ -4,7 +4,9 @@
 // follows the text). Each one is an HTML text block (selectable, crisp at any zoom, read
 // by screen readers) over an SVG outline built from balloonGeometry — the same geometry
 // the print view and PNG exporter use. Text is sized from the rendered page width, so a
-// thumbnail and a full-screen page letter identically.
+// thumbnail and a full-screen page letter identically: on small pages the layer is laid out
+// at a reading width and scaled down as a whole — a faithful miniature of the printed page
+// instead of oversized text that breaks words and spills over the art.
 //
 // Editable mode (page editor): drag a balloon to move it, drag the round handle to aim the
 // tail, drag the right-edge grip to resize, or focus it and use the arrow keys (Shift =
@@ -50,6 +52,14 @@ export interface BalloonLayerProps {
 }
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
+/**
+ * Below its proportional size, lettering may grow by at most this much (readability on a
+ * reading-size page) — the balloons' height follows the text, so a small boost still fits.
+ * Beyond it (thumbnails, phones) the whole layer is scaled instead.
+ */
+export const LETTERING_MAX_BOOST = 1.15;
+/** Page width (px) below which the lettering layer is laid out larger and scaled down. */
+export const LETTERING_LAYOUT_MIN_W = LETTERING.minFontPx / (LETTERING.fontScale * LETTERING_MAX_BOOST);
 const NUDGE = 0.005;
 const NUDGE_BIG = 0.02;
 /** Pointer travel (px) before a press becomes a drag. */
@@ -63,13 +73,15 @@ interface BalloonItemProps {
   pageW: number;
   pageH: number;
   aspect: number;
+  /** Rendered size / layout size (< 1 when the layer is scaled down). */
+  scale: number;
   editable: boolean;
   selected: boolean;
   onSelect: (lineId: string | null) => void;
   onChange?: (lineId: string, patch: Partial<Balloon>) => void;
 }
 
-const BalloonItem: React.FC<BalloonItemProps> = ({ item, doc, pageW, pageH, aspect, editable, selected, onSelect, onChange }) => {
+const BalloonItem: React.FC<BalloonItemProps> = ({ item, doc, pageW, pageH, aspect, scale, editable, selected, onSelect, onChange }) => {
   const { line } = item;
   const kind = line.kind;
   const [draft, setDraft] = useState<Partial<Balloon> | null>(null);
@@ -126,8 +138,9 @@ const BalloonItem: React.FC<BalloonItemProps> = ({ item, doc, pageW, pageH, aspe
     const move = (ev: PointerEvent) => {
       if (!moved && Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y) < DRAG_SLOP) return;
       moved = true;
-      const dx = (ev.clientX - origin.x) / (pageW || 1);
-      const dy = (ev.clientY - origin.y) / (pageH || 1);
+      // Pointer travel is in screen px; the layout may be scaled down.
+      const dx = (ev.clientX - origin.x) / (pageW * scale || 1);
+      const dy = (ev.clientY - origin.y) / (pageH * scale || 1);
       if (mode === 'move') latest = { x: r4(clamp(start.x + dx, 0, 1 - start.w)), y: r4(clamp(start.y + dy, 0, Math.max(0, 1 - heightFrac))) };
       else if (mode === 'tail') latest = { tailX: r4(clamp01((start.tailX ?? start.x) + dx)), tailY: r4(clamp01((start.tailY ?? start.y) + dy)) };
       else latest = { w: r4(clamp(start.w + dx, 0.06, 1 - start.x)) };
@@ -251,8 +264,8 @@ const BalloonItem: React.FC<BalloonItemProps> = ({ item, doc, pageW, pageH, aspe
           role="presentation"
           data-testid="tail-handle"
           onPointerDown={(e) => startDrag(e, 'tail')}
-          className="absolute z-[6] h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-crosshair touch-none rounded-full border-2 border-white bg-[var(--ds-accent)] shadow"
-          style={{ left: tipLocal.x, top: tipLocal.y }}
+          className="absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-crosshair touch-none rounded-full border-2 border-white bg-[var(--ds-accent)] shadow"
+          style={{ left: tipLocal.x, top: tipLocal.y, width: 14 / scale, height: 14 / scale }}
           title="Drag to aim the tail"
         />
       )}
@@ -261,7 +274,8 @@ const BalloonItem: React.FC<BalloonItemProps> = ({ item, doc, pageW, pageH, aspe
           role="presentation"
           data-testid="width-handle"
           onPointerDown={(e) => startDrag(e, 'width')}
-          className="absolute -right-2 top-1/2 z-[6] h-6 w-2 -translate-y-1/2 cursor-ew-resize touch-none rounded-full border border-white bg-[var(--ds-accent)] shadow"
+          className="absolute top-1/2 z-[6] -translate-y-1/2 cursor-ew-resize touch-none rounded-full border border-white bg-[var(--ds-accent)] shadow"
+          style={{ right: -8 / scale, width: 8 / scale, height: 24 / scale }}
           title="Drag to resize"
         />
       )}
@@ -289,6 +303,11 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   };
   const aspect = pageAspectOf(doc, page);
   if (!items.length || pageWidth <= 0) return null;
+  // Small pages (thumbnails, phones) are lettered at the proportional size and scaled down,
+  // so the miniature matches the full page, the print and the export exactly.
+  const scale = pageWidth < LETTERING_LAYOUT_MIN_W ? pageWidth / LETTERING_LAYOUT_MIN_W : 1;
+  const layoutW = pageWidth / scale;
+  const layoutH = (pageHeight || pageWidth / aspect) / scale;
   return (
     <div
       className={cx('absolute inset-0 z-[2]', editable ? '' : 'pointer-events-none')}
@@ -299,20 +318,30 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         if (e.target === e.currentTarget) select(null);
       } : undefined}
     >
-      {items.map((item) => (
-        <BalloonItem
-          key={item.line.id}
-          item={item}
-          doc={doc}
-          pageW={pageWidth}
-          pageH={pageHeight || pageWidth / aspect}
-          aspect={aspect}
-          editable={editable}
-          selected={selected === item.line.id}
-          onSelect={select}
-          onChange={onBalloonChange}
-        />
-      ))}
+      <div
+        className="pointer-events-none absolute left-0 top-0"
+        style={
+          scale === 1
+            ? { width: '100%', height: '100%' }
+            : { width: layoutW, height: layoutH, transform: `scale(${scale})`, transformOrigin: '0 0' }
+        }
+      >
+        {items.map((item) => (
+          <BalloonItem
+            key={item.line.id}
+            item={item}
+            doc={doc}
+            pageW={layoutW}
+            pageH={layoutH}
+            aspect={aspect}
+            scale={scale}
+            editable={editable}
+            selected={selected === item.line.id}
+            onSelect={select}
+            onChange={onBalloonChange}
+          />
+        ))}
+      </div>
     </div>
   );
 };

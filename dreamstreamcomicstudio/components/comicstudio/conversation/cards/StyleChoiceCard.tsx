@@ -48,7 +48,8 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
       {options.length === 0 ? (
         <p className="text-[13px] text-[var(--ds-muted)]">These style options were replaced. Draw a fresh set to compare looks.</p>
       ) : (
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+        // Three looks sit side by side even on a phone — comparing them is the whole point.
+        <div className={options.length <= 3 ? 'grid grid-cols-3 gap-2 sm:gap-2.5' : 'grid grid-cols-2 gap-2.5 sm:grid-cols-3'}>
           {options.map((o) => {
             const ready = o.render.status === 'ready' && !!o.render.asset;
             const selected = locked === o.id;

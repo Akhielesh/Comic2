@@ -146,7 +146,14 @@ const MarkupLayer: React.FC<{
           style={{ left: `${shown.x * 100}%`, top: `${shown.y * 100}%`, width: `${shown.w * 100}%`, height: `${shown.h * 100}%` }}
         >
           {!draft && (
-            <span className="absolute -top-6 left-0 whitespace-nowrap rounded-md bg-red-600 px-1.5 py-0.5 text-[10.5px] font-semibold text-white shadow">
+            // Keep the label on the page: flip it to the right edge / inside the box near the borders.
+            <span
+              className={cx(
+                'absolute whitespace-nowrap rounded-md bg-red-600 px-1.5 py-0.5 text-[10.5px] font-semibold text-white shadow',
+                shown.y < 0.06 ? 'top-1' : '-top-6',
+                shown.x + shown.w > 0.62 ? (shown.y < 0.06 ? 'right-1' : 'right-0') : shown.y < 0.06 ? 'left-1' : 'left-0'
+              )}
+            >
               Area to change{panelN ? ` · panel ${panelN}` : ''}
             </span>
           )}
@@ -338,8 +345,8 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
   const renderPrice = estimateDraw(doc, pagesForIds(doc, [page.id]), byok).estimate.usd;
   const spec = jobModel(doc, 'page');
 
-  // Fit the page inside the stage (both dimensions).
-  const pad = 24;
+  // Fit the page inside the stage (both dimensions). Phones get a tighter frame so the page is as big as it can be.
+  const pad = stage.width > 0 && stage.width < 640 ? 12 : 24;
   const availW = Math.max(0, stage.width - pad * 2);
   const availH = Math.max(0, stage.height - pad * 2);
   const pageWidth = availW && availH ? Math.min(availW, availH * aspect) : undefined;
@@ -375,7 +382,7 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
       {/* Stage */}
-      <div className="flex h-[58vh] min-h-[320px] shrink-0 flex-col lg:h-auto lg:min-h-0 lg:flex-1">
+      <div className="flex h-[74vh] min-h-[320px] shrink-0 flex-col sm:h-[62vh] lg:h-auto lg:min-h-0 lg:flex-1">
         <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
           <Segmented<Mode>
             label="Editing mode"
@@ -406,7 +413,7 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
                 : 'Lettering is drawn into the art on this comic.'}
           </span>
         </div>
-        <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center p-6">
+        <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center p-3 sm:p-6">
           <div style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className="shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
             <ComicPageView
               doc={doc}
@@ -428,7 +435,7 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
                   typicalSec={spec.latencySec}
                   error={page.render.error}
                   overImage={drawn && !!imageUrl}
-                  staleLabel="Script changed — re-render to apply"
+                  staleLabel="Out of date — re-render to apply"
                 />
               }
             >
@@ -658,7 +665,7 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
                 <h2 className="text-[14px] font-semibold text-[var(--ds-ink)]">
                   Page {page.n} <span className="font-normal text-[var(--ds-muted)]">of {pages.length}</span>
                 </h2>
-                <StatusChip status={status} label={status === 'stale' ? 'Script changed' : undefined} />
+                <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} />
               </div>
               {page.summary && <p className="truncate text-[12px] text-[var(--ds-muted)]">{page.summary}</p>}
             </div>

@@ -552,6 +552,24 @@ export interface ResolvedBalloon {
 const validBalloon = (b?: Balloon): b is Balloon =>
   !!b && [b.x, b.y, b.w].every((v) => typeof v === 'number' && Number.isFinite(v)) && b.w > 0;
 
+/** How far each kind's outline reaches past its text box (fractions of the box). */
+const OUTLINE_BLEED: Record<LineKind, { x: number; y: number }> = {
+  speech: { x: 0.04, y: 0.12 },
+  whisper: { x: 0.04, y: 0.12 },
+  thought: { x: 0.08, y: 0.25 },
+  shout: { x: 0.12, y: 0.45 },
+  caption: { x: 0, y: 0 },
+  sfx: { x: 0, y: 0.1 }
+};
+
+/** A balloon's text box grown to the outline it draws (used to keep placed balloons apart). */
+const outlineBounds = (kind: LineKind, r: { x: number; y: number; w: number; h: number }) => {
+  const b = OUTLINE_BLEED[kind] || OUTLINE_BLEED.speech;
+  const dx = r.w * b.x;
+  const dy = r.h * b.y;
+  return { x: r.x - dx, y: r.y - dy, w: r.w + 2 * dx, h: r.h + 2 * dy };
+};
+
 /**
  * Every non-empty line of a page with the balloon to draw for it, in reading order. Lines
  * without a balloon (new lines, an unfinished layout) get a fallback position stacked at
@@ -568,13 +586,14 @@ export const resolveBalloons = (doc: Pick<ComicDoc, 'format'>, page: Page): Reso
   page.panels.forEach((panel, i) => {
     const box = boxes[i] || { x: 0.02, y: 0.02, w: 0.96, h: 0.96 };
     const lines = panel.lines.filter((l) => clean(l.text));
-    // Balloons the page already has are obstacles for the ones we place.
+    // Balloons the page already has are obstacles for the ones we place — measured by the
+    // outline they actually draw (bursts and clouds reach well past their text box).
     const taken: { x: number; y: number; w: number; h: number }[] = [];
     for (const line of lines) {
       const b = byId.get(line.id);
       if (validBalloon(b)) {
         const c = clampBalloon(b);
-        taken.push({ x: c.x, y: c.y, w: c.w, h: estimateBalloonHeight(line.text, c.w, aspect) });
+        taken.push(outlineBounds(line.kind, { x: c.x, y: c.y, w: c.w, h: estimateBalloonHeight(line.text, c.w, aspect) }));
       }
     }
     const overlapping = (r: { x: number; y: number; w: number; h: number }) =>
@@ -602,14 +621,15 @@ export const resolveBalloons = (doc: Pick<ComicDoc, 'format'>, page: Page): Reso
       const maxY = Math.max(box.y + pad, box.y + box.h - pad - hFrac);
       let y = clamp(cursor, box.y + pad, maxY);
       // Stack below anything already there (stays in the panel; a full panel accepts overlap).
+      const bleedTop = y - outlineBounds(line.kind, { x, y, w, h: hFrac }).y;
       for (let guard = 0; guard < 12; guard += 1) {
-        const hit = overlapping({ x, y, w, h: hFrac });
+        const hit = overlapping(outlineBounds(line.kind, { x, y, w, h: hFrac }));
         if (!hit) break;
-        const below = hit.y + hit.h + gap;
+        const below = hit.y + hit.h + gap + bleedTop;
         if (below > maxY) break;
         y = below;
       }
-      taken.push({ x, y, w, h: hFrac });
+      taken.push(outlineBounds(line.kind, { x, y, w, h: hFrac }));
       cursor = y + hFrac + gap;
       const balloon: Balloon = { lineId: line.id, x: round4(x), y: round4(y), w: round4(w) };
       if (isSpokenKind(line.kind)) {

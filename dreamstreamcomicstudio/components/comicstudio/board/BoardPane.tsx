@@ -157,11 +157,12 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
                 onClick={() => setTab(t.id)}
                 onKeyDown={(e) => onTabKey(e, i)}
                 className={cx(
-                  'inline-flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[13px] font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45',
+                  'inline-flex shrink-0 items-center gap-1.5 rounded-xl px-2 py-1.5 text-[13px] font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:px-2.5',
                   active ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 )}
               >
-                {t.icon}
+                {/* Phones: labels only, so all five tabs fit without a hidden scroll. */}
+                <span className="hidden sm:inline-flex">{t.icon}</span>
                 {t.label}
                 {b !== null && <TabBadge active={active}>{b}</TabBadge>}
               </button>

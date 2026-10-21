@@ -177,7 +177,7 @@ export function Segmented<T extends string>({
             onClick={() => onChange(o.value)}
             onKeyDown={(e) => onKey(e, i)}
             className={cx(
-              `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING} disabled:opacity-40`,
+              `flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING} disabled:opacity-40`,
               size === 'xs' ? 'px-2 py-1 text-[11px]' : 'px-2.5 py-1.5 text-[12px]',
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
@@ -191,6 +191,9 @@ export function Segmented<T extends string>({
 }
 
 // ── Inline editing ───────────────────────────────────────────────────────────
+
+/** An explicit font-size utility (so the default size doesn't fight it). */
+const HAS_TEXT_SIZE = /(^|\s)([a-z]+:)?text-(\[\d|xs\b|sm\b|base\b|lg\b|[2-9]?xl\b)/;
 
 const FIELD_BASE = `w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] hover:border-[var(--ds-hairline)] focus:border-[#D97757]/50 focus:bg-[var(--ds-surface-strong)] focus:outline-none ${TRANSITION}`;
 
@@ -294,7 +297,9 @@ export const InlineField: React.FC<InlineFieldProps> = ({
         ref.current?.blur();
       }
     },
-    className: cx(FIELD_BASE, mono && 'font-mono text-[12px]', inputClassName)
+    // Default value size sits just under body text on desktop (labels 11px, values 13.5px);
+    // phones keep 16px so focusing a field never zooms the page.
+    className: cx(FIELD_BASE, !mono && !HAS_TEXT_SIZE.test(inputClassName || '') && 'text-base sm:text-[13.5px]', mono && 'font-mono text-[12px]', inputClassName)
   };
 
   return (
@@ -416,49 +421,67 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
     );
   }
   if (status === 'failed') {
+    // A legible card over a softened frame — never raw text over the plan sketch or the art.
     return (
       <div
         role="alert"
         className={cx(
-          'absolute inset-0 z-[3] flex flex-col items-center justify-center gap-2 p-3 text-center',
-          overImage ? 'bg-black/55 text-white' : 'bg-red-500/[0.06]'
+          'absolute inset-0 z-[3] flex flex-col items-center justify-center p-3 text-center',
+          overImage ? 'bg-black/45' : 'bg-red-500/[0.05] backdrop-blur-[2px]'
         )}
       >
-        <TriangleAlert className={cx('h-5 w-5', overImage ? 'text-amber-300' : 'text-red-500')} aria-hidden />
-        <p className={cx('line-clamp-4 max-w-[28ch] text-[12px] leading-snug', overImage ? 'text-white' : 'text-red-700 dark:text-red-300')}>
-          {error || 'This couldn’t be drawn.'}
-        </p>
-        {onRetry && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRetry();
-            }}
-            className={`inline-flex items-center gap-1 rounded-full border border-red-500/30 bg-[var(--ds-surface-strong)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
-          >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {retryLabel}
-          </button>
-        )}
+        <div
+          className={cx(
+            'flex max-w-[92%] flex-col items-center rounded-xl border border-red-500/25 bg-[var(--ds-surface-strong)] shadow-[0_4px_16px_rgba(0,0,0,0.12)]',
+            compact ? 'gap-1.5 px-2.5 py-2' : 'gap-2 px-3.5 py-3'
+          )}
+        >
+          <TriangleAlert className={cx('shrink-0 text-red-500', compact ? 'h-4 w-4' : 'h-5 w-5')} aria-hidden />
+          <p className={cx('line-clamp-4 max-w-[28ch] leading-snug text-red-700 dark:text-red-300', compact ? 'text-[11.5px]' : 'text-[12px]')}>
+            {error || 'This couldn’t be drawn.'}
+          </p>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetry();
+              }}
+              className={`inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
+            >
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {retryLabel}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
   if (status === 'stale') {
+    // Bottom-centre, like the drawing pill: the top of a page is where captions live.
     return (
-      <div className="absolute left-2 top-2 z-[3] flex flex-wrap items-center gap-1.5">
-        <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10.5px] font-semibold text-white shadow-sm">{staleLabel}</span>
-        {onRerender && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRerender();
-            }}
-            className={`rounded-full bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--ds-ink)] shadow-sm hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
-          >
-            Re-render
-          </button>
-        )}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] flex justify-center p-2">
+        <div
+          className={cx(
+            'pointer-events-auto flex max-w-full items-center gap-1.5 rounded-full bg-[var(--ds-surface-strong)] py-1 pl-2 font-semibold text-[var(--ds-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.18)]',
+            onRerender ? 'pr-1' : 'pr-2.5',
+            compact ? 'text-[10.5px]' : 'text-[11px]'
+          )}
+        >
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+          <span className="truncate">{staleLabel}</span>
+          {onRerender && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRerender();
+              }}
+              className={`shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10.5px] font-semibold text-white hover:bg-amber-600 ${FOCUS_RING}`}
+            >
+              Re-render
+            </button>
+          )}
+        </div>
       </div>
     );
   }

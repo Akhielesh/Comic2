@@ -40,7 +40,8 @@ export const STARTERS: Starter[] = [
 ];
 
 export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disabled?: boolean }> = ({ onSend, disabled }) => (
-  <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center px-2 py-10 studio-reveal">
+  // flex-1 (not min-h-full): the log is a flex column, so this fills it and centres for real.
+  <div className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-2 pb-[6vh] pt-10 studio-reveal">
     <DirectorMark className="mb-4 h-9 w-9" />
     <h2 className="text-[26px] font-semibold leading-tight tracking-tight text-[var(--ds-ink)]">What's your comic about?</h2>
     <p className="mt-2 max-w-md text-[14px] leading-relaxed text-[var(--ds-muted)]">

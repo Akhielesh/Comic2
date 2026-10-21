@@ -133,9 +133,9 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
             value: k.value,
             label: (
               <>
-                {k.icon}
-                <span className="hidden sm:inline">{k.label}</span>
-                <span className="sm:hidden">{k.label.slice(0, 5)}</span>
+                {/* Phones: the full word at a smaller size beats an icon + "Webto". */}
+                <span className="hidden sm:inline-flex">{k.icon}</span>
+                <span className="text-[11px] sm:text-[12px]">{k.label}</span>
               </>
             ),
             title: k.label
@@ -145,7 +145,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
 
       <div>
         <SectionLabel>Page shape</SectionLabel>
-        <div role="radiogroup" aria-label="Page shape" className="flex flex-wrap gap-2">
+        <div role="radiogroup" aria-label="Page shape" className="grid grid-cols-4 gap-2">
           {shapeList.map((s) => {
             const on = s.value === format.pageAspect;
             return (
@@ -156,7 +156,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 aria-checked={on}
                 onClick={() => set({ pageAspect: s.value })}
                 className={cx(
-                  'flex w-[74px] flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
+                  'flex min-w-0 flex-col items-center gap-1.5 rounded-xl border px-1.5 py-2.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
                   on
                     ? 'border-[#D97757]/50 bg-[#D97757]/10 text-[var(--ds-ink)]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
