@@ -51,6 +51,7 @@ import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
+import { adminCostsRouter } from './routes/adminCosts.js';
 import { modelBenchRouter } from './routes/modelBench.js';
 import { requireAdmin, requireResearcher } from './middleware/requireAdmin.js';
 import { invitesRouter } from './routes/invites.js';
@@ -218,6 +219,9 @@ app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);
 // Admin Email Console (templates/preview/test/send/invite). Admin-only.
 app.use('/api/admin/email', adminRateLimit, requireAdmin, adminEmailRouter);
+// Admin cost centre (cost-benefit dashboard). Admin-only. Already rate-limited by the
+// '/api/admin' mount above (which runs for every /api/admin/* path), so no second limiter.
+app.use('/api/admin/costs', requireAdmin, adminCostsRouter);
 // Admin model bench — in-app trigger + results for the all-models live test.
 // Benches may be RUN by researchers/analysts as well as admins (requireResearcher
 // includes admins); published DRS scores are readable by everyone via /api/models.
