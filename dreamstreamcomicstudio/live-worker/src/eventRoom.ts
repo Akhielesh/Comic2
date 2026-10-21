@@ -52,6 +52,8 @@ export interface EventMeta {
   slowSec: number;
   /** Whether emoji reactions are accepted from viewers. */
   reactionsOn: boolean;
+  /** The host's one-tap reactions (library emoji, ≤ 6). */
+  quick?: string[];
   /** Hard concurrent-viewer cap, host-set, never above HARD_VIEWER_CAP. */
   maxViewers: number;
 }
@@ -765,11 +767,15 @@ export class EventRoom {
     if (!meta) return;
     if (msg.slow != null) meta.slowSec = Math.min(120, Math.max(0, Math.floor(Number(msg.slow)) || 0));
     if (msg.reactions != null) meta.reactionsOn = Boolean(msg.reactions);
+    if (Array.isArray(msg.quick)) {
+      const q = [...new Set(msg.quick.filter((e): e is string => typeof e === 'string' && ALLOWED_EMOJI.has(e)))].slice(0, 6);
+      if (q.length) meta.quick = q;
+    }
     if (msg.maxViewers != null) {
       meta.maxViewers = Math.min(HARD_VIEWER_CAP, Math.max(1, Math.floor(Number(msg.maxViewers)) || DEFAULT_VIEWER_CAP));
     }
     await this.putMeta(meta);
-    this.broadcast({ t: 'config', slow: meta.slowSec, reactions: meta.reactionsOn, maxViewers: meta.maxViewers });
+    this.broadcast({ t: 'config', slow: meta.slowSec, reactions: meta.reactionsOn, maxViewers: meta.maxViewers, quick: meta.quick });
   }
 
   /** The studio reports encoder/network telemetry ~every 30 s while live. */

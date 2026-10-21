@@ -14,6 +14,7 @@ import { formatCountdown } from '../schedule';
 import { coverGradient } from '../theme';
 import { BrbSlate } from '../components/scenes';
 import { ChatRail, ReactBar } from '../components/rails';
+import { normalizeQuick } from '../emoji';
 import { Icon } from '../ui/icons';
 import { LiveLegalLinks } from '../ui/legalLinks';
 import { StreamStudioLogo } from '../ui/logo';
@@ -48,6 +49,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   const [pinned, setPinned] = useState<string | null>(null);
   const [slowSec, setSlowSec] = useState(0);
   const [reactionsOn, setReactionsOn] = useState(true);
+  const [quick, setQuick] = useState<string[]>(() => normalizeQuick(null));
   const [muted, setMuted] = useState(true);
   const [immersive, setImmersive] = useState(false);
   const [chatSheet, setChatSheet] = useState(false);
@@ -178,6 +180,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
             setPinned(msg.meta.pinned);
             setSlowSec(msg.meta.slowSec);
             setReactionsOn(msg.meta.reactionsOn);
+            setQuick(normalizeQuick(msg.meta.quick));
             setChat(msg.chat);
             setPhase('watching');
             if (msg.meta.status === 'ended') setReplayOffered(true);
@@ -198,6 +201,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
           case 'config':
             setSlowSec(msg.slow);
             setReactionsOn(msg.reactions);
+            if (msg.quick) setQuick(normalizeQuick(msg.quick));
             break;
           case 'notice':
             push(msg.text, { icon: 'info' });
@@ -568,7 +572,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
           <Icon name={muted ? 'volumeOff' : 'volume'} size={18} />
         </button>
         {muted && !immersive && <span className="vc-hint">Tap to unmute</span>}
-        {immersive && reactionsOn && !isMobile && <ReactBar onReact={sendEmoji} />}
+        {immersive && reactionsOn && !isMobile && <ReactBar onReact={sendEmoji} quick={quick} />}
         <span className="spacer" />
         <button className="pv-ctl" onClick={() => setImmersiveMode(!immersive)} aria-label={immersive ? 'Exit fullscreen' : 'Fullscreen'}>
           <Icon name={immersive ? 'x' : 'maximize'} size={17} />
@@ -638,7 +642,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
             {stage}
             {immersive && reactionsOn && (
               <div className="vm-immersive-reacts">
-                <ReactBar onReact={sendEmoji} vertical />
+                <ReactBar onReact={sendEmoji} quick={quick} vertical />
               </div>
             )}
           </div>
@@ -666,7 +670,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
           <div className="vm-composer">
             {reactionsOn && (
               <div className="vm-reactions">
-                <ReactBar onReact={sendEmoji} />
+                <ReactBar onReact={sendEmoji} quick={quick} />
               </div>
             )}
             <div className="vm-input-row">
@@ -732,6 +736,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
             pinned={pinned}
             slowSec={slowSec}
             reactionsOn={reactionsOn}
+            quick={quick}
             onSend={sendChat}
             onReact={sendEmoji}
           />

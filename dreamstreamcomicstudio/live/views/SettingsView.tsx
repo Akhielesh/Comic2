@@ -8,7 +8,8 @@ import { canPickFolder, forgetDriveFolder, getDriveFolder, pickDriveFolder } fro
 import { QUALITY_PRESETS, presetById } from '../config';
 import type { Nav } from '../nav';
 import { DEFAULT_PREFS, LOOK_LABELS, loadPrefs, playChime, savePrefs, type StudioPrefs } from '../prefs';
-import { EMOJI_LIBRARY, QUICK_EMOJI } from '../emoji';
+import { normalizeQuick } from '../emoji';
+import { QuickBarEditor } from '../components/EmojiPicker';
 import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
@@ -326,26 +327,13 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               <Row title="Floating reactions" desc="Emoji that drift up over the program preview.">
                 <Toggle on={prefs.floatingReactions} onChange={(v) => set('floatingReactions', v)} label="Floating reactions" />
               </Row>
-              <div className="set-row">
-                <div className="set-row-text">
-                  <div className="set-row-title">Quick reactions</div>
-                  <div className="set-row-desc">One tap on the chat bar.</div>
-                </div>
-                <div className="set-row-ctl">
-                  <div className="row" style={{ gap: 4 }}>
-                    {QUICK_EMOJI.map((e) => <span key={e} className="emoji-chip">{e}</span>)}
-                  </div>
-                </div>
-              </div>
               <div className="set-row" style={{ alignItems: 'flex-start' }}>
                 <div className="set-row-text">
-                  <div className="set-row-title">Full library · {EMOJI_LIBRARY.length} reactions</div>
-                  <div className="set-row-desc">Everything viewers can send from the “+” picker next to the quick bar.</div>
+                  <div className="set-row-title">Your reaction bar</div>
+                  <div className="set-row-desc">The six reactions viewers tap with one touch — tap one to swap it. Everything else is a “+” away, sorted into Love, Hype, Cheer, Funny, Faces, Party and Things.</div>
                 </div>
-                <div className="set-row-ctl" style={{ maxWidth: 380 }}>
-                  <div className="emoji-lib-grid" role="list" aria-label="Reaction library">
-                    {EMOJI_LIBRARY.map((e) => <span key={e} className="emoji-chip" role="listitem">{e}</span>)}
-                  </div>
+                <div className="set-row-ctl">
+                  <QuickBarEditor value={normalizeQuick(prefs.quickReactions)} onChange={(v) => set('quickReactions', v)} />
                 </div>
               </div>
               <Row title="Slow mode" desc="Limit each viewer to one message every few seconds. Applied when you go live.">

@@ -5,6 +5,12 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **Reactions, designed (2026-10-21):** Settings no longer shows a wall of 108 emoji.
+  Pick your own six one-tap reactions (tap one, choose from the tabbed picker — it floats
+  up just like on stream); viewers get your bar when you go live. The "+" picker is now
+  sorted into Recent, Love, Hype, Cheer, Funny, Faces, Party and Things.
+
 ### Added
 - **Family calls (2026-10-21):** a new **Calls** tab — FaceTime-style video and voice
   calls with anyone in your nurseries, or "Call everyone" for a group of up to four.

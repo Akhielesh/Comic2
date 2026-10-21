@@ -32,6 +32,7 @@ import { loadPrefs, playChime, savePrefs } from '../prefs';
 import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
 import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
+import { normalizeQuick } from '../emoji';
 import { SceneSketch } from '../components/scenes';
 import { HelpButton } from '../components/Guide';
 import { Icon } from '../ui/icons';
@@ -577,6 +578,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     mixerRef.current?.unlock(); // browsers may gesture-gate AudioContexts
     socketRef.current?.send({ t: 'state', status: 'live' });
     if (prefs.slowSec > 0) socketRef.current?.send({ t: 'config', slow: prefs.slowSec });
+    // Your quick reactions become the viewers' one-tap bar.
+    socketRef.current?.send({ t: 'config', quick: normalizeQuick(prefs.quickReactions) });
     // Restarting an ended event is a NEW session — fresh clock, no stale end.
     const freshStart = statusRef.current === 'ended' ? Date.now() : startedAt ?? Date.now();
     setStartedAt(freshStart);
@@ -1346,6 +1349,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                   pinned={pinned}
                   canModerate
                   composerRef={composerRef}
+                  quick={normalizeQuick(prefs.quickReactions)}
                   onSend={sendChat}
                   onReact={sendEmoji}
                   onDelete={delChat}

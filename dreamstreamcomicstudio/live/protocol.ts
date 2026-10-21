@@ -43,6 +43,8 @@ export interface EventMeta {
   pinned: string | null;
   slowSec: number;
   reactionsOn: boolean;
+  /** The host's six one-tap reactions (absent on older rooms → the defaults). */
+  quick?: string[];
   /** Hard concurrent-viewer cap, host-set (≤200 platform ceiling). */
   maxViewers: number;
   viewers: number;
@@ -132,7 +134,7 @@ export type ServerMsg =
   | { t: 'lobby'; pending: LobbyEntry[] }
   | { t: 'people'; list: PersonEntry[] }
   | { t: 'log'; entry: LogEntry }
-  | { t: 'config'; slow: number; reactions: boolean; maxViewers: number }
+  | { t: 'config'; slow: number; reactions: boolean; maxViewers: number; quick?: string[] }
   | { t: 'milestone'; n: number }
   | { t: 'full'; max: number }
   | { t: 'notice'; text: string }

@@ -23,6 +23,8 @@ export interface StudioPrefs {
   chatOpen: boolean;
   /** Floating emoji over the program preview. */
   floatingReactions: boolean;
+  /** The six one-tap reactions viewers see (sent to the room when you go live). */
+  quickReactions: string[];
   /** Viewers wait this many seconds between messages (0 = off). */
   slowSec: number;
   /** Toast when someone joins the lobby / gets admitted. */
@@ -58,6 +60,7 @@ export const DEFAULT_PREFS: StudioPrefs = {
   pipSize: 'md',
   chatOpen: true,
   floatingReactions: true,
+  quickReactions: ['❤️', '🔥', '👏', '😂', '🤯', '🎉'],
   slowSec: 0,
   alertJoins: true,
   alertMilestones: true,
