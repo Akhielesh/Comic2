@@ -23,6 +23,10 @@ function isOpenPath(pathname: string): boolean {
 
 export const onRequest = async ({ request, next }: PagesContext): Promise<Response> => {
   const url = new URL(request.url);
+  // One site, one sign-in: www would keep its own separate session (localStorage is per host).
+  if (url.hostname === 'www.dreamstreamstudio.ai') {
+    return new Response(null, { status: 301, headers: { location: `https://dreamstreamstudio.ai${url.pathname}${url.search}` } });
+  }
   if (isOpenPath(url.pathname)) return next();
 
   const isCheckinAlias = url.pathname === '/agents' || url.pathname === '/agents/';

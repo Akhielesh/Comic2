@@ -55,6 +55,7 @@ import { modelBenchRouter } from './routes/modelBench.js';
 import { requireAdmin, requireResearcher } from './middleware/requireAdmin.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
+import { accountStudiosRouter } from './routes/accountStudios.js';
 import { learnRouter } from './routes/learn.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
@@ -245,6 +246,8 @@ app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
 app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).
+// Your access to every studio (both apps read the same answer).
+app.use('/api/account/studios', systemRateLimit, accountStudiosRouter);
 app.use('/api/account', systemRateLimit, accountRouter);
 // Account connectors (authenticated): catalog, connect, sync, disconnect, query, dashboard.
 app.use('/api/connectors', systemRateLimit, connectorsRouter);

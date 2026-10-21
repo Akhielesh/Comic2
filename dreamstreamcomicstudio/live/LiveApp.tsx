@@ -6,7 +6,8 @@
 //   ?e=ID#/summary?k=KEY   → private recap
 //   ?e=ID                  → invite page or watch page (meta decides)
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
-//                            #/account, #/monitor[/NURSERY[/camera|/watch]]
+//                            #/account, #/monitor[/NURSERY[/camera|/watch]],
+//                            #/calls, #/call/NURSERY/CALL (a call notification → Calls)
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { consumeAuthReturn, openAuth, signOutEverywhereLocal, useAccount } from './account';
 import { getEvent } from './api';
@@ -27,6 +28,12 @@ const MonitorHome = lazy(() => import('./views/MonitorHome').then((m) => ({ defa
 const NurseryHub = lazy(() => import('./views/MonitorHome').then((m) => ({ default: m.NurseryHub })));
 const MonitorCamera = lazy(() => import('./views/MonitorCamera').then((m) => ({ default: m.MonitorCamera })));
 const MonitorViewer = lazy(() => import('./views/MonitorViewer').then((m) => ({ default: m.MonitorViewer })));
+const MonitorJoin = lazy(() => import('./views/MonitorJoin').then((m) => ({ default: m.MonitorJoin })));
+const CallsView = lazy(() => import('./views/CallsView').then((m) => ({ default: m.CallsView })));
+import { useCalls } from './calls/callCenter';
+import { CallHost } from './views/calls/CallHost';
+import { StudiosCard } from './components/StudiosCard';
+import { isMissed, CALLS_SEEN_KEY } from './views/callsBadge';
 import { SettingsView } from './views/SettingsView';
 import { StudioView } from './views/StudioView';
 import { SummaryView } from './views/SummaryView';
@@ -37,8 +44,9 @@ import { StreamStudioLogo } from './ui/logo';
 import { Avatar, Btn, cx, useToasts, type PushToast } from './ui/primitives';
 
 export type Route =
-  | { view: 'dashboard' | 'create' | 'settings' | 'monitor' }
+  | { view: 'dashboard' | 'create' | 'settings' | 'monitor' | 'calls' }
   | { view: 'nursery' | 'monitor-camera' | 'monitor-watch'; nid: string }
+  | { view: 'monitor-join'; nid: string; code: string }
   | { view: 'studio' | 'summary'; id: string; k: string }
   | { view: 'guest'; id: string; g: string }
   | { view: 'summary-lookup'; id: string }
@@ -70,6 +78,11 @@ export function parseRoute(): Route {
   if (hash === 'create') return { view: 'create' };
   if (hash === 'settings' || hash === 'account') return { view: 'settings' };
   if (hash === 'monitor') return { view: 'monitor' };
+  // A ringing call's notification lands on Calls; the call itself rings on top.
+  if (hash === 'calls' || /^call\/[0-9a-f-]{36}\/[0-9a-f]{8,24}$/.test(hash)) return { view: 'calls' };
+  // Share link: #/monitor/join/<nursery>/<code> (the passcode is typed, never in the link).
+  const join = hash.match(/^monitor\/join\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{16,64})$/);
+  if (join) return { view: 'monitor-join', nid: join[1], code: join[2] };
   const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch))?$/);
   if (mon) {
     if (mon[2] === 'camera') return { view: 'monitor-camera', nid: mon[1] };
@@ -126,6 +139,7 @@ const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
   { id: 'create', label: 'New event', icon: 'plus' },
   { id: 'monitor', label: 'Baby monitor', icon: 'baby' },
+  { id: 'calls', label: 'Calls', icon: 'video' },
   { id: 'settings', label: 'Customize', icon: 'sliders' },
 ] as const;
 
@@ -134,6 +148,7 @@ const TOUR_FOR: Partial<Record<Route['view'], TourId>> = {
   create: 'create',
   studio: 'studio',
   monitor: 'monitor',
+  calls: 'calls',
   nursery: 'nursery',
   'monitor-watch': 'watch',
   'monitor-camera': 'camera',
@@ -177,6 +192,7 @@ function AccountButton({ onSettings, push, compact }: { onSettings: () => void; 
             <b>{name}</b>
             <span className="faint">{account.email}</span>
           </div>
+          <StudiosCard compact />
           {account.status === 'needs_code' && (
             <button role="menuitem" onClick={() => { setMenu(false); openAuth('code'); }}><Icon name="lock" size={15} />Enter welcome code</button>
           )}
@@ -202,6 +218,16 @@ export function LiveApp() {
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
   const [railOpen, setRailOpen] = useState(true);
   const [push, toastNode] = useToasts();
+  const calls = useCalls();
+  // Missed family calls since Calls was last opened.
+  const missed = useMemo(() => {
+    if (route.view === 'calls') return 0;
+    let seen = 0;
+    try {
+      seen = Number(localStorage.getItem(CALLS_SEEN_KEY)) || 0;
+    } catch { /* storage unavailable */ }
+    return calls.log.filter((r) => isMissed(r, calls.uid) && r.at > seen).length;
+  }, [calls.log, calls.uid, route.view]);
 
   useEffect(() => {
     applyAppearance(appearance);
@@ -257,6 +283,7 @@ export function LiveApp() {
         ? navigate(`?e=${encodeURIComponent(id)}`, `#/summary?k=${encodeURIComponent(key)}`)
         : navigate('', `#/summary/${id}`)),
       monitor: () => navigate('', '#/monitor'),
+      calls: () => navigate('', '#/calls'),
       nursery: (id) => navigate('', `#/monitor/${id}`),
       monitorCamera: (id) => navigate('', `#/monitor/${id}/camera`),
       monitorWatch: (id) => navigate('', `#/monitor/${id}/watch`),
@@ -285,12 +312,16 @@ export function LiveApp() {
         return <SettingsView nav={nav} push={push} />;
       case 'monitor':
         return <MonitorHome nav={nav} push={push} />;
+      case 'calls':
+        return <CallsView nav={nav} push={push} />;
       case 'nursery':
         return <NurseryHub id={route.nid} nav={nav} push={push} />;
       case 'monitor-camera':
         return <MonitorCamera id={route.nid} nav={nav} push={push} />;
       case 'monitor-watch':
         return <MonitorViewer id={route.nid} nav={nav} push={push} />;
+      case 'monitor-join':
+        return <MonitorJoin nid={route.nid} code={route.code} nav={nav} push={push} />;
       case 'dashboard':
       default:
         return <DashboardView nav={nav} push={push} />;
@@ -298,11 +329,12 @@ export function LiveApp() {
   };
 
   // Full-bleed surfaces own the whole viewport — no side rail.
-  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch'].includes(route.view);
+  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch', 'monitor-join'].includes(route.view);
   const activeNav =
     route.view === 'create' ? 'create'
     : route.view === 'settings' ? 'settings'
     : route.view === 'monitor' || route.view === 'nursery' ? 'monitor'
+    : route.view === 'calls' ? 'calls'
     : 'dashboard';
   const screenTour = TOUR_FOR[route.view] ?? null;
 
@@ -329,6 +361,7 @@ export function LiveApp() {
               >
                 <Icon name={n.icon} size={18} />
                 <span className="nav-label">{n.label}</span>
+                {n.id === 'calls' && missed > 0 && <span className="nav-badge" aria-label={`${missed} missed`}>{missed}</span>}
               </button>
             ))}
             <button className="nav-item" onClick={openHelp} data-tour="help">
@@ -384,6 +417,7 @@ export function LiveApp() {
             <button key={n.id} className={cx('tab-item', activeNav === n.id && 'active')} aria-current={activeNav === n.id ? 'page' : undefined} onClick={() => nav[n.id]()}>
               <Icon name={n.icon} size={20} />
               <span>{n.id === 'create' ? 'Go live' : n.id === 'monitor' ? 'Monitor' : n.label === 'Customize' ? 'Settings' : n.label}</span>
+              {n.id === 'calls' && missed > 0 && <span className="nav-badge">{missed}</span>}
             </button>
           ))}
           <button className="tab-item" onClick={openHelp} data-tour="help"><Icon name="help" size={20} /><span>Help</span></button>
@@ -391,6 +425,7 @@ export function LiveApp() {
       )}
 
       {route.view === 'dashboard' && <WelcomeTour ready />}
+      <CallHost push={push} suspended={route.view === 'monitor-camera'} />
       <AuthSheetHost push={push} />
       <GuideHost screenTour={screenTour} />
       {toastNode}

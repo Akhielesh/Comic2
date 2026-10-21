@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderEmail, EMAIL_TEMPLATE_NAMES, isEmailTemplateName, isMarketing, isNoReply, TEMPLATE_KIND } from './index.js';
+import { renderEmail, EMAIL_TEMPLATE_NAMES, isEmailTemplateName, isMarketing, isNoReply, senderRoleFor, TEMPLATE_KIND } from './index.js';
 
 describe('email templates', () => {
   it('renders every template with subject, html and text', () => {
@@ -209,5 +209,36 @@ describe('email templates', () => {
     expect(out.html).toContain('&lt;b&gt;tags&lt;/b&gt;');
     expect(out.html).toContain('Para two.');
     expect(out.html).toContain('Open');
+  });
+
+  it('auth-security-notice is an essential, reply-able notice with per-type copy', () => {
+    expect(isMarketing('auth-security-notice')).toBe(false);
+    expect(senderRoleFor('auth-security-notice')).toBe('notifications');
+    const linked = renderEmail('auth-security-notice', { notice: 'identity_linked', provider: 'github', email: 'ada@example.com' });
+    expect(linked.subject).toBe('A new sign-in method was linked — DreamStream Studio');
+    expect(linked.html).toContain('GitHub was linked');
+    expect(linked.html).toContain('support@dreamstreamstudio.ai');
+    expect(linked.html).toContain('required');
+    const mfa = renderEmail('auth-security-notice', { notice: 'mfa_factor_enrolled', factorType: 'totp' });
+    expect(mfa.text).toContain('authenticator app');
+    // Unknown/absent notice ⇒ a safe generic message, never a crash.
+    expect(renderEmail('auth-security-notice', {}).subject).toContain('security settings changed');
+    // Dynamic values are escaped.
+    expect(renderEmail('auth-security-notice', { notice: 'email_changed', oldEmail: '<b>x</b>' }).html).not.toContain('<b>x</b>');
+  });
+
+  it('auth-email-change has a distinct approve-from-current-address variant', () => {
+    const current = renderEmail('auth-email-change', {
+      emailChangeStep: 'current',
+      bothRequired: '1',
+      newEmail: 'new@example.com',
+      actionUrl: 'https://x.supabase.co/auth/v1/verify?token=h&type=email_change'
+    });
+    expect(current.subject).toContain('Approve your email change');
+    expect(current.html).toContain('new@example.com');
+    expect(current.text).toContain('both links are confirmed');
+    const next = renderEmail('auth-email-change', { newEmail: 'new@example.com', actionUrl: 'https://x.supabase.co/v' });
+    expect(next.subject).toContain('Confirm your new email');
+    expect(next.text).not.toContain('both links');
   });
 });

@@ -3,65 +3,89 @@
 //
 //   npx tsx scripts/email-preview.ts
 //   open docs/email/previews/index.html
+//
+// SMTP-fallback mode — the branded auth templates with Supabase's Go-template placeholders
+// ({{ .ConfirmationURL }}, {{ .Token }}, {{ .NewEmail }}, …) for pasting into Supabase →
+// Authentication → Emails when the Send Email Hook is OFF and Supabase sends over SMTP:
+//
+//   npx tsx scripts/email-preview.ts --supabase [--out <dir>]   # default docs/email/previews/supabase
 
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { EMAIL_TEMPLATE_NAMES, TEMPLATE_KIND, renderEmail, type EmailParams } from '../shared/email/index.js';
+import { EMAIL_TEMPLATE_NAMES, TEMPLATE_KIND, renderEmail, type EmailParams, type EmailTemplateName } from '../shared/email/index.js';
 
-const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'email', 'previews');
+const PREVIEWS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'email', 'previews');
 
-// Sample params shared across templates — only the relevant ones are read per template.
-const SAMPLE: EmailParams = {
-  firstName: 'Ada',
-  confirmUrl: 'https://dreamstreamstudio.ai/api/newsletter/confirm?e=ada@example.com&t=sample',
-  actionUrl: 'https://dreamstreamstudio.ai/auth/v1/verify?token=sample&type=signup',
-  unsubscribeUrl: 'https://dreamstreamstudio.ai/api/newsletter/unsubscribe?e=ada@example.com&t=sample',
-  secureUrl: 'https://dreamstreamstudio.ai/account/security',
-  pixelUrl: 'https://dreamstreamstudio.ai/api/email/o/sample.gif',
-  token: '123456',
-  newEmail: 'ada.new@example.com',
-  time: 'Jun 8, 2026, 10:24 AM UTC',
-  device: 'Chrome 126 on macOS',
-  location: 'Austin, Texas, US',
-  ip: '203.0.113.42',
-  title: 'New: 8 fresh comic styles ✨',
-  body: 'We just dropped woodcut, dieselpunk, ink-wash and 5 more styles.\n\nTry them on your next page — pick a style in the Style panel and regenerate.',
-  ctaUrl: 'https://dreamstreamstudio.ai/studio',
-  ctaLabel: 'Try the new styles',
-  heading: 'Scheduled maintenance this Sunday',
-  inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-7K9F-Q3MX',
-  inviterName: 'Akhielesh',
-  personalNote: 'You have to try this — built our last comic in an afternoon.',
-  code: 'DS-7K9F-Q3MX'
-};
+const args = process.argv.slice(2);
+const outFlag = args.indexOf('--out');
+const supabaseMode = args.includes('--supabase');
+const OUT_DIR = outFlag >= 0 && args[outFlag + 1] ? resolve(args[outFlag + 1]) : supabaseMode ? resolve(PREVIEWS_DIR, 'supabase') : PREVIEWS_DIR;
 
-mkdirSync(OUT_DIR, { recursive: true });
+const escapeCell = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
-const rows: string[] = [];
-for (const name of EMAIL_TEMPLATE_NAMES) {
-  const { subject, html } = renderEmail(name, SAMPLE);
-  const file = `${name}.html`;
-  writeFileSync(resolve(OUT_DIR, file), html, 'utf8');
-  rows.push(
-    `<tr><td><a href="./${file}">${name}</a></td><td>${TEMPLATE_KIND[name]}</td><td>${subject.replace(/</g, '&lt;')}</td></tr>`
-  );
-  console.log(`✓ ${file}  (${TEMPLATE_KIND[name]})  — ${subject}`);
+if (supabaseMode) {
+  renderSupabaseTemplates();
+} else {
+  renderPreviews();
 }
 
-// studio-invite is keyed by studio id (the bare render above shows the Stream Studio
-// default) — also emit the Comic/Chat variants so all three feature sets are reviewable.
-for (const studio of ['comic_studio', 'chat_studio'] as const) {
-  const { subject, html } = renderEmail('studio-invite', { ...SAMPLE, studio, inviteUrl: undefined });
-  const file = `studio-invite-${studio}.html`;
-  writeFileSync(resolve(OUT_DIR, file), html, 'utf8');
-  rows.push(
-    `<tr><td><a href="./${file}">studio-invite (${studio})</a></td><td>${TEMPLATE_KIND['studio-invite']}</td><td>${subject.replace(/</g, '&lt;')}</td></tr>`
-  );
-  console.log(`✓ ${file}  (${TEMPLATE_KIND['studio-invite']})  — ${subject}`);
-}
+function renderPreviews() {
+  // Sample params shared across templates — only the relevant ones are read per template.
+  const SAMPLE: EmailParams = {
+    firstName: 'Ada',
+    confirmUrl: 'https://dreamstreamstudio.ai/api/newsletter/confirm?e=ada@example.com&t=sample',
+    actionUrl: 'https://dreamstreamstudio.ai/auth/v1/verify?token=sample&type=signup',
+    unsubscribeUrl: 'https://dreamstreamstudio.ai/api/newsletter/unsubscribe?e=ada@example.com&t=sample',
+    secureUrl: 'https://dreamstreamstudio.ai/account/security',
+    pixelUrl: 'https://dreamstreamstudio.ai/api/email/o/sample.gif',
+    token: '123456',
+    newEmail: 'ada.new@example.com',
+    time: 'Jun 8, 2026, 10:24 AM UTC',
+    device: 'Chrome 126 on macOS',
+    location: 'Austin, Texas, US',
+    ip: '203.0.113.42',
+    title: 'New: 8 fresh comic styles ✨',
+    body: 'We just dropped woodcut, dieselpunk, ink-wash and 5 more styles.\n\nTry them on your next page — pick a style in the Style panel and regenerate.',
+    ctaUrl: 'https://dreamstreamstudio.ai/studio',
+    ctaLabel: 'Try the new styles',
+    heading: 'Scheduled maintenance this Sunday',
+    inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-7K9F-Q3MX',
+    inviterName: 'Akhielesh',
+    personalNote: 'You have to try this — built our last comic in an afternoon.',
+    code: 'DS-7K9F-Q3MX',
+    notice: 'password_changed',
+    email: 'ada@example.com'
+  };
 
-const index = `<!doctype html><meta charset="utf-8"><title>DreamStream email previews</title>
+  mkdirSync(OUT_DIR, { recursive: true });
+
+  const rows: string[] = [];
+  const emit = (file: string, label: string, name: EmailTemplateName, params: EmailParams) => {
+    const { subject, html } = renderEmail(name, params);
+    writeFileSync(resolve(OUT_DIR, file), html, 'utf8');
+    rows.push(`<tr><td><a href="./${file}">${label}</a></td><td>${TEMPLATE_KIND[name]}</td><td>${escapeCell(subject)}</td></tr>`);
+    console.log(`✓ ${file}  (${TEMPLATE_KIND[name]})  — ${subject}`);
+  };
+
+  for (const name of EMAIL_TEMPLATE_NAMES) emit(`${name}.html`, name, name, SAMPLE);
+
+  // studio-invite is keyed by studio id (the bare render above shows the Stream Studio
+  // default) — also emit the Comic/Chat variants so all three feature sets are reviewable.
+  for (const studio of ['comic_studio', 'chat_studio'] as const) {
+    emit(`studio-invite-${studio}.html`, `studio-invite (${studio})`, 'studio-invite', { ...SAMPLE, studio, inviteUrl: undefined });
+  }
+
+  // Auth-hook variants: the Secure Email Change "approve from your current address" mail and
+  // the code-first email OTP.
+  emit('auth-email-change-current.html', 'auth-email-change (current address)', 'auth-email-change', {
+    ...SAMPLE,
+    emailChangeStep: 'current',
+    bothRequired: '1'
+  });
+  emit('auth-magic-link-otp.html', 'auth-magic-link (email OTP)', 'auth-magic-link', { ...SAMPLE, codeFirst: '1' });
+
+  const index = `<!doctype html><meta charset="utf-8"><title>DreamStream email previews</title>
 <style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}
 table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px}
 th{background:#FACC15}a{color:#2563EB}</style>
@@ -70,5 +94,92 @@ th{background:#FACC15}a{color:#2563EB}</style>
 <table><thead><tr><th>Template</th><th>Kind</th><th>Subject</th></tr></thead><tbody>
 ${rows.join('\n')}
 </tbody></table>`;
-writeFileSync(resolve(OUT_DIR, 'index.html'), index, 'utf8');
-console.log(`\nWrote ${EMAIL_TEMPLATE_NAMES.length} previews + index.html to ${OUT_DIR}`);
+  writeFileSync(resolve(OUT_DIR, 'index.html'), index, 'utf8');
+  console.log(`\nWrote ${rows.length} previews + index.html to ${OUT_DIR}`);
+}
+
+function renderSupabaseTemplates() {
+  // A sentinel http URL survives safeUrl() (which blanks non-http hrefs to "#"); it is swapped
+  // for the Go placeholder after rendering.
+  const URL_SENTINEL = 'https://supabase-confirmation-url.invalid/';
+  const URL_VAR = '{{ .ConfirmationURL }}';
+  const TOKEN = '{{ .Token }}';
+
+  // Supabase dashboard template name → our template + placeholder params.
+  const TEMPLATES: Array<{ file: string; supabase: string; template: EmailTemplateName; params: EmailParams }> = [
+    { file: 'confirm-signup', supabase: 'Confirm sign up', template: 'auth-confirm-signup', params: { actionUrl: URL_SENTINEL, token: TOKEN } },
+    { file: 'invite-user', supabase: 'Invite user', template: 'auth-invite', params: { actionUrl: URL_SENTINEL, token: TOKEN } },
+    { file: 'magic-link', supabase: 'Magic link or OTP', template: 'auth-magic-link', params: { actionUrl: URL_SENTINEL, token: TOKEN } },
+    {
+      file: 'change-email',
+      supabase: 'Change email address',
+      template: 'auth-email-change',
+      params: { actionUrl: URL_SENTINEL, token: TOKEN, newEmail: '{{ .NewEmail }}' }
+    },
+    { file: 'reset-password', supabase: 'Reset password', template: 'auth-recovery', params: { actionUrl: URL_SENTINEL, token: TOKEN } },
+    { file: 'reauthentication', supabase: 'Reauthentication', template: 'auth-reauthentication', params: { token: TOKEN } },
+    { file: 'password-changed', supabase: 'Password changed', template: 'auth-security-notice', params: { notice: 'password_changed', email: '{{ .Email }}' } },
+    {
+      file: 'email-changed',
+      supabase: 'Email address changed',
+      template: 'auth-security-notice',
+      params: { notice: 'email_changed', oldEmail: '{{ .OldEmail }}', newEmail: '{{ .Email }}', email: '{{ .Email }}' }
+    },
+    {
+      file: 'phone-changed',
+      supabase: 'Phone number changed',
+      template: 'auth-security-notice',
+      params: { notice: 'phone_changed', oldPhone: '{{ .OldPhone }}', phone: '{{ .Phone }}', email: '{{ .Email }}' }
+    },
+    {
+      file: 'identity-linked',
+      supabase: 'Sign-in method linked',
+      template: 'auth-security-notice',
+      params: { notice: 'identity_linked', provider: '{{ .Provider }}', email: '{{ .Email }}' }
+    },
+    {
+      file: 'identity-unlinked',
+      supabase: 'Sign-in method removed',
+      template: 'auth-security-notice',
+      params: { notice: 'identity_unlinked', provider: '{{ .Provider }}', email: '{{ .Email }}' }
+    },
+    {
+      file: 'mfa-factor-enrolled',
+      supabase: 'Verification method added',
+      template: 'auth-security-notice',
+      params: { notice: 'mfa_factor_enrolled', factorType: '{{ .FactorType }}', email: '{{ .Email }}' }
+    },
+    {
+      file: 'mfa-factor-unenrolled',
+      supabase: 'Verification method removed',
+      template: 'auth-security-notice',
+      params: { notice: 'mfa_factor_unenrolled', factorType: '{{ .FactorType }}', email: '{{ .Email }}' }
+    }
+  ];
+
+  mkdirSync(OUT_DIR, { recursive: true });
+  const rows: string[] = [];
+  for (const t of TEMPLATES) {
+    const { subject, html } = renderEmail(t.template, t.params);
+    const body = html.split(URL_SENTINEL).join(URL_VAR);
+    if (body.includes('supabase-confirmation-url.invalid')) throw new Error(`${t.file}: URL placeholder leaked`);
+    writeFileSync(resolve(OUT_DIR, `${t.file}.html`), body, 'utf8');
+    rows.push(`<tr><td>${t.supabase}</td><td><a href="./${t.file}.html">${t.file}.html</a></td><td><code>${escapeCell(subject)}</code></td></tr>`);
+    console.log(`✓ ${t.file}.html  [${t.supabase}]  subject: ${subject}`);
+  }
+
+  const index = `<!doctype html><meta charset="utf-8"><title>Supabase email templates</title>
+<style>body{font-family:system-ui,sans-serif;max-width:860px;margin:40px auto;padding:0 16px}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px}
+th{background:#FACC15}a{color:#2563EB}</style>
+<h1>Supabase Auth email templates (SMTP fallback)</h1>
+<p>Generated by <code>scripts/email-preview.ts --supabase</code>. Only needed while the Send Email Hook is
+<strong>off</strong> (Supabase then sends over SMTP with these). Paste each file's HTML into Supabase →
+Authentication → Emails → the template named in the first column, and its subject into the Subject field.
+Opening the files here shows raw <code>{{ … }}</code> placeholders — Supabase fills them at send time.</p>
+<table><thead><tr><th>Supabase template</th><th>File</th><th>Subject</th></tr></thead><tbody>
+${rows.join('\n')}
+</tbody></table>`;
+  writeFileSync(resolve(OUT_DIR, 'index.html'), index, 'utf8');
+  console.log(`\nWrote ${TEMPLATES.length} Supabase templates + index.html to ${OUT_DIR}`);
+}

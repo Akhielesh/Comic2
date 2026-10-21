@@ -6,8 +6,10 @@
 //
 //   POST /send       — HMAC-signed (x-email-signature) calls from the backend.
 //                      Body: { template, to, params?, subject?, replyTo? }.
-//   POST /auth-hook   — Supabase "Send Email Hook" (Standard Webhooks signature). Turns
-//                      GoTrue's signup/magic-link/recovery/… into branded mail.
+//   POST /auth-hook   — Supabase "Send Email Hook" (Standard Webhooks signature). Turns every
+//                      GoTrue email (signup, magic link/OTP, recovery, invite, email change,
+//                      reauthentication, security notifications) into branded mail. The
+//                      pure verify + payload→email logic lives in ./authHook.ts (unit-tested).
 //   GET  /health      — liveness probe.
 //
 // Templates live in ../../shared/email (shared with the app + preview script) so the inbox
@@ -23,6 +25,7 @@ import {
   type EmailTemplateName,
   type RenderedEmail
 } from '../../shared/email';
+import { maskEmail, planAuthEmails, timingSafeEqual, verifyStandardWebhook, webhookHeaders, type AuthHookPayload } from './authHook';
 
 interface EmailAddress {
   email: string;
@@ -87,15 +90,6 @@ const brandFromEnv = (env: Env): Partial<BrandConfig> => ({
 const enc = new TextEncoder();
 const bytesToHex = (buf: ArrayBuffer): string =>
   [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-const b64ToBytes = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-const bytesToB64 = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes));
-
-const timingSafeEqual = (a: string, b: string): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-};
 
 /** Verify the backend's `x-email-signature: sha256=<hex>` over the raw body. */
 async function verifyHmac(secret: string, signature: string | null, body: string): Promise<boolean> {
@@ -105,43 +99,18 @@ async function verifyHmac(secret: string, signature: string | null, body: string
   return timingSafeEqual(signature, 'sha256=' + bytesToHex(mac));
 }
 
-/** Verify a Standard Webhooks signature (the scheme Supabase auth hooks use). */
-async function verifyStandardWebhook(secret: string, headers: Headers, body: string): Promise<boolean> {
-  const id = headers.get('webhook-id');
-  const timestamp = headers.get('webhook-timestamp');
-  const sigHeader = headers.get('webhook-signature');
-  if (!secret || !id || !timestamp || !sigHeader) return false;
-
-  // Replay window: reject timestamps more than 5 minutes from now.
-  const now = Math.floor(Date.now() / 1000);
-  if (!Number.isFinite(Number(timestamp)) || Math.abs(now - Number(timestamp)) > 300) return false;
-
-  // Secret arrives as `v1,whsec_<base64>` (Supabase) — strip the known prefixes.
-  let raw = secret;
-  if (raw.startsWith('v1,')) raw = raw.slice(3);
-  if (raw.startsWith('whsec_')) raw = raw.slice(6);
-
-  const key = await crypto.subtle.importKey('raw', b64ToBytes(raw), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(`${id}.${timestamp}.${body}`));
-  const expected = bytesToB64(new Uint8Array(mac));
-
-  // Header is a space-separated list of `v1,<base64sig>`.
-  return sigHeader
-    .split(' ')
-    .map((part) => (part.includes(',') ? part.split(',')[1] : part))
-    .some((candidate) => timingSafeEqual(candidate, expected));
-}
-
 // Pick the FROM mailbox for a template's sender role (no-reply@ / hello@ / notifications@),
 // all on the verified sending domain. Any address on that domain is allowed once the domain
 // is onboarded — no per-address verification needed.
-function senderFrom(env: Env, template: EmailTemplateName): EmailAddress {
+// `fromName` overrides the display name for one send (Stream Studio auth mail).
+function senderFrom(env: Env, template: EmailTemplateName, fromName?: string): EmailAddress {
   const [defaultLocal, domain] = env.EMAIL_FROM.split('@');
   const zone = (domain || 'dreamstreamstudio.ai').trim();
   const role = senderRoleFor(template);
   const email =
     role === 'no-reply' ? `no-reply@${zone}` : role === 'hello' ? `hello@${zone}` : `${defaultLocal || 'notifications'}@${zone}`;
-  return env.EMAIL_FROM_NAME ? { email, name: env.EMAIL_FROM_NAME } : { email };
+  const name = fromName || env.EMAIL_FROM_NAME;
+  return name ? { email, name } : { email };
 }
 
 // ── Sending ───────────────────────────────────────────────────────────────────
@@ -172,74 +141,64 @@ async function dispatch(
   return result.messageId;
 }
 
-// ── Supabase auth-hook mapping ─────────────────────────────────────────────────
-interface AuthHookPayload {
-  user?: { email?: string; new_email?: string; user_metadata?: Record<string, unknown> };
-  email_data?: {
-    token?: string;
-    token_hash?: string;
-    token_hash_new?: string;
-    redirect_to?: string;
-    email_action_type?: string;
-    site_url?: string;
-  };
-}
-
-const ACTION_TO_TEMPLATE: Record<string, EmailTemplateName> = {
-  signup: 'auth-confirm-signup',
-  magiclink: 'auth-magic-link',
-  recovery: 'auth-recovery',
-  invite: 'auth-invite',
-  email_change: 'auth-email-change',
-  email_change_new: 'auth-email-change',
-  reauthentication: 'auth-reauthentication'
-};
-
-function buildVerifyUrl(env: Env, data: NonNullable<AuthHookPayload['email_data']>): string {
-  const base = (env.SUPABASE_VERIFY_URL || data.site_url || '').replace(/\/$/, '');
-  const type = data.email_action_type || 'signup';
-  const tokenHash = data.token_hash_new || data.token_hash || '';
-  const redirect = data.redirect_to ? `&redirect_to=${encodeURIComponent(data.redirect_to)}` : '';
-  return `${base}/auth/v1/verify?token=${encodeURIComponent(tokenHash)}&type=${encodeURIComponent(type)}${redirect}`;
-}
+// ── Supabase auth hook ─────────────────────────────────────────────────────────
+// Status codes follow Supabase's HTTP-hook contract: 200 = handled (GoTrue reads an `error`
+// key in a 200 body as a failure, so success bodies never carry one); any 4xx/5xx fails the
+// user's auth action. Every response is application/json, which GoTrue requires.
+const hookError = (status: number, message: string): Response => json({ error: { http_code: status, message } }, status);
 
 async function handleAuthHook(req: Request, env: Env): Promise<Response> {
-  if (!env.SUPABASE_AUTH_HOOK_SECRET) return json({ error: 'auth hook disabled' }, 503);
+  // No secret ⇒ refuse rather than accept unsigned calls. Never enable the hook in Supabase
+  // before this secret is set: while it's missing, every auth email fails.
+  if (!env.SUPABASE_AUTH_HOOK_SECRET) return hookError(503, 'auth hook disabled');
   const body = await req.text();
-  if (!(await verifyStandardWebhook(env.SUPABASE_AUTH_HOOK_SECRET, req.headers, body))) {
-    return json({ error: 'invalid signature' }, 401);
+  const verdict = await verifyStandardWebhook(env.SUPABASE_AUTH_HOOK_SECRET, webhookHeaders(req.headers), body);
+  if (!verdict.ok) {
+    console.warn(`[auth-hook] rejected request: ${verdict.reason}`);
+    return hookError(401, 'invalid signature');
   }
 
   let payload: AuthHookPayload;
   try {
     payload = JSON.parse(body) as AuthHookPayload;
   } catch {
-    return json({ error: 'invalid json' }, 400);
+    return hookError(400, 'invalid json');
   }
 
-  const data = payload.email_data;
-  const to = payload.user?.email;
-  const action = data?.email_action_type || '';
-  const template = ACTION_TO_TEMPLATE[action];
-  if (!data || !to || !template) return json({ error: `unsupported action: ${action}` }, 400);
-
-  const meta = payload.user?.user_metadata ?? {};
-  const params: EmailParams = {
-    actionUrl: buildVerifyUrl(env, data),
-    token: data.token,
-    firstName: (meta.first_name as string) || (meta.name as string) || '',
-    newEmail: payload.user?.new_email || ''
-  };
-
-  try {
-    const rendered = renderEmail(template, params, brandFromEnv(env));
-    const messageId = await dispatch(env, to, rendered, { from: senderFrom(env, template) });
-    return json({ ok: true, messageId });
-  } catch (err) {
-    // Returning 200 here would tell Supabase the mail was sent. Surface the failure so
-    // GoTrue can fall back / the dashboard shows the error.
-    return json({ error: (err as Error)?.message || 'send failed' }, 502);
+  const plan = planAuthEmails(payload, { verifyBaseUrl: env.SUPABASE_VERIFY_URL, appUrl: env.APP_URL });
+  if (plan.kind === 'skip') {
+    // e.g. an email_action_type Supabase added after this deploy — log it, don't break the user's flow.
+    console.warn(`[auth-hook] skipped ${plan.action || '(none)'}: ${plan.reason}`);
+    return json({ ok: true, skipped: true, reason: plan.reason });
   }
+  if (plan.kind === 'invalid') {
+    console.error(`[auth-hook] invalid ${plan.action || '(none)'} payload: ${plan.reason}`);
+    return hookError(400, plan.reason);
+  }
+
+  const brand = { ...brandFromEnv(env), ...plan.brand };
+  // Send in parallel (Supabase gives the whole hook ~5s). An email change needs BOTH mails —
+  // if either fails, report failure so the user retries instead of waiting on a dead link.
+  const results = await Promise.allSettled(
+    plan.emails.map(async (email) =>
+      dispatch(env, email.to, renderEmail(email.template, email.params, brand), {
+        from: senderFrom(env, email.template, plan.brand.productName)
+      })
+    )
+  );
+  const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [{ email: plan.emails[i], error: r.reason }] : []));
+  results.forEach((r, i) => {
+    const { label, to } = plan.emails[i];
+    if (r.status === 'fulfilled') console.log(`[auth-hook] sent ${label} → ${maskEmail(to)} (${r.value})`);
+  });
+  if (failed.length) {
+    for (const f of failed) {
+      console.error(`[auth-hook] send failed ${f.email.label} → ${maskEmail(f.email.to)}: ${(f.error as Error)?.message || f.error}`);
+    }
+    // Returning 200 would tell Supabase the mail went out. Surface it so the user sees an error.
+    return hookError(502, (failed[0].error as Error)?.message || 'send failed');
+  }
+  return json({ ok: true, sent: results.length });
 }
 
 // ── Backend /send ──────────────────────────────────────────────────────────────

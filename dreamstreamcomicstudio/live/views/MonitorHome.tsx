@@ -24,6 +24,7 @@ import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
 import { Avatar, Btn, Field, Pill, Segmented, cx, type PushToast } from '../ui/primitives';
 import { openGuide, useFirstVisitTour } from '../components/Guide';
+import { callCenter } from '../calls/callCenter';
 import { checkBrowser } from '../monitor/camera';
 import { hideSetup, setupDone, setupHidden, SETUP_STEPS, type SetupStep } from '../monitor/setupProgress';
 
@@ -114,6 +115,7 @@ function MonitorList({ nav, push }: { nav: Nav; push: PushToast }) {
       return;
     }
     push('Nursery created — now add a camera', { icon: 'check' });
+    void callCenter.refresh(); // the new family can call each other right away
     nav.nursery(r.nursery.id);
   };
 
@@ -305,7 +307,17 @@ function NurseryHubBody({ nursery, setNursery, account, device, setDevice, editi
         </div>
       </div>
 
-      <PeoplePanel nursery={nursery} push={push} onChanged={load} />
+      <PeoplePanel
+        nursery={nursery}
+        push={push}
+        onChanged={load}
+        onShare={() => {
+          try {
+            sessionStorage.setItem(FOCUS_KEY, 'share');
+          } catch { /* storage unavailable */ }
+          nav.monitorWatch(id);
+        }}
+      />
     </div>
   );
 }
@@ -424,7 +436,7 @@ function EditNursery({ nursery, onSaved, onDeleted, push, canDelete }: { nursery
 
 /* ------------------------------------------------------------- people */
 
-function PeoplePanel({ nursery, push, onChanged }: { nursery: Nursery; push: PushToast; onChanged: () => void }) {
+function PeoplePanel({ nursery, push, onChanged, onShare }: { nursery: Nursery; push: PushToast; onChanged: () => void; onShare: () => void }) {
   const [people, setPeople] = useState<NurseryPerson[] | null>(null);
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Person[]>([]);
@@ -494,11 +506,14 @@ function PeoplePanel({ nursery, push, onChanged }: { nursery: Nursery; push: Pus
               aria-label="Search people by name"
             />
           </div>
+          <button className="linkish people-share" onClick={onShare}>
+            <Icon name="link" size={13} /> No account? Share a guest link with a passcode
+          </button>
           {q.trim().length >= 2 && (
             <div className="search-results">
               {searching && <div className="faint sr-empty">Searching…</div>}
               {!searching && results.length === 0 && (
-                <div className="faint sr-empty">No one named “{q.trim()}” yet. They need a Stream Studio account first — ask them to sign up with the welcome code.</div>
+                <div className="faint sr-empty">No one named “{q.trim()}” yet. They need a Stream Studio account (with the welcome code) — or send them a guest link with a passcode instead.</div>
               )}
               {results.map((p) => (
                 <button key={p.user_id} className="sr-row" disabled={memberIds.has(p.user_id)} onClick={() => { setAdding(p); setLabel(''); setRole('caregiver'); }}>

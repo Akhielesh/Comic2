@@ -31,6 +31,7 @@ const SYSTEM_ONLY = new Set<string>([
   'auth-email-change',
   'auth-reauthentication',
   'auth-invite',
+  'auth-security-notice',
   'newsletter-confirm'
 ]);
 

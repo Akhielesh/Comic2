@@ -3,6 +3,7 @@
  * live-worker/src/monitorRoom.ts — the worker compiles separately).
  */
 
+import type { BabyProfile, TrackItem, TrackKind } from './trackTypes';
 import type { SoundCat } from './soundClasses';
 import type { Zone } from './vision';
 
@@ -46,6 +47,15 @@ export interface CamStatus {
   outside?: number | null;
   /** An adult is in the room right now. */
   visit?: boolean;
+  /** Smart vision (beta) — what the camera can tell about the baby right now. */
+  scene?: {
+    baby: boolean;
+    posture: 'lying' | 'sitting' | 'standing' | null;
+    where: string | null;
+    holding: string | null;
+    near: string[];
+    adult: boolean;
+  } | null;
 }
 
 export interface CamPresence {
@@ -65,6 +75,22 @@ export interface ViewerPresence {
   role: MonRole;
   dn: string;
   relay: boolean;
+  /** Joined with the share link + passcode (no account). */
+  guest?: boolean;
+}
+
+/** Guest access, as parents see it (never the passcode). */
+export interface ShareInfo {
+  on: boolean;
+  /** The link's secret part (…/join/<nursery>/<code>). */
+  code: string | null;
+  role: 'viewer' | 'caregiver';
+  created_at: number | null;
+  created_by: string | null;
+  expires_at: number | null;
+  /** Too many wrong passcodes: nobody can join until then. */
+  locked_until: number | null;
+  guests: { id: string; name: string; role: 'viewer' | 'caregiver'; created_at: number; last_seen: number; expires_at: number }[];
 }
 
 export type MonLogKind =
@@ -107,6 +133,8 @@ export interface MonSettings {
   sleepTracking?: boolean;
   /** Zones per camera device id. */
   zones?: Record<string, Zone[]>;
+  /** For the tracker's age-based guidance. */
+  baby?: BabyProfile;
   /** The nursery's time zone. */
   tz?: string;
 }
@@ -225,7 +253,7 @@ export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'v
 export type MonServerMsg =
   | {
       t: 'hello';
-      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string };
+      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string; guest?: boolean };
       nursery: { id: string; name: string; baby: string | null };
       cams: CamPresence[];
       viewers: ViewerPresence[];
@@ -235,10 +263,16 @@ export type MonServerMsg =
       incidents?: Incident[];
       duty?: Duty | null;
       sleep?: SleepStatus;
+      track?: { running: TrackItem[]; latest: Partial<Record<TrackKind, TrackItem>> };
       ice: RTCIceServer[];
       vapid: string | null;
     }
   | { t: 'presence'; cams: CamPresence[]; viewers: ViewerPresence[] }
+  | { t: 'share'; share: ShareInfo }
+  | { t: 'track'; item: TrackItem }
+  | { t: 'track_del'; id: string }
+  | { t: 'track_err'; id?: string; msg: string }
+  | { t: 'share_err'; msg: string }
   | { t: 'rtc'; from: string; d: MonRtc; name?: string; label?: string | null; role?: MonRole }
   | { t: 'status'; dev: string; sid: string; st: CamStatus; at: number }
   | { t: 'log'; entry: MonLog }

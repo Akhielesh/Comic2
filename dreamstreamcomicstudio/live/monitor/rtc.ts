@@ -10,12 +10,58 @@
  *                     while they talk)
  * Outgoing tracks are swapped with replaceTrack — no renegotiation, no glare,
  * instant on/off like FaceTime's mute and camera buttons.
+ *
+ * A data channel ('mon') rides along: the camera sends its status and sound /
+ * vision events straight to each viewer, so on the same home Wi-Fi the picture
+ * AND the alerts keep going when the internet (and so the room) is down. A
+ * connected call is never torn down just because the room lost track of a
+ * socket — it ends when the peers themselves can't reach each other.
  */
 
 import { TalkProcessor } from './voice';
 import type { MonRtc } from './protocol';
 
 export type Signal = (to: string, d: MonRtc) => void;
+/** How the media flows: on the home network, across the internet, or through a relay server. */
+export type NetPath = 'lan' | 'internet' | 'relay';
+
+const isPrivateIp = (ip?: string | null) =>
+  !!ip && (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.)/.test(ip) || /^f[cd][0-9a-f]{2}:/i.test(ip) || /^fe80:/i.test(ip) || ip.endsWith('.local'));
+
+/** Classify a selected ICE candidate pair. */
+export function classifyPath(local: { candidateType?: string; address?: string | null }, remote: { candidateType?: string; address?: string | null }): NetPath {
+  if (local.candidateType === 'relay' || remote.candidateType === 'relay') return 'relay';
+  const remoteLocal = remote.candidateType === 'host' || isPrivateIp(remote.address);
+  const localLocal = local.candidateType === 'host' || isPrivateIp(local.address);
+  return localLocal && remoteLocal ? 'lan' : 'internet';
+}
+
+/** The path the connection is using right now (null until it's chosen). */
+export async function netPath(pc: RTCPeerConnection): Promise<NetPath | null> {
+  try {
+    const stats = await pc.getStats();
+    let pairId: string | undefined;
+    stats.forEach((r: { type: string; selectedCandidatePairId?: string }) => {
+      if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+    });
+    let pair: { localCandidateId?: string; remoteCandidateId?: string } | undefined;
+    stats.forEach((r: { type: string; id: string; nominated?: boolean; state?: string; selected?: boolean; localCandidateId?: string; remoteCandidateId?: string }) => {
+      if (r.type !== 'candidate-pair') return;
+      if (pairId ? r.id === pairId : r.selected || (r.nominated && r.state === 'succeeded')) pair = r;
+    });
+    if (!pair) return null;
+    const local = stats.get(pair.localCandidateId!) as { candidateType?: string; address?: string } | undefined;
+    const remote = stats.get(pair.remoteCandidateId!) as { candidateType?: string; address?: string } | undefined;
+    return local && remote ? classifyPath(local, remote) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Messages on the camera → viewer data channel. */
+export type DirectMsg =
+  | { t: 'st'; st: Record<string, unknown>; dev: string }
+  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; label?: string; sharp?: boolean; name?: string; at: number; dev: string };
 export type Quality = 'hd' | 'sd' | 'audio';
 
 const QUALITY_BPS: Record<Exclude<Quality, 'audio'>, number> = { hd: 1_600_000, sd: 450_000 };
@@ -46,6 +92,7 @@ interface CamPeer {
   pc: RTCPeerConnection;
   quality: Quality;
   name: string;
+  dc: RTCDataChannel | null;
 }
 
 export class CameraHub {
@@ -68,6 +115,32 @@ export class CameraHub {
 
   get count(): number {
     return [...this.peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
+  }
+
+  /** Straight to every viewer over the data channel (works without the room). */
+  direct(msg: DirectMsg): number {
+    const raw = JSON.stringify(msg);
+    let n = 0;
+    for (const p of this.peers.values()) {
+      if (p.dc?.readyState !== 'open') continue;
+      try {
+        p.dc.send(raw);
+        n++;
+      } catch { /* closing */ }
+    }
+    return n;
+  }
+
+  /**
+   * The room says a viewer's socket left. If our call with them is still up
+   * (their internet blipped, or the house's did), keep it; it closes itself
+   * if they really are gone.
+   */
+  release(sid: string): void {
+    const peer = this.peers.get(sid);
+    if (!peer) return;
+    if (peer.pc.connectionState === 'connected') return;
+    this.close(sid);
   }
 
   private videoFor(peer: CamPeer): MediaStreamTrack | null {
@@ -106,7 +179,10 @@ export class CameraHub {
   private create(sid: string, who: string): CamPeer {
     this.close(sid);
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle' });
-    const peer: CamPeer = { pc, quality: 'hd', name: who };
+    const peer: CamPeer = { pc, quality: 'hd', name: who, dc: null };
+    pc.ondatachannel = (e) => {
+      if (e.channel.label === 'mon') peer.dc = e.channel;
+    };
     pc.onicecandidate = (e) => this.signal(sid, { ice: e.candidate ? e.candidate.toJSON() : null });
     pc.ontrack = (e) => {
       const stream = e.streams[0] ?? new MediaStream([e.track]);
@@ -188,8 +264,13 @@ export class ViewerLink {
   private disconnectedAt: number | null = null;
   private watchdog: number | undefined;
   state: LinkState = 'idle';
+  path: NetPath | null = null;
   onStream: ((s: MediaStream | null) => void) | null = null;
   onState: ((s: LinkState) => void) | null = null;
+  /** Status and events straight from the camera (the data channel). */
+  onDirect: ((m: DirectMsg) => void) | null = null;
+  onPath: ((p: NetPath | null) => void) | null = null;
+  private pathTimer: number | undefined;
 
   constructor(private signal: Signal, private ice: RTCIceServer[]) {}
 
@@ -218,6 +299,12 @@ export class ViewerLink {
     this.pc = pc;
     pc.addTransceiver('video', { direction: 'sendrecv' });
     pc.addTransceiver('audio', { direction: 'sendrecv' });
+    const dc = pc.createDataChannel('mon', { ordered: true });
+    dc.onmessage = (e) => {
+      try {
+        this.onDirect?.(JSON.parse(String(e.data)) as DirectMsg);
+      } catch { /* not ours */ }
+    };
     const remote = new MediaStream();
     pc.ontrack = (e) => {
       remote.addTrack(e.track);
@@ -230,6 +317,7 @@ export class ViewerLink {
         window.clearTimeout(this.connectTimer);
         this.disconnectedAt = null;
         this.setState('connected');
+        void this.checkPath();
         // Re-attach a live mic/camera after an ICE restart or reconnect.
         void this.reattach();
       } else if (s === 'disconnected') {
@@ -253,6 +341,31 @@ export class ViewerLink {
     }, 2000);
     await pc.setLocalDescription(await pc.createOffer());
     this.signal(camSid, { sdp: pc.localDescription!.toJSON() });
+  }
+
+  /** Re-read which network path the call uses (it can change after an ICE restart). */
+  private async checkPath(): Promise<void> {
+    const pc = this.pc;
+    window.clearTimeout(this.pathTimer);
+    if (!pc) return;
+    const p = await netPath(pc);
+    if (pc !== this.pc) return;
+    if (p !== this.path) {
+      this.path = p;
+      this.onPath?.(p);
+    }
+    this.pathTimer = window.setTimeout(() => void this.checkPath(), p ? 20_000 : 2000);
+  }
+
+  /**
+   * The camera came back to the room under a new session id. If the call
+   * itself never dropped (same camera, still connected), just send future
+   * signaling to the new id instead of rebuilding the call.
+   */
+  retarget(camSid: string): boolean {
+    if (!this.pc || this.pc.connectionState !== 'connected') return false;
+    this.camSid = camSid;
+    return true;
   }
 
   private async reattach(): Promise<void> {
@@ -355,6 +468,11 @@ export class ViewerLink {
   private teardown(notify: boolean): void {
     window.clearTimeout(this.connectTimer);
     window.clearInterval(this.watchdog);
+    window.clearTimeout(this.pathTimer);
+    if (this.path) {
+      this.path = null;
+      this.onPath?.(null);
+    }
     if (this.pc) {
       if (notify && this.camSid) this.signal(this.camSid, { bye: true });
       try {

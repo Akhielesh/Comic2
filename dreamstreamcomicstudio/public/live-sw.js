@@ -1,4 +1,4 @@
-/* Stream Studio service worker — baby-monitor alerts only.
+/* Stream Studio service worker — baby-monitor alerts and family-call rings only.
  * No fetch handler on purpose: it never caches or intercepts the app or the
  * stream, it only turns Web Push messages into notifications. */
 
@@ -7,10 +7,11 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 
 const TITLES = {
   cry: '👶 ', fuss: '👶 ', cough: '🤧 ', alarm: '🚨 ', crash: '💥 ', glass: '💥 ', zone: '🚨 ', cat: '🐈 ', loud: '🔊 ', noise: '🔊 ',
-  camera: '📷 ', offline: '⚠️ ', battery: '🔋 ', report: '🌙 ', insight: '💡 ', test: '✅ ',
+  camera: '📷 ', offline: '⚠️ ', battery: '🔋 ', report: '🌙 ', insight: '💡 ', guest: '🔗 ', test: '✅ ',
+  call: '📹 ', call_missed: '📵 ',
 };
 // Wake the phone and keep the notification up until it's handled.
-const URGENT = new Set(['cry', 'alarm', 'zone', 'glass', 'offline']);
+const URGENT = new Set(['cry', 'alarm', 'zone', 'glass', 'offline', 'call']);
 const VIBRATE = {
   alarm: [600, 200, 600, 200, 600, 200, 600],
   zone: [600, 200, 600, 200, 600, 200, 600],
@@ -19,6 +20,9 @@ const VIBRATE = {
   offline: [300, 120, 300, 120, 600],
   report: [80],
   insight: [80],
+  guest: [80, 60, 80],
+  call: [500, 250, 500, 250, 500, 250, 500, 250, 500],
+  call_missed: [120],
 };
 
 self.addEventListener('push', (event) => {
@@ -29,12 +33,15 @@ self.addEventListener('push', (event) => {
     data = { title: 'Baby monitor', body: event.data ? event.data.text() : '' };
   }
   const kind = data.kind || 'alert';
-  const url = data.nid ? `/live#/monitor/${data.nid}/watch` : '/live#/monitor';
+  const isCall = kind === 'call' || kind === 'call_missed';
+  // A ringing call opens the app on it (it rings on top); a missed one opens Calls.
+  const url = kind === 'call' && data.nid && data.call ? `/live#/call/${data.nid}/${data.call}` : isCall ? '/live#/calls' : data.nid ? `/live#/monitor/${data.nid}/watch` : '/live#/monitor';
   const urgent = URGENT.has(kind);
   event.waitUntil(
     self.registration.showNotification((TITLES[kind] || '') + (data.title || 'Baby monitor'), {
-      body: data.body || 'Tap to check in.',
-      tag: `${data.nid || 'monitor'}-${kind}`,
+      body: data.body || (isCall ? 'Tap to answer.' : 'Tap to check in.'),
+      // A call's ring and its "missed call" share a tag, so one replaces the other.
+      tag: data.tag || `${data.nid || 'monitor'}-${kind}`,
       renotify: true,
       requireInteraction: urgent,
       vibrate: VIBRATE[kind] || [200],
@@ -42,7 +49,7 @@ self.addEventListener('push', (event) => {
       badge: '/stream-studio.svg',
       timestamp: data.at || Date.now(),
       data: { url },
-      actions: kind !== 'test' ? [{ action: 'watch', title: 'Watch now' }] : [],
+      actions: kind === 'call' ? [{ action: 'answer', title: 'Answer' }] : kind === 'call_missed' ? [{ action: 'calls', title: 'Call back' }] : kind !== 'test' ? [{ action: 'watch', title: 'Watch now' }] : [],
     }),
   );
 });

@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { claimDevice } from './accountPurge';
 
 export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'member' | 'offline';
 
@@ -126,7 +127,18 @@ export async function refreshAccount(): Promise<LiveAccount> {
   if (!authSubscribed) {
     authSubscribed = true;
     sb.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') void refreshAccount();
+      if (event === 'SIGNED_OUT') {
+        // Signed out in another tab (e.g. the main app). Without "Remember me" this
+        // tab may hold its own copy of the session — drop it so both agree.
+        void (async () => {
+          try {
+            if ((await sb.auth.getSession()).data.session) await sb.auth.signOut({ scope: 'local' });
+          } catch { /* already gone */ }
+          void refreshAccount();
+        })();
+        return;
+      }
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED') void refreshAccount();
     });
   }
   let session;
@@ -137,9 +149,12 @@ export async function refreshAccount(): Promise<LiveAccount> {
     return current;
   }
   if (!session) {
+    // Nobody signed in: the last account's name, events and nursery data go too.
+    if (claimDevice(null)) notifyPurged();
     set({ status: 'signed_out' });
     return current;
   }
+  if (claimDevice(session.user.id)) notifyPurged();
   const email = session.user.email ?? undefined;
   const me = await rpc<{ member?: boolean; needs_code?: boolean; suggested_name?: string; profile?: { display_name?: string; verified_via?: string } }>('live_me');
   if (me.error || !me.data) {
@@ -169,6 +184,13 @@ export async function refreshAccount(): Promise<LiveAccount> {
   }
   set({ status: 'needs_code', userId: session.user.id, email, suggestedName: me.data.suggested_name });
   return current;
+}
+
+/** Views holding a copy of the purged settings re-read them. */
+function notifyPurged(): void {
+  try {
+    window.dispatchEvent(new Event('ds-live-account-purged'));
+  } catch { /* no window */ }
 }
 
 function readTicket(): string | null {

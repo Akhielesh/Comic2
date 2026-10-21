@@ -5,7 +5,8 @@ import { Icon } from '../ui/icons';
 import { AreaChart, Avatar, Btn, IconBtn, Meter, cx } from '../ui/primitives';
 import { fmtBps } from '../metrics';
 import type { ChatMsg, LobbyEntry, LogEntry, LogKind, PersonEntry, Role } from '../protocol';
-import { EMOJI_LIBRARY, QUICK_EMOJI } from '../emoji';
+import { QUICK_EMOJI, rememberEmoji } from '../emoji';
+import { EmojiPicker } from './EmojiPicker';
 
 /* --------------------------------------------------------------- helpers */
 
@@ -36,25 +37,25 @@ const roleClass = (role: Role): string | null =>
 
 /* ----------------------------------------------------------- reactions ---- */
 
-/** One-tap quick reactions + a "+" picker over the full emoji library. */
-export function ReactBar({ onReact, vertical, compact }: { onReact: (e: string) => void; vertical?: boolean; compact?: boolean }) {
+/** One-tap quick reactions (the host's six) + a "+" picker over the whole library, by group. */
+export function ReactBar({ onReact, vertical, compact, quick = QUICK_EMOJI }: { onReact: (e: string) => void; vertical?: boolean; compact?: boolean; quick?: readonly string[] }) {
   const [open, setOpen] = useState(false);
-  const quick = compact ? QUICK_EMOJI.slice(0, 4) : QUICK_EMOJI;
+  const shown = compact ? quick.slice(0, 4) : quick;
+  const react = (e: string) => {
+    rememberEmoji(e);
+    onReact(e);
+  };
   return (
     <div className={cx('react-bar', vertical && 'vertical')}>
-      {quick.map((e) => (
-        <button key={e} className="vc-react" onClick={() => onReact(e)} aria-label={`React ${e}`}>{e}</button>
+      {shown.map((e) => (
+        <button key={e} className="vc-react" onClick={() => react(e)} aria-label={`React ${e}`}>{e}</button>
       ))}
       <button className={cx('vc-react', 'more', open && 'active')} onClick={() => setOpen((o) => !o)} aria-label="More reactions" aria-expanded={open}>
         <Icon name="plus" size={15} />
       </button>
       {open && (
-        <div className="emoji-pop" role="menu" aria-label="All reactions">
-          {EMOJI_LIBRARY.map((e) => (
-            <button key={e} className="emoji-pop-btn" role="menuitem" onClick={() => { onReact(e); setOpen(false); }} aria-label={`React ${e}`}>
-              {e}
-            </button>
-          ))}
+        <div className="emoji-pop" role="dialog" aria-label="All reactions">
+          <EmojiPicker compact label="All reactions" onPick={(e) => { react(e); setOpen(false); }} />
         </div>
       )}
     </div>
@@ -63,8 +64,10 @@ export function ReactBar({ onReact, vertical, compact }: { onReact: (e: string) 
 
 /* ---------------------------------------------------------------- Chat ---- */
 
-export function ChatRail({ chat, pinned, slowSec, reactionsOn, canModerate, onSend, onReact, onDelete, onUnpin, composerRef }: {
+export function ChatRail({ chat, pinned, slowSec, reactionsOn, quick, canModerate, onSend, onReact, onDelete, onUnpin, composerRef }: {
   chat: ChatMsg[];
+  /** The host's quick reactions. */
+  quick?: readonly string[];
   pinned: string | null;
   slowSec?: number;
   reactionsOn?: boolean;
@@ -124,7 +127,7 @@ export function ChatRail({ chat, pinned, slowSec, reactionsOn, canModerate, onSe
       <div className="composer">
         {reactionsOn !== false && (
           <div className="reactions-row">
-            <ReactBar onReact={onReact} />
+            <ReactBar onReact={onReact} quick={quick} />
           </div>
         )}
         <div className="input-row">

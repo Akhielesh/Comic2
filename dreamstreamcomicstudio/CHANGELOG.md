@@ -24,6 +24,95 @@ All notable user-facing changes. Format loosely follows
     owners can read their own unpublished comic there.
   - **Gallery:** Settings → Gallery has a Comic Studio section showing a lettered page
     (drag the balloons) and the plan sketch shown before any spend.
+- **Tracker: the week at a glance, and richer logs (2026-10-21):** a Huckleberry-style
+  week view (one 24-hour strip per day: sleep, feeds, diapers — tap a day to open it);
+  mark a sleep as nap or night and how well it went; how full a diaper was; "skipped this
+  dose" for medicine (kept in the log, never counted as given); foods as a list with
+  **new** badges and quick-picks of foods tried before, plus a weekly "new foods" insight
+  that flags noted reactions; brushing teeth, screen time and other activities.
+- **Your studios (2026-10-21):** one account, every studio — DreamStream (Account →
+  Profile) and Stream Studio (Settings → Account & sync, plus chips in the account menu)
+  now show the same list: Comic Studio, Chat Studio, Stream Studio, and the baby monitor
+  & family calls, each marked **Yours**, **One step** (welcome code) or **Locked** (ask an
+  admin), with what you have there ("2 nurseries") and a link straight in. Answered once
+  by the server (`GET /api/account/studios`) so the apps can't disagree.
+
+### Fixed
+- **Stream Studio kept showing your name after you signed out (2026-10-21):** it kept its
+  own copy of your display name (and your events, nursery alert opt-ins and call settings)
+  in this browser, and signing out — especially from the main DreamStream app — never
+  cleared it. Now signing out anywhere wipes Stream Studio's personal data on that device
+  (and stops its alert subscription), a Stream Studio tab follows a sign-out in another tab
+  even without "Remember me", a different person signing in on the same device starts
+  clean, and the dashboard greets only the signed-in account. `www.dreamstreamstudio.ai`
+  now redirects to `dreamstreamstudio.ai`, so there's one sign-in instead of two.
+
+### Changed
+- **Reactions, designed (2026-10-21):** Settings no longer shows a wall of 108 emoji.
+  Pick your own six one-tap reactions (tap one, choose from the tabbed picker — it floats
+  up just like on stream); viewers get your bar when you go live. The "+" picker is now
+  sorted into Recent, Love, Hype, Cheer, Funny, Faces, Party and Things.
+
+### Added
+- **Family calls (2026-10-21):** a new **Calls** tab — FaceTime-style video and voice
+  calls with anyone in your nurseries, or "Call everyone" for a group of up to four.
+  Calls ring full-screen wherever Stream Studio is open, and with **Ring this device**
+  on, even when it's closed. In a call: mute, camera off, flip, add someone, minimize to
+  a floating window while you check the monitor, and a picture-in-corner of yourself you
+  can drag. Missed calls show in red with a badge; tap any recent call to call back.
+  Device to device, encrypted, never recorded — and the nursery's camera phone never
+  rings.
+- **Smart vision (beta) on the baby camera (2026-10-21):** turn it on in the camera's
+  setup ("Make it smarter") and the camera phone itself watches for posture (lying,
+  sitting, standing — and standing in the crib), rolling over, what the baby is holding,
+  risky things within reach (scissors and knives raise an alert; cups, phones, remotes,
+  plants and pets a warning), soft toys near a sleeping baby (AAP safe sleep), and which
+  play area they're in — mark a play gym, bouncer or play mat in Zones. Viewers see a
+  one-line "Lying down · in the crib · holding a teddy bear" under the picture and each
+  change in the log. Frames never leave the phone. Tuned on real infant photos: it now
+  finds swaddled and overhead babies the detector misses, and uses the baby's age (from
+  the Tracker birthday) and the phone's tilt so a baby on their back, filmed from above,
+  is never called "standing". A beta with honest limits — it doesn't watch breathing.
+- **Keeps working on your home Wi-Fi when the internet drops (2026-10-21):** phones on
+  the same Wi-Fi already stream straight to each other; now the camera also sends its
+  status and alerts (crying, danger zones, very loud noise) over that same direct link, so
+  the picture, sound and alerts on those screens carry on during an internet outage. The
+  picture shows **Home Wi-Fi** when it's on the local network, viewers get a clear banner
+  while the internet is down, the camera shows how many are still watching on Wi-Fi, and
+  the call is no longer rebuilt (a visible blip) when the camera reconnects. Phones away
+  from home get their alerts again once the internet is back.
+- **This week, at a glance (2026-10-21):** the All layout opens with six numbers worth
+  knowing from what the monitor measured — sleep the camera saw, night wakings, the
+  longest stretch, crying, how fast someone answered an alert, and the room's sound while
+  the baby slept — each against last week with a 14-day mini chart and one plain headline
+  ("A better week — night wakings improved: 1.2 a night vs 2.4").
+- **Baby tracker, built into the monitor (2026-10-21):** a new **Tracker** layout for
+  breastfeeds (a timer that switches sides), bottles (ml or oz), solids, pumping,
+  diapers, sleep, medicine, temperature, growth, tummy time and notes — shared live with
+  the whole family, so Grandpa can stop the sleep timer Mom started. **Up next** shows the
+  nap sweet spot (from age-based wake windows and the baby's own rhythm), the next feed
+  and which side to start on, and when the next medicine dose is allowed. Gentle checks
+  for wet diapers, stool colour, fevers by age (AAP) and early doses; 7/14/30-day trends
+  with plain-language insights; growth percentiles on the WHO standards; works offline
+  and catches up; CSV for the pediatrician. The camera's automatic sleep shows up too.
+- **Baby monitor layouts (2026-10-21):** pick how the watch screen looks — **Monitor**
+  (the picture, controls, status and only the safety checks that need you; the default
+  on phones), **All** (sleep, sound level, logs, alerts, people and settings; the default
+  on computers) or **Bedside**: a dark nightstand view with a big clock, how the baby is
+  and the room's decibels, which dims itself to deep red, drifts to protect OLED screens,
+  keeps the screen on and lights up with "I'm on it" the moment something needs you.
+  Turn a phone sideways for a full-screen picture with the controls along the side, and
+  use **Pop out** (picture-in-picture) to keep watching while you use other apps.
+- **Share the baby monitor with a guest link and passcode (2026-10-21):** for
+  grandparents or a sitter without an account. A parent creates a link, picks a
+  passcode (with a "Suggest one" passphrase) and what guests can do (watch &
+  listen, or also talk, soothe and answer alerts), for 1, 7 or 30 days or until
+  turned off. Guests open the link, type their name and the passcode, and watch
+  live — the video still goes straight from the camera, never recorded. Parents
+  are notified when someone joins, see every guest with when they last watched,
+  and can remove one or turn the link off in a tap. Five wrong passcodes lock the
+  link for 15 minutes; twenty turn it off. The passcode and guest passes are only
+  ever stored scrambled.
 - **Baby monitor v3 — sound meter, safety, sleep and a smarter room (2026-10-21):**
   - **Decibel meter:** a real A-weighted sound level meter (IEC 61672 weighting,
     Fast response) on the camera phone, live on every viewer, with 1 h / 6 h /
@@ -102,6 +191,11 @@ All notable user-facing changes. Format loosely follows
   recording is offered back on your next visit.
 
 ### Fixed
+- **Account emails (sign-up, password reset, email change):** the email worker's Supabase
+  hook now handles every Supabase email type — including both emails of a secure email
+  change (it used to send one, to the old address) and security notices — with Stream
+  Studio branding for links back to the live app. Turning it on is a dashboard step for
+  the owner (see `docs/email/SETUP.md` §5).
 - **Baby monitor video stopping after a few minutes:** the camera phone's screen
   now stays awake (wake lock re-taken whenever the OS drops it, with a fallback for
   Low Power Mode), the family is told at once if the camera phone locks or leaves

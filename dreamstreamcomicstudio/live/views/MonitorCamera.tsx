@@ -19,6 +19,8 @@ import { SOUND_INFO, type SoundCat } from '../monitor/soundClasses';
 import { NurseryEars, type EarsSnapshot, type ModelState } from '../monitor/soundEngine';
 import { LEVEL_BAND_INFO, levelBand, loadCalibration, saveCalibration, type Calibration, type MinuteLevels } from '../monitor/soundLevel';
 import { FRAME_H, FRAME_W, VisionWatch, type VisionEvent, type Zone } from '../monitor/vision';
+import { birthAt, downAngle, SceneWatch, type SceneEvent, type SceneState } from '../monitor/scene';
+import type { SceneAi, SceneAiState } from '../monitor/sceneAi';
 import { LoudnessGovernor, SOOTHE_CEILING_DB, TALK_CEILING_DB } from '../monitor/voice';
 import { markSetup } from '../monitor/setupProgress';
 import { SOOTHE_OPTIONS, SoothePlayer, type SootheKind } from '../monitor/soothe';
@@ -107,6 +109,18 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const hubRef = useRef<CameraHub | null>(null);
   const earsRef = useRef<NurseryEars | null>(null);
   const visionRef = useRef(new VisionWatch());
+  // Smart vision (beta): on-device object + pose models, about once a second.
+  const sceneWatchRef = useRef(new SceneWatch());
+  const sceneAiRef = useRef<SceneAi | null>(null);
+  const sceneNowRef = useRef<SceneState | null>(null);
+  const [sceneOn, setSceneOn] = useState(() => {
+    try {
+      const v = localStorage.getItem('ds-cam-scene');
+      if (v === '1' || v === '0') return v === '1';
+    } catch { /* storage unavailable */ }
+    return (navigator.hardwareConcurrency ?? 2) >= 4;
+  });
+  const [sceneAi, setSceneAi] = useState<SceneAiState>('idle');
   const zonesRef = useRef<Zone[]>(loadJson<Zone[]>(zonesKey(id), []));
   const pendingZonesRef = useRef<Zone[] | null>(null);
   const statsRef = useRef<StatsRow[]>(loadJson<StatsRow[]>(statsKey(id), []));
@@ -122,6 +136,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     for (const ev of visionRef.current.pushTilt(e.beta, e.gamma, Date.now())) {
       sockRef.current?.send({ t: 'event', kind: 'vision', type: ev.type, via: ev.via });
     }
+    // Smart vision: a phone looking straight down sees a lying baby as "upright".
+    if (e.beta != null && e.gamma != null) sceneWatchRef.current.setContext({ downAngle: downAngle(e.beta, e.gamma, lensRef.current.facing === 'user') });
   });
   const sootheRef = useRef(new SoothePlayer());
   const wakeRef = useRef(new ScreenWakeLock());
@@ -214,6 +230,50 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const phaseRef = useRef<Phase>(phase);
   phaseRef.current = phase;
   useEffect(() => () => stopAll(phaseRef.current === 'running'), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Smart vision: load the models once monitoring starts, then about one
+  // frame a second (slower if this phone struggles). Paused while the video
+  // is paused for privacy or the page is in the background.
+  useEffect(() => {
+    sceneWatchRef.current.setZones(zonesRef.current);
+    if (phase !== 'running' || !sceneOn) {
+      sceneNowRef.current = null;
+      return;
+    }
+    let alive = true;
+    let timer: number | undefined;
+    void (async () => {
+      setSceneAi('loading');
+      const { SceneAi } = await import('../monitor/sceneAi');
+      const ai = sceneAiRef.current ?? new SceneAi();
+      sceneAiRef.current = ai;
+      const ok = await ai.load();
+      if (import.meta.env?.DEV) (globalThis as unknown as { __dsScene?: unknown }).__dsScene = { ai, watch: sceneWatchRef.current, now: () => sceneNowRef.current };
+      if (!alive) return;
+      setSceneAi(ok ? 'ready' : 'failed');
+      if (!ok) return;
+      const tick = () => {
+        if (!alive) return;
+        const v = videoRef.current;
+        if (v && document.visibilityState === 'visible' && !privacyRef.current) {
+          const f = ai.detect(v);
+          if (f) {
+            const { state, events } = sceneWatchRef.current.push(f, Date.now());
+            sceneNowRef.current = state;
+            for (const e of events) sendScene(e);
+          }
+        }
+        const cost = ai.cost;
+        timer = window.setTimeout(tick, cost > 400 ? 3000 : cost > 150 ? 1500 : 1000);
+      };
+      tick();
+    })();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      sceneNowRef.current = null;
+    };
+  }, [phase, sceneOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The <video> elements mount per phase — (re)attach streams whenever they do.
   useEffect(() => {
@@ -339,7 +399,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       for (const e of events) sendSound(e);
     };
     ears.onNoise = (events) => {
-      for (const e of events) sockRef.current?.send({ t: 'event', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated });
+      for (const e of events) {
+        sockRef.current?.send({ t: 'event', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated });
+        hubRef.current?.direct({ t: 'ev', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, at: Date.now(), dev: device.id });
+      }
     };
     ears.onMinute = (lv) => addMinute(lv);
     // Feedback (a parent's phone in this room): silence the talk audio at once,
@@ -577,9 +640,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         if (talkersRef.current.size && ears) ears.suppress(3000);
         const talkNames = [...talkersRef.current.values()];
         const callerOn = [...callersRef.current.values()].find((c) => c.on);
-        sockRef.current?.send({
-          t: 'status',
-          st: {
+        const st = {
             state: s.mood as BabyState,
             level: s.level,
             motion: motionVal(),
@@ -588,6 +649,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             crib: visionNowRef.current.crib,
             outside: visionNowRef.current.outside,
             visit: visionNowRef.current.visit,
+            scene: sceneNowRef.current,
             battery: powerRef.current.level,
             charging: powerRef.current.charging,
             soothing: sootheRef.current.current?.kind ?? null,
@@ -600,8 +662,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             awake: wakeRef.current.state,
             talk: talkNames.length ? talkNames.join(' & ') : null,
             call: callerOn?.who ?? null,
-          },
-        });
+        };
+        sockRef.current?.send({ t: 'status', st });
+        // Straight to viewers too — over the home Wi-Fi this keeps working when the internet doesn't.
+        hubRef.current?.direct({ t: 'st', st, dev: device.id });
       }),
     );
     touch();
@@ -628,7 +692,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
    * syncSounds() on the next hello — so a cry already going when monitoring
    * starts still alerts the family, exactly once.
    */
-  const sendSound = (e: BrainEvent) => {
+  const sendSound = (e: BrainEvent, replay = false) => {
+    // Viewers on the same Wi-Fi hear about it directly, room or no room.
+    if (!replay) hubRef.current?.direct({ t: 'ev', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, at: Date.now(), dev: device.id });
     if (!authedRef.current) return;
     sockRef.current?.send({ t: 'event', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, via: e.via });
     if (e.phase === 'start') toldRef.current.add(e.cat);
@@ -638,12 +704,28 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     const brain = earsRef.current?.brain;
     if (!brain) return;
     const now = brain.ongoing();
-    for (const e of now) if (!toldRef.current.has(e.cat)) sendSound(e);
+    for (const e of now) if (!toldRef.current.has(e.cat)) sendSound(e, true);
     const still = new Set(now.map((e) => e.cat));
-    for (const cat of [...toldRef.current]) if (!still.has(cat)) sendSound({ phase: 'end', cat, conf: 0, via: 'ai' });
+    for (const cat of [...toldRef.current]) if (!still.has(cat)) sendSound({ phase: 'end', cat, conf: 0, via: 'ai' }, true);
+  };
+
+  const sendScene = (e: SceneEvent) => {
+    const { type, ...rest } = e as SceneEvent & Record<string, unknown>;
+    sockRef.current?.send({ t: 'event', kind: 'scene', type, ...rest });
+    hubRef.current?.direct({ t: 'ev', kind: 'scene', type, ...(rest as Record<string, string | number | boolean>), at: Date.now(), dev: device.id });
+  };
+
+  const toggleScene = () => {
+    setSceneOn((on) => {
+      try {
+        localStorage.setItem('ds-cam-scene', on ? '0' : '1');
+      } catch { /* storage unavailable */ }
+      return !on;
+    });
   };
 
   const sendVision = (e: VisionEvent) => {
+    hubRef.current?.direct({ t: 'ev', kind: 'vision', type: e.type, at: Date.now(), dev: device.id });
     sockRef.current?.send({ t: 'event', kind: 'vision', type: e.type, zone: e.zone, name: e.name, secs: e.secs, via: e.via });
   };
 
@@ -673,6 +755,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     zonesRef.current = list;
     setZones(list);
     visionRef.current.setZones(list);
+    sceneWatchRef.current.setZones(list);
     saveJson(zonesKey(id), list);
     if (sockRef.current?.open) sockRef.current.send({ t: 'settings', zones: { dev: device.id, list } });
     else pendingZonesRef.current = list;
@@ -748,7 +831,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         void hubRef.current?.onSignal(m.from, m.d, m.label || m.name || 'Someone');
         break;
       case 'peer_gone':
-        hubRef.current?.close(m.sid);
+        // Their socket left the room; a call that's still up (same Wi-Fi) carries on.
+        hubRef.current?.release(m.sid);
         if (talkersRef.current.delete(m.sid)) setTalkers([...talkersRef.current.values()]);
         break;
       case 'cmd':
@@ -765,6 +849,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const applySettings = (s: MonSettings) => {
     earsRef.current?.setSensitivity(s.sensitivity);
+    // Smart vision: before ~5 months a baby can only be lying down.
+    if (s.baby) sceneWatchRef.current.setContext({ bornAt: birthAt(s.baby.birth) });
     if (earsRef.current) earsRef.current.noise.threshold = s.noiseDb === undefined ? 70 : s.noiseDb;
     // Zones placed from a parent's phone reach this camera too.
     const z = s.zones?.[device.id];
@@ -772,6 +858,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       zonesRef.current = z;
       setZones(z);
       visionRef.current.setZones(z);
+      sceneWatchRef.current.setZones(z);
       saveJson(zonesKey(id), z);
     }
   };
@@ -899,8 +986,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const dbText = db != null ? `${cal ? '' : '≈'}${db} dB` : '—';
   const crib = zones.find((z) => z.kind === 'crib');
   const dangerN = zones.filter((z) => z.kind === 'danger').length;
-  const zoneSummary = crib || dangerN
-    ? `${crib ? 'Crib marked' : 'No crib yet'}${dangerN ? ` · ${dangerN} danger zone${dangerN === 1 ? '' : 's'}` : ''}`
+  const playN = zones.filter((z) => z.kind === 'activity').length;
+  const zoneSummary = crib || dangerN || playN
+    ? `${crib ? 'Crib marked' : 'No crib yet'}${dangerN ? ` · ${dangerN} danger zone${dangerN === 1 ? '' : 's'}` : ''}${playN ? ` · ${playN} play area${playN === 1 ? '' : 's'}` : ''}`
     : 'Optional — mark the crib for sleep tracking and climb-out alerts';
 
   const zoneEditor = zoneEdit && (
@@ -997,7 +1085,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             <div className="cam-extras-title">Make it smarter <span className="faint">· optional</span></div>
             <button className="cam-extra" onClick={() => setZoneEdit(true)} data-tour="cam-zones">
               <Icon name="target" size={16} />
-              <span><b>Crib &amp; danger zones</b><small>{zoneSummary}</small></span>
+              <span><b>Crib, danger zones &amp; play areas</b><small>{zoneSummary}</small></span>
               <Icon name="chevronRight" size={14} />
             </button>
             <button className="cam-extra" onClick={() => setCalOpen((o) => !o)} aria-expanded={calOpen} data-tour="cam-meter">
@@ -1006,6 +1094,18 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
               <span className={cx('db-pill', band && `t-${band.tone}`)}>{dbText}</span>
             </button>
             {calPanel}
+            <button className="cam-extra" onClick={toggleScene} aria-pressed={sceneOn} data-tour="cam-scene">
+              <Icon name="sparkles" size={16} />
+              <span>
+                <b>Smart vision <span className="beta-tag">beta</span></b>
+                <small>
+                  {sceneOn
+                    ? 'Posture, rolling over, what’s in hand or within reach, play areas — worked out on this phone. Uses more battery.'
+                    : 'Off — turn on to see posture, rolling over, objects within reach and play areas'}
+                </small>
+              </span>
+              <span className={cx('tog-pill', sceneOn && 'on')}>{sceneOn ? 'On' : 'Off'}</span>
+            </button>
           </div>
           <button className="cam-tips-toggle" onClick={() => setTipsOpen((o) => !o)} aria-expanded={tipsOpen}>
             <Icon name="checklist" size={15} />Placement &amp; safety tips<Icon name="chevronDown" size={14} />
@@ -1048,8 +1148,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       )}
 
       <div className="cam-top">
-        <Pill tone={sock === 'connected' ? 'live' : 'warn'} dot pulse={sock === 'connected'}>
-          {sock === 'connected' ? 'MONITORING' : sock === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
+        <Pill tone={sock === 'connected' || p2pCount > 0 ? 'live' : 'warn'} dot pulse={sock === 'connected'}>
+          {sock === 'connected' ? 'MONITORING' : p2pCount > 0 ? `ON WI-FI · ${p2pCount} WATCHING` : sock === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
         </Pill>
         <span className="cam-norec"><Icon name="shield" size={12} />Not recording</span>
         <span className="spacer" />

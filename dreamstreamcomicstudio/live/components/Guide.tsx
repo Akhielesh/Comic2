@@ -14,13 +14,14 @@ export interface TourStep {
   body: string;
 }
 
-export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | 'watch' | 'camera';
+export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | 'watch' | 'camera' | 'calls';
 
 export const TOURS: Record<TourId, TourStep[]> = {
   welcome: [
     { title: 'Welcome to Stream Studio 👋', body: 'Go live from your browser — viewers join with just a name — and run a private baby monitor from any of your devices. This 30-second tour shows you around.' },
     { target: 'nav-create', title: 'Start a stream', body: 'Create an event to go live now or schedule one with an invite page. Hosting needs a free account (with your welcome code); watching never does.' },
     { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
+    { target: 'nav-calls', title: 'Family calls', body: 'FaceTime-style video and voice calls with the people in your nurseries — one person or the whole family, up to four at once.' },
     { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys.' },
     { target: 'account', title: 'Your account', body: 'Sign in or create an account here. New accounts need the welcome code you were given — it’s checked securely on our server.' },
     { target: 'help', title: 'Help is always here', body: 'Open Help anytime to search answers or replay a tour for the screen you’re on.' },
@@ -50,18 +51,30 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'people', title: 'People & roles', body: 'Search people by name to add them, then pick a role — Parent, Caregiver or Viewer — and how they appear (Grandma, Nanny…). Removing someone cuts them off immediately.' },
   ],
   watch: [
-    { target: 'mv-stage', title: 'Live nursery view', body: 'Tap Listen (or “Tap to hear”) to unmute. The frame glows in the alert’s colour when something needs you. Night view (moon) brightens dark rooms.' },
+    { target: 'mv-views', title: 'Pick a layout', body: 'Monitor shows the picture and what needs you. Tracker logs feeds, diapers, sleep and growth for the whole family. All adds sleep, sound level, logs and settings. Bedside is a dark nightstand view with a big clock that dims itself and lights up for alerts. Turn your phone sideways for a full-screen picture.' },
+    { target: 'mv-stage', title: 'Live nursery view', body: 'Tap Listen (or “Tap to hear”) to unmute. The frame glows in the alert’s colour when something needs you. Night view (moon) brightens dark rooms; Pop out keeps the picture floating while you use other apps.' },
     { target: 'mv-talk', title: 'Talk — like FaceTime', body: 'Tap to open your mic and tap again to stop, or press and hold to talk only while holding. Your voice plays on the nursery phone; it won’t trigger a cry alert.' },
     { target: 'mv-call', title: 'Video call the nursery', body: 'Shows your face full-screen on the nursery phone (best when it uses its front camera). Your mic turns on with it.' },
-    { target: 'mv-status', title: 'What’s happening now', body: 'Mood, what the smart ears are hearing right now, and the last 2 minutes of sound — all analysed on the camera phone.' },
+    { target: 'mv-status', title: 'What’s happening now', body: 'Mood, what the smart ears are hearing right now, what smart vision sees (lying down, holding a toy, something within reach) and the last 2 minutes of sound — all analysed on the camera phone.' },
     { target: 'mv-activity', title: 'Activity log', body: 'Every cry (and how long it lasted), cough, wake-up, feed and note. Filter by Baby sounds, Alerts, Care or Camera.' },
     { target: 'mv-alerts', title: 'Alerts your way', body: 'Background notifications per category, plus alert sounds, spoken alerts and vibration while this screen is open. Tap Preview to hear each sound.' },
+    { target: 'mv-safety', title: 'Safety at a glance', body: 'Anything that needs someone shows here with “I’m on it”, plus every guard the camera runs and how to fix one that isn’t working. Take duty and routine alerts come to you first.' },
+    { target: 'mv-week', title: 'This week', body: 'Six numbers from what the monitor measured — sleep, wakings, the longest stretch, crying, how fast alerts were answered and the room’s sound while asleep — against last week.' },
+    { target: 'mv-sound', title: 'Sound level', body: 'The room in decibels, live and over the last hours — and a nudge if a sound machine runs louder than the 50 dB sleep guideline.' },
     { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
+    { target: 'mv-people', title: 'People & sharing', body: 'Who’s watching right now. Parents can share a guest link with a passcode for family without an account — and remove anyone in one tap.' },
+  ],
+  calls: [
+    { title: 'Family calls', body: 'Video or voice-call anyone in your nurseries — Grandma, the sitter, the other parent. Calls go straight between devices, encrypted, and are never recorded.' },
+    { target: 'calls-ring', title: 'Ring this device', body: 'Turn this on so calls ring even when Stream Studio is closed (on iPhone, from the Home Screen app).' },
+    { target: 'calls-family', title: 'Call someone', body: 'The phone button is a voice call, the camera button a video call. “Call everyone” rings up to three people at once.' },
+    { target: 'calls-recents', title: 'Recent calls', body: 'Who called, how long you talked, and any you missed. Tap one to call back.' },
   ],
   camera: [
     { title: 'Make this the nursery camera', body: 'Frame the crib, let the checks turn green, then start. It works like a private FaceTime call: live to your family, never recorded.' },
     { target: 'cam-lens', title: 'Pick the lens', body: 'Back camera is the sharpest. Ultra wide fits the whole crib. Front lets your baby see you during a video call.' },
     { target: 'cam-checks', title: 'Automatic checks', body: 'Microphone, smart sound detection, light, power and network. Clap once to test the mic. Only checks that need attention are shown.' },
+    { target: 'cam-scene', title: 'Smart vision (beta)', body: 'Optional: this phone also looks for posture (lying, sitting, standing), rolling over, what your baby holds, risky things within reach and soft toys near a sleeping baby. It all runs on this phone — frames never leave it. Add the baby’s birthday in the Tracker so it knows a young baby can only be lying down.' },
     { target: 'cam-start', title: 'Start monitoring', body: 'Prop it 1–2 m from the crib, plugged in. The screen dims itself after 90 s — keep this page open; everyone is alerted if it stops.' },
   ],
 };
@@ -312,6 +325,28 @@ export const GUIDES: HowTo[] = [
       { title: 'Add someone', body: 'Nursery → People & roles → search their name → choose a role and how they appear (Grandma, Nanny…) → Add.' },
       { title: 'Roles', body: 'Parent: everything, including people and settings. Caregiver: watch, talk, video call, soothe, run a camera, log. Viewer: watch, listen and get alerts.' },
       { title: 'Removing someone', body: 'Remove them in People & roles — any open session is cut off immediately.' },
+      { title: 'No account? Share a link', body: 'Watch → People → Create a share link. Choose a passcode (8+ characters — “Suggest one” makes a memorable one), what guests can do, and how long the link works. Send the link, then tell them the passcode by phone or in a different app.' },
+    ],
+  },
+  {
+    id: 'tracker', title: 'Track feeds, diapers, sleep & growth', icon: 'bottle', mins: 2, screens: ['watch'],
+    intro: 'Watch → Tracker. Everything you log shows on every family member’s phone at once — even logged offline.',
+    steps: [
+      { title: 'Log in one tap', body: 'Tap Bottle, Diaper, Breastfeed, Sleep… Timers (breastfeeding, sleep, pumping, tummy time) keep running on every phone, and anyone can stop them. Forgot? Use “Log a past one”.' },
+      { title: 'Breastfeeding', body: 'Start on the side “Up next” suggests, tap the other side to switch — each side’s minutes are kept.' },
+      { title: 'What’s next', body: 'Add the birthday (Edit) for age-based guidance: the nap sweet spot, the next feed and which side, and when a medicine is due again by the interval you entered.' },
+      { title: 'Trends & growth', body: 'Trends compare this week with last; Growth places weight, length and head on the WHO charts. Download a CSV for the pediatrician.' },
+      { title: 'Good to know', body: 'Checks for wet diapers, stool colour and fevers follow AAP guidance and say when to call your pediatrician — they’re not a diagnosis, and the tracker never calculates doses.' },
+    ],
+  },
+  {
+    id: 'share', title: 'Share with a guest link & passcode', icon: 'link', mins: 1, screens: ['watch', 'nursery'],
+    intro: 'For grandparents, a sitter or a friend without an account. They need both the link and the passcode you choose.',
+    steps: [
+      { title: 'Create it', body: 'Watch → People → Create a share link. Pick a passcode, “Watch & listen” or “Also talk, soothe & answer alerts”, and 1 day, 7 days, 30 days or until you turn it off.' },
+      { title: 'Send it safely', body: 'Send the link (Copy or Send), and say the passcode out loud or send it in a different app. The passcode is shown once — we only keep a scrambled version of it.' },
+      { title: 'Stay in control', body: 'You’re told when a guest joins. People shows every guest with when they last watched — Remove ends their pass at once. New link & passcode, or Turn off, signs every guest out.' },
+      { title: 'If someone guesses', body: '5 wrong passcodes lock the link for 15 minutes and 20 turn it off — the parents get a notification either way.' },
     ],
   },
   {
@@ -362,6 +397,8 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'What is the welcome code?', a: 'An invite code required for new accounts. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
       { q: 'I already had a DreamStream account', a: 'Just sign in — accounts created before Stream Studio accounts launched are unlocked automatically.' },
       { q: 'Finding people', a: 'In a nursery’s People & roles, search by the person’s name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory' },
+      { q: 'What happens if our internet goes down?', a: 'Phones on the same Wi-Fi as the camera keep the live picture, sound and alerts — they talk to each other directly (the picture shows “Home Wi-Fi”). Phones away from home, and notifications, come back when the internet does.', tags: 'offline wifi lan outage local network' },
+      { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent can make a guest link with a passcode (Watch → People → Create a share link). Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents' },
     ],
   },
   {
@@ -410,6 +447,8 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Soothing sounds', a: 'Soothe plays shush, white noise, rain, ocean or a heartbeat on the camera phone for 15–60 minutes. Sound detection ignores it.' },
       { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },
       { q: 'No video on my network', a: 'Some networks block direct device-to-device video. The monitor switches to a low-bandwidth snapshot mode (1 picture per second, no audio) and keeps retrying full video.' },
+      { q: 'What can smart vision see?', a: 'With Smart vision on (camera setup → Make it smarter), the camera phone runs two Google MediaPipe models on its own video about once a second: whether your baby is lying, sitting or standing (and standing in the crib), rolling over, what they’re holding, risky things within reach (scissors, knives, cups, phones, remotes, plants, pets), soft toys near a sleeping baby, and which play area they’re in. Frames never leave the phone. It’s a beta: it can miss things, it can’t see blankets or pillows, and it does not watch breathing or sleep position. Adding the baby’s birthday in the Tracker helps — a baby too young to sit is always reported lying.', tags: 'posture rolling sitting standing objects toys safe sleep vision ai camera' },
+      { q: 'Family video calls', a: 'Calls → tap the camera (video) or phone (voice) button next to anyone in your nurseries, or “Call everyone” for a group call of up to four. Calls ring wherever Stream Studio is open; turn on “Ring this device” to be rung with the app closed. During a call: mute, camera off, flip, add someone, or minimize to keep talking while you use the app. Device to device, encrypted, never recorded.', tags: 'facetime video call voice call family grandma group ring' },
       { q: 'Is it a medical device?', a: 'No. It watches and listens; it does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.' },
     ],
   },

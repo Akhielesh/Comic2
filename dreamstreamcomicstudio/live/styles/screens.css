@@ -169,14 +169,39 @@
 .reactions-row .vc-react.more { color: var(--muted); }
 .vm-reactions .react-bar { width: 100%; justify-content: space-between; }
 .emoji-pop {
-  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 30;
-  display: grid; grid-template-columns: repeat(8, 32px); gap: 2px; padding: 8px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
-  box-shadow: var(--shadow-lg); max-height: 200px; overflow-y: auto; animation: fadeUp .15s ease;
+  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 30; width: 296px;
+  padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg); animation: fadeUp .15s ease;
 }
+
+/* ---- reaction picker: tabs by mood instead of a wall ---- */
+.epick { display: flex; flex-direction: column; gap: 6px; }
+.epick-tabs { display: flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--panel-2); }
+.epick-tab { flex: 1; height: 30px; border: none; border-radius: 8px; background: none; color: var(--muted); font-size: 16px; cursor: pointer; display: grid; place-items: center; transition: background .12s, transform .12s; }
+.epick-tab:hover { background: var(--hover); }
+.epick-tab.sel { background: var(--panel); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.epick-name { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); padding: 2px 4px 0; }
+.epick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 2px; max-height: 176px; overflow-y: auto; }
+.epick.compact .epick-grid { max-height: 150px; }
+.epick-e { height: 36px; border: none; border-radius: 9px; background: none; font-size: 20px; cursor: pointer; display: grid; place-items: center; transition: background .1s, transform .12s; }
+.epick-e:hover { background: var(--hover); transform: scale(1.18); }
+.epick-e.on { background: var(--accent-wash); box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+/* ---- the host's quick-bar editor, with a floating preview ---- */
+.qbar-edit { position: relative; display: flex; flex-direction: column; gap: 8px; width: min(100%, 330px); }
+.qbar-stage { position: absolute; left: 0; right: 0; bottom: 100%; height: 90px; pointer-events: none; overflow: hidden; }
+.qbar-float { position: absolute; bottom: 0; font-size: 24px; animation: qbarFloat 1.5s ease-out forwards; }
+@keyframes qbarFloat { 0% { transform: translateY(10px) scale(.6); opacity: 0; } 15% { opacity: 1; transform: translateY(0) scale(1.1); } 100% { transform: translateY(-80px) scale(.9) rotate(-8deg); opacity: 0; } }
+.qbar-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--line); width: fit-content; }
+.qbar-slot { width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--panel); font-size: 20px; cursor: pointer; display: grid; place-items: center; box-shadow: var(--shadow-sm); transition: transform .14s, box-shadow .14s; }
+.qbar-slot:hover { transform: translateY(-2px) scale(1.06); }
+.qbar-slot.sel { box-shadow: 0 0 0 2px var(--accent), var(--shadow-sm); transform: translateY(-2px); animation: qbarWiggle .5s ease; }
+@keyframes qbarWiggle { 30% { transform: translateY(-2px) rotate(-10deg); } 60% { transform: translateY(-2px) rotate(8deg); } }
+.qbar-plus { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--faint); border: 1.5px dashed var(--line); }
+.qbar-hint { font-size: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; }
+.qbar-edit .epick { padding: 8px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); animation: fadeUp .15s ease; }
+@media (prefers-reduced-motion: reduce) { .qbar-float, .qbar-slot.sel { animation: none; } }
 .react-bar.vertical .emoji-pop { bottom: 0; right: calc(100% + 8px); }
-.emoji-pop-btn { border: none; background: none; font-size: 17px; width: 32px; height: 32px; border-radius: 7px; cursor: pointer; display: grid; place-items: center; transition: background .1s, transform .1s; }
-.emoji-pop-btn:hover { background: var(--hover); transform: scale(1.15); }
 
 /* ---- chat stays usable in fullscreen ---- */
 .fs-chatpeek { position: absolute; left: 14px; bottom: 76px; right: 30%; display: flex; flex-direction: column; gap: 5px; z-index: 5; pointer-events: none; }

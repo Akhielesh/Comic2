@@ -10,6 +10,7 @@ import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { parsePrivateStudioLink, viewerUrl } from '../nav';
 import { loadPrefs } from '../prefs';
+import { useAccount } from '../account';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
 import { Btn, IconBtn, Pill, Sparkline, Tabs, cx, type PushToast } from '../ui/primitives';
@@ -95,8 +96,10 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [access, setAccess] = useState<StudioAccess | null>(null);
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [checkingBackend, setCheckingBackend] = useState(false);
-  const prefs = useMemo(loadPrefs, []);
-  const recordings = useMemo(listMyRecordings, []);
+  const account = useAccount();
+  // Re-read on sign-in / sign-out: the last account's name and events must not linger.
+  const prefs = useMemo(loadPrefs, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  const recordings = useMemo(listMyRecordings, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
   const [saving, setSaving] = useState<FinishedRecording | null>(null);
 
@@ -142,7 +145,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [account.userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (access && !access.allowed) {
     return (
@@ -169,7 +172,8 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
 
   const greet = (() => {
     const h = new Date().getHours();
-    const who = prefs.hostName.trim();
+    // Only ever the signed-in person's name — never a previous account's.
+    const who = account.status === 'member' ? (account.name || prefs.hostName).trim().split(/\s+/)[0] : '';
     const day = h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
     return `Good ${day}${who ? `, ${who}` : ''}`;
   })();

@@ -9,8 +9,13 @@ It exposes three routes:
 | Route | Auth | Used by |
 |-------|------|---------|
 | `GET /health` | none | uptime checks |
-| `POST /send` | HMAC `x-email-signature` | the Railway backend (`server/src/services/mailer.ts`) |
-| `POST /auth-hook` | Standard Webhooks signature | Supabase **Send Email Hook** (signup / magic link / reset / …) |
+| `POST /send` | HMAC `x-email-signature` | the backend (`server/src/services/mailer.ts`) |
+| `POST /auth-hook` | Standard Webhooks signature | Supabase **Send Email Hook** — every auth email: signup, magic link / OTP, recovery, invite, email change (both Secure-change mails), reauthentication, security notifications |
+
+The auth-hook logic (signature check + Supabase payload → which email(s), to whom, with which
+link/code/brand) is pure and lives in [`src/authHook.ts`](./src/authHook.ts), covered by
+[`src/authHook.test.ts`](./src/authHook.test.ts). Owner setup and the safe enable order:
+[`../docs/email/SETUP.md` §5](../docs/email/SETUP.md).
 
 Templates come from [`../shared/email`](../shared/email) — the same module the app and the
 preview script use, so the inbox matches the product UI.
@@ -42,7 +47,7 @@ wrangler secret put SUPABASE_AUTH_HOOK_SECRET
 
 ```bash
 npm run typecheck
-npm run deploy   # prints the https://dreamstream-email.<account>.workers.dev URL
+npm run deploy   # → https://dreamstream-email.akhieleshsrirangam.workers.dev
 ```
 
 Put that URL in the backend as `EMAIL_WORKER_URL`, and (for the auth hook) point Supabase's
@@ -51,7 +56,10 @@ Send Email Hook at `<that-url>/auth-hook`.
 ## Test
 
 ```bash
-curl https://dreamstream-email.<account>.workers.dev/health
+# Unit tests (run from the repo root — the root vite.config.ts carries the test config):
+npx vitest run email-worker shared/email
+
+curl https://dreamstream-email.akhieleshsrirangam.workers.dev/health
 # {"ok":true,"service":"dreamstream-email-worker"}
 ```
 

@@ -17,12 +17,18 @@
  *     morning report,
  *   - watches camera heartbeats and raises "camera offline" alerts,
  *   - forwards low-rate JPEG snapshots in memory when a network blocks P2P
- *     (relay mode). Frames are passed through, never stored.
+ *     (relay mode). Frames are passed through, never stored,
+ *   - is the family's switchboard for video calls between members
+ *     (familyCalls.ts): rings their 'line' sockets and phones, relays the
+ *     handshake between the people in a call.
  *
  * The singleton instance named KEY_HOLDER only stores the VAPID key pair.
  */
 
-import { clockTime, isValidTz, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
+import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord } from './familyCalls';
+import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
+import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
+import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
 import { callRpc, type SupabaseEnv } from './supabaseAuth';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
@@ -31,17 +37,20 @@ export const KEY_HOLDER = '__vapid_keys__';
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
-/** 'admin' = a parent's short-lived control connection (never in presence). */
-export type MonMode = 'camera' | 'viewer' | 'admin';
+/**
+ * 'admin' = a parent's short-lived control connection (never in presence).
+ * 'line' = a member's app, open anywhere, reachable for family calls (never in presence).
+ */
+export type MonMode = 'camera' | 'viewer' | 'admin' | 'line';
 export type BabyState = 'calm' | 'stirring' | 'awake' | 'noisy' | 'fussing' | 'crying';
 const BABY_STATES: BabyState[] = ['calm', 'stirring', 'awake', 'noisy', 'fussing', 'crying'];
 
 /** Background-alert categories a device can opt into (and their defaults). */
-const PUSH_KINDS = ['cry', 'fuss', 'cough', 'alarm', 'glass', 'crash', 'zone', 'cat', 'loud', 'noise', 'camera', 'offline', 'battery', 'report', 'insight'] as const;
+const PUSH_KINDS = ['cry', 'fuss', 'cough', 'alarm', 'glass', 'crash', 'zone', 'cat', 'loud', 'noise', 'camera', 'offline', 'battery', 'report', 'insight', 'guest'] as const;
 export type PushKind = (typeof PUSH_KINDS)[number];
 const PUSH_DEFAULTS: Record<PushKind, boolean> = {
   cry: true, fuss: false, cough: true, alarm: true, glass: true, crash: true, zone: true, cat: true,
-  loud: false, noise: true, camera: true, offline: true, battery: true, report: true, insight: true,
+  loud: false, noise: true, camera: true, offline: true, battery: true, report: true, insight: true, guest: true,
 };
 
 /**
@@ -83,13 +92,14 @@ const VISION_TYPES: VisionType[] = ['zone', 'crib_out', 'visit_start', 'visit_en
  * person on duty first. `repeatMs`: push again until acknowledged;
  * `escalateMs`: one more push to everyone if nobody answered.
  */
-export type HazardKind = 'alarm' | 'glass' | 'crash' | 'zone' | 'crib_out' | 'cry' | 'very_loud' | 'moved' | 'paused' | 'offline';
+export type HazardKind = 'alarm' | 'glass' | 'crash' | 'zone' | 'crib_out' | 'cry' | 'very_loud' | 'moved' | 'paused' | 'offline' | 'object';
 const HAZARD: Record<HazardKind, { push: PushKind; everyone: boolean; repeatMs?: number; escalateMs?: number; maxPushes: number; staleMs: number }> = {
   alarm: { push: 'alarm', everyone: true, repeatMs: 60_000, maxPushes: 10, staleMs: 60 * 60_000 },
   glass: { push: 'glass', everyone: true, escalateMs: 3 * 60_000, maxPushes: 2, staleMs: 60 * 60_000 },
   crash: { push: 'crash', everyone: false, escalateMs: 5 * 60_000, maxPushes: 2, staleMs: 60 * 60_000 },
   zone: { push: 'zone', everyone: true, repeatMs: 2 * 60_000, maxPushes: 5, staleMs: 30 * 60_000 },
   crib_out: { push: 'zone', everyone: true, repeatMs: 2 * 60_000, maxPushes: 5, staleMs: 30 * 60_000 },
+  object: { push: 'zone', everyone: true, escalateMs: 3 * 60_000, maxPushes: 2, staleMs: 30 * 60_000 },
   cry: { push: 'cry', everyone: false, maxPushes: 4, staleMs: 2 * 60 * 60_000 },
   very_loud: { push: 'noise', everyone: true, maxPushes: 1, staleMs: 30 * 60_000 },
   moved: { push: 'camera', everyone: false, escalateMs: 10 * 60_000, maxPushes: 2, staleMs: 2 * 60 * 60_000 },
@@ -116,6 +126,8 @@ interface Attach {
   dn?: string;
   /** Viewer: camera device id it wants relayed snapshots from. */
   relay?: string;
+  /** Joined with the share link + passcode (no account): the guest's id. */
+  guest?: string;
 }
 
 export interface SplStatus {
@@ -158,7 +170,31 @@ export interface CamStatus {
   outside: number | null;
   /** An adult is in the room right now. */
   visit: boolean;
+  /** Smart vision (beta): what the camera can tell about the baby right now. */
+  scene?: SceneStatus | null;
 }
+
+export interface SceneStatus {
+  baby: boolean;
+  posture: 'lying' | 'sitting' | 'standing' | null;
+  where: string | null;
+  holding: string | null;
+  near: string[];
+  adult: boolean;
+}
+
+/** COCO labels the camera may report (scene.ts). Anything else is dropped. */
+const SCENE_LABELS = new Set([
+  'teddy bear', 'sports ball', 'book', 'bottle', 'spoon', 'toothbrush', 'frisbee', 'kite',
+  'scissors', 'knife', 'fork', 'cup', 'wine glass', 'cell phone', 'remote', 'hair drier', 'potted plant', 'cat', 'dog',
+]);
+const SHARP = new Set(['scissors', 'knife', 'fork']);
+const RISK_WHY: Record<string, string> = {
+  scissors: 'sharp', knife: 'sharp', fork: 'sharp', cup: 'hot drinks can scald', 'wine glass': 'glass can break', 'cell phone': 'cords and small parts',
+  remote: 'button batteries are dangerous if swallowed', 'hair drier': 'cord and heat', 'potted plant': 'soil and leaves can be swallowed', cat: 'a pet close to the baby', dog: 'a pet close to the baby',
+};
+const sceneLabel = (v: unknown): string | null => (typeof v === 'string' && SCENE_LABELS.has(v) ? v : null);
+const a_an = (w: string) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
 
 /** A log line as clients see it. */
 export interface MonLog {
@@ -175,17 +211,26 @@ export interface MonLog {
   incident?: string;
 }
 
+/** A device that wants to ring for family calls while the app is closed. */
+interface CallPushRec {
+  sub: PushSubscriptionJSONLike;
+  uid: string;
+  at: number;
+}
+
 interface PushRec {
   sub: PushSubscriptionJSONLike;
   uid: string;
   name: string;
+  /** Role when subscribed (parents-only notices, e.g. a new guest). */
+  role?: MonRole;
   prefs: Record<string, boolean>;
   at: number;
 }
 
 export interface Zone {
   id: string;
-  kind: 'crib' | 'danger';
+  kind: 'crib' | 'danger' | 'activity';
   name: string;
   x: number;
   y: number;
@@ -208,6 +253,8 @@ export interface Settings {
   zones: Record<string, Zone[]>;
   /** The nursery's time zone (from its camera phone). */
   tz: string;
+  /** The baby, for the tracker's age-based guidance (wake windows, growth percentiles). */
+  baby?: { birth: string | null; sex: 'f' | 'm' | null };
 }
 
 interface Duty {
@@ -227,6 +274,9 @@ const LOG_HELLO = 150;
 const TL_BUCKET_MS = 5 * 60_000;
 const TL_KEEP_MS = 7 * 24 * 60 * 60_000;
 const MAX_SOCKETS = 14;
+/** Family members' apps listening for calls (separate from the monitor's devices). */
+const MAX_LINES = 24;
+const CALL_PUSH_CAP = 40;
 const MAX_CAMERAS = 4;
 const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
@@ -239,7 +289,7 @@ const MACHINE_GAP_MS = 12 * 60 * 60_000;
 const STATE_RANK: Record<BabyState, number> = { calm: 1, stirring: 2, awake: 2, noisy: 3, fussing: 4, crying: 5 };
 const PUSH_COOLDOWN_MS: Record<string, number> = {
   alarm: 60_000, glass: 2 * 60_000, zone: 2 * 60_000, fuss: 10 * 60_000, cough: 10 * 60_000, crash: 10 * 60_000, cat: 15 * 60_000,
-  loud: 10 * 60_000, noise: 10 * 60_000, camera: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000, insight: 6 * 60 * 60_000,
+  loud: 10 * 60_000, noise: 10 * 60_000, camera: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000, insight: 6 * 60 * 60_000, guest: 0,
 };
 const PUSH_URGENT = new Set<PushKind>(['cry', 'alarm', 'glass', 'zone', 'offline', 'noise']);
 const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
@@ -256,6 +306,8 @@ const num = (v: unknown, lo: number, hi: number, d = 0) => {
 const numOrNull = (v: unknown, lo: number, hi: number) => (v == null || !Number.isFinite(Number(v)) ? null : num(v, lo, hi));
 const newId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 const dur = (secs: number) => (secs >= 3600 ? `${Math.floor(secs / 3600)} h ${Math.round((secs % 3600) / 60)} min` : secs >= 60 ? `${Math.round(secs / 60)} min` : `${secs}s`);
+/** How a nursery reads in calls: "Aria’s family". */
+const familyOf = (m: { name: string; baby: string | null }) => (m.baby ? `${m.baby}’s family` : m.name);
 const hm = (mins: number) => (mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`);
 
 /** Severity of the log kinds the room writes itself. */
@@ -264,23 +316,37 @@ const KIND_SEV: Record<string, Severity> = {
   feed: 'care', diaper: 'care', sleep: 'care', wake: 'care', note: 'care', ack: 'care', soothe: 'care', camera: 'info', people: 'info',
   paused: 'warn', zone: 'urgent', crib_out: 'urgent', visit_start: 'info', visit_end: 'info', lights_on: 'info', lights_off: 'info', dark: 'warn', moved: 'warn',
   very_loud: 'warn', loud_db: 'warn', machine: 'warn', asleep: 'care', woke: 'care', resettled: 'care', sleep_report: 'care', duty: 'info', resolved: 'info',
+  posture: 'info', rolled: 'info', holding: 'info', object: 'warn', soft_toy: 'warn', stood: 'warn', play: 'info',
 };
+
+export function sanitizeScene(v: unknown): SceneStatus | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  return {
+    baby: Boolean(r.baby),
+    posture: r.posture === 'lying' || r.posture === 'sitting' || r.posture === 'standing' ? r.posture : null,
+    where: r.where == null ? null : clip(r.where, 30) || null,
+    holding: sceneLabel(r.holding),
+    near: Array.isArray(r.near) ? [...new Set(r.near.map(sceneLabel).filter((x): x is string => !!x))].slice(0, 4) : [],
+    adult: Boolean(r.adult),
+  };
+}
 
 export function sanitizeZones(v: unknown): Zone[] {
   if (!Array.isArray(v)) return [];
   const out: Zone[] = [];
-  for (const z of v.slice(0, 6)) {
+  for (const z of v.slice(0, 8)) {
     if (!z || typeof z !== 'object') continue;
     const r = z as Record<string, unknown>;
     const id = clip(r.id, 12).replace(/[^a-z0-9]/gi, '');
-    const kind = r.kind === 'crib' ? 'crib' : r.kind === 'danger' ? 'danger' : null;
+    const kind = r.kind === 'crib' ? 'crib' : r.kind === 'danger' ? 'danger' : r.kind === 'activity' ? 'activity' : null;
     if (!id || !kind) continue;
     const x = num(r.x, 0, 1);
     const y = num(r.y, 0, 1);
     const w = num(r.w, 0, 1 - x);
     const h = num(r.h, 0, 1 - y);
     if (w < 0.02 || h < 0.02) continue;
-    out.push({ id, kind, name: clip(r.name, 30) || (kind === 'crib' ? 'Crib' : 'Danger zone'), x, y, w, h });
+    out.push({ id, kind, name: clip(r.name, 30) || (kind === 'crib' ? 'Crib' : kind === 'activity' ? 'Play area' : 'Danger zone'), x, y, w, h });
   }
   // One crib per camera.
   let crib = false;
@@ -300,10 +366,14 @@ export class MonitorRoom {
   private vapid: VapidKeys | null = null;
   private ice: { at: number; servers: unknown[] } | null = null;
   readonly store: MonitorStore;
+  readonly guests: GuestAccess;
+  readonly tracker: TrackerStore;
   readonly ready: Promise<void>;
 
   constructor(private state: DurableObjectState, private env: MonEnv) {
     this.store = new MonitorStore(state.storage.sql);
+    this.guests = new GuestAccess(state.storage.sql);
+    this.tracker = new TrackerStore(state.storage.sql);
     this.ready = state.blockConcurrencyWhile(() => this.migrate());
   }
 
@@ -329,6 +399,7 @@ export class MonitorRoom {
     if (url.pathname === '/vapid') return this.handleVapid();
     if (url.pathname === '/ws') return this.handleUpgrade(req, url);
     if (url.pathname === '/export') return this.handleExport(req, url);
+    if (url.pathname === '/guest' && req.method === 'POST') return this.handleGuestJoin(req, url);
     return json({ error: 'not found' }, 404);
   }
 
@@ -391,7 +462,7 @@ export class MonitorRoom {
     if (!res.ok) return json({ error: 'sign in' }, res.status === 401 ? 401 : 502);
     if (!res.data.ok || (res.data.role !== 'parent' && res.data.role !== 'caregiver')) return json({ error: 'forbidden' }, 403);
     const what = url.searchParams.get('what');
-    const kind = what === 'minutes' || what === 'sleep' ? what : 'events';
+    const kind = what === 'minutes' || what === 'sleep' || what === 'track' ? what : 'events';
     // An absent parameter is "default", never 0 (Number(null) === 0).
     const param = (k: string) => url.searchParams.get(k) || undefined;
     const now = Date.now();
@@ -399,7 +470,7 @@ export class MonitorRoom {
     const from = num(param('from'), to - 90 * 24 * 60 * 60_000, to, to - 7 * 24 * 60 * 60_000);
     const settings = await this.settings();
     const meta = await this.meta();
-    const csv = this.store.csv(kind, from, to + 1, settings.tz);
+    const csv = kind === 'track' ? this.tracker.csv(from, to + 1, (t) => localIso(t, settings.tz)) : this.store.csv(kind, from, to + 1, settings.tz);
     const slug = (meta.name || 'nursery').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'nursery';
     return new Response(`﻿${csv}\r\n`, {
       headers: {
@@ -420,7 +491,7 @@ export class MonitorRoom {
 
     const pair = new WebSocketPair();
     const server = pair[1];
-    if (this.sockets().length >= MAX_SOCKETS + 4) {
+    if (this.sockets().length >= MAX_SOCKETS + MAX_LINES + 4) {
       server.accept();
       try {
         server.send(JSON.stringify({ t: 'error', code: 'full', msg: 'Too many devices are connected to this nursery right now.' }));
@@ -455,10 +526,11 @@ export class MonitorRoom {
     } catch { /* closing */ }
   }
 
+  /** To the nursery's monitor devices (cameras, viewers) — never to call lines. */
   private broadcast(obj: unknown, filter?: (a: Attach) => boolean): void {
     const payload = JSON.stringify(obj);
     for (const { ws, a } of this.authed()) {
-      if (filter && !filter(a)) continue;
+      if (a.mode === 'line' || (filter && !filter(a))) continue;
       try {
         ws.send(payload);
       } catch { /* closing */ }
@@ -467,13 +539,13 @@ export class MonitorRoom {
 
   private presence() {
     const cams: { sid: string; dev: string; dn: string; by: string; since: number; status: CamStatus | null; statusAt: number | null }[] = [];
-    const viewers: { sid: string; name: string; label: string | null; role: MonRole; dn: string; relay: boolean }[] = [];
+    const viewers: { sid: string; name: string; label: string | null; role: MonRole; dn: string; relay: boolean; guest?: boolean }[] = [];
     for (const { a } of this.authed()) {
       if (a.mode === 'camera' && a.dev) {
         const ls = this.lastStatus.get(a.dev);
         cams.push({ sid: a.sid, dev: a.dev, dn: a.dn || 'Camera', by: a.name || 'Member', since: a.at, status: ls?.st ?? null, statusAt: ls?.at ?? null });
       } else if (a.mode === 'viewer') {
-        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay });
+        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay, ...(a.guest ? { guest: true } : {}) });
       }
     }
     return { cams, viewers };
@@ -511,12 +583,18 @@ export class MonitorRoom {
     } catch {
       return;
     }
-    const big = msg.t === 'rtc' || msg.t === 'auth' || msg.t === 'push_sub' || msg.t === 'stats' || msg.t === 'settings';
+    const big = msg.t === 'rtc' || msg.t === 'call_rtc' || msg.t === 'auth' || msg.t === 'push_sub' || msg.t === 'call_push' || msg.t === 'stats' || msg.t === 'settings';
     if (!big && raw.length > FRAME_MAX) return;
 
     if (!a.authed) {
       if (msg.t === 'auth') await this.onAuth(ws, a, msg);
       return;
+    }
+
+    // A call line only does calls (and keepalive).
+    if (a.mode === 'line') {
+      if (msg.t === 'ping') return this.send(ws, { t: 'pong', at: Date.now() });
+      return this.onCallMsg(ws, a, msg);
     }
 
     switch (msg.t) {
@@ -555,10 +633,20 @@ export class MonitorRoom {
         return this.onSettings(a, msg);
       case 'q':
         return this.onQuery(ws, msg);
+      case 'track_put':
+        return this.onTrackPut(ws, a, msg);
+      case 'track_del':
+        return this.onTrackDel(a, msg);
       case 'sleep_delete':
         return this.onSleepDelete(a, msg);
       case 'members_changed':
         return this.onMembersChanged(a, msg);
+      case 'share_set':
+        return this.onShareSet(ws, a, msg);
+      case 'share_off':
+        return this.onShareOff(a);
+      case 'guest_remove':
+        return this.onGuestRemove(a, msg);
       case 'end_all':
         return this.onEndAll(a);
       case 'bye':
@@ -576,6 +664,7 @@ export class MonitorRoom {
     await this.ready;
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a?.authed) return;
+    if (a.mode === 'line') return this.onLineGone(a);
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -610,8 +699,9 @@ export class MonitorRoom {
 
   // ---------------------------------------------------------------- auth
   private async onAuth(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (typeof msg.guest === 'string') return this.onGuestAuth(ws, a, msg);
     const token = clip(msg.token, 4096);
-    const mode: MonMode = msg.mode === 'camera' ? 'camera' : msg.mode === 'admin' ? 'admin' : 'viewer';
+    const mode: MonMode = msg.mode === 'camera' ? 'camera' : msg.mode === 'admin' ? 'admin' : msg.mode === 'line' ? 'line' : 'viewer';
     const nid = (await this.state.storage.get<string>('nid')) || '';
     if (!token || !nid) return this.reject(ws, 'auth', 'Sign in again to open this nursery.');
 
@@ -637,16 +727,43 @@ export class MonitorRoom {
     if (mode === 'camera' && camCount >= MAX_CAMERAS) {
       return this.reject(ws, 'full', `This nursery already has ${MAX_CAMERAS} cameras running.`);
     }
+    const lines = this.authed().filter((s) => s.a.mode === 'line').length;
+    if (mode === 'line' ? lines >= MAX_LINES : this.authed().length - lines >= MAX_SOCKETS + 4) {
+      return this.reject(ws, 'full', 'Too many devices are connected to this nursery right now.');
+    }
 
     a.authed = true;
     a.uid = res.data.user_id;
     a.name = clip(res.data.display_name || 'Member', 40);
     a.role = res.data.role;
     a.label = res.data.label ?? null;
+    const meta = { name: res.data.nursery_name || 'Nursery', baby: res.data.baby_name || null };
+    await this.state.storage.put('meta', meta);
+    return this.admit(ws, a, mode, msg, meta);
+  }
+
+  /** A guest's socket: the token from the share-link join, checked by this room. */
+  private async onGuestAuth(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (msg.mode !== 'viewer') return this.reject(ws, 'forbidden', 'Guests can watch, but not run a camera or manage the nursery.');
+    const g = await this.guests.verify(clip(msg.guest, 100), Date.now());
+    if (!g) return this.reject(ws, 'removed', 'This guest pass has ended — ask a parent for the link and passcode again.');
+    a.authed = true;
+    a.uid = `g:${g.id}`;
+    a.name = clip(g.name, 40);
+    a.role = g.role;
+    a.label = null;
+    a.guest = g.id;
+    return this.admit(ws, a, 'viewer', msg, await this.meta());
+  }
+
+  /** Common to members and guests once they're verified. */
+  private async admit(ws: WebSocket, a: Attach, mode: MonMode, msg: Record<string, unknown>, meta: { name: string; baby: string | null }): Promise<void> {
+    const nid = (await this.state.storage.get<string>('nid')) || '';
     a.mode = mode;
     a.dev = clip(msg.dev, 40) || a.sid;
     a.dn = clip(msg.dn, 40) || (mode === 'camera' ? 'Camera' : 'Device');
     ws.serializeAttachment(a);
+    if (mode === 'line') return this.admitLine(ws, a, nid, meta);
 
     // A device re-joining as the same camera replaces its stale socket.
     if (mode === 'camera') {
@@ -659,9 +776,6 @@ export class MonitorRoom {
       }
     }
 
-    const meta = { name: res.data.nursery_name || 'Nursery', baby: res.data.baby_name || null };
-    await this.state.storage.put('meta', meta);
-
     // The camera phone knows the nursery's time zone (reports, night vs nap).
     let settings = await this.settings();
     if (mode === 'camera' && isValidTz(msg.tz) && msg.tz !== settings.tz) {
@@ -672,18 +786,20 @@ export class MonitorRoom {
     const [tl, ice, vapid, duty, sleep] = await Promise.all([this.timeline(), this.iceServers(), this.vapidKeys(), this.duty(), this.sleepStatus()]);
     this.send(ws, {
       t: 'hello',
-      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev },
+      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev, ...(a.guest ? { guest: true } : {}) },
       nursery: { id: nid, ...meta },
       ...this.presence(),
       log: this.store.events({ limit: LOG_HELLO }).reverse().map(toLog),
       tl,
       settings,
       incidents: this.store.activeIncidents(),
+      track: { running: this.tracker.running(), latest: this.tracker.latest() },
       duty,
       sleep,
       ice,
       vapid: vapid?.publicKey ?? null,
     });
+    if (a.role === 'parent') this.send(ws, { t: 'share', share: this.guests.info(Date.now()) });
 
     if (mode === 'camera') {
       this.markBeat(a.dev);
@@ -772,6 +888,7 @@ export class MonitorRoom {
       crib: s.crib == null ? null : Math.round(num(s.crib, 0, 100)),
       outside: s.outside == null ? null : Math.round(num(s.outside, 0, 100)),
       visit: Boolean(s.visit),
+      scene: sanitizeScene(s.scene),
     };
     this.lastStatus.set(a.dev, { st, at: now });
     this.broadcast({ t: 'status', dev: a.dev, sid: a.sid, st, at: now }, (x) => x.mode === 'viewer');
@@ -822,6 +939,7 @@ export class MonitorRoom {
     const where = a.dn || 'Camera';
     if (kind === 'sound') return this.onSoundEvent(a, msg, meta, who, where);
     if (kind === 'vision') return this.onVisionEvent(a, msg, meta, who, where);
+    if (kind === 'scene') return this.onSceneEvent(a, msg, meta, who, where);
     if (kind === 'noise') return this.onNoiseEvent(a, msg, meta, where);
     if (kind === 'paused') {
       // The camera page went to the background or the phone locked: the video stops.
@@ -877,6 +995,62 @@ export class MonitorRoom {
     const note = { title, body: `${meta.name} · ${where} — tap to check in`, entryId: entry.id };
     if (info.hazard) await this.raiseHazard(info.hazard, entry, note, a.dev);
     else if (info.push) await this.pushAlert(info.push, note, a.dev, { audience: 'duty' });
+  }
+
+  /** Smart vision (beta): posture, rolling, what's in hand or within reach, play areas (live/monitor/scene.ts). */
+  private async onSceneEvent(a: Attach, msg: Record<string, unknown>, meta: { name: string; baby: string | null }, who: string, where: string): Promise<void> {
+    if (!a.dev || a.mode !== 'camera') return;
+    const type = String(msg.type ?? '');
+    const label = sceneLabel(msg.label);
+    const zoneName = clip(msg.name, 30);
+    const now = Date.now();
+    const key = `${a.dev}:s:${type}:${label || zoneName || String(msg.posture ?? '')}`;
+    const gap = type === 'object_near' ? 5 * 60_000 : type === 'soft_toy' ? 60 * 60_000 : 60_000;
+    if (now - (this.lastSoundAt.get(key) ?? 0) < gap) return;
+    this.lastSoundAt.set(key, now);
+    const inWhat = (w: unknown) => (w === 'Crib' ? ' in the crib' : typeof w === 'string' && w ? ` in the ${clip(w, 30)}` : '');
+    switch (type) {
+      case 'posture': {
+        const p = msg.posture === 'sitting' ? 'is sitting up' : msg.posture === 'standing' ? 'is standing' : msg.posture === 'lying' ? 'is lying down' : null;
+        if (!p) return;
+        await this.addLog({ kind: 'posture', msg: `${who} ${p}${inWhat(msg.where)} · ${where}`, dev: a.dev });
+        return;
+      }
+      case 'stood_in_crib':
+        await this.addLog({ kind: 'stood', msg: `${who} is standing in the crib — keep the mattress at its lowest setting · ${where}`, dev: a.dev });
+        return;
+      case 'rolled':
+        await this.addLog({ kind: 'rolled', msg: `${who} rolled over — face turned away from the camera · ${where}`, dev: a.dev });
+        return;
+      case 'holding':
+        if (!label) return;
+        await this.addLog({ kind: 'holding', msg: `${who} is holding ${a_an(label)} · ${where}`, dev: a.dev });
+        return;
+      case 'object_near': {
+        if (!label || !RISK_WHY[label]) return;
+        const title = SHARP.has(label) ? `${label[0].toUpperCase()}${label.slice(1)} within ${who}’s reach` : `${label[0].toUpperCase()}${label.slice(1)} near ${who}`;
+        const entry = await this.addLog({ kind: 'object', msg: `${title} (${RISK_WHY[label]}) · ${where}`, dev: a.dev, sev: SHARP.has(label) ? 'urgent' : 'warn' });
+        if (SHARP.has(label)) await this.raiseHazard('object', entry, { title, body: `${meta.name} · ${where} — move it out of reach`, entryId: entry.id }, a.dev);
+        return;
+      }
+      case 'soft_toy':
+        await this.addLog({
+          kind: 'soft_toy',
+          msg: msg.inCrib === false
+            ? `A soft toy is within ${who}’s reach while lying down — for sleep, the AAP advises a bare space: no toys, pillows or blankets · ${where}`
+            : `A soft toy is in the crib with ${who} — for sleep, the AAP advises an empty crib · ${where}`,
+          dev: a.dev,
+        });
+        return;
+      case 'in_zone':
+        if (!zoneName) return;
+        await this.addLog({ kind: 'play', msg: `${who} is in the ${zoneName} · ${where}`, dev: a.dev });
+        return;
+      case 'left_zone':
+        if (!zoneName) return;
+        await this.addLog({ kind: 'play', msg: `${who} left the ${zoneName}${msg.secs ? ` after ${dur(Math.round(num(msg.secs, 0, 86_400)))}` : ''} · ${where}`, dev: a.dev });
+        return;
+    }
   }
 
   /** On-device vision: zones, climb-outs, visits, lights, camera moved (see live/monitor/vision.ts). */
@@ -1191,6 +1365,94 @@ export class MonitorRoom {
     }
   }
 
+  // ------------------------------------------------------------ tracker
+  /** Add or edit a tracker entry (feeds, diapers, sleep…) — parents and caregivers, guests included. */
+  private async onTrackPut(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role === 'viewer') return this.send(ws, { t: 'track_err', id: clip((msg.item as Record<string, unknown> | undefined)?.id, 40), msg: 'Viewers can see the tracker but not log — ask a parent to make you a caregiver.' });
+    const now = Date.now();
+    const who = { name: a.label ? `${a.name} (${a.label})` : a.name || 'Someone', uid: a.uid || a.sid };
+    const r = sanitizeTrack((msg.item ?? {}) as Record<string, unknown>, who, now);
+    if (!r.ok) return this.send(ws, { t: 'track_err', id: clip((msg.item as Record<string, unknown> | undefined)?.id, 40), msg: r.error });
+    const before = this.tracker.get(r.row.id);
+    const saved = this.tracker.put(r.row);
+    if (!saved) return this.send(ws, { t: 'track_del', id: r.row.id });
+    this.broadcast({ t: 'track', item: saved });
+    await this.trackLog(saved, before, a);
+  }
+
+  private async onTrackDel(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role === 'viewer') return;
+    const id = clip(msg.id, 40);
+    if (id && this.tracker.delete(id, Date.now())) this.broadcast({ t: 'track_del', id });
+  }
+
+  /** One line in the activity log when something is logged or a timer stops — and sleep steers the sleep tracker. */
+  private async trackLog(row: TrackRow, before: TrackRow | null, a: Attach): Promise<void> {
+    const started = !before;
+    const stopped = !!before && before.end == null && row.end != null;
+    if (!started && !stopped) return;
+    const d = row.data as Record<string, number | string | boolean | undefined>;
+    const mins = row.end != null ? Math.max(1, Math.round((row.end - row.start) / 60_000)) : 0;
+    const by = a.label ? `${a.name} (${a.label})` : a.name;
+    let kind = 'note';
+    let text: string | null = null;
+    switch (row.kind) {
+      case 'bottle':
+        kind = 'feed';
+        text = `Bottle · ${d.ml} ml${d.milk === 'breast' ? ' breast milk' : d.milk === 'formula' ? ' formula' : ''}`;
+        break;
+      case 'breast':
+        if (row.end == null) return;
+        kind = 'feed';
+        text = `Breastfed ${mins} min${d.left || d.right ? ` (L ${Math.round(Number(d.left ?? 0) / 60)} · R ${Math.round(Number(d.right ?? 0) / 60)})` : ''}`;
+        break;
+      case 'solids':
+        kind = 'feed';
+        text = `Solids${d.foods ? ` · ${d.foods}` : ''}`;
+        break;
+      case 'diaper':
+        kind = 'diaper';
+        text = `Diaper · ${d.pee && d.poo ? 'wet + dirty' : d.poo ? 'dirty' : d.pee ? 'wet' : 'dry'}`;
+        break;
+      case 'sleep':
+        kind = row.end == null ? 'sleep' : 'wake';
+        text = row.end == null ? 'Down for sleep' : `Woke up after ${dur(mins * 60)}`;
+        if (started && row.end != null) text = `Slept ${dur(mins * 60)}`;
+        break;
+      case 'pump':
+        if (row.end == null) return;
+        text = `Pumped ${Number(d.mlLeft ?? 0) + Number(d.mlRight ?? 0)} ml`;
+        break;
+      case 'med':
+        text = `Gave ${d.name}${d.dose ? ` ${d.dose} ${d.unit ?? ''}`.trimEnd() : ''}`;
+        break;
+      case 'temp':
+        text = `Temperature ${d.c} °C${d.method ? ` (${d.method})` : ''}`;
+        break;
+      case 'growth':
+        text = `Measured${d.kg ? ` · ${d.kg} kg` : ''}${d.cm ? ` · ${d.cm} cm` : ''}${d.headCm ? ` · head ${d.headCm} cm` : ''}`;
+        break;
+      case 'activity':
+        if (row.end == null) return;
+        text = `${{ tummy: 'Tummy time', bath: 'Bath', play: 'Play', outdoor: 'Outside', reading: 'Reading', skin: 'Skin-to-skin' }[String(d.type)] ?? 'Activity'} · ${mins} min`;
+        break;
+      case 'note':
+        text = d.note ? `Note — ${String(d.note).slice(0, 140)}` : null;
+        break;
+    }
+    if (!text) return;
+    await this.addLog({ kind, msg: text, by, sev: 'care' });
+    // The sleep timer is the same thing as "Down for sleep" / "Woke up" for the camera's sleep tracker.
+    if (row.kind === 'sleep' && row.start > Date.now() - 10 * 60_000) {
+      const sm = (await this.state.storage.get<SleepSm>('sleepSm')) ?? newSleepSm();
+      const events = row.end == null ? manualSleep(sm, Date.now(), newId()) : stopped ? manualWake(sm, Date.now()) : [];
+      if (events.length) {
+        await this.state.storage.put('sleepSm', sm);
+        await this.onSleepEvents(events);
+      }
+    }
+  }
+
   /** "I'm on it" — tells everyone someone is checking; answers the incident. */
   private async onAck(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role === 'viewer') return;
@@ -1306,6 +1568,19 @@ export class MonitorRoom {
       const rows = this.store.events({ before: msg.before == null ? undefined : num(msg.before, 0, now + 1), limit: limit + 1, kinds }).map(toLog);
       return reply({ rows: rows.slice(0, limit), more: rows.length > limit });
     }
+    if (q === 'track') {
+      // The tracker's log for a window, with the camera's automatic sleep sessions alongside.
+      const to = num(msg.to, 0, now + 24 * 60 * 60_000, now + 60_000);
+      const from = num(msg.from, to - 400 * 24 * 60 * 60_000, to, to - 2 * 24 * 60 * 60_000);
+      const auto: TrackRow[] = this.store
+        .sleepBetween(from, to)
+        .filter((x) => !x.summary?.discarded && x.onset != null)
+        .map((x) => ({ id: `ms-${x.id}`, kind: 'sleep', start: x.onset ?? x.start, end: x.end, by: 'Camera', by_uid: 'camera', data: { where: 'crib', wakings: x.wakings }, src: 'monitor', updated: x.end ?? now }));
+      return reply({ from, to, items: this.tracker.range(from, to), auto, settings: { tz: (await this.settings()).tz, baby: (await this.settings()).baby ?? null } });
+    }
+    if (q === 'track_sync') {
+      return reply({ items: this.tracker.changedSince(num(msg.since, 0, now, 0)), now });
+    }
     if (q === 'sleep') {
       const days = Math.round(num(msg.days, 1, 60, 14));
       return reply({ sessions: this.store.sleepBetween(now - days * 24 * 60 * 60_000, now + 1).filter((s) => !s.summary?.discarded), status: await this.sleepStatus(), tz: (await this.settings()).tz });
@@ -1327,6 +1602,9 @@ export class MonitorRoom {
         tz: (await this.settings()).tz,
       });
     }
+    if (q === 'weeks') {
+      return reply({ days: this.weeks(now, (await this.settings()).tz, Math.round(num(msg.days, 7, 28, 14))) });
+    }
     if (q === 'day') {
       // Today (in the nursery's zone) at a glance.
       const settings = await this.settings();
@@ -1338,6 +1616,55 @@ export class MonitorRoom {
       const sleepMin = sessions.reduce((acc, s) => acc + s.asleep_min, 0);
       return reply({ from, tally: t, sleepMin, naps: sessions.filter((s) => s.kind === 'nap').length, summary: this.summarise(from, now + 1) });
     }
+  }
+
+  /**
+   * What the monitor measured, per local day (oldest first, today last and
+   * partial): sleep the camera saw, night wakings, crying, alerts and how
+   * fast someone answered, and the sound level while the baby slept.
+   */
+  weeks(now: number, tz: string, days = 14): {
+    day: number; sleepMin: number; nightMin: number; naps: number; wakings: number; longestMin: number;
+    cryMin: number; cries: number; alerts: number; responseSec: number | null; sleepLaeq: number | null; loud: number;
+  }[] {
+    const p = localParts(now, tz);
+    const today = now - (p.h * 60 + p.mi) * 60_000 - (now % 60_000);
+    const sessions = this.store.sleepBetween(today - days * 86_400_000, now + 1).filter((x) => !x.summary?.discarded);
+    const out = [];
+    for (let k = days - 1; k >= 0; k--) {
+      const from = today - k * 86_400_000;
+      const to = k === 0 ? now + 1 : from + 86_400_000;
+      const mine = sessions.filter((x) => x.start >= from && x.start < to);
+      const nights = mine.filter((x) => x.kind === 'night');
+      const t = this.store.tally(from, to);
+      const inc = this.store.incidentsBetween(from, to);
+      const answered = inc.filter((i) => i.ack_at != null);
+      // Energy-average LAeq over the minutes the baby was asleep.
+      let e = 0;
+      let n = 0;
+      for (const x of mine) {
+        for (const m of this.store.minutes(x.onset ?? x.start, x.end ?? to)) {
+          if (m.laeq == null) continue;
+          e += 10 ** (m.laeq / 10);
+          n++;
+        }
+      }
+      out.push({
+        day: from,
+        sleepMin: mine.reduce((a, x) => a + x.asleep_min, 0),
+        nightMin: nights.reduce((a, x) => a + x.asleep_min, 0),
+        naps: mine.filter((x) => x.kind === 'nap').length,
+        wakings: nights.reduce((a, x) => a + x.wakings, 0),
+        longestMin: mine.reduce((a, x) => Math.max(a, x.longest_min), 0),
+        cryMin: Math.round((t.cry_end?.secs ?? 0) / 60),
+        cries: t.cry?.n ?? 0,
+        alerts: inc.length,
+        responseSec: answered.length ? Math.round(answered.reduce((a, i) => a + (i.ack_at! - i.at), 0) / answered.length / 1000) : null,
+        sleepLaeq: n ? Math.round(10 * Math.log10(e / n) * 10) / 10 : null,
+        loud: (t.very_loud?.n ?? 0) + (t.loud_db?.n ?? 0),
+      });
+    }
+    return out;
   }
 
   private async onSleepDelete(a: Attach, msg: Record<string, unknown>): Promise<void> {
@@ -1361,6 +1688,7 @@ export class MonitorRoom {
       sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } },
       uid: a.uid!,
       name: a.name || 'Member',
+      role: a.role,
       prefs: Object.fromEntries(
         PUSH_KINDS.map((k) => {
           // Life-safety alerts can't be switched off.
@@ -1403,7 +1731,7 @@ export class MonitorRoom {
    * Alert the people who opted in. `audience: 'duty'` reaches only the person
    * on duty (when someone is); `force` skips the per-kind cooldown (escalations).
    */
-  private async pushAlert(kind: PushKind, note: { title: string; body: string; entryId: string }, dev?: string, opts: { audience?: 'all' | 'duty'; incident?: string; force?: boolean } = {}): Promise<void> {
+  private async pushAlert(kind: PushKind, note: { title: string; body: string; entryId: string }, dev?: string, opts: { audience?: 'all' | 'duty' | 'parents'; incident?: string; force?: boolean } = {}): Promise<void> {
     const now = Date.now();
     const key = `${kind}:${dev ?? '-'}`;
     const last = (await this.state.storage.get<Record<string, number>>('lastPush')) ?? {};
@@ -1424,6 +1752,7 @@ export class MonitorRoom {
       subs
         .filter((r) => (kind === 'alarm' ? true : r.prefs[kind] ?? PUSH_DEFAULTS[kind]))
         .filter((r) => !duty || r.uid === duty.uid)
+        .filter((r) => opts.audience !== 'parents' || r.role === 'parent' || r.role === undefined)
         .map(async (r) => {
           const out = await sendWebPush(r.sub, payload, keys, {
             subject: VAPID_SUBJECT,
@@ -1456,6 +1785,11 @@ export class MonitorRoom {
       else if (msg.noiseDb != null) cur.noiseDb = Math.round(num(msg.noiseDb, 45, 100, 70));
       if (typeof msg.machineCheck === 'boolean') cur.machineCheck = msg.machineCheck;
       if (typeof msg.sleepTracking === 'boolean') cur.sleepTracking = msg.sleepTracking;
+      if (msg.baby && typeof msg.baby === 'object') {
+        const b = msg.baby as Record<string, unknown>;
+        const birth = typeof b.birth === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.birth) && Date.parse(b.birth) <= Date.now() && Date.parse(b.birth) > Date.now() - 6 * 366 * 86400_000 ? b.birth : null;
+        cur.baby = { birth, sex: b.sex === 'f' || b.sex === 'm' ? b.sex : null };
+      }
     }
     if (msg.zones && typeof msg.zones === 'object' && typeof (msg.zones as Record<string, unknown>).dev === 'string') {
       const z = msg.zones as { dev: string; list: unknown };
@@ -1472,6 +1806,99 @@ export class MonitorRoom {
     this.broadcast({ t: 'settings', settings: cur });
   }
 
+  // ------------------------------------------------------------- guests
+  /** Someone opened the share link and typed the passcode. */
+  private async handleGuestJoin(req: Request, url: URL): Promise<Response> {
+    const nid = await this.state.storage.get<string>('nid');
+    if (!nid || url.searchParams.get('nid') !== nid) return json({ ok: false, reason: 'bad_link' }, 404);
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ ok: false, reason: 'bad_link' }, 400);
+    }
+    const now = Date.now();
+    const r = await this.guests.join(
+      { code: clip(body.code, 64), pass: String(body.pass ?? '').slice(0, 200), name: String(body.name ?? ''), dev: clip(body.dev, 40), ip: req.headers.get('cf-connecting-ip') || undefined },
+      now,
+    );
+    const meta = await this.meta();
+    if (r.ok) {
+      const entry = await this.addLog({ kind: 'people', msg: `${r.guest.name} joined as a guest with the share link`, by: r.guest.name });
+      await this.pushAlert('guest', { title: `${r.guest.name} is now a guest of ${meta.name}`, body: 'They joined with the share link and passcode. Remove them any time in Watch → People.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      this.sendShareInfo();
+      return json({ ok: true, token: r.token, guest: { name: r.guest.name, role: r.guest.role, until: r.guest.expires_at }, nursery: meta });
+    }
+    if (r.disabled) {
+      const entry = await this.addLog({ kind: 'people', sev: 'warn', msg: 'The share link was turned off after too many wrong passcodes — guests were signed out' });
+      await this.pushAlert('guest', { title: `Share link for ${meta.name} turned off`, body: 'Someone kept entering the wrong passcode. Make a new link and passcode if you still want to share.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      this.kickGuests(null);
+      this.sendShareInfo();
+    } else if (r.reason === 'locked' && r.retryAt === now + LOCK_MS) {
+      const entry = await this.addLog({ kind: 'people', sev: 'warn', msg: 'Wrong passcode entered 5 times — the share link is locked for 15 minutes' });
+      await this.pushAlert('guest', { title: `Wrong passcodes for ${meta.name}`, body: 'The share link is locked for 15 minutes. If this wasn’t someone you invited, turn the link off.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      this.sendShareInfo();
+    }
+    const status = r.reason === 'bad_link' ? 404 : r.reason === 'slow_down' || r.reason === 'locked' ? 429 : r.reason === 'wrong' || r.reason === 'name' ? 401 : 410;
+    return json({ ok: false, reason: r.reason, retryAt: r.retryAt ?? null, left: r.left ?? null }, status);
+  }
+
+  private async onShareSet(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const pass = String(msg.pass ?? '');
+    const meta = await this.meta();
+    const problem = passcodeProblem(pass, [meta.baby, meta.name]);
+    if (problem) return this.send(ws, { t: 'share_err', msg: problem });
+    const role: GuestRole = msg.role === 'caregiver' ? 'caregiver' : 'viewer';
+    const days = msg.days === 1 || msg.days === 7 || msg.days === 30 ? msg.days : null;
+    const { removed } = await this.guests.createShare({ pass, role, days, by: a.name || 'A parent' }, Date.now());
+    this.kickGuests(removed);
+    await this.addLog({ kind: 'people', msg: `${a.name} made a new share link (${role === 'caregiver' ? 'watch, talk & answer alerts' : 'watch & listen'}${days ? `, ${days} day${days > 1 ? 's' : ''}` : ''})`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  private async onShareOff(a: Attach): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const removed = this.guests.revokeShare(Date.now());
+    this.kickGuests(removed);
+    await this.addLog({ kind: 'people', msg: `${a.name} turned the share link off${removed.length ? ` and signed out ${removed.length} guest${removed.length > 1 ? 's' : ''}` : ''}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  private async onGuestRemove(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const id = clip(msg.id, 20);
+    const g = this.guests.guests(Date.now()).find((x) => x.id === id);
+    if (!g || !this.guests.removeGuest(id, Date.now())) return;
+    this.kickGuests([id]);
+    await this.addLog({ kind: 'people', msg: `${a.name} removed guest ${g.name}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  /** Close removed guests' sockets and forget their phones (null = every guest). */
+  private kickGuests(ids: string[] | null): void {
+    const set = ids ? new Set(ids) : null;
+    for (const s of this.authed()) {
+      if (s.a.guest && (!set || set.has(s.a.guest))) {
+        this.send(s.ws, { t: 'error', code: 'removed', msg: 'Your guest pass for this nursery has ended.' });
+        try {
+          s.ws.close(4004, 'removed');
+        } catch { /* closed */ }
+      }
+    }
+    if (set && set.size === 0) return;
+    void (async () => {
+      const subs = (await this.state.storage.get<PushRec[]>('push')) ?? [];
+      const keep = subs.filter((r) => !r.uid.startsWith('g:') || (set != null && !set.has(r.uid.slice(2))));
+      if (keep.length !== subs.length) await this.state.storage.put('push', keep);
+    })();
+  }
+
+  private sendShareInfo(): void {
+    const info = this.guests.info(Date.now());
+    for (const s of this.authed()) if (s.a.role === 'parent' && !s.a.guest) this.send(s.ws, { t: 'share', share: info });
+  }
+
   /** A parent changed the member list: drop sockets of anyone removed. */
   private async onMembersChanged(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent') return;
@@ -1481,14 +1908,23 @@ export class MonitorRoom {
     const res = await callRpc<{ ok?: boolean; ids?: string[] }>(this.env, token, 'monitor_member_ids', { p_nursery: nid });
     if (!res.ok || !res.data.ok || !Array.isArray(res.data.ids)) return;
     const ids = new Set(res.data.ids);
+    const cut: string[] = [];
     for (const s of this.authed()) {
-      if (s.a.uid && !ids.has(s.a.uid)) {
+      // Guests aren't Supabase members; their access is the share link's.
+      if (s.a.uid && !s.a.guest && !ids.has(s.a.uid)) {
+        cut.push(s.a.sid);
         this.send(s.ws, { t: 'error', code: 'removed', msg: 'You were removed from this nursery.' });
         try {
           s.ws.close(4004, 'removed');
         } catch { /* closed */ }
       }
     }
+    // Removed people leave any family call at once and are never rung again.
+    const book = await this.callBook();
+    const changed = cut.flatMap((sid) => book.leave(sid, Date.now()));
+    if (changed.length) await this.commitCalls(book, changed);
+    const rings = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
+    if (rings.some((r) => !ids.has(r.uid))) await this.state.storage.put('callPush', rings.filter((r) => ids.has(r.uid)));
     await this.addLog({ kind: 'people', msg: `${a.name} updated who can access this nursery`, by: a.name });
     this.broadcast({ t: 'roles_changed' });
   }
@@ -1530,6 +1966,181 @@ export class MonitorRoom {
   }
 
   // ---------------------------------------------------------------- alarm
+  // ---------------------------------------------------------- family calls
+  private async callBook(): Promise<CallBook> {
+    return new CallBook((await this.state.storage.get<Call[]>('calls')) ?? []);
+  }
+
+  /** Line sockets of everyone a call concerns (the caller and everyone asked). */
+  private toCallers(call: Call, obj: unknown): void {
+    const who = new Set([call.from.uid, ...call.invited]);
+    const payload = JSON.stringify(obj);
+    for (const { ws, a } of this.authed()) {
+      if (a.mode !== 'line' || !a.uid || !who.has(a.uid)) continue;
+      try {
+        ws.send(payload);
+      } catch { /* closing */ }
+    }
+  }
+
+  /** Save the book, tell everyone concerned, and log + clear calls that ended. */
+  private async commitCalls(book: CallBook, changed: Call[]): Promise<void> {
+    for (const c of changed) this.toCallers(c, { t: 'call', call: c });
+    const done = book.sweep();
+    await this.state.storage.put('calls', book.toJSON());
+    if (!done.length) return;
+    const log = (await this.state.storage.get<CallRecord[]>('callLog')) ?? [];
+    const meta = await this.meta();
+    for (const c of done) {
+      const rec = toRecord(c);
+      log.push(rec);
+      this.toCallers(c, { t: 'call_log', rec });
+      const missed = missedBy(c);
+      if (missed.length) {
+        await this.callPush(missed, { title: `Missed ${c.video ? 'video' : 'audio'} call`, body: `${c.from.label || c.from.name} · ${familyOf(meta)}`, kind: 'call_missed', call: c.id }, 6 * 3600, 'normal');
+      }
+    }
+    await this.state.storage.put('callLog', log.slice(-CALL_LOG_CAP));
+  }
+
+  /** Ringing calls past their time and devices that never came back. Returns when the next is due. */
+  private async expireCalls(now: number): Promise<number | null> {
+    const book = await this.callBook();
+    const out = book.expire(now);
+    if (out.length) await this.commitCalls(book, out);
+    return book.nextDeadline();
+  }
+
+  /** A member's app, reachable for calls: a light hello (no monitor data). */
+  private async admitLine(ws: WebSocket, a: Attach, nid: string, meta: { name: string; baby: string | null }): Promise<void> {
+    const now = Date.now();
+    await this.expireCalls(now);
+    const book = await this.callBook();
+    const [ice, vapid] = await Promise.all([this.iceServers(), this.vapidKeys()]);
+    const mine = (r: CallRecord) => r.from.uid === a.uid || r.invited.includes(a.uid!);
+    const log = ((await this.state.storage.get<CallRecord[]>('callLog')) ?? []).filter(mine).slice(-30);
+    this.send(ws, {
+      t: 'hello',
+      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode: 'line', dev: a.dev },
+      nursery: { id: nid, ...meta },
+      ice,
+      vapid: vapid?.publicKey ?? null,
+      calls: book.forUser(a.uid!),
+      callLog: log,
+    });
+  }
+
+  private async onLineGone(a: Attach): Promise<void> {
+    const now = Date.now();
+    const book = await this.callBook();
+    const changed = book.drop(a.sid, now);
+    if (!changed.length) return;
+    await this.commitCalls(book, changed);
+    await this.ensureAlarm(Math.max(1000, (book.nextDeadline() ?? now) - now + 500));
+  }
+
+  private async onCallMsg(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (!a.uid || a.guest) return;
+    const now = Date.now();
+    const id = clip(msg.id, 24);
+    const me = { uid: a.uid, name: a.name || 'Member', label: a.label ?? null, sid: a.sid };
+    // Member ids (Supabase UUIDs). Not checked against the member list: only members' sockets and phones are here to ring.
+    const uuids = (v: unknown) => (Array.isArray(v) ? v.slice(0, 16).map((u) => clip(u, 40)).filter((u) => /^[\w-]{1,40}$/.test(u)) : []);
+    switch (msg.t) {
+      case 'call_rtc': {
+        const to = clip(msg.to, 20);
+        if (msg.d == null || typeof msg.d !== 'object') return;
+        if (!(await this.callBook()).canRelay(id, a.sid, to)) return;
+        for (const s of this.authed()) {
+          if (s.a.sid === to && s.a.mode === 'line') return this.send(s.ws, { t: 'call_rtc', id, from: a.sid, d: msg.d });
+        }
+        return;
+      }
+      case 'call_start': {
+        await this.expireCalls(now);
+        const book = await this.callBook();
+        const ref = clip(msg.ref, 20);
+        const call = book.start(me, uuids(msg.to), msg.video !== false, crypto.randomUUID().replace(/-/g, '').slice(0, 16), now);
+        if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, ref });
+        this.send(ws, { t: 'call_started', ref, id: call.id });
+        await this.commitCalls(book, [call]);
+        const meta = await this.meta();
+        await this.callPush(call.invited, { title: me.label || me.name, body: `${call.video ? 'Video' : 'Audio'} call · ${familyOf(meta)}`, kind: 'call', call: call.id }, Math.round(RING_MS / 1000), 'high');
+        await this.ensureAlarm(RING_MS + 500);
+        return;
+      }
+      case 'call_join': {
+        const book = await this.callBook();
+        const call = book.join(id, me, msg.video !== false, now);
+        if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, id });
+        return this.commitCalls(book, [call]);
+      }
+      case 'call_decline': {
+        const book = await this.callBook();
+        const call = book.decline(id, a.uid, now);
+        if (call) await this.commitCalls(book, [call]);
+        return;
+      }
+      case 'call_leave': {
+        const book = await this.callBook();
+        const changed = book.leave(a.sid, now, id);
+        if (changed.length) await this.commitCalls(book, changed);
+        return;
+      }
+      case 'call_media': {
+        const book = await this.callBook();
+        const call = book.setMedia(id, a.sid, msg.mic !== false, msg.cam !== false);
+        if (call) await this.commitCalls(book, [call]);
+        return;
+      }
+      case 'call_invite': {
+        const book = await this.callBook();
+        const r = book.invite(id, a.sid, uuids(msg.to));
+        if (!r || !r.added.length) return;
+        await this.commitCalls(book, [r.call]);
+        const meta = await this.meta();
+        await this.callPush(r.added, { title: me.label || me.name, body: `Join the ${r.call.video ? 'video' : 'audio'} call · ${familyOf(meta)}`, kind: 'call', call: r.call.id }, Math.round(RING_MS / 1000), 'high');
+        return;
+      }
+      case 'call_push': {
+        const sub = msg.sub as PushSubscriptionJSONLike | undefined;
+        if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) return;
+        if (!isAllowedPushEndpoint(sub.endpoint) || sub.endpoint.length > 1024) return this.send(ws, { t: 'call_err', error: 'push' });
+        const rec: CallPushRec = { sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } }, uid: a.uid, at: now };
+        const all = ((await this.state.storage.get<CallPushRec[]>('callPush')) ?? []).filter((r) => r.sub.endpoint !== rec.sub.endpoint);
+        all.push(rec);
+        await this.state.storage.put('callPush', all.slice(-CALL_PUSH_CAP));
+        return;
+      }
+      case 'call_push_off': {
+        const endpoint = String(msg.endpoint ?? '');
+        const all = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
+        // Only the owner of a subscription may remove it.
+        await this.state.storage.put('callPush', all.filter((r) => !(r.sub.endpoint === endpoint && r.uid === a.uid)));
+        return;
+      }
+    }
+  }
+
+  /** Ring (or tell of a missed call) the devices of these people that asked to be rung. */
+  private async callPush(uids: string[], data: { title: string; body: string; kind: 'call' | 'call_missed'; call: string }, ttlSec: number, urgency: 'high' | 'normal'): Promise<void> {
+    const keys = await this.vapidKeys();
+    const all = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
+    const who = new Set(uids);
+    const recs = all.filter((r) => who.has(r.uid));
+    if (!keys || !recs.length) return;
+    const nid = await this.state.storage.get<string>('nid');
+    const gone = new Set<string>();
+    await Promise.all(
+      recs.map(async (r) => {
+        // Same topic: an undelivered ring is replaced by its "missed call".
+        const out = await sendWebPush(r.sub, { ...data, nid, tag: `call-${data.call}`, at: Date.now() }, keys, { subject: VAPID_SUBJECT, urgency, ttlSec, topic: `call${data.call.slice(0, 12)}` });
+        if (out === 'gone') gone.add(r.sub.endpoint);
+      }),
+    );
+    if (gone.size) await this.state.storage.put('callPush', all.filter((r) => !gone.has(r.sub.endpoint)));
+  }
+
   private async ensureAlarm(inMs: number): Promise<void> {
     const cur = await this.state.storage.getAlarm();
     const want = Date.now() + Math.max(1000, inMs);
@@ -1603,13 +2214,20 @@ export class MonitorRoom {
     const purgedAt = (await this.state.storage.get<number>('purgedAt')) ?? 0;
     if (now - purgedAt > PURGE_EVERY_MS) {
       this.store.purge(now);
+      this.guests.purge(now);
+      this.tracker.purge(now);
       await this.state.storage.put('purgedAt', now);
     }
 
+    // 7. Family calls nobody picked up.
+    const ringingUntil = await this.expireCalls(now);
+
     if (this.curBucket) await this.saveBucket(this.curBucket);
     // Next wake-up: cameras need heartbeat checks, incidents need escalation,
-    // an open sleep session needs closing if its camera never comes back.
+    // an open sleep session needs closing if its camera never comes back,
+    // a ringing call needs its "no answer".
     let want: number | null = again ? now + ALARM_MS : null;
+    if (ringingUntil != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, ringingUntil + 500));
     const nextInc = this.store.nextIncidentAt();
     if (nextInc != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, nextInc));
     const open = await this.state.storage.get<SleepSm>('sleepSm');

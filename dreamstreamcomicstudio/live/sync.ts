@@ -13,6 +13,7 @@
  * /live.html). Rows are written by admins via the service role only.
  */
 
+import { purgeLiveAccountData } from './accountPurge';
 import { addMyEvent, listMyEvents, type MyEvent } from './events';
 import type { StudioPrefs } from './prefs';
 
@@ -162,12 +163,8 @@ export async function signOut(): Promise<void> {
   } catch {
     /* already signed out */
   }
-  try {
-    localStorage.removeItem('ds-live-my-events');
-    localStorage.removeItem('ds-live-my-recordings');
-  } catch {
-    /* storage unavailable */
-  }
+  // Name, events, nursery data, alert subscription: nothing personal stays behind.
+  purgeLiveAccountData();
 }
 
 /** Debounced settings push — savePrefs schedules this so EVERY write path
