@@ -10,6 +10,7 @@ import { clearStudioModelSelection, STUDIO_MODEL_CHANGED } from '../services/stu
 import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
+import { purgeLiveAccountData } from '../live/accountPurge';
 
 type AuthContextType = {
     user: User | null;
@@ -159,6 +160,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         clearUserScopedSettings();
         clearModelSelection();
         clearStudioModelSelection();
+        // Stream Studio (/live) keeps its own copy of the name, events, nursery data and
+        // an alert subscription — wipe those too, so it never shows the last person.
+        purgeLiveAccountData();
     };
 
     const signOut = async () => {

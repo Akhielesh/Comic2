@@ -5,6 +5,16 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- **Stream Studio kept showing your name after you signed out (2026-10-21):** it kept its
+  own copy of your display name (and your events, nursery alert opt-ins and call settings)
+  in this browser, and signing out — especially from the main DreamStream app — never
+  cleared it. Now signing out anywhere wipes Stream Studio's personal data on that device
+  (and stops its alert subscription), a Stream Studio tab follows a sign-out in another tab
+  even without "Remember me", a different person signing in on the same device starts
+  clean, and the dashboard greets only the signed-in account. `www.dreamstreamstudio.ai`
+  now redirects to `dreamstreamstudio.ai`, so there's one sign-in instead of two.
+
 ### Changed
 - **Reactions, designed (2026-10-21):** Settings no longer shows a wall of 108 emoji.
   Pick your own six one-tap reactions (tap one, choose from the tabbed picker — it floats

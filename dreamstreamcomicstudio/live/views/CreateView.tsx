@@ -33,6 +33,10 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
   const account = useAccount();
+  // No saved host name yet: start from the signed-in person's name.
+  useEffect(() => {
+    if (account.status === 'member' && account.name) setHost((h) => h || account.name || '');
+  }, [account.status, account.name]);
   const isMember = account.status === 'member';
 
   const preset = presetById(quality);

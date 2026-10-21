@@ -85,6 +85,12 @@ describe('Pages middleware', () => {
     expect(await (await run('/robots.txt', 'GPTBot/1.2')).text()).toBe('app');
     expect((await run('/agents', HUMAN)).headers.get('location')).toBe('https://dreamstreamstudio.ai/api/agent-gate');
   });
+
+  it('sends www to the bare domain so there is one sign-in (sessions are per host)', async () => {
+    const res = await onRequest({ request: new Request('https://www.dreamstreamstudio.ai/live?x=1', { headers: { 'user-agent': HUMAN } }), next });
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe('https://dreamstreamstudio.ai/live?x=1');
+  });
 });
 
 function fakeContainer(handler: (req: Request) => Promise<Response>) {
