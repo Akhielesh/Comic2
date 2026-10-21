@@ -61,6 +61,7 @@ import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
 import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
+import { comicPublicRouter, comicRouter } from './routes/comic.js';
 import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
 import { seedConnectorCatalog } from './connectors/index.js';
 
@@ -192,6 +193,9 @@ app.use('/api/chat', systemRateLimit, optionalAuth, attachAccountContext, chatPu
 // webhook token instead.
 app.use('/api/connectors', systemRateLimit, connectorsPublicRouter);
 app.use('/api/connectors/webhooks', systemRateLimit, connectorsWebhookRouter);
+// Comic Studio v4 reader for published comics (no session needed; optionalAuth lets an
+// owner preview their own unpublished comic). Must mount before the global requireAuth.
+app.use('/api/comic/public', systemRateLimit, optionalAuth, comicPublicRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
@@ -230,6 +234,9 @@ app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
 // Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
 app.use('/api/studio', textRateLimit, studioRouter);
+// Comic Studio v4 (conversational studio) — auth'd, text-tier rate limited; renders are
+// billed per image inside the job runner.
+app.use('/api/comic', textRateLimit, comicRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);

@@ -28,7 +28,109 @@ import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { getComicCost, BILLING_SUMMARY_REFRESH_EVENT } from '../services/billing';
-import { DollarSign } from 'lucide-react';
+import { DollarSign, Loader2, MessageSquare, X } from 'lucide-react';
+import { createStudioProject } from './comicstudio/studioApi';
+import { ACCENT_TEXT, GLASS, PRIMARY_BTN, RADIUS_PILL } from './chat/studioDesign';
+
+const NEW_STUDIO_BANNER_DISMISS_KEY = 'ds.comicstudio.banner.dismissed';
+
+const readBannerDismissed = (projectId: string): boolean => {
+  try {
+    return window.localStorage.getItem(`${NEW_STUDIO_BANNER_DISMISS_KEY}:${projectId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const rememberBannerDismissed = (projectId: string) => {
+  try {
+    window.localStorage.setItem(`${NEW_STUDIO_BANNER_DISMISS_KEY}:${projectId}`, '1');
+  } catch {
+    /* storage unavailable — dismissed for this visit only */
+  }
+};
+
+/**
+ * Slim glass banner pointing classic projects at the conversational Comic Studio (v4).
+ * "Open this story in it" asks the server to import the script, title, cast looks and
+ * style into a NEW studio comic (POST /api/comic/projects {importFromProjectId}); the
+ * classic project is left untouched. Dismissal is remembered per project.
+ */
+export const OpenInNewStudioBanner: React.FC<{
+  projectId: string;
+  onOpened: (newProjectId: string) => void;
+}> = ({ projectId, onOpened }) => {
+  const [dismissed, setDismissed] = useState(() => readBannerDismissed(projectId));
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Synchronous guard: a double click must never import the story twice.
+  const inFlightRef = useRef(false);
+
+  useEffect(() => {
+    setDismissed(readBannerDismissed(projectId));
+    setError(null);
+  }, [projectId]);
+
+  if (dismissed) return null;
+
+  const open = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const { projectId: newProjectId } = await createStudioProject({ importFromProjectId: projectId });
+      onOpened(newProjectId);
+    } catch (err) {
+      // createStudioProject rejects with user-safe StudioApiError messages.
+      setError(err instanceof Error && err.message ? err.message : "Couldn't open this story in the new studio. Try again in a moment.");
+    } finally {
+      inFlightRef.current = false;
+      setPending(false);
+    }
+  };
+
+  return (
+    <div
+      role="region"
+      aria-label="New Comic Studio"
+      className={`shrink-0 border-b border-[var(--ds-hairline)] ${GLASS} px-3 py-2 text-[13px] text-[var(--ds-ink)] font-sans`}
+    >
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1.5">
+        <MessageSquare className={`h-4 w-4 shrink-0 ${ACCENT_TEXT}`} aria-hidden />
+        <p className="min-w-0 flex-1">
+          <span className="font-semibold">There&apos;s a new conversational Comic Studio.</span>{' '}
+          <span className="text-[var(--ds-muted)]">Your script, cast and style come along; this project stays as it is.</span>
+        </p>
+        {error && (
+          <span role="alert" className="basis-full text-[12px] text-red-600 sm:basis-auto">
+            {error}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => void open()}
+          disabled={pending}
+          className={`inline-flex shrink-0 items-center gap-1.5 ${RADIUS_PILL} ${PRIMARY_BTN} px-3 py-1 text-[12px] font-semibold disabled:opacity-60`}
+        >
+          {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+          {pending ? 'Bringing your story over…' : error ? 'Try again' : 'Open this story in it'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            rememberBannerDismissed(projectId);
+            setDismissed(true);
+          }}
+          aria-label="Dismiss"
+          className={`grid h-7 w-7 shrink-0 place-items-center ${RADIUS_PILL} text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+};
 
 // Always-visible "what has THIS comic cost so far" chip — real settled spend from the
 // billing ledger, refreshed after every generation. Hover shows the per-stage split.
@@ -113,6 +215,8 @@ interface ComicEditorProps {
   onStartGeneration: (projectId: string) => void;
   onStopGeneration: (projectId: string) => void;
   onBack: () => void;
+  /** Opens a freshly imported v4 studio project (the "new Comic Studio" banner). Banner hidden when absent. */
+  onOpenInNewStudio?: (newProjectId: string) => void;
 }
 
 // The live step order. STORY_PLANNING and COMBINED_PREVIEW were removed from the flow
@@ -136,7 +240,7 @@ const LEGACY_STEP_REMAP: Partial<Record<AppStep, AppStep>> = {
   [AppStep.COMBINED_PREVIEW]: AppStep.LAYOUT_SELECTION
 };
 
-export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onStartGeneration, onStopGeneration, onBack }) => {
+export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onStartGeneration, onStopGeneration, onBack, onOpenInNewStudio }) => {
   const state = project.state;
   const [titleDraft, setTitleDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
@@ -639,39 +743,46 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     }
   };
 
+  const newStudioBanner = onOpenInNewStudio ? (
+    <OpenInNewStudioBanner projectId={project.id} onOpened={onOpenInNewStudio} />
+  ) : null;
+
   if (viewMode === 'stream') {
     return (
-      <div className="h-screen">
-        <ComicStreamView
-          state={state}
-          projectTitle={project.name}
-          analyzing={streamAnalyzing}
-          pendingGate={pendingGate}
-          onConfirmGate={() => { setPendingGate(null); onStartGeneration(project.id); }}
-          onCancelGate={() => setPendingGate(null)}
-          onBack={onBack}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onSend={(text) => {
-            // No scenes yet → analyze the script right here (the comic starts in the stream).
-            // Once scenes exist, a typed note becomes creative direction for the next run.
-            if ((state.scenes?.length || 0) === 0) {
-              void runStreamAnalysis(text);
-            } else {
-              updateState({ creativeDirection: text });
-            }
-          }}
-          handlers={{
-            onApprovePlan: () => requestBuild(),
-            onSelectStyle: (id) => updateState({ selectedStyleId: id }),
-            onMoreStyles: () => { setViewMode('detailed'); goToStep(AppStep.STYLE_SELECTION); },
-            onEditEntity: () => { setViewMode('detailed'); goToStep(AppStep.REFERENCE_BUILDER); },
-            onSelectCover: () => { setViewMode('detailed'); goToStep(AppStep.COVER); },
-            onAdjust: () => setViewMode('detailed'),
-            onRead: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
-            onExport: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
-            onPublish: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
-          }}
-        />
+      <div className="h-screen flex flex-col">
+        {newStudioBanner}
+        <div className="min-h-0 flex-1">
+          <ComicStreamView
+            state={state}
+            projectTitle={project.name}
+            analyzing={streamAnalyzing}
+            pendingGate={pendingGate}
+            onConfirmGate={() => { setPendingGate(null); onStartGeneration(project.id); }}
+            onCancelGate={() => setPendingGate(null)}
+            onBack={onBack}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onSend={(text) => {
+              // No scenes yet → analyze the script right here (the comic starts in the stream).
+              // Once scenes exist, a typed note becomes creative direction for the next run.
+              if ((state.scenes?.length || 0) === 0) {
+                void runStreamAnalysis(text);
+              } else {
+                updateState({ creativeDirection: text });
+              }
+            }}
+            handlers={{
+              onApprovePlan: () => requestBuild(),
+              onSelectStyle: (id) => updateState({ selectedStyleId: id }),
+              onMoreStyles: () => { setViewMode('detailed'); goToStep(AppStep.STYLE_SELECTION); },
+              onEditEntity: () => { setViewMode('detailed'); goToStep(AppStep.REFERENCE_BUILDER); },
+              onSelectCover: () => { setViewMode('detailed'); goToStep(AppStep.COVER); },
+              onAdjust: () => setViewMode('detailed'),
+              onRead: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
+              onExport: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
+              onPublish: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
+            }}
+          />
+        </div>
         <AgentSettingsPanel
           open={settingsOpen}
           settings={state.agentSettings}
@@ -685,6 +796,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
 
   return (
     <div className="min-h-screen flex flex-col">
+      {newStudioBanner}
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
       <div className="px-4 py-2 border-b-4 border-black bg-white flex items-center gap-3">
         <button onClick={onBack} title="Back to Dashboard" className="flex items-center shrink-0 text-xs font-bold text-slate-500 hover:text-black transition-colors">

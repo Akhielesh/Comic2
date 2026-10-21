@@ -63,7 +63,6 @@ import {
   TIER_PRESETS,
   estimateJobs,
   formatUsd,
-  getImageModel,
   imagePriceUsd,
   resolveImageJob,
   type ImageJobKind,
@@ -100,7 +99,8 @@ export const MAX_PARALLEL_IMAGES = 3;
 export const LOW_QC_SCORE = 0.45;
 /** Attempts per image (the transport already retries 429/5xx once inside an attempt). */
 const MAX_IMAGE_ATTEMPTS = 2;
-const RETRY_BACKOFF_MS = 2500;
+/** Pauses between attempts (tests shorten them). */
+export const JOB_TIMINGS = { retryBackoffMs: 2500, saveRetryMs: 1000 };
 const MAX_STYLE_DIRECTIONS = 4;
 const DEFAULT_STYLE_DIRECTIONS = 3;
 const MAX_PATCH_OPS = 200;
@@ -635,6 +635,13 @@ const validateSpendAction = (doc: ComicDoc, action: SpendAction): string | null 
     case 'render_pages':
       if (!doc.pages.length) return 'There is no page plan yet — plan the pages first, then draw them.';
       return null;
+    case 'render_style_options':
+      // A second batch would replace options that are still being paid for.
+      if (doc.style.options.some((o) => isBusy(o.render))) return 'Style options are still drawing — pick one when they land, then ask for more if none fits.';
+      return null;
+    case 'render_cover':
+      if (isBusy(doc.cover.render)) return 'The cover is already drawing.';
+      return null;
     case 'edit_page': {
       const page = findPage(doc, action.pageId);
       if (!page) throw badRequest('That page is no longer in the plan.');
@@ -687,7 +694,7 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   const open = ctx.session.doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) ctx.session.commit([{ op: 'gate', gate: { ...open, status: 'declined' } }]);
 
-  const runner = new RenderRun(ctx, opts, estimate);
+  const runner = new RenderRun(ctx, estimate);
   const message = `Started drawing ${plan.what} (≈ ${formatUsd(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish.`;
   let done: Promise<void>;
   switch (action.type) {
@@ -805,7 +812,6 @@ class RenderRun {
 
   constructor(
     private readonly ctx: StudioContext,
-    private readonly opts: RunActionOptions,
     private readonly estimate: SpendEstimate
   ) {
     this.session = ctx.session;
@@ -1109,9 +1115,12 @@ class RenderRun {
 
   private ensureStyle() {
     const doc = this.session.doc;
-    if (doc.style.status !== 'empty' || clean(doc.style.spec)) return;
+    if (clean(doc.style.spec)) return;
     const preset = pickDefaultPreset(doc);
-    this.session.commit([{ op: 'style', patch: presetStylePatch(preset, 'drafted') }]);
+    const patch = presetStylePatch(preset, doc.style.status === 'locked' ? 'locked' : 'drafted');
+    // Keep anything the user already said the art must avoid.
+    patch.avoid = [...new Set([...(doc.style.avoid || []), ...preset.avoid])];
+    this.session.commit([{ op: 'style', patch }]);
     this.notices.push(noticeCard('info', `No style was chosen yet, so I used “${preset.name}”. Pick another in Style any time.`));
   }
 
@@ -1193,6 +1202,8 @@ class RenderRun {
     });
     if (reserved.ok === false) {
       end(false);
+      // Parallel jobs can be denied together: the first explains, the rest just don't start.
+      if (this.stopReason) return this.restore(job);
       this.stopReason = reserved.message;
       this.notices.push(noticeCard('error', reserved.message));
       return this.fail(job, reserved.message);
@@ -1221,7 +1232,7 @@ class RenderRun {
         if (typeof spent === 'number' && Number.isFinite(spent) && spent > 0) failedSpend += spent;
         if (!lastError.retryable || attempts >= MAX_IMAGE_ATTEMPTS || this.signal.aborted || lastError.code === 'CANCELLED') break;
         logger.warn('comic_image_job_retry', { projectId: ctx.projectId, target: renderTargetKey(job.target), code: lastError.code });
-        await sleep(RETRY_BACKOFF_MS, this.signal);
+        await sleep(JOB_TIMINGS.retryBackoffMs, this.signal);
         if (this.signal.aborted) break;
       }
     }
@@ -1275,8 +1286,13 @@ class RenderRun {
     ]);
     this.results.push({ job, ok: true });
     end(true);
-    await ctx.publishUrls([asset.path]);
-    if (job.qcPageId) await this.letterPage(job.qcPageId, result.dataUrl);
+    // The image is saved and paid for: nothing after this point may fail the render.
+    try {
+      await ctx.publishUrls([asset.path]);
+      if (job.qcPageId) await this.letterPage(job.qcPageId, result.dataUrl);
+    } catch (err) {
+      logger.warn('comic_post_render_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
+    }
   }
 
   /** Compile with references we can actually load; recompile without any that are missing. */
@@ -1323,7 +1339,7 @@ class RenderRun {
       return await this.ctx.assets.saveGenerated(args);
     } catch (err) {
       logger.warn('comic_image_save_retry', { projectId: this.ctx.projectId, message: (err as Error)?.message });
-      await sleep(1000);
+      await sleep(JOB_TIMINGS.saveRetryMs);
       return this.ctx.assets.saveGenerated(args);
     }
   }
@@ -1947,7 +1963,6 @@ export function suggestNextSteps(doc: ComicDoc): string[] {
   const out: string[] = [];
   const hasIdea = !!(clean(doc.brief.premise) || clean(doc.brief.logline) || clean(doc.source.script) || doc.cast.length);
   const rendering = doc.pages.some((p) => isBusy(p.render)) || doc.cast.some((c) => isBusy(c.sheet));
-  if (doc.gate?.status === 'open') out.push('Approve the spend');
   if (!hasIdea) {
     out.push('A heist comic set in Mumbai', 'Paste a script', 'A cozy fantasy for kids');
     return out.slice(0, 4);

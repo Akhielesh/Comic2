@@ -6,6 +6,24 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Comic Studio v4 is the default way to make a comic (2026-10-21):**
+  - **New Comic opens the conversational studio.** Name it (or don't) and you land in
+    the new Comic Studio: talk through your idea, see the page plan and the cost before
+    anything is drawn. Creation failures (offline, expired session) show right in the
+    form; "Use the classic editor instead" is still one click away.
+  - **Studio comics on the dashboard** get a Studio badge, their cover or first page as
+    the thumbnail, and "2 of 6 pages" progress. Rename works inline on every card (and
+    updates the studio's own title for studio comics); delete now asks first. Duplicate
+    is unavailable for studio comics for now — it says so instead of making a broken copy.
+  - **Bring a classic comic over:** the classic editor shows a slim banner — "Open this
+    story in it" copies the script, title, characters and style into a new studio comic
+    and opens it. The classic project stays as it is; the banner can be dismissed.
+  - **Links and reading:** `?view=studio&id=…` opens a studio comic after sign-in (old
+    editor links to a studio comic open the studio too). Reading a studio comic — from the
+    dashboard, a shared `?view=read` link or the public gallery — uses the new reader;
+    owners can read their own unpublished comic there.
+  - **Gallery:** Settings → Gallery has a Comic Studio section showing a lettered page
+    (drag the balloons) and the plan sketch shown before any spend.
 - **Baby monitor v3 — sound meter, safety, sleep and a smarter room (2026-10-21):**
   - **Decibel meter:** a real A-weighted sound level meter (IEC 61672 weighting,
     Fast response) on the camera phone, live on every viewer, with 1 h / 6 h /

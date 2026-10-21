@@ -35,3 +35,12 @@ export const STREAM_EVENT_NAMES: ReadonlyArray<StudioEvent['type']> = [
   'error',
   'done'
 ];
+
+/**
+ * Serialize an event for the wire. DocOps clear fields by setting them to `undefined`
+ * (e.g. `render.error` after a successful retry); plain JSON.stringify would DROP those
+ * keys and the client's mirror would keep the stale value. Encoding them as `null`
+ * makes the clear survive transport — applyOps treats null like "unset".
+ */
+export const encodeStudioEvent = (event: StudioEvent): string =>
+  JSON.stringify(event, (_key, value) => (value === undefined ? null : value));
