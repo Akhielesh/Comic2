@@ -198,6 +198,19 @@ export const setConnectionStatus = async (
   if (error) throw new Error(`connection status update failed: ${error.message}`);
 };
 
+/**
+ * Replace a connection's non-secret metadata JSON (e.g. the cached id of the Drive
+ * "DreamStream Recordings" folder). Never put tokens here — they belong in
+ * connection_credentials, encrypted.
+ */
+export const updateConnectionMetadata = async (
+  connectionId: string,
+  metadata: Record<string, unknown>
+): Promise<void> => {
+  const { error } = await getSupabaseAdmin().from('user_connections').update({ metadata }).eq('id', connectionId);
+  if (error) throw new Error(`connection metadata update failed: ${error.message}`);
+};
+
 export const markConnectionSynced = async (connectionId: string): Promise<void> => {
   const { error } = await getSupabaseAdmin()
     .from('user_connections')

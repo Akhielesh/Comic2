@@ -48,6 +48,7 @@ import {
   type SyncStateRow
 } from '../connectors/store.js';
 import { logger } from '../lib/logger.js';
+import { driveSaveRouter } from './connectorsDrive.js';
 
 // ---- response shaping --------------------------------------------------------
 
@@ -213,6 +214,10 @@ connectorsRouter.use((_req, res, next) => {
   if (!CONNECTORS_ENABLED) return res.status(404).json({ error: { message: 'Connectors are disabled' } });
   next();
 });
+
+// Stream Studio "save recordings to Google Drive" (status / upload-session / disconnect).
+// Static '/drive/*' paths — mounted before the param routes below so nothing shadows them.
+connectorsRouter.use('/drive', driveSaveRouter);
 
 const requireUser = (req: any, res: any): string | null => {
   const id = req.user?.id;

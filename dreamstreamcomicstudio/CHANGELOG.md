@@ -36,6 +36,17 @@ All notable user-facing changes. Format loosely follows
   sorted into Recent, Love, Hype, Cheer, Funny, Faces, Party and Things.
 
 ### Added
+- **Save recordings straight to Google Drive (2026-10-21):** in Stream Studio, connect
+  Google Drive once (one tap, Google's own sign-in) and finished recordings upload
+  directly into a **DreamStream Recordings** folder in your Drive — with a progress bar,
+  time left, and an **Open in Drive** link when it's done. Uploads resume on their own if
+  your connection drops, even for hour-long recordings. Stream Studio asks for the
+  narrowest Drive permission there is: it can only see files it saves — never the rest of
+  your Drive. Choose "Google Drive" as your remembered save destination and each recording
+  starts uploading as soon as it stops. Manage it in Customize → Recording & saving. The
+  no-sign-in routes (your Drive for desktop folder, the share menu on phones, or download
+  then drop into Drive) are still there as fallbacks, and errors say exactly what's wrong
+  (Drive full, reconnect needed, offline) with a one-tap fix.
 - **Family calls (2026-10-21):** a new **Calls** tab — FaceTime-style video and voice
   calls with anyone in your nurseries, or "Call everyone" for a group of up to four.
   Calls ring full-screen wherever Stream Studio is open, and with **Ring this device**

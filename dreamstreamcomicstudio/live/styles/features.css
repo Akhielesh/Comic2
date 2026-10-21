@@ -40,6 +40,19 @@
 .save-opt-text small { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .save-cloud { margin-top: 12px; padding: 12px 14px; border-radius: var(--r-md); background: var(--panel-2); font-size: 13.5px; }
 .save-remember { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--muted); margin-top: 12px; line-height: 1.4; }
+/* Google Drive (API) upload: progress / done card, privacy note, sign-in hint */
+.save-drive { margin-bottom: 12px; padding: 12px 14px; border-radius: var(--r-md); background: var(--panel-2); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); font-size: 13.5px; }
+.save-drive.done { border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
+.save-drive b { font-size: 14px; }
+.save-drive-sub { font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.save-drive-hint { font-size: 12px; margin-top: 8px; line-height: 1.4; }
+.save-drive .save-opt-icon.ok { color: var(--green); background: var(--green-wash); }
+.save-drive-err { margin-bottom: 12px; }
+.save-privacy { display: flex; align-items: flex-start; gap: 5px; margin-top: 3px; color: var(--muted); }
+.save-privacy svg { flex: none; margin-top: 2px; color: var(--green); }
+.save-hint { font-size: 12.5px; color: var(--muted); margin-top: 10px; line-height: 1.45; }
+.drive-conn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.drive-conn .pill { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------------------------------------------------------- auth */
 .auth-sheet { max-width: 440px; }
