@@ -18,6 +18,44 @@ import type { ComicDoc, RenderState, RenderTarget } from '../../../shared/comic/
 import { logger } from '../lib/logger.js';
 import { StudioError, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
 
+/**
+ * Hard size limits on a document. Every source of new entities (client patches, director
+ * tools, the writer's new cast) funnels through commit(), so the caps live here: one user
+ * must never be able to grow an in-memory session until the shared backend runs out of heap.
+ */
+export const DOC_LIMITS = { cast: 40, places: 30, linesPerPanel: 8, refsPerEntity: 12 } as const;
+
+/** Drop ops that would create entities past DOC_LIMITS (edits to existing ones always pass). */
+export function enforceDocLimits(doc: ComicDoc, ops: DocOp[]): DocOp[] {
+  const cast = new Set(doc.cast.map((c) => c.id));
+  const places = new Set(doc.places.map((p) => p.id));
+  const out: DocOp[] = [];
+  let dropped = 0;
+  for (const op of ops) {
+    if (op.op === 'character' && !cast.has(op.id)) {
+      if (cast.size >= DOC_LIMITS.cast) { dropped += 1; continue; }
+      cast.add(op.id);
+    } else if (op.op === 'place' && !places.has(op.id)) {
+      if (places.size >= DOC_LIMITS.places) { dropped += 1; continue; }
+      places.add(op.id);
+    } else if (op.op === 'character_remove') {
+      cast.delete(op.id);
+    } else if (op.op === 'place_remove') {
+      places.delete(op.id);
+    } else if (op.op === 'line' && op.patch) {
+      const panel = doc.pages.find((p) => p.id === op.pageId)?.panels.find((p) => p.id === op.panelId);
+      if (panel && !panel.lines.some((l) => l.id === op.id) && panel.lines.length >= DOC_LIMITS.linesPerPanel) { dropped += 1; continue; }
+    }
+    if ((op.op === 'character' || op.op === 'place') && Array.isArray(op.patch.refs) && op.patch.refs.length > DOC_LIMITS.refsPerEntity) {
+      out.push({ ...op, patch: { ...op.patch, refs: op.patch.refs.slice(0, DOC_LIMITS.refsPerEntity) } } as DocOp);
+      continue;
+    }
+    out.push(op);
+  }
+  if (dropped) logger.warn('comic_doc_limits_dropped_ops', { dropped, cast: cast.size, places: places.size });
+  return out;
+}
+
 /** Debounce window for persistence after a commit. */
 export const SAVE_DEBOUNCE_MS = 500;
 /** A render stuck in queued/rendering longer than this (and not running here) was interrupted. */
@@ -145,8 +183,10 @@ export class StudioSession implements StudioSessionApi {
     return this.savedRev >= this.current.rev && !this.saving;
   }
 
-  commit(ops: DocOp[]): ComicDoc {
-    if (!Array.isArray(ops) || !ops.length) return this.current;
+  commit(rawOps: DocOp[]): ComicDoc {
+    if (!Array.isArray(rawOps) || !rawOps.length) return this.current;
+    const ops = enforceDocLimits(this.current, rawOps);
+    if (!ops.length) return this.current;
     const at = this.now();
     const next = applyOps(this.current, ops, at);
     this.current = { ...next, rev: this.current.rev + 1, updatedAt: at };

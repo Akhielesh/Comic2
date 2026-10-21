@@ -69,7 +69,7 @@ export const convertImageTool: ChatTool = {
     }
 
     try {
-      let pipe = sharp(input, { failOn: 'none' });
+      let pipe = sharp(input, { failOn: 'none', limitInputPixels: 50_000_000 });
       if (width || height) pipe = pipe.resize({ width, height, fit: 'inside', withoutEnlargement: true });
       const out = await pipe.toFormat(to, quality !== undefined ? { quality } : undefined).toBuffer();
       const meta = await sharp(out).metadata();

@@ -309,7 +309,27 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
       try {
         result = await ctx.llm.complete(req);
       } catch (err) {
-        await reservation?.release(String((err as Error)?.message || 'text_call_failed'));
+        const code = err instanceof StudioError ? err.code : undefined;
+        if (code === 'CANCELLED' || code === 'TIMEOUT') {
+          // The upstream request is NOT aborted (the provider takes no signal) — it keeps
+          // generating on our key after the caller gave up. Releasing here would let a
+          // cancel-spam loop burn platform money with nothing ever counted, so bill a
+          // conservative estimate (prompt + half the output budget) instead.
+          const outputGuess = Math.ceil((req.maxTokens || 2000) / 2);
+          const providerGuess =
+            (route && estimateTextCostUsd(route.model, approxPrompt, outputGuess)) ??
+            (approxPrompt * UNKNOWN_TEXT_PRICE.input + outputGuess * UNKNOWN_TEXT_PRICE.output) / 1_000_000;
+          await reservation?.settle({ costUsd: providerGuess, promptTokens: approxPrompt, completionTokens: outputGuess });
+          if (route) {
+            args.tracker.usd = round4(args.tracker.usd + chargedUsd(providerGuess, route.key.byok));
+            args.tracker.byok = route.key.byok;
+            args.tracker.estimated = true;
+            args.tracker.calls += 1;
+            args.tracker.model = route.model;
+          }
+        } else {
+          await reservation?.release(String((err as Error)?.message || 'text_call_failed'));
+        }
         throw err;
       }
       await reservation?.settle({ costUsd: result.costUsd, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
@@ -538,6 +558,15 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
   }
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
+  const doc = ctx.session.doc;
+  const estimate = estimateSpendAction(doc, gate.action, spendIsByok(ctx.keys));
+  const { nickname } = modelLabel(doc, describeSpend(doc, gate.action).kind);
+  if (!gateStillHolds(gate, estimate, nickname)) {
+    // The plan, quality or model changed since the card was shown: never run a bigger
+    // or different spend on an old approval — re-quote instead.
+    ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'declined' } }]);
+    return startSpend(ctx, gate.action, { ...opts, confirmed: false, budgetApproved: false });
+  }
   ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'approved' } }]);
   return startSpend(ctx, gate.action, { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved });
 }
@@ -591,8 +620,31 @@ const modelLabel = (doc: ComicDoc, kind: ImageJobKind) => {
   return { nickname: spec.nickname, resolution, spec };
 };
 
-function createGate(ctx: StudioContext, action: SpendAction, estimate: SpendEstimate, reason: 'policy' | 'budget', opts: RunActionOptions): StartedAction {
+/**
+ * Pin an open-ended spend action to the work it would do right now, so approving its
+ * gate later runs exactly what the card quoted — not whatever the plan grew into since.
+ */
+export const bindSpendAction = (doc: ComicDoc, action: SpendAction): SpendAction => {
+  switch (action.type) {
+    case 'render_pages':
+      return action.pageIds?.length ? action : { ...action, pageIds: pageTargets(doc, action).map((p) => p.id) };
+    case 'render_sheets': {
+      if (action.characterIds?.length) return action;
+      const { characters, places } = sheetTargets(doc, action);
+      return { ...action, characterIds: [...characters.map((c) => c.id), ...places.map((p) => p.id)] };
+    }
+    default:
+      return action;
+  }
+};
+
+/** A gate's quote is still honest when the work, model and price have not grown. */
+const gateStillHolds = (gate: Gate, estimate: SpendEstimate, nickname: string): boolean =>
+  estimate.imageCount <= gate.imageCount && estimate.usd <= gate.estimateUsd * 1.15 + 0.01 && nickname === gate.model;
+
+function createGate(ctx: StudioContext, rawAction: SpendAction, estimate: SpendEstimate, reason: 'policy' | 'budget', opts: RunActionOptions): StartedAction {
   const doc = ctx.session.doc;
+  const action = bindSpendAction(doc, rawAction);
   const plan = describeSpend(doc, action);
   const { nickname, resolution } = modelLabel(doc, plan.kind);
   const budget = budgetOf(doc.settings);
@@ -680,7 +732,9 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     return blocked(ctx, opts, `${spec.nickname} needs ${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key. Add one in Settings → API keys.`, 'error');
   }
   const qualityDenied = opts.qualityDenied ?? (ctx as OrchestratorContext).qualityDenied;
-  if (qualityDenied && spec.id === TIER_PRESETS.pro.model) {
+  // Anything other than the everyday model (Pro, or an advanced override such as
+  // GPT Image / FLUX / Seedream) is a paid-plan feature on the platform key.
+  if (qualityDenied && spec.id !== TIER_PRESETS.standard.model) {
     return blocked(ctx, opts, `${qualityDenied} Switch to Standard quality to keep going.`, 'warn', ['Switch to Standard quality']);
   }
 

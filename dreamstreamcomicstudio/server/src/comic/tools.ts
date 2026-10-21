@@ -835,7 +835,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'set_settings',
-      'Change quality tier (draft/standard/pro), spend confirmation (always/big/never), the "big spend" threshold, or the project budget cap in USD (0 clears it).',
+      'Tighten money settings: lower the quality tier, require more confirmations, lower the "big spend" threshold, or set/lower a budget cap in USD. Upgrading quality or loosening confirmations/budget is the user\'s call — tell them to use the quality chip or Settings.',
       schema({
         quality: S('Quality tier.', { enum: QUALITY_TIERS }),
         confirm: S('always = confirm every spend; big = only above the threshold; never = only the budget stops spend.', { enum: CONFIRM_POLICIES }),
@@ -853,7 +853,24 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           throw argError(err instanceof StudioError ? err.userMessage : 'Invalid settings.');
         }
         if (!Object.keys(patch).length && !('budgetUsd' in raw)) throw argError('Pass at least one setting.');
-        commit([{ op: 'settings', patch: 'budgetUsd' in raw && !('budgetUsd' in patch) ? { ...patch, budgetUsd: undefined } : patch }]);
+        // Money controls can only be TIGHTENED from here. Text the director reads (pasted
+        // scripts, attachments, notes) is untrusted, so loosening — a pricier tier, fewer
+        // confirmations, a higher threshold, a raised or cleared budget — needs the user's
+        // own tap in the Quality chip / Settings sheet.
+        const current = doc().settings;
+        const clearsBudget = 'budgetUsd' in raw && patch.budgetUsd === undefined;
+        const loosened: string[] = [];
+        if (patch.quality && QUALITY_TIERS.indexOf(patch.quality) > QUALITY_TIERS.indexOf(current.quality)) loosened.push(`quality → ${patch.quality}`);
+        if (patch.confirm && CONFIRM_POLICIES.indexOf(patch.confirm) > CONFIRM_POLICIES.indexOf(current.confirm)) loosened.push(`confirmations → ${patch.confirm}`);
+        if (typeof patch.bigSpendUsd === 'number' && patch.bigSpendUsd > current.bigSpendUsd) loosened.push('a higher approval threshold');
+        if (clearsBudget && current.budgetUsd !== undefined) loosened.push('removing the budget');
+        if (typeof patch.budgetUsd === 'number' && current.budgetUsd !== undefined && patch.budgetUsd > current.budgetUsd) loosened.push('a higher budget');
+        if (loosened.length) {
+          throw argError(
+            `Only the user can change ${loosened.join(', ')} (it raises what can be spent). Tell them to tap the quality chip under the message box or open Settings — one tap — and do not retry this call.`
+          );
+        }
+        commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }]);
         const s = doc().settings;
         return `Settings: ${s.quality} quality; confirm ${s.confirm}${s.confirm === 'big' ? ` (above ${formatUsd(s.bigSpendUsd)})` : ''}; budget ${s.budgetUsd ? formatUsd(s.budgetUsd) : 'none'}.`;
       }

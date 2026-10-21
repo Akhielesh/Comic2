@@ -154,6 +154,9 @@ interface PreparedMessage {
  * Images are stored as uploads; plain-text files are inlined into the message when short
  * or saved as the source script when long (the director then reads it with save_source).
  */
+/** Message text longer than this is treated as a pasted script (saved to source.script). */
+const LONG_MESSAGE_CHARS = 6000;
+
 async function prepareMessage(
   req: Extract<StreamRequest, { kind: 'message' }>,
   ctx: { userId: string; projectId: string; assets: AssetStore }
@@ -162,6 +165,13 @@ async function prepareMessage(
   const attachments: AssetRef[] = [];
   const ops: DocOp[] = [];
   const notes: string[] = [];
+  // A pasted script lives in source.script, not in the conversation: the doc keeps up to
+  // 160 messages, and storing 60k-char pastes in each would bloat every save and session.
+  if (text.length > LONG_MESSAGE_CHARS) {
+    const words = (text.match(/\S+/g) || []).length;
+    ops.push({ op: 'source', patch: { script: text, updatedAt: Date.now() } });
+    text = `${text.slice(0, 400).trimEnd()}…\n\n[Pasted ${words.toLocaleString('en-US')} words — saved as the source script. Call save_source (no text) to read it.]`;
+  }
   for (const a of req.attachments || []) {
     const mime = a.mimeType || mimeOfDataUrl(a.dataUrl);
     if (mime.startsWith('image/')) {

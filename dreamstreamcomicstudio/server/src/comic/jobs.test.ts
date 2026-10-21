@@ -379,6 +379,42 @@ describe('spend gating', () => {
     expect(ctx.imagesFake.calls).toHaveLength(1);
   });
 
+  it('approving a gate runs exactly what was quoted; a grown plan or new model re-quotes', async () => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'always';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, { confirmed: false });
+    const first = session.doc.gate!;
+    expect(first.action).toMatchObject({ type: 'render_pages', pageIds: ['pg_1'] });
+    // The quality jumps to Pro after the card was shown: approving must not run the pricier spend.
+    session.commit([{ op: 'settings', patch: { quality: 'pro' } }]);
+    await runAction(ctx, { type: 'approve_gate', gateId: first.id }, { confirmed: false });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.gate?.id).not.toBe(first.id);
+    expect(session.doc.gate).toMatchObject({ status: 'open', model: 'Nano Banana Pro' });
+  });
+
+  it('an open-ended render gate is pinned to the pages it quoted', async () => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'always';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages' }, { confirmed: false });
+    expect(session.doc.gate?.action).toMatchObject({ type: 'render_pages', pageIds: ['pg_1', 'pg_2', 'pg_3'] });
+  });
+
+  it('advanced model overrides are paid-plan only on the platform key', async () => {
+    const doc = plannedDoc();
+    doc.settings.imageModelOverride = 'flux-3';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    (ctx as { qualityDenied?: string }).qualityDenied = 'Needs a paid plan.';
+    const blocked = await startAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(blocked.outcome.status).toBe('blocked');
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+  });
+
   it('decline closes the gate; a stale gate id is rejected', async () => {
     const doc = plannedDoc();
     doc.settings.confirm = 'always';

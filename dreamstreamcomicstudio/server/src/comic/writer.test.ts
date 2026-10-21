@@ -367,7 +367,10 @@ describe('writePagePlan', () => {
     expect(out.pages).toHaveLength(1);
     const page = out.pages[0];
     expect(page).toMatchObject({ id: 'pg_old2', n: 2 });
-    expect(page.panels.map((p) => p.id.startsWith('pn_2'))).toEqual([true, true, false]);
+    // Existing panels keep their ids; the new third panel gets a fresh one (compare exactly —
+    // a random id can itself start with "pn_2…").
+    expect(page.panels.slice(0, 2).map((p) => p.id)).toEqual(['pn_2a', 'pn_2b']);
+    expect(['pn_2a', 'pn_2b']).not.toContain(page.panels[2].id);
     expect(page.panels[0].lines[0].id).toBe('ln_2a'); // unchanged line keeps its id
     expect(page.panels[1].lines[0].id).not.toBe('ln_2b');
 

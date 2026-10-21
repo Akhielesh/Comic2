@@ -19,6 +19,15 @@ import { logger } from '../lib/logger.js';
 import type { AssetRef } from '../../../shared/comic/doc.js';
 import { StudioError, type AssetStore } from './types.js';
 
+/**
+ * Decode limits for every image this module opens. sharp's default pixel cap (~268 MP)
+ * lets a tiny, highly-compressible upload expand to gigabytes and take down the single
+ * 1 GiB backend; 50 MP comfortably covers 4K renders (≈16 MP) and phone photos.
+ */
+const MAX_INPUT_PIXELS = 50_000_000;
+const MAX_UPLOAD_SOURCE_EDGE = 12_000;
+const SHARP_INPUT = { failOn: 'none' as const, limitInputPixels: MAX_INPUT_PIXELS };
+
 // ── Limits ───────────────────────────────────────────────────────────────────
 
 export const WEBP_QUALITY = 90;
@@ -189,9 +198,9 @@ export const buildOutlineSvg = (width: number, height: number, box: { x: number;
 /** Composite the outline onto a copy of the image; returns a WebP data URL at the same size. */
 export const outlineRegionDataUrl = async (dataUrl: string, box: { x: number; y: number; w: number; h: number }): Promise<string> => {
   const { buffer } = decodeImageDataUrl(dataUrl);
-  let meta: sharp.Metadata;
+  let meta: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
   try {
-    meta = await sharp(buffer, { failOnError: false }).metadata();
+    meta = await sharp(buffer, SHARP_INPUT).metadata();
   } catch (err) {
     throw new StudioError('BAD_REQUEST', 'The page image could not be read for Mark-up.', { status: 400, cause: err });
   }
@@ -199,7 +208,7 @@ export const outlineRegionDataUrl = async (dataUrl: string, box: { x: number; y:
   const height = meta.height || 0;
   if (!width || !height) throw new StudioError('BAD_REQUEST', 'The page image could not be read for Mark-up.', { status: 400 });
   const svg = buildOutlineSvg(width, height, box);
-  const out = await sharp(buffer, { failOnError: false })
+  const out = await sharp(buffer, SHARP_INPUT)
     .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT })
     .toBuffer();
@@ -360,7 +369,7 @@ export function createSupabaseAssetStore(opts: SupabaseAssetStoreOptions = {}): 
     }
     let encoded: EncodedImage;
     try {
-      const { data, info } = await sharp(buffer, { failOnError: false })
+      const { data, info } = await sharp(buffer, SHARP_INPUT)
         .webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT })
         .toBuffer({ resolveWithObject: true });
       encoded = { data, width: info.width, height: info.height };
@@ -489,15 +498,25 @@ export const encodeUpload = async (dataUrl: string): Promise<EncodedImage> => {
   }
   let format: string | undefined;
   try {
-    format = (await sharp(buffer, { failOnError: false }).metadata()).format;
+    const meta = await sharp(buffer, SHARP_INPUT).metadata();
+    format = meta.format;
+    const w = meta.width || 0;
+    const h = meta.height || 0;
+    if (w * h > MAX_INPUT_PIXELS || w > MAX_UPLOAD_SOURCE_EDGE || h > MAX_UPLOAD_SOURCE_EDGE) {
+      throw new StudioError('BAD_REQUEST', 'That image is too large in pixels. Please upload one under 50 megapixels.', { status: 413 });
+    }
   } catch (err) {
+    if (err instanceof StudioError) throw err;
+    if (/pixel limit/i.test(String((err as Error)?.message))) {
+      throw new StudioError('BAD_REQUEST', 'That image is too large in pixels. Please upload one under 50 megapixels.', { status: 413, cause: err });
+    }
     throw new StudioError('BAD_REQUEST', "That file isn't a readable image.", { status: 400, cause: err });
   }
   if (!format || !UPLOAD_FORMATS.has(format)) {
     throw new StudioError('BAD_REQUEST', 'Upload a PNG, JPEG, WebP or GIF image.', { status: 400 });
   }
   try {
-    const { data, info } = await sharp(buffer, { failOnError: false })
+    const { data, info } = await sharp(buffer, SHARP_INPUT)
       .rotate() // honour EXIF orientation (phone photos)
       .resize({ width: MAX_UPLOAD_EDGE, height: MAX_UPLOAD_EDGE, fit: 'inside', withoutEnlargement: true })
       .webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT })

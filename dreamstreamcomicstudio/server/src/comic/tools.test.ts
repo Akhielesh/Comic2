@@ -246,11 +246,16 @@ describe('spend tools', () => {
 });
 
 describe('settings & ask_user', () => {
-  it('set_settings validates and clears the budget with 0', async () => {
+  it('set_settings validates and only ever tightens money controls', async () => {
     expect(await call('set_settings', { quality: 'ultra' })).toMatch(/^Error: Invalid settings: quality/);
-    expect(await call('set_settings', { quality: 'pro', budgetUsd: 5, confirm: 'always' })).toBe('Settings: pro quality; confirm always; budget $5.00.');
-    expect(await call('set_settings', { budgetUsd: 0 })).toContain('budget none');
-    expect(ctx.session.doc.settings.budgetUsd).toBeUndefined();
+    // Tightening is fine: lower tier, more confirmations, a (first) budget cap.
+    expect(await call('set_settings', { quality: 'draft', budgetUsd: 5, confirm: 'always' })).toBe('Settings: draft quality; confirm always; budget $5.00.');
+    expect(await call('set_settings', { budgetUsd: 2 })).toContain('budget $2.00');
+    // Loosening is the user's call — refused, nothing changes (prompt-injection guard).
+    for (const loosen of [{ quality: 'pro' }, { confirm: 'never' }, { budgetUsd: 0 }, { budgetUsd: 50 }, { bigSpendUsd: 1000 }]) {
+      expect(await call('set_settings', loosen)).toMatch(/^Error: Only the user can change/);
+    }
+    expect(ctx.session.doc.settings).toMatchObject({ quality: 'draft', confirm: 'always', budgetUsd: 2 });
   });
 
   it('ask_user adds an options card once per turn', async () => {
