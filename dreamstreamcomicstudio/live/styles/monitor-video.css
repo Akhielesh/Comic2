@@ -1,0 +1,55 @@
+/* ============================================================================
+   Baby monitor — video under load: the low-bandwidth relay picture, the
+   "camera phone is busy" notice (viewer) and its hint on the camera phone.
+   ========================================================================== */
+
+/* The relay canvas stays mounted (frames draw straight into it); hidden off the relay. */
+.mv-stage canvas.mv-relay { display: block; }
+.mv-stage canvas.mv-relay.hidden { visibility: hidden; }
+
+/* Honest pills over the picture: what the viewer is really getting. */
+.ov-pill.mv-relay-pill { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-pill.mv-relay-pill svg { color: var(--amber); flex: none; }
+.ov-pill.mv-busy-pill { background: color-mix(in srgb, var(--amber) 82%, transparent); }
+.ov-pill.mv-busy-pill svg { flex: none; }
+
+/* Phones: the short wording (the full sentence stays for screen readers and the tooltip). */
+.ov-pill.mv-busy-pill .short { display: none; }
+@media (max-width: 560px) {
+  .ov-pill.mv-relay-pill .extra { display: none; }
+  .ov-pill.mv-busy-pill .full { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .ov-pill.mv-busy-pill .short { display: inline; }
+}
+
+/* Camera phone: a calm hint when it has stepped the picture down. */
+.cam-busy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, .9);
+  background: color-mix(in srgb, var(--amber) 30%, transparent);
+  border-radius: 10px;
+  padding: 7px 10px;
+}
+.cam-busy svg { flex: none; color: var(--amber-wash); }
+.cam-busy span { flex: 1; min-width: 12ch; }
+.cam-busy-act {
+  font: inherit;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(255, 255, 255, .14);
+  border: none;
+  border-radius: 8px;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.cam-busy-act:hover { background: rgba(255, 255, 255, .24); }
+.cam-busy-act:focus-visible { outline: none; box-shadow: var(--ring); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cam-busy-act { transition: none; }
+}

@@ -12,7 +12,7 @@ vi.mock('./webpush', () => ({
   },
 }));
 
-import { MonitorRoom, sanitizeZones, type MonEnv } from './monitorRoom';
+import { FrameBucket, MonitorRoom, sanitizeEnc, sanitizeZones, type MonEnv } from './monitorRoom';
 
 const NID = '11111111-2222-4333-8444-555555555555';
 let SQL: SqlJsStatic;
@@ -44,10 +44,13 @@ function sqlStorage() {
 
 class FakeWS {
   sent: unknown[] = [];
+  /** Binary frames received (relay pictures). */
+  bin: ArrayBuffer[] = [];
   closed: number | null = null;
   private att: unknown = null;
   send(s: string | ArrayBuffer) {
     if (typeof s === 'string') this.sent.push(JSON.parse(s));
+    else this.bin.push(s);
   }
   serializeAttachment(a: unknown) {
     this.att = structuredClone(a);
@@ -187,6 +190,100 @@ describe('MonitorRoom status', () => {
     expect(st.spl).toEqual({ db: 41.3, leq: 40.4, max: 140, cal: true });
     expect(st.crib).toBe(12);
     expect(st.visit).toBe(true);
+  });
+});
+
+describe('MonitorRoom relay (low-bandwidth picture)', () => {
+  const frame = (n = 30_000) => new ArrayBuffer(n);
+  const sendFrame = (room: MonitorRoom, cam: FakeWS, n?: number) => room.webSocketMessage(cam as never, frame(n));
+
+  it('a camera that reconnects is told viewers are waiting on its relay', async () => {
+    const { join, say, close } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    expect(cam.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 1 });
+    await close(cam);
+    const again = await join('tok-parent', 'camera', 'crib');
+    expect(again.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 1 });
+  });
+
+  it('forwards a jittery 4 fps stream in full (no hard minimum gap)', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    let t = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const gaps = [240, 260, 120, 380, 250, 200, 300, 230, 270, 250, 90, 410, 250, 250, 240, 260];
+    for (let i = 0; i < 40; i++) {
+      t += gaps[i % gaps.length];
+      await sendFrame(room, cam);
+    }
+    now.mockRestore();
+    expect(viewer.bin).toHaveLength(40);
+  });
+
+  it('holds a flood to about 25 fps', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    let t = 2_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    for (let i = 0; i < 120; i++) {
+      t += 16; // 60 fps for ~2 s
+      await sendFrame(room, cam, 8_000);
+    }
+    now.mockRestore();
+    expect(viewer.bin.length).toBeGreaterThanOrEqual(50);
+    expect(viewer.bin.length).toBeLessThanOrEqual(25 * 2 + 8 + 1);
+  });
+
+  it('sends a camera’s frames only to viewers relaying that camera, and only from cameras', async () => {
+    const { room, join, say } = setup();
+    const crib = await join('tok-parent', 'camera', 'crib');
+    const play = await join('tok-care', 'camera', 'play');
+    const a = await join('tok-viewer', 'viewer', 'a');
+    const b = await join('tok-viewer', 'viewer', 'b');
+    const c = await join('tok-viewer', 'viewer', 'c');
+    await say(a, { t: 'relay', on: true, dev: 'crib' });
+    await say(b, { t: 'relay', on: true, dev: 'play' });
+    await sendFrame(room, crib);
+    await sendFrame(room, play);
+    await sendFrame(room, a as never); // a viewer can't inject frames
+    expect([a.bin.length, b.bin.length, c.bin.length]).toEqual([1, 1, 0]);
+    // Switching camera moves the subscription (and tells both cameras).
+    await say(a, { t: 'relay', on: true, dev: 'play' });
+    expect(crib.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 0 });
+    expect(play.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 2 });
+    expect(new FrameBucket(0).take(2 * 1024 * 1024, 0)).toBe(false); // bigger than a second's budget
+  });
+
+  it('a socket that is still closing no longer counts (presence, relay viewers)', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    const other = await join('tok-care', 'viewer', 'laptop');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    expect(other.msgs('presence').at(-1)?.viewers).toEqual(expect.arrayContaining([expect.objectContaining({ dn: 'Laptop', relay: true })]));
+    // The runtime still lists the socket while its close is handled.
+    await room.webSocketClose(viewer as never);
+    expect(viewer.closed).toBe(1000);
+    expect(cam.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 0 });
+    expect((other.msgs('presence').at(-1)?.viewers as unknown[]).length).toBe(1);
+    await room.webSocketClose(cam as never);
+    expect(other.msgs('presence').at(-1)?.cams).toEqual([]);
+  });
+
+  it('passes the camera’s encoder telemetry to viewers, sanitized', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-care', 'viewer', 'laptop');
+    await say(cam, { t: 'status', st: { state: 'calm', enc: { peers: 3, fps: 14.6, lim: 'cpu', impl: 'MediaCodec<script>', w: 99999, p: 1, relay: 4.25, extra: 'x' } } });
+    expect(viewer.msgs('status')[0].st).toMatchObject({ enc: { peers: 3, fps: 15, lim: 'cpu', impl: 'MediaCodecscript', w: 4096, p: 1, relay: 4.3 } });
+    expect(sanitizeEnc({ lim: 'bogus' })).toEqual({ peers: 0, fps: null, lim: null, impl: null, w: null, p: 0, relay: 0 });
+    expect(sanitizeEnc('nope')).toBeNull();
   });
 });
 
