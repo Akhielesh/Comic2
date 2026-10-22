@@ -114,6 +114,15 @@ describe('GET /api/comic/public/s/:slug (edge, never the container)', () => {
     expect(b.calls).toHaveLength(1);
   });
 
+  it('a database that cannot answer (wrong key, migration not applied) is 503 "try again", never the dead-link 404', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    stubFetch(() => new Response('{"code":"PGRST202"}', { status: 404 }));
+    const res = await call(`/api/comic/public/s/${SLUG}`);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('5');
+    warn.mockRestore();
+  });
+
   it('fails closed when a snapshot path leaves the publication prefix (a u/ path, another key, traversal)', async () => {
     for (const bad of [`u/user-1/p/proj/img/x.webp`, `pub/${'Z'.repeat(22)}/page-0123456789ab.webp`, `pub/${KEY}/../x.webp`]) {
       stubFetch(() => ({ publication: publication(), doc: snapshot(bad) }));
@@ -204,6 +213,9 @@ describe('GET /api/comic/oembed', () => {
     expect(body.html).toContain('title="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"');
     expect(body.html).not.toContain('<script>');
     expect(body.width).toBe(400);
+    // Revocation is immediate: nothing may cache an oEmbed answer.
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(body.cache_age).toBeUndefined();
     expect(body.thumbnail_url).toBe(`https://dreamstreamstudio.ai/og/${KEY}/og-en-0123456789ab.jpg`);
     const off = oembedFor(validateShareCardRpc(publication({ allowEmbed: false }))!, 'https://dreamstreamstudio.ai');
     expect(off.html).toBeUndefined();
@@ -241,5 +253,7 @@ describe('POST /api/csp-report (edge only)', () => {
       { directive: 'img-src', blocked: 'https://x.test', page: '/', disposition: 'report' }
     ]);
     expect(maskedPath('https://comics.dreamstreamstudio.ai/c/Ab3dEf6hIj9kLm2nP/embed')).toBe('/c/:slug/embed');
+    // Classic share tokens are capabilities too: never logged.
+    expect(maskedPath('https://dreamstreamstudio.ai/share/0123456789abcdef0123456789abcdef')).toBe('/share/:token');
   });
 });

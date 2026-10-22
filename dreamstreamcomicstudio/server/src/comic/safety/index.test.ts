@@ -188,6 +188,38 @@ describe('screenTurnInput', () => {
   });
 });
 
+describe('screenTurnInput: review fixes', () => {
+  it('innocent wording near "kids" never strikes or restricts the account', async () => {
+    const ctx = ctxFor();
+    const r = await screenTurnInput(ctx, { text: 'the kids could barely make out the castle in the fog', attachments: [], rating: 'PG' });
+    expect(r).toMatchObject({ decision: 'allow', strike: 0 });
+    expect(fakes.store.statuses.get(USER)).toBeUndefined();
+    expect(fakes.store.events.filter((e) => e.severity > 0)).toEqual([]);
+    expect(fakes.llm.calls).toHaveLength(0);
+  });
+
+  it('every image a message may carry is screened (12), not only the first 6', async () => {
+    const ctx = ctxFor();
+    const data = `data:image/webp;base64,${(await webp({ r: 30, g: 60, b: 90 })).toString('base64')}`;
+    const atts: RefAsset[] = Array.from({ length: 12 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/a${i}.webp`, source: 'upload' as const, at: i + 1 }));
+    for (const a of atts) ctx.assetsFake.files.set(a.path, data);
+    fakes.llm.script.vision = [...Array.from({ length: 11 }, () => imageAnswer({ rating: 'G' })), imageAnswer({ rating: 'X', categories: ['graphic_gore'] })];
+    const r = await screenTurnInput(ctx, { text: 'use these', attachments: atts, rating: 'PG-13' });
+    expect(imageCalls()).toHaveLength(12);
+    expect(r.blockedAttachmentPaths).toEqual([atts[11].path]);
+  });
+
+  it('first-person crisis wording that is not an instruction reaches the director with a care note', async () => {
+    const ctx = ctxFor();
+    const r = await screenTurnInput(ctx, { text: 'honestly I want to die, nothing works', attachments: [], rating: 'PG-13' });
+    expect(r.decision).toBe('allow');
+    expect(fakes.llm.calls).toHaveLength(0);
+    expect(r.strike).toBe(0);
+    expect(r.note).toMatch(/^CARE NOTE:/m);
+    expect(r.note).toMatch(/helpline/);
+  });
+});
+
 describe('client patches', () => {
   const linePatch = (text: string): DocOp => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text } });
   const sctx = (rating: 'G' | 'PG' | 'PG-13') => ({ userId: USER, caps: { ratingCeiling: 'PG-13' } as never, rating, now: 1 });

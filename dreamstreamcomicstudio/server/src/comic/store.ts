@@ -81,7 +81,9 @@ const isPublishedAssetPath = (value: unknown): value is string => typeof value =
 
 /**
  * Merge a freshly built legacy state over the stored one. On a public row any live
- * (non-`pub/`) coverImageId is removed, so the gallery mirror never exposes a draft path.
+ * (non-`pub/`) coverImageId is removed, so the gallery mirror never exposes a draft path,
+ * and the blurb (`overview`) stays the PUBLISHED logline the publish flow wrote: a later,
+ * unreviewed edit of the live doc never reaches the public gallery (P1-PUBLISH).
  */
 export function mergeLegacyProjectState(
   existing: Record<string, unknown>,
@@ -93,6 +95,8 @@ export function mergeLegacyProjectState(
     if (isPublishedAssetPath(existing.coverImageId)) state.coverImageId = existing.coverImageId;
     else delete state.coverImageId;
     state.stylePrompt = '';
+    if (typeof existing.overview === 'string') state.overview = existing.overview;
+    else delete state.overview;
   } else if (!legacy.coverImageId) {
     delete state.coverImageId;
   }
@@ -347,10 +351,12 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
         // write the public-safe state instead.
       }
 
+      // Public row: the listing name is the PUBLISHED title (written by the publish flow), so a
+      // live rename never reaches the gallery without passing the publish gate.
       const state = mergeLegacyProjectState(existing, legacy, true);
       const { error: updateError } = await db
         .from('projects')
-        .update({ name, state, updated_at: updatedAt })
+        .update({ state, updated_at: updatedAt })
         .eq('id', projectId)
         .eq('user_id', userId);
       if (updateError) throw updateError;

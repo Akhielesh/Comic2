@@ -60,9 +60,9 @@ export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children,
         role="img"
         aria-label="Image withheld"
         data-safety="blocked"
-        className="grid h-full min-h-[4rem] w-full place-items-center overflow-hidden rounded-[inherit] bg-[var(--ds-well-strong)] px-3 py-3 text-center"
+        className="grid h-full min-h-[4rem] w-full grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden rounded-[inherit] bg-[var(--ds-well-strong)] px-3 py-3 text-center"
       >
-        <div className="min-w-0 max-w-full">
+        <div className="max-h-full min-w-0 max-w-full overflow-y-auto overscroll-contain">
           <p className="break-words text-[12px] leading-snug text-[var(--ds-muted)]">This take didn&apos;t fit the content rules.</p>
           <Actions
             items={[
@@ -97,8 +97,9 @@ export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children,
         <div aria-hidden="true" className="h-full w-full [filter:blur(18px)] motion-safe:transition-[filter]">
           {children}
         </div>
-        <div className="absolute inset-0 grid place-items-center p-3 text-center">
-          <div className="min-w-0 max-w-full rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-2 shadow-sm">
+        <div className="absolute inset-0 grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] place-items-center p-2 text-center sm:p-3">
+          {/* Small thumbnails: the note scrolls instead of clipping its buttons. */}
+          <div className="max-h-full min-w-0 max-w-full overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-2 shadow-sm">
             <p className="break-words text-[12px] font-medium leading-snug text-[var(--ds-ink)]">
               Rated {assessed} — your comic is {rating}
             </p>

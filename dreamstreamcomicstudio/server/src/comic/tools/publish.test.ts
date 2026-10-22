@@ -128,4 +128,41 @@ describe('publish actions (the user tap)', () => {
       restore();
     }
   });
+
+  it('publish: a cover the safety check blocks is left out AND the owner is told so', async () => {
+    const doc = drawn();
+    doc.cover = { title: 'Spice Run', render: { status: 'ready', history: [], asset: { path: 'u/user-1/p/proj-1/img/cover.webp', source: 'generated', at: 1, w: 800, h: 1200 } } };
+    const session = newSession(doc);
+    const ctx = testContext(session, { assets: fakeAssetStore() });
+    const store = createMemoryPublicationStore();
+    store.seedProject('proj-1', 'user-1');
+    const gate = async (_c: unknown, _d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => ({
+      status: 'cleared' as const,
+      rating: 'PG' as const,
+      pages: Object.fromEntries(o.pageIds.map((id) => [id, { status: 'pass' as const, reasons: [] }])),
+      cover: { status: 'blocked' as const, reasons: ['violence'] },
+      text: { status: 'pass' as const, reasons: [] },
+      checkedHash: '',
+      costUsd: 0
+    });
+    const restore = publication.configurePublication({ store, gate, renderOg: async () => ({ jpeg: Buffer.from('x'), w: 1200, h: 630, themeColor: '#000000' }), publicUrl: (p) => `https://cdn.test/${p}` });
+    publication.__resetPublishBudget();
+    try {
+      const handler = PUBLISH_ACTIONS.find((h) => h.type === 'publish')!;
+      const started = await handler.run(ctx, { type: 'publish', request: { visibility: 'unlisted' } }, { confirmed: true });
+      expect(started.outcome.status).toBe('done');
+      expect(ctx.session.doc.conversation.at(-1)!.text).toMatch(/cover didn’t pass the content check/);
+      expect(store.rows.get('proj-1')!.snapshot!.cover.render.asset).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('update_publication tells the director that Update republishes the current version', async () => {
+    const doc = drawn();
+    doc.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };
+    const { tools, turn } = toolsFor(doc);
+    expect(await tools.update_publication.execute({ allow_download: false })).toMatch(/edits made since publishing go live too/);
+    expect(turn.cards).toMatchObject([{ type: 'publish', mode: 'update', request: { visibility: 'unlisted', allowDownload: false } }]);
+  });
 });

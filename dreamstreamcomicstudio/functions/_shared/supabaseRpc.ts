@@ -56,8 +56,15 @@ export async function rpc<T>(env: SupabaseEnv | undefined, name: string, args: R
       redirect: 'manual',
       signal: controller.signal
     });
-    if (res.status >= 500 || res.status === 429) return { ok: false, reason: 'unavailable' };
-    if (!res.ok) return { ok: true, data: null };
+    // A live-or-dead answer is always 200 (+ null for "no such live row"). Any other status — a
+    // wrong key, a migration not applied yet, a PostgREST error, 429/5xx — means the database
+    // could not answer, so callers degrade honestly ("try again") instead of telling a reader a
+    // live link is dead. The slug is validated before the call, so no status depends on which
+    // slug was asked (no oracle).
+    if (!res.ok) {
+      console.warn('supabase_rpc_failed', { name, status: res.status });
+      return { ok: false, reason: 'unavailable' };
+    }
     const text = await res.text();
     if (!text || text === 'null') return { ok: true, data: null };
     if (text.length > 4_000_000) return { ok: false, reason: 'unavailable' };

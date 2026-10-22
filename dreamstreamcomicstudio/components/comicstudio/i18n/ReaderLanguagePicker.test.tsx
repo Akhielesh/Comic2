@@ -11,6 +11,13 @@ const options = [
 ];
 
 describe('ReaderLanguagePicker', () => {
+  it('a draft edition in the owner preview shows how much is translated, in the reader language', () => {
+    render(<ReaderLanguagePicker current="en" options={[options[0], { code: 'hi', label: 'Hindi', native: 'हिन्दी', percent: 92 }]} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /English/ }));
+    expect(screen.getAllByRole('option')[1].textContent).toContain('92% translated');
+    expect(screen.getAllByRole('option')[0].textContent).not.toContain('translated');
+  });
+
   it('renders nothing for a single language', () => {
     const { container } = render(<ReaderLanguagePicker current="en" options={[options[0]]} onChange={vi.fn()} />);
     expect(container.innerHTML).toBe('');

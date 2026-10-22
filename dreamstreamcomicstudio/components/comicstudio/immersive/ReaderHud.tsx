@@ -89,8 +89,9 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
         </div>
         <div className={`${bar} ${glass} shrink-0 justify-end`}>
           {p.language && p.language.options.length > 1 && (
-            <div className="pointer-events-auto" data-no-turn>
-              <ReaderLanguagePicker {...p.language} />
+            <div className="pointer-events-auto min-w-0" data-no-turn>
+              {/* Phones: globe-only trigger, so close + language + guided + settings + full screen fit at 320 px. */}
+              <ReaderLanguagePicker {...p.language} compact={p.compact} />
             </div>
           )}
           {p.guided.available && (

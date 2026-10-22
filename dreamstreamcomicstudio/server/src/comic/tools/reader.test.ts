@@ -39,9 +39,17 @@ describe('registration and gate', () => {
     expect(readerToolGroup.promptRules?.(drawnDoc())).toMatch(/never the default/);
   });
 
-  it('is off until a page is drawn (nothing to read yet)', () => {
-    const s = setup(plannedDoc());
-    expect(readerToolGroup.when?.(s.ctx, s.turn)).toBe(false);
+  it('is on once the comic has a page plan (chapters and reader feel are planned too), off before', () => {
+    const planned = setup(plannedDoc());
+    expect(readerToolGroup.when?.(planned.ctx, planned.turn)).toBe(true);
+    const empty = setup({ ...plannedDoc(), pages: [] });
+    expect(readerToolGroup.when?.(empty.ctx, empty.turn)).toBe(false);
+  });
+
+  it('a chapter mark can be set while planning, before anything is drawn', async () => {
+    const { tools, session } = setup(plannedDoc());
+    expect(await tools().set_chapter.execute({ page: 1, title: 'Part One' })).toMatch(/^Done — page 1 now starts the chapter “Part One”/);
+    expect(session.doc.pages[0].chapterTitle).toBe('Part One');
   });
 
   it('summary lines carry only real, non-default settings and chapters', () => {

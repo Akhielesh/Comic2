@@ -453,6 +453,24 @@ describe('createSupabaseDocStore', () => {
     expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p4.webp');
   });
 
+  it('a PUBLIC row keeps the published title and blurb; live edits stay private until republish (P1-PUBLISH)', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    db.tables.projects[0].is_public = true;
+    db.tables.projects[0].name = 'Published Title';
+    db.tables.projects[0].state = { ...db.tables.projects[0].state, overview: 'Published blurb.' };
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1 }), summary: { title: 'UNREVIEWED live rename', logline: 'UNREVIEWED live blurb' } });
+    expect(db.tables.projects[0].name).toBe('Published Title');
+    expect(db.tables.projects[0].state.overview).toBe('Published blurb.');
+    expect(db.tables.projects[0].state.studioVersion).toBe(4);
+    expect(JSON.stringify(db.tables.projects[0])).not.toContain('UNREVIEWED');
+    // Private again (unpublished / unlisted): the owner's live text mirrors as before.
+    db.tables.projects[0].is_public = false;
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 2 }), summary: { title: 'Live Title', logline: 'Live blurb' } });
+    expect(db.tables.projects[0].name).toBe('Live Title');
+    expect(db.tables.projects[0].state.overview).toBe('Live blurb');
+  });
+
   it('writes the public-safe state when the row turns public between the read and the write', async () => {
     const { db, store } = setup({ mirrorIntervalMs: 0 });
     await store.create({ projectId: PID, userId: USER, doc: docWith() });

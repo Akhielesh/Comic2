@@ -22,6 +22,9 @@ vi.mock('../../../hooks/useDictation', () => ({ voiceInputSupported: () => true 
 import { MAX_MESSAGE_CHARS, StudioComposer, VOICE_AUTOSEND_KEY, buildOutgoing, shrinkImage, textToDataUrl } from './StudioComposer';
 import { composeInStudio } from './composerBus';
 import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { enterAction, selectionLabel, sendArgs } from './StudioComposer';
+import type { ComicStudioController } from '../useStudio';
 
 const textarea = () => screen.getByLabelText('Message the Comic Director') as HTMLTextAreaElement;
 
@@ -121,7 +124,8 @@ describe('StudioComposer — option chips', () => {
     expect(ops[1]).toEqual({ op: 'format', patch: { colorMode: 'bw' } });
 
     fireEvent.click(within(panel).getByRole('button', { name: /Explore 3 directions/ }));
-    expect(studio.act).toHaveBeenCalledWith({ type: 'render_style_options' });
+    // The action carries the quote the user saw (P1-CONVERSATION's StylePanel).
+    expect(studio.act).toHaveBeenCalledWith(expect.objectContaining({ type: 'render_style_options' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -289,5 +293,192 @@ describe('StudioComposer — external requests', () => {
     screen.getByText('elsewhere').focus();
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     await waitFor(() => expect(document.activeElement).toBe(textarea()));
+  });
+});
+
+// ── v5: touch Enter rule, inbox uploads, focus chip, attach sheet (contract §13.4; mobile.md §3.8) ──
+
+
+const PHONE = formFactorFor({ w: 390, h: 844, coarse: true });
+const TABLET = formFactorFor({ w: 1180, h: 820, coarse: true });
+const DESKTOP = formFactorFor({ w: 1440, h: 900, coarse: false });
+
+const renderAt = (ff: ReturnType<typeof formFactorFor>, studio: ComicStudioController, props: Partial<React.ComponentProps<typeof StudioComposer>> = {}) =>
+  render(
+    <FormFactorProvider value={ff}>
+      <StudioComposer studio={studio} {...props} />
+    </FormFactorProvider>
+  );
+
+describe('StudioComposer — the Enter rule by pointer', () => {
+  it('enterAction: coarse → newline, fine → send, Shift → newline, ⌘/Ctrl → always send, IME → nothing', () => {
+    expect(enterAction({ key: 'Enter' }, true)).toBe('newline');
+    expect(enterAction({ key: 'Enter' }, false)).toBe('send');
+    expect(enterAction({ key: 'Enter', shiftKey: true }, false)).toBe('newline');
+    expect(enterAction({ key: 'Enter', metaKey: true }, true)).toBe('send');
+    expect(enterAction({ key: 'Enter', ctrlKey: true }, true)).toBe('send');
+    expect(enterAction({ key: 'Enter', isComposing: true }, false)).toBe('none');
+    expect(enterAction({ key: 'a' }, false)).toBe('none');
+  });
+
+  it.each([
+    ['phone', PHONE],
+    ['touch tablet', TABLET]
+  ])('on a %s Enter is a newline and the button sends; ⌘/Ctrl+Enter still sends', (_label, ff) => {
+    const studio = makeFakeStudio();
+    renderAt(ff, studio);
+    const box = textarea();
+    expect(box).toHaveAttribute('enterkeyhint', 'enter');
+    expect(box.className).toContain('text-base');
+    expect(box.className).not.toContain('sm:text-[14px]');
+    fireEvent.change(box, { target: { value: 'Line one' } });
+    const notPrevented = fireEvent.keyDown(box, { key: 'Enter' });
+    expect(notPrevented).toBe(true); // the textarea inserts its newline
+    expect(studio.send).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    expect(studio.send).toHaveBeenCalledWith('Line one', []);
+  });
+
+  it('with a mouse Enter sends (Shift+Enter is a newline) and the key hint says send', () => {
+    const studio = makeFakeStudio();
+    renderAt(DESKTOP, studio);
+    const box = textarea();
+    expect(box).toHaveAttribute('enterkeyhint', 'send');
+    fireEvent.change(box, { target: { value: 'Hello' } });
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    expect(studio.send).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(studio.send).toHaveBeenCalledWith('Hello', []);
+  });
+
+  it('phones cap the box at 30 % of the visible height; 44 px send/attach targets on touch', () => {
+    renderAt(PHONE, makeFakeStudio());
+    expect(textarea().style.maxHeight).toContain('var(--app-h');
+    expect(screen.getByRole('button', { name: 'Send' }).className).toContain('coarse:h-11');
+    expect(screen.getByRole('button', { name: 'Add images or a script' }).className).toContain('coarse:h-11');
+  });
+});
+
+describe('StudioComposer — attach sheet and inbox uploads', () => {
+  it('on touch, + opens Photo library · Take a photo · Script — the camera input captures', () => {
+    renderAt(PHONE, makeFakeStudio());
+    fireEvent.click(screen.getByRole('button', { name: 'Add images or a script' }));
+    const menu = screen.getByRole('menu', { name: 'Add to your message' });
+    expect(within(menu).getByRole('menuitem', { name: /Photo library/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: /Script or document/ })).toBeInTheDocument();
+    const camera = screen.getByTestId('composer-camera-input') as HTMLInputElement;
+    expect(camera).toHaveAttribute('capture', 'environment');
+    const click = vi.spyOn(camera, 'click').mockImplementation(() => undefined);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Take a photo/ }));
+    expect(click).toHaveBeenCalled();
+    expect(screen.queryByRole('menu', { name: 'Add to your message' })).toBeNull();
+  });
+
+  it('a mouse on a roomy composer gets the file dialog directly (no camera row)', () => {
+    renderAt(DESKTOP, makeFakeStudio());
+    const click = vi.spyOn(screen.getByTestId('composer-file-input') as HTMLInputElement, 'click').mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'Add images or a script' }));
+    expect(click).toHaveBeenCalled();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('images upload to the inbox with progress and travel by path when done', async () => {
+    let finish: (v: unknown) => void = () => undefined;
+    let progress: ((f: number) => void) | undefined;
+    const uploadRef = vi.fn((_file: Blob, _target: unknown, opts?: { onProgress?: (f: number) => void }) => {
+      progress = opts?.onProgress;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    const studio = makeFakeStudio({ uploadRef: uploadRef as never });
+    renderAt(DESKTOP, studio);
+    const photo = new File([new Uint8Array([137, 80, 78, 71])], 'maya.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files: [photo] } });
+    await screen.findByAltText('maya.png');
+    expect(uploadRef).toHaveBeenCalledWith(expect.any(Blob), { kind: 'inbox' }, expect.objectContaining({ name: 'maya.png' }));
+    act(() => progress?.(0.4));
+    expect(screen.getByRole('progressbar', { name: 'Uploading maya.png' })).toHaveAttribute('aria-valuenow', '40');
+    await act(async () => finish({ ref: { path: 'u/1/ref/inbox/maya.webp' } }));
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    fireEvent.change(textarea(), { target: { value: 'This is Maya' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(studio.send).toHaveBeenCalledWith('This is Maya', { attachments: [], inboxPaths: ['u/1/ref/inbox/maya.webp'] });
+  });
+
+  it('an upload still running at send time goes inline instead and is aborted (never lost, no orphan)', async () => {
+    let signal: AbortSignal | undefined;
+    const uploadRef = vi.fn((_f: Blob, _t: unknown, opts?: { signal?: AbortSignal }) => {
+      signal = opts?.signal;
+      return new Promise(() => undefined);
+    });
+    const studio = makeFakeStudio({ uploadRef: uploadRef as never });
+    renderAt(DESKTOP, studio);
+    fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } });
+    await screen.findByAltText('a.png');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(studio.send).toHaveBeenCalledWith('', [{ name: 'a.png', mimeType: 'image/png', dataUrl: expect.stringMatching(/^data:image\/png/) }]);
+    expect(signal?.aborted).toBe(true);
+  });
+});
+
+describe('StudioComposer — the selection focus chip', () => {
+  const withSelection = () => makeFakeStudio({ selection: { pageId: 'pg_2', lineIds: ['l1', 'l2'], surface: 'page_editor' } });
+
+  it('selectionLabel names the page and what is selected', () => {
+    const doc = makeSampleDoc();
+    expect(selectionLabel(doc, { pageId: 'pg_2', lineIds: ['a'] })).toBe('Page 2 · 1 balloon');
+    expect(selectionLabel(doc, { pageId: 'pg_2', lineIds: [], panelN: 3 })).toBe('Page 2 · panel 3');
+    expect(selectionLabel(doc, { pageId: 'missing', lineIds: [] })).toBeNull();
+    expect(selectionLabel(doc, null)).toBeNull();
+  });
+
+  it('a selection rides along as the message focus; dismissing the chip sends a plain message', () => {
+    const studio = withSelection();
+    const { unmount } = renderAt(DESKTOP, studio);
+    expect(screen.getByText('About Page 2 · 2 balloons')).toBeInTheDocument();
+    fireEvent.change(textarea(), { target: { value: 'Shorter, please' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(studio.send).toHaveBeenLastCalledWith('Shorter, please', { attachments: [], focus: 'selection' });
+    unmount();
+
+    const plain = withSelection();
+    renderAt(DESKTOP, plain);
+    fireEvent.click(screen.getByRole('button', { name: /Don’t tie the next message to Page 2/ }));
+    expect(screen.queryByText(/About Page 2/)).toBeNull();
+    fireEvent.change(textarea(), { target: { value: 'Something else' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(plain.send).toHaveBeenLastCalledWith('Something else', []);
+  });
+
+  it('sendArgs keeps the legacy array form unless inbox paths or a focus ride along', () => {
+    expect(sendArgs({ text: 'hi', attachments: [] }, [], false)).toEqual(['hi', []]);
+    expect(sendArgs({ text: 'hi', attachments: [] }, ['p'], true)).toEqual(['hi', { attachments: [], inboxPaths: ['p'], focus: 'selection' }]);
+  });
+});
+
+describe('StudioComposer — phones and the sheet variant', () => {
+  it('option panels open as bottom sheets on phones', () => {
+    renderAt(PHONE, makeFakeStudio());
+    fireEvent.click(screen.getByRole('button', { name: /Format: page shape/ }));
+    expect(screen.getByRole('dialog', { name: 'Format' })).toHaveAttribute('data-sheet', 'bottom');
+  });
+
+  it('the bus can open a panel (and the sheet variant leaves the bus to the docked composer)', async () => {
+    const docked = makeFakeStudio();
+    renderAt(DESKTOP, docked);
+    act(() => composeInStudio({ openPanel: 'quality' }));
+    expect(await screen.findByRole('dialog', { name: 'Quality' })).toBeInTheDocument();
+  });
+
+  it('the sheet variant ignores the composer bus and ⌘K, and reports a send', () => {
+    const onSent = vi.fn();
+    renderAt(PHONE, makeFakeStudio(), { variant: 'sheet', onSent, placeholder: 'Ask about this board' });
+    expect(textarea()).toHaveAttribute('placeholder', 'Ask about this board');
+    act(() => composeInStudio({ text: 'from the bus' }));
+    expect(textarea()).toHaveValue('');
+    fireEvent.change(textarea(), { target: { value: 'Darker sky' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSent).toHaveBeenCalled();
   });
 });

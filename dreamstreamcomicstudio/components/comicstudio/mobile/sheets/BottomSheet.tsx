@@ -298,6 +298,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           onClick={cycle}
           aria-label={list.length > 1 ? 'Resize sheet' : 'Drag to close'}
           tabIndex={list.length > 1 ? 0 : -1}
+          data-hit-exempt="grabber: the whole 52 px header is its drag zone"
           className="absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
         >
           <span aria-hidden className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />

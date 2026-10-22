@@ -485,6 +485,15 @@ export function createUploadQueue(options: UploadQueueOptions): UploadQueueStore
           additions.push({ ...base, state: 'failed', message: rejected, retryable: false });
           continue;
         }
+        if (!doc || !refsOf(doc, owner)) {
+          additions.push({
+            ...base,
+            state: 'failed',
+            retryable: false,
+            message: doc ? `${ownerLabel(doc, owner)} is no longer in the story, so nothing was uploaded.` : 'The comic is still loading — add the photo again in a moment.'
+          });
+          continue;
+        }
         if (left.owner <= 0 || left.project <= 0) {
           additions.push({ ...base, state: 'over_cap', message: overCapCopy(doc, owner, left.owner > 0) });
           continue;

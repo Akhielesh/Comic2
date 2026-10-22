@@ -3,6 +3,7 @@ import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronR
 import { Button } from './Button';
 import { WaitlistForm } from './WaitlistForm';
 import { useAuth } from '../contexts/AuthContext';
+import { comicsEntryUrl } from '../services/productHost';
 
 interface HomePageProps {
   onEnterStudio: () => void;
@@ -34,6 +35,9 @@ const MOCK_MESSAGES = [
 
 export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenPrivacy, onOpenTerms, onNavigate }) => {
   const { user } = useAuth();
+  // Comic Studio has its own address: on the production main site link there (in-app entry stays
+  // available for signed-in people — a separate host means a separate sign-in).
+  const comicsHref = comicsEntryUrl();
   const [activeStage, setActiveStage] = useState(1);
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
 
@@ -189,12 +193,28 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
                 Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon.
               </p>
-              <button
-                onClick={onEnterStudio}
-                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
-              >
-                Explore Comic Studio <ArrowRight size={16} />
-              </button>
+              {comicsHref ? (
+                <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <a
+                    href={comicsHref}
+                    className="inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
+                  >
+                    Explore Comic Studio <ArrowRight size={16} />
+                  </a>
+                  {user && (
+                    <button onClick={onEnterStudio} className="text-xs font-bold text-slate-500 underline-offset-2 hover:underline">
+                      or open my comics here
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={onEnterStudio}
+                  className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
+                >
+                  Explore Comic Studio <ArrowRight size={16} />
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -411,7 +431,13 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           <div>
             <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Products</h4>
             <ul className="space-y-4 text-sm font-bold">
-              <li><button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button></li>
+              <li>
+                {comicsHref ? (
+                  <a href={comicsHref} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</a>
+                ) : (
+                  <button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button>
+                )}
+              </li>
               <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
               <li><a href="/live.html" className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
             </ul>

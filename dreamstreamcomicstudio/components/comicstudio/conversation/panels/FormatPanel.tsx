@@ -246,7 +246,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
               aria-label="Fewer pages"
               disabled={format.pageCount <= MIN_PAGES}
               onClick={() => set({ pageCount: clampPages(format.pageCount - 1) })}
-              className="rounded-l-xl p-2 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-40"
+              className="tap-target rounded-l-xl p-2 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-40"
             >
               <Minus className="h-3.5 w-3.5" />
             </button>
@@ -256,7 +256,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
               aria-label="More pages"
               disabled={format.pageCount >= MAX_PAGES}
               onClick={() => set({ pageCount: clampPages(format.pageCount + 1) })}
-              className="rounded-r-xl p-2 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-40"
+              className="tap-target rounded-r-xl p-2 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-40"
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
@@ -269,7 +269,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 aria-pressed={format.pageCount === n}
                 onClick={() => set({ pageCount: n })}
                 className={cx(
-                  'rounded-full border px-2.5 py-1 text-[12px] font-medium tabular-nums transition-all duration-200',
+                  'tap-target rounded-full border px-2.5 py-1 text-[12px] font-medium tabular-nums transition-all duration-200 coarse:min-h-[36px] coarse:min-w-[36px]',
                   format.pageCount === n
                     ? 'border-[#D97757]/40 bg-[#D97757]/10 text-[var(--ds-ink)]'
                     : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'

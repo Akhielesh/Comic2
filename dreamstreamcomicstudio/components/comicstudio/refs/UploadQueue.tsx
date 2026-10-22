@@ -141,7 +141,12 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                     {rejected && (
                       <>
                         {' '}
-                        <button type="button" className="underline underline-offset-2" onClick={() => setPolicyOpen((v) => !v)} aria-expanded={policyOpen}>
+                        <button
+                          type="button"
+                          className="-my-3 inline-block py-3 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                          onClick={() => setPolicyOpen((v) => !v)}
+                          aria-expanded={policyOpen}
+                        >
                           What's allowed?
                         </button>
                       </>

@@ -328,6 +328,28 @@ export async function quarantineAsset(
   }
 }
 
+/** An AssetStore that can move a quarantined object back (P1-STORAGE/P2 adds it; see wave-2 notes). */
+type RestoreCapable = AssetStore & { restoreQuarantined?(quarantinePath: string, originalPath: string): Promise<void> };
+
+/**
+ * Put a quarantined object back at its original path (an appeal cleared it, or a moderator
+ * restored it). Uses AssetStore.restoreQuarantined when the store has it; otherwise copyObject
+ * (which the production store refuses for q/ sources). false = the object is still held — the
+ * caller must say so honestly and never mark the image as servable.
+ */
+export async function restoreFromQuarantine(assets: AssetStore, quarantinePath: string, originalPath: string, projectId?: string | null): Promise<boolean> {
+  try {
+    const store = assets as RestoreCapable;
+    if (typeof store.restoreQuarantined === 'function') await store.restoreQuarantined(quarantinePath, originalPath);
+    else await assets.copyObject(quarantinePath, originalPath);
+    await current.store.forgetQuarantine(originalPath).catch(() => undefined);
+    return true;
+  } catch (err) {
+    logger.warn('comic_safety_restore_failed', { projectId: projectId ?? null, ...errorFacts(err) });
+    return false;
+  }
+}
+
 /** Sniff an image buffer's MIME for a data URL (previews are WebP; tolerate PNG/JPEG/GIF). */
 export const imageMime = (buf: Buffer): string | null => {
   if (!buf || buf.length < 12) return null;

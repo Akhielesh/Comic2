@@ -312,21 +312,29 @@ begin
 end $$;
 
 -- A client re-save of a v4 listing row keeps the server-mirrored share keys (the gallery
--- reads state.shareSlug / state.publicCover of public rows).
+-- reads state.shareSlug / state.publicCover of public rows). While a v4 row is PUBLIC, the
+-- gallery shows only what passed the publish gate: the server wrote the published title
+-- (name), blurb (state.overview) and opaque cover (state.coverImageId), and a direct client
+-- update can't swap them for unreviewed text or another image (anyone can read public rows).
 create or replace function public.projects_guard_publication_state()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_old jsonb := coalesce(old.state, '{}'::jsonb);
 begin
   if coalesce(auth.role(), 'service_role') = 'service_role' then return new; end if;
-  if new.state is not distinct from old.state then return new; end if;
+  if new.state is not distinct from old.state and new.name is not distinct from old.name then return new; end if;
   if not exists (select 1 from public.comic_docs d where d.project_id = old.id) then return new; end if;
   new.state := (coalesce(new.state, '{}'::jsonb) - 'shareSlug' - 'publicCover')
-    || jsonb_strip_nulls(jsonb_build_object(
-         'shareSlug', coalesce(old.state, '{}'::jsonb) -> 'shareSlug',
-         'publicCover', coalesce(old.state, '{}'::jsonb) -> 'publicCover'));
+    || jsonb_strip_nulls(jsonb_build_object('shareSlug', v_old -> 'shareSlug', 'publicCover', v_old -> 'publicCover'));
+  if coalesce(old.is_public, false) then
+    new.name := old.name;
+    new.state := (new.state - 'overview' - 'coverImageId')
+      || jsonb_strip_nulls(jsonb_build_object('overview', v_old -> 'overview', 'coverImageId', v_old -> 'coverImageId'));
+  end if;
   return new;
 end;
 $$;

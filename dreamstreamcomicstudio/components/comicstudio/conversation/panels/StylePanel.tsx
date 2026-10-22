@@ -8,7 +8,7 @@ import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
 import type { ComicDoc, StyleBible } from '../../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops';
-import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
+import { PLATFORM_MARKUP, estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
 import { stylePreviewId } from '../../../../shared/comic/library';
 import { LibraryImage } from '../../library/LibraryImage';
@@ -36,6 +36,23 @@ export const presetOps = (doc: ComicDoc, preset: StylePreset): DocOp[] => {
 
 export const STYLE_DIRECTION_COUNT = 3;
 
+/** Mirror of the server's writer cost for proposing directions (jobs.ts STYLE_DIRECTIONS_USD). */
+export const STYLE_DIRECTIONS_TEXT_USD = 0.015;
+
+/**
+ * The same quote the server gate makes for `render_style_options` (jobs.ts estimateSpendAction):
+ * the style boards on the comic's tier/override, plus the writer call that proposes directions
+ * when none are passed. Shown on the buttons and sent as quotedUsd.
+ */
+export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, withDirections = false): number => {
+  const est = estimateJobs([{ kind: 'style_option', count, label: 'style options' }], doc.settings.quality, {
+    override: doc.settings.imageModelOverride,
+    byok
+  });
+  const text = withDirections ? 0 : STYLE_DIRECTIONS_TEXT_USD * (byok ? 1 : PLATFORM_MARKUP);
+  return Math.round((est.usd + text) * 10000) / 10000;
+};
+
 export interface StylePanelProps {
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
@@ -52,7 +69,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
   const style = doc.style;
   const locked = style.status === 'locked';
   const exploring = style.options.some((o) => o.render.status === 'queued' || o.render.status === 'rendering');
-  const estimate = estimateJobs([{ kind: 'style_option', count: STYLE_DIRECTION_COUNT, label: 'style options' }], doc.settings.quality, { byok });
+  const quote = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, byok);
   const custom = style.status !== 'empty' && !style.presetId && (style.name || style.spec);
 
   const choose = (preset: StylePreset) => {
@@ -71,13 +88,13 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
           className="sm:flex-1"
           disabled={exploring}
           onClick={() => {
-            void act({ type: 'render_style_options' });
+            void act({ type: 'render_style_options', quotedUsd: quote });
             onDone();
           }}
         >
           <Sparkles className="h-3.5 w-3.5" aria-hidden />
           {exploring ? 'Drawing style options…' : `Explore ${STYLE_DIRECTION_COUNT} directions for my story`}
-          {!exploring && <span className="font-normal opacity-80">· ≈ {formatUsd(estimate.usd)}</span>}
+          {!exploring && <span className="font-normal opacity-80">· ≈ {formatUsd(quote)}</span>}
         </PrimaryButton>
         <GhostButton
           onClick={() => {

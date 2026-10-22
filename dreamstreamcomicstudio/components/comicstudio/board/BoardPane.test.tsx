@@ -2,6 +2,9 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { BoardTab } from '../types';
+// Built-in tabs only: feature tabs (Media, Languages) have their own registry tests (features.test.tsx).
+vi.mock('../features', async (importOriginal) => ({ ...(await importOriginal<typeof import('../features')>()), registeredTabs: () => [] }));
+
 import { BoardPane } from './BoardPane';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 

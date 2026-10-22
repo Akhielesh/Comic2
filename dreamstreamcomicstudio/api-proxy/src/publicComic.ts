@@ -239,8 +239,7 @@ export function oembedFor(card: ShareCardRpc, origin: string, maxwidth?: number,
     provider_name: 'DreamStream Studio',
     provider_url: COMICS_ORIGIN,
     title,
-    ...(card.card.creator ? { author_name: card.card.creator } : {}),
-    cache_age: 3600
+    ...(card.card.creator ? { author_name: card.card.creator } : {})
   };
   if (og) Object.assign(out, { thumbnail_url: `${origin}/og/${og.path.slice('pub/'.length)}`, thumbnail_width: 1200, thumbnail_height: 630 });
   if (card.allowEmbed) {
@@ -266,7 +265,9 @@ async function handleOembed(req: Request, env: PublicComicEnv, url: URL): Promis
     const v = Number(url.searchParams.get(k));
     return Number.isFinite(v) && v > 0 ? v : undefined;
   };
-  return json(req, env, JSON.stringify(oembedFor(card, url.origin, num('maxwidth'), num('maxheight'))), 200, { 'cache-control': 'public, max-age=300' });
+  // no-store (the shared default) and no oEmbed cache_age: a revoked or regenerated link must stop
+  // describing the comic at once (addendum: "revoked slugs stop working immediately").
+  return json(req, env, JSON.stringify(oembedFor(card, url.origin, num('maxwidth'), num('maxheight'))), 200);
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────

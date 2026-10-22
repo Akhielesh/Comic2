@@ -99,7 +99,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="mt-1 text-[12px] font-medium text-[var(--ds-accent)] hover:underline"
+              className="tap-target mt-1 text-[12px] font-medium text-[var(--ds-accent)] hover:underline"
               aria-expanded={expanded}
             >
               {expanded ? 'Show less' : 'Show all'}
@@ -117,12 +117,12 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
           {(onRetry || onEdit || onDismiss) && (
             <span className="inline-flex items-center gap-1">
               {onRetry && (
-                <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]">
+                <button type="button" onClick={onRetry} className="tap-target inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]">
                   <RotateCcw className="h-3 w-3" aria-hidden /> Retry
                 </button>
               )}
               {onEdit && (
-                <button type="button" onClick={onEdit} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
+                <button type="button" onClick={onEdit} className="tap-target inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
                   <Pencil className="h-3 w-3" aria-hidden /> Edit
                 </button>
               )}
@@ -131,7 +131,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
                   type="button"
                   onClick={onDismiss}
                   aria-label="Discard message"
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+                  className="tap-target inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
                 >
                   <X className="h-3 w-3" aria-hidden /> Discard
                 </button>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Menu, X, Radio } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Menu, X, Radio, ExternalLink } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NavDropdown } from './NavDropdown';
@@ -7,6 +7,7 @@ import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
 import { useProductAccess } from '../../services/productAccess';
+import { comicsEntryUrl } from '../../services/productHost';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
@@ -51,6 +52,10 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   const showComic = !confined || allowedProducts!.has('comic_studio');
   const showChat = !confined || allowedProducts!.has('chat_studio');
   const showLive = !confined || allowedProducts!.has('stream_studio');
+  // Comic Studio's own address (comics.dreamstreamstudio.ai) — offered on the production main site only.
+  // Separate host = separate sign-in, so the in-app "Studio" entry stays for signed-in people.
+  const comicsAppHref = comicsEntryUrl();
+  const openComicsApp = () => { if (comicsAppHref) window.location.href = comicsAppHref; };
 
   // Same products as the desktop nav, flattened for the mobile menu (<1024px).
   const mobileGroups: { heading: string; items: { label: string; onClick: () => void }[] }[] = [
@@ -58,6 +63,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
       { label: 'How It Works', onClick: () => onNavigate('how-it-works') },
       { label: 'Comic Studio', onClick: onEnterStudio },
       { label: 'Library', onClick: onViewComics },
+      ...(comicsAppHref ? [{ label: 'Comic Studio app', onClick: openComicsApp }] : []),
     ] }] : []),
     ...(showChat ? [{ heading: 'Chat Studio', items: [
       { label: 'Open Chat Studio', onClick: () => onNavigate('chat') },
@@ -105,6 +111,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                   { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
                   { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
                   { label: 'Library', description: 'Browse the public comic gallery', icon: <LayoutGrid size={16} />, onClick: onViewComics },
+                  ...(comicsAppHref
+                    ? [{ label: 'Comic Studio', description: 'Its own home at comics.dreamstreamstudio.ai', icon: <ExternalLink size={16} />, onClick: openComicsApp }]
+                    : []),
                 ]}
               />
             )}

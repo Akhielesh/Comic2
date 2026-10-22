@@ -24,13 +24,32 @@ export interface PublicationBackend extends PublicationStore {
   /**
    * Mirror visibility onto the listing row (service role; the DB guard refuses everyone else):
    * is_public, state.shareSlug, state.publicCover, state.coverImageId (= publicCover while
-   * public), state.publishedAt (first publish kept).
+   * public), state.publishedAt (first publish kept). While public, `listing` (the PUBLISHED
+   * title/logline) becomes the row's name and state.overview, so the gallery shows what passed
+   * the publish gate — never a later, unreviewed edit of the live doc.
    */
-  mirrorProject(args: { projectId: string; userId: string; isPublic: boolean; shareSlug: string | null; publicCover: string | null; publishedAt: number | null }): Promise<void>;
+  mirrorProject(args: MirrorArgs): Promise<void>;
   /** Public @username (never email or real name), only for showCreator. */
   publicUsername(userId: string): Promise<string | undefined>;
   /** pub/<key>/ prefixes older than a day with no live/suspended row (weekly sweep). */
   orphanKeys(limit: number): Promise<string[]>;
+}
+
+/** The published listing text (source language) a public gallery row shows. */
+export interface PublishedListing {
+  name: string;
+  overview: string;
+}
+
+export interface MirrorArgs {
+  projectId: string;
+  userId: string;
+  isPublic: boolean;
+  shareSlug: string | null;
+  publicCover: string | null;
+  publishedAt: number | null;
+  /** Written only while public (name + state.overview); private rows keep the owner's live text. */
+  listing?: PublishedListing;
 }
 
 /** Thrown by upsert when the slug (or asset key) collides; the caller mints a new one and retries. */
@@ -224,13 +243,15 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
       return { exists: !!row, forcedPrivate: row?.is_forced_private === true };
     },
 
-    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt }) {
+    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt, listing }) {
       const db = admin();
       const { data, error } = await db.from('projects').select('state').eq('id', projectId).eq('user_id', userId).maybeSingle();
       if (error) throw unavailable(error, 'save');
       if (!data) throw new StudioError('NOT_FOUND', "That comic doesn't exist or you don't have access to it.", { status: 404 });
-      const state = mirrorState(isRecord((data as { state?: unknown }).state) ? ((data as { state: Record<string, unknown> }).state) : {}, { isPublic, shareSlug, publicCover, publishedAt });
-      const { error: updateError } = await db.from('projects').update({ is_public: isPublic, state }).eq('id', projectId).eq('user_id', userId);
+      const state = mirrorState(isRecord((data as { state?: unknown }).state) ? ((data as { state: Record<string, unknown> }).state) : {}, { isPublic, shareSlug, publicCover, publishedAt, listing });
+      const patch: Record<string, unknown> = { is_public: isPublic, state };
+      if (isPublic && listing) patch.name = listingName(listing.name);
+      const { error: updateError } = await db.from('projects').update(patch).eq('id', projectId).eq('user_id', userId);
       if (updateError) throw unavailable(updateError, 'save');
     },
 
@@ -255,10 +276,13 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
   };
 }
 
+/** projects.name of a public listing: the published title, collapsed and clamped (≤ 200). */
+export const listingName = (title: string): string => (String(title || '').replace(/\s+/g, ' ').trim() || 'Untitled comic').slice(0, 200);
+
 /** The listing-state mirror for a visibility change (pure; shared by both stores). */
 export function mirrorState(
   existing: Record<string, unknown>,
-  m: { isPublic: boolean; shareSlug: string | null; publicCover: string | null; publishedAt: number | null }
+  m: { isPublic: boolean; shareSlug: string | null; publicCover: string | null; publishedAt: number | null; listing?: PublishedListing }
 ): Record<string, unknown> {
   const state: Record<string, unknown> = { ...existing };
   if (m.shareSlug && SLUG_RE.test(m.shareSlug)) state.shareSlug = m.shareSlug;
@@ -270,6 +294,8 @@ export function mirrorState(
     if (m.publicCover && m.publicCover.startsWith('pub/')) state.coverImageId = m.publicCover;
     else delete state.coverImageId;
     state.stylePrompt = '';
+    // The gallery blurb is the PUBLISHED logline (it passed the gate), never a later live edit.
+    if (m.listing) state.overview = String(m.listing.overview || '').slice(0, 600);
   } else if (typeof state.coverImageId === 'string' && state.coverImageId.startsWith('pub/')) {
     // Leaving public: drop the published cover; the doc mirror restores the owner's own cover on its next save.
     delete state.coverImageId;
@@ -285,6 +311,7 @@ export interface MemoryProject {
   isPublic: boolean;
   forcedPrivate: boolean;
   state: Record<string, unknown>;
+  name?: string;
 }
 
 export interface MemoryPublicationStore extends PublicationBackend {
@@ -353,11 +380,12 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
       const p = projects.get(projectId);
       return { exists: !!p && p.userId === userId, forcedPrivate: !!p?.forcedPrivate };
     },
-    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt }) {
+    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt, listing }) {
       const p = projects.get(projectId);
       if (!p || p.userId !== userId) throw new StudioError('NOT_FOUND', 'missing', { status: 404 });
       p.isPublic = isPublic && !p.forcedPrivate;
-      p.state = mirrorState(p.state, { isPublic, shareSlug, publicCover, publishedAt });
+      p.state = mirrorState(p.state, { isPublic, shareSlug, publicCover, publishedAt, listing });
+      if (isPublic && listing) p.name = listingName(listing.name);
     },
     async publicUsername() {
       return 'maya_draws';

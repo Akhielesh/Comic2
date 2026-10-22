@@ -16,7 +16,7 @@
  */
 import { parseShareParams, SLUG_RE } from '../../shared/comic/publication';
 import { buildCsp, inlineHashes } from '../_shared/csp';
-import { injectHead, notFoundHead, renderShareHead, validateShareCardRpc, type ShareCardRpc } from '../_shared/shareHead';
+import { injectHead, notFoundHead, publicOrigin, renderShareHead, validateShareCardRpc, type ShareCardRpc } from '../_shared/shareHead';
 import { rpc, supabaseOrigin, type SupabaseEnv } from '../_shared/supabaseRpc';
 
 export interface ShareEnv extends SupabaseEnv {
@@ -90,7 +90,9 @@ export async function handleShare(request: Request, env: ShareEnv): Promise<Resp
   if (!card || card.slug !== parsed.slug || (parsed.embed && !card.allowEmbed)) return notFound(request, env);
 
   const params = parseShareParams(url.search);
-  const head = renderShareHead(card, { origin: url.origin, lang: params.lang, page: params.page, embed: parsed.embed });
+  // og:image / oEmbed discovery use the host the reader actually used (the comics front door
+  // proxies here with X-Forwarded-Host), so previews never point at the Pages origin.
+  const head = renderShareHead(card, { origin: publicOrigin(request, url), lang: params.lang, page: params.page, embed: parsed.embed });
   const html = injectHead(await shell(env, request), head);
   const robots = card.visibility === 'public' && !parsed.embed ? 'noai, noimageai' : 'noindex, nofollow, noarchive, noai, noimageai';
   const extra: Record<string, string> = { 'x-robots-tag': robots, vary: 'accept-language' };

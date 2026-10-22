@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { DEFAULT_SETTINGS, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
 import { ASSET_KEY_RE, SLUG_RE, type ShareCard } from '../../../../shared/comic/publication.js';
-import type { SafetyStatus } from '../../../../shared/comic/safety.js';
+import { publishableText, type SafetyStatus } from '../../../../shared/comic/safety.js';
 import { fakeAssetStore, newSession, plannedDoc, testContext, type FakeAssetStore, type TestContext } from '../orchestrator.fakes.js';
 import type { PublishGateResult } from '../safety/index.js';
 import { buildPublicSnapshot, getReadiness, loadPublicByProjectId, newAssetKey, newSlug, publish, regenerateLink, unpublish, updatePublication } from './index.js';
@@ -233,7 +233,7 @@ describe('publish', () => {
     expect(card.title).toBe('Spice Run');
     expect(card.coverUrl).toMatch(new RegExp(`^https://cdn.test/pub/${row.assetKey}/cover-[0-9a-f]{12}-w1080\\.webp$`));
     expect(card.og.en.path).toMatch(/^pub\/[A-Za-z0-9]{22}\/og-en-[0-9a-f]{12}\.jpg$/);
-    expect(view.ogImageUrl).toBe(`https://comics.dreamstreamstudio.ai/og/${card.og.en.path.slice(4)}`);
+    expect(view.ogImageUrl).toBe(`/og/${card.og.en.path.slice(4)}`);
     expect(assets.puts.map((p) => p.contentType)).toEqual(['image/jpeg']);
     const project = store.projects.get('proj-1')!;
     expect(project.isPublic).toBe(false);
@@ -249,6 +249,9 @@ describe('publish', () => {
     expect(p.state.shareSlug).toBe(view.slug);
     expect(String(p.state.publicCover)).toMatch(/^pub\//);
     expect(p.state.coverImageId).toBe(p.state.publicCover);
+    // The gallery row shows the PUBLISHED (gated) title and blurb.
+    expect(p.name).toBe('Spice Run');
+    expect(p.state.overview).toBe('A courier races through a spice market.');
     const payload = await loadPublicByProjectId('proj-1');
     expect(payload?.publication.visibility).toBe('public');
     const snapshotPathList = Object.keys(payload!.urls);
@@ -259,6 +262,8 @@ describe('publish', () => {
   it('never maps a project id to an UNLISTED publication', async () => {
     await publish(ctx, { visibility: 'unlisted' });
     expect(await loadPublicByProjectId('proj-1')).toBeNull();
+    // An unlisted row stays private: the owner's live title is never overwritten by the listing mirror.
+    expect(store.projects.get('proj-1')!.name).toBeUndefined();
   });
 
   it('refuses with nothing drawn (422 NOT_READY) and changes nothing', async () => {
@@ -303,6 +308,24 @@ describe('publish', () => {
     const row = store.rows.get('proj-1')!;
     expect(row.snapshot!.cover.render.status).toBe('none');
     expect((row.card as ShareCard).coverUrl).toMatch(/page-[0-9a-f]{12}-w1080\.webp$/);
+  });
+
+  it('the safety gate reads EVERY published author text (chapter titles, blurb, credits, dedication), not just lines', async () => {
+    const doc = richDoc();
+    doc.pages[0].chapterTitle = 'CHAPTER-TEXT';
+    doc.book = { titlePage: true, endPage: true, backCover: 'auto', blurb: 'BLURB-TEXT', credits: ['CREDIT-TEXT'], firstPageRight: true, uniformTrim: true };
+    doc.reader = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true, credits: 'ENDCARD-TEXT', dedication: 'DEDICATION-TEXT' };
+    setup(doc);
+    let seen: ComicDoc | null = null;
+    const inner = gateFor();
+    restore();
+    restore = configurePublication({ store, gate: (async (c: unknown, d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => ((seen = d), inner(c, d, o))) as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    await publish(ctx, { visibility: 'unlisted' });
+    const words = publishableText(seen!, []);
+    for (const t of ['CHAPTER-TEXT', 'BLURB-TEXT', 'CREDIT-TEXT', 'ENDCARD-TEXT', 'DEDICATION-TEXT']) expect(words).toContain(t);
+    // The live doc and the snapshot never gain the helper entries.
+    expect(ctx.session.doc.cast.some((c) => c.id.startsWith('_published_text_'))).toBe(false);
+    expect(store.rows.get('proj-1')!.snapshot!.cast.some((c) => c.id.startsWith('_published_text_'))).toBe(false);
   });
 
   it('refuses unfinished languages (422 LANG_INCOMPLETE), unknown fields (400) and moderation holds (403)', async () => {
@@ -386,6 +409,17 @@ describe('publish', () => {
     const owner = await (await import('./index.js')).getPublicationView(ctx);
     expect(owner.status).toBe('suspended');
     expect(owner.suspendedReason).toBeTruthy();
+  });
+
+  it('owner stats: absent until a read is recorded (no misleading zeros), then summarized', async () => {
+    const { getPublicationView } = await import('./index.js');
+    await publish(ctx, { visibility: 'unlisted' });
+    expect((await getPublicationView(ctx)).stats).toBeUndefined();
+    const id = store.rows.get('proj-1')!.id!;
+    const today = new Date(clock).toISOString().slice(0, 10);
+    store.statsRows.set(id, [{ day: today, views: 4, uniques: 3, completes: 1, byChannel: { whatsapp: 3, direct: 1 } }]);
+    const stats = (await getPublicationView(ctx)).stats!;
+    expect(stats).toMatchObject({ uniques7d: 3, completes7d: 1, byChannel7d: { whatsapp: 3, direct: 1 }, daily: [{ day: today, views: 4 }] });
   });
 
   it('settings: visibility flips the mirror (public re-runs the gate); defaults must be published languages', async () => {

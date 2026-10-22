@@ -32,6 +32,7 @@ import {
   type RefSubject,
   type RenderTarget
 } from '../../../../shared/comic/doc.js';
+import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import {
   HARD_BLOCK,
@@ -51,6 +52,7 @@ import { StudioError, type StudioContext, type StudioSessionApi } from '../types
 import { appealMessage, flaggedSteps, recordReportImpl, runAppeal, type AppealResult } from './cases.js';
 import { SAFETY_CHECK_USD, SAFETY_TEXT_USD, UPLOAD_CHECK_TIMEOUT_MS, checkImage, classifyText, verdictFromVisionBlock } from './check.js';
 import {
+  CARE_NOTE,
   CRISIS_LINE,
   LANGUAGE_NOTE,
   buildSafetyNote,
@@ -133,8 +135,20 @@ async function screenText(
   rating: ContentRating,
   surface: 'message' | 'script'
 ): Promise<TextOutcome> {
-  const deps = safetyDeps();
   const detail = prefilterDetail(text, rating);
+  const out = await decideText(ctx, text, rating, surface, detail);
+  // First-person crisis wording is flagged whatever the decision (the director answers with care).
+  return detail.crisis ? { ...out, crisis: true } : out;
+}
+
+async function decideText(
+  ctx: StudioContext,
+  text: string,
+  rating: ContentRating,
+  surface: 'message' | 'script',
+  detail: PrefilterDetail
+): Promise<TextOutcome> {
+  const deps = safetyDeps();
   const hash = contentHash(text);
   const base = { userId: ctx.userId, projectId: ctx.projectId, surface, effective: rating, contentHash: hash } as const;
   if (detail.decision === 'block') {
@@ -259,8 +273,9 @@ export async function screenTurnInput(
     source.trim() ? screenText(ctx, source, rating, 'script') : Promise.resolve<TextOutcome>({ decision: 'allow', categories: [], severity: 0 }),
     Promise.all(
       (input.attachments || [])
-        .slice(0, 6)
         .filter((a) => a && typeof a.path === 'string' && a.path)
+        // Every image a message may carry (inbox photos + legacy attachments), never a subset.
+        .slice(0, DOC_LIMITS.imagesPerMessage)
         .map((a) => withTimeout(screenStoredImage(ctx, a, rating), UPLOAD_CHECK_TIMEOUT_MS, { path: a.path, blocked: false, severity: 0 as const, categories: [] }))
     )
   ]);
@@ -301,7 +316,9 @@ export async function screenTurnInput(
       note: [fillTitle(copy.text, ctx.session.doc.brief.title), crisis ? CRISIS_LINE : ''].filter(Boolean).join(' ')
     };
   }
-  const notes = [msg.note, src.note].filter((n): n is string => !!n);
+  // Someone who may be hurting gets a caring answer from the director, never a silent pass.
+  const care = msg.crisis ? CARE_NOTE : undefined;
+  const notes = [msg.note, src.note, care].filter((n): n is string => !!n);
   const adapt = msg.decision === 'adapt' || src.decision === 'adapt';
   const categories = [...new Set([...(adapt ? [...msg.categories, ...src.categories] : []), ...blockedImages.flatMap((i) => i.categories)])];
   return {

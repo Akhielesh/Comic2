@@ -89,6 +89,20 @@ describe('RatingPicker', () => {
     expect(onChange).toHaveBeenCalledWith('G');
   });
 
+  it('arrow keys move between the allowed ratings only (roving focus, one tab stop)', () => {
+    const onChange = vi.fn();
+    render(<RatingPicker value="G" ceiling="PG" ceilingReason="Kids audience → up to PG" onChange={onChange} />);
+    const radios = screen.getAllByRole('radio');
+    expect(radios.map((r) => r.getAttribute('tabindex'))).toEqual(['0', '-1', '-1']);
+    fireEvent.keyDown(radios[0], { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenLastCalledWith('PG');
+    expect(document.activeElement).toBe(radios[1]);
+    onChange.mockClear();
+    fireEvent.keyDown(radios[0], { key: 'End' });
+    expect(onChange).toHaveBeenLastCalledWith('PG');
+    expect(onChange).not.toHaveBeenCalledWith('PG-13');
+  });
+
   it('little kids cap at G; an under-13 account caps at PG; adults can pick PG-13', () => {
     expect(ratingPickerState(docWith('kids 2–6'))).toMatchObject({ value: 'G', ceiling: 'G', ceilingReason: 'Little-kids audience → up to G' });
     expect(ratingPickerState(docWith('teens and adults'), { ratingCeiling: 'PG' })).toMatchObject({ ceiling: 'PG', ceilingReason: 'Your account → up to PG' });
@@ -159,6 +173,18 @@ describe('SafetyCasesSection (admin)', () => {
     fireEvent.click(within(item).getByRole('button', { name: 'Withhold' }));
     expect(within(item).getByRole('alert')).toHaveTextContent('Add a short reason first.');
     expect(feature.adminSections?.map((s) => s.id)).toEqual(['comic-safety']);
+  });
+
+  it('a failed load says so — it never claims the queue is clear', async () => {
+    render(
+      <SafetyCasesSection
+        load={async () => {
+          throw new Error('offline');
+        }}
+      />
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load the safety queue");
+    expect(screen.queryByText('Nothing waiting — the queue is clear.')).toBeNull();
   });
 
   it('an empty queue says so', async () => {

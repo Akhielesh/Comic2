@@ -140,9 +140,14 @@ export async function runPublishGateImpl(
     const pre = prefilterDetail(words, rating);
     if (pre.decision === 'block') {
       textVerdict = { assessed: 'X', categories: pre.categories, model: 'prefilter' };
+    } else if (!deps.classifierOn()) {
+      // The operator chose pre-filter-only mode (COMIC_SAFETY_CLASSIFIER=off): clear text is within
+      // the rating; anything ambiguous stays unchecked (never published unread). An outage with
+      // the classifier ON is different: it never clears (below).
+      if (pre.decision === 'clear') textVerdict = { assessed: rating, categories: [], model: 'prefilter' };
     } else {
       const llm = deps.platformLlm();
-      const classified = llm && deps.classifierOn() ? await classifyText(llm, { text: words, rating, surface: 'publish', signal: ctx.signal }) : null;
+      const classified = llm ? await classifyText(llm, { text: words, rating, surface: 'publish', signal: ctx.signal }) : null;
       if (classified) {
         costUsd += classified.costUsd ?? SAFETY_TEXT_USD;
         textVerdict = { assessed: classified.assessed, categories: classified.categories, ...(classified.model ? { model: classified.model } : {}) };

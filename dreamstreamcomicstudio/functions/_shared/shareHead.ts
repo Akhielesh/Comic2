@@ -14,7 +14,7 @@
  */
 import type { AspectRatio } from '../../shared/comic/doc';
 import { SLUG_RE, type ShareCard } from '../../shared/comic/publication';
-import { comicShareUrl } from '../../services/productHost';
+import { COMICS_ORIGIN, comicShareUrl } from '../../services/productHost';
 
 export const SITE_NAME = 'DreamStream Studio';
 export const DEFAULT_TITLE = 'DreamStream Studio — Comics, AI Chat & Code';
@@ -84,6 +84,16 @@ const httpsUrl = (v: unknown): string | undefined => {
   }
 };
 
+/** A cover URL must be THIS publication's own opaque copy in Supabase public storage (defense in depth). */
+const isPublicationImage = (url: string, assetKey: string): boolean => {
+  try {
+    const u = new URL(url);
+    return /^[a-z0-9-]+\.supabase\.co$/.test(u.hostname) && u.pathname.startsWith('/storage/v1/object/public/') && u.pathname.includes(`/pub/${assetKey}/`);
+  } catch {
+    return false;
+  }
+};
+
 /** The RPC answer, shape-checked and normalized; null = treat as not found. */
 export function validateShareCardRpc(raw: unknown): ShareCardRpc | null {
   if (!isRecord(raw)) return null;
@@ -123,7 +133,7 @@ export function validateShareCardRpc(raw: unknown): ShareCardRpc | null {
     i18n
   };
   const coverUrl = httpsUrl(c.coverUrl);
-  if (coverUrl) card.coverUrl = coverUrl;
+  if (coverUrl && isPublicationImage(coverUrl, assetKey)) card.coverUrl = coverUrl;
   if (typeof c.creator === 'string' && c.creator.trim()) card.creator = clampText(c.creator, 40);
   if (typeof c.themeColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(c.themeColor)) card.themeColor = c.themeColor;
   const defaultLang = typeof raw.defaultLang === 'string' && languages.includes(raw.defaultLang) ? raw.defaultLang : languages[0];
@@ -155,6 +165,19 @@ const ENDONYMS: Record<string, string> = {
   en: 'English', hi: 'हिन्दी', te: 'తెలుగు', ta: 'தமிழ்', kn: 'ಕನ್ನಡ', ml: 'മലയാളം', mr: 'मराठी', bn: 'বাংলা', gu: 'ગુજરાતી', pa: 'ਪੰਜਾਬੀ',
   ur: 'اردو', es: 'Español', fr: 'Français', pt: 'Português', de: 'Deutsch', id: 'Bahasa Indonesia', ja: '日本語', ko: '한국어', 'zh-Hans': '中文（简体）', ar: 'العربية'
 };
+
+/** Front doors that proxy to the Pages origin and say so with X-Forwarded-Host (comics-edge). */
+export const PROXIED_HOSTS: ReadonlySet<string> = new Set(['comics.dreamstreamstudio.ai', 'comic.dreamstreamstudio.ai']);
+
+/**
+ * The origin a reader (or preview bot) actually used: the comics front door when it proxied this
+ * request to the Pages origin, else the request's own origin. Only allow-listed hosts are ever
+ * honoured, so a forged header can at most point same-site images at the canonical comics host.
+ */
+export function publicOrigin(request: Request, url: URL = new URL(request.url)): string {
+  const forwarded = (request.headers.get('x-forwarded-host') || '').trim().toLowerCase();
+  return PROXIED_HOSTS.has(forwarded) ? COMICS_ORIGIN : url.origin;
+}
 
 export interface ShareHeadContext {
   /** Origin that serves this page and its /og/ images (the request's own origin). */

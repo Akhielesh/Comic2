@@ -19,7 +19,7 @@
  * Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
  */
 import { detectAgent } from '../api-proxy/src/agent-gate';
-import { injectHead, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
+import { injectHead, PROXIED_HOSTS, publicOrigin, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
 import { rpc, type SupabaseEnv } from './_shared/supabaseRpc';
 
 interface PagesContext {
@@ -33,8 +33,6 @@ const CANONICAL_ORIGIN = 'https://dreamstreamstudio.ai';
  *  session (localStorage is per host). Exact match, so preview and branch deploys
  *  (<hash>.comic2.pages.dev, <branch>.comic2.pages.dev) keep serving. */
 const REDIRECT_HOSTS = new Set(['www.dreamstreamstudio.ai', 'comic2.pages.dev']);
-/** Front doors that proxy to the Pages origin (comics-edge sets X-Forwarded-Host). */
-const PROXIED_HOSTS = new Set(['comics.dreamstreamstudio.ai', 'comic.dreamstreamstudio.ai']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Crawl policy files and the pretty check-in URL stay reachable for every client. */
@@ -50,7 +48,7 @@ async function legacyReaderHead(request: Request, url: URL, env: SupabaseEnv | u
   if (!rpcCard || rpcCard.visibility !== 'public') return res;
   const type = res.headers.get('content-type') || '';
   if (res.status !== 200 || !type.includes('text/html')) return res;
-  const html = injectHead(await res.text(), renderShareHead(rpcCard, { origin: url.origin }));
+  const html = injectHead(await res.text(), renderShareHead(rpcCard, { origin: publicOrigin(request, url) }));
   const headers = new Headers(res.headers);
   headers.delete('content-length');
   headers.set('cache-control', 'no-store');

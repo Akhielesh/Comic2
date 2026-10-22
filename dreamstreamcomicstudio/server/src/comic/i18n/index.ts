@@ -243,7 +243,7 @@ const extrasFor = (doc: ComicDoc, fields: EditionTextField[]): TranslatorItem[] 
   return out;
 };
 
-async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, onPage: (label: string) => () => void): Promise<LanguageResult> {
+async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, onPage: (label: string) => (ok: boolean) => void): Promise<LanguageResult> {
   const spec = languageSpec(lang)!;
   const tracker: TextSpendTracker = newTextSpendTracker();
   const res: LanguageResult = { lang, translated: 0, free: 0, reviewed: 0, autoFixed: 0, failed: 0, unsafe: 0, tooLong: 0, reviewSkipped: 0, cancelled: false, usd: 0, byok: false };
@@ -491,10 +491,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     let results: LanguageResult[] = [];
     try {
       results = await pool(codes, TRANSLATE_CONCURRENCY, (lang) =>
-        runLanguage(ctx, lang, { ...action, languages: [lang] }, (label) => {
-          const end = activity(ctx, label);
-          return () => end(true);
-        })
+        runLanguage(ctx, lang, { ...action, languages: [lang] }, (label) => activity(ctx, label))
       );
     } catch (err) {
       logger.error('comic_translate_failed', { projectId: ctx.projectId, message: (err as Error)?.message });

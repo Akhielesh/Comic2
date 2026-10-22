@@ -67,6 +67,8 @@ interface RowProps {
   id: string;
   speaker?: string;
   kindLabel: string;
+  /** "page 2, panel 1": keeps every field's accessible name unique when lines repeat. */
+  where?: string;
   source: string;
   entry?: TextTranslation;
   status: DerivedStatus;
@@ -77,7 +79,7 @@ interface RowProps {
   onFocusRow?(): void;
 }
 
-function ReviewRow({ studio, lang, id, speaker, kindLabel, source, entry, status, fit, onSave, onNavigate, registerField, onFocusRow }: RowProps) {
+function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry, status, fit, onSave, onNavigate, registerField, onFocusRow }: RowProps) {
   const [draft, setDraft] = useState(entry?.text ?? '');
   const [busy, setBusy] = useState(false);
   const saved = entry?.text ?? '';
@@ -139,7 +141,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, source, entry, status
         }}
         maxLength={600}
         placeholder={`Not translated yet — type the ${spec?.english || lang} line`}
-        aria-label={`${spec?.english || lang} translation of: ${source}`}
+        aria-label={`${spec?.english || lang} translation of: ${source}${where ? ` (${where})` : ''}`}
         style={{ fontFamily: cssFontFamily(lang, 'legible') }}
         className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25"
       />
@@ -362,6 +364,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
                   {pageRows.map(({ line, status, entry }) => (
                     <ReviewRow
                       key={line.id}
+                      where={`page ${page.n}, panel ${page.panels.find((pn) => pn.lines.some((l) => l.id === line.id))?.n ?? '?'}`}
                       studio={studio}
                       doc={doc}
                       lang={lang}

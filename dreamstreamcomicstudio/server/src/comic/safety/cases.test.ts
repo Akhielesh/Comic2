@@ -110,6 +110,23 @@ describe('appeals (#33)', () => {
     expect(fakes.store.quarantine.size).toBe(0);
   });
 
+  it('the second opinion clears it but the vault refuses the copy: honest message, still hidden, a human restores it', async () => {
+    const ctx = testContext(newSession(flaggedDoc('X', true)));
+    ctx.assetsFake.copyObject = async (src: string) => {
+      if (src.startsWith('q/')) throw Object.assign(new Error('That image cannot be copied.'), { code: 'BAD_REQUEST', status: 400 });
+    };
+    fakes.store.quarantine.set('u/user-1/p/proj-1/img/p1.webp', 'q/user-1/proj-1/q-9.webp');
+    fakes.llm.script.writer = [imageAnswer({ rating: 'PG' })];
+    const r = await runAppeal(ctx, target);
+    expect(r.status).toBe('queued');
+    expect(r.message).toMatch(/looks fine \(PG\), but I couldn't bring the image back automatically/);
+    expect(r.message).not.toMatch(/agrees/);
+    expect(ctx.session.doc.pages[0].render.asset?.safety).toMatchObject({ assessed: 'X', quarantined: true });
+    expect(fakes.store.cases.at(-1)).toMatchObject({ kind: 'appeal', status: 'open', reason: 'second opinion cleared; restore needed' });
+    expect(fakes.store.quarantine.get('u/user-1/p/proj-1/img/p1.webp')).toBe('q/user-1/proj-1/q-9.webp');
+    expect(r.nextSteps?.map((s) => s.label)).toEqual(['Redraw it safer']);
+  });
+
   it('the second opinion agrees → a human reviews it; an over-rating page can offer the higher rating', async () => {
     const ctx = testContext(newSession(flaggedDoc('PG-13')));
     fakes.llm.script.writer = [imageAnswer({ rating: 'PG-13', categories: ['violence'] })];
@@ -192,6 +209,61 @@ describe('moderator cases', () => {
     expect(session.doc.pages[0].render.asset?.safety).toMatchObject({ assessed: 'PG', by: 'admin' });
     expect(assets.copies.at(-1)).toEqual({ src: 'q/u/p/q-2.webp', dst: 'u/user-1/p/proj-1/img/p1.webp' });
     expect(fakes.store.actions.at(-1)).toMatchObject({ action: 'appeal_resolved' });
+  });
+
+  // The production AssetStore refuses copies out of the q/ lane (P1-STORAGE): every restore path
+  // must stay honest when the object can't be moved back.
+  const refuseVaultCopies = (a: ReturnType<typeof fakeAssetStore>) => {
+    a.copyObject = async (src: string) => {
+      if (src.startsWith('q/')) throw Object.assign(new Error('That image cannot be copied.'), { code: 'BAD_REQUEST', status: 400 });
+    };
+  };
+
+  it('a moderator restore that cannot move the object back fails loudly: case open, no false "image is back"', async () => {
+    const session = newSession(flaggedDoc('X', true), undefined, OWNER);
+    fakes.sessions.set(PROJECT, session);
+    refuseVaultCopies(assets);
+    const opened = await fakes.store.openCase({
+      kind: 'appeal',
+      projectId: PROJECT,
+      ownerUserId: OWNER,
+      target: { target: { kind: 'page', id: 'pg_1' }, path: 'u/user-1/p/proj-1/img/p1.webp', quarantinePath: 'q/u/p/q-2.webp' },
+      reason: 'second opinion agreed'
+    });
+    await expect(resolveCase('mod-1', opened.id!, { action: 'restore', assessed: 'PG', reason: 'fine' })).rejects.toMatchObject({ status: 503, code: 'NOT_AVAILABLE' });
+    expect(fakes.store.cases.find((c) => c.id === opened.id)?.status).toBe('open');
+    expect(session.doc.pages[0].render.asset?.safety).toMatchObject({ assessed: 'X', quarantined: true });
+    expect(fakes.store.notifications).toEqual([]);
+  });
+
+  it('dismissing the last report lifts an automatic hold and tells the owner how to republish', async () => {
+    fakes.store.projects.set(PROJECT, { ownerUserId: OWNER, name: 'Spice Run', isForcedPrivate: true, forcedReason: 'auto: reader reports' });
+    const a = await fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r1', target: { page: 1 }, reason: 'other' });
+    const b = await fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r2', target: { page: 2 }, reason: 'other' });
+    const first = await resolveCase('mod-1', a.id!, { action: 'dismiss', reason: '' });
+    expect(first.effects).not.toContain('hold_lifted');
+    expect(fakes.store.projects.get(PROJECT)?.isForcedPrivate).toBe(true);
+    expect(fakes.store.notifications).toEqual([]);
+    const second = await resolveCase('mod-1', b.id!, { action: 'dismiss', reason: 'harmless' });
+    expect(second.effects).toContain('hold_lifted');
+    expect(fakes.store.projects.get(PROJECT)?.isForcedPrivate).toBe(false);
+    expect(fakes.store.actions.at(-1)).toMatchObject({ action: 'approve_republish', actedBy: 'mod-1', metadata: { lifted: 'auto_hold' } });
+    expect(fakes.store.notifications.at(-1)).toMatchObject({ userId: OWNER, title: 'Your comic is no longer paused', message: expect.stringMatching(/Publish it again/) });
+  });
+
+  it("a moderator's own pause is never lifted by dismissing a report", async () => {
+    fakes.store.projects.set(PROJECT, { ownerUserId: OWNER, isForcedPrivate: true, forcedReason: 'moderator: a published page was withheld' });
+    const a = await fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r1', target: {}, reason: 'other' });
+    const out = await resolveCase('mod-1', a.id!, { action: 'dismiss', reason: '' });
+    expect(out.effects).not.toContain('hold_lifted');
+    expect(fakes.store.projects.get(PROJECT)?.isForcedPrivate).toBe(true);
+  });
+
+  it('"restore" on a report with no live image tells the owner nothing false', async () => {
+    const a = await fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r1', target: { page: 1, path: PUB_PAGE }, reason: 'violent' });
+    const out = await resolveCase('mod-1', a.id!, { action: 'restore', assessed: 'PG', reason: 'fine' });
+    expect(out.effects).toEqual(['no_image_to_restore']);
+    expect(fakes.store.notifications).toEqual([]);
   });
 
   it('dismissing a report records no moderation action and does not ping the owner', async () => {

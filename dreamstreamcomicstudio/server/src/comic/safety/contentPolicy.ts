@@ -31,6 +31,7 @@ import {
   OBSCENITY_RULES,
   REAL_PEOPLE,
   SELF_HARM_INSTRUCTIONS,
+  SELF_HARM_SUPPORT,
   type LexTier
 } from './lexicon.js';
 
@@ -152,6 +153,9 @@ const scanLexicon = (s: string, hits: PrefilterHit[]) => {
         token,
         ...(negatedAt(s, token) ? { negated: true } : {}),
         ...(entry.sexualSignal ? { sexual: true } : {}),
+        // An ambiguous word ("sexy", "kinky") is a weak signal: near a minor or a public figure the
+        // classifier decides; only block-tier terms make the zero-tolerance rule fire on their own.
+        ...(entry.sexualSignal && entry.tier === 'ambiguous' ? { weak: true } : {}),
         ...(entry.nuditySignal ? { nudity: true } : {}),
         ...(entry.clearAt ? { clearAt: entry.clearAt } : {})
       } as PrefilterHit);
@@ -275,8 +279,14 @@ export const prefilterDetail = (text: string, rating: ContentRating): PrefilterD
       bump(1);
     }
   }
+  // Self-harm instructions block (with care, no strike) — unless the wording is supportive
+  // ("how to help a friend who wants to kill himself"): then the classifier reads it.
+  let selfHarmSupport = false;
   for (const re of SELF_HARM_INSTRUCTIONS) {
-    if (re.test(folded)) block.add('self_harm');
+    const m = re.exec(folded);
+    if (!m) continue;
+    if (SELF_HARM_SUPPORT.test(m[0])) selfHarmSupport = true;
+    else block.add('self_harm');
   }
   for (const h of hits) {
     if (h.tier !== 'block' || h.negated) continue;
@@ -307,6 +317,7 @@ export const prefilterDetail = (text: string, rating: ContentRating): PrefilterD
     ambiguous.add('sexual');
     ambiguous.add('real_person');
   }
+  if (selfHarmSupport) ambiguous.add('self_harm');
   if (ambiguous.size) return { decision: 'ambiguous', categories: [...ambiguous], ip, severity: 0, crisis, realPerson, hits: hits.length };
   return { ...empty, ip, crisis, realPerson, hits: hits.length };
 };
@@ -554,6 +565,10 @@ export const REDIRECT_COPY: Record<'graphic_gore' | 'self_harm' | 'hate' | 'real
     options: [{ label: 'Try a gentler version', reply: 'Try a gentler version of that.' }, SOMETHING_ELSE]
   }
 };
+
+/** Director note when the user may be talking about themselves in a crisis (not a block). */
+export const CARE_NOTE =
+  "CARE NOTE: the user may be talking about themselves going through something hard. Answer warmly and briefly first — they matter, and talking to someone they trust or a local helpline can help — with no lecture and no policy talk. Then offer to keep working on the story only if they want to.";
 
 /** A caring line for first-person crisis wording (never a lecture, never a strike). */
 export const CRISIS_LINE = "If you're going through something hard yourself, please talk to someone you trust or a local helpline — you matter.";

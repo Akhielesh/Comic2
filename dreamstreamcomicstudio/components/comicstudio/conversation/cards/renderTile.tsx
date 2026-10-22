@@ -22,7 +22,7 @@ import {
 import type { SpendAction } from '../../../../shared/comic/ops';
 import { ImageDevelop } from '../../../studio/kit/streamMotion';
 import { cx } from '../ui';
-import { failureCaption, failureReason, formatFailedAt } from './failure';
+import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
 
 /** Renders that finished this recently "develop" in; older ones show statically. */
 const DEVELOP_WINDOW_MS = 15_000;
@@ -133,18 +133,20 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
     selected && 'ring-2 ring-[var(--ds-accent)] ring-offset-1 ring-offset-[var(--ds-surface)]'
   );
 
-  const failedAt = failed ? render?.updatedAt : undefined;
-  const caption = failed ? failureCaption(render?.error, failedAt, now) : '';
-  const reason = failed ? failureReason(render?.error) : '';
+  const facts = failed ? failureFacts(render) : {};
+  const failedAt = facts.at;
+  const caption = failed ? failureCaption(facts.error, failedAt, now) : '';
+  const reason = failed ? failureReason(facts.error) : '';
+  const hasDetails = !!(facts.error || facts.facts);
   const spokenFailure = failed
-    ? `${label}: ${caption}.${render?.error ? ` ${render.error}` : ''}`
+    ? `${label}: ${caption}.${facts.error ? ` ${facts.error}` : ''}`
     : undefined;
 
   let body: React.ReactNode;
   if (failed) {
     body = (
       <div
-        title={render?.error || caption}
+        title={facts.error || caption}
         data-failed=""
         className="flex h-full w-full flex-col items-center justify-[safe_center] gap-1 bg-[var(--ds-surface-soft)] p-1.5 text-center"
       >
@@ -189,16 +191,17 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
             <span className="min-w-0 truncate">{status === 'queued' ? 'Queued' : 'Drawing…'}</span>
           </span>
         )}
-        {!busy && stale && hasImage && (
-          <span className="absolute left-1.5 top-1.5 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[9.5px] font-semibold text-white">Out of date</span>
-        )}
-        {!busy && status === 'ready' && render?.error && (
-          <span
-            className="absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full bg-amber-500/90 text-white"
-            title={render.error}
-            aria-label={render.error}
-          >
-            <AlertTriangle className="h-3 w-3" />
+        {/* One top-left row, so "Out of date" and a quality warning never sit on top of each other. */}
+        {!busy && ((stale && hasImage) || (status === 'ready' && render?.error)) && (
+          <span className="absolute left-1.5 top-1.5 flex max-w-[calc(100%-0.75rem)] flex-wrap items-center gap-1">
+            {stale && hasImage && (
+              <span className="min-w-0 truncate rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[9.5px] font-semibold text-white">Out of date</span>
+            )}
+            {status === 'ready' && render?.error && (
+              <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-amber-500/90 text-white" title={render.error} role="img" aria-label={render.error}>
+                <AlertTriangle className="h-3 w-3" aria-hidden />
+              </span>
+            )}
           </span>
         )}
         {badge}
@@ -207,11 +210,13 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         {label}
       </span>
       {failed && (
-        <span className="flex min-w-0 items-baseline gap-1 text-[10.5px] leading-snug text-[var(--ds-muted)]">
-          <span className="min-w-0 truncate" title={caption} aria-hidden>
+        // Wraps instead of truncating: in a 90 px style tile "failed 16:52" must stay readable
+        // (the time is what makes a stale failure recognisable); "Details" flows after it.
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-[10.5px] leading-snug text-[var(--ds-muted)]">
+          <span className="min-w-0 [overflow-wrap:anywhere]" title={caption} aria-hidden>
             {caption}
           </span>
-          {render?.error && (
+          {hasDetails && (
             <button
               type="button"
               onClick={(e) => {
@@ -227,16 +232,17 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
           )}
         </span>
       )}
-      {failed && detailsOpen && render?.error && (
+      {failed && detailsOpen && hasDetails && (
         <span
           id={detailsId}
           className="mt-1 block whitespace-pre-wrap rounded-lg bg-[var(--ds-well)] px-2 py-1.5 text-[10.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]"
         >
-          {render.error}
+          {facts.error}
+          {facts.facts && <span className="mt-0.5 block">{facts.facts}</span>}
           {formatFailedAt(failedAt, now) && (
-            <span className="mt-0.5 block text-[var(--ds-muted)]">
+            <span className="mt-0.5 block">
               Failed at {formatFailedAt(failedAt, now)}
-              {typeof render.attempts === 'number' && render.attempts > 1 ? ` after ${render.attempts} tries` : ''}.
+              {facts.attempts && facts.attempts > 1 ? ` after ${facts.attempts} tries` : ''}.
             </span>
           )}
         </span>

@@ -5,11 +5,13 @@ import { emptyRender, type Card, type Character, type ComicDoc, type Gate } from
 import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import { quoteRenderPages } from '../../../../shared/comic/plan';
 import { CARD_TYPES, CardRenderer } from './CardRenderer';
-import { gateBreakdownCard, gateModelName, gateReasonCopy } from './GateCard';
+import { gateBreakdownCard, gateModelName, gateReasonCopy, messageHasGateBreakdown } from './GateCard';
 import { OptionsCard, joinChoices } from './OptionsCard';
 import { PlanList, estimatePlanRender, pagesToDraw, sheetsNeededFor } from './PlanCard';
 import { failureSummary, retryAllFailed } from './RendersCard';
 import { lockedOptionId } from './StyleChoiceCard';
+import { RenderThumb } from './renderTile';
+import { quoteStyleOptions } from '../panels/StylePanel';
 import { castStatusLine } from './CastCard';
 import { castRoleLabel } from './castVisual';
 import { recapRows } from './recap';
@@ -162,7 +164,12 @@ describe('StyleChoiceCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getAllByText(/The model refused this one\./).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Retry Retro' }));
-    expect(studio.act).toHaveBeenCalledWith({ type: 'render_style_options', directions: [{ name: 'Retro', spec: 'Halftone' }] });
+    // the same direction is redrawn in place, with its own quote (no writer call: directions are passed)
+    expect(studio.act).toHaveBeenCalledWith({
+      type: 'render_style_options',
+      directions: [{ name: 'Retro', spec: 'Halftone' }],
+      quotedUsd: quoteStyleOptions(makeSampleDoc(), 1, false, true)
+    });
   });
 
   it('retries every failed style option at once (the 2026-10-22 outage case)', async () => {
@@ -198,7 +205,11 @@ describe('StyleChoiceCard', () => {
     expect(screen.getByText('Locked: Noir ink')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Use the Inky noir style' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /More options/ }));
-    expect(studio.act).toHaveBeenCalledWith({ type: 'render_style_options' });
+    // the quote includes the writer call that proposes fresh directions, like the server gate
+    const usd = quoteStyleOptions(doc, 3, false);
+    expect(usd).toBeGreaterThan(estimateJobs([{ kind: 'style_option', count: 3 }], 'standard', { byok: false }).usd);
+    expect(studio.act).toHaveBeenCalledWith({ type: 'render_style_options', quotedUsd: usd });
+    expect(screen.getByRole('button', { name: /More options/ })).toHaveTextContent(formatUsd(usd));
   });
 
   it('explains when the options were replaced', () => {
@@ -395,6 +406,27 @@ describe('GateCard', () => {
     expect(within(breakdown).queryByRole('button', { name: /Approve & (draw|render) all/ })).toBeNull();
   });
 
+  it('never shows the breakdown twice: a v5 message carries it as a sibling card above the gate', () => {
+    const pagesGate: Gate = { ...gate, action: { type: 'render_pages', pageIds: ['pg_2'] }, reason: 'first_render' };
+    const sibling: Card = { type: 'breakdown', id: 'card_b', pageIds: ['pg_2'], view: 'cost', gateId: 'gate_1' };
+    const doc = makeSampleDoc({
+      gate: pagesGate,
+      conversation: [{ id: 'm1', role: 'assistant', text: 'Here is what I would draw.', at: 1, cards: [sibling, card] }]
+    });
+    expect(messageHasGateBreakdown(doc.conversation[0], 'gate_1')).toBe(true);
+    expect(messageHasGateBreakdown(doc.conversation[0], 'gate_9')).toBe(false);
+    expect(messageHasGateBreakdown(undefined, 'gate_1')).toBe(false);
+    renderCard(card, doc);
+    const approval = screen.getByRole('region', { name: 'Spend approval' });
+    expect(within(approval).queryByRole('region', { name: 'Page breakdown' })).toBeNull();
+    expect(within(approval).getByRole('button', { name: /^Approve ·/ })).toBeInTheDocument();
+  });
+
+  it('a gate with no images (e.g. a translation) does not say "0 images"', () => {
+    renderCard(card, makeSampleDoc({ gate: { ...gate, imageCount: 0, model: 'Gemini Flash', action: { type: 'translate', languages: ['te'] } as Gate['action'] } }));
+    expect(screen.getByTestId('gate-model')).toHaveTextContent(/^Gemini Flash$/);
+  });
+
   it('shows the resolved and replaced states and flags budget gates', () => {
     const { unmount } = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, status: 'approved' } }) })} />);
     expect(screen.getByText(/Approved — drawing now/)).toBeInTheDocument();
@@ -435,7 +467,8 @@ describe('RendersCard', () => {
   it('retries a failed page with force', () => {
     const studio = renderCard(card);
     fireEvent.click(screen.getByRole('button', { name: 'Retry Page 3' }));
-    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_3'], force: true });
+    const q = quoteRenderPages(makeSampleDoc(), { pageIds: ['pg_3'], force: true, byok: false, tier: 'standard' });
+    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_3'], force: true, quotedUsd: q.usd });
   });
 
   it('shows progress while drawing', () => {
@@ -467,6 +500,64 @@ describe('RendersCard', () => {
     fireEvent.click(details);
     expect(details).toHaveAttribute('aria-expanded', 'true');
     expect(document.getElementById(details.getAttribute('aria-controls')!)).toHaveTextContent(/Provider said 429: rate limited\s*Failed at 16:52\./);
+  });
+
+  it('uses errorDetail when the server sets it: exact time, provider facts under Details', () => {
+    const now = new Date(2026, 9, 22, 18, 0).getTime();
+    const at = new Date(2026, 9, 22, 16, 52).getTime();
+    render(
+      <RenderThumb
+        label="Retro"
+        aspect="4 / 5"
+        now={now}
+        onRetry={() => undefined}
+        render={
+          {
+            status: 'failed',
+            history: [],
+            error: 'The image service is busy right now.',
+            updatedAt: at + 60_000,
+            attempts: 2,
+            errorDetail: { code: '429', provider: 'OpenRouter', at, text: 'upstream Google throttled' }
+          } as unknown as Parameters<typeof RenderThumb>[0]['render']
+        }
+      />
+    );
+    // classified from the provider code even though the user-facing sentence says "busy"
+    expect(screen.getByText('failed 16:52 · rate limited')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    const details = document.getElementById(screen.getByRole('button', { name: 'Hide' }).getAttribute('aria-controls')!)!;
+    expect(details).toHaveTextContent('The image service is busy right now. — upstream Google throttled — 429');
+    expect(details).toHaveTextContent('OpenRouter · 429');
+    expect(details).toHaveTextContent('Failed at 16:52 after 2 tries.');
+  });
+
+  it('a string errorDetail (older amendment shape) still shows under Details', () => {
+    render(
+      <RenderThumb
+        label="Page 3"
+        aspect="2 / 3"
+        render={{ status: 'failed', history: [], errorDetail: 'OpenRouter · 503 · upstream Google · 17:42 UTC' } as unknown as Parameters<typeof RenderThumb>[0]['render']}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('OpenRouter · 503 · upstream Google · 17:42 UTC')).toBeInTheDocument();
+  });
+
+  it('an out-of-date page with a quality warning shows both badges in one row (no overlap)', () => {
+    render(
+      <RenderThumb
+        label="Page 1"
+        aspect="2 / 3"
+        stale
+        url="https://cdn.test/p1.webp"
+        render={{ status: 'ready', history: [], error: 'Lettering may overlap a face', asset: { path: 'p1.webp', source: 'generated', at: 1 } }}
+      />
+    );
+    const stale = screen.getByText('Out of date');
+    const warn = screen.getByRole('img', { name: 'Lettering may overlap a face' });
+    expect(stale.parentElement).toBe(warn.parentElement);
+    expect(stale.parentElement!.className).toMatch(/\bflex-wrap\b/);
   });
 
   it('retries all failed images at once — pages AND style options, with the quote', async () => {

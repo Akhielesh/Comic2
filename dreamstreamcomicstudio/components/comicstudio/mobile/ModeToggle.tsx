@@ -2,15 +2,16 @@
 // permission: every edit stays reachable in Easy (and by asking the director). The only gate is the
 // `caps.proEditor` capability, which is true for everyone today.
 //
-// Placement: a 2-segment pill in the studio header on tablets and desktop; on phones the header slot
-// renders nothing and the same control lives in the ⋯ menu (`variant="menu"`).
+// Placement: a 2-segment pill in the studio header from 1024 px (the regular header); below that —
+// phones and narrow tablets, where the title and the pane switcher need the room — the header slot
+// renders nothing and the same control lives at the top of the ⋯ menu (`variant="menu"`).
 
 import React from 'react';
 import { Gauge, Sparkles } from 'lucide-react';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import type { StudioController } from '../types';
 import { Segmented } from '../board/ui';
-import { isPhoneLayout } from './formFactor';
+import { headerVariantFor } from './formFactor';
 import { useFormFactor } from './useFormFactor';
 
 export const MODE_HINT = 'Easy keeps it simple — you can still ask me to do anything. Pro shows every control.';
@@ -18,13 +19,13 @@ export const MODE_HINT = 'Easy keeps it simple — you can still ask me to do an
 export interface ModeToggleProps {
   studio: Pick<StudioController, 'mode' | 'setMode' | 'caps'>;
   compact?: boolean;
-  /** 'header' (default): hidden on phones. 'menu': full width with a one-line explanation. */
+  /** 'header' (default): only in the regular (≥ 1024) header. 'menu': full width with a one-line explanation. */
   variant?: 'header' | 'menu';
 }
 
 export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false, variant = 'header' }) => {
   const ff = useFormFactor();
-  if (variant === 'header' && isPhoneLayout(ff.layout)) return null;
+  if (variant === 'header' && headerVariantFor(ff) !== 'regular') return null;
   const proAllowed = studio.caps?.proEditor !== false;
   const mode: StudioMode = studio.mode === 'pro' && proAllowed ? 'pro' : 'easy';
   const options = [

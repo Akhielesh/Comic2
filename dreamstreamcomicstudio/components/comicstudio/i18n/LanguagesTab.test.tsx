@@ -129,7 +129,7 @@ describe('TranslationReview', () => {
     render(<LanguagesTab studio={studio} />);
     fireEvent.click(screen.getByRole('button', { name: /^Review/ }));
     const first = allLines(doc)[0];
-    const field = screen.getByRole('textbox', { name: `Telugu translation of: ${first.text}` }) as HTMLTextAreaElement;
+    const field = screen.getByRole('textbox', { name: `Telugu translation of: ${first.text} (page 1, panel 2)` }) as HTMLTextAreaElement;
     expect(field.getAttribute('lang')).toBe('te');
     expect(field.style.fontFamily).toContain('Noto Sans Telugu');
     expect(screen.getAllByText(`Means: ${first.text}`.slice(7)).length).toBeGreaterThan(0);
@@ -144,7 +144,7 @@ describe('TranslationReview', () => {
     expect(studio.patch).not.toHaveBeenCalled();
   });
 
-  it('issues: Use suggestion / Looks right / Use the original (auto-corrected) call the review action', () => {
+  it('issues: Use suggestion / Looks right / Use the original (auto-corrected) call the review action', async () => {
     let doc = withTelugu();
     const [a, b] = allLines(doc);
     doc = applyOps(doc, [
@@ -154,11 +154,17 @@ describe('TranslationReview', () => {
     const studio = makeFakeStudio({ doc });
     render(<LanguagesTab studio={studio} />);
     fireEvent.click(screen.getByRole('button', { name: /^Review/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Use suggestion' }));
+    // A row is busy (disabled) while its action is in flight; flush it before the next tap.
+    const tap = async (el: HTMLElement) => {
+      await act(async () => {
+        fireEvent.click(el);
+      });
+    };
+    await tap(screen.getByRole('button', { name: 'Use suggestion' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: a.id, useSuggestion: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Use the original' }));
+    await tap(screen.getByRole('button', { name: 'Use the original' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: b.id, useSuggestion: true });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Looks right' })[0]);
+    await tap(screen.getAllByRole('button', { name: 'Looks right' })[0]);
     expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: a.id, useSuggestion: false });
   });
 

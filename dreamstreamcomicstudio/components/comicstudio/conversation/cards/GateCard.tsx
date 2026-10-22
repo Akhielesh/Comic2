@@ -70,6 +70,10 @@ export const gateBreakdownCard = (gate: Gate, cardId: string): Extract<Card, { t
 
 type EmbeddedCard = React.ComponentType<CardProps<Card> & { compact?: boolean }>;
 
+/** The message already shows this gate's breakdown as its own card (v5 servers put it above the gate). */
+export const messageHasGateBreakdown = (message: Msg | undefined, gateId: string): boolean =>
+  !!message?.cards?.some((c) => c && c.type === 'breakdown' && (c as { gateId?: unknown }).gateId === gateId);
+
 /** "drawing now" / "translating now" — what an approved gate is doing. */
 export const approvedCopy = (gate: Gate): string =>
   gate.action.type === 'translate' ? 'Approved — translating now.' : gate.action.type === 'edit_page' ? 'Approved — editing now.' : 'Approved — drawing now.';
@@ -94,7 +98,9 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
   const deciding = isPending('approve') || isPending('decline');
   const overBudget = gate.reason === 'budget';
   const modelName = gateModelName(gate.model);
-  const breakdown = open ? gateBreakdownCard(gate, card.id) : null;
+  // Embed the breakdown only when the message doesn't already carry it (older conversations had
+  // the gate alone; v5 servers emit a sibling breakdown card above the gate — never show it twice).
+  const breakdown = open && !messageHasGateBreakdown(message, gate.id) ? gateBreakdownCard(gate, card.id) : null;
   // The breakdown card lives in its own feature (P1-BOOKMODEL); embed it through the registry.
   const Breakdown = breakdown ? (registeredCard('breakdown')?.Component as EmbeddedCard | undefined) : undefined;
   const msg: Msg = message || { id: `gate_${card.id}`, role: 'assistant', text: '', at: 0, cards: [card] };
@@ -123,8 +129,7 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
             ≈ <CountUp value={gate.estimateUsd} prefix="$" decimals={2} />
           </div>
           <div className="mt-1 max-w-[16rem] truncate text-[11px] text-[var(--ds-muted)]" title={gate.model || undefined} data-testid="gate-model">
-            {plural(gate.imageCount, 'image')}
-            {modelName ? ` · ${modelName}` : ''}
+            {[gate.imageCount > 0 ? plural(gate.imageCount, 'image') : '', modelName].filter(Boolean).join(' · ')}
           </div>
         </div>
       </div>

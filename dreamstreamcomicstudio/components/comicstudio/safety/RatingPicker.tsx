@@ -3,7 +3,7 @@
 // and say why. It sends `settings.rating` (the author's wish; the server clamps at use).
 // Lives in StoryTab next to the audience (P2-BOARD mounts it).
 
-import React, { useId } from 'react';
+import React, { useId, useRef } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
 import {
@@ -51,21 +51,47 @@ export const ratingPickerState = (doc: Pick<ComicDoc, 'brief' | 'format' | 'sett
 export const RatingPicker: React.FC<RatingPickerProps> = ({ value, ceiling, ceilingReason, chosen, onChange, disabled, compact }) => {
   const groupId = useId();
   const hintId = useId();
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const enabled = CONTENT_RATINGS.filter((r) => !disabled && ratingRank(r) <= ratingRank(ceiling));
+  // Radio-group keys (WAI-ARIA): arrows move and select among the allowed ratings; Home/End jump.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!enabled.length) return;
+    const at = Math.max(0, enabled.indexOf(value));
+    let next: ContentRating | undefined;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = enabled[(at + 1) % enabled.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = enabled[(at - 1 + enabled.length) % enabled.length];
+    else if (e.key === 'Home') next = enabled[0];
+    else if (e.key === 'End') next = enabled[enabled.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    buttons.current[CONTENT_RATINGS.indexOf(next)]?.focus();
+    if (next !== value) onChange(next);
+  };
   return (
     <div className="min-w-0">
       <div id={groupId} className="mb-1.5 text-[12px] font-medium text-[var(--ds-muted)]">
         Content rating
       </div>
-      <div role="radiogroup" aria-labelledby={groupId} aria-describedby={ceilingReason ? hintId : undefined} className="grid min-w-0 grid-cols-3 gap-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-1">
-        {CONTENT_RATINGS.map((r) => {
+      <div
+        role="radiogroup"
+        aria-labelledby={groupId}
+        aria-describedby={ceilingReason ? hintId : undefined}
+        onKeyDown={onKeyDown}
+        className="grid min-w-0 grid-cols-3 gap-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-1"
+      >
+        {CONTENT_RATINGS.map((r, i) => {
           const above = ratingRank(r) > ratingRank(ceiling);
           const selected = r === value;
           const off = disabled || above;
           return (
             <button
               key={r}
+              ref={(el) => {
+                buttons.current[i] = el;
+              }}
               type="button"
               role="radio"
+              tabIndex={selected && !off ? 0 : -1}
               aria-checked={selected}
               aria-label={`${r}: ${RATING_LABEL[r].blurb}${above && ceilingReason ? ` (${ceilingReason})` : ''}`}
               aria-disabled={off || undefined}

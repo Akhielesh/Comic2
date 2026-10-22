@@ -109,6 +109,20 @@ describe('runPublishGate', () => {
     expect(fakes.llm.calls.length).toBe(calls);
   });
 
+  it('pre-filter-only mode (classifier off by the operator): clear text passes with no model call; an outage never does', async () => {
+    resetSafety();
+    fakes = installSafetyFakes({ classifier: false });
+    const { doc, ctx } = await drawn({ pg_1: 'G', pg_2: 'G', pg_3: 'G' });
+    const gate = await runPublishGate(ctx, doc, { ...ALL, includeCover: false });
+    expect(gate.text.status).toBe('pass');
+    expect(gate.status).toBe('cleared');
+    expect(fakes.llm.calls).toHaveLength(0);
+    resetSafety();
+    fakes = installSafetyFakes({ llm: null });
+    const again = await drawn({ pg_1: 'G', pg_2: 'G', pg_3: 'G' });
+    expect((await runPublishGate(again.ctx, again.doc, { ...ALL, includeCover: false })).status).toBe('needs_check');
+  });
+
   it('a page that is not drawn is reported, not passed', async () => {
     const doc: ComicDoc = plannedDoc();
     const ctx = testContext(newSession(doc));

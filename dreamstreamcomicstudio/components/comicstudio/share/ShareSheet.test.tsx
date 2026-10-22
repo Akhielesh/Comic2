@@ -150,6 +150,35 @@ describe('ShareSheet', () => {
     await waitFor(() => expect(api.regeneratePublicationLink).toHaveBeenCalled());
   });
 
+  it('going PUBLIC from a live unlisted link asks first; "Keep it unlisted" changes nothing', async () => {
+    const studio = studioWith(view());
+    vi.mocked(api.updatePublication).mockResolvedValue(view({ visibility: 'public' }));
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Public gallery' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'List it in the public gallery?' });
+    // Focus lands on the safe choice so the question is announced.
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Keep it unlisted' }));
+    expect(api.updatePublication).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it unlisted' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.updatePublication).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('radio', { name: 'Public gallery' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Make it public' }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'public' }));
+  });
+
+  it('a parent re-render with a new inline onClose never moves focus out of the field the user is in', async () => {
+    const studio = studioWith(view());
+    const { rerender } = render(<ShareSheet studio={studio} open onClose={() => undefined} />);
+    await act(async () => new Promise((r) => setTimeout(r, 5)));
+    const field = screen.getByLabelText('Read-only link');
+    field.focus();
+    expect(document.activeElement).toBe(field);
+    rerender(<ShareSheet studio={studio} open onClose={() => undefined} />);
+    await act(async () => new Promise((r) => setTimeout(r, 5)));
+    expect(document.activeElement).toBe(field);
+  });
+
   it('shows the preview mock, stats, embed (only when allowed) and an update banner when behind', () => {
     const { unmount } = render(<ShareSheet studio={studioWith(view({ behind: true }))} open onClose={vi.fn()} />);
     expect(screen.getByText('This is what people see before they tap.')).toBeInTheDocument();

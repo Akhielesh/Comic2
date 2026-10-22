@@ -77,6 +77,13 @@ export const priceBadge = (usd: number | undefined): string | undefined => {
   return usd === 0 ? 'Free' : `≈${formatUsd(usd)}`;
 };
 
+/** The chip's price: its own `usd`, else the quote its spend action carries. */
+export const chipUsd = (step: NextStep): number | undefined => {
+  if (typeof step.usd === 'number') return step.usd;
+  const q = (step.action as { quotedUsd?: unknown } | undefined)?.quotedUsd;
+  return typeof q === 'number' && Number.isFinite(q) && q >= 0 ? q : undefined;
+};
+
 /** Text chips go to the director, so they wait while a turn is streaming. */
 const sendsText = (c: ChipModel) => c.legacy || (!c.step.action && !c.step.client);
 
@@ -107,7 +114,8 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
   return (
     <div className={cx('flex flex-wrap gap-2 pt-0.5', className)} role="group" aria-label="Next steps">
       {chips.map((chip, i) => {
-        const badge = priceBadge(chip.step.usd);
+        const usd = chipUsd(chip.step);
+        const badge = priceBadge(usd);
         const busy = pending === chip.step.label;
         const disabled = !!pending || (sendsText(chip) && studio.messageBusy);
         return (
@@ -116,7 +124,7 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
             onClick={() => void tap(chip)}
             disabled={disabled}
             aria-busy={busy || undefined}
-            aria-label={badge ? `${chip.step.label}, ${badge === 'Free' ? 'free' : `about ${formatUsd(chip.step.usd!)}`}` : undefined}
+            aria-label={badge ? `${chip.step.label}, ${badge === 'Free' ? 'free' : `about ${formatUsd(usd!)}`}` : undefined}
             className="min-w-0"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />}
@@ -127,6 +135,13 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
                   'shrink-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
                   badge === 'Free' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
                 )}
+                title={
+                  badge === 'Free'
+                    ? chip.step.action || chip.step.client
+                      ? 'Free — done by the editor, no AI cost'
+                      : 'Free'
+                    : 'Estimate — tapping is your OK, and the price is re-checked before anything is drawn'
+                }
                 aria-hidden
               >
                 {badge}

@@ -149,6 +149,12 @@ export function fakeSafetyStore(opts: { now?: () => number } = {}): FakeSafetySt
       store.projects.set(projectId, { ...p, isForcedPrivate: true, forcedReason: reason });
       for (const pub of store.publications) if (pub.projectId === projectId && pub.status === 'live') pub.status = 'suspended';
     },
+    async liftAutoHold(projectId) {
+      const p = store.projects.get(projectId);
+      if (!p?.isForcedPrivate || !String(p.forcedReason || '').startsWith('auto:')) return false;
+      store.projects.set(projectId, { ...p, isForcedPrivate: false, forcedReason: undefined });
+      return true;
+    },
     async moderationAction(row) {
       store.actions.push(row);
     },

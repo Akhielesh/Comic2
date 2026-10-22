@@ -14,7 +14,8 @@ import { readerString } from './readerStrings';
 /** What a reader surface needs to offer a language switch (also ImmersiveReader's `language`). */
 export interface ReaderLanguageSlot {
   current: string;
-  options: { code: string; label: string; native?: string; status?: 'ready' }[];
+  /** `percent` (0–100) marks a draft edition in the owner preview: "92% translated". */
+  options: { code: string; label: string; native?: string; status?: 'ready'; percent?: number }[];
   onChange(code: string): void;
 }
 
@@ -39,6 +40,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
   const currentIndex = Math.max(0, options.findIndex((o) => sameLanguage(o.code, current)));
   const currentOpt = options[currentIndex];
   const strings = useMemo(() => ({ language: readerString(current, 'language'), original: readerString(current, 'original'), choose: readerString(current, 'chooseLanguage') }), [current]);
+  const percentLabel = (n: number) => readerString(current, 'translatedPercent', { n });
 
   const close = useCallback((refocus = true) => {
     setOpen(false);
@@ -174,6 +176,9 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
                     {o.native || o.label}
                   </span>
                   {o.native && o.native !== o.label && <span className="block text-[11.5px] text-[var(--ds-muted)]">{o.label}</span>}
+                  {o.status !== 'ready' && typeof o.percent === 'number' && o.percent < 100 && (
+                    <span className="block text-[11.5px] tabular-nums text-[var(--ds-muted)]">{percentLabel(Math.max(0, Math.round(o.percent)))}</span>
+                  )}
                 </span>
                 {isOriginal && (
                   <span className="shrink-0 rounded-full border border-[var(--ds-hairline)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--ds-muted)]">{strings.original}</span>

@@ -144,3 +144,26 @@ describe('ConversationPane — status', () => {
     expect(screen.getByLabelText('Message the Comic Director')).toBeInTheDocument();
   });
 });
+
+describe('ConversationPane — layout (visualqa P2-1; mobile.md §3.9)', () => {
+  it('an empty conversation starts at the top (the heading is never scrolled away on short phones)', () => {
+    render(<ConversationPane studio={makeFakeStudio()} />);
+    const log = screen.getByRole('log', { name: 'Messages' });
+    expect((log.parentElement as HTMLElement).scrollTop).toBe(0);
+    expect(screen.getByRole('heading', { name: "What's your comic about?" })).toBeInTheDocument();
+  });
+
+  it('pads the bottom safe area unless the phone tab bar owns it', () => {
+    const { rerender } = render(<ConversationPane studio={makeFakeStudio()} />);
+    const dock = document.querySelector('[data-composer-dock]') as HTMLElement;
+    expect(dock.className).toContain('var(--sa-bottom-eff');
+    rerender(<ConversationPane studio={makeFakeStudio()} insetBottom={false} />);
+    expect((document.querySelector('[data-composer-dock]') as HTMLElement).className).not.toContain('var(--sa-bottom-eff');
+  });
+
+  it('older messages skip offscreen rendering (content-visibility) while the latest stay live', () => {
+    const conversation = Array.from({ length: 9 }, (_, i) => msg(`m${i}`, i % 2 ? 'assistant' : 'user', `Message ${i}`));
+    render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation }) })} />);
+    expect(document.querySelectorAll('.cv-auto').length).toBe(3);
+  });
+});

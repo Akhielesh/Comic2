@@ -221,6 +221,24 @@ describe('/c/<slug> share HTML', () => {
     const html = await res.text();
     expect(html).toContain('DreamStream Studio — Comics, AI Chat &amp; Code');
     expect(html).not.toContain('og:title');
+    // A misconfigured database (wrong key, migration not applied) is "unavailable", never a dead link.
+    for (const status of [401, 404]) {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const r = await handleShare(get(`/c/${SLUG}`), env(() => new Response('{"code":"PGRST202"}', { status })));
+      expect(r.status).toBe(200);
+      expect(await r.text()).not.toContain('"notFound":true');
+      warn.mockRestore();
+    }
+  });
+
+  it('previews proxied by the comics front door point at the comics host, never the Pages origin; other forwarded hosts are ignored', async () => {
+    const via = (host: string) => new Request(`https://comic2.pages.dev/c/${SLUG}`, { headers: { 'user-agent': 'Twitterbot/1.0', 'x-forwarded-host': host } });
+    const html = await (await handleShare(via('comics.dreamstreamstudio.ai'), env(card()))).text();
+    expect(meta(html, 'og:image')).toBe(`https://comics.dreamstreamstudio.ai/og/${KEY}/og-en-0123456789ab.jpg`);
+    expect(meta(html, 'og:url')).toBe(`https://comics.dreamstreamstudio.ai/c/${SLUG}`);
+    const forged = await (await handleShare(via('evil.example'), env(card()))).text();
+    expect(meta(forged, 'og:image')).toBe(`https://comic2.pages.dev/og/${KEY}/og-en-0123456789ab.jpg`);
+    expect(forged).not.toContain('evil.example');
   });
 
   it('strict, hashed CSP: every inline script and handler hashed, no unsafe-inline/eval in script-src, reports at the edge', async () => {
@@ -312,6 +330,11 @@ describe('shareHead units', () => {
     // An OG path under ANOTHER publication's key is dropped (never served for this card).
     const foreign = validateShareCardRpc(card({}, { og: { en: { path: `pub/${'Z'.repeat(22)}/og-en-0123456789ab.jpg`, alt: 'x' } } }))!;
     expect(foreign.card.og).toEqual({});
+    // The cover URL must be this publication's own pub/<key>/ copy on Supabase storage.
+    expect(validateShareCardRpc(card())!.card.coverUrl).toContain(`/pub/${KEY}/`);
+    for (const coverUrl of ['https://evil.example/pub/x.webp', `https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/u/user/p/proj/img/a.webp`, `https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/pub/${'Z'.repeat(22)}/a.webp`]) {
+      expect(validateShareCardRpc(card({}, { coverUrl }))!.card.coverUrl).toBeUndefined();
+    }
     const injected = injectHead('<head><title>x</title><!--ds:head--></head>', renderShareHead(validateShareCardRpc(card())!, { origin: 'https://dreamstreamstudio.ai' }));
     expect(injected.match(/<title>/g)).toHaveLength(1);
     expect(parseSharePath(`/c/${SLUG}/`)).toEqual({ slug: SLUG, embed: false });

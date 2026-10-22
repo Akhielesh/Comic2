@@ -1,5 +1,6 @@
-// useStudio v5 members (contract §13.1, wave 0): caps, Easy/Pro view, selection focus,
-// SendOptions, next-step chips, client actions, ref uploads and the lazy publication.
+// useStudio v5 members (contract §13.1): caps, Easy/Pro view, selection focus, SendOptions,
+// next-step chips, client actions, ref uploads and the lazy publication. Undo/redo flows live in
+// useStudio.undo.test.tsx.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -145,27 +146,42 @@ describe('next steps and client actions', () => {
     expect(result.current.tab).toBe('read');
     act(() => result.current.runClientAction({ type: 'set_mode', mode: 'pro' }));
     expect(result.current.mode).toBe('pro');
-    act(() => result.current.runClientAction({ type: 'undo' })); // inert until P1-CLIENTSTATE
+    act(() => result.current.runClientAction({ type: 'undo' })); // nothing to undo yet: a calm notice, no request
     expect(requests).toHaveLength(0);
+    expect(result.current.notice).toMatchObject({ kind: 'info', text: expect.stringMatching(/Nothing to undo/) });
   });
 });
 
 describe('uploads and publication', () => {
-  it('uploadRef posts the file, merges urls and resyncs once', async () => {
+  it('uploadRef posts the file (progress + abort), merges urls and applies the server ops without a refetch', async () => {
     const { result } = await setup();
     const ref = { path: 'u/x/p/ref/r1.webp', source: 'upload' as const, at: 1 };
     api.uploadStudioRef.mockResolvedValue({ ref, ops: [{ op: 'ref_add', owner: { kind: 'inbox' }, ref }], rev: 6, urls: { [ref.path]: 'https://cdn.test/r1' } });
     const progress = vi.fn();
+    const ctrl = new AbortController();
     const file = new Blob(['x'], { type: 'image/png' });
     let out: unknown;
     await act(async () => {
-      out = await result.current.uploadRef(file, { kind: 'inbox' }, { name: 'r1.png', onProgress: progress });
+      out = await result.current.uploadRef(file, { kind: 'inbox' }, { name: 'r1.png', onProgress: progress, signal: ctrl.signal });
     });
-    expect(api.uploadStudioRef).toHaveBeenCalledWith('proj_1', file, { to: { kind: 'inbox' }, name: 'r1.png' }, { signal: undefined });
+    expect(api.uploadStudioRef).toHaveBeenCalledWith('proj_1', file, { to: { kind: 'inbox' }, name: 'r1.png' }, { signal: ctrl.signal, onProgress: progress });
     expect(out).toEqual({ ref });
     expect(progress).toHaveBeenNthCalledWith(1, 0);
     expect(progress).toHaveBeenLastCalledWith(1);
     expect(result.current.urlFor(ref.path)).toBe('https://cdn.test/r1');
+    // rev 5 → 6 applies directly (no GET).
+    expect(result.current.doc?.rev).toBe(6);
+    expect(result.current.doc?.refInbox?.map((r) => r.path)).toEqual([ref.path]);
+    expect(api.loadStudioProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('uploadRef resyncs once when the server committed a ref but sent no ops', async () => {
+    const { result } = await setup();
+    const ref = { path: 'u/x/p/ref/r2.webp', source: 'upload' as const, at: 1 };
+    api.uploadStudioRef.mockResolvedValue({ ref, ops: [], urls: {} });
+    await act(async () => {
+      await result.current.uploadRef(new Blob(['x']), { kind: 'inbox' });
+    });
     await waitFor(() => expect(api.loadStudioProject).toHaveBeenCalledTimes(2));
   });
 

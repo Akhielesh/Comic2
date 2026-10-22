@@ -103,11 +103,13 @@ const attach = (): (() => void) => {
   let frame = 0;
   const schedule = () => {
     if (frame) return;
+    frame = -1; // pending (a synchronous rAF polyfill runs the callback before returning its id)
     const raf = typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame.bind(window) : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 16);
-    frame = raf(() => {
+    const id = raf(() => {
       frame = 0;
       notify();
     }) as number;
+    if (frame === -1) frame = id;
   };
   window.addEventListener('resize', schedule);
   window.addEventListener('orientationchange', schedule);
@@ -135,7 +137,7 @@ const attach = (): (() => void) => {
       else if (typeof mql.removeListener === 'function') mql.removeListener(schedule);
     }
     conn?.removeEventListener?.('change', schedule);
-    if (frame) {
+    if (frame > 0) {
       try {
         window.cancelAnimationFrame(frame);
       } catch {

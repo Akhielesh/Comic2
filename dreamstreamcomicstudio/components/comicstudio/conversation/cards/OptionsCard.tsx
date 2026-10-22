@@ -230,13 +230,13 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
             disabled={disabled}
             placeholder="Or type your own answer…"
             aria-label="Your own answer"
-            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/45 disabled:opacity-50"
+            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/45 disabled:opacity-50 coarse:h-11 coarse:text-[16px]"
           />
           <button
             type="submit"
             disabled={!custom.trim() || disabled}
             aria-label="Send answer"
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent)] text-white transition-all duration-200 hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)]"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent)] coarse:h-11 coarse:w-11 text-white transition-all duration-200 hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)]"
           >
             <CornerDownLeft className="h-4 w-4" />
           </button>

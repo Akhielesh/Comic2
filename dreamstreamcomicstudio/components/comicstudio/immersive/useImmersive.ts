@@ -14,7 +14,16 @@ interface WakeLockSentinelLike {
 }
 type WakeNavigator = Navigator & { wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinelLike> } };
 
-const HISTORY_KEY = '__dsReader';
+/** Marks the history entry the open reader pushed (Back closes the reader). */
+export const HISTORY_KEY = '__dsReader';
+/** The reader's own history entry is on top (it is popped as the reader closes). */
+export const readerEntryOnTop = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && !!(window.history.state as Record<string, unknown> | null)?.[HISTORY_KEY];
+  } catch {
+    return false;
+  }
+};
 
 export const fullscreenElement = (): Element | null => {
   if (typeof document === 'undefined') return null;

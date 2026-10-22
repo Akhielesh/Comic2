@@ -20,7 +20,7 @@ export const feature: FeatureModule = {
 export { HEADER_BANNER_MIN_ORDER, HEADER_SLOT_ORDER } from './headerSlots';
 export * from './formFactor';
 export { useFormFactor, readFormFactor, FormFactorProvider, formFactorFor, resetFormFactorStore } from './useFormFactor';
-export { useKeyboardInset, computeKeyboardInset, KB_OPEN_THRESHOLD, type KeyboardInset } from './useKeyboardInset';
+export { useKeyboardInset, computeKeyboardInset, keyboardOpen, isEditable, KB_OPEN_THRESHOLD, RESIZED_KB_PX, type KeyboardInset } from './useKeyboardInset';
 export { useBackLayer, pushLayer, popLayer, openLayers } from './backStack';
 export { useThemeColor } from './useThemeColor';
 export { ModeToggle, MODE_HINT } from './ModeToggle';

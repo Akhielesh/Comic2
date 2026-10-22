@@ -1,0 +1,48 @@
+{
+  // DreamStream Comic Studio front door — comics.dreamstreamstudio.ai (like Atlas at atlas.*).
+  //
+  // A thin edge Worker in front of the SAME Pages frontend (project `comic2`) and the SAME API
+  // Worker (dreamstream-api) the apex uses:
+  //   /__edge/health  → JSON health (CI probes the workers.dev URL below)
+  //   http://         → 301 https://
+  //   comic.*         → 301 comics.* (same path + query); any other host → 302 comics.*
+  //   /api/*          → service binding API → dreamstream-api, request passed through unchanged
+  //                     (agent gate, rate limits, CF-Connecting-IP forwarding all stay there)
+  //   other suites    → /live*, /models, /share/*, /studio.html → 302 to the apex (MAIN_ORIGIN)
+  //   everything else → fetched from PAGES_ORIGIN with X-Forwarded-Host = PUBLIC_HOST, Location
+  //                     headers mapped back to PUBLIC_HOST, Comic Studio <head> branding on HTML
+  //                     (except /c/*, which the share Pages Function owns), security headers.
+  //
+  // DNS PRECONDITION (see README.md): routes only run for hostnames with a PROXIED (orange-cloud)
+  // DNS record. Today the zone's proxied wildcard record covers comics.* and comic.*. If that
+  // wildcard is ever removed (ADR 0005 deletes the old Code Studio Worker ROUTE, not the DNS
+  // record), add proxied AAAA records `comics` and `comic` → 100:: first.
+  //
+  // No secrets in this file — the repository is public. This Worker needs none.
+  "name": "dreamstream-comics",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "observability": { "enabled": true },
+  // Also served at dreamstream-comics.akhieleshsrirangam.workers.dev: health answers there, every
+  // other path redirects to PUBLIC_HOST. CI probes it because the custom host may challenge
+  // datacenter IPs.
+  "workers_dev": true,
+
+  // Route patterns, not Custom Domains: the more specific `comics.dreamstreamstudio.ai/*` route
+  // wins over the old `*.dreamstreamstudio.ai/*` catch-all for as long as that still exists
+  // (a Custom Domain Worker would run BEHIND it), and routes need only the zone
+  // "Workers Routes: Edit" permission the deploy token already has.
+  "routes": [
+    { "pattern": "comics.dreamstreamstudio.ai/*", "zone_name": "dreamstreamstudio.ai" },
+    { "pattern": "comic.dreamstreamstudio.ai/*", "zone_name": "dreamstreamstudio.ai" }
+  ],
+
+  // The API Worker, called directly (no public hop, no CORS): same agent gate, same limits.
+  "services": [{ "binding": "API", "service": "dreamstream-api" }],
+
+  "vars": {
+    "PUBLIC_HOST": "comics.dreamstreamstudio.ai",
+    "PAGES_ORIGIN": "https://comic2.pages.dev",
+    "MAIN_ORIGIN": "https://dreamstreamstudio.ai"
+  }
+}

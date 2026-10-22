@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { PageImageCache, pickVariant, useCachedImage, type CacheDeps } from './pageImageCache';
+import { loadErrorText } from './ReaderSlot';
 
 const flush = async () => {
   for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0));
@@ -175,6 +176,40 @@ describe('PageImageCache', () => {
     expect(c.inUseCount('u/p1.webp')).toBe(0);
   });
 
+  it('a transient failure retries on its own, a bounded number of times; an expired link never auto-retries', async () => {
+    let calls = 0;
+    const d = deps({ fetch: vi.fn(async () => ((calls += 1) === 1 ? new Response('', { status: 503 }) : new Response(new Blob(['x']), { status: 200 }))) });
+    const c = new PageImageCache(d, 10, 3, [0, 0]);
+    expect(await c.ensure('u/p.webp', 'https://x/p', 'now')).toMatchObject({ state: 'error', attempts: 1 });
+    expect(c.retryIn('u/p.webp')).toBe(0);
+    expect(await c.ensure('u/p.webp', 'https://x/p', 'now')).toMatchObject({ state: 'ready', attempts: undefined });
+
+    const down = deps({ fetch: vi.fn(async () => new Response('', { status: 500 })) });
+    const c2 = new PageImageCache(down, 10, 3, [0]);
+    await c2.ensure('u/q.webp', 'https://x/q', 'now');
+    expect(await c2.ensure('u/q.webp', 'https://x/q', 'now')).toMatchObject({ state: 'error', attempts: 2 });
+    expect(c2.retryIn('u/q.webp')).toBeNull(); // out of attempts: the page says so instead of "retrying"
+    await c2.ensure('u/q.webp', 'https://x/q', 'now');
+    expect(down.fetch).toHaveBeenCalledTimes(2);
+
+    const gone = deps({ fetch: vi.fn(async () => new Response('', { status: 403 })) });
+    const c3 = new PageImageCache(gone, 10, 3, [0, 0]);
+    await c3.ensure('u/r.webp', 'https://x/r', 'now');
+    expect(c3.retryIn('u/r.webp')).toBeNull(); // only a fresh link helps (the host relinks)
+  });
+
+  it('useCachedImage retries a transient failure after its delay and reports it meanwhile', async () => {
+    let calls = 0;
+    const d = deps({ fetch: vi.fn(async () => ((calls += 1) === 1 ? new Response('', { status: 502 }) : new Response(new Blob(['x']), { status: 200 }))) });
+    const c = new PageImageCache(d, 10, 3, [250]);
+    const { result } = renderHook(() => useCachedImage('u/t.webp', 'https://x/t', 'now', c));
+    await waitFor(() => expect(result.current).toMatchObject({ state: 'error', retrying: true }), { interval: 5 });
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.src).toBe('blob:1'));
+    expect(result.current.retrying).toBe(false);
+    expect(d.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('notifies subscribers', async () => {
     const c = new PageImageCache(deps());
     const fn = vi.fn();
@@ -198,5 +233,14 @@ describe('pickVariant', () => {
     expect(pickVariant(asset, 700, { dpr: 2, saveData: true })).toEqual({ path: 'u/p.1080w.webp', w: 1080 });
     expect(pickVariant(asset, 200, { dpr: 2, original: true })).toEqual({ path: 'u/p.webp' });
     expect(pickVariant({ path: 'u/x.webp', source: 'generated', at: 0 }, 300)).toEqual({ path: 'u/x.webp' });
+  });
+});
+
+describe('a page that failed to load says only what really happens next', () => {
+  it('expired + a host that relinks → fresh link; transient → trying again; out of retries → no promise of a retry now', () => {
+    expect(loadErrorText(true, true, false)).toMatch(/fresh one/);
+    expect(loadErrorText(true, false, false)).not.toMatch(/fresh|trying again/);
+    expect(loadErrorText(false, true, true)).toMatch(/trying again/);
+    expect(loadErrorText(false, true, false)).toMatch(/reopen the reader/);
   });
 });

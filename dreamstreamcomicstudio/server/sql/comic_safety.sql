@@ -201,7 +201,9 @@ alter table public.project_moderation_actions add constraint project_moderation_
     'auto_hold', 'withhold_page', 'restore_page', 'appeal', 'appeal_resolved', 'publish_blocked'
   ));
 
--- ── 7. Retention: events 180 days, closed cases 1 year, quarantine map 90 days after review ─
+-- ── 7. Retention: events 180 days, closed cases 1 year, quarantine map 120 days ───────────────
+-- (the quarantined OBJECTS are held 90 days by the image-asset retention, assets.ts
+-- QUARANTINE_HOLD_DAYS; a map row outlives its object by a month, then points at nothing.)
 
 create or replace function public.purge_comic_safety_events()
 returns integer
@@ -213,8 +215,10 @@ as $$
     delete from public.comic_safety_events where created_at < now() - interval '180 days' returning 1
   ), c as (
     delete from public.comic_safety_cases where status <> 'open' and coalesce(resolved_at, created_at) < now() - interval '365 days' returning 1
+  ), q as (
+    delete from public.comic_quarantine where created_at < now() - interval '120 days' returning 1
   )
-  select ((select count(*) from e) + (select count(*) from c))::int;
+  select ((select count(*) from e) + (select count(*) from c) + (select count(*) from q))::int;
 $$;
 revoke all on function public.purge_comic_safety_events() from public, anon, authenticated;
 grant execute on function public.purge_comic_safety_events() to service_role;

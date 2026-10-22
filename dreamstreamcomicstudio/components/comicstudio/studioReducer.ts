@@ -13,10 +13,15 @@
 // view the UI renders: base + optimistic patches.
 //
 // Everything here is deterministic (time comes in on the action) and unit-tested.
+//
+// v5 (P1-CLIENTSTATE): ops batches carry `origin` ('user' | 'director' | 'job') and an undo
+// `label`. A director batch is queued in `undoInbox` together with the exact base it applied to,
+// so useStudio can push its inverse (computed BEFORE apply) onto the undo stack. Ops committed
+// outside a stream (an upload answer) apply through `server_ops` with the same revision guard.
 
 import { applyOps, type DocOp } from '../../shared/comic/ops';
-import type { StudioEvent } from '../../shared/comic/events';
-import { getRender, type AssetRef, type ComicDoc, type Msg, type RenderTarget } from '../../shared/comic/doc';
+import type { OpsOrigin, StudioEvent } from '../../shared/comic/events';
+import { getRender, renderTargetKey, type AssetRef, type ComicDoc, type Msg, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
 import type { ActivityItem, BoardTab, PendingAttachment } from './types';
 
 // ── Signed URLs ──────────────────────────────────────────────────────────────
@@ -115,6 +120,20 @@ export interface OptimisticPatch {
   ops: DocOp[];
 }
 
+/** A director batch waiting to become an undo entry: the base it applied to + its ops. */
+export interface DirectorBatch {
+  rev: number;
+  before: ComicDoc;
+  ops: DocOp[];
+  label?: string;
+  at: number;
+  /** The stream (one director reply) it came from: batches of one reply undo together. */
+  streamId?: string;
+}
+
+/** Keep at most this many director batches queued (the hook drains them every render). */
+export const MAX_UNDO_INBOX = 50;
+
 export interface StudioState {
   /** Last server-confirmed doc. */
   base: ComicDoc | null;
@@ -139,8 +158,14 @@ export interface StudioState {
   cancelling: boolean;
   /** USD the last finished turn/job reported (`done.spentUsd`). */
   lastSpentUsd: number | null;
+  /** USD the software saved in the last turn/job (`done.savedUsd`, decisions-final #6). */
+  lastSavedUsd: number | null;
+  /** Server code of `error` (COOLDOWN, CONTENT_POLICY, LIMIT, NOT_READY, …). */
+  errorCode: string | null;
   /** Revision bump counter for "the latest ops touched X" consumers. */
-  lastOps: { rev: number; ops: DocOp[]; echo: boolean } | null;
+  lastOps: { rev: number; ops: DocOp[]; echo: boolean; origin?: OpsOrigin; label?: string } | null;
+  /** Director batches not yet pushed onto the undo stack (oldest first). */
+  undoInbox: DirectorBatch[];
 }
 
 export const initialStudioState = (): StudioState => ({
@@ -161,7 +186,10 @@ export const initialStudioState = (): StudioState => ({
   refreshing: false,
   cancelling: false,
   lastSpentUsd: null,
-  lastOps: null
+  lastSavedUsd: null,
+  errorCode: null,
+  lastOps: null,
+  undoInbox: []
 });
 
 export type StudioReducerAction =
@@ -173,14 +201,18 @@ export type StudioReducerAction =
   | { type: 'refresh_error'; message?: string }
   | { type: 'stream_start'; streamId: string; kind: StreamKind; actionType?: string; now: number }
   | { type: 'stream_event'; streamId: string; event: StudioEvent; now: number }
-  | { type: 'stream_end'; streamId: string; error?: string; aborted?: boolean; now: number }
+  | { type: 'stream_end'; streamId: string; error?: string; code?: string; aborted?: boolean; now: number }
+  /** Ops the server committed outside a stream (e.g. a ref upload answer); same revision guard. */
+  | { type: 'server_ops'; rev: number; ops: DocOp[]; origin?: OpsOrigin; label?: string; now: number }
+  /** The hook pushed every queued director batch up to this revision onto the undo stack. */
+  | { type: 'undo_inbox_drain'; upToRev: number }
   | { type: 'message_pending'; message: PendingUserMessage }
   | { type: 'message_dismiss' }
   | { type: 'patch_local'; patch: OptimisticPatch; now: number }
-  | { type: 'patch_settled'; ids: string[]; error?: string; now: number }
+  | { type: 'patch_settled'; ids: string[]; error?: string; code?: string; now: number }
   | { type: 'urls_merge'; urls: Record<string, string>; now: number }
   | { type: 'urls_invalidate'; paths: string[] }
-  | { type: 'set_error'; message: string | null }
+  | { type: 'set_error'; message: string | null; code?: string | null }
   | { type: 'cancel_start' }
   | { type: 'cancel_end' };
 
@@ -238,6 +270,9 @@ const TAB_BY_RENDER_KIND: Record<RenderTarget['kind'], BoardTab> = {
   style_option: 'style'
 };
 
+const tabForOwner = (owner: RefOwner | undefined): BoardTab | null =>
+  owner?.kind === 'character' || owner?.kind === 'place' ? 'cast' : owner?.kind === 'style' ? 'style' : null;
+
 const tabForOp = (op: DocOp): BoardTab | null => {
   switch (op.op) {
     case 'character':
@@ -265,8 +300,35 @@ const tabForOp = (op: DocOp): BoardTab | null => {
     case 'note_add':
     case 'source':
       return 'story';
+    // v5
+    case 'letter_style':
+    case 'line_style':
+    case 'pages_reorder':
+    case 'page_insert':
+    case 'page_duplicate':
+    case 'page_delete':
+    case 'page_restore':
+    case 'book':
+      return 'pages';
+    case 'render_use':
+      return TAB_BY_RENDER_KIND[op.target?.kind] || null;
+    case 'ref_add':
+    case 'ref_patch':
+    case 'ref_move':
+    case 'ref_remove':
+      return tabForOwner(op.owner);
+    case 'ref_transfer':
+      return tabForOwner(op.to);
+    case 'edition':
+    case 'translation':
+    case 'translations':
+    case 'edition_text':
+    case 'edition_balloon':
+    case 'glossary_term':
+      return 'languages';
     default:
-      // format/settings/message/spend/gate/memory don't belong to a board area.
+      // format/settings/message/spend/gate/memory/reader/version_star/asset_meta/safety/publication
+      // don't move the board.
       return null;
   }
 };
@@ -296,10 +358,27 @@ export const mayHaveDroppedClears = (ops: DocOp[]): boolean =>
     return false;
   });
 
+const ownerSig = (v: unknown): string | undefined => {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as { kind?: unknown; id?: unknown };
+  return typeof o.kind === 'string' ? (typeof o.id === 'string' ? `${o.kind}:${o.id}` : o.kind) : undefined;
+};
+const targetSig = (v: unknown): string | undefined => {
+  if (!v || typeof v !== 'object' || typeof (v as { kind?: unknown }).kind !== 'string') return undefined;
+  try {
+    return renderTargetKey(v as RenderTarget);
+  } catch {
+    return undefined;
+  }
+};
+
 /** Signature used to recognize the server's echo of our own patch (sanitized values may differ). */
 const opSignature = (op: DocOp): string => {
   const o = op as unknown as Record<string, unknown>;
-  return [op.op, o.id, o.pageId, o.panelId, o.lineId].filter((v) => v !== undefined).join(':');
+  const lineIds = Array.isArray(o.lineIds) ? (o.lineIds as unknown[]).join(',') : undefined;
+  return [op.op, o.id, o.newId, o.pageId, o.panelId, o.lineId, lineIds, o.lang, o.field, o.path, targetSig(o.target), ownerSig(o.owner), ownerSig(o.from), ownerSig(o.to)]
+    .filter((v) => v !== undefined && v !== null && v !== '')
+    .join(':');
 };
 
 export const isEchoOf = (ops: DocOp[], optimistic: OptimisticPatch[]): boolean => {
@@ -339,7 +418,7 @@ const upsertActivity = (activity: ActivityItem[], event: Extract<StudioEvent, { 
   const idx = activity.findIndex((a) => a.id === event.id);
   if (idx === -1) {
     if (event.phase === 'end') return activity; // an end for a line we never saw (joined late)
-    return [...activity, { id: event.id, label: event.label, phase: 'start' as const, at: now }].slice(-MAX_ACTIVITY);
+    return [...activity, { id: event.id, label: event.label, phase: 'start' as const, at: now, ...(event.cost ? { cost: event.cost } : {}) }].slice(-MAX_ACTIVITY);
   }
   const next = activity.slice();
   next[idx] = {
@@ -347,6 +426,7 @@ const upsertActivity = (activity: ActivityItem[], event: Extract<StudioEvent, { 
     label: event.label || next[idx].label,
     phase: event.phase,
     ...(event.phase === 'end' ? { ok: event.ok !== false } : {}),
+    ...(event.cost ? { cost: event.cost } : {}),
     at: now
   };
   return next;
@@ -354,9 +434,9 @@ const upsertActivity = (activity: ActivityItem[], event: Extract<StudioEvent, { 
 
 const landedText = (msg: Msg | undefined) => (msg?.text || '').trim();
 
-const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: 'ops' }>, now: number): StudioState => {
+const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: 'ops' }>, now: number, streamId?: string): StudioState => {
   const base = state.base;
-  if (!base || !Array.isArray(event.ops)) return state;
+  if (!base || !Array.isArray(event.ops) || typeof event.rev !== 'number') return state;
   if (event.rev <= base.rev) return state; // already applied (another stream delivered it)
   if (event.rev !== base.rev + 1) return { ...state, behindRev: Math.max(state.behindRev, event.rev) };
 
@@ -380,6 +460,14 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
     }
   }
 
+  const origin = event.origin;
+  const label = typeof event.label === 'string' && event.label.trim() ? event.label.trim() : undefined;
+  // A director edit is undoable: queue it with the exact base it applied to (inverse before apply).
+  const undoInbox =
+    origin === 'director' && event.ops.length
+      ? [...state.undoInbox, { rev: event.rev, before: base, ops: event.ops, ...(label ? { label } : {}), at: now, ...(streamId ? { streamId } : {}) }].slice(-MAX_UNDO_INBOX)
+      : state.undoInbox;
+
   return withView({
     ...state,
     base: nextBase,
@@ -387,7 +475,15 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
     pendingMessage,
     behindRev: Math.max(state.behindRev, event.rev),
     syncDue: state.syncDue || mayHaveDroppedClears(event.ops),
-    lastOps: { rev: event.rev, ops: event.ops, echo: isEchoOf(event.ops, state.optimistic) }
+    lastOps: {
+      rev: event.rev,
+      ops: event.ops,
+      // Our own edit coming back (or another tab of ours): never yank the board for it.
+      echo: origin === 'user' || isEchoOf(event.ops, state.optimistic),
+      ...(origin ? { origin } : {}),
+      ...(label ? { label } : {})
+    },
+    undoInbox
   });
 };
 
@@ -400,7 +496,7 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
       return { ...state, behindRev: Math.max(state.behindRev, event.rev) };
     }
     case 'ops':
-      return typeof event.rev === 'number' ? applyOpsEvent(state, event, now) : state;
+      return typeof event.rev === 'number' ? applyOpsEvent(state, event, now, streamId) : state;
     case 'delta': {
       if (!event.msgId || typeof event.text !== 'string' || !event.text) return state;
       return { ...state, drafts: { ...state.drafts, [event.msgId]: (state.drafts[event.msgId] || '') + event.text } };
@@ -415,6 +511,7 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
       return {
         ...state,
         error: message,
+        errorCode: typeof event.code === 'string' && event.code ? event.code : null,
         streams: stream ? { ...state.streams, [streamId]: { ...stream, errored: message } } : state.streams
       };
     }
@@ -422,7 +519,8 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
       return {
         ...state,
         behindRev: typeof event.rev === 'number' ? Math.max(state.behindRev, event.rev) : state.behindRev,
-        lastSpentUsd: typeof event.spentUsd === 'number' && Number.isFinite(event.spentUsd) ? event.spentUsd : state.lastSpentUsd
+        lastSpentUsd: typeof event.spentUsd === 'number' && Number.isFinite(event.spentUsd) ? event.spentUsd : state.lastSpentUsd,
+        lastSavedUsd: typeof event.savedUsd === 'number' && Number.isFinite(event.savedUsd) && event.savedUsd > 0 ? event.savedUsd : null
       };
     default:
       return state;
@@ -437,6 +535,7 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
   const anyLeft = Object.keys(streams).length > 0;
 
   let error = state.error;
+  let errorCode = state.errorCode;
   let pendingMessage = state.pendingMessage;
   const failure = action.aborted ? undefined : action.error || stream.errored;
 
@@ -453,6 +552,7 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
     }
   } else if (action.error && !action.aborted) {
     error = action.error;
+    errorCode = action.code ?? null;
   }
 
   let drafts = state.drafts;
@@ -475,6 +575,7 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
     ...state,
     streams,
     error,
+    errorCode: error ? errorCode : null,
     pendingMessage,
     drafts,
     activity,
@@ -563,7 +664,7 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
       return withView({
         ...state,
         optimistic: state.optimistic.filter((p) => !ids.has(p.id)),
-        ...(action.error ? { error: action.error } : {})
+        ...(action.error ? { error: action.error, errorCode: action.code ?? null } : {})
       });
     }
     case 'urls_merge':
@@ -577,7 +678,15 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
       return { ...state, urls };
     }
     case 'set_error':
-      return { ...state, error: action.message };
+      return { ...state, error: action.message, errorCode: action.message ? action.code ?? null : null };
+    case 'server_ops':
+      // Not tied to a stream: apply with the same revision guard (a gap triggers a refetch).
+      return applyOpsEvent(state, { type: 'ops', rev: action.rev, ops: action.ops, ...(action.origin ? { origin: action.origin } : {}), ...(action.label ? { label: action.label } : {}) }, action.now);
+    case 'undo_inbox_drain': {
+      if (!state.undoInbox.length) return state;
+      const undoInbox = state.undoInbox.filter((b) => b.rev > action.upToRev);
+      return undoInbox.length === state.undoInbox.length ? state : { ...state, undoInbox };
+    }
     case 'cancel_start':
       return { ...state, cancelling: true };
     case 'cancel_end':

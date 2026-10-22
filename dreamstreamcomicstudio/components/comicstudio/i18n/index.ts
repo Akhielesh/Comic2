@@ -29,6 +29,6 @@ export const feature: FeatureModule = {
 
 export { ReaderLanguagePicker, type ReaderLanguageSlot } from './ReaderLanguagePicker';
 export { LanguageSwitch, languageSwitchOptions } from './LanguageSwitch';
-export { pickReaderLanguage, readerLanguageOptions, readStoredReaderLang, storeReaderLang, readUrlLang, syncLangToUrl, nextLanguage } from './readerLanguage';
+export { pickReaderLanguage, readerLanguageOptions, readStoredReaderLang, storeReaderLang, readUrlLang, syncLangToUrl, nextLanguage, useReaderLanguage, type ReaderLanguageState } from './readerLanguage';
 export { readerString, readerStrings } from './readerStrings';
 export { cssFontFamily, ensureFontsFor } from './scriptFonts';

@@ -124,4 +124,22 @@ describe('reader URL params', () => {
     replace.mockRestore();
     push.mockRestore();
   });
+
+  it('re-applies the last position onto the entry left after the reader\'s own history entry is popped', () => {
+    vi.useFakeTimers();
+    window.history.replaceState(null, '', '/c/test?via=s');
+    const sync = createUrlSync(300);
+    sync.schedule({ p: 5 });
+    vi.advanceTimersByTime(300);
+    expect(window.location.search).toBe('?via=s&p=5');
+    // Closing pops the reader entry: the page underneath still has the old link.
+    window.history.replaceState(null, '', '/c/test?via=s&p=1');
+    sync.reapply();
+    expect(window.location.search).toBe('?via=s&p=5');
+    // Nothing scheduled yet: nothing to write.
+    const fresh = createUrlSync(300);
+    window.history.replaceState(null, '', '/c/test?via=s');
+    fresh.reapply();
+    expect(window.location.search).toBe('?via=s');
+  });
 });

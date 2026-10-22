@@ -225,17 +225,45 @@ export const buildOutgoing = (text: string, list: PendingAttachment[]): { text: 
   return { text: message, attachments };
 };
 
+/** What goes to `studio.send`: the legacy array form unless inbox uploads or a focus ride along. */
+export const sendArgs = (
+  outgoing: { text: string; attachments: PendingAttachment[] },
+  inboxPaths: string[],
+  focusSelection: boolean
+): [string, SendOptions | PendingAttachment[]] => {
+  if (!inboxPaths.length && !focusSelection) return [outgoing.text, outgoing.attachments];
+  return [
+    outgoing.text,
+    {
+      attachments: outgoing.attachments,
+      ...(inboxPaths.length ? { inboxPaths } : {}),
+      ...(focusSelection ? { focus: 'selection' as const } : {})
+    }
+  ];
+};
+
 export interface StudioComposerProps {
   studio: ComicStudioController;
   apiRef?: React.Ref<StudioComposerHandle>;
   className?: string;
+  /**
+   * 'docked' (default): the conversation's composer — listens to the composer bus and ⌘/Ctrl+K.
+   * 'sheet': a second composer inside the phone Board's "Ask the Director…" sheet — no global
+   * listeners (the docked one owns them), panels always open as bottom sheets.
+   */
+  variant?: 'docked' | 'sheet';
+  /** A message went out (the phone sheet closes itself). */
+  onSent?: () => void;
+  /** Placeholder override (the sheet: "Ask the director about this board…"). */
+  placeholder?: string;
 }
 
-export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className }) => {
+export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className, variant = 'docked', onSent, placeholder: placeholderProp }) => {
   const { doc, messageBusy, cancelling } = studio;
   const ff = useFormFactor();
   const coarse = ff.coarse;
   const phone = isPhoneLayout(ff.layout);
+  const inSheet = variant === 'sheet';
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [panel, setPanel] = useState<ComposerPanel | null>(null);
@@ -294,6 +322,14 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const ready = !!doc;
   const hasContent = text.trim().length > 0 || attachments.length > 0;
   const canSend = ready && hasContent && !messageBusy;
+
+  // The page-editor selection rides along as the message's focus ("Page 3 · 2 balloons") until the
+  // user dismisses the chip; a new selection brings the chip back.
+  const selection = studio.selection ?? null;
+  const focusText = selectionLabel(doc, selection);
+  const selectionKey = selection ? `${selection.pageId}|${(selection.lineIds || []).join(',')}|${selection.panelN ?? ''}` : '';
+  const [dismissedFocus, setDismissedFocus] = useState<string | null>(null);
+  const focusActive = !!focusText && dismissedFocus !== selectionKey;
 
   const autoGrow = useCallback(() => {
     const el = textareaRef.current;
@@ -513,19 +549,32 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const sendNow = useCallback(
     (rawText: string, list: ComposerAttachment[]) => {
       if (!ready || messageBusy) return false;
-      const outgoing = buildOutgoing(rawText, list);
-      if (!outgoing.text && !outgoing.attachments.length) return false;
-      void studio.send(outgoing.text, outgoing.attachments);
+      // Images already in the comic's inbox travel by path; anything else (no uploader, still
+      // uploading, failed) goes inline as before — never lost, never blocking the send.
+      const uploaded = list.filter((a) => a.kind === 'image' && a.upload === 'done' && a.inboxPath);
+      const inline = list.filter((a) => !uploaded.includes(a));
+      const inboxPaths = uploaded.map((a) => a.inboxPath as string);
+      const outgoing = buildOutgoing(rawText, inline);
+      if (!outgoing.text && !outgoing.attachments.length && !inboxPaths.length) return false;
+      // An upload still running is superseded by its inline copy: stop it (no orphan in the inbox).
+      for (const a of inline) {
+        uploads.current.get(a.id)?.abort();
+        uploads.current.delete(a.id);
+      }
+      const [sendText, opts] = sendArgs(outgoing, inboxPaths, focusActive);
+      void studio.send(sendText, opts);
       setText('');
       setAttachments([]);
       setHint(null);
       setPanel(null);
+      setAttachOpen(false);
       requestAnimationFrame(() => {
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
       });
+      onSent?.();
       return true;
     },
-    [messageBusy, ready, studio]
+    [messageBusy, ready, studio, focusActive, onSent]
   );
 
   const submit = () => {
@@ -534,10 +583,13 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      submit();
-    }
+    const action = enterAction(
+      { key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, isComposing: e.nativeEvent.isComposing },
+      coarse
+    );
+    if (action !== 'send') return; // a newline (or any other key) is the textarea's own default
+    e.preventDefault();
+    submit();
   };
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -593,18 +645,21 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   );
 
   useEffect(() => {
+    if (inSheet) return; // the docked composer is the bus's one listener
     const onCompose = (e: Event) => {
       const req = ((e as CustomEvent<ComposeRequest>).detail || {}) as ComposeRequest;
       if (typeof req.text === 'string') setText((prev) => (req.append && prev.trim() ? `${prev.replace(/\s+$/, '')}\n\n${req.text}` : req.text!));
       if (req.hint !== undefined) setHint(req.hint || null);
+      if (req.openPanel === 'format' || req.openPanel === 'style' || req.openPanel === 'quality') setPanel(req.openPanel);
       if (req.pickFiles) fileInputRef.current?.click();
-      else if (req.focus !== false) focusEnd();
+      else if (req.focus !== false && !req.openPanel) focusEnd();
     };
     window.addEventListener(COMPOSE_EVENT, onCompose);
     return () => window.removeEventListener(COMPOSE_EVENT, onCompose);
-  }, [focusEnd]);
+  }, [focusEnd, inSheet]);
 
   useEffect(() => {
+    if (inSheet) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -613,7 +668,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [focusEnd]);
+  }, [focusEnd, inSheet]);
 
   // ── Drag & drop ────────────────────────────────────────────────────────────
 
@@ -644,6 +699,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     }
   };
 
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const format = doc?.format;
@@ -651,11 +707,18 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const tierLabel = TIER_PRESETS[doc?.settings.quality || 'standard']?.label || 'Standard';
   const placeholder =
     hint ||
+    placeholderProp ||
     (doc?.conversation.length
       ? 'Reply, or describe a change…'
       : roomy
         ? 'Describe your comic, paste a script, or drop in character photos…'
         : 'Describe your comic or paste a script…');
+  const panelLabel = panel === 'format' ? 'Format' : panel === 'style' ? 'Style' : 'Quality';
+  // Phones: the box never grows past 30 % of the visible height, so the keyboard can't push the
+  // conversation away (mobile.md §3.8); elsewhere the 240 px cap of today.
+  const textareaMaxHeight = phone ? `min(${MAX_TEXTAREA_PX}px, calc(var(--app-h, 100dvh) * 0.3))` : `${MAX_TEXTAREA_PX}px`;
+  const showVoiceToggleInline = voiceOk && roomy;
+  const iconBtn = 'grid h-8 w-8 shrink-0 place-items-center rounded-full coarse:h-11 coarse:w-11';
 
   const chip = (id: ComposerPanel, label: React.ReactNode, title: string, extra?: string) => (
     <button
@@ -667,7 +730,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       disabled={!ready}
       onClick={() => setPanel((p) => (p === id ? null : id))}
       className={cx(
-        `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+        `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3.5 coarse:text-[13px]`,
         panel === id
           ? 'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)]'
           : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
@@ -678,14 +741,41 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     </button>
   );
 
+  /** A row of the attach sheet (44 px, 48 on touch); picking it opens the native picker in the same tap. */
+  const attachRow = (key: string, icon: React.ReactNode, label: string, detail: string, onPick: () => void) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        onPick();
+        setAttachOpen(false);
+      }}
+      className={`press flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 py-1.5 text-left ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:bg-[var(--ds-hover)] focus-visible:outline-none coarse:min-h-[48px]`}
+    >
+      <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--ds-surface-soft)] text-[var(--ds-muted)]">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[14px] text-[var(--ds-ink)]">{label}</span>
+        <span className={`block truncate text-[11.5px] ${MUTED}`}>{detail}</span>
+      </span>
+    </button>
+  );
+
   return (
-    <div className={cx('relative', className)} {...dropHandlers}>
+    <div ref={rootSizeRef} className={cx('relative min-w-0', className)} data-composer={variant} {...dropHandlers}>
       {doc && (
-        <PopSheet
+        <AdaptiveSheet
           open={panel !== null}
           onClose={() => setPanel(null)}
-          label={panel === 'format' ? 'Format' : panel === 'style' ? 'Style' : 'Quality'}
+          label={panelLabel}
+          title={panelLabel}
           anchorRef={chipsRef}
+          // Inside the phone sheet the panels stack as their own bottom sheet; elsewhere they pop above
+          // the composer as before (popover), or become a bottom sheet on phones / with the keyboard up.
+          presentation={inSheet ? 'bottom' : 'auto'}
+          strategy="absolute"
         >
           {panel === 'format' && <FormatPanel doc={doc} patch={studio.patch} byok={studio.byok} />}
           {panel === 'style' && (
@@ -703,12 +793,45 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             />
           )}
           {panel === 'quality' && <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} onDone={() => setPanel(null)} />}
-        </PopSheet>
+        </AdaptiveSheet>
       )}
+
+      <AdaptiveSheet
+        open={attachOpen}
+        onClose={() => setAttachOpen(false)}
+        label="Add to your message"
+        title="Add to your message"
+        anchorRef={plusRef}
+        placement="above"
+        align="start"
+        presentation={inSheet ? 'bottom' : 'auto'}
+        className="w-72 py-1"
+      >
+        <div role="menu" aria-label="Add to your message" className="flex flex-col p-1.5">
+          {attachRow('photos', <ImageIcon className="h-4 w-4" />, 'Photo library', 'Character photos or style references', () => photoInputRef.current?.click())}
+          {coarse && attachRow('camera', <Camera className="h-4 w-4" />, 'Take a photo', 'Use the camera — a person, a sketch, a place', () => cameraInputRef.current?.click())}
+          {attachRow('script', <FileText className="h-4 w-4" />, 'Script or document', '.txt · .md · .docx · .pdf · .fdx · .fountain', () => scriptInputRef.current?.click())}
+          {voiceOk && !showVoiceToggleInline && (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={autoSend}
+              onClick={toggleAutoSend}
+              className={`press mt-1 flex min-h-[44px] w-full items-center gap-3 rounded-xl border-t border-[var(--ds-hairline-soft)] px-3 py-1.5 text-left ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:bg-[var(--ds-hover)] focus-visible:outline-none coarse:min-h-[48px]`}
+            >
+              <AudioLines className={cx('h-4 w-4 shrink-0', autoSend ? 'text-[var(--ds-accent)]' : MUTED)} aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] text-[var(--ds-ink)]">Voice sends when I stop talking</span>
+                <span className={`block truncate text-[11.5px] ${MUTED}`}>{autoSend ? 'On — tap to review before sending' : 'Off — the text waits for you'}</span>
+              </span>
+            </button>
+          )}
+        </div>
+      </AdaptiveSheet>
 
       <div
         className={cx(
-          `${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`,
+          `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`,
           dragOver && 'border-[#D97757]/60 ring-2 ring-[#D97757]/30'
         )}
       >
@@ -718,34 +841,75 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           </div>
         )}
 
+        {focusActive && (
+          <div className="mb-1.5 flex min-w-0 pt-0.5">
+            <span
+              data-focus-chip
+              className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-[#D97757]/35 bg-[#D97757]/10 py-0.5 pl-2.5 pr-0.5 text-[12px] font-medium text-[var(--ds-ink)]"
+            >
+              <Crosshair className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
+              <span className="min-w-0 truncate" title={`Your next message is about ${focusText}`}>
+                About {focusText}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDismissedFocus(selectionKey)}
+                aria-label={`Don’t tie the next message to ${focusText}`}
+                title="Not about this selection"
+                className={`tap-target grid h-6 w-6 shrink-0 place-items-center rounded-full ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </span>
+          </div>
+        )}
+
         {attachments.length > 0 && (
           <ul className="mb-2 flex flex-wrap gap-2 pt-1" aria-label="Attachments">
-            {attachments.map((a) => (
-              <li key={a.id} className="relative">
-                {a.kind === 'image' ? (
-                  <img src={a.dataUrl} alt={a.name} className={`h-14 w-14 rounded-xl object-cover ${HAIRLINE}`} />
-                ) : (
-                  <div className={`flex h-14 max-w-[200px] items-center gap-2 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] pl-2.5 pr-3`}>
-                    <FileText className="h-5 w-5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
-                    <span className="min-w-0">
-                      <span className="block truncate text-[11px] font-medium text-[var(--ds-ink)]">{a.name}</span>
-                      <span className={`block text-[10px] ${MUTED}`}>
-                        {charCount(a.chars || 0)}
-                        {a.truncated ? ' · trimmed' : ''}
-                      </span>
+            {attachments.map((a) => {
+              const uploading = a.kind === 'image' && a.upload === 'pending';
+              const pct = Math.round((a.progress || 0) * 100);
+              return (
+                <li key={a.id} className="relative">
+                  {a.kind === 'image' ? (
+                    <span className="relative block">
+                      <img src={a.dataUrl} alt={a.name} className={cx(`h-14 w-14 rounded-xl object-cover ${HAIRLINE}`, uploading && 'opacity-80')} />
+                      {uploading && (
+                        <span
+                          role="progressbar"
+                          aria-label={`Uploading ${a.name}`}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={pct}
+                          className="absolute inset-x-1.5 bottom-1.5 h-1 overflow-hidden rounded-full bg-black/30"
+                        >
+                          <span className="block h-full rounded-full bg-white transition-[width] duration-200 motion-reduce:transition-none" style={{ width: `${Math.max(8, pct)}%` }} />
+                        </span>
+                      )}
                     </span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(a.id)}
-                  aria-label={`Remove ${a.name}`}
-                  className={`absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${SHADOW_SOFT} ${TRANSITION} hover:scale-105`}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </li>
-            ))}
+                  ) : (
+                    <div className={`flex h-14 max-w-[200px] items-center gap-2 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] pl-2.5 pr-3`}>
+                      <FileText className="h-5 w-5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px] font-medium text-[var(--ds-ink)]">{a.name}</span>
+                        <span className={`block text-[10px] ${MUTED}`}>
+                          {charCount(a.chars || 0)}
+                          {a.truncated ? ' · trimmed' : ''}
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(a.id)}
+                    aria-label={`Remove ${a.name}`}
+                    className={`tap-target absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${SHADOW_SOFT} ${TRANSITION} hover:scale-105 coarse:h-6 coarse:w-6`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
 
@@ -756,13 +920,20 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           disabled={!ready}
           aria-label="Message the Comic Director"
           placeholder={placeholder}
+          // Touch: Enter is a newline (the Send button sends) — the keyboard key says so.
+          enterKeyHint={coarse ? 'enter' : 'send'}
           onChange={(e) => {
             setText(e.target.value);
             autoGrow();
           }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          className="block max-h-[240px] min-h-[44px] w-full resize-none bg-transparent px-1.5 py-2 text-base leading-relaxed text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] disabled:opacity-60 sm:text-[14px]"
+          style={{ maxHeight: textareaMaxHeight }}
+          className={cx(
+            'block min-h-[44px] w-full resize-none bg-transparent px-1.5 py-2 leading-relaxed text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] disabled:opacity-60',
+            // 16 px on every touch device (iOS never zooms into the field); 14 px with a mouse on wide screens.
+            coarse ? 'text-base' : 'text-base sm:text-[14px]'
+          )}
         />
 
         {text.trim().length > MAX_MESSAGE_CHARS && (
@@ -773,50 +944,69 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
         {notice && (
           <div role="status" className="mb-1.5 flex items-start gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:text-amber-300">
-            <span className="flex-1">{notice}</span>
-            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="opacity-70 hover:opacity-100">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{notice}</span>
+            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="tap-target shrink-0 opacity-70 hover:opacity-100">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
         )}
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
           <input ref={fileInputRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-file-input" />
+          <input ref={photoInputRef} type="file" accept={IMAGE_ACCEPT} multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-photo-input" />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept={IMAGE_ACCEPT}
+            capture="environment"
+            hidden
+            onChange={(e) => e.target.files && void addFiles(e.target.files)}
+            data-testid="composer-camera-input"
+          />
+          <input ref={scriptInputRef} type="file" accept={SCRIPT_ACCEPT} hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-script-input" />
           <button
+            ref={plusRef}
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => (attachSheet ? setAttachOpen((o) => !o) : fileInputRef.current?.click())}
             disabled={!ready}
             aria-label="Add images or a script"
-            title="Add character photos, style references or a script (.txt, .md)"
-            className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${CONTROL_BTN} rounded-full ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
+            aria-haspopup={attachSheet ? 'menu' : undefined}
+            aria-expanded={attachSheet ? attachOpen : undefined}
+            title={attachSheet ? 'Add a photo, take one, or attach a script' : 'Add character photos, style references or a script (.txt, .md)'}
+            className={`${iconBtn} ${CONTROL_BTN} ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
           >
             <Plus className="h-4 w-4" />
           </button>
           {voiceOk && (
             <>
-              <DictationButton
-                disabled={!ready || messageBusy}
-                onStart={() => {
-                  dictationBaseRef.current = text;
-                }}
-                onPartial={applyDictation}
-                onFinal={onDictationFinal}
-              />
-              <button
-                type="button"
-                onClick={toggleAutoSend}
-                aria-pressed={autoSend}
-                aria-label="Auto-send when I stop talking"
-                title={autoSend ? 'Voice: sends when you stop talking (click to review first)' : 'Voice: fills the box for review (click to auto-send)'}
-                className={cx(
-                  // A quiet setting beside the mic, not a call to action: icon only, accent ink when on.
-                  `relative grid h-8 w-8 shrink-0 place-items-center rounded-full ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
-                  autoSend ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
-                )}
-              >
-                <AudioLines className="h-4 w-4" aria-hidden />
-                {autoSend && <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)] ring-2 ring-[var(--ds-surface)]" aria-hidden />}
-              </button>
+              {/* The shared dictation control keeps its desktop look; on touch its buttons get a 44 px height. */}
+              <span className="contents coarse:[&_button]:min-h-[44px]">
+                <DictationButton
+                  disabled={!ready || messageBusy}
+                  onStart={() => {
+                    dictationBaseRef.current = text;
+                  }}
+                  onPartial={applyDictation}
+                  onFinal={onDictationFinal}
+                />
+              </span>
+              {showVoiceToggleInline && (
+                <button
+                  type="button"
+                  onClick={toggleAutoSend}
+                  aria-pressed={autoSend}
+                  aria-label="Auto-send when I stop talking"
+                  title={autoSend ? 'Voice: sends when you stop talking (click to review first)' : 'Voice: fills the box for review (click to auto-send)'}
+                  className={cx(
+                    // A quiet setting beside the mic, not a call to action: icon only, accent ink when on.
+                    `relative ${iconBtn} ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+                    autoSend ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+                  )}
+                >
+                  <AudioLines className="h-4 w-4" aria-hidden />
+                  {autoSend && <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)] ring-2 ring-[var(--ds-surface)]" aria-hidden />}
+                </button>
+              )}
             </>
           )}
 
@@ -841,8 +1031,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               <>
                 <AspectGlyph aspect={format?.pageAspect || '2:3'} size={13} />
                 <span className="tabular-nums">
-                  {/* Phones: the glyph already shows the page shape. */}
-                  <span className="hidden sm:inline">{format?.pageAspect || '2:3'} · </span>
+                  {/* Narrow: the glyph already shows the page shape. */}
+                  {roomy && <span>{format?.pageAspect || '2:3'} · </span>}
                   {format?.pageCount ?? 6}p
                 </span>
               </>,
@@ -852,7 +1042,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               'style',
               <>
                 <Palette className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                <span className="max-w-[5.5rem] truncate sm:max-w-[9rem]">{styleName || 'Style'}</span>
+                <span className={cx('truncate', roomy ? 'max-w-[9rem]' : 'max-w-[5.5rem]')}>{styleName || 'Style'}</span>
               </>,
               'Art style'
             )}
@@ -874,7 +1064,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               disabled={cancelling}
               aria-label={cancelling ? 'Stopping' : 'Stop'}
               title={cancelling ? 'Stopping…' : 'Stop the director'}
-              className={`grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${TRANSITION} hover:opacity-85 disabled:opacity-50`}
+              className={`grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${TRANSITION} hover:opacity-85 disabled:opacity-50 coarse:h-11 coarse:w-11`}
             >
               <Square className="h-3.5 w-3.5 fill-current" />
             </button>
@@ -884,8 +1074,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               onClick={submit}
               disabled={!canSend}
               aria-label="Send"
-              title="Send (Enter)"
-              className={`grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)]`}
+              title={coarse ? 'Send' : 'Send (Enter)'}
+              className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
             >
               <ArrowUp className="h-4 w-4" />
             </button>

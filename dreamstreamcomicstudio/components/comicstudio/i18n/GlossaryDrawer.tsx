@@ -118,8 +118,9 @@ export const GlossaryDrawer: React.FC<GlossaryDrawerProps> = ({ studio, open, on
             Add the cast and places ({seed.length})
           </GhostButton>
         )}
-        <p aria-live="polite" className="sr-only">{note || ''}</p>
-        {note && <p className="mb-2 rounded-lg bg-[#D97757]/10 px-2.5 py-1.5 text-[12px]">{note}</p>}
+        <p role="status" aria-live="polite" className={note ? 'mb-2 rounded-lg bg-[#D97757]/10 px-2.5 py-1.5 text-[12px]' : 'sr-only'}>
+          {note || ''}
+        </p>
         {!glossary.length && <p className="mb-3 text-[13px] text-[var(--ds-muted)]">No terms yet. Translations add the names they use here automatically.</p>}
         <ul className="space-y-2.5">
           {glossary.map((term) => (

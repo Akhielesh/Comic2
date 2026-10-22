@@ -5,8 +5,9 @@
 // zh-CN → zh-Hans, pt-BR → pt) → the comic's own language. Switching writes the choice back with
 // history.replaceState, so a shared link carries the language.
 
+import { useCallback, useMemo, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
+import { editionProgress, editionReadiness, fallbackLineIds, i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { languageSpec, matchLanguage, sameLanguage } from '../../../shared/comic/languages';
 import type { ReaderLanguageSlot } from './ReaderLanguagePicker';
 
@@ -93,7 +94,7 @@ export function readerLanguageOptions(doc: ComicDoc, opts: { published?: readonl
     if (!spec) continue;
     const ready = opts.published ? true : editionReadiness(doc, code).publishable;
     if (!ready && !opts.includeDrafts) continue;
-    out.push({ code, label: spec.english, native: spec.endonym, ...(ready ? { status: 'ready' as const } : {}) });
+    out.push({ code, label: spec.english, native: spec.endonym, ...(ready ? { status: 'ready' as const } : { percent: translatedPercent(doc, code) }) });
   }
   return out;
 }
@@ -110,3 +111,74 @@ export const nextLanguage = (options: ReaderLanguageSlot['options'], current: st
   const i = options.findIndex((o) => sameLanguage(o.code, current));
   return options[(i + 1) % options.length].code;
 };
+
+export interface UseReaderLanguageArgs {
+  doc: ComicDoc | null | undefined;
+  /** Published editions (the public reader / share link). Omit in the studio: every publishable edition. */
+  published?: readonly string[];
+  /** Studio preview: drafts are offered too (marked by the missing `status`). */
+  includeDrafts?: boolean;
+  /** Remember the choice globally and write `?lang=` into the address bar (public reader). Default true. */
+  persist?: boolean;
+  /** Environment seams for tests (default: window.location.search, localStorage, navigator.languages). */
+  env?: { search?: string; stored?: string | null; navigatorLanguages?: readonly string[] };
+}
+
+export interface ReaderLanguageState {
+  lang: string;
+  reason: ReaderLanguageReason | 'picked';
+  /** Ready for ImmersiveReader / ReaderHud / ReaderLanguagePicker; undefined with a single language. */
+  slot?: ReaderLanguageSlot;
+  /** The doc as this reader sees it (localizeDoc; the same object for the source language). */
+  localized: ComicDoc | null;
+  /** Lines shown in the original language (draft previews only; a published edition has none). */
+  fallback: string[];
+  setLang(code: string): void;
+}
+
+/**
+ * Everything a reader surface needs for the language switch in one hook: the initial pick
+ * (`?lang=` → stored preference → browser → source, validated against what is actually offered),
+ * the picker slot, the localized doc, and a setter that remembers the choice and updates the URL
+ * with replaceState (no navigation, no reload; only the words change — the art and position stay).
+ */
+export function useReaderLanguage({ doc, published, includeDrafts, persist = true, env }: UseReaderLanguageArgs): ReaderLanguageState {
+  const [picked, setPicked] = useState<string | null>(null);
+  const source = doc?.format.language || 'en';
+  const publishedKey = published ? published.join(',') : null;
+  const options = useMemo(
+    () => (doc ? readerLanguageOptions(doc, { published: publishedKey === null ? undefined : publishedKey.split(',').filter(Boolean), includeDrafts }) : []),
+    [doc, publishedKey, includeDrafts]
+  );
+  const codes = options.map((o) => o.code).join(',');
+  const initial = useMemo(() => {
+    const available = codes.split(',').filter(Boolean);
+    const navigatorLanguages = env?.navigatorLanguages ?? (typeof navigator !== 'undefined' ? navigator.languages || [navigator.language] : []);
+    return pickReaderLanguage({
+      urlLang: readUrlLang(env?.search),
+      stored: persist ? (env && 'stored' in env ? env.stored ?? null : readStoredReaderLang()) : null,
+      navigatorLanguages: navigatorLanguages.filter((l): l is string => typeof l === 'string'),
+      source,
+      published: available.filter((c) => !sameLanguage(c, source))
+    });
+    // The environment is read once per offered set (a new doc or a new published list re-picks).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codes, source, persist]);
+  const pickedValid = !!picked && options.some((o) => sameLanguage(o.code, picked));
+  const lang = pickedValid ? options.find((o) => sameLanguage(o.code, picked!))!.code : initial.lang;
+  const reason: ReaderLanguageState['reason'] = pickedValid ? 'picked' : initial.reason;
+
+  const setLang = useCallback(
+    (code: string) => {
+      setPicked(code);
+      if (!persist) return;
+      storeReaderLang(code);
+      syncLangToUrl(code, source);
+    },
+    [persist, source]
+  );
+  const localized = useMemo(() => (doc ? localizeDoc(doc, lang) : null), [doc, lang]);
+  const fallback = useMemo(() => (localized && localized !== doc ? fallbackLineIds(localized) : []), [localized, doc]);
+  const slot = useMemo<ReaderLanguageSlot | undefined>(() => (options.length > 1 ? { current: lang, options, onChange: setLang } : undefined), [options, lang, setLang]);
+  return { lang, reason, slot, localized, fallback, setLang };
+}

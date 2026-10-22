@@ -130,8 +130,11 @@ const native = (list: string[]) => new RegExp(`(?:${list.map((w) => w.normalize(
 /** Rating-shaping and extra sexual/abuse terms not in the obscenity dataset. */
 export const LEXICON: readonly LexEntry[] = [
   // ── Sexual (beyond the dataset) ──
-  { re: words(['erotica?', 'onlyfans', 'xxx', 'strip ?tease', 'sexting', 'sex ?tape', 'nudes']), category: 'sexual', tier: 'block', sexualSignal: true },
-  { re: words(['sexy', 'seductive(?:ly)?', 'seduc(?:e|es|ed|ing)', 'lingerie', 'nsfw', 'stripper', 'aroused', 'horny', 'kinky', 'make ?out', 'making ?out', 'lap ?dance', 'brothel']), category: 'sexual', tier: 'ambiguous', sexualSignal: true },
+  { re: words(['erotica?', 'onlyfans', 'strip ?tease', 'sexting', 'sex ?tape', 'nudes']), category: 'sexual', tier: 'block', sexualSignal: true },
+  // Ambiguous sexual words are WEAK signals: near a minor or a public figure they go to the
+  // classifier (never a strike by themselves). "Make out" only in its kissing sense ("the kids
+  // could barely make out the castle" is innocent); "xxx" is also how people sign off with kisses.
+  { re: words(['sexy', 'seductive(?:ly)?', 'seduc(?:e|es|ed|ing)', 'lingerie', 'nsfw', 'stripper', 'aroused', 'horny', 'kinky', 'make ?out with', 'makes ?out with', 'making ?out', 'made ?out with', 'lap ?dance', 'brothel', 'xxx']), category: 'sexual', tier: 'ambiguous', sexualSignal: true },
   { re: words(['naked', 'nude', 'nudity', 'topless', 'undress(?:es|ed|ing)?', 'unclothed', 'skinny ?dipping']), category: 'nudity', tier: 'ambiguous', nuditySignal: true },
 
   // ── Graphic gore: never clear by itself (the classifier decides adapt vs X) ──
@@ -184,9 +187,15 @@ export const LEXICON: readonly LexEntry[] = [
  * a weapon/drug/poison. "the hero builds a bomb shelter" never matches (no instruction words).
  */
 export const DANGEROUS_INSTRUCTIONS: readonly RegExp[] = [
-  /\b(?:how (?:do (?:i|you) |to )|recipe (?:for|to)|steps? (?:to|for)|step[- ]by[- ]step|instructions? (?:for|to|on)|guide (?:to|for)|tutorial|teach me (?:how )?to|ways? to)\b.{0,60}?\b(?:make|making|build|building|cook|cooking|synthesi[sz]e|assemble|brew|mix|3d[- ]print|manufacture)\b.{0,40}?\b(?:pipe ?bombs?|bombs?|explosives?|ied|napalm|thermite|molotov\w*|meth\w*|crack|poisons?|nerve (?:agent|gas)|ricin|sarin|anthrax|ghost guns?|silencers?|suppressors?|untraceable guns?|grenades?|landmines?)\b/,
+  // Story props are excluded: bomb shelters/squads, poison apples and potions (fantasy), "a crack
+  // in the wall", "method" (meth is matched as a whole word only).
+  /\b(?:how (?:do (?:i|you) |to )|recipe (?:for|to)|steps? (?:to|for)|step[- ]by[- ]step|instructions? (?:for|to|on)|guide (?:to|for)|tutorial|teach me (?:how )?to|ways? to)\b.{0,60}?\b(?:make|making|build|building|cook|cooking|synthesi[sz]e|assemble|brew|mix|3d[- ]print|manufacture)\b.{0,40}?\b(?:pipe ?bombs?|bombs?(?![- ](?:shelters?|squads?|disposal|drills?|threats?|scares?|proof|sniff\w*))|explosives?|ied|napalm|thermite|molotov\w*|meth|methamphetamine|crystal meth|crack cocaine|crack rocks?|poisons?(?![- ](?:apples?|potions?|ivy|darts?|mushrooms?|frogs?|berr(?:y|ies)|oak|gas cloud))|nerve (?:agent|gas)|ricin|sarin|anthrax|ghost guns?|silencers?|suppressors?|untraceable guns?|grenades?|landmines?)\b/,
   /\b(?:how (?:do (?:i|you) |to )|best way to|easiest way to|ways? to)\b.{0,30}?\b(?:poison (?:someone|a person|my|him|her|them)|make (?:someone|a person) overdose|untraceable poison)\b/
 ];
+
+/** Supportive framing around a self-harm instruction match ("how to help a friend who…", "ways to
+ *  prevent suicide"): the classifier decides instead of a block. */
+export const SELF_HARM_SUPPORT = /\b(?:prevent\w*|stop(?:ping)?|help(?:ing)?|support\w*|talk(?:ing)? (?:to|with|about)|cope|coping|awareness|recover\w*|survive|surviving|hotline|helpline|counsel\w*|therap\w*)\b/;
 
 /** Instructions for self-harm (block, `self_harm`, no strike: answered with care). */
 export const SELF_HARM_INSTRUCTIONS: readonly RegExp[] = [

@@ -113,6 +113,21 @@ describe('POST /api/comic/projects/:id/safety-review (owner appeal)', () => {
     expect(ctx.session.doc.conversation.at(-1)).toMatchObject({ role: 'assistant', text: expect.stringMatching(/Second look/) });
   });
 
+  it('a suspended account cannot ask for (platform-paid) second looks', async () => {
+    fakes.store.statuses.set('user-9', 'suspended');
+    const contextFor = vi.fn();
+    const a = express();
+    a.use(express.json());
+    a.use(asUser('user-9'));
+    a.use('/api/comic', createComicSafetyRouter({ contextFor }));
+    await serve(a, async (base) => {
+      const res = await post(`${base}/api/comic/projects/proj-1/safety-review`, { target: { kind: 'cover' } });
+      expect(res.status).toBe(403);
+    });
+    expect(contextFor).not.toHaveBeenCalled();
+    expect(fakes.llm.calls).toHaveLength(0);
+  });
+
   it('needs a signed-in user', async () => {
     const a = express();
     a.use(express.json());

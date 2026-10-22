@@ -5,7 +5,9 @@
 //   set_chapter          mark (or clear) a chapter start on a page (scrubber marks, End-card list) → `page {chapterTitle}`
 //
 // Both are FREE (software settings: no spend, no gate, no redraw) and never change a page's spec hash.
-// Phase gate: at least one page drawn — before that there is nothing to read.
+// Phase gate: the comic has a page plan. Readers' settings and chapter marks are part of planning the
+// book too ("make page 3 the start of chapter 2" while planning), and the director must never be left
+// without a way to do what the user asked; before any plan there is nothing to set.
 // Results are honest sentences that say exactly what changed (or that nothing needed to), so the
 // director always has something visible to tell the user. Guided View is never the default
 // (decisions-final #11); asking for it gets an explanation, not a silent no-op.
@@ -28,8 +30,6 @@ const TURN_WORD: Record<ReaderSettings['turn'], string> = {
 };
 
 const sortedPages = (doc: ComicDoc): Page[] => [...doc.pages].sort((a, b) => a.n - b.n);
-const isDrawn = (p: Page) => !!p.render.asset?.path;
-const drawnCount = (doc: ComicDoc) => doc.pages.filter(isDrawn).length;
 const quote = (t: string, max = 60) => `“${t.length > max ? `${t.slice(0, max - 1)}…` : t}”`;
 const int = (v: unknown): number | undefined => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v.replace(/^page\s*/i, '')) : Number.NaN;
@@ -177,7 +177,7 @@ function setChapterTool(ctx: StudioContext): DirectorTool {
 export const readerToolGroup: ToolGroup = {
   id: 'reader',
   priority: 70,
-  when: (ctx: StudioContext) => drawnCount(ctx.session.doc) > 0,
+  when: (ctx: StudioContext) => ctx.session.doc.pages.length > 0,
   tools: (ctx: StudioContext, _turn: DirectorTurn): DirectorTool[] => [setReaderOptionsTool(ctx), setChapterTool(ctx)],
   promptRules: () =>
     'READER (free): how the finished comic reads — page-turn style (paper curl / slide / fade), Guided View overview, paper texture, ambient colour, End-card credits and an inside-cover dedication — is set with set_reader_options; chapter marks with set_chapter. Guided View (panel by panel) is never the default: readers open it with one tap. Confirm every change in one visible sentence.',

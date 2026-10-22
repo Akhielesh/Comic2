@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failureCaption, failureKind, failureReason, formatFailedAt, isTransientFailure } from './failure';
+import { failureCaption, failureFacts, failureKind, failureReason, formatFailedAt, isTransientFailure } from './failure';
 
 describe('failure copy', () => {
   it('classifies provider errors into short, calm reasons', () => {
@@ -27,5 +27,23 @@ describe('failure copy', () => {
     expect(formatFailedAt(undefined, now)).toBeUndefined();
     expect(failureCaption('429', new Date(2026, 9, 22, 16, 52).getTime(), now)).toBe('failed 16:52 · rate limited');
     expect(failureCaption(undefined, undefined, now)).toBe('failed · didn’t finish');
+  });
+
+  it('failureFacts reads errorDetail (object or string) and falls back to error + updatedAt', () => {
+    expect(failureFacts(undefined)).toEqual({});
+    expect(failureFacts({ error: 'Timed out', updatedAt: 5 })).toEqual({ error: 'Timed out', at: 5 });
+    const obj = failureFacts({
+      error: 'Busy right now.',
+      updatedAt: 9,
+      attempts: 3,
+      errorDetail: { code: '429', provider: 'OpenRouter', at: 7, text: 'upstream Google' }
+    } as never);
+    expect(obj).toEqual({ error: 'Busy right now. — upstream Google — 429', at: 7, facts: 'OpenRouter · 429', attempts: 3 });
+    expect(failureReason(obj.error)).toBe('rate limited');
+    // a string detail is shown as-is (capped), never parsed
+    const long = `OpenRouter · 503 · ${'x'.repeat(300)}`;
+    expect(failureFacts({ errorDetail: long } as never).facts).toHaveLength(120);
+    // junk is ignored, not shown
+    expect(failureFacts({ error: 'x', errorDetail: { at: 'yesterday', code: 42 } } as never)).toEqual({ error: 'x' });
   });
 });

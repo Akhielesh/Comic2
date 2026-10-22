@@ -1,6 +1,6 @@
 // Page-turn sound (reader.md §6.5): synthesized with WebAudio — a short burst of noise through a
 // sweeping band-pass with a quick swell and fade. No audio asset, no licence, $0. Off by default; the
-// AudioContext is created lazily on the first turn after the reader turns sound on (a user gesture).
+// AudioContext is created in the gesture that turns sound on (primePaperSound), else on the first turn.
 
 type AudioCtor = typeof AudioContext;
 
@@ -60,6 +60,19 @@ export function playPageTurn(kind: 'turn' | 'soft' | 'heavy' = 'turn'): void {
     src.connect(band).connect(gain).connect(ac.destination);
     src.start(t0);
     src.stop(t0 + 0.3);
+  } catch {
+    /* audio unavailable — silent */
+  }
+}
+
+/**
+ * Create/resume the AudioContext inside the user's gesture that turned sound on: iOS Safari only lets
+ * audio start from a gesture's call stack, and turns play later from animation frames.
+ */
+export function primePaperSound(): void {
+  const ac = ensure();
+  try {
+    if (ac && ac.state === 'suspended') void ac.resume();
   } catch {
     /* audio unavailable — silent */
   }

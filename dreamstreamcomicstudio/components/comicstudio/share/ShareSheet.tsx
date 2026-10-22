@@ -51,7 +51,7 @@ const rightSegmentLeft = (): number | null => {
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-type Confirm = null | 'unpublish' | 'regenerate';
+type Confirm = null | 'unpublish' | 'regenerate' | 'public';
 
 export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose }) => {
   const doc = studio.doc;
@@ -68,6 +68,10 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const panelRef = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const dragStart = useRef<number | null>(null);
+  // Parents often pass an inline onClose; keep the latest in a ref so a parent re-render (the
+  // conversation streams constantly) never re-runs the focus effect and yanks focus to Close.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // Layout follows the viewport (rotation, foldable posture, window resize).
   useLayoutEffect(() => {
@@ -101,7 +105,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab' || !panelRef.current) return;
@@ -124,7 +128,14 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       document.body.style.overflow = prevOverflow;
       returnFocus.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
+
+  // A confirmation (unpublish / new link / go public) takes focus on its SAFE choice ("Keep it…"),
+  // so keyboard and screen-reader users hear the question instead of tabbing past it.
+  useEffect(() => {
+    if (!open || !confirm) return;
+    panelRef.current?.querySelector<HTMLElement>('[role="alertdialog"] button')?.focus();
+  }, [open, confirm]);
 
   const after = useCallback(
     async (next: PublicationOwnerView | null) => {
@@ -147,6 +158,9 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
         setConfirm(null);
       } catch (err) {
         setError((err as Error)?.message || "That didn't work. Nothing changed — try again.");
+        // A refusal can still teach us something (the safety check records which page it
+        // blocked): refresh readiness so "Publish without page N" can appear right away.
+        studio.refreshPublication().catch(() => undefined);
       } finally {
         setBusy(false);
       }
@@ -165,9 +179,15 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
 
   const choose = (v: 'private' | 'unlisted' | 'public') => {
     setError(null);
-    if (v === current) return setPublishAs(null);
+    if (v === current) {
+      setConfirm(null);
+      return setPublishAs(null);
+    }
     if (v === 'private') return setConfirm('unpublish');
     if (!live) return setPublishAs(v);
+    // Listing a live comic in the public gallery is a privacy step (kids' comics): ask first.
+    if (v === 'public') return setConfirm('public');
+    setConfirm(null);
     void run(() => updatePublication(doc.id, { visibility: v }));
   };
   const publish = (request: PublishRequest) => void run(() => publishComic(doc.id, request));
@@ -215,28 +235,50 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     </div>
   );
 
-  const confirmBox = confirm && (
-    <div role="alertdialog" aria-label={confirm === 'unpublish' ? 'Unpublish?' : 'Get a new link?'} className="rounded-xl border border-red-500/30 bg-red-500/[0.06] p-3">
-      <p className="m-0 text-[13px] text-[var(--ds-ink)]">
-        {confirm === 'unpublish'
-          ? 'Unpublish? The link stops working for everyone. Publishing again creates a new link.'
-          : 'Get a new link? The current link stops working for everyone right away.'}
-      </p>
-      <div className="mt-2 flex flex-wrap justify-end gap-2">
-        <button type="button" onClick={() => setConfirm(null)} className="min-h-[44px] rounded-xl px-4 text-[14px] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">
-          Keep it
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void run(() => (confirm === 'unpublish' ? unpublishComic(doc.id) : regeneratePublicationLink(doc.id)))}
-          className="min-h-[44px] rounded-xl bg-red-600 px-4 text-[14px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-        >
-          {busy ? 'Working…' : confirm === 'unpublish' ? 'Unpublish' : 'Get new link'}
-        </button>
+  const confirmBox =
+    confirm === 'public' ? (
+      <div role="alertdialog" aria-label="List it in the public gallery?" className="rounded-xl border border-[#D97757]/35 bg-[#D97757]/[0.07] p-3">
+        <p className="m-0 text-[13px] text-[var(--ds-ink)]">
+          List it in the public gallery? Anyone can find and read it there, not just people with the link. Readers still can’t edit. A quick safety check runs first.
+        </p>
+        <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={() => setConfirm(null)} className="min-h-[44px] rounded-xl px-4 text-[14px] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">
+            Keep it unlisted
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void run(() => updatePublication(doc.id, { visibility: 'public' }))}
+            className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-4 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-50"
+          >
+            {busy ? 'Working…' : 'Make it public'}
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    ) : (
+      confirm && (
+        <div role="alertdialog" aria-label={confirm === 'unpublish' ? 'Unpublish?' : 'Get a new link?'} className="rounded-xl border border-red-500/30 bg-red-500/[0.06] p-3">
+          <p className="m-0 text-[13px] text-[var(--ds-ink)]">
+            {confirm === 'unpublish'
+              ? 'Unpublish? The link stops working for everyone. Publishing again creates a new link.'
+              : 'Get a new link? The current link stops working for everyone right away.'}
+          </p>
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setConfirm(null)} className="min-h-[44px] rounded-xl px-4 text-[14px] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">
+              Keep it
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(() => (confirm === 'unpublish' ? unpublishComic(doc.id) : regeneratePublicationLink(doc.id)))}
+              className="min-h-[44px] rounded-xl bg-red-600 px-4 text-[14px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {busy ? 'Working…' : confirm === 'unpublish' ? 'Unpublish' : 'Get new link'}
+            </button>
+          </div>
+        </div>
+      )
+    );
 
   const fallback = fallbackUrl && (
     <div className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3">
@@ -281,7 +323,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       {suspended && view?.suspendedReason && (
         <p className="m-0 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">{view.suspendedReason}</p>
       )}
-      {confirm === 'unpublish' && confirmBox}
+      {(confirm === 'unpublish' || confirm === 'public') && confirmBox}
       {publishAs ? (
         <PublishPanel doc={doc} view={view} visibility={publishAs} busy={busy} error={error} onPublish={publish} onCancel={() => setPublishAs(null)} />
       ) : (

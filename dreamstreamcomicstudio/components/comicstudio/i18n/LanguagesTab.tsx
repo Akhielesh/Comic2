@@ -518,7 +518,7 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
                     <span key={code} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-[var(--ds-raised)] py-1 pl-3 pr-1 text-[13px] shadow-sm">
                       <span lang={code} dir={dirOf(code)} className="break-words">{s.endonym}</span>
                       {q && <span className="text-[11.5px] tabular-nums text-[var(--ds-muted)]">{q.usd > 0 ? `≈ ${formatUsd(q.usd)}` : 'Free'}</span>}
-                      <button type="button" aria-label={`Remove ${s.english}`} onClick={() => setPending((p) => p.filter((x) => x !== code))} className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--ds-hover)] coarse:h-9 coarse:w-9">
+                      <button type="button" aria-label={`Remove ${s.english}`} onClick={() => setPending((p) => p.filter((x) => x !== code))} className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11">
                         <X className="h-3.5 w-3.5" aria-hidden />
                       </button>
                     </span>

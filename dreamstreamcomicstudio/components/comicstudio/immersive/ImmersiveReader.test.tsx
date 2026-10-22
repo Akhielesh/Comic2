@@ -10,6 +10,9 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { ImmersiveReader } from './ImmersiveReader';
 import { pageImageCache } from './pageImageCache';
 
+const pdfMock = vi.hoisted(() => ({ exportComicPdf: vi.fn() }));
+vi.mock('../export/pdfExport', () => pdfMock);
+
 const drawnDoc = (): ComicDoc =>
   makeSampleDoc((d) => {
     d.cover.render = { status: 'ready', history: [], asset: { path: 'u/cover.png', source: 'generated', at: 0, w: 1000, h: 1500 } };
@@ -134,6 +137,27 @@ describe('ImmersiveReader', () => {
     expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 2 of 3/);
   });
 
+  it('double-tapping the right-hand page of a spread opens Guided View on that page (not the left one)', () => {
+    reduce = true;
+    setViewport(1280, 800);
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={2} onExit={() => undefined} />);
+    expect(root().dataset.layout).toBe('spread');
+    expect(counter()).toBe('Pages 2–3 of 6');
+    const stage = screen.getByTestId('book-stage');
+    // jsdom has no layout: the stage rect is 0×0, so client coordinates are stage coordinates and every tap
+    // reads as a centre tap. The book is centred (x ≈ 139..1141); x = 890 is on the right-hand page.
+    const tap = (x: number) => {
+      fireEvent.pointerDown(stage, { clientX: x, clientY: 400, pointerId: 1, pointerType: 'touch' });
+      fireEvent.pointerUp(stage, { clientX: x, clientY: 400, pointerId: 1, pointerType: 'touch' });
+    };
+    act(() => {
+      tap(890);
+      tap(890);
+    });
+    expect(root().dataset.guided).toBe('true');
+    expect(counter()).toBe('Page 3 of 6');
+  });
+
   it('Escape: leave Guided View first, then close the reader', () => {
     reduce = true;
     const onExit = vi.fn();
@@ -186,6 +210,26 @@ describe('ImmersiveReader', () => {
     expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
   });
 
+  it('a withheld (blocked) page never goes into the PDF; the toast counts what was left out', async () => {
+    reduce = true;
+    setViewport(1280, 800);
+    const seen: (string | undefined)[] = [];
+    const spy = pdfMock.exportComicPdf.mockImplementation(async (d: ComicDoc, urlFor: (a: unknown) => string | undefined) => {
+      for (const p of d.pages) seen.push(urlFor(p.render.asset));
+      return { fileName: 'x.pdf', pages: 5, failed: [{ label: 'Page 6', message: 'network' }], skipped: ['Page 2 (image link not ready yet)'] };
+    });
+    const doc = drawnDoc();
+    doc.pages[1].render.asset!.safety = { assessed: 'X', at: 1 };
+    render(<ImmersiveReader doc={doc} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    });
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(seen[1]).toBeUndefined();
+    expect(seen[0]).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/Downloaded 5 pages — 2 couldn’t be included/)).toBeInTheDocument());
+  });
+
   it('wide screens read in spreads with the cover alone on the right', () => {
     reduce = true;
     setViewport(1280, 800);
@@ -208,7 +252,8 @@ describe('ImmersiveReader', () => {
     expect(page2.dataset.visible).toBe('false'); // mounted early (decoded, measured), not shown
     press('ArrowRight');
     expect(page2.dataset.visible).toBe('true'); // revealed under the leaf
-    await waitFor(() => expect(page1.style.clipPath).toMatch(/^polygon\(/));
+    // Polled finely: the fold lives ~560 ms, and a loaded CI box can be slow to schedule frames.
+    await waitFor(() => expect(page1.style.clipPath).toMatch(/^polygon\(/), { timeout: 3000, interval: 5 });
     expect(screen.getByTestId('paper-back')).toBeInTheDocument();
     await waitFor(() => expect(counter()).toBe('Page 2 of 6'), { timeout: 3000 });
     expect(page1.style.clipPath).toBe('');

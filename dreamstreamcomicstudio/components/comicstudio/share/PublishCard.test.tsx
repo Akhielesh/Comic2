@@ -36,6 +36,16 @@ describe('PublishCard', () => {
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'publish', cardId: 'c1', request: { visibility: 'unlisted' } }));
   });
 
+  it('an Update card says honestly whether readers will see new edits', () => {
+    const behind = makeFakeStudio({ publication: { behind: true } as never });
+    const { unmount } = render(<PublishCard card={card({ mode: 'update' })} message={msg} studio={behind} />);
+    expect(screen.getByText(/including any edits since you published/)).toBeInTheDocument();
+    unmount();
+    const same = makeFakeStudio({ publication: { behind: false } as never });
+    render(<PublishCard card={card({ mode: 'update' })} message={msg} studio={same} />);
+    expect(screen.getByText(/published pages stay the same/)).toBeInTheDocument();
+  });
+
   it('Not now declines', async () => {
     const studio = makeFakeStudio();
     render(<PublishCard card={card()} message={msg} studio={studio} />);

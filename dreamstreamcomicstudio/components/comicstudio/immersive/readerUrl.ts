@@ -60,6 +60,8 @@ export const withReaderParams = (href: string, params: ReaderParams): string => 
 export const createUrlSync = (debounceMs = 300) => {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let next: ReaderParams | null = null;
+  /** The last position scheduled (re-applied after the reader's own history entry is popped). */
+  let last: ReaderParams | null = null;
   const flush = () => {
     if (timer) clearTimeout(timer);
     timer = null;
@@ -77,10 +79,17 @@ export const createUrlSync = (debounceMs = 300) => {
   return {
     schedule(params: ReaderParams) {
       next = params;
+      last = params;
       if (timer) clearTimeout(timer);
       timer = setTimeout(flush, debounceMs);
     },
     flush,
+    /** Write the last scheduled position again, now (e.g. onto the entry under a popped reader entry). */
+    reapply() {
+      if (!last) return;
+      next = last;
+      flush();
+    },
     cancel() {
       if (timer) clearTimeout(timer);
       timer = null;

@@ -174,7 +174,8 @@ export async function classifyText(
   const spans = (Array.isArray(json.spans) ? json.spans : [])
     .map((s) => (s && typeof s === 'object' ? (s as Record<string, unknown>) : {}))
     .map((s) => ({ where: neutral(s.where, 60), category: asCategories([s.category])[0] }))
-    .filter((s): s is { where: string; category: SafetyCategory } => !!s.where && !!s.category)
+    // A locator that quotes the text ("…") is dropped: notes are stored in the doc and must never hold excerpts.
+    .filter((s): s is { where: string; category: SafetyCategory } => !!s.where && !!s.category && !/["“”«»„]/.test(s.where))
     .slice(0, 6);
   return {
     assessed,

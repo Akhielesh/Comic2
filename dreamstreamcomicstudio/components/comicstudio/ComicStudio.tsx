@@ -1,40 +1,51 @@
-// Comic Studio (v4) shell: header + conversation | board.
+// Comic Studio shell: header + conversation | board, on every form factor (mobile.md §3; contract §13.4).
 //
-// Desktop (≥1024px): a resizable split — conversation ~40% | board ~60% (persisted under
-// 'comicstudio.split'). Narrow screens: one column with a sticky Chat | Board switch; the
-// composer stays docked in both views, and a small "3 pages rendering · View" pill points
-// at the board instead of yanking the user there.
+// `ComicStudioShell({ studio, onBack })` renders a loaded (or loading) controller — the QA harness
+// mounts it with a fixture controller — and `ComicStudio` wires it to `useStudio(projectId)`.
+// One form factor (useFormFactor) decides the layout (mobile/shell/StudioLayout.tsx):
+//   single       phones portrait (< 720 wide): one pane at a time + a bottom tab bar (Chat · Board · Read)
+//   single-rail  phones landscape (< 480 tall): the same with a left navigation rail
+//   split        tablets ≥ 720 and desktop: resizable conversation | board (+ Chat | Both | Board switcher)
+//   dual-screen  foldables spanning two segments: chat and board each in their own segment
+// Both panes stay mounted (the hidden one is `inert`), so scroll, drafts and tab scroll survive.
 //
-// The header carries the project-level controls: back, the editable title, quality,
-// the truthful spend chip (with a by-kind breakdown and BYOK note), Read, and Settings
-// (confirm policy, budget cap, lettering, reading direction). Feature controls (Share,
-// Easy/Pro, savings) join through the header slot registry (features.ts, contract §13.2),
-// interleaved with the built-ins by `order`.
+// The header carries back, the editable title, quality, the truthful spend chip (with a by-kind
+// breakdown and BYOK note), Read and the ⋯ menu (settings, resync, install). On phones it keeps only
+// Back · Title · Share · $ · ⋯ — everything else moves into ⋯, a thumb-reachable bottom sheet.
+// Feature controls (Share, Easy/Pro, savings, a model-status pill) join through the header slot
+// registry (features.ts, contract §13.2) interleaved by `order`; slots ordered ≥ 1000 render as a
+// full-width calm banner strip under the header (mobile/headerSlots.ts).
+// Keyboard-safe: the root follows the visible height (--app-h from useKeyboardInset), safe areas are
+// tokens (--sa-*), and the back gesture closes the top layer (reader, sheets) before the studio.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   AlertTriangle,
   ArrowLeft,
   BookOpen,
   ChevronDown,
-  Image as ImageIcon,
+  Download,
+  LayoutGrid,
   MessageSquare,
   MoreHorizontal,
   RefreshCw,
-  Settings2
+  Settings2,
+  Sparkles,
+  Wallet
 } from 'lucide-react';
 import type { ComicDoc, ConfirmPolicy, SpendKind } from '../../shared/comic/doc';
 import type { DocOp } from '../../shared/comic/ops';
 import { TIER_PRESETS, formatUsd } from '../../shared/comic/models';
-import { applyGutterDelta } from '../studio/kit/ResizableSplit';
-import { useIsWide } from '../studio/kit/useMediaQuery';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
-import { CANVAS_BG, HAIRLINE, MENU_ITEM, TRANSITION } from '../chat/studioDesign';
+import { CANVAS_BG, HAIRLINE, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { BoardPane } from './board/BoardPane';
+import { pageProgress } from './board/boardModel';
 import { ConversationPane } from './conversation/ConversationPane';
-import { PopSheet, SlideOver } from './conversation/PopSheet';
+import { StudioComposer, type StudioComposerHandle } from './conversation/StudioComposer';
+import { COMPOSE_EVENT } from './conversation/composerBus';
 import { QualityPanel } from './conversation/panels/QualityPanel';
 import { LETTERING_OPTIONS } from './conversation/panels/FormatPanel';
 import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from './conversation/ui';
@@ -42,103 +53,27 @@ import { renderingPageCount } from './studioReducer';
 import { useStudio, type ComicStudioController } from './useStudio';
 import type { BoardTab } from './types';
 import { BUILTIN_HEADER_ORDER, registeredHeaderSlots, type HeaderSlotRegistration } from './features';
+import { headerVariantFor, isPhoneLayout, showsPaneSwitcher, type FormFactor, type HeaderVariant } from './mobile/formFactor';
+import { useFormFactor } from './mobile/useFormFactor';
+import { useKeyboardInset } from './mobile/useKeyboardInset';
+import { useThemeColor } from './mobile/useThemeColor';
+import { useBackLayer } from './mobile/backStack';
+import { HEADER_BANNER_MIN_ORDER } from './mobile/headerSlots';
+import { ModeToggle } from './mobile/ModeToggle';
+import { SavingsBreakdown, savedTotal } from './mobile/SavingsChip';
+import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
+import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
+import type { StudioNavItem } from './mobile/shell/MobileTabBar';
+import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
+import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
 
-export const SPLIT_STORAGE_KEY = 'comicstudio.split';
-const DEFAULT_SPLIT = [40, 60];
-const MIN_PANE_PX = 360;
+export { SPLIT_STORAGE_KEY };
 
-// ── Split view ───────────────────────────────────────────────────────────────
+// The full-screen reader is a heavy engine (page flip, guided view): loaded the first time it opens.
+const ImmersiveReader = React.lazy(() => import('./immersive/ImmersiveReader').then((m) => ({ default: m.ImmersiveReader })));
 
-const readSplit = (): number[] => {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(SPLIT_STORAGE_KEY) || 'null');
-    if (Array.isArray(parsed) && parsed.length === 2 && parsed.every((x) => typeof x === 'number' && x > 0)) return parsed;
-  } catch {
-    /* fall through */
-  }
-  return DEFAULT_SPLIT.slice();
-};
-
-/** Two-pane horizontal split in calm-studio chrome; the gutter is draggable and keyboard-adjustable. */
-const SplitView: React.FC<{ left: React.ReactNode; right: React.ReactNode }> = ({ left, right }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [sizes, setSizes] = useState<number[]>(readSplit);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(SPLIT_STORAGE_KEY, JSON.stringify(sizes));
-    } catch {
-      /* not persisted */
-    }
-  }, [sizes]);
-
-  const minFrac = (sum: number) => {
-    const width = containerRef.current?.getBoundingClientRect().width || 0;
-    return width > 0 ? Math.min(sum * 0.45, (MIN_PANE_PX / width) * sum) : sum * 0.25;
-  };
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return;
-    const start = sizes.slice();
-    const sum = start[0] + start[1];
-    const startX = e.clientX;
-    const min = minFrac(sum);
-    const onMove = (ev: PointerEvent) => setSizes(applyGutterDelta(start, 0, ((ev.clientX - startX) / rect.width) * sum, min));
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const sum = sizes[0] + sizes[1];
-    const step = sum * 0.03;
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault();
-      setSizes((s) => applyGutterDelta(s, 0, e.key === 'ArrowLeft' ? -step : step, minFrac(sum)));
-    } else if (e.key === 'Home' || e.key === 'Enter') {
-      e.preventDefault();
-      setSizes(DEFAULT_SPLIT.slice());
-    }
-  };
-
-  const leftPct = Math.round((sizes[0] / (sizes[0] + sizes[1])) * 100);
-
-  return (
-    <div ref={containerRef} className="flex h-full min-h-0 w-full">
-      <div className="flex min-h-0 min-w-0" style={{ flexGrow: sizes[0], flexShrink: 1, flexBasis: 0 }}>
-        {left}
-      </div>
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize conversation and board"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={leftPct}
-        tabIndex={0}
-        title="Drag to resize · double-click to reset"
-        onPointerDown={onPointerDown}
-        onKeyDown={onKeyDown}
-        onDoubleClick={() => setSizes(DEFAULT_SPLIT.slice())}
-        className="group relative z-10 flex w-2 shrink-0 cursor-col-resize touch-none items-stretch justify-center focus-visible:outline-none"
-      >
-        <span className="w-px bg-[var(--ds-hairline)] transition-colors group-hover:bg-[#D97757]/50 group-focus-visible:bg-[var(--ds-accent)]" />
-      </div>
-      <div className="flex min-h-0 min-w-0" style={{ flexGrow: sizes[1], flexShrink: 1, flexBasis: 0 }}>
-        {right}
-      </div>
-    </div>
-  );
-};
+/** Below this width the phone header moves the spend chip into the ⋯ menu (the title keeps ≥ 100 px). */
+export const SPEND_CHIP_MIN_WIDTH = 360;
 
 // ── Header pieces ────────────────────────────────────────────────────────────
 
@@ -164,7 +99,7 @@ const TitleField: React.FC<{ title: string; onCommit: (title: string) => void }>
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
           e.preventDefault();
           (e.target as HTMLInputElement).blur();
         } else if (e.key === 'Escape') {
@@ -175,9 +110,12 @@ const TitleField: React.FC<{ title: string; onCommit: (title: string) => void }>
         }
       }}
       aria-label="Comic title"
+      title={draft}
       maxLength={200}
       spellCheck={false}
-      className={`min-w-0 max-w-[28rem] flex-1 truncate rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)] outline-none ${TRANSITION} hover:border-[var(--ds-hairline)] focus:border-[#D97757]/45 focus:bg-[var(--ds-surface-soft)]`}
+      enterKeyHint="done"
+      // 16 px on touch so focusing the title never zooms the page (iOS); ellipsis when it doesn't fit.
+      className={`min-w-0 max-w-[28rem] flex-1 truncate rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)] outline-none ${TRANSITION} hover:border-[var(--ds-hairline)] focus:border-[#D97757]/45 focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px] coarse:text-base`}
     />
   );
 };
@@ -241,8 +179,8 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
   );
 };
 
-/** A feature header control; a crash inside it hides the control, never the studio. */
-class HeaderSlotBoundary extends React.Component<{ id: string; children: React.ReactNode }, { failed: boolean }> {
+/** A feature surface (header slot, the reader layer); a crash inside it hides it, never the studio. */
+class SlotBoundary extends React.Component<{ id: string; kind?: string; children: React.ReactNode; onError?: () => void }, { failed: boolean }> {
   state = { failed: false };
 
   static getDerivedStateFromError() {
@@ -250,7 +188,8 @@ class HeaderSlotBoundary extends React.Component<{ id: string; children: React.R
   }
 
   componentDidCatch(error: unknown) {
-    console.error(`[comicstudio] header slot "${this.props.id}" failed to render`, error);
+    console.error(`[comicstudio] ${this.props.kind || 'header slot'} "${this.props.id}" failed to render`, error);
+    this.props.onError?.();
   }
 
   render() {
@@ -269,129 +208,207 @@ const HeaderSlots: React.FC<{ slots: readonly HeaderSlotRegistration[]; from: nu
     {slots
       .filter((slot) => slot.order >= from && slot.order < to)
       .map((slot) => (
-        <HeaderSlotBoundary key={slot.id} id={slot.id}>
+        <SlotBoundary key={slot.id} id={slot.id}>
           <slot.Component studio={studio} compact={compact} />
-        </HeaderSlotBoundary>
+        </SlotBoundary>
       ))}
   </>
 );
 
 const QUALITY_DOT: Record<string, string> = { draft: 'bg-sky-500', standard: 'bg-emerald-500', pro: 'bg-[var(--ds-accent)]' };
 
-const headerBtn = `inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`;
+// Fine pointers keep the calm 32 px pill; touch gets a real 44 px target (mobile.md §2.4).
+const headerBtn = `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3.5 press`;
+const headerIconBtn = `grid h-9 w-9 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:w-11 press`;
 
-const StudioHeader: React.FC<{
+type HeaderSheet = 'quality' | 'spend' | 'menu' | null;
+
+export interface StudioHeaderProps {
   studio: ComicStudioController;
   doc: ComicDoc;
+  ff: FormFactor;
   onBack: () => void;
   onRead: () => void;
+  /** The Read entry is unavailable (nothing drawn yet) — say why instead of opening an empty reader. */
+  readHint?: string;
   onOpenSettings: () => void;
-  /** Narrow header (single-column studio): slots render their compact form. */
-  compact?: boolean;
-}> = ({ studio, doc, onBack, onRead, onOpenSettings, compact = false }) => {
-  const [open, setOpen] = useState<'quality' | 'spend' | 'menu' | null>(null);
+  paneMode: PaneMode;
+  onPaneMode: (mode: PaneMode) => void;
+}
+
+/**
+ * The studio header. `variant` (from the form factor):
+ *  - compact  phones: Back · Title · slots · $ · ⋯ (quality, spending, Read, Easy/Pro, settings in ⋯)
+ *  - medium   split below 1024: icon-only quality/Read, Easy/Pro in ⋯, pane switcher
+ *  - regular  1024+: today's desktop header (pane switcher on touch tablets)
+ */
+export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, onOpenSettings, paneMode, onPaneMode }) => {
+  const [open, setOpen] = useState<HeaderSheet>(null);
+  const variant: HeaderVariant = headerVariantFor(ff);
+  const compact = variant !== 'regular';
+  const phone = variant === 'compact';
   const slots = registeredHeaderSlots();
+  const rowSlots = slots.filter((s) => s.order < HEADER_BANNER_MIN_ORDER);
   const H = BUILTIN_HEADER_ORDER;
   const slotRange = (from: number, to: number) =>
-    slots.length ? <HeaderSlots slots={slots} from={from} to={to} studio={studio} compact={compact} /> : null;
+    rowSlots.length ? <HeaderSlots slots={rowSlots} from={from} to={Math.min(to, HEADER_BANNER_MIN_ORDER)} studio={studio} compact={compact} /> : null;
   const qualityRef = useRef<HTMLDivElement>(null);
   const spendRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const toggle = (which: 'quality' | 'spend' | 'menu') => setOpen((cur) => (cur === which ? null : which));
+  const toggle = (which: Exclude<HeaderSheet, null>) => setOpen((cur) => (cur === which ? null : which));
   const close = () => setOpen(null);
   const tier = doc.settings.quality;
+  const tierLabel = TIER_PRESETS[tier]?.label || 'Standard';
+  const install = useInstallPrompt();
+  const saved = savedTotal(doc);
+  const showSpendChip = !phone || ff.width >= SPEND_CHIP_MIN_WIDTH;
+  const showBack = ff.layout !== 'single-rail'; // the rail carries Back in phone landscape
+
+  const rows: MenuRow[] = [];
+  if (phone) {
+    rows.push({
+      id: 'quality',
+      label: 'Quality',
+      icon: <Sparkles className="h-4 w-4" />,
+      detail: tierLabel,
+      opensSheet: true,
+      onSelect: () => setOpen('quality')
+    });
+    rows.push({
+      id: 'spend',
+      label: 'Spending',
+      icon: <Wallet className="h-4 w-4" />,
+      detail: saved > 0 ? `${formatUsd(doc.spend.totalUsd)} · saved ${formatUsd(saved)}` : formatUsd(doc.spend.totalUsd),
+      opensSheet: true,
+      onSelect: () => setOpen('spend')
+    });
+    rows.push({
+      id: 'read',
+      label: 'Read the comic',
+      icon: <BookOpen className="h-4 w-4" />,
+      hint: readHint,
+      disabled: !!readHint,
+      onSelect: onRead
+    });
+  }
+  rows.push({ id: 'settings', label: 'Settings', icon: <Settings2 className="h-4 w-4" />, opensSheet: true, onSelect: onOpenSettings });
+  rows.push({ id: 'resync', label: 'Resync', icon: <RefreshCw className="h-4 w-4" />, hint: 'Reload the latest saved state', onSelect: () => void studio.refresh() });
+  if (install.canInstall) rows.push({ id: 'install', label: 'Install the app', icon: <Download className="h-4 w-4" />, hint: 'Open the studio from your home screen', onSelect: install.install });
+
+  const spendSheet = (
+    <div className="mx-auto w-fit max-w-full">
+      <SpendBreakdown doc={doc} />
+      {phone && saved > 0 && (
+        <div className="border-t border-[var(--ds-hairline-soft)]">
+          <SavingsBreakdown doc={doc} />
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--ds-hairline-soft)] px-2 sm:px-3">
-      <button
-        type="button"
-        onClick={onBack}
-        aria-label="Back to your projects"
-        title="Back"
-        className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
-      >
-        <ArrowLeft className="h-4 w-4" />
-      </button>
+    <header
+      className="flex shrink-0 items-center gap-1.5 border-b border-[var(--ds-hairline-soft)] px-2 sm:px-3"
+      style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}
+      data-header={variant}
+    >
+      {showBack && (
+        <button type="button" onClick={onBack} aria-label="Back to your projects" title="Back" className={headerIconBtn}>
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+      )}
       <TitleField title={doc.brief.title || 'Untitled comic'} onCommit={(title) => void studio.patch([{ op: 'brief', patch: { title } }])} />
 
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      {showsPaneSwitcher(ff) && <PaneSwitcher value={paneMode} onChange={onPaneMode} className="shrink-0" />}
+
+      <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
         {slotRange(-Infinity, H.quality)}
-        <div ref={qualityRef} className="relative">
-          <button type="button" onClick={() => toggle('quality')} aria-haspopup="dialog" aria-expanded={open === 'quality'} className={headerBtn} title="Quality">
-            <span className={cx('h-2 w-2 rounded-full', QUALITY_DOT[tier] || QUALITY_DOT.standard)} aria-hidden />
-            <span className="hidden sm:inline">{TIER_PRESETS[tier]?.label || 'Standard'}</span>
-            <ChevronDown className="h-3 w-3 text-[var(--ds-muted)]" aria-hidden />
-          </button>
-          <PopSheet open={open === 'quality'} onClose={close} label="Quality" anchorRef={qualityRef} placement="below" align="end" className="w-[min(25rem,calc(100vw-1.5rem))]">
-            <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} onDone={close} />
-          </PopSheet>
-        </div>
+        {!phone && (
+          <div ref={qualityRef} className="relative">
+            <button
+              type="button"
+              onClick={() => toggle('quality')}
+              aria-haspopup="dialog"
+              aria-expanded={open === 'quality'}
+              aria-label={`Quality: ${tierLabel}`}
+              className={headerBtn}
+              title="Quality"
+            >
+              <span className={cx('h-2 w-2 rounded-full', QUALITY_DOT[tier] || QUALITY_DOT.standard)} aria-hidden />
+              {variant === 'regular' && <span>{tierLabel}</span>}
+              <ChevronDown className="h-3 w-3 text-[var(--ds-muted)]" aria-hidden />
+            </button>
+          </div>
+        )}
         {slotRange(H.quality, H.spend)}
 
-        <div ref={spendRef} className="relative">
-          <button
-            type="button"
-            onClick={() => toggle('spend')}
-            aria-haspopup="dialog"
-            aria-expanded={open === 'spend'}
-            aria-label={`Spent ${formatUsd(doc.spend.totalUsd)} on this comic`}
-            className={cx(headerBtn, 'tabular-nums')}
-          >
-            <CountUp value={doc.spend.totalUsd} prefix="$" decimals={2} />
-          </button>
-          <PopSheet open={open === 'spend'} onClose={close} label="Spending" anchorRef={spendRef} placement="below" align="end">
-            <SpendBreakdown doc={doc} />
-          </PopSheet>
-        </div>
+        {showSpendChip && (
+          <div ref={spendRef} className="relative">
+            <button
+              type="button"
+              onClick={() => toggle('spend')}
+              aria-haspopup="dialog"
+              aria-expanded={open === 'spend'}
+              aria-label={`Spent ${formatUsd(doc.spend.totalUsd)} on this comic`}
+              className={cx(headerBtn, 'tabular-nums', phone && 'px-2.5')}
+            >
+              <CountUp value={doc.spend.totalUsd} prefix="$" decimals={2} />
+            </button>
+          </div>
+        )}
         {slotRange(H.spend, H.read)}
 
-        <button type="button" onClick={onRead} className={headerBtn} aria-label="Read the comic">
-          <BookOpen className="h-3.5 w-3.5" aria-hidden />
-          <span className="hidden sm:inline">Read</span>
-        </button>
+        {!phone && (
+          <button type="button" onClick={onRead} className={headerBtn} aria-label="Read the comic" title={readHint || 'Read the comic'}>
+            <BookOpen className="h-3.5 w-3.5" aria-hidden />
+            {variant === 'regular' && <span>Read</span>}
+          </button>
+        )}
         {slotRange(H.read, H.more)}
 
         <div ref={menuRef} className="relative">
-          <button
-            type="button"
-            onClick={() => toggle('menu')}
-            aria-haspopup="menu"
-            aria-expanded={open === 'menu'}
-            aria-label="More"
-            className={`grid h-8 w-8 place-items-center rounded-full text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
-          >
+          <button type="button" onClick={() => toggle('menu')} aria-haspopup="menu" aria-expanded={open === 'menu'} aria-label="More" className={headerIconBtn}>
             <MoreHorizontal className="h-4 w-4" />
           </button>
-          <PopSheet open={open === 'menu'} onClose={close} label="More" anchorRef={menuRef} placement="below" align="end" className="w-52 py-1">
-            <div role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                className={MENU_ITEM}
-                onClick={() => {
-                  close();
-                  onOpenSettings();
-                }}
-              >
-                <Settings2 className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden /> Settings
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className={MENU_ITEM}
-                onClick={() => {
-                  close();
-                  void studio.refresh();
-                }}
-              >
-                <RefreshCw className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden /> Resync
-              </button>
-            </div>
-          </PopSheet>
         </div>
-        {slotRange(H.more, Infinity)}
+        {slotRange(H.more, HEADER_BANNER_MIN_ORDER)}
       </div>
+
+      <AdaptiveSheet
+        open={open === 'quality'}
+        onClose={close}
+        label="Quality"
+        title="Quality"
+        anchorRef={phone ? menuRef : qualityRef}
+        placement="below"
+        align="end"
+        className="w-[min(25rem,calc(100vw-1.5rem))]"
+      >
+        <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} onDone={close} />
+      </AdaptiveSheet>
+      <AdaptiveSheet open={open === 'spend'} onClose={close} label="Spending" title="Spending" anchorRef={showSpendChip ? spendRef : menuRef} placement="below" align="end">
+        {spendSheet}
+      </AdaptiveSheet>
+      <CompactHeaderMenu
+        open={open === 'menu'}
+        onClose={close}
+        anchorRef={menuRef}
+        title={doc.brief.title || 'This comic'}
+        rows={rows}
+        top={compact ? <ModeToggle studio={studio} variant="menu" /> : undefined}
+      />
     </header>
+  );
+};
+
+/** Feature banners (slots ordered ≥ 1000, e.g. a model-status line) in one calm strip under the header. */
+const HeaderBanners: React.FC<{ studio: ComicStudioController; compact: boolean }> = ({ studio, compact }) => {
+  const banners = registeredHeaderSlots().filter((s) => s.order >= HEADER_BANNER_MIN_ORDER);
+  if (!banners.length) return null;
+  return (
+    <div data-header-banners className="min-w-0 shrink-0 empty:hidden">
+      <HeaderSlots slots={banners} from={HEADER_BANNER_MIN_ORDER} to={Infinity} studio={studio} compact={compact} />
+    </div>
   );
 };
 
@@ -450,7 +467,7 @@ const UsdField: React.FC<{
             commit();
           }
         }}
-        className="h-8 w-20 bg-transparent px-1.5 text-[13px] tabular-nums text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] disabled:opacity-50"
+        className="h-8 w-20 bg-transparent px-1.5 text-[13px] tabular-nums coarse:h-11 coarse:text-base text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] disabled:opacity-50"
       />
     </span>
   );
@@ -569,11 +586,11 @@ export const SettingsPanel: React.FC<{ doc: ComicDoc; patch: (ops: DocOp[]) => P
 
 const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean }> = ({ onBack, wide }) => (
   <div role="status" className={`flex h-full min-h-0 w-full flex-col ${CANVAS_BG}`} aria-busy="true" aria-label="Opening your comic">
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-3">
-      <button type="button" onClick={onBack} aria-label="Back to your projects" className="grid h-9 w-9 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">
+    <header className="flex shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-3" style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}>
+      <button type="button" onClick={onBack} aria-label="Back to your projects" className={headerIconBtn}>
         <ArrowLeft className="h-4 w-4" />
       </button>
-      <Skeleton className="h-4 w-44" />
+      <Skeleton className="h-4 w-44 max-w-[40%]" />
       <div className="ml-auto flex gap-2">
         <Skeleton pill className="h-8 w-24" />
         <Skeleton pill className="h-8 w-16" />
@@ -604,8 +621,8 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
         <AlertTriangle className="h-6 w-6" aria-hidden />
       </span>
       <h2 className="text-[17px] font-semibold tracking-tight text-[var(--ds-ink)]">Couldn’t open this comic</h2>
-      <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--ds-muted)]">{message}</p>
-      <div className="mt-5 flex justify-center gap-2">
+      <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--ds-muted)] [overflow-wrap:anywhere]">{message}</p>
+      <div className="mt-5 flex flex-wrap justify-center gap-2">
         <PrimaryButton onClick={onRetry} busy={retrying}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Try again
         </PrimaryButton>
@@ -617,19 +634,61 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
   </div>
 );
 
+// ── Phone board: "Ask the Director…" ─────────────────────────────────────────
+
+/** The composer collapsed to one 44 px pill at the foot of the phone Board (mobile.md §3.1). */
+const AskDirectorPill: React.FC<{ busy: boolean; onAsk: () => void; onViewChat: () => void; insetBottom: boolean }> = ({ busy, onAsk, onViewChat, insetBottom }) => (
+  <div
+    // Hidden while the keyboard is up (editing a board field): the field gets the room.
+    className="shrink-0 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-strong)] px-3 pt-1.5 backdrop-blur-xl [html.kb-open_&]:hidden"
+    style={{ paddingBottom: insetBottom ? 'max(0.375rem, var(--sa-bottom-eff, 0px))' : '0.375rem' }}
+    data-ask-pill
+  >
+    <button
+      type="button"
+      onClick={busy ? onViewChat : onAsk}
+      className={`press mx-auto flex h-11 w-full max-w-xl items-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-4 text-left text-[14px] text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`}
+    >
+      {busy ? (
+        <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />
+      ) : (
+        <Sparkles className="h-4 w-4 shrink-0 text-[var(--ds-accent)]" aria-hidden />
+      )}
+      <span className="min-w-0 flex-1 truncate">{busy ? 'The director is replying — view the chat' : 'Ask the Director…'}</span>
+    </button>
+  </div>
+);
+
 // ── Shell ────────────────────────────────────────────────────────────────────
 
-export const ComicStudio: React.FC<{ projectId: string; onBack: () => void }> = ({ projectId, onBack }) => {
-  const studio = useStudio(projectId);
-  const wide = useIsWide();
-  const [mobileView, setMobileView] = useState<'chat' | 'board'>('chat');
+/** Nothing drawn yet → why Read is unavailable (undefined when it can open). */
+export const readUnavailableReason = (doc: ComicDoc | null): string | undefined =>
+  doc && pageProgress(doc).ready > 0 ? undefined : 'Read opens once a page is drawn';
+
+export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack: () => void }> = ({ studio, onBack }) => {
+  const ff = useFormFactor();
+  useKeyboardInset();
+  useThemeColor();
+  const phone = isPhoneLayout(ff.layout);
+  const [view, setView] = useState<'chat' | 'board'>('chat');
+  const [paneModeState, setPaneModeState] = useState<PaneMode>(() => readPaneMode(ff.widthClass));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [readerOpen, setReaderOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const composerApi = useRef<StudioComposerHandle | null>(null);
+  const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
 
-  useEffect(() => {
-    setMobileView('chat');
-    setSettingsOpen(false);
-  }, [projectId]);
+  // The pane switcher remembers its choice per window class (an iPad portrait and landscape can differ).
+  useEffect(() => setPaneModeState(readPaneMode(ff.widthClass)), [ff.widthClass]);
+  const paneMode: PaneMode = showsPaneSwitcher(ff) ? paneModeState : 'both';
+  const setPaneMode = useCallback(
+    (mode: PaneMode) => {
+      setPaneModeState(mode);
+      writePaneMode(ff.widthClass, mode);
+    },
+    [ff.widthClass]
+  );
 
   // Honor the user's light/dark preference even when the studio is opened directly.
   useEffect(() => {
@@ -647,12 +706,17 @@ export const ComicStudio: React.FC<{ projectId: string; onBack: () => void }> = 
     };
   }, [title]);
 
-  // Card clicks inside the conversation ("open page 3", "see the cast") should reveal the
-  // board on narrow screens; automatic tab follows from server ops should not.
+  // Card clicks inside the conversation ("open page 3", "see the cast") reveal the board — on phones
+  // by switching to it, on a collapsed split by showing both panes (this session only, not persisted).
   const { setTab, openPage } = studio;
   const showBoard = useCallback(() => {
-    if (!wide) setMobileView('board');
-  }, [wide]);
+    if (phone) setView('board');
+    else if (paneMode === 'chat') setPaneModeState('both');
+  }, [phone, paneMode]);
+  const showChat = useCallback(() => {
+    if (phone) setView('chat');
+    else if (paneMode === 'board') setPaneModeState('both');
+  }, [phone, paneMode]);
   const chatStudio = useMemo<ComicStudioController>(
     () => ({
       ...studio,
@@ -668,93 +732,218 @@ export const ComicStudio: React.FC<{ projectId: string; onBack: () => void }> = 
     [studio, setTab, openPage, showBoard]
   );
 
+  // Anything that drives the composer (empty-state starters, board buttons, ⌘/Ctrl+K) while the chat
+  // pane is hidden brings the chat back first, so the request is never silently swallowed.
+  useEffect(() => {
+    const onCompose = () => showChat();
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') showChat();
+    };
+    window.addEventListener(COMPOSE_EVENT, onCompose);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener(COMPOSE_EVENT, onCompose);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [showChat]);
+
+  // Chat tab dot: a director reply landed while the phone showed the board.
+  const assistantCount = doc ? doc.conversation.filter((m) => m.role === 'assistant').length : 0;
+  const seenAssistant = useRef(assistantCount);
+  const [unread, setUnread] = useState(false);
+  useEffect(() => {
+    if (!phone || view === 'chat') {
+      seenAssistant.current = assistantCount;
+      setUnread(false);
+    } else if (assistantCount > seenAssistant.current) setUnread(true);
+  }, [assistantCount, view, phone]);
+
+  const readHint = readUnavailableReason(doc);
+  const canRead = !readHint;
+  // Phones read in the full-screen reader (a layer, not a pane); larger screens use the board's Read tab.
   const onRead = useCallback(() => {
+    if (phone && canRead) {
+      setReaderOpen(true);
+      return;
+    }
+    setTab('read');
+    showBoard();
+  }, [phone, canRead, setTab, showBoard]);
+  useBackLayer(readerOpen, () => setReaderOpen(false), 'reader');
+  const readerFailed = useCallback(() => {
+    setReaderOpen(false);
     setTab('read');
     showBoard();
   }, [setTab, showBoard]);
+
+  // "Ask the Director…": open the sheet and focus its composer inside the same tap, so iOS raises the keyboard.
+  const openAsk = useCallback(() => {
+    flushSync(() => setAskOpen(true));
+    askComposer.current?.focus();
+  }, []);
+
+  const skipToComposer = () => {
+    if (phone && view !== 'chat') flushSync(() => setView('chat'));
+    else if (!phone && paneMode === 'board') flushSync(() => setPaneModeState('both'));
+    composerApi.current?.focus();
+  };
 
   if (!doc) {
     if (studio.loadError) {
       return <FatalError message={studio.loadError} onRetry={() => void studio.refresh()} onBack={onBack} retrying={studio.refreshing} />;
     }
-    return <StudioSkeleton onBack={onBack} wide={wide} />;
+    return <StudioSkeleton onBack={onBack} wide={!phone} />;
   }
 
   const pagesRendering = renderingPageCount(doc);
+  const progress = pageProgress(doc);
+  const gateOpen = doc.gate?.status === 'open';
+  const tabBar = ff.layout === 'single';
+  const boardHiddenFromChat = phone ? view !== 'board' : paneMode === 'chat';
+
+  const navItems: StudioNavItem[] = [
+    {
+      id: 'chat',
+      label: 'Chat',
+      icon: <MessageSquare className="h-5 w-5" aria-hidden />,
+      dot: gateOpen ? 'amber' : unread ? 'accent' : undefined,
+      current: view === 'chat' && !readerOpen,
+      onSelect: () => setView('chat')
+    },
+    {
+      id: 'board',
+      label: 'Board',
+      icon: <LayoutGrid className="h-5 w-5" aria-hidden />,
+      badge: progress.total ? `${progress.ready}/${progress.total}` : undefined,
+      badgeLabel: progress.total ? `${progress.ready} of ${plural(progress.total, 'page')} ready` : undefined,
+      dot: pagesRendering > 0 ? 'pulse' : undefined,
+      current: view === 'board' && !readerOpen,
+      onSelect: () => setView('board')
+    },
+    {
+      id: 'read',
+      label: 'Read',
+      icon: <BookOpen className="h-5 w-5" aria-hidden />,
+      disabled: !canRead,
+      disabledReason: readHint,
+      current: readerOpen,
+      onSelect: onRead
+    }
+  ];
+
+  const renderingPill =
+    boardHiddenFromChat && pagesRendering > 0 ? (
+      <div className="mb-2 flex justify-center">
+        <button
+          type="button"
+          onClick={() => {
+            setTab('pages');
+            showBoard();
+          }}
+          className="press inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.08)] animate-scale-in coarse:min-h-[44px] coarse:px-4"
+        >
+          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />
+          <span className="truncate">
+            {plural(pagesRendering, 'page')} rendering · <span className="text-[var(--ds-accent)]">View</span>
+          </span>
+        </button>
+      </div>
+    ) : undefined;
+
+  const chat = (
+    <ConversationPane studio={chatStudio} aboveComposer={renderingPill} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
+  );
+
   const board = (
-    <div className="h-full min-h-0 w-full overflow-hidden bg-[var(--ds-well)]">
-      <BoardPane studio={studio} />
-    </div>
+    <section aria-label="Board" className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-[var(--ds-well)]">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        <BoardPane studio={studio} />
+      </div>
+      {phone && <AskDirectorPill busy={studio.messageBusy} onAsk={openAsk} onViewChat={() => setView('chat')} insetBottom={!tabBar} />}
+    </section>
   );
 
   return (
-    <div className={`flex h-full min-h-0 w-full flex-col font-sans ${CANVAS_BG} text-[var(--ds-ink)]`}>
-      <StudioHeader studio={studio} doc={doc} onBack={onBack} onRead={onRead} onOpenSettings={() => setSettingsOpen(true)} compact={!wide} />
+    <div
+      className={`gesture-root relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden font-sans ${CANVAS_BG} text-[var(--ds-ink)]`}
+      style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)' }}
+      data-layout={ff.layout}
+    >
+      <button
+        type="button"
+        onClick={skipToComposer}
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-[90] focus:rounded-full focus:bg-[var(--ds-surface-strong)] focus:px-4 focus:py-2 focus:text-[13px] focus:font-medium focus:text-[var(--ds-ink)] focus:shadow-[0_4px_16px_rgba(0,0,0,0.16)]"
+      >
+        Skip to composer
+      </button>
+      <StudioHeader
+        studio={studio}
+        doc={doc}
+        ff={ff}
+        onBack={onBack}
+        onRead={onRead}
+        readHint={readHint}
+        onOpenSettings={() => setSettingsOpen(true)}
+        paneMode={paneMode}
+        onPaneMode={setPaneMode}
+      />
+      <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
 
-      {wide ? (
-        <div className="min-h-0 flex-1">
-          <SplitView left={<ConversationPane studio={chatStudio} />} right={board} />
+      <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <StudioLayout ff={ff} chat={chat} board={board} view={view} paneMode={paneMode} navItems={navItems} onBack={onBack} />
+      </main>
+
+      <AdaptiveSheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        label="Comic settings"
+        title="Comic settings"
+        presentation="side"
+        panel
+        modal
+        detents={['full']}
+        sideWidth={420}
+      >
+        <div className="px-5 py-5">
+          <SettingsPanel doc={doc} patch={studio.patch} />
         </div>
-      ) : (
-        <>
-          <div className="sticky top-0 z-20 shrink-0 border-b border-[var(--ds-hairline-soft)] px-3 py-2">
-            <Segmented<'chat' | 'board'>
-              label="View"
-              value={mobileView}
-              onChange={setMobileView}
-              className="mx-auto max-w-xs"
-              options={[
-                {
-                  value: 'chat',
-                  label: (
-                    <>
-                      <MessageSquare className="h-3.5 w-3.5" aria-hidden /> Chat
-                    </>
-                  )
-                },
-                {
-                  value: 'board',
-                  label: (
-                    <>
-                      <ImageIcon className="h-3.5 w-3.5" aria-hidden /> Board
-                      {pagesRendering > 0 && <span className="ml-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--ds-accent)]" aria-hidden />}
-                    </>
-                  )
-                }
-              ]}
+      </AdaptiveSheet>
+
+      {phone && (
+        <AdaptiveSheet open={askOpen} onClose={() => setAskOpen(false)} label="Ask the Director" title="Ask the Director" presentation="bottom" detents={['content']}>
+          <div className="px-3 pb-3">
+            <StudioComposer
+              studio={studio}
+              variant="sheet"
+              apiRef={askComposer}
+              onSent={() => setAskOpen(false)}
+              placeholder="Ask about this board — e.g. “make page 2 moodier”"
             />
           </div>
-          <div className="min-h-0 flex-1">
-            <ConversationPane
-              studio={chatStudio}
-              replaceList={mobileView === 'board' ? board : undefined}
-              aboveComposer={
-                mobileView === 'chat' && pagesRendering > 0 ? (
-                  <div className="mb-2 flex justify-center">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTab('pages');
-                        setMobileView('board');
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.08)] animate-scale-in"
-                    >
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--ds-accent)]" aria-hidden />
-                      {plural(pagesRendering, 'page')} rendering · <span className="text-[var(--ds-accent)]">View</span>
-                    </button>
-                  </div>
-                ) : undefined
-              }
-            />
-          </div>
-        </>
+        </AdaptiveSheet>
       )}
 
-      <SlideOver open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Comic settings">
-        <SettingsPanel doc={doc} patch={studio.patch} />
-      </SlideOver>
+      {readerOpen && (
+        <SlotBoundary id="reader" kind="reader" onError={readerFailed}>
+          <Suspense
+            fallback={
+              <div role="status" aria-label="Opening the reader" className="fixed inset-0 z-[80] grid place-items-center bg-[var(--ds-reader-room,#0e0d0c)] text-[13px] text-white/70">
+                Opening the reader…
+              </div>
+            }
+          >
+            <ImmersiveReader doc={doc} urlFor={studio.urlFor} intro onExit={() => setReaderOpen(false)} onImageError={() => void studio.refresh()} />
+          </Suspense>
+        </SlotBoundary>
+      )}
     </div>
   );
+};
+
+export const ComicStudio: React.FC<{ projectId: string; onBack: () => void }> = ({ projectId, onBack }) => {
+  const studio = useStudio(projectId);
+  // A new project starts with a fresh shell (chat view, closed sheets, empty composer).
+  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} />;
 };
 
 export default ComicStudio;

@@ -190,7 +190,7 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       if (allowDownload !== undefined) request.allowDownload = allowDownload;
       if (Object.keys(request).length <= 2 && request.visibility === m.visibility) return 'Nothing to change. Settings: visibility, default_language, start_page, allow_download, regenerate_link.';
       turn.cards.push(publishCard('update', request));
-      return `Update card shown (${request.visibility}${request.allowDownload === false ? ', downloads off' : ''}). Nothing changes until the user taps.`;
+      return `Update card shown (${request.visibility}${request.allowDownload === false ? ', downloads off' : ''}). Tapping Update republishes the current version with these settings, so any edits made since publishing go live too (after the safety check) — tell the user that plainly. Nothing changes until the user taps.`;
     }
   );
 

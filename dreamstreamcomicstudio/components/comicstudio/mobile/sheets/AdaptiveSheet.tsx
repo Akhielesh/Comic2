@@ -51,15 +51,17 @@ export const AdaptiveSheet: React.FC<AdaptiveSheetProps> = ({
 }) => {
   const ff = useFormFactor();
   const { open, anchorRef } = popSheet;
-  // Coarse pointers: an anchor with little room above it (keyboard up) gets a bottom sheet.
+  // Coarse pointers: a sheet that pops ABOVE its anchor (composer panels) with little room there — the
+  // keyboard is up — becomes a bottom sheet. Header popovers open below and are never affected.
+  const above = (popSheet.placement ?? 'above') === 'above';
   const [anchorTop, setAnchorTop] = useState<number | null>(null);
   useLayoutEffect(() => {
-    if (!open || !ff.coarse || presentation !== 'auto') return;
+    if (!open || !ff.coarse || presentation !== 'auto' || !above) return;
     const r = anchorRef?.current?.getBoundingClientRect();
     setAnchorTop(r ? r.top : null);
-  }, [open, ff.coarse, presentation, anchorRef]);
+  }, [open, ff.coarse, presentation, anchorRef, above]);
 
-  const resolved = resolvePresentation(ff, presentation, { panel, anchorRect: anchorTop === null ? null : { top: anchorTop } });
+  const resolved = resolvePresentation(ff, presentation, { panel, anchorRect: above && anchorTop !== null ? { top: anchorTop } : null });
   useLayoutEffect(() => {
     if (open) onPresentation?.(resolved);
   }, [open, resolved, onPresentation]);

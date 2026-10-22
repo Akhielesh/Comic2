@@ -13,7 +13,8 @@ import type { ComicDoc, RefAsset } from '../../../shared/comic/doc.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import { encodeUploadBuffer } from '../comic/assets.js';
 import { KEYS, fakeAssetStore, fakeBilling, fakeDocStore, fakeImages, plannedDoc, scriptedLlm, type FakeAssetStore, type FakeDocStore } from '../comic/orchestrator.fakes.js';
-import { __resetSessionsForTests } from '../comic/session.js';
+import { StudioSession, __resetSessionsForTests } from '../comic/session.js';
+import { StudioError } from '../comic/types.js';
 import { mountComicOwnerRoutes } from './comicMounts.js';
 import { __resetRefUploadsForTests, createComicRefsRouter } from './comicRefs.js';
 
@@ -266,6 +267,25 @@ describe('POST /projects/:id/refs', () => {
     expect(refFiles(h)).toEqual([]);
     expect(h.doc().cast[0].refs).toEqual([]);
     expect(h.doc().rev).toBe(rev);
+  });
+
+  it('a commit the session refuses (doc too large) leaves no orphan file behind and says why', async () => {
+    const h = await harness();
+    const commit = vi.spyOn(StudioSession.prototype, 'commit').mockImplementation(function (this: StudioSession, ops) {
+      if (ops.some((o) => o.op === 'ref_add')) {
+        throw new StudioError('LIMIT', 'This comic has grown too large to save more changes.', { status: 409 });
+      }
+      return this.doc;
+    });
+    const remove = vi.spyOn(h.assets, 'remove');
+    const res = await upload(h, 'to=character:c_maya');
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.message).toMatch(/too large/);
+    expect(h.saveRef).toHaveBeenCalledTimes(1);
+    const stored = (await h.saveRef.mock.results[0].value) as RefAsset;
+    expect(remove).toHaveBeenCalledWith([stored.path]);
+    expect(h.doc().cast[0].refs).toEqual([]);
+    commit.mockRestore();
   });
 
   it('safety unavailable (or erroring) → stored unchecked, gated lazily before first render use', async () => {

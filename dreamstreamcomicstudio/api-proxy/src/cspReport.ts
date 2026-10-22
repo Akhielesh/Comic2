@@ -31,11 +31,14 @@ const originOnly = (v: unknown): string => {
   }
 };
 
-/** Document path with /c/<slug> masked and no query string. */
+/** Document path with capability segments masked (/c/<slug>, classic /share/<token>) and no query string. */
 export const maskedPath = (v: unknown): string => {
   const s = typeof v === 'string' ? v.slice(0, 500) : '';
   try {
-    return new URL(s).pathname.replace(/^\/c\/[^/]+/, '/c/:slug').slice(0, 120);
+    return new URL(s).pathname
+      .replace(/^\/c\/[^/]+/, '/c/:slug')
+      .replace(/^\/share\/[^/]+/, '/share/:token')
+      .slice(0, 120);
   } catch {
     return '';
   }

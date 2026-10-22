@@ -116,6 +116,8 @@ export interface SafetyStore {
   publicationByProject(projectId: string): Promise<PublicationRef | null>;
   projectInfo(projectId: string): Promise<{ ownerUserId: string; name?: string; isForcedPrivate: boolean } | null>;
   forcePrivate(projectId: string, reason: string, actorId: string | null): Promise<void>;
+  /** Lift an AUTOMATIC hold (forced_private_reason 'auto: …'); a moderator's own pause stays. true = lifted. */
+  liftAutoHold(projectId: string): Promise<boolean>;
   moderationAction(row: { projectId: string; ownerUserId?: string | null; action: string; reason?: string | null; actedBy?: string | null; metadata?: Record<string, unknown> }): Promise<void>;
   recordQuarantine(row: { path: string; quarantinePath: string; projectId?: string | null; userId?: string | null; reason: string }): Promise<void>;
   quarantineFor(path: string): Promise<string | null>;
@@ -189,7 +191,8 @@ export function createSupabaseSafetyStore(opts: { db?: () => SupabaseClient } = 
         effective_rating: e.effective ?? null,
         assessed: e.assessed ?? null,
         severity: e.severity,
-        content_hash: e.contentHash ?? null,
+        // The column only takes a 16–64 hex fingerprint; anything else is dropped, never stored.
+        content_hash: typeof e.contentHash === 'string' && /^[0-9a-f]{16,64}$/i.test(e.contentHash) ? e.contentHash.toLowerCase() : null,
         model: e.model ? String(e.model).slice(0, 120) : null,
         cost_usd: Math.max(0, Number(e.costUsd) || 0)
       };
@@ -295,7 +298,8 @@ export function createSupabaseSafetyStore(opts: { db?: () => SupabaseClient } = 
           reporter_id: uuidOrNull(c.reporterId),
           reporter_fingerprint: c.reporterFingerprint ?? null,
           target: c.target || {},
-          reason: c.reason,
+          // The column checks 1–200 characters (an auto case lists categories).
+          reason: String(c.reason || 'flagged').slice(0, 200),
           note: c.note ? String(c.note).slice(0, 300) : null,
           status: c.status || 'open'
         })
@@ -439,6 +443,20 @@ export function createSupabaseSafetyStore(opts: { db?: () => SupabaseClient } = 
       if (error) throw error;
     },
 
+    async liftAutoHold(projectId) {
+      const db = admin();
+      if (!db || !uuidOrNull(projectId)) return false;
+      const { data, error } = await db
+        .from('projects')
+        .update({ is_forced_private: false, forced_private_reason: null, forced_private_by: null, forced_private_at: null })
+        .eq('id', projectId)
+        .eq('is_forced_private', true)
+        .like('forced_private_reason', 'auto:%')
+        .select('id');
+      if (error) throw error;
+      return Array.isArray(data) && data.length > 0;
+    },
+
     async moderationAction(row) {
       const db = admin();
       if (!db) return;
@@ -490,16 +508,17 @@ export function createSupabaseSafetyStore(opts: { db?: () => SupabaseClient } = 
     async notify(n) {
       const db = admin();
       if (!db || !uuidOrNull(n.userId)) return;
-      const { error } = await db.from('notifications').insert({
-        user_id: n.userId,
-        actor_id: uuidOrNull(n.actorId ?? null),
-        type: 'system',
-        entity_id: n.entityId,
-        title: n.title,
-        message: n.message,
-        metadata: n.metadata || {}
-      });
-      if (error) warn('notify', error);
+      const base = { user_id: n.userId, actor_id: uuidOrNull(n.actorId ?? null), type: 'system', entity_id: n.entityId ?? null };
+      const { error } = await db.from('notifications').insert({ ...base, title: n.title, message: n.message, metadata: n.metadata || {} });
+      if (!error) return;
+      // Older notifications tables have no title/message columns (moderation.ts does the same):
+      // a bare system notification still reaches the owner.
+      if (String((error as { code?: string }).code) === '42703') {
+        const retry = await db.from('notifications').insert(base);
+        if (retry.error) warn('notify', retry.error);
+        return;
+      }
+      warn('notify', error);
     }
   };
 }

@@ -2,6 +2,8 @@
 // A failed tile says WHEN it failed and a short reason ("failed 16:52 · rate limited"), so a
 // stale failure from an earlier outage is recognisable at a glance; the provider's exact
 // words stay one tap away ("Details"). Pure: no clock reads except through `now`.
+// `failureFacts` reads the optional `RenderState.errorDetail` (sanitized provider facts and the
+// exact failure time) when the server sets it, and falls back to `error` + `updatedAt`.
 
 export type FailureKind = 'rate_limited' | 'busy' | 'timeout' | 'safety' | 'declined' | 'network' | 'key' | 'stopped' | 'unknown';
 
@@ -69,4 +71,55 @@ export const formatFailedAt = (at: number | undefined, now: number = Date.now())
 export const failureCaption = (error: string | undefined, at: number | undefined, now: number = Date.now()): string => {
   const when = formatFailedAt(at, now);
   return `failed${when ? ` ${when}` : ''} · ${failureReason(error)}`;
+};
+
+/** What a failed render says about itself, from whichever fields the server filled. */
+export interface FailureFacts {
+  /** The words to classify and show under "Details" (the render's error, else the detail text). */
+  error?: string;
+  /** When it failed: errorDetail.at when present (exact), else the render's last update. */
+  at?: number;
+  /** Sanitized provider facts, one line ("OpenRouter · 429 · upstream Google"). Never a body or a key. */
+  facts?: string;
+  attempts?: number;
+}
+
+const MAX_FACTS = 120;
+const str = (v: unknown, max = 400): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+const finite = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
+
+/**
+ * Read a render's failure, tolerating both shapes of `errorDetail` the contract may carry
+ * (wm-plan: `{ code, provider?, at, text }`; the P1-JOBS amendment: a ≤120-char string) and
+ * old docs without it. Only for `status === 'failed'` renders; pure.
+ */
+export const failureFacts = (render: { error?: string; updatedAt?: number; attempts?: number } | undefined | null): FailureFacts => {
+  if (!render) return {};
+  const detail = (render as { errorDetail?: unknown }).errorDetail;
+  let facts = '';
+  let at = finite(render.updatedAt);
+  let code = '';
+  let text = '';
+  if (typeof detail === 'string') {
+    facts = str(detail, MAX_FACTS);
+  } else if (detail && typeof detail === 'object') {
+    const d = detail as { code?: unknown; provider?: unknown; at?: unknown; text?: unknown };
+    code = str(d.code, 40);
+    text = str(d.text);
+    facts = [str(d.provider, 40), code].filter(Boolean).join(' · ').slice(0, MAX_FACTS);
+    at = finite(d.at) ?? at;
+  }
+  const own = str(render.error, 2000);
+  // Classify on the provider code too, so "429" in the detail reads "rate limited" even when the
+  // user-facing error is a softer sentence.
+  const error = [own || text, own && text && !own.includes(text) ? text : '', code && !(own || text).includes(code) ? code : '']
+    .filter(Boolean)
+    .join(' — ');
+  const attempts = finite(render.attempts);
+  return {
+    ...(error ? { error } : {}),
+    ...(at ? { at } : {}),
+    ...(facts ? { facts } : {}),
+    ...(attempts ? { attempts } : {})
+  };
 };

@@ -24,6 +24,7 @@ export const RatingBadge: React.FC<RatingBadgeProps> = ({ rating, reason }) => {
     <span
       data-rating={rating}
       title={title}
+      role="img"
       aria-label={`Rated ${rating}`}
       aria-describedby={descId}
       className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full border border-[var(--ds-hairline)] px-2 py-0.5 text-[11px] font-semibold leading-4 tracking-wide tabular-nums ${TONE[rating]}`}

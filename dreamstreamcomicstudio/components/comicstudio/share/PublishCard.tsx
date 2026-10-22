@@ -75,6 +75,13 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
               <span className="min-w-0">{r.text}</span>
             </li>
           ))}
+          {card.mode === 'update' && (
+            <li className="text-[13px] text-[var(--ds-ink)]">
+              {studio.publication?.behind === false
+                ? 'Your published pages stay the same — only these settings change.'
+                : 'Readers will see the current version, including any edits since you published (after a quick safety check).'}
+            </li>
+          )}
           <li className="text-[12px] text-[var(--ds-muted)]">Read-only link{card.request?.allowDownload === false ? '' : ' · readers can download'} · free</li>
         </ul>
       )}

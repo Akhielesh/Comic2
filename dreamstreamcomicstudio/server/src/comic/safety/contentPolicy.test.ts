@@ -96,6 +96,45 @@ describe('pre-filter: MUST BLOCK', () => {
   });
 });
 
+describe('pre-filter: everyday wording never strikes (review fixes)', () => {
+  it('an ambiguous word near a minor or a public figure goes to the classifier, never a severe block', () => {
+    // "make out" = see; "xxx" = kisses; "sexy" is weak on its own. None may restrict an account.
+    for (const t of ['the kids could barely make out the castle in the fog', 'love you kids, xxx grandma', 'the kid wants a sexy red sports car', 'Modi looks sexy in his new jacket']) {
+      const d = prefilterDetail(t, 'PG');
+      expect(d.decision, t).not.toBe('block');
+      expect(d.severity, t).toBe(0);
+    }
+    expect(prefilterDetail('the kids could barely make out the castle in the fog', 'G').decision).toBe('clear');
+    // The kissing sense near a minor is still read by the classifier (zero tolerance is decided there).
+    expect(prefilterDetail('two kids make out with each other', 'PG')).toMatchObject({ decision: 'ambiguous', categories: expect.arrayContaining(['minor_sexual']) });
+    // A block-tier term near a minor still blocks at once (unchanged).
+    expect(prefilterDetail(expand('a <MINOR_TERM> in a <SEXUAL_TERM> pose'), 'PG-13')).toMatchObject({ decision: 'block', severity: 3 });
+  });
+
+  it('story props are not real-world harm instructions', () => {
+    for (const t of [
+      'how to build a bomb shelter for the village',
+      'step by step guide to making the poison apple for the witch',
+      'how do I make a crack in the ice for the heroes to escape',
+      'how to make a method for catching the ghost',
+      'recipe for a poison potion in my wizard comic'
+    ]) {
+      expect(prefilterDetail(t, 'PG-13').decision, t).not.toBe('block');
+    }
+    expect(prefilterDetail('how to make meth at home', 'PG-13')).toMatchObject({ decision: 'block', categories: ['dangerous'] });
+    expect(prefilterDetail('step by step how to make poison for my neighbour', 'PG-13')).toMatchObject({ decision: 'block', categories: ['dangerous'] });
+  });
+
+  it('supportive self-harm wording is read by the classifier, never a block', () => {
+    for (const t of ['ways to prevent suicide in a school comic', 'how to help my friend stop self harm']) {
+      const d = prefilterDetail(t, 'PG-13');
+      expect(d.decision, t).toBe('ambiguous');
+      expect(d.categories, t).toContain('self_harm');
+    }
+    expect(prefilterDetail('how to kill myself', 'PG-13').decision).toBe('block');
+  });
+});
+
 describe('pre-filter: rating-shaping words', () => {
   it('weapons are fine at PG-13 and ambiguous for kids', () => {
     expect(prefilterDetail('the hero shoots the robber', 'PG-13').decision).toBe('clear');

@@ -28,7 +28,9 @@ export const LinkPreviewMock: React.FC<LinkPreviewMockProps> = ({ title, descrip
   return (
     <figure className={cx('m-0 min-w-0', className)}>
       <div className={cx('rounded-2xl p-3 transition-colors', dark ? 'bg-[#1f2328]' : 'bg-[#e9eef3]')}>
-        <div className={cx('ml-auto max-w-[340px] overflow-hidden rounded-2xl rounded-br-md shadow-sm', dark ? 'bg-[#2b5f4a] text-white' : 'bg-[#d9fdd3] text-[#111b21]')}>
+        {/* Neutral bubble colours (not any messenger's brand palette); the mock simulates a chat app
+            in light or dark, independent of the studio theme, so it uses fixed neutral greys. */}
+        <div className={cx('ml-auto max-w-[340px] overflow-hidden rounded-2xl rounded-br-md shadow-sm', dark ? 'bg-[#2d333b] text-white' : 'bg-white text-[#1f2328]')}>
           <div className={cx('m-1 overflow-hidden rounded-xl', dark ? 'bg-black/25' : 'bg-black/5')}>
             <div className="relative aspect-[1200/630] w-full">
               {imageUrl && !broken ? (

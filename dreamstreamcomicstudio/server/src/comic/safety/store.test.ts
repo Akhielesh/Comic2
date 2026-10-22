@@ -17,7 +17,7 @@ function fakeDb(respond: (table: string, calls: Call[]) => { data?: unknown; err
     from(table: string) {
       const mine: Call[] = [];
       const builder: Record<string, unknown> = {};
-      for (const method of ['insert', 'upsert', 'update', 'delete', 'select', 'eq', 'neq', 'gt', 'gte', 'in', 'order', 'range', 'limit', 'maybeSingle']) {
+      for (const method of ['insert', 'upsert', 'update', 'delete', 'select', 'eq', 'neq', 'gt', 'gte', 'in', 'like', 'order', 'range', 'limit', 'maybeSingle']) {
         builder[method] = (...args: unknown[]) => {
           const call = { table, method, args };
           calls.push(call);
@@ -83,6 +83,44 @@ describe('createSupabaseSafetyStore', () => {
     const { db, calls } = fakeDb(() => ({ data: { status: 'suspended' }, error: null }));
     await createSupabaseSafetyStore({ db: () => db }).restrictUser(USER, 'auto');
     expect(calls.some((c) => c.method === 'upsert')).toBe(false);
+  });
+
+  it('an event never stores a malformed fingerprint (the column only takes 16–64 hex)', async () => {
+    const { db, calls } = fakeDb(() => ({ error: null }));
+    const store = createSupabaseSafetyStore({ db: () => db });
+    await store.recordEvent({ surface: 'upload', layer: 'hash', decision: 'block', categories: [], severity: 3, contentHash: 'ABCDEF0123456789' });
+    await store.recordEvent({ surface: 'message', layer: 'prefilter', decision: 'allow', categories: [], severity: 0, contentHash: 'not a hash' });
+    const rows = calls.filter((c) => c.method === 'insert').map((c) => c.args[0] as Record<string, unknown>);
+    expect(rows.map((r) => r.content_hash)).toEqual(['abcdef0123456789', null]);
+  });
+
+  it('a long auto-case reason is clamped to the column limit (200)', async () => {
+    const { db, calls } = fakeDb(() => ({ data: { id: 'c1' }, error: null }));
+    await createSupabaseSafetyStore({ db: () => db }).openCase({ kind: 'auto', projectId: PROJECT, target: {}, reason: `severe: ${'minor_sexual, '.repeat(30)}` });
+    expect(String((calls.find((c) => c.method === 'insert')!.args[0] as Record<string, unknown>).reason).length).toBe(200);
+  });
+
+  it('liftAutoHold only clears an automatic hold (reason "auto: …") and reports whether it did', async () => {
+    const { db, calls } = fakeDb(() => ({ data: [{ id: PROJECT }], error: null }));
+    expect(await createSupabaseSafetyStore({ db: () => db }).liftAutoHold(PROJECT)).toBe(true);
+    expect(calls.find((c) => c.method === 'update')!.args[0]).toEqual({ is_forced_private: false, forced_private_reason: null, forced_private_by: null, forced_private_at: null });
+    expect(calls.find((c) => c.method === 'like')!.args).toEqual(['forced_private_reason', 'auto:%']);
+    expect(calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([
+      ['id', PROJECT],
+      ['is_forced_private', true]
+    ]);
+    const none = fakeDb(() => ({ data: [], error: null }));
+    expect(await createSupabaseSafetyStore({ db: () => none.db }).liftAutoHold(PROJECT)).toBe(false);
+  });
+
+  it('notifications fall back to a bare system row on an older table (no title/message columns)', async () => {
+    let n = 0;
+    const { db, calls } = fakeDb((table) => (table === 'notifications' && (n += 1) === 1 ? { error: { code: '42703' } } : { error: null }));
+    await createSupabaseSafetyStore({ db: () => db }).notify({ userId: USER, entityId: PROJECT, title: 'T', message: 'M' });
+    const inserts = calls.filter((c) => c.method === 'insert').map((c) => c.args[0] as Record<string, unknown>);
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0]).toMatchObject({ title: 'T', message: 'M', type: 'system' });
+    expect(inserts[1]).toEqual({ user_id: USER, actor_id: null, type: 'system', entity_id: PROJECT });
   });
 
   it('unconfigured: reads answer safe defaults and writes are no-ops', async () => {

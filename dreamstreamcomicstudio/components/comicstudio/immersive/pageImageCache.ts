@@ -12,6 +12,8 @@
 //   joined is adopted (its abort signal is dropped), so a page never waits on a cancelled preload.
 // - A 400/403 means the signed link expired: the entry reports `expired` so the host can relink.
 // - CORS/network failure falls back to the plain URL in an <img> (no palette), never a broken page.
+// - Any other failure (5xx, 404, an undecodable file) retries a bounded number of times with a growing
+//   delay (`retryIn`), so a flaky connection heals by itself and the page can say so honestly.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import type { AssetRef } from '../../../shared/comic/doc';
@@ -35,6 +37,10 @@ export interface CachedPage {
   direct?: boolean;
   /** URL this entry was loaded from (a different URL after an error retries). */
   url: string;
+  /** Failed loads of this URL so far (transient-error retries). */
+  attempts?: number;
+  /** When the last load failed (ms epoch). */
+  failedAt?: number;
 }
 
 export interface CacheDeps {
@@ -49,6 +55,10 @@ export interface CacheDeps {
 }
 
 const RANK: Record<CachePriority, number> = { now: 0, next: 1, idle: 2 };
+/** Delay before retry n (after failure n); the length caps the attempts (1 load + 2 retries). */
+export const RETRY_DELAYS_MS = [2000, 6000] as const;
+/** After the automatic retries, a fresh request (the reader reopened) may try again this much later. */
+export const GIVE_UP_RESET_MS = 15_000;
 
 const defaultDecode = (url: string): Promise<{ w: number; h: number }> =>
   new Promise((resolve, reject) => {
@@ -104,7 +114,12 @@ export class PageImageCache {
   private lru: string[] = [];
   private version = 0;
 
-  constructor(private deps: CacheDeps = defaultCacheDeps(), private maxEntries = 10, private concurrency = 3) {}
+  constructor(
+    private deps: CacheDeps = defaultCacheDeps(),
+    private maxEntries = 10,
+    private concurrency = 3,
+    private retryDelaysMs: readonly number[] = RETRY_DELAYS_MS
+  ) {}
 
   get(path: string): CachedPage | undefined {
     return this.entries.get(path);
@@ -138,6 +153,18 @@ export class PageImageCache {
     };
   }
 
+  /**
+   * Milliseconds until a failed entry may load again (0 = now), or null when it won't retry on its own:
+   * not failed, an expired link (only a fresh URL helps — the host relinks), or out of attempts.
+   */
+  retryIn(path: string, at: number = Date.now()): number | null {
+    const e = this.entries.get(path);
+    if (!e || e.state !== 'error' || e.expired) return null;
+    const n = e.attempts ?? 1;
+    if (n > this.retryDelaysMs.length) return null;
+    return Math.max(0, (e.failedAt ?? 0) + this.retryDelaysMs[n - 1] - at);
+  }
+
   /** Held by a mounted page (tests, diagnostics). */
   inUseCount(path: string): number {
     return this.inUse.get(path) ?? 0;
@@ -149,7 +176,11 @@ export class PageImageCache {
       this.touch(path);
       return Promise.resolve(existing);
     }
-    if (existing && existing.state === 'error' && existing.url === url) return Promise.resolve(existing);
+    // The same link failed: try again only once its retry delay has passed (never for an expired link).
+    // A page out of automatic retries loads again when it is asked for afresh (the reader reopened).
+    const retry = existing && existing.state === 'error' && existing.url === url;
+    const gaveUp = retry && !existing!.expired && Date.now() - (existing!.failedAt ?? 0) >= GIVE_UP_RESET_MS;
+    if (retry && !gaveUp && this.retryIn(path) !== 0) return Promise.resolve(existing);
     const inflight = this.pending.get(path);
     if (inflight) {
       // Upgrade a queued job's priority (a page we were idly preloading is now on screen), and adopt it:
@@ -159,7 +190,7 @@ export class PageImageCache {
       if (job && !signal) job.signal = undefined;
       return inflight;
     }
-    const entry: CachedPage = { path, url, objectUrl: '', w: 0, h: 0, state: 'loading' };
+    const entry: CachedPage = { path, url, objectUrl: '', w: 0, h: 0, state: 'loading', ...(retry && !gaveUp ? { attempts: existing!.attempts } : {}) };
     this.entries.set(path, entry);
     this.touch(path);
     const promise = new Promise<CachedPage>((resolve) => {
@@ -233,7 +264,8 @@ export class PageImageCache {
 
   private finish(job: Job, patch: Partial<CachedPage>) {
     const cur = this.entries.get(job.path);
-    const entry: CachedPage = { ...(cur ?? { path: job.path, url: job.url, objectUrl: '', w: 0, h: 0, state: 'loading' }), ...patch, url: job.url };
+    const failed = patch.state === 'error' ? { attempts: (cur?.attempts ?? 0) + 1, failedAt: Date.now() } : { attempts: undefined, failedAt: undefined };
+    const entry: CachedPage = { ...(cur ?? { path: job.path, url: job.url, objectUrl: '', w: 0, h: 0, state: 'loading' }), ...patch, ...failed, url: job.url };
     this.entries.set(job.path, entry);
     this.pending.delete(job.path);
     job.resolve(entry);
@@ -348,6 +380,8 @@ export interface CachedImage {
   h: number;
   palette?: Palette | null;
   expired?: boolean;
+  /** A transient failure that will be retried on its own shortly. */
+  retrying?: boolean;
 }
 
 /** Subscribe to the cache (re-renders when any entry changes; cheap — entries are few). */
@@ -370,6 +404,14 @@ export function useCachedImage(path: string | undefined, url: string | undefined
   useEffect(() => {
     if (path && url) void cache.ensure(path, url, prio);
   }, [path, url, prio, cache, missing]);
+  // A transient failure: load again after its retry delay (bounded; an expired link waits for the host).
+  const failedAt = e?.state === 'error' ? e.failedAt : undefined;
+  const retrying = !!path && failedAt !== undefined && cache.retryIn(path) !== null;
+  useEffect(() => {
+    if (!path || !url || !retrying) return;
+    const t = setTimeout(() => void cache.ensure(path, url, prio), cache.retryIn(path) ?? 0);
+    return () => clearTimeout(t);
+  }, [path, url, prio, cache, retrying, failedAt]);
   if (!e) return { state: 'waiting', w: 0, h: 0 };
-  return { src: e.state === 'ready' ? e.objectUrl : undefined, state: e.state, w: e.w, h: e.h, palette: e.palette, expired: e.expired };
+  return { src: e.state === 'ready' ? e.objectUrl : undefined, state: e.state, w: e.w, h: e.h, palette: e.palette, expired: e.expired, retrying };
 }

@@ -37,6 +37,8 @@ const PROJECT_ID = /^[A-Za-z0-9-]{1,64}$/;
 const HASH_RE = /^[0-9a-f]{16}$/;
 /** dHash bits within which a new photo "looks the same as" one already on the owner. */
 export const NEAR_DUP_BITS = 4;
+/** What the vision piggyback may say a photo shows (anything else is dropped). */
+const REF_SUBJECTS = new Set<string>(['person', 'animal', 'creature', 'robot', 'toy', 'vehicle', 'object', 'place', 'artwork', 'other']);
 /** The content screen may not hold an upload longer than this (then the photo is stored unchecked). */
 export const SCREEN_TIMEOUT_MS = 15_000;
 
@@ -292,9 +294,11 @@ export function createComicRefsRouter(deps: ComicRefsRouterDeps = {}): Router {
         if (hash) slot?.storing.add(hash);
         let ref: RefAsset;
         let op: DocOp;
+        let savedPath: string | undefined;
         try {
           // 6. Store in the PRIVATE bucket.
           const saved = await ctx.assets.saveRef({ userId: session.userId, projectId: session.projectId, encoded });
+          savedPath = saved.path;
           const describe = 'describe' in screened ? screened.describe : undefined;
           const quality = { ...(measured.quality || {}), ...(describe?.multipleSubjects ? { multiSubject: true as const } : {}) };
           ref = {
@@ -307,13 +311,17 @@ export function createComicRefsRouter(deps: ComicRefsRouterDeps = {}): Router {
             ...(measured.dhash ? { dhash: measured.dhash } : {}),
             ...(Object.keys(quality).length ? { quality } : {}),
             ...(describe?.caption ? { caption: String(describe.caption).replace(/\s+/g, ' ').trim().slice(0, 160) } : {}),
-            ...(describe?.subject ? { subject: describe.subject } : {}),
+            ...(describe?.subject && REF_SUBJECTS.has(describe.subject) ? { subject: describe.subject } : {}),
             ...('verdict' in screened && screened.verdict ? { safety: screened.verdict } : {}),
             addedBy: 'user'
           };
           op = { op: 'ref_add', owner, ref, ...(index !== undefined ? { index } : {}) };
           // 7. Commit. Never a stale op on the sheet: a redraw is offered, never forced.
           session.commit([op], { origin: 'user', label: owner.kind === 'inbox' ? 'Attach photo' : 'Add photo' });
+        } catch (err) {
+          // Stored but never committed (e.g. the doc-size guard refused it): nothing points at the file.
+          if (savedPath) void ctx.assets.remove([savedPath]).catch(() => undefined);
+          throw err;
         } finally {
           if (hash) slot?.storing.delete(hash);
         }

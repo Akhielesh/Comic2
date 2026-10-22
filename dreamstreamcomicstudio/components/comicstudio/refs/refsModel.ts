@@ -13,10 +13,14 @@ const upper = (s?: string) => (s || '').trim().toUpperCase() || 'UNNAMED';
 /** "MAYA", "SPICE MARKET", "the style", "the composer". */
 export function ownerLabel(doc: ComicDoc | null | undefined, owner: RefOwner): string {
   switch (owner.kind) {
-    case 'character':
-      return upper(doc?.cast.find((c) => c.id === owner.id)?.name) || 'This character';
-    case 'place':
-      return upper(doc?.places.find((p) => p.id === owner.id)?.name) || 'This place';
+    case 'character': {
+      const c = doc?.cast.find((x) => x.id === owner.id);
+      return c ? upper(c.name) : 'This character';
+    }
+    case 'place': {
+      const p = doc?.places.find((x) => x.id === owner.id);
+      return p ? upper(p.name) : 'This place';
+    }
     case 'style':
       return 'The style';
     default:

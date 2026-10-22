@@ -16,7 +16,7 @@ import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import { quoteRenderPages } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
 import { CardShell, GhostButton, plural } from '../ui';
-import { failureReason, formatFailedAt } from './failure';
+import { failureFacts, failureReason, formatFailedAt } from './failure';
 import { RenderThumb, describeTarget } from './renderTile';
 import { useAction } from './useAction';
 
@@ -53,7 +53,14 @@ export const retryAllFailed = (
 
   const sheetIds = failed.filter((f) => f.target.kind === 'sheet' || f.target.kind === 'place').map((f) => (f.target as { id: string }).id);
   if (sheetIds.length) {
-    const est = estimateJobs([{ kind: 'sheet', count: sheetIds.length }], tier, { override, byok });
+    // One render_sheets covers characters and places (the server splits them); price each kind.
+    const places = failed.filter((f) => f.target.kind === 'place').length;
+    const chars = sheetIds.length - places;
+    const est = estimateJobs(
+      [...(chars ? [{ kind: 'sheet' as const, count: chars }] : []), ...(places ? [{ kind: 'place' as const, count: places }] : [])],
+      tier,
+      { override, byok }
+    );
     actions.push({ type: 'render_sheets', characterIds: sheetIds, force: true, quotedUsd: est.usd });
     usd += est.usd;
   }
@@ -64,7 +71,7 @@ export const retryAllFailed = (
     .filter((o): o is NonNullable<typeof o> => !!o)
     .map((o) => ({ name: o.name, spec: o.spec }));
   if (directions.length) {
-    const est = estimateJobs([{ kind: 'style_option', count: directions.length }], tier, { byok });
+    const est = estimateJobs([{ kind: 'style_option', count: directions.length }], tier, { override, byok });
     actions.push({ type: 'render_style_options', directions, quotedUsd: est.usd });
     usd += est.usd;
   }
@@ -81,13 +88,11 @@ export const retryAllFailed = (
 /** One calm sentence about the failures: when the latest happened and the main reason. */
 export const failureSummary = (failed: FailedItem[], now: number = Date.now()): string => {
   if (!failed.length) return '';
-  const latest = failed.reduce<number | undefined>((t, f) => {
-    const at = f.render?.updatedAt;
-    return typeof at === 'number' && (t === undefined || at > t) ? at : t;
-  }, undefined);
+  const facts = failed.map((f) => failureFacts(f.render));
+  const latest = facts.reduce<number | undefined>((t, f) => (typeof f.at === 'number' && (t === undefined || f.at > t) ? f.at : t), undefined);
   const reasons = new Map<string, number>();
-  for (const f of failed) {
-    const r = failureReason(f.render?.error);
+  for (const f of facts) {
+    const r = failureReason(f.error);
     reasons.set(r, (reasons.get(r) || 0) + 1);
   }
   const top = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -146,7 +151,12 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
         <div className={onlySheets ? 'grid grid-cols-2 gap-2.5' : 'grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2.5'}>
           {live.map(({ target, render, meta }) => {
             const key = renderTargetKey(target);
-            const action: SpendAction | undefined = meta!.retry;
+            // A failed tile's Retry carries a quote made at click time (a stale card re-quotes on the
+            // server instead of overspending); the plain redraw action is the fallback.
+            const retryActions = (): SpendAction[] => {
+              const quoted = retryAllFailed(doc, [{ target, render }], studio.byok).actions;
+              return quoted.length ? quoted : meta!.retry ? [meta!.retry] : [];
+            };
             return (
               <RenderThumb
                 key={key}
@@ -156,7 +166,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
                 stale={meta!.stale}
                 url={studio.urlFor(render?.asset)}
                 onOpen={open(target)}
-                onRetry={action ? () => void run(`retry:${key}`, action) : undefined}
+                onRetry={meta!.retry ? () => void run(`retry:${key}`, ...retryActions()) : undefined}
                 retryBusy={isPending(`retry:${key}`) || isPending('retry-all')}
               />
             );

@@ -22,7 +22,7 @@ import { studioCapsFor } from '../comic/access.js';
 import { createStudioContext } from '../comic/context.js';
 import { spendIsByok } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
-import { appealAndTell, recordReport } from '../comic/safety/index.js';
+import { appealAndTell, recordReport, requireActiveUser } from '../comic/safety/index.js';
 import { RESOLVE_ACTIONS, caseAssetUrl, caseView, normalizeReportReason, resolveCase, type ResolveAction } from '../comic/safety/cases.js';
 import { errorFacts, safetyDeps } from '../comic/safety/deps.js';
 import { getStudioSession } from '../comic/session.js';
@@ -70,6 +70,8 @@ export const parseTarget = (raw: unknown): RenderTarget | null => {
 export interface ComicSafetyRouterDeps {
   /** Owner-scoped context for a project (throws NOT_FOUND for anyone else). */
   contextFor?(req: Request, projectId: string): Promise<StudioContext>;
+  /** Moderation-status gate (suspended accounts get 403); defaults to requireActiveUser(). */
+  requireActive?: (req: Request, res: Response, next: NextFunction) => void;
 }
 
 const defaultContextFor = async (req: Request, projectId: string): Promise<StudioContext> => {
@@ -84,6 +86,8 @@ const defaultContextFor = async (req: Request, projectId: string): Promise<Studi
 /** Owner appeal route (mounted on /api/comic). */
 export function createComicSafetyRouter(deps: ComicSafetyRouterDeps = {}): Router {
   const router = Router();
+  // A suspended account cannot spend platform checks (the mount adds no requireActive here).
+  router.post(SAFETY_OWNER_PATHS, deps.requireActive ?? requireActiveUser());
   router.post(
     SAFETY_OWNER_PATHS,
     handle(async (req, res) => {

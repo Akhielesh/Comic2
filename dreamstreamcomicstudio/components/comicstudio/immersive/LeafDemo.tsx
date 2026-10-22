@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { usePrefersReducedMotion } from '../../studio/kit/motion';
+import { useElementSize } from '../board/ui';
 import { computeFold, cssMatrix, leafFrame, leafStyles, BAND_REACH } from './flipGeometry';
 import { autoPath, AUTO_GRAB } from './flipPhysics';
 import { CAST_GRADIENT, CURL_GRADIENT } from './ReaderSlot';
@@ -24,6 +25,9 @@ const Art: React.FC<{ hue: number; label: string }> = ({ hue, label }) => (
 
 export const LeafDemo: React.FC<{ width?: number; progress?: number }> = ({ width = 360, progress }) => {
   const reduced = usePrefersReducedMotion();
+  // Drawn at `width`, scaled down to fit narrower containers (no overflow on a 320 px phone).
+  const [boxRef, box] = useElementSize<HTMLDivElement>();
+  const fit = box.width > 0 ? Math.min(1, box.width / width) : 1;
   const [t, setT] = useState(0.4);
   useEffect(() => {
     if (reduced || progress !== undefined || typeof requestAnimationFrame !== 'function') return;
@@ -44,26 +48,28 @@ export const LeafDemo: React.FC<{ width?: number; progress?: number }> = ({ widt
   const st = fold ? leafStyles(frame, fold) : null;
   const k = fold ? Math.sin(Math.PI * fold.progress) : 0;
   return (
-    <div className="relative mx-auto" style={{ width, height: H }} role="img" aria-label="A comic page caught mid-turn" data-testid="leaf-demo">
-      <div className="absolute left-0 top-0 overflow-hidden shadow-[0_18px_40px_-16px_rgba(0,0,0,0.5)]" style={{ width: W, height: H }}>
-        <Art hue={200} label="2" />
-      </div>
-      {/* The page revealed under the leaf, with the cast shadow along the fold. */}
-      <div className="absolute top-0 overflow-hidden shadow-[0_18px_40px_-16px_rgba(0,0,0,0.5)]" style={{ left: W, width: W, height: H }}>
-        <Art hue={30} label="5" />
-        {st && <div className="absolute left-0 top-0" style={{ width: W, height: BAND_REACH, transformOrigin: '0 0', transform: cssMatrix(st.castBand), background: CAST_GRADIENT, opacity: Math.min(1, st.shade.cast * 1.6) }} />}
-      </div>
-      {/* The turning page: its static part… */}
-      <div className="absolute top-0 overflow-hidden" style={{ left: W, width: W, height: H, clipPath: st?.frontClip }}>
-        <Art hue={320} label="3" />
-      </div>
-      {/* …and its back (page 4) folding over, with the curl highlight. */}
-      {st && (
-        <div className="absolute top-0 overflow-hidden" style={{ left: 0, width: W, height: H, transformOrigin: '0 0', transform: cssMatrix(st.backTransform), clipPath: st.backClip }}>
-          <Art hue={120} label="4" />
-          <div className="absolute left-0 top-0" style={{ width: W, height: BAND_REACH, transformOrigin: '0 0', transform: cssMatrix(st.curlBand), background: CURL_GRADIENT, opacity: Math.min(1, k * 1.1) }} />
+    <div ref={boxRef} className="relative mx-auto w-full" style={{ maxWidth: width, height: H * fit }} role="img" aria-label="A comic page caught mid-turn" data-testid="leaf-demo">
+      <div className="absolute left-0 top-0" style={{ width, height: H, transform: fit < 1 ? `scale(${fit})` : undefined, transformOrigin: '0 0' }}>
+        <div className="absolute left-0 top-0 overflow-hidden shadow-[0_18px_40px_-16px_rgba(0,0,0,0.5)]" style={{ width: W, height: H }}>
+          <Art hue={200} label="2" />
         </div>
-      )}
+        {/* The page revealed under the leaf, with the cast shadow along the fold. */}
+        <div className="absolute top-0 overflow-hidden shadow-[0_18px_40px_-16px_rgba(0,0,0,0.5)]" style={{ left: W, width: W, height: H }}>
+          <Art hue={30} label="5" />
+          {st && <div className="absolute left-0 top-0" style={{ width: W, height: BAND_REACH, transformOrigin: '0 0', transform: cssMatrix(st.castBand), background: CAST_GRADIENT, opacity: Math.min(1, st.shade.cast * 1.6) }} />}
+        </div>
+        {/* The turning page: its static part… */}
+        <div className="absolute top-0 overflow-hidden" style={{ left: W, width: W, height: H, clipPath: st?.frontClip }}>
+          <Art hue={320} label="3" />
+        </div>
+        {/* …and its back (page 4) folding over, with the curl highlight. */}
+        {st && (
+          <div className="absolute top-0 overflow-hidden" style={{ left: 0, width: W, height: H, transformOrigin: '0 0', transform: cssMatrix(st.backTransform), clipPath: st.backClip }}>
+            <Art hue={120} label="4" />
+            <div className="absolute left-0 top-0" style={{ width: W, height: BAND_REACH, transformOrigin: '0 0', transform: cssMatrix(st.curlBand), background: CURL_GRADIENT, opacity: Math.min(1, k * 1.1) }} />
+          </div>
+        )}
+      </div>
     </div>
   );
 };

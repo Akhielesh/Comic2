@@ -184,7 +184,7 @@ export function Segmented<T extends string>({
             onKeyDown={(e) => onKey(e, i)}
             className={cx(
               `flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING} disabled:opacity-40`,
-              size === 'xs' ? 'px-2 py-1 text-[11px] coarse:min-h-[40px]' : 'px-2.5 py-1.5 text-[12px] coarse:min-h-[44px]',
+              size === 'xs' ? 'px-2 py-1 text-[11px] coarse:min-h-[44px]' : 'px-2.5 py-1.5 text-[12px] coarse:min-h-[44px]',
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >

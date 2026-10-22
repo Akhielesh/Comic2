@@ -12,28 +12,49 @@
 //   - When the client may have missed changes (rev gap, broken stream, renders running
 //     with no stream attached after a reload) it refetches, bounded and only while needed.
 //
-// v5 seams (contract §13.1, wave 0 / P0-C): caps, the Easy/Pro view, selection, next-step
-// chips, client actions, ref uploads and the lazily fetched publication work minimally here;
-// undo/redo are inert (canUndo stays false) until P1-CLIENTSTATE lands useUndo.
+// v5 (contract §13.1, P1-CLIENTSTATE):
+//   - caps come from the project load (`byok` from caps; the spend-entry heuristic is only the
+//     offline fallback when the server sent no caps); the Easy/Pro view is useStudioMode().
+//   - Undo/redo (useUndo + shared inverseOps): every user patch is undoable by default (coalesced
+//     drags/scrubs), director batches (`ops.origin === 'director'`) are pushed with the inverse
+//     computed against the exact base they applied to, a typed "undo" is intercepted here and
+//     never sent to the director (no AI cost), and a project switch clears the stack.
+//   - `restore_render` is an optimistic, undoable `render_use` patch (instant, free).
+//   - urlFor(asset, {width}) picks the smallest stored variant ≥ width × min(dpr, 2).
+//   - uploadRef streams the bytes via XHR with real progress and abort, and applies the
+//     server's ref ops directly (no refetch).
+//   - The owner's publication view is fetched lazily and refreshed when the doc's mirror changes.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { DocOp, StudioAction } from '../../shared/comic/ops';
+import { applyOps, type DocOp, type StudioAction } from '../../shared/comic/ops';
 import type { StreamRequest, StudioFocus } from '../../shared/comic/events';
-import type { AssetRef, ClientAction, NextStep, RefOwner, RenderTarget } from '../../shared/comic/doc';
-import { DEFAULT_CAPS, type StudioCaps, type StudioMode } from '../../shared/comic/capabilities';
+import {
+  mapAssetRefs,
+  variantFor,
+  type AssetRef,
+  type ClientAction,
+  type ComicDoc,
+  type NextStep,
+  type RefOwner,
+  type RenderTarget
+} from '../../shared/comic/doc';
+import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
 import type { PublicationOwnerView } from '../../shared/comic/publication';
 import type {
   BoardTab,
   PatchOptions,
   PendingAttachment,
+  ReaderRequest,
   RefUploadOptions,
   RefUploadResult,
   SendOptions,
   StudioController,
+  StudioNotice,
   StudioSelection
 } from './types';
 import {
   cancelStudio,
+  friendlyErrorMessage,
   getPublication,
   isAbortError,
   loadStudioProject,
@@ -58,6 +79,11 @@ import {
   type StreamKind,
   type StudioState
 } from './studioReducer';
+import { useStudioMode } from './useStudioMode';
+import { isNoopOn, makeUndoEntry, useUndo, type UndoEntry } from './useUndo';
+
+// Back-compat re-exports (consumers and tests import these from './useStudio').
+export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
 
 /** Extra state the conversation pane uses on top of the shared StudioController contract. */
 export interface ComicStudioController extends StudioController {
@@ -72,7 +98,9 @@ export interface ComicStudioController extends StudioController {
   refreshing: boolean;
   /** USD the last finished turn/job reported. */
   lastSpentUsd: number | null;
-  /** Best guess whether images are paid with the user's own key (from the latest image spend). */
+  /** USD the software saved in the last turn/job ("Free — done by the editor"), null when none. */
+  lastSavedUsd?: number | null;
+  /** Images are paid with the user's own key: caps.byok (the latest image spend only when offline). */
   byok: boolean;
   /** Pages + sheets + options + cover currently queued or drawing. */
   renderingTotal: number;
@@ -97,35 +125,25 @@ const CANCEL_SAFETY_MS = 20_000;
 
 const IMAGE_SPEND_KINDS = new Set(['style', 'sheet', 'page', 'edit', 'cover']);
 
-/** localStorage key of the Easy/Pro view (contract §13.5). */
-export const MODE_STORAGE_KEY = 'comicstudio.mode';
 /** Inbox paths per message (the server enforces the same cap). */
 const MAX_INBOX_ATTACHMENTS = 12;
 /** StudioFocus.lineIds cap. */
 const MAX_FOCUS_LINES = 80;
+/** A typed message that is an undo request: handled here, never sent (contract §13.1). */
+export const TYPED_UNDO_RE = /^\s*undo( that| it)?\s*[.!]?\s*$/i;
+/** Window event the Share sheet listens for (share/ShareButton.tsx OPEN_SHARE_EVENT). */
+const OPEN_SHARE_EVENT = 'ds:open-share';
 
-const readStoredMode = (): StudioMode | null => {
-  try {
-    const v = typeof window !== 'undefined' ? window.localStorage.getItem(MODE_STORAGE_KEY) : null;
-    return v === 'easy' || v === 'pro' ? v : null;
-  } catch {
-    return null;
-  }
+/**
+ * Offline fallback only: guess "own key" from the latest image spend. The server's caps.byok is
+ * authoritative whenever the project load sent caps.
+ */
+export const byokFromDoc = (doc: ComicDoc | null | undefined): boolean => {
+  const entry = doc?.spend.entries.find((e) => IMAGE_SPEND_KINDS.has(e.kind));
+  return !!entry?.byok;
 };
 
-const writeStoredMode = (mode: StudioMode) => {
-  try {
-    window.localStorage.setItem(MODE_STORAGE_KEY, mode);
-  } catch {
-    /* not persisted (private mode, blocked storage) */
-  }
-};
-
-/** The view a user gets: their pick, else the plan default; Pro needs the proEditor capability. */
-export const resolveStudioMode = (stored: StudioMode | null, caps: StudioCaps): StudioMode => {
-  const mode = stored ?? caps.defaultMode;
-  return mode === 'pro' && !caps.proEditor ? 'easy' : mode;
-};
+const devicePixelRatioNow = (): number => (typeof window !== 'undefined' && Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1);
 
 /** The turn focus a selection implies (what the user is looking at when they send). */
 export const focusFromSelection = (sel: StudioSelection | null): StudioFocus | undefined => {
@@ -162,12 +180,35 @@ interface QueuedPatch {
   id: string;
   ops: DocOp[];
   resolve: () => void;
+  /** Its edit is on the undo stack (a rejected save drops the entry). */
+  recorded?: boolean;
+  /** Undo/redo application: told whether the save failed and whether trying again could work. */
+  onFailed?: (retryable: boolean) => void;
 }
+
+/** What a finished stream reported. */
+interface StreamOutcome {
+  ok: boolean;
+  error?: string;
+  code?: string;
+  aborted: boolean;
+  /** Trying the same request again could succeed (network, busy, rate limit, server hiccup). */
+  retryable: boolean;
+}
+
+/** Server codes that mean "try again later", not "this can never be saved". */
+const RETRYABLE_CODES = new Set(['CONFLICT', 'RATE_LIMIT', 'COOLDOWN', 'TIMEOUT', 'INTERNAL', 'NOT_AVAILABLE', 'PROVIDER_ERROR']);
+
+let noticeSeq = 0;
+
 
 export function useStudio(projectId: string): ComicStudioController {
   const [state, dispatch] = useReducer(studioReducer, undefined, initialStudioState);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** The doc the user sees, including edits queued earlier in this same tick (undo baselines). */
+  const viewRef = useRef<ComicDoc | null>(state.doc);
+  viewRef.current = state.doc;
 
   const projectRef = useRef(projectId);
   const generationRef = useRef(0);
@@ -184,16 +225,29 @@ export function useStudio(projectId: string): ComicStudioController {
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
   const [caps, setCaps] = useState<StudioCaps>(DEFAULT_CAPS);
-  const [storedMode, setStoredMode] = useState<StudioMode | null>(readStoredMode);
+  /** The server sent caps at least once (else byok falls back to the doc heuristic). */
+  const [capsFromServer, setCapsFromServer] = useState(false);
+  const { mode, setMode } = useStudioMode(caps);
+  const undoApi = useUndo(projectId);
+  const undoRef = useRef(undoApi);
+  undoRef.current = undoApi;
   const [selection, setSelectionState] = useState<StudioSelection | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const [publication, setPublication] = useState<PublicationOwnerView | null>(null);
+  const [publicationLoading, setPublicationLoading] = useState(false);
+  const publicationRequestedRef = useRef(false);
+  const publicationPromiseRef = useRef<Promise<void> | null>(null);
+  const [notice, setNotice] = useState<StudioNotice | null>(null);
+  const [readerRequest, setReaderRequest] = useState<ReaderRequest | null>(null);
   const manualTabAtRef = useRef(0);
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const focusedRef = useRef(focusedPageId);
   focusedRef.current = focusedPageId;
+  /** The project whose load has started. A render where it differs is a project switch. */
+  const loadedProjectRef = useRef<string | null>(null);
+  const switching = loadedProjectRef.current !== projectId;
 
   /** Dispatch only while this hook instance still shows the same project load. */
   const guarded = useCallback((generation: number) => {
@@ -210,11 +264,18 @@ export function useStudio(projectId: string): ComicStudioController {
     }
   }, []);
 
+  const say = useCallback((n: Omit<StudioNotice, 'id' | 'at'>) => {
+    noticeSeq = (noticeSeq + 1) % 1e9;
+    setNotice({ ...n, id: `notice_${noticeSeq}`, at: Date.now() });
+  }, []);
+  const clearNotice = useCallback(() => setNotice(null), []);
+
   // ── Load ───────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     mountedRef.current = true;
     projectRef.current = projectId;
+    loadedProjectRef.current = projectId;
     const generation = ++generationRef.current;
     const d = guarded(generation);
     const ctrl = new AbortController();
@@ -225,14 +286,22 @@ export function useStudio(projectId: string): ComicStudioController {
     patchInFlightRef.current = false;
     refreshPromiseRef.current = null;
     manualTabAtRef.current = 0;
+    publicationRequestedRef.current = false;
+    publicationPromiseRef.current = null;
     setFocusedPageId(null);
     setSelectionState(null);
     setPublication(null);
+    setPublicationLoading(false);
+    setNotice(null);
+    setReaderRequest(null);
     dispatch({ type: 'load_start' });
 
     loadStudioProject(projectId, { signal: ctrl.signal })
       .then(({ doc, urls, caps: loadedCaps }) => {
-        if (loadedCaps && mountedRef.current && generation === generationRef.current) setCaps(loadedCaps);
+        if (loadedCaps && mountedRef.current && generation === generationRef.current) {
+          setCaps(loadedCaps);
+          setCapsFromServer(true);
+        }
         d({ type: 'load_success', doc, urls, now: Date.now() });
       })
       .catch((err) => {
@@ -262,7 +331,10 @@ export function useStudio(projectId: string): ComicStudioController {
     const generation = generationRef.current;
     const work = loadStudioProject(id)
       .then(({ doc, urls, caps: loadedCaps }) => {
-        if (loadedCaps && mountedRef.current && generation === generationRef.current) setCaps(loadedCaps);
+        if (loadedCaps && mountedRef.current && generation === generationRef.current) {
+          setCaps(loadedCaps);
+          setCapsFromServer(true);
+        }
         d({ type: 'refresh_success', doc, urls, now: Date.now() });
       })
       .catch((err) => {
@@ -279,7 +351,7 @@ export function useStudio(projectId: string): ComicStudioController {
   // ── Streams ────────────────────────────────────────────────────────────────
 
   const runStream = useCallback(
-    async (kind: StreamKind, request: StreamRequest, opts: { streamId?: string; actionType?: string } = {}) => {
+    async (kind: StreamKind, request: StreamRequest, opts: { streamId?: string; actionType?: string } = {}): Promise<StreamOutcome> => {
       const generation = generationRef.current;
       const d = guarded(generation);
       const streamId = opts.streamId || localId('stream');
@@ -287,77 +359,51 @@ export function useStudio(projectId: string): ComicStudioController {
       controllersRef.current.set(streamId, { ctrl, kind });
       d({ type: 'stream_start', streamId, kind, ...(opts.actionType ? { actionType: opts.actionType } : {}), now: Date.now() });
       let error: string | undefined;
+      let code: string | undefined;
+      let retryable = false;
       let reported: string | undefined;
+      let reportedCode: string | undefined;
       let aborted = false;
       try {
         await streamStudio(
           projectRef.current,
           request,
-          (event) => {
-            // The server can refuse inside the stream (an `error` event, then close).
-            if (event.type === 'error') reported = event.message;
+          (raw) => {
+            let event = raw;
+            // The server can refuse inside the stream (an `error` event, then close). Its text is
+            // shown only when it is calm, human copy (defence in depth over the stream parser).
+            if (event.type === 'error') {
+              event = { ...event, message: friendlyErrorMessage(event.code, event.message) };
+              reported = event.message;
+              reportedCode = event.code;
+            }
             d({ type: 'stream_event', streamId, event, now: Date.now() });
           },
           ctrl.signal
         );
       } catch (err) {
         if (isAbortError(err)) aborted = true;
-        else error = toStudioApiError(err, 'project').message;
+        else {
+          const e = toStudioApiError(err, 'project');
+          error = e.message;
+          code = e.code;
+          retryable = e.retryable;
+        }
       } finally {
         controllersRef.current.delete(streamId);
-        d({ type: 'stream_end', streamId, ...(error ? { error } : {}), aborted, now: Date.now() });
+        d({ type: 'stream_end', streamId, ...(error ? { error } : {}), ...(code ? { code } : {}), aborted, now: Date.now() });
       }
-      return { ok: !error && !aborted && !reported, error: error || reported, aborted };
+      const finalCode = error ? code : reportedCode;
+      return {
+        ok: !error && !aborted && !reported,
+        ...(error || reported ? { error: error || reported } : {}),
+        ...(finalCode ? { code: finalCode } : {}),
+        aborted,
+        retryable: aborted || (error ? retryable : reported ? !reportedCode || RETRYABLE_CODES.has(reportedCode) : false)
+      };
     },
     [guarded]
   );
-
-  const send = useCallback(
-    async (text: string, opts?: SendOptions | PendingAttachment[]) => {
-      // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
-      const o: SendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
-      const clean = (text || '').trim();
-      const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
-      const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
-      if (!clean && !files.length && !inbox.length) return;
-      if (messageInFlightRef.current || !stateRef.current.base) return;
-      messageInFlightRef.current = true;
-      const streamId = localId('stream');
-      dispatch({
-        type: 'message_pending',
-        message: { id: localId('pending'), text: clean, attachments: files, at: Date.now(), status: 'sending', streamId }
-      });
-      const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
-      const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
-      const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
-      const generation = generationRef.current;
-      try {
-        await runStream(
-          'message',
-          {
-            kind: 'message',
-            text: clean,
-            ...(attachments.length ? { attachments } : {}),
-            ...(targets ? { attachmentTargets: targets } : {}),
-            ...(focus ? { focus } : {})
-          },
-          { streamId }
-        );
-      } finally {
-        if (generation === generationRef.current) messageInFlightRef.current = false;
-      }
-    },
-    [runStream]
-  );
-
-  const retryPendingMessage = useCallback(() => {
-    const pending = stateRef.current.pendingMessage;
-    if (!pending || pending.status !== 'failed' || messageInFlightRef.current) return;
-    dispatch({ type: 'message_dismiss' });
-    void send(pending.text, pending.attachments);
-  }, [send]);
-
-  const dismissPendingMessage = useCallback(() => dispatch({ type: 'message_dismiss' }), []);
 
   // ── Patches ────────────────────────────────────────────────────────────────
 
@@ -385,9 +431,15 @@ export function useStudio(projectId: string): ComicStudioController {
     guarded(generation)({
       type: 'patch_settled',
       ids: batch.map((b) => b.id),
-      ...(result.error ? { error: `Couldn't save your change. ${result.error}` } : {}),
+      ...(result.error ? { error: `Couldn't save your change. ${result.error}`, ...(result.code ? { code: result.code } : {}) } : {}),
       now: Date.now()
     });
+    if (!result.ok && mountedRef.current) {
+      // A rejected edit never happened: drop its undo entry. (An aborted save is unknown — the
+      // resync below tells, and a stale entry is skipped when undone.)
+      if (!result.aborted) undoRef.current.forget(batch.filter((b) => b.recorded).map((b) => b.id));
+      batch.forEach((b) => b.onFailed?.(result.retryable));
+    }
     batch.forEach((b) => b.resolve());
     // Don't fire a resync GET after the component is gone (unmount flushes a final batch).
     if (mountedRef.current && (result.ok ? hasClearIntent(ops) : result.aborted)) void refresh();
@@ -410,21 +462,167 @@ export function useStudio(projectId: string): ComicStudioController {
     };
   }, [abortStreams, flushPatches]);
 
-  // PatchOptions (undo/coalesce/label) feed the undo stack, which P1-CLIENTSTATE adds.
-  const patch = useCallback(
-    (ops: DocOp[], _opts?: PatchOptions): Promise<void> => {
-      const list = (ops || []).filter((op) => op && typeof op.op === 'string');
+  /**
+   * Queue a free content edit: applied optimistically now, saved in order (debounced, ≤ 200 ops per
+   * request). `record` puts it on the undo stack with the inverse computed against what the user
+   * sees right now; `onFailed` hears about a failed save (undo/redo bookkeeping).
+   */
+  const enqueuePatch = useCallback(
+    (
+      ops: DocOp[],
+      opts: { record?: { label?: string; coalesce?: string } | null; onFailed?: (retryable: boolean) => void } = {}
+    ): Promise<void> => {
+      const list = (Array.isArray(ops) ? ops : []).filter((op) => op && typeof op === 'object' && typeof op.op === 'string');
       if (!list.length || !stateRef.current.base) return Promise.resolve();
-      return new Promise<void>((resolve) => {
-        const id = localId('patch');
-        dispatch({ type: 'patch_local', patch: { id, ops: list }, now: Date.now() });
-        patchQueueRef.current.push({ id, ops: list, resolve });
-        if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
-        patchTimerRef.current = setTimeout(() => void flushPatches(), PATCH_DEBOUNCE_MS);
-      });
+      const chunks: DocOp[][] = [];
+      for (let i = 0; i < list.length; i += MAX_PATCH_OPS) chunks.push(list.slice(i, i + MAX_PATCH_OPS));
+      const ids = chunks.map(() => localId('patch'));
+      const before = viewRef.current ?? stateRef.current.doc;
+      const now = Date.now();
+      let recorded = false;
+      if (opts.record && before) {
+        const entry = makeUndoEntry(before, list, { origin: 'user', label: opts.record.label, coalesce: opts.record.coalesce, at: now });
+        if (entry) {
+          entry.patchIds = ids;
+          undoRef.current.record(entry);
+          recorded = true;
+        }
+      }
+      // Same-tick follow-up edits must see this one (React applies the dispatch on the next render).
+      if (before) viewRef.current = applyOps(before, list, before.updatedAt);
+      const settled = chunks.map(
+        (chunk, i) =>
+          new Promise<void>((resolve) => {
+            dispatch({ type: 'patch_local', patch: { id: ids[i], ops: chunk }, now });
+            patchQueueRef.current.push({
+              id: ids[i],
+              ops: chunk,
+              resolve,
+              ...(recorded ? { recorded: true } : {}),
+              ...(opts.onFailed ? { onFailed: opts.onFailed } : {})
+            });
+          })
+      );
+      if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
+      patchTimerRef.current = setTimeout(() => void flushPatches(), PATCH_DEBOUNCE_MS);
+      return Promise.all(settled).then(() => undefined);
     },
     [flushPatches]
   );
+
+  /** User content edit (contract §13.1): undoable unless `undo: false`; drags/scrubs coalesce by key. */
+  const patch = useCallback(
+    (ops: DocOp[], opts: PatchOptions = {}): Promise<void> =>
+      enqueuePatch(ops, { record: opts?.undo === false ? null : { label: opts?.label, coalesce: opts?.coalesce } }),
+    [enqueuePatch]
+  );
+
+  // ── Undo / redo ────────────────────────────────────────────────────────────
+
+  /**
+   * Re-apply an entry's inverse (undo) or forward ops (redo) as a free patch. Entries whose target is
+   * gone or that would change nothing are skipped. A failed save puts the entry back when trying again
+   * could work, else drops it. `announce` (typed "undo", chat chips) leaves a calm notice either way.
+   */
+  const historyStep = useCallback(
+    (dir: 'undo' | 'redo', announce: boolean): boolean => {
+      const doc = viewRef.current;
+      if (!doc || !stateRef.current.base) return false;
+      const api = undoRef.current;
+      const usable = (e: UndoEntry) => !isNoopOn(doc, dir === 'undo' ? e.inverse : e.forward);
+      const entry = dir === 'undo' ? api.takeUndo(usable) : api.takeRedo(usable);
+      if (!entry) {
+        if (announce) say({ kind: 'info', text: dir === 'undo' ? 'Nothing to undo yet — free edits from this session can be undone here.' : 'Nothing to redo.' });
+        return false;
+      }
+      void enqueuePatch(dir === 'undo' ? entry.inverse : entry.forward, {
+        record: null,
+        onFailed: (retryable) => {
+          if (retryable) undoRef.current.putBack(entry, dir);
+          else undoRef.current.discard(entry.id);
+        }
+      });
+      if (announce) {
+        say(
+          dir === 'undo'
+            ? { kind: 'undo', text: `Undid: ${entry.label}.`, action: 'redo' }
+            : { kind: 'redo', text: `Redid: ${entry.label}.`, action: 'undo' }
+        );
+      }
+      return true;
+    },
+    [enqueuePatch, say]
+  );
+
+  const undo = useCallback(() => void historyStep('undo', false), [historyStep]);
+  const redo = useCallback(() => void historyStep('redo', false), [historyStep]);
+
+  // Director edits (ops.origin === 'director') become undo entries, inverse computed against the
+  // exact base each batch applied to; the batches of one reply merge, so "undo" undoes the reply.
+  // Skipped on the render of a project switch (load_start clears the inbox).
+  const undoInbox = state.undoInbox;
+  useEffect(() => {
+    if (!undoInbox.length || switching) return;
+    for (const b of undoInbox) {
+      const group = b.streamId ? `reply:${b.streamId}` : undefined;
+      undoRef.current.record(makeUndoEntry(b.before, b.ops, { origin: 'director', label: b.label, rev: b.rev, at: b.at, ...(group ? { group } : {}) }));
+    }
+    dispatch({ type: 'undo_inbox_drain', upToRev: undoInbox[undoInbox.length - 1].rev });
+  }, [undoInbox, switching]);
+
+  // ── Messages ───────────────────────────────────────────────────────────────
+
+  const send = useCallback(
+    async (text: string, opts?: SendOptions | PendingAttachment[]) => {
+      // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
+      const o: SendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
+      const clean = (typeof text === 'string' ? text : '').trim();
+      const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
+      const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
+      if (!clean && !files.length && !inbox.length) return;
+      // A typed "undo" is the editor's job: instant, free, never sent to the director (contract §13.1).
+      if (!files.length && !inbox.length && TYPED_UNDO_RE.test(clean)) {
+        historyStep('undo', true);
+        return;
+      }
+      if (messageInFlightRef.current || !stateRef.current.base) return;
+      messageInFlightRef.current = true;
+      const streamId = localId('stream');
+      dispatch({
+        type: 'message_pending',
+        message: { id: localId('pending'), text: clean, attachments: files, at: Date.now(), status: 'sending', streamId }
+      });
+      const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
+      const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
+      const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
+      const generation = generationRef.current;
+      try {
+        await runStream(
+          'message',
+          {
+            kind: 'message',
+            text: clean,
+            ...(attachments.length ? { attachments } : {}),
+            ...(targets ? { attachmentTargets: targets } : {}),
+            ...(focus ? { focus } : {})
+          },
+          { streamId }
+        );
+      } finally {
+        if (generation === generationRef.current) messageInFlightRef.current = false;
+      }
+    },
+    [runStream, historyStep]
+  );
+
+  const retryPendingMessage = useCallback(() => {
+    const pending = stateRef.current.pendingMessage;
+    if (!pending || pending.status !== 'failed' || messageInFlightRef.current) return;
+    dispatch({ type: 'message_dismiss' });
+    void send(pending.text, pending.attachments);
+  }, [send]);
+
+  const dismissPendingMessage = useCallback(() => dispatch({ type: 'message_dismiss' }), []);
 
   // ── Cancel ─────────────────────────────────────────────────────────────────
 
@@ -454,6 +652,12 @@ export function useStudio(projectId: string): ComicStudioController {
       if (!action || typeof action !== 'object') return;
       if (action.type === 'patch') return patch(action.ops);
       if (action.type === 'cancel') return cancel();
+      // Switching to another version is a free, instant, undoable edit (timeline.md §3): the
+      // optimistic `render_use` patch replaces the old round-trip action.
+      if (action.type === 'restore_render') {
+        if (!action.target || typeof action.target !== 'object' || typeof action.path !== 'string' || !action.path) return;
+        return patch([{ op: 'render_use', target: action.target, path: action.path, at: Date.now() }], { label: 'switch versions' });
+      }
       if (!stateRef.current.base) return;
       // A double click must not run (and bill) the same action twice.
       const key = JSON.stringify(action);
@@ -507,6 +711,8 @@ export function useStudio(projectId: string): ComicStudioController {
   const wantedRef = useRef(new Set<string>());
   const signingRef = useRef(new Set<string>());
   const signAttemptsRef = useRef(new Map<string, number>());
+  /** Paths the server declined to sign (not allow-listed / missing): a variant falls back to its original. */
+  const unsignableRef = useRef(new Set<string>());
   const signTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flushSigning = useCallback(async () => {
@@ -523,8 +729,12 @@ export function useStudio(projectId: string): ComicStudioController {
     });
     try {
       const signed = await signStudioUrls(projectRef.current, paths);
+      if (generation !== generationRef.current) return;
       guarded(generation)({ type: 'urls_merge', urls: signed, now: Date.now() });
       Object.keys(signed).forEach((p) => signAttemptsRef.current.delete(p));
+      paths.forEach((p) => {
+        if (!signed[p]) unsignableRef.current.add(p);
+      });
     } catch {
       /* the placeholder stays; the next render or image error asks again (bounded) */
     } finally {
@@ -553,24 +763,54 @@ export function useStudio(projectId: string): ComicStudioController {
     wantedRef.current.clear();
     signingRef.current.clear();
     signAttemptsRef.current.clear();
+    unsignableRef.current.clear();
   }, [projectId]);
 
+  /** Path → AssetRef with variants, rebuilt lazily once per doc (for urlFor(pathString, {width})). */
+  const variantIndexRef = useRef<{ doc: ComicDoc | null; map: Map<string, AssetRef> }>({ doc: null, map: new Map() });
+  const assetWithVariants = useCallback((path: string): AssetRef | undefined => {
+    const d = stateRef.current.doc;
+    if (!d) return undefined;
+    if (variantIndexRef.current.doc !== d) {
+      const map = new Map<string, AssetRef>();
+      mapAssetRefs(d, (a) => {
+        if (a && typeof a.path === 'string' && a.variants?.length) map.set(a.path, a);
+        return a;
+      });
+      variantIndexRef.current = { doc: d, map };
+    }
+    return variantIndexRef.current.map.get(path);
+  }, []);
+
   const urls = state.urls;
-  // opts.width (variant pick) is honored once P1-CLIENTSTATE lands variants; until then: the original.
   const urlFor = useCallback(
-    (asset?: AssetRef | string | null, _opts?: { width?: number }): string | undefined => {
+    (asset?: AssetRef | string | null, opts?: { width?: number }): string | undefined => {
       if (typeof asset === 'string' && isDirectUrl(asset)) return asset;
       const path = assetPath(asset);
       if (!path) return undefined;
       if (isDirectUrl(path)) return path;
+      const now = Date.now();
+      const width = opts?.width;
+      // Side effects are limited to scheduling (refs + a timer) — safe during render.
+      if (typeof width === 'number' && Number.isFinite(width) && width > 0) {
+        const ref = typeof asset === 'object' && asset?.variants?.length ? asset : assetWithVariants(path);
+        const pick = ref ? variantFor(ref, width, devicePixelRatioNow()).path : path;
+        if (pick !== path && !unsignableRef.current.has(pick) && (signAttemptsRef.current.get(pick) || 0) < MAX_SIGN_ATTEMPTS) {
+          const v = urls[pick];
+          if (!urlIsFresh(v, now)) requestSign(pick);
+          if (v?.url) return v.url;
+          // The smaller file is still being signed: show the original if it is already here
+          // (never fetch both while waiting).
+          return urls[path]?.url;
+        }
+      }
       const entry = urls[path];
-      // Side effect is limited to scheduling (refs + a timer) — safe during render.
-      if (!urlIsFresh(entry, Date.now())) requestSign(path);
+      if (!urlIsFresh(entry, now)) requestSign(path);
       // A stale URL is still returned: the browser has it cached, and the re-signed one
       // replaces it as soon as it arrives.
       return entry?.url;
     },
-    [urls, requestSign]
+    [urls, requestSign, assetWithVariants]
   );
 
   // An <img> anywhere in the studio failed to load one of our URLs: it expired or was
@@ -625,20 +865,9 @@ export function useStudio(projectId: string): ComicStudioController {
     if (focusedPageId && pageIds !== undefined && !pageIds.split('|').includes(focusedPageId)) setFocusedPageId(null);
   }, [focusedPageId, pageIds]);
 
-  // ── v5 seams: mode, selection, next steps, uploads, publication ─────────────
-
-  const mode = resolveStudioMode(storedMode, caps);
-  const setMode = useCallback((next: StudioMode) => {
-    if (next !== 'easy' && next !== 'pro') return;
-    writeStoredMode(next);
-    setStoredMode(next);
-  }, []);
+  // ── v5: selection, next steps, uploads, publication ─────────────────────────
 
   const setSelection = useCallback((sel: StudioSelection | null) => setSelectionState(sel), []);
-
-  // Undo/redo: inert until P1-CLIENTSTATE (useUndo + inverseOps). canUndo stays false so no UI offers it.
-  const undo = useCallback(() => undefined, []);
-  const redo = useCallback(() => undefined, []);
 
   const runClientAction = useCallback(
     (action: ClientAction) => {
@@ -646,6 +875,8 @@ export function useStudio(projectId: string): ComicStudioController {
       switch (action.type) {
         case 'open_reader':
           setTab('read');
+          // The Read tab host opens the immersive reader (or Guided View) on a new request.
+          setReaderRequest((prev) => ({ seq: (prev?.seq ?? 0) + 1, immersive: !!action.immersive, guided: !!action.guided }));
           return;
         case 'open_page':
           if (typeof action.pageId === 'string' && action.pageId) openPage(action.pageId);
@@ -653,12 +884,18 @@ export function useStudio(projectId: string): ComicStudioController {
         case 'open_tab':
           if (typeof action.tab === 'string') setTab(action.tab);
           return;
-        case 'open_share':
-          // The Share sheet (P1-PUBLISH) hangs off the reader; until then, the Read tab.
-          setTab('read');
+        case 'open_share': {
+          // The mounted Share button opens its sheet on this event (and may preventDefault to say
+          // so); otherwise fall back to the Read tab, where sharing lives.
+          let handled = false;
+          if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
+            handled = !window.dispatchEvent(new CustomEvent(OPEN_SHARE_EVENT, { cancelable: true }));
+          }
+          if (!handled) setTab('read');
           return;
+        }
         case 'undo':
-          undo();
+          historyStep('undo', true);
           return;
         case 'set_mode':
           setMode(action.mode);
@@ -667,7 +904,7 @@ export function useStudio(projectId: string): ComicStudioController {
           return;
       }
     },
-    [setTab, openPage, undo, setMode]
+    [setTab, openPage, historyStep, setMode]
   );
 
   const runNextStep = useCallback(
@@ -692,15 +929,18 @@ export function useStudio(projectId: string): ComicStudioController {
           to: target,
           ...(opts.label ? { label: opts.label } : {}),
           ...(opts.name ? { name: opts.name } : {}),
-          ...(typeof opts.index === 'number' ? { index: opts.index } : {})
+          ...(typeof opts.index === 'number' ? { index: opts.index } : {}),
+          ...(opts.hash ? { hash: opts.hash } : {})
         },
-        { signal: opts.signal }
+        { signal: opts.signal, ...(opts.onProgress ? { onProgress: opts.onProgress } : {}) }
       );
       opts.onProgress?.(1);
       if (mountedRef.current && generation === generationRef.current) {
         if (Object.keys(res.urls).length) dispatch({ type: 'urls_merge', urls: res.urls, now: Date.now() });
-        // The server committed `ref_add` outside a stream: resync once to pick it up.
-        if (res.ref || res.ops.length) void refresh();
+        // The server committed `ref_add` outside a stream: apply its ops (revision-guarded; a gap
+        // refetches), or resync once when it sent none.
+        if (typeof res.rev === 'number' && res.ops.length) dispatch({ type: 'server_ops', rev: res.rev, ops: res.ops, origin: 'user', now: Date.now() });
+        else if (res.ref) void refresh();
       }
       return {
         ...(res.ref ? { ref: res.ref } : {}),
@@ -711,21 +951,45 @@ export function useStudio(projectId: string): ComicStudioController {
     [refresh]
   );
 
-  const refreshPublication = useCallback(async (): Promise<void> => {
+  /** Owner view of the publication. Concurrent calls share one request; "not published" is null. */
+  const refreshPublication = useCallback((): Promise<void> => {
+    if (publicationPromiseRef.current) return publicationPromiseRef.current;
+    publicationRequestedRef.current = true;
     const generation = generationRef.current;
-    try {
-      const view = await getPublication(projectRef.current);
-      if (mountedRef.current && generation === generationRef.current) setPublication(view);
-    } catch (err) {
-      const e = toStudioApiError(err, 'project');
-      // Not published / not available yet ⇒ "no publication", not an error.
-      if (e.kind === 'not_available' || e.kind === 'not_found') {
-        if (mountedRef.current && generation === generationRef.current) setPublication(null);
-        return;
-      }
-      throw e;
-    }
+    const live = () => mountedRef.current && generation === generationRef.current;
+    setPublicationLoading(true);
+    const work: Promise<void> = getPublication(projectRef.current)
+      .then((view) => {
+        if (live()) setPublication(view);
+      })
+      .catch((err) => {
+        const e = toStudioApiError(err, 'project');
+        // Not published / not available yet ⇒ "no publication", not an error.
+        if (e.kind === 'not_available' || e.kind === 'not_found') {
+          if (live()) setPublication(null);
+          return;
+        }
+        throw e;
+      })
+      .finally(() => {
+        if (publicationPromiseRef.current === work) publicationPromiseRef.current = null;
+        if (live()) setPublicationLoading(false);
+      });
+    publicationPromiseRef.current = work;
+    return work;
   }, []);
+
+  // The doc's publication mirror changed (published, unpublished, link regenerated, edits since):
+  // refresh the owner view — only once something has asked for it (no request otherwise).
+  const pubMirror = state.doc?.publication;
+  const pubKey = useMemo(() => (pubMirror ? JSON.stringify(pubMirror) : ''), [pubMirror]);
+  const pubKeyRef = useRef(pubKey);
+  useEffect(() => {
+    if (pubKeyRef.current === pubKey) return;
+    pubKeyRef.current = pubKey;
+    if (!publicationRequestedRef.current || switching) return;
+    refreshPublication().catch(() => undefined);
+  }, [pubKey, switching, refreshPublication]);
 
   // ── Controller ─────────────────────────────────────────────────────────────
 
@@ -733,13 +997,12 @@ export function useStudio(projectId: string): ComicStudioController {
   const isRendering = useCallback((target: RenderTarget) => isTargetRendering(doc, target), [doc]);
   const clearError = useCallback(() => dispatch({ type: 'set_error', message: null }), []);
 
-  const byok = useMemo(() => {
-    const entry = doc?.spend.entries.find((e) => IMAGE_SPEND_KINDS.has(e.kind));
-    return !!entry?.byok;
-  }, [doc?.spend.entries]);
+  const spendEntries = doc?.spend.entries;
+  const byok = useMemo(() => (capsFromServer ? caps.byok : byokFromDoc(doc)), [capsFromServer, caps.byok, spendEntries]);
 
   const busy = visibleStreams(state).length > 0;
   const messageBusy = isMessageBusy(state);
+  const { canUndo, canRedo, undoLabel, redoLabel } = undoApi;
 
   return useMemo(
     () => ({
@@ -750,6 +1013,7 @@ export function useStudio(projectId: string): ComicStudioController {
       drafts: state.drafts,
       activity: state.activity,
       error: state.error,
+      errorCode: state.errorCode,
       clearError,
       urlFor,
       send,
@@ -769,6 +1033,7 @@ export function useStudio(projectId: string): ComicStudioController {
       cancelling: state.cancelling,
       refreshing: state.refreshing,
       lastSpentUsd: state.lastSpentUsd,
+      lastSavedUsd: state.lastSavedUsd,
       byok,
       renderingTotal: rendering,
       caps,
@@ -776,15 +1041,21 @@ export function useStudio(projectId: string): ComicStudioController {
       setMode,
       undo,
       redo,
-      canUndo: false,
-      canRedo: false,
+      canUndo,
+      canRedo,
+      ...(undoLabel ? { undoLabel } : {}),
+      ...(redoLabel ? { redoLabel } : {}),
+      notice,
+      clearNotice,
       selection,
       setSelection,
       runNextStep,
       runClientAction,
       uploadRef,
       publication,
-      refreshPublication
+      publicationLoading,
+      refreshPublication,
+      readerRequest
     }),
     [
       doc,
@@ -794,6 +1065,7 @@ export function useStudio(projectId: string): ComicStudioController {
       state.drafts,
       state.activity,
       state.error,
+      state.errorCode,
       clearError,
       urlFor,
       send,
@@ -813,6 +1085,7 @@ export function useStudio(projectId: string): ComicStudioController {
       state.cancelling,
       state.refreshing,
       state.lastSpentUsd,
+      state.lastSavedUsd,
       byok,
       rendering,
       caps,
@@ -820,13 +1093,21 @@ export function useStudio(projectId: string): ComicStudioController {
       setMode,
       undo,
       redo,
+      canUndo,
+      canRedo,
+      undoLabel,
+      redoLabel,
+      notice,
+      clearNotice,
       selection,
       setSelection,
       runNextStep,
       runClientAction,
       uploadRef,
       publication,
-      refreshPublication
+      publicationLoading,
+      refreshPublication,
+      readerRequest
     ]
   );
 }

@@ -6,9 +6,10 @@
 import React from 'react';
 import { Lock, Palette, RefreshCw, RotateCcw } from 'lucide-react';
 import type { Card, ComicDoc, StyleOption } from '../../../../shared/comic/doc';
-import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
+import { formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
 import { CardShell, GhostButton, plural } from '../ui';
+import { STYLE_DIRECTION_COUNT, quoteStyleOptions } from '../panels/StylePanel';
 import { RenderThumb } from './renderTile';
 import { failureSummary, retryAllFailed } from './RendersCard';
 import { useAction } from './useAction';
@@ -35,7 +36,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
   const locked = lockedOptionId(doc);
   const drawing = options.filter(isBusy).length;
   const picking = options.some((o) => isPending(`pick:${o.id}`));
-  const more = estimateJobs([{ kind: 'style_option', count: 3, label: 'style options' }], doc.settings.quality, { byok: studio.byok });
+  const moreUsd = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, studio.byok);
   const failed = options
     .filter((o) => o.render.status === 'failed')
     .map((o) => ({ target: { kind: 'style_option' as const, id: o.id }, render: o.render }));
@@ -67,7 +68,13 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                 aspect="4 / 5"
                 url={url}
                 selected={selected}
-                onRetry={() => void run(`retry:${o.id}`, { type: 'render_style_options', directions: [{ name: o.name, spec: o.spec }] })}
+                onRetry={() =>
+                  void run(`retry:${o.id}`, {
+                    type: 'render_style_options',
+                    directions: [{ name: o.name, spec: o.spec }],
+                    quotedUsd: quoteStyleOptions(doc, 1, studio.byok, true)
+                  })
+                }
                 retryBusy={isPending(`retry:${o.id}`) || isPending('retry-all')}
                 badge={
                   selected ? (
@@ -111,10 +118,10 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
           className="tap-target"
           busy={isPending('more')}
           disabled={drawing > 0}
-          onClick={() => void run('more', { type: 'render_style_options' })}
+          onClick={() => void run('more', { type: 'render_style_options', quotedUsd: moreUsd })}
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-          More options <span className="text-[var(--ds-muted)]">≈ {formatUsd(more.usd)}</span>
+          More options <span className="text-[var(--ds-muted)]">≈ {formatUsd(moreUsd)}</span>
         </GhostButton>
         {locked && (
           <span className="text-[11.5px] text-[var(--ds-muted)]">Every page will be drawn in this style.</span>

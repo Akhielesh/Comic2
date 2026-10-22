@@ -153,6 +153,22 @@ describe('upload queue', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('never uploads for a comic that is still loading or an owner that is gone (and says so)', async () => {
+    const calls: unknown[] = [];
+    const transport: UploadTransport = async () => {
+      calls.push(1);
+      return { ops: [], urls: {} };
+    };
+    const loading = createUploadQueue({ projectId: 'p1', getDoc: () => null, transport });
+    await loading.add([file('a.jpg')], MAYA);
+    expect(loading.getSnapshot()[0]).toMatchObject({ state: 'failed', retryable: false, message: 'The comic is still loading — add the photo again in a moment.' });
+    const { queue } = setup();
+    await queue.add([file('b.jpg')], { kind: 'character', id: 'ch_gone' });
+    expect(queue.getSnapshot()[0]).toMatchObject({ state: 'failed', message: 'This character is no longer in the story, so nothing was uploaded.' });
+    await flush();
+    expect(calls).toHaveLength(0);
+  });
+
   it('a near-duplicate is stored with the look-alike named', async () => {
     const { queue, calls } = setup((d) => {
       d.cast[0].refs = [ref(1), ref(2)];

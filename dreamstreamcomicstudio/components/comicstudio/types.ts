@@ -4,8 +4,9 @@
 // cache and the live stream; every pane renders from the StudioController it returns
 // and talks back through it. Panes never call the API directly.
 //
-// Contract §13.1: the members below "v5" were added in wave 0 (P0-C) with minimal working
-// implementations; P1-CLIENTSTATE completes them (undo stack, variants, upload progress).
+// Contract §13.1: the members below "v5" were added in wave 0 (P0-C) and completed by
+// P1-CLIENTSTATE (undo stack, variants, upload progress, publication). Members added after the
+// contract froze are OPTIONAL so every existing consumer and test fake keeps compiling.
 
 import type { AssetRef, ClientAction, ComicDoc, NextStep, RefAsset, RefLabel, RefOwner, RenderTarget, StudioTab } from '../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../shared/comic/ops';
@@ -23,6 +24,29 @@ export interface ActivityItem {
   phase: 'start' | 'end';
   ok?: boolean;
   at: number;
+  /** Tiny badge on the status line: free software work, a text-model call or an image. */
+  cost?: 'free' | 'text' | 'image';
+}
+
+/**
+ * A calm, transient studio notice (not an error): "Undid: move a balloon · Redo",
+ * "Nothing to undo yet". Shown by the conversation/editor chrome and dismissible.
+ */
+export interface StudioNotice {
+  id: string;
+  kind: 'undo' | 'redo' | 'info';
+  text: string;
+  /** The follow-up the notice offers as a button. */
+  action?: 'undo' | 'redo';
+  at: number;
+}
+
+/** A request to open the reader (chips, cards, the director): the Read tab host consumes it. */
+export interface ReaderRequest {
+  /** Changes on every request, so the same request twice still opens it. */
+  seq: number;
+  immersive: boolean;
+  guided: boolean;
 }
 
 export interface PendingAttachment {
@@ -66,9 +90,14 @@ export interface RefUploadResult {
 export interface RefUploadOptions {
   label?: RefLabel;
   name?: string;
+  /** 0-based insert position (0 = main ref). */
   index?: number;
+  /** 0..1: bytes sent map to 0..0.95, 1 once the server has checked and stored the image. */
   onProgress?: (fraction: number) => void;
+  /** Aborts the upload (the XHR is cancelled; the promise rejects with kind 'aborted'). */
   signal?: AbortSignal;
+  /** sha256(original bytes) first 16 hex — exact-duplicate hint (the server re-checks). */
+  hash?: string;
 }
 
 export interface StudioController {
@@ -129,7 +158,21 @@ export interface StudioController {
   runNextStep(step: NextStep): Promise<void>;
   runClientAction(action: ClientAction): void;
   uploadRef(file: Blob, target: RefOwner, opts?: RefUploadOptions): Promise<RefUploadResult>;
-  /** Fetched lazily (Share sheet / ReaderTab). */
+  /** Fetched lazily (Share sheet / ReaderTab); refreshed when the doc's publication mirror changes. */
   publication: PublicationOwnerView | null;
   refreshPublication(): Promise<void>;
+
+  // ── P1-CLIENTSTATE additions (optional; see the header note) ─────────────
+
+  /** What redo would re-apply ("move a balloon"). */
+  redoLabel?: string;
+  /** Calm transient notice (typed "undo", chip undo, nothing to undo). */
+  notice?: StudioNotice | null;
+  clearNotice?(): void;
+  /** Latest "open the reader" request (chips/cards); the Read tab host opens the immersive reader on a new seq. */
+  readerRequest?: ReaderRequest | null;
+  /** Server code of the last error (`COOLDOWN`, `CONTENT_POLICY`, `LIMIT`, `NOT_READY`, …), for tailored UI. */
+  errorCode?: string | null;
+  /** True while the owner's publication view is being fetched. */
+  publicationLoading?: boolean;
 }

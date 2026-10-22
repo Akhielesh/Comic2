@@ -1,5 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
+import { resolveAuthRedirectUrl } from './productHost';
 
 // These will be populated by the user in .env.local
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -67,12 +68,18 @@ export const setAuthPersistMode = (mode: AuthPersistMode) => {
     }
 };
 
+// Sessions are PER HOST: the token lives in this origin's storage (storageKey below), so the
+// apex and comics.dreamstreamstudio.ai each sign in once. Never move tokens between hosts with a
+// `Domain=.dreamstreamstudio.ai` cookie or by copying refresh tokens — other subdomains (the
+// retired Code Studio previews) ran user code. On the comics host the callback is always its own
+// exact, Supabase-registered URL, never the apex VITE_AUTH_REDIRECT_URL (services/productHost.ts).
 export const getAuthRedirectUrl = () => {
-    if (explicitAuthRedirectUrl && explicitAuthRedirectUrl.trim()) {
-        return explicitAuthRedirectUrl.trim();
-    }
-    if (typeof window === 'undefined') return '/auth/callback';
-    return `${window.location.origin}/auth/callback`;
+    if (typeof window === 'undefined') return resolveAuthRedirectUrl({ explicit: explicitAuthRedirectUrl });
+    return resolveAuthRedirectUrl({
+        explicit: explicitAuthRedirectUrl,
+        hostname: window.location.hostname,
+        origin: window.location.origin
+    });
 };
 
 const authStorage = {

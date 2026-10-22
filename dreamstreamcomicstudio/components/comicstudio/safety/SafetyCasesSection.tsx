@@ -126,6 +126,12 @@ const CaseCard: React.FC<{ item: ComicCase; onResolved(): void }> = ({ item, onR
                 alt="Flagged image"
                 referrerPolicy="no-referrer"
                 className={`block h-auto w-full ${revealed ? '' : '[filter:blur(18px)]'}`}
+                onError={() => {
+                  // The 5-minute link expired (or the object moved): offer a fresh one.
+                  setImage(null);
+                  setRevealed(false);
+                  setError('That image link expired — load it again.');
+                }}
               />
               {!revealed && (
                 <div className="absolute inset-0 grid place-items-center">
@@ -204,7 +210,8 @@ export const SafetyCasesSection: React.FC<SafetyCasesSectionProps> = ({ load }) 
       const list = await (load ? load(filter) : listComicCases<ComicCase>(filter));
       setCases(list);
     } catch {
-      setCases([]);
+      // Never claim "the queue is clear" when it could not be read.
+      setCases(null);
       setError("Couldn't load the safety queue — try again.");
     }
   }, [filter, load]);
@@ -254,7 +261,11 @@ export const SafetyCasesSection: React.FC<SafetyCasesSectionProps> = ({ load }) 
         </p>
       )}
       {cases === null ? (
-        <p className="mt-4 text-[13px] text-[var(--ds-muted)]">Loading…</p>
+        error ? null : (
+          <p role="status" className="mt-4 text-[13px] text-[var(--ds-muted)]">
+            Loading…
+          </p>
+        )
       ) : cases.length === 0 ? (
         <p className="mt-4 text-[13px] text-[var(--ds-muted)]">{filter.status === 'resolved' ? 'No closed cases yet.' : 'Nothing waiting — the queue is clear.'}</p>
       ) : (

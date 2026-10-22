@@ -19,6 +19,8 @@ const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
+// Comic Studio's own front page on comics.dreamstreamstudio.ai (components/comicshost).
+const ComicsLanding = lazyImportWithRetry(() => import('./components/comicshost/ComicsLanding').then(module => ({ default: module.ComicsLanding })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -56,6 +58,7 @@ import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
+import { useComicsHost } from './components/comicshost/useComicsHost';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
 // first-paint bundle — the floating assistant isn't needed for initial render.
 const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
@@ -213,6 +216,9 @@ const App: React.FC = () => {
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
+  // comics.dreamstreamstudio.ai = Comic Studio's own host: signed-in visitors boot into their comics,
+  // signed-out ones see the Comic Studio landing, other products open on the main site. Inert elsewhere.
+  const comicsHost = useComicsHost({ view: currentView, setView: setCurrentView, signedIn: !!user, ready: !authLoading && !isCheckingKey });
 
   // Connector OAuth popup relay: when THIS page was opened as the Google consent popup
   // (window.opener is set) and the callback bounced back with a result, post it to the
@@ -1043,8 +1049,8 @@ const App: React.FC = () => {
     );
   }
 
-  if (isCheckingKey || isHydratingProject || authLoading) {
-    return <AppLoader label={isHydratingProject ? 'Opening project…' : 'Loading…'} />;
+  if (isCheckingKey || isHydratingProject || authLoading || comicsHost.leaving) {
+    return <AppLoader label={comicsHost.leaving ? 'Opening DreamStream…' : isHydratingProject ? 'Opening project…' : 'Loading…'} />;
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
@@ -1068,7 +1074,7 @@ const App: React.FC = () => {
   // The editor is a focused, full-screen workspace with its own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
   // The v4 Comic Studio is full-bleed too (its own header with back, title and Read).
-  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio'].includes(effectiveView);
+  const showSharedHeader = !comicsHost.ownsChrome(effectiveView) && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio'].includes(effectiveView);
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces
   // (the v4 Comic Studio is itself a conversation with the Comic Director).
@@ -1145,7 +1151,17 @@ const App: React.FC = () => {
         ) : (
         <Suspense fallback={<AppLoader />}>
           {/* Views */}
-          {effectiveView === 'home' && (
+          {effectiveView === 'home' && (comicsHost.active ? (
+            <ComicsLanding
+              signedIn={!!user}
+              onSignIn={() => goToAuth('signin')}
+              onRequestAccess={() => goToAuth('request-access')}
+              onOpenComics={() => handleNavigate('dashboard')}
+              onBrowseGallery={() => handleNavigate('gallery')}
+              onOpenPrivacy={() => setCurrentView('privacy')}
+              onOpenTerms={() => setCurrentView('terms')}
+            />
+          ) : (
             <HomePage
               onEnterStudio={() => (user ? setCurrentView('dashboard') : setCurrentView('auth'))}
               onViewComics={() => setCurrentView('gallery')}
@@ -1153,7 +1169,7 @@ const App: React.FC = () => {
               onOpenTerms={() => setCurrentView('terms')}
               onNavigate={handleNavigate}
             />
-          )}
+          ))}
 
           {effectiveView === 'auth' && (
             <AuthPage

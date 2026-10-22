@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { ClientAction, Msg, NextStep } from '../../../shared/comic/doc';
 import { AssistantMessage } from './MessageItem';
-import { chipsFor, fallbackNextSteps, priceBadge } from './cards/NextStepChips';
+import { chipUsd, chipsFor, fallbackNextSteps, priceBadge } from './cards/NextStepChips';
 import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
 
 const msg = (text: string, extra: Partial<Msg> = {}): Msg => ({ id: 'a1', role: 'assistant', text, at: 1, ...extra });
@@ -130,6 +130,10 @@ describe('AssistantMessage — next-step chips', () => {
     expect(priceBadge(0)).toBe('Free');
     expect(priceBadge(0.0655)).toBe('≈$0.07');
     expect(priceBadge(undefined)).toBeUndefined();
+    // a spend chip without its own usd is priced from the quote its action carries
+    expect(chipUsd({ label: 'Draw 2 pages', action: { type: 'render_pages', quotedUsd: 0.14 } })).toBe(0.14);
+    expect(chipUsd({ label: 'Free fix', action: { type: 'render_pages', quotedUsd: 0.14 }, usd: 0 })).toBe(0);
+    expect(chipUsd({ label: 'Talk', say: 'hi' })).toBeUndefined();
     const doc = makeSampleDoc();
     // nextSteps beat suggestions; invalid steps (two kinds at once) are dropped
     const bad = { label: 'Both', say: 'x', client: { type: 'undo' } } as NextStep;

@@ -60,8 +60,16 @@ export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img
   const cached = useCachedImage(path, url, prio);
   // While a sharper variant loads, keep showing the one already decoded.
   const fallback = useCachedImage(item && !withheld && path !== item.asset.path ? item.asset.path : undefined, undefined, prio);
-  return { src: cached.src || fallback.src, state: cached.state, palette: cached.palette ?? fallback.palette, expired: cached.expired, withheld };
+  return { src: cached.src || fallback.src, state: cached.state, palette: cached.palette ?? fallback.palette, expired: cached.expired, retrying: cached.retrying, withheld };
 };
+
+/** What a page that failed to load says — only what is really happening next. */
+export const loadErrorText = (expired: boolean, canRelink: boolean, retrying: boolean): string =>
+  expired && canRelink
+    ? 'This page’s link expired — getting a fresh one…'
+    : retrying
+      ? 'Couldn’t load this page — trying again…'
+      : 'Couldn’t load this page. Check your connection — it tries again when you reopen the reader.';
 
 export interface SlotContentProps {
   doc: ComicDoc;
@@ -123,7 +131,9 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
               </div>
             )}
       {prio === 'now' && image.state === 'error' && !image.withheld && !image.src && (
-        <p className="absolute inset-x-3 bottom-3 rounded-lg bg-black/60 px-2 py-1 text-center text-[11px] text-white">Couldn’t load this page — retrying with a fresh link.</p>
+        <p role="status" className="absolute inset-x-3 bottom-3 rounded-lg bg-black/60 px-2 py-1 text-center text-[11px] text-white [overflow-wrap:anywhere]">
+          {loadErrorText(!!image.expired, !!onExpired, !!image.retrying)}
+        </p>
       )}
     </div>
   );

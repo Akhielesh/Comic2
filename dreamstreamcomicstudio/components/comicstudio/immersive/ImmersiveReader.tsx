@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom';
 import { ScanEye } from 'lucide-react';
 import { bookOf, readerOf, type ComicDoc } from '../../../shared/comic/doc';
 import { localizeDoc } from '../../../shared/comic/i18n';
+import { canServeToOwner } from '../../../shared/comic/safety';
 import type { StudioController } from '../types';
 import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import { ensureFontsFor } from '../i18n/scriptFonts';
@@ -27,7 +28,7 @@ import { EndCard } from './EndCard';
 import { guidedStops, stopAtPoint, type GuidedStop } from './guidedModel';
 import { connectionHints, pageImageCache, useCacheVersion } from './pageImageCache';
 import { panelTranscript, pageTranscript } from './pageTranscript';
-import { closePaperSound } from './paperSound';
+import { closePaperSound, primePaperSound } from './paperSound';
 import { keyCommand, type ReaderCommand } from './readerInput';
 import { bookGeometry, bookViews, decideLayout, firstItemOfView, letterbox, viewIndexOfItem, type BookView, type LayoutPref, type ReaderLayout } from './readerLayout';
 import { slotImageSource } from './ReaderSlot';
@@ -51,7 +52,7 @@ import { PageScrubber } from './PageScrubber';
 import { ReaderHud } from './ReaderHud';
 import { ReaderSettingsSheet } from './ReaderSettingsSheet';
 import { ReaderShortcuts } from './ReaderShortcuts';
-import { useImmersive } from './useImmersive';
+import { readerEntryOnTop, useImmersive } from './useImmersive';
 import { useLowPower } from './useLowPower';
 import { WebtoonStage, type WebtoonStageHandle } from './WebtoonStage';
 
@@ -121,7 +122,10 @@ const pageNOfView = (views: BookView[], items: ReaderItem[], view: number): numb
 export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const { doc, urlFor, language, endCard, onExit, allowDownload = true } = props;
   // ── Document ──────────────────────────────────────────────────────────────
-  const localized = useMemo(() => (language ? localizeDoc(doc, language.current) : doc), [doc, language]);
+  // Keyed on the language CODE: hosts pass the slot as an inline object, and a new object on every host
+  // render must not re-localize the book (new items → new views → every page re-rendered mid-turn).
+  const lang = language?.current;
+  const localized = useMemo(() => (lang ? localizeDoc(doc, lang) : doc), [doc, lang]);
   const items = useMemo(() => readerItems(localized), [localized]);
   const rtl = localized.format.readingDirection === 'rtl';
   const kind = localized.format.kind;
@@ -138,6 +142,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const osReduced = usePrefersReducedMotion() || ff.reducedMotion;
   const [prefs, setPrefs] = useState<ReaderPrefs>(() => readPrefs());
   const onPrefs = useCallback((patch: Partial<ReaderPrefs>) => {
+    // Still inside the toggle's click: unlock audio now (iOS plays nothing started outside a gesture).
+    if (patch.sound) primePaperSound();
     setPrefs((p) => {
       const next = { ...p, ...patch };
       writePrefs(next);
@@ -507,7 +513,26 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
 
   const [announce, setAnnounce] = useState('');
   const urlSync = useMemo(() => createUrlSync(300), []);
-  useEffect(() => () => urlSync.flush(), [urlSync]);
+  const syncUrlRef = useRef(props.syncUrl);
+  syncUrlRef.current = props.syncUrl;
+  useEffect(
+    () => () => {
+      if (!syncUrlRef.current || typeof window === 'undefined') return urlSync.cancel();
+      // The link keeps the page the reader closed on. Closing pops the reader's own history entry
+      // (Back, or Close calling history.back()), so the position is written onto the entry underneath —
+      // right away when it is already gone, else once the pop lands (bounded wait).
+      if (!readerEntryOnTop()) return urlSync.reapply();
+      let t: ReturnType<typeof setTimeout> | null = null;
+      const once = () => {
+        window.removeEventListener('popstate', once);
+        if (t) clearTimeout(t);
+        urlSync.reapply();
+      };
+      t = setTimeout(once, 1000);
+      window.addEventListener('popstate', once);
+    },
+    [urlSync]
+  );
   useEffect(() => {
     if (state.motion.kind !== 'idle' || state.phase === 'intro') return;
     const chap = firstItem !== undefined ? chapterOf(items, firstItem) : undefined;
@@ -593,8 +618,10 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       setToast('Preparing the PDF…');
       try {
         const { exportComicPdf } = await import('../export/pdfExport');
-        const res = await exportComicPdf(localized, (a) => urlFor(a));
-        setToast(res.skipped.length ? `Downloaded — ${res.skipped.length} page${res.skipped.length === 1 ? '' : 's'} not drawn yet were left out.` : 'Downloaded the PDF.');
+        // A withheld (safety-blocked) image is never shown, so it never goes into a download either.
+        const res = await exportComicPdf(localized, (a) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a)));
+        const left = res.skipped.length + res.failed.length;
+        setToast(left ? `Downloaded ${res.pages} page${res.pages === 1 ? '' : 's'} — ${left} couldn’t be included (not drawn, withheld or didn’t load).` : 'Downloaded the PDF.');
       } catch (err) {
         setToast(`Couldn’t make the PDF: ${(err as Error)?.message || 'please try again.'}`);
       } finally {
@@ -765,13 +792,14 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
               sound={prefs.sound}
               peel={ff.hover && !ff.coarse && !reduced}
               onCommand={onCommand}
-              onDoubleTap={(v, point) => {
+              onDoubleTap={(v, point, tapped) => {
                 if (!guidedAvailable) return;
                 if (state.guided.on) {
                   toggleGuided(false);
                   return;
                 }
-                const item = firstItemOfView(views, v);
+                // The page under the finger (the right-hand page of a spread is not the view's first item).
+                const item = tapped ?? firstItemOfView(views, v);
                 const vs = viewsFor('single');
                 const st = stopsFor('single', viewIndexOfItem(vs, item));
                 toggleGuided(true, { item, stop: stopAtPoint(st, point) });

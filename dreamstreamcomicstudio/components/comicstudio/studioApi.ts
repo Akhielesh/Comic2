@@ -45,7 +45,16 @@ export type StudioApiErrorKind =
   | 'connection_lost'
   | 'server'
   | 'not_available'
-  | 'aborted';
+  | 'aborted'
+  // v5 server codes (contract §12.9): each maps to calm, honest copy.
+  /** 422 CONTENT_POLICY / SAFETY_BLOCKED: past this comic's rating — nothing was changed. */
+  | 'content_policy'
+  /** 429 COOLDOWN: a short safety break on new drawings and uploads (reading/editing still work). */
+  | 'cooldown'
+  /** 409 LIMIT: a count limit (refs, pages, editions, doc size). */
+  | 'limit'
+  /** 422 NOT_READY / LANG_INCOMPLETE: something has to be finished first. */
+  | 'not_ready';
 
 export class StudioApiError extends Error {
   readonly kind: StudioApiErrorKind;
@@ -53,16 +62,19 @@ export class StudioApiError extends Error {
   readonly status: number;
   /** Whether "Try again" is a sensible next step. */
   readonly retryable: boolean;
-  /** Raw server/transport message, for logs. */
+  /** Raw server/transport message, for logs. Never shown to the user. */
   readonly detail?: string;
+  /** Server error code (`CONTENT_POLICY`, `COOLDOWN`, `LIMIT`, `NOT_READY`, …) when it sent one. */
+  readonly code?: string;
 
-  constructor(kind: StudioApiErrorKind, message: string, opts: { status?: number; retryable?: boolean; detail?: string } = {}) {
+  constructor(kind: StudioApiErrorKind, message: string, opts: { status?: number; retryable?: boolean; detail?: string; code?: string } = {}) {
     super(message);
     this.name = 'StudioApiError';
     this.kind = kind;
     this.status = opts.status ?? 0;
     this.retryable = opts.retryable ?? false;
     if (opts.detail) this.detail = opts.detail;
+    if (opts.code) this.code = opts.code;
   }
 }
 
@@ -83,7 +95,107 @@ interface ErrorLike {
   status?: unknown;
   message?: unknown;
   name?: unknown;
+  code?: unknown;
+  details?: unknown;
 }
+
+/** Bare HTTP status texts apiClient falls back to when the body had no message. */
+const STATUS_TEXT_RE =
+  /^(bad request|unauthorized|payment required|forbidden|not found|conflict|unprocessable (entity|content)|too many requests|internal server error|not implemented|bad gateway|service unavailable|gateway timeout)$/i;
+/** Text that reads like a stack, a driver/transport error or markup — never shown to a user. */
+const TECHNICAL_RE =
+  /(\b(TypeError|ReferenceError|SyntaxError|RangeError|AbortError|DOMException|Exception|ECONN[A-Z]+|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|Failed to fetch|NetworkError|Load failed|status code|Unexpected token|violates|constraint|stack trace|undefined|NaN|postgres|PGRST\w*|supabase|jwt|bearer|is not a function|is not defined|Cannot read propert(y|ies)|JSON)\b|\bError:|<\/?[a-z!][^>]*>|[{}]|\n\s+at\s)/i;
+
+/**
+ * True when a server message is calm, human copy the studio may show verbatim (the studio
+ * routes send user-safe `userMessage`s). Bare codes, status texts, stack-ish or driver text,
+ * markup and very long strings are not — the caller shows its own copy instead.
+ */
+export const isFriendlyMessage = (text: unknown): text is string => {
+  if (typeof text !== 'string') return false;
+  const t = text.trim();
+  if (t.length < 4 || t.length > 280) return false;
+  if (/^[A-Z0-9_.:-]+$/.test(t)) return false; // a bare code ("NOT_AVAILABLE")
+  if (STATUS_TEXT_RE.test(t)) return false;
+  return !TECHNICAL_RE.test(t);
+};
+
+const CODE_RE = /^[A-Z][A-Z0-9_]{1,40}$/;
+
+/** The server's error code: apiClient keeps the JSON body in `details` (`{error:{message, code}}`). */
+export const errorCodeOf = (err: unknown): string | undefined => {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as ErrorLike;
+  const pick = (v: unknown) => (typeof v === 'string' && CODE_RE.test(v) ? v : undefined);
+  const details = e.details && typeof e.details === 'object' ? (e.details as { code?: unknown; error?: { code?: unknown } }) : undefined;
+  return pick(e.code) ?? pick(details?.error?.code) ?? pick(details?.code);
+};
+
+interface CodeCopy {
+  kind: StudioApiErrorKind;
+  /** Calm fallback when the server's own text isn't fit to show. */
+  message: string;
+  retryable: boolean;
+}
+
+/**
+ * Server codes → kind + honest fallback copy (contract §12.9). The server's text wins when it is
+ * friendly (it is more specific: "Maya can hold 12 photos — remove one to add more.").
+ */
+export const STUDIO_ERROR_COPY: Readonly<Record<string, CodeCopy>> = {
+  CONTENT_POLICY: {
+    kind: 'content_policy',
+    message: "That goes past what this comic allows, so nothing was changed. Try different wording — bold action and spooky moments are fine.",
+    retryable: false
+  },
+  SAFETY_BLOCKED: {
+    kind: 'content_policy',
+    message: 'A page needs a safety fix before this can go ahead. Redraw it a little safer or remove it, then try again.',
+    retryable: false
+  },
+  COOLDOWN: {
+    kind: 'cooldown',
+    message: "Let's take a short break from new drawings and uploads. You can keep reading and editing — it opens again in a few minutes.",
+    retryable: true
+  },
+  LIMIT: {
+    kind: 'limit',
+    message: 'This comic is at its limit for that. Remove something first, then try again.',
+    retryable: false
+  },
+  NOT_READY: {
+    kind: 'not_ready',
+    message: "That isn't ready yet — finish what it needs first, then try again.",
+    retryable: false
+  },
+  LANG_INCOMPLETE: {
+    kind: 'not_ready',
+    message: "A language edition isn't finished yet. Review its translation, then try again.",
+    retryable: false
+  },
+  RATE_LIMIT: {
+    kind: 'rate_limit',
+    message: 'Lots of requests at once — give it a few seconds and try again.',
+    retryable: true
+  },
+  CONFLICT: {
+    kind: 'conflict',
+    message: "That's busy right now — try again once the current drawing finishes.",
+    retryable: true
+  },
+  NOT_AVAILABLE: {
+    kind: 'not_available',
+    message: "That isn't available yet.",
+    retryable: false
+  }
+};
+
+/** The message to show for a coded server refusal (stream `error` events and HTTP errors). */
+export const friendlyErrorMessage = (code: string | undefined, message: unknown, fallback = 'Something went wrong in the studio.'): string => {
+  if (isFriendlyMessage(message)) return message.trim();
+  const copy = code ? STUDIO_ERROR_COPY[code] : undefined;
+  return copy ? copy.message : fallback;
+};
 
 /**
  * Map any thrown error (apiClient ApiError, fetch TypeError, our own) to a StudioApiError
@@ -96,12 +208,21 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
   const e = (err && typeof err === 'object' ? err : {}) as ErrorLike;
   const status = typeof e.status === 'number' ? e.status : undefined;
   const raw = typeof e.message === 'string' ? e.message.trim() : '';
-  // apiClient falls back to the HTTP status text when the body has no message.
-  const serverSaid = raw && !/^(bad request|unauthorized|payment required|forbidden|not found|conflict|internal server error|bad gateway|service unavailable|gateway timeout)$/i.test(raw) ? raw : '';
+  // Only calm, human server text is ever shown; status texts, codes and stack-ish text are not.
+  const serverSaid = isFriendlyMessage(raw) ? raw : '';
+  const code = errorCodeOf(err);
+
+  // A coded refusal (contract §12.9) maps by code; 401/404 keep their context-specific copy.
+  const coded = code && status !== 401 && status !== 404 ? STUDIO_ERROR_COPY[code] : undefined;
+  if (coded) {
+    return new StudioApiError(coded.kind, serverSaid || coded.message, { status: status ?? 0, retryable: coded.retryable, detail: raw, code });
+  }
+  const withCode = code ? { code } : {};
 
   switch (status) {
     case undefined:
-      return new StudioApiError('network', raw || 'Something went wrong talking to the studio.', { retryable: true, detail: raw });
+      // No HTTP status: a client/transport exception, never server copy — don't show its text.
+      return new StudioApiError('network', 'Something went wrong talking to the studio. Try again in a moment.', { retryable: true, detail: raw });
     case 0:
       return new StudioApiError(
         'network',
@@ -114,10 +235,10 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
       return new StudioApiError(
         'billing',
         serverSaid || "You're out of studio credit for now. Top up, or connect your own Gemini or OpenRouter key in Settings → API keys.",
-        { status, detail: raw }
+        { status, detail: raw, ...withCode }
       );
     case 403:
-      return new StudioApiError('forbidden', serverSaid || "You don't have access to do that with this comic.", { status, detail: raw });
+      return new StudioApiError('forbidden', serverSaid || "You don't have access to do that with this comic.", { status, detail: raw, ...withCode });
     case 404:
       return new StudioApiError(
         'not_found',
@@ -129,7 +250,7 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
         { status, detail: raw }
       );
     case 409:
-      return new StudioApiError('conflict', serverSaid || 'That changed in the meantime — refresh and try again.', { status, retryable: true, detail: raw });
+      return new StudioApiError('conflict', serverSaid || 'That changed in the meantime — refresh and try again.', { status, retryable: true, detail: raw, ...withCode });
     case 429:
       return new StudioApiError('rate_limit', 'Too many requests in a short time. Give it a few seconds and try again.', {
         status,
@@ -139,7 +260,8 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
     case 501:
       return new StudioApiError('not_available', serverSaid && !/not.?implemented|not_available/i.test(serverSaid) ? serverSaid : "That isn't available yet.", {
         status,
-        detail: raw
+        detail: raw,
+        ...withCode
       });
     default:
       if (status >= 500) {
@@ -151,7 +273,7 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
           { status, retryable: true, detail: raw }
         );
       }
-      return new StudioApiError('bad_request', serverSaid || "The studio couldn't do that.", { status, detail: raw });
+      return new StudioApiError('bad_request', serverSaid || "The studio couldn't do that — nothing was changed.", { status, detail: raw, ...withCode });
   }
 };
 
@@ -312,7 +434,16 @@ export const parseStudioEvent = (eventName: string, data: string): StudioEvent |
       const rev = num(parsed.rev);
       if (rev === undefined || !Array.isArray(parsed.ops)) return null;
       const ops = parsed.ops.filter((op) => isObject(op) && typeof op.op === 'string');
-      return { type: 'ops', rev, ops: ops as unknown as Extract<StudioEvent, { type: 'ops' }>['ops'] };
+      // origin: who caused the batch (the undo stack takes 'director' batches); label: undo text.
+      const origin = parsed.origin === 'user' || parsed.origin === 'director' || parsed.origin === 'job' ? parsed.origin : undefined;
+      const label = str(parsed.label)?.trim().slice(0, 120);
+      return {
+        type: 'ops',
+        rev,
+        ops: ops as unknown as Extract<StudioEvent, { type: 'ops' }>['ops'],
+        ...(origin ? { origin } : {}),
+        ...(label ? { label } : {})
+      };
     }
     case 'delta': {
       const msgId = str(parsed.msgId);
@@ -323,24 +454,31 @@ export const parseStudioEvent = (eventName: string, data: string): StudioEvent |
       const id = str(parsed.id);
       const phase = parsed.phase === 'end' ? 'end' : parsed.phase === 'start' ? 'start' : undefined;
       if (!id || !phase) return null;
+      const cost = parsed.cost === 'free' || parsed.cost === 'text' || parsed.cost === 'image' ? parsed.cost : undefined;
       return {
         type: 'activity',
         id,
         label: str(parsed.label) || '',
         phase,
-        ...(typeof parsed.ok === 'boolean' ? { ok: parsed.ok } : {})
+        ...(typeof parsed.ok === 'boolean' ? { ok: parsed.ok } : {}),
+        ...(cost ? { cost } : {})
       };
     }
     case 'urls':
       return { type: 'urls', urls: asUrls(parsed.urls) };
-    case 'error':
+    case 'error': {
+      // Coded refusals get calm copy; a raw/technical message never reaches the UI.
+      const code = str(parsed.code) && CODE_RE.test(str(parsed.code)!) ? str(parsed.code) : undefined;
       return {
         type: 'error',
-        message: str(parsed.message)?.trim() || 'Something went wrong in the studio.',
-        ...(str(parsed.code) ? { code: str(parsed.code) } : {})
+        message: friendlyErrorMessage(code, str(parsed.message)),
+        ...(code ? { code } : {})
       };
-    case 'done':
-      return { type: 'done', rev: num(parsed.rev) ?? -1, spentUsd: num(parsed.spentUsd) ?? 0 };
+    }
+    case 'done': {
+      const saved = num(parsed.savedUsd);
+      return { type: 'done', rev: num(parsed.rev) ?? -1, spentUsd: num(parsed.spentUsd) ?? 0, ...(saved !== undefined && saved > 0 ? { savedUsd: saved } : {}) };
+    }
     default:
       return null;
   }
@@ -467,24 +605,36 @@ const enc = encodeURIComponent;
 
 class HttpStatusError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'HttpStatusError';
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
-/** Server message from a JSON error body (`{error:{message}}` or `{message}`), else the status text. */
+/** `{error:{message, code}}` (or `{message, code}`) from a JSON error body. */
+const errorFromBody = (body: unknown, status: number, statusText: string): HttpStatusError => {
+  let message = statusText || '';
+  let code: string | undefined;
+  if (isObject(body)) {
+    const src = isObject(body.error) ? body.error : body;
+    if (typeof src.message === 'string' && src.message.trim()) message = src.message.trim();
+    if (typeof src.code === 'string' && CODE_RE.test(src.code)) code = src.code;
+  }
+  return new HttpStatusError(message, status, code);
+};
+
+/** Server message + code from a JSON error body, else the status text. */
 const errorFromResponse = async (res: Response): Promise<HttpStatusError> => {
-  let message = res.statusText || '';
+  let body: unknown;
   try {
-    const body = (await res.json()) as { error?: { message?: unknown }; message?: unknown };
-    const m = isObject(body?.error) ? body.error.message : body?.message;
-    if (typeof m === 'string' && m.trim()) message = m.trim();
+    body = await res.json();
   } catch {
     /* not JSON */
   }
-  return new HttpStatusError(message, res.status);
+  return errorFromBody(body, res.status, res.statusText);
 };
 
 /** fetch that maps a transport failure to status 0 and keeps aborts as aborts. */
@@ -552,39 +702,110 @@ export interface RefUploadResponse {
   urls: Record<string, string>;
 }
 
+/** Parse a refs upload answer (201 `{ref, rev, ops, urls, notice?}` · 200 `{duplicateOf}`). */
+const asRefUploadResponse = (raw: unknown): RefUploadResponse => {
+  const body = isObject(raw) ? raw : {};
+  const ref = isObject(body.ref) && typeof body.ref.path === 'string' ? (body.ref as unknown as RefAsset) : undefined;
+  const notice =
+    isObject(body.notice) && body.notice.kind === 'near_duplicate' && typeof body.notice.of === 'string'
+      ? { kind: 'near_duplicate' as const, of: body.notice.of }
+      : undefined;
+  return {
+    ...(ref ? { ref } : {}),
+    ...(typeof body.duplicateOf === 'string' && body.duplicateOf ? { duplicateOf: body.duplicateOf } : {}),
+    ...(notice ? { notice } : {}),
+    ...(typeof body.rev === 'number' && Number.isFinite(body.rev) ? { rev: body.rev } : {}),
+    ops: asOps(body.ops),
+    urls: asUrls(body.urls)
+  };
+};
+
+const refUploadPath = (id: string, params: RefUploadParams): string => {
+  const q = new URLSearchParams({ to: refOwnerKey(params.to) });
+  if (params.label) q.set('label', params.label);
+  if (params.name) q.set('name', params.name);
+  if (params.hash && /^[0-9a-f]{16}$/.test(params.hash)) q.set('hash', params.hash);
+  if (typeof params.index === 'number' && Number.isInteger(params.index) && params.index >= 0) q.set('index', String(params.index));
+  return `${projectPath(id)}/refs?${q.toString()}`;
+};
+
+/** Upload progress is reported up to this fraction; the rest is the server's safety check. */
+export const UPLOAD_SENT_FRACTION = 0.95;
+/** A stuck upload gives up after this long (phones on bad networks). */
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
+export interface RefUploadTransportOptions {
+  signal?: AbortSignal;
+  /** 0..1. Bytes sent map to 0..0.95; 1 once the server has checked and stored the image. Uses XHR. */
+  onProgress?: (fraction: number) => void;
+  /** Injected XMLHttpRequest (tests). */
+  XHR?: typeof XMLHttpRequest;
+}
+
+/** XHR transport: real upload progress, abort via the signal, the user's bearer token, no provider keys. */
+const xhrUpload = (path: string, file: Blob, headers: Record<string, string>, opts: RefUploadTransportOptions, Ctor: typeof XMLHttpRequest): Promise<unknown> =>
+  new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const xhr = new Ctor();
+    let settled = false;
+    const onAbort = () => xhr.abort();
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      opts.signal?.removeEventListener('abort', onAbort);
+      fn();
+    };
+    xhr.open('POST', buildApiUrl(path));
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    if (xhr.upload && opts.onProgress) {
+      xhr.upload.onprogress = (e: ProgressEvent) => {
+        if (e.lengthComputable && e.total > 0) opts.onProgress?.(Math.min(UPLOAD_SENT_FRACTION, (e.loaded / e.total) * UPLOAD_SENT_FRACTION));
+      };
+    }
+    xhr.onload = () =>
+      finish(() => {
+        const text = typeof xhr.responseText === 'string' ? xhr.responseText : '';
+        let body: unknown;
+        try {
+          body = text ? JSON.parse(text) : undefined;
+        } catch {
+          body = undefined;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+        else reject(errorFromBody(body, xhr.status, xhr.statusText || ''));
+      });
+    xhr.onerror = () => finish(() => reject(new HttpStatusError('network error', 0)));
+    xhr.ontimeout = () => finish(() => reject(new HttpStatusError('upload timed out', 0)));
+    xhr.onabort = () => finish(() => reject(abortError()));
+    xhr.send(file);
+  });
+
 /**
  * POST /projects/:id/refs — raw image body (≤ 10 MB after the client downscale).
- * 201 {ref, rev, ops, urls, notice?} · 200 {duplicateOf} · 409 LIMIT · 415 · 422 CONTENT_POLICY.
- * Plain fetch (no progress); P1-CLIENTSTATE swaps in XHR for progress + abort.
+ * 201 {ref, rev, ops, urls, notice?} · 200 {duplicateOf} · 409 LIMIT · 415 · 422 CONTENT_POLICY · 429 COOLDOWN.
+ * With `onProgress` (and an XMLHttpRequest) it uploads via XHR for real progress; otherwise fetch.
+ * Either way the signal aborts it, and failures are StudioApiErrors with calm copy.
  */
-export async function uploadStudioRef(id: string, file: Blob, params: RefUploadParams, opts: { signal?: AbortSignal } = {}): Promise<RefUploadResponse> {
+export async function uploadStudioRef(id: string, file: Blob, params: RefUploadParams, opts: RefUploadTransportOptions = {}): Promise<RefUploadResponse> {
   return call('project', async () => {
-    const q = new URLSearchParams({ to: refOwnerKey(params.to) });
-    if (params.label) q.set('label', params.label);
-    if (params.name) q.set('name', params.name);
-    if (params.hash) q.set('hash', params.hash);
-    if (typeof params.index === 'number' && Number.isInteger(params.index) && params.index >= 0) q.set('index', String(params.index));
-    const res = await rawFetch(`${projectPath(id)}/refs?${q.toString()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': file.type || 'application/octet-stream', ...(await authHeader()) },
-      body: file,
-      signal: opts.signal
-    });
+    const path = refUploadPath(id, params);
+    const headers = { 'Content-Type': file.type || 'application/octet-stream', ...(await authHeader()) };
+    const Ctor = opts.XHR || (opts.onProgress && typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined);
+    if (Ctor) {
+      const body = await xhrUpload(path, file, headers, opts, Ctor);
+      opts.onProgress?.(1);
+      return asRefUploadResponse(body);
+    }
+    const res = await rawFetch(path, { method: 'POST', headers, body: file, signal: opts.signal });
     if (!res.ok) throw await errorFromResponse(res);
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const ref = isObject(body.ref) && typeof body.ref.path === 'string' ? (body.ref as unknown as RefAsset) : undefined;
-    const notice =
-      isObject(body.notice) && body.notice.kind === 'near_duplicate' && typeof body.notice.of === 'string'
-        ? { kind: 'near_duplicate' as const, of: body.notice.of }
-        : undefined;
-    return {
-      ...(ref ? { ref } : {}),
-      ...(typeof body.duplicateOf === 'string' && body.duplicateOf ? { duplicateOf: body.duplicateOf } : {}),
-      ...(notice ? { notice } : {}),
-      ...(typeof body.rev === 'number' && Number.isFinite(body.rev) ? { rev: body.rev } : {}),
-      ops: asOps(body.ops),
-      urls: asUrls(body.urls)
-    };
+    const out = asRefUploadResponse(await res.json().catch(() => ({})));
+    opts.onProgress?.(1);
+    return out;
   });
 }
 

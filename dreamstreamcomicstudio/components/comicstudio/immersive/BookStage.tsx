@@ -51,8 +51,8 @@ export interface BookStageProps {
   /** Mouse peel teaser on page corners (fine pointers, motion allowed). */
   peel: boolean;
   onCommand(cmd: ReaderCommand): void;
-  /** Double-tap on a page: where (view + page-normalized point). */
-  onDoubleTap(view: number, point: { x: number; y: number }): void;
+  /** Double-tap on a page: where (view, page-normalized point, and the tapped page's item in a spread). */
+  onDoubleTap(view: number, point: { x: number; y: number }, itemIndex?: number): void;
   onFrames(deltas: number[], kind: string): void;
   onImageError?(): void;
   onExpired?(): void;
@@ -306,10 +306,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       },
       els,
       {
-        onDone: (outcome) => {
-          if (sound && !reduced) playPageTurn(outcome === 'cancel' ? 'soft' : plan.kind === 'board' ? 'heavy' : 'turn');
-          dispatch({ type: 'TURN_DONE' });
-        },
+        onDone: () => dispatch({ type: 'TURN_DONE' }),
         onFrames: (deltas, kind) => {
           recordTurnPerf(kind, deltas);
           props.onFrames(deltas, kind);
@@ -318,8 +315,11 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     );
     engine.current = eng;
     engineMotion.current = motion;
-    if (motion.kind === 'turn') eng.startAuto();
-    else if (motion.kind === 'drag') {
+    if (motion.kind === 'turn') {
+      eng.startAuto();
+      // The swish plays as the paper lifts (not when it lands).
+      if (sound && !reduced) playPageTurn(plan.kind === 'board' ? 'heavy' : 'turn');
+    } else if (motion.kind === 'drag') {
       const d = drag.current;
       const frame = leafFrame(spineX, 0, W, H, plan.mirrored);
       const toLeaf = (c: Vec) => bookToLeaf(frame, clientToBook(c));
@@ -401,6 +401,12 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     const outcome = cancelled ? 'cancel' : decideRelease(eng.turnProgress(), eng.releaseVelocity());
     dispatch({ type: 'DRAG_END', outcome });
     eng.release(outcome);
+    swish(outcome);
+  };
+
+  /** Page-turn sound on release: the paper finishes (or falls back) from here. */
+  const swish = (outcome: 'commit' | 'cancel') => {
+    if (sound && !reduced) playPageTurn(outcome === 'cancel' ? 'soft' : plan?.kind === 'board' ? 'heavy' : 'turn');
   };
 
   const stageFraction = (clientX: number) => {
@@ -578,6 +584,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
         drag.current = null;
         dispatch({ type: 'DRAG_END', outcome: 'commit' });
         engine.current.release('commit');
+        swish('commit');
         down.current = null;
         return;
       }
@@ -591,7 +598,11 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     if (Math.hypot(e.clientX - dn.x, e.clientY - dn.y) >= DRAG_SLOP || performance.now() - dn.t > 600) return;
     // A tap: double-tap first, then outer zones turn, the middle toggles the HUD (after a beat).
     const tap = { t: performance.now(), x: e.clientX, y: e.clientY };
-    if (isDoubleTap(lastTap.current, tap)) {
+    const cmd = tapCommand(stageFraction(e.clientX), rtl);
+    // Double-tap belongs to the middle of the page (or anywhere while zoomed in, to zoom back out): two
+    // quick taps on an edge are two page turns, never "turn, then jump into Guided View mid-turn".
+    const doubleOk = cmd.type === 'hud' || (!!state.zoom && !guidedOn);
+    if (doubleOk && isDoubleTap(lastTap.current, tap)) {
       lastTap.current = null;
       if (tapTimer.current) clearTimeout(tapTimer.current);
       tapTimer.current = null;
@@ -603,12 +614,12 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       const slot = geom1.slots.find((s) => p.x >= s.x && p.x <= s.x + s.w) ?? geom1.slots[0];
       const box = letterbox(slot.w, slot.h, slot.contentAspect);
       const point = { x: (p.x - slot.x - box.x) / Math.max(1, box.w), y: (p.y - slot.y - box.y) / Math.max(1, box.h) };
-      const viewForTap = slot.content.kind === 'item' ? views.findIndex((v) => v.items.includes((slot.content as { index: number }).index)) : state.view;
-      props.onDoubleTap(viewForTap >= 0 ? viewForTap : state.view, point);
+      const tapped = slot.content.kind === 'item' ? slot.content.index : undefined;
+      const viewForTap = tapped !== undefined ? views.findIndex((v) => v.items.includes(tapped)) : state.view;
+      props.onDoubleTap(viewForTap >= 0 ? viewForTap : state.view, point, tapped);
       return;
     }
-    lastTap.current = tap;
-    const cmd = tapCommand(stageFraction(e.clientX), rtl);
+    lastTap.current = doubleOk ? tap : null;
     if (cmd.type === 'hud') {
       if (tapTimer.current) clearTimeout(tapTimer.current);
       tapTimer.current = setTimeout(() => {
