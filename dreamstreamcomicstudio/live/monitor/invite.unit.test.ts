@@ -4,6 +4,7 @@ const client = vi.hoisted(() => ({
   listNurseries: vi.fn(),
   listPeople: vi.fn(),
   announceMembersChanged: vi.fn(async () => undefined),
+  noteMembersChanged: vi.fn(),
 }));
 vi.mock('./client', async (orig) => ({ ...(await orig<typeof import('./client')>()), ...client }));
 vi.mock('../account', () => ({ accessToken: async () => 'tok-parent', supa: async () => null }));

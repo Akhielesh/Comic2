@@ -10,7 +10,7 @@
  */
 
 import { accessToken } from '../account';
-import { announceMembersChanged, listNurseries, listPeople, monitorError, openMonitorSocket, type Nursery } from './client';
+import { announceMembersChanged, listNurseries, listPeople, monitorError, noteMembersChanged, openMonitorSocket, type Nursery } from './client';
 import type { MonRole, ShareInfo, ViewerPresence } from './protocol';
 
 export type InviteTab = 'add' | 'link';
@@ -137,8 +137,10 @@ export function adminChannel(nid: string): ShareChannel {
  */
 export async function announcePeople(nid: string, ch: ShareChannel | null, uids: string[]): Promise<void> {
   const token = await accessToken();
-  if (ch?.snapshot().connected && token) ch.send({ t: 'members_changed', token, uids });
-  else await announceMembersChanged(nid);
+  if (ch?.snapshot().connected && token) {
+    ch.send({ t: 'members_changed', token, uids });
+    noteMembersChanged(nid);
+  } else await announceMembersChanged(nid);
 }
 
 /* ------------------------------------------------------------- people */

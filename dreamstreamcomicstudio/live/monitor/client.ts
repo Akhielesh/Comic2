@@ -467,7 +467,7 @@ export function openCallRoomSocket<M extends { t: string }>(id: string, ticket: 
 
 const membersFns = new Set<(nid: string) => void>();
 
-/** This device just changed who's in a nursery (calls re-read who counts as family). */
+/** This device just changed who's in a nursery (calls re-read who counts as family) — `noteMembersChanged` tells them. */
 export function onMembersChanged(fn: (nid: string) => void): () => void {
   membersFns.add(fn);
   return () => void membersFns.delete(fn);
@@ -477,8 +477,12 @@ export function onMembersChanged(fn: (nid: string) => void): () => void {
  * One-shot "admin" connection (not shown in presence): a parent tells the
  * room the member list changed so removed people are cut off right away.
  */
-export function announceMembersChanged(nid: string): Promise<void> {
+export function noteMembersChanged(nid: string): void {
   for (const fn of membersFns) fn(nid);
+}
+
+export function announceMembersChanged(nid: string): Promise<void> {
+  noteMembersChanged(nid);
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {

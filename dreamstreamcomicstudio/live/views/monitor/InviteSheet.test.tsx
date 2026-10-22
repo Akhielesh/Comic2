@@ -44,6 +44,7 @@ vi.mock('../../monitor/client', async (orig) => ({
   setMember: vi.fn(async () => ({ ok: true })),
   removeMember: vi.fn(async () => ({ ok: true })),
   announceMembersChanged: vi.fn(async () => undefined),
+  noteMembersChanged: vi.fn(),
   openMonitorSocket: vi.fn((nid: string, mode: string, onMsg: (m: unknown) => void, _bin: unknown, onStatus: (s: string) => void) => {
     const s = { nid, mode, onMsg, onStatus, sent: [] as Record<string, unknown>[], closed: false };
     h.sockets.push(s);
