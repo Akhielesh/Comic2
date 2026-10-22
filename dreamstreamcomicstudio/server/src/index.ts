@@ -54,7 +54,7 @@ import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
 import { adminCostsRouter } from './routes/adminCosts.js';
 import { modelBenchRouter } from './routes/modelBench.js';
-import { requireAdmin, requireResearcher } from './middleware/requireAdmin.js';
+import { requireAdmin, requireModerator, requireResearcher } from './middleware/requireAdmin.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
 import { accountStudiosRouter } from './routes/accountStudios.js';
@@ -65,6 +65,7 @@ import { venturesRouter } from './routes/ventures.js';
 import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
 import { comicPublicRouter, comicRouter } from './routes/comic.js';
+import { mountComicOwnerRoutes, mountComicPublicRoutes, type ComicRateLimits } from './routes/comicMounts.js';
 import { drainStudioSessions } from './comic/session.js';
 import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
 import { seedConnectorCatalog } from './connectors/index.js';
@@ -153,11 +154,33 @@ const moderationRateLimit = createRateLimit({
 // BEFORE optionalAuth so it always keys by IP; the route adds a durable per-recipient throttle.
 const authEmailRateLimit = createRateLimit({ scope: 'auth-email', windowMs: 600_000, maxRequests: 10 });
 
+// Comic Studio v5 per-route limits (contract §14.3). Scoped by user when signed in, else IP.
+// Mounted on their exact paths by routes/comicMounts.ts (never on the whole /api/comic prefix).
+const comicUploadRateLimit = [
+  createRateLimit({ scope: 'comic_upload', windowMs: 60_000, maxRequests: 30 }),
+  createRateLimit({ scope: 'comic_upload_hour', windowMs: 60 * 60_000, maxRequests: 300 })
+];
+const comicPublishRateLimit = [
+  createRateLimit({ scope: 'comic_publish', windowMs: 60_000, maxRequests: 10 }),
+  createRateLimit({ scope: 'comic_publish_day', windowMs: 24 * 60 * 60_000, maxRequests: 60 })
+];
+const comicReportRateLimit = [createRateLimit({ scope: 'comic_report', windowMs: 60 * 60_000, maxRequests: 5 })];
+const comicTranslateQuoteRateLimit = [createRateLimit({ scope: 'comic_translate_quote', windowMs: 60_000, maxRequests: 30 })];
+const comicRateLimits: ComicRateLimits = {
+  upload: comicUploadRateLimit,
+  publish: comicPublishRateLimit,
+  report: comicReportRateLimit,
+  translateQuote: comicTranslateQuoteRateLimit
+};
+
 app.get('/api/health', (_req, res) => {
   // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
   // EMAIL_WORKER_URL/EMAIL_HMAC_SECRET is checkable from outside (no admin login, no log access).
   const emailConfigured = Boolean(EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<'));
-  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant' });
+  // build: which commit is live (set by deploy-api-proxy.yml; the repo is public), so "is the
+  // fix deployed?" is answerable from outside without container logs.
+  const build = String(process.env.GIT_SHA || '').slice(0, 12) || undefined;
+  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant', ...(build ? { build, builtAt: process.env.BUILD_TIMESTAMP } : {}) });
 });
 
 // Public routes
@@ -203,9 +226,10 @@ app.use('/api/chat', systemRateLimit, optionalAuth, attachAccountContext, chatPu
 // webhook token instead.
 app.use('/api/connectors', systemRateLimit, connectorsPublicRouter);
 app.use('/api/connectors/webhooks', systemRateLimit, connectorsWebhookRouter);
-// Comic Studio v4 reader for published comics (no session needed; optionalAuth lets an
-// owner preview their own unpublished comic). Must mount before the global requireAuth.
-app.use('/api/comic/public', systemRateLimit, optionalAuth, comicPublicRouter);
+// Comic Studio public routes: the library index, reader reports and the v4 reader for
+// published comics (no session needed; optionalAuth lets an owner preview their own
+// unpublished comic). Must mount before the global requireAuth; order in comicMounts.ts.
+mountComicPublicRoutes(app, { systemRateLimit, optionalAuth, limits: comicRateLimits, comicPublicRouter });
 
 // Protect all API routes
 app.use('/api', requireAuth);
@@ -228,6 +252,19 @@ try {
   console.warn('[provider-usage] cloud sink not configured (no Supabase admin) — usage stays in-memory');
 }
 
+// Comic Studio authenticated routes: admin/moderation consoles, the feature owner routers
+// (publication, refs, translation quotes, safety appeals) and the studio itself. Order and
+// per-route limits live in routes/comicMounts.ts (contract §14.1).
+mountComicOwnerRoutes(app, {
+  textRateLimit,
+  adminRateLimit,
+  moderationRateLimit,
+  requireAdmin,
+  requireModerator,
+  limits: comicRateLimits,
+  comicRouter
+});
+
 app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);
 // Admin Email Console (templates/preview/test/send/invite). Admin-only.
@@ -245,9 +282,6 @@ app.use('/api/chat', textRateLimit, chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
-// Comic Studio v4 (conversational studio) — auth'd, text-tier rate limited; renders are
-// billed per image inside the job runner.
-app.use('/api/comic', textRateLimit, comicRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);

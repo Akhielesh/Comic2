@@ -1,10 +1,15 @@
 // Maps a conversation Card to its component. Each card renders LIVE doc state through the
 // controller, and sits behind a small error boundary so one bad card can never take the
 // whole conversation down.
+//
+// Built-in types render first; any other type is looked up in the feature card registry
+// (features.ts, contract §13.2) — that is how wave-1 features add cards without editing
+// this file. A type nobody handles renders nothing (a newer server never breaks the chat).
 
 import React from 'react';
-import type { Card } from '../../../../shared/comic/doc';
+import type { Card, ComicDoc, Msg } from '../../../../shared/comic/doc';
 import type { ComicStudioController } from '../../useStudio';
+import { registeredCard } from '../../features';
 import { CastCard } from './CastCard';
 import { GateCard } from './GateCard';
 import { NoticeCard } from './NoticeCard';
@@ -38,7 +43,15 @@ class CardBoundary extends React.Component<{ children: React.ReactNode }, { fail
   }
 }
 
-export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController }> = ({ card, studio }) => {
+/** The message that carries a card (registry cards receive it; callers may pass it directly). */
+const messageOf = (doc: ComicDoc | null, cardId: string): Msg | undefined => {
+  const list = doc?.conversation;
+  if (!list) return undefined;
+  for (let i = list.length - 1; i >= 0; i -= 1) if (list[i].cards?.some((c) => c.id === cardId)) return list[i];
+  return undefined;
+};
+
+export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController; message?: Msg }> = ({ card, studio, message }) => {
   let body: React.ReactNode = null;
   switch (card.type) {
     case 'options':
@@ -62,8 +75,14 @@ export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController 
     case 'notice':
       body = <NoticeCard card={card} />;
       break;
-    default:
-      return null; // a card type this client doesn't know yet
+    case 'recap':
+      return null; // built-in; P1-CONVERSATION adds the RecapCard
+    default: {
+      const reg = registeredCard((card as { type: string }).type);
+      if (!reg) return null; // a card type this client doesn't know yet
+      const msg = message || messageOf(studio.doc, card.id) || { id: `card_${card.id}`, role: 'assistant', text: '', at: 0, cards: [card] };
+      body = <reg.Component card={card} message={msg} studio={studio} />;
+    }
   }
   return <CardBoundary>{body}</CardBoundary>;
 };

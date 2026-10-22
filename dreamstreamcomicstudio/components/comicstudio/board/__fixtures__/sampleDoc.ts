@@ -15,6 +15,7 @@ import {
   type Page,
   type Panel
 } from '../../../../shared/comic/doc';
+import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities';
 import type { StudioController } from '../../types';
 
 export const SAMPLE_NOW = 1_760_000_000_000;
@@ -196,5 +197,19 @@ export const makeStudio = (doc: ComicDoc | null = makeSampleDoc(), overrides: Pa
   focusedPageId: null,
   openPage: vi.fn(),
   isRendering: vi.fn(() => false),
+  caps: DEFAULT_CAPS,
+  mode: 'easy',
+  setMode: vi.fn(),
+  undo: vi.fn(),
+  redo: vi.fn(),
+  canUndo: false,
+  canRedo: false,
+  selection: null,
+  setSelection: vi.fn(),
+  runNextStep: vi.fn(async () => undefined),
+  runClientAction: vi.fn(),
+  uploadRef: vi.fn(async () => ({})),
+  publication: null,
+  refreshPublication: vi.fn(async () => undefined),
   ...overrides
 });

@@ -3,6 +3,7 @@
 
 import { vi } from 'vitest';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Page } from '../../../../shared/comic/doc';
+import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities';
 import type { ComicStudioController } from '../../useStudio';
 
 const NOW = 1_760_000_000_000;
@@ -115,6 +116,20 @@ export const makeFakeStudio = (overrides: Partial<ComicStudioController> = {}): 
     lastSpentUsd: null,
     byok: false,
     renderingTotal: 0,
+    caps: DEFAULT_CAPS,
+    mode: 'easy',
+    setMode: vi.fn(),
+    undo: vi.fn(),
+    redo: vi.fn(),
+    canUndo: false,
+    canRedo: false,
+    selection: null,
+    setSelection: vi.fn(),
+    runNextStep: vi.fn(async () => undefined),
+    runClientAction: vi.fn(),
+    uploadRef: vi.fn(async () => ({})),
+    publication: null,
+    refreshPublication: vi.fn(async () => undefined),
     ...overrides
   } as FakeStudio;
 };

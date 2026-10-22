@@ -13,6 +13,8 @@
     "/live-sw.js",
     "/live.webmanifest",
     "/stream.webmanifest",
-    "/models/*"
+    "/models/*",
+    "/app.webmanifest",
+    "/icons/*"
   ]
 }

@@ -7,6 +7,7 @@
 // do for every other route. Nothing here reads raw headers or env vars.
 
 import type { Request } from 'express';
+import { GEMINI_API_KEY, OPENROUTER_API_KEY } from '../config.js';
 import { allowedProviderFilter } from '../middleware/keys.js';
 import type { ResolvedKey, StudioKeys } from './types.js';
 
@@ -66,3 +67,19 @@ export const hasAnyStudioKey = (keys: StudioKeys): boolean => Boolean(keys.openr
  */
 export const prefersGeminiDirect = (keys: StudioKeys): boolean =>
   Boolean(keys.gemini?.key && keys.gemini.byok && !keys.openrouter?.byok);
+
+/**
+ * The PLATFORM's own keys (never a user's), for work DreamStream pays for itself: the
+ * PG-13 safety checks and the asset-library pipeline (contract §12.6/§12.9). Both keys are
+ * byok:false, so routing goes OpenRouter-first and the provider reports cost. An
+ * OpenRouter key pasted into GEMINI_API_KEY is not used as a Gemini key. Null when the
+ * platform has no key (safety then fails open only for the owner's private view).
+ */
+export function platformStudioKeys(source: { openrouter?: string; gemini?: string } = { openrouter: OPENROUTER_API_KEY, gemini: GEMINI_API_KEY }): StudioKeys | null {
+  const keys: StudioKeys = {};
+  const openrouter = (source.openrouter || '').trim();
+  const gemini = (source.gemini || '').trim();
+  if (openrouter) keys.openrouter = { key: openrouter, byok: false };
+  if (gemini && !OPENROUTER_KEY_PREFIX.test(gemini)) keys.gemini = { key: gemini, byok: false };
+  return keys.openrouter || keys.gemini ? keys : null;
+}

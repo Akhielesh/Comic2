@@ -7,7 +7,15 @@
          composer hidden under the keyboard. This makes the layout viewport resize, so
          100dvh flex layouts shrink above the keyboard. iOS ignores it (harmless). -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#3B82F6" />
+    <!-- Keep the viewport zoomable: never add maximum-scale or user-scalable=no
+         (WCAG 1.4.4; a11y.spec.ts asserts it). -->
+    <meta name="description" content="Make comics with an AI director, then read and share them anywhere. DreamStream Studio also does AI chat and code." />
+    <!-- Browser/OS chrome colour follows the calm-studio paper (light) and ink (dark)
+         canvases; the landing page sets its brand blue at runtime. -->
+    <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)" />
+    <link rel="manifest" href="/app.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-180.png" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -83,6 +91,7 @@
   @media (prefers-reduced-motion: reduce) { #app-splash .spinner { animation: none; } }
 </style>
 <link rel="stylesheet" href="/index.css">
+<!--ds:head-->
 </head>
   <body class="text-slate-900 antialiased selection:bg-brand-yellow selection:text-black">
     <div id="root">

@@ -51,6 +51,7 @@ import {
 import { getEmailUsage, listEmailTemplates, type EmailUsage } from '../../services/adminEmail';
 import { getAnalyticsOverview } from '../../services/adminAnalytics';
 import { patchUrlParams, persistUiState, resolveInitialUiState } from '../../services/viewState';
+import { registeredAdminSections, type AdminSectionRegistration } from '../comicstudio/features';
 
 type AdminSection =
     | 'overview'
@@ -78,8 +79,15 @@ const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; 
     { id: 'verification', label: 'Verification', icon: <CheckCircle2 size={15} />, adminOnly: true }
 ];
 
-const isAdminSection = (value: string): value is AdminSection =>
-    SECTIONS.some((section) => section.id === value);
+/** A section id: a built-in, or one registered by a Comic Studio feature (features.ts, contract §13.2). */
+type SectionId = AdminSection | string;
+
+/** Feature sections (library builder, safety cases, …): admin-only (the server re-checks requireAdmin). */
+const featureSections = (): readonly AdminSectionRegistration[] =>
+    registeredAdminSections().filter((entry) => !SECTIONS.some((section) => section.id === entry.id));
+
+const isAdminSection = (value: string): value is SectionId =>
+    SECTIONS.some((section) => section.id === value) || featureSections().some((entry) => entry.id === value);
 
 type MessageState = { type: 'success' | 'error'; text: string } | null;
 
@@ -141,17 +149,22 @@ const sectionMotion = {
 };
 
 export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator, adminAccess, onNavigate }) => {
-    const visibleSections = useMemo(
-        () => SECTIONS.filter((section) => isAdmin || !section.adminOnly),
+    const visibleSections = useMemo<Array<{ id: SectionId; label: string; icon: React.ReactNode; adminOnly?: boolean }>>(
+        () => [
+            ...SECTIONS.filter((section) => isAdmin || !section.adminOnly),
+            ...(isAdmin ? featureSections().map((entry) => ({ id: entry.id, label: entry.label, icon: entry.icon, adminOnly: true })) : [])
+        ],
         [isAdmin]
     );
+    const activeFeatureSection = (id: SectionId): AdminSectionRegistration | undefined =>
+        isAdmin ? featureSections().find((entry) => entry.id === id) : undefined;
 
-    const [section, setSection] = useState<AdminSection>(() => {
-        const initial = resolveInitialUiState<AdminSection>('settings.admin.section', 'section', isAdminSection, 'overview');
+    const [section, setSection] = useState<SectionId>(() => {
+        const initial = resolveInitialUiState<SectionId>('settings.admin.section', 'section', isAdminSection, 'overview');
         return visibleSections.some((s) => s.id === initial) ? initial : 'overview';
     });
 
-    const selectSection = (next: AdminSection) => {
+    const selectSection = (next: SectionId) => {
         setSection(next);
         persistUiState('settings.admin.section', 'section', next);
     };
@@ -883,6 +896,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     {section === 'verification' && isAdmin && (
                         <div className="border-2 border-black rounded-xl bg-white"><VerificationCenter /></div>
                     )}
+                    {(() => {
+                        const feature = activeFeatureSection(section);
+                        return feature ? <feature.Component /> : null;
+                    })()}
                 </motion.div>
             </AnimatePresence>
         </div>
