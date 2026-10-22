@@ -4,6 +4,7 @@ import { supabase } from "./supabase";
 import { ImageTransformPreset, sanitizeProjectForStorage } from "./projectStorage";
 import { isMissingPrivateProfileTableError } from "./profilePrivate";
 import { buildApiUrl } from "./clientConfig";
+import { isStudioV4Project } from "./studioDeepLink";
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -480,10 +481,14 @@ export const saveProject = async (project: Project): Promise<void> => {
 
   const sanitized = sanitizeProjectForStorage(project);
   const { id, name, coverImage, state, createdAt, updatedAt, isPublic, publishedAt } = sanitized;
+  // Comic Studio (v4) visibility is server-owned (published from the studio Share sheet; the
+  // database guard refuses client is_public changes on v4 rows), so a v4 upsert never carries
+  // is_public — an omitted column is left untouched on conflict — and never stamps publishedAt.
+  const isStudioComic = isStudioV4Project(project) || isStudioV4Project({ state });
   const effectivePublishedAt =
     normalizeTimestamp(publishedAt)
     ?? readPublishedAtFromState(state)
-    ?? (isPublic ? Date.now() : undefined);
+    ?? (isPublic && !isStudioComic ? Date.now() : undefined);
   const stateWithPublishMeta = effectivePublishedAt ? { ...state, publishedAt: effectivePublishedAt } : state;
   const stateBytes = new Blob([JSON.stringify(stateWithPublishMeta)]).size;
   const prevBytes = lastStateBytesLogged.get(id);
@@ -498,7 +503,7 @@ export const saveProject = async (project: Project): Promise<void> => {
     user_id: user.id,
     name,
     cover_image_url: coverImage,
-    is_public: !!isPublic,
+    ...(isStudioComic ? {} : { is_public: !!isPublic }),
     state: stateWithPublishMeta, // JSONB
     updated_at: new Date(updatedAt).toISOString(),
     created_at: new Date(createdAt).toISOString()

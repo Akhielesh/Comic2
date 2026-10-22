@@ -183,7 +183,8 @@ export const SPEND_KIND_LABEL: Record<SpendKind, string> = {
   page: 'Pages',
   edit: 'Page edits',
   cover: 'Cover',
-  qc: 'Quality checks'
+  qc: 'Quality checks',
+  translate: 'Translations'
 };
 
 export const cssAspect = (ratio: AspectRatio | string): string => String(ratio || '2:3').replace(':', ' / ');

@@ -379,6 +379,38 @@ describe('public reader', () => {
     expect(Object.keys(body.urls).sort()).toEqual(['cover.webp', 'page1.webp']);
   });
 
+  it('public payload carries no render history, archive/trash/inbox, sheets, board or private text (P0-SEC)', async () => {
+    const doc = plannedDoc();
+    const draft = { path: 'u/user-1/p/proj-1/img/discarded.webp', source: 'generated' as const, at: 1 };
+    doc.style = { ...doc.style, spec: 'SECRET STYLE SPEC', board: { path: 'u/user-1/p/proj-1/img/board.webp', source: 'generated', at: 1 } };
+    doc.cast[0].look = { ...doc.cast[0].look, summary: 'SECRET LOOK' };
+    doc.cast[0].sheet = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/sheet.webp', source: 'generated', at: 1 }, history: [draft] };
+    doc.pages[0].summary = 'SECRET SUMMARY';
+    if (doc.pages[0].panels[0]) doc.pages[0].panels[0].action = 'SECRET ACTION';
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/page1.webp', source: 'generated', at: 2 }, history: [draft], qc: { score: 0.3, issues: ['SECRET QC'], checkedAt: 1 } };
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/cover.webp', source: 'generated', at: 2 }, history: [draft] };
+    Object.assign(doc as unknown as Record<string, unknown>, {
+      archive: [{ id: 'a1', asset: draft }],
+      trash: [{ page: { id: 'pg_gone', summary: 'SECRET TRASH' } }],
+      refInbox: [{ path: 'u/user-1/p/proj-1/ref/photo.webp' }]
+    });
+    store.docs.set('proj-1', { userId: 'user-1', doc, isPublic: true });
+
+    for (const user of [undefined, 'user-1']) {
+      const res = await api('/api/comic/public/proj-1', { user });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const json = JSON.stringify(body);
+      for (const secret of ['SECRET', 'discarded.webp', 'board.webp', 'sheet.webp', '/ref/']) expect(json).not.toContain(secret);
+      expect(body.doc.archive).toBeUndefined();
+      expect(body.doc.trash).toBeUndefined();
+      expect(body.doc.refInbox).toBeUndefined();
+      expect(body.doc.pages[0].render.history).toEqual([]);
+      expect(body.doc.style.board).toBeUndefined();
+      expect(Object.keys(body.urls).sort()).toEqual(['u/user-1/p/proj-1/img/cover.webp', 'u/user-1/p/proj-1/img/page1.webp']);
+    }
+  });
+
   it('publicComicDoc is idempotent', () => {
     const once = publicComicDoc(plannedDoc());
     expect(publicComicDoc(once)).toEqual(once);

@@ -145,4 +145,16 @@ describe('useProjectManager — Comic Studio v4 rows', () => {
     expect(result.current.projects.map((p) => p.id)).toEqual(['classic-1']);
     expect(db.deleteProject).toHaveBeenCalledWith('studio-1');
   });
+
+  it('never applies a client visibility change to a studio comic (P0-SEC)', async () => {
+    const { result } = await loaded();
+    act(() => result.current.updateProject('studio-1', { isPublic: true, publishedAt: 123, name: 'Renamed' }));
+    const studio = result.current.projects.find((p) => p.id === 'studio-1')!;
+    expect(studio.name).toBe('Renamed');
+    expect(studio.isPublic).toBeFalsy();
+    expect(studio.publishedAt).toBeUndefined();
+
+    act(() => result.current.updateProject('classic-1', (prev) => ({ isPublic: !prev.isPublic })));
+    expect(result.current.projects.find((p) => p.id === 'classic-1')!.isPublic).toBe(true);
+  });
 });

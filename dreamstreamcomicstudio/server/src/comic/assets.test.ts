@@ -72,6 +72,15 @@ describe('paths', () => {
     expect(isSafeStoragePath('/abs')).toBe(false);
     expect(isSafeStoragePath('a\\b')).toBe(false);
     expect(isSafeStoragePath('x'.repeat(600))).toBe(false);
+    // Percent-encoded traversal: URL parsing would collapse %2e%2e into '..' after the owner check.
+    expect(isSafeStoragePath(`u/${USER}/%2e%2e/victim/p/${PROJECT}/ref/a.webp`)).toBe(false);
+    expect(isSafeStoragePath(`u/${USER}/%2E%2E/victim/a.webp`)).toBe(false);
+    expect(isSafeStoragePath('u/x/p/y/img/z.webp?x=1')).toBe(false);
+    expect(isSafeStoragePath('u/x/p/y/img/z.webp#frag')).toBe(false);
+    expect(isSafeStoragePath('u/x//p/y/img/z.webp')).toBe(false);
+    expect(isSafeStoragePath('u/x/./p/y/img/z.webp')).toBe(false);
+    expect(isSafeStoragePath('u/x/p/y/img/z\u0000.webp')).toBe(false);
+    expect(isOwnedAssetPath(`u/${USER}/%2e%2e/someone-else/p/${PROJECT}/ref/a.webp`, USER)).toBe(false);
     expect(isOwnedAssetPath(`u/${USER}/p/${PROJECT}/img/a.webp`, USER)).toBe(true);
     expect(isOwnedAssetPath(`${USER}/legacy.webp`, USER)).toBe(true);
     expect(isOwnedAssetPath(`u/someone-else/p/${PROJECT}/img/a.webp`, USER)).toBe(false);

@@ -16,7 +16,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { logger } from '../lib/logger.js';
-import { hashString, normalizeDoc, type ComicDoc, type RenderState } from '../../../shared/comic/doc.js';
+import { hashString, normalizeDoc, type AssetRef, type ComicDoc, type RenderState } from '../../../shared/comic/doc.js';
 import { StudioError, type DocStore, type ProjectRowSummary } from './types.js';
 
 const PROJECT_NAME_MAX = 200;
@@ -36,12 +36,17 @@ const projectName = (title?: string): string => {
  * Minimal legacy ComicState the classic client can read without crashing: every array
  * it maps over is present (empty), the dashboard gets a cover + overview, and
  * `studioVersion: 4` routes opens/reads to the v4 studio.
+ *
+ * `projects.state` of a public row is readable by anyone (gallery RLS), so for a public
+ * row (`opts.isPublic`) the live draft cover path and the private style spec are never
+ * mirrored: `coverImageId` is written only while the row is private (the publish flow
+ * writes the opaque `pub/` cover instead).
  */
-export function buildLegacyProjectState(doc: ComicDoc): Record<string, unknown> {
+export function buildLegacyProjectState(doc: ComicDoc, opts: { isPublic?: boolean } = {}): Record<string, unknown> {
   const pages = Array.isArray(doc?.pages) ? doc.pages : [];
   const readyPages = pages.filter((p) => p?.render?.status === 'ready' && p.render.asset?.path);
   const firstReady = [...readyPages].sort((a, b) => (a.n || 0) - (b.n || 0))[0];
-  const coverImageId = doc?.cover?.render?.asset?.path || firstReady?.render.asset?.path || undefined;
+  const coverImageId = opts.isPublic ? undefined : doc?.cover?.render?.asset?.path || firstReady?.render.asset?.path || undefined;
   const state: Record<string, unknown> = {
     studioVersion: 4,
     pipelineMode: 'classic',
@@ -54,7 +59,7 @@ export function buildLegacyProjectState(doc: ComicDoc): Record<string, unknown> 
     items: [],
     locations: [],
     styleVariants: [],
-    stylePrompt: doc?.style?.spec || '',
+    stylePrompt: opts.isPublic ? '' : doc?.style?.spec || '',
     styleCategory: doc?.style?.name || '',
     styleAspectRatio: doc?.format?.pageAspect,
     imageResolution: '2K',
@@ -67,44 +72,151 @@ export function buildLegacyProjectState(doc: ComicDoc): Record<string, unknown> 
   return state;
 }
 
+/** Opaque published-asset paths (written by the publish flow) are safe on a public row. */
+const isPublishedAssetPath = (value: unknown): value is string => typeof value === 'string' && value.startsWith('pub/');
+
+/**
+ * Merge a freshly built legacy state over the stored one. On a public row any live
+ * (non-`pub/`) coverImageId is removed, so the gallery mirror never exposes a draft path.
+ */
+export function mergeLegacyProjectState(
+  existing: Record<string, unknown>,
+  legacy: Record<string, unknown>,
+  isPublic: boolean
+): Record<string, unknown> {
+  const state: Record<string, unknown> = { ...existing, ...legacy };
+  if (isPublic) {
+    if (isPublishedAssetPath(existing.coverImageId)) state.coverImageId = existing.coverImageId;
+    else delete state.coverImageId;
+    state.stylePrompt = '';
+  } else if (!legacy.coverImageId) {
+    delete state.coverImageId;
+  }
+  return state;
+}
+
 /**
  * Reduce a RenderState to what a public reader needs: its status and current asset.
  * Drops the render `history` (holds discarded drafts whose paths are fetchable from
  * the public bucket), plus qc/error/model and other private render internals.
  */
-const publicRender = (r: RenderState): RenderState => ({
-  status: r.status,
-  ...(r.asset ? { asset: r.asset } : {}),
+const publicRender = (r: RenderState | undefined): RenderState => ({
+  status: r?.status || 'none',
+  ...(r?.asset ? { asset: publicAsset(r.asset) } : {}),
+  ...(r?.withheld ? { withheld: r.withheld } : {}),
   history: []
 });
 
 /**
- * Strip everything private from a published doc: the conversation (and its
- * attachments), spend, gate, director memory, pasted source, and the user's own
- * reference uploads (often personal photos). Pages, cover, cast sheets and style stay,
- * but every render is reduced to its status + current asset — the draft history, QC
- * notes and model metadata never reach the public payload (those storage paths are
- * directly fetchable from the public comic-assets bucket). The unchosen style options
- * are dropped too, since the reader only renders the locked style.
+ * Allow-list an asset for readers: the image path, its size and its published downscales.
+ * Everything else is private — `derivedFrom` is the storage path of the draft it was made
+ * from (directly fetchable from the public bucket), plus the producing model, the
+ * content-safety verdict and the library id.
+ */
+const publicAsset = (a: AssetRef): AssetRef => {
+  const out: AssetRef = { path: a.path, source: a.source, at: a.at };
+  if (typeof a.w === 'number') out.w = a.w;
+  if (typeof a.h === 'number') out.h = a.h;
+  if (Array.isArray(a.variants) && a.variants.length) {
+    out.variants = a.variants
+      .filter((v) => v && typeof v.path === 'string')
+      .map((v) => ({ path: v.path, w: v.w, h: v.h }));
+  }
+  return out;
+};
+
+/** A translation as a reader sees it: the text only (no linguist gloss/finding, no model). */
+const publicTranslation = (t: unknown): unknown => {
+  if (!isRecord(t)) return t;
+  const out: Record<string, unknown> = { text: t.text, status: t.status, sourceHash: t.sourceHash, at: t.at };
+  return out;
+};
+
+const publicI18n = (i18n: unknown): unknown => {
+  if (!isRecord(i18n)) return undefined;
+  const editions: Record<string, unknown> = {};
+  const source = isRecord(i18n.editions) ? i18n.editions : {};
+  for (const [lang, raw] of Object.entries(source)) {
+    if (!isRecord(raw)) continue;
+    const lines: Record<string, unknown> = {};
+    for (const [lineId, t] of Object.entries(isRecord(raw.lines) ? raw.lines : {})) lines[lineId] = publicTranslation(t);
+    const pick = (group: unknown) => {
+      if (!isRecord(group)) return undefined;
+      const outGroup: Record<string, unknown> = {};
+      for (const [k, t] of Object.entries(group)) outGroup[k] = publicTranslation(t);
+      return outGroup;
+    };
+    editions[lang] = {
+      ...raw,
+      lines,
+      ...(raw.cover !== undefined ? { cover: pick(raw.cover) } : {}),
+      ...(raw.brief !== undefined ? { brief: pick(raw.brief) } : {})
+    };
+  }
+  // The glossary (translation policy + author notes) is an authoring tool, not reader content.
+  return { ...i18n, editions, glossary: [] };
+};
+
+/**
+ * Doc keys that never reach a public payload: director memory, the version archive, page
+ * trash, unsorted ref uploads, the server-only safety record (moderation categories, notes,
+ * source screening), the server-only publication mirror and the planner fingerprint.
+ */
+const PRIVATE_DOC_KEYS = ['memory', 'archive', 'trash', 'refInbox', 'safety', 'publication', 'planInputHash'] as const;
+
+/**
+ * Strip everything private from a published doc (idempotent; the input is not mutated).
+ *
+ * Interim allow-by-strip until the publication snapshot lands (P1-PUBLISH):
+ *  - removed: the conversation (and its attachments), spend, gate, director memory,
+ *    pasted source, budget/model settings, every reference upload (often personal
+ *    photos), unchosen style tests, the style board, cast/place model sheets, and the
+ *    version archive / page trash / ref inbox, the server-only safety record and
+ *    publication mirror, page turn hooks, the cover art direction, the translation
+ *    glossary and every translation's linguist gloss/finding/model;
+ *  - blanked: the style spec, cast looks/personality/voice, place looks, panel actions,
+ *    page summaries and the private brief fields (premise, notes);
+ *  - every remaining render (pages, cover) keeps only its status + current asset, and the
+ *    asset only its path/size/downscales — the draft history, `derivedFrom` draft path,
+ *    QC notes, safety verdicts and model metadata never reach the public payload.
+ * Newer optional fields are read with optional chaining so older/newer docs both work.
  */
 export function sanitizePublicDoc(doc: ComicDoc): ComicDoc {
   const settings = { ...doc.settings };
   delete settings.budgetUsd;
   delete settings.imageModelOverride;
+  const style = { ...doc.style, refs: [], options: [], spec: '' } as ComicDoc['style'];
+  delete style.board;
+  const brief = { ...doc.brief, notes: [] } as ComicDoc['brief'];
+  delete brief.premise;
   const clean: ComicDoc = {
     ...doc,
+    brief,
     conversation: [],
     spend: { totalUsd: 0, byKind: {}, entries: [] },
     gate: null,
     source: {},
     settings,
-    style: { ...doc.style, refs: [], options: [] },
-    cast: doc.cast.map((c) => ({ ...c, refs: [], sheet: publicRender(c.sheet) })),
-    places: doc.places.map((p) => ({ ...p, refs: [], sheet: publicRender(p.sheet) })),
-    pages: doc.pages.map((p) => ({ ...p, render: publicRender(p.render) })),
-    cover: { ...doc.cover, render: publicRender(doc.cover.render) }
+    style,
+    cast: (doc.cast || []).map((c) => {
+      const out = { ...c, look: { summary: '' }, refs: [], sheet: publicRender(undefined) };
+      delete out.personality;
+      delete out.voice;
+      return out;
+    }),
+    places: (doc.places || []).map((p) => ({ ...p, look: '', refs: [], sheet: publicRender(undefined) })),
+    pages: (doc.pages || []).map(({ turnHook: _turnHook, ...p }) => ({
+      ...p,
+      summary: '',
+      panels: (p.panels || []).map((panel) => ({ ...panel, action: '' })),
+      render: publicRender(p.render)
+    })),
+    // `direction` is the private art-direction prompt for the cover render.
+    cover: (({ direction: _direction, ...cover }) => ({ ...cover, render: publicRender(cover.render) }))(doc.cover || ({ render: { status: 'none', history: [] } } as ComicDoc['cover']))
   };
-  delete clean.memory;
+  if (doc.i18n !== undefined) clean.i18n = publicI18n(doc.i18n) as ComicDoc['i18n'];
+  const loose = clean as unknown as Record<string, unknown>;
+  for (const key of PRIVATE_DOC_KEYS) delete loose[key];
   return clean;
 }
 
@@ -139,6 +251,21 @@ const storeError = (err: unknown, action: string): StudioError => {
   );
 };
 
+/**
+ * True when the project is a Comic Studio v4 project (it has a comic_docs row) — the same
+ * test the database guard (`projects_guard_client_writes`) uses. Bad ids and databases
+ * without the comic_docs table read as "not v4"; other errors propagate.
+ */
+export async function projectHasComicDoc(db: SupabaseClient, projectId: string): Promise<boolean> {
+  if (!projectId) return false;
+  const { data, error } = await db.from('comic_docs').select('project_id').eq('project_id', projectId).maybeSingle();
+  if (error) {
+    if (isInvalidId(error) || isMissingTable(error)) return false;
+    throw error;
+  }
+  return !!data;
+}
+
 // ── Supabase store ───────────────────────────────────────────────────────────
 
 export interface SupabaseDocStoreOptions {
@@ -163,12 +290,18 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     mirrored.set(projectId, { fingerprint, at: now() });
   };
 
-  /** Best-effort projects-row mirror; preserves state keys other flows wrote (e.g. publishedAt). */
+  /**
+   * Best-effort projects-row mirror; preserves state keys other flows wrote (e.g. publishedAt).
+   * The gallery can read `state` of public rows, so a live draft cover path is written only
+   * while the row is private — and the write itself is conditioned on `is_public=false`, so a
+   * row that turns public between the read and the write never receives one.
+   */
   const mirrorProject = async (projectId: string, userId: string, doc: ComicDoc, summary?: ProjectRowSummary) => {
     const name = projectName(summary?.title || doc.brief.title);
     const legacy = buildLegacyProjectState(doc);
     const coverPath = summary?.coverPath || (legacy.coverImageId as string | undefined);
     if (coverPath) legacy.coverImageId = coverPath;
+    else delete legacy.coverImageId;
     if (summary?.logline !== undefined) legacy.overview = summary.logline || '';
     const fingerprint = hashString(JSON.stringify([name, legacy]));
     const last = mirrored.get(projectId);
@@ -178,7 +311,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
       const db = admin();
       const { data: row, error: readError } = await db
         .from('projects')
-        .select('state')
+        .select('state, is_public')
         .eq('id', projectId)
         .eq('user_id', userId)
         .maybeSingle();
@@ -187,12 +320,33 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
         logger.warn('comic_project_row_missing', { projectId });
         return;
       }
-      const existing = isRecord((row as { state?: unknown }).state) ? ((row as { state: Record<string, unknown> }).state) : {};
-      const state: Record<string, unknown> = { ...existing, ...legacy };
-      if (!coverPath) delete state.coverImageId;
+      const stored = row as { state?: unknown; is_public?: boolean | null };
+      const existing = isRecord(stored.state) ? stored.state : {};
+      const updatedAt = new Date(now()).toISOString();
+
+      if (stored.is_public !== true) {
+        // `.not(is, true)` also matches a NULL is_public (the column is nullable).
+        const state = mergeLegacyProjectState(existing, legacy, false);
+        const { data: hit, error: updateError } = await db
+          .from('projects')
+          .update({ name, state, updated_at: updatedAt })
+          .eq('id', projectId)
+          .eq('user_id', userId)
+          .not('is_public', 'is', true)
+          .select('id');
+        if (updateError) throw updateError;
+        if (Array.isArray(hit) && hit.length > 0) {
+          rememberMirror(projectId, fingerprint);
+          return;
+        }
+        // Zero rows: the row became public (or vanished) since the read — fall through and
+        // write the public-safe state instead.
+      }
+
+      const state = mergeLegacyProjectState(existing, legacy, true);
       const { error: updateError } = await db
         .from('projects')
-        .update({ name, state, updated_at: new Date(now()).toISOString() })
+        .update({ name, state, updated_at: updatedAt })
         .eq('id', projectId)
         .eq('user_id', userId);
       if (updateError) throw updateError;
@@ -254,6 +408,20 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
         logger.error('comic_create_rollback_failed', { projectId, message: (cleanupError as Error)?.message });
       }
       throw storeError(docError, 'create');
+    }
+    // Between the two inserts the owner's own RLS can still flip is_public on the listing
+    // row (the database guard only treats a row as v4 once comic_docs exists). Re-assert
+    // private now that it is v4 — a new comic is published only from the studio.
+    try {
+      const { error: privateError } = await db
+        .from('projects')
+        .update({ is_public: false })
+        .eq('id', projectId)
+        .eq('user_id', userId)
+        .eq('is_public', true);
+      if (privateError) throw privateError;
+    } catch (privateError) {
+      logger.error('comic_create_reassert_private_failed', { projectId, message: (privateError as Error)?.message });
     }
     rememberMirror(projectId, hashString(JSON.stringify([name, state])));
   };
@@ -418,9 +586,7 @@ export function createMemoryDocStore(): MemoryDocStore {
       const legacy = buildLegacyProjectState(doc);
       if (summary?.coverPath) legacy.coverImageId = summary.coverPath;
       if (summary?.logline !== undefined) legacy.overview = summary.logline || '';
-      const state = { ...row.state, ...legacy };
-      if (!legacy.coverImageId) delete state.coverImageId;
-      row.state = state;
+      row.state = mergeLegacyProjectState(row.state, legacy, row.isPublic);
       saveCount += 1;
     },
     async loadPublic(projectId) {
