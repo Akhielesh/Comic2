@@ -7,7 +7,7 @@
 //  • mcpOutboundRouter (/api/connect, bearer-token auth, mounted BEFORE requireAuth):
 //    DreamStream's OWN tools published as an authenticated MCP endpoint, so external
 //    agents (Claude/Cursor/…) can call our registry over JSON-RPC. Exposes only the
-//    read-only, side-effect-free tools; never generate_app or the swarm.
+//    read-only, side-effect-free tools; never the swarm or the render_* tools.
 
 import { Router } from 'express';
 import crypto from 'crypto';
@@ -89,9 +89,9 @@ mcpRouter.delete('/:id', async (req, res, next) => {
 
 const PROTOCOL_VERSION = '2025-06-18';
 
-// The safe, read-only subset of our registry we publish externally. No generate_app
-// (produces app artifacts), no run_agent_swarm (recursive/credentialed), no render_*
-// (they only draw caller-supplied data, useless without the UI).
+// The safe, read-only subset of our registry we publish externally. No run_agent_swarm
+// (recursive/credentialed), no render_* (they only draw caller-supplied data, useless
+// without the UI).
 const OUTBOUND_TOOL_NAMES = [
   'web_search',
   'get_news',

@@ -1,0 +1,23 @@
+{
+  "title": "Rooftop Run",
+  "quality": "standard",
+  "style": "modern-heroic",
+  "format": {
+    "kind": "comic",
+    "pageCount": 2,
+    "pageAspect": "2:3",
+    "panelsPerPage": "auto",
+    "readingDirection": "ltr",
+    "lettering": "overlay",
+    "colorMode": "color",
+    "language": "en"
+  },
+  "script": "Monsoon night over Old Mumbai. MAYA RAO (19), a wiry courier with a high black bun skewered by a pencil, a faded red kurta over cargo pants and a cracked leather satchel, sprints across the tin rooftops with a stolen ledger. A thin scar cuts through her left eyebrow.\n\nShe is chased by THE TAILOR, a tall enforcer in a charcoal three-piece suit and a white porcelain half-mask, who carries a folded umbrella with a hooked steel tip.\n\nMaya leaps a gap between buildings and nearly slips on the wet tin. The Tailor doesn't jump; he hooks a clothesline with his umbrella and swings across. Maya: \"Oh, come ON.\" She ducks under hanging laundry, kicks a stack of water drums down a ladder behind her (CLANG CLANG CLANG) and drops through a skylight into a crowded textile workshop, landing on a bolt of silk. The Tailor appears at the skylight above, rain pouring past his mask. The Tailor: \"Nobody outruns the cut, little courier.\" Maya smiles, holding up the ledger's brass lotus lock — it's empty. Maya: \"Who said I'm the one running?\"",
+  "checks": [
+    "Readable action: clear left-to-right screen direction for the chase across both pages.",
+    "Maya's bun + pencil, red kurta, satchel and eyebrow scar stay identical; the Tailor's mask, suit and hooked umbrella stay identical.",
+    "Establishing shot when the scene moves into the workshop.",
+    "Shot variety: no more than two same-size shots in a row.",
+    "SFX are left for overlay (no drawn lettering); page 1 ends on a hook."
+  ]
+}

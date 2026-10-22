@@ -138,13 +138,14 @@ for the production push — that's fine, proceed once allowed.)
 `Backend` Container class inside the `dreamstream-api` Worker (`api-proxy/`): image
 `Dockerfile.cloudflare` (esbuild bundle + only `sharp`/`pyodide`/`sql.js` installed),
 `basic` instance, one instance, sleeps 15 min after the last request (billed only while
-awake, on the Workers Paid plan the account already has for the studio container). Deployed
+awake, on the Workers Paid plan — which Containers require, so keep it). Deployed
 by `.github/workflows/deploy-api-proxy.yml` on pushes touching `server/**`, `shared/**`,
 `api-proxy/**`, root `package*.json`, etc. The frontend (Pages) and the other Workers
-(`-data-egress`, `-live`, `-email`, `-studio`) are unchanged. (The `atlas-studio` worker —
-Atlas Studio at `atlas.dreamstreamstudio.ai`, repo `Akhielesh/AtlasD` — plus
-`akhieleshpersonalwebsite` and the unused `atlasd` stub on the same Cloudflare account are
-*not* DreamStream; DreamStream only links to Atlas Studio, via `services/atlasStudio.ts`.)
+(`-data-egress`, `-live`, `-email`) are unchanged; `-studio` (Code Studio's sandbox) was retired
+on 2026-10-22 (ADR 0005). (The `atlas-studio` worker — Atlas Studio at
+`atlas.dreamstreamstudio.ai`, repo `Akhielesh/AtlasD` — plus `akhieleshpersonalwebsite` and the
+unused `atlasd` stub on the same Cloudflare account are *not* DreamStream; DreamStream only links
+to Atlas Studio, via `services/atlasStudio.ts`.)
 
 - **Backend env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in
   D1 `dreamstream-backend-env` (`backend_env(name, value)`) or Worker secrets (which override

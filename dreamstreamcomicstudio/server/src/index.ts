@@ -42,13 +42,13 @@ import { adminRouter } from './routes/admin.js';
 import { verificationRouter } from './routes/verification.js';
 import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
-import { studioRouter } from './routes/studio.js';
 import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
+import { authEmailRouter } from './routes/authEmail.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
 import { adminCostsRouter } from './routes/adminCosts.js';
@@ -63,6 +63,8 @@ import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
 import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
+import { comicPublicRouter, comicRouter } from './routes/comic.js';
+import { drainStudioSessions } from './comic/session.js';
 import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
 import { seedConnectorCatalog } from './connectors/index.js';
 
@@ -146,6 +148,9 @@ const moderationRateLimit = createRateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: Math.max(30, Math.floor(RATE_LIMIT_SYSTEM_MAX_REQUESTS / 2))
 });
+// Auth emails (sign-up confirm / resend / reset / magic link): 10 per 10 minutes per IP. Runs
+// BEFORE optionalAuth so it always keys by IP; the route adds a durable per-recipient throttle.
+const authEmailRateLimit = createRateLimit({ scope: 'auth-email', windowMs: 600_000, maxRequests: 10 });
 
 app.get('/api/health', (_req, res) => {
   // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
@@ -166,6 +171,9 @@ app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 // Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
 // signed-in user's id is attached when present; mounted before requireAuth.
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
+// Auth emails sent by the backend instead of Supabase's ~2/hour built-in mailer (public,
+// logged-out — sign-up and password reset happen before there is a session).
+app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
 // Email open-tracking pixel (public — fetched by the recipient's mail client, no session).
 app.use('/api/email', systemRateLimit, optionalAuth, emailRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
@@ -194,6 +202,9 @@ app.use('/api/chat', systemRateLimit, optionalAuth, attachAccountContext, chatPu
 // webhook token instead.
 app.use('/api/connectors', systemRateLimit, connectorsPublicRouter);
 app.use('/api/connectors/webhooks', systemRateLimit, connectorsWebhookRouter);
+// Comic Studio v4 reader for published comics (no session needed; optionalAuth lets an
+// owner preview their own unpublished comic). Must mount before the global requireAuth.
+app.use('/api/comic/public', systemRateLimit, optionalAuth, comicPublicRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
@@ -233,12 +244,14 @@ app.use('/api/chat', textRateLimit, chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
-// Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
-app.use('/api/studio', textRateLimit, studioRouter);
+// Comic Studio v4 (conversational studio) — auth'd, text-tier rate limited; renders are
+// billed per image inside the job runner.
+app.use('/api/comic', textRateLimit, comicRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
-// Autopilot control plane (Epic A1). Flag-gated + admin-only until GA (see ventures router).
+// Autopilot control plane (Epic A1). Admin-only while VENTURES_ENABLED is off; the build stage
+// was retired with Code Studio (ADR 0005), see the ventures router.
 app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
 app.use('/api/invites', systemRateLimit, invitesRouter);
@@ -253,7 +266,7 @@ app.use('/api/learn', textRateLimit, learnRouter);
 
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`DreamStream API listening on :${PORT}`);
   // The mailer is dormant-by-design when unconfigured and skips sends WITHOUT logging to
   // email_log, so say so loudly here — otherwise "no emails and no errors" is undebuggable.
@@ -275,3 +288,21 @@ app.listen(PORT, () => {
   // Persist the code-defined connector catalog (enablement/admin config). Best-effort.
   void seedConnectorCatalog();
 });
+
+// Graceful shutdown: on a deploy/scale-down (Cloudflare Containers send SIGTERM), stop
+// accepting new requests, then flush the Comic Studio's in-memory sessions so debounced
+// commits, pending save retries and in-flight paid renders aren't lost. Bounded so a hung
+// store can never block exit past the drain timeout.
+let shuttingDown = false;
+const shutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} — draining studio sessions`);
+  httpServer.close();
+  const drainMs = Number(process.env.SHUTDOWN_DRAIN_MS) || 25_000;
+  void drainStudioSessions(drainMs)
+    .catch((err) => console.warn('[shutdown] drain error', (err as Error)?.message))
+    .finally(() => process.exit(0));
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

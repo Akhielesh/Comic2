@@ -32,6 +32,9 @@ import { isSettingsTab, type SettingsTab } from './settingsTabs';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 import { StudiosAccess } from './account/StudiosAccess';
+import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
+import { fetchAccountAccess } from '../services/studioAccessApi';
+import { resolveName, splitName } from '../shared/accountName';
 
 interface AccountSettingsProps {
     onClose: () => void;
@@ -182,8 +185,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
     const [username, setUsername] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
-    const [firstName, setFirstName] = useState('');
-    const [lastName, setLastName] = useState('');
+    // One display name for every studio (saved through the server — services/accountName.ts).
+    const [displayName, setDisplayName] = useState('');
+    const [savedName, setSavedName] = useState('');
     const [phoneNumber, setPhoneNumber] = useState('');
     const [dob, setDob] = useState('');
     const [emailPrefProductUpdates, setEmailPrefProductUpdates] = useState(true);
@@ -354,8 +358,16 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             setUsername(publicProfile?.username || '');
             setAvatarUrl(normalizeText(publicProfile?.avatar_url));
 
-            setFirstName(privateData?.first_name || '');
-            setLastName(privateData?.last_name || '');
+            // First + last for now; the account's one name (what every studio shows) replaces it below.
+            const localName = resolveName({ first: privateData?.first_name, last: privateData?.last_name }) || '';
+            setDisplayName(localName);
+            setSavedName(localName);
+            void fetchAccountAccess().then((access) => {
+                const name = access?.account.name;
+                if (!active || !name) return;
+                setSavedName(name);
+                setDisplayName((current) => (current === localName ? name : current));
+            });
             setPhoneNumber(privateData?.phone_number || '');
             setDob(privateData?.dob || '');
 
@@ -411,8 +423,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         setIsSavingProfile(true);
         try {
             const normalizedUsername = normalizeText(username);
-            const normalizedFirstName = normalizeText(firstName);
-            const normalizedLastName = normalizeText(lastName);
+            const name = cleanName(displayName);
             const normalizedPhone = normalizeText(phoneNumber);
             const normalizedAvatar = normalizeText(avatarUrl);
             const normalizedDob = normalizeText(dob);
@@ -421,7 +432,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             if (!USERNAME_REGEX.test(normalizedUsername)) {
                 throw new Error("Username must be 3-20 chars and use only letters, numbers, or underscore.");
             }
-            if (!normalizedFirstName) throw new Error("First name is required.");
+            if (!name) throw new Error("Name is required.");
 
             const mustProvideDob = requireDobCompletion || !privateProfile?.dob;
             if (mustProvideDob && !normalizedDob) throw new Error("Date of birth is required.");
@@ -431,9 +442,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 username: normalizedUsername,
                 avatar_url: normalizedAvatar
             });
+            // The name is saved separately below (it lives in more than one place).
             await upsertPrivateProfile(user.id, {
-                first_name: normalizedFirstName,
-                last_name: normalizedLastName || null,
                 phone_number: normalizedPhone || null,
                 dob: normalizedDob || null,
                 email_pref_product_updates: emailPrefProductUpdates,
@@ -451,15 +461,29 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 id: user.id,
                 created_at: prev?.created_at || new Date().toISOString(),
                 updated_at: new Date().toISOString(),
-                first_name: normalizedFirstName,
-                last_name: normalizedLastName || null,
+                first_name: prev?.first_name || null,
+                last_name: prev?.last_name || null,
                 phone_number: normalizedPhone || null,
                 dob: normalizedDob || null,
                 email_pref_product_updates: emailPrefProductUpdates,
                 email_pref_marketing: emailPrefMarketing
             }));
-
             onDobCompletionStatusChange?.(!normalizedDob);
+
+            if (name !== savedName) {
+                const saved = await updateAccountName(name);
+                if (!saved.ok) {
+                    setProfileMessage({ type: 'error', text: `Everything else was saved, but not your name: ${saved.error}` });
+                    return;
+                }
+                const finalName = saved.name || name;
+                const { first, last } = splitName(finalName);
+                setSavedName(finalName);
+                setDisplayName(finalName);
+                setPrivateProfile(prev => (prev ? { ...prev, first_name: first, last_name: last } : prev));
+            } else {
+                setDisplayName(name);
+            }
             setProfileMessage({ type: 'success', text: 'Profile updated successfully.' });
         } catch (err: any) {
             setProfileMessage({ type: 'error', text: err?.message || 'Failed to update profile.' });
@@ -657,27 +681,22 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono bg-slate-100 text-slate-500 cursor-not-allowed"
                         />
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className="font-display text-lg">First Name *</label>
-                            <input
-                                type="text"
-                                value={firstName}
-                                onChange={(e) => setFirstName(e.target.value)}
-                                className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
-                                placeholder="Super"
-                            />
-                        </div>
-                        <div>
-                            <label className="font-display text-lg">Last Name</label>
-                            <input
-                                type="text"
-                                value={lastName}
-                                onChange={(e) => setLastName(e.target.value)}
-                                className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
-                                placeholder="Hero"
-                            />
-                        </div>
+                    <div>
+                        <label htmlFor="account-display-name" className="font-display text-lg">Name *</label>
+                        <input
+                            id="account-display-name"
+                            type="text"
+                            value={displayName}
+                            onChange={(e) => setDisplayName(e.target.value)}
+                            maxLength={NAME_MAX}
+                            autoComplete="name"
+                            className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
+                            placeholder="Super Hero"
+                        />
+                        <p className="text-xs text-slate-500 mt-1">
+                            Shown in every studio — in Stream Studio, family and nursery members see it too.
+                            {username ? ` @${normalizeText(username)}` : ' Your @username'} stays your sign-in and comic handle.
+                        </p>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
@@ -1096,9 +1115,12 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             <div className="w-7 h-7 rounded-full border-2 border-black bg-brand-yellow flex items-center justify-center font-display text-sm overflow-hidden">
                                 {avatarUrl
                                     ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
-                                    : (username || user?.email || '?').slice(0, 1).toUpperCase()}
+                                    : (savedName || username || user?.email || '?').slice(0, 1).toUpperCase()}
                             </div>
-                            <span className="text-xs font-bold max-w-[14rem] truncate">{username || user?.email}</span>
+                            <span className="text-xs font-bold max-w-[14rem] truncate">{savedName || username || user?.email}</span>
+                            {savedName && username && savedName !== username && (
+                                <span className="text-[11px] text-slate-500 max-w-[8rem] truncate">@{username}</span>
+                            )}
                         </div>
                     </div>
                 </div>

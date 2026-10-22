@@ -1,7 +1,10 @@
-// Operator Console — the 24/7 Autopilot cockpit (Epic A8). Watch ventures, draft new ones from
-// an idea, approve the roadmap + checkpoints, see budget/spend, pause/resume, and read the live
-// activity stream (polled; real-time WS is F4). Self-contained; talks to /api/ventures via
-// services/venturesApi. Reachable at ?view=ventures (flag-gated + admin-only on the server until GA).
+// Operator Console — the Autopilot cockpit (Epic A8). Watch ventures, draft new ones from an
+// idea, approve the roadmap + checkpoints, see budget/spend, pause, and read the activity stream
+// (polled). Self-contained; talks to /api/ventures via services/venturesApi. Reachable at
+// ?view=ventures (signed in; admin-only on the server while VENTURES_ENABLED is off).
+//
+// The build stage was retired with Code Studio (ADR 0005): nothing is built automatically, an
+// approved roadmap stays paused ('build_retired') and the server refuses to resume (410).
 
 import React, { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/venturesApi';
@@ -28,6 +31,30 @@ const Badge: React.FC<{ status: string }> = ({ status }) => (
 );
 
 const num = (n: number | null | undefined) => (typeof n === 'number' ? n : 0);
+
+const PAUSE_LABELS: Record<string, string> = {
+  build_retired: 'build stage retired',
+  manual: 'paused by you',
+  budget: 'budget reached',
+  checkpoint: 'waiting on an approval',
+  kill: 'emergency stop',
+  stuck: 'stuck'
+};
+
+const BUILD_RETIRED_COPY =
+  'Nothing is built automatically any more: the build stage was retired with Code Studio. Roadmaps, goals, budgets, approvals and signals still work.';
+
+// ApiError carries the response body in `details`; read the server's error code from there.
+const errorCode = (e: unknown): string | undefined => {
+  const err = e as { code?: string; details?: { error?: { code?: string } } };
+  return err?.code || err?.details?.error?.code;
+};
+
+const RetiredBanner: React.FC = () => (
+  <div role="note" className="m-4 p-3 rounded border border-amber-500/30 bg-amber-500/5 text-sm text-amber-200">
+    <span className="font-medium">Build stage retired.</span> {BUILD_RETIRED_COPY}
+  </div>
+);
 
 const BudgetMeter: React.FC<{ detail: VentureDetail }> = ({ detail }) => {
   if (!detail.budget) return null;
@@ -66,9 +93,14 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
   const [busy, setBusy] = useState<string | null>(null);
 
   const handleErr = (e: unknown) => {
-    const err = e as { code?: string; message?: string };
-    if (err?.code === 'VENTURES_DISABLED' || /not enabled/i.test(err?.message || '')) {
+    const err = e as { message?: string };
+    const code = errorCode(e);
+    if (code === 'VENTURES_DISABLED' || /not enabled/i.test(err?.message || '')) {
       setDisabled(true);
+      return;
+    }
+    if (code === 'VENTURES_BUILD_RETIRED') {
+      setError(`This venture can't be resumed. ${BUILD_RETIRED_COPY}`);
       return;
     }
     setError(err?.message || String(e));
@@ -139,10 +171,10 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
     return (
       <div className="min-h-screen bg-neutral-950 text-neutral-200 flex items-center justify-center p-8">
         <div className="max-w-md text-center space-y-3">
-          <h1 className="text-xl font-semibold">Autopilot isn't enabled yet</h1>
+          <h1 className="text-xl font-semibold">Autopilot is admin-only</h1>
           <p className="text-neutral-400 text-sm">
-            The autonomous ventures layer is built but turned off (<code>VENTURES_ENABLED=false</code>). An admin can
-            enable it once a model key + worker are configured. See <code>docs/studio/autopilot</code>.
+            Ventures is turned off for everyone else (<code>VENTURES_ENABLED=false</code>) since its build stage was
+            retired with Code Studio. Admins can still draft ventures and plan roadmaps. See <code>docs/ventures</code>.
           </p>
           {onBack && (
             <button onClick={onBack} className="px-4 py-2 rounded bg-neutral-800 hover:bg-neutral-700 text-sm">
@@ -170,7 +202,7 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
           <textarea
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
-            placeholder="Describe a product idea to build…"
+            placeholder="Describe a product idea to plan…"
             className="w-full h-20 text-sm bg-neutral-900 border border-neutral-800 rounded p-2 resize-none focus:outline-none focus:border-violet-500"
           />
           <button
@@ -201,6 +233,7 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
 
       {/* Right: detail */}
       <main className="flex-1 overflow-y-auto">
+        <RetiredBanner />
         {error && <div className="m-4 p-3 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm">{error}</div>}
         {!detail && <div className="p-8 text-neutral-500">Select a venture, or draft one from an idea.</div>}
         {detail && (
@@ -210,7 +243,9 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
                 <h2 className="text-2xl font-semibold">{detail.venture.name}</h2>
                 <Badge status={detail.venture.status} />
                 {detail.venture.pauseReason && (
-                  <span className="text-xs text-orange-300">paused: {detail.venture.pauseReason}</span>
+                  <span className="text-xs text-orange-300">
+                    {PAUSE_LABELS[detail.venture.pauseReason] || `paused: ${detail.venture.pauseReason}`}
+                  </span>
                 )}
               </div>
               {detail.venture.summary && <p className="text-neutral-400 text-sm">{detail.venture.summary}</p>}
@@ -221,7 +256,7 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
                     disabled={busy === 'approve'}
                     className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-medium"
                   >
-                    {busy === 'approve' ? 'Activating…' : 'Approve roadmap & activate'}
+                    {busy === 'approve' ? 'Approving…' : 'Approve roadmap'}
                   </button>
                 )}
                 {detail.venture.status === 'active' && (
@@ -233,15 +268,8 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
                     Pause
                   </button>
                 )}
-                {detail.venture.status === 'paused' && (
-                  <button
-                    onClick={() => act('resume', () => api.setVentureStatus(detail.venture.id, 'active'))}
-                    disabled={busy === 'resume'}
-                    className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm"
-                  >
-                    Resume
-                  </button>
-                )}
+                {/* No Resume: with the build stage retired the server refuses 'active' (410), so a
+                    paused venture stays paused whatever paused it. */}
                 {detail.venture.deployUrl && (
                   <a
                     href={detail.venture.deployUrl}

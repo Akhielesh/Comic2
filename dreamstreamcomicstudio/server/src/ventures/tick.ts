@@ -4,8 +4,9 @@
 // advances a backlog and stops on kill/budget/checkpoint/stuck. The repository-backed adapter
 // lives in tickRunner.ts; the scheduler that calls it lives in queue.ts/scheduler.ts.
 //
-// In A2 the ACT step is a STUB (io.act); A4 wires it to the real build engine. Nothing here
-// builds or deploys anything yet — this proves the *governance + durability* first.
+// The ACT step is injected (io.act). A4 wired it to Code Studio's generator; that build stage
+// was retired with Code Studio (ADR 0005), so tickRunner no longer calls runTick. Nothing here
+// builds or deploys anything — this proves the *governance + durability* on its own.
 
 import {
   evaluateBudget, // re-exported convenience not needed here, kept implicit via decide
@@ -65,7 +66,9 @@ export interface TickOptions {
   maxAttemptsPerGoal?: number;
 }
 
-export type TickOutcome = 'halted' | 'no-goal' | 'gated' | 'budget' | 'stuck' | 'advanced';
+// 'retired' is only returned by tickRunner: the build stage was retired with Code Studio
+// (ADR 0005), so a real tick pauses the venture instead of running this loop.
+export type TickOutcome = 'halted' | 'no-goal' | 'gated' | 'budget' | 'stuck' | 'advanced' | 'retired';
 
 export interface TickResult {
   outcome: TickOutcome;

@@ -10,6 +10,8 @@
 | **Forged newsletter confirm** | The confirm link carries a 24-byte random token stored server-side and compared constant-time; it's single-use (cleared on confirm). |
 | **List exfiltration** | `email_log` and `email_suppressions` have RLS enabled with **no client policies** and `REVOKE ALL` from `anon`/`authenticated` — only the service role (server) can read them. `waitlist_signups` stays write-only for clients (existing design). Tokens are never returned to the client. |
 | **Injection in templates** | All dynamic values are `escapeHtml`-escaped; URLs pass `safeUrl` (http/https/mailto only — `javascript:`/`data:` neutralised to `#`). Covered by `shared/email/templates.test.ts`. |
+| **Auth-link hijack / account takeover** | The backend's auth emails (`/api/auth/email/*`) carry GoTrue `token_hash` links whose origin comes only from `APP_PUBLIC_URL` or the **exact** origins in `AUTH_LINK_ORIGINS` — never the CORS wildcard, which covers user-controlled `*.dreamstreamstudio.ai` preview hosts. A hostile `Origin` header is ignored. The raw `email_otp` is never mailed. |
+| **Auth-email abuse / enumeration** | `/api/auth/email/*`: Turnstile (a sent token must verify; sign-up needs one unless it's a live-app sign-up holding a valid welcome ticket), 10 requests / 10 min per IP, and a durable per-recipient throttle in `email_log` (1/min, 5/h, 10/day). `/resend`, `/recovery`, `/magiclink` answer identically for unknown addresses and never create accounts. Logs mask addresses. |
 | **Spend abuse / runaway cost** | Hard caps (`EMAIL_MAX_PER_DAY` / `EMAIL_MAX_PER_MONTH`, default under the free tier) enforced before every send; over-cap sends are skipped + alerted, never delivered. Per-route rate limits apply (`systemRateLimit`). |
 | **Secrets** | `EMAIL_HMAC_SECRET` and `SUPABASE_AUTH_HOOK_SECRET` live as Worker secrets / Railway env, never in the repo. `.env*` is git-ignored (only `.env.example`). |
 
@@ -42,9 +44,10 @@ unset (no pixel URL is generated) or strip `params.pixelUrl` in the mailer.
 Turnstile guards the public, abuse-prone entry points. **Fully dormant until keys are set** —
 no widget renders and no endpoint is gated, so nothing changes for anyone until you turn it on.
 
-- **Where:** the auth form (`AuthPage` → sign-in / sign-up / magic-link / password-reset, via
-  Supabase `captchaToken`) and the public newsletter / request-access form (`WaitlistForm` →
-  `/api/newsletter/subscribe`, verified server-side).
+- **Where:** the auth form (`AuthPage` → sign-in via Supabase `captchaToken`; sign-up /
+  magic-link / password-reset / resend via `/api/auth/email/*`, verified server-side, with the
+  old Supabase call as the fallback) and the public newsletter / request-access form
+  (`WaitlistForm` → `/api/newsletter/subscribe`, verified server-side).
 - **Client:** `components/Turnstile.tsx`, gated by `VITE_TURNSTILE_SITE_KEY`. Tokens are
   single-use; the widget resets after every attempt.
 - **Server:** `server/src/services/turnstile.ts` verifies tokens against Cloudflare's

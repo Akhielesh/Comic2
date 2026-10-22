@@ -1,0 +1,23 @@
+{
+  "title": "Last Match",
+  "quality": "pro",
+  "style": "manga-screentone",
+  "format": {
+    "kind": "manga",
+    "pageCount": 2,
+    "pageAspect": "2:3",
+    "panelsPerPage": "auto",
+    "readingDirection": "rtl",
+    "lettering": "in_art",
+    "colorMode": "bw",
+    "language": "en"
+  },
+  "script": "PAGE 1\nPanel 1. A high-school gym before the kendo final. Rows of silent spectators. Caption: Prefectural Finals. Final bout.\nPanel 2. KAITO (17, lean, messy black hair under a white tenugui headband, a bandaged right wrist) ties his men helmet strings, hands trembling.\nPanel 3. Across the court, REN (17, broad-shouldered, buzz cut, calm half-lidded eyes, a red tasuki ribbon tied to the back of his armor) bows. Ren: Don't hold back because of the wrist.\nPanel 4. Close on Kaito's eyes through the helmet grille. Kaito: I was going to say the same to you.\n\nPAGE 2\nPanel 1. Wide. Both fighters explode forward, shinai raised, speed lines everywhere. SFX: DAN!\nPanel 2. Extreme close-up: two bamboo tips miss each other by a centimeter.\nPanel 3. Kaito's shinai lands on Ren's helmet. SFX: PAAN!\nPanel 4. Silence. The referee's white flag rises. Ren, helmet off, grins. Ren: About time.",
+  "checks": [
+    "Right-to-left reading order: panel 1 at the top right on both pages; balloons ordered right-to-left.",
+    "Black and white with screentones only (no color).",
+    "In-art lettering on Pro: every line spelled exactly, SFX as display lettering, no extra text.",
+    "Kaito's headband + bandaged wrist and Ren's buzz cut + red tasuki ribbon (rendered in grey) never swap between the two fighters.",
+    "Vision QC reports no misspelled or missing lines."
+  ]
+}

@@ -9,8 +9,8 @@ name: Deploy API (Worker + backend container)
 # api-proxy/wrangler.jsonc (see docs/infrastructure/INFRA_MAP.md).
 #
 # Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, zone Workers
-# Routes:Edit, Containers:Edit, D1:Edit), CLOUDFLARE_ACCOUNT_ID — the same token
-# deploy-studio-worker.yml already uses for its container.
+# Routes:Edit, Containers:Edit, D1:Edit) and CLOUDFLARE_ACCOUNT_ID. The backend
+# container is why the account stays on Workers Paid.
 
 on:
   push:

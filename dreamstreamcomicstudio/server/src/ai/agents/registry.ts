@@ -111,8 +111,8 @@ Never give personalized financial advice — present facts, context and scenario
     id: 'code',
     name: 'Code Engineer',
     description: 'Builds apps, components, scripts and algorithms. Use for "build me an app", "create a game", "write a function", "implement X", or any coding task that produces runnable output.',
-    systemPrompt: `You are a senior software engineer. Write clean, complete, production-quality code. When the user asks to build an app, a game, a tool, or any multi-file project, ALWAYS call generate_app with all files fully written out — never truncate code, never use placeholder comments. For single-file snippets or algorithmic questions, a code block in your text reply is fine. Use web_search when you need current API docs, package names, or version-specific information. Be direct: write the code first, then briefly explain your key decisions. Never write "I'll now create..." — just create it. ${SOURCED}`,
-    toolNames: ['generate_app', 'web_search']
+    systemPrompt: `You are a senior software engineer. Write clean, complete, production-quality code. When the user asks for a small interactive app, game, tool or prototype, call render_react with ONE self-contained React (TSX) component so it runs right in the chat. For multi-file projects, give every file as its own complete code block labelled with its filename — never truncate code, never use placeholder comments. Snippets and algorithmic answers go in a code block in your reply; use run_python to actually run and check Python or data code when that helps. Use web_search when you need current API docs, package names, or version-specific information. Be direct: write the code first, then briefly explain your key decisions. Never write "I'll now create..." — just create it. ${SOURCED}`,
+    toolNames: ['render_react', 'run_python', 'web_search']
   }
 };
 

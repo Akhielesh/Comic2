@@ -383,3 +383,37 @@
   .gv-self { width: 34%; }
   .gv-title { max-width: 40vw; }
 }
+
+/* Dashboard, read at a glance: tinted icons on the stats, the stream path as a
+   picture (dots flowing camera → edge → CDN → viewers), chips instead of paragraphs. */
+.st-label { display: flex; align-items: center; gap: 7px; }
+.st-ic { width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center; flex: none; color: var(--st-c); background: color-mix(in srgb, var(--st-c) 14%, transparent); }
+.stat-tile { transition: transform .18s ease, box-shadow .18s ease; }
+.stat-tile:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+
+.how-pipe { display: flex; align-items: flex-start; margin: 14px 0 12px; }
+.how-node { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; flex: none; width: 62px; animation: how-in .45s ease both; }
+.how-node b { font-size: 11.5px; font-weight: 600; }
+.how-node small { font-size: 10.5px; color: var(--faint); line-height: 1.25; }
+.how-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent-ink); margin-bottom: 3px; }
+.how-node:last-child .how-ic { background: var(--blue-wash); color: var(--blue); }
+.how-wire { position: relative; flex: 1; height: 2px; margin-top: 18px; background: var(--line); border-radius: 2px; overflow: hidden; min-width: 12px; }
+.how-wire i { position: absolute; top: -1px; left: -6px; width: 6px; height: 4px; border-radius: 3px; background: var(--accent); animation: how-flow 1.8s linear infinite; }
+.how-wire i:nth-child(2) { animation-delay: .6s; }
+.how-wire i:nth-child(3) { animation-delay: 1.2s; }
+.how-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.how-facts span { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 4px 9px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
+.how-card .linkish { font-size: 12.5px; }
+.how-more { font-size: 12.5px; line-height: 1.6; margin: 12px 0 0; }
+@keyframes how-flow { from { left: -6px; } to { left: 100%; } }
+@keyframes how-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.mp-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.mp-chips span { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
+
+.rec-empty { display: grid; gap: 10px; }
+.rec-dests { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.rec-dests span { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 4px; border: 1px dashed var(--line); border-radius: 12px; font-size: 11.5px; color: var(--muted); }
+.rec-dests span svg { color: var(--accent-ink); }
+.rec-empty small { font-size: 12px; line-height: 1.45; }
+@media (prefers-reduced-motion: reduce) { .how-wire i { animation: none; display: none; } .how-node { animation: none; } }

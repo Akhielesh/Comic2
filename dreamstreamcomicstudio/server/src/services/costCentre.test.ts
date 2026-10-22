@@ -205,7 +205,8 @@ describe('cost centre — aggregation', () => {
     expect(report.notes.some((n) => n.includes('never closed'))).toBe(true);
     const code = report.products.find((p) => p.id === 'code')!;
     expect(code.requests).toBe(4);
-    expect(code.verdict).toMatch(/retiring it saves ~\$\d/);
+    expect(code.label).toBe('Code Studio sandbox (retired)');
+    expect(code.verdict).toMatch(/^Retired — .*~\$\d.*no longer spent/);
   });
 
   it('reports connector calls vs guardrail budget (monthly run-rate and peak day)', () => {

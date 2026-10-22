@@ -360,7 +360,8 @@ export function HealthRail({ upBps, encBps, targetBps, minUplinkMbps, failures, 
           </span>
         </div>
         <Meter value={Math.min(upMbps, minUplinkMbps * 1.5)} max={minUplinkMbps * 1.5} tone={healthy ? 'green' : 'amber'} height={7} />
-        <div className="pz-note" style={{ marginTop: 6 }}>
+        <div className="pz-note hs-note" style={{ marginTop: 6 }}>
+          <Icon name={healthy ? 'check' : 'alert'} size={12} style={{ color: healthy ? 'var(--green)' : 'var(--amber)' }} />
           {healthy ? 'Headroom healthy' : 'Uplink tight — consider a lower preset'} · target {fmtBps(targetBps)}
         </div>
       </div>
@@ -400,7 +401,17 @@ export function HealthRail({ upBps, encBps, targetBps, minUplinkMbps, failures, 
           <span className="hs-label">Delivery rail</span>
           <span className="hs-value mono" style={{ fontSize: 11.5 }}>{mime ? mime.split(';')[0].replace('video/', '').toUpperCase() : '—'} · R2</span>
         </div>
-        <div className="pz-note">Self-contained segments → R2 → CDN cache. 100 viewers ≈ 1 read.</div>
+        <div className="how-pipe hs-pipe" aria-label="Segments to R2 to CDN cache to viewers — 100 viewers cost about one read">
+          {([['film', 'Segments'], ['cloud', 'R2'], ['globe', 'CDN'], ['users', '≈ 1 read']] as const).map(([icon, label], i) => (
+            <React.Fragment key={label}>
+              {i > 0 && <span className="how-wire" aria-hidden><i /><i /><i /></span>}
+              <span className="how-node">
+                <span className="how-ic"><Icon name={icon} size={15} /></span>
+                <small>{label}</small>
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
       </div>
     </div>
   );

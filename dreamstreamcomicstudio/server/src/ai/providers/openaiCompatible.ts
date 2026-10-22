@@ -223,11 +223,16 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
     let usage: ProviderUsage = {};
     let raw: any = null;
     const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+    // Some endpoints (notably Gemini's OpenAI-compat layer) omit `index` on streamed
+    // tool_calls and may pack several complete calls into one delta; track the last slot
+    // and hand out synthetic keys (far above any real index) so each call gets its own.
+    let lastToolKey = -1;
+    let synthToolKey = 1_000_000;
 
     const buildResult = (): GenerateTextResult => {
       const toolCalls = Array.from(toolAcc.values())
         .filter((t) => t.name)
-        .map((t) => ({ id: t.id || `call_${t.name}`, name: t.name, arguments: t.args || '{}' }));
+        .map((t, i) => ({ id: t.id || `call_${i}_${t.name}`, name: t.name, arguments: t.args || '{}' }));
       return {
         text,
         model: String(model || req.model),
@@ -269,12 +274,23 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
         if (typeof dr === 'string' && dr) { reasoning += dr; onDelta({ reasoning: dr }); }
         if (Array.isArray(delta?.tool_calls)) {
           for (const tc of delta.tool_calls) {
-            const idx = typeof tc.index === 'number' ? tc.index : 0;
-            const cur = toolAcc.get(idx) || { id: '', name: '', args: '' };
+            let key: number;
+            if (typeof tc.index === 'number') {
+              key = tc.index;
+            } else {
+              // No `index`: start a new slot when the entry looks like the start of a call
+              // (has a name, or a new id); otherwise treat it as a continuation fragment of
+              // the previous call so split-across-deltas arguments still reassemble.
+              const last = toolAcc.get(lastToolKey);
+              const startsNew = !last || Boolean(tc.function?.name) || Boolean(tc.id && tc.id !== last.id);
+              key = startsNew ? synthToolKey++ : lastToolKey;
+            }
+            lastToolKey = key;
+            const cur = toolAcc.get(key) || { id: '', name: '', args: '' };
             if (tc.id) cur.id = tc.id;
             if (tc.function?.name) cur.name = tc.function.name;
             if (typeof tc.function?.arguments === 'string') cur.args += tc.function.arguments;
-            toolAcc.set(idx, cur);
+            toolAcc.set(key, cur);
           }
         }
       };

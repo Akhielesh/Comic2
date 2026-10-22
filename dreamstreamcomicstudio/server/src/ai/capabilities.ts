@@ -66,7 +66,7 @@ export const capabilityStatuses = (): CapabilityStatus[] => {
     { id: 'tool.video_search', label: 'Video search (DuckDuckGo)', status: 'ok', detail: 'Keyless.' },
     { id: 'tool.image_search', label: 'Image search (DuckDuckGo)', status: 'ok', detail: 'Keyless.' },
     { id: 'tool.run_agent_swarm', label: 'Agent swarm', status: openrouter ? 'ok' : 'unavailable', detail: openrouter ? 'Available.' : 'Needs OpenRouter (tool calling).' },
-    // External API connectors + Code Studio / chat design tools (operator-configured).
+    // External API connectors + chat design tools (operator-configured).
     {
       id: 'tool.nango_integrations',
       label: 'API connectors (Nango — 800+ APIs)',
@@ -82,7 +82,7 @@ export const capabilityStatuses = (): CapabilityStatus[] => {
       status: videoRenderEnabled() ? 'ok' : 'unavailable',
       detail: videoRenderEnabled()
         ? 'Render worker configured — agents can turn HTML/CSS/GSAP animations into MP4.'
-        : 'Set STUDIO_VIDEO_RENDER_URL to a self-hosted HyperFrames render worker (headless Chromium + ffmpeg). Client-side preview recording works without it.',
+        : 'Set STUDIO_VIDEO_RENDER_URL to a self-hosted HyperFrames render worker (headless Chromium + ffmpeg).',
       envVar: 'STUDIO_VIDEO_RENDER_URL'
     },
     { id: 'mcp.context7', label: 'Context7 docs MCP (studio + chat)', status: 'ok', detail: 'Always-on — live, version-correct library docs so models use real APIs.' },

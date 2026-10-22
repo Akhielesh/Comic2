@@ -127,9 +127,9 @@ export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativ
 const RAW_TEXT_TIMEOUT = parseIntegerEnv(process.env.TEXT_REQUEST_TIMEOUT_MS, 50_000, 'TEXT_REQUEST_TIMEOUT_MS', 1_000);
 export const TEXT_REQUEST_TIMEOUT_MS = Math.min(RAW_TEXT_TIMEOUT, 55_000);
 // Maximum output (completion) tokens for the AI Chat Platform. The old flat 2048 cap
-// truncated long answers AND — critically — cut off generate_app/render_chart tool-call
-// arguments mid-JSON (the whole app/chart rides in those arguments), so "build me an
-// app/chart" silently produced nothing. Raised so chat behaves like a pro assistant.
+// truncated long answers AND — critically — cut off render_react/render_chart tool-call
+// arguments mid-JSON (the whole component/chart rides in those arguments), so "build me a
+// widget/chart" silently produced nothing. Raised so chat behaves like a pro assistant.
 export const CHAT_MAX_OUTPUT_TOKENS = parseIntegerEnv(process.env.CHAT_MAX_OUTPUT_TOKENS, 8192, 'CHAT_MAX_OUTPUT_TOKENS', 256);
 // Hard backstop for a single streaming model call. The streaming timeout below is an IDLE
 // window (reset on every token) so legitimately long answers/code generation finish; this
@@ -291,34 +291,6 @@ export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL
 // Redis connection string (BullMQ broker) — used by the ventures queue/worker.
 export const REDIS_URL = process.env.REDIS_URL || '';
 
-// --- Studio v2 (Cloudflare container live previews) ---
-// The control plane (/api/studio/*) brokers signed requests to the Studio Worker. Both
-// values must be set for live Studio to work; otherwise /api/studio returns 503.
-export const STUDIO_WORKER_URL = process.env.STUDIO_WORKER_URL || '';
-export const STUDIO_HMAC_SECRET = process.env.STUDIO_HMAC_SECRET || '';
-// Per-user cost-safety caps.
-export const STUDIO_MAX_CONCURRENT_PER_USER = parseIntegerEnv(
-  process.env.STUDIO_MAX_CONCURRENT_PER_USER,
-  2,
-  'STUDIO_MAX_CONCURRENT_PER_USER',
-  1
-);
-export const STUDIO_DAILY_BUILD_MINUTES = parseIntegerEnv(
-  process.env.STUDIO_DAILY_BUILD_MINUTES,
-  120,
-  'STUDIO_DAILY_BUILD_MINUTES',
-  1
-);
-export const STUDIO_REQUEST_TIMEOUT_MS = parseIntegerEnv(
-  process.env.STUDIO_REQUEST_TIMEOUT_MS,
-  120_000,
-  'STUDIO_REQUEST_TIMEOUT_MS',
-  1_000
-);
-// Advisory $/awake-second for cost display (≈ standard-3: memory+CPU ≈ $0.1/hr). Keep in
-// sync with docs/studio/CLOUDFLARE_STUDIO_PLAN.md.
-export const STUDIO_COST_PER_AWAKE_SEC = Number(process.env.STUDIO_COST_PER_AWAKE_SEC || '0.00003');
-
 // --- Transactional email (Cloudflare Email Sending via email-worker) --------------
 // The backend never talks to the email service directly — it signs requests to the
 // email-worker (HMAC, mirroring the Studio worker). EMPTY EMAIL_WORKER_URL or
@@ -330,6 +302,15 @@ export const EMAIL_HMAC_SECRET = process.env.EMAIL_HMAC_SECRET || '';
 export const EMAIL_PUBLIC_BASE_URL = (process.env.EMAIL_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 // Public app origin used for post-confirm redirects + in-email app links.
 export const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || 'https://dreamstreamstudio.ai').replace(/\/+$/, '');
+// Extra origins that auth-email links (sign-up confirm, password reset, magic link) may point
+// at, besides APP_PUBLIC_URL's origin — e.g. `http://localhost:3000,http://localhost:7000` for
+// local dev. EXACT origins only: never a wildcard or isAllowedOrigin(), whose
+// `*.dreamstreamstudio.ai` includes user-controlled Studio preview hosts (a reset link sent
+// there would hand its owner the account). See services/authEmailLinks.ts.
+export const AUTH_LINK_ORIGINS = (process.env.AUTH_LINK_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 export const EMAIL_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   process.env.EMAIL_REQUEST_TIMEOUT_MS,
   15_000,
@@ -369,8 +350,9 @@ export const MCP_OUTBOUND_TOKEN = (process.env.MCP_OUTBOUND_TOKEN || '').trim();
 // --- Autopilot (always-on autonomous ventures) — Epic A0: brakes-first, flag-gated -------
 // The ENTIRE Autopilot layer is OFF by default. Nothing autonomous runs unless
 // VENTURES_ENABLED is true AND the kill switch (VENTURES_KILL) is false. This keeps the
-// existing Comic/Chat/Studio product completely unaffected until explicitly turned on.
-// See docs/studio/autopilot/00-MASTER-PLAN.md and OPERATING-MODEL.md.
+// existing Comic/Chat product completely unaffected until explicitly turned on. The build
+// (ACT) stage was retired with Code Studio (ADR 0005): a tick now only pauses the venture.
+// See docs/ventures/00-MASTER-PLAN.md and OPERATING-MODEL.md.
 export const VENTURES_ENABLED = parseBooleanEnv(process.env.VENTURES_ENABLED, false);
 // Global emergency stop: when true, the scheduler pauses ALL ventures (an admin can also flip
 // this at runtime via the in-process override in ventures/killSwitch.ts).
@@ -405,9 +387,14 @@ export const VENTURES_TICK_INTERVAL_MS = parseIntegerEnv(
   'VENTURES_TICK_INTERVAL_MS',
   1_000
 );
-// Conservative pre-spend estimate ($) per build goal, checked against the budget BEFORE acting
-// (A4). Real usage-based cost metering lands with F1; until then this keeps budgets meaningful.
-export const VENTURES_BUILD_COST_ESTIMATE_USD = Number(process.env.VENTURES_BUILD_COST_ESTIMATE_USD || '0.05');
+// Timeout for the intake model call (idea → roadmap). The build stage that also used a model
+// was retired with Code Studio (ADR 0005), so intake is the only Ventures model call left.
+export const VENTURES_INTAKE_TIMEOUT_MS = parseIntegerEnv(
+  process.env.VENTURES_INTAKE_TIMEOUT_MS,
+  120_000,
+  'VENTURES_INTAKE_TIMEOUT_MS',
+  1_000
+);
 
 // --- Account Connectors framework (Google Suite + API-key services) ----------------
 // Per-user OAuth connections (Gmail/Drive/Calendar/Sheets/YouTube) use a custom

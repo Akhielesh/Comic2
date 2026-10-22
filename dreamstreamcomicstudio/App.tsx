@@ -13,12 +13,12 @@ const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPoli
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
 const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/PageStudio').then(module => ({ default: module.PageStudio })));
+// Comic Studio v4 — the conversational studio (docs/features/comic-studio-v4.md).
+const ComicStudio = lazyImportWithRetry(() => import('./components/comicstudio/ComicStudio').then(module => ({ default: module.ComicStudio })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
-const CodeStudioView = lazyImportWithRetry(() => import('./components/studio/CodeStudioView').then(module => ({ default: module.CodeStudioView })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
-import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -34,8 +34,19 @@ import { setPendingChatModel } from './services/chatStorage';
 import { captureInviteCodeFromUrl, clearPendingInviteCode, getPendingInviteCode, redeemInvite } from './services/invites';
 import { persistUiState } from './services/viewState';
 import { isSettingsTab, type SettingsTab } from './components/settingsTabs';
-import { useStudioHandoff } from './services/studioHandoff';
-import { findStudioProjectForDeepLink, normalizeStudioDeepLinkUrl, resolveStudioDeepLink } from './services/studioDeepLink';
+import {
+  COMIC_STUDIO_URL_VIEW,
+  isStudioV4Project,
+  normalizeStudioDeepLinkUrl,
+  resolveProjectView,
+  resolveStudioDeepLink,
+  routeStudioDeepLink,
+  studioViewToUrlParam,
+  type StudioDeepLinkView
+} from './services/studioDeepLink';
+import { createStudioProject } from './components/comicstudio/studioApi';
+import type { NewComicMode } from './components/ProjectDashboard';
+import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
@@ -69,17 +80,18 @@ type AppView =
   | 'terms'
   | 'profile'
   | 'pagestudio'
-  | 'codestudio'
+  | 'comicstudio'
   | 'ventures'
   | 'shared';
 
 // Top-level views whose identity is persisted in the URL (?view=) so a refresh restores the page.
 // Path/param-managed views (reader, shared, auth-callback, models) are intentionally excluded —
 // they have their own URL handling and must not be clobbered.
-// (editor/pagestudio/profile are excluded: they need a loaded project/profile that
-//  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.)
+// (editor/pagestudio/comicstudio/profile are excluded: they need a loaded project/profile that
+//  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.
+//  Project workspaces restore through the ?view=…&id= deep-link path instead.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
+  'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -98,20 +110,24 @@ type PendingReaderTarget = {
 
 type PendingStudioTarget = {
   id: string;
-  view: 'editor' | 'pagestudio';
+  view: StudioDeepLinkView;
   source: 'id' | 'board';
 };
 
+/** Project workspaces whose identity lives in the URL as ?view=<workspace>&id=<projectId>. */
+const PROJECT_WORKSPACE_VIEWS = new Set<AppView>(['editor', 'pagestudio', 'comicstudio']);
+// ('comicstudio' is the accepted alias of ?view=studio — see studioViewFromUrlParam.)
+const PROJECT_WORKSPACE_URL_VIEWS = new Set<string>(['editor', 'pagestudio', COMIC_STUDIO_URL_VIEW, 'comicstudio']);
+
 // Which product each gated view belongs to. Views not listed here (home, gallery,
 // reader, models, settings, legal, …) stay open to every signed-in account — only the
-// product work surfaces are confined. 'codestudio' maps to null: it isn't one of the
-// three standalone products, so a confined account never includes it.
-const VIEW_PRODUCT: Partial<Record<AppView, ProductId | null>> = {
+// product work surfaces are confined.
+const VIEW_PRODUCT: Partial<Record<AppView, ProductId>> = {
   chat: 'chat_studio',
   dashboard: 'comic_studio',
   editor: 'comic_studio',
   pagestudio: 'comic_studio',
-  codestudio: null,
+  comicstudio: 'comic_studio',
 };
 
 // Friendly gate for accounts confined to specific studios (product_access rows exist).
@@ -166,10 +182,7 @@ const App: React.FC = () => {
   // Per-account studio confinement (product_access). null = unrestricted/unknown → allow.
   const allowedProducts = useProductAccess();
   const streamOnlyRedirectedRef = useRef(false);
-  // Chat → Code Studio hand-off: opening an app from chat bumps requestId; route here.
-  const studioHandoffArtifact = useStudioHandoff((s) => s.artifact);
-  const studioHandoffRequestId = useStudioHandoff((s) => s.requestId);
-  const { projects, projectsLoaded, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
+  const { projects, projectsLoaded, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets, reloadProjects } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
@@ -190,12 +203,6 @@ const App: React.FC = () => {
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
-
-  // When chat (or any surface) hands an app off to Code Studio, route to the studio view.
-  // requestId starts at 0 and increments per open(), so this only fires on a real hand-off.
-  useEffect(() => {
-    if (studioHandoffRequestId > 0) setCurrentView('codestudio');
-  }, [studioHandoffRequestId]);
 
   // Connector OAuth popup relay: when THIS page was opened as the Google consent popup
   // (window.opener is set) and the callback bounced back with a result, post it to the
@@ -369,6 +376,16 @@ const App: React.FC = () => {
     setReturnView(originView);
 
     const local = projects.find((project) => project.id === id);
+    if (local && isStudioV4Project(local)) {
+      // v4 comics read in the v4 reader (ComicReader delegates on studioVersion). It loads
+      // the doc + signed URLs from /api/comic/public/:id, which also serves the signed-in
+      // owner's unpublished comic — so no classic asset hydration here.
+      setPublicProject(null);
+      setActiveProjectId(id);
+      setCurrentView('reader');
+      setReaderUrlParams(id);
+      return;
+    }
     if (local) {
       setIsHydratingProject(true);
       hydrateProjectAssets(id).finally(() => {
@@ -473,14 +490,15 @@ const App: React.FC = () => {
       const awaitingStudioDeepLink = !!(
         pendingStudioTarget &&
         urlProjectId === pendingStudioTarget.id &&
-        (urlView === 'editor' || urlView === 'pagestudio') &&
+        urlView !== null &&
+        PROJECT_WORKSPACE_URL_VIEWS.has(urlView) &&
         activeProjectId !== pendingStudioTarget.id
       );
       if (awaitingStudioDeepLink) return;
 
-      if ((currentView === 'editor' || currentView === 'pagestudio') && activeProjectId) {
+      if (PROJECT_WORKSPACE_VIEWS.has(currentView) && activeProjectId) {
         url.pathname = '/';
-        url.searchParams.set('view', currentView);
+        url.searchParams.set('view', studioViewToUrlParam(currentView as StudioDeepLinkView));
         url.searchParams.set('id', activeProjectId);
         url.searchParams.delete('board');
       } else {
@@ -713,7 +731,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!user || authLoading || isCheckingKey) return;
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
-    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'codestudio', 'editor', 'pagestudio', 'reader', 'ventures'];
+    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures'];
     if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
@@ -773,6 +791,12 @@ const App: React.FC = () => {
       return;
     }
 
+    if (view === 'comicstudio' && id) {
+      clearReaderUrlParams();
+      openComicStudio(id);
+      return;
+    }
+
     if (view === 'home') {
       handleBackToHome();
       return;
@@ -786,7 +810,6 @@ const App: React.FC = () => {
       view === 'gallery' ||
       view === 'models' ||
       view === 'chat' ||
-      view === 'codestudio' ||
       view === 'privacy' ||
       view === 'terms'
     ) {
@@ -812,8 +835,37 @@ const App: React.FC = () => {
     setCurrentView('chat');
   };
 
-  const handleCreateProject = (name: string, pipelineMode: 'classic' | 'pagestudio' = 'classic') => {
-    const newProject = createProject(name);
+  // Comic Studio v4 is a full-bleed workspace keyed by project id. It loads (and owns)
+  // its document through /api/comic, so nothing is hydrated client-side first; the server
+  // enforces ownership and the studio shows a friendly not-found when the id isn't ours.
+  const openComicStudio = (id: string) => {
+    setPublicProject(null);
+    setActiveProjectId(id);
+    setCurrentView('comicstudio');
+  };
+
+  // Leaving the studio: back to the dashboard with a fresh project list, so the card shows
+  // the title, cover thumbnail and page progress the server mirrored while the user worked.
+  const leaveComicStudio = () => {
+    setActiveProjectId(null);
+    setCurrentView('dashboard');
+    void reloadProjects();
+  };
+
+  // New comics start in the conversational studio. The server creates the projects row +
+  // the comic_docs row in one call; failures reject with a user-safe message the dashboard
+  // shows inline (offline, expired session, studio storage unavailable…).
+  const handleCreateProject = async (name: string, mode: NewComicMode = 'studio'): Promise<void> => {
+    if (mode === 'studio') {
+      const { projectId } = await createStudioProject({ title: name.trim() || undefined });
+      openComicStudio(projectId);
+      // The server created the listing row; pick it up in the background so every way
+      // back to the dashboard lists the new comic.
+      void reloadProjects();
+      return;
+    }
+    const pipelineMode = mode === 'pagestudio' ? 'pagestudio' : 'classic';
+    const newProject = createProject(name.trim() || 'Untitled comic');
     updateProject(newProject.id, (prev) => ({
       state: { ...prev.state, pipelineMode }
     }));
@@ -821,12 +873,29 @@ const App: React.FC = () => {
     setCurrentView(pipelineMode === 'pagestudio' ? 'pagestudio' : 'editor');
   };
 
+  // Classic editor banner → "Open this story in the new studio": the banner already
+  // created the imported v4 project; open it (and list it, as for a new comic).
+  const handleOpenInNewStudio = (newProjectId: string) => {
+    openComicStudio(newProjectId);
+    void reloadProjects();
+  };
+
   const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'pagestudio') => {
+    // v4 studio comics skip the classic asset hydration entirely (their assets are signed
+    // by the studio itself) and always open the studio, whatever pipeline was requested.
+    if (isStudioV4Project(projects.find((project) => project.id === id))) {
+      openComicStudio(id);
+      return;
+    }
     setIsHydratingProject(true);
     // Stored projects may carry legacy pipeline modes (e.g. the retired 'comicforge'
-    // engine) — coerce anything unknown to the classic editor so old projects still open.
-    const routeTo = (mode?: string) =>
-      setCurrentView(mode === 'pagestudio' ? 'pagestudio' : 'editor');
+    // engine) — resolveProjectView coerces anything unknown to the classic editor so old
+    // projects still open.
+    const routeTo = (project: Project | undefined) => {
+      const view = resolveProjectView(project, expectedPipelineMode);
+      if (view === 'comicstudio') openComicStudio(id);
+      else setCurrentView(view);
+    };
     hydrateProjectAssets(id)
       .then((hydrated) => {
         if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
@@ -835,12 +904,12 @@ const App: React.FC = () => {
         setActiveProjectId(id);
         // Route off the freshly hydrated project (not the stale render-time snapshot),
         // so a migrated/updated pipelineMode opens the correct workspace.
-        routeTo(expectedPipelineMode || hydrated?.state.pipelineMode);
+        routeTo(hydrated);
       })
       .catch(() => {
         // Hydration failed — still open the project, best-effort on the workspace.
         setActiveProjectId(id);
-        routeTo(expectedPipelineMode || projects.find((candidate) => candidate.id === id)?.state.pipelineMode);
+        routeTo(projects.find((candidate) => candidate.id === id));
       })
       .finally(() => setIsHydratingProject(false));
   };
@@ -874,24 +943,32 @@ const App: React.FC = () => {
 
     if (!projectsLoaded) return;
 
-    const matchedProject = findStudioProjectForDeepLink(projects, target);
-    if (!matchedProject) {
-      setPendingStudioTarget(null);
+    setPendingStudioTarget(null);
+    const route = routeStudioDeepLink(projects, target);
+    if (route.kind === 'missing') {
       setSystemError('Comic project not found for this editor link.');
       return;
     }
-
-    setPendingStudioTarget(null);
-    handleOpenProject(
-      matchedProject.id,
-      target.view === 'pagestudio'
-        ? 'pagestudio'
-        : matchedProject.state.pipelineMode === 'pagestudio'
-          ? 'pagestudio'
-          : 'classic'
-    );
+    if (route.kind === 'comicstudio') {
+      openComicStudio(route.id);
+      return;
+    }
+    handleOpenProject(route.project.id, route.pipelineMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingStudioTarget, authLoading, isCheckingKey, user?.id, projectsLoaded, projects, currentView, activeProjectId]);
+
+  // Workspace guards. 'comicstudio' needs a project id (nothing to show without one), and a
+  // v4 comic must never sit in the classic editor/Page Studio: they would render an empty
+  // wizard over it and their autosave would rewrite the server-mirrored listing state.
+  useEffect(() => {
+    if (currentView === 'comicstudio' && !activeProjectId) {
+      setCurrentView(user ? 'dashboard' : 'home');
+      return;
+    }
+    if ((currentView === 'editor' || currentView === 'pagestudio') && activeProjectId) {
+      if (isStudioV4Project(projects.find((project) => project.id === activeProjectId))) setCurrentView('comicstudio');
+    }
+  }, [currentView, activeProjectId, projects, user]);
 
   const handleReadProject = (id: string) => {
     void navigateToReader(id, currentView);
@@ -960,7 +1037,9 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'chat', 'codestudio'].includes(currentView);
+  // ventures (the Operator Console) only works signed in, so send visitors to sign in first
+  // instead of letting them reach a console that fails every call with 401.
+  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'comicstudio', 'chat', 'ventures'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   // Product gate (product_access): confined accounts only reach their active studios.
@@ -970,24 +1049,27 @@ const App: React.FC = () => {
     if (!user || isAdmin || !allowedProducts) return null;
     if (!(effectiveView in VIEW_PRODUCT)) return null;
     const product = VIEW_PRODUCT[effectiveView];
-    if (product && allowedProducts.has(product)) return null;
-    return product ? PRODUCT_LABELS[product] : 'Code Studio';
+    if (!product || allowedProducts.has(product)) return null;
+    return PRODUCT_LABELS[product];
   })();
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // The editor is a focused, full-screen workspace with its own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
-  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'codestudio'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
-  // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
-  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
+  // The v4 Comic Studio is full-bleed too (its own header with back, title and Read).
+  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio'].includes(effectiveView);
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat';
+  // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces
+  // (the v4 Comic Studio is itself a conversation with the Comic Director).
+  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared';
-  // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat /
-  // code studio surfaces (they have their own inline feedback) and on the bare
-  // auth-callback / shared viewer screens.
-  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
+  // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat
+  // surface (it has its own inline feedback) and on the bare auth-callback / shared
+  // viewer screens.
+  // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
+  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -1107,17 +1189,6 @@ const App: React.FC = () => {
             <AIChatPlatform projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
           )}
 
-          {effectiveView === 'codestudio' && (
-            <StudioErrorBoundary onBack={() => setCurrentView(user ? 'dashboard' : 'home')}>
-              <CodeStudioView
-                artifact={studioHandoffArtifact}
-                isAdmin={isAdmin}
-                onBack={() => setCurrentView(user ? 'dashboard' : 'home')}
-                onNavigate={handleNavigate}
-              />
-            </StudioErrorBoundary>
-          )}
-
           {effectiveView === 'ventures' && (
             <Suspense fallback={<div className="min-h-screen bg-neutral-950" />}>
               <OperatorConsoleView isAdmin={isAdmin} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
@@ -1156,17 +1227,28 @@ const App: React.FC = () => {
             <LearnHub />
           )}
 
-          {effectiveView === 'editor' && activeProject && (
+          {effectiveView === 'editor' && activeProject && !isStudioV4Project(activeProject) && (
             <ComicEditor
               project={activeProject}
               onUpdate={(updates) => updateProject(activeProject.id, updates)}
               onStartGeneration={startGeneration}
               onStopGeneration={stopGeneration}
               onBack={() => setCurrentView('dashboard')}
+              onOpenInNewStudio={handleOpenInNewStudio}
             />
           )}
 
-          {effectiveView === 'pagestudio' && activeProject && (
+          {effectiveView === 'comicstudio' && activeProjectId && (
+            // Full-bleed: the studio lays itself out in a viewport-tall box (h-screen is the
+            // fallback where dynamic viewport units aren't supported).
+            <div className="h-screen w-full overflow-hidden" style={{ height: '100dvh' }}>
+              <StudioErrorBoundary onBack={leaveComicStudio}>
+                <ComicStudio key={activeProjectId} projectId={activeProjectId} onBack={leaveComicStudio} />
+              </StudioErrorBoundary>
+            </div>
+          )}
+
+          {effectiveView === 'pagestudio' && activeProject && !isStudioV4Project(activeProject) && (
             <PageStudio
               project={activeProject}
               onUpdate={(updater) => updateProject(activeProject.id, updater)}

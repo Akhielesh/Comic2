@@ -539,8 +539,7 @@ const welcome: Renderer = (params, brand) => {
   const features =
     featureCard('🎬', 'Comic Studio', 'Turn a script into a cinematic, fully-styled comic — pick a style, generate panels, export.') +
     featureCard('💬', 'AI Chat', 'Build, brainstorm and research with 100+ models. Bring your own key or use the free tier.') +
-    featureCard('🧩', 'Rich tools', 'Live charts, maps, finance, news and more render right inside chat.') +
-    featureCard('🛠️', 'Code Studio', 'Spin up real apps in a live cloud container — coming soon to your account.');
+    featureCard('🧩', 'Rich tools', 'Live charts, maps, finance, news and more render right inside chat.');
   return {
     subject: `Welcome to ${brand.productName} — let's make something 🎬`,
     preheader: 'Your account is ready. Here’s everything you can do.',
@@ -566,7 +565,6 @@ const welcome: Renderer = (params, brand) => {
       '• Comic Studio — scripts into cinematic comics',
       '• AI Chat — build with 100+ models',
       '• Rich tools — charts, maps, finance, news in chat',
-      '• Code Studio — live app containers (coming soon)',
       '',
       `Open the studio: ${cta}`,
       '',

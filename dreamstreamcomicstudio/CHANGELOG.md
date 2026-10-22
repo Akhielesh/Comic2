@@ -6,6 +6,24 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Comic Studio v4 is the default way to make a comic (2026-10-21):**
+  - **New Comic opens the conversational studio.** Name it (or don't) and you land in
+    the new Comic Studio: talk through your idea, see the page plan and the cost before
+    anything is drawn. Creation failures (offline, expired session) show right in the
+    form; "Use the classic editor instead" is still one click away.
+  - **Studio comics on the dashboard** get a Studio badge, their cover or first page as
+    the thumbnail, and "2 of 6 pages" progress. Rename works inline on every card (and
+    updates the studio's own title for studio comics); delete now asks first. Duplicate
+    is unavailable for studio comics for now — it says so instead of making a broken copy.
+  - **Bring a classic comic over:** the classic editor shows a slim banner — "Open this
+    story in it" copies the script, title, characters and style into a new studio comic
+    and opens it. The classic project stays as it is; the banner can be dismissed.
+  - **Links and reading:** `?view=studio&id=…` opens a studio comic after sign-in (old
+    editor links to a studio comic open the studio too). Reading a studio comic — from the
+    dashboard, a shared `?view=read` link or the public gallery — uses the new reader;
+    owners can read their own unpublished comic there.
+  - **Gallery:** Settings → Gallery has a Comic Studio section showing a lettered page
+    (drag the balloons) and the plan sketch shown before any spend.
 - **Admin Cost centre (2026-10-21):** DreamStream → Account → Admin → **Costs**: what the
   platform costs to run against what it brings in, on real data — total cost with its
   trend and run-rate, AI spend (provider vs billable, margin; users' own-key calls kept
@@ -30,6 +48,24 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Fixed
+- **Every account email now comes from dreamstreamstudio.ai (2026-10-22):** sign-up,
+  resend, password-reset and magic-link emails are only ever sent by our backend from
+  `no-reply@dreamstreamstudio.ai` (signed with the domain's DKIM key, SPF + DMARC aligned,
+  replies to support@). The apps no longer fall back to Supabase's own mailer
+  (`noreply@mail.app.supabase.io`, ~2 emails an hour for the whole project, links built from
+  its Site URL); if our email service can't be reached they ask you to try again in a minute.
+- **Sign-up, reset and magic-link emails no longer hit Supabase's limit (2026-10-22):**
+  Supabase's built-in mailer allows about two emails an hour for the whole project, so new
+  sign-ups were failing with "email rate limit exceeded". Our backend now creates the
+  confirmation / reset / magic links itself (Supabase admin `generateLink`, which sends
+  nothing and isn't rate-limited) and sends them as branded DreamStream / Stream Studio
+  emails from `no-reply@dreamstreamstudio.ai` through our email Worker
+  (`POST /api/auth/email/{signup,resend,recovery,magiclink}`). Links land on our own
+  domain and finish in the app (`token_hash`). Abuse limits: 10 requests / 10 min per
+  network, one email per address per minute (5/hour, 10/day), Turnstile verified when the
+  page sends it, a Stream Studio welcome ticket accepted instead on live sign-ups, no
+  account guessing on resend / reset / magic link, and no tracking pixel in auth mail.
+  If the backend is unreachable the apps fall back to the old Supabase call.
 - **Stream Studio kept showing your name after you signed out (2026-10-21):** it kept its
   own copy of your display name (and your events, nursery alert opt-ins and call settings)
   in this browser, and signing out — especially from the main DreamStream app — never
@@ -40,10 +76,40 @@ All notable user-facing changes. Format loosely follows
   now redirects to `dreamstreamstudio.ai`, so there's one sign-in instead of two.
 
 ### Changed
+- **One name in every studio (2026-10-22):** your name is now a single setting — change
+  it in DreamStream (Account → Profile) or Stream Studio (Settings → Account & sync) and
+  it updates everywhere: Stream Studio, the baby monitor and calls, Chat Studio's
+  greeting and auth emails. Your @username stays your sign-in handle and Comic Studio
+  identity. Stream Studio's per-device "Your name" became an optional **on-stream name**.
+- **One address (2026-10-22):** `comic2.pages.dev` now redirects to `dreamstreamstudio.ai`
+  (path, query and `#` links kept), like `www.` already did — one sign-in everywhere.
+  If you used the old address: sign in once more, and re-install the home-screen app /
+  re-enable baby-monitor alerts from dreamstreamstudio.ai.
+- **Less text, more picture — Live monitor & Stream Studio (2026-10-21):** the monitor's
+  alert settings are now one card — a background-alerts switch, three presets
+  (Essentials · Recommended · Everything) and, only if you want them, topic tiles grouped
+  Baby / Safety / Room / Camera with a tap-to-hear preview (each tile switches the phone
+  notification and the on-screen alert together); rare per-device switches sit behind
+  "More on this device". The baby's state is an animated glyph (a moon with drifting z's
+  when calm, sound rings when crying) instead of a coloured dot, and Safety guards that are
+  fine show as a grid of tiles — only ones needing attention stay as text. In Stream
+  Studio the dashboard's stats carry icons, "How it works" is an animated camera → edge →
+  CDN → viewers diagram (the paragraph is one tap away), and the Recordings and Baby
+  monitor cards use icon chips; the Health tab's delivery path is a small diagram too.
+  The All view of the monitor is about a third shorter. Animations respect "reduce
+  motion". Fixed: nursery settings' segmented controls rendered vertically.
 - **Reactions, designed (2026-10-21):** Settings no longer shows a wall of 108 emoji.
   Pick your own six one-tap reactions (tap one, choose from the tabbed picker — it floats
   up just like on stream); viewers get your bar when you go live. The "+" picker is now
   sorted into Recent, Love, Hype, Cheer, Funny, Faces, Party and Things.
+
+### Removed
+- **Code Studio (2026-10-22, ADR 0005):** the app builder is retired — its pages, chat
+  card and `generate_app` tool, its sandbox Worker and deploy workflow, and two heavy
+  editor dependencies are gone (smaller app bundle). Ventures keeps roadmaps, goals,
+  budgets and checkpoints but no longer builds automatically, and is admin-only again.
+  "Your studios" lists Comic Studio, Chat Studio, Stream Studio and the baby monitor &
+  calls. Old Code Studio projects stay in the database as history.
 
 ### Added
 - **Save recordings straight to Google Drive (2026-10-21):** in Stream Studio, connect

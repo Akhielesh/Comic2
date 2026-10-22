@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles } from 'lucide-react';
@@ -11,6 +11,14 @@ import { submitReview } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
+import { isStudioV4Project } from '../services/studioDeepLink';
+import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
+
+// Comic Studio v4 comics (state.studioVersion === 4) keep their pages in a server-side
+// ComicDoc, not in the legacy panels this reader draws — they read in the v4 reader.
+const PublicComicReader = lazyImportWithRetry(() =>
+  import('./comicstudio/PublicComicReader').then((module) => ({ default: module.PublicComicReader }))
+);
 
 // Reveals its children with a comic "pop-in" the first time they scroll into view.
 const RevealOnScroll: React.FC<{ className?: string; children: React.ReactNode }> = ({ className, children }) => {
@@ -78,7 +86,32 @@ interface ComicReaderProps {
   onOpenFaq: () => void;
 }
 
-export const ComicReader: React.FC<ComicReaderProps> = ({
+/**
+ * Reader entry point for every comic link (/?view=read&id=…, the public gallery, the
+ * dashboard's Read). Classic comics render below; v4 studio comics delegate to the v4
+ * PublicComicReader, which loads the published doc (or the signed-in owner's own,
+ * unpublished one) from /api/comic/public/:id.
+ */
+export const ComicReader: React.FC<ComicReaderProps> = (props) => {
+  if (isStudioV4Project(props.project)) {
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-[var(--ds-canvas)]" data-testid="studio-comic-reader">
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center text-sm text-[var(--ds-muted)]" role="status">
+              Opening the comic…
+            </div>
+          }
+        >
+          <PublicComicReader projectId={props.project.id} onClose={props.onClose} />
+        </Suspense>
+      </div>
+    );
+  }
+  return <ClassicComicReader {...props} />;
+};
+
+const ClassicComicReader: React.FC<ComicReaderProps> = ({
   project,
   onClose,
   onUpdateProject,

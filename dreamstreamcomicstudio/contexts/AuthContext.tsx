@@ -6,11 +6,11 @@ import { clearUserScopedSettings, setSettingsChangeListener } from '../services/
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { setChatDataChangeListener } from '../services/chatStorage';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
-import { clearStudioModelSelection, STUDIO_MODEL_CHANGED } from '../services/studioModelSelection';
 import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
 import { purgeLiveAccountData } from '../live/accountPurge';
+import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 
 type AuthContextType = {
     user: User | null;
@@ -84,11 +84,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         };
         setKeysChangeListener(pushIfSignedIn);
         setSettingsChangeListener(pushIfSignedIn);
-        // Chat memory + custom agents, and the model selections (chat/comics + Code
-        // Studio) used to change silently on one device only — sync them like keys.
+        // Chat memory + custom agents, and the chat/comics model selection used to
+        // change silently on one device only — sync them like keys.
         setChatDataChangeListener(pushIfSignedIn);
         window.addEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
-        window.addEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
         // Allowed-sources governance: an explicit OFF must follow the account (the
         // restore path fires this event under the applyingSnapshot guard, so no loop).
         window.addEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
@@ -142,7 +141,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setSettingsChangeListener(null);
             setChatDataChangeListener(null);
             window.removeEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
-            window.removeEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
             window.removeEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
         };
     }, []);
@@ -159,7 +157,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // that other account's cloud snapshot.
         clearUserScopedSettings();
         clearModelSelection();
-        clearStudioModelSelection();
+        // Retired Code Studio's model pin (ADR 0005); still cleared so no old copy lingers.
+        try { localStorage.removeItem('dreamstream_studio_model'); } catch { /* storage unavailable */ }
         // Stream Studio (/live) keeps its own copy of the name, events, nursery data and
         // an alert subscription — wipe those too, so it never shows the last person.
         purgeLiveAccountData();
@@ -191,16 +190,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             return { success: false, message: 'No account email found for verification.' };
         }
 
-        const { error } = await supabase.auth.resend({
-            type: 'signup',
-            email: user.email,
-            options: {
-                emailRedirectTo: getAuthRedirectUrl()
-            }
-        });
+        // Sent by our backend (signed in + own address ⇒ no captcha needed).
+        const viaApi = await requestAuthEmail(
+            'resend',
+            { email: user.email, app: 'main' },
+            { accessToken: session?.access_token }
+        );
+        if (viaApi.status === 'ok') return { success: true, message: 'Verification email sent. Check your inbox.' };
+        if (viaApi.status === 'error') {
+            return { success: false, message: viaApi.message || 'Failed to resend verification email.' };
+        }
 
-        if (error) return { success: false, message: error.message || 'Failed to resend verification email.' };
-        return { success: true, message: 'Verification email sent. Check your inbox.' };
+        // Never Supabase's own mailer: every auth email comes from dreamstreamstudio.ai.
+        return { success: false, message: EMAIL_SERVICE_DOWN };
     };
 
     const changePassword = async (newPassword: string): Promise<{ success: boolean; message: string }> => {

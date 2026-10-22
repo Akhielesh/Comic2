@@ -50,6 +50,7 @@ export const LIMITS: { label: string; value: string }[] = [
   { label: 'Cost guardrails', value: 'Closing the studio tab ends the stream instantly (restartable); silent drops auto-end after a 2-minute grace' },
 ];
 
+/** Legacy: the live worker's workers.dev address, used only by the old Pages host (below). */
 export const FALLBACK_PAGES_LIVE_WORKER_BASE = 'https://dreamstream-live.akhieleshsrirangam.workers.dev';
 
 const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;
@@ -69,16 +70,17 @@ export function resolveWorkerBase(
   if (!pageLocation) return 'https://dreamstreamstudio.ai/live-api';
   if (isLocalLiveHost(pageLocation.hostname)) return 'http://127.0.0.1:8788';
 
-  // Temporary launch fallback: Cloudflare Pages' `comic2.pages.dev` domain does
-  // not support the custom-zone Worker route at `/live-api/*`; without this the
-  // SPA fallback returns index.html and hosts create dead events. Keep custom
-  // domains same-origin, but point the Pages production host at workers.dev.
+  // Legacy (2026-10): `comic2.pages.dev` now 301s to dreamstreamstudio.ai
+  // (functions/_middleware.ts), so no page loads there any more. This stays for
+  // tabs opened before the redirect shipped (the Pages host has no `/live-api/*`
+  // Worker route, so they need workers.dev) and because scripts/ops/liveSmoke.ts
+  // still checks the bundle carries the base. Remove both together later.
   if (pageLocation.hostname === 'comic2.pages.dev') return FALLBACK_PAGES_LIVE_WORKER_BASE;
 
   return `${pageLocation.origin}/live-api`;
 }
 
-/** Worker base: explicit env override → local wrangler dev → temporary Pages
+/** Worker base: explicit env override → local wrangler dev → legacy Pages
  *  workers.dev fallback → same-origin `/live-api` for the custom domain. */
 export const WORKER_BASE: string = resolveWorkerBase(explicitBase, runtimeLocation);
 

@@ -10,6 +10,7 @@ import { applyStyleLockResolution } from '../services/styleLock';
 import { getDefaultStoryPlanningState, recommendStoryPlanning } from '../services/storyPlanning';
 import { makeDefaultComicAgentSettings, normalizeComicAgentSettings } from '../services/comicAgentSettings';
 import { makeDefaultComicAgentRun, syncAgentRunWithState } from '../services/comicAgentRun';
+import { isStudioV4Project } from '../services/studioDeepLink';
 
 const SAVE_DEBOUNCE_MS = 500;
 const FLOW_VERSION = 4;
@@ -377,7 +378,19 @@ export const useProjectManager = () => {
     return hydratedProject;
   };
 
+  // Comic Studio v4 rows carry a server-mirrored listing state (studioVersion: 4) over a
+  // document that lives in comic_docs. Only the cover thumbnail is signed here: the
+  // classic flow migrations would "repair" that state and write it back over the
+  // server's mirror on every dashboard load.
+  const hydrateStudioCover = async (project: Project): Promise<Project> => {
+    const coverImageId = project.state.coverImageId;
+    if (!coverImageId) return project;
+    const coverImageUrl = await getImageUrl(coverImageId, { transform: IMAGE_TRANSFORMS.thumb }).catch(() => undefined);
+    return coverImageUrl ? { ...project, state: { ...project.state, coverImageUrl } } : project;
+  };
+
   const hydrateProjectCover = async (project: Project): Promise<Project> => {
+    if (isStudioV4Project(project)) return hydrateStudioCover(project);
     let panelOverrides: ComicPanel[] | undefined;
     const firstPanelWithImageIdIndex = project.state.panels.findIndex(
       (panel) => !panel.imageUrl && (!!panel.imageId || (panel.imageIdHistory?.length || 0) > 0)
@@ -609,6 +622,9 @@ export const useProjectManager = () => {
 
   const duplicateProject = (id: string) => {
     const original = projects.find(p => p.id === id);
+    // A v4 studio comic's content lives in comic_docs (server-owned); copying the listing
+    // row alone would produce a comic with no document. The dashboard disables the action.
+    if (original && isStudioV4Project(original)) return;
     if (original) {
       const copy: Project = {
         ...original,
@@ -632,6 +648,8 @@ export const useProjectManager = () => {
   const hydrateProjectAssets = async (projectId: string): Promise<Project | undefined> => {
     const target = projects.find((p) => p.id === projectId);
     if (!target) return undefined;
+    // v4 studio comics sign their own assets through /api/comic (see hydrateStudioCover).
+    if (isStudioV4Project(target)) return target;
     const hydrated = await hydrateProject(target);
     setProjects((prev) => prev.map((p) => (p.id === projectId ? hydrated : p)));
     return hydrated;

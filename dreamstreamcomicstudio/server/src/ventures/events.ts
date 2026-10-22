@@ -1,7 +1,7 @@
 // Pure venture-event shaping for Autopilot's append-only audit trail (no DB, no network).
 // Epic A0. The actual append is a thin repository call (added in A1); this module builds and
 // lightly redacts the record so the loop can log every sense/decision/action/spend
-// deterministically and explainably. See docs/studio/autopilot/spec/38-observability.md.
+// deterministically and explainably. See docs/ventures/spec/38-observability.md.
 
 export type VentureEventLevel = 'info' | 'warn' | 'error';
 

@@ -33,7 +33,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
   const account = useAccount();
-  // No saved host name yet: start from the signed-in person's name.
+  // No on-stream name of its own (Settings → Scenes): start from the account name.
   useEffect(() => {
     if (account.status === 'member' && account.name) setHost((h) => h || account.name || '');
   }, [account.status, account.name]);
@@ -79,7 +79,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
     setBusy(true);
     setError(null);
     const cleanTitle = title.trim() || 'Untitled stream';
-    const cleanHost = host.trim() || 'Host';
+    const cleanHost = host.trim() || account.name || 'Host';
     try {
       const readiness = backendProbe?.ok ? backendProbe : await probeLiveWorker();
       setBackendProbe(readiness);
@@ -112,8 +112,9 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
       };
       addMyEvent(mine);
       void pushEventToCloud(mine); // cross-device history when signed in
-      // Remember host name + defaults for next time.
-      savePrefs({ ...prefs, hostName: cleanHost, qualityId: quality, autoRecord: rec });
+      // Remember defaults for next time. The host name is kept only when it differs from
+      // the account name — otherwise it stays empty so a later rename flows through.
+      savePrefs({ ...prefs, hostName: cleanHost === account.name || cleanHost === 'Host' ? '' : cleanHost, qualityId: quality, autoRecord: rec });
       setCreated(res);
     } catch (e) {
       if (e instanceof SignInRequiredError) {
@@ -219,7 +220,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
           </Field>
 
           <Field label="Your name" hint="shown to viewers and on the invite">
-            <input className="input" value={host} maxLength={40} placeholder="e.g. Akhielesh" onChange={(e) => setHost(e.target.value)} />
+            <input className="input" value={host} maxLength={40} placeholder={account.name || 'Your name'} onChange={(e) => setHost(e.target.value)} />
           </Field>
 
           <Field label="When">

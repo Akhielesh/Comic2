@@ -26,7 +26,7 @@ export const BUILTIN_AGENTS: BuiltinAgentMeta[] = [
   { id: 'research', name: 'Web Researcher', description: 'Deep research: facts, comparisons, how-tos, docs.', toolNames: ['web_search', 'video_search', 'image_search'] },
   { id: 'local', name: 'Local & Places', description: 'Nearby places, directions, travel and "near me".', toolNames: ['find_places', 'show_map', 'get_weather', 'web_search'] },
   { id: 'general', name: 'Generalist', description: 'Reasoning, writing, analysis and coding — no live data.', toolNames: [] },
-  { id: 'code', name: 'Code Engineer', description: 'Builds apps, components, scripts and algorithms from a description.', toolNames: ['generate_app', 'web_search'] }
+  { id: 'code', name: 'Code Engineer', description: 'Builds apps, components, scripts and algorithms from a description.', toolNames: ['render_react', 'run_python', 'web_search'] }
 ];
 
 /** Tools a custom agent may use (the swarm tool itself is intentionally excluded). */
@@ -46,7 +46,8 @@ export const AGENT_TOOLS: { name: string; label: string }[] = [
   { name: 'build_finance_terminal', label: 'Finance terminal' },
   { name: 'crypto_price', label: 'Crypto prices' },
   { name: 'exchange_rate', label: 'Currency exchange' },
-  { name: 'generate_app', label: 'App / code generator' }
+  { name: 'render_react', label: 'Interactive widget / mini app' },
+  { name: 'run_python', label: 'Run Python' }
 ];
 
 export const TOOL_LABEL: Record<string, string> = Object.fromEntries(

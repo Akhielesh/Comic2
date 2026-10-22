@@ -70,7 +70,7 @@ describe('productFitForModel', () => {
     expect(fit.blockedReason).toMatch(/safety classifier/);
   });
 
-  it('requires tool calling for Code Studio but not Chat Studio', () => {
+  it('requires tool calling for the stream_studio profile but not Chat Studio', () => {
     const toolless = { ...chatModel, id: 'some/chatty-model', supportedParameters: ['temperature'] };
     expect(productFitForModel(toolless, 'chat_studio').allowed).toBe(true);
     expect(productFitForModel(toolless, 'stream_studio').allowed).toBe(false);

@@ -1,10 +1,10 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { AccountAccess } from '@/services/studioAccessApi';
+import { fetchAccountAccess, type AccountAccess } from '@/services/studioAccessApi';
 
 const access: AccountAccess = {
-  account: { id: 'u1', email: 'a@x.dev', name: 'Alice', since: null, plan: 'pro', admin: false },
+  account: { id: 'u1', email: 'a@x.dev', name: 'Alice', username: 'alice_1', since: null, plan: 'pro', admin: false },
   confined: true,
   studios: [
     { id: 'comic_studio', label: 'Comic Studio', tagline: 'Write, draw and publish comics with AI', status: 'locked', detail: 'Not part of your account yet', href: '/?view=dashboard', action: { label: 'Ask an admin for access', href: 'mailto:x' } },
@@ -13,7 +13,14 @@ const access: AccountAccess = {
   ],
 };
 
-vi.mock('@/services/studioAccessApi', () => ({ fetchAccountAccess: vi.fn(async () => access) }));
+const listeners = vi.hoisted(() => new Set<() => void>());
+vi.mock('@/services/studioAccessApi', () => ({
+  fetchAccountAccess: vi.fn(async () => access),
+  onAccountAccessChange: (fn: () => void) => {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+  },
+}));
 vi.mock('../account', () => ({ useAccount: () => ({ status: 'member', userId: 'u1' }) }));
 
 import { StudiosCard } from './StudiosCard';
@@ -28,5 +35,14 @@ describe('StudiosCard', () => {
     expect(screen.getByText('Locked')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Ask an admin for access' })).toBeTruthy();
     expect(screen.getByText('An admin set which studios this account can use.')).toBeTruthy();
+  });
+
+  it('re-reads after the account changes (e.g. a rename in Settings)', async () => {
+    render(<StudiosCard />);
+    await waitFor(() => expect(screen.getByText('Your studios')).toBeTruthy());
+    const before = vi.mocked(fetchAccountAccess).mock.calls.length;
+    act(() => listeners.forEach((l) => l()));
+    await waitFor(() => expect(vi.mocked(fetchAccountAccess).mock.calls.length).toBe(before + 1));
+    expect(screen.getByText('Your studios')).toBeTruthy();
   });
 });

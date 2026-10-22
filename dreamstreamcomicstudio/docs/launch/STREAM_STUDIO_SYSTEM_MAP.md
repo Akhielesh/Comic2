@@ -1,5 +1,10 @@
 # Stream Studio System Map
 
+> **Superseded 2026-10:** `comic2.pages.dev` now 301-redirects to `dreamstreamstudio.ai`
+> (path, query and `#` link kept; `functions/_middleware.ts`). The temporary Pages launch
+> path described below is history — see [`docs/infrastructure/INFRA_MAP.md`](../infrastructure/INFRA_MAP.md)
+> and [`docs/features/accounts-and-access.md`](../features/accounts-and-access.md) for the current setup.
+
 > Status: launch-readiness map for the June 25 Stream Studio MVP.
 > Last updated: 2026-06-18 from repo evidence and live smoke probes.
 

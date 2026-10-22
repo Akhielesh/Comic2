@@ -194,8 +194,16 @@ describe('email templates', () => {
     const out = renderEmail('welcome', { firstName: 'Akhielesh' });
     expect(out.html).toContain('Comic Studio');
     expect(out.html).toContain('AI Chat');
-    expect(out.html).toContain('Code Studio');
+    expect(out.html).toContain('Rich tools');
     expect(out.subject).toContain('Welcome');
+  });
+
+  it('welcome email no longer promises the retired Code Studio', () => {
+    const out = renderEmail('welcome', { firstName: 'Akhielesh' });
+    expect(out.html).not.toContain('Code Studio');
+    expect(out.text).not.toContain('Code Studio');
+    // "three superpowers" lists exactly three.
+    expect(out.text.split('\n').filter((l) => l.startsWith('• '))).toHaveLength(3);
   });
 
   it('announcement escapes the composed body (no raw HTML) and keeps paragraphs', () => {

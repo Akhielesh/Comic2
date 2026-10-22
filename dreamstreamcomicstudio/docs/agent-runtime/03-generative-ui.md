@@ -21,7 +21,7 @@ There are two ways to let an agent "build a component":
 Every safety-conscious vendor (tambo, CopilotKit, assistant-ui, Vercel AI SDK)
 converges on **(A) as the default**, **(B) as an escape hatch**. We already run both:
 (A) is the artifact system; (B) is `CodeBlock.tsx`'s `sandbox="allow-scripts"` iframe
-and the WebContainer path. **This slice deepens (A).** (Note: Sandpack is now legacy —
+(and was the WebContainer path, retired with Code Studio in 2026-10). **This slice deepens (A).** (Note: Sandpack is now legacy —
 CodeSandbox was acquired by Together AI, EOL ~July 2026 — so the long-term (B) hatch is
 WebContainer + raw sandboxed iframe, never `react-live` which evals in-origin.)
 

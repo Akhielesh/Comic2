@@ -41,7 +41,6 @@ import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
 import { FLIGHT_TOOLS } from './flights.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
-import { generateAppTool } from './codeStudio.js';
 import { generativeUiTool, renderReactTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
@@ -1219,7 +1218,6 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   create_monitor: monitorTool,
   create_widget_stack: stackTool,
   play_game: playGameTool,
-  generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
 

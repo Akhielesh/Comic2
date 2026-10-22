@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X, Radio, Search } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Menu, X, Radio, Search } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NavDropdown } from './NavDropdown';
@@ -11,7 +11,7 @@ import { openAtlasStudio } from '../../services/atlasStudio';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
-  /** Admins are never feature-gated — they get the real Code Studio entry, not "Soon". */
+  /** Admins are never confined to specific studios (product_access). */
   isAdmin?: boolean;
   currentView?: string;
   onGoHome: () => void;
@@ -19,7 +19,7 @@ interface StaticSiteHeaderProps {
   onEnterStudio: () => void;
   onSignIn: () => void;
   onRequestAccess?: () => void;
-  /** Jump to the "stay updated" capture (used by the Code "coming soon" product). */
+  /** Jump to the "stay updated" capture (used by the Live "coming soon" product). */
   onNotify?: () => void;
   onOpenProfile: () => void;
   onNavigate: (view: string, id?: string) => void;
@@ -52,8 +52,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   const showComic = !confined || allowedProducts!.has('comic_studio');
   const showChat = !confined || allowedProducts!.has('chat_studio');
   const showLive = !confined || allowedProducts!.has('stream_studio');
-  // Code Studio isn't one of the standalone products — confined accounts never get it.
-  const showCode = !confined;
   // Atlas Studio is a separate app with its own accounts; confined accounts stay focused.
   const showAtlas = !confined;
 
@@ -68,9 +66,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
       { label: 'Open Chat Studio', onClick: () => onNavigate('chat') },
       { label: 'Model Catalog', onClick: () => onNavigate('models') },
     ] }] : []),
-    ...(showCode ? [{ heading: 'Code', items: isAdmin
-      ? [{ label: 'Open Code Studio', onClick: () => onNavigate('codestudio') }]
-      : [{ label: 'Get notified', onClick: notify }] }] : []),
     { heading: 'Live', items: showLive
       ? [{ label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } }]
       : [{ label: 'Get notified', onClick: notify }] },
@@ -130,29 +125,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 ]}
               />
             )}
-            {/* Admins are never gated: they get the real Code Studio entry; everyone else
-                sees the "Coming soon" capture until Code launches publicly. */}
-            {showCode && (isAdmin ? (
-              <NavDropdown
-                label="Code"
-                icon={<Code2 size={14} />}
-                variant="blue"
-                items={[
-                  { label: 'Open Code Studio', description: 'Build & run apps live (agentic builder)', icon: <Code2 size={16} />, onClick: () => onNavigate('codestudio') },
-                ]}
-              />
-            ) : (
-              <NavDropdown
-                label="Code"
-                icon={<Code2 size={14} />}
-                variant="muted"
-                badge="Coming soon"
-                caption="🚧 In the workshop"
-                items={[
-                  { label: 'Get notified', description: 'Be first to know when Code launches', icon: <Mail size={16} />, onClick: notify },
-                ]}
-              />
-            ))}
             {showLive ? (
               <NavDropdown
                 label="Live"

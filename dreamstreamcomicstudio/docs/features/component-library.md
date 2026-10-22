@@ -142,7 +142,6 @@ From `ARTIFACT_RENDERERS` (`ChatArtifacts.tsx:42-69`). Density-aware =
 | `data_table` | `DataTableCard.tsx` | macOS list-view table: sortable, typed cells (currency/percent/sparkline/badge). | yes | no |
 | `market_heatmap` | `HeatmapCard.tsx` | Green→red tile grid, optional cap-weighted treemap sizing. | yes | no |
 | `finance_terminal` | `FinanceTerminal.tsx` | Flagship composite terminal: focus quote, indices, watchlist, heatmap, news rail. | yes | no |
-| `code_studio` | `CodeStudioCard.tsx` | Generated-app handoff card with one "Open in Code Studio" CTA. | no | yes |
 | `recipe_card` | `RecipeCard.tsx` | A reusable parameterized agent workflow (goose-style recipe) summary. | no | yes |
 | `recipe_run` | `RecipeRunCard.tsx` | Record of a recipe run: params, mode, outcome, structured JSON. | no | yes |
 | `research_report` | `ResearchReport.tsx` | Deep-research header: depth, sub-questions, sources gathered/read. | yes | yes |

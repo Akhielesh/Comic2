@@ -8,15 +8,24 @@
 > **iterate** on user feedback. Enterprise-grade, cost-optimized, mostly deterministic
 > (non-AI) under the hood.
 
+> **Update 2026-10-22 — the container sandbox is gone.** Code Studio was retired
+> ([ADR 0005](../decisions/0005-retire-code-studio.md)) and its `studio-worker/` Cloudflare
+> Container sandbox went with it. Code execution in chat today is **Pyodide in the backend**
+> (`run_python`, `server/src/services/pyodideRunner.ts`) plus sandboxed iframes for UI
+> (`render_react`, `CodeBlock.tsx`). Where these docs say "we already run a container sandbox"
+> or plan a `studio-worker` `exec` action, read it as history: a heavy tier (T3) would now be a
+> new Container (or a vendor such as E2B), costed and approved on its own.
+
 This folder is the design system of record. It is the synthesis of a multi-source,
 fact-checked research pass (June 2026) **plus** a deep review of this codebase, so the
 recommendations are grounded in what we already run.
 
 ## The headline findings (read these first)
 
-1. **We already own most of the substrate.** The repo has a Cloudflare
+1. **We already own most of the substrate.** The repo had a Cloudflare
    container sandbox (`studio-worker/` via `@cloudflare/sandbox`, HMAC-gated,
-   per-user-scoped) *and* a whitelisted generative-UI pipeline (the chat **artifact**
+   per-user-scoped; retired with Code Studio on 2026-10-22, see the note above) *and* a
+   whitelisted generative-UI pipeline (the chat **artifact**
    system: `{ type, data }` → `ARTIFACT_RENDERERS` → trusted React component, built on
    a dependency-free Primitive Kit). The work is **extension, not greenfield.**
 

@@ -7,6 +7,7 @@ import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
 import { ComparisonChart } from './artifacts/ComparisonChart';
 import { LiveComponentCard } from './artifacts/LiveComponentCard';
+import { LegacyCodeStudioCard } from './artifacts/LegacyCodeStudioCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
@@ -18,7 +19,6 @@ import { DirectionsCard } from './artifacts/DirectionsCard';
 import { DataTableCard } from './artifacts/DataTableCard';
 import { HeatmapCard } from './artifacts/HeatmapCard';
 import { FinanceTerminal } from './artifacts/FinanceTerminal';
-import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
@@ -80,11 +80,12 @@ import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact, DirectionsArtifact,
-  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
+  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
   GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact,
   EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact
 } from '../../apiTypes';
+import type { Balloon, ComicDoc, Page } from '../../shared/comic/doc';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
   title: 'SQL practice — filter & sort',
@@ -287,6 +288,16 @@ const comparison: StockComparisonArtifact = {
     { symbol: 'AAPL', name: 'Apple Inc.', currency: 'USD', last: cmpAapl[cmpAapl.length - 1], ranges: cmpRanges(cmpAapl) },
     { symbol: 'TSLA', name: 'Tesla Inc.', currency: 'USD', last: cmpTsla[cmpTsla.length - 1], ranges: cmpRanges(cmpTsla) },
     { symbol: 'GC=F', name: 'Gold', currency: 'USD', last: cmpGold[cmpGold.length - 1], ranges: cmpRanges(cmpGold) }
+  ]
+};
+
+const legacyCodeStudioDemo = {
+  title: 'Habit tracker',
+  description: 'A tiny streak tracker built in Code Studio.',
+  template: 'react-ts',
+  files: [
+    { path: '/App.tsx', content: "import { useState } from 'react';\n\nexport default function App() {\n  const [days, setDays] = useState(3);\n  return <button onClick={() => setDays(days + 1)}>🔥 {days}-day streak</button>;\n}\n" },
+    { path: '/index.css', content: 'button {\n  font: 600 18px system-ui;\n  padding: 12px 18px;\n  border-radius: 12px;\n}\n' }
   ]
 };
 
@@ -571,30 +582,6 @@ export type GalleryCategory =
   | 'Learning'
   | 'Games'
   | 'Agents & code';
-
-const codeStudioDemo: CodeStudioArtifact = {
-  title: 'Counter App',
-  description: 'A simple React counter with increment, decrement, and reset.',
-  template: 'react-ts',
-  files: [
-    {
-      path: '/App.tsx',
-      content: `import { useState } from 'react';
-export default function App() {
-  const [count, setCount] = useState(0);
-  return (
-    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '2rem' }}>
-      <h1>Counter: {count}</h1>
-      <button onClick={() => setCount(c => c - 1)}>−</button>
-      <button onClick={() => setCount(0)} style={{ margin: '0 0.5rem' }}>Reset</button>
-      <button onClick={() => setCount(c => c + 1)}>+</button>
-    </div>
-  );
-}`,
-      language: 'typescript'
-    }
-  ]
-};
 
 const recipeDemo: RecipeCardArtifact = {
   id: 'comic-concept-forge',
@@ -1371,6 +1358,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
   { title: 'Comparison chart (overlay 2–6 assets · % rebase ⇄ price · range tabs · legend toggle)', type: 'stock_comparison', category: 'Finance', node: <ComparisonChart data={comparison} /> },
   { title: 'Custom React component (agent-written TSX · sandboxed run · code view)', type: 'react_component', category: 'Agents & code', node: <LiveComponentCard data={reactComponentDemo} /> },
+  { title: 'Code Studio app (retired · read-only code + .zip)', type: 'code_studio', category: 'Agents & code', node: <LegacyCodeStudioCard data={legacyCodeStudioDemo} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Email terminal (inbox · search · reading pane · open/reply)', type: 'email_inbox', category: 'News & knowledge', node: <EmailTerminal data={emailInboxDemo} /> },
   { title: 'Unread email (unread-only inbox terminal)', type: 'email_unread', category: 'News & knowledge', node: <EmailTerminal data={emailUnreadDemo} /> },
@@ -1393,7 +1381,6 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Glass dashboard (drag-drop widgets · clock · countdown · globe · chart · checklist)', type: 'dashboard', category: 'Data & charts', node: <DashboardCard data={dashboardDemo} /> },
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', category: 'Finance', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', category: 'Finance', node: <FinanceTerminal data={terminal} /> },
-  { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', category: 'Agents & code', node: <CodeStudioCard data={codeStudioDemo} /> },
   { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', category: 'Agents & code', node: <RecipeCard data={recipeDemo} /> },
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', category: 'Agents & code', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', category: 'News & knowledge', node: <ResearchReport data={researchReportDemo} /> },
@@ -1439,6 +1426,199 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */
 export const GALLERY_DEMO_TYPES: string[] = GALLERY_DEMOS.filter((d) => d.type).map((d) => d.type as string);
+
+// ── Comic Studio (v4) showcase ───────────────────────────────────────────────
+// Not a chat artifact (so it is NOT in GALLERY_DEMOS / ARTIFACT_TYPES): the studio's own
+// page visuals, rendered by the real board components against a static sample doc. The
+// whole showcase is one lazy chunk behind an error boundary, so a missing or broken
+// studio chunk degrades to a one-line notice instead of taking the gallery down.
+
+/** Panel rectangles of the sample page art (page-normalized; 800×1200 SVG below). */
+const SAMPLE_PANEL_BOXES = [
+  { x: 30 / 800, y: 30 / 1200, w: 740 / 800, h: 400 / 1200 },
+  { x: 30 / 800, y: 460 / 1200, w: 355 / 800, h: 400 / 1200 },
+  { x: 415 / 800, y: 460 / 1200, w: 355 / 800, h: 400 / 1200 },
+  { x: 30 / 800, y: 890 / 1200, w: 740 / 800, h: 280 / 1200 }
+];
+
+/** A finished-looking page (clean art, no text) drawn as inline SVG — no network, no storage. */
+const SAMPLE_PAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" width="800" height="1200">
+<defs>
+<linearGradient id="dusk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b2a6b"/><stop offset=".55" stop-color="#d9636b"/><stop offset="1" stop-color="#f6b26b"/></linearGradient>
+<linearGradient id="night" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#101a3a"/><stop offset="1" stop-color="#2d3f74"/></linearGradient>
+<radialGradient id="glow" cx=".5" cy=".45" r=".6"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#7b3f5e"/></radialGradient>
+<radialGradient id="cool" cx=".5" cy=".45" r=".6"><stop offset="0" stop-color="#9fd3e8"/><stop offset="1" stop-color="#29406b"/></radialGradient>
+</defs>
+<rect width="800" height="1200" fill="#fff"/>
+<rect x="30" y="30" width="740" height="400" fill="url(#dusk)"/>
+<rect x="30" y="460" width="355" height="400" fill="url(#glow)"/>
+<rect x="415" y="460" width="355" height="400" fill="url(#cool)"/>
+<rect x="30" y="890" width="740" height="280" fill="url(#night)"/>
+<circle cx="610" cy="150" r="46" fill="#ffe7b0" opacity=".9"/>
+<path d="M30 430V300h73v-40h60v70h50V230h80v90h40v-60h70v120h60V280h90v50h50v-80h70v120h97v60z" fill="#1d1630"/>
+<g fill="#ffd27a" opacity=".85"><rect x="120" y="290" width="10" height="14"/><rect x="250" y="260" width="10" height="14"/><rect x="270" y="300" width="10" height="14"/><rect x="520" y="300" width="10" height="14"/><rect x="640" y="320" width="10" height="14"/></g>
+<path d="M120 860c10-100 60-150 92-160 32 10 82 60 92 160z" fill="#2a1a2e"/>
+<circle cx="212" cy="640" r="58" fill="#2a1a2e"/>
+<path d="M152 688c38 22 82 22 120 0l8 26c-46 26-92 26-136 0z" fill="#d9363e"/>
+<path d="M505 860c8-95 50-145 88-155 38 10 80 60 88 155z" fill="#132238"/>
+<circle cx="593" cy="640" r="56" fill="#132238"/>
+<path d="M531 628h124v16h-124z" fill="#0b1626"/><circle cx="535" cy="640" r="14" fill="#0b1626"/><circle cx="651" cy="640" r="14" fill="#0b1626"/>
+<circle cx="640" cy="960" r="30" fill="#f4f1de"/>
+<path d="M30 1170v-70h740v70z" fill="#0b1026"/>
+<path d="M300 1100c4-60 22-92 40-96 18 4 36 36 40 96z" fill="#0b1026"/><circle cx="340" cy="990" r="22" fill="#0b1026"/>
+<path d="M420 1100c4-64 24-98 44-102 20 4 40 38 44 102z" fill="#0b1026"/><circle cx="464" cy="982" r="24" fill="#0b1026"/>
+<path d="M300 1018l-12 10M300 1040h-16M592 1010c40-20 80-20 120 0M592 1040c40-20 80-20 120 0" stroke="#f4f1de" stroke-width="4" fill="none" opacity=".6"/>
+<g fill="none" stroke="#111" stroke-width="6" stroke-linejoin="round">
+<rect x="30" y="30" width="740" height="400"/><rect x="30" y="460" width="355" height="400"/><rect x="415" y="460" width="355" height="400"/><rect x="30" y="890" width="740" height="280"/>
+</g>
+</svg>`;
+
+const SAMPLE_PAGE_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(SAMPLE_PAGE_SVG)}`;
+
+const SAMPLE_BALLOONS: Balloon[] = [
+  { lineId: 'gl_l1', x: 0.06, y: 0.045, w: 0.42 },
+  { lineId: 'gl_l2', x: 0.06, y: 0.395, w: 0.34, tailX: 0.255, tailY: 0.478 },
+  { lineId: 'gl_l3', x: 0.585, y: 0.398, w: 0.28, tailX: 0.72, tailY: 0.478 },
+  { lineId: 'gl_l4', x: 0.07, y: 0.755, w: 0.27, tailX: 0.42, tailY: 0.81 },
+  { lineId: 'gl_l5', x: 0.66, y: 0.865, w: 0.26 }
+];
+
+/** Static sample doc: a drawn page (overlay lettering) and the same page as a plan. */
+export const buildComicStudioGallerySample = (createEmptyDoc: (id: string, title?: string, now?: number) => ComicDoc) => {
+  const at = Date.UTC(2026, 9, 1);
+  const base = createEmptyDoc('gallery_sample', 'The Signal', at);
+  const panels: Page['panels'] = [
+    {
+      id: 'gl_p1', n: 1, size: 'wide', shot: 'establishing', castIds: [], mood: 'hushed',
+      action: 'The city skyline at dusk, every window going dark one block at a time.',
+      lines: [{ id: 'gl_l1', kind: 'caption', text: 'Neo-Mumbai. The night the lights went out.' }]
+    },
+    {
+      id: 'gl_p2', n: 2, size: 'medium', shot: 'close_up', castIds: ['gl_maya'],
+      action: 'Maya on the rooftop, red scarf whipping in the wind, squinting into the dark.',
+      lines: [{ id: 'gl_l2', kind: 'speech', speakerId: 'gl_maya', text: 'You said the signal came from up here.' }]
+    },
+    {
+      id: 'gl_p3', n: 3, size: 'medium', shot: 'close_up', castIds: ['gl_arjun'],
+      action: 'Arjun adjusts his headset, eyes closed, listening.',
+      lines: [{ id: 'gl_l3', kind: 'speech', speakerId: 'gl_arjun', text: 'It did. Listen.' }]
+    },
+    {
+      id: 'gl_p4', n: 4, size: 'wide', shot: 'wide', castIds: ['gl_maya', 'gl_arjun'],
+      action: 'Both stand silhouetted under the moon as a hum rolls over the dark city.',
+      lines: [
+        { id: 'gl_l4', kind: 'whisper', speakerId: 'gl_maya', text: "…It's singing." },
+        { id: 'gl_l5', kind: 'sfx', text: 'HMMMMM' }
+      ]
+    }
+  ];
+  const layout = 'Row 1: one wide establishing panel. Row 2: two equal close-ups side by side. Row 3: one wide panel.';
+  const doc: ComicDoc = {
+    ...base,
+    brief: { ...base.brief, logline: 'Two friends chase a mysterious signal across a blacked-out city.', genre: 'sci-fi mystery' },
+    cast: [
+      { id: 'gl_maya', name: 'Maya', tier: 'lead', look: { summary: 'Wiry teen in a red scarf and patched bomber jacket' }, refs: [], sheet: { status: 'none', history: [] } },
+      { id: 'gl_arjun', name: 'Arjun', tier: 'support', look: { summary: 'Tall, calm, oversized headphones, cropped beard' }, refs: [], sheet: { status: 'none', history: [] } }
+    ]
+  };
+  const drawnPage: Page = {
+    id: 'gl_page1', n: 1, summary: 'The blackout and the signal on the roof.', layout, panels,
+    render: {
+      status: 'ready',
+      asset: { path: 'gallery/sample-page.svg', w: 800, h: 1200, source: 'generated', at },
+      history: [],
+      updatedAt: at,
+      qc: { score: 0.94, issues: [], panelBoxes: SAMPLE_PANEL_BOXES, checkedAt: at }
+    },
+    balloons: SAMPLE_BALLOONS
+  };
+  const plannedPage: Page = { ...drawnPage, id: 'gl_page2', n: 2, render: { status: 'none', history: [] }, balloons: [] };
+  return { doc: { ...doc, pages: [drawnPage, plannedPage], planStatus: 'approved' as const }, drawnPage, plannedPage };
+};
+
+const ComicStudioShowcase = React.lazy(async () => {
+  const [{ ComicPageView }, { createEmptyDoc }] = await Promise.all([
+    import('../comicstudio/board/ComicPageView'),
+    import('../../shared/comic/doc')
+  ]);
+  const sample = buildComicStudioGallerySample(createEmptyDoc);
+
+  const Showcase: React.FC = () => {
+    // Balloon edits stay local to the demo — drag one to see the page editor's lettering.
+    const [balloons, setBalloons] = React.useState<Balloon[]>(sample.drawnPage.balloons);
+    const page: Page = { ...sample.drawnPage, balloons };
+    const doc: ComicDoc = { ...sample.doc, pages: [page, sample.plannedPage] };
+    const onBalloonChange = (lineId: string, patch: Partial<Balloon>) =>
+      setBalloons((prev) => prev.map((b) => (b.lineId === lineId ? { ...b, ...patch } : b)));
+    const moved = balloons !== sample.drawnPage.balloons;
+    return (
+      <div className="grid gap-4 sm:grid-cols-2">
+        <figure className="space-y-1.5">
+          <figcaption className="flex items-center justify-between gap-2 text-[11px] font-medium text-[var(--ds-muted)]">
+            <span>Drawn page · overlay balloons (drag one, aim its tail)</span>
+            {moved && (
+              <button
+                type="button"
+                onClick={() => setBalloons(sample.drawnPage.balloons)}
+                className="rounded-md px-1.5 py-0.5 text-[11px] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+              >
+                Reset
+              </button>
+            )}
+          </figcaption>
+          <ComicPageView
+            doc={doc}
+            page={page}
+            imageUrl={SAMPLE_PAGE_URL}
+            editable
+            develop={false}
+            loading="eager"
+            onBalloonChange={onBalloonChange}
+            className="rounded-xl border border-[var(--ds-hairline)] shadow-sm"
+          />
+        </figure>
+        <figure className="space-y-1.5">
+          <figcaption className="text-[11px] font-medium text-[var(--ds-muted)]">Planned page · the sketch you approve before any spend</figcaption>
+          <ComicPageView doc={doc} page={sample.plannedPage} className="rounded-xl border border-[var(--ds-hairline)] shadow-sm" />
+        </figure>
+      </div>
+    );
+  };
+  return { default: Showcase };
+});
+
+class ShowcaseBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: unknown) {
+    console.warn('[gallery] Comic Studio showcase failed to render', error);
+  }
+  render() {
+    if (this.state.failed) {
+      return <p className="text-[12px] text-[var(--ds-muted)]">The Comic Studio showcase couldn’t load right now.</p>;
+    }
+    return this.props.children;
+  }
+}
+
+/** Settings → Gallery section for the v4 Comic Studio's page visuals. */
+export const ComicStudioGallerySection: React.FC = () => (
+  <section aria-label="Comic Studio">
+    <h3 className="mb-2 border-b border-[var(--ds-hairline-soft)] pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+      Comic Studio
+    </h3>
+    <p className="mb-3 text-[12px] text-[var(--ds-muted)]">
+      One image per page, lettered with editable vector balloons — and the plan sketch shown before anything is drawn.
+    </p>
+    <ShowcaseBoundary>
+      <React.Suspense fallback={<div className="studio-shimmer h-64 rounded-xl" role="status" aria-label="Loading the Comic Studio showcase" />}>
+        <ComicStudioShowcase />
+      </React.Suspense>
+    </ShowcaseBoundary>
+  </section>
+);
 
 const CATEGORY_ORDER: GalleryCategory[] = [
   'Data & charts',
@@ -1512,6 +1692,7 @@ export const ComponentGallery: React.FC = () => {
           </section>
         );
       })}
+      <ComicStudioGallerySection />
     </div>
   );
 };

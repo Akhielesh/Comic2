@@ -28,7 +28,6 @@
   },
   "exclude": [
     "server",
-    "studio-worker",
     "live-worker",
     // Workers-runtime modules (DurableObject/Container base classes); typechecked by
     // api-proxy/tsconfig.json with @cloudflare/workers-types in deploy-api-proxy.yml.
