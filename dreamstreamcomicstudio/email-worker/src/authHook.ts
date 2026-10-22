@@ -209,11 +209,22 @@ export const isLiveRedirect = (redirectTo: string | undefined): boolean => {
   }
 };
 
+/** The Stream Studio sub-brand: product name + the live app as the brand's home link. */
+export const streamStudioBrand = (appUrl?: string): Partial<BrandConfig> => ({
+  productName: STREAM_STUDIO_NAME,
+  appUrl: `${(appUrl || DEFAULT_BRAND.appUrl).replace(/\/+$/, '')}/live`
+});
+
 /** Brand overrides for this send: Stream Studio for live-app flows, the env brand otherwise. */
 export const brandForRedirect = (redirectTo: string | undefined, appUrl?: string): Partial<BrandConfig> =>
-  isLiveRedirect(redirectTo)
-    ? { productName: STREAM_STUDIO_NAME, appUrl: `${(appUrl || DEFAULT_BRAND.appUrl).replace(/\/+$/, '')}/live` }
-    : {};
+  isLiveRedirect(redirectTo) ? streamStudioBrand(appUrl) : {};
+
+/**
+ * Brand a backend `/send` may ask for by name (`body.brand`). Only 'stream-studio' exists —
+ * the backend's own auth emails for the live app; anything else keeps the env brand.
+ */
+export const brandForSend = (brand: unknown, appUrl?: string): Partial<BrandConfig> =>
+  brand === 'stream-studio' ? streamStudioBrand(appUrl) : {};
 
 /**
  * `{base}/auth/v1/verify?token=<token_hash>&type=<type>&redirect_to=<redirect>` — the link

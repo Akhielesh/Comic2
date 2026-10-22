@@ -5,7 +5,9 @@
 // so the sender can never be abused from the open internet:
 //
 //   POST /send       — HMAC-signed (x-email-signature) calls from the backend.
-//                      Body: { template, to, params?, subject?, replyTo? }.
+//                      Body: { template, to, params?, subject?, replyTo?, brand? }.
+//                      brand: 'stream-studio' renders + signs as Stream Studio (the backend's
+//                      live-app auth emails); any other value is ignored.
 //   POST /auth-hook   — Supabase "Send Email Hook" (Standard Webhooks signature). Turns every
 //                      GoTrue email (signup, magic link/OTP, recovery, invite, email change,
 //                      reauthentication, security notifications) into branded mail. The
@@ -25,7 +27,15 @@ import {
   type EmailTemplateName,
   type RenderedEmail
 } from '../../shared/email';
-import { maskEmail, planAuthEmails, timingSafeEqual, verifyStandardWebhook, webhookHeaders, type AuthHookPayload } from './authHook';
+import {
+  brandForSend,
+  maskEmail,
+  planAuthEmails,
+  timingSafeEqual,
+  verifyStandardWebhook,
+  webhookHeaders,
+  type AuthHookPayload
+} from './authHook';
 
 interface EmailAddress {
   email: string;
@@ -208,7 +218,7 @@ async function handleSend(req: Request, env: Env): Promise<Response> {
     return json({ error: 'invalid signature' }, 401);
   }
 
-  let parsed: { template?: string; to?: string; params?: EmailParams; subject?: string; replyTo?: string };
+  let parsed: { template?: string; to?: string; params?: EmailParams; subject?: string; replyTo?: string; brand?: unknown };
   try {
     parsed = JSON.parse(body);
   } catch {
@@ -221,14 +231,16 @@ async function handleSend(req: Request, env: Env): Promise<Response> {
 
   try {
     const params = parsed.params ?? {};
-    const rendered = renderEmail(parsed.template, params, brandFromEnv(env));
+    // Same merge as /auth-hook: a sub-brand overrides the env brand (name, home link, From name).
+    const override = brandForSend(parsed.brand, env.APP_URL);
+    const rendered = renderEmail(parsed.template, params, { ...brandFromEnv(env), ...override });
     if (parsed.subject) rendered.subject = parsed.subject;
     // Only marketing mail gets a one-click unsubscribe header.
     const unsubscribeUrl = isMarketing(parsed.template) ? params.unsubscribeUrl : undefined;
     const messageId = await dispatch(env, parsed.to, rendered, {
       replyTo: parsed.replyTo,
       unsubscribeUrl,
-      from: senderFrom(env, parsed.template)
+      from: senderFrom(env, parsed.template, override.productName)
     });
     return json({ ok: true, messageId });
   } catch (err) {

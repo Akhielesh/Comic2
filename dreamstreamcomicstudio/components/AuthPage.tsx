@@ -4,6 +4,7 @@ import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare, Lock } from 'lucide-reac
 import { WaitlistForm } from './WaitlistForm';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
+import { requestAuthEmail } from '../services/authEmail';
 
 // New registrations are invite-only for now: existing accounts can still sign in,
 // while everyone else can leave their email to request access. Flip this to true
@@ -84,21 +85,37 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         setError(null);
         setMessage(null);
         setIsLoading(true);
+        const usedCaptcha = Boolean(captchaToken);
         try {
-            const { error: resendError } = await supabase.auth.resend({
-                type: 'signup',
+            // Our backend sends it (Supabase's own mailer allows ~2 emails/hour project-wide);
+            // the direct Supabase call is only the fallback when the backend can't be reached.
+            const viaApi = await requestAuthEmail('resend', {
                 email: normalizedEmail,
-                options: {
-                    emailRedirectTo: authRedirectUrl
-                }
+                app: 'main',
+                captchaToken: captchaToken || undefined
             });
-            if (resendError) throw resendError;
+            if (viaApi.status === 'error') throw new Error(viaApi.message);
+            if (viaApi.status === 'unreachable') {
+                const { error: resendError } = await supabase.auth.resend({
+                    type: 'signup',
+                    email: normalizedEmail,
+                    options: {
+                        emailRedirectTo: authRedirectUrl
+                    }
+                });
+                if (resendError) throw resendError;
+            }
             setPendingVerificationEmail(normalizedEmail);
             setMessage('Verification email sent. Check inbox and spam.');
         } catch (err: any) {
             setError(err?.message || 'Failed to resend verification email.');
         } finally {
             setIsLoading(false);
+            // A Turnstile token is single-use — if this request spent it, get a fresh one.
+            if (usedCaptcha && turnstileEnabled()) {
+                setCaptchaToken('');
+                resetTurnstile();
+            }
         }
     };
 
@@ -165,33 +182,58 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 }
 
                 // Sign up with metadata. Profile rows are created by Supabase DB trigger.
-                const { data, error: signUpError } = await supabase.auth.signUp({
+                const signupData = {
+                    username: normalizedUsername,
+                    first_name: normalizedFirstName,
+                    last_name: normalizedLastName || null,
+                    phone_number: normalizedPhoneNumber || null,
+                    dob: normalizedDob,
+                    terms_accepted: termsAccepted,
+                    marketing_consent: marketingConsent,
+                    email_pref_product_updates: true,
+                    email_pref_marketing: marketingConsent
+                };
+                // Our backend creates the account and sends the confirmation (Supabase's own
+                // mailer allows ~2 emails/hour project-wide). Direct signUp only if it's unreachable.
+                const viaApi = await requestAuthEmail('signup', {
+                    app: 'main',
                     email: normalizedEmail,
                     password,
-                    options: {
-                        emailRedirectTo: authRedirectUrl,
-                        captchaToken: captchaToken || undefined,
-                        data: {
-                            username: normalizedUsername,
-                            first_name: normalizedFirstName,
-                            last_name: normalizedLastName || null,
-                            phone_number: normalizedPhoneNumber || null,
-                            dob: normalizedDob,
-                            terms_accepted: termsAccepted,
-                            marketing_consent: marketingConsent,
-                            email_pref_product_updates: true,
-                            email_pref_marketing: marketingConsent
-                        }
-                    }
+                    captchaToken: captchaToken || undefined,
+                    data: signupData
                 });
-                if (signUpError) {
-                    const duplicateMessage = getDuplicateSignupError(signUpError);
-                    if (duplicateMessage) throw new Error(duplicateMessage);
-                    throw signUpError;
+                if (viaApi.status === 'error') {
+                    if (viaApi.code === 'email_exists') {
+                        throw new Error("An account with this email already exists. Please sign in or reset your password.");
+                    }
+                    if (viaApi.code === 'send_failed') {
+                        // The account exists; only the email didn't go out — offer the resend button.
+                        setMode('signin');
+                        setPassword('');
+                        setConfirmPassword('');
+                        setPendingVerificationEmail(normalizedEmail);
+                    }
+                    throw new Error(viaApi.message);
                 }
-                if (!data.user) throw new Error("Signup failed.");
-                if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-                    throw new Error("An account with this email already exists. Please sign in or reset your password.");
+                if (viaApi.status === 'unreachable') {
+                    const { data, error: signUpError } = await supabase.auth.signUp({
+                        email: normalizedEmail,
+                        password,
+                        options: {
+                            emailRedirectTo: authRedirectUrl,
+                            captchaToken: captchaToken || undefined,
+                            data: signupData
+                        }
+                    });
+                    if (signUpError) {
+                        const duplicateMessage = getDuplicateSignupError(signUpError);
+                        if (duplicateMessage) throw new Error(duplicateMessage);
+                        throw signUpError;
+                    }
+                    if (!data.user) throw new Error("Signup failed.");
+                    if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+                        throw new Error("An account with this email already exists. Please sign in or reset your password.");
+                    }
                 }
 
                 setMessage("Account created! Please check your email to confirm.");
@@ -255,14 +297,22 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 }
                 setAuthPersistMode(rememberMe ? 'local' : 'session');
 
-                const { error } = await supabase.auth.signInWithOtp({
+                const viaApi = await requestAuthEmail('magiclink', {
                     email: normalizedEmail,
-                    options: {
-                        emailRedirectTo: authRedirectUrl,
-                        captchaToken: captchaToken || undefined
-                    }
+                    app: 'main',
+                    captchaToken: captchaToken || undefined
                 });
-                if (error) throw error;
+                if (viaApi.status === 'error') throw new Error(viaApi.message);
+                if (viaApi.status === 'unreachable') {
+                    const { error } = await supabase.auth.signInWithOtp({
+                        email: normalizedEmail,
+                        options: {
+                            emailRedirectTo: authRedirectUrl,
+                            captchaToken: captchaToken || undefined
+                        }
+                    });
+                    if (error) throw error;
+                }
 
                 setMessage("Magic link sent! Check your email to continue.");
                 setMode('signin');
@@ -272,11 +322,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     throw new Error("Enter a valid email for password reset.");
                 }
                 // Forgot Password
-                const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-                    redirectTo: authRedirectUrl,
+                const viaApi = await requestAuthEmail('recovery', {
+                    email: normalizedEmail,
+                    app: 'main',
                     captchaToken: captchaToken || undefined
                 });
-                if (error) throw error;
+                if (viaApi.status === 'error') throw new Error(viaApi.message);
+                if (viaApi.status === 'unreachable') {
+                    const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+                        redirectTo: authRedirectUrl,
+                        captchaToken: captchaToken || undefined
+                    });
+                    if (error) throw error;
+                }
                 setMessage("Password reset link sent! Check your email.");
                 setMode('signin');
             }

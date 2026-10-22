@@ -22,6 +22,16 @@ Use this checklist to make signup verification and account policies work in prod
 
 ## Auth email delivery (Cloudflare — no third-party ESP)
 
+> **Since 2026-10-22 the backend sends sign-up confirmation, resend, password reset and magic
+> link itself** (`POST /api/auth/email/*`: service-role `auth.admin.generateLink` + our
+> templates through the email Worker). Supabase's built-in mailer allows ~2 emails/hour for the
+> whole project, and its limit applies before the Send Email Hook, so the hook alone could not
+> fix failed sign-ups. Supabase now only sends email change, reauthentication, security
+> notices, and the client's fallback mail when the backend is unreachable, which makes items
+> 6–8 below optional. The backend throttles per IP and per recipient; links point only at
+> `APP_PUBLIC_URL` or the exact origins in `AUTH_LINK_ORIGINS`. Details:
+> [`docs/email/SETUP.md`](../email/SETUP.md#auth-emails-go-through-the-backend-default-since-2026-10-22).
+
 All auth email goes out through **Cloudflare Email Sending** on the verified domain
 `dreamstreamstudio.ai`; there is no Resend/Postmark/SES account. Full steps, commands and the
 per-action mapping: [`docs/email/SETUP.md` §5–6](../email/SETUP.md#5-route-supabase-auth-emails-through-the-worker-send-email-hook).
@@ -60,6 +70,9 @@ Run these scripts in order from the SQL editor:
 1. Create a new account with an age under 8 -> should fail.
 2. Create a valid account and verify email delivery.
 3. Attempt sign-in before email verification -> should be blocked.
-4. Test resend verification from the login screen.
+4. Test resend verification from the login screen (a second resend within a minute must say
+   "Please wait N seconds…").
 5. Attempt duplicate username signup -> should fail.
 6. Attempt duplicate email signup -> should fail.
+7. Request a password reset and a magic link for an address with **no** account -> the UI
+   shows the same success message as for a real account, and no account is created.

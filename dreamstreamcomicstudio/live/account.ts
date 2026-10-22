@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { requestAuthEmail } from '@/services/authEmail';
 import { claimDevice } from './accountPurge';
 
 export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'member' | 'offline';
@@ -226,23 +227,51 @@ export function confirmRedirectUrl(): string {
 export type AuthReturn = { confirmed: true } | { error: 'expired' | 'failed'; message?: string };
 
 /**
- * Back from an email link: let supabase-js adopt the session from the URL,
- * explain a dead link, and land on the screen the user started from.
+ * Back from an email link: verify it (or let supabase-js adopt the session from
+ * the URL), explain a dead link, and land on the screen the user started from.
+ * Two link shapes:
+ *   ?after=…&token_hash=…&type=signup — sent by our backend; verified here.
+ *   #access_token=…                    — older links (Supabase / the auth hook).
  * Returns null on an ordinary page load.
  */
 export async function consumeAuthReturn(): Promise<AuthReturn | null> {
   const url = new URL(location.href);
   const after = url.searchParams.get('after');
+  const tokenHash = url.searchParams.get('token_hash');
   const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
   const hasTokens = hash.has('access_token');
   const errorCode = hash.get('error_code') || hash.get('error');
-  if (!after && !hasTokens && !errorCode) return null;
+  if (!after && !tokenHash && !hasTokens && !errorCode) return null;
 
   let result: AuthReturn | null = null;
   if (errorCode) {
     result = /expired|access_denied/i.test(errorCode)
       ? { error: 'expired' }
       : { error: 'failed', message: hash.get('error_description') || undefined };
+  } else if (tokenHash) {
+    const sb = await supa();
+    // Our links say type=signup; accept the other one-time-link types verifyOtp knows.
+    const rawType = url.searchParams.get('type') || 'signup';
+    type LinkType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email';
+    const type: LinkType = ['signup', 'invite', 'magiclink', 'recovery', 'email'].includes(rawType) ? (rawType as LinkType) : 'signup';
+    let failure: { message?: string; code?: string; status?: number } | null = null;
+    if (!sb) failure = { message: '' };
+    else {
+      try {
+        failure = (await sb.auth.verifyOtp({ token_hash: tokenHash, type })).error;
+      } catch (e) {
+        failure = { message: (e as Error)?.message };
+      }
+    }
+    // On success verifyOtp stores the session and fires SIGNED_IN, which refreshes the account.
+    if (!failure) {
+      result = { confirmed: true };
+    } else if (failure.code === 'otp_expired' || failure.status === 403 || /expired|invalid/i.test(failure.message || '')) {
+      // Already used (opening it twice) or too old.
+      result = { error: 'expired' };
+    } else {
+      result = { error: 'failed', message: failure.message || undefined };
+    }
   } else if (hasTokens) {
     const sb = await supa();
     // getSession() waits for the client to finish reading the tokens from the URL.
@@ -250,6 +279,10 @@ export async function consumeAuthReturn(): Promise<AuthReturn | null> {
     result = session ? { confirmed: true } : { error: 'failed' };
   }
   url.searchParams.delete('after');
+  if (tokenHash) {
+    url.searchParams.delete('token_hash');
+    url.searchParams.delete('type');
+  }
   const screen = after && RETURN_SCREENS.has(after) ? `#/${after}` : '';
   history.replaceState(null, '', `${url.pathname}${url.search}${screen}`);
   return result;
@@ -272,13 +305,28 @@ export async function signIn(email: string, password: string): Promise<{ ok: boo
   return { ok: true };
 }
 
-/** Send the sign-up confirmation email again (Supabase allows one a minute). */
+/**
+ * Send the sign-up confirmation email again — through our backend (one a
+ * minute per address), or Supabase directly when the backend can't be reached.
+ */
 export async function resendConfirmation(email: string): Promise<{ ok: boolean; error?: string }> {
+  const address = email.trim().toLowerCase();
+  const after = new URL(confirmRedirectUrl()).searchParams.get('after') || undefined;
+  const viaApi = await requestAuthEmail('resend', { email: address, app: 'live', after });
+  if (viaApi.status === 'ok') return { ok: true };
+  if (viaApi.status === 'error') {
+    // too_many (hourly/daily cap) explains itself; anything else at 429 is the one-a-minute rule.
+    if (viaApi.httpStatus === 429 && viaApi.code !== 'too_many') {
+      return { ok: false, error: 'Just sent one — wait a minute before asking again.' };
+    }
+    return { ok: false, error: viaApi.message };
+  }
+
   const sb = await supa();
   if (!sb) return { ok: false, error: 'Unavailable right now.' };
   const { error } = await sb.auth.resend({
     type: 'signup',
-    email: email.trim().toLowerCase(),
+    email: address,
     options: { emailRedirectTo: confirmRedirectUrl() },
   });
   if (!error) return { ok: true };
@@ -288,10 +336,16 @@ export async function resendConfirmation(email: string): Promise<{ ok: boolean; 
   return { ok: false, error: error.message };
 }
 
+/** The link lands on the main app's /auth/callback — that's where the new-password screen lives. */
 export async function sendPasswordReset(email: string): Promise<{ ok: boolean; error?: string }> {
+  const address = email.trim().toLowerCase();
+  const viaApi = await requestAuthEmail('recovery', { email: address, app: 'main' });
+  if (viaApi.status === 'ok') return { ok: true };
+  if (viaApi.status === 'error') return { ok: false, error: viaApi.message };
+
   const sb = await supa();
   if (!sb) return { ok: false, error: 'Unavailable right now.' };
-  const { error } = await sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+  const { error } = await sb.auth.resetPasswordForEmail(address, {
     redirectTo: `${location.origin}/auth/callback`,
   });
   return error ? { ok: false, error: error.message } : { ok: true };
@@ -316,7 +370,9 @@ export interface CreateInput {
   code: string;
 }
 
-export async function createAccount(input: CreateInput): Promise<{ ok: boolean; error?: string; confirmEmail?: boolean }> {
+export async function createAccount(
+  input: CreateInput
+): Promise<{ ok: boolean; error?: string; confirmEmail?: boolean; note?: string }> {
   const name = input.name.trim().replace(/\s+/g, ' ').slice(0, 40);
   if (!name) return { ok: false, error: 'Add your name — it’s how family and viewers will find you.' };
   if (input.password.length < 8) return { ok: false, error: 'Use a password with at least 8 characters.' };
@@ -330,26 +386,54 @@ export async function createAccount(input: CreateInput): Promise<{ ok: boolean; 
   const sb = await supa();
   if (!sb) return { ok: false, error: 'Sign-up is unavailable right now.' };
   const [first, ...rest] = name.split(' ');
+  const email = input.email.trim().toLowerCase();
+  const after = new URL(confirmRedirectUrl()).searchParams.get('after') || undefined;
+  // Our backend creates the account and mails the confirmation (Supabase's own mailer
+  // allows ~2 emails/hour for the whole project); the welcome ticket stands in for a
+  // captcha there. Direct signUp only once the backend proves unreachable.
+  let direct = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     const username = `${USERNAME_SAFE(first)}_${Math.floor(1000 + Math.random() * 9000)}`;
+    const metadata = {
+      username,
+      first_name: first,
+      last_name: rest.join(' ') || null,
+      dob: input.dob,
+      display_name: name,
+      terms_accepted: true,
+      marketing_consent: false,
+      email_pref_product_updates: true,
+      email_pref_marketing: false,
+      live_ticket: checked.ticket,
+      signup_source: 'stream_studio',
+    };
+    if (!direct) {
+      const viaApi = await requestAuthEmail('signup', { app: 'live', after, email, password: input.password, data: metadata });
+      if (viaApi.status === 'ok') return { ok: true, confirmEmail: true };
+      if (viaApi.status === 'error') {
+        // Profile trigger collision (username taken) — retry with a new suffix.
+        if (viaApi.code === 'database_error') {
+          if (attempt < 2) continue;
+          return { ok: false, error: 'Could not create the account — try again.' };
+        }
+        if (viaApi.code === 'email_exists') return { ok: false, error: 'An account with this email already exists — sign in instead.' };
+        if (viaApi.code === 'send_failed') {
+          // The account exists; only the email failed — the "check your email" screen offers a resend.
+          return { ok: true, confirmEmail: true, note: 'Your account is ready, but the email didn’t go out — tap “Resend email”.' };
+        }
+        if (viaApi.code === 'captcha_required') {
+          return { ok: false, error: 'We couldn’t verify your welcome code — check it and try again.' };
+        }
+        return { ok: false, error: viaApi.message };
+      }
+      direct = true;
+    }
     const { data, error } = await sb.auth.signUp({
-      email: input.email.trim().toLowerCase(),
+      email,
       password: input.password,
       options: {
         emailRedirectTo: confirmRedirectUrl(),
-        data: {
-          username,
-          first_name: first,
-          last_name: rest.join(' ') || null,
-          dob: input.dob,
-          display_name: name,
-          terms_accepted: true,
-          marketing_consent: false,
-          email_pref_product_updates: true,
-          email_pref_marketing: false,
-          live_ticket: checked.ticket,
-          signup_source: 'stream_studio',
-        },
+        data: metadata,
       },
     });
     if (error) {

@@ -112,6 +112,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 |---|---|---|---|---|
 | `STUDIO_WORKER_URL` / `STUDIO_HMAC_SECRET` | backend → studio-worker | ⭕ 🔐 | 💸 (Containers) | **missing from .env.example** |
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
+| `AUTH_LINK_ORIGINS` | `services/authEmailLinks.ts` (backend auth emails) | ⭕ | — | Comma-separated **exact** origins auth-email links may point at besides `APP_PUBLIC_URL` (e.g. `http://localhost:3000,http://localhost:7000` for local dev). Default empty. Never wildcards — see `docs/email/SETUP.md` |
 | `VITE_LIVE_WORKER_URL` / `VITE_STUDIO_LIVE_ENABLED` / `VITE_LEGACY_STUDIO_ENABLED` | frontend feature flags | ⭕ | — | |
 | `VENTURES_ENABLED` / `VENTURES_KILL` / `VENTURES_*` | autopilot | ⭕ | 💸 (Redis) | OFF by default; **missing from .env.example** |
 

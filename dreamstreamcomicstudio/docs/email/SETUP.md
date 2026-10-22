@@ -1,5 +1,102 @@
 # Email — setup & owner actions
 
+## Auth emails go through the backend (default since 2026-10-22)
+
+**Why.** Supabase Auth's built-in mailer (`noreply@mail.app.supabase.io`) allows about
+**2 emails an hour for the whole project**. Past that, every sign-up failed with
+`429: email rate limit exceeded` (`over_email_send_rate_limit`). The Send Email Hook (§5) does
+not get around it: GoTrue applies `RATE_LIMIT_EMAIL_SENT` *before* it calls the hook.
+
+**How it works now.** Sign-up confirmation, resend, password reset and magic link no longer
+ask Supabase to send anything:
+
+1. The app posts to the backend, `POST /api/auth/email/{signup,resend,recovery,magiclink}`
+   ([`server/src/routes/authEmail.ts`](../../server/src/routes/authEmail.ts); client wrapper
+   [`services/authEmail.ts`](../../services/authEmail.ts), used by `AuthPage`, `AuthContext`
+   and `live/account.ts`).
+2. The backend asks GoTrue for the link with the service role,
+   `auth.admin.generateLink(...)`. That **sends no email and is not email-rate-limited**.
+3. It builds a link on our own domain from `properties.hashed_token` and
+   `properties.verification_type` (never the raw `email_otp`, never Supabase's `action_link`):
+   - main app: `https://dreamstreamstudio.ai/auth/callback?token_hash=…&type=signup|recovery|magiclink`
+     (`App.tsx` verifies it with `verifyOtp`);
+   - live-app sign-up: `https://dreamstreamstudio.ai/live?after=monitor|settings|create&token_hash=…&type=signup`
+     (`consumeAuthReturn()` in `live/account.ts`).
+
+   Verifying needs the page's JavaScript (a POST), so a mail scanner that prefetches the link
+   can't burn the token.
+4. It mails the branded `auth-*` template through the mailer → email Worker `/send` (HMAC),
+   with `brand: 'stream-studio'` for live-app links and **no read-receipt pixel**. Every send
+   is an `email_log` row and counts toward `EMAIL_MAX_PER_DAY` / `EMAIL_MAX_PER_MONTH`.
+
+| Endpoint | Body | What it does | Answers |
+|---|---|---|---|
+| `/signup` | `app` (`main`\|`live`), `after?`, `email`, `password` (8–72), `data`, `captchaToken?` | Validates like the clients (username `^[A-Za-z0-9_]{3,20}$`, first name, DOB `YYYY-MM-DD` not in the future and **age ≥ 8** — the DB trigger doesn't check age —, terms accepted, display name ≤ 40), keeps only whitelisted metadata keys, creates the account and mails the confirmation. An existing **unconfirmed** account just gets a fresh confirmation (its metadata and password are left alone). | `{ok:true, confirmEmail:true}` · `409 email_exists` · `422 database_error` (the profile trigger failed, e.g. username taken — the live app retries with a new one) · `502 send_failed` with `created:true` (no fallback; the UI offers "Resend") |
+| `/resend` | `email`, `app?`, `after?`, `captchaToken?` | Re-sends the confirmation, only to an existing unconfirmed account. Never creates one. | always `{ok:true}` |
+| `/recovery` | `email`, `captchaToken?` | Password-reset link, always to the **main** app's `/auth/callback` (the new-password screen lives there, also for `/live`). | always `{ok:true}` |
+| `/magiclink` | `email`, `captchaToken?` | Sign-in link for an existing account. Never creates one (GoTrue would turn a magic link for an unknown address into a sign-up). | always `{ok:true}` |
+
+**Abuse controls.**
+
+- **Turnstile.** A `captchaToken`, when sent, must verify (`400 captcha_failed`). Without one,
+  `/signup` is allowed only for `app:'live'` with a valid welcome ticket in `data.live_ticket`
+  (its sha256 is an unexpired, unredeemed row in `live_welcome_tickets`); otherwise
+  `400 captcha_required` while Turnstile is configured. `/resend`, `/recovery` and `/magiclink`
+  accept requests without a token (the live app has no widget) and rely on the throttles; a
+  signed-in user re-sending to their own address skips the captcha entirely.
+- **Per IP:** 10 requests per 10 minutes (`auth-email` limiter in `server/src/index.ts`).
+- **Per recipient** (durable — counted in `email_log`, auth templates with status
+  `queued`/`sent`, so a failed send never locks anyone out): one per 60 s
+  (`429 too_soon` with `retryAfterS`, message says how many seconds), at most 5 an hour and
+  10 a day (`429 too_many`).
+- **No account enumeration:** `/resend`, `/recovery` and `/magiclink` answer the same for
+  unknown addresses. `/signup` reveals an existing confirmed account, exactly as the UI always
+  has. (As with Supabase's own endpoints, a `429` does show that something was mailed to that
+  address in the last minute.)
+- Logs mask addresses (`a***@example.com`) and never contain tokens or links.
+
+**Where links may point: `AUTH_LINK_ORIGINS`.** A recovery or magic link signs in whoever opens
+it, so link origins come from a strict allowlist: `APP_PUBLIC_URL`'s origin plus the exact
+origins in `AUTH_LINK_ORIGINS` (comma-separated, default empty). The request's `Origin` is used
+only on an **exact** match; anything else gets `APP_PUBLIC_URL`. Never use wildcards or the CORS
+helper `isAllowedOrigin()` here: `*.dreamstreamstudio.ai` includes user-controlled Studio preview
+hosts, and a reset link sent there would hand the account to the host's owner. For local dev:
+
+```bash
+AUTH_LINK_ORIGINS=http://localhost:3000,http://localhost:7000
+```
+
+**Fallback.** The client falls back to its old direct Supabase call (`signUp`, `resend`,
+`resetPasswordForEmail`, `signInWithOtp`) **only** when the backend is unreachable: a network
+error, a 20 s timeout (the container may be cold), `404`/`405`, a non-JSON body, a
+`502`/`503`/`504` without a route `code`, or `503 {code:'email_unavailable', fallback:true}`.
+The backend sends that last one *before* it spends the captcha token, so the fallback call can
+still use it, whenever the service role key is missing, the mailer isn't configured
+(`EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET`) or the `EMAIL_MAX_PER_*` cap is reached. Every other
+answer, `429` included, is final: falling back would only hit Supabase's limit. Fallback mail
+still goes through Supabase and its limit (or the hook, if enabled).
+
+**What still goes through Supabase.** Email change, reauthentication codes, security
+notifications and every fallback-path email. The Send Email Hook (§5) is now **optional**: keep
+it on to brand those and send them from our domain.
+
+**Owner checklist.** Production already has everything this needs (`SUPABASE_SERVICE_ROLE_KEY`,
+`EMAIL_WORKER_URL`, `EMAIL_HMAC_SECRET`, `TURNSTILE_SECRET_KEY`, `APP_PUBLIC_URL`).
+
+- Deploy order: email Worker (accepts `brand`) → backend container → Pages. Each step is
+  backward-compatible: an older Worker ignores `brand` and sends DreamStream branding.
+- Auth mail now counts toward `EMAIL_MAX_PER_DAY` (default 200) and `EMAIL_MAX_PER_MONTH`
+  (2,500). When a cap is reached, auth email falls back to Supabase until the next day/month,
+  so keep headroom.
+- Smoke test: "Forgot password" on the site → a branded email from `no-reply@dreamstreamstudio.ai`
+  arrives; `email_log` has an `auth-recovery` row with status `sent`; the backend log shows
+  `[auth-email] recovery → y***@domain sent (recovery)`. Asking again within a minute answers
+  "Please wait N seconds…".
+
+---
+
+## One-time owner setup
+
 Everything here is a **one-time owner action** (account, DNS, secrets). Until it's done the
 mailer stays dormant: the app still works, signups are still captured, no email is sent.
 
@@ -9,7 +106,7 @@ Checklist:
 - [ ] 2. Apply the DB migration
 - [ ] 3. Deploy the email-worker + set its secrets
 - [ ] 4. Point the backend at the worker
-- [ ] 5. Route Supabase auth emails through the worker (Send Email Hook) — **follow the order**
+- [ ] 5. (Optional since 2026-10-22) Route Supabase's remaining auth emails through the worker (Send Email Hook) — **follow the order**
 - [ ] 6. (Recommended) Cloudflare SMTP fallback for when the hook is off
 - [ ] 7. Smoke-test
 
@@ -73,9 +170,17 @@ EMAIL_MAX_PER_MONTH=2500     # keep < 3000 to stay free; raising it past 3000 ri
 > skipped with `status='skipped'`.
 
 The newsletter form then sends a double opt-in confirmation; the welcome email goes out when
-the recipient clicks confirm. (These backend caps do **not** cover auth-hook mail — see 5.4.)
+the recipient clicks confirm. These caps also cover the backend's own auth emails (sign-up
+confirm, resend, reset, magic link — see the top section), but **not** auth-hook mail (see 5.4).
+Local dev: set `AUTH_LINK_ORIGINS=http://localhost:3000,http://localhost:7000` so auth links
+land back on your dev server.
 
 ## 5. Route Supabase auth emails through the worker (Send Email Hook)
+
+> **Optional since 2026-10-22.** Sign-up confirmation, resend, password reset and magic link
+> are sent by the backend (top section) and never reach Supabase's mailer or this hook. The hook
+> still covers what Supabase sends itself: email change, reauthentication, security notices and
+> the client's fallback path when the backend is unreachable.
 
 With the hook on, **every** Supabase Auth email — signup confirmation, magic link / email OTP,
 password reset, invite, email change, reauthentication code and the security notifications —
