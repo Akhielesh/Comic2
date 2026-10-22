@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { EmailTemplateName } from '../../../shared/email/index.js';
 import {
@@ -214,8 +214,10 @@ const isValidLiveTicket = async (admin: SupabaseClient, ticket: unknown): Promis
 
 /**
  * A token, when sent, must verify. Without one: allowed when Turnstile isn't configured, or
- * when `allowWithoutToken()` says so (live sign-ups with a welcome ticket; resend/reset/magic
- * link, which are throttled per recipient instead).
+ * when `allowWithoutToken()` says so (live sign-ups with a welcome ticket). Resend / reset /
+ * magic link always need one — without it, anyone could spend a stranger's per-address
+ * allowance and lock them out of these emails for a day (the signed-in own-address resend
+ * is the one exception).
  */
 const captchaGate = async (
   req: Request,
@@ -339,6 +341,33 @@ const isDatabaseError = (error: LinkError) => /database error/i.test(error.messa
 const isEmailExists = (error: LinkError) =>
   error.code === 'email_exists' || /already (been )?registered|already exists/i.test(error.message || '');
 
+// ── One request per address at a time ────────────────────────────────────────────
+// The per-recipient throttle reads email_log, and the row it counts is only written when the
+// mailer sends — several network round trips later. Concurrent requests for one address
+// would all read "nothing sent yet" and all send, so they queue behind each other instead.
+// The backend runs as a single container instance, so an in-process queue is enough.
+const addressQueues = new Map<string, Promise<void>>();
+export const oneAtATimePerAddress = (req: Request, res: Response, next: NextFunction): void => {
+  const email = readEmail(bodyOf(req).email);
+  if (!email) return next();
+  const prev = addressQueues.get(email) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => (release = resolve));
+  const tail = prev.then(() => mine);
+  addressQueues.set(email, tail);
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    release();
+    if (addressQueues.get(email) === tail) addressQueues.delete(email);
+  };
+  res.once('finish', finish);
+  res.once('close', finish);
+  void prev.then(() => next());
+};
+authEmailRouter.use(oneAtATimePerAddress);
+
 // ── Routes ───────────────────────────────────────────────────────────────────────
 
 // POST /api/auth/email/signup — { app, after?, email, password, data, captchaToken? }
@@ -432,7 +461,7 @@ authEmailRouter.post('/resend', async (req, res, next) => {
     // Signed in and asking for your own address (Settings → Security has no captcha widget).
     const ownAddress = Boolean(req.user?.email && normalizeEmail(req.user.email) === email);
     if (!ownAddress) {
-      const gate = await captchaGate(req, () => true);
+      const gate = await captchaGate(req, () => false);
       if (gate) return captchaFailure(res, gate);
     }
 
@@ -472,7 +501,7 @@ authEmailRouter.post('/recovery', async (req, res, next) => {
     const admin = await emailReady();
     if (!admin) return unavailable(res);
 
-    const gate = await captchaGate(req, () => true);
+    const gate = await captchaGate(req, () => false);
     if (gate) return captchaFailure(res, gate);
 
     const limit = await checkThrottle(email);
@@ -504,7 +533,7 @@ authEmailRouter.post('/magiclink', async (req, res, next) => {
     const admin = await emailReady();
     if (!admin) return unavailable(res);
 
-    const gate = await captchaGate(req, () => true);
+    const gate = await captchaGate(req, () => false);
     if (gate) return captchaFailure(res, gate);
 
     const limit = await checkThrottle(email);

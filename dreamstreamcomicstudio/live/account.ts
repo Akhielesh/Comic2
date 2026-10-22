@@ -310,14 +310,15 @@ export async function signIn(email: string, password: string): Promise<{ ok: boo
  * Send the sign-up confirmation email again — through our backend (one a
  * minute per address), or Supabase directly when the backend can't be reached.
  */
-export async function resendConfirmation(email: string): Promise<{ ok: boolean; error?: string }> {
+export async function resendConfirmation(email: string, captchaToken?: string): Promise<{ ok: boolean; error?: string }> {
   const address = email.trim().toLowerCase();
   const after = new URL(confirmRedirectUrl()).searchParams.get('after') || undefined;
-  const viaApi = await requestAuthEmail('resend', { email: address, app: 'live', after });
+  const viaApi = await requestAuthEmail('resend', { email: address, app: 'live', after, captchaToken: captchaToken || undefined });
   if (viaApi.status === 'ok') return { ok: true };
   if (viaApi.status === 'error') {
-    // too_many (hourly/daily cap) explains itself; anything else at 429 is the one-a-minute rule.
-    if (viaApi.httpStatus === 429 && viaApi.code !== 'too_many') {
+    // The one-a-minute rule gets the short version; the hourly/daily caps and the per-network
+    // limiter explain themselves (their wait can be much longer than a minute).
+    if (viaApi.code === 'too_soon') {
       return { ok: false, error: 'Just sent one — wait a minute before asking again.' };
     }
     return { ok: false, error: viaApi.message };
@@ -338,9 +339,9 @@ export async function resendConfirmation(email: string): Promise<{ ok: boolean; 
 }
 
 /** The link lands on the main app's /auth/callback — that's where the new-password screen lives. */
-export async function sendPasswordReset(email: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendPasswordReset(email: string, captchaToken?: string): Promise<{ ok: boolean; error?: string }> {
   const address = email.trim().toLowerCase();
-  const viaApi = await requestAuthEmail('recovery', { email: address, app: 'main' });
+  const viaApi = await requestAuthEmail('recovery', { email: address, app: 'main', captchaToken: captchaToken || undefined });
   if (viaApi.status === 'ok') return { ok: true };
   if (viaApi.status === 'error') return { ok: false, error: viaApi.message };
 

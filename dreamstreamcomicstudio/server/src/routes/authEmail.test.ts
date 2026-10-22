@@ -182,7 +182,13 @@ const addUser = (email: string, confirmed: boolean) => {
   return id;
 };
 
+// Resend / reset / magic link need a solved challenge; tests send one unless they say
+// otherwise with `captchaToken: null`.
+const NEEDS_CAPTCHA = new Set(['/resend', '/recovery', '/magiclink']);
 const post = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
+  if (NEEDS_CAPTCHA.has(path) && body && typeof body === 'object' && !('captchaToken' in body)) {
+    body = { ...(body as Record<string, unknown>), captchaToken: 'good-token' };
+  }
   const res = await fetch(`${base}/api/auth/email${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
@@ -279,12 +285,15 @@ describe('captcha policy', () => {
     expect(main.json.code).toBe('captcha_required');
   });
 
-  it('lets resend / reset / magic link through without a token (throttled instead)', async () => {
+  it('requires a solved challenge for resend / reset / magic link (no stranger can spend an address’s allowance)', async () => {
     addUser('ada@example.com', true);
     for (const path of ['/resend', '/recovery', '/magiclink']) {
+      const res = await post(path, { email: 'ada@example.com', captchaToken: null });
+      expect(res.status, path).toBe(400);
+      expect(res.json.code, path).toBe('captcha_required');
       expect((await post(path, { email: 'ada@example.com' })).json, path).toEqual({ ok: true });
     }
-    expect(h.verifyTurnstile).not.toHaveBeenCalled();
+    expect(h.sendEmail).toHaveBeenCalledTimes(2); // recovery + magic link (resend: already confirmed)
   });
 
   it('skips the captcha for a signed-in user re-sending their own confirmation', async () => {
@@ -301,6 +310,21 @@ describe('captcha policy', () => {
 });
 
 describe('per-recipient throttle', () => {
+  it('holds under a burst: concurrent requests for one address send exactly one email', async () => {
+    addUser('ada@example.com', true);
+    // The throttle sees a send only once the mailer has logged it, like production.
+    h.sendEmail.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      h.state.latest = new Date().toISOString();
+      return { ok: true, messageId: 'm' };
+    });
+    const results = await Promise.all(Array.from({ length: 8 }, () => post('/recovery', { email: 'ada@example.com' })));
+    expect(h.sendEmail).toHaveBeenCalledTimes(1);
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 429).every((r) => r.json.code === 'too_soon')).toBe(true);
+    h.sendEmail.mockImplementation(async () => ({ ok: true, messageId: 'm1' }));
+  });
+
   it('asks for a short wait right after a send, in seconds', async () => {
     h.state.latest = new Date(Date.now() - 20_000).toISOString();
     const res = await post('/recovery', { email: 'ada@example.com' });

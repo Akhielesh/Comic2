@@ -23,6 +23,20 @@ describe('interpretAuthEmailResponse', () => {
     expect(
       interpretAuthEmailResponse(503, { ok: false, code: 'email_unavailable', fallback: true, message: 'Email sending is unavailable right now.' })
     ).toEqual({ status: 'unreachable' });
+    // The api-proxy while the container can't start: a nested code, not a route answer.
+    expect(
+      interpretAuthEmailResponse(503, { error: { code: 'backend_starting', message: 'The server is starting up — please retry in a few seconds.' } })
+    ).toEqual({ status: 'unreachable' });
+  });
+
+  it('falls back when an older backend answers with its auth wall (deploy window)', () => {
+    expect(interpretAuthEmailResponse(401, { error: { message: 'Missing Authorization header' } })).toEqual({ status: 'unreachable' });
+    expect(interpretAuthEmailResponse(403, { error: { code: 'FORBIDDEN', message: 'nope' } })).toEqual({ status: 'unreachable' });
+    // …but a route's own 4xx answer stays final.
+    expect(interpretAuthEmailResponse(400, { ok: false, code: 'captcha_required', message: 'Please complete the verification challenge.' })).toMatchObject({
+      status: 'error',
+      code: 'captcha_required'
+    });
   });
 
   it('treats throttles as final, keeping the wait time', () => {

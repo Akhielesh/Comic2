@@ -12,6 +12,8 @@ import {
   useAccount,
   type AuthMode,
 } from '../account';
+import { Turnstile, resetTurnstile } from '@/components/Turnstile';
+import { turnstileEnabled } from '@/services/clientConfig';
 import { Icon } from '../ui/icons';
 import { Btn, cx, type PushToast } from '../ui/primitives';
 
@@ -65,6 +67,8 @@ function AuthSheet({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Reset / resend mail goes out only after the bot check (one solved challenge per email).
+  const [captcha, setCaptcha] = useState('');
   // Waiting for the email link: credentials stay in memory only, so the sheet
   // can sign in by itself once the address is confirmed — wherever the link opened.
   const [awaiting, setAwaiting] = useState<{ email: string; password: string; fresh: boolean } | null>(null);
@@ -121,7 +125,13 @@ function AuthSheet({
         if (!r.ok) setErr(r.error || 'That code did not work.');
         else push('Unlocked — welcome to Stream Studio!', { icon: 'sparkles' });
       } else if (mode === 'reset') {
-        const r = await sendPasswordReset(email);
+        if (turnstileEnabled() && !captcha) {
+          setErr('Please complete the quick check below.');
+          return;
+        }
+        const r = await sendPasswordReset(email, captcha);
+        setCaptcha('');
+        resetTurnstile();
         if (!r.ok) setErr(r.error || 'Could not send the email.');
         else setNotice('If that email has an account, a reset link is on its way.');
       }
@@ -209,6 +219,10 @@ function AuthSheet({
           )}
         </div>
 
+        {mode === 'reset' && turnstileEnabled() && (
+          <Turnstile className="auth-captcha" action="live_reset" onToken={setCaptcha} onExpire={() => setCaptcha('')} />
+        )}
+
         <Btn variant="solid" size="lg" type="submit" disabled={busy} className="auth-submit">
           {busy ? 'One moment…' : mode === 'signin' ? 'Sign in' : mode === 'create' ? 'Create account' : mode === 'code' ? 'Unlock Stream Studio' : 'Send reset link'}
         </Btn>
@@ -263,6 +277,8 @@ function ConfirmEmail({
   const [err, setErr] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(fresh ? RESEND_COOLDOWN_S : 0);
+  const [captcha, setCaptcha] = useState('');
+  const [askCaptcha, setAskCaptcha] = useState(false);
   const busy = useRef(false);
   const lastTry = useRef(0);
 
@@ -312,7 +328,14 @@ function ConfirmEmail({
 
   const resend = async () => {
     setErr(null);
-    const r = await resendConfirmation(email);
+    if (turnstileEnabled() && !captcha) {
+      // Show the quick check; the tap that solves it sends the email.
+      setAskCaptcha(true);
+      return;
+    }
+    const r = await resendConfirmation(email, captcha);
+    setCaptcha('');
+    resetTurnstile();
     if (r.ok) {
       setSent('Sent a fresh link — the newest email is the one that works.');
       setCooldown(RESEND_COOLDOWN_S);
@@ -349,8 +372,12 @@ function ConfirmEmail({
           {checking ? 'Checking…' : 'I’ve confirmed — continue'}
         </Btn>
 
+        {askCaptcha && turnstileEnabled() && (
+          <Turnstile className="auth-captcha" action="live_resend" onToken={setCaptcha} onExpire={() => setCaptcha('')} />
+        )}
+
         <div className="auth-switch">
-          <button type="button" className="linkish" disabled={cooldown > 0} onClick={() => void resend()}>
+          <button type="button" className="linkish" disabled={cooldown > 0 || (askCaptcha && turnstileEnabled() && !captcha)} onClick={() => void resend()}>
             {cooldown > 0 ? `Resend email in ${cooldown}s` : 'Resend email'}
           </button>
           <button type="button" className="linkish" onClick={onBack}>{fresh ? 'Use a different email' : 'Back to sign in'}</button>

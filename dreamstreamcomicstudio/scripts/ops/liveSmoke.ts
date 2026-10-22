@@ -274,6 +274,15 @@ const classifyRedirect = (target: SmokeTarget, response: Response, body: string)
     return { status: 'fail', detail: 'Cloudflare challenge/interstitial returned instead of the redirect' };
   }
   const location = response.headers.get('location');
+  // www.dreamstreamstudio.ai is answered by a Cloudflare zone redirect rule before Pages
+  // (seen 2026-10-22: 302 to the bare root, path + query dropped), so shared www links lose
+  // their event / nursery. The fix is in the dashboard, not in this repo.
+  if (response.status === 302 && location === `${CANONICAL_ORIGIN}/` && expected !== `${CANONICAL_ORIGIN}/`) {
+    return {
+      status: 'fail',
+      detail: `zone redirect rule drops the path (302 → ${location}); change it to a 301 that keeps path + query, or remove it and add www to the Pages project`
+    };
+  }
   if (!PERMANENT_REDIRECT_STATUSES.has(response.status)) {
     return { status: 'fail', detail: `expected a permanent redirect to ${expected}, got HTTP ${response.status} (is functions/_middleware.ts deployed?)` };
   }

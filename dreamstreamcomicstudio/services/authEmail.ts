@@ -45,7 +45,12 @@ export const interpretAuthEmailResponse = (
   const b = body as Record<string, unknown>;
   const nested = b.error && typeof b.error === 'object' ? (b.error as Record<string, unknown>) : null;
   const code = typeof b.code === 'string' ? b.code : typeof nested?.code === 'string' ? nested.code : '';
-  if ((httpStatus === 502 || httpStatus === 503 || httpStatus === 504) && (!code || b.fallback === true)) return UNREACHABLE;
+  // A route answer is top-level `{ ok:false, code }`. Anything else at 401/403 is a backend
+  // without these routes yet (its auth wall), and anything else at 5xx-gateway is the proxy
+  // or a container that's still starting — the old Supabase call is the right move for both.
+  const routeAnswer = b.ok === false && typeof b.code === 'string';
+  if ((httpStatus === 401 || httpStatus === 403) && !routeAnswer) return UNREACHABLE;
+  if ((httpStatus === 502 || httpStatus === 503 || httpStatus === 504) && (!routeAnswer || b.fallback === true)) return UNREACHABLE;
   if (httpStatus >= 200 && httpStatus < 300 && b.ok === true) return { status: 'ok', data: b };
 
   const details = nested?.details && typeof nested.details === 'object' ? (nested.details as Record<string, unknown>) : null;

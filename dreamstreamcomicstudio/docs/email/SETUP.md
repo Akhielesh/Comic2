@@ -32,9 +32,9 @@ ask Supabase to send anything:
 | Endpoint | Body | What it does | Answers |
 |---|---|---|---|
 | `/signup` | `app` (`main`\|`live`), `after?`, `email`, `password` (8–72), `data`, `captchaToken?` | Validates like the clients (username `^[A-Za-z0-9_]{3,20}$`, first name, DOB `YYYY-MM-DD` not in the future and **age ≥ 8** — the DB trigger doesn't check age —, terms accepted, display name ≤ 40), keeps only whitelisted metadata keys, creates the account and mails the confirmation. An existing **unconfirmed** account just gets a fresh confirmation (its metadata and password are left alone). | `{ok:true, confirmEmail:true}` · `409 email_exists` · `422 database_error` (the profile trigger failed, e.g. username taken — the live app retries with a new one) · `502 send_failed` with `created:true` (no fallback; the UI offers "Resend") |
-| `/resend` | `email`, `app?`, `after?`, `captchaToken?` | Re-sends the confirmation, only to an existing unconfirmed account. Never creates one. | always `{ok:true}` |
-| `/recovery` | `email`, `captchaToken?` | Password-reset link, always to the **main** app's `/auth/callback` (the new-password screen lives there, also for `/live`). | always `{ok:true}` |
-| `/magiclink` | `email`, `captchaToken?` | Sign-in link for an existing account. Never creates one (GoTrue would turn a magic link for an unknown address into a sign-up). | always `{ok:true}` |
+| `/resend` | `email`, `app?`, `after?`, `captchaToken` (unless signed in as that address) | Re-sends the confirmation, only to an existing unconfirmed account. Never creates one. | always `{ok:true}` |
+| `/recovery` | `email`, `captchaToken` | Password-reset link, always to the **main** app's `/auth/callback` (the new-password screen lives there, also for `/live`). | always `{ok:true}` |
+| `/magiclink` | `email`, `captchaToken` | Sign-in link for an existing account. Never creates one (GoTrue would turn a magic link for an unknown address into a sign-up). | always `{ok:true}` |
 
 **Abuse controls.**
 
@@ -42,11 +42,14 @@ ask Supabase to send anything:
   `/signup` is allowed only for `app:'live'` with a valid welcome ticket in `data.live_ticket`
   (its sha256 is an unexpired, unredeemed row in `live_welcome_tickets`); otherwise
   `400 captcha_required` while Turnstile is configured. `/resend`, `/recovery` and `/magiclink`
-  accept requests without a token (the live app has no widget) and rely on the throttles; a
-  signed-in user re-sending to their own address skips the captcha entirely.
+  **always** need a solved challenge while Turnstile is configured (both apps show the widget
+  on those screens) — otherwise anyone could spend a stranger's per-address allowance and lock
+  them out of these emails for a day. The one exception: a signed-in user re-sending the
+  confirmation to their own address (Settings → Security has no widget).
 - **Per IP:** 10 requests per 10 minutes (`auth-email` limiter in `server/src/index.ts`).
 - **Per recipient** (durable — counted in `email_log`, auth templates with status
-  `queued`/`sent`, so a failed send never locks anyone out): one per 60 s
+  `queued`/`sent`, so a failed send never locks anyone out; requests for one address are
+  queued one at a time in the backend so a burst can't all read "nothing sent yet"): one per 60 s
   (`429 too_soon` with `retryAfterS`, message says how many seconds), at most 5 an hour and
   10 a day (`429 too_many`).
 - **No account enumeration:** `/resend`, `/recovery` and `/magiclink` answer the same for

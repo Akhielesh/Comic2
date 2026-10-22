@@ -2245,6 +2245,17 @@ export interface GenerativeUIArtifact {
  *  an MCP like 21st.dev) authors on demand, rendered in a sandboxed iframe (Sandpack)
  *  so it can never touch the host page, cookies or our origin. For genuinely custom
  *  interactivity beyond render_ui's block kit. Emitted by the `render_react` tool. */
+/**
+ * An app built with Code Studio before it was retired (ADR 0005). No tool emits this any
+ * more; old chats still carry it, so it renders read-only with a .zip download.
+ */
+export interface LegacyCodeStudioArtifact {
+  title: string;
+  description?: string;
+  files: { path: string; content: string; language?: string }[];
+  template?: string;
+}
+
 export interface ReactComponentArtifact {
   /** A self-contained component module with `export default function App() {…}`. */
   code: string;

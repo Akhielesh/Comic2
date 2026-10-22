@@ -7,6 +7,7 @@ import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
 import { ComparisonChart } from './artifacts/ComparisonChart';
 import { LiveComponentCard } from './artifacts/LiveComponentCard';
+import { LegacyCodeStudioCard } from './artifacts/LegacyCodeStudioCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
@@ -286,6 +287,16 @@ const comparison: StockComparisonArtifact = {
     { symbol: 'AAPL', name: 'Apple Inc.', currency: 'USD', last: cmpAapl[cmpAapl.length - 1], ranges: cmpRanges(cmpAapl) },
     { symbol: 'TSLA', name: 'Tesla Inc.', currency: 'USD', last: cmpTsla[cmpTsla.length - 1], ranges: cmpRanges(cmpTsla) },
     { symbol: 'GC=F', name: 'Gold', currency: 'USD', last: cmpGold[cmpGold.length - 1], ranges: cmpRanges(cmpGold) }
+  ]
+};
+
+const legacyCodeStudioDemo = {
+  title: 'Habit tracker',
+  description: 'A tiny streak tracker built in Code Studio.',
+  template: 'react-ts',
+  files: [
+    { path: '/App.tsx', content: "import { useState } from 'react';\n\nexport default function App() {\n  const [days, setDays] = useState(3);\n  return <button onClick={() => setDays(days + 1)}>🔥 {days}-day streak</button>;\n}\n" },
+    { path: '/index.css', content: 'button {\n  font: 600 18px system-ui;\n  padding: 12px 18px;\n  border-radius: 12px;\n}\n' }
   ]
 };
 
@@ -1346,6 +1357,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
   { title: 'Comparison chart (overlay 2–6 assets · % rebase ⇄ price · range tabs · legend toggle)', type: 'stock_comparison', category: 'Finance', node: <ComparisonChart data={comparison} /> },
   { title: 'Custom React component (agent-written TSX · sandboxed run · code view)', type: 'react_component', category: 'Agents & code', node: <LiveComponentCard data={reactComponentDemo} /> },
+  { title: 'Code Studio app (retired · read-only code + .zip)', type: 'code_studio', category: 'Agents & code', node: <LegacyCodeStudioCard data={legacyCodeStudioDemo} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Email terminal (inbox · search · reading pane · open/reply)', type: 'email_inbox', category: 'News & knowledge', node: <EmailTerminal data={emailInboxDemo} /> },
   { title: 'Unread email (unread-only inbox terminal)', type: 'email_unread', category: 'News & knowledge', node: <EmailTerminal data={emailUnreadDemo} /> },

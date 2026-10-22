@@ -145,6 +145,11 @@ describe('live smoke classification', () => {
 
     const temporary = await runLiveSmoke({ targets: [REDIRECT_TARGET], timeoutMs: 100, fetcher: answer(302, REDIRECT_TARGET.redirectTo) });
     expect(temporary[0].status).toBe('fail');
+
+    // What www answers today: a zone rule's 302 to the bare root — named, with the fix.
+    const zoneRule = await runLiveSmoke({ targets: [REDIRECT_TARGET], timeoutMs: 100, fetcher: answer(302, 'https://dreamstreamstudio.ai/') });
+    expect(zoneRule[0].status).toBe('fail');
+    expect(zoneRule[0].detail).toContain('zone redirect rule drops the path');
   });
 
   it('fails a redirect target when the old host still serves the app (middleware not deployed)', () => {

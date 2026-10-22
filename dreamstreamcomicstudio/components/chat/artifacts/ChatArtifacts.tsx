@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes';
 import { LiveDataContext } from './kit';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact, LearningPathArtifact, ItineraryArtifact, StockComparisonArtifact, ReactComponentArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact, LearningPathArtifact, ItineraryArtifact, StockComparisonArtifact, ReactComponentArtifact, LegacyCodeStudioArtifact } from '../../../apiTypes';
 import type { DashboardArtifact, TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact, BoardingPassArtifact, CurrencyConverterArtifact, WorldClocksArtifact, PackingListArtifact, TripCountdownArtifact, GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact } from '../../../apiTypes';
 import type { MacroTilesArtifact, EconCalendarArtifact, EarningsCalendarArtifact, CentralBankWatchArtifact, PnlCalendarArtifact, DebtClockArtifact, FlightStatusArtifact, TripBudgetArtifact, LocalCheatsheetArtifact, LoyaltyWalletArtifact, WidgetStackArtifact, DirectionsArtifact } from '../../../apiTypes';
 import { ArtifactBoundary } from './ArtifactBoundary';
@@ -15,6 +15,7 @@ import { NewsDigest } from './NewsDigest';
 import { MarketCard } from './MarketCard';
 import { ComparisonChart } from './ComparisonChart';
 import { LiveComponentCard } from './LiveComponentCard';
+import { LegacyCodeStudioCard } from './LegacyCodeStudioCard';
 import { SwarmTraceCard } from './SwarmTraceCard';
 import { AgentActivityCard } from './AgentActivityCard';
 import { PlacesResults } from './PlacesResults';
@@ -86,6 +87,8 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   stock_quote: (d, k) => <MarketCard key={k} data={d as StockQuoteArtifact} />,
   stock_comparison: (d, k) => <ComparisonChart key={k} data={d as StockComparisonArtifact} />,
   react_component: (d, k) => <LiveComponentCard key={k} data={d as ReactComponentArtifact} />,
+  // Retired with Code Studio (ADR 0005): old chats keep their apps, read-only.
+  code_studio: (d, k) => <LegacyCodeStudioCard key={k} data={d as LegacyCodeStudioArtifact} />,
   swarm_trace: (d, k) => <SwarmTraceCard key={k} data={d as SwarmTraceArtifact} />,
   agent_activity: (d, k) => <AgentActivityCard key={k} data={d as AgentActivityArtifact} />,
   chart: (d, k) => <ChartCard key={k} data={d as ChartArtifact} />,
@@ -274,7 +277,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // KPI boards, news) ride a narrower column so several pack into view at once — e.g.
 // "compare gold, oil and the S&P" → three quote cards you swipe through instead of a
 // tall stack you scroll past.
-const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'agent_activity', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'flight_results', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft']);
+const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'agent_activity', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'flight_results', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'code_studio', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft']);
 
 // When an assistant turn produces several cards, present them as a horizontal
 // scrolling gallery (snap + edge fades + arrows + dots) rather than a tall vertical
