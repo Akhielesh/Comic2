@@ -187,7 +187,8 @@ export const SPEND_KIND_LABELS: Record<SpendKind, string> = {
   page: 'Pages',
   edit: 'Page edits',
   cover: 'Cover',
-  qc: 'Quality checks'
+  qc: 'Quality checks',
+  translate: 'Translations'
 };
 
 const SPEND_ORDER: SpendKind[] = ['page', 'edit', 'sheet', 'style', 'cover', 'plan', 'chat', 'qc'];

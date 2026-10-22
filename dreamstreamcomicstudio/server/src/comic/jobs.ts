@@ -1744,14 +1744,9 @@ function restoreRender(ctx: StudioContext, target: RenderTarget, path: string): 
   if (render.asset?.path === path) return { status: 'done', message: 'That version is already current.' };
   const version = render.history.find((a) => a.path === path);
   if (!version) throw badRequest("That version isn't in this image's history.");
-  ctx.session.commit([
-    {
-      op: 'render',
-      target,
-      // The restored image's spec fingerprint is unknown, and its old QC no longer applies.
-      patch: { asset: version, status: 'ready', error: undefined, qc: undefined, specHash: undefined, updatedAt: Date.now() }
-    }
-  ]);
+  // v5 contract: restore_render is a compatibility action that commits `render_use` (history versions now carry
+  // their own VersionMeta, which render_use lifts onto the render; versions without meta come back without qc/specHash).
+  ctx.session.commit([{ op: 'render_use', target, path, at: Date.now() }]);
   void ctx.publishUrls([version.path]);
   return { status: 'done', message: 'Restored that version.' };
 }
