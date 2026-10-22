@@ -6,6 +6,10 @@ import {
   GuestPeer,
   HostPeers,
   MAX_ICE_RESTARTS,
+  PATH_RECHECK_MS,
+  RELAY_GUEST_CAM_BPS,
+  RELAY_GUEST_SCREEN_BPS,
+  RELAY_RETURN_BPS,
   returnFeedEncoding,
   sanitizeIceServers,
   type ReturnFeed,
@@ -86,6 +90,20 @@ class FakePC {
     this.remoteDescription = d;
   }
   async addIceCandidate() {}
+  /** What getStats reports (its selected candidate pair is the link's path). */
+  stats: Map<string, Record<string, unknown>> = new Map();
+  async getStats() {
+    return this.stats;
+  }
+  /** The selected pair goes through a relay (TURN) or straight across the internet. */
+  onPath(relay: boolean) {
+    this.stats = new Map<string, Record<string, unknown>>([
+      ['t', { type: 'transport', id: 't', selectedCandidatePairId: 'cp' }],
+      ['cp', { type: 'candidate-pair', id: 'cp', localCandidateId: 'l', remoteCandidateId: 'r' }],
+      ['l', { type: 'local-candidate', id: 'l', candidateType: relay ? 'relay' : 'srflx', address: '93.1.2.3' }],
+      ['r', { type: 'remote-candidate', id: 'r', candidateType: 'srflx', address: '81.1.2.3' }],
+    ]);
+  }
   close() {
     this.closed = true;
   }
@@ -262,5 +280,84 @@ describe('return feed budget and mix-minus wiring', () => {
     expect(plan.get('g3')).toEqual(['host', 'g1', 'g2']);
     // A guest whose audio hasn't arrived yet still hears the room.
     expect(mixMinusPlan(['host'], ['g9']).get('g9')).toEqual(['host']);
+  });
+});
+
+/* ------------------------------------------------ relays (TURN, billed per GB) */
+
+describe('relays: capped video, fresh credentials', () => {
+  const turn = (user: string): RTCIceServer[] => [{ urls: ['stun:s:3478'] }, { urls: ['turn:t:3478'], username: user, credential: 'c' }];
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+
+  it('a relayed return feed is ≤ 700 kbps whatever the guest count; direct ones keep their budget', () => {
+    expect(returnFeedEncoding(1, 720, true).maxBitrate).toBe(RELAY_RETURN_BPS);
+    expect(returnFeedEncoding(2, 720, true).maxBitrate).toBe(RELAY_RETURN_BPS);
+    expect(returnFeedEncoding(4, 720, true).maxBitrate).toBe(700_000);
+    expect(returnFeedEncoding(1, 1080, true).scaleResolutionDownBy).toBe(2);
+    expect(returnFeedEncoding(1, 720).maxBitrate).toBe(1_200_000);
+  });
+
+  it('the host caps only the guests reached through a relay, and follows a path that changes', async () => {
+    vi.useFakeTimers();
+    const { feed } = feedOf();
+    const hp = new HostPeers(() => undefined);
+    hp.setReturnFeed(feed);
+    hp.ensure('g1', 'Ann');
+    hp.ensure('g2', 'Ben');
+    const [ann, ben] = FakePC.all;
+    ann.onPath(true);
+    ben.onPath(false);
+    ann.go('connected');
+    ben.go('connected');
+    await settle();
+    expect(ann.senders[0].params.encodings[0].maxBitrate).toBe(RELAY_RETURN_BPS);
+    expect(ben.senders[0].params.encodings[0].maxBitrate).toBe(900_000);
+    ann.onPath(false);
+    await vi.advanceTimersByTimeAsync(PATH_RECHECK_MS);
+    expect(ann.senders[0].params.encodings[0].maxBitrate).toBe(900_000);
+    hp.closeAll();
+  });
+
+  it('a guest on a relay sends its camera ≤ 600 kbps and its screen ≤ 1 Mbps — no cap of ours off it', async () => {
+    vi.useFakeTimers();
+    const g = new GuestPeer(() => undefined, new FakeStream([new FakeTrack('video'), new FakeTrack('audio')]) as unknown as MediaStream);
+    const pc = FakePC.all[0];
+    const cam = pc.senders.find((x) => x.track.kind === 'video')!;
+    pc.onPath(true);
+    pc.go('connected');
+    await settle();
+    expect(cam.params.encodings[0].maxBitrate).toBe(RELAY_GUEST_CAM_BPS);
+    g.setScreen(new FakeStream([Object.assign(new FakeTrack('video'), { stop: () => undefined })]) as unknown as MediaStream);
+    await settle();
+    const screen = pc.senders.at(-1)!;
+    expect(screen.params.encodings[0].maxBitrate).toBe(RELAY_GUEST_SCREEN_BPS);
+    pc.onPath(false);
+    await vi.advanceTimersByTimeAsync(PATH_RECHECK_MS);
+    expect(cam.params.encodings[0]).not.toHaveProperty('maxBitrate');
+    expect(screen.params.encodings[0]).not.toHaveProperty('maxBitrate');
+    g.close();
+  });
+
+  it('fresh credentials restart a relayed link onto them; the same ones, or a direct link, wait for the next restart', async () => {
+    vi.useFakeTimers();
+    const hp = new HostPeers(() => undefined, turn('u1'));
+    hp.ensure('g1', 'Ann');
+    hp.ensure('g2', 'Ben');
+    const [ann, ben] = FakePC.all;
+    ann.remoteDescription = { type: 'answer' };
+    ben.remoteDescription = { type: 'answer' };
+    ann.onPath(true);
+    ben.onPath(false);
+    ann.go('connected');
+    ben.go('connected');
+    await settle();
+    hp.setIceServers(turn('u2'));
+    expect(ann.config.iceServers).toEqual(turn('u2'));
+    expect(ben.config.iceServers).toEqual(turn('u2'));
+    expect(ann.restartIce).toHaveBeenCalledTimes(1);
+    expect(ben.restartIce).not.toHaveBeenCalled();
+    hp.setIceServers(turn('u2'));
+    expect(ann.restartIce).toHaveBeenCalledTimes(1);
+    hp.closeAll();
   });
 });

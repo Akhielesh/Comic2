@@ -34,6 +34,7 @@
  */
 
 import { TalkProcessor } from './voice';
+import { applyIce, IceClock, keepRelay, turnRenewed } from '../rtcIce';
 import type { EncLimit, EncStatus, MonRtc } from './protocol';
 
 export type Signal = (to: string, d: MonRtc) => void;
@@ -384,6 +385,9 @@ export class CameraHub {
   /** A parent's camera (video call) — null when the peer leaves. Keyed by the viewer. */
   onCallerVideo: ((key: string, stream: MediaStream | null, who: string) => void) | null = null;
   onCount: ((n: number) => void) | null = null;
+  /** The relay credentials are due: ask the room for fresh ones (`{t:'ice'}`). */
+  onIceStale: (() => void) | null = null;
+  private iceClock = new IceClock(() => this.onIceStale?.());
 
   constructor(
     private signal: Signal,
@@ -391,8 +395,21 @@ export class CameraHub {
     private tracks: () => { video: MediaStreamTrack | null; audio: MediaStreamTrack | null },
   ) {}
 
-  setIce(ice: RTCIceServer[]): void {
+  /**
+   * The room's ICE list (STUN + this phone's short-lived TURN credential; `iceMs`: when to
+   * ask again). New viewers get it; live connections take it for their next ICE restart —
+   * and a viewer reached through a relay is asked to restart now (only the viewer offers),
+   * so the night's picture moves onto the fresh credential before the old one lapses.
+   */
+  setIce(list: RTCIceServer[], iceMs?: number | null): void {
+    const ice = keepRelay(this.ice, list);
+    const renewed = turnRenewed(this.ice, ice);
     this.ice = ice;
+    this.iceClock.arm(iceMs);
+    for (const peer of this.peers.values()) {
+      applyIce(peer.pc, ice);
+      if (renewed && peer.path === 'relay' && peer.pc.connectionState === 'connected') this.send(peer, { re: 1 });
+    }
   }
 
   get count(): number {
@@ -692,6 +709,7 @@ export class CameraHub {
       this.close(peer.key);
     }
     this.stopStats();
+    this.iceClock.stop();
   }
 }
 
@@ -722,6 +740,9 @@ export class ViewerLink {
   /** Status and events straight from the camera (the data channel). */
   onDirect: ((m: DirectMsg) => void) | null = null;
   onPath: ((p: NetPath | null) => void) | null = null;
+  /** The relay credentials are due: ask the room for fresh ones (`{t:'ice'}`). */
+  onIceStale: (() => void) | null = null;
+  private iceClock = new IceClock(() => this.onIceStale?.());
   private pathTimer: number | undefined;
 
   /**
@@ -730,8 +751,21 @@ export class ViewerLink {
    */
   constructor(private signal: Signal, private ice: RTCIceServer[], readonly vid = randomId()) {}
 
-  setIce(ice: RTCIceServer[]): void {
+  /**
+   * The room's ICE list (STUN + this device's short-lived TURN credential; `iceMs`: when to
+   * ask again). The next call uses it; the current one takes it for its next ICE restart —
+   * and restarts now if it's going through a relay on the credential this replaces, so an
+   * all-night relayed picture never outlives it.
+   */
+  setIce(list: RTCIceServer[], iceMs?: number | null): void {
+    const ice = keepRelay(this.ice, list);
+    const renewed = turnRenewed(this.ice, ice);
     this.ice = ice;
+    this.iceClock.arm(iceMs);
+    const pc = this.pc;
+    if (!pc) return;
+    applyIce(pc, ice);
+    if (renewed && this.path === 'relay' && pc.connectionState === 'connected') void this.restartIce();
   }
 
   get target(): string | null {
@@ -866,6 +900,9 @@ export class ViewerLink {
       await this.pc.setRemoteDescription(d.sdp).catch(() => this.setState('failed'));
     } else if (d.ice) {
       await this.pc.addIceCandidate(d.ice).catch(() => undefined);
+    } else if (d.re) {
+      // The camera's relay credential was renewed: restart onto it (only we offer).
+      if (this.pc.connectionState === 'connected') await this.restartIce();
     } else if (d.bye) {
       this.teardown(false);
       if (d.full) {
@@ -966,6 +1003,7 @@ export class ViewerLink {
 
   /** Full stop: also releases the mic and camera. */
   close(): void {
+    this.iceClock.stop();
     if (this.camSid && this.pc) this.send(this.camSid, { bye: true });
     void this.stopTalk();
     void this.stopVideo();

@@ -19,6 +19,7 @@ import { addMyEvent, findMyEvent, updateMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
 import { ProgramAudioMixer, takePrimedAudioContext } from '../studio/audioMixer';
 import { HostPeers, sanitizeIceServers, type GuestLink } from '../studio/rtc';
+import { IceClock } from '../rtcIce';
 import { CameraIssue, InviteSheet, ReadyCheck, type ReadyPhase } from '../studio/meetingUi';
 import { shareOrCopy, takeStudioIntent } from '../quickStart';
 import {
@@ -217,6 +218,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const iceRef = useRef<RTCIceServer[] | null>(null);
   const iceSettledRef = useRef(false);
   const iceTimerRef = useRef<number | null>(null);
+  // Relay credentials last a few hours: ask the room for fresh ones when it says (`iceMs`).
+  const iceClockRef = useRef(new IceClock(() => socketRef.current?.send({ t: 'ice' })));
   /** Guests we've asked to (re)connect since the last hello — each once. */
   const pingedRef = useRef(new Set<string>());
   const inviteAutoRef = useRef(intent === 'meeting');
@@ -411,6 +414,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
               iceRef.current = list;
               hostPeersRef.current?.setIceServers(list);
             }
+            iceClockRef.current.arm(msg.iceMs);
             settleIce();
             break;
           }
@@ -610,6 +614,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       cancelled = true;
       aliveRef.current = false;
       if (iceTimerRef.current != null) window.clearTimeout(iceTimerRef.current);
+      iceClockRef.current.stop();
       window.clearInterval(clock);
       window.clearInterval(speakTimer);
       window.clearInterval(curveTimer);

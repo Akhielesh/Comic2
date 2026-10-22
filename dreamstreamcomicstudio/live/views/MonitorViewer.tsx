@@ -382,6 +382,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       runFallback({ t: 'link', state: s });
     };
     link.onPath = setNetPath;
+    // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
+    link.onIceStale = () => sockRef.current?.send({ t: 'ice' });
     link.onDirect = (dm) => onDirectRef.current(dm);
     link.onStream = (s) => {
       p2pStreamRef.current = s;
@@ -572,7 +574,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         setTl(m.tl);
         setSettings(m.settings);
         vapidRef.current = m.vapid;
-        linkRef.current?.setIce(m.ice);
+        linkRef.current?.setIce(m.ice, m.iceMs);
         const st: Record<string, { st: CamStatus; at: number; since: number }> = {};
         for (const c of m.cams) if (c.status && c.statusAt) st[c.dev] = { st: c.status, at: c.statusAt, since: c.statusAt };
         statusRef.current = st;
@@ -728,6 +730,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         break;
       case 'notice':
         push(m.text, { icon: 'info', duration: 4000 });
+        break;
+      case 'ice':
+        linkRef.current?.setIce(m.servers, m.iceMs);
         break;
       case 'error':
         if (['removed', 'ended', 'forbidden', 'auth'].includes(m.code)) setClosedMsg(m.msg);

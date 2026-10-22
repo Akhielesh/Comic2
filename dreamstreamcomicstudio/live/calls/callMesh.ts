@@ -24,9 +24,18 @@
  *    (at most 5 in a minute) — the other phone may have been between
  *    connections to the room. Failed connections are rebuilt when either
  *    phone's network changes or comes back to the room, or on "Try again".
+ *
+ * Relays cost per GB (Cloudflare TURN bills what it sends to the relaying phone), so:
+ *  - a connection whose chosen path goes through a relay sends less video (1:1 <= 700 kbps,
+ *    groups <= 450 kbps a copy: <= 0.4 GB per relayed call-hour); the path is re-read from
+ *    the stats this file already polls, and the cap lifts if the path goes direct;
+ *  - relay credentials are short-lived: the room is asked for fresh ones before they lapse
+ *    (`refreshIce`), and a relayed connection restarts ICE onto them (the answering side
+ *    asks the offerer, `renew`), so a long call never drops when one expires.
  */
 
-import { netPath, type NetPath } from '../monitor/rtc';
+import { netPath, pathFromReport, type NetPath } from '../monitor/rtc';
+import { applyIce, IceClock, keepRelay, turnKey, turnRenewed } from '../rtcIce';
 import type { Call, CallPart, CallSignal } from './types';
 
 export type PeerState = 'connecting' | 'slow' | 'connected' | 'reconnecting' | 'failed';
@@ -112,15 +121,27 @@ export function videoBitrate(others: number): number {
 }
 
 /**
+ * Through a relay (TURN, $0.05/GB on what the relaying phone receives), a copy of your video
+ * never goes above this: 700 kbps one-to-one (with audio and overhead about 0.37 GB per
+ * relayed call-hour, from about 0.68 at 1.5 Mbps), 450 kbps a copy in a group.
+ */
+export const RELAY_VIDEO_BPS = 700_000;
+export const RELAY_GROUP_VIDEO_BPS = 450_000;
+
+/** A fresh relay credential lasts at least 3 h 35 min; when the room didn't say, ask again after this. */
+export const ICE_REFRESH_MS = 3 * 3600_000;
+
+/**
  * What each copy of your video is encoded at. A mesh runs one encoder per
  * person, so with two or more others each copy drops to 360p (a quarter of
  * the pixels), and to 24 fps with three; a phone that says its CPU is the
  * limit steps down further.
  */
-export function encodingFor(others: number, cpuStep = 0): { maxBitrate: number; scaleResolutionDownBy: number; maxFramerate: number } {
+export function encodingFor(others: number, cpuStep = 0, relayed = false): { maxBitrate: number; scaleResolutionDownBy: number; maxFramerate: number } {
   const scale = (others >= 2 ? 2 : 1) * [1, 1.5, 2][Math.max(0, Math.min(2, cpuStep))];
   const fps = others >= 3 ? 24 : 30;
-  return { maxBitrate: videoBitrate(others), scaleResolutionDownBy: scale, maxFramerate: cpuStep >= 2 ? Math.min(fps, 20) : fps };
+  const bps = relayed ? Math.min(videoBitrate(others), others <= 1 ? RELAY_VIDEO_BPS : RELAY_GROUP_VIDEO_BPS) : videoBitrate(others);
+  return { maxBitrate: bps, scaleResolutionDownBy: scale, maxFramerate: cpuStep >= 2 ? Math.min(fps, 20) : fps };
 }
 
 export function rateQuality(lossPct: number, rttSec: number | null): Quality {
@@ -219,6 +240,10 @@ export interface MeshOptions {
   onChange: () => void;
   /** A connection made ahead of time (while ringing), its network candidates already gathered. */
   warm?: () => RTCPeerConnection | null;
+  /** When to ask for fresh relay credentials (the room's `iceMs`); unknown: ICE_REFRESH_MS when there's a relay. */
+  iceMs?: number | null;
+  /** The relay credentials are due: ask the room for fresh ones (`{t:'call_ice'}`); they come back through setIce. */
+  refreshIce?: () => void;
 }
 
 export class CallMesh {
@@ -238,10 +263,13 @@ export class CallMesh {
   private cpuAt = 0;
   private cpuNow = false;
   private first: MeshStats | null = null;
+  private iceClock: IceClock;
 
   constructor(private opts: MeshOptions) {
     this.ice = opts.ice;
     this.hasTurn = hasTurnServer(opts.ice);
+    this.iceClock = new IceClock(() => this.opts.refreshIce?.());
+    this.iceClock.arm(opts.iceMs ?? (this.hasTurn ? ICE_REFRESH_MS : null));
     this.statsTimer = window.setInterval(() => void this.measure(), 3000);
     this.tickTimer = window.setInterval(() => this.tick(), 1000);
   }
@@ -351,16 +379,29 @@ export class CallMesh {
     this.opts.onChange();
   }
 
-  /** Fresh relay credentials for this call (used by every later connection and restart). */
-  setIce(ice: RTCIceServer[]): void {
-    if (!ice.length) return;
+  /**
+   * Fresh relay credentials for this call (`iceMs`: when to ask again). Every later connection
+   * and restart uses them; a connection going through a relay on the ones they replace
+   * restarts onto them now, before those lapse.
+   */
+  setIce(list: RTCIceServer[], iceMs?: number | null): void {
+    if (!list.length) return;
+    const ice = keepRelay(this.ice, list);
+    const renewed = turnRenewed(this.ice, ice);
     this.ice = ice;
     this.hasTurn = hasTurnServer(ice);
+    this.iceClock.arm(iceMs ?? (this.hasTurn ? ICE_REFRESH_MS : null));
     for (const p of this.peers.values()) {
-      try {
-        p.pc.setConfiguration({ ...p.pc.getConfiguration(), iceServers: ice });
-      } catch { /* applies to the next connection instead */ }
+      applyIce(p.pc, ice);
+      if (renewed && p.path === 'relay' && p.state === 'connected') this.renew(p);
     }
+  }
+
+  /** Move a working relayed connection onto fresh credentials: the offerer restarts it, the other side asks it to. */
+  private renew(p: Peer): void {
+    if (this.closed || p.cid == null) return;
+    if (p.offerer) this.restart(p);
+    else this.signal(p, { restart: true, renew: true });
   }
 
   /** Local tracks changed (camera turned on, flipped, opened late): every connection sends the new ones. */
@@ -371,6 +412,7 @@ export class CallMesh {
 
   close(): void {
     this.closed = true;
+    this.iceClock.stop();
     window.clearInterval(this.statsTimer);
     window.clearInterval(this.tickTimer);
     for (const p of this.peers.values()) this.drop(p);
@@ -381,7 +423,11 @@ export class CallMesh {
   /* ------------------------------------------------------- connections */
 
   private create(part: CallPart, offerer: boolean, cid: string | null, born = Date.now(), stream?: MediaStream): Peer {
-    const pc = this.opts.warm?.() ?? new RTCPeerConnection(pcConfig(this.ice, this.opts.relayOnly));
+    const warm = this.opts.warm?.() ?? null;
+    // Made while ringing with the line's credentials: if fresher ones came since (the line
+    // reconnected), gather with those; expired ones would leave it with no relay at all.
+    if (warm && turnKey(warm.getConfiguration?.().iceServers) !== turnKey(this.ice)) applyIce(warm, this.ice);
+    const pc = warm ?? new RTCPeerConnection(pcConfig(this.ice, this.opts.relayOnly));
     if (stream) for (const t of stream.getTracks()) stream.removeTrack(t);
     const peer: Peer = {
       uid: part.uid, sid: part.sid, part, pc, cid, offerer, stream: stream ?? new MediaStream(), pending: [], state: 'connecting', why: null,
@@ -443,6 +489,7 @@ export class CallMesh {
       this.retune();
       void netPath(peer.pc).then((path) => {
         peer.path = path;
+        if (path === 'relay') this.retune(); // a relayed copy is capped from the start
         if (this.first?.ttc == null && peer.ttc != null) this.first = { ttc: peer.ttc, path, fail: this.first?.fail ?? null, turn: this.hasTurn };
         this.opts.onChange();
       });
@@ -612,6 +659,9 @@ export class CallMesh {
         this.orphan.set(cid, [...(this.orphan.get(cid) ?? []), d.cand].slice(-40));
         if (this.orphan.size > 8) this.orphan.delete(this.orphan.keys().next().value!);
       }
+    } else if ('restart' in d && d.renew) {
+      // Their relay credentials were renewed: restart this working connection onto them (if it's ours to offer).
+      if (peer && peer.cid === cid && peer.offerer && peer.state === 'connected') this.nudge(peer, Date.now(), true, true);
     } else if ('restart' in d) {
       // They want this connection restarted (only its offerer may), or a new one.
       if (!peer) this.offer(this.create(part, true, newCid()));
@@ -669,10 +719,10 @@ export class CallMesh {
     for (const c of q) await peer.pc.addIceCandidate(c).catch(() => undefined);
   }
 
-  /** Share the uplink and the phone's encoder between everyone we send to. */
+  /** Share the uplink and the phone's encoder between everyone we send to (less through a relay). */
   private retune(): void {
-    const enc = encodingFor(this.peers.size, this.cpuStep);
     for (const p of this.peers.values()) {
+      const enc = encodingFor(this.peers.size, this.cpuStep, p.path === 'relay');
       const sender = p.pc.getTransceivers().find((t) => (t.sender.track?.kind ?? t.receiver.track?.kind) === 'video')?.sender;
       if (!sender) continue;
       try {
@@ -693,6 +743,7 @@ export class CallMesh {
   /** Connection quality per person (packet loss, round-trip time), and whether our encoder keeps up. */
   private async measure(): Promise<void> {
     let changed = false;
+    let relayChanged = false;
     let cpu = false;
     let sending = false;
     for (const p of this.peers.values()) {
@@ -713,6 +764,13 @@ export class CallMesh {
           }
           if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated && r.currentRoundTripTime != null) rtt = r.currentRoundTripTime;
         });
+        // The path can change under a live connection (an ICE restart, a network change): a relay is capped.
+        const path = pathFromReport(stats as unknown as Parameters<typeof pathFromReport>[0]);
+        if (path && path !== p.path) {
+          p.path = path;
+          relayChanged = true;
+          changed = true;
+        }
         const dLost = p.last ? lost - p.last.lost : 0;
         const dGot = p.last ? got - p.last.got : 0;
         p.last = { lost, got };
@@ -724,6 +782,7 @@ export class CallMesh {
         }
       } catch { /* closed */ }
     }
+    if (relayChanged) this.retune();
     // The phone's CPU is the limit twice running: encode less. Back up after two quiet minutes.
     const now = Date.now();
     this.cpuHits = cpu ? this.cpuHits + 1 : 0;

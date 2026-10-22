@@ -702,13 +702,61 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
 | C3 | LAN first and ICE fixes (5) | `live/monitor/rtc.ts:43-52` + peers (WS-6), `linkFallback.ts:77`, a `monitorRoom.ts` same-network boolean (WS-9) | ≥ **95%** of same-Wi-Fi viewer sessions on `lan` within 5 s; **0** instant-relay frames to same-network viewers |
 | C4 | MonitorRoom diet (3) | ADR 0006 WS-6 / WS-9 | Per active nursery-day: DO requests ≤ **1,000**, rows ≤ **1,800**, DO duration ≤ **40 GB-s** (ADR acceptance, 7-day median) |
 | C5 | Hidden → sound only, relay cap 400 kbps (4) | ADR 0006 WS-6 | **0** video minutes sent to hidden viewers. **Server-relayed video minutes per monitored night: median ≤ 5, p90 ≤ 60.** Our-server share of monitor viewer-minutes ≤ **10%** |
-| C6 | TURN guardrails (2), then set the TURN secrets | `live-worker/src/ice.ts` (WS-4), `monitorRoom.ts`, `callRoom.ts`, `eventRoom.ts` callers | **0** credentials shared across rooms (test); ≥ **95%** of TURN egress attributable to an identifier; credential TTL ≤ 4 h |
-| C7 | Relay-path caps (8) | `live/calls/callMesh.ts:111`, `live/studio/rtc.ts` | TURN GB per relayed 1:1 call-hour ≤ **0.4** (from ≈ 0.68) |
+| C6 | TURN guardrails (2), then set the TURN secrets | `live-worker/src/ice.ts` (WS-4), `monitorRoom.ts`, `callRoom.ts`, `eventRoom.ts` callers | **0** credentials shared across rooms (test); ≥ **95%** of TURN egress attributable to an identifier; credential TTL ≤ 4 h. **Status: built 2026-10-22** (branch `impl/costs-turn`; the secrets were already set, so this ships as a fix). See the note below |
+| C7 | Relay-path caps (8) | `live/calls/callMesh.ts:111`, `live/studio/rtc.ts` | TURN GB per relayed 1:1 call-hour ≤ **0.4** (from ≈ 0.68). **Status: built 2026-10-22** (same branch); the target holds by construction, to be confirmed against Cloudflare's per-identifier `egressBytes` once Phase A queries them |
 | C8 | TURN on the side that receives less (7) | `ice.ts` + room "who gets TURN first" | After a 1 h lab test: TURN egress per relayed monitor viewer-hour ≤ **15 MB** (from ≈ 310 MB) |
 | C9 | E2E relay, then relay before viewer-side TURN (9) | ADR 0006 Phase 0 E2E | Viewer-side TURN ≤ **2%** of monitor viewer-minutes |
 | C10 | Broadcast trims + R2 lifecycle (10) | `index.ts` (WS-7), `eventRoom.ts` (WS-11); the owner runs `wrangler r2 bucket lifecycle add` | DO requests per stream-hour ≤ **800** (from ≈ 1,371: drops the 600 `authHost` calls); rows ≤ **1,000** (from ≈ 1,920: `putMeta` every 10 segments, batched chat `stats`); dead-event DO storage **0** after 9 days |
 | C11 | Container asleep (11) | `live/driveUpload.ts:29` | ≤ **1** container wake per Drive save session |
 | C12 | Family live (12), native hub + port mapping (13), coturn past 1 TB/month | later | Separate ADRs |
+
+**C6 and C7 as built (2026-10-22).** TURN was switched on before the guardrails, so they shipped first:
+
+- **Per room, person and payer.** `iceFor(env, { room, who, bill })` (`live-worker/src/ice.ts`) mints a credential of
+  the room's own for each person. It is never shared across rooms, people or payers, and it is reused for at most
+  5 minutes, so a reconnect storm costs one API call, not one per socket. A failed mint serves STUN only, tells the
+  client to ask again in 2 minutes and holds further mints for 30 s. The port-53 filter stays.
+- **Short-lived.** Members and studio hosts ≤ 4 h; share-link guests and studio guests ≤ 2 h, and never past their
+  pass (no TURN at all once the pass is over).
+- **Refreshed before expiry.** Every delivery carries `iceMs`: ask again 20 minutes before expiry, or a quarter of
+  the life of a short credential. Clients run an `IceClock` (`live/rtcIce.ts`) and ask with `{t:'ice'}` (monitor,
+  studio) or `{t:'call_ice'}` (calls). They apply the fresh list with `setConfiguration`. A connection on a relay
+  whose credentials changed restarts ICE now, so it never outlives them. On the monitor the camera answers, so it
+  asks the viewer to restart (`MonRtc.re`). In a call the answering side asks the offerer (`{restart, renew}`).
+  An overnight relayed monitor therefore keeps its relay across the 4-hour mark.
+- **Attributed.** Each credential carries Cloudflare's documented `customIdentifier` (sent to `credentials/generate`,
+  with `generate-ice-servers` as the fallback). The value is `n-`/`a-`/`e-` plus 32 hex characters of an HMAC keyed
+  by a Worker secret (`TURN_TAG_SALT`, else the TURN API token). Monitor relay counts against the **nursery**. A
+  call counts against its **caller**: the line's own account at hello, the caller's for `call_started`,
+  `call_joined` and `call_ice`. Stream Studio counts against the **event**. Every credential is tagged, so 100% of
+  TURN egress is attributable in `callsTurnUsageAdaptiveGroups`. `turnTag()` lets Phase A recompute a room's tag
+  without storing it. `wrangler tail` shows one `turn_mint` line per credential (tag, scope, ttl, guest; no ids).
+- **Revoked.** Credentials are revoked through the TURN API when:
+  - a parent removes a guest, turns the link off, sets a new passcode with sign-out, or makes a guest a member;
+  - someone stops being a member of the nursery (whether connected or not);
+  - the host kicks an on-air studio guest;
+  - a direct call ends.
+
+  Revocation is best effort. Credentials minted by an isolate that has since been evicted can't be found, so they
+  lapse on their own (≤ 4 h).
+- **Who gets TURN is unchanged.** On the monitor: cameras, viewers, call lines and guests with a valid pass, never
+  the Invite sheet's admin socket. In calls: people in the call. In Stream Studio: the host and on-air guests, never
+  viewers, mods or the lobby. Tests: `live-worker/src/ice.test.ts`, `live-worker/src/turnRooms.test.ts`.
+- **C7 relay caps.** A cap applies when the selected candidate pair is relayed (either end on TURN):
+  - calls: 700 kbps 1:1 and 450 kbps a copy in a group. With audio and overhead that is ≈ 0.37 GB per relayed
+    1:1 call-hour, against the ≤ 0.4 target. It was 1.5 Mbps ≈ 0.68;
+  - Stream Studio: return feed 700 kbps, guest camera 600 kbps, guest screen 1 Mbps;
+  - the monitor's existing 650 kbps relay cap.
+
+  Each client re-reads the path from stats it already polls, every 3 s in calls and every 15 s in Studio, and lifts
+  the cap when the path goes direct.
+
+  Not done yet: capping only the billed direction, meaning what the TURN client *receives* (§2.1). A pair whose relay
+  is on our own side doesn't bill our sending. This is left for when Phase A can verify it.
+- **Rollout note.** App versions from before this change still get 4-hour credentials but never ask for fresh ones.
+  Their relayed links fall back as they did before TURN was switched on, until the PWA updates. Pre-TURN behaviour
+  is the server-relay picture with sound and alerts unchanged.
+- **Owner backstop:** a Cloudflare account budget alert at **$10/month** (Billing → budget alerts).
 
 **Overall Phase C success measures** (Cost centre, 30 days):
 - Stream Studio marginal cost $0 at current scale.

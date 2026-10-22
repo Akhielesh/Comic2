@@ -165,8 +165,8 @@ const NAMES_CAP = 200;
 const RELAY_KEY = 'ds-calls-relay';
 /** A line this quiet may be dead (a network change can leave a socket OPEN): check it before a call. */
 const SILENT_MS = 30_000;
-/** Relay credentials from a line's hello stay good for 23 h+; refresh before then. */
-const ICE_MAX_AGE_MS = 20 * 60 * 60_000;
+/** Relay credentials from a line's hello stay good for 3 h 35 min+ (live-worker/src/ice.ts: ≤ 4 h); refresh before then. */
+const ICE_MAX_AGE_MS = 3 * 60 * 60_000;
 /** While connected, tell the room every 10 s whose media still reaches us. */
 const VOUCH_MS = 10_000;
 /** A call hung up before it got going is cancelled for real when its start is heard of within this long. */
@@ -890,11 +890,13 @@ class CallCenter {
         this.emit();
         return;
       }
-      case 'call_joined': {
+      case 'call_joined':
+      case 'call_ice': {
+        // Fresh relay credentials for this call: on picking up, and when a long call's are due.
         const a = this.active;
         if (a && a.id === m.id && a.nid === line.nid && m.ice?.length) {
           a.ice = m.ice;
-          a.mesh?.setIce(m.ice);
+          a.mesh?.setIce(m.ice, m.iceMs);
         }
         return;
       }
@@ -1456,6 +1458,7 @@ class CallCenter {
         signal: (to: string, d: CallSignal) => line.sock.send({ t: 'call_rtc', id, to, d }),
         onChange: () => this.onMesh(a),
         warm: () => this.takeWarm(id),
+        refreshIce: () => line.sock.send({ t: 'call_ice', id }),
       });
     }
     const awayBefore = new Set(a.mesh.views.filter((p) => p.away).map((p) => p.uid));

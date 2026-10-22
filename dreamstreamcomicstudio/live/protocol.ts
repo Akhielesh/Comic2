@@ -148,7 +148,8 @@ export type ServerMsg =
   | { t: 'pin'; text: string | null }
   | { t: 'guest'; sid: string; name: string; on: boolean }
   | { t: 'guestkey'; key: string }
-  | { t: 'ice'; servers: RTCIceServer[] }
+  /** `iceMs`: ask again (`{t:'ice'}`) in this many ms, before the relay credentials lapse; absent: STUN only. */
+  | { t: 'ice'; servers: RTCIceServer[]; iceMs?: number }
   | { t: 'rtc'; from: string; d: RtcSignal };
 
 export const EMOJI_SET = ['❤️', '🔥', '👏', '😂', '🤯', '🎉'] as const;

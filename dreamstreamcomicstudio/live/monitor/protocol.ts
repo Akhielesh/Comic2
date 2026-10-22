@@ -307,6 +307,8 @@ export interface MonRtc {
   ov?: 1;
   /** With a bye from the camera: its direct slots are full — watch the relay picture. */
   full?: boolean;
+  /** Camera → viewer: its relay (TURN) credential was renewed — restart ICE onto it (only the viewer offers). */
+  re?: 1;
 }
 
 export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'video';
@@ -327,8 +329,12 @@ export type MonServerMsg =
       sleep?: SleepStatus;
       track?: { running: TrackItem[]; latest: Partial<Record<TrackKind, TrackItem>> };
       ice: RTCIceServer[];
+      /** Ask for fresh relay credentials (`{t:'ice'}`) in this many ms; absent: STUN only, nothing to refresh. */
+      iceMs?: number;
       vapid: string | null;
     }
+  /** Fresh relay credentials, answering `{t:'ice'}`. */
+  | { t: 'ice'; servers: RTCIceServer[]; iceMs?: number }
   | { t: 'presence'; cams: CamPresence[]; viewers: ViewerPresence[] }
   | { t: 'share'; share: ShareInfo }
   | { t: 'track'; item: TrackItem }
