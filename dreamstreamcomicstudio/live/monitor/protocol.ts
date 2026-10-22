@@ -112,7 +112,26 @@ export interface ShareInfo {
   expires_at: number | null;
   /** Too many wrong passcodes: nobody can join until then. */
   locked_until: number | null;
+  /** When the passcode was last set — a new value confirms "Set a new passcode". */
+  pass_at?: number | null;
+  /** Most guests one link admits. */
+  max_guests?: number;
   guests: { id: string; name: string; role: 'viewer' | 'caregiver'; created_at: number; last_seen: number; expires_at: number }[];
+  /** Guests who also have a Stream Studio account — a parent can make them members. */
+  requests?: ShareRequest[];
+}
+
+/** A guest with a Stream Studio account (uid verified by the room with Supabase). */
+export interface ShareRequest {
+  id: string;
+  uid: string;
+  /** Their account's display name. */
+  account: string;
+  /** The name they typed when joining. */
+  name: string;
+  guest_id: string;
+  role: 'viewer' | 'caregiver';
+  at: number;
 }
 
 export type MonLogKind =
@@ -326,10 +345,19 @@ export type MonServerMsg =
   | { t: 'cam_gone'; sid: string; dev: string }
   | { t: 'peer_gone'; sid: string }
   | { t: 'roles_changed' }
+  /** This guest was made a member: drop the guest pass, reconnect with the account. */
+  | { t: 'promoted' }
   | { t: 'push_ok'; prefs: Record<string, boolean> }
   | { t: 'notice'; text: string }
   | { t: 'pong'; at: number }
   | { t: 'error'; code: string; msg: string };
+
+/** One line each, for choosing a role when inviting (least access first). */
+export const ROLE_INVITE: Record<MonRole, string> = {
+  viewer: 'Watch, listen and get alerts',
+  caregiver: 'Also talk, soothe, run a camera and log feeds',
+  parent: 'Everything, including inviting people and settings',
+};
 
 export const ROLE_INFO: Record<MonRole, { label: string; can: string }> = {
   parent: { label: 'Parent', can: 'Everything: watch, talk, video call, soothe, run cameras, manage people' },

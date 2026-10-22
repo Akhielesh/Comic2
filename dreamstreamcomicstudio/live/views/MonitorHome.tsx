@@ -3,7 +3,7 @@
 // role and a name like "Grandma"), and any device they sign in on can become
 // the camera or a viewer. Nothing is ever recorded.
 import React, { useEffect, useMemo, useState } from 'react';
-import { openAuth, searchPeople, useAccount, type Person } from '../account';
+import { openAuth, useAccount } from '../account';
 import {
   announceMembersChanged,
   createNursery,
@@ -19,19 +19,19 @@ import {
   type Nursery,
   type NurseryPerson,
 } from '../monitor/client';
+import { addMemberError, onPeopleChanged, openInvite } from '../monitor/invite';
 import { LABEL_SUGGESTIONS, ROLE_INFO, type MonRole } from '../monitor/protocol';
 import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
-import { Avatar, Btn, Field, Pill, Segmented, cx, type PushToast } from '../ui/primitives';
+import { Btn, Field, Pill, cx, type PushToast } from '../ui/primitives';
 import { openGuide, useFirstVisitTour } from '../components/Guide';
 import { callCenter } from '../calls/callCenter';
 import { checkBrowser } from '../monitor/camera';
 import { hideSetup, setupDone, setupHidden, SETUP_STEPS, type SetupStep } from '../monitor/setupProgress';
+import { PersonRow, ROLE_ORDER } from './monitor/PeopleRows';
 
 /** Ask the watch screen to scroll to a section when it opens (e.g. alerts). */
 export const FOCUS_KEY = 'ds-monitor-focus';
-
-const ROLE_ORDER: MonRole[] = ['parent', 'caregiver', 'viewer'];
 
 export function MonitorGate({ children }: { children: React.ReactNode }) {
   const account = useAccount();
@@ -175,6 +175,9 @@ function MonitorList({ nav, push }: { nav: Nav; push: PushToast }) {
                 {n.my_role !== 'viewer' && (
                   <span className="nc-act" onClick={(e) => { e.stopPropagation(); nav.monitorCamera(n.id); }}><Icon name="video" size={14} />Be the camera</span>
                 )}
+                {n.my_role === 'parent' && n.member_count === 1 && (
+                  <span className="nc-act nc-invite" onClick={(e) => { e.stopPropagation(); openInvite(n.id); }}><Icon name="userPlus" size={14} />Invite</span>
+                )}
               </div>
             </button>
           ))}
@@ -187,7 +190,7 @@ function MonitorList({ nav, push }: { nav: Nav; push: PushToast }) {
           <li><b>Camera:</b> on a spare phone, sign in, open the nursery and tap <i>Be the camera</i>. Prop it 1–2 m from the crib, plugged in.</li>
           <li><b>Watch:</b> on your phone or laptop, sign in and tap <i>Watch</i>. Video and sound go device-to-device, encrypted.</li>
           <li><b>Alerts:</b> turn on alerts while watching — a cry or an offline camera notifies you even with the app closed.</li>
-          <li><b>Family:</b> add people by searching their name, and give each a role (Parent, Caregiver, Viewer) and a name like “Grandma”.</li>
+          <li><b>Family:</b> tap <i>Invite</i> — add someone with an account by name (Parent, Caregiver or Viewer, and a name like “Grandma”), or share a link + passcode, with a QR code to scan, for anyone without one.</li>
         </ol>
         <p className="faint" style={{ fontSize: 12, margin: '10px 0 0' }}>
           Not a medical device: it listens and watches, but does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.
@@ -266,6 +269,7 @@ function NurseryHubBody({ nursery, setNursery, account, device, setDevice, editi
         </div>
         <span className="spacer" />
         {isParent && <Btn variant="ghost" size="sm" icon="edit" onClick={() => setEditing((v) => !v)}>Edit</Btn>}
+        {isParent && <Btn variant="solid" size="sm" icon="userPlus" onClick={() => openInvite(id)} data-tour="hub-invite">Invite</Btn>}
       </div>
 
       {editing && isParent && <EditNursery nursery={nursery} onSaved={(n) => { setNursery(n); setEditing(false); }} onDeleted={() => nav.monitor()} push={push} canDelete={isOwner} />}
@@ -307,17 +311,7 @@ function NurseryHubBody({ nursery, setNursery, account, device, setDevice, editi
         </div>
       </div>
 
-      <PeoplePanel
-        nursery={nursery}
-        push={push}
-        onChanged={load}
-        onShare={() => {
-          try {
-            sessionStorage.setItem(FOCUS_KEY, 'share');
-          } catch { /* storage unavailable */ }
-          nav.monitorWatch(id);
-        }}
-      />
+      <PeoplePanel nursery={nursery} push={push} onChanged={load} />
     </div>
   );
 }
@@ -361,8 +355,8 @@ function SetupChecklist({ nursery, nav }: { nursery: Nursery; nav: Nav }) {
     },
     family: {
       title: 'Invite family',
-      sub: 'Search a person’s name below, pick Parent, Caregiver or Viewer, and how they appear (Grandma, Nanny…).',
-      action: isParent ? { label: 'Add people', run: () => document.querySelector('[data-tour="people"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) } : null,
+      sub: 'Tap Invite: add someone with an account by name, or share a link + passcode (with a QR code to scan) for anyone without one.',
+      action: isParent ? { label: 'Invite', run: () => openInvite(nursery.id) } : null,
     },
   };
   const count = SETUP_STEPS.filter((s) => done[s]).length;
@@ -436,16 +430,10 @@ function EditNursery({ nursery, onSaved, onDeleted, push, canDelete }: { nursery
 
 /* ------------------------------------------------------------- people */
 
-function PeoplePanel({ nursery, push, onChanged, onShare }: { nursery: Nursery; push: PushToast; onChanged: () => void; onShare: () => void }) {
+/** Everyone with an account here, their roles and names; adding people happens in Invite. */
+function PeoplePanel({ nursery, push, onChanged }: { nursery: Nursery; push: PushToast; onChanged: () => void }) {
   const [people, setPeople] = useState<NurseryPerson[] | null>(null);
-  const [q, setQ] = useState('');
-  const [results, setResults] = useState<Person[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [adding, setAdding] = useState<Person | null>(null);
-  const [role, setRole] = useState<MonRole>('caregiver');
-  const [label, setLabel] = useState('');
   const isParent = nursery.my_role === 'parent';
-  const memberIds = useMemo(() => new Set((people ?? []).map((p) => p.user_id)), [people]);
 
   const load = async () => {
     const r = await listPeople(nursery.id);
@@ -453,32 +441,22 @@ function PeoplePanel({ nursery, push, onChanged, onShare }: { nursery: Nursery; 
   };
   useEffect(() => {
     void load();
+    // Someone added (or promoted) in the Invite sheet shows up here at once.
+    return onPeopleChanged((nid) => {
+      if (nid !== nursery.id) return;
+      void load();
+      onChanged();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nursery.id]);
 
-  // Debounced name search across Stream Studio members.
-  useEffect(() => {
-    if (q.trim().length < 2) {
-      setResults([]);
-      return;
-    }
-    setSearching(true);
-    const t = window.setTimeout(() => {
-      void searchPeople(q).then((r) => {
-        setResults(r);
-        setSearching(false);
-      });
-    }, 250);
-    return () => window.clearTimeout(t);
-  }, [q]);
-
-  const save = async (userId: string, r: MonRole, l: string, okMsg: string) => {
-    const res = await setMember(nursery.id, userId, r, l);
+  const save = async (p: NurseryPerson, r: MonRole, l: string) => {
+    const res = await setMember(nursery.id, p.user_id, r, l);
     if (!res.ok) {
-      push(monitorError(res.error), { icon: 'alert' });
+      push(addMemberError(res.error, p.display_name), { icon: 'alert' });
       return false;
     }
-    push(okMsg, { icon: 'check' });
+    push(`${p.display_name} updated`, { icon: 'check' });
     await load();
     onChanged();
     notifyRoom(nursery.id);
@@ -492,62 +470,16 @@ function PeoplePanel({ nursery, push, onChanged, onShare }: { nursery: Nursery; 
         <h3>People &amp; roles</h3>
         <span className="spacer" />
         <span className="faint" style={{ fontSize: 12 }}>{people?.length ?? 0} / 20</span>
+        {isParent && <Btn variant="soft" size="sm" icon="userPlus" onClick={() => openInvite(nursery.id)} data-tour="people-invite">Invite</Btn>}
       </div>
 
-      {isParent && (
-        <div className="people-add">
-          <div className="search-box">
-            <Icon name="search" size={15} className="faint" />
-            <input
-              className="input"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Find someone by name to add…"
-              aria-label="Search people by name"
-            />
-          </div>
-          <button className="linkish people-share" onClick={onShare}>
-            <Icon name="link" size={13} /> No account? Share a guest link with a passcode
-          </button>
-          {q.trim().length >= 2 && (
-            <div className="search-results">
-              {searching && <div className="faint sr-empty">Searching…</div>}
-              {!searching && results.length === 0 && (
-                <div className="faint sr-empty">No one named “{q.trim()}” yet. They need a Stream Studio account (with the welcome code) — or send them a guest link with a passcode instead.</div>
-              )}
-              {results.map((p) => (
-                <button key={p.user_id} className="sr-row" disabled={memberIds.has(p.user_id)} onClick={() => { setAdding(p); setLabel(''); setRole('caregiver'); }}>
-                  <Avatar name={p.display_name} size={28} />
-                  <span style={{ flex: 1, textAlign: 'left' }}>{p.display_name}</span>
-                  {memberIds.has(p.user_id) ? <span className="faint" style={{ fontSize: 12 }}>Already added</span> : <Icon name="plus" size={15} />}
-                </button>
-              ))}
-            </div>
-          )}
-          {adding && (
-            <div className="add-person">
-              <div className="row" style={{ gap: 10, marginBottom: 12 }}>
-                <Avatar name={adding.display_name} size={34} />
-                <b style={{ flex: 1 }}>Add {adding.display_name}</b>
-                <button className="iconbtn" onClick={() => setAdding(null)} aria-label="Cancel"><Icon name="x" size={15} /></button>
-              </div>
-              <RolePicker value={role} onChange={setRole} />
-              <Field label="Their name here" hint="e.g. Grandma, Nanny">
-                <input className="input" value={label} maxLength={30} list="label-suggestions" onChange={(e) => setLabel(e.target.value)} placeholder="Grandma" />
-              </Field>
-              <datalist id="label-suggestions">{LABEL_SUGGESTIONS.map((l) => <option key={l} value={l} />)}</datalist>
-              <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
-                <Btn variant="solid" icon="check" onClick={async () => {
-                  if (await save(adding.user_id, role, label, `${adding.display_name} added as ${label || ROLE_INFO[role].label}`)) {
-                    setAdding(null);
-                    setQ('');
-                  }
-                }}>Add to nursery</Btn>
-              </div>
-            </div>
-          )}
+      {isParent && people?.length === 1 && (
+        <div className="people-empty">
+          <span>It’s just you so far. Invite the other parent, grandparents or a sitter — by name if they have an account, or with a link + passcode if not.</span>
+          <Btn variant="solid" size="sm" icon="userPlus" onClick={() => openInvite(nursery.id)}>Invite</Btn>
         </div>
       )}
+      {!isParent && <div className="people-ask">Only parents can invite people — ask {nursery.owner_name || 'a parent'}.</div>}
 
       <div className="people-list">
         {people == null && <div className="skeleton" style={{ height: 60, margin: 16 }} />}
@@ -555,23 +487,27 @@ function PeoplePanel({ nursery, push, onChanged, onShare }: { nursery: Nursery; 
           <PersonRow
             key={p.user_id}
             p={p}
+            nurseryName={nursery.name}
             canEdit={isParent && !p.is_owner}
             canRelabelSelf={p.is_me}
-            onSave={(r, l) => save(p.user_id, r, l, `${p.display_name} updated`)}
+            onSave={(r, l) => save(p, r, l)}
             onRemove={async () => {
               const leaving = p.is_me;
-              if (!window.confirm(leaving ? `Leave “${nursery.name}”? You’ll lose access.` : `Remove ${p.display_name} from “${nursery.name}”? They lose access immediately.`)) return;
               const r = await removeMember(nursery.id, p.user_id);
               if (!r.ok) return push(monitorError(r.error), { icon: 'alert' });
               push(leaving ? 'You left the nursery' : `${p.display_name} removed`, { icon: 'check' });
               notifyRoom(nursery.id);
               if (leaving) location.hash = '#/monitor';
-              else await load();
+              else {
+                await load();
+                onChanged();
+              }
             }}
             canRemove={(isParent && !p.is_owner) || (p.is_me && !p.is_owner)}
           />
         ))}
       </div>
+      <datalist id="label-suggestions">{LABEL_SUGGESTIONS.map((l) => <option key={l} value={l} />)}</datalist>
 
       <div className="role-legend">
         {ROLE_ORDER.map((r) => (
@@ -582,60 +518,9 @@ function PeoplePanel({ nursery, push, onChanged, onShare }: { nursery: Nursery; 
   );
 }
 
-function RolePicker({ value, onChange }: { value: MonRole; onChange: (r: MonRole) => void }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <Segmented label="Role" full options={ROLE_ORDER.map((r) => ({ value: r, label: ROLE_INFO[r].label }))} value={value} onChange={(v) => onChange(v as MonRole)} />
-      <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>{ROLE_INFO[value].can}</div>
-    </div>
-  );
-}
-
-function PersonRow({ p, canEdit, canRelabelSelf, canRemove, onSave, onRemove }: {
-  p: NurseryPerson;
-  canEdit: boolean;
-  canRelabelSelf: boolean;
-  canRemove: boolean;
-  onSave: (r: MonRole, l: string) => Promise<boolean>;
-  onRemove: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [role, setRole] = useState(p.role);
-  const [label, setLabel] = useState(p.label ?? '');
-  const editable = canEdit || canRelabelSelf;
-  return (
-    <div className="person-row">
-      <div className="row" style={{ gap: 12 }}>
-        <Avatar name={p.display_name} size={34} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="pr-name">
-            {p.display_name}
-            {p.label && <span className="pr-label">{p.label}</span>}
-            {p.is_me && <span className="faint" style={{ fontSize: 12 }}> (you)</span>}
-          </div>
-          <div className="faint" style={{ fontSize: 12 }}>{ROLE_INFO[p.role].label}{p.is_owner ? ' · owner' : ''}</div>
-        </div>
-        {editable && <Btn variant="subtle" size="sm" icon="edit" onClick={() => setOpen((v) => !v)}>{open ? 'Close' : 'Edit'}</Btn>}
-      </div>
-      {open && (
-        <div className="pr-edit">
-          {canEdit && <RolePicker value={role} onChange={setRole} />}
-          <Field label="Name in this nursery">
-            <input className="input" value={label} maxLength={30} list="label-suggestions" onChange={(e) => setLabel(e.target.value)} placeholder="Grandma, Dad…" />
-          </Field>
-          <div className="row" style={{ marginTop: 10 }}>
-            {canRemove && <Btn variant="danger" size="sm" icon="trash" onClick={onRemove}>{p.is_me ? 'Leave' : 'Remove'}</Btn>}
-            <span className="spacer" />
-            <Btn variant="solid" size="sm" icon="check" onClick={async () => { if (await onSave(canEdit ? role : p.role, label)) setOpen(false); }}>Save</Btn>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** Tell the live room membership changed: removed people are disconnected
  *  immediately and everyone else refreshes their role. */
 function notifyRoom(nurseryId: string): void {
   void announceMembersChanged(nurseryId);
 }
+

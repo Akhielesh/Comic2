@@ -33,7 +33,7 @@ import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitor
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
 import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
-import { callRpc, type SupabaseEnv } from './supabaseAuth';
+import { bearerFrom, callRpc, verifyMember, type LiveIdentity, type SupabaseEnv } from './supabaseAuth';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
 
 export const KEY_HOLDER = '__vapid_keys__';
@@ -41,7 +41,9 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
 /**
- * 'admin' = a parent's short-lived control connection (never in presence).
+ * 'admin' = a parent's control connection while managing people or the share
+ * link from outside the watch screen (the Invite sheet): never in presence,
+ * a slim hello, no monitor broadcasts, and only the messages in ADMIN_MSGS.
  * 'line' = a member's app, open anywhere, reachable for family calls (never in presence).
  */
 export type MonMode = 'camera' | 'viewer' | 'admin' | 'line';
@@ -299,6 +301,8 @@ const MAX_SOCKETS = 14;
 /** Family members' apps listening for calls (separate from the monitor's devices). */
 const MAX_LINES = 24;
 const CALL_PUSH_CAP = 40;
+/** All an 'admin' socket (the Invite sheet off the watch screen) may send. */
+const ADMIN_MSGS = new Set(['members_changed', 'share_set', 'share_off', 'share_pass', 'share_extend', 'guest_remove', 'request_dismiss', 'ping']);
 const MAX_CAMERAS = 4;
 const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
@@ -572,11 +576,11 @@ export class MonitorRoom {
     } catch { /* closing */ }
   }
 
-  /** To the nursery's monitor devices (cameras, viewers) — never to call lines. */
+  /** To the nursery's monitor devices (cameras, viewers) — never to call lines or admin sockets. */
   private broadcast(obj: unknown, filter?: (a: Attach) => boolean): void {
     const payload = JSON.stringify(obj);
     for (const { ws, a } of this.authed()) {
-      if (a.mode === 'line' || (filter && !filter(a))) continue;
+      if (a.mode === 'line' || a.mode === 'admin' || (filter && !filter(a))) continue;
       try {
         ws.send(payload);
       } catch { /* closing */ }
@@ -643,6 +647,8 @@ export class MonitorRoom {
       if (msg.t === 'ping') return this.send(ws, { t: 'pong', at: Date.now() });
       return this.onCallMsg(ws, a, msg);
     }
+    // An admin socket manages people and the share link, nothing else.
+    if (a.mode === 'admin' && !ADMIN_MSGS.has(String(msg.t))) return;
 
     switch (msg.t) {
       case 'rtc':
@@ -692,8 +698,14 @@ export class MonitorRoom {
         return this.onShareSet(ws, a, msg);
       case 'share_off':
         return this.onShareOff(a);
+      case 'share_pass':
+        return this.onSharePass(ws, a, msg);
+      case 'share_extend':
+        return this.onShareExtend(a, msg);
       case 'guest_remove':
         return this.onGuestRemove(a, msg);
+      case 'request_dismiss':
+        return this.onRequestDismiss(a, msg);
       case 'end_all':
         return this.onEndAll(a);
       case 'bye':
@@ -718,6 +730,7 @@ export class MonitorRoom {
       ws.serializeAttachment({ ...a, authed: false });
       ws.close(1000, 'bye');
     } catch { /* already closed */ }
+    if (a.mode === 'admin') return; // never in presence
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -817,6 +830,12 @@ export class MonitorRoom {
     a.dn = clip(msg.dn, 40) || (mode === 'camera' ? 'Camera' : 'Device');
     ws.serializeAttachment(a);
     if (mode === 'line') return this.admitLine(ws, a, nid, meta);
+    if (mode === 'admin') {
+      // Slim: who you are and the share link — no monitor data, not in presence.
+      this.send(ws, { t: 'hello', you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev }, nursery: { id: nid, ...meta } });
+      this.send(ws, { t: 'share', share: this.guests.info(Date.now()) });
+      return;
+    }
 
     // A device re-joining as the same camera replaces its stale socket.
     if (mode === 'camera') {
@@ -1876,16 +1895,37 @@ export class MonitorRoom {
       return json({ ok: false, reason: 'bad_link' }, 400);
     }
     const now = Date.now();
-    const r = await this.guests.join(
-      { code: clip(body.code, 64), pass: String(body.pass ?? '').slice(0, 200), name: String(body.name ?? ''), dev: clip(body.dev, 40), ip: req.headers.get('cf-connecting-ip') || undefined },
+    const c = await this.guests.check(
+      { code: clip(body.code, 64), pass: String(body.pass ?? '').slice(0, 200), name: String(body.name ?? ''), ip: req.headers.get('cf-connecting-ip') || undefined },
       now,
     );
+    // Signed in? Who they are comes from their own token, checked by Supabase —
+    // never from the body. A member of this nursery needs no guest pass; anyone
+    // else with an account can be made a member by a parent later.
+    let account: LiveIdentity | null = null;
+    const bearer = c.ok ? bearerFrom(req) : null;
+    if (bearer) {
+      account = await verifyMember(this.env, bearer);
+      if (account) {
+        const role = await callRpc<{ ok?: boolean; role?: MonRole }>(this.env, bearer, 'monitor_my_role', { p_nursery: nid });
+        if (role.ok && role.data.ok && role.data.role) return json({ ok: false, reason: 'member' }, 409);
+      }
+    }
+    const r = c.ok ? await this.guests.issue(c.share, { name: c.name, dev: clip(body.dev, 40) }, now) : c;
     const meta = await this.meta();
     if (r.ok) {
-      const entry = await this.addLog({ kind: 'people', msg: `${r.guest.name} joined as a guest with the share link`, by: r.guest.name });
-      await this.pushAlert('guest', { title: `${r.guest.name} is now a guest of ${meta.name}`, body: 'They joined with the share link and passcode. Remove them any time in Watch → People.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      if (account) this.guests.addRequest({ uid: account.userId, account: account.displayName, name: r.guest.name, guest_id: r.guest.id }, now);
+      const entry = await this.addLog({ kind: 'people', msg: `${r.guest.name} joined as a guest with the share link${account ? ' (has a Stream Studio account)' : ''}`, by: r.guest.name });
+      await this.pushAlert(
+        'guest',
+        account
+          ? { title: `${r.guest.name} joined ${meta.name} with the share link`, body: `They have a Stream Studio account (${account.displayName}) — make them a member in Invite → Who has access, so they can watch without the passcode.`, entryId: entry.id }
+          : { title: `${r.guest.name} is now a guest of ${meta.name}`, body: 'They joined with the share link and passcode. Remove them any time in Invite → Who has access.', entryId: entry.id },
+        undefined,
+        { audience: 'parents', force: true },
+      );
       this.sendShareInfo();
-      return json({ ok: true, token: r.token, guest: { name: r.guest.name, role: r.guest.role, until: r.guest.expires_at }, nursery: meta });
+      return json({ ok: true, token: r.token, guest: { name: r.guest.name, role: r.guest.role, until: r.guest.expires_at }, nursery: meta, ...(account ? { account: true } : {}) });
     }
     if (r.disabled) {
       const entry = await this.addLog({ kind: 'people', sev: 'warn', msg: 'The share link was turned off after too many wrong passcodes — guests were signed out' });
@@ -1923,6 +1963,39 @@ export class MonitorRoom {
     this.sendShareInfo();
   }
 
+  /** A new passcode on the same link (forgotten or passed on too widely). Guests stay unless asked. */
+  private async onSharePass(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const pass = String(msg.pass ?? '');
+    const meta = await this.meta();
+    const problem = passcodeProblem(pass, [meta.baby, meta.name]);
+    if (problem) return this.send(ws, { t: 'share_err', msg: problem });
+    const r = await this.guests.setPasscode(pass, msg.signOut === true, Date.now());
+    if (!r) return this.send(ws, { t: 'share_err', msg: 'There’s no link to change — make a new one.' });
+    this.kickGuests(r.removed);
+    const n = r.removed.length;
+    await this.addLog({ kind: 'people', msg: `${a.name} set a new passcode for the share link${n ? ` and signed out ${n} guest${n > 1 ? 's' : ''}` : ' (guests stay signed in)'}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  /** Keep the link working longer — or until a parent turns it off. */
+  private async onShareExtend(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    // An absent value is never "forever": only an explicit null (or 0) is.
+    const days = msg.days === 1 || msg.days === 7 || msg.days === 30 ? msg.days : msg.days === null || msg.days === 0 ? null : undefined;
+    if (days === undefined) return;
+    const s = this.guests.extend(days, Date.now());
+    if (!s) return;
+    await this.addLog({ kind: 'people', msg: `${a.name} ${days == null ? 'made the share link work until it’s turned off' : `extended the share link by ${days} day${days > 1 ? 's' : ''}`}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  /** "Keep as a guest": hide the make-member suggestion for this person. */
+  private async onRequestDismiss(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    if (this.guests.dismissRequest(clip(msg.id, 20), Date.now())) this.sendShareInfo();
+  }
+
   private async onGuestRemove(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent' || a.guest) return;
     const id = clip(msg.id, 20);
@@ -1944,6 +2017,11 @@ export class MonitorRoom {
         } catch { /* closed */ }
       }
     }
+    this.dropGuestPushes(set);
+  }
+
+  /** Forget ended guests' phones for alerts (null = every guest). */
+  private dropGuestPushes(set: Set<string> | null): void {
     if (set && set.size === 0) return;
     void (async () => {
       const subs = (await this.state.storage.get<PushRec[]>('push')) ?? [];
@@ -1983,8 +2061,32 @@ export class MonitorRoom {
     if (changed.length) await this.commitCalls(book, changed);
     const rings = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
     if (rings.some((r) => !ids.has(r.uid))) await this.state.storage.put('callPush', rings.filter((r) => ids.has(r.uid)));
-    await this.addLog({ kind: 'people', msg: `${a.name} updated who can access this nursery`, by: a.name });
-    this.broadcast({ t: 'roles_changed' });
+
+    // Guests with an account a parent just made a member: their guest pass
+    // ends and their app reconnects with their own account.
+    const now = Date.now();
+    const promoted = this.guests.resolveRequests(ids, now);
+    if (promoted.length) {
+      const gone = new Set(promoted.map((p) => p.guest_id));
+      for (const s of this.authed()) {
+        if (!s.a.guest || !gone.has(s.a.guest)) continue;
+        this.send(s.ws, { t: 'promoted' });
+        try {
+          s.ws.close(4007, 'promoted');
+        } catch { /* closed */ }
+      }
+      for (const id of gone) this.guests.removeGuest(id, now);
+      this.dropGuestPushes(gone);
+      for (const p of promoted) await this.addLog({ kind: 'people', msg: `${a.name} made ${p.name} a member — they now watch with their own account`, by: a.name });
+      this.sendShareInfo();
+    } else {
+      await this.addLog({ kind: 'people', msg: `${a.name} updated who can access this nursery`, by: a.name });
+    }
+    // Only the people whose access changed need to reconnect (when the app says
+    // who) — adding Grandma shouldn't restart everyone else's live picture.
+    const who = Array.isArray(msg.uids) ? new Set(msg.uids.slice(0, 40).map((u) => clip(u, 64))) : null;
+    if (who) this.broadcast({ t: 'roles_changed' }, (x) => !!x.uid && who.has(x.uid));
+    else this.broadcast({ t: 'roles_changed' });
   }
 
   /** Panic button: end every viewing session but the parent's own. */

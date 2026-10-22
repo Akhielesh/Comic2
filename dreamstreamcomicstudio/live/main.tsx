@@ -7,6 +7,7 @@ import './styles/studio.css';
 import './styles/screens.css';
 import './styles/features.css';
 import './styles/monitor-video.css';
+import './styles/invite.css';
 
 const el = document.getElementById('live-root');
 if (el) createRoot(el).render(<LiveApp />);

@@ -10,6 +10,9 @@
 import React, { useSyncExternalStore, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
+import { openInvite, registerShareChannel, ShareChannel, shareSummary } from '../monitor/invite';
+import { useGuestPass } from './monitor/useGuestPass';
+import { focusLayout } from '../monitor/viewFocus';
 import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
@@ -31,7 +34,7 @@ import { stopTimer } from './tracker/TimerCard';
 import { TrackerSync } from '../monitor/trackerSync';
 import type { TrackKind } from '../monitor/trackTypes';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
-import { clearGuest, loadGuest, type GuestPass } from '../monitor/guest';
+import { clearGuest, type GuestPass } from '../monitor/guest';
 import { PeopleCard } from './monitor/PeopleCard';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { NurserySettings } from './monitor/NurserySettings';
@@ -132,9 +135,25 @@ const canPip = () =>
     typeof (HTMLVideoElement.prototype as unknown as { webkitSetPresentationMode?: unknown }).webkitSetPresentationMode === 'function');
 
 export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: PushToast }) {
-  // Guests (share link + passcode) watch without an account.
-  const [guest, setGuest] = useState(() => loadGuest(id));
-  if (guest) return <ViewerInner id={id} nav={nav} push={push} guest={guest} onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }} />;
+  // Guests (share link + passcode) watch without an account — unless this
+  // account is a member, whose own access wins over a pass left on the device.
+  const [guest, setGuest] = useGuestPass(id);
+  if (guest) {
+    return (
+      <ViewerInner
+        id={id}
+        nav={nav}
+        push={push}
+        guest={guest}
+        onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }}
+        onPromoted={() => {
+          clearGuest(id);
+          setGuest(null);
+          push(`You’re now a member of ${guest.nursery.name} — watching with your account`, { icon: 'heart', duration: 5000 });
+        }}
+      />
+    );
+  }
   return (
     <MonitorGate>
       <ViewerInner id={id} nav={nav} push={push} />
@@ -142,7 +161,7 @@ export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: P
   );
 }
 
-function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void }) {
+function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void; onPromoted?: () => void }) {
   const sockRef = useRef<MonitorSocket | null>(null);
   const linkRef = useRef<ViewerLink | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -166,7 +185,6 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
   const [closedMsg, setClosedMsg] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
-  const [shareErr, setShareErr] = useState<string | null>(null);
   const [me, setMe] = useState<{ sid: string; uid: string; role: MonRole; name: string; label: string | null } | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [cams, setCams] = useState<CamPresence[]>([]);
@@ -229,6 +247,23 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const lastFrameRef = useRef(Date.now());
   const [, setClock] = useState(0);
   const wide = useMediaQuery('(min-width: 980px)');
+
+  // The Invite sheet borrows this screen's socket for the share link and who's watching.
+  const shareCh = useMemo(
+    () =>
+      new ShareChannel(
+        (msg) => sockRef.current?.send(msg),
+        guest
+          ? () => {
+              sockRef.current?.send({ t: 'bye' });
+              onLeave?.();
+            }
+          : undefined,
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id],
+  );
+  useEffect(() => registerShareChannel(id, shareCh), [id, shareCh]);
 
   const canAct = me?.role === 'parent' || me?.role === 'caregiver';
   useFirstVisitTour('watch', sock === 'connected');
@@ -333,6 +368,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
 
     const sockNow = openMonitorSocket(id, 'viewer', (m) => onMsgRef.current(m), onBinary, (s, detail) => {
       setSock(s);
+      shareCh.set({ connected: s === 'connected' });
       if (s !== 'connected') tracker.detach();
       if (s === 'closed') setClosedMsg(detail || 'Disconnected from the nursery.');
     });
@@ -461,6 +497,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         setNursery(m.nursery);
         setCams(m.cams);
         setViewers(m.viewers);
+        shareCh.set({ connected: true, me: { role: m.you.role, name: m.you.name, guest: !!m.you.guest }, nursery: m.nursery, viewers: m.viewers });
         setLog(m.log);
         setTl(m.tl);
         setSettings(m.settings);
@@ -476,6 +513,9 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           const focus = sessionStorage.getItem(FOCUS_KEY);
           if (focus) {
             sessionStorage.removeItem(FOCUS_KEY);
+            // Alerts, settings and people live in All: show it for this visit (the saved layout stays).
+            const need = focusLayout(focus);
+            if (need) setViewState(need);
             window.setTimeout(() => document.querySelector(`[data-tour="mv-${focus}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 600);
           }
         } catch { /* storage unavailable */ }
@@ -502,15 +542,18 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       }
       case 'share':
         setShare(m.share);
-        setShareErr(null);
+        shareCh.set({ share: m.share, err: null });
+        // Family who joined with the link count for the checklist's "Invite family".
+        if (m.share.guests.length) markSetup(id, 'family');
         break;
       case 'share_err':
-        setShareErr(m.msg);
+        shareCh.set({ err: m.msg });
         break;
       case 'presence':
         if (m.cams.length) markSetup(id, 'camera');
         setCams(m.cams);
         setViewers(m.viewers);
+        shareCh.set({ viewers: m.viewers });
         setCamSid((cur) => pickCam(m.cams, cur));
         break;
       case 'rtc':
@@ -603,6 +646,11 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         break;
       case 'roles_changed':
         setReconnectKey((k) => k + 1);
+        break;
+      case 'promoted':
+        // A parent made this guest a member: watch with the account from now on.
+        sockRef.current?.close();
+        onPromoted?.();
         break;
       case 'push_ok':
         setPushOn(true);
@@ -1440,7 +1488,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       {takeover}
       <div className="mv-top">
         {!guest && <button className="iconbtn" onClick={() => nav.nursery(id)} aria-label="Back"><Icon name="arrowLeft" size={17} /></button>}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="mv-top-id" style={{ flex: 1, minWidth: 0 }}>
           <div className="mv-title">{nursery.name}{guest && <span className="pill-guest sm">Guest</span>}</div>
           <div className="faint" style={{ fontSize: 12 }}>
             {sock === 'connected' ? `${getDevice().name} · ${me ? ROLE_INFO[me.role].label : ''}` : sock === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
@@ -1460,6 +1508,17 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             <Icon name="moon" size={15} /><span>Bedside</span>
           </button>
         </div>
+        <button
+          type="button"
+          className="iconbtn mv-invite"
+          onClick={() => openInvite(id)}
+          data-tour="mv-invite"
+          aria-label={`${me?.role === 'parent' && !guest ? 'Invite and people' : 'People'} (${viewers.length} watching)`}
+          title={me?.role === 'parent' && !guest ? 'Invite family — add someone or share a link' : 'Who’s watching'}
+        >
+          <Icon name={me?.role === 'parent' && !guest ? 'userPlus' : 'users'} size={17} />
+          {viewers.length > 0 && <span className="mv-invite-badge" aria-hidden>{viewers.length}</span>}
+        </button>
         <HelpButton />
       </div>
       {alertStack}
@@ -1538,26 +1597,27 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           {timeline}
           {activity}
           {alertsCard}
-          {!guest && <NurserySettings nid={id} nurseryName={nursery.name} role={me?.role ?? null} settings={settings} send={(msg) => sockRef.current?.send(msg)} push={push} />}
+          {!guest && (
+            <NurserySettings
+              nid={id}
+              nurseryName={nursery.name}
+              role={me?.role ?? null}
+              settings={settings}
+              send={(msg) => sockRef.current?.send(msg)}
+              push={push}
+              people={{ summary: shareSummary(share), onInvite: () => openInvite(id) }}
+            />
+          )}
           <PeopleCard
-            nid={id}
             me={me}
             guest={!!guest}
             viewers={viewers}
             share={share}
-            shareErr={shareErr}
-            baby={baby}
-            nurseryName={nursery.name}
-            send={(msg) => {
-              setShareErr(null);
-              sockRef.current?.send(msg);
-            }}
-            push={push}
+            send={(msg) => sockRef.current?.send(msg)}
+            onInvite={(tab) => openInvite(id, tab)}
             onLeave={() => {
-              if (window.confirm('Leave this nursery? You’ll need the link and passcode to come back.')) {
-                sockRef.current?.send({ t: 'bye' });
-                onLeave?.();
-              }
+              sockRef.current?.send({ t: 'bye' });
+              onLeave?.();
             }}
           />
           </>

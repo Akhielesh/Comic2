@@ -31,6 +31,7 @@ relays signaling, status numbers and events.
 | Viewer screen | `live/views/MonitorViewer.tsx` + `live/views/monitor/*` | Listen / talk (tap or hold) / video call / soothe, alert stack + stage glow + alarm takeover, Safety card (incidents, guards, duty), Sleep card + morning report, Sound level card (live + 1/6/24 h history), "Hearing now", filterable log, alert + nursery settings, zone editor. Frozen-video detection. |
 | Alert cues | `live/monitor/alerts.ts` | Per-category synthesized sounds, speech, vibration, repeat-until-answered, title flashing, snooze, per-device prefs. |
 | Guidance | `live/components/Guide.tsx`, `MonitorHome.tsx` | Tours per screen, 10 how-to guides, nursery "Get set up" checklist (`live/monitor/setupProgress.ts`). |
+| Invite | `live/views/monitor/InviteSheet.tsx`, `live/monitor/invite.ts`, `live/monitor/qr.ts` | One sheet to add someone with an account or share a link + passcode (on-device QR), and who has access — see “Invite” below. |
 
 ## Sound categories — ESC-50 study (2026-10-21)
 
@@ -183,6 +184,54 @@ everything below works with or without it.
 - Cost: a 4 fps relay is ~144k incoming WebSocket messages per 10 h night (≈ $0.03 per
   nursery per month at the 20:1 request ratio); outgoing messages are free.
 
+## Invite (add people or share a link)
+
+One sheet, `openInvite(nid, tab?)` from anywhere (mounted once by `LiveApp`
+like the sign-in sheet; the sheet and its QR encoder load on demand):
+watch-screen header (`mv-invite`, with a "watching now" count), nursery hub
+header (`hub-invite`), People & roles (`people-invite` + an "It's just you so
+far" empty state), the setup checklist's "Invite family", the nursery card
+when you're its only member, the watch screen's People card and Nursery
+settings, and `#/monitor/<nid>/invite`.
+
+- **Add by name** (Supabase `monitor_set_member`, the authority): people you
+  share another nursery with first (`knownPeople()` — no directory search, no
+  wrong "Sarah"), then a 250 ms debounced name search (12 results, names only).
+  Role chips default to **Viewer** (least access), label chips, a "check it's
+  the right Jo" line for search results, then "Let them know" — the native
+  share sheet with the (non-secret) watch link. `not_member` reads "Jo hasn't
+  finished setting up Stream Studio yet — share a link instead".
+- **Share a link**: the passcode is pre-filled (`suggestPasscode()`, re-rolled
+  if it trips the nursery-name rule), so it's one tap to a link. Then a QR code
+  drawn on the device (`live/monitor/qr.ts`: byte mode, level M, versions
+  1–10, penalty-chosen mask, ported from Project Nayuki's MIT encoder — the
+  107-character link is version 7, 45×45; **never** an online QR service, which
+  would see the link's secret), Send (`navigator.share`, falling back to copy;
+  the text never includes the passcode), Copy, the passcode shown once,
+  "Set a new passcode" (same link; guests stay unless "also sign them out"),
+  +7 days, New link and Turn off — both confirmed in place, not `window.confirm`
+  (blocked in some in-app browsers).
+- **Who has access**: members (edit role/name, remove), guests (remove), and
+  guests who have an account — "Make member" / "Keep as guest".
+- **Plumbing**: on the watch screen the sheet borrows its socket (a registered
+  `ShareChannel`); anywhere else a parent's sheet opens an `admin` socket while
+  it's open — slim hello (`you`, `nursery`) + `share`, no monitor broadcasts,
+  never in presence, and only `members_changed`, `share_*`, `guest_remove`,
+  `request_dismiss`, `ping`. `members_changed` may name the `uids` whose access
+  changed: only they get `roles_changed`, so adding Grandma doesn't restart
+  everyone's live picture (no `uids` = everyone, as before).
+- **Accessibility**: `role="dialog"` + `aria-modal`, Esc closes, focus starts in
+  the sheet (the search field with a mouse/keyboard) and returns to the button
+  that opened it, the page behind is `inert`, tabs are a real tablist (arrow
+  keys, Home/End), role chips a radiogroup, a `role="status"` live region for
+  "added" / "passcode shown", 44 px targets on touch, reduced motion honoured.
+- **Members never become guests by accident**: the join page sends a signed-in
+  member straight to watching ("You're already in …"), the watch screen drops a
+  stale guest pass once the account is a member, and the room answers
+  `reason: 'member'` to a member's join. In-app browsers get a note that the
+  guest pass stays inside that app. Guests count toward the checklist's
+  "Invite family".
+
 ## Guest access (share link + passcode)
 
 For family or a sitter without an account (accounts need the welcome code).
@@ -207,9 +256,29 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
 - **Roles**: "Watch & listen" (viewer) or "Also talk, soothe & answer alerts"
   (caregiver). Guests can never run a camera, change settings, manage people or
   download history; Supabase member re-checks never touch them.
+- **New passcode, same link** (`share_pass {pass, signOut?}`): new salt + hash
+  on the active link, wrong-guess counters and any lock cleared, `pass_at`
+  updated (added to `mon_shares` with a guarded `ALTER TABLE`); guests stay
+  signed in unless `signOut`. **Extend** (`share_extend {days: 1|7|30|null}`):
+  adds to the link's current end (an absent value is never "forever") and moves
+  its guests' passes with it — never past 90 days from their join.
+  `ShareInfo` also carries `max_guests` and `pass_at`.
+- **Guests who have an account** (`mon_requests` in the room's SQLite — no
+  Supabase migration): a signed-in person's join sends their own bearer token
+  (`index.ts` forwards `authorization` to the room). After the passcode is
+  accepted the room asks Supabase who they are (`verifyMember` → `live_me`;
+  the uid is **never** read from the body). Already a member of this nursery →
+  `409 {reason:'member'}`, no guest pass. Otherwise a guest pass as usual, a
+  request for the parents ("has a Stream Studio account") and a push saying so.
+  "Make member" calls `monitor_set_member` (Supabase stays the authority), then
+  `members_changed`: the room resolves the request, sends `{t:'promoted'}` to
+  that guest's sockets (closed with 4007), ends the guest pass, and the app
+  reconnects with the account.
 - Code: `live-worker/src/monitorGuests.ts` (+ tests), `MonitorRoom` (`/guest`
-  join, `share_set` / `share_off` / `guest_remove`), `live/monitor/guest.ts`,
-  `live/views/MonitorJoin.tsx`, `live/views/monitor/PeopleCard.tsx`.
+  join, `share_set` / `share_off` / `share_pass` / `share_extend` /
+  `guest_remove` / `request_dismiss`), `live/monitor/guest.ts`,
+  `live/monitor/invite.ts`, `live/monitor/qr.ts`, `live/views/MonitorJoin.tsx`,
+  `live/views/monitor/InviteSheet.tsx`, `live/views/monitor/PeopleCard.tsx`.
 
 ## This week (monitor analytics)
 
