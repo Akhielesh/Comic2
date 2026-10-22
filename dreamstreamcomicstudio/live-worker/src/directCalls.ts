@@ -14,10 +14,17 @@
  *    token of the same uid, and a claim goes stale after 30 days without a
  *    fresh sign-in, so removed accounts stop ringing.
  *  - A blocked caller — or one silenced for ringing too often — gets exactly
- *    the reply anyone else would get, but nothing reaches the callee (the
- *    iOS approach), so a block can't be detected. "Only people in my
- *    nurseries" honestly answers `restricted`.
- *  - Who the caller is comes from the server (live_me), never the app.
+ *    the reply anyone else would get, at the same speed, but nothing reaches
+ *    the callee (the iOS approach), so a block can't be detected. Whether the
+ *    callee has an app open (or "Ring this device") is never part of the
+ *    reply either: a line nobody is at rings out as "no answer", like a phone
+ *    that's switched off. "Only people in my nurseries" honestly answers
+ *    `restricted`.
+ *  - Who the caller is comes from the server (live_me, checked again for
+ *    every call), never the app. Someone added to a call is rung as the call
+ *    it is — the caller — and as the person who added them: a block of either
+ *    (or of anyone already in the call) silences it, and it's family only
+ *    when both are.
  */
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -33,8 +40,14 @@ export const DAY = 24 * HOUR;
 
 /** A line whose owner hasn't signed in for this long no longer rings. */
 export const CLAIM_STALE_MS = 30 * DAY;
-/** The owner's family (people sharing a nursery) is re-read after this long. */
+/**
+ * The owner's family (people sharing a nursery) is re-read after this long when
+ * their app connects; a callee's own map older than this no longer counts when
+ * they're rung (the caller's freshly read side vouches instead).
+ */
 export const FAMILY_TTL_MS = 10 * MINUTE;
+/** Placing a call re-reads the caller's family first unless it was read this recently. */
+export const FAMILY_CALL_TTL_MS = MINUTE;
 /** People in one direct call besides the caller (a mesh of four). */
 export const MAX_DIRECT_TO = 3;
 
@@ -78,13 +91,23 @@ export interface FamilyCache {
   map: Record<string, FamilyEntry>;
 }
 
+/** Who added you to a call (when it isn't the caller), and whether they're in your family. */
+export interface RingBy {
+  uid: string;
+  name: string;
+  family: boolean;
+}
+
 /** How a call reads on the callee's ring screen. */
 export interface RingCtx {
+  /** Everyone responsible for the ring (the caller, and whoever added you) is in your family. */
   family: boolean;
   /** The caller's label in a nursery you share ("Grandma"). */
   label: string | null;
   /** Which family ("Aria’s family"). */
   where: string | null;
+  /** Added to the call by someone in it (not the caller). */
+  by?: RingBy | null;
 }
 
 /** A call ringing on a member's line — what a push-opened app needs to pick up. */
@@ -109,7 +132,6 @@ export interface StartRate {
   strangers: Record<string, number>;
 }
 
-export type Via = 'app' | 'push' | 'none';
 export type RingDecision = 'ring' | 'silent' | 'restricted' | 'unavailable';
 /** What the caller hears back. */
 export type RingStatus = 'ringing' | 'restricted' | 'unavailable';
@@ -117,14 +139,17 @@ export type RingStatus = 'ringing' | 'restricted' | 'unavailable';
 const recent = (ts: number[], now: number, ms: number) => ts.filter((t) => now - t < ms).length;
 
 /**
- * Should this line ring? `via` is how it could reach its owner right now
- * (an open app, a push subscription, or nothing).
+ * Should this line ring?
  *
- *  - unavailable: never claimed, the claim went stale, or nothing to ring.
+ *  - unavailable: never claimed, or the claim went stale (the same for every caller).
  *  - restricted: the owner takes calls only from their family.
  *  - silent: blocked, or a caller outside the family ringing too often (3 an
  *    hour) or declined twice today — answered exactly like `ring`, but
  *    nothing reaches the owner.
+ *  - ring: rings every open app and phone that asked to be rung — and an app
+ *    opened while it rings. With none of those it simply rings out ("no
+ *    answer"): whether the owner has Stream Studio open is nobody's business,
+ *    and telling only unblocked callers would give a block away.
  *
  * The checks that can tell callers apart (block, history) come last, after
  * every check whose answer the caller can see, so a blocked caller always
@@ -138,11 +163,9 @@ export function ringDecision(i: {
   prefs: DirectPrefs;
   family: boolean;
   history: CallerHistory | null | undefined;
-  via: Via;
 }): RingDecision {
   if (!i.claimed || i.now - i.verifiedAt > CLAIM_STALE_MS) return 'unavailable';
   if (!i.family && i.prefs.who === 'family') return 'restricted';
-  if (i.via === 'none') return 'unavailable';
   if (i.blocked) return 'silent';
   if (!i.family && i.history) {
     if (recent(i.history.rings, i.now, HOUR) >= RINGS_PER_HOUR) return 'silent';
@@ -269,5 +292,77 @@ export function ringCtx(mine: FamilyEntry | undefined, fromCaller: { family: boo
   return { family: false, label: null, where: null };
 }
 
+/**
+ * Who a ring is from, as the callee's line judges it.
+ *
+ *  - `from` is the caller; `by` whoever added the callee to the call (absent
+ *    when the caller rang); `others` who's already in it. A block of any of
+ *    them silences the ring, and the rate limits count against whoever rang
+ *    (`ringer`).
+ *  - `mine` / `mineAt` is the callee's own family map and when it was read;
+ *    `vouch` / `vouchAt` what the ringing person's line said about sharing a
+ *    nursery with the callee, and when *its* map was read (it's re-read for
+ *    every call). The newer of the two decides for the person who rang — so
+ *    someone just removed from a nursery stops counting as family even while
+ *    the callee's older map still lists them — and nothing past
+ *    FAMILY_TTL_MS counts at all. A vouch speaks only for the person who
+ *    rang, never for someone else in the call.
+ *  - When someone else added you, the caller's own line vouched for the
+ *    caller when the call was placed (`fromVouch` / `fromVouchAt`, kept by
+ *    the call's room) — judged the same way, so a family member added to a
+ *    family call rings as family even when your map is old.
+ *  - A side whose map couldn't be read (`at` 0) vouches for nobody, and then
+ *    only a map of your own read under FAMILY_CALL_TTL_MS ago counts — a
+ *    failed read can't hand the decision to an older map.
+ *  - It's family only when everyone responsible for the ring (the caller, and
+ *    whoever added you) is.
+ */
+export function judgeRing(i: {
+  from: { uid: string; name: string };
+  by: { uid: string; name: string } | null;
+  others: string[];
+  mine: Record<string, FamilyEntry>;
+  mineAt: number;
+  now: number;
+  vouch: boolean;
+  /** When the ringing side's map was read (absent from an older room: then its word simply counts). */
+  vouchAt?: number | null;
+  /** With `by`: what the caller's line said about the caller, when the call was placed, and when its map was read. */
+  fromVouch?: boolean;
+  fromVouchAt?: number | null;
+  where: string | null;
+  blocked: PersonRec[];
+}): { family: boolean; blocked: boolean; ringer: { uid: string; name: string }; ctx: RingCtx } {
+  const { from, by, mine } = i;
+  const fresh = (at: number) => at > 0 && i.now - at < FAMILY_TTL_MS;
+  const own = (uid: string) => fresh(i.mineAt) && !!mine[uid];
+  const justRead = (uid: string) => i.mineAt > 0 && i.now - i.mineAt < FAMILY_CALL_TTL_MS && !!mine[uid];
+  /** Is `uid` family: the newer of your map and their side's vouch. */
+  const judge = (uid: string, vouch: boolean, at: number | null | undefined) =>
+    at == null ? own(uid) || vouch
+    : at <= 0 ? justRead(uid)
+    : fresh(at) && at >= i.mineAt ? vouch
+    : own(uid);
+  const ringer = by ?? from;
+  const ringerFam = judge(ringer.uid, i.vouch, i.vouchAt);
+  const fromFam = by ? (i.fromVouchAt == null ? own(from.uid) : judge(from.uid, i.fromVouch === true, i.fromVouchAt)) : ringerFam;
+  const byFam = by ? ringerFam : true;
+  const family = fromFam && byFam;
+  const who = new Set([from.uid, ...(by ? [by.uid] : []), ...i.others]);
+  const blocked = i.blocked.some((b) => who.has(b.uid));
+  const entry = mine[from.uid];
+  const base: RingCtx = family
+    ? { family: true, label: entry?.label ?? null, where: entry?.where ?? (!by ? i.where : null) }
+    : { family: false, label: fromFam ? entry?.label ?? null : null, where: null };
+  const ctx: RingCtx = by ? { ...base, by: { uid: by.uid, name: by.name, family: byFam } } : base;
+  return { family, blocked, ringer, ctx };
+}
+
+/** Who "Decline & block" blocks: whoever added you, if they're not your family; otherwise the caller. */
+export function blockTarget(from: { uid: string; name: string }, ctx: Pick<RingCtx, 'by'> | null | undefined): { uid: string; name: string } {
+  const by = ctx?.by;
+  return by && !by.family ? { uid: by.uid, name: by.name } : { uid: from.uid, name: from.name };
+}
+
 export const NOT_FAMILY = 'Stream Studio member · not in your family';
-export const ctxText = (c: RingCtx): string => (c.family ? c.where || 'Your family' : NOT_FAMILY);
+export const ctxText = (c: RingCtx): string => (c.family ? c.where || 'Your family' : c.by && !c.by.family ? `Added by ${c.by.name} · not in your family` : NOT_FAMILY);

@@ -148,7 +148,7 @@ export function CallsView({ nav, push }: { nav: Nav; push: PushToast }) {
   };
 
   const setWho = (who: CallWho) => {
-    if (!callCenter.setWho(who)) push('Not connected right now — try again in a moment.', { icon: 'alert' });
+    if (!callCenter.setWho(who)) push('Not connected right now — this takes effect as soon as you’re back online.', { icon: 'alert' });
     else push(who === 'family' ? 'Only people in your nurseries can call you now' : 'Anyone on Stream Studio can call you now', { icon: 'check' });
   };
 
@@ -417,7 +417,7 @@ export function CallsView({ nav, push }: { nav: Nav; push: PushToast }) {
                 <span>{b.name}</span>
                 <Btn variant="ghost" size="sm" onClick={() => {
                   if (callCenter.setBlocked(b, false)) push(`${b.name} can call you again`, { icon: 'check' });
-                  else push('Not connected right now — try again in a moment.', { icon: 'alert' });
+                  else push(`Not connected right now — ${b.name} can call you again once you’re back online.`, { icon: 'alert' });
                 }}>Unblock</Btn>
               </div>
             ))

@@ -1,10 +1,33 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isMissed } from '../views/callsBadge';
 import { candidateType, classifyFailure, encodingFor, failureText, hasTurnServer, joinedAfter, preferH264, rateQuality, videoBitrate } from './callMesh';
-import { answerFromHash, callFailText, deriveActiveState, familyName, recentsOf, ringAsCall, withMe } from './callCenter';
+import { ANSWER_CACHE, ANSWER_KEY, ANSWER_PROOF_MS, answerFromHash, callFailText, deriveActiveState, familyName, recentsOf, ringAsCall, takeAnswerProof, withMe } from './callCenter';
 import { badgeFor, familyMap, needsConfirm, recentPeople } from '../views/calls/people';
-import { callErrorText, ctxText, type Call, type CallRecord } from './types';
+import { blockTarget, callErrorText, ctxText, type Call, type CallRecord } from './types';
+
+/** Cache Storage as the service worker and the page share it (one origin). */
+function fakeCaches() {
+  const stores = new Map<string, Map<string, Response>>();
+  const keyOf = (k: string | Request) => new URL(typeof k === 'string' ? k : k.url, 'https://dreamstreamstudio.ai').pathname;
+  const open = async (name: string) => {
+    const s = stores.get(name) ?? new Map<string, Response>();
+    stores.set(name, s);
+    return {
+      match: async (k: string) => s.get(keyOf(k))?.clone(),
+      put: async (k: string, r: Response) => void s.set(keyOf(k), r),
+      delete: async (k: string) => s.delete(keyOf(k)),
+      keys: async () => [...s.keys()].map((p) => new Request(`https://dreamstreamstudio.ai${p}`)),
+    };
+  };
+  return { open, stores };
+}
+const PROOF = '0123456789abcdef0123456789abcdef';
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 const baseCall = (over: Partial<Call> = {}): Call => ({
   id: 'c1', from: { uid: 'mom', name: 'Alice', label: 'Mom' }, video: true, invited: ['gpa'], declined: [], at: 1, answeredAt: null,
@@ -83,6 +106,52 @@ describe('encoding and codecs', () => {
   });
 });
 
+describe('“Answer” on a call notification (the service worker, public/live-sw.js)', () => {
+  const SW = readFileSync(new URL('../../public/live-sw.js', import.meta.url), 'utf8');
+  /** The service worker in a sandbox: its listeners, its Cache Storage, and where it sent the app. */
+  function loadSW() {
+    const listeners: Record<string, (e: unknown) => void> = {};
+    const c = fakeCaches();
+    const navigated: string[] = [];
+    const client = { url: 'https://dreamstreamstudio.ai/live#/calls', focus: async () => undefined, navigate: async (u: string) => void navigated.push(u) };
+    const self = {
+      addEventListener: (t: string, fn: (e: unknown) => void) => void (listeners[t] = fn),
+      clients: { matchAll: async () => [client], openWindow: async (u: string) => void navigated.push(u), claim: async () => undefined },
+      location: { origin: 'https://dreamstreamstudio.ai' },
+      registration: { showNotification: async () => undefined },
+      skipWaiting: () => undefined,
+    };
+    new Function('self', 'caches', SW)(self, c);
+    const click = async (action: string, url: string) => {
+      let done: Promise<unknown> = Promise.resolve();
+      listeners.notificationclick({ action, notification: { close: () => undefined, data: { url } }, waitUntil: (p: Promise<unknown>) => void (done = p) });
+      await done;
+      return navigated.at(-1)!;
+    };
+    return { click, caches: c };
+  }
+
+  it('leaves a one-time proof bound to that call, opens the app with it — and that proof answers exactly once', async () => {
+    const sw = loadSW();
+    const href = await sw.click('answer', '/live#/call/d/0123456789abcdef');
+    const x = answerFromHash(new URL(href).hash);
+    expect(x).toMatchObject({ nid: 'd:0123456789abcdef', id: '0123456789abcdef', proof: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    vi.stubGlobal('caches', sw.caches);
+    expect(await takeAnswerProof(x!)).toBe(true);
+    expect(await takeAnswerProof(x!)).toBe(false);
+    // The proof can't be moved to another call.
+    const y = answerFromHash(new URL(await sw.click('answer', '/live#/call/d/0123456789abcdef')).hash)!;
+    expect(await takeAnswerProof({ ...y, nid: 'd:ffffffffffffffff', id: 'ffffffffffffffff' })).toBe(false);
+  });
+
+  it('tapping the notification itself (not “Answer”) opens the ringing call with nothing to answer it', async () => {
+    const sw = loadSW();
+    const href = await sw.click('', '/live#/call/d/0123456789abcdef');
+    expect(new URL(href).hash).toBe('#/call/d/0123456789abcdef');
+    expect(answerFromHash(new URL(href).hash)).toBeNull();
+  });
+});
+
 describe('answering', () => {
   it('builds the call as it will be once our join lands (we offer to everyone already in it)', () => {
     const c = withMe(baseCall({ answeredAt: null }), { uid: 'gpa', sid: 's-gpa', name: 'Bob', label: 'Grandpa' }, false);
@@ -90,12 +159,44 @@ describe('answering', () => {
     expect(joinedAfter(c.parts[1], c.parts[0])).toBe(true);
     expect(c.parts[1]).toMatchObject({ cam: false, mic: true });
   });
-  it('“Answer” on a notification opens the call with answer=1', () => {
+  it('“Answer” on a notification opens the call with a one-time proof — a plain answer=1 answers nothing', () => {
     const nid = '11111111-2222-4333-8444-555555555555';
-    expect(answerFromHash(`#/call/${nid}/abcdef0123456789?answer=1`)).toEqual({ nid, id: 'abcdef0123456789' });
+    expect(answerFromHash(`#/call/${nid}/abcdef0123456789?answer=${PROOF}`)).toEqual({ nid, id: 'abcdef0123456789', proof: PROOF });
+    // Regression: anyone could send a link ending in ?answer=1 and the app picked the call up, mic on.
+    expect(answerFromHash(`#/call/${nid}/abcdef0123456789?answer=1`)).toBeNull();
     expect(answerFromHash(`#/call/${nid}/abcdef0123456789`)).toBeNull();
     expect(answerFromHash(`#/call/${nid}/abcdef0123456789?answer=0`)).toBeNull();
-    expect(answerFromHash('#/calls?answer=1')).toBeNull();
+    expect(answerFromHash(`#/calls?answer=${PROOF}`)).toBeNull();
+  });
+
+  it('the proof: left by the service worker for that call, good once, and only for a short while', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-22T10:00:00Z'));
+    const c = fakeCaches();
+    vi.stubGlobal('caches', c);
+    const leave = async (proof: string, call: string, where: string) =>
+      (await c.open(ANSWER_CACHE)).put(`${ANSWER_KEY}${proof}`, new Response(JSON.stringify({ call, where, at: Date.now() })));
+    const x = { nid: 'd:0123456789abcdef', id: '0123456789abcdef', proof: PROOF };
+    // No proof at all (somebody's link): nothing.
+    expect(await takeAnswerProof(x)).toBe(false);
+    await leave(PROOF, '0123456789abcdef', 'd');
+    expect(await takeAnswerProof(x)).toBe(true);
+    // Used up.
+    expect(await takeAnswerProof(x)).toBe(false);
+    // Another call's proof can't answer this one.
+    await leave(PROOF, 'ffffffffffffffff', 'd');
+    expect(await takeAnswerProof(x)).toBe(false);
+    // A family call's proof names its nursery.
+    const nid = '11111111-2222-4333-8444-555555555555';
+    await leave(PROOF, 'abcdef0123456789', nid);
+    expect(await takeAnswerProof({ nid, id: 'abcdef0123456789', proof: PROOF })).toBe(true);
+    // Too old.
+    await leave(PROOF, '0123456789abcdef', 'd');
+    vi.setSystemTime(Date.now() + ANSWER_PROOF_MS + 1);
+    expect(await takeAnswerProof(x)).toBe(false);
+    // No Cache Storage (an old browser): never answers by itself.
+    vi.unstubAllGlobals();
+    expect(await takeAnswerProof(x)).toBe(false);
   });
 });
 
@@ -157,9 +258,10 @@ describe('direct calls (anyone on Stream Studio)', () => {
   };
 
   it('“Answer” on a direct call’s notification: #/call/d/<call> → its room’s line', () => {
-    expect(answerFromHash('#/call/d/0123456789abcdef?answer=1')).toEqual({ nid: 'd:0123456789abcdef', id: '0123456789abcdef' });
+    expect(answerFromHash(`#/call/d/0123456789abcdef?answer=${PROOF}`)).toEqual({ nid: 'd:0123456789abcdef', id: '0123456789abcdef', proof: PROOF });
+    expect(answerFromHash('#/call/d/0123456789abcdef?answer=1')).toBeNull();
     expect(answerFromHash('#/call/d/0123456789abcdef')).toBeNull();
-    expect(answerFromHash('#/call/x/0123456789abcdef?answer=1')).toBeNull();
+    expect(answerFromHash(`#/call/x/0123456789abcdef?answer=${PROOF}`)).toBeNull();
   });
 
   it('recents: family and direct calls merged, newest first, each call once', () => {
@@ -204,7 +306,7 @@ describe('direct calls (anyone on Stream Studio)', () => {
   });
 
   it('says why a direct call can’t go through, naming them', () => {
-    expect(callErrorText('unavailable', 'Sam')).toMatch(/^Sam can’t be reached right now/);
+    expect(callErrorText('unavailable', 'Sam')).toMatch(/^Sam can’t be reached on Stream Studio right now/);
     expect(callErrorText('restricted', 'Sam')).toBe('Sam only takes calls from people in their nurseries.');
     expect(callErrorText('slow_down')).toMatch(/wait a few minutes/);
     expect(callErrorText('busy', 'Sam')).toBe('You’re already in a call on this device.');
@@ -215,5 +317,14 @@ describe('direct calls (anyone on Stream Studio)', () => {
     expect(ringAsCall(ring, 'me')).toMatchObject({ id: 'd1', from: { uid: 'sam', name: 'Sam', label: null }, invited: ['me'], parts: [], answeredAt: null, ended: null });
     expect(ctxText(ring.ctx)).toBe('Stream Studio member · not in your family');
     expect(ctxText({ family: true, label: 'Grandma', where: 'Aria’s family' })).toBe('Aria’s family');
+    // Added to a call by a stranger: says who, and that they're not family.
+    expect(ctxText({ family: false, label: 'Grandma', where: null, by: { uid: 'sam', name: 'Sam', family: false } })).toBe('Added by Sam · not in your family');
+  });
+
+  it('“Decline & block” names the person it blocks: a stranger who added you, else the caller', () => {
+    const from = { uid: 'gma', name: 'June' };
+    expect(blockTarget(from, { family: false, label: 'Grandma', where: null, by: { uid: 'sam', name: 'Sam', family: false } })).toEqual({ uid: 'sam', name: 'Sam' });
+    expect(blockTarget(from, { family: false, label: null, where: null, by: { uid: 'mom', name: 'Alice', family: true } })).toEqual(from);
+    expect(blockTarget(from, null)).toEqual(from);
   });
 });

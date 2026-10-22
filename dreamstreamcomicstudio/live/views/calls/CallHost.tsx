@@ -2,15 +2,18 @@
 // line, for direct calls) connected while you're signed in, rings for incoming
 // calls (full-screen, with a ringtone), and shows the call screen on top of
 // whatever you were doing. "Answer" on a call notification opens
-// #/call/<nursery>/<call>?answer=1 (#/call/d/<call> for a direct call), which
-// picks up as soon as the app is back in the room — one tap from the lock screen.
+// #/call/<nursery>/<call>?answer=<proof> (#/call/d/<call> for a direct call),
+// which picks up as soon as the app is back in the room — one tap from the lock
+// screen. The proof is a one-time token the service worker leaves only when
+// "Answer" is really tapped (takeAnswerProof); any other address — a link
+// someone sent you, a reload — just shows the call ringing, never answers it.
 //
 // A direct call from someone outside your family says so ("Stream Studio member
 // · not in your family"), answers with your camera off unless you choose video,
-// and offers Decline & block.
+// and offers Decline & block. Added to a call by someone else, it says who.
 import React, { useEffect, useRef, useState } from 'react';
 import { useAccount } from '../../account';
-import { answerFromHash, callCenter, useCalls, type Ringing } from '../../calls/callCenter';
+import { answerFromHash, callCenter, takeAnswerProof, useCalls, type Ringing } from '../../calls/callCenter';
 import { chime, startRing, unlockCallAudio } from '../../calls/ringtone';
 import { Icon } from '../../ui/icons';
 import { Avatar, cx, gradFor, type PushToast } from '../../ui/primitives';
@@ -38,9 +41,14 @@ function IncomingCall({ r, busy, push }: { r: Ringing; busy: boolean; push: Push
     if (err) push(err, { icon: 'alert', duration: 7000 });
   };
   const decline = (block = false) => {
-    callCenter.decline(r.nid, r.call.id, block);
-    if (block) push(`${r.call.from.name} is blocked — their calls won’t reach you. Unblock them in Calls.`, { icon: 'shield', duration: 7000 });
+    const done = callCenter.decline(r.nid, r.call.id, block);
+    if (!done) return;
+    const name = done.who.name;
+    // Only say it's done once your line has it; otherwise say when it will be.
+    if (done.now) push(`${name} is blocked — their calls won’t reach you. Unblock them in Calls.`, { icon: 'shield', duration: 7000 });
+    else push(`${name} will be blocked as soon as you’re back online — until then their calls can still ring your other devices.`, { icon: 'alert', duration: 9000 });
   };
+  const by = r.direct?.by ?? null;
   // Outside your family, Accept answers by voice; video is a deliberate second choice.
   const mainVideo = r.call.video && !stranger;
   if (busy) {
@@ -60,8 +68,14 @@ function IncomingCall({ r, busy, push }: { r: Ringing; busy: boolean; push: Push
         <b>{who}</b>
         <span>{what}</span>
         {r.direct?.label && r.direct.label !== r.call.from.name && <small>{r.call.from.name}</small>}
+        {by && <small>Added by {by.name}</small>}
         {others.length > 0 && <small>with {others.map((p) => p.label || p.name).join(', ')}</small>}
-        {stranger && <small className="call-ring-note"><Icon name="shield" size={13} />Not in any of your nurseries. Answering starts with your camera off.</small>}
+        {stranger && (
+          <small className="call-ring-note">
+            <Icon name="shield" size={13} />
+            {by && !by.family ? `${by.name} isn’t in any of your nurseries.` : 'Not in any of your nurseries.'} Answering starts with your camera off.
+          </small>
+        )}
       </div>
       <div className="call-ring-acts">
         <div>
@@ -97,18 +111,28 @@ export function CallHost({ push, suspended }: { push: PushToast; suspended: bool
   const calls = useCalls();
   const member = account.status === 'member';
 
-  // Answer from the notification: pick up as soon as the call rings here.
-  const [autoAnswer, setAutoAnswer] = useState<{ nid: string; id: string; until: number } | null>(() => {
-    const x = typeof location !== 'undefined' ? answerFromHash(location.hash) : null;
-    return x ? { ...x, until: Date.now() + AUTO_ANSWER_MS } : null;
-  });
+  // Answer from the notification: pick up as soon as the call rings here — but
+  // only with the service worker's one-time proof that "Answer" was tapped.
+  const [autoAnswer, setAutoAnswer] = useState<{ nid: string; id: string; until: number } | null>(null);
   useEffect(() => {
+    let alive = true;
     const on = () => {
       const x = answerFromHash(location.hash);
-      if (x) setAutoAnswer({ ...x, until: Date.now() + AUTO_ANSWER_MS });
+      if (!x) return;
+      // The proof is used up either way; a reload of this address mustn't try again.
+      try {
+        history.replaceState(history.state, '', `${location.pathname}${location.search}${location.hash.slice(0, location.hash.indexOf('?'))}`);
+      } catch { /* sandboxed */ }
+      void takeAnswerProof(x).then((ok) => {
+        if (ok && alive) setAutoAnswer({ nid: x.nid, id: x.id, until: Date.now() + AUTO_ANSWER_MS });
+      });
     };
+    on();
     window.addEventListener('hashchange', on);
-    return () => window.removeEventListener('hashchange', on);
+    return () => {
+      alive = false;
+      window.removeEventListener('hashchange', on);
+    };
   }, []);
   useEffect(() => {
     if (!autoAnswer) return;

@@ -4,9 +4,10 @@
 // back within 2 s.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../account', () => ({ accessToken: async () => 'tok', supa: async () => null }));
+const acct = vi.hoisted(() => ({ token: 'tok' as string | null }));
+vi.mock('../account', () => ({ accessToken: async () => acct.token, supa: async () => null }));
 
-import { FAST_PING_MS, openCallRoomSocket, openMonitorSocket, openUserLineSocket, PING_MS, PONG_WAIT_MS } from './client';
+import { AUTH_RETRY_MS, FAST_PING_MS, openCallRoomSocket, openMonitorSocket, openUserLineSocket, PING_MS, PONG_WAIT_MS } from './client';
 
 class FakeWS {
   static CONNECTING = 0;
@@ -21,7 +22,7 @@ class FakeWS {
   closedWith: number | null = null;
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: unknown }) => void) | null = null;
-  onclose: ((e: { code: number }) => void) | null = null;
+  onclose: ((e: { code: number; reason?: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(public url: string) {
     FakeWS.all.push(this);
@@ -60,6 +61,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal('WebSocket', FakeWS);
   FakeWS.all = [];
+  acct.token = 'tok';
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -168,6 +170,72 @@ describe('direct-call sockets (same liveness, their own first frame)', () => {
     await vi.advanceTimersByTimeAsync(PING_MS + PONG_WAIT_MS);
     expect(ws.closedWith).toBe(4000);
     sock.close();
+  });
+
+  it('your line never quietly gives up: “too many devices” is waited out', async () => {
+    const status: string[] = [];
+    const sock = openUserLineSocket(UID, () => undefined, (s) => status.push(s));
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeWS.all.at(-1)!;
+    ws.open();
+    ws.msg({ t: 'error', code: 'full', msg: 'Stream Studio is open on too many devices.' });
+    // Regression: 4003 was final — one "full" (which anyone could cause) cut the device off until a reload.
+    ws.onclose?.({ code: 4003, reason: 'full' });
+    expect(status.at(-1)).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(FakeWS.all).toHaveLength(2);
+    sock.close();
+  });
+
+  it('your line: no token right now (a phone waking up offline) — it tries again, and at once when back online', async () => {
+    acct.token = null;
+    const status: string[] = [];
+    const sock = openUserLineSocket(UID, () => undefined, (s) => status.push(s));
+    await vi.advanceTimersByTimeAsync(0);
+    // Regression: "Sign in to make calls." closed the line for good.
+    expect(status.at(-1)).toBe('reconnecting');
+    expect(FakeWS.all).toHaveLength(0);
+    acct.token = 'tok';
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWS.all).toHaveLength(1);
+    FakeWS.all[0].open();
+    FakeWS.all[0].msg({ t: 'hello' });
+    expect(status.at(-1)).toBe('connected');
+    sock.close();
+  });
+
+  it('your line: sign-in that keeps failing slows down instead of stopping; a real “forbidden” stops it', async () => {
+    const status: string[] = [];
+    const sock = openUserLineSocket(UID, () => undefined, (s) => status.push(s));
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(i === 0 ? 0 : AUTH_RETRY_MS);
+      const ws = FakeWS.all.at(-1)!;
+      ws.open();
+      ws.onclose?.({ code: 4001, reason: 'auth' });
+    }
+    expect(FakeWS.all).toHaveLength(4);
+    expect(status.at(-1)).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(AUTH_RETRY_MS);
+    const ws = FakeWS.all.at(-1)!;
+    expect(FakeWS.all).toHaveLength(5);
+    ws.open();
+    ws.onclose?.({ code: 4003, reason: 'forbidden' });
+    expect(status.at(-1)).toBe('closed');
+    await vi.advanceTimersByTimeAsync(AUTH_RETRY_MS * 2);
+    expect(FakeWS.all).toHaveLength(5);
+    sock.close();
+  });
+
+  it('a nursery’s room keeps its rules: “full” and “forbidden” are final there', async () => {
+    const status: string[] = [];
+    openMonitorSocket(NID, 'viewer', () => undefined, () => undefined, (s) => status.push(s));
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWS.all[0].open();
+    FakeWS.all[0].onclose?.({ code: 4003, reason: 'full' });
+    expect(status.at(-1)).toBe('closed');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeWS.all).toHaveLength(1);
   });
 
   it('a call’s room: the ticket in the first frame; “that call has ended” is final', async () => {

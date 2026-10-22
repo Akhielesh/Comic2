@@ -47,7 +47,10 @@ export class DOHarness {
   sockets: FakeWS[] = [];
   pinged = new Map<FakeWS, number>();
   alarmAt: number | null = null;
+  /** Work handed to waitUntil (runs on after the reply). */
+  background: Promise<unknown>[] = [];
   state = {
+    waitUntil: (p: Promise<unknown>) => void this.background.push(p),
     storage: {
       get: async (k: string) => structuredClone(this.store.get(k)),
       put: async (k: string | Record<string, unknown>, v?: unknown) => {
@@ -115,6 +118,15 @@ export class World {
       this.lines.set(name, x);
     }
     return x;
+  }
+
+  /** Let every object's after-the-reply work (waitUntil) finish — including work it starts in turn. */
+  async settle(): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      const all = [...this.lines.values(), ...this.rooms.values()].flatMap((x) => x.h.background.splice(0));
+      if (!all.length) return;
+      await Promise.all(all);
+    }
   }
 
   lineOf(uid: string) {

@@ -3,7 +3,7 @@
 // app's call screen is the same), the handshake only between people in the
 // call, history to everyone's line at the end — and nothing left behind.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CallRoom, CLEANUP_MS, PENDING_SID } from './callRoom';
+import { CallRoom, CLEANUP_MS, MAX_PENDING, MAX_SOCKETS, PENDING_SID } from './callRoom';
 import { DOHarness, FakeWS, Pair } from './directTestKit';
 import { LINE_GRACE_MS, RING_MS, type Call, type CallRecord } from './familyCalls';
 import { STUN } from './ice';
@@ -36,8 +36,8 @@ function setup(replies: Record<string, { status: string; name?: string }> = {}) 
     }),
   };
   const room = new CallRoom(h.state as never, { USER_LINE } as never);
-  const init = async (to: unknown[] = [{ uid: SAM.uid, family: false, where: null }]) => {
-    const res = await room.fetch(new Request('https://call.internal/x/init', { method: 'POST', body: JSON.stringify({ id: ID, from: ALICE, video: true, to }) }));
+  const init = async (to: unknown[] = [{ uid: SAM.uid, family: false, where: null }], extra: Record<string, unknown> = {}) => {
+    const res = await room.fetch(new Request('https://call.internal/x/init', { method: 'POST', body: JSON.stringify({ id: ID, from: ALICE, video: true, to, ...extra }) }));
     return (await res.json()) as { status: string; ticket?: string; error?: string };
   };
   const ticketFor = (uid: string) => posts.find((p) => p.path === '/x/ring' && p.uid === uid)?.body.ticket as string;
@@ -53,8 +53,8 @@ function setup(replies: Record<string, { status: string; name?: string }> = {}) 
   };
   const lastCall = (ws: FakeWS) => ws.last('call')?.call as Call | undefined;
   /** Alice places the call, both reach the room, Sam picks up. */
-  const answered = async () => {
-    const r = await init();
+  const answered = async (extra: Record<string, unknown> = {}) => {
+    const r = await init(undefined, extra);
     const alice = await enter(r.ticket!, 'alice');
     await say(alice, { t: 'call_join', id: ID, video: true, mic: true });
     const sam = await enter(ticketFor(SAM.uid), 'sam');
@@ -191,6 +191,84 @@ describe('CallRoom', () => {
     // Only someone in the call can add people.
     const no = await room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by: JO.uid, to: [{ uid: SAM.uid }] }) }));
     expect(no.status).toBe(403);
+  });
+
+  it('someone other than the caller adding a person: rung as the call and as the person adding them, with who’s in it', async () => {
+    const { answered, room, posts } = setup();
+    await answered();
+    // Sam (not the caller) adds Jo. His line's family word is about Sam, and goes along as such.
+    const res = await room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by: SAM.uid, to: [{ uid: JO.uid, family: true, where: 'Aria’s family' }], famAt: 123 }) }));
+    expect(await res.json()).toEqual({ status: 'ringing', added: [JO.uid] });
+    const ring = posts.filter((p) => p.path === '/x/ring').at(-1)!;
+    // Regression: the ring went out as if Alice alone were ringing, so Jo's line judged only Alice.
+    expect(ring.body).toMatchObject({ from: ALICE, by: { uid: SAM.uid, name: 'Sam' }, family: true, famAt: 123 });
+    expect(ring.body.with ?? []).toEqual([]);
+    // The caller adding someone: no `by` (it's their own call), and Sam is listed as already in it.
+    await room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by: ALICE.uid, to: [{ uid: '00000000-0000-4000-8000-00000000000a', family: false, where: null }] }) }));
+    const second = posts.filter((p) => p.path === '/x/ring').at(-1)!;
+    expect(second.body.by).toBeUndefined();
+    expect(second.body.with).toEqual([SAM.uid]);
+  });
+
+  it('someone else adding a person: the caller’s own line (when the call was placed) still speaks for the caller', async () => {
+    const { answered, room, posts } = setup();
+    const OTHER = '00000000-0000-4000-8000-00000000000b';
+    // Alice's line sent her family with the call (read at 5000) — Jo is in it.
+    await answered({ famAt: 5000, fam: [JO.uid, 'not-a-uid', ALICE.uid] });
+    const add = (uid: string, by: string) =>
+      room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by, to: [{ uid, family: true, where: null }], famAt: 9000 }) }));
+    // Regression: a family member added by family rang as a stranger once the callee's own map was old.
+    await add(JO.uid, SAM.uid);
+    expect(posts.filter((p) => p.path === '/x/ring').at(-1)!.body).toMatchObject({ by: { uid: SAM.uid }, famAt: 9000, fromFamily: true, fromFamAt: 5000 });
+    await add(OTHER, SAM.uid);
+    expect(posts.filter((p) => p.path === '/x/ring').at(-1)!.body).toMatchObject({ fromFamily: false, fromFamAt: 5000 });
+  });
+
+  it('the caller adding people, or a call placed without a family word: no separate word for the caller', async () => {
+    const { answered, room, posts } = setup();
+    await answered();
+    await room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by: SAM.uid, to: [{ uid: JO.uid, family: true, where: null }], famAt: 9000 }) }));
+    expect(posts.filter((p) => p.path === '/x/ring').at(-1)!.body.fromFamAt).toBeUndefined();
+  });
+
+  it('the caller hanging up before reaching the room cancels the call there and then', async () => {
+    const { init, room, posts, h } = setup();
+    await init();
+    const cancel = (by: string) => room.fetch(new Request('https://call.internal/x/cancel', { method: 'POST', body: JSON.stringify({ id: ID, by }) })).then((r) => r.json());
+    // Only the caller's own line can.
+    expect(await cancel(SAM.uid)).toEqual({ ok: false });
+    expect(h.store.get('endedAt')).toBeUndefined();
+    // Regression: it rang on until the caller's 20-second grace ran out.
+    expect(await cancel(ALICE.uid)).toEqual({ ok: true });
+    const log = posts.find((p) => p.path === '/x/log')!;
+    expect((log.body.rec as CallRecord).why).toBe('cancelled');
+    expect(h.store.get('endedAt')).toEqual(expect.any(Number));
+  });
+
+  it('a caller already in the room isn’t dropped by a late cancel (hanging up there is a call_leave)', async () => {
+    const { init, room, enter, say, h } = setup();
+    const r = await init();
+    const alice = await enter(r.ticket!, 'alice');
+    await say(alice, { t: 'call_join', id: ID, video: true, mic: true });
+    const res = await room.fetch(new Request('https://call.internal/x/cancel', { method: 'POST', body: JSON.stringify({ id: ID, by: ALICE.uid }) }));
+    expect(await res.json()).toEqual({ ok: false });
+    expect(h.store.get('endedAt')).toBeUndefined();
+  });
+
+  it('idle sockets without a ticket can’t fill the room: only ticket holders count towards its limit', async () => {
+    const { init, room, h, enter, ticketFor } = setup();
+    await init();
+    // Regression: unauthenticated sockets counted, so 16 idle ones kept everyone in the call out.
+    const idle = Array.from({ length: MAX_SOCKETS + 4 }, () => {
+      const ws = new FakeWS(h);
+      room.admit(ws as never);
+      return ws;
+    });
+    expect(h.sockets.length).toBeLessThanOrEqual(MAX_PENDING);
+    expect(idle.filter((ws) => ws.closed != null)).toHaveLength(idle.length - MAX_PENDING);
+    const sam = await enter(ticketFor(SAM.uid), 'sam');
+    expect(sam.closed).toBeNull();
+    expect(sam.last('hello')).toBeTruthy();
   });
 
   it('wipes itself two minutes after the call ends, closing whatever is left', async () => {

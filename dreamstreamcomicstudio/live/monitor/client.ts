@@ -141,6 +141,8 @@ export interface MonitorSocket {
 
 /** Close codes that mean "stop trying": auth/forbidden/full/removed/ended. */
 const FINAL = new Set([4001, 4003, 4004, 4006]);
+/** A persistent socket that can't sign in (no token yet, or the server couldn't check it) tries again this often at most. */
+export const AUTH_RETRY_MS = 30_000;
 export const PING_MS = 25_000;
 export const FAST_PING_MS = 10_000;
 /** A ping that gets no answer (no message at all) this long means the socket is dead. */
@@ -155,6 +157,11 @@ export type AuthFrame = { frame: Record<string, unknown>; guest?: boolean } | { 
  * call line, a direct call): authenticates in the first frame, keeps itself
  * alive (ping + watchdog, faster while ringing or in a call), and reconnects —
  * re-authenticating with a fresh frame every time — until it's told to stop.
+ *
+ * `persistent` (your own call line): only a real "forbidden" stops it. "Too
+ * many devices", a sign-in that can't be checked right now, and no token yet
+ * (a phone waking up offline with an expired session) all back off and try
+ * again — a line that quietly gave up would leave the device unreachable.
  */
 export function openLiveSocket<M extends { t: string }>(
   path: string,
@@ -162,7 +169,7 @@ export function openLiveSocket<M extends { t: string }>(
   onMsg: (m: M) => void,
   onBinary: (data: Blob) => void,
   onStatus: (s: MonSocketStatus, detail?: string) => void,
-  opts: { fast?: boolean; onFinal?: (code: number, guest: boolean) => void } = {},
+  opts: { fast?: boolean; onFinal?: (code: number, guest: boolean) => void; persistent?: boolean } = {},
 ): MonitorSocket {
   let ws: WebSocket | null = null;
   let usedGuest = false;
@@ -231,18 +238,25 @@ export function openLiveSocket<M extends { t: string }>(
   };
 
   /** The connection is gone (closed, or found dead): say so and try again — unless it's final. */
-  const lost = (code: number, guest: boolean) => {
+  const lost = (code: number, guest: boolean, reason = '') => {
     stopTimers();
     if (closedByUs) return;
-    if (FINAL.has(code) && code !== 4001) {
+    // "Too many devices" passes (a device closes, a stale socket times out): a persistent line waits it out.
+    const full = code === 4003 && reason === 'full';
+    if (FINAL.has(code) && code !== 4001 && !(opts.persistent && full)) {
       opts.onFinal?.(code, guest);
       onStatus('closed', lastError);
       return;
     }
-    // 4001 (auth) retries once with a freshly refreshed token, then stops.
+    // 4001 (auth) retries once with a freshly refreshed token, then stops (a persistent line slows down instead).
     attempts += 1;
-    if (code === 4001 && attempts > 2) {
-      onStatus('closed', lastError || 'Your session expired — sign in again.');
+    if ((code === 4001 && attempts > 2) || full) {
+      if (!opts.persistent) {
+        onStatus('closed', lastError || 'Your session expired — sign in again.');
+        return;
+      }
+      onStatus('reconnecting', lastError);
+      retryIn(Math.max(backoff(), full ? 5000 : AUTH_RETRY_MS));
       return;
     }
     onStatus('reconnecting');
@@ -274,7 +288,14 @@ export function openLiveSocket<M extends { t: string }>(
     const a = await auth();
     if (my !== gen || closedByUs) return;
     if ('error' in a) {
-      onStatus('closed', a.error);
+      if (!opts.persistent) {
+        onStatus('closed', a.error);
+        return;
+      }
+      // No token right now (offline, or the session is refreshing): try again shortly, and as soon as we're back online.
+      attempts += 1;
+      onStatus('reconnecting', a.error);
+      retryIn(Math.min(AUTH_RETRY_MS, Math.max(backoff(), 5000)));
       return;
     }
     usedGuest = !!a.guest;
@@ -306,7 +327,7 @@ export function openLiveSocket<M extends { t: string }>(
     sock.onclose = (ev) => {
       if (ws !== sock) return;
       ws = null;
-      lost(ev.code, usedGuest);
+      lost(ev.code, usedGuest, ev.reason);
     };
   };
 
@@ -408,7 +429,11 @@ export function openMonitorSocket(
   );
 }
 
-/** A member's personal line for direct calls (live-worker userLine.ts): their own token in the first frame. */
+/**
+ * A member's personal line for direct calls (live-worker userLine.ts): their own
+ * token in the first frame. Persistent: it keeps trying through "too many
+ * devices", no token yet and sign-in hiccups — only a real "forbidden" stops it.
+ */
 export function openUserLineSocket<M extends { t: string }>(uid: string, onMsg: (m: M) => void, onStatus: (s: MonSocketStatus, detail?: string) => void, opts: { fast?: boolean } = {}): MonitorSocket {
   return openLiveSocket<M>(
     `/api/calls/u/${uid}/ws`,
@@ -421,7 +446,7 @@ export function openUserLineSocket<M extends { t: string }>(uid: string, onMsg: 
     onMsg,
     () => undefined,
     onStatus,
-    opts,
+    { ...opts, persistent: true },
   );
 }
 
@@ -440,11 +465,20 @@ export function openCallRoomSocket<M extends { t: string }>(id: string, ticket: 
   );
 }
 
+const membersFns = new Set<(nid: string) => void>();
+
+/** This device just changed who's in a nursery (calls re-read who counts as family). */
+export function onMembersChanged(fn: (nid: string) => void): () => void {
+  membersFns.add(fn);
+  return () => void membersFns.delete(fn);
+}
+
 /**
  * One-shot "admin" connection (not shown in presence): a parent tells the
  * room the member list changed so removed people are cut off right away.
  */
 export function announceMembersChanged(nid: string): Promise<void> {
+  for (const fn of membersFns) fn(nid);
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {

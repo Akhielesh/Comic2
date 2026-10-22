@@ -535,8 +535,14 @@ TURN — "Relay test" shows in the call. Each call's history keeps a small
 `call_stats` per person (time to connect, LAN / internet / relay, failure reason,
 relay on offer — no names or addresses), also logged as one line for
 `wrangler tail`. "Answer" on a call notification opens
-`#/call/<nursery>/<call>?answer=1`, which picks up as soon as the app is back in
-the room.
+`#/call/<nursery>/<call>?answer=<proof>`, which picks up as soon as the app is
+back in the room. The proof is a one-time random token the service worker
+writes to Cache Storage (`ds-sw-state`, `/__ds/answer/<proof>`) only when
+"Answer" is really tapped, bound to that call and good for 90 s; the app
+(`takeAnswerProof`) uses it up before answering. Any other address — a link
+someone sends while a call rings, `?answer=1`, a reload — only opens the app on
+the ringing call; it never picks up. Someone outside your family is always
+answered by voice first, even from "Answer".
 
 **Line liveness.** Line sockets ping every 25 s (every 10 s while ringing or in a
 call) and treat a ping that hears nothing for 10 s as a dead socket: dropped and
@@ -571,14 +577,29 @@ through two new Durable Objects — no SQL:
   your own token; `live_me` must say you're a member with that very uid (else
   4003), which **claims** the line. Only a claimed line rings; a claim nobody
   renews for 30 days lapses, and a ring to an unclaimed line writes nothing.
+  Only authenticated apps count towards its 10 devices; sockets still waiting
+  to authenticate have their own pool of 6 (the oldest is let go first), and a
+  closed socket stops counting at once, so knowing a member's id isn't enough
+  to crowd their apps off the line. The app keeps this line open through "too
+  many devices", sign-in hiccups and a phone waking up offline (backing off up
+  to 30 s), and reopens it when back online, on every refresh and when you
+  place a call — only a real "forbidden" stops it.
   Hello: `{you, vapid, ringing (with tickets), log, favs, blocked, prefs}` —
   VAPID from the monitor's `KEY_HOLDER` (the **same** key pair, so nursery
   alerts keep working). It works out your family (`monitor_list` +
-  `monitor_people` with your token, after the hello, cached 10 min). It places
-  calls (`dcall_start`, `dcall_invite`), rings you (`dcall_ring` to open apps +
-  Web Push `{direct:true}` → `#/call/d/<id>`), takes `dcall_decline {block?}`,
-  `fav`, `block`, `prefs {who}`, `call_push(_off)`, and keeps your direct-call
-  history (60, missed-call push).
+  `monitor_people` with your token, after the hello, re-read when older than
+  10 min). It places calls (`dcall_start`, `dcall_invite`) — each one checks
+  your token again (`verifyMember`, cached a minute: a membership revoked while
+  a socket stays open stops calls at once) and re-reads your family unless that
+  was under a minute ago — rings you (`dcall_ring` to open apps + Web Push
+  `{direct:true}` → `#/call/d/<id>`, sent behind the reply so a ring and a
+  silenced ring take the same time), takes `dcall_decline {block?}`,
+  `dcall_cancel {ref, id?}` (you hung up before the call got going — it ends at
+  once, even while its room is still being made), `fav`, `block`,
+  `prefs {who}`, `call_push(_off)`, and keeps your direct-call history (60,
+  missed-call push). Favourite, block and "who can call me" changes made while
+  the line is down are kept on the device (also across a reload) and replayed
+  after its next hello, so a hello never quietly undoes them.
 - `CallRoom` (`callRoom.ts`, one per call, 16-hex id, socket
   `GET /api/calls/c/<id>/ws`) speaks the nursery line protocol, so the call
   mesh and call screen are the same. It's made by the caller's line
@@ -590,24 +611,41 @@ through two new Durable Objects — no SQL:
   authenticated line) — no Supabase round trip on answer. The hello carries
   fresh ICE. Picking up tells the person's other devices to stop ringing
   (`/x/update`); at the end every line gets the history line (`/x/log`,
-  missed calls marked), and the room wipes itself 2 minutes later.
+  missed calls marked), and the room wipes itself 2 minutes later. Someone in
+  the call adding a person (`/x/invite`) rings them with `by` (who added them)
+  and `with` (who's in the call), and the caller hanging up before reaching
+  the room (`/x/cancel`, from their line) cancels it there and then. As on the
+  personal line, only ticket holders count towards its 16 devices.
 - The worker routes only those two sockets (`/api/calls/u/<uuid>/ws`,
   `/api/calls/c/<16 hex>/ws`); the objects' `/x/*` endpoints are never routed.
   Migration `v3` adds both classes (`wrangler.jsonc`).
 
 Privacy and abuse controls (`directCalls.ts`, pure and unit-tested): the
 caller's name comes from `live_me`, never the app; "Grandma · Aria’s family"
-appears only when you share a nursery (your own family map, or the caller's
-side vouching), otherwise the ring says **Stream Studio member · not in your
-family**, answers with the camera off unless you pick video, and offers
-**Decline & block**. **Who can call you**: everyone on Stream Studio (default)
+appears only when you share a nursery (`judgeRing`: your own family map and the
+ringing side's map, re-read for the call, are compared and the newer one
+decides — someone just removed from a nursery stops counting at once; neither
+counts past 10 minutes; a side whose map couldn't be read vouches for nobody,
+and then only a map of your own read under a minute ago counts), otherwise the ring says **Stream Studio member · not
+in your family**, answers with the camera off unless you pick video, and offers
+**Decline & block**. Added to a call by someone else, the ring is judged as the
+call (the caller) *and* as the person who added you: a block of either — or of
+anyone already in the call — silences it, the rate limits count against
+whoever added you, it's family only when both are (the adder's side vouches
+only for themselves; the caller's own line vouched for the caller when the call
+was placed, and the call's room keeps that word), a caller you silenced stays
+silenced, the ring says "Added by Bob", and Decline & block blocks
+a stranger who added you rather than the caller. **Who can call you**: everyone on Stream Studio (default)
 or only people in your nurseries (`restricted` is the honest reply). A
 **blocked** caller — or one silenced for ringing a non-family member 3 times in
 an hour, or after 2 declines in a day — gets exactly the reply anyone else
-would (it rings out as "no answer") while nothing reaches you: no ring, no push,
-no history; the checks a caller can observe all come before the block. Nobody
-reachable (no app open, no push) is said at once ("Sam can’t be reached right
-now") and leaves a missed call. Caller limits: 8 calls per 10 minutes, 40 a
+would, just as fast (it rings out as "no answer") while nothing reaches you: no
+ring, no push, no history; the checks a caller can observe all come before the
+block. Whether you have Stream Studio open is never part of the reply: with no
+app open and no push it simply rings out as "no answer" (and an app opened
+while it rings picks it up), like a phone that's switched off — otherwise a
+blocked caller could watch you come online. You get the missed call.
+"Unavailable" now only means a line that was never claimed or lapsed. Caller limits: 8 calls per 10 minutes, 40 a
 day, 15 different people outside the family a day (`slow_down`). The first call
 to someone outside your family asks first ("Sam isn’t in any of your nurseries
 — they’ll see your name"), since two people can share a name. A device running
