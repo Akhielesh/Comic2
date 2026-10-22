@@ -1,0 +1,50 @@
+name: Stream cost watch
+
+# Daily Stream Studio cost watch (ADR 0007 D3; dreamstreamcomicstudio/docs/features/stream-studio-costs.md §3.2).
+# Reads Cloudflare's own analytics (GraphQL + the rooms' Analytics Engine points) with a READ-ONLY
+# token, evaluates the Cost centre's alert rules (free tiers filling, TURN on course for $10/month,
+# hibernation, relay creep, R2 near free, …) and opens / updates / closes ONE issue labelled
+# `stream-cost-watch` — only when the set of firing alerts changes. GitHub's notification is the email.
+#
+# Never wakes the backend container (talks to api.cloudflare.com and api.github.com only), sends no
+# email of its own, and installs nothing but tsx. Free on this public repo.
+#
+# Secrets: CF_ANALYTICS_API_TOKEN (read-only: Account › Account Analytics › Read — NOT the deploy
+# token) and CLOUDFLARE_ACCOUNT_ID. Without them the job logs why and exits 0.
+# Optional repository variables: STREAM_DO_NAMESPACES (MonitorRoom=<id>,EventRoom=<id>,…) and
+# STREAM_PHASE0_SHIPPED=1 (applies the ADR 0006 write-diet budget).
+
+on:
+  schedule:
+    - cron: '17 6 * * *' # daily, off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: stream-cost-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check Stream Studio costs
+        env:
+          CF_ANALYTICS_API_TOKEN: ${{ secrets.CF_ANALYTICS_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STREAM_DO_NAMESPACES: ${{ vars.STREAM_DO_NAMESPACES }}
+          STREAM_PHASE0_SHIPPED: ${{ vars.STREAM_PHASE0_SHIPPED }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --yes tsx@4.19.2 dreamstreamcomicstudio/scripts/ops/streamCostWatch.mjs

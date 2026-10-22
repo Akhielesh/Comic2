@@ -69,6 +69,8 @@ import {
 import { RING_MS, type CallRecord } from './familyCalls';
 import { callRpc, verifyMember, type SupabaseEnv } from './supabaseAuth';
 import { isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
+import { UsageMeter, type SocketUsage, type UsageSink } from './usageMeter';
+import { FAIR_USE, isUsageKind, sanitizeUsage, type UsageMonth } from '../../shared/stream/usage';
 
 /** The baby monitor's VAPID key holder (one key pair for every push this app sends). */
 const KEY_HOLDER = '__vapid_keys__';
@@ -77,6 +79,15 @@ const VAPID_SUBJECT = 'https://dreamstreamstudio.ai';
 export interface UserLineEnv extends SupabaseEnv {
   MONITOR_ROOM: DurableObjectNamespace;
   CALL_ROOM: DurableObjectNamespace;
+  /** Workers Analytics Engine (optional): Stream Studio usage points. */
+  STREAM_USAGE?: UsageSink;
+}
+
+/** The member's own usage this month (`{t:'usage_get'}` → `{t:'usage'}`; Phase B's Usage card). */
+export interface AccountUsageReply {
+  t: 'usage';
+  usage: UsageMonth;
+  allowances: { relayDataGb: number; cloudCopyGb: number };
 }
 
 interface Attach {
@@ -89,6 +100,8 @@ interface Attach {
   gone?: boolean;
   dev?: string;
   dn?: string;
+  /** Usage this app carries until the account's month row is written (usageMeter.ts). */
+  u?: SocketUsage;
 }
 
 interface Owner {
@@ -141,8 +154,11 @@ const clip = (s: unknown, n: number) => String(s ?? '').trim().slice(0, n);
 
 export class UserLine {
   private vapid: VapidKeys | null = null;
+  /** The account's usage month (calls it placed, …): ≤ 1 `use:YYYY-MM` row an hour. */
+  private readonly usage: UsageMeter;
 
   constructor(private state: DurableObjectState, private env: UserLineEnv) {
+    this.usage = new UsageMeter({ storage: state.storage, sink: env.STREAM_USAGE, scope: 'account' });
     // Idle lines never wake the object: the runtime answers keepalive pings.
     try {
       state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}'));
@@ -157,6 +173,7 @@ export class UserLine {
       if (url.pathname === '/x/ring') return this.handleRing(body);
       if (url.pathname === '/x/update') return this.handleUpdate(body);
       if (url.pathname === '/x/log') return this.handleLog(body);
+      if (url.pathname === '/x/use') return this.handleUse(body);
     }
     return json({ error: 'not found' }, 404);
   }
@@ -314,6 +331,8 @@ export class UserLine {
         return this.onList(msg);
       case 'prefs':
         return this.onPrefs(msg);
+      case 'usage_get':
+        return this.onUsageGet(ws);
       case 'family_refresh': {
         // At most once a minute (each read is a few Supabase calls) — or every 10 s right after
         // this member changed who's in a nursery, so someone removed stops counting at once.
@@ -329,11 +348,23 @@ export class UserLine {
   async webSocketClose(ws: WebSocket): Promise<void> {
     const a = ws.deserializeAttachment() as Attach | null;
     if (a && !a.gone) this.retire(ws, a, 1000, 'bye');
+    if (a?.u) this.handOver(ws, a);
+  }
+
+  /** A closing app's unwritten usage moves to another open app (or memory) — once, never lost to a close. */
+  private handOver(ws: WebSocket, a: Attach): void {
+    this.usage.release(a);
+    try {
+      ws.serializeAttachment({ ...a, authed: false, authing: false, gone: true } satisfies Attach);
+    } catch { /* closed */ }
+    const next = this.apps().find((s) => s.ws !== ws);
+    if (next && this.usage.stash(next.a)) next.ws.serializeAttachment(next.a);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
     const a = ws.deserializeAttachment() as Attach | null;
     if (a && !a.gone) this.retire(ws, a, 1011, 'error');
+    if (a?.u) this.handOver(ws, a);
   }
 
   /** The member's own token: live_me must say it's a member with this line's uid. That claims the line. */
@@ -630,6 +661,8 @@ export class UserLine {
     }
     await this.state.storage.put('log', appendLog((await this.get<CallRecord[]>('log')) ?? [], rec));
     this.all({ t: 'call_log', rec });
+    // A call this member placed: its usage is theirs (the call's room sends it to the caller only).
+    if (!incoming && body.use) await this.meterAdd('call', body.use);
     if (incoming && body.missed === true && seen?.how !== 'silent') {
       const ctx = seen?.ctx ?? { family: false, label: null, where: null };
       // Behind the reply, like the ring's: the room's wrap-up must take as long whoever you block.
@@ -720,6 +753,34 @@ export class UserLine {
     const endpoint = String(msg.endpoint ?? '');
     const all = (await this.get<PushRec[]>('push')) ?? [];
     if (all.some((r) => r.sub.endpoint === endpoint)) await this.state.storage.put('push', all.filter((r) => r.sub.endpoint !== endpoint));
+  }
+
+  // ---------------------------------------------------------------- usage
+  /** Usage another room measured for this account (a family call it placed). Internal only. */
+  private async handleUse(body: Record<string, unknown>): Promise<Response> {
+    if (!isUsageKind(body.kind)) return json({ ok: false });
+    await this.meterAdd(body.kind, body.use);
+    return json({ ok: true });
+  }
+
+  private async meterAdd(kind: Parameters<UsageMeter['add']>[0], use: unknown): Promise<void> {
+    this.usage.add(kind, sanitizeUsage(use));
+    const uid = await this.get<string>('uid');
+    const now = Date.now();
+    const carriers = this.apps().map(({ ws, a }) => ({ a, save: () => ws.serializeAttachment(a) }));
+    if ((await this.usage.flush(now, { scopeId: uid, account: uid, carriers })) === 'written') return;
+    // Inside the hour: it rides an open app's attachment until the next write (hibernation-safe).
+    const app = this.apps()[0];
+    if (app && this.usage.stash(app.a)) app.ws.serializeAttachment(app.a);
+  }
+
+  /** The member's own month: written row + what is still owed. A read; prunes the row that aged out. */
+  private async onUsageGet(ws: WebSocket): Promise<void> {
+    const now = Date.now();
+    const usage = await this.usage.month(now, this.apps().map(({ ws: w, a }) => ({ a, save: () => w.serializeAttachment(a) })));
+    const reply: AccountUsageReply = { t: 'usage', usage, allowances: { relayDataGb: FAIR_USE.relayDataGbPerAccountMonth, cloudCopyGb: FAIR_USE.cloudCopyGbRolling } };
+    this.send(ws, reply);
+    await this.usage.prune(now);
   }
 
   // ---------------------------------------------------------------- alarm

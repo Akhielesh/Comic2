@@ -6,6 +6,9 @@
 //                                      hard cap 50,000 rows/table), selecting only needed columns.
 //   fetchCloudflareAnalytics(...)      Optional live Workers/R2 usage via the GraphQL Analytics
 //                                      API when CF_ANALYTICS_API_TOKEN + CLOUDFLARE_ACCOUNT_ID exist.
+//   streamCosts.ts                     Stream Studio's tab: measured DO / R2 / TURN month to date + the
+//                                      rooms' usage counters (Analytics Engine) → report.stream and the
+//                                      'stream' product row (marginal $ + list value). ADR 0007.
 //   getCostCentreReport(days)          The route's entry point (60s cache, request-coalesced).
 //
 // Provenance (shown as badges in the UI):
@@ -34,6 +37,14 @@ import type {
 import { TtlCache } from '../lib/cache.js';
 import { getConfiguredProviderBudget, type ProviderBudget } from '../lib/providerUsage.js';
 import { getSupabaseAdmin } from './supabase.js';
+import {
+  buildStreamSection,
+  fetchStreamAnalytics,
+  namespaceLabelsFromEnv,
+  streamVerdict,
+  topNurseryIds,
+  type StreamAnalytics
+} from './streamCosts.js';
 
 // ─── Constants (each documented with its source) ──────────────────────────────────────────
 
@@ -126,6 +137,20 @@ export const FIXED_COSTS: ReadonlyArray<FixedCostRow & { source: CostSource }> =
     usdMonth: 0,
     source: 'fixed',
     note: 'Fallback backend host kept configured; nothing bills.'
+  },
+  {
+    service: 'Durable Objects (Stream Studio rooms)',
+    plan: 'Inside Workers Paid allowances',
+    usdMonth: 0,
+    source: 'estimated',
+    note: 'Usage-billed past 1M requests, 400k GB-s and 50M rows written a month (account-wide); $0.15/M, $12.50/M GB-s, $1/M rows beyond. Live figures: Stream Studio tab.'
+  },
+  {
+    service: 'Cloudflare Realtime TURN',
+    plan: 'First 1,000 GB/month free (shared)',
+    usdMonth: 0,
+    source: 'estimated',
+    note: 'On since 2026-10-22: $0.05/GB of relay egress past the free 1 TB; alert at $10/month. The baby monitor server relay costs DO requests, not bytes.'
   }
 ];
 
@@ -253,6 +278,13 @@ export interface CostCentreBuildOptions {
   now: Date;
   budgetFor?: (provider: string) => ProviderBudget | null;
   cloudflare?: CloudflareSection;
+  /** Stream Studio: live analytics (absent = not measured) and admin-only name lookups. */
+  stream?: {
+    analytics: StreamAnalytics | null;
+    nurseryNames?: Map<string, { name: string; owner: string | null }>;
+    namespaceLabels?: Record<string, string>;
+    phase0Shipped?: boolean;
+  };
 }
 
 // ─── Small helpers ─────────────────────────────────────────────────────────────────────────
@@ -708,6 +740,19 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
   const liveWorker = cfWorkers.find((w) => w.script === 'dreamstream-live');
   const perMonth = (usd: number) => (usd / days) * 30;
 
+  // Stream Studio: measured month to date + the rooms' counters (estimated), independent of billing.
+  const stream = buildStreamSection({
+    nowMs,
+    range: { fromMs, toMs, prevFromMs, days },
+    analytics: opts.stream?.analytics ?? null,
+    cloudflare: opts.cloudflare,
+    emailsMonthToDate: emailMonthToDate,
+    emails: userEmail,
+    nurseryNames: opts.stream?.nurseryNames,
+    namespaceLabels: opts.stream?.namespaceLabels,
+    phase0Shipped: opts.stream?.phase0Shipped
+  });
+
   const comic = productAi.comic;
   const chat = productAi.chat;
   const chatMonthly = monthlyRequests.get('chat_studio') || 0;
@@ -756,16 +801,19 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
     {
       id: 'stream',
       label: 'Stream Studio & Baby monitor',
-      costUsd: 0,
+      // Marginal: its share of the account's overage this month ($0 inside the free tiers).
+      costUsd: round(stream.marginalUsd),
+      // What the same usage is worth at list price (estimated) — the planning number.
+      listValueUsd: round(stream.listValueUsd, 6),
       // Without Cloudflare analytics there is no request count: model_usage_monthly's
       // 'stream_studio' row was Code Studio's model calls (mislabelled), not Stream Studio.
       requests: liveWorker ? liveWorker.requests : 0,
       users: rows.liveProfiles,
       revenueUsd: null,
-      note: liveWorker
-        ? 'Infra only: dreamstream-live Worker requests (Cloudflare analytics); Durable Objects + R2 inside Workers Paid.'
-        : 'Infra only: runs on the dreamstream-live Worker inside Workers Paid. Connect Cloudflare analytics for request counts.',
-      verdict: `No metered cost — covered by the $5 Workers Paid plan; ${plural(rows.liveProfiles, 'member')}.`
+      note: stream.sources.graphql || stream.sources.analyticsEngine
+        ? 'Infra: Durable Objects, R2, TURN and Worker requests (Cloudflare analytics, measured) + in-room usage counters (estimated). Marginal $ is month to date.'
+        : 'Infra only: runs on the dreamstream-live Worker inside Workers Paid. Connect Cloudflare analytics for real figures.',
+      verdict: `${streamVerdict(stream, formatUsd)} · ${plural(rows.liveProfiles, 'member')}.`
     },
     {
       id: 'code',
@@ -828,6 +876,9 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
   if (cfRequests > 0 && (cfRequests / days) * 30 > 10_000_000) {
     notes.push('Workers requests are running above the 10M/month included in Workers Paid — overage is not included above.');
   }
+  if (stream.marginalUsd > 0) {
+    notes.push(`Stream Studio owes ${formatUsd(stream.marginalUsd)} past the free allowances this month (its share of the account's overage) — not in the daily chart above; see the Stream Studio tab.`);
+  }
   for (const table of rows.truncated) notes.push(`Row cap reached for ${table} (${ROW_HARD_CAP.toLocaleString('en-US')} rows) — its figures are partial.`);
   for (const failure of rows.failures || []) notes.push(`Could not read ${failure} — treated as empty.`);
 
@@ -874,7 +925,8 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
     revenue: { byTier, creditPurchasesUsd: round(creditPurchasesUsd, 2) },
     products,
     cloudflare: opts.cloudflare ?? { configured: false },
-    notes
+    notes,
+    stream
   };
 };
 
@@ -1196,6 +1248,23 @@ export const loadCostCentreRows = async (days: CostRangeDays, now: Date): Promis
   };
 };
 
+/** Admin console only: the top nurseries' names and their owners' emails (soft — falls back to short ids). */
+export const loadNurseryNames = async (ids: string[], profiles: ProfileRow[]): Promise<Map<string, { name: string; owner: string | null }>> => {
+  const out = new Map<string, { name: string; owner: string | null }>();
+  if (!ids.length) return out;
+  try {
+    const { data, error } = await getSupabaseAdmin().from('monitor_nurseries').select('id, name, owner_id').in('id', ids.slice(0, 50));
+    if (error) return out;
+    const email = new Map(profiles.map((p) => [p.id, p.email ?? null]));
+    for (const n of (data || []) as Array<{ id: string; name?: string | null; owner_id?: string | null }>) {
+      out.set(String(n.id), { name: String(n.name || '').slice(0, 60) || 'Nursery', owner: n.owner_id ? email.get(String(n.owner_id)) ?? null : null });
+    }
+  } catch {
+    /* names are a convenience; ids still show */
+  }
+  return out;
+};
+
 // ─── Entry point ──────────────────────────────────────────────────────────────────────────
 
 const reportCache = new TtlCache<CostCentreReport>(60_000, 6);
@@ -1206,12 +1275,25 @@ export const getCostCentreReport = async (days: CostRangeDays, options: { fresh?
   return reportCache.getOrSet(key, async () => {
     const now = new Date();
     const range = computeCostRange(days, now);
-    const [rows, cloudflare] = await Promise.all([
+    const [rows, cloudflare, streamAnalytics] = await Promise.all([
       loadCostCentreRows(days, now),
       fetchCloudflareAnalytics({ fromMs: range.fromMs, toMs: range.toMs }).catch(
         (err): CloudflareSection => ({ configured: true, error: (err as Error)?.message || 'Cloudflare analytics unavailable' })
-      )
+      ),
+      // Stream Studio: ≤ 4 GraphQL queries + 1 Analytics Engine query, month to date. Never throws.
+      fetchStreamAnalytics({ nowMs: now.getTime(), fromMs: range.prevFromMs }).catch((): StreamAnalytics | null => null)
     ]);
-    return buildCostCentreReport(rows, { days, now, cloudflare });
+    const nurseryNames = await loadNurseryNames(topNurseryIds(streamAnalytics, range.fromMs, range.toMs), rows.profiles);
+    return buildCostCentreReport(rows, {
+      days,
+      now,
+      cloudflare,
+      stream: {
+        analytics: streamAnalytics,
+        nurseryNames,
+        namespaceLabels: namespaceLabelsFromEnv(),
+        phase0Shipped: process.env.STREAM_PHASE0_SHIPPED === '1'
+      }
+    });
   });
 };

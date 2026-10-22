@@ -1,6 +1,8 @@
 # Stream Studio costs: what we spend, who sees it, and how we keep it near $0
 
-- **Status:** Proposed design. Nothing here is implemented yet. The decision record is
+- **Status:** Phase A (metering and the owner view) is **implemented** — see
+  [Implementation status](#implementation-status-2026-10-22) below. Phases B and C are still the plan. The owner
+  answered §8 on 2026-10-22 (recorded there). The decision record is
   [ADR 0007](../decisions/0007-stream-studio-cost-transparency-and-frugality.md).
 - **Date:** 2026-10-22.
 - **Code refs:** branch `claude/dreams-streaming-baby-monitor-z2kkae` at `ad30d1c`. Every line ref was checked at `b6bf72e`;
@@ -14,6 +16,47 @@
   - `docs/features/baby-monitor.md`.
   - `docs/features/stream-studio.md` §10.
   - `docs/infrastructure/COST_RUNBOOK.md`.
+
+---
+
+## Implementation status (2026-10-22)
+
+**Phase A — shipped** (A1–A8, branch `impl/costs-metering`):
+
+| Step | Where | What it does |
+|---|---|---|
+| A1 | `shared/stream/usage.ts` (+ test) | Types, `STREAM_UNIT_PRICES` (`checkedOn: '2026-10-22'`), allowances, fair-use numbers, `listValueUsd`, `allocateOverage`, `projectMonthEnd`, and the pure alert rules (`evaluateStreamAlerts`, incl. TURN ≥ $10/month) shared by the Cost centre and the daily watch. |
+| A2 | `live-worker/src/usageMeter.ts` (+ test) | In-memory counters (`bump` per frame: no `await`, no storage), per-socket totals in WebSocket attachments (`a.u`: cumulative `c`, written `f`) that survive hibernation, `flush(now)` → **≤ 1 `use:YYYY-MM` row + 1 Analytics Engine point per kind per room per hour** (the hour is checked against the row's own `updatedAt`, so it holds across eviction). Fails open. No `BILLING_ENABLED` dependency. |
+| A3 | `monitorRoom.ts` | Every camera relay message counted (they are billed 20:1, throttled ones too); per-viewer "through our server" clock (`a.rs`) → relay minutes in the viewer's attachment; flush in the existing alarm and when the last camera leaves; memory parked on a connected socket's attachment otherwise; prune in the 6-hour purge. A finished family call → one point against the **caller's** account + its usage to the caller's line. |
+| A3 | `eventRoom.ts` | Segment bytes/count **ride the existing `putMeta`** (`meta.use`, never public); viewer-minutes and alarm upkeep ride the alarm's existing `stats` write. The flush (janitor alarm, end, recording register) counts what those durable totals gained since a **watermark kept in the usage row**, so an end inside the hour loses nothing — the replay janitor writes it at the latest. Recordings counted once, at the size R2 stored. |
+| A3 | `callRoom.ts`, `userLine.ts`, `index.ts` | A direct call's usage rides the existing `/x/log` to the caller's line only. `UserLine` keeps the account month (`/x/use` for family calls). The Worker passes `bytes` to `/ingest` and R2's `stored` size on `complete`. |
+| A4 | `live-worker/wrangler.jsonc` | `analytics_engine_datasets: [{ binding: "STREAM_USAGE", dataset: "stream_usage" }]` (optional in code). |
+| A5 | `server/src/services/streamCosts.ts` (+ test), `costCentre.ts` | ≤ 4 GraphQL queries (Workers + DO requests; DO `activeTime` + `rowsWritten`; R2 operations + storage; TURN `egressBytes`) and 1 Analytics Engine SQL query per Cost centre load, month to date, each dataset failing alone. Stream product row = marginal $ (its share of the account's overage, $0 inside the free tiers) + `listValueUsd`; `report.stream` carries per-feature units, path mix, top consumers (nursery name / email in the admin console only), account-wide headroom with month-end projection, per-nursery-day KPIs, scale projection and alerts. `FIXED_COSTS` gains the DO and TURN lines. |
+| A6 | `components/admin/costs/StreamCard.tsx`, `CostCentre.tsx` | Admin → Costs → **Stream Studio** tab (kit only: `Surface`, `KpiTile`, `SourceBadge`, `BudgetMeter`, `SortableTable`), a "List value" column in Products, and an alert badge in the header. |
+| A7 | `.github/workflows/stream-cost-watch.yml`, `scripts/ops/streamCostWatch.mjs` (+ test) | Daily at 06:17 UTC; reads Cloudflare only (never the backend); opens / updates / closes one `stream-cost-watch` issue **only when the alert set changes**; no secret → a logged no-op. |
+| A8 | `COST_RUNBOOK.md` §1/§7/§9, `baby-monitor.md` | DO rows, server relay and TURN lines; the relay cost claim corrected (≈ $0.16 per all-night relay viewer-month, not $1.7). |
+
+**Read paths for Phase B** (no UI yet): `UserLine` `{t:'usage_get'}` → `{t:'usage', usage: UsageMonth, allowances}`
+(the member's own month); `MonitorRoom` `{t:'q', q:'usage'}` → `{t:'r', q:'usage', usage, allowances}` for **parents only**
+(caregivers, viewers and guests get `error: 'forbidden'`). `MonitorRoom` already accepts the Phase B `{t:'use'}` report from
+viewers: cumulative, deduplicated in the attachment, clamped to the socket's age, never "through our server" minutes
+(the room measures those itself) — display data only, never enforcement.
+
+**Owner actions to light it up:** set `CF_ANALYTICS_API_TOKEN` (read-only, Account Analytics Read) and
+`CLOUDFLARE_ACCOUNT_ID` on the backend **and** as GitHub Actions secrets; optionally `STREAM_DO_NAMESPACES`
+(`MonitorRoom=<id>,EventRoom=<id>,UserLine=<id>,CallRoom=<id>`) for exact per-room figures; set the Cloudflare account
+budget alert at $10. Deploying the live Worker creates the `stream_usage` dataset on its first write.
+
+**Known limits (honest):**
+- The GraphQL field names (`durableObjectsPeriodicGroups.sum.activeTime/rowsWritten`, `callsTurnUsageAdaptiveGroups`)
+  follow Cloudflare's docs but were not introspected against the live schema; a mismatch shows as that panel's error,
+  not a broken page.
+- The hourly bound is strict. A `MonitorRoom` session that ends within an hour of the last write parks its counters on a
+  socket that stays (or memory); if the room is then evicted with no socket left, up to an hour of relay counters can be
+  lost. `EventRoom` can't lose any (durable totals + watermark). Cloudflare's own figures remain the control total.
+- TURN per-identifier figures need the P2 guardrails (per-socket credentials with a `customIdentifier`); until then
+  TURN is the account total and call TURN GB is estimated from minutes on the relay path.
+- Counters are accurate estimates, **not billing-grade** — Stream Studio does not charge users.
 
 ---
 
@@ -719,6 +762,20 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
 
 ## 8. Open questions for the owner
 
+**Answered 2026-10-22** (build to these):
+1. Users see free / through-our-servers labels, GB and % meters, and the list-price "What this costs DreamStream (est.)"
+   in a clearly labelled expander that is never presented as a charge.
+2. Fair use as proposed: relay data 10 GB per account-month + 10 GB per nursery; picture through our server 16 h a day;
+   7-day cloud copies 10 GB rolling. When relay data runs out the monitor falls back to **sound only + direct / Home Wi-Fi
+   picture** — never silently to the not-yet-encrypted server relay. Sound and alerts are never cut.
+3. TURN is **already on** in production (`TURN_KEY_ID` / `TURN_KEY_API_TOKEN` set), so the guardrails are urgent. The
+   monthly TURN alert is **$10**.
+4. The 7-day cloud copy becomes **off by default** (Drive / device first).
+6. Stream Studio does **not** charge users; counters are accurate but not billing-grade.
+7. Monitor relay counts against the **nursery**; call relay against the **caller's account**.
+
+The original questions, for the record:
+
 1. **Dollars for users.** Show "What this costs DreamStream" in USD to users, labelled as our cost and in an expander
    (recommended)? Or percent and GB only, as Comic Studio's platform allowance does? Or nothing?
 2. **Fair-use numbers.** Relay data 10 GB per account-month (plus 10 GB per nursery)? Picture through our server 16 h a day?
@@ -770,7 +827,7 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
 **Arithmetic:** the session working notes `comic-costing.md`, `stream-cost-model.md`, `frugal-tech.md` and `model.py`. Those
 notes are not in the repo; every figure they gave that is used here is restated above with its inputs.
 
-### Doc inconsistencies found (fix in Phase A8)
+### Doc inconsistencies found (fixed in Phase A8, 2026-10-22)
 
 - `docs/features/baby-monitor.md` (relay "Cost" paragraph) says that while relay frames flow "the object stays awake: up to ~4.6k
   GB-s per relayed night … ≈ $1.7 per nursery per month". Under current pricing, an idle object that is eligible to hibernate is

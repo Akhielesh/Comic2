@@ -35,6 +35,25 @@ export const CATEGORY_SHORT_LABEL: Record<CostCategoryId, string> = {
   email: 'Email'
 };
 
+/**
+ * Stream Studio connection paths, reusing the validated categorical steps: the free paths read
+ * green/blue (Home Wi-Fi, Direct), the paths we pay for read amber/orange (relay, our server).
+ * Always shown with a legend and the path's words — never color alone.
+ */
+export const PATH_COLOR = {
+  lan: 'var(--cc-connectors)',
+  direct: 'var(--cc-ai)',
+  turn: 'var(--cc-email)',
+  server: 'var(--cc-containers)'
+} as const;
+
+export const PATH_LABEL = {
+  lan: 'Home Wi-Fi',
+  direct: 'Direct',
+  turn: 'Through our relay',
+  server: 'Through our server'
+} as const;
+
 /** Status colors (fixed, never themed) — always paired with an icon + label. */
 export const STATUS = {
   warning: '#fab219',

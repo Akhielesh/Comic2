@@ -107,6 +107,106 @@ export interface ProductRow {
   note: string;
   /** One-line cost-benefit verdict. */
   verdict?: string;
+  /**
+   * What the same usage would cost at LIST PRICE with no free tier (estimated; the planning number).
+   * `costUsd` stays the marginal cost (the product's share of the account's overage).
+   */
+  listValueUsd?: number;
+}
+
+// ─── Stream Studio (ADR 0007; docs/features/stream-studio-costs.md §3) ───────────────────
+
+export type StreamPathKey = 'lan' | 'direct' | 'turn' | 'server';
+
+/** One account-wide free allowance: month to date, projected to month end. */
+export interface StreamHeadroomRow {
+  id: string;
+  label: string;
+  unit: string;
+  used: number;
+  allowance: number;
+  projected: number;
+  /** projected ÷ allowance × 100. */
+  projectedPct: number;
+  /** UTC day the run-rate crosses the allowance this month, or null. */
+  crossesOn: string | null;
+  /** Overage $ this month so far (list price beyond the allowance). */
+  overageUsd: number;
+  source: CostSource;
+  note?: string;
+}
+
+export interface StreamFeatureRow {
+  id: string;
+  label: string;
+  /** The units behind the $ (requests, rows, GB-s, GB, …). */
+  units: { label: string; value: number; unit: string }[];
+  /** List-price value of the period's usage (estimated). */
+  listValueUsd: number;
+  source: CostSource;
+  note?: string;
+}
+
+export interface StreamConsumerRow {
+  scope: 'nursery' | 'account' | 'event';
+  /** Internal id (admin console only). */
+  id: string;
+  /** Nursery name, account email or event id — admin console only; guests are never listed. */
+  label: string;
+  owner?: string | null;
+  listValueUsd: number;
+  serverMinutes: number;
+  turnGb: number;
+  minutes: number;
+}
+
+export interface StreamAlertRow {
+  id: string;
+  severity: 'warning' | 'critical';
+  title: string;
+  cause: string;
+}
+
+export interface StreamCostSection {
+  /** Which sources answered: Cloudflare GraphQL (measured) and Analytics Engine (in-room counters). */
+  sources: { graphql: boolean; analyticsEngine: boolean };
+  /** Month to date (UTC) that headroom, overage and alerts cover. */
+  month: { from: string; to: string; daysElapsed: number; daysInMonth: number };
+  /** Stream Studio's share of the account's overage this month (marginal $; $0 inside the free tiers). */
+  marginalUsd: number;
+  /** List-price value of the selected range's usage, and the range before it (estimated). */
+  listValueUsd: number;
+  prevListValueUsd: number | null;
+  /** Estimated list value per active nursery-month and per broadcast-hour. */
+  perNurseryMonthUsd: number | null;
+  perBroadcastHourUsd: number | null;
+  /** Share (0–1) of monitor + call minutes on Home Wi-Fi or Direct. */
+  freePathShare: number | null;
+  activeNurseries: number;
+  events: number;
+  features: StreamFeatureRow[];
+  /** Minutes by path for monitor, calls and meetings — the frugality scoreboard. */
+  pathMix: { kind: string; label: string; minutes: Record<StreamPathKey, number> }[];
+  top: { nurseries: StreamConsumerRow[]; accounts: StreamConsumerRow[]; events: StreamConsumerRow[] };
+  headroom: StreamHeadroomRow[];
+  /** At today's per-nursery cost (list price). */
+  projection: { perNurseryMonthUsd: number | null; at1k: number | null; at10k: number | null; source: CostSource };
+  /** ADR 0006 per-active-nursery-day KPIs (thresholds apply after Phase 0). */
+  kpis: {
+    activeNurseryDays: number;
+    doRequests: number | null;
+    rowsWritten: number | null;
+    gbSeconds: number | null;
+    serverShare: number | null;
+    source: CostSource;
+    note: string;
+  };
+  alerts: StreamAlertRow[];
+  /** Price table date (STREAM_UNIT_PRICES.checkedOn). */
+  pricesCheckedOn: string;
+  notes: string[];
+  /** Per-dataset failures (the rest still shows). */
+  errors: string[];
 }
 
 export interface CloudflareWorkerRow {
@@ -166,4 +266,6 @@ export interface CostCentreReport {
   products: ProductRow[];
   cloudflare: CloudflareSection;
   notes: string[];
+  /** Admin → Costs → Stream Studio (absent from servers that predate it). */
+  stream?: StreamCostSection;
 }
