@@ -9,12 +9,11 @@ import { FileText } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
 import { MessageBody } from '../MessageBody';
 import { ChatArtifacts } from './artifacts/ChatArtifacts';
-import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { SourceCard } from './SourceCard';
 import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
 import { prettyModelLabel } from '../../services/modelCatalog';
-import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles, buildStudioArtifact } from '../../services/chatUtils';
+import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles } from '../../services/chatUtils';
 import { FeedbackButtons } from '../feedback/FeedbackButtons';
 import {
   GLASS, HAIRLINE, MENU, MUTED, TRANSITION, PILL,
@@ -87,16 +86,6 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
   }, [branchOpen]);
 
   const codeBlocks = useMemo(() => (isUser ? [] : extractCodeBlocks(turn.content)), [isUser, turn.content]);
-  // Fallback Code Studio: if the model wrote an app as Markdown code blocks instead of
-  // calling generate_app (the norm for NVIDIA + free, non-tool-calling models), offer
-  // the SAME live Studio it would have. Skip while still streaming and when the tool
-  // already produced a code_studio artifact (so we never double up).
-  const inferredStudio = useMemo(() => {
-    if (isUser) return null;
-    if (busy && isLast) return null;
-    if (turn.artifacts?.some((a) => a.type === 'code_studio')) return null;
-    return buildStudioArtifact(codeBlocks);
-  }, [isUser, busy, isLast, turn.artifacts, codeBlocks]);
   const hasDetails = Boolean(
     turn.reasoning ||
     (turn.citations && turn.citations.length) ||
@@ -211,12 +200,6 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           )}
 
           {!isUser && <ChatArtifacts artifacts={turn.artifacts} />}
-
-          {!isUser && inferredStudio && (
-            <div className="mt-2">
-              <CodeStudioCard data={inferredStudio} />
-            </div>
-          )}
 
           {!isUser && turn.images && turn.images.length > 0 && (
             <div className="mt-2 grid grid-cols-3 gap-2">

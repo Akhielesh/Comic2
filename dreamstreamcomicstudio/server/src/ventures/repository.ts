@@ -1,6 +1,6 @@
 // Durable persistence for Autopilot ventures (Supabase). Epic A1 control-plane backbone.
-// Mirrors services/studioRepository.ts: writes use the service role (bypasses RLS) and EVERY
-// query is scoped to userId so a venture can never be read or mutated across tenants.
+// Writes use the service role (bypasses RLS) and EVERY query is scoped to userId so a venture
+// can never be read or mutated across tenants.
 // The pure governance logic (budget/checkpoints/events) lives in the sibling modules; this
 // module only persists + retrieves. Tables come from server/sql/ventures_foundation.sql.
 
@@ -19,7 +19,9 @@ import {
 import { buildVentureEvent, type VentureEventInput } from './events.js';
 
 export type VentureStatus = 'draft' | 'roadmap_pending' | 'active' | 'paused' | 'archived';
-export type VenturePauseReason = 'budget' | 'checkpoint' | 'kill' | 'stuck' | 'manual';
+// 'build_retired': the build stage went with Code Studio (ADR 0005). pause_reason is free text
+// in SQL (no CHECK constraint), so this needs no migration.
+export type VenturePauseReason = 'budget' | 'checkpoint' | 'kill' | 'stuck' | 'manual' | 'build_retired';
 
 export interface VentureRow {
   id: string;

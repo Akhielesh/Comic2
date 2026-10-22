@@ -13,9 +13,12 @@ const ACCENT = '#D97757'; // theme-invariant terracotta accent (see studioDesign
 const MONTHS_SHOWN = 6;
 const TOP_MODELS = 8;
 
+// Every model_usage row under stream_studio came from Code Studio (it recorded its coding
+// calls under that product id). Code Studio is retired (ADR 0005), so those rows are history:
+// label them for what they are. The stream_studio id itself stays (Stream Studio's access key).
 const PRODUCT_LABELS: Record<string, string> = {
   chat_studio: 'Chat Studio',
-  stream_studio: 'Code Studio',
+  stream_studio: 'Code Studio (retired)',
   comic_studio: 'Comic Studio'
 };
 const productLabel = (product: string): string =>

@@ -40,7 +40,7 @@ export interface ModelCapabilities {
   reasoning: boolean;
   /** Supports structured/JSON output (reliable pipelines). */
   json: boolean;
-  /** Context window ≥ 32k tokens — comfortable for Code Studio projects. */
+  /** Context window ≥ 32k tokens — comfortable for long documents and multi-file code. */
   longContext: boolean;
   /** Accepts the temperature sampler param (o-series & some media models reject it). */
   temperature: boolean;
@@ -98,8 +98,9 @@ export const PRODUCT_MODEL_PROFILES: Record<string, ProductModelProfile> = {
   // Chat Studio: any honest chat model works; tools/vision/reasoning unlock
   // widgets, image attachments and the reasoning toggle respectively.
   chat_studio: { kinds: ['chat'], required: [], recommended: ['tools', 'json'] },
-  // Code Studio (stream_studio): agentic builds need tool calling and benefit
-  // from JSON mode + a long window for project context.
+  // stream_studio: the profile Code Studio's agentic builds used (it filed its model
+  // calls under this id). Code Studio is retired (ADR 0005); the id and profile stay so
+  // the catalog's ?product=stream_studio filter keeps answering.
   stream_studio: { kinds: ['chat'], required: ['tools'], recommended: ['json', 'longContext'] },
   // Comic Studio text stages (script analysis / dialogue / QC) need reliable
   // structured output; panel art is gated separately via imageOutput.

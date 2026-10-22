@@ -6,7 +6,6 @@ import { clearUserScopedSettings, setSettingsChangeListener } from '../services/
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { setChatDataChangeListener } from '../services/chatStorage';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
-import { clearStudioModelSelection, STUDIO_MODEL_CHANGED } from '../services/studioModelSelection';
 import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
@@ -84,11 +83,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         };
         setKeysChangeListener(pushIfSignedIn);
         setSettingsChangeListener(pushIfSignedIn);
-        // Chat memory + custom agents, and the model selections (chat/comics + Code
-        // Studio) used to change silently on one device only — sync them like keys.
+        // Chat memory + custom agents, and the chat/comics model selection used to
+        // change silently on one device only — sync them like keys.
         setChatDataChangeListener(pushIfSignedIn);
         window.addEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
-        window.addEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
         // Allowed-sources governance: an explicit OFF must follow the account (the
         // restore path fires this event under the applyingSnapshot guard, so no loop).
         window.addEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
@@ -142,7 +140,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setSettingsChangeListener(null);
             setChatDataChangeListener(null);
             window.removeEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
-            window.removeEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
             window.removeEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
         };
     }, []);
@@ -159,7 +156,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // that other account's cloud snapshot.
         clearUserScopedSettings();
         clearModelSelection();
-        clearStudioModelSelection();
+        // Retired Code Studio's model pin (ADR 0005); still cleared so no old copy lingers.
+        try { localStorage.removeItem('dreamstream_studio_model'); } catch { /* storage unavailable */ }
         // Stream Studio (/live) keeps its own copy of the name, events, nursery data and
         // an alert subscription — wipe those too, so it never shows the last person.
         purgeLiveAccountData();

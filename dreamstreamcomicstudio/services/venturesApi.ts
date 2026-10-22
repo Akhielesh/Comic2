@@ -1,6 +1,8 @@
 // Client for the Autopilot control plane (/api/ventures/*). Epic A8.
-// Mirrors services/studioApi.ts. The whole surface is flag-gated + admin-only on the server
-// until GA; calls throw ApiError with code VENTURES_DISABLED when the caller can't use it yet.
+// The whole surface is admin-only on the server while VENTURES_ENABLED is off; calls throw
+// ApiError (code VENTURES_DISABLED in `details.error.code`) when the caller can't use it. The
+// build stage was retired with Code Studio (ADR 0005): setVentureStatus(id, 'active') answers
+// 410 VENTURES_BUILD_RETIRED and an approved roadmap stays paused ('build_retired').
 
 import { get, post, put, patch } from './apiClient';
 
@@ -95,8 +97,16 @@ export const createIntake = async (
     { idea, ...opts }
   );
 
-export const approveRoadmap = async (id: string): Promise<{ ok: boolean; status: string; approved: number }> =>
-  post<Record<string, never>, { ok: boolean; status: string; approved: number }>(
+export interface ApproveRoadmapResult {
+  ok: boolean;
+  status: 'paused';
+  pauseReason: 'build_retired';
+  approved: number;
+}
+
+/** Approve the roadmap checkpoint(s). The venture stays paused: nothing is built automatically. */
+export const approveRoadmap = async (id: string): Promise<ApproveRoadmapResult> =>
+  post<Record<string, never>, ApproveRoadmapResult>(
     `/api/ventures/${encodeURIComponent(id)}/approve-roadmap`,
     {}
   );

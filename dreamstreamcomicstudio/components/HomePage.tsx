@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock, Radio } from 'lucide-react';
+import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Radio } from 'lucide-react';
 import { Button } from './Button';
 import { WaitlistForm } from './WaitlistForm';
 import { useAuth } from '../contexts/AuthContext';
@@ -132,13 +132,13 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             </div>
             <h2 className="text-4xl md:text-5xl font-display mb-4">One flagship workflow. Supporting creative tools.</h2>
             <p className="font-comic text-slate-600 max-w-2xl mx-auto">
-              Stream Studio is the launch wedge: private creator events that start in the browser and end with replayable content. Chat and Comic Studio support planning and repurposing; Code stays parked until the live workflow is proven.
+              Stream Studio is the launch wedge: private creator events that start in the browser and end with replayable content. Chat and Comic Studio support planning and repurposing.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* Stream Studio — launch focus */}
-            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1 lg:col-span-2">
+            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1 md:col-span-2">
               <div className="flex items-center justify-between mb-5">
                 <div className="w-14 h-14 bg-brand-red border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2 text-white">
                   <Radio size={26} />
@@ -195,34 +195,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               >
                 Explore Comic Studio <ArrowRight size={16} />
               </button>
-            </div>
-
-            {/* Code — coming soon */}
-            <div className="group relative bg-slate-50 border-4 border-dashed border-slate-300 rounded-2xl p-7 flex flex-col">
-              <div className="flex items-center justify-between mb-5">
-                <div className="w-14 h-14 bg-slate-200 border-2 border-slate-400 rounded-xl flex items-center justify-center text-slate-500 transform -rotate-2">
-                  <Code2 size={26} />
-                </div>
-                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-slate-200 text-slate-500 border-2 border-slate-400 rounded-full px-2.5 py-1">
-                  <Lock size={10} /> Coming soon
-                </span>
-              </div>
-              <h3 className="text-2xl font-display mb-2 text-slate-500">Code</h3>
-              <p className="text-sm font-comic text-slate-500 leading-relaxed flex-1">
-                Describe an app and watch it build itself. AI pair-programming with instant live previews — we’re hard at work on it.
-              </p>
-              <button
-                onClick={scrollToUpdates}
-                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-slate-500 hover:text-black transition-colors"
-              >
-                <Mail size={15} /> Notify me when it’s ready
-              </button>
-              {/* Hover tooltip */}
-              <div className="pointer-events-none absolute inset-x-0 -top-3 flex justify-center opacity-0 -translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150">
-                <div className="bg-black text-white text-xs font-bold rounded-lg border-2 border-black shadow-comic px-3 py-1.5">
-                  🚧 In the workshop — coming soon
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -442,7 +414,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <li><button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button></li>
               <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
               <li><a href="/live.html" className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
-              <li><button onClick={scrollToUpdates} className="flex items-center gap-2 text-zinc-500 hover:text-zinc-300 text-left"><Code2 size={16} /> Code <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Soon</span></button></li>
             </ul>
           </div>
           <div>

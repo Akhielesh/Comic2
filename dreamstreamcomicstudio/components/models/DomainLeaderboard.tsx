@@ -9,12 +9,11 @@
 // header, filters, rank, provider icon, score bar, actions — is identical everywhere.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Trophy, Crown, Star, Cpu, Type as TypeIcon, ArrowUpDown, Check, Zap, MessageSquare, Gauge, AlertTriangle } from 'lucide-react';
+import { Trophy, Crown, Star, Type as TypeIcon, ArrowUpDown, Check, Zap, MessageSquare, Gauge, AlertTriangle } from 'lucide-react';
 import { sourceLabel, type CatalogModel, type ModelSource } from '../../services/modelCatalog';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import { getModelBenchmarks, formatScore, BENCHMARK_METRICS, type BenchmarkMetricId } from '../../services/modelBenchmarks';
 import { domainStrength, DOMAIN_META, type DomainId } from '../../services/modelDomains';
-import { setStudioModel } from '../../services/studioModelSelection';
 import { setSelectedModel } from '../../services/modelSelection';
 import { CODING_RECOMMENDATIONS, recommendedCodingMatch, TIER_LABEL } from '../../services/codingRecommendations';
 import { ModelProviderIcon, SourceIcon } from './ProviderIcon';
@@ -78,7 +77,7 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
   const [sortBy, setSortBy] = useState<SortKey>('strength');
   const [freeOnly, setFreeOnly] = useState(false);
   const [source, setSource] = useState<SourceFilter>('all');
-  const [recent, setRecent] = useState<{ id: string; kind: 'studio' | 'text' } | null>(null);
+  const [recent, setRecent] = useState<{ id: string; kind: 'text' } | null>(null);
   // Real measured latency (median from chat telemetry) — the "is it actually usable" stat.
   const [speed, setSpeed] = useState<Record<string, ModelSpeed>>({});
   useEffect(() => { let on = true; fetchModelSpeed().then((s) => { if (on) setSpeed(s); }); return () => { on = false; }; }, []);
@@ -114,7 +113,6 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
     return list;
   }, [models, tab, sortBy, freeOnly, source]);
 
-  const useStudio = (m: CatalogModel) => { setStudioModel(m.id, m.source); setRecent({ id: m.id, kind: 'studio' }); };
   const useText = (m: CatalogModel) => { setSelectedModel('text', m.id, 'specific', m.source); setRecent({ id: m.id, kind: 'text' }); };
 
   // Curated coding recommendations (chips) — coding tab only.
@@ -171,8 +169,8 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
                 <button
                   key={p.key}
                   disabled={!m}
-                  onClick={() => m && useStudio(m)}
-                  title={m ? `${p.blurb} — Use in Studio` : `${p.label} isn't in your live catalog right now`}
+                  onClick={() => m && useText(m)}
+                  title={m ? `${p.blurb} — Use as your text model` : `${p.label} isn't in your live catalog right now`}
                   className={`inline-flex items-center gap-1 rounded-full border-2 px-2.5 py-1 text-[11px] font-bold ${m ? 'border-black bg-white hover:translate-x-[1px] hover:translate-y-[1px] transition-transform' : 'border-slate-300 text-slate-400 cursor-not-allowed'}`}
                 >
                   {p.tier === 'flagship' && <Crown className="w-3 h-3 text-amber-500" />}
@@ -265,15 +263,6 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-end gap-1">
-                      {tab.domain === 'coding' && (
-                        <button
-                          onClick={() => useStudio(r.model)}
-                          title="Pin as Code Studio's coding model (independent of comics & chat)"
-                          className="inline-flex items-center gap-1 rounded-full border-2 border-black px-2 py-1 font-bold bg-violet-500 text-white hover:translate-x-[1px] hover:translate-y-[1px] transition-transform"
-                        >
-                          {justSet && recent?.kind === 'studio' ? <Check className="w-3 h-3" /> : <Cpu className="w-3 h-3" />} Studio
-                        </button>
-                      )}
                       <button
                         onClick={() => useText(r.model)}
                         title="Use as the global text model (chat & comics)"

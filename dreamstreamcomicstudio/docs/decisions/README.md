@@ -25,4 +25,4 @@ Rules:
 | 0001 | OpenRouter gateway + BYOK as the AI control plane | Accepted |
 | 0002 | Remove pricing/billing UI; keep billing backend dormant | Accepted |
 | 0003 | Multi-key API configuration + per-key usage limits | Proposed |
-| 0005 | Retire Code Studio (removal plan; Ventures dependency to resolve first) | Proposed |
+| 0005 | Retire Code Studio (and the Ventures build stage with it) | Accepted |

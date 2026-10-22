@@ -10,7 +10,8 @@
 //
 // Provenance (shown as badges in the UI):
 //   measured  — AI provider $ as settled per call; email / connector counts × list price
-//   estimated — Code Studio sandbox $ from awake time × Cloudflare Containers unit prices
+//   estimated — Code Studio sandbox $ (retired, ADR 0005; history from studio_runs) from awake
+//               time × Cloudflare Containers unit prices
 //   fixed     — flat plan fees (docs/infrastructure/COST_RUNBOOK.md §1), amortized usd/30 per day
 
 import type {
@@ -52,9 +53,10 @@ export const CONTAINER_UNIT_PRICES = {
 } as const;
 
 /**
- * The Code Studio sandbox instance (studio-worker/wrangler.jsonc: instance_type "standard-3"
- * = 2 vCPU / 8 GiB / 16 GB). Memory + disk bill for every awake second; CPU bills only while
- * busy, so we ASSUME 25% average utilization (npm install bursts, then an idle dev server).
+ * The retired Code Studio sandbox instance: the dreamstream-studio Worker ran instance_type
+ * "standard-3" = 2 vCPU / 8 GiB / 16 GB (removed with ADR 0005; studio_runs keeps the history).
+ * Memory + disk bill for every awake second; CPU bills only while busy, so we ASSUME 25% average
+ * utilization (npm install bursts, then an idle dev server).
  */
 export const STUDIO_INSTANCE = {
   type: 'standard-3',
@@ -529,7 +531,7 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
   }
   const emailUsd = range.dayKeys.reduce((sum, d) => sum + (current.get(d)?.email || 0), 0);
 
-  // ---- containers: Code Studio sandbox (estimated from awake time) ------------------------
+  // ---- containers: retired Code Studio sandbox (history; estimated from awake time) --------
   let runs = 0;
   let awakeSeconds = 0;
   let orphanRuns = 0;
@@ -666,7 +668,7 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
     },
     {
       id: 'containers',
-      label: 'Code Studio sandbox',
+      label: 'Code Studio sandbox (retired)',
       usd: round(containersUsd),
       source: 'estimated',
       note: `${plural(runs, 'run')}, ${round(awakeSeconds / 3600, 2)}h awake × ${formatUsd(STUDIO_USD_PER_AWAKE_SECOND * 3600)}/h (standard-3 list price, 25% CPU assumed).`
@@ -765,16 +767,16 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
     },
     {
       id: 'code',
-      label: 'Code Studio sandbox',
+      label: 'Code Studio sandbox (retired)',
       costUsd: round(containersUsd),
       requests: runs,
       users: runUsers.size,
       revenueUsd: null,
-      note: 'Estimated from awake time (standard-3 container). Being retired.',
+      note: 'Retired (ADR 0005). History from studio_runs, estimated from awake time (standard-3 container).',
       verdict:
         runs === 0
-          ? 'No sandbox runs in this period — retiring it saves ~$0/mo in usage (it sits idle).'
-          : `${formatUsd(containersUsd)} for ${plural(runs, 'run')} — retiring it saves ~${formatUsd(perMonth(containersUsd))}/mo.`
+          ? 'Retired — no sandbox runs in this period.'
+          : `Retired — ${formatUsd(containersUsd)} for ${plural(runs, 'run')} in this period (~${formatUsd(perMonth(containersUsd))}/mo no longer spent).`
     }
   ];
   if (productAi.other.events > 0) {
@@ -802,8 +804,8 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
       `${plural(byokEvents, 'AI call')} ran on users' own keys (${formatUsd(byokProviderUsd)} of provider cost they paid) — not platform spend.`
     );
   }
-  notes.push(
-    `Code Studio sandbox $ is an estimate at list price (${STUDIO_INSTANCE.type}: ${STUDIO_INSTANCE.memoryGiB} GiB, ${STUDIO_INSTANCE.diskGB} GB disk, ${STUDIO_INSTANCE.vcpu} vCPU at an assumed ${STUDIO_INSTANCE.assumedCpuUtilization * 100}% busy) before the Workers Paid included allowance — the real bill can be lower.`
+  if (runs > 0) notes.push(
+    `Code Studio sandbox (retired) $ is an estimate at list price (${STUDIO_INSTANCE.type}: ${STUDIO_INSTANCE.memoryGiB} GiB, ${STUDIO_INSTANCE.diskGB} GB disk, ${STUDIO_INSTANCE.vcpu} vCPU at an assumed ${STUDIO_INSTANCE.assumedCpuUtilization * 100}% busy) before the Workers Paid included allowance — the real bill can be lower.`
   );
   if (orphanRuns > 0) notes.push(`${plural(orphanRuns, 'sandbox run')} never closed and recorded no awake time — excluded from the estimate.`);
   notes.push('Auth emails sent through the Supabase hook go straight to the email Worker and are not in email_log, so they are not counted.');

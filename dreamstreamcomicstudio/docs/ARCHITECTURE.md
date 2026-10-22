@@ -9,8 +9,8 @@ high-level map; see `features/` and `decisions/` for detail.
 > The simplified diagram below intentionally omits the Workers tier — notably
 > `dreamstream-api` (the `/api/*` reverse proxy that fronts this backend),
 > `dreamstream-data-egress` (market-data relay, load-bearing for finance widgets),
-> `dreamstream-live` (EventRoom DO + R2), `dreamstream-studio` (container sandboxes), and
-> `dreamstream-email`.
+> `dreamstream-live` (EventRoom DO + R2) and `dreamstream-email`. (`dreamstream-studio`, Code
+> Studio's container sandboxes, was retired on 2026-10-22 — ADR 0005.)
 
 ## Topology
 

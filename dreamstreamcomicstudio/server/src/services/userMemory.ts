@@ -2,7 +2,7 @@
 //
 // The durable, server-side half of DreamStream's memory: distilled facts and
 // preferences live in Supabase (user_memories, pgvector), so the user's context
-// follows them across Chat Studio, Code Studio and Comic Studio, across devices,
+// follows them across Chat Studio and Comic Studio, across devices,
 // sessions and AI models. Retrieval is model-agnostic — it returns a plain-text
 // system-prompt block any provider can consume.
 //

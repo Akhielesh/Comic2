@@ -27,7 +27,7 @@ The review (read-only, file-cited) found we are far closer than a greenfield bui
 | Agentic chat loop w/ tool-calling | `server/src/ai/chat.ts` (`runChat`, `MAX_TOOL_ITERATIONS=6`) | Mature. Two tool paths: OpenRouter native `tool_calls` + a JSON-text protocol for non-tool-calling providers (NVIDIA). Concurrent tool exec, SSE streaming. |
 | Smart tool routing | `routes/chat.ts` → `selectRelevantTools(...)` in `toolCatalog.ts` | Keyword-scored; caps the model to ≤20 of ~60 tools so it never sees all specs. |
 | Tool registry / plugin contract | `server/src/ai/tools/registry.ts`, `types.ts` (`ChatTool { name, description, parameters, execute }`) | Clean. Adding a tool never touches the loop. `ToolExecResult` already carries `artifacts`. |
-| **Cloud code sandbox** | `studio-worker/` (`@cloudflare/sandbox`), control plane `server/src/services/studioWorker.ts` (HMAC-signed), autonomous loop `ai/studio/buildAgent.ts` | **Already runs.** Per-user `sandboxId`, allowlisted commands (`sanitizeStudioCommand`), path-guarded writes (`isSafeStudioPath`), `studio_runs` accounting + caps. |
+| **Cloud code sandbox** | ~~`studio-worker/` (`@cloudflare/sandbox`), control plane `server/src/services/studioWorker.ts` (HMAC-signed), autonomous loop `ai/studio/buildAgent.ts`~~ | **Retired 2026-10-22 with Code Studio (ADR 0005); chat runs Python in Pyodide (`run_python`).** At review time it ran: Per-user `sandboxId`, allowlisted commands (`sanitizeStudioCommand`), path-guarded writes (`isSafeStudioPath`), `studio_runs` accounting + caps. |
 | **Generative-UI pipeline** | `apiTypes.ts` types → `components/chat/artifacts/ChatArtifacts.tsx` (`ARTIFACT_RENDERERS`) → Primitive Kit (`artifacts/kit/`) | ~24 typed artifact cards, dependency-free inline-SVG. Gallery-coverage test enforces demos. |
 | In-process SQLite exec | `services/sqlRunner.ts` (sql.js WASM, capped) | Backs `sql_exercise`. Model for cheap in-process execution. |
 | MCP client + server | `ai/tools/mcpClient.ts` (SSRF-guarded), `routes/mcp.ts` (outbound) | We can call external MCPs and expose our own tools. |
@@ -105,7 +105,7 @@ These are folded into the roadmap, not deferred indefinitely:
 | # | Weakness | Fix phase |
 |---|---|---|
 | 1 | Sandbox has no egress allowlist / resource ceilings beyond a time cap | P1 (before `run_code` ships to chat): no-network-default + egress allowlist, mem/CPU/output caps |
-| 2 | Container cap check **fails open** (`routes/studio.ts` logs & allows on error) | P1: fail-closed for paid compute |
+| 2 | Container cap check **fails open** (`routes/studio.ts` logs & allows on error) | Moot: the container and `routes/studio.ts` were removed (ADR 0005) |
 | 3 | Wide prompt-injection→tool surface; tool outputs flow back as untrusted text with no data/instruction separation | P1: spotlighting wrapper + per-tool output caps |
 | 4 | `ChatArtifact.data` is `unknown`, cast without validation; no error boundary | **P0 (this PR)** |
 | 5 | No per-request wall-clock / total-cost ceiling on the tool loop | P1 |
@@ -114,7 +114,7 @@ These are folded into the roadmap, not deferred indefinitely:
 | 8 | Inconsistent fail-open `catch {}` that hides security-relevant errors | P1–P2 |
 | 9 | BYOK secrets traverse many layers; no central log redaction at call sites | P1 |
 | 10 | Type safety erodes at boundaries (`req: any`, hand-rolled arg coercion) | P2: shared Zod validation layer for tool args |
-| 11 | Two competing code-exec stacks (legacy WebContainer/Sandpack vs cloud sandbox) | P2: retire legacy behind the flag |
+| 11 | Two competing code-exec stacks (legacy WebContainer/Sandpack vs cloud sandbox) | Done: both Code Studio stacks retired (ADR 0005); Sandpack stays only for chat code blocks |
 | 12 | MCP tool results not size-bounded into the model | P1: uniform truncation + reference pointers |
 
 ## 6. Phased roadmap
@@ -126,8 +126,8 @@ These are folded into the roadmap, not deferred indefinitely:
 - Docs (this folder).
 
 ### Phase 1 — `run_code` + sandbox hardening
-- Add a one-shot `exec` action to `studio-worker` (run-to-completion, return
-  stdout/stderr/produced-files) reusing HMAC + per-user scoping.
+- ~~Add a one-shot `exec` action to `studio-worker`~~ (retired with Code Studio, ADR 0005).
+  A heavy tier now needs a new Container or vendor, approved on its own (see `02`).
 - `run_code` `ChatTool` with the **tiered router** (Gemini-native for Gemini calls;
   Worker/Pyodide for light; container for heavy). Preload the deterministic toolbelt.
 - Security: egress allowlist, resource caps, output caps, fail-closed cap checks,

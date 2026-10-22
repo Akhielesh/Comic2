@@ -42,7 +42,6 @@ import { adminRouter } from './routes/admin.js';
 import { verificationRouter } from './routes/verification.js';
 import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
-import { studioRouter } from './routes/studio.js';
 import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
@@ -233,12 +232,11 @@ app.use('/api/chat', textRateLimit, chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
-// Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
-app.use('/api/studio', textRateLimit, studioRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
-// Autopilot control plane (Epic A1). Flag-gated + admin-only until GA (see ventures router).
+// Autopilot control plane (Epic A1). Admin-only while VENTURES_ENABLED is off; the build stage
+// was retired with Code Studio (ADR 0005), see the ventures router.
 app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
 app.use('/api/invites', systemRateLimit, invitesRouter);
