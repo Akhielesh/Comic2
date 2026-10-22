@@ -119,7 +119,14 @@ export type MonSocketStatus = 'connecting' | 'connected' | 'reconnecting' | 'clo
 
 export interface MonitorSocket {
   send(msg: Record<string, unknown>): void;
-  sendBinary(buf: ArrayBuffer | Blob): void;
+  /**
+   * Send a binary frame unless more than `maxBuffered` bytes are still
+   * waiting to go out (a stale frame is worse than a skipped one).
+   * Returns whether it was sent.
+   */
+  sendBinary(data: ArrayBuffer | Blob, maxBuffered?: number): boolean;
+  /** Bytes queued on the socket but not yet sent (0 when closed). */
+  bufferedAmount(): number;
   close(): void;
   readonly open: boolean;
 }
@@ -206,8 +213,13 @@ export function openMonitorSocket(
     send(msg) {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
     },
-    sendBinary(buf) {
-      if (ws?.readyState === WebSocket.OPEN && ws.bufferedAmount < 512 * 1024) ws.send(buf);
+    sendBinary(data, maxBuffered = 512 * 1024) {
+      if (ws?.readyState !== WebSocket.OPEN || ws.bufferedAmount >= maxBuffered) return false;
+      ws.send(data);
+      return true;
+    },
+    bufferedAmount() {
+      return ws?.readyState === WebSocket.OPEN ? ws.bufferedAmount : 0;
     },
     close() {
       closedByUs = true;

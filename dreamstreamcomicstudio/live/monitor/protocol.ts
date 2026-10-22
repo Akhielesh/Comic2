@@ -56,6 +56,28 @@ export interface CamStatus {
     near: string[];
     adult: boolean;
   } | null;
+  /** The camera phone's video encoder right now (see CameraHub.telemetry). */
+  enc?: EncStatus | null;
+}
+
+/** Why an encoder is holding back: the phone's processor, the network, or nothing. */
+export type EncLimit = 'cpu' | 'bandwidth' | 'other' | 'none';
+
+export interface EncStatus {
+  /** Viewers connected peer-to-peer. */
+  peers: number;
+  /** Frames per second actually sent (slowest viewer), null before the first reading. */
+  fps: number | null;
+  /** Worst limitation across the viewers. */
+  lim: EncLimit | null;
+  /** Encoder in use, e.g. "MediaCodec" / "VideoToolbox" (hardware) or "libvpx" / "OpenH264" (software). */
+  impl: string | null;
+  /** Width of the largest picture sent, px. */
+  w: number | null;
+  /** Rungs the camera stepped down because the phone is busy (0 = full quality). */
+  p: number;
+  /** Low-bandwidth relay frames per second (0 = off). */
+  relay: number;
 }
 
 export interface CamPresence {
@@ -246,6 +268,20 @@ export interface MonRtc {
   ice?: RTCIceCandidateInit | null;
   hello?: boolean;
   bye?: boolean;
+  /**
+   * The viewer's peer connection this belongs to (fresh per ViewerLink.connect).
+   * A new id means a new call: the camera builds a new connection for it instead
+   * of re-using the old one, and ignores late candidates / byes from older ones.
+   */
+  pc?: string;
+  /**
+   * The viewer (its device id + this tab), stable across socket reconnects: the
+   * camera keys its peer by it, so commands from the viewer's new socket still
+   * find the call.
+   */
+  vid?: string;
+  /** The picture the viewer wants, with its offer (so a new call starts at the right quality). */
+  q?: 'hd' | 'sd' | 'audio';
 }
 
 export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'video';

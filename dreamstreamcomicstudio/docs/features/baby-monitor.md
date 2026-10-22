@@ -15,7 +15,8 @@ relays signaling, status numbers and events.
 | Sleep tracker | `live-worker/src/sleepTracker.ts` | Actigraphy-style state machine over minute rows (crib movement, sound, lights, visits): settling → asleep → stirring → awake, wakings, self-settles, naps vs night by local time. |
 | Camera screen | `live/views/MonitorCamera.tsx` | Setup wizard (browser check, permissions, lens picker, zoom, live checks), FaceTime-style running screen, auto-dim, privacy pause, interruption recovery. |
 | Device plumbing | `live/monitor/camera.ts` | In-app browser detection, friendly lens names, constraint ladder, human error text, zoom, iOS `audioSession` for speaker playback. |
-| Peer links | `live/monitor/rtc.ts` | Viewer offers `video sendrecv` + `audio sendrecv`; outgoing tracks swapped with `replaceTrack` (talk / video call on & off with no renegotiation). |
+| Peer links | `live/monitor/rtc.ts` | Viewer offers `video sendrecv` + `audio sendrecv`; outgoing tracks swapped with `replaceTrack` (talk / video call on & off with no renegotiation). One camera connection per viewer *session* (call id + viewer id), H.264 preferred, an encoding ladder by audience and phone load — see “Video with many viewers” below. |
+| Relay fallback | `live/monitor/linkFallback.ts` (viewer state machine), `live/monitor/videoBudget.ts` (pacing) | When P2P can't connect: the room's low-bandwidth picture (640 px JPEG, 2–5 fps, no sound), P2P retried in the background with back-off, dropped the moment P2P connects. |
 | Sound engine | `live/monitor/soundEngine.ts` | Mic → analyser (cry analyser 10 Hz, alarm pattern 20 Hz) and PCM tap → 16 kHz resampler → YAMNet worker every 0.48 s → `SoundBrain`. |
 | AI sound model | `live/monitor/yamnet.worker.ts`, `public/models/yamnet/` | Google YAMNet (Apache-2.0, 521 AudioSet classes) via onnxruntime-web WASM, single-threaded, SHA-256 verified, cached. |
 | Categories | `live/monitor/soundClasses.ts` | cry, fuss, cough, sneeze, snore, babble, laugh, alarm, glass, crash, loud, voices, music, dog, cat, knocking, footsteps, running water — YAMNet class weights, rival classes, thresholds, severities. |
@@ -128,6 +129,60 @@ analyser + alarm detector keep working ("Basic ears").
   events that start and end entirely during an outage reach the log only through the
   "ongoing" replay on reconnect.
 
+## Video with many viewers and on strict networks
+
+Every viewer is its own encoder on the camera phone (a mesh), and without a TURN
+server a viewer whose network blocks peer-to-peer (often a guest on mobile data)
+can't connect directly at all. Production is **STUN-only until the owner sets
+`TURN_KEY_ID` / `TURN_KEY_API_TOKEN`** on `dreamstream-live` (`live-worker/src/ice.ts`);
+everything below works with or without it.
+
+**Direct (P2P) picture — `rtc.ts`:**
+- *One connection per viewer session.* Each `ViewerLink.connect()` mints a call id
+  (`MonRtc.pc`); the viewer also sends `vid` (its device id + tab). The camera keys
+  its peer by `vid`, builds a fresh `RTCPeerConnection` for a new call id (an ICE
+  restart keeps the id), ignores late candidates / byes from older calls, and
+  follows the viewer to a new room socket — so Data saver, talk and video-call
+  commands still find the call after a reconnect. A reconnect says `bye` for the
+  previous call first. Older viewers without ids are keyed by socket, as before.
+- *Encoding ladder* (`encodingFor`), per viewer: 1 internet viewer 1.6 Mbps 720p
+  24 fps · 2 → 1.1 Mbps · 3 → 800 kbps ÷1.5 20 fps · 4+ → 500 kbps ÷2 15 fps
+  (floor rung 320 kbps ÷3 12 fps). Home Wi-Fi viewers don't count against the upload;
+  every viewer counts against the processor (4–6 encoders → ÷1.5, 7+ → ÷2). A TURN
+  path is capped at 650 kbps ÷2 (pay-per-GB); Data saver at 450 kbps ÷2 15 fps.
+- `degradationPreference: 'maintain-framerate'` and `contentHint: 'motion'`: under
+  pressure the picture gets smaller, not choppier.
+- *H.264 first* (`orderCodecs` / `setCodecPreferences`, keeping rtx/red/fec): hardware
+  on iPhones and most Android phones, where VP8 is software. The viewer's offer order
+  is what makes the camera send it (SDP order = what you want to receive); the camera
+  sets it on its answer too.
+- *Stats every 5 s* (`adapt`): CPU-limited twice in a row → everyone one rung down
+  (at most two); 30 s calm → one back up. Bandwidth-limited over the internet → that
+  viewer −25 % (floor 300 kbps), restored after 30 s clean.
+- *Telemetry*: the camera's status carries `enc = {peers, fps, lim, impl, w, p, relay}`
+  (sanitized by the room, `sanitizeEnc`). Viewers show **“Camera phone is busy — showing
+  a smaller picture”** when the phone stepped down; the camera screen offers to turn
+  Smart vision off.
+
+**Relay picture (P2P can't connect):**
+- Viewer (`linkFallback.ts`): gives P2P 10 s, then subscribes to the relay and retries
+  P2P after 30 s, 1, 2, 4, then every 5 min; a late connect cancels the retry instead
+  of being torn down by it. The subscription is re-sent after every room reconnect and
+  when switching cameras. Frames draw straight onto a canvas (no re-render per frame);
+  the pill shows the fps actually arriving; no frame for 5 s → “Picture paused”.
+- Camera (`setRelay` + `RelayPacer`): 640 px JPEG, 2–5 fps by the socket's
+  `bufferedAmount` (backlog over 80 KB → skip and step down; 2 s clear → step up),
+  quality 0.35–0.6 by frame size, never queued behind more than 128 KB
+  (`client.sendBinary(data, maxBuffered)`). A camera that (re)joins is told at once
+  how many viewers want its relay.
+- Room: frames from cameras only, to viewers relaying that camera only; a token
+  bucket per camera (25 fps sustained, burst 8, ~1.5 MB/s) instead of the old hard
+  250 ms gap that dropped jittery frames. Frames pass through the Durable Object's
+  memory — **not end-to-end encrypted** like P2P, never stored (the pill's tooltip
+  says so). No sound in relay mode; alerts are unaffected.
+- Cost: a 4 fps relay is ~144k incoming WebSocket messages per 10 h night (≈ $0.03 per
+  nursery per month at the 20:1 request ratio); outgoing messages are free.
+
 ## Guest access (share link + passcode)
 
 For family or a sitter without an account (accounts need the welcome code).
@@ -220,7 +275,10 @@ summary in the camera's status). The models are fetched from our own site and
 refused unless their SHA-256 matches; the WebAssembly runtime is bundled from the
 pinned `@mediapipe/tasks-vision` package. Measured in a headless desktop browser on the CPU: ~1 s for
 the first frame, then ~250–320 ms; the loop backs off to one every 1.5 s or 3 s on slower phones and pauses while the
-video is privacy-paused or the page is hidden.
+video is privacy-paused or the page is hidden. It also yields to the live picture
+(`sceneIntervalMs` in `videoBudget.ts`): half the rate with two or more viewers (the relay counts as one), a third
+when the encoder reports the phone's processor as the limit, never slower than one frame per 6 s. Sound and cry
+detection never slow down.
 
 **What it reports** (each finding must hold for 3–8 s; each kind has a cooldown):
 posture (lying / sitting / standing, with where), standing in the crib (climb-out

@@ -16,8 +16,10 @@
  *   - tracks sleep from the camera's minutes (sleepTracker.ts) and sends the
  *     morning report,
  *   - watches camera heartbeats and raises "camera offline" alerts,
- *   - forwards low-rate JPEG snapshots in memory when a network blocks P2P
- *     (relay mode). Frames are passed through, never stored,
+ *   - forwards the camera's low-bandwidth relay frames (640 px JPEGs, 2–5 a
+ *     second, video only) to viewers whose network blocks P2P. They pass
+ *     through this object's memory — not end-to-end encrypted like P2P, and
+ *     never stored. A token bucket per camera caps them at 25 fps,
  *   - is the family's switchboard for video calls between members
  *     (familyCalls.ts): rings their 'line' sockets and phones, relays the
  *     handshake between the people in a call.
@@ -173,6 +175,25 @@ export interface CamStatus {
   visit: boolean;
   /** Smart vision (beta): what the camera can tell about the baby right now. */
   scene?: SceneStatus | null;
+  /** The camera phone's video encoders (live/monitor/rtc.ts CameraHub.telemetry). */
+  enc?: EncStatus | null;
+}
+
+export interface EncStatus {
+  /** Viewers connected peer-to-peer. */
+  peers: number;
+  /** Frames per second sent to the slowest viewer. */
+  fps: number | null;
+  /** Worst limitation: the phone's processor, the network, other, none. */
+  lim: 'cpu' | 'bandwidth' | 'other' | 'none' | null;
+  /** Encoder implementation ("MediaCodec", "libvpx", …). */
+  impl: string | null;
+  /** Widest picture sent, px. */
+  w: number | null;
+  /** Rungs stepped down because the phone is busy. */
+  p: number;
+  /** Relay frames per second (0 = off). */
+  relay: number;
 }
 
 export interface SceneStatus {
@@ -283,7 +304,10 @@ const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
 const RTC_FRAME_MAX = 64 * 1024;
 const SNAPSHOT_MAX = 256 * 1024;
-const SNAPSHOT_MIN_GAP_MS = 250;
+/** Relay frames per camera: sustained rate, burst, and bytes per second. */
+const RELAY_FPS = 25;
+const RELAY_BURST = 8;
+const RELAY_BYTES_PER_S = 1536 * 1024;
 const PURGE_EVERY_MS = 6 * 60 * 60_000;
 const MACHINE_DB = 50;
 const MACHINE_GAP_MS = 12 * 60 * 60_000;
@@ -332,6 +356,51 @@ export function sanitizeScene(v: unknown): SceneStatus | null {
   };
 }
 
+export function sanitizeEnc(v: unknown): EncStatus | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const lim = r.lim === 'cpu' || r.lim === 'bandwidth' || r.lim === 'other' || r.lim === 'none' ? r.lim : null;
+  const fps = numOrNull(r.fps, 0, 60);
+  const w = numOrNull(r.w, 0, 4096);
+  return {
+    peers: Math.round(num(r.peers, 0, 32)),
+    fps: fps == null ? null : Math.round(fps),
+    lim,
+    impl: r.impl == null ? null : clip(r.impl, 40).replace(/[^\w .()/-]/g, '') || null,
+    w: w == null ? null : Math.round(w),
+    p: Math.round(num(r.p, 0, 4)),
+    relay: Math.round(num(r.relay, 0, 30) * 10) / 10,
+  };
+}
+
+/**
+ * Relay frames from one camera: a token bucket, so a jittery 2–5 fps stream
+ * passes untouched (a frame 240 ms after the last isn't dropped) while a flood
+ * is held to 25 fps and ~1.5 MB/s.
+ */
+export class FrameBucket {
+  private tokens: number;
+  private bytes: number;
+  private at: number;
+
+  constructor(now: number, private rate = RELAY_FPS, private burst = RELAY_BURST, private byteRate = RELAY_BYTES_PER_S) {
+    this.tokens = burst;
+    this.bytes = byteRate;
+    this.at = now;
+  }
+
+  take(size: number, now: number): boolean {
+    const dt = Math.max(0, now - this.at) / 1000;
+    this.at = Math.max(this.at, now);
+    this.tokens = Math.min(this.burst, this.tokens + dt * this.rate);
+    this.bytes = Math.min(this.byteRate, this.bytes + dt * this.byteRate);
+    if (this.tokens < 1 || this.bytes < size) return false;
+    this.tokens -= 1;
+    this.bytes -= size;
+    return true;
+  }
+}
+
 export function sanitizeZones(v: unknown): Zone[] {
   if (!Array.isArray(v)) return [];
   const out: Zone[] = [];
@@ -358,7 +427,7 @@ export class MonitorRoom {
   private beats = new Map<string, number>();
   private staleFlagged = new Set<string>();
   private lastStatus = new Map<string, { st: CamStatus; at: number }>();
-  private lastSnapAt = new Map<string, number>();
+  private relayBuckets = new Map<string, FrameBucket>();
   private lastStatusAt = new Map<string, number>();
   private lastSoundAt = new Map<string, number>();
   private curBucket: { t: number; s: number; cry: number } | null = null;
@@ -537,12 +606,13 @@ export class MonitorRoom {
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a) return;
 
-    // Binary = relay snapshot (JPEG) from an authenticated camera.
+    // Binary = a relay frame (JPEG) from an authenticated camera.
     if (typeof raw !== 'string') {
       if (!a.authed || a.mode !== 'camera' || !a.dev || raw.byteLength > SNAPSHOT_MAX) return;
       const now = Date.now();
-      if (now - (this.lastSnapAt.get(a.dev) ?? 0) < SNAPSHOT_MIN_GAP_MS) return;
-      this.lastSnapAt.set(a.dev, now);
+      let bucket = this.relayBuckets.get(a.dev);
+      if (!bucket) this.relayBuckets.set(a.dev, (bucket = new FrameBucket(now)));
+      if (!bucket.take(raw.byteLength, now)) return;
       for (const s of this.authed()) {
         if (s.a.mode === 'viewer' && s.a.relay === a.dev) {
           try {
@@ -642,6 +712,12 @@ export class MonitorRoom {
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a?.authed) return;
     if (a.mode === 'line') return this.onLineGone(a);
+    // The room can still list a socket while it closes: take it out of every
+    // count below (presence, relay viewers), and finish the closing handshake.
+    try {
+      ws.serializeAttachment({ ...a, authed: false });
+      ws.close(1000, 'bye');
+    } catch { /* already closed */ }
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -780,6 +856,8 @@ export class MonitorRoom {
 
     if (mode === 'camera') {
       this.markBeat(a.dev);
+      // A camera that (re)joins picks up viewers already waiting on its relay.
+      this.updateRelayWant(a.dev);
       const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
       const wasAlerted = await this.state.storage.get<boolean>(`alerted:${a.dev}`);
       if (pending[a.dev]) {
@@ -866,6 +944,7 @@ export class MonitorRoom {
       outside: s.outside == null ? null : Math.round(num(s.outside, 0, 100)),
       visit: Boolean(s.visit),
       scene: sanitizeScene(s.scene),
+      enc: sanitizeEnc(s.enc),
     };
     this.lastStatus.set(a.dev, { st, at: now });
     this.broadcast({ t: 'status', dev: a.dev, sid: a.sid, st, at: now }, (x) => x.mode === 'viewer');
@@ -1520,6 +1599,8 @@ export class MonitorRoom {
     ws.serializeAttachment(a);
     if (prev && prev !== a.relay) this.updateRelayWant(prev);
     if (a.relay) this.updateRelayWant(a.relay);
+    // Parents see who is on the low-bandwidth picture.
+    if (prev !== a.relay) this.syncPresence();
   }
 
   private updateRelayWant(dev: string): void {
