@@ -6,6 +6,29 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Call anyone on Stream Studio (2026-10-22):** Calls has a search box — find any member by
+  name and call them by voice or video, not just people in your nurseries. Family is
+  marked as family; a first call to someone outside your family asks you to check it's
+  the right person. Recents on both sides, favourites, and **Who can call you** (everyone,
+  or only my nurseries). **Decline & block** stops someone calling you without telling
+  them. Callers are rate-limited so nobody can be ring-bombed.
+- **Instant meeting and Go live now (2026-10-22):** Create opens on **Start now** — an
+  optional title and two big buttons. One tap opens the studio with the camera ready (and
+  for Go live, a short countdown you can cancel). Every other option is under **Advanced**,
+  and the dashboard has the same two buttons. Picking Schedule with no date (or a past one)
+  now says so instead of quietly creating an unscheduled event.
+- **Invite to the baby monitor in one sheet (2026-10-22):** **Invite** on the watch screen
+  (and **Invite family** in Calls) — add someone with an account by name (people from your
+  other nurseries first, starting as Viewer), or share a link: one tap creates it with a QR
+  code, **Send** shares the link without the passcode, a new passcode keeps the same link,
+  **+7 days** extends it. **Who has access** lists members and guests, and a guest who has
+  an account can be made a member.
+- **Real video when phones can't connect directly (2026-10-22):** when a viewer's network
+  blocks the direct connection, the monitor now sends real video with sound through our
+  server (about 10–15 fps) instead of a 2–5 fps silent slideshow, and shows a first
+  picture within a couple of seconds while the direct connection is still being set up. This path is
+  encrypted in transit but, unlike the direct connection, not end-to-end; it is only used
+  when the direct connection fails.
 - **Comic Studio v4 is the default way to make a comic (2026-10-21):**
   - **New Comic opens the conversational studio.** Name it (or don't) and you land in
     the new Comic Studio: talk through your idea, see the page plan and the cost before
@@ -48,6 +71,18 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Fixed
+- **Calls connect faster and say why when they can't (2026-10-22):** answering is about twice
+  as fast (median Accept → connected ≈0.6 s, was ≈1.4 s) — the camera opens while the call
+  connects. After 8 s a call says "Still connecting…", and if it fails it says why (your
+  network, theirs, or no route between them) with **Try again** and **Audio only**,
+  instead of hanging on "Connecting…". Calls recover from a network change or a dropped
+  connection, play through the iPhone's loudspeaker, and group calls send lighter video
+  so they don't lag.
+- **Baby monitor: smooth video for several viewers and share-link guests (2026-10-22):** no
+  more 1 fps. A direct connection that arrives late is kept rather than torn down, the
+  fallback picture resumes after a reconnect or camera switch, the camera sends each viewer
+  a quality ladder tuned for frame rate, and the viewer shows the frame rate actually
+  arriving — or "Picture paused" if frames stop.
 - **Every account email now comes from dreamstreamstudio.ai (2026-10-22):** sign-up,
   resend, password-reset and magic-link emails are only ever sent by our backend from
   `no-reply@dreamstreamstudio.ai` (signed with the domain's DKIM key, SPF + DMARC aligned,
