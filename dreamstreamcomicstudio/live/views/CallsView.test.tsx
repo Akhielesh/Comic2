@@ -44,6 +44,8 @@ vi.mock('../monitor/client', () => ({
   listPeople: async (nid: string) => ({ ok: true, people: h.people[nid] ?? [] }),
 }));
 vi.mock('../monitor/push', () => ({ needsHomeScreen: () => false, pushSupported: () => true }));
+const openInvite = vi.hoisted(() => vi.fn());
+vi.mock('../monitor/invite', () => ({ openInvite }));
 
 import { CallsView } from './CallsView';
 
@@ -137,5 +139,21 @@ describe('CallsView', () => {
     expect(row).toHaveTextContent('Incoming · Missed · Stream Studio');
     fireEvent.click(row);
     await waitFor(() => expect(h.center.callUser).toHaveBeenCalledWith([{ uid: SAM, name: 'Sam' }], false));
+  });
+  it('an empty nursery offers parents Invite family (and tells others to ask a parent)', async () => {
+    const OTHER = '99999999-2222-4333-8444-555555555555';
+    h.nurseries = [
+      { id: NID, name: 'Nursery', baby_name: 'Aria', my_role: 'parent' },
+      { id: OTHER, name: 'Gran’s', baby_name: null, my_role: 'viewer' },
+    ];
+    h.people = {
+      [NID]: [{ user_id: ME, display_name: 'Alice', role: 'parent', label: 'Mom', is_owner: true, is_me: true }],
+      [OTHER]: [{ user_id: ME, display_name: 'Alice', role: 'viewer', label: '', is_owner: false, is_me: true }],
+    };
+    render(<CallsView nav={nav} push={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Invite family' }));
+    expect(openInvite).toHaveBeenCalledWith(NID);
+    expect(await screen.findByText(/Ask a parent to invite family/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Invite family' })).toHaveLength(1);
   });
 });

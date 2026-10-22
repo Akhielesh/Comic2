@@ -121,3 +121,4 @@
   .call-confirm-wrap, .call-confirm { animation: none; }
   .fav-face, .star-chip { transition: none; }
 }
+.call-add-empty .linkish { color: #fff; text-decoration: underline; text-underline-offset: 3px; }

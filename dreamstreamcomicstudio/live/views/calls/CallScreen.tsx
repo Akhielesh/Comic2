@@ -13,6 +13,7 @@ import { callCenter, isDirect, useCalls, type ActiveView } from '../../calls/cal
 import { failureText, type PeerView } from '../../calls/callMesh';
 import { MAX_IN_CALL } from '../../calls/types';
 import { listPeople, type NurseryPerson } from '../../monitor/client';
+import { openInvite } from '../../monitor/invite';
 import { Icon } from '../../ui/icons';
 import { Avatar, cx, type PushToast } from '../../ui/primitives';
 
@@ -358,7 +359,10 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
           {!people ? (
             <p className="call-add-empty">Loading…</p>
           ) : addable.length === 0 ? (
-            <p className="call-add-empty">Everyone in {a.nursery} is already here. Add people to the nursery to call them.</p>
+            <p className="call-add-empty">
+              Everyone in {a.nursery} is already here.{' '}
+              <button className="linkish" onClick={() => { setAdding(false); openInvite(a.nid); }}>Invite family</button>
+            </p>
           ) : (
             addable.map((p) => (
               <button

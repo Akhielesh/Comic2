@@ -13,11 +13,12 @@ import { callCenter, useCalls } from '../calls/callCenter';
 import { unlockCallAudio } from '../calls/ringtone';
 import { MAX_IN_CALL, type CallWho } from '../calls/types';
 import { listNurseries, listPeople, type Nursery, type NurseryPerson } from '../monitor/client';
+import { openInvite } from '../monitor/invite';
 import { needsHomeScreen, pushSupported } from '../monitor/push';
 import { ROLE_INFO } from '../monitor/protocol';
 import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
-import { Avatar, Btn, cx, Segmented, type PushToast } from '../ui/primitives';
+import { Avatar, Btn, cx, IconBtn, Segmented, type PushToast } from '../ui/primitives';
 import { CALLS_SEEN_KEY, isMissed } from './callsBadge';
 import { badgeFor, familyMap, loadConfirmed, needsConfirm, recentPeople, saveConfirmed, type FamilyMember } from './calls/people';
 
@@ -304,6 +305,9 @@ export function CallsView({ nav, push }: { nav: Nav; push: PushToast }) {
                   <b>{n.name}</b>
                   <small className="faint">{n.baby_name ? `${n.baby_name}’s family` : 'Family'}{line && !line.connected ? ' · connecting…' : ''}</small>
                 </div>
+                {n.my_role === 'parent' && list.length > 0 && (
+                  <IconBtn name="userPlus" label={`Invite family to ${n.name}`} onClick={() => openInvite(n.id)} />
+                )}
                 {list.length > 1 && (
                   <Btn variant="soft" size="sm" icon="video" disabled={!line?.connected || inCall} onClick={() => void place(n.id, group, true)}>
                     {list.length > MAX_IN_CALL - 1 ? `Call ${MAX_IN_CALL - 1}` : 'Call everyone'}
@@ -313,7 +317,14 @@ export function CallsView({ nav, push }: { nav: Nav; push: PushToast }) {
               {people[n.id] == null ? (
                 <div className="skeleton" style={{ height: 52 }} />
               ) : list.length === 0 ? (
-                <p className="faint family-empty">Nobody else is in this nursery yet. Add people in the nursery’s People &amp; roles to call them.</p>
+                <p className="faint family-empty">
+                  Nobody else is in this nursery yet.{' '}
+                  {n.my_role === 'parent' ? (
+                    <Btn variant="soft" size="sm" icon="userPlus" onClick={() => openInvite(n.id)} data-tour="calls-invite">Invite family</Btn>
+                  ) : (
+                    'Ask a parent to invite family.'
+                  )}
+                </p>
               ) : (
                 <div className="family-list">
                   {list.map((p) => {
