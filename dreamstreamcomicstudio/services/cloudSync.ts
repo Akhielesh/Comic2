@@ -10,9 +10,10 @@
 //
 // The snapshot separates ACCOUNT-level configuration (API keys, model preferences,
 // chat memory and custom agents — the same everywhere the account signs in) from
-// STUDIO-scoped configuration (each studio's own knobs, e.g. the Code Studio's
-// pinned coding model), so studios share one account without sharing one settings
-// bag (snapshot v2).
+// STUDIO-scoped configuration (each studio's own knobs), so studios share one account
+// without sharing one settings bag (snapshot v2). The only studio entry so far was
+// Code Studio's pinned coding model; Code Studio is retired (ADR 0005), so old
+// snapshots may still carry `studios.code` but it is never applied or pushed again.
 //
 // Storage moved server-side: the snapshot is sent over the authenticated API
 // (GET/PUT /api/account/settings) and encrypted AT THE SERVER with a server-only
@@ -44,11 +45,6 @@ import {
   replaceModelSelection,
   type ModelSelection,
 } from './modelSelection';
-import {
-  getStoredStudioModelSelection,
-  replaceStudioModelSelection,
-  type StudioModelSelection,
-} from './studioModelSelection';
 import { applyGovernanceMap, getGovernanceMap, type GovernanceMap } from './sourceGovernance';
 import { getChatMemory, setChatMemory, MAX_CHAT_MEMORY_CHARS } from './chatStorage';
 import { listCustomAgents, replaceCustomAgents, parseMemoryItems, formatMemoryItems } from './chatAgents';
@@ -72,8 +68,8 @@ interface CloudSnapshot {
   sourceGovernance?: GovernanceMap;
   // ---- Studio-scoped: each studio's own settings, namespaced (v2) ----
   studios?: {
-    /** Code Studio: pinned coding model, cost pref, agents, runtime, … */
-    code?: StudioModelSelection | null;
+    /** Legacy: Code Studio's pinned coding model (retired, ADR 0005). Ignored on read. */
+    code?: unknown;
   };
 }
 
@@ -92,9 +88,6 @@ const buildLocalSnapshot = (userId: string): CloudSnapshot => ({
     agents: listCustomAgents(userId),
   },
   sourceGovernance: getGovernanceMap(),
-  studios: {
-    code: getStoredStudioModelSelection(),
-  },
 });
 
 /** Union two key lists, de-duplicating by the secret value (keeps the first seen). */
@@ -166,7 +159,6 @@ const applySnapshot = (snap: CloudSnapshot, userId: string) => {
     if (snap.modelKeys) setAllModelKeys(snap.modelKeys);
     if (snap.imageModelId) setImageModelId(snap.imageModelId);
     if (snap.modelSelection) replaceModelSelection(snap.modelSelection);
-    if (snap.studios?.code) replaceStudioModelSelection(snap.studios.code);
     if (typeof snap.chat?.memory === 'string') setChatMemory(snap.chat.memory, userId);
     if (Array.isArray(snap.chat?.agents)) replaceCustomAgents(snap.chat.agents, userId);
     if (snap.sourceGovernance) applyGovernanceMap(snap.sourceGovernance);
@@ -239,9 +231,6 @@ export const syncOnLogin = async (userId: string): Promise<void> => {
       },
       // Cloud wins per-provider; local explicit choices not yet synced fill the gaps.
       sourceGovernance: { ...local.sourceGovernance, ...cloud.sourceGovernance },
-      studios: {
-        code: cloud.studios?.code ?? local.studios?.code,
-      },
     };
 
     applySnapshot(merged, userId);

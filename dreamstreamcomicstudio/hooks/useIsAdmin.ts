@@ -1,5 +1,5 @@
 // Whether the signed-in user is a platform admin. Admins are NEVER feature-gated —
-// every product/flag (Code Studio, "Run live", coming-soon surfaces) is always available
+// every product/flag ("Run live", coming-soon surfaces, admin tools) is always available
 // to them — so this is the single signal the UI checks before hiding anything.
 //
 // Backed by /api/admin/me (services/billing.getAdminAccess). Cached per user-id at module

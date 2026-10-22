@@ -13,8 +13,8 @@ As of 2026-06-18, the active near-term launch source of truth is
 The long-term vision below still matters, but it is **not** the June 25 launch
 positioning. For the beta push, DreamStream leads with **Stream Studio**:
 private creator live events from browser to replay. Chat and Comic Studio support
-planning/repurposing; Code Studio and broad-suite claims stay parked until the
-Stream Studio workflow is proven with real users.
+planning/repurposing; broad-suite claims stay parked until the Stream Studio
+workflow is proven with real users. (Code Studio was retired on 2026-10-22 — ADR 0005.)
 
 No pricing, subscription, paid-infra, or spending decision is made without owner
 approval and an explicit benefit/cost memo.
@@ -50,8 +50,8 @@ of proactivity** layered on the existing Chat Studio.
 ## Where this fits honestly (focus statement)
 
 The platform today spans Comic Studio, Chat Studio (100+ tools, artifacts,
-dashboards), Code Studio, DreamStream Live, LearnHub, Model Bench, ventures
-specs, and five Cloudflare workers. That is **real sprawl for the team size**,
+dashboards), DreamStream Live, LearnHub, Model Bench, ventures specs, and four
+Cloudflare workers (Code Studio and its sandbox worker were retired on 2026-10-22). That is **real sprawl for the team size**,
 and the owner has asked for honesty about it, so:
 
 - **Chat Studio is the center of gravity.** Personal-data connectors deepen
@@ -73,7 +73,7 @@ lane; it never invents a fourth.
 | Lane | When | What exists | Docs |
 |---|---|---|---|
 | **1. First-party built-in** | Flagship UX: typed data, rich artifact cards, RAG ingestion, budgets (Google is this) | `ChatTool` registry (`server/src/ai/tools/registry.ts`), catalog (`toolCatalog.ts`), metering (`lib/providerUsage.ts`), artifact pipeline | `DATA_CONNECTORS.md` checklist |
-| **2. Nango (self-hosted)** | Long-tail OAuth SaaS (800+ providers) where text answers suffice | 3 meta-tools (`server/src/ai/tools/nango.ts`); needs deploy + per-user connection mapping | `docs/studio/INTEGRATIONS-NANGO.md` |
+| **2. Nango (self-hosted)** | Long-tail OAuth SaaS (800+ providers) where text answers suffice | 3 meta-tools (`server/src/ai/tools/nango.ts`); needs deploy + per-user connection mapping | `docs/chat/INTEGRATIONS-NANGO.md` |
 | **3. MCP** | User-extensible: users bring their own servers; curated marketplace | Per-user registry, SSRF guards, marketplace, outbound endpoint | `features/mcp-directory.md` |
 
 **Every personal-data connector (lane 1) must implement the same contract:**

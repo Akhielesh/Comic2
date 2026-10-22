@@ -80,5 +80,5 @@ describe('DashboardView live-worker readiness gate', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /New event/i }));
     expect(nav.create).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000); // renders the whole dashboard twice; slow under a loaded parallel run
 });

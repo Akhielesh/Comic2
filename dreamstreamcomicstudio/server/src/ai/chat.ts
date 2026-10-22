@@ -434,8 +434,8 @@ export const isFastLaneChat = (text: string): boolean => {
 };
 
 // Output-token budget for a chat answer. The old flat 2048 cap truncated long answers and —
-// worse — cut off generate_app/render_chart tool-call arguments mid-JSON (the entire app or
-// chart rides inside those arguments), so "build me an app/chart" silently produced nothing.
+// worse — cut off render_react/render_chart tool-call arguments mid-JSON (the entire component
+// or chart rides inside those arguments), so "build me a widget/chart" silently produced nothing.
 // OpenRouter (the tool-calling path) gets the full budget; reasoning models get extra headroom
 // because the hidden reasoning trace is billed against the same completion budget. NVIDIA NIMs
 // are text-only (no tool calls) and some cap completion lower, so they stay conservative.
@@ -854,7 +854,7 @@ export const runChat = async (
         }
         if (malformed) {
           // The streamed arguments were truncated/garbled (the output-token budget can cut
-          // off a big render_chart/generate_app payload mid-JSON). Don't run the tool on
+          // off a big render_chart/render_react payload mid-JSON). Don't run the tool on
           // empty args and hand back a fake "no input" result — tell the model so it
           // re-issues the call with complete JSON next round (within MAX_TOOL_ITERATIONS).
           const summary = 'Unreadable tool arguments';

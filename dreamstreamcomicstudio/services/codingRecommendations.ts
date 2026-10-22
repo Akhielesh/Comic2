@@ -1,10 +1,10 @@
-// Curated "best coding models" shortlist for Code Studio.
+// Curated "best coding models" shortlist.
 //
 // The Library/leaderboard ranks the LIVE catalog objectively (see modelDomains coding score),
 // but users also asked a simpler question: "just tell me the best open/free coders I can use
 // from OpenRouter + NVIDIA." This is that hand-curated, source-attributed answer — a small,
-// honest shortlist we can surface as "Recommended" chips in the leaderboard and the Code Studio
-// settings, and use to bias the studio's free-first auto-pick toward proven coders.
+// honest shortlist we surface as "Recommended" chips on the leaderboard's coding tab (picking one
+// sets it as your text model for chat and comics).
 //
 // Numbers are SWE-bench Verified (real GitHub bug-fixing) point-in-time figures from public
 // leaderboards (swebench.com, llm-stats.com, vendor cards). They are approximate and meant for

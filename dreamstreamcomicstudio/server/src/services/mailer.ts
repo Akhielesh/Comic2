@@ -62,6 +62,13 @@ export interface SendOptions {
   replyTo?: string;
   userId?: string | null;
   requestId?: string | null;
+  /**
+   * Render with a sub-brand instead of the worker's env brand (subject, header, From name).
+   * 'stream-studio' = live-app auth mail. An older worker ignores it and uses DreamStream.
+   */
+  brand?: 'stream-studio';
+  /** false ⇒ no read-receipt pixel. Auth mail opts out: it carries sign-in links, not campaigns. */
+  track?: boolean;
 }
 
 /** Usage snapshot + caps, for ops/cost dashboards and honest cost alerts. */
@@ -140,11 +147,20 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
 
   // (4) log 'queued' first so we have an id for the read-receipt pixel
   const logId = await logSend({ ...baseLog, status: 'queued' });
-  if (logId && EMAIL_PUBLIC_BASE_URL) {
+  if (opts.track === false) {
+    delete params.pixelUrl;
+  } else if (logId && EMAIL_PUBLIC_BASE_URL) {
     params.pixelUrl = `${EMAIL_PUBLIC_BASE_URL}/api/email/o/${logId}.gif`;
   }
 
-  const body = JSON.stringify({ template, to, params, subject: opts.subject, replyTo: opts.replyTo });
+  const body = JSON.stringify({
+    template,
+    to,
+    params,
+    subject: opts.subject,
+    replyTo: opts.replyTo,
+    ...(opts.brand ? { brand: opts.brand } : {})
+  });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EMAIL_REQUEST_TIMEOUT_MS);
   try {

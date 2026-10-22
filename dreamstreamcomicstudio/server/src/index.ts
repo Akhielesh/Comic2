@@ -42,13 +42,13 @@ import { adminRouter } from './routes/admin.js';
 import { verificationRouter } from './routes/verification.js';
 import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
-import { studioRouter } from './routes/studio.js';
 import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
+import { authEmailRouter } from './routes/authEmail.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
 import { adminCostsRouter } from './routes/adminCosts.js';
@@ -149,6 +149,9 @@ const moderationRateLimit = createRateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: Math.max(30, Math.floor(RATE_LIMIT_SYSTEM_MAX_REQUESTS / 2))
 });
+// Auth emails (sign-up confirm / resend / reset / magic link): 10 per 10 minutes per IP. Runs
+// BEFORE optionalAuth so it always keys by IP; the route adds a durable per-recipient throttle.
+const authEmailRateLimit = createRateLimit({ scope: 'auth-email', windowMs: 600_000, maxRequests: 10 });
 
 // Comic Studio v5 per-route limits (contract §14.3). Scoped by user when signed in, else IP.
 // Mounted on their exact paths by routes/comicMounts.ts (never on the whole /api/comic prefix).
@@ -188,6 +191,9 @@ app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 // Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
 // signed-in user's id is attached when present; mounted before requireAuth.
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
+// Auth emails sent by the backend instead of Supabase's ~2/hour built-in mailer (public,
+// logged-out — sign-up and password reset happen before there is a session).
+app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
 // Email open-tracking pixel (public — fetched by the recipient's mail client, no session).
 app.use('/api/email', systemRateLimit, optionalAuth, emailRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
@@ -272,12 +278,11 @@ app.use('/api/chat', textRateLimit, chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
-// Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
-app.use('/api/studio', textRateLimit, studioRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
-// Autopilot control plane (Epic A1). Flag-gated + admin-only until GA (see ventures router).
+// Autopilot control plane (Epic A1). Admin-only while VENTURES_ENABLED is off; the build stage
+// was retired with Code Studio (ADR 0005), see the ventures router.
 app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
 app.use('/api/invites', systemRateLimit, invitesRouter);

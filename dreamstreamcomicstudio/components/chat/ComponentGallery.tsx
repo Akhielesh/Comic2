@@ -7,6 +7,7 @@ import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
 import { ComparisonChart } from './artifacts/ComparisonChart';
 import { LiveComponentCard } from './artifacts/LiveComponentCard';
+import { LegacyCodeStudioCard } from './artifacts/LegacyCodeStudioCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
@@ -18,7 +19,6 @@ import { DirectionsCard } from './artifacts/DirectionsCard';
 import { DataTableCard } from './artifacts/DataTableCard';
 import { HeatmapCard } from './artifacts/HeatmapCard';
 import { FinanceTerminal } from './artifacts/FinanceTerminal';
-import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
@@ -80,7 +80,7 @@ import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact, DirectionsArtifact,
-  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
+  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
   GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact,
   EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact
@@ -288,6 +288,16 @@ const comparison: StockComparisonArtifact = {
     { symbol: 'AAPL', name: 'Apple Inc.', currency: 'USD', last: cmpAapl[cmpAapl.length - 1], ranges: cmpRanges(cmpAapl) },
     { symbol: 'TSLA', name: 'Tesla Inc.', currency: 'USD', last: cmpTsla[cmpTsla.length - 1], ranges: cmpRanges(cmpTsla) },
     { symbol: 'GC=F', name: 'Gold', currency: 'USD', last: cmpGold[cmpGold.length - 1], ranges: cmpRanges(cmpGold) }
+  ]
+};
+
+const legacyCodeStudioDemo = {
+  title: 'Habit tracker',
+  description: 'A tiny streak tracker built in Code Studio.',
+  template: 'react-ts',
+  files: [
+    { path: '/App.tsx', content: "import { useState } from 'react';\n\nexport default function App() {\n  const [days, setDays] = useState(3);\n  return <button onClick={() => setDays(days + 1)}>🔥 {days}-day streak</button>;\n}\n" },
+    { path: '/index.css', content: 'button {\n  font: 600 18px system-ui;\n  padding: 12px 18px;\n  border-radius: 12px;\n}\n' }
   ]
 };
 
@@ -572,30 +582,6 @@ export type GalleryCategory =
   | 'Learning'
   | 'Games'
   | 'Agents & code';
-
-const codeStudioDemo: CodeStudioArtifact = {
-  title: 'Counter App',
-  description: 'A simple React counter with increment, decrement, and reset.',
-  template: 'react-ts',
-  files: [
-    {
-      path: '/App.tsx',
-      content: `import { useState } from 'react';
-export default function App() {
-  const [count, setCount] = useState(0);
-  return (
-    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '2rem' }}>
-      <h1>Counter: {count}</h1>
-      <button onClick={() => setCount(c => c - 1)}>−</button>
-      <button onClick={() => setCount(0)} style={{ margin: '0 0.5rem' }}>Reset</button>
-      <button onClick={() => setCount(c => c + 1)}>+</button>
-    </div>
-  );
-}`,
-      language: 'typescript'
-    }
-  ]
-};
 
 const recipeDemo: RecipeCardArtifact = {
   id: 'comic-concept-forge',
@@ -1372,6 +1358,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
   { title: 'Comparison chart (overlay 2–6 assets · % rebase ⇄ price · range tabs · legend toggle)', type: 'stock_comparison', category: 'Finance', node: <ComparisonChart data={comparison} /> },
   { title: 'Custom React component (agent-written TSX · sandboxed run · code view)', type: 'react_component', category: 'Agents & code', node: <LiveComponentCard data={reactComponentDemo} /> },
+  { title: 'Code Studio app (retired · read-only code + .zip)', type: 'code_studio', category: 'Agents & code', node: <LegacyCodeStudioCard data={legacyCodeStudioDemo} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Email terminal (inbox · search · reading pane · open/reply)', type: 'email_inbox', category: 'News & knowledge', node: <EmailTerminal data={emailInboxDemo} /> },
   { title: 'Unread email (unread-only inbox terminal)', type: 'email_unread', category: 'News & knowledge', node: <EmailTerminal data={emailUnreadDemo} /> },
@@ -1394,7 +1381,6 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Glass dashboard (drag-drop widgets · clock · countdown · globe · chart · checklist)', type: 'dashboard', category: 'Data & charts', node: <DashboardCard data={dashboardDemo} /> },
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', category: 'Finance', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', category: 'Finance', node: <FinanceTerminal data={terminal} /> },
-  { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', category: 'Agents & code', node: <CodeStudioCard data={codeStudioDemo} /> },
   { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', category: 'Agents & code', node: <RecipeCard data={recipeDemo} /> },
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', category: 'Agents & code', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', category: 'News & knowledge', node: <ResearchReport data={researchReportDemo} /> },

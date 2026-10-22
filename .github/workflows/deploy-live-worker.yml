@@ -1,7 +1,7 @@
 name: Deploy Live Worker
 
 # Keeps the dreamstream-live Cloudflare worker (DreamStream Live streaming backend)
-# in sync with live-worker/ source, same pattern as deploy-studio-worker.yml.
+# in sync with live-worker/ source (wrangler deploy on push).
 # Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit + Workers R2
 # Storage:Edit), CLOUDFLARE_ACCOUNT_ID.
 #

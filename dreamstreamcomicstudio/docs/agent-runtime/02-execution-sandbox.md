@@ -42,9 +42,9 @@ JavaScript: CSV munging, JSON transforms, chart-spec assembly, controlled live-d
 fetch. JS only (Python/WASM possible but slow). This is also the **Code Mode** lever:
 the agent writes code that calls tools and filters data *before* it re-enters context.
 
-### T3 — Cloudflare Container (`@cloudflare/sandbox`) *(heavy / arbitrary — we already run this)*
-Full Linux, arbitrary Python, `npm install`, long jobs. **Already in the repo**
-(`studio-worker/`), HMAC-gated, per-user scoped. GA Apr 2026. Verified trade-off: it is
+### T3 — Cloudflare Container (`@cloudflare/sandbox`) *(heavy / arbitrary — retired 2026-10-22)*
+Full Linux, arbitrary Python, `npm install`, long jobs. **Was in the repo**
+(`studio-worker/`, removed with Code Studio by ADR 0005), HMAC-gated, per-user scoped. GA Apr 2026. Verified trade-off: it is
 **container-based (shared kernel), not a microVM** — weaker isolation than Firecracker
 and ~30s cold boot (≈2s snapshot restore) — but it stays inside our Workers bill and
 has the "Outbound Workers" zero-trust egress proxy. **Phase 1 adds a one-shot `exec`
@@ -78,7 +78,8 @@ microVM, <100ms, Apache-2.0, has MCP) is the most turnkey self-host option.
 - **T0 Gemini-native** for Gemini-routed simple tasks (free compute).
 - **T2 Dynamic Workers** + **T1 Pyodide** for the cheap/fast 95% (ms–sub-sec, strong
   egress control, on our stack).
-- **T3 existing CF Container** for heavy/arbitrary Python.
+- **T3 CF Container** for heavy/arbitrary Python — no longer deployed (Code Studio's
+  `studio-worker` was retired); adding it back is a new, separately costed decision.
 - **E2B (Firecracker)** is the *only* reason to add a vendor — if, after security
   review, container-grade isolation is judged insufficient for untrusted multi-tenant
   code and we want hardware microVM isolation without operating Firecracker ourselves.

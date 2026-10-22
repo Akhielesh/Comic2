@@ -62,6 +62,7 @@
 .auth-agree { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
 .auth-agree a { color: var(--accent-ink); }
 .auth-submit { width: 100%; }
+.auth-captcha { display: flex; justify-content: center; min-height: 65px; margin: 4px 0 12px; }
 /* Replaces the form in place — don't replay the slide-up. */
 .sheet.sheet-swap { animation: none; }
 .confirm-email { color: var(--text); font-weight: 600; word-break: break-all; }
@@ -1176,7 +1177,6 @@
 .studio-badge.st-open { background: var(--green-wash); color: var(--green); }
 .studio-badge.st-needs_code { background: var(--amber-wash); color: var(--amber); }
 .studio-badge.st-locked { background: var(--panel-3); color: var(--muted); }
-.studio-badge.st-retiring { background: var(--panel-3); color: var(--faint); }
 .studio-go { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--text); display: grid; place-items: center; cursor: pointer; }
 .studio-go:hover { background: var(--hover); }
 .studio-act { border: none; background: none; color: var(--accent-ink); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }

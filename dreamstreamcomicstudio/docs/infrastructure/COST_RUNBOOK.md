@@ -22,12 +22,11 @@ paid provider changes.
 | Service | What you pay for | Est. monthly | Lever |
 |---|---|---|---|
 | **Backend container** (`Backend`, `basic` 1/4 vCPU · 1 GiB · 4 GB) | Memory + disk per awake second, CPU per *active* second | **~$0–1** at a few hours/day awake; **~$7 worst case** if kept awake 24/7 | Sleeps 15 min after the last request; one instance; Node heap cap, no Redis, lazy Pyodide |
-| **Cloudflare Workers Paid** | Flat plan fee (already required by the studio container) | **$5** | Includes 25 GiB-h memory, 375 vCPU-min, 200 GB-h disk of Containers per month |
+| **Cloudflare Workers Paid** | Flat plan fee (required by the backend container) | **$5** | Includes 25 GiB-h memory, 375 vCPU-min, 200 GB-h disk of Containers per month |
 | **Railway** | Nothing — trial expired, deployments removed | **$0** | Dormant fallback; don't upgrade the plan unless returning (`INFRA_MAP.md` §3a) |
 | **Railway dead projects** | Idle volumes only (~1.4 GB total) | **~$0** while the account is on an expired trial | Delete dead services/volumes (§4) |
 | **Cloudflare Pages** | — | **$0** | Free |
 | **Cloudflare Workers** | Requests (10M/mo included on Paid) | **$0** beyond the plan | — |
-| **Cloudflare Containers (studio-worker)** | vCPU + memory **per running instance** (`standard-3` = 2 vCPU/8 GiB, max 50) | **$0 idle → can spike** | ⚠️ Real cost landmine — see §3 |
 | **Cloudflare R2 (dreamstream-live)** | Storage + ops (10 GB free) | **~$0** | Janitor purges segments @24h, recordings @7d |
 | **Supabase** | Free plan | **$0** | Stay under 500 MB DB / 1 GB storage / 2 active projects |
 | **LLM / AI providers** | Per-token; platform-funded capped at **$5/user/mo** | **variable, capped** | Platform allowance + per-provider budgets (well-architected) |
@@ -90,15 +89,15 @@ in the dashboard. **This fixed fee is probably your largest remaining Railway co
 
 ---
 
-## 3. Cloudflare — watch the Containers, the rest is free (studio sandboxes)
+## 3. Cloudflare — watch the Container, the rest is free
 
-- **studio-worker Containers** (`standard-3` = 2 vCPU / 8 GiB, max 50 instances) are the
-  **only Cloudflare resource that is not free.** They cost per running instance.
-  - Ensure sandboxes **stop** when done (the worker has `stop`; confirm idle auto-stop).
-  - ✅ **`max_instances` lowered 50 → 3** (`studio-worker/wrangler.jsonc`, 2026-06-16) to
-    cap the worst-case Container bill for single-user scale. Raise only if concurrent
-    Studio usage needs it.
-  - If the Studio feature isn't in active use, consider not deploying studio-worker.
+- **The backend container** (`Backend` in `dreamstream-api`, `basic`, one instance) is the only
+  Container left. It bills only while awake; keep it sleepable (§1, `CLAUDE.md`).
+- ✅ **Code Studio's sandbox Containers are gone** (2026-10-22, ADR 0005). `studio-worker`
+  (`standard-3` = 2 vCPU / 8 GiB, capped at 3 instances) was the biggest Cloudflare cost
+  landmine; it was removed from the repo with its deploy workflow. Owner step: delete the
+  deployed `dreamstream-studio` Worker and its `*.dreamstreamstudio.ai/*` route if they still
+  exist. **Keep Workers Paid** — the backend container needs it.
 - **R2** (`dreamstream-live`): confirm the DO alarm janitor is actually purging (segments
   @24h, recordings @7d) so storage stays near zero. 10 GB free.
 - **Workers/DO**: covered by Workers Paid at single-user scale.
@@ -153,8 +152,8 @@ The codebase is genuinely well-architected here; **do not weaken these guardrail
 `GET /api/admin/costs?days=7|30|90`, `server/src/services/costCentre.ts`): every figure
 is labelled **measured** (AI spend from `generation_cost_events` — settled, platform-paid
 only; users' own-key calls shown apart; email and connector counts × list price),
-**estimated** (Code Studio sandbox from `studio_runs` awake time × standard-3 prices,
-25% CPU assumed; backend container ~$0.50) or **fixed** (Workers Paid $5, spread per day).
+**estimated** (the retired Code Studio sandbox, history from `studio_runs` awake time ×
+standard-3 prices, 25% CPU assumed; backend container ~$0.50) or **fixed** (Workers Paid $5, spread per day).
 Revenue counts only paid tiers with a Stripe subscription (admin-comped accounts are
 shown as "comped", not MRR). Per-Worker requests/CPU and R2 size appear once
 `CF_ANALYTICS_API_TOKEN` (Account › Account Analytics › Read) and `CLOUDFLARE_ACCOUNT_ID`
@@ -166,7 +165,7 @@ Then run this once a month (or when a bill looks off):
       when idle; Containers usage in Billing stays near the included amounts.
 - [ ] Backend: `REDIS_URL` **unset** (no D1 row / var for it); nothing pings `/api/*` on a timer.
 - [ ] Railway: still dormant (no surprise plan upgrade); no services in `RUNNING` state.
-- [ ] Cloudflare: studio-worker Containers idle/stopped; `max_instances` sane.
+- [ ] Cloudflare: no `dreamstream-studio` Worker left (Code Studio retired; delete it if it reappears).
 - [ ] Cloudflare: R2 `dreamstream-live` size near zero (janitor working).
 - [ ] Supabase: still on free plan; DB < 500 MB; storage < 1 GB.
 - [ ] AI: `GET /api/usage/providers` shows spend within the $5 allowance; no provider
@@ -192,3 +191,4 @@ Then run this once a month (or when a bill looks off):
 | 2026-06-16 | Runbook created. App-Sleeping enabled on Comic2 + SearXNG; dead projects identified; Container cost landmine flagged. |
 | 2026-10-19 | Backend moved to a Cloudflare Container (`basic`, sleeps after 15 min). Railway dormant (trial expired). Cost model rewritten. |
 | 2026-10-21 | Admin Cost centre (real data, measured / estimated / fixed, cost-benefit per product, optional live Cloudflare analytics). |
+| 2026-10-22 | Code Studio retired (ADR 0005): the `studio-worker` sandbox Containers (`standard-3`) — the old cost landmine — removed from the repo; Workers Paid stays for the backend container. Cost centre labels the sandbox line "(retired)" and keeps reading `studio_runs` as history. |

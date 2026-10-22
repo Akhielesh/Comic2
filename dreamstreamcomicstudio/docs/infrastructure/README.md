@@ -28,5 +28,5 @@ docs are the fix.
   Cloudflare `workers_list` / `r2_buckets_list` / `d1_databases_list`) and bump the
   "Last verified" date + change log in each doc.
 - **Each doc has a change-log table at the bottom** — append, don't overwrite.
-- Treat `docs/studio/autopilot/**` as **target design**, not current state
-  (see `INFRA_MAP.md` §10).
+- Treat `docs/ventures/**` (the Autopilot specs, moved from `docs/studio/autopilot/`) as
+  **target design**, not current state (see `INFRA_MAP.md` §10 and `docs/ventures/README.md`).

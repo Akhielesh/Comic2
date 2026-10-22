@@ -10,7 +10,9 @@
  */
 
 import { useEffect, useState } from 'react';
+import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '@/services/authEmail';
 import { claimDevice } from './accountPurge';
+import type { AccountNameResult } from '@/services/accountName';
 
 export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'member' | 'offline';
 
@@ -226,23 +228,51 @@ export function confirmRedirectUrl(): string {
 export type AuthReturn = { confirmed: true } | { error: 'expired' | 'failed'; message?: string };
 
 /**
- * Back from an email link: let supabase-js adopt the session from the URL,
- * explain a dead link, and land on the screen the user started from.
+ * Back from an email link: verify it (or let supabase-js adopt the session from
+ * the URL), explain a dead link, and land on the screen the user started from.
+ * Two link shapes:
+ *   ?after=…&token_hash=…&type=signup — sent by our backend; verified here.
+ *   #access_token=…                    — older links (Supabase / the auth hook).
  * Returns null on an ordinary page load.
  */
 export async function consumeAuthReturn(): Promise<AuthReturn | null> {
   const url = new URL(location.href);
   const after = url.searchParams.get('after');
+  const tokenHash = url.searchParams.get('token_hash');
   const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
   const hasTokens = hash.has('access_token');
   const errorCode = hash.get('error_code') || hash.get('error');
-  if (!after && !hasTokens && !errorCode) return null;
+  if (!after && !tokenHash && !hasTokens && !errorCode) return null;
 
   let result: AuthReturn | null = null;
   if (errorCode) {
     result = /expired|access_denied/i.test(errorCode)
       ? { error: 'expired' }
       : { error: 'failed', message: hash.get('error_description') || undefined };
+  } else if (tokenHash) {
+    const sb = await supa();
+    // Our links say type=signup; accept the other one-time-link types verifyOtp knows.
+    const rawType = url.searchParams.get('type') || 'signup';
+    type LinkType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email';
+    const type: LinkType = ['signup', 'invite', 'magiclink', 'recovery', 'email'].includes(rawType) ? (rawType as LinkType) : 'signup';
+    let failure: { message?: string; code?: string; status?: number } | null = null;
+    if (!sb) failure = { message: '' };
+    else {
+      try {
+        failure = (await sb.auth.verifyOtp({ token_hash: tokenHash, type })).error;
+      } catch (e) {
+        failure = { message: (e as Error)?.message };
+      }
+    }
+    // On success verifyOtp stores the session and fires SIGNED_IN, which refreshes the account.
+    if (!failure) {
+      result = { confirmed: true };
+    } else if (failure.code === 'otp_expired' || failure.status === 403 || /expired|invalid/i.test(failure.message || '')) {
+      // Already used (opening it twice) or too old.
+      result = { error: 'expired' };
+    } else {
+      result = { error: 'failed', message: failure.message || undefined };
+    }
   } else if (hasTokens) {
     const sb = await supa();
     // getSession() waits for the client to finish reading the tokens from the URL.
@@ -250,6 +280,10 @@ export async function consumeAuthReturn(): Promise<AuthReturn | null> {
     result = session ? { confirmed: true } : { error: 'failed' };
   }
   url.searchParams.delete('after');
+  if (tokenHash) {
+    url.searchParams.delete('token_hash');
+    url.searchParams.delete('type');
+  }
   const screen = after && RETURN_SCREENS.has(after) ? `#/${after}` : '';
   history.replaceState(null, '', `${url.pathname}${url.search}${screen}`);
   return result;
@@ -272,29 +306,36 @@ export async function signIn(email: string, password: string): Promise<{ ok: boo
   return { ok: true };
 }
 
-/** Send the sign-up confirmation email again (Supabase allows one a minute). */
-export async function resendConfirmation(email: string): Promise<{ ok: boolean; error?: string }> {
-  const sb = await supa();
-  if (!sb) return { ok: false, error: 'Unavailable right now.' };
-  const { error } = await sb.auth.resend({
-    type: 'signup',
-    email: email.trim().toLowerCase(),
-    options: { emailRedirectTo: confirmRedirectUrl() },
-  });
-  if (!error) return { ok: true };
-  if (/security purposes|rate limit|seconds/i.test(error.message)) {
-    return { ok: false, error: 'Just sent one — wait a minute before asking again.' };
+/**
+ * Send the sign-up confirmation email again — through our backend (one a minute per
+ * address), always from dreamstreamstudio.ai.
+ */
+export async function resendConfirmation(email: string, captchaToken?: string): Promise<{ ok: boolean; error?: string }> {
+  const address = email.trim().toLowerCase();
+  const after = new URL(confirmRedirectUrl()).searchParams.get('after') || undefined;
+  const viaApi = await requestAuthEmail('resend', { email: address, app: 'live', after, captchaToken: captchaToken || undefined });
+  if (viaApi.status === 'ok') return { ok: true };
+  if (viaApi.status === 'error') {
+    // The one-a-minute rule gets the short version; the hourly/daily caps and the per-network
+    // limiter explain themselves (their wait can be much longer than a minute).
+    if (viaApi.code === 'too_soon') {
+      return { ok: false, error: 'Just sent one — wait a minute before asking again.' };
+    }
+    return { ok: false, error: viaApi.message };
   }
-  return { ok: false, error: error.message };
+
+  // Never Supabase's own mailer: every auth email comes from dreamstreamstudio.ai.
+  return { ok: false, error: EMAIL_SERVICE_DOWN };
 }
 
-export async function sendPasswordReset(email: string): Promise<{ ok: boolean; error?: string }> {
-  const sb = await supa();
-  if (!sb) return { ok: false, error: 'Unavailable right now.' };
-  const { error } = await sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
-    redirectTo: `${location.origin}/auth/callback`,
-  });
-  return error ? { ok: false, error: error.message } : { ok: true };
+/** The link lands on the main app's /auth/callback — that's where the new-password screen lives. */
+export async function sendPasswordReset(email: string, captchaToken?: string): Promise<{ ok: boolean; error?: string }> {
+  const address = email.trim().toLowerCase();
+  const viaApi = await requestAuthEmail('recovery', { email: address, app: 'main', captchaToken: captchaToken || undefined });
+  if (viaApi.status === 'ok') return { ok: true };
+  if (viaApi.status === 'error') return { ok: false, error: viaApi.message };
+
+  return { ok: false, error: EMAIL_SERVICE_DOWN };
 }
 
 /** Verify the code server-side BEFORE creating anything. */
@@ -316,7 +357,9 @@ export interface CreateInput {
   code: string;
 }
 
-export async function createAccount(input: CreateInput): Promise<{ ok: boolean; error?: string; confirmEmail?: boolean }> {
+export async function createAccount(
+  input: CreateInput
+): Promise<{ ok: boolean; error?: string; confirmEmail?: boolean; note?: string }> {
   const name = input.name.trim().replace(/\s+/g, ' ').slice(0, 40);
   if (!name) return { ok: false, error: 'Add your name — it’s how family and viewers will find you.' };
   if (input.password.length < 8) return { ok: false, error: 'Use a password with at least 8 characters.' };
@@ -327,47 +370,43 @@ export async function createAccount(input: CreateInput): Promise<{ ok: boolean; 
     localStorage.setItem(TICKET_KEY, checked.ticket);
   } catch { /* storage unavailable — user_metadata still carries it */ }
 
-  const sb = await supa();
-  if (!sb) return { ok: false, error: 'Sign-up is unavailable right now.' };
   const [first, ...rest] = name.split(' ');
+  const email = input.email.trim().toLowerCase();
+  const after = new URL(confirmRedirectUrl()).searchParams.get('after') || undefined;
+  // Our backend creates the account and mails the confirmation from dreamstreamstudio.ai;
+  // the welcome ticket stands in for a captcha there.
   for (let attempt = 0; attempt < 3; attempt++) {
     const username = `${USERNAME_SAFE(first)}_${Math.floor(1000 + Math.random() * 9000)}`;
-    const { data, error } = await sb.auth.signUp({
-      email: input.email.trim().toLowerCase(),
-      password: input.password,
-      options: {
-        emailRedirectTo: confirmRedirectUrl(),
-        data: {
-          username,
-          first_name: first,
-          last_name: rest.join(' ') || null,
-          dob: input.dob,
-          display_name: name,
-          terms_accepted: true,
-          marketing_consent: false,
-          email_pref_product_updates: true,
-          email_pref_marketing: false,
-          live_ticket: checked.ticket,
-          signup_source: 'stream_studio',
-        },
-      },
-    });
-    if (error) {
-      // Profile trigger collisions (username taken) surface as a DB error — retry with a new suffix.
-      if (/database error/i.test(error.message) && attempt < 2) continue;
-      if (/already registered|already exists/i.test(error.message)) {
-        return { ok: false, error: 'An account with this email already exists — sign in instead.' };
-      }
-      return { ok: false, error: error.message };
+    const metadata = {
+      username,
+      first_name: first,
+      last_name: rest.join(' ') || null,
+      dob: input.dob,
+      display_name: name,
+      terms_accepted: true,
+      marketing_consent: false,
+      email_pref_product_updates: true,
+      email_pref_marketing: false,
+      live_ticket: checked.ticket,
+      signup_source: 'stream_studio',
+    };
+    const viaApi = await requestAuthEmail('signup', { app: 'live', after, email, password: input.password, data: metadata });
+    if (viaApi.status === 'ok') return { ok: true, confirmEmail: true };
+    if (viaApi.status === 'unreachable') return { ok: false, error: EMAIL_SERVICE_DOWN };
+    // Profile trigger collision (username taken) — retry with a new suffix.
+    if (viaApi.code === 'database_error') {
+      if (attempt < 2) continue;
+      return { ok: false, error: 'Could not create the account — try again.' };
     }
-    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-      return { ok: false, error: 'An account with this email already exists — sign in instead.' };
+    if (viaApi.code === 'email_exists') return { ok: false, error: 'An account with this email already exists — sign in instead.' };
+    if (viaApi.code === 'send_failed') {
+      // The account exists; only the email failed — the "check your email" screen offers a resend.
+      return { ok: true, confirmEmail: true, note: 'Your account is ready, but the email didn’t go out — tap “Resend email”.' };
     }
-    if (data.session) {
-      await refreshAccount();
-      return { ok: true };
+    if (viaApi.code === 'captcha_required') {
+      return { ok: false, error: 'We couldn’t verify your welcome code — check it and try again.' };
     }
-    return { ok: true, confirmEmail: true };
+    return { ok: false, error: viaApi.message };
   }
   return { ok: false, error: 'Could not create the account — try again.' };
 }
@@ -381,11 +420,21 @@ export async function redeemWelcomeCode(code: string, displayName?: string): Pro
   return { ok: true };
 }
 
-export async function updateDisplayName(name: string): Promise<{ ok: boolean; error?: string }> {
-  const r = await rpc<{ ok: boolean; error?: string }>('live_update_profile', { p_display_name: name });
-  if (!r.data?.ok) return { ok: false, error: friendlyError(r.data?.error ?? r.error ?? undefined) };
+/** One name for the whole account (DreamStream, Stream Studio, the monitor and calls):
+ *  saved through the server, which also renames the Stream Studio profile when there is
+ *  one — so it works before the welcome code too. (The live_update_profile RPC stays for
+ *  tabs still running an older build.) */
+export async function updateDisplayName(name: string): Promise<{ ok: boolean; error?: string; name?: string }> {
+  let r: AccountNameResult;
+  try {
+    const { updateAccountName } = await import('@/services/accountName');
+    r = await updateAccountName(name);
+  } catch {
+    return { ok: false, error: 'Couldn’t save your name right now — try again.' };
+  }
+  if (!r.ok) return { ok: false, error: r.error };
   await refreshAccount();
-  return { ok: true };
+  return { ok: true, name: r.name };
 }
 
 export async function searchPeople(q: string): Promise<Person[]> {

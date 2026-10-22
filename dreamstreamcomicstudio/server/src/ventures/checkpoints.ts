@@ -1,6 +1,6 @@
 // Pure checkpoint logic for Autopilot's human-in-the-loop gate (no DB, no network). Epic A0.
 // Six checkpoint kinds ALWAYS require human approval regardless of autonomy level
-// (docs/studio/autopilot/00-MASTER-PLAN.md §8). The DECIDE gate calls checkpointForAction()
+// (docs/ventures/00-MASTER-PLAN.md §8). The DECIDE gate calls checkpointForAction()
 // for any intended action; if it returns a kind, the loop raises a checkpoint and pauses
 // that goal until the checkpoint is resolved (approved).
 

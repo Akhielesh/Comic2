@@ -1,0 +1,32 @@
+name: Cloudflare www redirect
+
+# Keeps www.dreamstreamstudio.ai → dreamstreamstudio.ai a 301 that keeps the path + query
+# (dreamstreamcomicstudio/scripts/ops/cloudflare_www_redirect.py — idempotent, touches only
+# the www redirect). Runs when the script changes on production and on demand.
+# Uses CLOUDFLARE_API_TOKEN, which needs Zone → Single Redirect → Edit (plus Zone → Read;
+# Page Rules → Edit only if a legacy www forwarding Page Rule exists). If the token lacks
+# them the job fails with a message naming the missing permission.
+
+on:
+  push:
+    branches: [Dreamstrream-v1]
+    paths:
+      - 'dreamstreamcomicstudio/scripts/ops/cloudflare_www_redirect.py'
+      - '.github/workflows/cloudflare-www-redirect.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  www-redirect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make www keep the full link
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: python3 dreamstreamcomicstudio/scripts/ops/cloudflare_www_redirect.py

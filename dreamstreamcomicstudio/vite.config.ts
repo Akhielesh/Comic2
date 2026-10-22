@@ -1,25 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-
-// Serve the dedicated Code Studio page (/studio.html) with cross-origin isolation
-// headers so WebContainers can boot there — WITHOUT isolating the main app (which
-// would break OSM map tiles, image-search results and cross-origin embeds).
-const studioIsolation = (): Plugin => {
-  const apply = (req: { url?: string }, res: { setHeader: (k: string, v: string) => void }, next: () => void) => {
-    if (req.url && req.url.startsWith('/studio')) {
-      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-      res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-    }
-    next();
-  };
-  return {
-    name: 'studio-coop-coep',
-    configureServer: (server) => { server.middlewares.use(apply); },
-    configurePreviewServer: (server) => { server.middlewares.use(apply); }
-  };
-};
 
 // Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
 // (`npm run qa:build` → dist-qa/), so production dist/ never contains it.
@@ -49,7 +31,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react(), studioIsolation()],
+    plugins: [react()],
     // Module workers (the baby monitor's sound-model worker imports ONNX Runtime).
     worker: { format: 'es' },
     // ONNX Runtime loads its .wasm next to its own module; pre-bundling it into
@@ -67,7 +49,6 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),
-          studio: path.resolve(__dirname, 'studio.html'),
           live: path.resolve(__dirname, 'live.html'),
           ...qaInput()
         },

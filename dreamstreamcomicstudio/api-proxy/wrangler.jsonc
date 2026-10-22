@@ -58,11 +58,12 @@
     "VITE_TURNSTILE_SITE_KEY": "0x4AAAAAADhE8Hiuake2V8ix",
     "STORAGE_BUCKET": "comic-assets",
     "EMAIL_WORKER_URL": "https://dreamstream-email.akhieleshsrirangam.workers.dev",
-    "STUDIO_WORKER_URL": "https://dreamstream-studio.akhieleshsrirangam.workers.dev",
     "BILLING_ENABLED": "false",
     "COMICFORGE_ENABLED": "false",
-    "VENTURES_ENABLED": "true",
-    "VENTURES_PILOT_INLINE": "true",
+    // Ventures' build stage was retired with Code Studio (ADR 0005): admin-only (admins still
+    // get in), and no in-process tick loop since there is nothing left for it to do.
+    "VENTURES_ENABLED": "false",
+    "VENTURES_PILOT_INLINE": "false",
     "IMAGE_INCLUDE_DATA_URL_LEGACY": "false",
     "IDEMPOTENCY_TTL_MS": "900000",
     "MAX_BODY_SIZE": "10mb",

@@ -18,9 +18,7 @@ const ComicStudio = lazyImportWithRetry(() => import('./components/comicstudio/C
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
-const CodeStudioView = lazyImportWithRetry(() => import('./components/studio/CodeStudioView').then(module => ({ default: module.CodeStudioView })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
-import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -36,7 +34,6 @@ import { setPendingChatModel } from './services/chatStorage';
 import { captureInviteCodeFromUrl, clearPendingInviteCode, getPendingInviteCode, redeemInvite } from './services/invites';
 import { persistUiState } from './services/viewState';
 import { isSettingsTab, type SettingsTab } from './components/settingsTabs';
-import { useStudioHandoff } from './services/studioHandoff';
 import {
   COMIC_STUDIO_URL_VIEW,
   isStudioV4Project,
@@ -49,6 +46,7 @@ import {
 } from './services/studioDeepLink';
 import { createStudioProject } from './components/comicstudio/studioApi';
 import type { NewComicMode } from './components/ProjectDashboard';
+import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
@@ -83,7 +81,6 @@ type AppView =
   | 'profile'
   | 'pagestudio'
   | 'comicstudio'
-  | 'codestudio'
   | 'ventures'
   | 'shared';
 
@@ -94,7 +91,7 @@ type AppView =
 //  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.
 //  Project workspaces restore through the ?view=…&id= deep-link path instead.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
+  'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -124,15 +121,13 @@ const PROJECT_WORKSPACE_URL_VIEWS = new Set<string>(['editor', 'pagestudio', COM
 
 // Which product each gated view belongs to. Views not listed here (home, gallery,
 // reader, models, settings, legal, …) stay open to every signed-in account — only the
-// product work surfaces are confined. 'codestudio' maps to null: it isn't one of the
-// three standalone products, so a confined account never includes it.
-const VIEW_PRODUCT: Partial<Record<AppView, ProductId | null>> = {
+// product work surfaces are confined.
+const VIEW_PRODUCT: Partial<Record<AppView, ProductId>> = {
   chat: 'chat_studio',
   dashboard: 'comic_studio',
   editor: 'comic_studio',
   pagestudio: 'comic_studio',
   comicstudio: 'comic_studio',
-  codestudio: null,
 };
 
 // Friendly gate for accounts confined to specific studios (product_access rows exist).
@@ -187,9 +182,6 @@ const App: React.FC = () => {
   // Per-account studio confinement (product_access). null = unrestricted/unknown → allow.
   const allowedProducts = useProductAccess();
   const streamOnlyRedirectedRef = useRef(false);
-  // Chat → Code Studio hand-off: opening an app from chat bumps requestId; route here.
-  const studioHandoffArtifact = useStudioHandoff((s) => s.artifact);
-  const studioHandoffRequestId = useStudioHandoff((s) => s.requestId);
   const { projects, projectsLoaded, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets, reloadProjects } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
@@ -211,12 +203,6 @@ const App: React.FC = () => {
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
-
-  // When chat (or any surface) hands an app off to Code Studio, route to the studio view.
-  // requestId starts at 0 and increments per open(), so this only fires on a real hand-off.
-  useEffect(() => {
-    if (studioHandoffRequestId > 0) setCurrentView('codestudio');
-  }, [studioHandoffRequestId]);
 
   // Connector OAuth popup relay: when THIS page was opened as the Google consent popup
   // (window.opener is set) and the callback bounced back with a result, post it to the
@@ -745,7 +731,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!user || authLoading || isCheckingKey) return;
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
-    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'codestudio', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures'];
+    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures'];
     if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
@@ -824,7 +810,6 @@ const App: React.FC = () => {
       view === 'gallery' ||
       view === 'models' ||
       view === 'chat' ||
-      view === 'codestudio' ||
       view === 'privacy' ||
       view === 'terms'
     ) {
@@ -1052,7 +1037,9 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'comicstudio', 'chat', 'codestudio'].includes(currentView);
+  // ventures (the Operator Console) only works signed in, so send visitors to sign in first
+  // instead of letting them reach a console that fails every call with 401.
+  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'comicstudio', 'chat', 'ventures'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   // Product gate (product_access): confined accounts only reach their active studios.
@@ -1062,27 +1049,27 @@ const App: React.FC = () => {
     if (!user || isAdmin || !allowedProducts) return null;
     if (!(effectiveView in VIEW_PRODUCT)) return null;
     const product = VIEW_PRODUCT[effectiveView];
-    if (product && allowedProducts.has(product)) return null;
-    return product ? PRODUCT_LABELS[product] : 'Code Studio';
+    if (!product || allowedProducts.has(product)) return null;
+    return PRODUCT_LABELS[product];
   })();
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // The editor is a focused, full-screen workspace with its own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
   // The v4 Comic Studio is full-bleed too (its own header with back, title and Read).
-  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'codestudio'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
+  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio'].includes(effectiveView);
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces
   // (the v4 Comic Studio is itself a conversation with the Comic Director).
-  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'codestudio';
+  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared';
-  // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat /
-  // code studio surfaces (they have their own inline feedback) and on the bare
-  // auth-callback / shared viewer screens.
+  // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat
+  // surface (it has its own inline feedback) and on the bare auth-callback / shared
+  // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'codestudio';
+  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -1200,17 +1187,6 @@ const App: React.FC = () => {
 
           {effectiveView === 'chat' && (
             <AIChatPlatform projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
-          )}
-
-          {effectiveView === 'codestudio' && (
-            <StudioErrorBoundary onBack={() => setCurrentView(user ? 'dashboard' : 'home')}>
-              <CodeStudioView
-                artifact={studioHandoffArtifact}
-                isAdmin={isAdmin}
-                onBack={() => setCurrentView(user ? 'dashboard' : 'home')}
-                onNavigate={handleNavigate}
-              />
-            </StudioErrorBoundary>
           )}
 
           {effectiveView === 'ventures' && (

@@ -38,7 +38,7 @@ const hashParams = (hash: string): URLSearchParams => {
  */
 export function parsePrivateStudioLink(raw: string, base?: string): ParsedPrivateStudioLink | null {
   try {
-    const fallbackBase = base ?? (typeof location === 'undefined' ? 'https://comic2.pages.dev/live.html' : location.href);
+    const fallbackBase = base ?? (typeof location === 'undefined' ? 'https://dreamstreamstudio.ai/live.html' : location.href);
     const url = new URL(raw.trim(), fallbackBase);
     const id = url.searchParams.get('e');
     const key = url.searchParams.get('k') ?? hashParams(url.hash).get('k');

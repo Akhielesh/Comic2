@@ -233,6 +233,8 @@ Console path: **APIs & Services → Credentials → Create credentials → OAuth
    carries its own credential and the backend forwards the browser's `Origin` when opening
    it, which is what Google uses for the upload's CORS — the console list is
    belt-and-braces (and harmless). `localhost:7000` belongs on the **dev** client only.
+   `https://comic2.pages.dev` is optional now: since 2026-10-22 that host only redirects
+   to `dreamstreamstudio.ai`, so nobody records from it (leaving it listed is harmless).
 5. **Create.** Copy the **Client ID** and **Client secret** immediately into your password
    manager.
 
@@ -341,8 +343,8 @@ resumes after drops. Recording bytes never touch our backend (10 MB body limit).
    paste `https://www.googleapis.com/auth/drive.file` → tick it → **Update → Save**.
    It lands under *non-sensitive* scopes.
 3. **Credentials → your Web OAuth client → Authorized JavaScript origins:** add
-   `https://dreamstreamstudio.ai` and `https://comic2.pages.dev` (on the dev client also
-   `http://localhost:7000`) → **Save**.
+   `https://dreamstreamstudio.ai` (on the dev client also `http://localhost:7000`) →
+   **Save**. (`https://comic2.pages.dev` is optional — that host only redirects now.)
 4. Same client → **Authorized redirect URIs:** confirm
    `https://dreamstreamstudio.ai/api/connectors/oauth/callback` is there, byte-for-byte.
 5. **Audience → Test users:** while Publishing status = Testing, add every Google account

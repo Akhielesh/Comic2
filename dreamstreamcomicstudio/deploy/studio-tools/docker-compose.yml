@@ -1,10 +1,10 @@
-# Code Studio agent-tool sidecars: a self-hosted Nango (800+ API connectors) plus the design MCP
+# Chat agent-tool sidecars (first built for the retired Code Studio): a self-hosted Nango (800+ API connectors) plus the design MCP
 # servers (shadcn/ui, Magic UI) exposed over Streamable HTTP so the app's MCP client can reach them.
 #
 # Why this exists: the app's MCP client speaks JSON-RPC over HTTP and CANNOT spawn `npx` stdio
 # servers, so the stdio design MCPs (shadcn, Magic UI) are fronted with `supergateway`, and Nango
 # runs as its documented self-hosted stack. Point the app at them via env (see ../../.env.studio-tools.example
-# and docs/studio/INTEGRATIONS-NANGO.md). Nango is Elastic License v2 — self-hosting to power our
+# and docs/chat/INTEGRATIONS-NANGO.md). Nango is Elastic License v2 — self-hosting to power our
 # product is allowed; reselling Nango-as-a-service is not.
 #
 # Usage:

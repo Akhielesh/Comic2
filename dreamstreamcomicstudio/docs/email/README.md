@@ -20,7 +20,8 @@ Email Sending** (the send half of Cloudflare Email Service, public beta since Ap
 | Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access) |
 | Account welcome (fuller onboarding) | `welcome` | essential | `sendWelcome(...)` |
 | New sign-in alert | `signin-alert` | essential | `sendSigninAlert(...)` |
-| Confirm signup / magic link / reset / email-change / invite / reauth | `auth-*` | essential | Supabase **Send Email Hook** |
+| Confirm signup / resend / password reset / magic link | `auth-confirm-signup`, `auth-recovery`, `auth-magic-link` | essential | `POST /api/auth/email/*` (backend `generateLink` + `/send`; see [SETUP](./SETUP.md#auth-emails-go-through-the-backend-default-since-2026-10-22)) |
+| Email change / reauthentication / security notices (+ auth fallback) | `auth-*` | essential | Supabase **Send Email Hook** |
 
 **Essential** mail (account, security, transactional) is always sent and **can never be
 unsubscribed**. **Marketing** mail carries a working one-click unsubscribe and honors the
@@ -48,11 +49,12 @@ no-reply message it lands somewhere a human can see.
 ## Architecture
 
 ```
- Browser (WaitlistForm)
+ Browser (WaitlistForm, AuthPage, live app)
         │  POST /api/newsletter/{subscribe,confirm,unsubscribe}
+        │  POST /api/auth/email/{signup,resend,recovery,magiclink}  (→ GoTrue admin generateLink)
         ▼
  Railway backend (Express)
-   server/src/routes/newsletter.ts ─┐
+   server/src/routes/newsletter.ts, authEmail.ts ─┐
    server/src/services/mailer.ts    │  caps + suppression + log + unsubscribe/pixel links
         │  HMAC-signed POST /send   │
         ▼                           │
@@ -78,6 +80,8 @@ the worker, so authentication, branding and abuse-control live in one auditable 
 | `server/src/services/mailer.ts` | Backend send API: dormant-until-configured, hard cost cap, suppression, logging, unsubscribe + read-receipt links, typed helpers. |
 | `server/src/services/emailStore.ts` | Supabase (service-role) persistence: `email_log`, `email_suppressions`, waitlist double opt-in. |
 | `server/src/routes/newsletter.ts` | Public subscribe / confirm / unsubscribe (one-click GET + RFC 8058 POST). |
+| `server/src/routes/authEmail.ts` | Public auth emails (`/api/auth/email/{signup,resend,recovery,magiclink}`): GoTrue `generateLink` + our templates, Turnstile, per-recipient throttle. |
+| `server/src/services/authEmailLinks.ts` | Pure link builder + the strict link-origin allowlist (`APP_PUBLIC_URL` + `AUTH_LINK_ORIGINS`). |
 | `server/src/routes/email.ts` | Public open-tracking pixel. |
 | `server/sql/email_system.sql` | DB migration (log + suppression + double opt-in columns). |
 | `scripts/email-preview.ts` | Renders every template to `docs/email/previews/`. |

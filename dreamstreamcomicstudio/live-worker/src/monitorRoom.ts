@@ -25,6 +25,7 @@
  * The singleton instance named KEY_HOLDER only stores the VAPID key pair.
  */
 
+import { iceServers } from './ice';
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
@@ -292,7 +293,6 @@ const PUSH_COOLDOWN_MS: Record<string, number> = {
   loud: 10 * 60_000, noise: 10 * 60_000, camera: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000, insight: 6 * 60 * 60_000, guest: 0,
 };
 const PUSH_URGENT = new Set<PushKind>(['cry', 'alarm', 'glass', 'zone', 'offline', 'noise']);
-const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
 const VAPID_SUBJECT = 'https://dreamstreamstudio.ai';
 
 const json = (data: unknown, status = 200) =>
@@ -364,7 +364,6 @@ export class MonitorRoom {
   private curBucket: { t: number; s: number; cry: number } | null = null;
   private lastBucketSave = 0;
   private vapid: VapidKeys | null = null;
-  private ice: { at: number; servers: unknown[] } | null = null;
   readonly store: MonitorStore;
   readonly guests: GuestAccess;
   readonly tracker: TrackerStore;
@@ -425,31 +424,9 @@ export class MonitorRoom {
     return this.vapid;
   }
 
-  private async iceServers(): Promise<unknown[]> {
-    if (this.ice && Date.now() - this.ice.at < 60 * 60_000) return this.ice.servers;
-    let servers: unknown[] = STUN;
-    // Optional TURN (Cloudflare Realtime) for networks that block peer-to-peer.
-    if (this.env.TURN_KEY_ID && this.env.TURN_KEY_API_TOKEN) {
-      try {
-        const res = await fetch(
-          `https://rtc.live.cloudflare.com/v1/turn/keys/${this.env.TURN_KEY_ID}/credentials/generate-ice-servers`,
-          {
-            method: 'POST',
-            headers: { authorization: `Bearer ${this.env.TURN_KEY_API_TOKEN}`, 'content-type': 'application/json' },
-            body: JSON.stringify({ ttl: 6 * 3600 }),
-          },
-        );
-        if (res.ok) {
-          const body = (await res.json()) as { iceServers?: unknown };
-          const turn = Array.isArray(body.iceServers) ? body.iceServers : body.iceServers ? [body.iceServers] : [];
-          if (turn.length) servers = [...STUN, ...turn];
-        }
-      } catch {
-        /* STUN-only; relay mode still covers blocked networks */
-      }
-    }
-    this.ice = { at: Date.now(), servers };
-    return servers;
+  /** STUN + Cloudflare TURN when configured (shared with every live WebRTC path). */
+  private iceServers(): Promise<unknown[]> {
+    return iceServers(this.env);
   }
 
   /** CSV download for parents and caregivers (the member's own token decides). */

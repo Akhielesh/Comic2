@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Guards the app-shell config owned by P0-E (Comic Studio v5): PWA manifest + icons,
- * index.html/studio.html head, edge headers and routes, Tailwind screens, the §13.5 CSS
+ * index.html head, edge headers and routes, Tailwind screens, the §13.5 CSS
  * tokens/utilities and the pinned new dependencies. These are plain files that no
  * component test loads, so a stray edit would otherwise only show up on a device.
  */
@@ -81,7 +81,7 @@ describe('public/app.webmanifest', () => {
   });
 });
 
-describe('index.html / studio.html head', () => {
+describe('index.html head', () => {
   it('links the manifest and an existing 180px apple-touch-icon', async () => {
     expect(head).toContain('<link rel="manifest" href="/app.webmanifest"');
     const m = head.match(/<link rel="apple-touch-icon" href="([^"]+)"/);
@@ -111,11 +111,9 @@ describe('index.html / studio.html head', () => {
   });
 
   it('keeps the viewport zoomable and safe-area aware', () => {
-    for (const html of [indexHtml, read('studio.html')]) {
-      const vp = html.match(/<meta name="viewport" content="([^"]+)"/)?.[1] ?? '';
-      expect(vp).toContain('viewport-fit=cover');
-      expect(vp).not.toMatch(/maximum-scale|user-scalable\s*=\s*no/);
-    }
+    const vp = indexHtml.match(/<meta name="viewport" content="([^"]+)"/)?.[1] ?? '';
+    expect(vp).toContain('viewport-fit=cover');
+    expect(vp).not.toMatch(/maximum-scale|user-scalable\s*=\s*no/);
   });
 });
 
@@ -154,10 +152,8 @@ describe('public/_headers and public/_routes.json', () => {
     expect(all).toContain('Referrer-Policy: strict-origin-when-cross-origin');
   });
 
-  it('keeps the Code Studio cross-origin isolation', () => {
-    const studio = block('/studio.html');
-    expect(studio).toContain('Cross-Origin-Opener-Policy: same-origin');
-    expect(studio).toContain('Cross-Origin-Embedder-Policy: require-corp');
+  it('isolates no page cross-origin (Code Studio and its /studio.html were removed)', () => {
+    expect(headers).not.toContain('Cross-Origin-Embedder-Policy');
   });
 
   it('stays inside Cloudflare Pages limits', () => {
