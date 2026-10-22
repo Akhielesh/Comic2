@@ -1,0 +1,23 @@
+{
+  "title": "Pip and the Night Lantern",
+  "quality": "draft",
+  "style": "watercolor-storybook",
+  "format": {
+    "kind": "storybook",
+    "pageCount": 2,
+    "pageAspect": "4:3",
+    "panelsPerPage": "auto",
+    "readingDirection": "ltr",
+    "lettering": "overlay",
+    "colorMode": "color",
+    "language": "en"
+  },
+  "script": "A gentle bedtime story for children aged 3 to 6.\n\nPip is a very small hedgehog with soft brown spines, a cream-colored tummy and a striped blue-and-white scarf that is much too long for him. Pip is afraid of the dark.\n\nOne evening the moon hides behind the clouds and Pip's burrow under the old oak tree goes very, very dark. Pip pulls his scarf over his nose and shivers.\n\nThen a tiny light blinks at the doorway. It is Lumi, a firefly with round glasses and a glow the color of honey. \"May I come in?\" asks Lumi. \"It's awfully dark out here.\"\n\n\"You're scared of the dark too?\" asks Pip.\n\n\"Everyone is, a little,\" says Lumi. \"That's why we glow for each other.\"\n\nLumi settles on Pip's nose like a night lantern, and together they count the stars peeking through the leaves until Pip falls fast asleep.",
+  "checks": [
+    "Storybook feel: 1–3 large panels per page, narration carried by captions.",
+    "Pip's long blue-and-white scarf and Lumi's round glasses + honey glow stay consistent.",
+    "Nothing scary: soft light, rounded shapes, warm palette even in the dark burrow.",
+    "Landscape 4:3 pages render without cropping.",
+    "Draft tier (1K) output is still readable for review."
+  ]
+}

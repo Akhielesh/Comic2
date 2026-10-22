@@ -6,6 +6,7 @@ import {
   FREE_TEXT_COMPAT_MODELS as SHARED_FREE_TEXT_COMPAT_MODELS,
   resolveFreeTextModel
 } from '../../../shared/freeModelPolicy.js';
+import { IMAGE_MODELS } from '../../../shared/comic/models.js';
 
 export type ModelAccessScope = 'text' | 'vision' | 'assistant' | 'image';
 
@@ -26,23 +27,30 @@ const PRO_TEXT_MODELS = [
   'gemini-3-pro-preview'
 ] as const;
 
-const PRO_IMAGE_MODELS = [
-  'pixazo/flux-1-schnell',
-  'gemini-2.5-flash-image',
-  'gemini-3-pro-image-preview'
-] as const;
+/** Comic Studio v4's everyday image model (Nano Banana 2.1) — open to free plans too. */
+export const FREE_COMIC_IMAGE_MODELS = ['gemini-nano-banana-2.1', 'google/gemini-nano-banana-2.1'] as const;
+
+export const FREE_IMAGE_MODELS: readonly string[] = ['pixazo/flux-1-schnell', FREE_NANO_BANANA_MODEL, ...FREE_COMIC_IMAGE_MODELS];
+
+/** Every transport id of every registry image model (shared/comic/models.ts), for paid plans. */
+const COMIC_IMAGE_MODEL_IDS = IMAGE_MODELS.flatMap((spec) => Object.values(spec.routes).filter((id): id is string => Boolean(id)));
+
+const PRO_IMAGE_MODELS: readonly string[] = Array.from(
+  new Set(['pixazo/flux-1-schnell', 'gemini-2.5-flash-image', 'gemini-3-pro-image-preview', ...COMIC_IMAGE_MODEL_IDS])
+);
 
 const isMissingTableError = (error: unknown) => {
   const code = String((error as { code?: string })?.code || '').toUpperCase();
   return code === '42P01' || code === 'PGRST205';
 };
 
-const toEffectiveTier = (planTier: BillingPlanTier | string | undefined): EffectiveModelTier => {
+/** Paid plans get the full model list. 'creator' and 'custom' are paid too (they were
+ *  previously capped as free — a paying Creator user hit the free image list). */
+const PAID_PLAN_TIERS = new Set(['creator', 'pro', 'studio', 'custom', 'admin']);
+
+export const toEffectiveTier = (planTier: BillingPlanTier | string | undefined): EffectiveModelTier => {
   const normalized = String(planTier || 'free').trim().toLowerCase();
-  if (normalized === 'pro' || normalized === 'studio' || normalized === 'admin') {
-    return 'pro';
-  }
-  return 'free';
+  return PAID_PLAN_TIERS.has(normalized) ? 'pro' : 'free';
 };
 
 const normalizeModel = (model: string) => {
@@ -82,7 +90,7 @@ export const resolveAllowedModels = (
 
   if (scope === 'image') {
     if (tier === 'pro') return [...PRO_IMAGE_MODELS];
-    return ['pixazo/flux-1-schnell', FREE_NANO_BANANA_MODEL];
+    return [...FREE_IMAGE_MODELS];
   }
 
   if (tier === 'pro') return [...PRO_TEXT_MODELS];

@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/types/billing.js';
 import { getSupabaseAdmin } from './supabase.js';
 import { getPlanPricingCatalog } from './stripePriceConfig.js';
+import { IMAGE_MODELS } from '../../../shared/comic/models.js';
 
 export const CT_USD = 0.0001;
 export const DEFAULT_MARKUP = Number(process.env.BILLING_PLATFORM_MARKUP || '1.30');
@@ -120,6 +121,46 @@ export type ModelPricing = {
   status: 'ACTIVE' | 'REVIEW_REQUIRED';
   effectiveFrom: string;
 };
+
+/**
+ * Per-image price the ledger uses for a registry image model. One row can hold one
+ * price, so it is the 2K price (the studio's Standard/Pro page resolution) when listed,
+ * else the highest listed price — reservations err high and are trued up at
+ * settlement (provider-reported cost, or billing.ts's per-resolution registry price).
+ */
+export const registryImagePriceUsd = (priceUsd: Partial<Record<string, number>>): number => {
+  if (typeof priceUsd['2K'] === 'number') return priceUsd['2K'];
+  const values = Object.values(priceUsd).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  return values.length ? Math.max(...values) : 0;
+};
+
+/** Hand-maintained rows above win over generated ones for the same provider:model. */
+const HAND_PRICED_IMAGE_MODELS = new Set(['gemini:gemini-2.5-flash-image', 'openrouter:google/gemini-2.5-flash-image']);
+
+function comicImageModelPricing(): ModelPricing[] {
+  const rows: ModelPricing[] = [];
+  for (const spec of IMAGE_MODELS) {
+    const price = registryImagePriceUsd(spec.priceUsd);
+    if (!price) continue;
+    for (const [route, modelId] of Object.entries(spec.routes)) {
+      if (!modelId) continue;
+      const provider = route === 'gemini' ? 'gemini' : 'openrouter';
+      if (HAND_PRICED_IMAGE_MODELS.has(`${provider}:${modelId}`)) continue;
+      rows.push({
+        provider,
+        model: modelId,
+        inputPer1kUsd: 0,
+        outputPer1kUsd: 0,
+        imagePerOutputUsd: price,
+        source: 'fallback/comic-registry',
+        confidence: 0.6,
+        status: 'ACTIVE',
+        effectiveFrom: '2026-10-21T00:00:00.000Z'
+      });
+    }
+  }
+  return rows;
+}
 
 export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
   {
@@ -265,7 +306,100 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     confidence: 0.4,
     status: 'REVIEW_REQUIRED',
     effectiveFrom: '2026-02-13T00:00:00.000Z'
-  }
+  },
+  // --- Comic Studio v4 text roles (server/src/comic/textModels.ts). OpenRouter list prices
+  //     2026-10-21; the Google ones are also priced for the Gemini-direct route. ---
+  {
+    provider: 'openrouter',
+    model: 'google/gemini-3.8-flash',
+    inputPer1kUsd: 0.000825,
+    outputPer1kUsd: 0.004125,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.6,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'openrouter',
+    model: 'anthropic/claude-sonnet-5.5',
+    inputPer1kUsd: 0.002,
+    outputPer1kUsd: 0.01,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.6,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'openrouter',
+    model: 'openai/gpt-6-luna',
+    inputPer1kUsd: 0.0001,
+    outputPer1kUsd: 0.0005,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.6,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'openrouter',
+    model: 'google/gemini-4-argon',
+    inputPer1kUsd: 0.002,
+    outputPer1kUsd: 0.01,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.6,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'openrouter',
+    model: 'google/gemini-3.7-flash',
+    inputPer1kUsd: 0.00075,
+    outputPer1kUsd: 0.00375,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.6,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3.8-flash',
+    inputPer1kUsd: 0.000825,
+    outputPer1kUsd: 0.004125,
+    imagePerOutputUsd: 0,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-4-argon',
+    inputPer1kUsd: 0.002,
+    outputPer1kUsd: 0.01,
+    imagePerOutputUsd: 0,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3.7-flash',
+    inputPer1kUsd: 0.00075,
+    outputPer1kUsd: 0.00375,
+    imagePerOutputUsd: 0,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-10-21T00:00:00.000Z'
+  },
+  // --- Comic Studio v4 image models, generated from the capability registry
+  //     (shared/comic/models.ts) for both transports — see comicImageModelPricing below. ---
+  ...comicImageModelPricing()
 ];
 
 const toPlanTier = (value: unknown): BillingPlanTier | null => {
@@ -363,6 +497,11 @@ export const getActiveModelPricingCatalog = async (): Promise<{ models: ModelPri
   }
 };
 
+/** Ids that name an image-generation model (never priced from a text row). */
+const IMAGE_MODEL_ID_RE = /image|banana|flux|seedream|imagen|dall-?e|ideogram|stable-diffusion|sdxl|recraft|midjourney/i;
+
+export const looksLikeImageModel = (model: string): boolean => IMAGE_MODEL_ID_RE.test(model);
+
 export const resolveModelPricing = async (provider: string, model: string): Promise<ModelPricing> => {
   const catalog = await getActiveModelPricingCatalog();
   const normalizedProvider = provider.trim().toLowerCase();
@@ -373,6 +512,29 @@ export const resolveModelPricing = async (provider: string, model: string): Prom
 
   const byModel = catalog.models.find((item) => item.model === normalizedModel);
   if (byModel) return byModel;
+
+  // A live snapshot table may predate a model the fallback rows already price (new
+  // registry entries) — prefer that known price over a provider-wide guess.
+  if (catalog.models !== FALLBACK_MODEL_PRICING) {
+    const fallbackExact =
+      FALLBACK_MODEL_PRICING.find((item) => item.provider === normalizedProvider && item.model === normalizedModel) ||
+      FALLBACK_MODEL_PRICING.find((item) => item.model === normalizedModel);
+    if (fallbackExact) return fallbackExact;
+  }
+
+  // An unknown IMAGE model must never resolve to a text row (imagePerOutputUsd 0 would
+  // bill every image at $0). Use the provider's most expensive known image price so a
+  // reservation errs high; settlement trues it up with the reported cost.
+  if (looksLikeImageModel(normalizedModel)) {
+    const providerImageRows = (rows: ModelPricing[]) =>
+      rows.filter((item) => item.provider === normalizedProvider && item.imagePerOutputUsd > 0);
+    const pool = [
+      providerImageRows(catalog.models),
+      providerImageRows(FALLBACK_MODEL_PRICING),
+      FALLBACK_MODEL_PRICING.filter((item) => item.imagePerOutputUsd > 0)
+    ].find((rows) => rows.length > 0);
+    if (pool) return pool.reduce((max, item) => (item.imagePerOutputUsd > max.imagePerOutputUsd ? item : max));
+  }
 
   const byProvider = catalog.models.find((item) => item.provider === normalizedProvider);
   if (byProvider) return byProvider;

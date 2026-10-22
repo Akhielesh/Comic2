@@ -1,5 +1,13 @@
 # Comic Studio — the finalized creation flow
 
+> **Legacy (classic editor) documentation.** Since 2026-10-21 new comics start in the
+> conversational **Comic Studio v4** — see [`comic-studio-v4.md`](comic-studio-v4.md),
+> which is now the default creation flow. The dashboard's "New Comic" creates a v4
+> project (a secondary "Use the classic editor instead" link remains), projects whose
+> `state.studioVersion === 4` always open the v4 studio (`?view=studio&id=…`), and the
+> classic editor shows a banner that imports the story into a new v4 project. Existing
+> classic projects keep opening in the editor described below, unchanged.
+
 _June 2026: Comic Studio was recommitted as a shareable product. This doc is the
 single source of truth for its design flow and structure. The experimental
 ComicForge pipeline and the admin Test Lab were removed the same week (see ADR
