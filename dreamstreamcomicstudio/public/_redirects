@@ -1,3 +1,6 @@
+# Atlas Studio lives on its own subdomain (Worker atlas-studio, repo Akhielesh/AtlasD).
+/atlas    https://atlas.dreamstreamstudio.ai/   302
+
 # SPA fallback for Cloudflare Pages: serve index.html for client-routed paths
 # (e.g. /models, /share/:token) so deep links and refreshes don't 404.
 /*    /index.html   200

@@ -142,8 +142,10 @@ awake, on the Workers Paid plan — which Containers require, so keep it). Deplo
 by `.github/workflows/deploy-api-proxy.yml` on pushes touching `server/**`, `shared/**`,
 `api-proxy/**`, root `package*.json`, etc. The frontend (Pages) and the other Workers
 (`-data-egress`, `-live`, `-email`) are unchanged; `-studio` (Code Studio's sandbox) was retired
-on 2026-10-22 (ADR 0005). (The `atlasd` / `akhieleshpersonalwebsite` workers on the same
-Cloudflare account are *not* DreamStream.)
+on 2026-10-22 (ADR 0005). (The `atlas-studio` worker — Atlas Studio at
+`atlas.dreamstreamstudio.ai`, repo `Akhielesh/AtlasD` — plus `akhieleshpersonalwebsite` and the
+unused `atlasd` stub on the same Cloudflare account are *not* DreamStream; DreamStream only links
+to Atlas Studio, via `services/atlasStudio.ts`.)
 
 - **Backend env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in
   D1 `dreamstream-backend-env` (`backend_env(name, value)`) or Worker secrets (which override
