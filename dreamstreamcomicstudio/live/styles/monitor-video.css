@@ -7,9 +7,16 @@
 .mv-stage canvas.mv-relay { display: block; }
 .mv-stage canvas.mv-relay.hidden { visibility: hidden; }
 
-/* Honest pills over the picture: what the viewer is really getting. */
+/* Honest pills over the picture: what the viewer is really getting.
+   Amber = through our server (not end-to-end encrypted); blue = the quick
+   preview while the encrypted direct picture connects. */
 .ov-pill.mv-relay-pill { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ov-pill.mv-relay-pill svg { color: var(--amber); flex: none; }
+.ov-pill.mv-relay-pill.early svg { color: var(--blue); }
+@media (prefers-reduced-motion: no-preference) {
+  .ov-pill.mv-relay-pill.early svg { animation: mv-preview-pulse 1.4s ease-in-out infinite; }
+}
+@keyframes mv-preview-pulse { 50% { opacity: .4; } }
 .ov-pill.mv-busy-pill { background: color-mix(in srgb, var(--amber) 82%, transparent); }
 .ov-pill.mv-busy-pill svg { flex: none; }
 

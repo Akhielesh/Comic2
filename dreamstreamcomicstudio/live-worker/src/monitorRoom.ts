@@ -16,10 +16,16 @@
  *   - tracks sleep from the camera's minutes (sleepTracker.ts) and sends the
  *     morning report,
  *   - watches camera heartbeats and raises "camera offline" alerts,
- *   - forwards the camera's low-bandwidth relay frames (640 px JPEGs, 2–5 a
- *     second, video only) to viewers whose network blocks P2P. They pass
- *     through this object's memory — not end-to-end encrypted like P2P, and
- *     never stored. A token bucket per camera caps them at 25 fps,
+ *   - forwards the camera's relay picture to viewers whose network blocks P2P,
+ *     who are still connecting (the instant picture), or who arrive when the
+ *     camera's direct slots are full: real video (WebCodecs H.264 / VP8 /
+ *     VP9, 10–15 fps) with its sound, or 640 px JPEGs for browsers that can't
+ *     decode it. Frames and sound pass through this object's memory — NOT
+ *     end-to-end encrypted (only P2P, direct or through TURN, is) — and are
+ *     never stored. Routed by codec, throttled per camera (token bucket,
+ *     25 messages/s), and each viewer acknowledges what it got: one that falls
+ *     behind skips to the next key frame instead of drifting seconds late,
+ *     and keeps its sound meanwhile (relayWire.ts),
  *   - is the family's switchboard for video calls between members
  *     (familyCalls.ts): rings their 'line' sockets and phones, relays the
  *     handshake between the people in a call.
@@ -28,12 +34,13 @@
  */
 
 import { iceServers } from './ice';
+import { audioOnly, bareJpeg, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDIO, readHead, seqDiff, type RelayHead } from './relayWire';
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord, type CallStat } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
 import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
-import { callRpc, type SupabaseEnv } from './supabaseAuth';
+import { bearerFrom, callRpc, verifyMember, type LiveIdentity, type SupabaseEnv } from './supabaseAuth';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
 
 export const KEY_HOLDER = '__vapid_keys__';
@@ -41,7 +48,9 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
 /**
- * 'admin' = a parent's short-lived control connection (never in presence).
+ * 'admin' = a parent's control connection while managing people or the share
+ * link from outside the watch screen (the Invite sheet): never in presence,
+ * a slim hello, no monitor broadcasts, and only the messages in ADMIN_MSGS.
  * 'line' = a member's app, open anywhere, reachable for family calls (never in presence).
  */
 export type MonMode = 'camera' | 'viewer' | 'admin' | 'line';
@@ -129,6 +138,14 @@ interface Attach {
   dn?: string;
   /** Viewer: camera device id it wants relayed snapshots from. */
   relay?: string;
+  /**
+   * Viewer on the relay: the video codecs it decodes (bit 0 H.264, 1 VP8,
+   * 2 VP9; 0 = JPEG only). Absent = a viewer from before the framed format
+   * (bare JPEGs only, no acknowledgements).
+   */
+  rc?: number;
+  /** On the relay only while its direct picture connects (not shown as "on the relay"). */
+  ri?: boolean;
   /** Joined with the share link + passcode (no account): the guest's id. */
   guest?: string;
 }
@@ -192,8 +209,10 @@ export interface EncStatus {
   w: number | null;
   /** Rungs stepped down because the phone is busy. */
   p: number;
-  /** Relay frames per second (0 = off). */
+  /** Relay pictures per second (0 = off). */
   relay: number;
+  /** What the relay sends: a video codec or JPEG (only when known). */
+  rc?: 'avc' | 'vp8' | 'vp9' | 'jpeg';
 }
 
 export interface SceneStatus {
@@ -303,15 +322,30 @@ const CALL_PUSH_CAP = 40;
 const LINE_CHECK_MS = 30_000;
 /** …and drops a line in the call that hasn't pinged or said anything for this long (half-open socket). */
 const LINE_STALE_MS = 60_000;
+/** All an 'admin' socket (the Invite sheet off the watch screen) may send. */
+const ADMIN_MSGS = new Set(['members_changed', 'share_set', 'share_off', 'share_pass', 'share_extend', 'guest_remove', 'request_dismiss', 'ping']);
 const MAX_CAMERAS = 4;
 const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
 const RTC_FRAME_MAX = 64 * 1024;
-const SNAPSHOT_MAX = 256 * 1024;
 /** Relay frames per camera: sustained rate, burst, and bytes per second. */
 const RELAY_FPS = 25;
 const RELAY_BURST = 8;
 const RELAY_BYTES_PER_S = 1536 * 1024;
+/**
+ * A viewer's relay window, in the camera's messages (≈15 a second; viewers
+ * acknowledge every 500 ms): more than RELAY_LAG (≈2 s) forwarded but not yet
+ * acknowledged and it skips video until a key frame arrives with no more than
+ * RELAY_RESUME (≈1 s) in flight — sound keeps going meanwhile. Past RELAY_DEAD
+ * with no acknowledgement for 3 s it gets nothing.
+ */
+const RELAY_LAG = 30;
+const RELAY_RESUME = 15;
+const RELAY_DEAD = 150;
+/** At most one key-frame request per camera per second (the camera also sends one every 2 s). */
+const RELAY_KEY_GAP_MS = 1000;
+/** A camera that sent no video for this long is treated as JPEG-only. */
+const RELAY_VIDEO_STALE_MS = 5000;
 const PURGE_EVERY_MS = 6 * 60 * 60_000;
 const MACHINE_DB = 50;
 const MACHINE_GAP_MS = 12 * 60 * 60_000;
@@ -374,6 +408,7 @@ export function sanitizeEnc(v: unknown): EncStatus | null {
     w: w == null ? null : Math.round(w),
     p: Math.round(num(r.p, 0, 4)),
     relay: Math.round(num(r.relay, 0, 30) * 10) / 10,
+    ...(r.rc === 'avc' || r.rc === 'vp8' || r.rc === 'vp9' || r.rc === 'jpeg' ? { rc: r.rc } : {}),
   };
 }
 
@@ -405,6 +440,43 @@ export class FrameBucket {
   }
 }
 
+/** What a viewer decodes, from its subscription's codec names (bit 0 H.264, 1 VP8, 2 VP9). */
+export function relayCodecMask(v: unknown[]): number {
+  let m = 0;
+  for (const c of v.slice(0, 8)) {
+    if (c === 'avc') m |= 1;
+    else if (c === 'vp8') m |= 2;
+    else if (c === 'vp9') m |= 4;
+  }
+  return m;
+}
+
+/**
+ * Which bytes (if any) one viewer gets of a relay message. `rc`: what it
+ * decodes (undefined = a viewer from before the framed format); `vc`: the
+ * camera's current video codec (0 = it sends none). Video goes to those who
+ * decode it, JPEG to the rest (bare for older viewers), sound-only messages
+ * with the video (or to every framed-format viewer of a JPEG-only camera).
+ */
+export function relayRoute(head: RelayHead, raw: ArrayBuffer, rc: number | undefined, vc: number): ArrayBuffer | null {
+  const decodes = (codec: number) => rc != null && codec > 0 && (rc & (1 << (codec - 1))) !== 0;
+  if (head.kind === KIND_JPEG) {
+    if (decodes(vc)) return null; // it gets the video instead
+    return rc == null ? bareJpeg(raw) : raw;
+  }
+  if (head.kind === KIND_VIDEO || head.kind === KIND_VIDEO_AUDIO) return decodes(head.codec) ? raw : null;
+  if (rc == null) return null;
+  return vc === 0 || decodes(vc) ? raw : null;
+}
+
+const freshRx = () => ({ fw: null as number | null, ack: null as number | null, ackAt: Date.now(), wait: true });
+
+function sendBin(ws: WebSocket, buf: ArrayBuffer): void {
+  try {
+    ws.send(buf);
+  } catch { /* closing */ }
+}
+
 export function sanitizeZones(v: unknown): Zone[] {
   if (!Array.isArray(v)) return [];
   const out: Zone[] = [];
@@ -432,6 +504,12 @@ export class MonitorRoom {
   private staleFlagged = new Set<string>();
   private lastStatus = new Map<string, { st: CamStatus; at: number }>();
   private relayBuckets = new Map<string, FrameBucket>();
+  /** Per camera: the video codec it last sent (and when), and its key-frame requests. */
+  private relayCams = new Map<string, { codec: number; at: number; keyAt: number; keyPending: boolean }>();
+  /** Per viewer socket: last seq forwarded / acknowledged, waiting for a key frame. */
+  private relayRx = new Map<string, { fw: number | null; ack: number | null; ackAt: number; wait: boolean }>();
+  /** Cameras paused for privacy: nothing of theirs is relayed. */
+  private relayPrivacy = new Set<string>();
   private lastStatusAt = new Map<string, number>();
   private lastSoundAt = new Map<string, number>();
   private curBucket: { t: number; s: number; cry: number } | null = null;
@@ -585,11 +663,11 @@ export class MonitorRoom {
     } catch { /* closing */ }
   }
 
-  /** To the nursery's monitor devices (cameras, viewers) — never to call lines. */
+  /** To the nursery's monitor devices (cameras, viewers) — never to call lines or admin sockets. */
   private broadcast(obj: unknown, filter?: (a: Attach) => boolean): void {
     const payload = JSON.stringify(obj);
     for (const { ws, a } of this.authed()) {
-      if (a.mode === 'line' || (filter && !filter(a))) continue;
+      if (a.mode === 'line' || a.mode === 'admin' || (filter && !filter(a))) continue;
       try {
         ws.send(payload);
       } catch { /* closing */ }
@@ -604,7 +682,7 @@ export class MonitorRoom {
         const ls = this.lastStatus.get(a.dev);
         cams.push({ sid: a.sid, dev: a.dev, dn: a.dn || 'Camera', by: a.name || 'Member', since: a.at, status: ls?.st ?? null, statusAt: ls?.at ?? null });
       } else if (a.mode === 'viewer') {
-        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay, ...(a.guest ? { guest: true } : {}) });
+        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay && !a.ri, ...(a.guest ? { guest: true } : {}) });
       }
     }
     return { cams, viewers };
@@ -619,22 +697,8 @@ export class MonitorRoom {
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a) return;
 
-    // Binary = a relay frame (JPEG) from an authenticated camera.
-    if (typeof raw !== 'string') {
-      if (!a.authed || a.mode !== 'camera' || !a.dev || raw.byteLength > SNAPSHOT_MAX) return;
-      const now = Date.now();
-      let bucket = this.relayBuckets.get(a.dev);
-      if (!bucket) this.relayBuckets.set(a.dev, (bucket = new FrameBucket(now)));
-      if (!bucket.take(raw.byteLength, now)) return;
-      for (const s of this.authed()) {
-        if (s.a.mode === 'viewer' && s.a.relay === a.dev) {
-          try {
-            s.ws.send(raw);
-          } catch { /* closing */ }
-        }
-      }
-      return;
-    }
+    // Binary = a relay message (video, sound or JPEG) from an authenticated camera.
+    if (typeof raw !== 'string') return this.onRelayFrame(a, raw);
 
     if (raw.length > RTC_FRAME_MAX) return;
     let msg: Record<string, unknown>;
@@ -657,6 +721,8 @@ export class MonitorRoom {
       if (msg.t === 'ping') return this.send(ws, { t: 'pong', at: Date.now() });
       return this.onCallMsg(ws, a, msg);
     }
+    // An admin socket manages people and the share link, nothing else.
+    if (a.mode === 'admin' && !ADMIN_MSGS.has(String(msg.t))) return;
 
     switch (msg.t) {
       case 'rtc':
@@ -684,6 +750,8 @@ export class MonitorRoom {
         return this.onTell(a, msg);
       case 'relay':
         return this.onRelay(ws, a, msg);
+      case 'rx':
+        return this.onRelayAck(a, msg);
       case 'push_sub':
         return this.onPushSub(ws, a, msg);
       case 'push_unsub':
@@ -706,8 +774,14 @@ export class MonitorRoom {
         return this.onShareSet(ws, a, msg);
       case 'share_off':
         return this.onShareOff(a);
+      case 'share_pass':
+        return this.onSharePass(ws, a, msg);
+      case 'share_extend':
+        return this.onShareExtend(a, msg);
       case 'guest_remove':
         return this.onGuestRemove(a, msg);
+      case 'request_dismiss':
+        return this.onRequestDismiss(a, msg);
       case 'end_all':
         return this.onEndAll(a);
       case 'bye':
@@ -735,6 +809,7 @@ export class MonitorRoom {
       ws.serializeAttachment({ ...a, authed: false });
       ws.close(1000, 'bye');
     } catch { /* already closed */ }
+    if (a.mode === 'admin') return; // never in presence
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -756,6 +831,7 @@ export class MonitorRoom {
     }
     if (a.mode === 'viewer') {
       this.broadcast({ t: 'peer_gone', sid: a.sid }, (x) => x.mode === 'camera');
+      this.relayRx.delete(a.sid);
       if (a.relay) this.updateRelayWant(a.relay);
     }
     this.syncPresence();
@@ -834,6 +910,12 @@ export class MonitorRoom {
     a.dn = clip(msg.dn, 40) || (mode === 'camera' ? 'Camera' : 'Device');
     ws.serializeAttachment(a);
     if (mode === 'line') return this.admitLine(ws, a, nid, meta);
+    if (mode === 'admin') {
+      // Slim: who you are and the share link — no monitor data, not in presence.
+      this.send(ws, { t: 'hello', you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev }, nursery: { id: nid, ...meta } });
+      this.send(ws, { t: 'share', share: this.guests.info(Date.now()) });
+      return;
+    }
 
     // A device re-joining as the same camera replaces its stale socket.
     if (mode === 'camera') {
@@ -873,7 +955,11 @@ export class MonitorRoom {
 
     if (mode === 'camera') {
       this.markBeat(a.dev);
-      // A camera that (re)joins picks up viewers already waiting on its relay.
+      // A camera that (re)joins picks up viewers already waiting on its relay;
+      // its messages start a new count, so every one of them starts on a key frame.
+      this.relayCams.delete(a.dev);
+      this.relayPrivacy.delete(a.dev);
+      for (const s of this.authed()) if (s.a.mode === 'viewer' && s.a.relay === a.dev) this.relayRx.set(s.a.sid, freshRx());
       this.updateRelayWant(a.dev);
       const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
       const wasAlerted = await this.state.storage.get<boolean>(`alerted:${a.dev}`);
@@ -926,6 +1012,9 @@ export class MonitorRoom {
     if (a.mode !== 'camera' || !a.dev) return;
     const now = Date.now();
     this.markBeat(a.dev);
+    // Privacy pause holds back every relay message from this camera (even a throttled status says so).
+    if ((msg.st as Record<string, unknown> | undefined)?.paused === 'privacy') this.relayPrivacy.add(a.dev);
+    else this.relayPrivacy.delete(a.dev);
     if (now - (this.lastStatusAt.get(a.dev) ?? 0) < 800) return;
     this.lastStatusAt.set(a.dev, now);
     const s = (msg.st ?? {}) as Record<string, unknown>;
@@ -1025,6 +1114,8 @@ export class MonitorRoom {
       return this.resolveHazard('paused', a.dev, 'back');
     }
     if (kind === 'privacy') {
+      if (msg.on) this.relayPrivacy.add(a.dev);
+      else this.relayPrivacy.delete(a.dev);
       await this.addLog({ kind: 'privacy', msg: msg.on ? `Video paused for privacy on ${where} — sound monitoring continues` : `Video resumed on ${where}`, dev: a.dev });
       return;
     }
@@ -1609,20 +1700,169 @@ export class MonitorRoom {
     }
   }
 
+  /**
+   * A viewer (un)subscribes to a camera's relay picture: `codecs` it can
+   * decode (absent from viewers before the framed format), `instant` while its
+   * direct picture is still connecting. A new or changed subscription starts
+   * on a key frame.
+   */
   private onRelay(ws: WebSocket, a: Attach, msg: Record<string, unknown>): void {
     if (a.mode !== 'viewer') return;
     const prev = a.relay;
+    const prevRc = a.rc;
+    const prevRi = !!a.ri;
     a.relay = msg.on ? clip(msg.dev, 40) || undefined : undefined;
+    a.rc = a.relay && Array.isArray(msg.codecs) ? relayCodecMask(msg.codecs) : undefined;
+    a.ri = a.relay && msg.instant ? true : undefined;
     ws.serializeAttachment(a);
+    if (!a.relay) this.relayRx.delete(a.sid);
+    else if (a.relay !== prev || a.rc !== prevRc || !this.relayRx.has(a.sid)) {
+      this.relayRx.set(a.sid, freshRx());
+      this.requestKey(a.relay);
+    }
     if (prev && prev !== a.relay) this.updateRelayWant(prev);
     if (a.relay) this.updateRelayWant(a.relay);
-    // Parents see who is on the low-bandwidth picture.
-    if (prev !== a.relay) this.syncPresence();
+    // Parents see who is on the relay picture (not those only waiting for their direct one).
+    if (prev !== a.relay || prevRi !== !!a.ri) this.syncPresence();
   }
 
+  /** Tell a camera how many viewers want its relay, and what they decode. */
   private updateRelayWant(dev: string): void {
-    const n = this.authed().filter((s) => s.a.mode === 'viewer' && s.a.relay === dev).length;
-    this.broadcast({ t: 'relay_want', n }, (x) => x.mode === 'camera' && x.dev === dev);
+    const want = { t: 'relay_want', n: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 };
+    for (const { a } of this.authed()) {
+      if (a.mode !== 'viewer' || a.relay !== dev) continue;
+      const m = a.rc ?? 0;
+      want.n += 1;
+      if (m & 1) want.avc += 1;
+      if (m & 2) want.vp8 += 1;
+      if (m & 4) want.vp9 += 1;
+      if (!m) want.jpeg += 1;
+    }
+    this.broadcast(want, (x) => x.mode === 'camera' && x.dev === dev);
+  }
+
+  private relayCam(dev: string): { codec: number; at: number; keyAt: number; keyPending: boolean } {
+    let c = this.relayCams.get(dev);
+    if (!c) this.relayCams.set(dev, (c = { codec: 0, at: 0, keyAt: 0, keyPending: false }));
+    return c;
+  }
+
+  /** Ask a camera for a key frame now (at most once a second; a request inside that second waits for its next message). */
+  private requestKey(dev: string): void {
+    const cam = this.relayCam(dev);
+    const now = Date.now();
+    if (now - cam.keyAt < RELAY_KEY_GAP_MS) {
+      cam.keyPending = true;
+      return;
+    }
+    cam.keyAt = now;
+    cam.keyPending = false;
+    this.broadcast({ t: 'relay_key' }, (x) => x.mode === 'camera' && x.dev === dev);
+  }
+
+  /** A viewer's acknowledgement: the last seq it got; `k` = its decoder needs a key frame. */
+  private onRelayAck(a: Attach, msg: Record<string, unknown>): void {
+    if (a.mode !== 'viewer' || !a.relay || a.rc == null) return;
+    let rx = this.relayRx.get(a.sid);
+    if (!rx) this.relayRx.set(a.sid, (rx = freshRx()));
+    const s = Number(msg.s);
+    if (Number.isInteger(s) && s >= 0 && s <= 0xffffffff) {
+      rx.ack = s;
+      rx.ackAt = Date.now();
+      rx.fw ??= s;
+    }
+    if (msg.k) {
+      rx.wait = true;
+      this.requestKey(a.relay);
+    }
+  }
+
+  /**
+   * One relay message from a camera, to the viewers relaying it: video to
+   * those who decode its codec, JPEG to the rest (bare for older viewers),
+   * sound with the video. Nothing during a privacy pause.
+   */
+  private onRelayFrame(a: Attach, raw: ArrayBuffer): void {
+    if (!a.authed || a.mode !== 'camera' || !a.dev) return;
+    const head = readHead(raw);
+    if (!head || this.relayPrivacy.has(a.dev)) return;
+    const dev = a.dev;
+    const now = Date.now();
+    const isVideo = head.kind === KIND_VIDEO || head.kind === KIND_VIDEO_AUDIO;
+    let bucket = this.relayBuckets.get(dev);
+    if (!bucket) this.relayBuckets.set(dev, (bucket = new FrameBucket(now)));
+    if (!bucket.take(raw.byteLength, now)) {
+      // A video frame that never arrives breaks every decoder after it: all resync on a key frame.
+      if (isVideo && !head.key) this.relayResync(dev);
+      return;
+    }
+    const cam = this.relayCam(dev);
+    if (isVideo) {
+      cam.codec = head.codec;
+      cam.at = now;
+    }
+    if (cam.keyPending && now - cam.keyAt >= RELAY_KEY_GAP_MS) this.requestKey(dev);
+    const vc = now - cam.at < RELAY_VIDEO_STALE_MS ? cam.codec : 0;
+    let wantKey = false;
+    for (const s of this.authed()) {
+      const v = s.a;
+      if (v.mode !== 'viewer' || v.relay !== dev) continue;
+      const out = relayRoute(head, raw, v.rc, vc);
+      if (!out) continue;
+      // Viewers from before the framed format: bare JPEGs, no window.
+      if (v.rc == null) {
+        sendBin(s.ws, out);
+        continue;
+      }
+      let rx = this.relayRx.get(v.sid);
+      if (!rx) this.relayRx.set(v.sid, (rx = freshRx()));
+      if (rx.ack == null) rx.ack = (head.seq - 1) >>> 0;
+      if (rx.fw == null) rx.fw = rx.ack;
+      let lag = seqDiff(rx.fw, rx.ack);
+      if (lag > RELAY_DEAD) {
+        // Still acknowledging but far apart: the numbers restarted — start over. Silent: it's gone.
+        if (now - rx.ackAt > 3000) continue;
+        rx.ack = (head.seq - 1) >>> 0;
+        rx.fw = rx.ack;
+        rx.wait = true;
+        lag = 0;
+      }
+      if (isVideo) {
+        if (!rx.wait && lag > RELAY_LAG) {
+          rx.wait = true;
+          wantKey = true;
+        }
+        if (rx.wait) {
+          if (head.key && lag <= RELAY_RESUME) {
+            rx.wait = false;
+          } else {
+            // The picture waits for a key frame; the sound doesn't.
+            const snd = head.kind === KIND_VIDEO_AUDIO && lag <= RELAY_LAG * 2 ? audioOnly(raw) : null;
+            if (snd) {
+              sendBin(s.ws, snd);
+              rx.fw = head.seq;
+            }
+            if (head.key) wantKey = true;
+            continue;
+          }
+        }
+      } else if (head.kind === KIND_JPEG && lag > RELAY_LAG) {
+        continue; // every JPEG stands alone: a viewer that's behind just skips some
+      }
+      sendBin(s.ws, out);
+      rx.fw = head.seq;
+    }
+    if (wantKey) this.requestKey(dev);
+  }
+
+  /** Every viewer of this camera waits for its next key frame. */
+  private relayResync(dev: string): void {
+    for (const s of this.authed()) {
+      if (s.a.mode !== 'viewer' || s.a.relay !== dev || s.a.rc == null) continue;
+      const rx = this.relayRx.get(s.a.sid);
+      if (rx) rx.wait = true;
+    }
+    this.requestKey(dev);
   }
 
   // -------------------------------------------------------------- queries
@@ -1893,16 +2133,37 @@ export class MonitorRoom {
       return json({ ok: false, reason: 'bad_link' }, 400);
     }
     const now = Date.now();
-    const r = await this.guests.join(
-      { code: clip(body.code, 64), pass: String(body.pass ?? '').slice(0, 200), name: String(body.name ?? ''), dev: clip(body.dev, 40), ip: req.headers.get('cf-connecting-ip') || undefined },
+    const c = await this.guests.check(
+      { code: clip(body.code, 64), pass: String(body.pass ?? '').slice(0, 200), name: String(body.name ?? ''), ip: req.headers.get('cf-connecting-ip') || undefined },
       now,
     );
+    // Signed in? Who they are comes from their own token, checked by Supabase —
+    // never from the body. A member of this nursery needs no guest pass; anyone
+    // else with an account can be made a member by a parent later.
+    let account: LiveIdentity | null = null;
+    const bearer = c.ok ? bearerFrom(req) : null;
+    if (bearer) {
+      account = await verifyMember(this.env, bearer);
+      if (account) {
+        const role = await callRpc<{ ok?: boolean; role?: MonRole }>(this.env, bearer, 'monitor_my_role', { p_nursery: nid });
+        if (role.ok && role.data.ok && role.data.role) return json({ ok: false, reason: 'member' }, 409);
+      }
+    }
+    const r = c.ok ? await this.guests.issue(c.share, { name: c.name, dev: clip(body.dev, 40) }, now) : c;
     const meta = await this.meta();
     if (r.ok) {
-      const entry = await this.addLog({ kind: 'people', msg: `${r.guest.name} joined as a guest with the share link`, by: r.guest.name });
-      await this.pushAlert('guest', { title: `${r.guest.name} is now a guest of ${meta.name}`, body: 'They joined with the share link and passcode. Remove them any time in Watch → People.', entryId: entry.id }, undefined, { audience: 'parents', force: true });
+      if (account) this.guests.addRequest({ uid: account.userId, account: account.displayName, name: r.guest.name, guest_id: r.guest.id }, now);
+      const entry = await this.addLog({ kind: 'people', msg: `${r.guest.name} joined as a guest with the share link${account ? ' (has a Stream Studio account)' : ''}`, by: r.guest.name });
+      await this.pushAlert(
+        'guest',
+        account
+          ? { title: `${r.guest.name} joined ${meta.name} with the share link`, body: `They have a Stream Studio account (${account.displayName}) — make them a member in Invite → Who has access, so they can watch without the passcode.`, entryId: entry.id }
+          : { title: `${r.guest.name} is now a guest of ${meta.name}`, body: 'They joined with the share link and passcode. Remove them any time in Invite → Who has access.', entryId: entry.id },
+        undefined,
+        { audience: 'parents', force: true },
+      );
       this.sendShareInfo();
-      return json({ ok: true, token: r.token, guest: { name: r.guest.name, role: r.guest.role, until: r.guest.expires_at }, nursery: meta });
+      return json({ ok: true, token: r.token, guest: { name: r.guest.name, role: r.guest.role, until: r.guest.expires_at }, nursery: meta, ...(account ? { account: true } : {}) });
     }
     if (r.disabled) {
       const entry = await this.addLog({ kind: 'people', sev: 'warn', msg: 'The share link was turned off after too many wrong passcodes — guests were signed out' });
@@ -1940,6 +2201,39 @@ export class MonitorRoom {
     this.sendShareInfo();
   }
 
+  /** A new passcode on the same link (forgotten or passed on too widely). Guests stay unless asked. */
+  private async onSharePass(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    const pass = String(msg.pass ?? '');
+    const meta = await this.meta();
+    const problem = passcodeProblem(pass, [meta.baby, meta.name]);
+    if (problem) return this.send(ws, { t: 'share_err', msg: problem });
+    const r = await this.guests.setPasscode(pass, msg.signOut === true, Date.now());
+    if (!r) return this.send(ws, { t: 'share_err', msg: 'There’s no link to change — make a new one.' });
+    this.kickGuests(r.removed);
+    const n = r.removed.length;
+    await this.addLog({ kind: 'people', msg: `${a.name} set a new passcode for the share link${n ? ` and signed out ${n} guest${n > 1 ? 's' : ''}` : ' (guests stay signed in)'}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  /** Keep the link working longer — or until a parent turns it off. */
+  private async onShareExtend(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    // An absent value is never "forever": only an explicit null (or 0) is.
+    const days = msg.days === 1 || msg.days === 7 || msg.days === 30 ? msg.days : msg.days === null || msg.days === 0 ? null : undefined;
+    if (days === undefined) return;
+    const s = this.guests.extend(days, Date.now());
+    if (!s) return;
+    await this.addLog({ kind: 'people', msg: `${a.name} ${days == null ? 'made the share link work until it’s turned off' : `extended the share link by ${days} day${days > 1 ? 's' : ''}`}`, by: a.name });
+    this.sendShareInfo();
+  }
+
+  /** "Keep as a guest": hide the make-member suggestion for this person. */
+  private async onRequestDismiss(a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.role !== 'parent' || a.guest) return;
+    if (this.guests.dismissRequest(clip(msg.id, 20), Date.now())) this.sendShareInfo();
+  }
+
   private async onGuestRemove(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent' || a.guest) return;
     const id = clip(msg.id, 20);
@@ -1961,6 +2255,11 @@ export class MonitorRoom {
         } catch { /* closed */ }
       }
     }
+    this.dropGuestPushes(set);
+  }
+
+  /** Forget ended guests' phones for alerts (null = every guest). */
+  private dropGuestPushes(set: Set<string> | null): void {
     if (set && set.size === 0) return;
     void (async () => {
       const subs = (await this.state.storage.get<PushRec[]>('push')) ?? [];
@@ -2000,8 +2299,32 @@ export class MonitorRoom {
     if (changed.length) await this.commitCalls(book, changed);
     const rings = (await this.state.storage.get<CallPushRec[]>('callPush')) ?? [];
     if (rings.some((r) => !ids.has(r.uid))) await this.state.storage.put('callPush', rings.filter((r) => ids.has(r.uid)));
-    await this.addLog({ kind: 'people', msg: `${a.name} updated who can access this nursery`, by: a.name });
-    this.broadcast({ t: 'roles_changed' });
+
+    // Guests with an account a parent just made a member: their guest pass
+    // ends and their app reconnects with their own account.
+    const now = Date.now();
+    const promoted = this.guests.resolveRequests(ids, now);
+    if (promoted.length) {
+      const gone = new Set(promoted.map((p) => p.guest_id));
+      for (const s of this.authed()) {
+        if (!s.a.guest || !gone.has(s.a.guest)) continue;
+        this.send(s.ws, { t: 'promoted' });
+        try {
+          s.ws.close(4007, 'promoted');
+        } catch { /* closed */ }
+      }
+      for (const id of gone) this.guests.removeGuest(id, now);
+      this.dropGuestPushes(gone);
+      for (const p of promoted) await this.addLog({ kind: 'people', msg: `${a.name} made ${p.name} a member — they now watch with their own account`, by: a.name });
+      this.sendShareInfo();
+    } else {
+      await this.addLog({ kind: 'people', msg: `${a.name} updated who can access this nursery`, by: a.name });
+    }
+    // Only the people whose access changed need to reconnect (when the app says
+    // who) — adding Grandma shouldn't restart everyone else's live picture.
+    const who = Array.isArray(msg.uids) ? new Set(msg.uids.slice(0, 40).map((u) => clip(u, 64))) : null;
+    if (who) this.broadcast({ t: 'roles_changed' }, (x) => !!x.uid && who.has(x.uid));
+    else this.broadcast({ t: 'roles_changed' });
   }
 
   /** Panic button: end every viewing session but the parent's own. */

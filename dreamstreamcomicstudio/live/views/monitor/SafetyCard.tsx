@@ -110,7 +110,7 @@ export function SafetyCard({
         },
         {
           k: 'net', icon: 'wifi', label: 'Connection', state: linkState === 'connected' ? 'ok' : relayOn ? 'warn' : 'off',
-          sub: linkState === 'connected' ? 'Live video, encrypted device-to-device' : relayOn ? 'Low-bandwidth mode — alerts still arrive instantly' : 'Connecting…',
+          sub: linkState === 'connected' ? 'Live video, encrypted device-to-device' : relayOn ? 'Picture through our server — alerts still arrive instantly' : 'Connecting…',
         },
       ];
   const issues = open.length + guards.filter((g) => g.state === 'bad').length;

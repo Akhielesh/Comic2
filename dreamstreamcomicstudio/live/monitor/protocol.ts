@@ -76,8 +76,10 @@ export interface EncStatus {
   w: number | null;
   /** Rungs the camera stepped down because the phone is busy (0 = full quality). */
   p: number;
-  /** Low-bandwidth relay frames per second (0 = off). */
+  /** Relay pictures per second (0 = off). */
   relay: number;
+  /** What the relay sends: a video codec, or JPEG (absent from older cameras). */
+  rc?: 'avc' | 'vp8' | 'vp9' | 'jpeg' | null;
 }
 
 export interface CamPresence {
@@ -112,7 +114,26 @@ export interface ShareInfo {
   expires_at: number | null;
   /** Too many wrong passcodes: nobody can join until then. */
   locked_until: number | null;
+  /** When the passcode was last set — a new value confirms "Set a new passcode". */
+  pass_at?: number | null;
+  /** Most guests one link admits. */
+  max_guests?: number;
   guests: { id: string; name: string; role: 'viewer' | 'caregiver'; created_at: number; last_seen: number; expires_at: number }[];
+  /** Guests who also have a Stream Studio account — a parent can make them members. */
+  requests?: ShareRequest[];
+}
+
+/** A guest with a Stream Studio account (uid verified by the room with Supabase). */
+export interface ShareRequest {
+  id: string;
+  uid: string;
+  /** Their account's display name. */
+  account: string;
+  /** The name they typed when joining. */
+  name: string;
+  guest_id: string;
+  role: 'viewer' | 'caregiver';
+  at: number;
 }
 
 export type MonLogKind =
@@ -282,6 +303,10 @@ export interface MonRtc {
   vid?: string;
   /** The picture the viewer wants, with its offer (so a new call starts at the right quality). */
   q?: 'hd' | 'sd' | 'audio';
+  /** With an offer: this viewer can watch the relay picture if the camera's direct slots are full. */
+  ov?: 1;
+  /** With a bye from the camera: its direct slots are full — watch the relay picture. */
+  full?: boolean;
 }
 
 export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'video';
@@ -321,15 +346,27 @@ export type MonServerMsg =
   | { t: 'r'; id: string; q: string; [k: string]: unknown }
   | { t: 'tell'; c: 'feedback' | 'talk_gain'; v: { factor?: number; db?: number; freq?: number }; from: string }
   | { t: 'cmd'; c: MonCmd; v: unknown; from: string; by: string }
-  | { t: 'relay_want'; n: number }
+  /** Viewers on this camera's relay picture, and how many decode each codec (jpeg = none). Older rooms send only n. */
+  | { t: 'relay_want'; n: number; avc?: number; vp8?: number; vp9?: number; jpeg?: number }
+  /** A relay viewer needs a key frame (it subscribed, fell behind, or its decoder failed). */
+  | { t: 'relay_key' }
   | { t: 'settings'; settings: MonSettings }
   | { t: 'cam_gone'; sid: string; dev: string }
   | { t: 'peer_gone'; sid: string }
   | { t: 'roles_changed' }
+  /** This guest was made a member: drop the guest pass, reconnect with the account. */
+  | { t: 'promoted' }
   | { t: 'push_ok'; prefs: Record<string, boolean> }
   | { t: 'notice'; text: string }
   | { t: 'pong'; at: number }
   | { t: 'error'; code: string; msg: string };
+
+/** One line each, for choosing a role when inviting (least access first). */
+export const ROLE_INVITE: Record<MonRole, string> = {
+  viewer: 'Watch, listen and get alerts',
+  caregiver: 'Also talk, soothe, run a camera and log feeds',
+  parent: 'Everything, including inviting people and settings',
+};
 
 export const ROLE_INFO: Record<MonRole, { label: string; can: string }> = {
   parent: { label: 'Parent', can: 'Everything: watch, talk, video call, soothe, run cameras, manage people' },

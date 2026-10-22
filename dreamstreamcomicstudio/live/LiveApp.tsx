@@ -6,7 +6,7 @@
 //   ?e=ID#/summary?k=KEY   → private recap
 //   ?e=ID                  → invite page or watch page (meta decides)
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
-//                            #/account, #/monitor[/NURSERY[/camera|/watch]],
+//                            #/account, #/monitor[/NURSERY[/camera|/watch|/invite]],
 //                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls)
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { consumeAuthReturn, openAuth, signOutEverywhereLocal, useAccount } from './account';
@@ -31,6 +31,8 @@ const MonitorJoin = lazy(() => import('./views/MonitorJoin').then((m) => ({ defa
 const CallsView = lazy(() => import('./views/CallsView').then((m) => ({ default: m.CallsView })));
 import { useCalls } from './calls/callCenter';
 import { CallHost } from './views/calls/CallHost';
+import { InviteHost } from './views/monitor/InviteHost';
+import { openInvite } from './monitor/invite';
 import { StudiosCard } from './components/StudiosCard';
 import { isMissed, CALLS_SEEN_KEY } from './views/callsBadge';
 import { SettingsView } from './views/SettingsView';
@@ -82,7 +84,8 @@ export function parseRoute(): Route {
   // Share link: #/monitor/join/<nursery>/<code> (the passcode is typed, never in the link).
   const join = hash.match(/^monitor\/join\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{16,64})$/);
   if (join) return { view: 'monitor-join', nid: join[1], code: join[2] };
-  const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch))?$/);
+  // #/monitor/<nursery>/invite opens the hub with the Invite sheet on top.
+  const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch|invite))?$/);
   if (mon) {
     if (mon[2] === 'camera') return { view: 'monitor-camera', nid: mon[1] };
     if (mon[2] === 'watch') return { view: 'monitor-watch', nid: mon[1] };
@@ -266,6 +269,14 @@ export function LiveApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A link straight to Invite (help, notifications): the hub, then the sheet.
+  useEffect(() => {
+    const inv = location.hash.match(/^#\/monitor\/([0-9a-f-]{36})\/invite$/);
+    if (!inv) return;
+    history.replaceState(null, '', `${location.pathname}${location.search}#/monitor/${inv[1]}`);
+    openInvite(inv[1]);
+  }, [route]);
+
   const nav: Nav = useMemo(() => {
     const navigate = (search: string, hash: string) => {
       history.pushState(null, '', `${location.pathname}${search}${hash}` || location.pathname);
@@ -427,6 +438,7 @@ export function LiveApp() {
       {route.view === 'dashboard' && <WelcomeTour ready />}
       <CallHost push={push} suspended={route.view === 'monitor-camera'} />
       <AuthSheetHost push={push} />
+      <InviteHost push={push} />
       <GuideHost screenTour={screenTour} />
       {toastNode}
     </div>

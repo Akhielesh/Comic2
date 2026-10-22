@@ -1,7 +1,8 @@
 /**
  * "Get set up" checklist progress for a nursery, as seen from this device.
  * Steps are marked where they happen (the camera screen, the watch screen);
- * the family step comes from the nursery's member count.
+ * the family step is done once someone else has an account in the nursery
+ * or a guest has joined with the share link (marked where a parent sees it).
  */
 
 export type SetupStep = 'camera' | 'watch' | 'alerts' | 'talk' | 'family';
@@ -35,7 +36,7 @@ export function setupDone(nid: string, memberCount: number): Record<SetupStep, b
     watch: !!s.watch,
     alerts: !!s.alerts,
     talk: !!s.talk,
-    family: memberCount > 1,
+    family: memberCount > 1 || !!s.family,
   };
 }
 

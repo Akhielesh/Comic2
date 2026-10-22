@@ -202,6 +202,28 @@ describe('monitor routes', () => {
     expect(JSON.parse(text)).toEqual({ publicKey: 'BPUB' });
     expect(text).not.toContain('SECRET');
   });
+
+  it('passes a signed-in guest’s own token (and only the room’s headers) to the share-link join', async () => {
+    const seen: Request[] = [];
+    const room = { fetch: async (req: Request) => (seen.push(req), jsonResponse({ ok: true })) };
+    const env = { ALLOWED_ORIGINS: '*', MONITOR_ROOM: { idFromName: () => 'n', get: () => room } } as unknown as Env;
+    const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
+    const nid = '11111111-2222-4333-8444-555555555555';
+    await liveWorker.fetch(
+      new Request(`https://worker.example/api/monitor/${nid}/guest`, {
+        method: 'POST',
+        body: JSON.stringify({ code: 'c', pass: 'p', name: 'Jo' }),
+        headers: { authorization: 'Bearer tok-0123456789abcdefghij', cookie: 'x=1', 'cf-connecting-ip': '1.2.3.4' },
+      }),
+      env,
+      ctx,
+    );
+    expect(seen).toHaveLength(1);
+    expect(new URL(seen[0].url).pathname).toBe('/guest');
+    expect(seen[0].headers.get('authorization')).toBe('Bearer tok-0123456789abcdefghij');
+    expect(seen[0].headers.get('cf-connecting-ip')).toBe('1.2.3.4');
+    expect(seen[0].headers.get('cookie')).toBeNull();
+  });
 });
 
 describe('direct call routes', () => {

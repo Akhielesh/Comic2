@@ -92,31 +92,38 @@ export function shareLink(nid: string, code: string): string {
   return `${origin}/live#/monitor/join/${nid}/${code}`;
 }
 
-export type JoinError = 'bad_link' | 'expired' | 'off' | 'locked' | 'wrong' | 'full' | 'slow_down' | 'name' | 'network';
+/** `member`: the signed-in account already belongs to this nursery — no guest pass needed. */
+export type JoinError = 'bad_link' | 'expired' | 'off' | 'locked' | 'wrong' | 'full' | 'slow_down' | 'name' | 'member' | 'network';
 
+/**
+ * Join with the link + passcode. Signed in? Pass your own access token: the
+ * room asks Supabase who you are, sends a member straight to watching, and
+ * lists anyone else with an account for the parents to make a member.
+ */
 export async function joinAsGuest(
   nid: string,
   o: { code: string; pass: string; name: string; dev: string },
-): Promise<{ ok: true; pass: GuestPass } | { ok: false; reason: JoinError; retryAt?: number | null; left?: number | null }> {
+  token?: string | null,
+): Promise<{ ok: true; pass: GuestPass; account: boolean } | { ok: false; reason: JoinError; retryAt?: number | null; left?: number | null }> {
   let res: Response;
   try {
     res = await fetch(`${WORKER_BASE}/api/monitor/${nid}/guest`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(o),
     });
   } catch {
     return { ok: false, reason: 'network' };
   }
   const body = (await res.json().catch(() => null)) as
-    | { ok: true; token: string; guest: { name: string; role: 'viewer' | 'caregiver'; until: number }; nursery: { name: string; baby: string | null } }
+    | { ok: true; token: string; guest: { name: string; role: 'viewer' | 'caregiver'; until: number }; nursery: { name: string; baby: string | null }; account?: boolean }
     | { ok: false; reason: JoinError; retryAt?: number | null; left?: number | null }
     | null;
   if (!body) return { ok: false, reason: 'network' };
   if (body.ok === false) return { ok: false, reason: body.reason, retryAt: body.retryAt, left: body.left };
   const pass: GuestPass = { token: body.token, name: body.guest.name, role: body.guest.role, until: body.guest.until, nursery: body.nursery };
   saveGuest(nid, pass);
-  return { ok: true, pass };
+  return { ok: true, pass, account: body.account === true };
 }
 
 /** Plain words for a failed join. */
@@ -139,6 +146,8 @@ export function joinErrorText(r: { reason: JoinError; retryAt?: number | null; l
       return 'This link has reached its guest limit. Ask a parent to remove a guest or make a new link.';
     case 'name':
       return 'Add your name so the family knows who’s watching.';
+    case 'member':
+      return 'You’re already in this nursery — opening it with your account.';
     case 'network':
       return 'Couldn’t reach the nursery — check your connection and try again.';
     default:

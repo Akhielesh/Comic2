@@ -43,7 +43,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'studio-health', title: 'Health', body: 'Upload speed, auto-quality and any skipped segments. If it says “Degraded”, close other uploads or pick a lower quality.' },
   ],
   monitor: [
-    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Video and sound go device-to-device, encrypted, and nothing is ever recorded.' },
+    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Video and sound go device-to-device, encrypted (through our server, never stored, only when a network blocks that), and nothing is ever recorded.' },
     { target: 'monitor-create', title: 'Create a nursery', body: 'One per baby or room. Add the baby’s name to get personal alerts like “Aria is crying”.' },
     { target: 'monitor-new', title: 'More nurseries', body: 'Grandparents’ house? Daycare? Add up to five.' },
   ],
@@ -51,7 +51,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'hub-checklist', title: 'Your setup checklist', body: 'Five steps from zero to a fully covered nursery. Each has a button that takes you straight there, and they tick off as you go.' },
     { target: 'hub-actions', title: 'Camera or viewer', body: 'On the phone that stays in the nursery tap “Be the camera”. On your own phone or laptop tap “Watch”.' },
     { target: 'device-name', title: 'Name this device', body: 'So everyone knows which camera is which (“Crib iPhone”, “Playroom tablet”).' },
-    { target: 'people', title: 'People & roles', body: 'Search people by name to add them, then pick a role — Parent, Caregiver or Viewer — and how they appear (Grandma, Nanny…). Removing someone cuts them off immediately.' },
+    { target: 'hub-invite', title: 'Invite family', body: 'Add someone with an account by name in two taps (people from your other nurseries come first), or share a link + passcode — with a QR code to scan — for anyone without one. People & roles below lists everyone; removing someone cuts them off immediately.' },
   ],
   watch: [
     { target: 'mv-views', title: 'Pick a layout', body: 'Monitor shows the picture and what needs you. Tracker logs feeds, diapers, sleep and growth for the whole family. All adds sleep, sound level, logs and settings. Bedside is a dark nightstand view with a big clock that dims itself and lights up for alerts. Turn your phone sideways for a full-screen picture.' },
@@ -65,7 +65,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'mv-week', title: 'This week', body: 'Six numbers from what the monitor measured — sleep, wakings, the longest stretch, crying, how fast alerts were answered and the room’s sound while asleep — against last week.' },
     { target: 'mv-sound', title: 'Sound level', body: 'The room in decibels, live and over the last hours — and a nudge if a sound machine runs louder than the 50 dB sleep guideline.' },
     { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
-    { target: 'mv-people', title: 'People & sharing', body: 'Who’s watching right now. Parents can share a guest link with a passcode for family without an account — and remove anyone in one tap.' },
+    { target: 'mv-invite', title: 'Invite family', body: 'Add someone with an account in two taps, or share a link + passcode (with a QR code to scan) for anyone without one. The number is how many are watching right now; Who has access lists everyone, and a parent can remove anyone in one tap.' },
   ],
   calls: [
     { title: 'Calls', body: 'Video or voice-call the people in your nurseries — Grandma, the sitter, the other parent — or anyone else on Stream Studio. Calls go straight between devices, encrypted, and are never recorded.' },
@@ -283,7 +283,7 @@ export const GUIDES: HowTo[] = [
   },
   {
     id: 'talk', title: 'Talk, listen & video call (like FaceTime)', icon: 'phone', mins: 1, screens: ['watch'],
-    intro: 'Everything goes device-to-device, encrypted. Nothing is recorded.',
+    intro: 'Video goes device-to-device, encrypted, wherever the network allows. Nothing is recorded.',
     steps: [
       { title: 'Listen', body: 'Tap Listen (or “Tap to hear the nursery”). Browsers start muted until you tap.' },
       { title: 'Talk', body: 'Tap Talk to open your mic; tap again to stop. Or press and hold to talk only while holding, like a walkie-talkie.' },
@@ -324,13 +324,14 @@ export const GUIDES: HowTo[] = [
     ],
   },
   {
-    id: 'family', title: 'Invite family & set roles', icon: 'users', mins: 1, screens: ['nursery'],
-    intro: 'Everyone signs in with their own account — new accounts need your invitation code.',
+    id: 'family', title: 'Invite family & set roles', icon: 'users', mins: 1, screens: ['nursery', 'watch'],
+    intro: 'Tap Invite — on the nursery page or the watch screen. People with an account are added by name; anyone else gets a link + passcode.',
     steps: [
-      { title: 'Add someone', body: 'Nursery → People & roles → search their name → choose a role and how they appear (Grandma, Nanny…) → Add.' },
+      { title: 'Add someone with an account', body: 'Invite → Add by name. People from your other nurseries are listed first — tap one; or search their name. They start as a Viewer (watch, listen, alerts) — pick Caregiver or Parent if they need more, and how they appear (Grandma, Nanny…). Then “Let them know” sends them the link to sign in with.' },
       { title: 'Roles', body: 'Parent: everything, including people and settings. Caregiver: watch, talk, video call, soothe, run a camera, log. Viewer: watch, listen and get alerts.' },
-      { title: 'Removing someone', body: 'Remove them in People & roles — any open session is cut off immediately.' },
-      { title: 'No account? Share a link', body: 'Watch → People → Create a share link. Choose a passcode (8+ characters — “Suggest one” makes a memorable one), what guests can do, and how long the link works. Send the link, then tell them the passcode by phone or in a different app.' },
+      { title: 'No account? Share a link', body: 'Invite → Share a link → Create link (a passcode is already filled in). Send the link or let them scan the QR code, then tell them the passcode by phone or in a different app.' },
+      { title: 'Make a guest a member', body: 'If someone who joined with the link has an account, Who has access says so — tap Make member and they watch with their own account, no passcode.' },
+      { title: 'Removing someone', body: 'Invite → Who has access (or People & roles) → Remove — any open session is cut off immediately.' },
     ],
   },
   {
@@ -348,9 +349,10 @@ export const GUIDES: HowTo[] = [
     id: 'share', title: 'Share with a guest link & passcode', icon: 'link', mins: 1, screens: ['watch', 'nursery'],
     intro: 'For grandparents, a sitter or a friend without an account. They need both the link and the passcode you choose.',
     steps: [
-      { title: 'Create it', body: 'Watch → People → Create a share link. Pick a passcode, “Watch & listen” or “Also talk, soothe & answer alerts”, and 1 day, 7 days, 30 days or until you turn it off.' },
-      { title: 'Send it safely', body: 'Send the link (Copy or Send), and say the passcode out loud or send it in a different app. The passcode is shown once — we only keep a scrambled version of it.' },
-      { title: 'Stay in control', body: 'You’re told when a guest joins. People shows every guest with when they last watched — Remove ends their pass at once. New link & passcode, or Turn off, signs every guest out.' },
+      { title: 'Create it', body: 'Tap Invite → Share a link → Create link. A memorable passcode is already filled in (“Another one” swaps it); guests can “Watch & listen” or “Also talk, soothe & answer alerts”, for 1, 7 or 30 days or until you turn it off.' },
+      { title: 'Send it safely', body: 'Send the link (it never includes the passcode), or let them scan the QR code from your screen. Say the passcode out loud or send it in a different app — it’s shown once; we only keep a scrambled version of it.' },
+      { title: 'Forgot the passcode?', body: 'Set a new passcode — the link stays the same and guests stay signed in (tick the box to sign them out too). +7 days keeps the link working longer.' },
+      { title: 'Stay in control', body: 'You’re told when a guest joins. Who has access shows every guest with when they last watched — Remove ends their pass at once; New link or Turn off signs every guest out. Guests with an account can be made members.' },
       { title: 'If someone guesses', body: '5 wrong passcodes lock the link for 15 minutes and 20 turn it off — the parents get a notification either way.' },
     ],
   },
@@ -401,9 +403,9 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'How do I create an account?', a: 'Tap your name/avatar (bottom of the menu) → Create account. Enter your name, email, password, date of birth and the welcome code you were given. Then confirm your email if asked.', tags: 'sign up register' },
       { q: 'What is the welcome code?', a: 'An invite code required for new accounts. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
       { q: 'I already had a DreamStream account', a: 'Just sign in — accounts created before Stream Studio accounts launched are unlocked automatically.' },
-      { q: 'Finding people', a: 'In a nursery’s People & roles, search by the person’s name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory' },
+      { q: 'Finding people', a: 'Tap Invite → Add by name. People from your other nurseries come first; or search by name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory invite add' },
       { q: 'What happens if our internet goes down?', a: 'Phones on the same Wi-Fi as the camera keep the live picture, sound and alerts — they talk to each other directly (the picture shows “Home Wi-Fi”). Phones away from home, and notifications, come back when the internet does.', tags: 'offline wifi lan outage local network' },
-      { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent can make a guest link with a passcode (Watch → People → Create a share link). Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents' },
+      { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent taps Invite → Share a link → Create link, then sends the link (or shows the QR code) and tells them the passcode separately. Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents qr code invite' },
     ],
   },
   {
@@ -446,7 +448,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     icon: 'baby',
     items: [
       { q: 'Set it up', a: 'Baby monitor → create a nursery. On the phone in the nursery: sign in, open the nursery, tap “Be the camera”. On your phone/laptop: tap “Watch”.' },
-      { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC). Our server only passes small connection messages and status numbers. There is no record button.', tags: 'privacy security' },
+      { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC), whenever your networks allow it. Our server passes small connection messages and status numbers — and, only for a device the direct connection can’t reach (or for a moment while it starts), the picture and sound themselves, passed along in memory and never stored, but not end-to-end encrypted. Privacy pause stops that too. There is no record button.', tags: 'privacy security relay server' },
       { q: 'How does sound detection work?', a: 'The camera phone runs an AI sound model (Google’s YAMNet, on the phone itself) plus a pitch-and-rhythm cry analyser and a smoke/CO alarm pattern detector. It recognizes crying, fussing, coughing, alarms, bangs, babbling, laughing, voices, music/TV and dogs — the audio never leaves the phone. Parents can set sensitivity while watching.', tags: 'cry detection ai model cough alarm' },
       { q: 'Talk and video call like FaceTime', a: 'While watching: tap Talk to open your mic (or press and hold to talk while holding). Tap Video to show your face on the nursery phone. Echo cancellation keeps it clear both ways.', tags: 'two-way audio facetime call' },
       { q: 'Alerts when my phone is locked', a: 'Turn on “Alerts on this device” while watching. Android and computers work right away. iPhone: Share → Add to Home Screen, open it from the Home Screen, then turn alerts on.', tags: 'notifications push iphone' },
@@ -454,7 +456,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Roles', a: 'Parent: everything incl. managing people. Caregiver: watch, talk, soothe, run a camera, log. Viewer: watch and get alerts. Each person can also have a name like Grandma or Nanny.' },
       { q: 'Soothing sounds', a: 'Soothe plays shush, white noise, rain, ocean or a heartbeat on the camera phone for 15–60 minutes. Sound detection ignores it.' },
       { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },
-      { q: 'No video on my network', a: 'Some networks (often mobile data) block direct device-to-device video. The monitor switches to a low-bandwidth picture — 2 to 5 frames a second, no sound, passed through our server and never stored — and keeps retrying full video in the background. Alerts are unaffected.' },
+      { q: 'No video on my network', a: 'Some networks (often mobile data) block direct device-to-device video. The monitor then shows the picture through our server instead — smooth video (10–15 frames a second) with sound, or still pictures on older browsers — and keeps retrying the direct connection in the background. The same happens when the camera already sends directly to four people over the internet, and while a direct connection takes longer than a second to start, so the picture appears straight away. Through our server, video and sound are passed along in memory and never stored, but they are not end-to-end encrypted the way the direct connection is. Privacy pause stops it completely. Alerts are unaffected.', tags: 'relay server encrypted mobile data guest slow choppy sound' },
       { q: 'What can smart vision see?', a: 'With Smart vision on (camera setup → Make it smarter), the camera phone runs two Google MediaPipe models on its own video about once a second: whether your baby is lying, sitting or standing (and standing in the crib), rolling over, what they’re holding, risky things within reach (scissors, knives, cups, phones, remotes, plants, pets), soft toys near a sleeping baby, and which play area they’re in. Frames never leave the phone. It’s a beta: it can miss things, it can’t see blankets or pillows, and it does not watch breathing or sleep position. Adding the baby’s birthday in the Tracker helps — a baby too young to sit is always reported lying.', tags: 'posture rolling sitting standing objects toys safe sleep vision ai camera' },
       { q: 'Family video calls', a: 'Calls → tap the camera (video) or phone (voice) button next to anyone in your nurseries, or “Call everyone” for a group call of up to four. Calls ring wherever Stream Studio is open; turn on “Ring this device” to be rung with the app closed. During a call: mute, camera off, flip, add someone, or minimize to keep talking while you use the app. Device to device, encrypted, never recorded.', tags: 'facetime video call voice call family grandma group ring' },
       { q: 'Call someone who isn’t in my nursery', a: 'Calls → search their name to call anyone on Stream Studio (they need an account). The first time you call someone outside your nurseries, Calls checks it’s the right person — they’ll see your name. Their phone says “Stream Studio member · not in your family” and answers with the camera off unless they choose video. Star people to keep them in Favourites.', tags: 'search call anyone friend member stranger favourites star direct' },

@@ -1,0 +1,142 @@
+/* ============================================================================
+   invite.css — the baby monitor's Invite sheet (add someone with an account,
+   share a link + passcode with a QR code, who has access) and its entry
+   points (watch-screen header button, hub, people cards). Design tokens only.
+   ========================================================================== */
+
+/* Above a running call too (Invite can be opened from the call screen). */
+.inv-scrim { z-index: 160; }
+.inv-sheet { max-width: 560px; }
+.inv-sheet:focus { outline: none; }
+.inv-sheet:focus-visible { box-shadow: var(--shadow-lg), var(--ring); }
+.inv-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+
+/* tabs */
+.inv-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 14px; background: var(--panel-2); border: 1px solid var(--line); margin-bottom: 14px; }
+.inv-tab { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.inv-tab.sel { background: var(--panel); color: var(--text); box-shadow: var(--shadow-sm); }
+.inv-tab:focus-visible, .inv-chip:focus-visible, .inv-person:focus-visible, .inv-qr:focus-visible, .mv-invite:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inv-panel { display: grid; gap: 12px; }
+
+/* fields and chips */
+.inv-field { display: grid; gap: 7px; }
+.inv-field > span { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.inv-field > small { font-size: 12px; line-height: 1.45; }
+.inv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.inv-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel-2); font: inherit; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+.inv-chip.sel { border-color: var(--accent); background: var(--accent-wash); color: var(--accent-ink); }
+.inv-wide { width: 100%; justify-content: center; }
+.inv-lead { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--muted); }
+.inv-hint { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; }
+.inv-sect, .inv-sub { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
+.inv-sub { margin: 14px 0 4px; }
+.inline-confirm { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--live-wash); color: var(--text); font-size: 13px; line-height: 1.45; margin-top: 8px; }
+.inv-note { display: grid; gap: 10px; justify-items: start; font-size: 14px; }
+.inv-ask { margin-bottom: 4px; }
+
+/* add by name */
+.inv-add { display: grid; gap: 10px; }
+.inv-list { display: grid; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--panel); }
+.inv-person { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line-soft); background: none; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
+.inv-person:last-child { border-bottom: 0; }
+.inv-person:hover:not(:disabled) { background: var(--hover); }
+.inv-person:disabled { cursor: default; opacity: .6; }
+.inv-person > svg { color: var(--accent-ink); flex: none; }
+.inv-person-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.inv-person-txt b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-person-txt small { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-empty { display: grid; gap: 8px; justify-items: start; padding: 12px; border-radius: var(--r-md); background: var(--panel-2); font-size: 13px; line-height: 1.45; }
+.inv-empty p { margin: 0; }
+.inv-confirm { display: grid; gap: 14px; padding: 14px; border-radius: var(--r-md); background: var(--panel-2); border: 1px solid var(--line); }
+.inv-confirm small { display: block; font-size: 12px; }
+.inv-pname { display: block; font-size: 15px; }
+.inv-check { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--amber); }
+.inv-check svg { flex: none; margin-top: 2px; }
+.inv-done { display: grid; gap: 8px; justify-items: center; text-align: center; padding: 18px 12px; border-radius: var(--r-md); background: var(--green-wash); }
+.inv-done b { font-size: 16px; }
+.inv-done small { max-width: 400px; font-size: 12.5px; line-height: 1.45; }
+.inv-done-icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--green); color: var(--panel); }
+
+/* share a link */
+.inv-make, .inv-live { display: grid; gap: 12px; }
+.inv-wait { display: grid; gap: 8px; }
+.inv-link { display: flex; gap: 14px; align-items: flex-start; }
+.inv-qr { flex: none; display: grid; justify-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; cursor: zoom-in; }
+.inv-qr .qr-svg { border-radius: 10px; border: 1px solid var(--line); display: block; }
+.inv-qr-hint { display: inline-flex; align-items: center; gap: 4px; }
+.inv-link-side { flex: 1; min-width: 0; display: grid; gap: 8px; align-content: start; }
+.inv-url { display: block; padding: 8px 10px; border-radius: var(--r-sm); background: var(--panel-2); border: 1px solid var(--line); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; line-height: 1.4; }
+.inv-status { font-size: 12px; line-height: 1.45; }
+.inv-pass-hidden { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--panel-2); font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.inv-pass-hidden > svg { flex: none; }
+.inv-pass-hidden > span { flex: 1; min-width: 200px; }
+.inv-pass-shown .mono { overflow-wrap: anywhere; }
+.inv-check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.inv-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 440px) {
+  .inv-link { flex-direction: column; align-items: stretch; }
+  .inv-qr { justify-self: center; align-self: center; }
+}
+
+/* the big QR, for scanning from another phone */
+.inv-zoom { position: fixed; inset: 0; z-index: 170; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px 16px; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px); text-align: center; animation: invFade .16s ease; }
+.inv-zoom-tile { padding: 12px; border-radius: 18px; background: var(--panel); box-shadow: var(--shadow-lg); }
+.inv-zoom-tile .qr-svg { width: min(78vw, 62vh, 360px); height: auto; display: block; border-radius: 8px; }
+.inv-zoom p { margin: 0; max-width: 320px; font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+@keyframes invFade { from { opacity: 0; } }
+
+/* who has access */
+.inv-access { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.inv-access-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.inv-access-head h3 { margin: 0; font-size: 15px; }
+.inv-access-head span { font-size: 12px; }
+.inv-now { display: flex; align-items: baseline; gap: 7px; margin: 8px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.inv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; transform: translateY(-1px); }
+.inv-watching { color: var(--green); }
+.inv-people .person-row { padding: 10px 0; }
+.inv-people .person-row:last-of-type { border-bottom: 0; }
+.inv-requests { display: grid; gap: 8px; margin-top: 12px; }
+.inv-req { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: var(--r-md); background: var(--blue-wash); font-size: 13px; line-height: 1.45; }
+.inv-req small { display: block; margin-top: 2px; font-size: 12px; }
+.inv-guests { display: grid; gap: 8px; }
+.inv-guest-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.inv-guest-row b { display: block; font-size: 13.5px; }
+.inv-guest-row small { display: block; font-size: 11.5px; }
+.inv-guestme { display: grid; gap: 10px; justify-items: start; font-size: 14px; line-height: 1.5; }
+.inv-guestme p { margin: 0; }
+
+/* entry points ------------------------------------------------------------- */
+/* Watch screen header: Invite with how many are watching. */
+/* One line each, cut with an ellipsis; `contain` keeps a long name from widening the page. */
+.mv-top-id { contain: inline-size; overflow: hidden; }
+.mv-top .mv-title, .mv-top .mv-title ~ .faint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 400px) { .mv-top { gap: 6px; } }
+.mv-invite { position: relative; flex: none; }
+.mv-invite-badge { position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 99px; background: var(--green); color: var(--panel); font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* Watch screen People card and Settings: the link at a glance + Manage. */
+.pc-share { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pc-share-txt { flex: 1; min-width: 180px; display: grid; gap: 2px; }
+.pc-share-txt small { font-size: 12px; line-height: 1.45; }
+.ns-people { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 12px; border-radius: var(--r-md); background: var(--panel-2); font-size: 13px; }
+.ns-people > span { flex: 1; min-width: 0; }
+.ns-people b { display: block; font-size: 13.5px; }
+
+/* Nursery hub: People & roles with Invite, and the empty state. */
+.people-empty { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 13.5px; line-height: 1.45; }
+.people-empty > span { flex: 1; min-width: 200px; color: var(--muted); }
+.people-ask { padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.nc-act.nc-invite { background: var(--accent-wash); color: var(--accent-ink); }
+
+/* Join page: opened inside another app's browser. */
+.join-inapp { margin-bottom: 14px; }
+
+/* Thumbs: comfortable targets on touch screens. */
+@media (pointer: coarse) {
+  .inv-sheet .btn, .inv-tab, .inv-chip, .inv-person, .inv-check-row { min-height: 44px; }
+  .mv-invite { min-width: 44px; min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inv-sheet, .inv-zoom { animation: none; }
+}

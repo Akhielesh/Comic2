@@ -134,7 +134,8 @@ export default {
             new Request(`https://monitor.internal/guest?nid=${mon[1]}`, {
               method: 'POST',
               body,
-              headers: { 'content-type': 'application/json', 'cf-connecting-ip': req.headers.get('cf-connecting-ip') ?? '' },
+              // A signed-in person's own token (optional): the room asks Supabase who they are.
+              headers: { 'content-type': 'application/json', 'cf-connecting-ip': req.headers.get('cf-connecting-ip') ?? '', authorization: req.headers.get('authorization') ?? '' },
             }),
           );
           return withCors(new Response(res.body, { status: res.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), cors);

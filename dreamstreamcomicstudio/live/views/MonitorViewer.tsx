@@ -10,12 +10,17 @@
 import React, { useSyncExternalStore, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
+import { openInvite, registerShareChannel, ShareChannel, shareSummary } from '../monitor/invite';
+import { useGuestPass } from './monitor/useGuestPass';
+import { focusLayout } from '../monitor/viewFocus';
 import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
 import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
-import { initialFallback, stepFallback, type FallbackInput } from '../monitor/linkFallback';
+import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
 import { RelayMeter } from '../monitor/videoBudget';
+import { probeDecoders, RelayDecoder } from '../monitor/relay';
+import type { RelayCodec } from '../monitor/relayWire';
 import { SOUND_INFO, SOUND_CATS, soundHeadline, type SoundCat } from '../monitor/soundClasses';
 import { SOOTHE_OPTIONS, type SootheKind } from '../monitor/soothe';
 import { markSetup } from '../monitor/setupProgress';
@@ -31,7 +36,7 @@ import { stopTimer } from './tracker/TimerCard';
 import { TrackerSync } from '../monitor/trackerSync';
 import type { TrackKind } from '../monitor/trackTypes';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
-import { clearGuest, loadGuest, type GuestPass } from '../monitor/guest';
+import { clearGuest, type GuestPass } from '../monitor/guest';
 import { PeopleCard } from './monitor/PeopleCard';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { NurserySettings } from './monitor/NurserySettings';
@@ -132,9 +137,25 @@ const canPip = () =>
     typeof (HTMLVideoElement.prototype as unknown as { webkitSetPresentationMode?: unknown }).webkitSetPresentationMode === 'function');
 
 export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: PushToast }) {
-  // Guests (share link + passcode) watch without an account.
-  const [guest, setGuest] = useState(() => loadGuest(id));
-  if (guest) return <ViewerInner id={id} nav={nav} push={push} guest={guest} onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }} />;
+  // Guests (share link + passcode) watch without an account — unless this
+  // account is a member, whose own access wins over a pass left on the device.
+  const [guest, setGuest] = useGuestPass(id);
+  if (guest) {
+    return (
+      <ViewerInner
+        id={id}
+        nav={nav}
+        push={push}
+        guest={guest}
+        onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }}
+        onPromoted={() => {
+          clearGuest(id);
+          setGuest(null);
+          push(`You’re now a member of ${guest.nursery.name} — watching with your account`, { icon: 'heart', duration: 5000 });
+        }}
+      />
+    );
+  }
   return (
     <MonitorGate>
       <ViewerInner id={id} nav={nav} push={push} />
@@ -142,7 +163,7 @@ export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: P
   );
 }
 
-function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void }) {
+function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void; onPromoted?: () => void }) {
   const sockRef = useRef<MonitorSocket | null>(null);
   const linkRef = useRef<ViewerLink | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -150,7 +171,13 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const relayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const relayMeterRef = useRef(new RelayMeter());
-  const relaySeqRef = useRef({ next: 0, drawn: -1 });
+  const relayDecRef = useRef<RelayDecoder | null>(null);
+  /** What this browser decodes for the relay (null until probed; [] = JPEG only). */
+  const relayCodecsRef = useRef<RelayCodec[] | null>(null);
+  /** The relay picture (canvas capture) + its sound, for the <video> element. */
+  const relayStreamRef = useRef<MediaStream | null>(null);
+  /** The direct call's stream (shown once the call is connected). */
+  const p2pStreamRef = useRef<MediaStream | null>(null);
   const fallbackRef = useRef(initialFallback());
   const camSidRef = useRef<string | null>(null);
   /** The camera was told we're talking / on video (re-asserted after the room reconnects). */
@@ -158,6 +185,10 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const wakeRef = useRef(new ScreenWakeLock());
   const cuesRef = useRef(new AlertCues());
   const retryRef = useRef<number | undefined>(undefined);
+  /** The instant (relay) picture's timer: the direct one gets a head start. */
+  const instantRef = useRef<number | undefined>(undefined);
+  /** The camera turned our direct picture away (its slots are full). */
+  const fullRef = useRef(false);
   const vapidRef = useRef<string | null>(null);
   const micMeterRef = useRef<{ ctx: AudioContext; timer: number } | null>(null);
   const pressRef = useRef<number | null>(null);
@@ -166,7 +197,6 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
   const [closedMsg, setClosedMsg] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
-  const [shareErr, setShareErr] = useState<string | null>(null);
   const [me, setMe] = useState<{ sid: string; uid: string; role: MonRole; name: string; label: string | null } | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [cams, setCams] = useState<CamPresence[]>([]);
@@ -181,8 +211,14 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [linkState, setLinkState] = useState<LinkState>('idle');
   const [netPath, setNetPath] = useState<NetPath | null>(null);
   const [relayOn, setRelayOn] = useState(false);
-  /** The relay picture as it really is: frames a second, stopped, or not started. */
-  const [relayView, setRelayView] = useState<{ has: boolean; fps: number; stale: boolean }>({ has: false, fps: 0, stale: false });
+  /** The relay is only bridging while the direct picture connects (the "instant picture"). */
+  const [relayEarly, setRelayEarly] = useState(false);
+  /** The camera's direct slots were full, so this viewer watches the relay. */
+  const [relayFull, setRelayFull] = useState(false);
+  /** The relay picture as it really is: frames a second, stopped, or not started — and video or still pictures, with sound or not. */
+  const [relayView, setRelayView] = useState<{ has: boolean; fps: number; stale: boolean; jpeg?: boolean; sound?: boolean }>({ has: false, fps: 0, stale: false });
+  /** The <video> element plays the relay's stream (canvas capture + sound): PiP and Listen work on it. */
+  const [relaySrc, setRelaySrc] = useState<{ video: boolean; sound: boolean } | null>(null);
   const [hasVideo, setHasVideo] = useState(false);
   const [muted, setMuted] = useState(true);
   const [night, setNight] = useState(false);
@@ -230,6 +266,23 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [, setClock] = useState(0);
   const wide = useMediaQuery('(min-width: 980px)');
 
+  // The Invite sheet borrows this screen's socket for the share link and who's watching.
+  const shareCh = useMemo(
+    () =>
+      new ShareChannel(
+        (msg) => sockRef.current?.send(msg),
+        guest
+          ? () => {
+              sockRef.current?.send({ t: 'bye' });
+              onLeave?.();
+            }
+          : undefined,
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id],
+  );
+  useEffect(() => registerShareChannel(id, shareCh), [id, shareCh]);
+
   const canAct = me?.role === 'parent' || me?.role === 'caregiver';
   useFirstVisitTour('watch', sock === 'connected');
   // The room may lose the camera (its internet dropped) while our call with it
@@ -251,11 +304,20 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     const { s, fx } = stepFallback(fallbackRef.current, input);
     fallbackRef.current = s;
     setRelayOn(s.relay);
+    setRelayEarly(s.early);
+    // "Camera full" holds through background retries until a direct picture gets through.
+    if (input.t === 'link' && input.state === 'failed' && linkRef.current?.full) fullRef.current = true;
+    else if (input.t === 'link' && input.state === 'connected') fullRef.current = false;
+    setRelayFull(s.relay && !s.early && fullRef.current);
     for (const e of fx) {
-      if (e.t === 'relay_on') sockRef.current?.send({ t: 'relay', on: true, dev: e.dev });
+      if (e.t === 'relay_on') sendRelay(e.dev, e.instant);
       else if (e.t === 'relay_off') sockRef.current?.send({ t: 'relay', on: false });
       else if (e.t === 'retry_clear') window.clearTimeout(retryRef.current);
-      else if (e.t === 'retry_in') {
+      else if (e.t === 'instant_clear') window.clearTimeout(instantRef.current);
+      else if (e.t === 'instant_in') {
+        window.clearTimeout(instantRef.current);
+        instantRef.current = window.setTimeout(() => runFallback({ t: 'instant_due' }), e.ms);
+      } else if (e.t === 'retry_in') {
         window.clearTimeout(retryRef.current);
         retryRef.current = window.setTimeout(() => runFallback({ t: 'retry' }), e.ms);
       } else if (e.t === 'connect') {
@@ -264,15 +326,42 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       }
     }
     if (!s.relay) clearRelayPicture();
+    syncVideo();
+  };
+
+  /** Subscribe to a camera's relay, saying what this browser decodes (the room routes by it). */
+  const sendRelay = (dev: string, instant: boolean) => {
+    sockRef.current?.send({ t: 'relay', on: true, dev, codecs: relayCodecsRef.current ?? [], ...(instant ? { instant: true } : {}) });
   };
 
   /** Forget the relay picture (a different camera, or the direct picture is back). */
   const clearRelayPicture = () => {
     relayMeterRef.current.reset();
-    relaySeqRef.current.drawn = relaySeqRef.current.next;
+    relayDecRef.current?.reset();
     const c = relayCanvasRef.current;
     if (c) c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
     setRelayView((v) => (v.has || v.fps || v.stale ? { has: false, fps: 0, stale: false } : v));
+  };
+
+  /**
+   * What the <video> element plays: the direct call once it's connected (or
+   * when there's no relay picture), otherwise the relay's stream — so
+   * picture-in-picture, the Listen button and the bedside view work on either.
+   * (While the direct picture loads, the relay canvas stays on top of it.)
+   */
+  const syncVideo = () => {
+    const v = videoRef.current;
+    // Only once the relay has drawn something: a frozen direct frame beats a blank one.
+    const relayStream = fallbackRef.current.relay && relayMeterRef.current.last != null ? relayStreamRef.current : null;
+    const p2p = p2pStreamRef.current;
+    const useRelay = !!relayStream && (!p2p || linkRef.current?.state !== 'connected');
+    const want = useRelay ? relayStream : p2p;
+    if (v && v.srcObject !== want) {
+      v.srcObject = want;
+      if (want) void v.play().catch(() => undefined);
+    }
+    const next = useRelay && relayStream ? { video: relayStream.getVideoTracks().length > 0, sound: relayStream.getAudioTracks().length > 0 } : null;
+    setRelaySrc((cur) => (cur?.video === next?.video && cur?.sound === next?.sound ? cur : next));
   };
   const baby = nursery.baby || 'Baby';
 
@@ -288,51 +377,45 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     link.onPath = setNetPath;
     link.onDirect = (dm) => onDirectRef.current(dm);
     link.onStream = (s) => {
-      const v = videoRef.current;
-      if (v && v.srcObject !== s) {
-        v.srcObject = s;
-        if (s) void v.play().catch(() => undefined);
-      }
+      p2pStreamRef.current = s;
+      syncVideo();
       setHasVideo(!!s && s.getVideoTracks().length > 0);
     };
     linkRef.current = link;
 
-    // Relay frames are drawn straight onto a canvas — no re-render of this screen per frame.
+    // The relay picture (relay.ts): video decoded (or JPEGs drawn) straight onto
+    // a canvas — no re-render of this screen per frame — and its sound.
+    const dec = new RelayDecoder({
+      canvas: () => relayCanvasRef.current,
+      onPicture: (now) => {
+        const first = relayMeterRef.current.last == null;
+        relayMeterRef.current.frame(now);
+        if (first) {
+          setRelayView({ has: true, fps: 0, stale: false, jpeg: dec.codec === 'jpeg', sound: dec.hasSound });
+          syncVideo();
+        }
+      },
+      onAck: (a) => sockRef.current?.send({ t: 'rx', ...a }),
+      onStream: (s) => {
+        relayStreamRef.current = s;
+        syncVideo();
+      },
+      onFallback: () => {
+        // Video keeps failing in this browser: still pictures from now on.
+        relayCodecsRef.current = [];
+        const f = fallbackRef.current;
+        if (f.relay && f.dev) sendRelay(f.dev, f.early);
+      },
+    });
+    relayDecRef.current = dec;
+    if (import.meta.env?.DEV) (globalThis as unknown as { __dsRelay?: unknown }).__dsRelay = dec;
     const onBinary = (data: Blob) => {
-      if (!fallbackRef.current.relay) return;
-      const seq = relaySeqRef.current.next++;
-      const draw = (img: CanvasImageSource & { width: number; height: number }) => {
-        const c = relayCanvasRef.current;
-        // Decoding is async: never let an older frame overwrite a newer one.
-        if (!c || seq < relaySeqRef.current.drawn) return;
-        relaySeqRef.current.drawn = seq;
-        if (c.width !== img.width) c.width = img.width;
-        if (c.height !== img.height) c.height = img.height;
-        c.getContext('2d')?.drawImage(img, 0, 0);
-        if (relayMeterRef.current.last == null) setRelayView({ has: true, fps: 0, stale: false });
-        relayMeterRef.current.frame(Date.now());
-      };
-      if (typeof createImageBitmap === 'function') {
-        void createImageBitmap(data)
-          .then((bmp) => {
-            draw(bmp);
-            bmp.close();
-          })
-          .catch(() => undefined);
-      } else {
-        const url = URL.createObjectURL(data);
-        const im = new Image();
-        im.onload = () => {
-          draw(im);
-          URL.revokeObjectURL(url);
-        };
-        im.onerror = () => URL.revokeObjectURL(url);
-        im.src = url;
-      }
+      if (fallbackRef.current.relay) dec.push(data);
     };
 
     const sockNow = openMonitorSocket(id, 'viewer', (m) => onMsgRef.current(m), onBinary, (s, detail) => {
       setSock(s);
+      shareCh.set({ connected: s === 'connected' });
       if (s !== 'connected') tracker.detach();
       if (s === 'closed') setClosedMsg(detail || 'Disconnected from the nursery.');
     });
@@ -344,8 +427,13 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     return () => {
       window.clearInterval(tick);
       window.clearTimeout(retryRef.current);
+      window.clearTimeout(instantRef.current);
+      fallbackRef.current = { ...fallbackRef.current, pending: false };
       window.removeEventListener('pointerdown', unlock);
       link.close();
+      dec.close();
+      if (relayDecRef.current === dec) relayDecRef.current = null;
+      relayStreamRef.current = null;
       sockNow.close();
       queryRef.current?.cancelAll();
       stopMicMeter();
@@ -461,6 +549,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         setNursery(m.nursery);
         setCams(m.cams);
         setViewers(m.viewers);
+        shareCh.set({ connected: true, me: { role: m.you.role, name: m.you.name, guest: !!m.you.guest }, nursery: m.nursery, viewers: m.viewers });
         setLog(m.log);
         setTl(m.tl);
         setSettings(m.settings);
@@ -476,6 +565,9 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           const focus = sessionStorage.getItem(FOCUS_KEY);
           if (focus) {
             sessionStorage.removeItem(FOCUS_KEY);
+            // Alerts, settings and people live in All: show it for this visit (the saved layout stays).
+            const need = focusLayout(focus);
+            if (need) setViewState(need);
             window.setTimeout(() => document.querySelector(`[data-tour="mv-${focus}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 600);
           }
         } catch { /* storage unavailable */ }
@@ -502,15 +594,18 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       }
       case 'share':
         setShare(m.share);
-        setShareErr(null);
+        shareCh.set({ share: m.share, err: null });
+        // Family who joined with the link count for the checklist's "Invite family".
+        if (m.share.guests.length) markSetup(id, 'family');
         break;
       case 'share_err':
-        setShareErr(m.msg);
+        shareCh.set({ err: m.msg });
         break;
       case 'presence':
         if (m.cams.length) markSetup(id, 'camera');
         setCams(m.cams);
         setViewers(m.viewers);
+        shareCh.set({ viewers: m.viewers });
         setCamSid((cur) => pickCam(m.cams, cur));
         break;
       case 'rtc':
@@ -603,6 +698,11 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         break;
       case 'roles_changed':
         setReconnectKey((k) => k + 1);
+        break;
+      case 'promoted':
+        // A parent made this guest a member: watch with the account from now on.
+        sockRef.current?.close();
+        onPromoted?.();
         break;
       case 'push_ok':
         setPushOn(true);
@@ -712,14 +812,69 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camDev]);
 
+  // What this browser can decode decides what the room sends it (video, or still pictures).
+  useEffect(() => {
+    let alive = true;
+    void probeDecoders().then((codecs) => {
+      if (!alive || relayCodecsRef.current) return;
+      relayCodecsRef.current = codecs;
+      const f = fallbackRef.current;
+      if (f.relay && f.dev && codecs.length) sendRelay(f.dev, f.early);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Audio-only viewers need no instant picture.
+  useEffect(() => {
+    runFallback({ t: 'instant', on: quality !== 'audio' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quality]);
+
+  // The direct call is up: keep the relay picture on top until the direct one
+  // has really drawn a frame (a seamless swap), then drop the relay. Never
+  // longer than RENDER_WAIT_MS (audio-only, a paused camera).
+  useEffect(() => {
+    if (linkState !== 'connected' || !relayOn) return;
+    const v = videoRef.current as (HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number; cancelVideoFrameCallback?: (h: number) => void }) | null;
+    let done = false;
+    let handle = 0;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      runFallback({ t: 'rendered' });
+    };
+    const direct = () => !!v && !!p2pStreamRef.current && v.srcObject === p2pStreamRef.current && v.videoWidth > 0;
+    const onFrame = () => {
+      if (direct()) finish();
+      else if (!done && v?.requestVideoFrameCallback) handle = v.requestVideoFrameCallback(onFrame);
+    };
+    if (v?.requestVideoFrameCallback) handle = v.requestVideoFrameCallback(onFrame);
+    const t0 = v?.currentTime ?? 0;
+    const poll = window.setInterval(() => {
+      if (!v?.requestVideoFrameCallback && direct() && v!.currentTime !== t0) finish();
+    }, 200);
+    const cap = window.setTimeout(finish, RENDER_WAIT_MS);
+    return () => {
+      done = true;
+      window.clearInterval(poll);
+      window.clearTimeout(cap);
+      if (handle && v?.cancelVideoFrameCallback) v.cancelVideoFrameCallback(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkState, relayOn]);
+
   // The relay picture as it really is — frames a second, or stopped.
   useEffect(() => {
     if (!relayOn) return;
     const t = window.setInterval(() => {
       const m = relayMeterRef.current;
+      const dec = relayDecRef.current;
       const now = Date.now();
-      const next = { has: m.last != null, fps: m.fps(now), stale: m.stale(now) };
-      setRelayView((v) => (v.has === next.has && v.fps === next.fps && v.stale === next.stale ? v : next));
+      const next = { has: m.last != null, fps: m.fps(now), stale: m.stale(now), jpeg: dec?.codec === 'jpeg', sound: !!dec?.hasSound };
+      setRelayView((v) => (v.has === next.has && v.fps === next.fps && v.stale === next.stale && v.jpeg === next.jpeg && v.sound === next.sound ? v : next));
     }, 1000);
     return () => window.clearInterval(t);
   }, [relayOn]);
@@ -773,6 +928,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       v.muted = !on;
       if (on) void v.play().catch(() => undefined);
     }
+    // The relay's sound plays through an AudioContext: phones start it only from a tap.
+    if (on) relayDecRef.current?.resumeSound();
     cuesRef.current.unlock();
   };
 
@@ -875,6 +1032,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   };
 
   const setQ = (q: Quality) => {
+    // (Audio-only also stops the instant relay picture — see the [quality] effect.)
     setQuality(q);
     // Also sent with every new call's offer, so a reconnect starts at this quality.
     if (linkRef.current) linkRef.current.quality = q;
@@ -1012,16 +1170,24 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   }
 
   /* ---------------------------------------------------------- the stage */
-  // The relay picture covers a frozen direct one until the direct one is back.
+  // The relay picture covers the direct one until the direct one has drawn a frame.
   const showRelay = relayOn && !!cam && relayView.has;
   // The camera stepped every picture down because its processor is maxed out.
   const enc = camStatus && state !== 'offline' && state !== 'unknown' ? camStatus.st.enc : null;
   const busyCam = !!enc && linkState === 'connected' && quality !== 'audio' && (enc.p > 0 || enc.lim === 'cpu');
+  // What the relay pill says (honest: through our server, not end-to-end encrypted, never stored).
+  const relayFps = relayView.has && !relayView.stale && relayView.fps ? ` · ${relayView.fps} fps` : '';
+  const relayNoSound = relayView.has && !relayView.sound;
+  const relayTitle = relayEarly
+    ? 'A quick preview through our server while the encrypted direct connection starts — passed along in memory, never stored, not end-to-end encrypted.'
+    : `${relayFull
+        ? 'The camera phone already sends its picture directly to four people over the internet, so you’re watching through our server instead'
+        : 'Your network blocks a direct connection, so the picture and sound come through our server instead'} — passed along in memory, never stored, but not end-to-end encrypted like a direct connection.${relayNoSound ? ' This browser gets still pictures without live sound; alerts still arrive.' : ''} Direct video is retried in the background.`;
   const stage = (
     <div className={cx('mv-stage', night && 'night', glow && `glow-${glow}`)} ref={stageRef} data-tour="mv-stage">
-      <video ref={videoRef} autoPlay playsInline muted={muted} className={cx(!hasVideo && 'hidden')} />
-      {/* Relay frames draw straight into this canvas; shown only while on the relay. */}
-      <canvas ref={relayCanvasRef} className={cx('mv-relay', !showRelay && 'hidden')} role="img" aria-label="Nursery picture, low-bandwidth mode" />
+      <video ref={videoRef} autoPlay playsInline muted={muted} className={cx(!hasVideo && !relaySrc?.video && 'hidden')} />
+      {/* Relay frames draw straight into this canvas; shown only while on the relay (the <video> carries a copy for PiP and its sound). */}
+      <canvas ref={relayCanvasRef} className={cx('mv-relay', !showRelay && 'hidden')} role="img" aria-label="Nursery picture, through our server" />
       {call && <video ref={selfRef} className={cx('mv-self', call.facing === 'user' && 'mirror')} autoPlay playsInline muted />}
       {!cam && (
         <div className="mv-empty">
@@ -1034,8 +1200,10 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         <div className="mv-empty">
           <div className="knock-dots" aria-hidden><span /><span /><span /></div>
           <span>
-            {relayOn
-              ? 'Your network blocks a direct connection — getting a low-bandwidth picture from the camera…'
+            {relayOn && !relayEarly
+              ? relayFull
+                ? 'The camera is already sending its picture directly to four people — getting yours through our server…'
+                : 'Your network blocks a direct connection — getting the picture through our server…'
               : quality === 'audio'
                 ? 'Audio-only mode'
                 : 'Connecting securely to the camera…'}
@@ -1069,14 +1237,11 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             <Icon name="gauge" size={11} />{camStatus.st.spl.cal ? '' : '≈'}{Math.round(camStatus.st.spl.db)} dB
           </span>
         )}
-        {relayOn && cam && (
-          <span
-            className="ov-pill mv-relay-pill"
-            title="Your network blocks a direct connection, so a smaller picture comes through our server instead (passed along, never stored, not end-to-end encrypted). No live sound in this mode — alerts still arrive. Direct video is retried in the background."
-          >
-            <Icon name="signal" size={11} />
-            <span>{relayView.has && !relayView.stale && relayView.fps ? `Low-bandwidth · ${relayView.fps} fps` : 'Low-bandwidth'}</span>
-            <span className="extra"> · no sound</span>
+        {relayOn && cam && (relayView.has || !relayEarly) && (
+          <span className={cx('ov-pill mv-relay-pill', relayEarly && 'early')} title={relayTitle} aria-label={relayTitle}>
+            <Icon name={relayEarly ? 'zap' : 'cloud'} size={11} />
+            <span>{relayEarly ? 'Quick preview' : `${relayFull ? 'Camera full · via server' : 'Via our server'}${relayFps}`}</span>
+            {!relayEarly && relayNoSound && <span className="extra"> · no sound</span>}
           </span>
         )}
         {busyCam && (
@@ -1094,12 +1259,12 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       </div>
       <div className="mv-ov-tr">
         <button className="mv-mini" onClick={() => setNight((v) => !v)} aria-pressed={night} aria-label="Night view" title="Night view"><Icon name="moon" size={16} /></button>
-        {hasVideo && canPip() && (
+        {(hasVideo || relaySrc?.video) && canPip() && (
           <button className="mv-mini" onClick={() => void togglePip()} aria-pressed={pip} aria-label="Pop out the video" title="Pop out — keep watching in other apps"><Icon name="layers" size={16} /></button>
         )}
         <button className="mv-mini" onClick={fullscreen} aria-label="Fullscreen" title="Fullscreen"><Icon name="maximize" size={16} /></button>
       </div>
-      {cam && muted && hasVideo && !showRelay && (
+      {cam && muted && ((hasVideo && !showRelay) || (showRelay && !!relaySrc?.sound)) && (
         <button className="mv-listen" onClick={() => listen(true)}><Icon name="volume" size={18} />Tap to hear the nursery</button>
       )}
       {(talk === 'on' || others) && (
@@ -1440,7 +1605,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       {takeover}
       <div className="mv-top">
         {!guest && <button className="iconbtn" onClick={() => nav.nursery(id)} aria-label="Back"><Icon name="arrowLeft" size={17} /></button>}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="mv-top-id" style={{ flex: 1, minWidth: 0 }}>
           <div className="mv-title">{nursery.name}{guest && <span className="pill-guest sm">Guest</span>}</div>
           <div className="faint" style={{ fontSize: 12 }}>
             {sock === 'connected' ? `${getDevice().name} · ${me ? ROLE_INFO[me.role].label : ''}` : sock === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
@@ -1460,6 +1625,17 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             <Icon name="moon" size={15} /><span>Bedside</span>
           </button>
         </div>
+        <button
+          type="button"
+          className="iconbtn mv-invite"
+          onClick={() => openInvite(id)}
+          data-tour="mv-invite"
+          aria-label={`${me?.role === 'parent' && !guest ? 'Invite and people' : 'People'} (${viewers.length} watching)`}
+          title={me?.role === 'parent' && !guest ? 'Invite family — add someone or share a link' : 'Who’s watching'}
+        >
+          <Icon name={me?.role === 'parent' && !guest ? 'userPlus' : 'users'} size={17} />
+          {viewers.length > 0 && <span className="mv-invite-badge" aria-hidden>{viewers.length}</span>}
+        </button>
         <HelpButton />
       </div>
       {alertStack}
@@ -1521,7 +1697,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             onAck={ackIncident}
             onResolve={resolveIncident}
             onDuty={(on) => sockRef.current?.send({ t: 'duty', on, hours: 12 })}
-            onZones={() => (hasVideo ? setZoneEdit(true) : push('Wait for the live picture, then mark the zones', { icon: 'info' }))}
+            onZones={() => (hasVideo || relaySrc?.video ? setZoneEdit(true) : push('Wait for the live picture, then mark the zones', { icon: 'info' }))}
             compact={view === 'monitor'}
           />
           {view === 'monitor' ? (
@@ -1538,26 +1714,27 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           {timeline}
           {activity}
           {alertsCard}
-          {!guest && <NurserySettings nid={id} nurseryName={nursery.name} role={me?.role ?? null} settings={settings} send={(msg) => sockRef.current?.send(msg)} push={push} />}
+          {!guest && (
+            <NurserySettings
+              nid={id}
+              nurseryName={nursery.name}
+              role={me?.role ?? null}
+              settings={settings}
+              send={(msg) => sockRef.current?.send(msg)}
+              push={push}
+              people={{ summary: shareSummary(share), onInvite: () => openInvite(id) }}
+            />
+          )}
           <PeopleCard
-            nid={id}
             me={me}
             guest={!!guest}
             viewers={viewers}
             share={share}
-            shareErr={shareErr}
-            baby={baby}
-            nurseryName={nursery.name}
-            send={(msg) => {
-              setShareErr(null);
-              sockRef.current?.send(msg);
-            }}
-            push={push}
+            send={(msg) => sockRef.current?.send(msg)}
+            onInvite={(tab) => openInvite(id, tab)}
             onLeave={() => {
-              if (window.confirm('Leave this nursery? You’ll need the link and passcode to come back.')) {
-                sockRef.current?.send({ t: 'bye' });
-                onLeave?.();
-              }
+              sockRef.current?.send({ t: 'bye' });
+              onLeave?.();
             }}
           />
           </>

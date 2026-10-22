@@ -2,8 +2,10 @@
 
 A private, never-recording baby monitor inside Stream Studio (`/live#/monitor`).
 One device in the nursery is the **camera**; any device the family signs in on can
-**watch**. Video and sound go peer-to-peer (WebRTC, DTLS-SRTP); the server only
-relays signaling, status numbers and events.
+**watch**. Video and sound go peer-to-peer (WebRTC, DTLS-SRTP, end-to-end
+encrypted); the server relays signaling, status numbers and events — and, only for
+a viewer the direct picture can't reach (or while it connects), the relay picture
+and sound, passed through its memory and never stored (see *Relay picture* below).
 
 ## Pieces
 
@@ -16,7 +18,7 @@ relays signaling, status numbers and events.
 | Camera screen | `live/views/MonitorCamera.tsx` | Setup wizard (browser check, permissions, lens picker, zoom, live checks), FaceTime-style running screen, auto-dim, privacy pause, interruption recovery. |
 | Device plumbing | `live/monitor/camera.ts` | In-app browser detection, friendly lens names, constraint ladder, human error text, zoom, iOS `audioSession` for speaker playback. |
 | Peer links | `live/monitor/rtc.ts` | Viewer offers `video sendrecv` + `audio sendrecv`; outgoing tracks swapped with `replaceTrack` (talk / video call on & off with no renegotiation). One camera connection per viewer *session* (call id + viewer id), H.264 preferred, an encoding ladder by audience and phone load — see “Video with many viewers” below. |
-| Relay fallback | `live/monitor/linkFallback.ts` (viewer state machine), `live/monitor/videoBudget.ts` (pacing) | When P2P can't connect: the room's low-bandwidth picture (640 px JPEG, 2–5 fps, no sound), P2P retried in the background with back-off, dropped the moment P2P connects. |
+| Relay picture | `live/monitor/relay.ts` (WebCodecs encoder / decoder), `relayWire.ts` (wire format), `relayAudio.ts` (μ-law + AudioWorklet), `linkFallback.ts` (viewer state machine), `live-worker/src/relayWire.ts` (room's header reader) | When P2P can't connect (no TURN), while it connects (instant picture), or when the camera's direct slots are full: real video through the room (H.264 / VP8 / VP9, 640 px, 10–15 fps, with sound), JPEG for browsers without WebCodecs. Not end-to-end encrypted; never stored. |
 | Sound engine | `live/monitor/soundEngine.ts` | Mic → analyser (cry analyser 10 Hz, alarm pattern 20 Hz) and PCM tap → 16 kHz resampler → YAMNet worker every 0.48 s → `SoundBrain`. |
 | AI sound model | `live/monitor/yamnet.worker.ts`, `public/models/yamnet/` | Google YAMNet (Apache-2.0, 521 AudioSet classes) via onnxruntime-web WASM, single-threaded, SHA-256 verified, cached. |
 | Categories | `live/monitor/soundClasses.ts` | cry, fuss, cough, sneeze, snore, babble, laugh, alarm, glass, crash, loud, voices, music, dog, cat, knocking, footsteps, running water — YAMNet class weights, rival classes, thresholds, severities. |
@@ -31,6 +33,7 @@ relays signaling, status numbers and events.
 | Viewer screen | `live/views/MonitorViewer.tsx` + `live/views/monitor/*` | Listen / talk (tap or hold) / video call / soothe, alert stack + stage glow + alarm takeover, Safety card (incidents, guards, duty), Sleep card + morning report, Sound level card (live + 1/6/24 h history), "Hearing now", filterable log, alert + nursery settings, zone editor. Frozen-video detection. |
 | Alert cues | `live/monitor/alerts.ts` | Per-category synthesized sounds, speech, vibration, repeat-until-answered, title flashing, snooze, per-device prefs. |
 | Guidance | `live/components/Guide.tsx`, `MonitorHome.tsx` | Tours per screen, 10 how-to guides, nursery "Get set up" checklist (`live/monitor/setupProgress.ts`). |
+| Invite | `live/views/monitor/InviteSheet.tsx`, `live/monitor/invite.ts`, `live/monitor/qr.ts` | One sheet to add someone with an account or share a link + passcode (on-device QR), and who has access — see “Invite” below. |
 
 ## Sound categories — ESC-50 study (2026-10-21)
 
@@ -164,24 +167,127 @@ everything below works with or without it.
   a smaller picture”** when the phone stepped down; the camera screen offers to turn
   Smart vision off.
 
-**Relay picture (P2P can't connect):**
-- Viewer (`linkFallback.ts`): gives P2P 10 s, then subscribes to the relay and retries
-  P2P after 30 s, 1, 2, 4, then every 5 min; a late connect cancels the retry instead
-  of being torn down by it. The subscription is re-sent after every room reconnect and
-  when switching cameras. Frames draw straight onto a canvas (no re-render per frame);
-  the pill shows the fps actually arriving; no frame for 5 s → “Picture paused”.
-- Camera (`setRelay` + `RelayPacer`): 640 px JPEG, 2–5 fps by the socket's
-  `bufferedAmount` (backlog over 80 KB → skip and step down; 2 s clear → step up),
-  quality 0.35–0.6 by frame size, never queued behind more than 128 KB
-  (`client.sendBinary(data, maxBuffered)`). A camera that (re)joins is told at once
-  how many viewers want its relay.
-- Room: frames from cameras only, to viewers relaying that camera only; a token
-  bucket per camera (25 fps sustained, burst 8, ~1.5 MB/s) instead of the old hard
-  250 ms gap that dropped jittery frames. Frames pass through the Durable Object's
-  memory — **not end-to-end encrypted** like P2P, never stored (the pill's tooltip
-  says so). No sound in relay mode; alerts are unaffected.
-- Cost: a 4 fps relay is ~144k incoming WebSocket messages per 10 h night (≈ $0.03 per
-  nursery per month at the 20:1 request ratio); outgoing messages are free.
+**Relay picture — real video through the room (`relay.ts`):** used when P2P can't
+connect (no TURN; often a guest on mobile data), while a viewer's P2P takes longer than
+a second to connect (the *instant picture*), and when the camera's direct slots are full
+(the *overflow tier*). The camera encodes **once** for every relay viewer.
+- *Wire* (`relayWire.ts`, mirrored by `live-worker/src/relayWire.ts`; a parity test
+  checks both): `u8 kind` (1 JPEG · 2 video · 3 video + sound · 4 sound only) · `u8 flags`
+  (bit 0 key) · `u32 seq` (wraps) · `u32 ts` ms · `u8 codec` (1 H.264 · 2 VP8 · 3 VP9) ·
+  payload (kind 3: `u16` sound length, sound, video). Older cameras' bare JPEGs still work.
+- *Camera* (`RelayEncoder`): draws the live picture into a canvas at 640 on the long side
+  (640×360, 360×640 upright, never upscaled), `new VideoFrame(canvas)`, and encodes with
+  the first codec the phone can encode (`isConfigSupported`: `avc1.42E01E` Annex B — every
+  key frame carries SPS/PPS — then `vp8`, then `vp09.00.10.08`) that most relay viewers
+  decode; `latencyMode: 'realtime'`, 450 kbit/s at 15 fps, a key frame every 2 s and on
+  `relay_key`. No encoder → JPEG (2–5 fps, `RelayPacer`); JPEG also goes alongside the
+  video for viewers that can't decode it. More than 64 KB queued on the socket → skip
+  frames (nothing queued) and restart on a key frame, stepping down to 300 / 200 kbit/s
+  and 12 / 10 fps (`RelayRate`; 20 s clear → back up); a frame that couldn't be sent
+  holds back every frame after it until a key frame; an encoder that keeps failing is
+  dropped for the next codec. Nothing at all is sent during a privacy pause (and sound
+  captured then is discarded).
+- *Sound* (`relayAudio.ts`): the sound engine's microphone tap (only while someone is on
+  the relay) → 8 kHz band-limited resample → G.711 μ-law (64 kbit/s), bundled into the
+  next video message (so no extra billed messages); alone only when no frame went out for
+  150 ms (or the camera has no encoder). Viewer: an AudioWorklet with a ~300 ms jitter
+  buffer (±3 % speed to hold it, re-buffer after a gap, skip ahead when half a second
+  behind) → a MediaStream track. Browsers without AudioWorklet get the picture without
+  sound, and say so.
+- *Viewer* (`RelayDecoder`): subscribes with the codecs it decodes
+  (`{t:'relay', on, dev, codecs, instant?}`); VideoDecoder → canvas, every frame closed;
+  waits for a key frame after joining, a codec change or an error (asking with
+  `{t:'rx', s, k:1}`); three decoder errors in 20 s → JPEG. Acknowledges `{t:'rx', s}`
+  every 500 ms. The canvas is captured (`captureStream`) together with the sound into the
+  watch screen's `<video>`, so picture-in-picture, Listen and the bedside view work on the
+  relay too; the canvas itself stays on top until the direct picture has *drawn* a frame
+  (requestVideoFrameCallback, at most 5 s), so the swap is seamless.
+- *Instant picture* (`linkFallback.ts`): P2P gets a one-second head start
+  (`INSTANT_DELAY_MS`) — on the home Wi-Fi it's usually rendering by then, so nothing
+  passes through the server — then the viewer subscribes until P2P has rendered a frame.
+  The relay picture arrives ~0.2 s after subscribing (measured), so a remote viewer sees
+  the nursery in about 1.2 s instead of after the handshake or the 10 s give-up. Also
+  bridges an ICE reconnect. Audio-only viewers skip it. If P2P fails, the same
+  subscription becomes the fallback (re-sent without `instant`; parents then see “via
+  our server”). P2P is retried after 30 s, 1, 2, 4, then every 5 min; re-subscribed after
+  every room reconnect and camera switch.
+- *Overflow tier* (`rtc.ts` `DIRECT_CAP` = 4): at most four viewers get their own
+  encoder over the internet; home Wi-Fi viewers and audio-only viewers don't count. A
+  viewer arriving when the slots are full (and that sent `ov: 1` with its offer) gets no
+  video until its path is known: on the home Wi-Fi it's let in; otherwise the camera
+  answers `{bye, full}` and it goes straight to the relay (“Camera full · via server”).
+  Older viewers are never turned away.
+- *Room*: relay messages from cameras only, validated (header, kind, codec; video ≤ 128
+  KB, JPEG ≤ 256 KB, sound ≤ 16 KB), a token bucket per camera (25 messages/s, burst 8,
+  ~1.5 MB/s). Routed by codec: video to viewers that decode it, JPEG to the rest (bare
+  for viewers from before the framed format), sound-only with the video.
+  `relay_want {n, avc, vp8, vp9, jpeg}` tells the camera who wants what. A key frame is
+  requested (≤ 1/s per camera) when someone subscribes, falls behind or reports a
+  decoder error; new subscribers start on a key frame. Per-viewer window: more than 30
+  messages unacknowledged (~2 s) → that viewer skips video until a key frame arrives
+  with ≤ 15 in flight, and keeps getting its **sound** meanwhile (the room rewrites the
+  video + sound message into sound only); a dropped frame (bucket) resyncs everyone on
+  the next key frame. A privacy pause (the camera's event or status) stops every relay
+  message. Viewers only bridging while P2P connects aren't listed as “on the relay”.
+- *Privacy*: relay video and sound pass through the Durable Object's memory — **not
+  end-to-end encrypted** (only P2P, direct or through TURN, is) and never stored. The
+  pill (“Via our server · 12 fps”, “Quick preview”) and its tooltip say so.
+- *Cost*: 15 fps with sound is ~540k incoming WebSocket messages per 10 h night (≈ $0.12
+  per nursery per month at the 20:1 request ratio) plus ~2 acks/s per relay viewer;
+  outgoing messages are free. While frames flow the object stays awake: up to ~4.6k
+  GB-s per relayed night (inside the 400k GB-s monthly allowance for a few nurseries,
+  ≈ $1.7 per nursery per month beyond it) — only while someone is on the relay.
+- *Verified* in Chromium (Playwright, fake camera, P2P blocked): VP8 decoded at 11–12 fps,
+  ~250 kbit/s with sound, picture 0.2 s after subscribing, PiP, jitter-buffered sound,
+  JPEG + “no sound” without WebCodecs, privacy pause, camera restart.
+
+## Invite (add people or share a link)
+
+One sheet, `openInvite(nid, tab?)` from anywhere (mounted once by `LiveApp`
+like the sign-in sheet; the sheet and its QR encoder load on demand):
+watch-screen header (`mv-invite`, with a "watching now" count), nursery hub
+header (`hub-invite`), People & roles (`people-invite` + an "It's just you so
+far" empty state), the setup checklist's "Invite family", the nursery card
+when you're its only member, the watch screen's People card and Nursery
+settings, and `#/monitor/<nid>/invite`.
+
+- **Add by name** (Supabase `monitor_set_member`, the authority): people you
+  share another nursery with first (`knownPeople()` — no directory search, no
+  wrong "Sarah"), then a 250 ms debounced name search (12 results, names only).
+  Role chips default to **Viewer** (least access), label chips, a "check it's
+  the right Jo" line for search results, then "Let them know" — the native
+  share sheet with the (non-secret) watch link. `not_member` reads "Jo hasn't
+  finished setting up Stream Studio yet — share a link instead".
+- **Share a link**: the passcode is pre-filled (`suggestPasscode()`, re-rolled
+  if it trips the nursery-name rule), so it's one tap to a link. Then a QR code
+  drawn on the device (`live/monitor/qr.ts`: byte mode, level M, versions
+  1–10, penalty-chosen mask, ported from Project Nayuki's MIT encoder — the
+  107-character link is version 7, 45×45; **never** an online QR service, which
+  would see the link's secret), Send (`navigator.share`, falling back to copy;
+  the text never includes the passcode), Copy, the passcode shown once,
+  "Set a new passcode" (same link; guests stay unless "also sign them out"),
+  +7 days, New link and Turn off — both confirmed in place, not `window.confirm`
+  (blocked in some in-app browsers).
+- **Who has access**: members (edit role/name, remove), guests (remove), and
+  guests who have an account — "Make member" / "Keep as guest".
+- **Plumbing**: on the watch screen the sheet borrows its socket (a registered
+  `ShareChannel`); anywhere else a parent's sheet opens an `admin` socket while
+  it's open — slim hello (`you`, `nursery`) + `share`, no monitor broadcasts,
+  never in presence, and only `members_changed`, `share_*`, `guest_remove`,
+  `request_dismiss`, `ping`. `members_changed` may name the `uids` whose access
+  changed: only they get `roles_changed`, so adding Grandma doesn't restart
+  everyone's live picture (no `uids` = everyone, as before).
+- **Accessibility**: `role="dialog"` + `aria-modal`, Esc closes, focus starts in
+  the sheet (the search field with a mouse/keyboard) and returns to the button
+  that opened it, the page behind is `inert`, tabs are a real tablist (arrow
+  keys, Home/End), role chips a radiogroup, a `role="status"` live region for
+  "added" / "passcode shown", 44 px targets on touch, reduced motion honoured.
+- **Members never become guests by accident**: the join page sends a signed-in
+  member straight to watching ("You're already in …"), the watch screen drops a
+  stale guest pass once the account is a member, and the room answers
+  `reason: 'member'` to a member's join. In-app browsers get a note that the
+  guest pass stays inside that app. Guests count toward the checklist's
+  "Invite family".
 
 ## Guest access (share link + passcode)
 
@@ -207,9 +313,29 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
 - **Roles**: "Watch & listen" (viewer) or "Also talk, soothe & answer alerts"
   (caregiver). Guests can never run a camera, change settings, manage people or
   download history; Supabase member re-checks never touch them.
+- **New passcode, same link** (`share_pass {pass, signOut?}`): new salt + hash
+  on the active link, wrong-guess counters and any lock cleared, `pass_at`
+  updated (added to `mon_shares` with a guarded `ALTER TABLE`); guests stay
+  signed in unless `signOut`. **Extend** (`share_extend {days: 1|7|30|null}`):
+  adds to the link's current end (an absent value is never "forever") and moves
+  its guests' passes with it — never past 90 days from their join.
+  `ShareInfo` also carries `max_guests` and `pass_at`.
+- **Guests who have an account** (`mon_requests` in the room's SQLite — no
+  Supabase migration): a signed-in person's join sends their own bearer token
+  (`index.ts` forwards `authorization` to the room). After the passcode is
+  accepted the room asks Supabase who they are (`verifyMember` → `live_me`;
+  the uid is **never** read from the body). Already a member of this nursery →
+  `409 {reason:'member'}`, no guest pass. Otherwise a guest pass as usual, a
+  request for the parents ("has a Stream Studio account") and a push saying so.
+  "Make member" calls `monitor_set_member` (Supabase stays the authority), then
+  `members_changed`: the room resolves the request, sends `{t:'promoted'}` to
+  that guest's sockets (closed with 4007), ends the guest pass, and the app
+  reconnects with the account.
 - Code: `live-worker/src/monitorGuests.ts` (+ tests), `MonitorRoom` (`/guest`
-  join, `share_set` / `share_off` / `guest_remove`), `live/monitor/guest.ts`,
-  `live/views/MonitorJoin.tsx`, `live/views/monitor/PeopleCard.tsx`.
+  join, `share_set` / `share_off` / `share_pass` / `share_extend` /
+  `guest_remove` / `request_dismiss`), `live/monitor/guest.ts`,
+  `live/monitor/invite.ts`, `live/monitor/qr.ts`, `live/views/MonitorJoin.tsx`,
+  `live/views/monitor/InviteSheet.tsx`, `live/views/monitor/PeopleCard.tsx`.
 
 ## This week (monitor analytics)
 

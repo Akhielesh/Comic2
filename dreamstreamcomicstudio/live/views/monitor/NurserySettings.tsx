@@ -15,6 +15,7 @@ export function NurserySettings({
   settings,
   send,
   push,
+  people,
 }: {
   nid: string;
   nurseryName: string;
@@ -22,6 +23,8 @@ export function NurserySettings({
   settings: MonSettings;
   send: Send;
   push: PushToast;
+  /** Parents: "People & sharing" at a glance, with Invite. */
+  people?: { summary: string; onInvite: () => void };
 }) {
   const [days, setDays] = useState('30');
   const [busy, setBusy] = useState<string | null>(null);
@@ -63,6 +66,14 @@ export function NurserySettings({
         <b style={{ flex: 1 }}>Nursery settings</b>
         {!parent && <span className="faint" style={{ fontSize: 12 }}>Parents can change these</span>}
       </div>
+
+      {parent && people && (
+        <div className="ns-people">
+          <Icon name="users" size={16} />
+          <span><b>People &amp; sharing</b><small className="faint">{people.summary}</small></span>
+          <Btn variant="soft" size="sm" icon="userPlus" onClick={people.onInvite}>Invite</Btn>
+        </div>
+      )}
 
       <div className="ns-row">
         <div><b>Sound detection sensitivity</b><small>High catches soft whimpers and distant sounds; Low only clear, close cries.</small></div>

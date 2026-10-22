@@ -24,6 +24,13 @@
  * rate up when it must cut quality, and steps every viewer's picture down a
  * ladder as more people watch over the internet or the phone gets busy —
  * driven by the encoder's own stats every five seconds.
+ *
+ * Overflow: at most DIRECT_CAP viewers get their own encoder over the
+ * internet (home Wi-Fi viewers don't count). A viewer that arrives when those
+ * slots are full (and says it can watch the relay, `ov`) gets no video until
+ * its path is known: on the home Wi-Fi it's let in; otherwise the camera
+ * answers `{bye, full}` and the viewer goes straight to the relay picture —
+ * one encoder for everyone else, however many they are (relay.ts).
  */
 
 import { TalkProcessor } from './voice';
@@ -86,6 +93,8 @@ export type Quality = 'hd' | 'sd' | 'audio';
 const CALLER_VIDEO_BPS = 600_000;
 /** Give a direct connection this long before falling back to the relay (it may still connect later). */
 const CONNECT_GIVE_UP_MS = 10_000;
+/** Viewers served directly over the internet, each its own encoder; the rest watch the relay. */
+export const DIRECT_CAP = 4;
 
 /* ------------------------------------------------------ encoding ladder */
 
@@ -352,7 +361,13 @@ interface CamPeer {
   path: NetPath | null;
   /** The last encoding set (skip identical setParameters). */
   applied: string;
+  /** The viewer can watch the relay instead (it may be told the camera is full). */
+  ov: boolean;
+  /** Arrived while the direct slots were full: no video until it proves to be on the home Wi-Fi. */
+  held: boolean;
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 const STATS_MS = 5000;
 
@@ -433,9 +448,46 @@ export class CameraHub {
   }
 
   private videoFor(peer: CamPeer): MediaStreamTrack | null {
-    const t = this.videoOn && peer.quality !== 'audio' ? this.tracks().video : null;
+    const t = this.videoOn && peer.quality !== 'audio' && !peer.held ? this.tracks().video : null;
     hintMotion(t);
     return t;
+  }
+
+  /** Direct video slots taken over the internet (connected, not on the home Wi-Fi, not audio-only), besides `except`. */
+  internetSlots(except?: CamPeer): number {
+    let n = 0;
+    for (const p of this.peers.values()) {
+      if (p === except || p.held || p.quality === 'audio' || p.pc.connectionState !== 'connected') continue;
+      if (p.path !== 'lan') n++;
+    }
+    return n;
+  }
+
+  /**
+   * A viewer just connected. If the direct slots are full (or were when it
+   * called): on the home Wi-Fi it's let in; over the internet it's told the
+   * camera is full and watches the relay instead.
+   */
+  private async admit(peer: CamPeer): Promise<void> {
+    // Audio-only viewers cost no video encoder: never turned away.
+    if (!peer.ov || peer.quality === 'audio' || (!peer.held && this.internetSlots(peer) < DIRECT_CAP)) return;
+    let path: NetPath | null = null;
+    for (let i = 0; i < 4 && !path; i++) {
+      path = await netPath(peer.pc);
+      if (!path) await sleep(250);
+    }
+    if (this.peers.get(peer.key) !== peer || peer.pc.connectionState !== 'connected') return;
+    if (path) peer.path = path;
+    if (path !== 'lan' && this.internetSlots(peer) >= DIRECT_CAP) {
+      this.send(peer, { bye: true, full: true });
+      this.close(peer.key);
+      return;
+    }
+    if (peer.held) {
+      peer.held = false;
+      await videoTransceiver(peer.pc)?.sender.replaceTrack(this.videoFor(peer)).catch(() => undefined);
+      void this.applyEncodings();
+    }
   }
 
   private send(peer: CamPeer, d: MonRtc): void {
@@ -454,7 +506,12 @@ export class CameraHub {
     if (d.sdp?.type === 'offer') {
       // A new call id is a new call: a fresh connection, never the old one
       // patched with a stranger's ICE and DTLS (an ICE restart keeps the id).
-      if (!peer || peer.pc.signalingState === 'closed' || (d.pc && d.pc !== peer.pcId)) peer = this.create(key, from, d.pc ?? null, who);
+      if (!peer || peer.pc.signalingState === 'closed' || (d.pc && d.pc !== peer.pcId)) {
+        peer = this.create(key, from, d.pc ?? null, who);
+        peer.ov = d.ov === 1;
+        // Direct slots full: no video until we know it's on the home Wi-Fi (admit()).
+        peer.held = peer.ov && d.q !== 'audio' && this.internetSlots(peer) >= DIRECT_CAP;
+      }
       if (d.q === 'hd' || d.q === 'sd' || d.q === 'audio') peer.quality = d.q;
       const { pc } = peer;
       try {
@@ -488,7 +545,7 @@ export class CameraHub {
   private create(key: string, sid: string, pcId: string | null, who: string): CamPeer {
     this.close(key);
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle' });
-    const peer: CamPeer = { key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '' };
+    const peer: CamPeer = { key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '', ov: false, held: false };
     pc.ondatachannel = (e) => {
       if (e.channel.label === 'mon') peer.dc = e.channel;
     };
@@ -512,6 +569,7 @@ export class CameraHub {
         // Which network it uses decides its share of the upload (a path check
         // only — the regular tick judges the encoders).
         window.setTimeout(() => void this.statsTick(false), 1500);
+        void this.admit(peer);
       }
       this.onCount?.(this.count);
       void this.applyEncodings();
@@ -524,7 +582,13 @@ export class CameraHub {
   async setQuality(key: string, q: Quality): Promise<void> {
     const peer = this.peers.get(key);
     if (!peer) return;
+    const wasAudio = peer.quality === 'audio';
     peer.quality = q;
+    // An audio-only viewer asking for the picture needs a slot like anyone else.
+    if (wasAudio && q !== 'audio' && peer.pc.connectionState === 'connected') {
+      await this.admit(peer);
+      if (this.peers.get(key) !== peer) return;
+    }
     peer.applied = '';
     await videoTransceiver(peer.pc)?.sender.replaceTrack(this.videoFor(peer)).catch(() => undefined);
     await this.applyEncodings();
@@ -649,6 +713,8 @@ export class ViewerLink {
   private watchdog: number | undefined;
   state: LinkState = 'idle';
   path: NetPath | null = null;
+  /** The camera's direct slots were full: this attempt ended in 'failed', watch the relay. */
+  full = false;
   /** The picture this viewer asks for (sent with every offer, so a new call starts right). */
   quality: Quality = 'hd';
   onStream: ((s: MediaStream | null) => void) | null = null;
@@ -691,6 +757,7 @@ export class ViewerLink {
     this.teardown(false);
     this.camSid = camSid;
     this.pcId = randomId();
+    this.full = false;
     this.setState('connecting');
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle' });
     this.pc = pc;
@@ -742,7 +809,8 @@ export class ViewerLink {
     }, 2000);
     await pc.setLocalDescription(await pc.createOffer());
     if (this.pc !== pc) return;
-    this.send(camSid, { sdp: pc.localDescription!.toJSON(), q: this.quality });
+    // ov: if the camera's direct slots are full, we'll watch its relay picture.
+    this.send(camSid, { sdp: pc.localDescription!.toJSON(), q: this.quality, ov: 1 });
   }
 
   /** Re-read which network path the call uses (it can change after an ICE restart). */
@@ -799,8 +867,15 @@ export class ViewerLink {
     } else if (d.ice) {
       await this.pc.addIceCandidate(d.ice).catch(() => undefined);
     } else if (d.bye) {
-      // The camera hung up (it's stopping): the call is over, not failed.
       this.teardown(false);
+      if (d.full) {
+        // Its direct slots are taken: straight to the relay picture (retried later).
+        this.full = true;
+        window.clearTimeout(this.connectTimer);
+        this.setState('failed');
+        return;
+      }
+      // The camera hung up (it's stopping): the call is over, not failed.
       this.setState('closed');
     }
   }

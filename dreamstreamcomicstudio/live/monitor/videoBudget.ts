@@ -6,8 +6,8 @@
  *  - Smart vision (object + pose models on the main thread) steps back when
  *    several people watch or the encoder reports the phone is busy. Sound and
  *    cry detection never do — they are the safety net.
- *  - The low-bandwidth relay (JPEG frames through the room, for viewers whose
- *    network blocks a direct connection) paces itself by what the socket can
+ *  - The relay picture's JPEG frames (for viewers whose browser can't decode
+ *    the relay video — relay.ts) pace themselves by what the socket can
  *    actually send: 2–5 frames a second, skipping rather than queueing.
  */
 
@@ -23,8 +23,6 @@ export function sceneIntervalMs(cost: number, peers: number, pressure: number): 
   return Math.min(6000, ms);
 }
 
-/** Relay frames: this wide, JPEG at about this quality. */
-export const RELAY_WIDTH = 640;
 /** Bytes still queued on the socket above which the uplink is falling behind. */
 export const RELAY_BACKLOG = 80 * 1024;
 /** Never queue a frame behind more than this (client.sendBinary's limit for relay frames). */
