@@ -37,6 +37,10 @@ export interface RasterOptions {
   /** Scale so the longest edge is this many px (default: the image's own size, capped). */
   longEdge?: number;
   signal?: AbortSignal;
+  /** Output encoding (default PNG). JPEG keeps multi-page PDFs small. */
+  mime?: 'image/png' | 'image/jpeg';
+  /** JPEG quality 0–1 (default 0.9). */
+  quality?: number;
 }
 
 /** Output canvas size for an image (keeps aspect; never above MAX_EXPORT_EDGE). */
@@ -191,7 +195,7 @@ export const drawCanvasBalloons = (ctx: CanvasRenderingContext2D, plans: CanvasB
   }
 };
 
-interface LoadedImage {
+export interface LoadedImage {
   source: CanvasImageSource;
   width: number;
   height: number;
@@ -264,10 +268,14 @@ export const ensureLetteringFonts = async (timeoutMs = 5000): Promise<void> => {
   }
 };
 
-const canvasToPng = (canvas: HTMLCanvasElement): Promise<Blob> =>
+const canvasToPng = (canvas: HTMLCanvasElement, mime: 'image/png' | 'image/jpeg' = 'image/png', quality = 0.9): Promise<Blob> =>
   new Promise((resolve, reject) => {
     try {
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new ExportError('The browser couldn’t encode this page as PNG (it may be too large).'))), 'image/png');
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new ExportError('The browser couldn’t encode this page (it may be too large).'))),
+        mime,
+        mime === 'image/jpeg' ? quality : undefined
+      );
     } catch (err) {
       reject(
         (err as Error)?.name === 'SecurityError'
@@ -296,7 +304,7 @@ const drawToBlob = async (
     ctx.drawImage(image.source, 0, 0, width, height);
     if (letter) await letter(ctx, width, height);
     if (opts.signal?.aborted) throw new ExportError('Export cancelled.');
-    return await canvasToPng(canvas);
+    return await canvasToPng(canvas, opts.mime, opts.quality);
   } finally {
     image.release();
   }

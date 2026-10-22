@@ -266,22 +266,24 @@ describe('ReaderTab', () => {
     const studio = makeStudio();
     render(<ReaderTab studio={studio} doc={studio.doc!} />);
     expect(screen.getByTestId('comic-reader')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Print \/ PDF/ })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /PNG pages/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Print$/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^PDF$/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^PNG$/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Motion$/ })).toBeEnabled();
   });
 
   it('offers nothing to export until something is drawn', () => {
     const doc = makeSampleDoc((d) => d.pages.forEach((p) => (p.render = { status: 'none', history: [] })));
     render(<ReaderTab studio={makeStudio(doc)} doc={doc} />);
     expect(screen.getByText('Nothing to read yet')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Print \/ PDF/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Print$/ })).toBeNull();
   });
 
   it('reports a blocked print window', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     const studio = makeStudio();
     render(<ReaderTab studio={studio} doc={studio.doc!} />);
-    fireEvent.click(screen.getByRole('button', { name: /Print \/ PDF/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Print$/ }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/Allow pop-ups/);
     expect(open).toHaveBeenCalled();
   });

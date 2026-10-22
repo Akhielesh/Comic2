@@ -216,9 +216,10 @@ describe('StudioComposer — attachments', () => {
     Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
     fireEvent.change(fileInput(), { target: { files: [big] } });
     expect(await screen.findByText(/huge\.jpg is over 10 MB/)).toBeInTheDocument();
-    const pdf = new File(['%PDF'], 'notes.pdf', { type: 'application/pdf' });
-    fireEvent.change(fileInput(), { target: { files: [pdf] } });
-    expect(await screen.findByText(/notes\.pdf isn't supported/)).toBeInTheDocument();
+    // .pdf/.docx/.fdx are now accepted (extracted in-browser); a .zip is genuinely unsupported.
+    const zip = new File(['x'], 'archive.zip', { type: 'application/zip' });
+    fireEvent.change(fileInput(), { target: { files: [zip] } });
+    expect(await screen.findByText(/archive\.zip isn't supported/)).toBeInTheDocument();
   });
 
   it('a removed attachment is not sent', async () => {

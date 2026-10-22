@@ -2,10 +2,12 @@
 //
 //  - Auto-growing textarea. Enter sends, Shift+Enter is a newline, Cmd/Ctrl+K focuses it.
 //  - Attach (+), paste or drop: PNG/JPG/WebP images ≤ 10 MB become attachments (character
-//    photos, style refs; big photos are downscaled first); .txt/.md files go up as text
-//    attachments — the server appends short ones to the message and saves long ones as
-//    the comic's source script. Long pasted text stays in the box (a script is the
-//    message); past the server's message cap it is sent as a script file instead.
+//    photos, style refs; big photos are downscaled first). Script files are read IN THE
+//    BROWSER to plain text before upload — .txt/.md as-is, and .docx (mammoth), .pdf
+//    (pdf.js) and .fdx (Final Draft XML) via scriptImport, whose parsers load only when
+//    such a file is attached. The server appends short scripts to the message and saves
+//    long ones as the comic's source script. Long pasted text stays in the box (a script
+//    is the message); past the server's message cap it is sent as a script file instead.
 //  - Voice via DictationButton with the base-snapshot pattern (partials replace only the
 //    dictated segment). "Auto-send when I stop talking" sends the transcript on stop.
 //  - Gemini-style option chips (format · style · quality) open anchored panels above the
@@ -27,6 +29,7 @@ import { StylePanel } from './panels/StylePanel';
 import { QualityPanel } from './panels/QualityPanel';
 import { AspectGlyph, cx } from './ui';
 import { useMediaQuery } from '../../studio/kit/useMediaQuery';
+import { importScriptFile, scriptKindOf, ScriptImportError, SCRIPT_ACCEPT } from './scriptImport';
 
 export const VOICE_AUTOSEND_KEY = 'comicstudio.voiceAutoSend';
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -43,7 +46,9 @@ const MAX_TEXTAREA_PX = 240;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
 const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/x-markdown']);
 const TEXT_EXT = /\.(txt|md|markdown|text|fountain)$/i;
-const ACCEPT = 'image/png,image/jpeg,image/webp,.txt,.md,.markdown,text/plain,text/markdown';
+// .docx/.pdf/.fdx need in-browser extraction (mammoth/pdf.js/XML); the rest are plain text.
+const RICH_SCRIPT_KINDS = new Set(['docx', 'pdf', 'fdx']);
+const ACCEPT = `image/png,image/jpeg,image/webp,${SCRIPT_ACCEPT}`;
 
 export type ComposerPanel = 'format' | 'style' | 'quality';
 
@@ -307,8 +312,21 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           } catch {
             problems.push(`Couldn't read ${file.name}`);
           }
+        } else if (RICH_SCRIPT_KINDS.has(scriptKindOf(file.name, file.type) || '')) {
+          // .docx / .pdf / .fdx — extract to plain text in the browser, then upload the text.
+          try {
+            const imported = await importScriptFile(file);
+            const dataUrl = textToDataUrl(imported.text, 'text/plain');
+            if (!fits(dataUrl, file.name || 'That script')) continue;
+            added.push({ id: attachId(), kind: 'text', name: `${imported.name}.txt`, mimeType: 'text/plain', dataUrl, chars: imported.text.length, truncated: imported.truncated });
+            payload += dataUrl.length;
+            count += 1;
+            if (imported.truncated) problems.push(`${file.name} was trimmed to the first ${charCount(MAX_TEXT_CHARS)}`);
+          } catch (err) {
+            problems.push(err instanceof ScriptImportError ? err.message : `Couldn't read ${file.name}`);
+          }
         } else {
-          problems.push(`${file.name || 'That file'} isn't supported — use PNG, JPG or WebP images, or .txt/.md scripts`);
+          problems.push(`${file.name || 'That file'} isn't supported — use PNG, JPG or WebP images, or .txt/.md/.docx/.pdf/.fdx/.fountain scripts`);
         }
       }
       if (added.length) setAttachments((prev) => [...prev, ...added]);

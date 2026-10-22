@@ -45,6 +45,7 @@
     "ops:stream-e2e:checklist:canonical": "tsx scripts/ops/streamE2eChecklist.ts --canonical"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "2.11.1",
     "@codesandbox/sandpack-react": "^2.20.0",
     "@google/genai": "^1.30.0",
     "@huggingface/transformers": "^4.2.0",
@@ -66,7 +67,10 @@
     "leaflet": "^1.9.4",
     "lottie-react": "^2.4.1",
     "lucide-react": "^0.554.0",
+    "mammoth": "^1.13.0",
+    "mediabunny": "1.62.0",
     "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
+    "pdfjs-dist": "^6.4.299",
     "pyodide": "^314.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
