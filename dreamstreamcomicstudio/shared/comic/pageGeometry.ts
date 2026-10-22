@@ -1,9 +1,9 @@
 // Page geometry (pure, dependency-free) — contract §11.1, shared by client and server.
 //
-// A VERBATIM copy of the pure functions in components/comicstudio/board/pageLayout.ts
-// (and the server's vision.ts / prompts.ts twins). In wave 1 (P1-BOOKMODEL) both of those
-// files become thin re-exports of this module; until then keep the copies byte-identical.
-// Margins, gutters, row weights and the parsing vocabulary must match the server.
+// The ONE copy of the page-blueprint geometry. The board (components/comicstudio/board/pageLayout.ts)
+// re-exports it; the server's twins (vision.ts estimatePanelBoxes, prompts.ts synthesizeLayout /
+// parseLayout) switch to it in wave 2 once the golden test (pageGeometry.test.ts) keeps showing
+// identical boxes. Margins, gutters, row weights and the parsing vocabulary are the server's.
 //
 // All boxes are page-normalized (0..1, origin top-left).
 

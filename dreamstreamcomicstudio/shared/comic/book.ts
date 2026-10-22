@@ -1,7 +1,11 @@
 // The book as a sequence of slots (cover → title → pages → end → back cover) (contract §11.3).
-// WAVE-0: working minimal implementation; P1-BOOKMODEL owns it in wave 1.
+//
+// One ordering for every surface that walks the book: the studio reader, the timeline, the chat
+// breakdown card, exports and the public reader (`audience: 'public'` keeps only what a reader may
+// see: drawn pages and the free software plates that are switched on). Pure and dependency-free.
 
-import { bookOf, isPageStale, type AssetRef, type ComicDoc, type Page } from './doc.js';
+import { bookOf, coverSpecHash, isPageStale, type AspectRatio, type AssetRef, type ComicDoc, type Page, type RenderState } from './doc.js';
+import { aspectFromSize, aspectMatches } from './models.js';
 
 export type BookSlotKind = 'cover' | 'title' | 'page' | 'end' | 'back_cover';
 export interface BookSlot {
@@ -32,6 +36,30 @@ export function clipStatus(doc: ComicDoc, page: Page): BookSlot['status'] {
   }
 }
 
+/** Cover status with the same vocabulary as pages (an older title/style ⇒ stale; adopted art ⇒ custom). */
+export function coverStatus(doc: ComicDoc): BookSlot['status'] {
+  const r: RenderState = doc.cover.render;
+  switch (r.status) {
+    case 'queued':
+    case 'rendering':
+    case 'failed':
+    case 'stale':
+      return r.status;
+    case 'ready':
+      if (r.specHash && r.specHash !== coverSpecHash(doc)) return 'stale';
+      return !r.specHash && r.origin === 'adopted' ? 'custom' : 'ready';
+    default:
+      return 'planned';
+  }
+}
+
+/** The art came back at a different shape than the book's page aspect (unknown sizes never flag). */
+export function aspectMismatch(doc: ComicDoc, asset?: AssetRef): { want: AspectRatio; got: AspectRatio } | null {
+  if (!asset || !asset.w || !asset.h) return null;
+  const want = doc.format.pageAspect;
+  return aspectMatches(want, asset.w, asset.h) ? null : { want, got: aspectFromSize(asset.w, asset.h) };
+}
+
 /** studio: includes undrawn pages; public: drawn pages + enabled plates only. Order: cover → title → pages by n → end → back cover. */
 export function bookSequence(doc: ComicDoc, opts: { audience?: 'studio' | 'public' } = {}): BookSlot[] {
   const pub = opts.audience === 'public';
@@ -40,10 +68,7 @@ export function bookSequence(doc: ComicDoc, opts: { audience?: 'studio' | 'publi
   const cover = doc.cover.render;
   const coverDrawn = cover.status === 'ready' && !!cover.asset;
   if (!pub || coverDrawn) {
-    slots.push({
-      key: 'cover', kind: 'cover', label: 'Cover', asset: cover.asset, drawn: coverDrawn,
-      status: cover.status === 'none' ? 'planned' : cover.status === 'ready' ? 'ready' : cover.status
-    });
+    slots.push({ key: 'cover', kind: 'cover', label: 'Cover', asset: cover.asset, drawn: coverDrawn, status: coverStatus(doc) });
   }
   if (book.titlePage) slots.push({ key: 'title', kind: 'title', label: 'Title page', plate: true, drawn: true, status: 'ready' });
   for (const page of [...doc.pages].sort((a, b) => a.n - b.n)) {
