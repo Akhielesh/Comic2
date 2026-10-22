@@ -30,7 +30,15 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
   const done = useRef(false);
   const scale = pageWidthPx > 0 ? pageWidthPx / 1000 : 1;
   const parsed = parseFont(plan.font);
-  const fontPx = Math.max(12, plan.fontSize * scale);
+  // iOS zooms the whole page when a field under 16 px gets focus: never below 16 px on touch screens.
+  const coarse = useState(() => {
+    try {
+      return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    } catch {
+      return false;
+    }
+  })[0];
+  const fontPx = Math.max(coarse ? 16 : 12, plan.fontSize * scale);
   const color = paintOf(plan.style.textColor)?.color ?? '#111111';
   const fill = paintOf(plan.style.fill);
 
@@ -100,6 +108,9 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
         onBlur={commit}
         onKeyDown={(e) => {
           e.stopPropagation();
+          // Typing through an IME (Japanese, Chinese, Korean, Hindi/Telugu transliteration…): Enter
+          // and Esc confirm or cancel the composition — they must never commit or close the editor.
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === 'Escape') {
             e.preventDefault();
             cancel();

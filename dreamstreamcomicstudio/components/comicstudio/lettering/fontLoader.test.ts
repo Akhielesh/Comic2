@@ -86,6 +86,47 @@ describe('ensureFonts', () => {
   });
 });
 
+describe('script faces (Google CSS2)', () => {
+  it('are measurable only once a face of the family has really loaded (check() alone is true for unknown families)', () => {
+    const faces: { family: string; status: string }[] = [];
+    const fonts = { check: () => true, forEach: (cb: (f: { family: string; status: string }) => void) => faces.forEach(cb), addEventListener: vi.fn() };
+    vi.stubGlobal('FontFace', class {});
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true });
+    try {
+      expect(isFontReady('noto-sans-telugu', 400)).toBe(false);
+      faces.push({ family: '"Noto Sans Telugu"', status: 'loading' });
+      expect(isFontReady('noto-sans-telugu', 400)).toBe(false);
+      faces.push({ family: 'Noto Sans Telugu', status: 'loaded' });
+      expect(isFontReady('noto-sans-telugu', 400)).toBe(true);
+    } finally {
+      delete (document as unknown as { fonts?: unknown }).fonts;
+    }
+  });
+
+  it('wait for the stylesheet before loading, and report a face that never arrives as failed (never rejects)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('FontFace', class {});
+    const load = vi.fn(async () => [] as FontFace[]);
+    Object.defineProperty(document, 'fonts', { value: { load, check: () => true, forEach: () => undefined, addEventListener: vi.fn() }, configurable: true });
+    try {
+      const pending = ensureFonts(['noto-sans-telugu'], { weights: [400], sample: 'నమస్తే', timeoutMs: 1000 });
+      const link = document.head.querySelector<HTMLLinkElement>('link[data-ds-lettering-fonts]')!;
+      expect(link.href).toContain('fonts.googleapis.com/css2?family=Noto+Sans+Telugu');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(load).not.toHaveBeenCalled(); // the @font-face rules are not there yet
+      link.dispatchEvent(new Event('load'));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(load).toHaveBeenCalledWith(expect.stringContaining('Noto Sans Telugu'), 'నమస్తే');
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(pending).resolves.toEqual({ loaded: [], failed: ['noto-sans-telugu'] });
+    } finally {
+      vi.useRealTimers();
+      document.head.querySelectorAll('link[data-ds-lettering-fonts]').forEach((l) => l.remove());
+      delete (document as unknown as { fonts?: unknown }).fonts;
+    }
+  });
+});
+
 describe('measure', () => {
   it('parses lettering font shorthands', () => {
     expect(parseFont('italic 700 17px "DSL Comic Neue", "Comic Sans MS", cursive')).toEqual({ italic: true, weight: 700, px: 17, family: 'DSL Comic Neue' });

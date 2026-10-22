@@ -34,7 +34,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 export const cleanReaderText = (v: string): string =>
   v
     // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 

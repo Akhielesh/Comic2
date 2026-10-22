@@ -1,0 +1,112 @@
+// Reader language choice (i18n.md §11.1). Owner: P1-I18N. Pure helpers + guarded storage/URL glue.
+//
+// Priority: `?lang=` (validated against the source + published editions) → the reader's stored global
+// preference (localStorage 'comicstudio.reader.lang') → the browser's languages (te-IN → te,
+// zh-CN → zh-Hans, pt-BR → pt) → the comic's own language. Switching writes the choice back with
+// history.replaceState, so a shared link carries the language.
+
+import type { ComicDoc } from '../../../shared/comic/doc';
+import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
+import { languageSpec, matchLanguage, sameLanguage } from '../../../shared/comic/languages';
+import type { ReaderLanguageSlot } from './ReaderLanguagePicker';
+
+export const READER_LANG_KEY = 'comicstudio.reader.lang';
+export type ReaderLanguageReason = 'url' | 'stored' | 'browser' | 'source';
+
+export const pickReaderLanguage = (args: {
+  urlLang?: string | null;
+  stored?: string | null;
+  navigatorLanguages: readonly string[];
+  source: string;
+  published: readonly string[];
+}): { lang: string; reason: ReaderLanguageReason } => {
+  const available = [args.source, ...args.published.filter((l) => !sameLanguage(l, args.source))];
+  const valid = (raw?: string | null) => (typeof raw === 'string' && raw.length <= 35 && raw.trim() ? matchLanguage([raw.trim()], available) : undefined);
+  const fromUrl = valid(args.urlLang);
+  if (fromUrl) return { lang: fromUrl, reason: 'url' };
+  const fromStore = valid(args.stored);
+  if (fromStore) return { lang: fromStore, reason: 'stored' };
+  const prefs = (args.navigatorLanguages || []).filter((l): l is string => typeof l === 'string' && l.length <= 35);
+  const fromBrowser = matchLanguage(prefs, available);
+  if (fromBrowser) return { lang: fromBrowser, reason: 'browser' };
+  return { lang: args.source, reason: 'source' };
+};
+
+/** The stored global preference (null when absent or storage is unavailable). */
+export const readStoredReaderLang = (): string | null => {
+  try {
+    const v = globalThis.localStorage?.getItem(READER_LANG_KEY);
+    return v && v.length <= 35 ? v : null;
+  } catch {
+    return null;
+  }
+};
+
+export const storeReaderLang = (lang: string): void => {
+  try {
+    globalThis.localStorage?.setItem(READER_LANG_KEY, lang);
+  } catch {
+    /* private mode / quota: the choice still applies for this visit */
+  }
+};
+
+/** `?lang=` of a search string (validated against the registry; null otherwise). */
+export const readUrlLang = (search?: string): string | null => {
+  try {
+    const s = search ?? (typeof window !== 'undefined' ? window.location.search : '');
+    const raw = new URLSearchParams(s).get('lang');
+    if (!raw || raw.length > 35) return null;
+    return languageSpec(raw)?.code ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/** A URL with `lang` set (or removed for the source) — every other param and the hash kept. */
+export const urlWithLang = (href: string, lang: string, source: string): string => {
+  const url = new URL(href);
+  if (sameLanguage(lang, source)) url.searchParams.delete('lang');
+  else url.searchParams.set('lang', lang);
+  return url.toString();
+};
+
+/** Write the language into the address bar without a navigation (shared links carry it). */
+export const syncLangToUrl = (lang: string, source: string): void => {
+  try {
+    if (typeof window === 'undefined' || !window.history?.replaceState) return;
+    const next = urlWithLang(window.location.href, lang, source);
+    if (next !== window.location.href) window.history.replaceState(window.history.state, '', next);
+  } catch {
+    /* sandboxed frames may refuse replaceState */
+  }
+};
+
+/** Languages a reader can choose for this doc: the source first, then editions (publishable only unless drafts). */
+export function readerLanguageOptions(doc: ComicDoc, opts: { published?: readonly string[]; includeDrafts?: boolean } = {}): ReaderLanguageSlot['options'] {
+  const source = doc.format.language;
+  const sourceSpec = languageSpec(source);
+  const out: ReaderLanguageSlot['options'] = [{ code: source, label: sourceSpec?.english || source, native: sourceSpec?.endonym, status: 'ready' }];
+  const editions = opts.published ?? Object.keys(i18nOf(doc).editions);
+  for (const code of editions) {
+    if (sameLanguage(code, source) || out.some((o) => o.code === code)) continue;
+    const spec = languageSpec(code);
+    if (!spec) continue;
+    const ready = opts.published ? true : editionReadiness(doc, code).publishable;
+    if (!ready && !opts.includeDrafts) continue;
+    out.push({ code, label: spec.english, native: spec.endonym, ...(ready ? { status: 'ready' as const } : {}) });
+  }
+  return out;
+}
+
+/** "92% translated" for an edition (drafts in the owner preview). */
+export const translatedPercent = (doc: ComicDoc, lang: string): number => {
+  const p = editionProgress(doc, lang);
+  return p.total ? Math.floor((p.done / p.total) * 100) : 100;
+};
+
+/** The next language in the list (the reader's `L` shortcut). */
+export const nextLanguage = (options: ReaderLanguageSlot['options'], current: string): string | undefined => {
+  if (options.length < 2) return undefined;
+  const i = options.findIndex((o) => sameLanguage(o.code, current));
+  return options[(i + 1) % options.length].code;
+};

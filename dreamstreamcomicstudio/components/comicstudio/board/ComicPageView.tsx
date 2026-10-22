@@ -162,6 +162,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   const [boxRef, size] = useElementSize<HTMLDivElement>();
   const [natural, setNatural] = useState<{ path: string; w: number; h: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [variantFailed, setVariantFailed] = useState<string | null>(null);
   const assetPath = page.render.asset?.path;
   // Adopt the real pixel ratio once the image is known (models snap to their nearest supported aspect).
   const naturalAspect = natural && natural.path === assetPath && natural.w > 0 && natural.h > 0 ? natural.w / natural.h : 0;
@@ -169,8 +170,10 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   const width = size.width || FALLBACK_WIDTH;
   const height = size.height || width / aspect;
   // Variant pick from the real box width (only once measured; the plain URL until then).
+  // A variant that fails to load falls back to the original image (never to the sketch while the
+  // original is fine).
   const pickedUrl = srcWidth && size.width > 0 ? srcWidth(size.width) : undefined;
-  const src = pickedUrl || imageUrl;
+  const src = pickedUrl && variantFailed !== pickedUrl ? pickedUrl : imageUrl;
   const showImage = !!src && failed !== src;
   const waitingForUrl = !src && !!assetPath;
   const lettering = doc.format.lettering === 'overlay' && showImage && !hideLettering;
@@ -191,6 +194,10 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
         }
       }}
       onError={() => {
+        if (pickedUrl && src === pickedUrl && pickedUrl !== imageUrl) {
+          setVariantFailed(pickedUrl);
+          return;
+        }
         setFailed(src || null);
         onImageError?.();
       }}

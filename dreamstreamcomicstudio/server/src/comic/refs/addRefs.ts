@@ -62,7 +62,7 @@ export const ownerName = (doc: ComicDoc, owner: RefOwner): string | undefined =>
 export const cleanNote = (v: unknown): string | undefined => {
   if (typeof v !== 'string') return undefined;
   // eslint-disable-next-line no-control-regex
-  const t = v.replace(/[\u0000-\u001f\u007f  ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const t = v.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
   return t ? t.slice(0, REF_LIMITS.noteChars).trim() : undefined;
 };
 

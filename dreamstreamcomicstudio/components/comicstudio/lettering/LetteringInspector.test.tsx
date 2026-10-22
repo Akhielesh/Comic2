@@ -133,6 +133,34 @@ describe('LetteringInspector', () => {
     expect(apply.mock.calls.at(-1)![0][0]).toMatchObject({ op: 'balloon', lineId: 'pg_1_l1' });
   });
 
+  it('crowded panel: free fixes — shorten, keep it here (pins the drawn balloon), or move it to another panel', () => {
+    const doc = makeSampleDoc();
+    const base = resolvePlacements(doc, doc.pages[0], ASPECT, estimateMeasure);
+    const id = [...base.fallback][0];
+    expect(id).toBeTruthy();
+    const onEditText = vi.fn();
+    const { apply } = inspector([id], { placements: { ...base, crowded: new Set([id]) }, onEditText }, doc);
+    expect(screen.getByText(/Crowded panel/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Shorten' }));
+    expect(onEditText).toHaveBeenCalledWith(id);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep here' }));
+    const [ops, opts] = apply.mock.calls.at(-1)!;
+    expect(opts).toEqual({ label: 'Keep balloon here' });
+    // A software-placed balloon: the FULL drawn balloon is stored, pinned (no jump to a default width).
+    expect(ops[0]).toMatchObject({ op: 'balloon', lineId: id, patch: { ...(({ lineId: _l, ...rest }) => rest)(base.balloons.get(id)!), pinned: true } });
+    expect(screen.getByRole('button', { name: /^Move to panel \d+$/ })).toBeInTheDocument();
+  });
+
+  it('overflow "Widen" never narrows the balloon', () => {
+    const doc = makeSampleDoc();
+    const page = doc.pages[0];
+    const plans = planLettering(doc, page, ASPECT, estimateMeasure).map((p) => (p.lineId === 'pg_1_l4' ? { ...p, overflow: true } : p));
+    const { apply } = inspector(['pg_1_l4'], { plans }, doc);
+    fireEvent.click(screen.getByRole('button', { name: 'Widen' }));
+    const patch = apply.mock.calls.at(-1)![0][0].patch as { w: number };
+    expect(patch.w).toBeGreaterThan(plans.find((p) => p.lineId === 'pg_1_l4')!.w / 1000);
+  });
+
   it('caps.proEditor false hides the Pro view (Easy keeps every capability)', () => {
     inspector(['pg_1_l4'], { mode: 'pro', canPro: false });
     expect(screen.queryByRole('tablist')).toBeNull();
@@ -222,5 +250,25 @@ describe('previews and the cover title', () => {
     // The title block stays inside its box.
     expect(plan.title!.ys[plan.title!.ys.length - 1]).toBeLessThan((0.04 + 0.2) * H + 1);
     expect(plan.tagline!.fontSize).toBeLessThan(plan.title!.fontSize);
+  });
+
+  it('a Telugu overlay cover loads the Telugu script face it is drawn in (not only the Latin title face)', () => {
+    vi.stubGlobal('FontFace', class {});
+    Object.defineProperty(document, 'fonts', { value: { load: vi.fn(async () => []), check: () => true, forEach: () => undefined, add: vi.fn(), addEventListener: vi.fn() }, configurable: true });
+    try {
+      const te = makeSampleDoc((d) => {
+        d.format = { ...d.format, language: 'te' };
+        d.cover = { ...d.cover, lettering: 'overlay', title: 'కుంకుమపువ్వు దొంగ' };
+      });
+      render(<CoverTitleLayer doc={te} aspect={ASPECT} />);
+      const plan = planCoverTitle(te, ASPECT, estimateMeasure);
+      expect(plan.title!.style.font).toBe('noto-sans-telugu');
+      const hrefs = [...document.head.querySelectorAll<HTMLLinkElement>('link[data-ds-lettering-fonts]')].map((l) => l.href);
+      expect(hrefs.some((h) => h.includes('Noto+Sans+Telugu'))).toBe(true);
+    } finally {
+      document.head.querySelectorAll('link[data-ds-lettering-fonts]').forEach((l) => l.remove());
+      delete (document as unknown as { fonts?: unknown }).fonts;
+      vi.unstubAllGlobals();
+    }
   });
 });

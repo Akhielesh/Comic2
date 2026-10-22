@@ -139,7 +139,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
               if (e.key === 'Enter') commitDraft();
             }}
             spellCheck={false}
-            className="h-7 w-[5.5rem] min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 font-mono text-[12px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none"
+            className="h-7 w-[5.5rem] min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 font-mono text-[12px] text-[var(--ds-ink)] coarse:h-9 coarse:w-[7rem] coarse:text-[16px] focus:border-[#D97757]/50 focus:outline-none"
           />
           {eyeDropper && (
             <button

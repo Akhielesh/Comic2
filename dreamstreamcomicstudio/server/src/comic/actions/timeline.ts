@@ -10,6 +10,7 @@
 // outcome says so and offers the quoted paid redraw as a chip.
 
 import {
+  archiveOf,
   findPage,
   getRender,
   newId,
@@ -248,7 +249,12 @@ export async function runFitRender(ctx: StudioContext, action: FitAction, opts: 
   const page = target.kind === 'page' ? findPage(doc, target.id) : undefined;
   if (page?.balloons.length) ops.push({ op: 'balloons', pageId: page.id, balloons: remapBalloons(page.balloons, frame) });
   // "Saved by software" (decisions-final #6): the quoted alternative to a fit is a redraw at the right shape.
-  const saved = unitPrice(doc, target.kind === 'cover' ? 'cover' : 'page', { byok }).usd;
+  // Counted once per original: re-fitting the same image (after flipping back to it) saves nothing new.
+  const key = renderTargetKey(target);
+  const fittedBefore =
+    now.history.some((v) => v.derivedFrom === asset.path || (v.origin === 'derived' && v.parentPath === asset.path)) ||
+    archiveOf(doc).some((a) => a.targetKey === key && a.derivedFrom === asset.path);
+  const saved = fittedBefore ? 0 : unitPrice(doc, target.kind === 'cover' ? 'cover' : 'page', { byok }).usd;
   ops.push({
     op: 'spend',
     entry: {
@@ -259,7 +265,7 @@ export async function runFitRender(ctx: StudioContext, action: FitAction, opts: 
       usd: 0,
       byok,
       estimated: false,
-      target: renderTargetKey(target),
+      target: key,
       ...(saved > 0 ? { savedUsd: saved } : {})
     }
   });

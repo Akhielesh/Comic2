@@ -18,7 +18,7 @@ const page = (): Page => ({
       id: 'pn_2',
       n: 2,
       size: 'medium',
-      shot: 'close',
+      shot: 'close_up',
       action: 'A frog leaps',
       castIds: [],
       lines: [

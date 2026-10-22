@@ -1,5 +1,6 @@
 // "notice" card: a short, honest status line from the studio (missing key, billing,
 // a finished job). Tones are tinted, never alarming unless it really is an error.
+// Long URLs and tokens wrap anywhere so they never spill across the column (visualqa P1-3).
 
 import React from 'react';
 import { CircleCheck, CircleX, Info, TriangleAlert } from 'lucide-react';
@@ -36,7 +37,7 @@ export const NoticeCard: React.FC<{ card: NoticeCardData }> = ({ card }) => {
   return (
     <div role={tone.role} className={cx('flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] leading-snug', tone.cls)}>
       <span className="mt-0.5 shrink-0">{tone.icon}</span>
-      <span className="min-w-0 whitespace-pre-wrap">{card.text}</span>
+      <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{typeof card.text === 'string' ? card.text : ''}</span>
     </div>
   );
 };

@@ -91,6 +91,21 @@ describe('fit_render action (UI tap)', () => {
     expect(ctx.events.some((e) => e.type === 'urls' && Object.keys(e.urls).some((p) => p.includes('/fit-')))).toBe(true);
   });
 
+  it('"saved by software" counts once per original: flipping back and fitting again saves nothing new', async () => {
+    const { session, fit } = ui(squarePageDoc());
+    await fit({ target: { kind: 'page', id: 'pg_1' } });
+    const savedOnce = session.doc.spend.savedUsd ?? 0;
+    expect(savedOnce).toBeGreaterThan(0);
+    // The user picks the square original again (free version swap), then fits it a second time.
+    session.commit([{ op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path: 'u/user-1/p/proj-1/img/p1.webp', at: 2 }]);
+    expect(session.doc.pages[0].render.asset?.path).toBe('u/user-1/p/proj-1/img/p1.webp');
+    const again = await fit({ target: { kind: 'page', id: 'pg_1' } });
+    expect(again.outcome).toMatchObject({ status: 'done' });
+    expect(session.doc.pages[0].render.origin).toBe('derived');
+    expect(session.doc.spend.savedUsd).toBe(savedOnce);
+    expect(session.doc.spend.totalUsd).toBe(0);
+  });
+
   it('a page that already fits is a $0 no-op', async () => {
     const { session, fit } = ui(squarePageDoc(1024, 1280));
     const started = await fit({ target: { kind: 'page', id: 'pg_1' } });

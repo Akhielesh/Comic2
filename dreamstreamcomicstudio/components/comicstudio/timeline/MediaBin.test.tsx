@@ -3,6 +3,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComicDoc } from '../../../shared/comic/doc';
+import { applyOps } from '../../../shared/comic/ops';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
 import { richDoc } from './__fixtures__/richDoc';
 import { MediaBin } from './MediaBin';
@@ -112,6 +113,21 @@ describe('MediaBin', () => {
     expect(within(d2).getByRole('alert').textContent).toMatch(/This image is 1:1, not 4:5/);
     fireEvent.click(within(d2).getByRole('button', { name: 'Use it anyway · Free' }));
     expect(studio.patch.mock.calls[0][0]).toEqual([{ op: 'render_use', target: { kind: 'cover' }, path: 'u/x/p/p1-v2.webp', at: expect.any(Number) }]);
+  });
+
+  it('the preview stays on the same image after an action regroups the bin (tracked by path, not position)', () => {
+    const doc = richDoc();
+    const { studio, rerender } = setup(doc);
+    fireEvent.click(tile(/^Chat uploads/));
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Page to put this image on'), { target: { value: 'pg_2' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Use for this page' }));
+    const [ops] = studio.patch.mock.calls[0];
+    // The optimistic doc: the upload is now page 2's art, so it moves up into the "Page 2" group.
+    rerender(<MediaBin studio={{ ...studio, doc: applyOps(doc, ops) }} />);
+    const dialog = screen.getByRole('dialog', { name: 'Page 2' });
+    expect(within(dialog).getByRole('img', { name: /^Page 2, v1/ })).toBeInTheDocument();
+    expect(within(dialog).getByText(/Page 2 · Chat uploads/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('status').textContent).toMatch(/page 2 uses this image now/);
   });
 
   it('archived versions can be starred; facts are recorded data', () => {

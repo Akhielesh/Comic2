@@ -85,7 +85,7 @@ const TILE =
 
 /** Pro: the whole bubble library. */
 export const ShapePicker: React.FC<{ value: BubbleShape | undefined; onChange(shape: BubbleShape): void; label?: string }> = ({ value, onChange, label = 'Bubble shape' }) => (
-  <div role="radiogroup" aria-label={label} className="grid grid-cols-4 gap-1.5 text-[var(--ds-ink)] sm:grid-cols-5">
+  <div role="radiogroup" aria-label={label} className="grid grid-cols-4 gap-1.5 text-[var(--ds-ink)]">
     {BUBBLE_SHAPES.map((s) => (
       <button
         key={s}
@@ -134,7 +134,7 @@ const EASY_ICON: Record<EasyShapeId, { shape: BubbleShape; tail: TailStyle; bord
 
 /** Easy: six friendly shapes (semantic ones change the line's kind). */
 export const EasyShapePicker: React.FC<{ value: EasyShapeId | undefined; onChange(id: EasyShapeId): void }> = ({ value, onChange }) => (
-  <div role="radiogroup" aria-label="Balloon type" className="grid grid-cols-3 gap-1.5 text-[var(--ds-ink)] min-[380px]:grid-cols-6">
+  <div role="radiogroup" aria-label="Balloon type" className="grid grid-cols-3 gap-1.5 text-[var(--ds-ink)]">
     {EASY_SHAPES.map((s) => (
       <button
         key={s.id}

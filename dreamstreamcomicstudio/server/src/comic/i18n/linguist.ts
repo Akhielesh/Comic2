@@ -16,7 +16,7 @@ import type { ContentRating } from '../../../../shared/comic/safety.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, linesInOrder, REVIEW_CHUNK_LINES } from '../../../../shared/comic/translationPlan.js';
 import { StudioError, type LlmClient } from '../types.js';
-import { checkLine, glossaryNeeds, outputOf } from './translate.js';
+import { checkLine, glossaryNeeds, isSoftwareIssue, outputOf } from './translate.js';
 import { linguistSystemPrompt, linguistUserMessage, REVIEW_SCHEMA, type ReviewItem, type ReviewVerdict } from './prompts.js';
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -122,6 +122,14 @@ export function applyReview(doc: ComicDoc, lang: string, verdicts: Map<string, R
     delete next.issue;
     if (v.gloss) next.gloss = v.gloss;
     if (v.verdict === 'ok') {
+      if (isSoftwareIssue(cur.issue)) {
+        // Software found an objective problem (wrong script, missing glossary name, content check):
+        // a reviewer's "ok" does not clear it — the author decides.
+        next.status = 'machine';
+        next.issue = cur.issue;
+        out.flagged += 1;
+        return next;
+      }
       next.status = 'reviewed';
       out.reviewed += 1;
       return next;

@@ -18,7 +18,7 @@ import { playPageTurn } from './paperSound';
 import { bookGeometry, letterbox, type BookGeometry, type BookView, type LayoutDecision } from './readerLayout';
 import { isDoubleTap, tapCommand, WheelAccumulator, type ReaderCommand } from './readerInput';
 import type { ReaderEvent, ReaderState } from './readerMachine';
-import { ReaderSlot, type SlotImage, type SlotRefs } from './ReaderSlot';
+import { gutterFor, ReaderSlot, type SlotImage, type SlotRefs } from './ReaderSlot';
 import { contentKey, LAYER_Z, mountWindow, planTurn, roleOf, type TurnPlan, type TurnStyle } from './turnPlan';
 import { Spotlight, useCameraAnimator } from './GuidedCamera';
 import { useCachedImage, pickVariant } from './pageImageCache';
@@ -131,8 +131,10 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     return planTurn({
       layout: layout === 'spread' ? 'spread' : layout === 'strip' ? 'strip' : 'single',
       rtl,
-      style: turnStyle,
-      lowPower,
+      // Reduced motion: a drag (the only turn that still animates; taps and keys land at once) is a
+      // crossfade whose opacity follows the finger — never a fold or a slide.
+      style: reduced ? 'fade' : turnStyle,
+      lowPower: reduced ? false : lowPower,
       items,
       from,
       to,
@@ -140,7 +142,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       geomTo: geomAt(to),
       riffle: motion.kind === 'turn' ? motion.riffle : undefined
     });
-  }, [motion, state.view, views, layout, rtl, turnStyle, lowPower, items, geomAt]);
+  }, [motion, state.view, views, layout, rtl, turnStyle, lowPower, reduced, items, geomAt]);
 
   // ── Layers (mount window) ─────────────────────────────────────────────────
   const mounted = useMemo(() => {
@@ -200,6 +202,9 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       return;
     }
     setCameraIdle(false);
+    // Reduced motion: the camera cuts (no glide) behind a 140 ms fade (reader.md §8).
+    const wrap = wrapperRef.current;
+    if (reduced && wrap && typeof wrap.animate === 'function') wrap.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
     const zoomOutForTurn = busy && guidedOn;
     camera.move({
       to: target,
@@ -789,6 +794,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
             const isCurrent = currentKeys.includes(key);
             const itemIndex = s.content.kind === 'item' ? s.content.index : -1;
             const label = itemIndex >= 0 ? items[itemIndex]?.label ?? 'Page' : s.content.kind === 'end' ? 'The End' : 'Inside cover';
+            const pageCount = items.filter((i) => i.kind === 'page').length;
             return (
               <ReaderSlot
                 key={key}
@@ -808,9 +814,9 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
                 contentAspect={s.contentAspect}
                 z={LAYER_Z[role]}
                 visible={visible}
-                gutter={layout === 'spread'}
+                gutter={layout === 'strip' ? undefined : gutterFor(s.side, layout === 'spread', rtl)}
                 interactive={s.content.kind === 'end' && role === 'static' && !plan}
-                ariaLabel={`${label} of ${items.filter((i) => i.kind === 'page').length || items.length}`}
+                ariaLabel={itemIndex >= 0 && items[itemIndex]?.kind === 'page' && pageCount ? `${label} of ${pageCount}` : label}
                 img={imgFull}
                 prio={isCurrent ? 'now' : 'next'}
                 paper={paper}

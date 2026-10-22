@@ -192,7 +192,7 @@ export interface ClipVM {
   drawn: boolean;
   busy: boolean;
   versions: number;
-  /** Real money recorded against this image (ledger), else the sum of its versions' recorded costs. */
+  /** Real money recorded against this image (ledger), else its versions' recorded costs (each paid image counted once per book). */
   spentUsd: number;
   savedUsd: number;
   mismatch: { want: AspectRatio; got: AspectRatio } | null;
@@ -204,22 +204,47 @@ export interface ClipVM {
   blocked: boolean;
 }
 
-const spentFor = (doc: ComicDoc, target: RenderTarget, ledger: ReturnType<typeof spendByTarget>): { usd: number; saved: number } => {
-  const key = renderTargetKey(target);
-  const hit = ledger.get(key);
-  if (hit && (hit.usd > 0 || hit.savedUsd > 0)) return { usd: hit.usd, saved: hit.savedUsd };
-  const recorded = versionList(doc, target).reduce((n, v) => n + (typeof v.costUsd === 'number' ? v.costUsd : 0), 0);
-  return { usd: round4(recorded), saved: hit?.savedUsd ?? 0 };
-};
+/**
+ * Per-clip money, each paid image counted ONCE across the book. A clip with ledger entries shows the
+ * ledger (the real charges, BYOK included). A clip without them (older docs, entries past the ledger
+ * cap) falls back to the costs its versions recorded — but never for an image another clip already
+ * accounts for: a duplicated page shares its source's art and shows no spend of its own, so the clip
+ * badges never add up to more than was actually spent.
+ */
+export function clipSpend(doc: ComicDoc, targets: RenderTarget[]): Map<string, { usd: number; saved: number }> {
+  const ledger = spendByTarget(doc);
+  const out = new Map<string, { usd: number; saved: number }>();
+  const claimed = new Set<string>();
+  const lists = targets.map((t) => ({ key: renderTargetKey(t), versions: versionList(doc, t) }));
+  for (const { key, versions } of lists) {
+    const hit = ledger.get(key);
+    if (!hit || (hit.usd <= 0 && hit.savedUsd <= 0)) continue;
+    out.set(key, { usd: hit.usd, saved: hit.savedUsd });
+    for (const v of versions) claimed.add(v.path);
+  }
+  for (const { key, versions } of lists) {
+    if (out.has(key)) continue;
+    let usd = 0;
+    for (const v of versions) {
+      if (claimed.has(v.path)) continue;
+      claimed.add(v.path);
+      if (typeof v.costUsd === 'number' && v.costUsd > 0) usd += v.costUsd;
+    }
+    out.set(key, { usd: round4(usd), saved: ledger.get(key)?.savedUsd ?? 0 });
+  }
+  return out;
+}
 
 /** The studio book order as filmstrip clips: cover → [title] → pages → [end] → [back cover]. */
 export function bookClips(doc: ComicDoc): ClipVM[] {
-  const ledger = spendByTarget(doc);
-  return bookSequence(doc, { audience: 'studio' }).map((slot) => {
-    const target: RenderTarget | undefined =
-      slot.kind === 'cover' ? { kind: 'cover' } : slot.kind === 'page' && slot.page ? { kind: 'page', id: slot.page.id } : undefined;
+  const slots = bookSequence(doc, { audience: 'studio' });
+  const targetOf = (slot: BookSlot): RenderTarget | undefined =>
+    slot.kind === 'cover' ? { kind: 'cover' } : slot.kind === 'page' && slot.page ? { kind: 'page', id: slot.page.id } : undefined;
+  const money = clipSpend(doc, slots.map(targetOf).filter((t): t is RenderTarget => !!t));
+  return slots.map((slot) => {
+    const target = targetOf(slot);
     const render = target ? getRender(doc, target) : undefined;
-    const spend = target ? spentFor(doc, target, ledger) : { usd: 0, saved: 0 };
+    const spend = (target && money.get(renderTargetKey(target))) || { usd: 0, saved: 0 };
     const asset = slot.asset;
     return {
       key: slot.key,
@@ -571,9 +596,21 @@ const slug = (s: string) =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'image';
 
-/** Safe download name: "<title>-<owner>-v<n>.webp" (no path separators, no control characters). */
-export const downloadName = (doc: ComicDoc, item: Pick<MediaItem, 'owner' | 'versionN'>): string =>
-  `${slug(doc.brief.title || 'comic')}-${slug(item.owner.label)}${item.versionN ? `-v${item.versionN}` : ''}.webp`;
+const EXT_BY_MIME: Record<string, string> = { 'image/webp': 'webp', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/avif': 'avif' };
+const KNOWN_EXT = new Set(['webp', 'png', 'jpg', 'jpeg', 'gif', 'avif']);
+
+/** The real file type: the downloaded bytes' MIME type, else the stored path's extension, else webp. */
+export const downloadExt = (mime?: string, path?: string): string => {
+  const fromMime = mime ? EXT_BY_MIME[mime.split(';')[0].trim().toLowerCase()] : undefined;
+  if (fromMime) return fromMime;
+  const m = path ? /\.([a-z0-9]{2,5})$/i.exec(path) : null;
+  const ext = m?.[1].toLowerCase();
+  return ext && KNOWN_EXT.has(ext) ? (ext === 'jpeg' ? 'jpg' : ext) : 'webp';
+};
+
+/** Safe download name: "<title>-<owner>-v<n>.<ext>" (no path separators, no control characters; ext from the real type). */
+export const downloadName = (doc: ComicDoc, item: Pick<MediaItem, 'owner' | 'versionN'> & { path?: string }, mime?: string): string =>
+  `${slug(doc.brief.title || 'comic')}-${slug(item.owner.label)}${item.versionN ? `-v${item.versionN}` : ''}.${downloadExt(mime, item.path)}`;
 
 /** Whether a media image may become page/cover art without the explicit "adopt" confirmation. */
 export const isArtRole = (role: MediaRole): boolean => role === 'page' || role === 'cover' || role === 'deleted_page';

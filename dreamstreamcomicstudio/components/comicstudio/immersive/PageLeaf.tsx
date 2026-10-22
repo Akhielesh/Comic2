@@ -6,7 +6,7 @@
 import React from 'react';
 import { BAND_REACH } from './flipGeometry';
 import type { LeafPart } from './leafEngine';
-import { CAST_GRADIENT, CURL_GRADIENT, ENDPAPER_BG } from './ReaderSlot';
+import { CAST_GRADIENT, CURL_GRADIENT } from './ReaderSlot';
 import { PaperBack } from './PaperBack';
 
 export interface LeafExtraRefs {
@@ -159,4 +159,3 @@ export const PageLeaf: React.FC<PageLeafProps> = ({ refs, W, H, frontX, backX, b
   );
 };
 
-export { ENDPAPER_BG };

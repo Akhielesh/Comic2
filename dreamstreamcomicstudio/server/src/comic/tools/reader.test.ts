@@ -71,7 +71,7 @@ describe('set_reader_options', () => {
     const doc = drawnDoc();
     doc.reader = { ...DEFAULT_READER, dedication: 'For Mia' };
     const { tools, session } = setup(doc);
-    expect(await tools().set_reader_options.execute({ dedication: null })).toMatch(/the dedication is cleared/);
+    expect(await tools().set_reader_options.execute({ dedication: '' })).toMatch(/the dedication is cleared/);
     expect(readerOf(session.doc).dedication).toBeUndefined();
     expect(await tools().set_reader_options.execute({ turn: 'paper' })).toMatch(/already in place — nothing changed/);
   });
@@ -105,7 +105,7 @@ describe('set_chapter', () => {
     expect(await tools().set_chapter.execute({ page: 2, title: 'Chapter 2: The Lake' })).toMatch(/already starts/);
     expect(await tools().set_chapter.execute({ page: 2, title: null })).toMatch(/Removed the chapter mark from page 2/);
     expect(chaptersOf(session.doc)).toEqual([]);
-    expect(await tools().set_chapter.execute({ page: 2, title: null })).toMatch(/has no chapter mark/);
+    expect(await tools().set_chapter.execute({ page: 2, title: '' })).toMatch(/has no chapter mark/);
     expect(opsOf(ctx.events).map((o) => o.op)).toEqual(['page', 'page']);
   });
 

@@ -1,6 +1,7 @@
 // Conversation messages: the user's bubbles (right, with attachment thumbnails) and the
 // director's replies (left, avatar mark, markdown text that streams with a caret, then its
-// live cards, then suggestion chips under the latest reply).
+// live cards, then acting next-step chips under the latest reply — priced, "Free" when $0,
+// run directly when they can be, so a tap rarely costs a director call).
 
 import React, { useState } from 'react';
 import { AlertCircle, Feather, FileText, Pencil, RotateCcw, X } from 'lucide-react';
@@ -9,7 +10,8 @@ import { ChatMarkdown } from '../../chat/ChatMarkdown';
 import type { PendingAttachment } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { CardRenderer } from './cards/CardRenderer';
-import { ChipButton, cx } from './ui';
+import { NextStepChips, chipsFor } from './cards/NextStepChips';
+import { cx } from './ui';
 
 const CLAMP_CHARS = 700;
 const CLAMP_LINES = 12;
@@ -150,7 +152,7 @@ export interface AssistantMessageProps {
   draft?: string;
   /** Show the blinking caret (a director turn is streaming into this message). */
   streaming?: boolean;
-  /** Show suggestion chips (latest reply, nothing after it, not busy). */
+  /** Show next-step chips (latest reply, nothing after it, not busy). */
   showSuggestions?: boolean;
   studio: ComicStudioController;
 }
@@ -162,31 +164,28 @@ export const StreamingCaret: React.FC = () => (
 export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio }) => {
   const text = stripMarkdownImages(draft ?? msg.text ?? '');
   const cards = Array.isArray(msg.cards) ? msg.cards : [];
-  const suggestions = showSuggestions ? (msg.suggestions || []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 4) : [];
+  // The latest reply always offers a next move: its own nextSteps, else old suggestions, else
+  // a free client-side step ("See the pages" / "Read it") so the conversation never dead-ends.
+  const chips = showSuggestions ? chipsFor(msg, studio.doc, { fallback: true }) : [];
+  // Never silent: a committed reply with no words and no cards still says something.
+  const silent = !text && !streaming && cards.length === 0;
   return (
-    <div className="flex gap-3 pr-2 studio-reveal" data-role="assistant">
+    <div className="flex min-w-0 gap-3 pr-2 studio-reveal" data-role="assistant">
       <DirectorMark className="mt-0.5" />
       <div className="min-w-0 flex-1 space-y-3">
         {(text || streaming) && (
-          <div className="text-[14px] leading-relaxed text-[var(--ds-ink)]">
+          <div className="min-w-0 text-[14px] leading-relaxed text-[var(--ds-ink)] [overflow-wrap:anywhere]">
             {text ? <ChatMarkdown text={text} className="comicstudio-md" /> : null}
             {streaming && <StreamingCaret />}
           </div>
         )}
+        {silent && <p className="text-[13.5px] leading-relaxed text-[var(--ds-muted)]">Done — the board shows the latest.</p>}
         {cards.map((card) => (
-          <div key={card.id} className="studio-reveal">
-            <CardRenderer card={card} studio={studio} />
+          <div key={card.id} className="min-w-0 studio-reveal">
+            <CardRenderer card={card} studio={studio} message={msg} />
           </div>
         ))}
-        {suggestions.length > 0 && (
-          <div className="flex flex-wrap gap-2 pt-0.5" role="group" aria-label="Suggestions">
-            {suggestions.map((s) => (
-              <ChipButton key={s} onClick={() => void studio.send(s)} disabled={studio.messageBusy}>
-                {s}
-              </ChipButton>
-            ))}
-          </div>
-        )}
+        <NextStepChips chips={chips} studio={studio} />
       </div>
     </div>
   );

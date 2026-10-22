@@ -1,0 +1,147 @@
+// "Saved by software" (decisions-final #6): a subtle trust signal that the studio did the work with its
+// own tools instead of a paid redraw — "Free — done by the editor, no AI cost". Honest numbers only:
+// the total is `doc.spend.savedUsd` (the server adds a SpendEntry.savedUsd for a reuse of an identical
+// render, or a free step picked over a quoted paid one). Nothing saved → nothing shown.
+//
+//  - Tablets/desktop: a quiet chip after the spend chip; it briefly says the copy when a new saving
+//    lands (aria-live), and opens a small breakdown.
+//  - Phones: no header chip (the ⋯ menu and the spend sheet show the total); a new saving shows the
+//    same line as a calm transient toast under the header.
+
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Leaf } from 'lucide-react';
+import type { ComicDoc, SpendEntry } from '../../../shared/comic/doc';
+import { formatUsd } from '../../../shared/comic/models';
+import type { StudioController } from '../types';
+import { AdaptiveSheet } from './sheets/AdaptiveSheet';
+import { isPhoneLayout } from './formFactor';
+import { useFormFactor } from './useFormFactor';
+
+export const SAVINGS_COPY = 'Free — done by the editor, no AI cost';
+const FLASH_MS = 4000;
+
+const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+
+/** Total saved by software on this comic (the running total, else the sum of the entries). */
+export const savedTotal = (doc: ComicDoc | null | undefined): number => {
+  if (!doc) return 0;
+  const total = doc.spend?.savedUsd;
+  if (typeof total === 'number' && Number.isFinite(total) && total > 0) return total;
+  return (doc.spend?.entries || []).reduce((n, e) => n + (typeof e.savedUsd === 'number' && Number.isFinite(e.savedUsd) && e.savedUsd > 0 ? e.savedUsd : 0), 0);
+};
+
+/** The most recent savings (entries are most-recent-first). */
+export const savedEntries = (doc: ComicDoc | null | undefined, limit = 6): SpendEntry[] =>
+  (doc?.spend?.entries || []).filter((e) => typeof e.savedUsd === 'number' && e.savedUsd > 0).slice(0, limit);
+
+/** Flash true for a few seconds whenever the total grows (not on first sight). */
+const useSavingsFlash = (total: number): boolean => {
+  const prev = useRef<number | null>(null);
+  const [flash, setFlash] = useState(false);
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = total;
+    if (before === null || total <= before + 0.00005) return;
+    setFlash(true);
+    const t = setTimeout(() => setFlash(false), FLASH_MS);
+    return () => clearTimeout(t);
+  }, [total]);
+  return flash;
+};
+
+/** The breakdown shown from the chip (also used by the phone ⋯ menu's spend sheet). */
+export const SavingsBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
+  const total = savedTotal(doc);
+  const list = savedEntries(doc);
+  return (
+    <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+        <Leaf className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden /> Saved by software
+      </div>
+      <div className="mt-1 text-[22px] font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]">{formatUsd(total)}</div>
+      <p className="mt-1 text-[12.5px] leading-snug text-[var(--ds-muted)]">
+        {SAVINGS_COPY}. The studio’s own tools made these changes instead of paid redraws.
+      </p>
+      {list.length > 0 && (
+        <ul className="mt-3 space-y-1.5 border-t border-[var(--ds-hairline-soft)] pt-3">
+          {list.map((e) => (
+            <li key={e.id} className="flex items-center justify-between gap-3 text-[13px]">
+              <span className="min-w-0 truncate text-[var(--ds-ink)]" title={e.label}>
+                {e.label}
+              </span>
+              <span className="shrink-0 tabular-nums text-emerald-700 dark:text-emerald-300">−{formatUsd(e.savedUsd || 0)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'>; compact?: boolean }> = ({ studio, compact = false }) => {
+  const ff = useFormFactor();
+  const total = savedTotal(studio.doc);
+  const flash = useSavingsFlash(total);
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const doc = studio.doc;
+  if (!doc || total <= 0) return null;
+
+  if (isPhoneLayout(ff.layout)) {
+    if (!flash || typeof document === 'undefined') return null;
+    return createPortal(
+      <div
+        role="status"
+        className="pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border border-emerald-500/25 bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal"
+        style={{ top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
+      >
+        <span className="flex items-center gap-1.5">
+          <Leaf className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+          <span className="truncate">{SAVINGS_COPY}</span>
+        </span>
+      </div>,
+      document.body
+    );
+  }
+
+  return (
+    <span ref={anchorRef} className="relative inline-flex shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={`Saved ${formatUsd(total)} by software — ${SAVINGS_COPY}`}
+        title={SAVINGS_COPY}
+        className={cx(
+          'inline-flex h-8 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/[0.07] px-2.5 text-[12px] font-medium tabular-nums text-emerald-800 transition-colors hover:bg-emerald-500/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 dark:text-emerald-200 coarse:h-11 coarse:px-3',
+          flash && 'ring-2 ring-emerald-500/25'
+        )}
+      >
+        <Leaf className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {compact ? formatUsd(total) : `Saved ${formatUsd(total)}`}
+      </button>
+      {/* The copy, briefly, when a new saving lands — under the chip, never widening the header. */}
+      <span aria-live="polite" className="sr-only">
+        {flash ? `${SAVINGS_COPY}. Saved ${formatUsd(total)} so far.` : ''}
+      </span>
+      {flash && !open && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-0 top-full z-30 mt-2 w-max max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-emerald-500/25 bg-[var(--ds-surface-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] studio-reveal"
+        >
+          {SAVINGS_COPY}
+        </span>
+      )}
+      <AdaptiveSheet open={open} onClose={() => setOpen(false)} label="Saved by software" title="Saved by software" anchorRef={anchorRef} placement="below" align="end">
+        <SavingsBreakdown doc={doc} />
+      </AdaptiveSheet>
+    </span>
+  );
+};
+
+/** Header-slot adapter (registered by mobile/index.ts). */
+export const SavingsChipSlot: React.FC<{ studio: StudioController; compact: boolean }> = ({ studio, compact }) => <SavingsChip studio={studio} compact={compact} />;
+
+export default SavingsChip;

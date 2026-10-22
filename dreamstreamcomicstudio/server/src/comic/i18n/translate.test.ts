@@ -1,0 +1,375 @@
+// @vitest-environment node
+// The translation pipeline end to end with a fake LLM (no network, $0): software-first plan, the
+// writer-class translator per chunk, validation + one repair round, the safety hook, the linguist
+// review (always), duplicates copied for free, spend, the appended completion message, gating.
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { editionReadiness, editionProgress, i18nOf } from '../../../../shared/comic/i18n.js';
+import { applyOps, type StudioAction } from '../../../../shared/comic/ops.js';
+import { AUTO_CORRECTED_NOTE, planTranslation } from '../../../../shared/comic/translationPlan.js';
+import type { ComicDoc } from '../../../../shared/comic/doc.js';
+import { GOLDEN_DOCS } from '../golden/fixtures.js';
+import { JOB_TIMINGS, startAction } from '../jobs.js';
+import { newSession, scriptedLlm, testContext, type TestContext } from '../orchestrator.fakes.js';
+import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
+import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation } from './index.js';
+import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
+import { fakeLinguist, fakeTranslator, requestedItems, sixPageKidsDoc, times } from './testing.js';
+
+vi.mock('../safety/index.js', async (orig) => {
+  const real = await orig<typeof import('../safety/index.js')>();
+  return { ...real, prefilterText: vi.fn(real.prefilterText) };
+});
+const safety = await import('../safety/index.js');
+
+beforeEach(() => {
+  JOB_TIMINGS.retryBackoffMs = 0;
+  resetTranslationCalibration();
+  vi.mocked(safety.prefilterText).mockClear();
+  vi.spyOn(console, 'info').mockImplementation(() => undefined);
+  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+});
+
+const T = (action: Partial<Extract<StudioAction, { type: 'translate' }>> = {}): Extract<StudioAction, { type: 'translate' }> => ({ type: 'translate', languages: ['te'], ...action });
+
+async function run(doc: ComicDoc, llmScript: Parameters<typeof scriptedLlm>[0], action = T(), keys?: TestContext['keys']) {
+  const session = newSession(doc);
+  const llm = scriptedLlm(llmScript);
+  const ctx = testContext(session, { llm, ...(keys ? { keys } : {}) });
+  const started = await runTranslation(ctx, action, { confirmed: true, origin: 'user' });
+  await started.done;
+  await ctx.settled();
+  return { session, ctx, llm, started };
+}
+
+const roles = (ctx: TestContext, role: string) => ctx.llmFake.calls.filter((c) => c.role === role);
+
+describe('acceptance — a Telugu run on a 6-page comic is publishable after the review; a rerun makes no LLM call', () => {
+  it('6-page kids comic → te: translated, reviewed (gloss on every line), publishable; rerun is $0', async () => {
+    const tr = fakeTranslator();
+    const { session, ctx, started } = await run(sixPageKidsDoc(), { translator: times(4, tr.step), linguist: times(2, fakeLinguist()) });
+    expect(started.outcome.status).toBe('started');
+    expect(roles(ctx, 'translator')).toHaveLength(2); // 6 pages → two 3-page chunks; titles ride in the first
+    expect(roles(ctx, 'linguist')).toHaveLength(1); // the review ALWAYS runs
+    const doc = session.doc;
+    const p = editionProgress(doc, 'te');
+    expect(p).toMatchObject({ missing: 0, stale: 0, unreviewed: 0, total: 12 });
+    expect(editionReadiness(doc, 'te')).toEqual({ publishable: true, issues: [] });
+    const e = i18nOf(doc).editions.te;
+    // the duplicate "Ribbit!" (l5) and the "..." line cost nothing, and still read as reviewed
+    expect(e.lines.l5).toMatchObject({ text: e.lines.l2.text, status: 'reviewed', gloss: e.lines.l2.gloss });
+    expect(e.lines.l4).toMatchObject({ text: '…', status: 'reviewed' });
+    for (const id of ['l1', 'l3', 'l6', 'l9', 'l12']) expect(e.lines[id].gloss).toMatch(/^Means: /);
+    expect(e.brief?.title?.status).toBe('reviewed');
+    // writer-class translator chain (amendment): the translator role resolves to the writer chain
+    expect(TEXT_ROLE_DEFAULTS.translator.models).toEqual(TEXT_ROLE_DEFAULTS.writer.models);
+    // spend recorded under 'translate'; the completion message is a NEW message at the end
+    expect(doc.spend.entries.some((s) => s.kind === 'translate' && s.label === 'Translate · Telugu' && s.usd > 0)).toBe(true);
+    const last = doc.conversation[doc.conversation.length - 1];
+    expect(last.role).toBe('assistant');
+    expect(last.text).toContain('Telugu is translated and reviewed.');
+    expect(last.text).toContain('Ready to publish in తెలుగు');
+    expect(last.nextSteps?.map((s) => s.label)).toEqual(expect.arrayContaining(['Review translations', 'Publish']));
+
+    // rerun: cache hit by sourceHash → no LLM call, done, "$0"
+    const llm2 = scriptedLlm({});
+    const ctx2 = testContext(session, { llm: llm2 });
+    const again = await runTranslation(ctx2, T(), { confirmed: true, origin: 'user' });
+    await again.done;
+    expect(llm2.calls).toHaveLength(0);
+    expect(again.outcome).toMatchObject({ status: 'done' });
+    expect(again.outcome.message).toContain('already up to date. Nothing to translate ($0)');
+    expect((await estimateTranslation(ctx2, T())).usd).toBe(0);
+  });
+
+  it('the golden six-page action comic (6 × "Jump!") needs ONE translated line; 5 duplicates are free', async () => {
+    const tr = fakeTranslator();
+    const { session, ctx } = await run(GOLDEN_DOCS['six-drawn'](), { translator: times(2, tr.step), linguist: times(2, fakeLinguist()) }, T({ languages: ['hi'] }));
+    expect(roles(ctx, 'translator')).toHaveLength(1);
+    const items = requestedItems(tr.calls[0]);
+    expect(Object.keys(items).filter((id) => id.startsWith('ln_six'))).toEqual(['ln_six_1']);
+    const r = editionReadiness(session.doc, 'hi');
+    expect(r.publishable).toBe(true);
+    // the painted cover title is a non-blocking warning, with the one-time textless offer
+    expect(r.issues.map((i) => i.code)).toEqual(['cover_in_art']);
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.nextSteps?.find((s) => s.label === 'Textless cover')?.action).toMatchObject({ type: 'render_cover', textless: true });
+  });
+});
+
+describe('software first: caching and misses', () => {
+  it('miss: only the stale ids go to the translator, with their previous translation', async () => {
+    const first = await run(sixPageKidsDoc(), { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
+    const doc = applyOps(first.session.doc, [{ op: 'line', pageId: 'pg_5', panelId: 'pn_5', id: 'l9', patch: { text: 'We found the moon together, Frog.' } }]);
+    const tr = fakeTranslator();
+    const second = await run(doc, { translator: times(2, tr.step), linguist: times(2, fakeLinguist()) });
+    expect(roles(second.ctx, 'translator')).toHaveLength(1);
+    const items = requestedItems(tr.calls[0]);
+    const lineIds = Object.keys(items).filter((id) => /^l\d+$/.test(id));
+    expect(lineIds).toEqual(['l9']);
+    expect(items.l9.previous).toBe(i18nOf(doc).editions.te.lines.l9.text);
+    // only the re-translated line is reviewed again
+    expect(roles(second.ctx, 'linguist')[0].messages[1].content).toContain('"id":"l9"');
+    expect(roles(second.ctx, 'linguist')[0].messages[1].content).not.toContain('"id":"l1"');
+  });
+
+  it('human-edited translations are never overwritten', async () => {
+    const first = await run(sixPageKidsDoc(), { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
+    let doc = applyOps(first.session.doc, [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'చంద్రుడు ఎటు పోయాడు?', status: 'edited' } }]);
+    doc = applyOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'l1', patch: { text: 'Where did our moon go?' } }]);
+    const second = await run(doc, { translator: times(2, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
+    expect(roles(second.ctx, 'translator')).toHaveLength(0);
+    expect(i18nOf(second.session.doc).editions.te.lines.l1).toMatchObject({ text: 'చంద్రుడు ఎటు పోయాడు?', status: 'edited' });
+  });
+
+  it('several languages run with concurrency ≤ 3; one chunk per ≤ 40 lines', async () => {
+    const doc = sixPageKidsDoc();
+    let inflight = 0;
+    let peak = 0;
+    const tr = fakeTranslator();
+    const slow = async (req: Parameters<typeof tr.step>[0]) => {
+      inflight += 1;
+      peak = Math.max(peak, inflight);
+      await new Promise((r) => setTimeout(r, 5));
+      inflight -= 1;
+      return tr.step(req);
+    };
+    const { session, ctx } = await run(doc, { translator: times(12, slow), linguist: times(6, fakeLinguist()) }, T({ languages: ['te', 'hi', 'ta', 'ja'] }));
+    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBeGreaterThan(1);
+    expect(roles(ctx, 'translator')).toHaveLength(8); // 2 chunks × 4 languages
+    for (const lang of ['te', 'hi', 'ta', 'ja']) expect(editionReadiness(session.doc, lang).publishable).toBe(true);
+    for (const c of roles(ctx, 'translator')) expect(Object.keys(requestedItems(c)).filter((id) => /^l\d+$/.test(id)).length).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('validation and repair (§8.6)', () => {
+  it('a script failure triggers exactly ONE repair round; a persistent failure is committed with a major issue', async () => {
+    const tr = fakeTranslator({ text: (id, _lang, attempt) => (id === 'l3' ? 'Look up there, friend!' : undefined), omit: () => false });
+    const { session, ctx } = await run(sixPageKidsDoc(), { translator: times(5, tr.step), linguist: times(2, fakeLinguist()) });
+    // chunk 1: first call + one repair; chunk 2: one call
+    expect(roles(ctx, 'translator')).toHaveLength(3);
+    const asked = roles(ctx, 'translator')[1].messages; // cloned at call time
+    const repair = asked[asked.length - 1];
+    expect(String(repair.content)).toContain('line l3 is not written in Telugu');
+    const e = i18nOf(session.doc).editions.te.lines.l3;
+    expect(e.issue?.severity).toBe('major');
+    expect(editionReadiness(session.doc, 'te').publishable).toBe(false);
+    expect(editionReadiness(session.doc, 'te').issues.map((i) => i.code)).toContain('major_issue');
+  });
+
+  it('a repaired line is accepted; a line the translator never returns stays honestly missing', async () => {
+    const tr = fakeTranslator({ text: (id, _l, attempt) => (id === 'l7' && attempt === 1 ? 'Hold on!' : undefined), omit: (id) => id === 'l8' });
+    const { session } = await run(sixPageKidsDoc(), { translator: times(6, tr.step), linguist: times(2, fakeLinguist()) });
+    const e = i18nOf(session.doc).editions.te;
+    expect(e.lines.l7.issue).toBeUndefined();
+    expect(e.lines.l8).toBeUndefined();
+    expect(editionProgress(session.doc, 'te').missing).toBe(1);
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.text).toContain('1 still missing');
+    expect(last.nextSteps?.find((s) => s.label === 'Translate missing lines')?.action).toMatchObject({ type: 'translate', languages: ['te'] });
+  });
+
+  it('translated text goes through the safety pre-filter; a blocked line is never committed', async () => {
+    vi.mocked(safety.prefilterText).mockImplementation((text: string) => ({ decision: /నేస్తం/.test(text) ? 'block' : 'clear', categories: [], ip: [] }));
+    const { session } = await run(sixPageKidsDoc(), { translator: times(6, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
+    expect(safety.prefilterText).toHaveBeenCalled();
+    const e = i18nOf(session.doc).editions.te;
+    for (const t of Object.values(e.lines)) expect(t.text).not.toContain('నేస్తం');
+    vi.mocked(safety.prefilterText).mockReset();
+  });
+
+  it('checkLine / scriptShare / reader helpers', () => {
+    expect(scriptShare('చంద్రుడు ఎక్కడ?', 'te')).toBe(1);
+    expect(scriptShare('Chandrudu ekkada', 'te')).toBe(0);
+    expect(scriptShare('A!', 'te')).toBe(1); // < 2 letters
+    const item = { id: 'x', source: 'Where is Milo?', maxChars: 10, forms: ['మైలో'], keep: [] };
+    expect(checkLine('te', 'everyday', item, 'మైలో ఎక్కడ?', 'PG-13', 'en').problem).toBeUndefined();
+    expect(checkLine('te', 'everyday', item, 'ఎక్కడ?', 'PG-13', 'en').problem).toBe('glossary');
+    expect(checkLine('te', 'everyday', item, undefined, 'PG-13', 'en').problem).toBe('missing');
+    expect(checkLine('te', 'code_mixed', { ...item, forms: [] }, 'Milo ఎక్కడ ఉన్నాడు?', 'PG-13', 'en').problem).toBeUndefined();
+    expect(checkLine('te', 'everyday', { ...item, forms: [] }, 'మైలో ఎక్కడ ఉన్నాడు, ఎక్కడ ఉన్నాడు?', 'PG-13', 'en').tooLong).toBe(true);
+    expect(readTranslatorOutput({ lines: [{ id: 'a', text: 'x' }, { id: 1 }], glossary: [{ term: 'Milo', form: 'మైలో' }] })).toEqual({ lines: [{ id: 'a', text: 'x', fits: true }], glossary: [{ term: 'Milo', form: 'మైలో' }], notes: '' });
+    expect(resolveLanguage('Telugu')).toBe('te');
+    expect(resolveLanguage('తెలుగు')).toBe('te');
+    expect(resolveLanguage('zh-CN')).toBe('zh-Hans');
+    expect(resolveLanguage('Chinese')).toBe('zh-Hans');
+    expect(resolveLanguage('Klingon')).toBeUndefined();
+    expect(resolveLanguages(sixPageKidsDoc(), ['English', 'hindi', 'hi', 'xx'])).toEqual({ codes: ['hi'], unknown: ['xx'], includedSource: true });
+  });
+
+  it('a name the translator coins in chunk 1 is used by chunk 2 (glossary)', async () => {
+    const tr = fakeTranslator({ glossary: [{ term: 'Milo', form: 'మైలో' }], text: (id) => (id === 'l12' ? 'శుభరాత్రి, మైలో.' : undefined) });
+    const { session } = await run(sixPageKidsDoc(), { translator: times(4, tr.step), linguist: times(2, fakeLinguist()) });
+    expect(i18nOf(session.doc).glossary.find((g) => g.term === 'Milo')?.forms.te).toBe('మైలో');
+    expect(String(tr.calls[1].messages[1].content)).toMatch(/GLOSSARY[\s\S]*Milo → మైలో/);
+  });
+});
+
+describe('the linguist review (always)', () => {
+  it('ok → reviewed; minor → issue with suggestion; major + suggestion → auto-corrected (revertible); major alone → blocks', async () => {
+    const verdicts = (id: string) =>
+      id === 'l1'
+        ? { verdict: 'fix' as const, severity: 'minor' as const, issue: 'Sounds stiff.', suggestion: 'చంద్రుడు ఎక్కడికి పోయాడు?' }
+        : id === 'l3'
+          ? { verdict: 'fix' as const, severity: 'major' as const, issue: 'Wrong meaning.', suggestion: 'అదిగో, పైకి చూడు!', gloss: 'There, look up!' }
+          : id === 'l7'
+            ? { verdict: 'fix' as const, severity: 'major' as const, issue: 'Wrong speaker gender.', suggestion: '' }
+            : undefined;
+    const { session } = await run(sixPageKidsDoc(), { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist(verdicts)) });
+    const e = i18nOf(session.doc).editions.te.lines;
+    expect(e.l9).toMatchObject({ status: 'reviewed' });
+    expect(e.l1).toMatchObject({ status: 'reviewed', issue: { severity: 'minor', note: 'Sounds stiff.', suggestion: 'చంద్రుడు ఎక్కడికి పోయాడు?' } });
+    expect(e.l3.text).toBe('అదిగో, పైకి చూడు!');
+    expect(e.l3).toMatchObject({ status: 'reviewed', gloss: 'There, look up!', issue: { severity: 'minor' } });
+    expect(e.l3.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(true);
+    expect(e.l3.issue?.suggestion).toBeTruthy(); // the original, to revert
+    expect(e.l7).toMatchObject({ status: 'machine', issue: { severity: 'major', note: 'Wrong speaker gender.' } });
+    const r = editionReadiness(session.doc, 'te');
+    expect(r.publishable).toBe(false);
+    expect(r.issues.find((i) => i.code === 'major_issue')?.count).toBe(1);
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.text).toContain('1 line corrected by the review');
+    expect(last.text).toContain('1 line flagged for a look');
+  });
+
+  it('a review that fails leaves lines "waiting for review"; the next run reviews them without re-translating', async () => {
+    const first = await run(sixPageKidsDoc(), { translator: times(4, fakeTranslator().step), linguist: [new Error('boom')] });
+    expect(editionProgress(first.session.doc, 'te').unreviewed).toBeGreaterThan(5);
+    expect(editionReadiness(first.session.doc, 'te').publishable).toBe(false);
+    const plan = planTranslation(first.session.doc, 'te');
+    expect(plan.calls).toBe(0);
+    expect(plan.toReview!.length).toBeGreaterThan(5);
+    const second = await run(first.session.doc, { linguist: times(2, fakeLinguist()) });
+    expect(roles(second.ctx, 'translator')).toHaveLength(0);
+    expect(roles(second.ctx, 'linguist')).toHaveLength(1);
+    expect(editionReadiness(second.session.doc, 'te').publishable).toBe(true);
+  });
+});
+
+describe('money: quote, gate, BYOK, cancel, keys', () => {
+  it('the quote is per language, BYOK has no markup, and matches the gate estimate', async () => {
+    const doc = sixPageKidsDoc();
+    const platform = quoteTranslation(doc, { openrouter: { key: 'k', byok: false } }, { languages: ['te', 'hi'] });
+    const byok = quoteTranslation(doc, { openrouter: { key: 'k', byok: true } }, { languages: ['te', 'hi'] });
+    expect(platform.perLanguage.map((l) => l.lang)).toEqual(['te', 'hi']);
+    expect(platform.perLanguage[0]).toMatchObject({ lines: 12, free: 2, upToDate: false }); // 10 lines + title + logline
+    expect(platform.perLanguage[0].usd).toBeGreaterThan(platform.perLanguage[1].usd); // Telugu outputs more tokens
+    expect(byok.estimate.usd).toBeLessThan(platform.estimate.usd);
+    expect(platform.estimate.usd).toBeGreaterThan(0.005);
+    expect(platform.estimate.usd).toBeLessThan(0.5); // "a 6-page comic costs about $0.05 per language"
+    expect(platform.estimate.model).toBe('Claude Sonnet 5.5 + review');
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    expect((await estimateTranslation(ctx, T({ languages: ['Telugu', 'Hindi'] }))).usd).toBe(platform.estimate.usd);
+  });
+
+  it('confirm "always" and an over-budget quote open a gate (nothing runs until approved)', async () => {
+    for (const settings of [{ confirm: 'always' as const }, { budgetUsd: 0.0001 }]) {
+      const doc = sixPageKidsDoc();
+      doc.settings = { ...doc.settings, ...settings };
+      const session = newSession(doc);
+      const ctx = testContext(session, { llm: scriptedLlm({}) });
+      const started = await startAction(ctx, T(), { confirmed: false, origin: 'user' });
+      expect(started.outcome.status).toBe('gated');
+      expect(session.doc.gate).toMatchObject({ status: 'open', action: { type: 'translate', languages: ['te'] } });
+      expect(ctx.llmFake.calls).toHaveLength(0);
+      expect(i18nOf(session.doc).editions.te).toBeUndefined();
+    }
+  });
+
+  it('approving the gate runs it; spend is recorded with BYOK honored', async () => {
+    const doc = sixPageKidsDoc();
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    const session = newSession(doc);
+    const keys = { openrouter: { key: 'mine', byok: true } };
+    const ctx = testContext(session, { keys, llm: scriptedLlm({ translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }) });
+    await startAction(ctx, T(), { confirmed: false, origin: 'user' });
+    // the gate quotes the BYOK price (no platform markup)
+    expect(session.doc.gate!.estimateUsd).toBe(quoteTranslation(doc, keys, { languages: ['te'] }).estimate.usd);
+    expect(session.doc.gate!.estimateUsd).toBeLessThan(quoteTranslation(doc, { openrouter: { key: 'k', byok: false } }, { languages: ['te'] }).estimate.usd);
+    const started = await startAction(ctx, { type: 'approve_gate', gateId: session.doc.gate!.id }, { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
+    const entry = session.doc.spend.entries.find((s) => s.kind === 'translate');
+    expect(entry).toMatchObject({ kind: 'translate', label: 'Translate · Telugu' });
+    expect(session.doc.spend.byKind.translate).toBeGreaterThan(0);
+  });
+
+  it('cancel stops after the current chunk; finished chunks are kept', async () => {
+    const doc = sixPageKidsDoc();
+    const session = newSession(doc);
+    const tr = fakeTranslator();
+    const ctx = testContext(session, {
+      llm: scriptedLlm({
+        translator: [
+          (req) => {
+            session.abort.abort();
+            return tr.step(req);
+          },
+          tr.step
+        ],
+        linguist: times(2, fakeLinguist())
+      })
+    });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    expect(ctx.llmFake.calls.filter((c) => c.role === 'translator')).toHaveLength(1);
+    const p = editionProgress(session.doc, 'te');
+    expect(p.done).toBeGreaterThan(2);
+    expect(p.missing).toBeGreaterThan(0);
+    expect(session.doc.conversation[session.doc.conversation.length - 1].text).toContain('Stopped');
+  });
+
+  it('no AI key → an honest refusal, nothing committed; unknown languages are refused with the list', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const ctx = testContext(session, { keys: {} });
+    const out = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    expect(out.outcome).toMatchObject({ status: 'blocked', code: 'NO_TEXT_KEY' });
+    expect(i18nOf(session.doc).editions.te).toBeUndefined();
+    const bad = await runTranslation(testContext(session), T({ languages: ['Klingon'] }), { confirmed: true, origin: 'user' });
+    expect(bad.outcome.status).toBe('blocked');
+    expect(bad.outcome.message).toContain('I can translate into: Hindi, Telugu');
+  });
+});
+
+describe('overlay lettering is required for translated editions', () => {
+  it('in-art pages: translations are made, readiness blocks, and the completion offers the quoted overlay conversion', async () => {
+    const doc = GOLDEN_DOCS['six-drawn']();
+    doc.format = { ...doc.format, lettering: 'in_art' };
+    const { session } = await run(doc, { translator: times(2, fakeTranslator().step), linguist: times(2, fakeLinguist()) }, T({ languages: ['hi'] }));
+    const r = editionReadiness(session.doc, 'hi');
+    expect(r.publishable).toBe(false);
+    expect(r.issues.find((i) => i.code === 'in_art_pages')).toMatchObject({ blocking: true, count: 6 });
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.text).toMatch(/redrawing 6 pages without text costs ≈ \$/);
+    expect(last.nextSteps?.map((s) => s.label)).toContain('Set up lettering for translations');
+    expect(last.nextSteps?.map((s) => s.label)).not.toContain('Publish');
+  });
+
+  it('completionMessage is honest about cost on the user key', () => {
+    const doc = sixPageKidsDoc();
+    const { text } = completionMessage(doc, [{ lang: 'te', translated: 0, free: 0, reviewed: 0, autoFixed: 0, failed: 0, unsafe: 0, tooLong: 0, reviewSkipped: 0, cancelled: false, usd: 0.0421, byok: true }], { openrouter: { key: 'k', byok: true } });
+    expect(text).toContain('on your key');
+    expect(text).toContain('12 lines done');
+  });
+});
+
+describe('director turns', () => {
+  it('a director-started run puts the live card in the director message and APPENDS the completion message', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const cards: unknown[] = [];
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }) });
+    const before = session.doc.conversation.length;
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'director', collectCard: (c) => cards.push(c) });
+    expect(cards).toEqual([expect.objectContaining({ type: 'translation', languages: ['te'] })]);
+    expect(started.outcome.message).toContain('The result arrives as a new message.');
+    await started.done;
+    await ctx.settled();
+    expect(session.doc.conversation.length).toBe(before + 1);
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.text).toContain('Telugu is translated and reviewed.');
+    expect(last.at).toBeGreaterThan(0);
+  });
+});

@@ -189,6 +189,16 @@ describe('page structure', () => {
     expect(session.doc.pages).toHaveLength(4);
   });
 
+  it('insert_page write:true whose writer fails still says the blank page was added (never a bare error)', async () => {
+    const { tools, session, ctx, turn } = setup();
+    ctx.llmFake.script.writer = [new Error('provider down'), new Error('provider down'), new Error('provider down')];
+    const text = await tools().insert_page.execute({ after: 1, summary: 'A storm rolls in.', write: true });
+    expect(text).toMatch(/^Added a blank page 2 \(\$0\)/);
+    expect(text).not.toMatch(/^Error/);
+    expect(session.doc.pages.map((p) => p.n)).toEqual([1, 2, 3, 4]);
+    expect(turn.paidText).toBe(1);
+  });
+
   it('duplicate_page copies the page right after itself with its current art', async () => {
     const { tools, session } = setup();
     const text = await tools().duplicate_page.execute({ page: 1 });

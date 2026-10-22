@@ -10,7 +10,7 @@ import { TriangleAlert, X } from 'lucide-react';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
-import { fitWidthOps, fixSafeAreaOps, linesOf, moveLineToPanelOps, findLineRef } from './styleOps';
+import { balloonOp, fixSafeAreaOps, linesOf, moveLineToPanelOps, findLineRef, widenOps } from './styleOps';
 import type { LetteringPanelProps } from './panelTypes';
 import { Segmented, cx } from '../board/ui';
 import { LINE_KIND_LABEL, castName } from '../board/boardModel';
@@ -66,9 +66,12 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
   const view: StudioMode = canPro ? mode : 'easy';
   const anchorKey = anchor ? `${Math.round(anchor.left)},${Math.round(anchor.top)},${Math.round(anchor.right)},${Math.round(anchor.bottom)}` : '';
 
+  // Re-place whenever the anchor, the view or the panel's own size changes (a taller Pro tab must not
+  // push the panel past the bottom of the viewport). setPos bails out when nothing moved.
+  const [sizeTick, setSizeTick] = useState(0);
   useLayoutEffect(() => {
     if (compact || !anchor || typeof window === 'undefined') {
-      setPos(null);
+      setPos((cur) => (cur === null ? cur : null));
       return;
     }
     const el = ref.current;
@@ -76,7 +79,20 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
     const p = placeInspector(anchor, size, { w: window.innerWidth, h: window.innerHeight });
     setPos((cur) => (cur && cur.left === p.left && cur.top === p.top ? cur : { left: p.left, top: p.top }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchorKey, compact, view, lineIds.join('|')]);
+  }, [anchorKey, compact, view, lineIds.join('|'), sizeTick]);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (compact || !el || typeof ResizeObserver === 'undefined') return;
+    let last = el.offsetHeight;
+    const ro = new ResizeObserver(() => {
+      const h = el.offsetHeight;
+      if (Math.abs(h - last) < 1) return;
+      last = h;
+      setSizeTick((t) => t + 1);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [compact, lines.length > 0]);
 
   if (!lines.length) return null;
   const selPlans = plans.filter((p) => lineIds.includes(p.lineId));
@@ -140,7 +156,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                 <button
                   type="button"
                   className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10"
-                  onClick={() => apply(fitWidthOps(doc, page, overflow.map((p) => p.lineId), placements.balloons), { label: 'Widen balloon' })}
+                  onClick={() => apply(widenOps(doc, page, plans, overflow.map((p) => p.lineId), placements.balloons), { label: 'Widen balloon' })}
                 >
                   Widen
                 </button>
@@ -152,6 +168,14 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                 <span className="min-w-0 flex-1">Crowded panel — this balloon overlaps another.</span>
                 <button type="button" className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10" onClick={() => onEditText(one.id)}>
                   Shorten
+                </button>
+                <button
+                  type="button"
+                  title="Keep this balloon where it is (it may overlap); the editor stops moving it"
+                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10"
+                  onClick={() => apply([balloonOp(page, one.id, { pinned: true }, placements.balloons)], { label: 'Keep balloon here' })}
+                >
+                  Keep here
                 </button>
                 {nextPanelFor(one.id) && (
                   <button

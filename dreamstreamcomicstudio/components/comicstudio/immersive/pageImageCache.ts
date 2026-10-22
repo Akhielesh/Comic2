@@ -5,8 +5,11 @@
 //   by signed URL, so a re-signed link (relink after expiry) never re-downloads a cached page.
 // - Priorities: the current view loads `now`, its neighbours `next`, a few pages ahead `idle` (skipped
 //   on Save-Data / 2G). At most 3 downloads run at once, highest priority first.
-// - LRU of 10 entries; retained paths (current ±2 views) are never evicted. Eviction revokes the object
+// - LRU of 10 entries; retained paths (current ±2 views) and paths a mounted page is showing (acquired)
+//   are never evicted — evicting a page still on screen would blank it. Eviction revokes the object
 //   URL and closes any bitmap.
+// - An abort (a preload the reader moved past) only drops a job that hasn't started; a job a mounted page
+//   joined is adopted (its abort signal is dropped), so a page never waits on a cancelled preload.
 // - A 400/403 means the signed link expired: the entry reports `expired` so the host can relink.
 // - CORS/network failure falls back to the plain URL in an <img> (no palette), never a broken page.
 
@@ -95,6 +98,8 @@ export class PageImageCache {
   private queue: Job[] = [];
   private running = 0;
   private retained = new Set<string>();
+  /** Paths a mounted page is showing (ref counts): never evicted while held. */
+  private inUse = new Map<string, number>();
   private listeners = new Set<() => void>();
   private lru: string[] = [];
   private version = 0;
@@ -120,6 +125,24 @@ export class PageImageCache {
     this.evict();
   }
 
+  /** A mounted page shows `path`: keep it cached until the returned release runs. */
+  acquire(path: string): () => void {
+    this.inUse.set(path, (this.inUse.get(path) ?? 0) + 1);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const n = (this.inUse.get(path) ?? 1) - 1;
+      if (n > 0) this.inUse.set(path, n);
+      else this.inUse.delete(path);
+    };
+  }
+
+  /** Held by a mounted page (tests, diagnostics). */
+  inUseCount(path: string): number {
+    return this.inUse.get(path) ?? 0;
+  }
+
   ensure(path: string, url: string, prio: CachePriority, signal?: AbortSignal): Promise<CachedPage> {
     const existing = this.entries.get(path);
     if (existing && existing.state === 'ready') {
@@ -129,9 +152,11 @@ export class PageImageCache {
     if (existing && existing.state === 'error' && existing.url === url) return Promise.resolve(existing);
     const inflight = this.pending.get(path);
     if (inflight) {
-      // Upgrade a queued job's priority (a page we were idly preloading is now on screen).
+      // Upgrade a queued job's priority (a page we were idly preloading is now on screen), and adopt it:
+      // a caller without an abort signal needs the image, so the preload's abort no longer applies.
       const job = this.queue.find((j) => j.path === path);
       if (job && RANK[prio] < RANK[job.prio]) job.prio = prio;
+      if (job && !signal) job.signal = undefined;
       return inflight;
     }
     const entry: CachedPage = { path, url, objectUrl: '', w: 0, h: 0, state: 'loading' };
@@ -179,7 +204,7 @@ export class PageImageCache {
     for (const path of [...this.lru]) {
       if (this.entries.size <= this.maxEntries) break;
       const e = this.entries.get(path);
-      if (!e || e.state === 'loading' || this.retained.has(path)) continue;
+      if (!e || e.state === 'loading' || this.retained.has(path) || this.inUse.has(path)) continue;
       this.release(e);
       this.entries.delete(path);
       this.lru = this.lru.filter((p) => p !== path);
@@ -220,10 +245,11 @@ export class PageImageCache {
   private async run(job: Job): Promise<void> {
     let res: Response;
     try {
+      // No abort signal on a started download: a page that joins it later must still get its image
+      // (only queued jobs are dropped on abort, in pump()).
       res = await this.deps.fetch(job.url, {
         mode: 'cors',
         credentials: 'omit',
-        signal: job.signal,
         priority: job.prio === 'idle' ? 'low' : 'high'
       });
     } catch (err) {
@@ -332,13 +358,18 @@ export const useCacheVersion = (cache: PageImageCache = pageImageCache): number 
     () => 0
   );
 
-/** One cached page image: kicks off the load and returns the object URL once decoded. */
+/**
+ * One cached page image: kicks off the load and returns the object URL once decoded. The page holds
+ * its entry while mounted (never evicted under it), and a vanished entry is requested again.
+ */
 export function useCachedImage(path: string | undefined, url: string | undefined, prio: CachePriority, cache: PageImageCache = pageImageCache): CachedImage {
   useCacheVersion(cache);
+  useEffect(() => (path ? cache.acquire(path) : undefined), [path, cache]);
+  const e = path ? cache.get(path) : undefined;
+  const missing = !!path && !e;
   useEffect(() => {
     if (path && url) void cache.ensure(path, url, prio);
-  }, [path, url, prio, cache]);
-  const e = path ? cache.get(path) : undefined;
+  }, [path, url, prio, cache, missing]);
   if (!e) return { state: 'waiting', w: 0, h: 0 };
   return { src: e.state === 'ready' ? e.objectUrl : undefined, state: e.state, w: e.w, h: e.h, palette: e.palette, expired: e.expired };
 }

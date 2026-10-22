@@ -16,7 +16,7 @@ import type { StudioController } from '../types';
 import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import { ensureFontsFor } from '../i18n/scriptFonts';
 import { aspectNumber } from '../board/balloonGeometry';
-import { cx, useElementSize, useFocusTrap } from '../board/ui';
+import { cx, useElementSize } from '../board/ui';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { usePrefersReducedMotion } from '../../studio/kit/motion';
 import { chapterOf, chapterStarts, readerItems, resolvePageN, type ReaderItem } from '../reader/readerModel';
@@ -29,7 +29,8 @@ import { connectionHints, pageImageCache, useCacheVersion } from './pageImageCac
 import { panelTranscript, pageTranscript } from './pageTranscript';
 import { closePaperSound } from './paperSound';
 import { keyCommand, type ReaderCommand } from './readerInput';
-import { bookViews, decideLayout, firstItemOfView, viewIndexOfItem, type BookView, type LayoutPref, type ReaderLayout } from './readerLayout';
+import { bookGeometry, bookViews, decideLayout, firstItemOfView, letterbox, viewIndexOfItem, type BookView, type LayoutPref, type ReaderLayout } from './readerLayout';
+import { slotImageSource } from './ReaderSlot';
 import { initialReaderState, readerReducer, escapeTarget, type MachineCtx, type ReaderEvent, type ReaderState } from './readerMachine';
 import {
   effectiveReader,
@@ -323,7 +324,36 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useFocusTrap(rootRef, true);
+  // Tab cycles inside the reader (pages off screen are inert, so they never take focus).
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const items = Array.from(el.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')).filter(
+        (n) => !n.closest('[inert]') && n.getAttribute('aria-hidden') !== 'true'
+      );
+      if (!items.length) {
+        e.preventDefault();
+        el.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && (active === first || active === el || !el.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !el.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    el.addEventListener('keydown', onKey);
+    return () => el.removeEventListener('keydown', onKey);
+  }, []);
+
+  const [bookEl, setBookEl] = useState<HTMLElement | null>(null);
 
   // ── Toasts ────────────────────────────────────────────────────────────────
   const [toast, setToast] = useState<string | null>(initial.note ?? null);
@@ -525,6 +555,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     if (!lang || lang === prevLang.current) return;
     prevLang.current = lang;
     writeReaderLang(lang);
+    // Lettering crossfades into the new language; the page, panel and zoom stay put.
+    if (!reduced && bookEl && typeof bookEl.animate === 'function') bookEl.animate([{ opacity: 0.8 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
     const sample = items.slice(0, 3).flatMap((i) => i.page?.panels.flatMap((p) => p.lines.map((l) => l.text)) ?? []).join(' ').slice(0, 400);
     void ensureFontsFor([lang], ['dialogue', 'sfx'], sample).then((r) => {
       if (r.degraded) setToast('Some lettering uses a fallback font on this device.');
@@ -583,20 +615,39 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     () => ({ urlFor, dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, saveData: ff.saveData || net.saveData }),
     [urlFor, ff.saveData, net.saveData]
   );
-  // Polite preloading: a few pages ahead when the connection allows it.
+  // The page box the stage draws (same geometry as BookStage / the webtoon column), so preloads and
+  // the retained set name the exact file (variant) each page will show.
+  const pageBox = useMemo(() => {
+    if (state.layout === 'scroll') return { w: Math.min(size.w, 800), h: 0 };
+    const v = views[view] ?? views[0];
+    if (!v) return { w: 0, h: 0 };
+    return bookGeometry({ view: v, stage: size, layout: state.layout === 'spread' ? 'spread' : 'single', rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass, hinge: decision.perSegment ? hinge : undefined }).page;
+  }, [state.layout, size, views, view, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hinge]);
+  const sourceOf = useCallback(
+    (i: number) => {
+      const it = items[i];
+      if (!it) return undefined;
+      const w = state.layout === 'scroll' || !pageBox.h ? pageBox.w : letterbox(pageBox.w, pageBox.h, aspectOf(i)).w;
+      return slotImageSource(it, w, { ...img, original: false });
+    },
+    [items, state.layout, pageBox, aspectOf, img]
+  );
+  // Polite preloading: a few pages ahead when the connection allows it (never a withheld page).
   useEffect(() => {
-    if (net.saveData || net.slow || ff.saveData) return;
-    const ahead = views.slice(view + 2, view + 6).flatMap((v) => v.items);
-    const controller = new AbortController();
-    for (const i of ahead) {
-      const a = items[i]?.asset;
-      const url = a ? urlFor(a) : undefined;
-      if (a && url) void pageImageCache.ensure(a.path, url, 'idle', controller.signal);
-    }
-    const keep = views.slice(Math.max(0, view - 2), view + 3).flatMap((v) => v.items).map((i) => items[i]?.asset.path).filter(Boolean) as string[];
+    const keep = views
+      .slice(Math.max(0, view - 2), view + 3)
+      .flatMap((v) => v.items)
+      .flatMap((i) => [items[i]?.asset.path, sourceOf(i)?.path])
+      .filter(Boolean) as string[];
     pageImageCache.retain(keep);
+    if (net.saveData || net.slow || ff.saveData) return;
+    const controller = new AbortController();
+    for (const i of views.slice(view + 2, view + 6).flatMap((v) => v.items)) {
+      const src = sourceOf(i);
+      if (src?.url) void pageImageCache.ensure(src.path, src.url, 'idle', controller.signal);
+    }
     return () => controller.abort();
-  }, [view, views, items, urlFor, net.saveData, net.slow, ff.saveData]);
+  }, [view, views, items, sourceOf, net.saveData, net.slow, ff.saveData]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const title = localized.cover.title || localized.brief.title || 'Untitled comic';
@@ -620,7 +671,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       downloadBusy={downloading}
     />
   );
-  const [bookEl, setBookEl] = useState<HTMLElement | null>(null);
   const layoutOptions: LayoutPref[] = kind === 'webtoon' ? [] : kind === 'strip' ? ['auto', 'scroll'] : ['auto', 'single', 'spread', 'scroll'];
   const fullscreenCursorHidden = immersive.fullscreen && !state.hud;
 

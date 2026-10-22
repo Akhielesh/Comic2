@@ -1,6 +1,8 @@
 // Style panel (composer chip "🎨 Style"): the curated preset grid, "explore 3 directions
 // for my story" (cheap style boards, gated like any spend) and "describe your own".
 // Picking a preset drafts the style bible instantly (a `style` patch, no LLM).
+// Preset tiles show the platform library's real preview art when it is published, with the
+// procedural thumbnail as the instant, offline fallback (assets.md; free either way).
 
 import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
@@ -8,6 +10,9 @@ import type { ComicDoc, StyleBible } from '../../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops';
 import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
+import { stylePreviewId } from '../../../../shared/comic/library';
+import { LibraryImage } from '../../library/LibraryImage';
+import { PresetThumb } from '../../library/procedural/PresetThumb';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
 
 /** Ops that make a preset the (drafted) style. A locked board from another look is dropped. */
@@ -138,7 +143,19 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
                   on ? 'border-[#D97757]/60 ring-2 ring-[#D97757]/30' : 'border-[var(--ds-hairline)] hover:-translate-y-px hover:border-[#D97757]/35'
                 )}
               >
-                <span className="block h-14 w-full" style={{ background: preset.swatch }} aria-hidden />
+                <span data-preset-art="" className="relative block aspect-[16/9] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>
+                  <LibraryImage
+                    id={stylePreviewId(preset.id)}
+                    alt=""
+                    sizes="(min-width: 640px) 160px, 45vw"
+                    className="absolute inset-0 h-full w-full object-cover"
+                    fallback={
+                      <span className="absolute inset-0 block [&>*]:h-full [&>*]:w-full">
+                        <PresetThumb preset={preset} />
+                      </span>
+                    }
+                  />
+                </span>
                 <span className="block bg-[var(--ds-surface-strong)] px-2.5 py-2">
                   <span className="flex items-center gap-1 text-[12px] font-semibold text-[var(--ds-ink)]">
                     <span className="truncate">{preset.name}</span>

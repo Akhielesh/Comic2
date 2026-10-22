@@ -45,7 +45,8 @@ export const CardShell: React.FC<{
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; size?: 'sm' | 'md' };
 
-const sizeCls = (size: 'sm' | 'md' = 'md') => (size === 'sm' ? 'h-8 px-3 text-[12px]' : 'h-9 px-4 text-[13px]');
+// Coarse pointers get real 44 px buttons (mobile.md §2.4); fine pointers keep today's sizes.
+const sizeCls = (size: 'sm' | 'md' = 'md') => (size === 'sm' ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:px-3.5' : 'h-9 px-4 text-[13px] coarse:h-11');
 
 export const PrimaryButton: React.FC<ButtonProps> = ({ busy, size, className, children, disabled, ...rest }) => (
   <button
@@ -93,7 +94,7 @@ export const ChipButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
     {...rest}
     aria-pressed={selected === undefined ? undefined : selected}
     className={cx(
-      `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+      `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:text-[14px]`,
       selected
         ? // An answered card keeps the chosen chip at full strength; only the others fade.
           'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)] disabled:opacity-100'
@@ -132,7 +133,7 @@ export function Segmented<T extends string | number>({
             title={o.title}
             onClick={() => onChange(o.value)}
             className={cx(
-              `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+              `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[40px]`,
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >

@@ -305,6 +305,121 @@ describe('BalloonLayer — editing', () => {
   });
 });
 
+describe('BalloonLayer — review fixes', () => {
+  it('add mode works on a wordless page (its first balloon), and a wordless page draws nothing otherwise', () => {
+    const doc = makeSampleDoc();
+    for (const panel of doc.pages[0].panels) panel.lines = [];
+    doc.pages[0].balloons = [];
+    const onAddAt = vi.fn();
+    const { container, unmount } = setup({ editable: true, addKind: 'speech', onAddAt }, doc);
+    const layer = container.querySelector<HTMLElement>('[data-testid="balloon-layer"]')!;
+    expect(layer).toBeTruthy();
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 900, right: 600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.pointerDown(layer, { clientX: 150, clientY: 450, button: 0, pointerType: 'mouse' });
+    expect(onAddAt).toHaveBeenCalledWith('speech', { x: 0.25, y: 0.5 });
+    unmount();
+    const again = setup({ editable: true }, doc);
+    expect(again.container.querySelector('[data-testid="balloon-layer"]')).toBeNull();
+  });
+
+  it('the tail and width handles are focusable sliders that the arrow keys adjust', () => {
+    const { container, onBalloonChange } = setup({ editable: true, selectedLineId: 'pg_1_l2' });
+    const tail = container.querySelector<HTMLElement>('[data-testid="tail-handle"]')!;
+    const grip = container.querySelector<HTMLElement>('[data-testid="width-handle"]')!;
+    expect(tail).toHaveAttribute('tabindex', '0');
+    expect(grip).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(tail, { key: 'ArrowLeft' });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { tailX: 0.195, tailY: 0.7, pinned: true });
+    fireEvent.keyDown(grip, { key: 'ArrowRight' });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { w: 0.225, pinned: true });
+    fireEvent.keyDown(grip, { key: 'ArrowDown', shiftKey: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { w: 0.2, pinned: true });
+    expect(onBalloonChange).toHaveBeenCalledTimes(3);
+  });
+
+  it('Enter while an IME is composing never commits the inline text', () => {
+    const onOps = vi.fn();
+    const onEditingChange = vi.fn();
+    setup({ editable: true, onOps, editingLineId: 'pg_1_l4', onEditingChange });
+    const ta = screen.getByTestId('balloon-text-editor');
+    fireEvent.change(ta, { target: { value: 'こんにちは' } });
+    fireEvent.keyDown(ta, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(ta, { key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(ta, { key: 'Escape', isComposing: true });
+    expect(onOps).not.toHaveBeenCalled();
+    expect(onEditingChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    expect(onOps).toHaveBeenCalledTimes(1);
+    expect(onOps.mock.calls[0][0][0].patch).toEqual({ text: 'こんにちは' });
+  });
+
+  it('marquee: dragging a box on empty art selects every balloon it touches (Shift adds); a plain click clears', () => {
+    const onSelectionChange = vi.fn();
+    const { container, hit } = setup({ editable: true, onSelectionChange });
+    const layer = container.querySelector<HTMLElement>('[data-testid="balloon-layer"]')!;
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 900, right: 600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) });
+    const all = [...container.querySelectorAll<HTMLElement>('[data-testid="balloon-hit"]')].map((el) => el.dataset.lineId!);
+    fireEvent.pointerDown(layer, { clientX: 1, clientY: 1, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(window, { clientX: 599, clientY: 899 });
+    expect(container.querySelector('[data-testid="marquee"]')).toBeTruthy();
+    fireEvent.pointerUp(window, { clientX: 599, clientY: 899 });
+    expect(container.querySelector('[data-testid="marquee"]')).toBeNull();
+    expect(onSelectionChange).toHaveBeenLastCalledWith(all);
+    // A box around one balloon only.
+    const one = hit('pg_1_l2');
+    const l = (parseFloat(one.style.left) / 100) * 600;
+    const t = (parseFloat(one.style.top) / 100) * 900;
+    const w = (parseFloat(one.style.width) / 100) * 600;
+    const h = (parseFloat(one.style.height) / 100) * 900;
+    fireEvent.pointerDown(layer, { clientX: l + w / 2, clientY: t + h + 40, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(window, { clientX: l + w / 2 + 2, clientY: t + h / 2 });
+    fireEvent.pointerUp(window, { clientX: l + w / 2 + 2, clientY: t + h / 2 });
+    expect(onSelectionChange).toHaveBeenLastCalledWith(['pg_1_l2']);
+    // A press without a drag clears.
+    fireEvent.pointerDown(layer, { clientX: 595, clientY: 5, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerUp(window, { clientX: 595, clientY: 5 });
+    expect(onSelectionChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('in a translated edition the source text is never edited or added to (edition ops own that)', () => {
+    const onOps = vi.fn();
+    const onEditingChange = vi.fn();
+    const onAddAt = vi.fn();
+    const { hit, container } = setup({ editable: true, onOps, onEditingChange, editionLang: 'hi', editingLineId: 'pg_1_l4', addKind: 'speech', onAddAt });
+    expect(screen.queryByTestId('balloon-text-editor')).toBeNull();
+    fireEvent.doubleClick(hit('pg_1_l4'));
+    fireEvent.keyDown(hit('pg_1_l4'), { key: 'Enter' });
+    expect(onEditingChange).not.toHaveBeenCalled();
+    const layer = container.querySelector<HTMLElement>('[data-testid="balloon-layer"]')!;
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 900, right: 600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.pointerDown(layer, { clientX: 300, clientY: 450, button: 0, pointerType: 'mouse' });
+    expect(onAddAt).not.toHaveBeenCalled();
+    expect(onOps).not.toHaveBeenCalled();
+  });
+
+  it('a lifted touch drag cancels page scrolling; before the hold and after the drag the page scrolls', () => {
+    vi.useFakeTimers();
+    try {
+      const { hit } = setup({ editable: true });
+      const touchmove = () => {
+        const ev = new Event('touchmove', { bubbles: true, cancelable: true });
+        hit('pg_1_l2').dispatchEvent(ev);
+        return ev.defaultPrevented;
+      };
+      fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch' });
+      expect(touchmove()).toBe(false);
+      act(() => {
+        vi.advanceTimersByTime(230);
+      });
+      expect(touchmove()).toBe(true);
+      fireEvent.pointerUp(window, { clientX: 100, clientY: 100 });
+      expect(touchmove()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('BalloonLayer — touch (mobile.md §5.4)', () => {
   const layerRect = (container: HTMLElement, width = 600, height = 900) => {
     const layer = container.querySelector<HTMLElement>('[data-testid="balloon-layer"]')!;

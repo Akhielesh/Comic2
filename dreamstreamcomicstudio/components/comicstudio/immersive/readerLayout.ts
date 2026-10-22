@@ -13,6 +13,8 @@
 // A spread shows the cover alone on its side (right for LTR, left for RTL) — the book box is always two
 // page-widths wide, the empty half is the dark room — and, when the book's first page is a right-hand
 // page, page 1 faces the inside cover (endpaper, carrying the dedication). The End card closes the book.
+// Every view shares one page box (the book's trim), so the spine stays straight and turns between views
+// line up; a page of another shape (a 1:1 render in a 2:3 book) is letterboxed on paper inside it.
 
 import type { ComicKind } from '../../../shared/comic/doc';
 import type { FormFactor, HeightClass, Segments, WidthClass } from '../mobile/formFactor';

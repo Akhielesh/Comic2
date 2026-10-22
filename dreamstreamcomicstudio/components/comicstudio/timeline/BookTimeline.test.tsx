@@ -1,10 +1,10 @@
 // BookTimeline: the video-editor style dock (timeline.md §4.2, §7 client).
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import type { ComicDoc } from '../../../shared/comic/doc';
+import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
-import { BookTimeline, DOCK_OPEN_KEY, dragShift, dropIndex } from './BookTimeline';
+import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex } from './BookTimeline';
 import { clipThumbWidth } from './TimelineClip';
 
 const setWidth = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
@@ -183,6 +183,80 @@ describe('BookTimeline', () => {
     expect(dragShift(1, 0, 2, 60)).toBe(-64);
     expect(dragShift(1, 2, 0, 60)).toBe(64);
     expect(dragShift(2, 0, 1, 60)).toBe(0);
+  });
+
+  it('the dock’s Media shortcut appears only once the comic has an image (no dead button before)', () => {
+    const { unmount } = setup();
+    expect(screen.getByRole('button', { name: 'Open Media: every image in this comic' })).toBeInTheDocument();
+    unmount();
+    const bare = makeSampleDoc();
+    bare.pages = bare.pages.map((p) => ({ ...p, render: emptyRender() }));
+    bare.style = { ...bare.style, options: [], board: undefined, refs: [] };
+    bare.cast = bare.cast.map((c) => ({ ...c, refs: [], sheet: emptyRender() }));
+    bare.places = [];
+    bare.cover = { ...bare.cover, render: emptyRender() };
+    bare.conversation = [];
+    setup(bare);
+    expect(screen.getByRole('button', { name: 'Book' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open Media/ })).toBeNull();
+  });
+
+  describe('touch: long-press lifts a clip so scrolling never turns into a move', () => {
+    const layout = () =>
+      options()
+        .filter((o) => /^Page \d/.test(o.getAttribute('aria-label') || ''))
+        .forEach((el, i) => {
+          Object.defineProperty(el, 'offsetLeft', { value: i * 64, configurable: true });
+          Object.defineProperty(el, 'offsetWidth', { value: 60, configurable: true });
+        });
+    const touch = (type: string, x: number, y = 10) => window.dispatchEvent(new PointerEvent(type, { pointerId: 7, pointerType: 'touch', clientX: x, clientY: y }));
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('hold, then drag: the page moves (pages_reorder) and the tap after the drop does not open it', () => {
+      const { studio } = setup(makeSampleDoc(), {}, { reorderActivation: 'longpress' });
+      layout();
+      const p1 = optionNamed(/^Page 1,/);
+      fireEvent.pointerDown(p1, { button: 0, pointerId: 7, pointerType: 'touch', clientX: 30, clientY: 10 });
+      act(() => {
+        vi.advanceTimersByTime(LONG_PRESS_MS + 10);
+      });
+      act(() => {
+        touch('pointermove', 100);
+        touch('pointermove', 175);
+        touch('pointerup', 175);
+      });
+      expect(lastPatch(studio)[0]).toEqual([{ op: 'pages_reorder', order: ['pg_2', 'pg_3', 'pg_1'] }]);
+      fireEvent.click(p1);
+      expect(studio.openPage).not.toHaveBeenCalled();
+    });
+
+    it('a finger that moves before the hold completes is a scroll: nothing moves, no menu', () => {
+      const { studio } = setup(makeSampleDoc(), {}, { reorderActivation: 'longpress' });
+      layout();
+      const p1 = optionNamed(/^Page 1,/);
+      fireEvent.pointerDown(p1, { button: 0, pointerId: 7, pointerType: 'touch', clientX: 30, clientY: 10 });
+      act(() => {
+        touch('pointermove', 60);
+        vi.advanceTimersByTime(LONG_PRESS_MS + 10);
+        touch('pointermove', 175);
+        touch('pointerup', 175);
+      });
+      expect(studio.patch).not.toHaveBeenCalled();
+      expect(screen.queryByRole('menu')).toBeNull();
+    });
+
+    it('hold and release without moving opens the clip menu', () => {
+      setup(makeSampleDoc(), {}, { reorderActivation: 'longpress' });
+      layout();
+      const p2 = optionNamed(/^Page 2,/);
+      fireEvent.pointerDown(p2, { button: 0, pointerId: 7, pointerType: 'touch', clientX: 94, clientY: 10 });
+      act(() => {
+        vi.advanceTimersByTime(LONG_PRESS_MS + 10);
+        touch('pointerup', 94);
+      });
+      expect(screen.getByRole('menu', { name: 'Page 2 actions' })).toBeInTheDocument();
+    });
   });
 
   it('mouse drag reorders immediately; a click right after the drop is not an open', () => {

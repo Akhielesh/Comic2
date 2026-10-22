@@ -555,6 +555,27 @@ export function aimAtSpeakerOps(page: Page, plans: readonly LetterPlan[], lineId
   return ops;
 }
 
+/**
+ * "Widen" (the overflow warning's fix): make each balloon WIDER than it is drawn now — never narrower,
+ * which the balanced "Fit text" width can be for a balloon the user already widened — and keep it on
+ * the page (shifted left near the right edge). Pinned, tail kept.
+ */
+export function widenOps(doc: ComicDoc, page: Page, plans: readonly LetterPlan[], lineIds: readonly string[], resolved: ReadonlyMap<string, Balloon>): DocOp[] {
+  const margin = 0.008;
+  const ops: DocOp[] = [];
+  for (const line of linesOf(page, lineIds)) {
+    const plan = plans.find((p) => p.lineId === line.id);
+    if (!plan || plan.locked) continue;
+    const cur = plan.w / 1000;
+    const want = Math.max(cur * 1.25, cur + 0.04, estimateWidthForText(line.text, line.lang || doc.format?.language || 'en'));
+    const w = r4(clamp(want, cur, 1 - 2 * margin));
+    if (w <= cur + 1e-4) continue;
+    const x = r4(clamp(plan.x / 1000, margin, 1 - margin - w));
+    ops.push(balloonOp(page, line.id, { x, w, pinned: true }, resolved));
+  }
+  return ops;
+}
+
 /** "Fit text": a balanced width for the line's text (the same curve auto-placement uses). */
 export function fitWidthOps(doc: ComicDoc, page: Page, lineIds: readonly string[], resolved: ReadonlyMap<string, Balloon>): DocOp[] {
   return linesOf(page, lineIds).map((l) => balloonOp(page, l.id, { w: estimateWidthForText(l.text, l.lang || doc.format?.language || 'en'), pinned: true }, resolved));

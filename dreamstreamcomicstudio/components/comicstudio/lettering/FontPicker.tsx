@@ -49,6 +49,16 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // An open list closes on a press anywhere outside it (it never lingers over the other controls).
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const onDown = (e: PointerEvent) => {
+      if (rootRef.current && e.target instanceof Node && !rootRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open]);
   const spec = languageSpec(lang);
   // Script faces the comic's language can use (non-Latin languages only).
   const options: FontId[] = useMemo(() => {
@@ -107,7 +117,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
   };
 
   return (
-    <div className="relative min-w-0">
+    <div ref={rootRef} className="relative min-w-0">
       <span id={`${id}-label`} className="mb-1 block text-[11.5px] font-medium text-[var(--ds-muted)]">
         {label}
       </span>

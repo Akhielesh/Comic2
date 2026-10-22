@@ -271,7 +271,11 @@ export class TurnEngine {
     if (this.touched) return;
     this.touched = true;
     const parts = this.parts();
-    for (const p of parts) if (p.root) p.root.style.willChange = this.cfg.plan.kind === 'paper' || this.cfg.plan.kind === 'riffle' ? 'transform, clip-path' : 'transform, opacity';
+    const folding = this.cfg.plan.kind === 'paper' || this.cfg.plan.kind === 'riffle';
+    for (const p of parts) if (p.root) p.root.style.willChange = folding ? 'transform, clip-path' : 'transform, opacity';
+    // Shadow layers move every frame too: give them their own compositing layers.
+    if (this.els.shadow) this.els.shadow.style.willChange = 'transform, clip-path, opacity';
+    if (this.els.cast) this.els.cast.style.willChange = 'transform, opacity';
     if (this.cfg.plan.kind === 'board' && this.els.book) {
       this.els.book.style.perspective = '1800px';
       this.els.book.style.perspectiveOrigin = `${this.cfg.spineX}px 50%`;

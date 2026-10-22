@@ -109,6 +109,28 @@ describe('ComicPageView', () => {
     }
   });
 
+  it('a variant that fails to load falls back to the original image (not the sketch); both failing is reported', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 480, height: 720, right: 480, bottom: 720, x: 0, y: 0, toJSON: () => ({}) });
+    try {
+      const doc = makeSampleDoc();
+      const onImageError = vi.fn();
+      const { container } = render(
+        <ComicPageView doc={doc} page={doc.pages[0]} imageUrl="https://cdn.test/p1.png" srcWidth={(w) => `https://cdn.test/p1-${w}w.webp`} onImageError={onImageError} />
+      );
+      expect(container.querySelector('img')!.getAttribute('src')).toBe('https://cdn.test/p1-480w.webp');
+      fireEvent.error(container.querySelector('img')!);
+      expect(container.querySelector('img')!.getAttribute('src')).toBe('https://cdn.test/p1.png');
+      expect(onImageError).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Couldn’t load this image/)).toBeNull();
+      fireEvent.error(container.querySelector('img')!);
+      expect(onImageError).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('img')).toBeNull();
+      expect(screen.getByText(/Couldn’t load this image/)).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('passes edition edits through with { lang }', () => {
     const doc = makeSampleDoc();
     const onBalloonChange = vi.fn();

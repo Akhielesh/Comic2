@@ -95,7 +95,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
     <div
       role="radiogroup"
       aria-label={`${label} versions`}
-      className="flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:thin]"
+      className="flex min-w-0 gap-1.5 overflow-x-auto overscroll-x-contain py-2 [scrollbar-width:thin]"
       onKeyDown={(e) => {
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           e.preventDefault();

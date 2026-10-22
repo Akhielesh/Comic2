@@ -253,6 +253,18 @@ describe('PageEditor', () => {
     expect(studio.openPage).not.toHaveBeenCalled();
   });
 
+  it('undo / redo stay one tap away outside the lettering toolbar (mark-up mode, phones without keys)', () => {
+    const doc = makeSampleDoc();
+    const studio = makeStudio(doc, { focusedPageId: 'pg_1', canUndo: true, canRedo: false, undoLabel: 'Edit line' });
+    render(<PageEditor studio={studio} doc={doc} pageId="pg_1" />);
+    fireEvent.click(screen.getByRole('radio', { name: /Mark up/ }));
+    expect(screen.queryByTestId('lettering-toolbar')).toBeNull();
+    const group = screen.getByRole('group', { name: 'Undo and redo' });
+    fireEvent.click(within(group).getByRole('button', { name: 'Undo Edit line' }));
+    expect(studio.undo).toHaveBeenCalledTimes(1);
+    expect(within(group).getByRole('button', { name: 'Redo' })).toBeDisabled();
+  });
+
   it('stage: sizes the page from its content box and can never widen its column (visualqa P0-2)', () => {
     expect(fitPageToStage({ w: 590, h: 640 }, 1)).toBeLessThanOrEqual(590 - 48);
     expect(fitPageToStage({ w: 1000, h: 500 }, 2 / 3, 0)).toBe(333);

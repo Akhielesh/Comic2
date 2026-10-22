@@ -37,7 +37,8 @@ export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters
   const credits = reader.credits || (endCard?.authorName ? `Created by ${endCard.authorName}` : undefined);
   const stars = doc.cast.filter((c) => c.tier === 'lead' || c.tier === 'support').map((c) => c.name).filter(Boolean);
   const title = doc.cover.title || doc.brief.title;
-  const otherLang = language && language.options.find((o) => o.code !== language.current && o.status === 'ready');
+  // An edition without a status is a published one (the slot only marks 'ready' explicitly when it can).
+  const otherLang = language && language.options.find((o) => o.code !== language.current && (o.status === undefined || o.status === 'ready'));
   return (
     <div className="absolute inset-0 overflow-y-auto overscroll-contain text-[var(--ds-reader-ink)]" style={{ containerType: 'inline-size' }} data-testid="end-card">
       <div className={`flex min-h-full flex-col items-center justify-center ${dense ? 'gap-2' : 'gap-3'} px-[8%] py-[8%] text-center`}>

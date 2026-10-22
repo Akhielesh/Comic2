@@ -22,6 +22,7 @@ import {
   dockSummary,
   duplicateOps,
   ghostPlates,
+  hasMedia,
   insertOps,
   moveOps,
   plateOffPatch,
@@ -586,7 +587,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
         Enter opens. M opens actions. V shows versions. Alt plus arrow keys move a page. Delete removes it; undo brings it back.
       </p>
       {!compact && (
-        <div className="flex h-9 min-w-0 items-center gap-1.5 px-2 sm:px-3">
+        <div className="flex h-9 min-w-0 items-center gap-1.5 px-2 coarse:h-11 sm:px-3">
           <button
             type="button"
             aria-expanded={open}
@@ -600,15 +601,18 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
           <p className="min-w-0 flex-1 truncate text-[11.5px] tabular-nums text-[var(--ds-muted)]" title={notice || summary} role={notice ? 'status' : undefined}>
             {notice || summary}
           </p>
-          <button
-            type="button"
-            onClick={() => studio.setTab('media')}
-            className={cx('tap-target inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING)}
-            aria-label="Open Media: every image in this comic"
-          >
-            <Images className="h-3.5 w-3.5" aria-hidden />
-            <span className="hidden sm:inline">Media</span>
-          </button>
+          {/* The Media tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
+          {hasMedia(doc) && (
+            <button
+              type="button"
+              onClick={() => studio.setTab('media')}
+              className={cx('tap-target inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING)}
+              aria-label="Open Media: every image in this comic"
+            >
+              <Images className="h-3.5 w-3.5" aria-hidden />
+              <span className="hidden sm:inline">Media</span>
+            </button>
+          )}
         </div>
       )}
       {compact && notice && (

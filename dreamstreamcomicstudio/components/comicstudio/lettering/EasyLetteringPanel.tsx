@@ -26,7 +26,7 @@ import {
   tailToggleOps
 } from './styleOps';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
-import { Segmented, cx } from '../board/ui';
+import { cx } from '../board/ui';
 
 const ROW = 'space-y-1.5';
 const ROW_LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
@@ -35,6 +35,19 @@ const SMALL_BTN =
 
 type SeeThrough = 'solid' | 'soft' | 'see' | 'clear';
 const SEE_ALPHA: Record<Exclude<SeeThrough, 'clear'>, number> = { solid: 1, soft: 0.85, see: 0.6 };
+const SEE_OPTIONS: { value: SeeThrough; label: string; title: string }[] = [
+  { value: 'solid', label: 'Solid', title: 'Nothing shows through the bubble' },
+  { value: 'soft', label: 'Soft', title: 'The art shows through a little (85 %)' },
+  { value: 'see', label: 'See-through', title: 'The art shows through (60 %)' },
+  { value: 'clear', label: 'Clear', title: 'No fill: just the outline and the text' }
+];
+/** Checkerboard behind the opacity previews. */
+const CHECKER: React.CSSProperties = {
+  backgroundImage: 'linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)',
+  backgroundSize: '6px 6px',
+  backgroundPosition: '0 0,0 3px,3px -3px,-3px 0',
+  backgroundColor: '#fff'
+};
 const seeThroughOf = (fill: string | undefined): SeeThrough | 'mixed' => {
   if (fill === undefined) return 'mixed';
   if (fill === 'none') return 'clear';
@@ -120,19 +133,30 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
             allowNone
             onChange={(c) => style({ fill: c === 'none' ? 'none' : withAlpha(c, see === 'soft' ? SEE_ALPHA.soft : see === 'see' ? SEE_ALPHA.see : 1) }, { label: 'Bubble colour' })}
           />
-          <Segmented<SeeThrough | 'mixed'>
-            label="Bubble opacity"
-            size="xs"
-            value={see}
-            onChange={(v) => v !== 'mixed' && setSee(v)}
-            className="w-full"
-            options={[
-              { value: 'solid', label: 'Solid' },
-              { value: 'soft', label: 'Soft' },
-              { value: 'see', label: 'See-through' },
-              { value: 'clear', label: 'Clear', title: 'No fill: just the outline and the text' }
-            ]}
-          />
+          {/* Wrapping chips (not a fixed segmented row): "See-through" never overlaps its neighbour at 320 px,
+              and each chip previews the fill at that opacity over a checkerboard. */}
+          <div role="radiogroup" aria-label="Bubble opacity" className="flex flex-wrap gap-1.5">
+            {SEE_OPTIONS.map((o) => {
+              const on = see === o.value;
+              const swatch = o.value === 'clear' ? 'transparent' : withAlpha(fill && fill !== 'none' ? fill : '#ffffff', SEE_ALPHA[o.value]);
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  title={o.title}
+                  onClick={() => setSee(o.value)}
+                  className={cx(SMALL_BTN, 'rounded-full', on && 'border-[#D97757]/60 bg-[#D97757]/10')}
+                >
+                  <span aria-hidden className="relative h-3.5 w-3.5 shrink-0 overflow-hidden rounded-full border border-[var(--ds-hairline)]" style={CHECKER}>
+                    <span className="absolute inset-0" style={{ background: swatch }} />
+                  </span>
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
           <ColorField
             label="Outline"
             simple
@@ -199,7 +223,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
             onChange={(e) => setAsk(e.target.value)}
             onKeyDown={(e) => e.stopPropagation()}
             placeholder={lines.length > 1 ? 'Ask AI about these balloons…' : 'Ask AI about this balloon…'}
-            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none"
+            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] coarse:text-[16px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none"
           />
           <button type="submit" disabled={!ask.trim()} aria-label="Send to the director" className={SMALL_BTN}>
             <Send className="h-3.5 w-3.5" aria-hidden />

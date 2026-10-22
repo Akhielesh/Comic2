@@ -15,10 +15,12 @@ import { GateCard } from './GateCard';
 import { NoticeCard } from './NoticeCard';
 import { OptionsCard } from './OptionsCard';
 import { PlanCard } from './PlanCard';
+import { RecapCard } from './RecapCard';
 import { RendersCard } from './RendersCard';
 import { StyleChoiceCard } from './StyleChoiceCard';
 
-export const CARD_TYPES: ReadonlyArray<Card['type']> = ['options', 'style_choice', 'cast', 'plan', 'gate', 'renders', 'notice'];
+/** Card types this renderer handles itself (the original seven plus `recap`); the rest come from the registry. */
+export const CARD_TYPES: ReadonlyArray<Card['type']> = ['options', 'style_choice', 'cast', 'plan', 'gate', 'renders', 'notice', 'recap'];
 
 class CardBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -52,6 +54,7 @@ const messageOf = (doc: ComicDoc | null, cardId: string): Msg | undefined => {
 };
 
 export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController; message?: Msg }> = ({ card, studio, message }) => {
+  if (!card || typeof card !== 'object' || typeof (card as { type?: unknown }).type !== 'string') return null;
   let body: React.ReactNode = null;
   switch (card.type) {
     case 'options':
@@ -64,10 +67,10 @@ export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController;
       body = <CastCard card={card} studio={studio} />;
       break;
     case 'plan':
-      body = <PlanCard card={card} studio={studio} />;
+      body = <PlanCard card={card} studio={studio} message={message || messageOf(studio.doc, card.id)} />;
       break;
     case 'gate':
-      body = <GateCard card={card} studio={studio} />;
+      body = <GateCard card={card} studio={studio} message={message || messageOf(studio.doc, card.id)} />;
       break;
     case 'renders':
       body = <RendersCard card={card} studio={studio} />;
@@ -76,7 +79,8 @@ export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController;
       body = <NoticeCard card={card} />;
       break;
     case 'recap':
-      return null; // built-in; P1-CONVERSATION adds the RecapCard
+      body = <RecapCard card={card} studio={studio} />;
+      break;
     default: {
       const reg = registeredCard((card as { type: string }).type);
       if (!reg) return null; // a card type this client doesn't know yet

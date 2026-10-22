@@ -19,6 +19,13 @@ export const CURL_GRADIENT =
 export const CAST_GRADIENT = 'linear-gradient(to right, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.22) 35%, rgba(0,0,0,0) 100%)';
 const GUTTER_LEFT = 'linear-gradient(to left, rgba(0,0,0,0.24) 0, rgba(0,0,0,0.08) 2.5%, rgba(255,255,255,0.10) 3.2%, rgba(0,0,0,0) 7%)';
 const GUTTER_RIGHT = 'linear-gradient(to right, rgba(0,0,0,0.24) 0, rgba(0,0,0,0.08) 2.5%, rgba(255,255,255,0.10) 3.2%, rgba(0,0,0,0) 7%)';
+/** A single page still shows where it is bound: a softer shade on the spine edge. */
+const BINDING_LEFT = 'linear-gradient(to right, rgba(0,0,0,0.14) 0, rgba(0,0,0,0.04) 2%, rgba(255,255,255,0.06) 2.6%, rgba(0,0,0,0) 5%)';
+const BINDING_RIGHT = 'linear-gradient(to left, rgba(0,0,0,0.14) 0, rgba(0,0,0,0.04) 2%, rgba(255,255,255,0.06) 2.6%, rgba(0,0,0,0) 5%)';
+
+/** Spine shading for a slot: spreads shade both inner edges; single pages their bound edge. */
+export const gutterFor = (side: SlotSide, spread: boolean, rtl: boolean): string | undefined =>
+  spread ? (side === 'left' ? GUTTER_LEFT : side === 'right' ? GUTTER_RIGHT : undefined) : rtl ? BINDING_RIGHT : BINDING_LEFT;
 /** Inside-cover paper: a faint woven pattern on warm cream (pure CSS). */
 export const ENDPAPER_BG =
   'radial-gradient(circle at 25% 25%, rgba(120,92,60,0.07) 1.2px, transparent 1.6px) 0 0 / 14px 14px, radial-gradient(circle at 75% 75%, rgba(120,92,60,0.05) 1.2px, transparent 1.6px) 0 0 / 14px 14px, var(--ds-reader-endpaper)';
@@ -31,14 +38,25 @@ export interface SlotImage {
   original: boolean;
 }
 
+/**
+ * Which stored image a page drawn `cssWidth` wide uses (cache path + URL): the variant pick, or the
+ * original when the variant isn't signed for this viewer. Withheld (blocked) pages have none — they are
+ * never fetched. Shared by the slots and the reader's preloader, so a preload is the very file the page
+ * will show (never the original and then a variant: no double download on phones).
+ */
+export const slotImageSource = (item: ReaderItem, cssWidth: number, img: SlotImage): { path: string; url?: string } | undefined => {
+  if (isWithheld(item)) return undefined;
+  const pick = pickVariant(item.asset, cssWidth, { dpr: img.dpr, saveData: img.saveData, original: img.original });
+  const variantUrl = pick.path !== item.asset.path ? img.urlFor(pick.path) : undefined;
+  return variantUrl ? { path: pick.path, url: variantUrl } : { path: item.asset.path, url: img.urlFor(item.asset) };
+};
+
 /** The page image for an item, through the shared cache (variant-aware, decoded before it shows). */
 export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img: SlotImage, prio: CachePriority) => {
   const withheld = !!item && isWithheld(item);
-  const pick = item && !withheld ? pickVariant(item.asset, cssWidth, { dpr: img.dpr, saveData: img.saveData, original: img.original }) : undefined;
-  // Variant URLs may not be signed for this viewer: fall back to the original path when they aren't.
-  const variantUrl = pick && pick.path !== item!.asset.path ? img.urlFor(pick.path) : undefined;
-  const path = pick ? (variantUrl ? pick.path : item!.asset.path) : undefined;
-  const url = pick ? variantUrl || img.urlFor(item!.asset) : undefined;
+  const source = item && !withheld ? slotImageSource(item, cssWidth, img) : undefined;
+  const path = source?.path;
+  const url = source?.url;
   const cached = useCachedImage(path, url, prio);
   // While a sharper variant loads, keep showing the one already decoded.
   const fallback = useCachedImage(item && !withheld && path !== item.asset.path ? item.asset.path : undefined, undefined, prio);
@@ -141,8 +159,8 @@ export interface ReaderSlotProps extends SlotContentProps {
   side: SlotSide;
   z: number;
   visible: boolean;
-  /** Spread gutter shading on the inner edge. */
-  gutter: boolean;
+  /** Spine shading (gutterFor). */
+  gutter?: string;
   interactive: boolean;
   ariaLabel: string;
 }
@@ -172,6 +190,7 @@ export const ReaderSlot = memo(
         aria-roledescription={visible && isPage ? 'page' : undefined}
         aria-label={visible && isPage ? ariaLabel : undefined}
         aria-hidden={visible ? undefined : true}
+        inert={visible ? undefined : true}
         className="absolute overflow-hidden"
         style={{
           left: x,
@@ -186,9 +205,7 @@ export const ReaderSlot = memo(
         }}
       >
         <SlotContentView {...props} />
-        {gutter && content.kind !== 'blank' && (
-          <div aria-hidden className="pointer-events-none absolute inset-0 z-[3]" style={{ background: side === 'left' ? GUTTER_LEFT : GUTTER_RIGHT }} />
-        )}
+        {gutter && content.kind !== 'blank' && content.kind !== 'end' && <div aria-hidden className="pointer-events-none absolute inset-0 z-[3]" style={{ background: gutter }} />}
         <div
           ref={(el) => {
             refs.current.curl = el;

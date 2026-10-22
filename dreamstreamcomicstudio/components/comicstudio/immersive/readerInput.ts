@@ -57,6 +57,10 @@ export const keyCommand = (e: KeyLike, ctx: { rtl: boolean; layout: ReaderLayout
     case 'PageUp':
       if (scroll) return { type: 'scroll', amount: e.key === 'PageDown' ? 0.85 : -0.85 };
       return { type: 'step', delta: e.key === 'PageDown' ? 1 : -1 };
+    case 'ArrowDown':
+    case 'ArrowUp':
+      // The column scrolls a little per press (focus sits on the reader, not the scroller).
+      return scroll ? { type: 'scroll', amount: e.key === 'ArrowDown' ? 0.3 : -0.3 } : null;
     case 'ArrowRight':
     case 'ArrowLeft': {
       if (scroll) return { type: 'scroll', amount: e.key === 'ArrowRight' ? 1 : -1 };
@@ -119,6 +123,7 @@ export const SHORTCUTS: { keys: string; action: string }[] = [
   { keys: 'Space · Shift+Space', action: 'Next / previous page (panel in Guided View)' },
   { keys: 'Page Up · Page Down', action: 'Previous / next page' },
   { keys: 'Home · End', action: 'Cover · last page' },
+  { keys: '↑ ↓', action: 'Scroll (vertical reading)' },
   { keys: 'G', action: 'Guided View (panel by panel)' },
   { keys: 'P', action: 'Play / pause Guided View' },
   { keys: 'F', action: 'Full screen' },

@@ -145,11 +145,16 @@ const blockNodes = (blk: CoverTextBlock): SvgNode[] => {
 
 export const CoverTitleLayer: React.FC<CoverTitleLayerProps> = ({ doc, aspect }) => {
   const overlay = doc.cover?.lettering === 'overlay';
+  // The faces actually drawn: a Telugu or Hindi cover letters in the language's script face, so load
+  // that one (a Latin-only face would leave the title in a system fallback).
+  const lang = doc.format?.language || 'en';
   const fonts = useMemo(() => {
     const t = doc.cover?.titleStyle;
-    return [...new Set([t?.title?.font ?? TITLE_DEFAULT.font, t?.tagline?.font ?? TAGLINE_DEFAULT.font])];
-  }, [doc.cover?.titleStyle]);
-  const { measure } = useLetteringFontsReady(overlay ? fonts : [], { weights: [400, 700] });
+    const ids = [t?.title?.font ?? TITLE_DEFAULT.font, t?.tagline?.font ?? TAGLINE_DEFAULT.font].map((id) => resolveLetteringFont(id, 'caption', lang).fontId);
+    return [...new Set(ids)];
+  }, [doc.cover?.titleStyle, lang]);
+  const sample = `${doc.cover?.title || doc.brief?.title || ''} ${doc.cover?.tagline || ''}`.slice(0, 160);
+  const { measure } = useLetteringFontsReady(overlay ? fonts : [], { weights: [400, 700], sample });
   const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : 2 / 3;
   const plan = useMemo(() => (overlay ? planCoverTitle(doc, asp, measure) : { title: null, tagline: null }), [overlay, doc, asp, measure]);
   if (!overlay || (!plan.title && !plan.tagline)) return null;

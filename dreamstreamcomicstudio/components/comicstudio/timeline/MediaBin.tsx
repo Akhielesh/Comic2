@@ -5,7 +5,7 @@
 // archive). "Examples from the library" shows the platform library for inspiration when it is
 // available. The archive counter ("Archive 12/300") makes the cap visible, never silent.
 
-import React, { useEffect, useId, useMemo, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search, Star } from 'lucide-react';
 import type { LibraryAssetPublic } from '../../../shared/comic/library';
 import { formatUsd } from '../../../shared/comic/models';
@@ -93,7 +93,10 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<MediaSort>('book');
   const [closed, setClosed] = useState<Set<string>>(new Set());
-  const [preview, setPreview] = useState<number | null>(null);
+  /** The previewed image, by PATH: an action in the preview (use for a page, restore, star) regroups the
+   *  list, and an index would then silently point at a different image. */
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const lastPreviewIdx = useRef(0);
   const edit = useTimelineEdit(studio);
   const library = useComicLibrary();
   const searchId = useId();
@@ -104,9 +107,15 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
   const shown = useMemo(() => filterMedia(all, filter, query), [all, filter, query]);
   const groups = useMemo(() => groupMedia(shown, sort), [shown, sort]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
-  useEffect(() => {
-    if (preview !== null && preview >= flat.length) setPreview(flat.length ? flat.length - 1 : null);
-  }, [flat.length, preview]);
+  // The open image's place in the current list; when it left the filtered set (a restored page leaves
+  // "Deleted"), its neighbour is shown instead of closing under the user's finger.
+  let preview: number | null = null;
+  if (previewPath !== null && flat.length) {
+    const at = flat.findIndex((it) => it.path === previewPath);
+    preview = at >= 0 ? at : Math.min(lastPreviewIdx.current, flat.length - 1);
+    lastPreviewIdx.current = preview;
+  }
+  const setPreview = (i: number | null) => setPreviewPath(i === null ? null : flat[i]?.path ?? null);
 
   if (!doc) return null;
   const examples = library.status === 'ready' ? [...library.byKind('cover_example'), ...library.byKind('genre_example')].slice(0, 12) : [];
@@ -127,7 +136,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
         <div
           role="radiogroup"
           aria-label="Show"
-          className="-mx-1 flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain px-1 pb-0.5 [scrollbar-width:none]"
+          className="-mx-1 -my-1.5 flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain px-1 py-1.5 [scrollbar-width:none]"
           onKeyDown={(e) => {
             if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
             e.preventDefault();
@@ -221,7 +230,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
               {!isClosed && (
                 <div className="mt-1 grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-2">
                   {g.items.map((it) => (
-                    <MediaTile key={it.path} item={it} studio={studio} onOpen={() => setPreview(flat.indexOf(it))} />
+                    <MediaTile key={it.path} item={it} studio={studio} onOpen={() => setPreviewPath(it.path)} />
                   ))}
                 </div>
               )}

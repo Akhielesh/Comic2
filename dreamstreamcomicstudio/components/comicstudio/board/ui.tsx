@@ -47,8 +47,14 @@ export const SectionTitle: React.FC<{ children: React.ReactNode; right?: React.R
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; size?: 'xs' | 'sm' | 'md' };
 
+// Coarse pointers (mobile.md §2.4): sm/md grow to a real 44 px; xs keeps a compact look with a 44 px
+// hit area (`tap-target`). Fine pointers keep today's sizes.
 const sizeCls = (size: ButtonProps['size'] = 'md') =>
-  size === 'xs' ? 'h-7 px-2.5 text-[11.5px]' : size === 'sm' ? 'h-8 px-3 text-[12px]' : 'h-9 px-4 text-[13px]';
+  size === 'xs'
+    ? 'h-7 px-2.5 text-[11.5px] coarse:h-10 tap-target'
+    : size === 'sm'
+      ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:px-3.5'
+      : 'h-9 px-4 text-[13px] coarse:h-11';
 
 export const PrimaryButton: React.FC<ButtonProps> = ({ busy, size, className, children, disabled, type, ...rest }) => (
   <button
@@ -100,7 +106,7 @@ export const IconButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
     {...rest}
     className={cx(
       `inline-flex shrink-0 items-center justify-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${TRANSITION} ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-40`,
-      size === 'sm' ? 'h-7 w-7' : 'h-8 w-8',
+      size === 'sm' ? 'h-7 w-7 coarse:h-9 coarse:w-9 tap-target' : 'h-8 w-8 coarse:h-11 coarse:w-11',
       className
     )}
   >
@@ -178,7 +184,7 @@ export function Segmented<T extends string>({
             onKeyDown={(e) => onKey(e, i)}
             className={cx(
               `flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING} disabled:opacity-40`,
-              size === 'xs' ? 'px-2 py-1 text-[11px]' : 'px-2.5 py-1.5 text-[12px]',
+              size === 'xs' ? 'px-2 py-1 text-[11px] coarse:min-h-[40px]' : 'px-2.5 py-1.5 text-[12px] coarse:min-h-[44px]',
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
@@ -217,6 +223,11 @@ export interface InlineFieldProps {
   id?: string;
   /** When false, clearing the field reverts it instead of committing an empty value (names, titles). */
   allowEmpty?: boolean;
+  /**
+   * Multiline fields that are really one long value (comic title, names, taglines): Enter commits
+   * (blurs) and Shift+Enter makes a newline, while the text still wraps instead of clipping.
+   */
+  submitOnEnter?: boolean;
 }
 
 /**
@@ -239,7 +250,8 @@ export const InlineField: React.FC<InlineFieldProps> = ({
   autoFocus,
   mono,
   id,
-  allowEmpty = true
+  allowEmpty = true,
+  submitOnEnter = false
 }) => {
   const [draft, setDraft] = useState(value);
   const focused = useRef(false);
@@ -252,13 +264,47 @@ export const InlineField: React.FC<InlineFieldProps> = ({
     if (!focused.current) setDraft(value);
   }, [value]);
 
-  const autosize = () => {
+  const autosize = React.useCallback(() => {
     const el = ref.current;
     if (!el || !multiline) return;
     el.style.height = 'auto';
     if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight + 2}px`;
-  };
-  useLayoutEffect(autosize, [draft, multiline]);
+  }, [multiline]);
+  useLayoutEffect(autosize, [draft, autosize]);
+
+  // Re-measure when the field's WIDTH changes (split drag, the board appearing, a scrollbar) and once
+  // web fonts land — otherwise wrapped text is silently cut at the bottom (visualqa P1-2).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !multiline) return;
+    let frame = 0;
+    let lastWidth = el.getBoundingClientRect().width;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        autosize();
+      });
+    };
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver((records) => {
+        const w = records[0]?.contentRect?.width ?? el.getBoundingClientRect().width;
+        if (Math.abs(w - lastWidth) < 0.5) return; // height changes come from autosize itself: no loop
+        lastWidth = w;
+        schedule();
+      });
+      ro.observe(el);
+    }
+    let alive = true;
+    const fonts = typeof document !== 'undefined' ? (document as Document & { fonts?: { ready?: Promise<unknown> } }).fonts : undefined;
+    fonts?.ready?.then(() => alive && autosize()).catch(() => undefined);
+    return () => {
+      alive = false;
+      ro?.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [multiline, autosize]);
 
   const commit = () => {
     focused.current = false;
@@ -292,14 +338,24 @@ export const InlineField: React.FC<InlineFieldProps> = ({
         cancelled.current = true;
         setDraft(value);
         ref.current?.blur();
-      } else if (e.key === 'Enter' && (!multiline || e.metaKey || e.ctrlKey)) {
+      } else if (e.key === 'Enter' && !e.nativeEvent.isComposing && (!multiline || e.metaKey || e.ctrlKey || (submitOnEnter && !e.shiftKey))) {
         e.preventDefault();
         ref.current?.blur();
       }
     },
+    // The whole value on hover/long-press when it doesn't fit (single-line fields ellipsize).
+    title: !multiline && draft ? draft : undefined,
     // Default value size sits just under body text on desktop (labels 11px, values 13.5px);
     // phones keep 16px so focusing a field never zooms the page.
-    className: cx(FIELD_BASE, !mono && !HAS_TEXT_SIZE.test(inputClassName || '') && 'text-base sm:text-[13.5px]', mono && 'font-mono text-[12px]', inputClassName)
+    className: cx(
+      FIELD_BASE,
+      // 16 px on phones and every coarse pointer (no iOS focus zoom); 13.5 px on desktop.
+      !mono && !HAS_TEXT_SIZE.test(inputClassName || '') && 'text-base sm:text-[13.5px] coarse:text-base',
+      mono && 'font-mono text-[12px]',
+      // Long single-line values end in an ellipsis instead of being clipped mid-letter (visualqa P1-1).
+      !multiline && 'overflow-hidden text-ellipsis',
+      inputClassName
+    )
   };
 
   return (
@@ -377,7 +433,18 @@ export interface RenderOverlayProps {
   /** There is an older image under the overlay (dim it instead of shimmering the whole frame). */
   overImage?: boolean;
   compact?: boolean;
+  /** A free re-check of the job (re-poll / resync) offered when a render is far past its usual time. */
+  onRefresh?: () => void;
 }
+
+/** Past this multiple of the model's usual time the clock stops and "Check again" is offered. */
+export const STUCK_FACTOR = 10;
+/** Without a typical time, a render counts as stuck after this long. */
+export const STUCK_FALLBACK_MS = 15 * 60_000;
+
+/** Is a render that started `elapsedMs` ago far past its usual time? */
+export const isStuck = (elapsedMs: number, typicalSec?: number): boolean =>
+  elapsedMs > (typicalSec && typicalSec > 0 ? typicalSec * 1000 * STUCK_FACTOR : STUCK_FALLBACK_MS);
 
 /**
  * The status layer over any render frame: shimmer + elapsed + model while drawing, error
@@ -394,22 +461,48 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
   staleLabel = 'Out of date',
   onRerender,
   overImage,
-  compact
+  compact,
+  onRefresh
 }) => {
   const busy = status === 'queued' || status === 'rendering';
   const now = useNow(busy);
   if (busy) {
-    const elapsed = since ? now - since : 0;
+    const elapsed = since ? Math.max(0, now - since) : 0;
     const slow = status === 'rendering' && typicalSec && elapsed > typicalSec * 2500;
+    // A clock that reads "378d" helps nobody: past 10× the usual time it stops and offers a free re-check.
+    const stuck = !!since && isStuck(elapsed, typicalSec);
     return (
       <div className={cx('absolute inset-0 z-[3] flex flex-col justify-end', overImage ? 'bg-black/25' : '')} aria-live="polite">
         {!overImage && <div className="studio-shimmer absolute inset-0" aria-hidden />}
-        <div className={cx('relative m-2 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 rounded-full bg-[var(--ds-surface-strong)] px-2.5 py-1 text-center font-medium text-[var(--ds-ink)] shadow-sm', compact ? 'text-[10px]' : 'text-[11px]')}>
-          <span className={cx('h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && 'animate-pulse')} aria-hidden />
-          {status === 'queued' ? (
-            <span>Queued{model ? ` · ${model}` : ''}</span>
+        {/* Fade whatever sits under the pill (plan sketch, placeholder copy) so text never overlaps text. */}
+        {!overImage && <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[var(--ds-surface)] to-transparent" aria-hidden />}
+        <div
+          className={cx(
+            'relative m-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 self-center rounded-full bg-[var(--ds-surface-strong)] px-2.5 py-1 text-center font-medium text-[var(--ds-ink)] shadow-sm',
+            compact ? 'text-[10px]' : 'text-[11px]'
+          )}
+        >
+          <span className={cx('h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && !stuck && 'animate-pulse')} aria-hidden />
+          {status === 'queued' && !stuck ? (
+            <span className="min-w-0 truncate">Queued{model ? ` · ${model}` : ''}</span>
+          ) : stuck ? (
+            <>
+              <span className="min-w-0">{status === 'queued' ? 'Still queued' : 'Still drawing'} · much longer than usual</span>
+              {onRefresh && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRefresh();
+                  }}
+                  className={`tap-target rounded-full px-1.5 font-semibold text-[var(--ds-accent)] hover:underline ${FOCUS_RING}`}
+                >
+                  Check again
+                </button>
+              )}
+            </>
           ) : (
-            <span>
+            <span className="min-w-0">
               Drawing{since ? ` · ${formatElapsed(elapsed)}` : '…'}
               {model ? ` · ${model}` : ''}
               {!compact && typicalSec && !slow ? <span className="text-[var(--ds-muted)]"> (usually ~{typicalSec}s)</span> : null}
@@ -427,7 +520,8 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
         role="alert"
         className={cx(
           'absolute inset-0 z-[3] flex flex-col items-center justify-center p-3 text-center',
-          overImage ? 'bg-black/45' : 'bg-red-500/[0.05] backdrop-blur-[2px]'
+          // Opaque over placeholders: the plan sketch / "Not drawn yet" copy never shows through (visualqa P2-2).
+          overImage ? 'bg-black/45' : 'bg-[var(--ds-surface)]'
         )}
       >
         <div
@@ -447,7 +541,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
                 e.stopPropagation();
                 onRetry();
               }}
-              className={`inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
+              className={`inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[40px] tap-target ${FOCUS_RING}`}
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {retryLabel}
             </button>
@@ -476,7 +570,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
                 e.stopPropagation();
                 onRerender();
               }}
-              className={`shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10.5px] font-semibold text-white hover:bg-amber-600 ${FOCUS_RING}`}
+              className={`tap-target shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10.5px] font-semibold text-white hover:bg-amber-600 ${FOCUS_RING}`}
             >
               Re-render
             </button>
@@ -511,7 +605,7 @@ export const ConfirmStrip: React.FC<{
         type="button"
         onClick={onConfirm}
         className={cx(
-          `inline-flex h-7 items-center rounded-lg px-2.5 text-[12px] font-semibold text-white ${FOCUS_RING}`,
+          `inline-flex h-7 items-center rounded-lg px-2.5 text-[12px] font-semibold text-white coarse:h-10 ${FOCUS_RING}`,
           tone === 'danger' ? 'bg-red-600 hover:bg-red-700' : `${ACCENT_BG} ${ACCENT_BG_HOVER}`
         )}
       >

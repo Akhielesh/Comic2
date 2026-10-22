@@ -1,12 +1,16 @@
 // Format panel (composer chip "▭ 2:3 · 6p"): kind, page shape, page count, panel density,
 // lettering and reading direction. Every change is an instant `format` patch — no LLM —
 // and the director sees it on its next turn.
+//
+// Tell before staling (director.md §3.8.4): when pages are already drawn, the panel says up
+// front that a new shape / lettering mode marks them out of date and what a redraw would cost;
+// after such a change it says how many are now out of date and offers "Switch back" (free).
 
 import React from 'react';
-import { BookHeart, BookOpen, GalleryHorizontal, Minus, Plus, ScrollText, Smartphone } from 'lucide-react';
-import type { AspectRatio, ComicDoc, ComicKind, Format, LetteringMode } from '../../../../shared/comic/doc';
+import { BookHeart, BookOpen, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
+import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Format, type LetteringMode, type Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
-import { formatUsd, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import { estimateJobs, formatUsd, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
 import { AspectGlyph, Segmented, SectionLabel, cx } from '../ui';
 
 export const KIND_OPTIONS: { value: ComicKind; label: string; icon: React.ReactNode }[] = [
@@ -64,6 +68,24 @@ export const kindPatch = (format: Format, kind: ComicKind): Partial<Format> => {
   return patch;
 };
 
+/** Format fields that are part of every page's spec hash: changing one marks drawn pages out of date. */
+export const STALING_FORMAT_KEYS = ['pageAspect', 'colorMode', 'lettering'] as const;
+type StalingKey = (typeof STALING_FORMAT_KEYS)[number];
+
+/** True when applying `patch` would change a field drawn pages depend on. */
+export const isStalingChange = (format: Format, patch: Partial<Format>): boolean =>
+  STALING_FORMAT_KEYS.some((k) => patch[k] !== undefined && patch[k] !== format[k]);
+
+/** Drawn pages whose art still matches their spec (what a staling change would put out of date). */
+export const drawnCurrentPages = (doc: ComicDoc): Page[] =>
+  doc.pages.filter((p) => p.render.status === 'ready' && !!p.render.asset && !isPageStale(doc, p));
+
+/** Honest registry quote for redrawing `count` pages on the comic's tier/model. */
+export const redrawQuoteUsd = (doc: ComicDoc, count: number, byok: boolean): number =>
+  count > 0 ? estimateJobs([{ kind: 'page', count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd : 0;
+
+const pagesWord = (n: number) => (n === 1 ? '1 page' : `${n} pages`);
+
 export const LETTERING_OPTIONS: { value: LetteringMode; title: string; blurb: string }[] = [
   { value: 'overlay', title: 'Editable balloons', blurb: 'Clean art; we letter it with balloons you can edit and move.' },
   { value: 'in_art', title: 'Drawn by the model', blurb: 'The model letters the page itself — best on Pro.' }
@@ -112,7 +134,18 @@ export interface FormatPanelProps {
 
 export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = false }) => {
   const format = doc.format;
-  const set = (p: Partial<Format>) => void patch([{ op: 'format', patch: p }]);
+  // The values a staling change replaced, so "Switch back" can restore them for free.
+  const [undoStale, setUndoStale] = React.useState<Partial<Pick<Format, StalingKey>> | null>(null);
+  const drawn = drawnCurrentPages(doc);
+  const staleNow = doc.pages.filter((p) => isPageStale(doc, p)).length;
+  const set = (p: Partial<Format>) => {
+    if (isStalingChange(format, p) && drawn.length) {
+      const before: Partial<Pick<Format, StalingKey>> = {};
+      for (const k of STALING_FORMAT_KEYS) if (p[k] !== undefined && p[k] !== format[k]) (before as Record<string, unknown>)[k] = format[k];
+      setUndoStale((prev) => ({ ...before, ...(prev || {}) }));
+    }
+    void patch([{ op: 'format', patch: p }]);
+  };
   const shapes = ASPECTS_BY_KIND[format.kind] || ASPECTS_BY_KIND.comic;
   const shapeList = shapes.some((s) => s.value === format.pageAspect)
     ? shapes
@@ -123,6 +156,34 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
 
   return (
     <div className="space-y-5 p-4">
+      {undoStale && staleNow > 0 ? (
+        <div role="status" className="flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2.5 text-[12px] leading-snug text-[var(--ds-ink)]">
+          <p className="min-w-0 flex-1 basis-[12rem] [overflow-wrap:anywhere]">
+            {staleNow === 1 ? '1 drawn page is' : `${staleNow} drawn pages are`} now out of date — redraw ≈ {formatUsd(redrawQuoteUsd(doc, staleNow, byok))} when you’re
+            ready, or switch back to keep {staleNow === 1 ? 'it' : 'them'} as {staleNow === 1 ? 'it is' : 'they are'}.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              const before = undoStale;
+              setUndoStale(null);
+              void patch([{ op: 'format', patch: before }]);
+            }}
+            className="tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 py-1 text-[11.5px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden /> Switch back
+          </button>
+        </div>
+      ) : drawn.length > 0 ? (
+        <p className="flex items-start gap-2 rounded-xl bg-[var(--ds-well)] px-3 py-2 text-[11.5px] leading-snug text-[var(--ds-muted)]">
+          <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 [overflow-wrap:anywhere]">
+            {pagesWord(drawn.length)} {drawn.length === 1 ? 'is' : 'are'} already drawn. A new page shape or lettering mode marks{' '}
+            {drawn.length === 1 ? 'it' : 'them'} out of date (redraw ≈ {formatUsd(redrawQuoteUsd(doc, drawn.length, byok))}) — nothing is redrawn until you ask.
+          </span>
+        </p>
+      ) : null}
+
       <div>
         <SectionLabel>Kind</SectionLabel>
         <Segmented

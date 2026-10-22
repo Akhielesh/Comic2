@@ -47,6 +47,13 @@ describe('keyCommand', () => {
     expect(keyCommand({ key: 'PageUp' }, column)).toEqual({ type: 'scroll', amount: -0.85 });
     expect(keyCommand({ key: 'ArrowRight' }, column)).toEqual({ type: 'scroll', amount: 1 });
   });
+
+  it('↑ / ↓ scroll the column a little; in a book they do nothing (the page stays put)', () => {
+    expect(keyCommand({ key: 'ArrowDown' }, column)).toEqual({ type: 'scroll', amount: 0.3 });
+    expect(keyCommand({ key: 'ArrowUp' }, column)).toEqual({ type: 'scroll', amount: -0.3 });
+    expect(keyCommand({ key: 'ArrowDown' }, book)).toBeNull();
+    expect(keyCommand({ key: 'ArrowUp' }, manga)).toBeNull();
+  });
 });
 
 describe('taps', () => {

@@ -216,6 +216,52 @@ describe('ImmersiveReader', () => {
     expect(screen.queryByTestId('paper-back')).toBeNull();
   });
 
+  it('reduced motion: dragging a page is a crossfade that follows the finger — no fold, no paper back', async () => {
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    const stage = screen.getByTestId('book-stage');
+    const page1 = document.querySelector('[data-slot="i1"]') as HTMLElement;
+    const page2 = document.querySelector('[data-slot="i2"]') as HTMLElement;
+    fireEvent.pointerDown(stage, { clientX: 300, clientY: 400, pointerId: 7, pointerType: 'touch' });
+    fireEvent.pointerMove(stage, { clientX: 260, clientY: 402, pointerId: 7, pointerType: 'touch' });
+    expect(page2.dataset.visible).toBe('true');
+    expect(page2.style.opacity).toBe('0'); // fades in as the finger travels
+    expect(page1.style.clipPath).toBe('');
+    expect(page1.style.transform).toBe('');
+    expect(screen.queryByTestId('paper-back')).toBeNull();
+    fireEvent.pointerMove(stage, { clientX: -200, clientY: 402, pointerId: 7, pointerType: 'touch' });
+    fireEvent.pointerUp(stage, { clientX: -200, clientY: 402, pointerId: 7, pointerType: 'touch' });
+    await waitFor(() => expect(counter()).toBe('Page 2 of 6'), { timeout: 3000 });
+    expect(page2.style.opacity).toBe('');
+  });
+
+  it('the cover intro opens once on a swipe (no double turn from the click that may follow)', async () => {
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro onExit={() => undefined} />);
+    const intro = screen.getByTestId('cover-intro');
+    fireEvent.pointerDown(intro, { clientX: 300, clientY: 400, pointerType: 'touch' });
+    fireEvent.pointerUp(intro, { clientX: 200, clientY: 400, pointerType: 'touch' });
+    fireEvent.click(intro);
+    expect(root().dataset.phase).toBe('reading');
+    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 3000 });
+    // No queued second turn: it stays on page 1.
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(counter()).toBe('Page 1 of 6');
+  });
+
+  it('Tab never leaves the reader; off-screen pages are inert', () => {
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    const hidden = document.querySelector('[data-slot][data-visible="false"]') as HTMLElement;
+    expect(hidden).toHaveAttribute('inert');
+    const close = screen.getByRole('button', { name: 'Close reader' });
+    const scrubber = screen.getByRole('slider', { name: 'Page' });
+    scrubber.focus();
+    fireEvent.keyDown(scrubber, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(scrubber);
+  });
+
   it('nothing drawn yet: an honest empty state', () => {
     render(<ImmersiveReader doc={makeSampleDoc((d) => d.pages.forEach((p) => (p.render = { status: 'none', history: [] })))} urlFor={fakeUrlFor} intro onExit={() => undefined} />);
     expect(screen.getByText('Nothing to read yet')).toBeInTheDocument();

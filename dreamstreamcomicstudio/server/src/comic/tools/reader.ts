@@ -94,8 +94,8 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
         guidedOverview: { type: 'boolean', description: 'Guided View shows the whole page first, then each panel.' },
         paperTexture: { type: 'boolean', description: 'Subtle paper grain and page edges.' },
         ambient: { type: 'boolean', description: 'Tint the dark reading room with the colours of the current page.' },
-        credits: { type: ['string', 'null'], description: `End-card credits line (≤ ${DOC_LIMITS.readerTextChars} characters). null clears it.` },
-        dedication: { type: ['string', 'null'], description: `Inside-cover dedication (≤ ${DOC_LIMITS.readerTextChars} characters). null clears it.` }
+        credits: { type: 'string', description: `End-card credits line (≤ ${DOC_LIMITS.readerTextChars} characters). An empty string clears it.` },
+        dedication: { type: 'string', description: `Inside-cover dedication (≤ ${DOC_LIMITS.readerTextChars} characters). An empty string clears it.` }
       },
       additionalProperties: false
     },
@@ -133,12 +133,12 @@ function setChapterTool(ctx: StudioContext): DirectorTool {
   return defineTool(
     'set_chapter',
     'free',
-    `Mark (or clear) a chapter start on a page. The title shows as a chapter mark on the reader's page scrubber and on the End card. title ≤ ${DOC_LIMITS.chapterTitleChars} characters; null clears the mark.`,
+    `Mark (or clear) a chapter start on a page. The title shows as a chapter mark on the reader's page scrubber and on the End card. title ≤ ${DOC_LIMITS.chapterTitleChars} characters; an empty title clears the mark.`,
     {
       type: 'object',
       properties: {
         page: { type: 'integer', minimum: 1, description: '1-based page number where the chapter starts.' },
-        title: { type: ['string', 'null'], description: 'Chapter title, e.g. "Chapter 2: The Lake". null removes the mark.' }
+        title: { type: 'string', description: 'Chapter title, e.g. "Chapter 2: The Lake". An empty string removes the mark.' }
       },
       required: ['page', 'title'],
       additionalProperties: false

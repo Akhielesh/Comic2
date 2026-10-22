@@ -26,6 +26,7 @@ import {
   tailToggleOps,
   textEditOps,
   tidyOps,
+  widenOps,
   zOrderOps
 } from './styleOps';
 
@@ -190,6 +191,28 @@ describe('arrange', () => {
     const { doc, page } = ctx();
     const ops = resetPositionOps(doc, page, ['pg_1_l3'], ASPECT, estimateMeasure);
     expect(ops[0]).toMatchObject({ op: 'balloon', lineId: 'pg_1_l3', patch: { pinned: false } });
+  });
+});
+
+describe('widen (overflow fix)', () => {
+  it('always makes the balloon wider than drawn — never narrower — and keeps it on the page', () => {
+    // A balloon the user already made wide (0.6) near the right edge: "Fit text" would narrow it.
+    const { doc, page } = ctx((d) => {
+      d.pages[0].balloons[0] = { lineId: 'pg_1_l1', x: 0.38, y: 0.05, w: 0.6, pinned: true };
+    });
+    const plans = planLettering(doc, page, ASPECT, estimateMeasure);
+    const resolved = resolvePlacements(doc, page, ASPECT, estimateMeasure).balloons;
+    const before = plans.find((p) => p.lineId === 'pg_1_l1')!;
+    const ops = widenOps(doc, page, plans, ['pg_1_l1'], resolved);
+    expect(ops).toHaveLength(1);
+    const patch = (ops[0] as { patch: { x: number; w: number; pinned: boolean } }).patch;
+    expect(patch.w).toBeGreaterThan(before.w / 1000);
+    expect(patch.pinned).toBe(true);
+    expect(patch.x + patch.w).toBeLessThanOrEqual(1 - 0.008 + 1e-9);
+    expect(patch.x).toBeGreaterThanOrEqual(0.008);
+    // Locked balloons are left alone.
+    const locked = plans.map((p) => (p.lineId === 'pg_1_l1' ? { ...p, locked: true } : p));
+    expect(widenOps(doc, page, locked, ['pg_1_l1'], resolved)).toEqual([]);
   });
 });
 

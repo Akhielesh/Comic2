@@ -474,6 +474,8 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   }
 
   const lines = quote.perLanguage.reduce((n, l) => n + l.lines, 0);
+  // Duplicates of lines being translated now are copied for free once their twin is done.
+  freeCount += quote.plans.reduce((n, p) => n + (p.deferred?.length || 0), 0);
   const skipped = unknown.length ? ` (I don't know ${joinList(unknown)} as a language, so I left it out.)` : '';
   const startText = `Translating ${plural(lines, 'line')} into ${names} (≈ ${formatUsd(quote.estimate.usd)}${quote.byok ? ' on your key' : ''})${freeCount ? `; ${plural(freeCount, 'line')} reused for free` : ''}. Every line gets a linguist review.${skipped}`;
   const card = translationCard(codes);

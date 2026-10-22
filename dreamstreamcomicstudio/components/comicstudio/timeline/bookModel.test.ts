@@ -85,6 +85,18 @@ describe('clips and the dock summary', () => {
     expect(bookClips(doc)[1].mismatch).toEqual({ want: '4:5', got: '1:1' });
   });
 
+  it('a duplicated page shows no spend of its own: each paid image is counted once across the book', () => {
+    const doc = applyOp(richDoc(), { op: 'page_duplicate', id: 'pg_1', newId: 'pg_copy' });
+    const byKey = new Map(bookClips(doc).map((c) => [c.key, c]));
+    expect(byKey.get('pg_copy')).toMatchObject({ drawn: true, versions: 1, spentUsd: 0 });
+    expect(byKey.get('pg_1')?.spentUsd).toBe(0.17); // the ledger's real charges stay on the original
+    // Old docs without ledger targets fall back to recorded version costs — still once per image,
+    // even when the copy is moved in front of the original.
+    const legacy = applyOp({ ...doc, spend: { ...doc.spend, entries: [] } }, { op: 'pages_reorder', order: ['pg_copy', 'pg_1'] });
+    const clips = bookClips(legacy).filter((c) => c.kind === 'page');
+    expect(clips.reduce((n, c) => n + c.spentUsd, 0)).toBe(0.06);
+  });
+
   it('ghost plates offer the disabled software pages (free toggles)', () => {
     expect(ghostPlates(richDoc()).map((g) => [g.kind, g.patch])).toEqual([
       ['title', { titlePage: true }],
@@ -163,5 +175,9 @@ describe('media index', () => {
     const doc = richDoc();
     doc.brief = { ...doc.brief, title: '../../My "Heist" <1>' };
     expect(downloadName(doc, { owner: { key: 'k', label: 'Page 3 / v2', order: 0 }, versionN: 2 })).toBe('my-heist-1-page-3-v2-v2.webp');
+    // The extension is the real file type: the downloaded MIME, else the stored path's extension.
+    expect(downloadName(doc, { owner: { key: 'k', label: 'Maya ref', order: 0 } }, 'image/png')).toBe('my-heist-1-maya-ref.png');
+    expect(downloadName(doc, { owner: { key: 'k', label: 'Upload', order: 0 }, path: 'u/x/p/ref/photo.JPEG' })).toBe('my-heist-1-upload.jpg');
+    expect(downloadName(doc, { owner: { key: 'k', label: 'Upload', order: 0 }, path: 'u/x/p/ref/photo.exe' }, 'text/html')).toBe('my-heist-1-upload.webp');
   });
 });

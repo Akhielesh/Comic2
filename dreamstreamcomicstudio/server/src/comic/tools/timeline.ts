@@ -39,7 +39,7 @@ import { reorderIds, continuityHint } from '../../../../shared/comic/book.js';
 import { unitPrice } from '../../../../shared/comic/plan.js';
 import { DOC_LIMITS, MAX_ARCHIVE } from '../../../../shared/comic/limits.js';
 import { canServeToOwner } from '../../../../shared/comic/safety.js';
-import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
+import { defineTool, toolArgError, toolErrorText, type DirectorTool, type ToolGroup } from '../extensions.js';
 import { planPages, sanitizeCtxFor, sanitizePatchOps, spendIsByok } from '../jobs.js';
 import { MAX_PAID_TEXT_PER_TURN, pushNextSteps, type DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
@@ -343,8 +343,16 @@ function insertPageTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
       const instructions =
         summary ||
         `Write new page ${n} so it bridges ${prevBeat ? `“${clip(prevBeat, 160)}”` : 'the opening'} and ${nextBeat ? `“${clip(nextBeat, 160)}”` : 'the ending'}.`;
-      const outcome = await planPages(ctx, { instructions, pageIds: [id] }, { collectCard: (c) => turn.cards.push(c), origin: 'director' });
+      let outcome: Awaited<ReturnType<typeof planPages>>;
+      try {
+        outcome = await planPages(ctx, { instructions, pageIds: [id] }, { collectCard: (c) => turn.cards.push(c), origin: 'director' });
+      } catch (err) {
+        // The blank page is already in the book: say so, never a bare error the model reads as "nothing happened".
+        const why = toolErrorText(err).replace(/^Error:\s*/, '').replace(/[.!]+$/, '');
+        return `Added a blank page ${n} ($0), but the writer couldn't write it: ${why}. The page is in the book and empty — offer to try again or let the user type it in the Pages tab.`;
+      }
       turn.plannedThisTurn = true;
+      if (outcome.status !== 'done') return `Added a blank page ${n} ($0); writing it didn't finish: ${outcome.message}`;
       return `Added page ${n} and wrote it: ${outcome.message} Draw it later with render_pages (only when the user asks).`;
     }
   );

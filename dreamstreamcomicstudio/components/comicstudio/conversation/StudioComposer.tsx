@@ -1,8 +1,17 @@
 // The studio composer: a calm glass box where the user talks to the Comic Director.
 //
-//  - Auto-growing textarea. Enter sends, Shift+Enter is a newline, Cmd/Ctrl+K focuses it.
+//  - Auto-growing textarea (capped at 240 px, or 30 % of the visible height on phones so the
+//    keyboard never pushes the conversation away). Cmd/Ctrl+K focuses it.
+//  - Enter rule (contract §13.4): on touch devices (coarse pointer — phones AND tablets) Enter is
+//    a newline and the Send button sends, like mainstream mobile chat apps, so half-typed scripts
+//    never go out by accident. On fine pointers Enter sends and Shift+Enter is a newline.
+//    ⌘/Ctrl+Enter always sends. 16 px text on every coarse pointer (no iOS focus zoom).
 //  - Attach (+), paste or drop: PNG/JPG/WebP images ≤ 10 MB become attachments (character
-//    photos, style refs; big photos are downscaled first). Script files are read IN THE
+//    photos, style refs; big photos are downscaled first). On touch, + opens an action sheet:
+//    Photo library · Take a photo (camera) · Script or document. Images upload to the comic's
+//    inbox right away (`uploadRef(…, {kind:'inbox'})`, with progress) and go with the message as
+//    `inboxPaths`; if that upload is unavailable or still running at send time, the image goes
+//    inline as before — never lost, never blocking. Script files are read IN THE
 //    BROWSER to plain text before upload — .txt/.md as-is, and .docx (mammoth), .pdf
 //    (pdf.js) and .fdx (Final Draft XML) via scriptImport, whose parsers load only when
 //    such a file is attached. The server appends short scripts to the message and saves
@@ -13,22 +22,26 @@
 //  - Gemini-style option chips (format · style · quality) open anchored panels above the
 //    composer; changes there are instant doc patches.
 //  - While a director turn streams the send button becomes Stop.
+//  - A selection in the page editor shows as a focus chip ("Page 3 · 2 balloons ×"); the next
+//    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ArrowUp, AudioLines, FileText, Palette, Plus, Sparkles, Square, X } from 'lucide-react';
+import { ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, Palette, Plus, Sparkles, Square, X } from 'lucide-react';
 import { TIER_PRESETS } from '../../../shared/comic/models';
 import { DictationButton } from '../../chat/DictationButton';
 import { voiceInputSupported } from '../../../hooks/useDictation';
 import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
-import type { PendingAttachment } from '../types';
+import type { PendingAttachment, SendOptions } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { COMPOSE_EVENT, type ComposeRequest } from './composerBus';
-import { PopSheet } from './PopSheet';
+import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
+import { isPhoneLayout } from '../mobile/formFactor';
+import { useFormFactor } from '../mobile/useFormFactor';
 import { FormatPanel } from './panels/FormatPanel';
 import { StylePanel } from './panels/StylePanel';
 import { QualityPanel } from './panels/QualityPanel';
 import { AspectGlyph, cx } from './ui';
-import { useMediaQuery } from '../../studio/kit/useMediaQuery';
+import { useElementSize } from '../board/ui';
 import { importScriptFile, scriptKindOf, ScriptImportError, SCRIPT_ACCEPT } from './scriptImport';
 
 export const VOICE_AUTOSEND_KEY = 'comicstudio.voiceAutoSend';
@@ -48,7 +61,10 @@ const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/x-markdown']);
 const TEXT_EXT = /\.(txt|md|markdown|text|fountain)$/i;
 // .docx/.pdf/.fdx need in-browser extraction (mammoth/pdf.js/XML); the rest are plain text.
 const RICH_SCRIPT_KINDS = new Set(['docx', 'pdf', 'fdx']);
-const ACCEPT = `image/png,image/jpeg,image/webp,${SCRIPT_ACCEPT}`;
+const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp';
+const ACCEPT = `${IMAGE_ACCEPT},${SCRIPT_ACCEPT}`;
+/** Below this composer width the quality chip and the voice auto-send toggle step aside. */
+const ROOMY_PX = 400;
 
 export type ComposerPanel = 'format' | 'style' | 'quality';
 
@@ -58,7 +74,56 @@ interface ComposerAttachment extends PendingAttachment {
   /** Characters in a text attachment (for the chip). */
   chars?: number;
   truncated?: boolean;
+  /** Images: inbox upload state. 'done' carries `inboxPath`; anything else falls back to the data URL. */
+  upload?: 'pending' | 'done' | 'failed';
+  inboxPath?: string;
+  /** 0..1 while pending. */
+  progress?: number;
 }
+
+/**
+ * What Enter does in the composer (contract §13.4): coarse pointers insert a newline (the Send
+ * button sends); fine pointers send, Shift+Enter is a newline; ⌘/Ctrl+Enter always sends; IME
+ * composition is never interrupted.
+ */
+export const enterAction = (
+  e: { key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; isComposing?: boolean },
+  coarse: boolean
+): 'send' | 'newline' | 'none' => {
+  if (e.key !== 'Enter' || e.isComposing) return 'none';
+  if (e.metaKey || e.ctrlKey) return 'send';
+  if (coarse || e.shiftKey) return 'newline';
+  return 'send';
+};
+
+/** A data: URL as a Blob (the downscaled photo is what goes to the inbox, not the 12 MB original). */
+export const dataUrlToBlob = (dataUrl: string): Blob | null => {
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!m) return null;
+  try {
+    const type = m[1] || 'application/octet-stream';
+    if (!m[2]) return new Blob([decodeURIComponent(m[3])], { type });
+    const bin = atob(m[3]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type });
+  } catch {
+    return null;
+  }
+};
+
+/** The focus chip's words for a selection ("Page 3 · 2 balloons"). */
+export const selectionLabel = (
+  doc: { pages: { id: string; n: number }[] } | null | undefined,
+  sel: { pageId: string; lineIds: string[]; panelN?: number } | null | undefined
+): string | null => {
+  if (!doc || !sel?.pageId) return null;
+  const page = doc.pages.find((p) => p.id === sel.pageId);
+  if (!page) return null;
+  const n = sel.lineIds?.length || 0;
+  const detail = n ? ` · ${n} ${n === 1 ? 'balloon' : 'balloons'}` : typeof sel.panelN === 'number' ? ` · panel ${sel.panelN}` : '';
+  return `Page ${page.n}${detail}`;
+};
 
 export interface StudioComposerHandle {
   focus(): void;
@@ -168,9 +233,13 @@ export interface StudioComposerProps {
 
 export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className }) => {
   const { doc, messageBusy, cancelling } = studio;
+  const ff = useFormFactor();
+  const coarse = ff.coarse;
+  const phone = isPhoneLayout(ff.layout);
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [panel, setPanel] = useState<ComposerPanel | null>(null);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -185,13 +254,22 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const scriptInputRef = useRef<HTMLInputElement>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
+  const uploads = useRef(new Map<string, AbortController>());
   const dictationBaseRef = useRef('');
   const dragDepth = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Phones: shorter placeholder; the quality chip lives in the header there.
-  const roomy = useMediaQuery('(min-width: 640px)');
+  // Measured on the COMPOSER, not the window: a 320 px chat pane on a tablet is as tight as a phone.
+  // Narrow: shorter placeholder; the quality chip lives in the header / ⋯ menu.
+  const [rootSizeRef, rootSize] = useElementSize<HTMLDivElement>();
+  const roomy = rootSize.width === 0 ? !phone : rootSize.width >= ROOMY_PX;
+  // On touch, or when the voice toggle has stepped aside, + opens the attach sheet (camera, toggle).
+  const attachSheet = coarse || !roomy;
   // The chip row scrolls sideways when the column is narrow — fade the clipped edge so it reads as "more".
   const [chipsClipped, setChipsClipped] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
   const measureChips = useCallback(() => {
@@ -220,15 +298,27 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const autoGrow = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
+    let cap = MAX_TEXTAREA_PX;
+    try {
+      const mh = parseFloat(getComputedStyle(el).maxHeight);
+      if (Number.isFinite(mh) && mh > 0) cap = Math.min(cap, mh);
+    } catch {
+      /* jsdom */
+    }
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
   }, []);
 
+  // Re-measure when the composer's width changes (split drag, rotation) — visualqa P1-2.
+  const lastWidth = useRef(0);
+  useEffect(() => {
+    if (Math.abs(rootSize.width - lastWidth.current) < 0.5) return;
+    lastWidth.current = rootSize.width;
+    autoGrow();
+  }, [rootSize.width, autoGrow]);
+
   const focusEnd = useCallback(() => {
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
+    const place = (el: HTMLTextAreaElement) => {
       autoGrow();
       const end = el.value.length;
       try {
@@ -236,6 +326,21 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       } catch {
         /* some input types don't support selection */
       }
+    };
+    // Focus synchronously when we can: iOS only raises the keyboard for a focus() inside the tap.
+    const now = textareaRef.current;
+    if (now && !now.disabled) {
+      try {
+        now.focus({ preventScroll: true });
+      } catch {
+        now.focus();
+      }
+    }
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      if (document.activeElement !== el) el.focus();
+      place(el);
     });
   }, [autoGrow]);
 
@@ -257,12 +362,53 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
 
+  // Abort in-flight inbox uploads when the composer goes away.
+  useEffect(() => {
+    const map = uploads.current;
+    return () => {
+      map.forEach((c) => c.abort());
+      map.clear();
+    };
+  }, []);
+
+  /** Start the inbox upload for an image attachment; any failure keeps the inline data-URL path. */
+  const startInboxUpload = useCallback(
+    (att: ComposerAttachment, original: File) => {
+      if (typeof studio.uploadRef !== 'function') return;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      if (ctrl) uploads.current.set(att.id, ctrl);
+      const patchAtt = (p: Partial<ComposerAttachment>) => setAttachments((prev) => prev.map((a) => (a.id === att.id ? { ...a, ...p } : a)));
+      const body = (att.dataUrl !== '' && att.mimeType !== original.type ? dataUrlToBlob(att.dataUrl) : null) || original;
+      let result: Promise<{ ref?: { path?: string } }>;
+      try {
+        result = studio.uploadRef(body, { kind: 'inbox' }, {
+          name: att.name,
+          ...(ctrl ? { signal: ctrl.signal } : {}),
+          onProgress: (f) => patchAtt({ progress: Math.max(0, Math.min(1, f)) })
+        });
+      } catch {
+        uploads.current.delete(att.id);
+        patchAtt({ upload: 'failed' });
+        return;
+      }
+      Promise.resolve(result)
+        .then((res) => {
+          const path = res?.ref?.path;
+          patchAtt(path ? { upload: 'done', inboxPath: path, progress: 1 } : { upload: 'failed' });
+        })
+        .catch(() => patchAtt({ upload: 'failed' }))
+        .finally(() => uploads.current.delete(att.id));
+    },
+    [studio]
+  );
+
   const addFiles = useCallback(
     async (input: FileList | File[]) => {
       const files = Array.from(input || []);
       if (!files.length) return;
       const problems: string[] = [];
       const added: ComposerAttachment[] = [];
+      const imageFiles = new Map<string, File>();
       let count = attachmentsRef.current.length;
       let payload = attachmentsRef.current.reduce((n, a) => n + a.dataUrl.length, 0);
       const fits = (dataUrl: string, name: string) => {
@@ -287,7 +433,17 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             const shrunk = await shrinkImage(file, original);
             const dataUrl = shrunk?.dataUrl || original;
             if (!fits(dataUrl, file.name || 'That image')) continue;
-            added.push({ id: attachId(), kind: 'image', name: file.name || 'image', mimeType: shrunk?.mimeType || file.type || 'image/png', dataUrl });
+            const att: ComposerAttachment = {
+              id: attachId(),
+              kind: 'image',
+              name: file.name || 'photo.jpg',
+              mimeType: shrunk?.mimeType || file.type || 'image/png',
+              dataUrl,
+              upload: typeof studio.uploadRef === 'function' ? 'pending' : undefined,
+              progress: 0
+            };
+            added.push(att);
+            imageFiles.set(att.id, file);
             payload += dataUrl.length;
             count += 1;
           } catch {
@@ -329,17 +485,28 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           problems.push(`${file.name || 'That file'} isn't supported — use PNG, JPG or WebP images, or .txt/.md/.docx/.pdf/.fdx/.fountain scripts`);
         }
       }
-      if (added.length) setAttachments((prev) => [...prev, ...added]);
+      if (added.length) {
+        setAttachments((prev) => [...prev, ...added]);
+        for (const a of added) {
+          const f = imageFiles.get(a.id);
+          if (f && a.upload === 'pending') startInboxUpload(a, f);
+        }
+      }
       if (problems.length) {
         showNotice(`${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}.`);
       }
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      if (added.length) focusEnd();
+      for (const input of [fileInputRef, photoInputRef, cameraInputRef, scriptInputRef]) if (input.current) input.current.value = '';
+      // Phones: don't pop the keyboard over the photo the user just picked.
+      if (added.length && !coarse) focusEnd();
     },
-    [focusEnd, showNotice]
+    [focusEnd, showNotice, startInboxUpload, coarse, studio.uploadRef]
   );
 
-  const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
+  const removeAttachment = (id: string) => {
+    uploads.current.get(id)?.abort();
+    uploads.current.delete(id);
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
 
   // ── Send ───────────────────────────────────────────────────────────────────
 

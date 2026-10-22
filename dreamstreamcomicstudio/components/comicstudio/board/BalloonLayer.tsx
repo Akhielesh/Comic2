@@ -158,7 +158,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const balloons = page.balloons.filter((b) => !drafts.has(b.lineId)).concat([...drafts.values()]);
     return { ...page, balloons };
   }, [page, drafts]);
-  const base = useLetterPlans(doc, page, aspect);
+  const base = useLetterPlans(doc, page, aspect, { placements: editable });
   const { H } = base;
   // Drafts re-plan only the page being dragged (fits of the other lines hit the engine's memo).
   const plans = useMemo(
@@ -171,6 +171,28 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   const layerRef = useRef<HTMLDivElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
   useEffect(() => () => cleanup.current?.(), []);
+  // In a translated edition the drawn text is the TRANSLATION: committing it as a source `line` edit (or
+  // adding a source line) would overwrite the original dialogue, so text editing and "add" belong to the
+  // edition ops (wave 2) and are off here; geometry edits are reported with { lang }.
+  const canEditText = !editionLang;
+  const addArmed = !!(editable && addKind && onAddAt && !editionLang);
+  // The layer renders when there is lettering, or (editor) when "add" mode waits for a click — a wordless
+  // page must still accept its first balloon.
+  const rendered = pageWidth > 0 && (plans.length > 0 || addArmed);
+  // Touch drags: an UNSELECTED balloon is not touch-action:none (so the page can still scroll/pan), and
+  // touch-action is fixed at touchstart. Once a hold has lifted it (or a selected one is dragging), a
+  // registered non-passive touchmove listener cancels the scroll so the browser does not take the
+  // gesture over (pointercancel) mid-drag.
+  const touchDragRef = useRef(false);
+  useEffect(() => {
+    const el = layerRef.current;
+    if (!editable || !el) return;
+    const onTouchMove = (ev: TouchEvent) => {
+      if (touchDragRef.current && ev.cancelable) ev.preventDefault();
+    };
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    return () => el.removeEventListener('touchmove', onTouchMove);
+  }, [editable, rendered]);
 
   // ── Selection (controlled multi, controlled single, or local) ─────────────
   const [localSel, setLocalSel] = useState<string[]>([]);
@@ -183,12 +205,14 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       : localSel;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-  const select = (id: string | null, additive = false) => {
-    const next = nextSelection(selectionRef.current, id, additive);
+  const setSel = (next: string[]) => {
     setLocalSel(next);
     onSelectionChange?.(next);
     onSelectLine?.(next[0] ?? null);
   };
+  const select = (id: string | null, additive = false) => setSel(nextSelection(selectionRef.current, id, additive));
+  // Marquee (mouse/pen drag on empty art): page-fraction rectangle while dragging.
+  const [marquee, setMarquee] = useState<Box | null>(null);
   const selectedSet = useMemo(() => new Set(selection), [selection.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lang = editionLang ? { lang: editionLang } : undefined;
@@ -208,7 +232,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   }, [doc, page.panels]);
   const labelFor = useMemo(() => (p: LetterPlan) => labels.get(p.lineId) ?? `${LINE_KIND_LABEL[p.kind]}: ${planText(p)}`, [labels]);
 
-  if (!plans.length || pageWidth <= 0) return null;
+  if (!rendered) return null;
 
   const ls = doc.letterStyle ?? DEFAULT_LETTERING;
   const safe = safeAreaBox(typeof ls.safeMargin === 'number' ? ls.safeMargin : DEFAULT_SAFE_MARGIN, aspect);
@@ -295,10 +319,12 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const slop = dragSlopPx(e.pointerType || 'mouse');
     // Touch on an unselected balloon: a hold lifts it; a quick move pans/scrolls instead.
     let armed = !touch || wasSelected || mode !== 'move';
+    touchDragRef.current = touch && armed;
     let liftTimer: ReturnType<typeof setTimeout> | null = null;
     if (!armed) {
       liftTimer = setTimeout(() => {
         armed = true;
+        touchDragRef.current = true;
         setLifted(id);
         select(id);
         try {
@@ -397,6 +423,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const cancel = () => finish(false);
     const stop = () => {
       if (liftTimer) clearTimeout(liftTimer);
+      touchDragRef.current = false;
       cleanup.current?.();
       setDrafts(null);
       setGuides([]);
@@ -429,7 +456,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       (e.currentTarget as HTMLElement).blur();
       return;
     }
-    if ((e.key === 'Enter' || e.key === 'F2') && !mod && onEditingChange) {
+    if ((e.key === 'Enter' || e.key === 'F2') && !mod && onEditingChange && canEditText) {
       handled();
       onEditingChange(id);
       return;
@@ -484,16 +511,43 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     );
   };
 
-  // ── Background taps: nearest balloon within 22 px, else clear ─────────────
+  /** Keyboard on the tail / width handles (role=slider): arrows aim the tail or change the width. */
+  const onHandleKey = (e: React.KeyboardEvent, plan: LetterPlan, mode: 'tail' | 'width') => {
+    const dirs: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const d = dirs[e.key];
+    if (!editable || !d || e.metaKey || e.ctrlKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (plan.locked) return;
+    const step = e.shiftKey ? NUDGE_BIG : NUDGE;
+    if (mode === 'tail') {
+      const tip = planTip(plan, H, resolvedOf(plan.lineId));
+      if (!tip) return;
+      commitMany([{ id: plan.lineId, patch: { tailX: r4(clamp01(tip.x + d[0] * step)), tailY: r4(clamp01(tip.y + d[1] * step)), pinned: true } }], 'Aim tail');
+      return;
+    }
+    // Slider semantics: Right/Up widen, Left/Down narrow.
+    const delta = d[0] !== 0 ? d[0] : -d[1];
+    const x0 = plan.x / 1000;
+    const w = r4(clamp(plan.w / 1000 + delta * step, 0.06, Math.max(0.06, 1 - PAGE_MARGIN - x0)));
+    if (Math.abs(w - plan.w / 1000) < 1e-4) return;
+    commitMany([{ id: plan.lineId, patch: { w, pinned: true } }], 'Resize balloon');
+  };
+
+  // ── Background: add mode; nearest balloon (22 px on touch); marquee (mouse/pen); else clear ──
   const onBackgroundPointerDown = (e: React.PointerEvent) => {
     if (e.target !== e.currentTarget) return;
     const rect = layerRef.current?.getBoundingClientRect();
     const t = travel(rect ?? { width: 0, height: 0 }, pageWidth, pageHeight);
-    if (addKind && onAddAt && rect) {
+    if (addArmed && addKind && onAddAt && rect) {
       e.preventDefault();
       onAddAt(addKind, { x: clamp01((e.clientX - rect.left) / t.w), y: clamp01((e.clientY - rect.top) / t.h) });
       return;
     }
+    const pointer = e.pointerType || 'mouse';
+    // Fingers are imprecise (small SFX and whispers stay selectable at fit on a phone); a mouse needs
+    // only a few px, so a marquee can start close to a balloon.
+    const nearPx = pointer === 'touch' ? NEAREST_TAP_PX : pointer === 'pen' ? 12 : 6;
     if (rect) {
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
@@ -503,14 +557,59 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         const ox = Math.max(o.x * t.w - px, 0, px - (o.x + o.w) * t.w);
         const oy = Math.max(o.y * t.h - py, 0, py - (o.y + o.h) * t.h);
         const dist = Math.hypot(ox, oy);
-        if (dist <= NEAREST_TAP_PX && (!best || dist < best.d)) best = { id: p.lineId, d: dist };
+        if (dist <= nearPx && (!best || dist < best.d)) best = { id: p.lineId, d: dist };
       }
       if (best) {
         select(best.id, e.shiftKey);
         return;
       }
     }
-    select(null);
+    if (pointer === 'touch' || !rect || (pointer === 'mouse' && e.button !== 0)) {
+      select(null);
+      return;
+    }
+    // Marquee multi-select (lettering.md §7.5): drag on empty art; Shift adds to the selection. A press
+    // without a drag clears the selection as before.
+    e.preventDefault();
+    cleanup.current?.();
+    const additive = e.shiftKey;
+    const start = { x: clamp01((e.clientX - rect.left) / t.w), y: clamp01((e.clientY - rect.top) / t.h) };
+    const slop = dragSlopPx(pointer);
+    let box: Box | null = null;
+    const move = (ev: PointerEvent) => {
+      if (!box && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < slop) return;
+      const cur = { x: clamp01((ev.clientX - rect.left) / t.w), y: clamp01((ev.clientY - rect.top) / t.h) };
+      box = { x: Math.min(start.x, cur.x), y: Math.min(start.y, cur.y), w: Math.abs(cur.x - start.x), h: Math.abs(cur.y - start.y) };
+      setMarquee(box);
+    };
+    const end = (commit: boolean) => {
+      const b = box;
+      cleanup.current?.();
+      setMarquee(null);
+      if (!commit) return;
+      if (!b) {
+        if (!additive) select(null);
+        return;
+      }
+      const hits = readingOrder.filter((id) => {
+        const p = planById.get(id);
+        if (!p) return false;
+        const o = outlineFractions(p, H);
+        return o.x < b.x + b.w && o.x + o.w > b.x && o.y < b.y + b.h && o.y + o.h > b.y;
+      });
+      setSel(additive ? [...selectionRef.current, ...hits.filter((id) => !selectionRef.current.includes(id))] : hits);
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+    cleanup.current = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      cleanup.current = null;
+    };
   };
 
   const primary = selection[0];
@@ -524,7 +623,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   return (
     <div
       ref={layerRef}
-      className={cx('absolute inset-0 z-[2]', editable ? (addKind ? 'cursor-crosshair' : '') : 'pointer-events-none')}
+      className={cx('absolute inset-0 z-[2]', editable ? (addArmed ? 'cursor-crosshair' : '') : 'pointer-events-none')}
       {...(editable ? { role: 'group', 'aria-label': `Lettering for page ${page.n}` } : ariaHidden ? { 'aria-hidden': true } : {})}
       onPointerDown={editable ? onBackgroundPointerDown : undefined}
       data-testid="balloon-layer"
@@ -562,7 +661,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               dir={p.dir}
               className={cx(
                 'absolute select-none rounded-[30%] focus:outline-none',
-                addKind ? 'pointer-events-none' : 'pointer-events-auto',
+                addArmed ? 'pointer-events-none' : 'pointer-events-auto',
                 p.locked ? 'cursor-not-allowed' : 'cursor-move',
                 // A selected balloon owns its touches (drag at once); unselected ones let the page pan/scroll.
                 sel && 'touch-none outline-dashed outline-2 outline-offset-2 outline-[#D97757]',
@@ -573,13 +672,13 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               role="button"
               tabIndex={0}
               aria-roledescription="movable balloon"
-              aria-label={`${labels.get(id) ?? planText(p)}. ${p.locked ? 'Locked.' : `Drag or use the arrow keys to move${planTip(p, H, resolvedOf(id)) ? '; Alt+arrows move the tail' : ''}. Enter edits the text.`}`}
+              aria-label={`${labels.get(id) ?? planText(p)}. ${p.locked ? 'Locked.' : `Drag or use the arrow keys to move${planTip(p, H, resolvedOf(id)) ? '; Alt+arrows move the tail' : ''}.${canEditText && onEditingChange ? ' Enter edits the text.' : ''}`}`}
               aria-describedby={`bd-${page.id}-${id}`}
               aria-pressed={sel}
               onPointerDown={(e) => beginDrag(e, p, 'move')}
               onDoubleClick={(e) => {
                 e.stopPropagation();
-                onEditingChange?.(id);
+                if (canEditText) onEditingChange?.(id);
               }}
               onContextMenu={(e) => {
                 // Long-press/right-click selects (the inspector holds the actions).
@@ -594,14 +693,34 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               <span id={`bd-${page.id}-${id}`} className="sr-only">
                 {describe}
               </span>
+              {p.overflow && (
+                // Visible "text doesn't fit" marker in the editor (the inspector offers the free fix).
+                <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white" />
+              )}
             </div>
           );
         })}
       {editable && primaryPlan && selection.length === 1 && !editingPlan && !primaryPlan.locked && (
-        <Handles plan={primaryPlan} H={H} tip={planTip(primaryPlan, H, resolvedOf(primaryPlan.lineId))} coarse={coarse} scale={zs} onDrag={(e, mode) => beginDrag(e, primaryPlan, mode)} />
+        <Handles
+          plan={primaryPlan}
+          H={H}
+          tip={planTip(primaryPlan, H, resolvedOf(primaryPlan.lineId))}
+          coarse={coarse}
+          scale={zs}
+          onDrag={(e, mode) => beginDrag(e, primaryPlan, mode)}
+          onKey={(e, mode) => onHandleKey(e, primaryPlan, mode)}
+        />
       )}
       {editable && <SnapGuides guides={guides} />}
-      {editable && editingPlan && editingLine && onOps && (
+      {editable && marquee && (
+        <div
+          aria-hidden
+          data-testid="marquee"
+          className="pointer-events-none absolute z-[7] rounded-[3px] border border-dashed border-[#D97757] bg-[#D97757]/10"
+          style={{ left: `${marquee.x * 100}%`, top: `${marquee.y * 100}%`, width: `${marquee.w * 100}%`, height: `${marquee.h * 100}%` }}
+        />
+      )}
+      {editable && canEditText && editingPlan && editingLine && onOps && (
         <BalloonTextEditor
           key={editingPlan.lineId}
           plan={editingPlan}
@@ -636,7 +755,8 @@ const Handles: React.FC<{
   coarse: boolean;
   scale: number;
   onDrag: (e: React.PointerEvent, mode: DragMode) => void;
-}> = ({ plan, H, tip, coarse, scale, onDrag }) => {
+  onKey: (e: React.KeyboardEvent, mode: 'tail' | 'width') => void;
+}> = ({ plan, H, tip, coarse, scale, onDrag, onKey }) => {
   const dot = (coarse ? 20 : 14) / scale;
   const grip = { w: (coarse ? 10 : 8) / scale, h: (coarse ? 32 : 24) / scale };
   const hit = 44 / scale;
@@ -648,13 +768,15 @@ const Handles: React.FC<{
         <span
           role="slider"
           aria-label="Tail direction"
-          aria-valuetext={`Tail tip at ${Math.round(tip.x * 100)}% across, ${Math.round(tip.y * 100)}% down`}
+          aria-valuetext={`Tail tip at ${Math.round(tip.x * 100)}% across, ${Math.round(tip.y * 100)}% down. Arrow keys move it.`}
           aria-valuenow={Math.round(tip.x * 100)}
           aria-valuemin={0}
           aria-valuemax={100}
           data-testid="tail-handle"
+          tabIndex={0}
           onPointerDown={(e) => onDrag(e, 'tail')}
-          className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-white bg-[var(--ds-accent)] shadow"
+          onKeyDown={(e) => onKey(e, 'tail')}
+          className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
           style={{ left: `${tip.x * 100}%`, top: `${tip.y * 100}%`, width: dot, height: dot }}
           title="Drag to aim the tail"
         >
@@ -669,8 +791,11 @@ const Handles: React.FC<{
         aria-valuemin={6}
         aria-valuemax={95}
         data-testid="width-handle"
+        tabIndex={0}
+        aria-orientation="horizontal"
         onPointerDown={(e) => onDrag(e, 'width')}
-        className="pointer-events-auto absolute z-[6] -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow"
+        onKeyDown={(e) => onKey(e, 'width')}
+        className="pointer-events-auto absolute z-[6] -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
         style={{ left: `calc(${right * 100}% + ${2 / scale}px)`, top: `${midY * 100}%`, width: grip.w, height: grip.h }}
         title="Drag to resize"
       >

@@ -53,6 +53,8 @@ const PLACE_RE =
 interface Assignment {
   numbers: number[];
   names: string[];
+  /** Per name: typed capitalized, after a kind noun ("my dog bruno") or after "named/called". */
+  strong: boolean[];
   kind?: CastKind;
   kindWord?: string;
 }
@@ -64,9 +66,13 @@ export interface AttachmentAnalysis {
   place?: string;
 }
 
-const tokenize = (text: string): string[] => text.toLowerCase().match(/[\p{L}\p{N}#][\p{L}\p{N}'’-]*/gu) || [];
+const tokenizeRaw = (text: string): string[] => text.match(/[\p{L}\p{N}#][\p{L}\p{N}'’-]*/gu) || [];
+const tokenize = (text: string): string[] => tokenizeRaw(text).map((t) => t.toLowerCase());
 
-const isNameToken = (t: string): boolean => /^\p{L}[\p{L}'’-]{1,29}$/u.test(t) && !STOP.has(t) && !KIND_NOUNS[t];
+/** Kind noun for a word, accepting a plain plural ("kids", "dogs"). */
+const kindOf = (t: string): CastKind | undefined => KIND_NOUNS[t] ?? (t.length > 3 && t.endsWith('s') ? KIND_NOUNS[t.slice(0, -1)] : undefined);
+
+const isNameToken = (t: string): boolean => /^\p{L}[\p{L}'’-]{1,29}$/u.test(t) && !STOP.has(t) && !kindOf(t);
 
 const clean = (t: string) => t.replace(/['’]s$/u, '').replace(/['’-]+$/u, '');
 
@@ -89,20 +95,28 @@ const levenshtein = (a: string, b: string): number => {
  * Read names after a trigger: skip fillers and kind nouns (recording the kind), then take up to
  * three names joined by "and" / ",". Returns the names and how many tokens were consumed.
  */
-const readNames = (tokens: string[], from: number): { names: string[]; kind?: CastKind; kindWord?: string } => {
+const readNames = (
+  tokens: string[],
+  raw: string[],
+  from: number
+): { names: string[]; strong: boolean[]; kind?: CastKind; kindWord?: string } => {
   const names: string[] = [];
+  const strong: boolean[] = [];
   let kind: CastKind | undefined;
   let kindWord: string | undefined;
+  let named = false;
   let i = from;
   for (let guard = 0; i < tokens.length && guard < 6; guard += 1) {
     const t = clean(tokens[i]);
-    if (KIND_NOUNS[t]) {
-      kind ??= KIND_NOUNS[t];
+    const k = kindOf(t);
+    if (k) {
+      kind ??= k;
       kindWord ??= t;
       i += 1;
       continue;
     }
     if (FILLERS.has(t)) {
+      if (t === 'named' || t === 'called') named = true;
       i += 1;
       continue;
     }
@@ -112,17 +126,19 @@ const readNames = (tokens: string[], from: number): { names: string[]; kind?: Ca
     const t = clean(tokens[i]);
     if (!isNameToken(t)) break;
     names.push(t);
+    strong.push(/^\p{Lu}/u.test(raw[i] || '') || !!kindWord || named);
     if (tokens[i + 1] === 'and' && tokens[i + 2] && isNameToken(clean(tokens[i + 2]))) i += 2;
     else break;
   }
-  return { names, ...(kind ? { kind } : {}), ...(kindWord ? { kindWord } : {}) };
+  return { names, strong, ...(kind ? { kind } : {}), ...(kindWord ? { kindWord } : {}) };
 };
 
 /** Pure analysis (exported for tests). `count` = images available this turn. */
 export function analyzeAttachmentText(text: string, count: number): AttachmentAnalysis | null {
   if (typeof text !== 'string' || !text.trim() || !(count > 0)) return null;
-  const body = text.slice(0, MAX_TEXT).replace(/\s+/g, ' ');
-  const tokens = tokenize(body);
+  const body = text.slice(0, MAX_TEXT).replace(/[\u2012-\u2015\u2212]/g, '-').replace(/\s+/g, ' ');
+  const raw = tokenizeRaw(body);
+  const tokens = raw.map((t) => t.toLowerCase());
   const all = Array.from({ length: count }, (_, i) => i + 1);
   const out: AttachmentAnalysis = { assignments: [], labels: [] };
   const inRange = (n: number) => Number.isInteger(n) && n >= 1 && n <= count;
@@ -133,14 +149,10 @@ export function analyzeAttachmentText(text: string, count: number): AttachmentAn
     // 1. Numbered: "#3 is Maya", "1-3 are Maya", "1 to 3 are Maya", "image 2 is her outfit".
     const num = /^#?(\d{1,2})$/.exec(t);
     if (num && (i === 0 || !/^\d/.test(tokens[i - 1]))) {
-      let a = Number(num[1]);
+      const a = Number(num[1]);
       let b = a;
       let j = i + 1;
-      const range = /^#?(\d{1,2})-#?(\d{1,2})$/.exec(t);
-      if (range) {
-        a = Number(range[1]);
-        b = Number(range[2]);
-      } else if ((tokens[j] === 'to' || tokens[j] === 'through' || tokens[j] === 'thru' || tokens[j] === 'and') && /^#?\d{1,2}$/.test(tokens[j + 1] || '')) {
+      if ((tokens[j] === 'to' || tokens[j] === 'through' || tokens[j] === 'thru' || tokens[j] === 'and') && /^#?\d{1,2}$/.test(tokens[j + 1] || '')) {
         b = Number(tokens[j + 1].replace('#', ''));
         j += 2;
       }
@@ -149,7 +161,7 @@ export function analyzeAttachmentText(text: string, count: number): AttachmentAn
         const hi = Math.max(a, b);
         const numbers = Array.from({ length: hi - lo + 1 }, (_, k) => lo + k).filter(inRange);
         const labelWord = tokens.slice(j + 1, j + 4).map(clean).find((w) => LABEL_WORDS[w]);
-        const read = readNames(tokens, j + 1);
+        const read = readNames(tokens, raw, j + 1);
         if (numbers.length && read.names.length) out.assignments.push({ numbers, ...read });
         if (numbers.length === 1 && labelWord) out.labels.push({ image: numbers[0], label: LABEL_WORDS[labelWord], word: labelWord });
       }
@@ -161,24 +173,24 @@ export function analyzeAttachmentText(text: string, count: number): AttachmentAn
       const lo = Math.min(Number(dashed[1]), Number(dashed[2]));
       const hi = Math.max(Number(dashed[1]), Number(dashed[2]));
       const numbers = Array.from({ length: hi - lo + 1 }, (_, k) => lo + k).filter(inRange);
-      const read = readNames(tokens, i + 2);
+      const read = readNames(tokens, raw, i + 2);
       if (numbers.length && read.names.length) out.assignments.push({ numbers, ...read });
       continue;
     }
     // 2. Identity: "this is my dog Bruno", "these are Maya", "meet Bruno", "here's Maya", "that's Maya".
-    const contraction = /^(this|that|here|it)['’]s$/.exec(t);
+    const contraction = /^(this|that|here)['’]s$/.exec(t);
     if (
       contraction ||
       t === 'meet' ||
-      (['this', 'that', 'these', 'those', 'here', 'it'].includes(t) && ['is', 'are', '=', 'was'].includes(next || ''))
+      (['this', 'that', 'these', 'those', 'here'].includes(t) && ['is', 'are', '=', 'was'].includes(next || ''))
     ) {
-      const read = readNames(tokens, contraction || t === 'meet' ? i + 1 : i + 2);
+      const read = readNames(tokens, raw, contraction || t === 'meet' ? i + 1 : i + 2);
       if (read.names.length) out.assignments.push({ numbers: all, ...read });
       continue;
     }
     // 3. "photos of Maya", "pics for Bruno".
     if (/^(photos?|pics?|pictures?|images?|shots?|selfies?)$/.test(t) && (next === 'of' || next === 'for')) {
-      const read = readNames(tokens, i + 2);
+      const read = readNames(tokens, raw, i + 2);
       if (read.names.length) out.assignments.push({ numbers: all, ...read });
       continue;
     }
@@ -214,6 +226,7 @@ const matchPlace = (doc: ComicDoc | undefined, name: string) =>
 
 /** The one-line hint (refs.md §6.4), or null when nothing useful was found. */
 export function attachmentHint(text: string, doc: ComicDoc | undefined, count: number): string | null {
+  if (typeof text !== 'string' || !text.trim() || !(count > 0)) return null;
   const a = analyzeAttachmentText(text, count);
   const parts: string[] = [];
   if (a) {
@@ -222,15 +235,21 @@ export function attachmentHint(text: string, doc: ComicDoc | undefined, count: n
       const key = `${as.numbers.join(',')}:${as.names.join('+')}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      // A word that is not in the cast must look like a name ("Bruno", "my dog bruno", "named bruno").
+      const who = as.names
+        .map((n, i) => {
+          const c = matchCast(doc, n);
+          if (c) return `${upperName(c.name)} (existing, ${c.refs.length} ref${c.refs.length === 1 ? '' : 's'})`;
+          const p = matchPlace(doc, n);
+          if (p) return `the place ${upperName(p.name)} (existing)`;
+          if (!as.strong[i]) return '';
+          const kind = as.kindWord ? `"${as.kindWord}" → kind ${as.kind}` : '';
+          return doc ? `${upperName(n)} (new${kind ? `; ${kind}` : ''})` : `${upperName(n)}${kind ? ` (${kind})` : ''}`;
+        })
+        .filter(Boolean);
+      if (!who.length) continue;
       const span = `${as.numbers.length === 1 ? 'image' : 'images'} ${numberRanges(as.numbers)}`;
-      const who = as.names.map((n) => {
-        const c = matchCast(doc, n);
-        if (c) return `${upperName(c.name)} (existing, ${c.refs.length} ref${c.refs.length === 1 ? '' : 's'})`;
-        const p = matchPlace(doc, n);
-        if (p) return `the place ${upperName(p.name)} (existing)`;
-        return doc ? `${upperName(n)} (new${as.kindWord ? `; "${as.kindWord}" → kind ${as.kind}` : ''})` : `${upperName(n)}${as.kindWord ? ` ("${as.kindWord}" → kind ${as.kind})` : ''}`;
-      });
-      parts.push(`${span} → ${who.join(' and ')}${as.names.length > 1 ? ' (several names — ask which is which if unclear)' : ''}`);
+      parts.push(`${span} → ${who.join(' and ')}${who.length > 1 ? ' (several names — ask which is which if unclear)' : ''}`);
     }
     for (const l of a.labels) parts.push(`"${l.word}" mentioned${l.image ? ` for image ${l.image}` : ''} (label ${l.label})`);
     if (a.style) parts.push(`style cue ("${a.style}") — these may be a style reference`);

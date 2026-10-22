@@ -1,7 +1,8 @@
 // Page image cache (reader.md §9.1): keyed by storage path (a relink never re-downloads), variant-aware,
 // priority order, LRU with retained paths, expired links (400/403), CORS fallback, abort.
 import { describe, expect, it, vi } from 'vitest';
-import { PageImageCache, pickVariant, type CacheDeps } from './pageImageCache';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { PageImageCache, pickVariant, useCachedImage, type CacheDeps } from './pageImageCache';
 
 const flush = async () => {
   for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0));
@@ -114,6 +115,64 @@ describe('PageImageCache', () => {
     expect((await p).state).toBe('error');
     expect(c.get('later')).toBeUndefined();
     expect(d.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a page that joins a queued preload adopts it: the preload\'s abort no longer drops it', async () => {
+    const gates: (() => void)[] = [];
+    const d = deps({ fetch: vi.fn(() => new Promise<Response>((r) => gates.push(() => r(new Response(new Blob(['x']), { status: 200 }))))) });
+    const c = new PageImageCache(d, 10, 1);
+    void c.ensure('busy', 'B', 'now');
+    const ac = new AbortController();
+    void c.ensure('next', 'N', 'idle', ac.signal);
+    const shown = c.ensure('next', 'N', 'next'); // the page mounts (no signal)
+    ac.abort(); // the reader moved on: the preload is cancelled
+    gates[0]();
+    await flush();
+    gates[1]?.();
+    expect((await shown).state).toBe('ready');
+    expect(c.get('next')?.state).toBe('ready');
+  });
+
+  it('an abort never cancels a download that already started (a page may be waiting on it)', async () => {
+    const gates: (() => void)[] = [];
+    const d = deps({ fetch: vi.fn(() => new Promise<Response>((r) => gates.push(() => r(new Response(new Blob(['x']), { status: 200 }))))) });
+    const c = new PageImageCache(d);
+    const ac = new AbortController();
+    const pre = c.ensure('p5', 'U5', 'idle', ac.signal);
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+    expect((d.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]).not.toHaveProperty('signal');
+    const shown = c.ensure('p5', 'U5', 'next');
+    ac.abort();
+    gates[0]();
+    expect((await shown).state).toBe('ready');
+    expect((await pre).state).toBe('ready');
+  });
+
+  it('never evicts a page that is on screen (acquired), and lets it go once released', async () => {
+    const d = deps();
+    const c = new PageImageCache(d, 2);
+    const release = c.acquire('p0');
+    for (let i = 0; i < 4; i += 1) await c.ensure(`p${i}`, `U${i}`, 'now');
+    expect(c.get('p0')?.state).toBe('ready');
+    expect(c.inUseCount('p0')).toBe(1);
+    release();
+    release(); // idempotent
+    expect(c.inUseCount('p0')).toBe(0);
+    await c.ensure('p9', 'U9', 'now');
+    expect(c.get('p0')).toBeUndefined();
+  });
+
+  it('useCachedImage holds its page and asks again when the entry vanished', async () => {
+    const d = deps();
+    const c = new PageImageCache(d);
+    const { result, unmount } = renderHook(() => useCachedImage('u/p1.webp', 'https://x/p1', 'now', c));
+    await waitFor(() => expect(result.current.src).toBe('blob:1'));
+    expect(c.inUseCount('u/p1.webp')).toBe(1);
+    act(() => c.clear()); // e.g. dropped by an aborted job
+    await waitFor(() => expect(result.current.src).toBe('blob:2'));
+    expect(d.fetch).toHaveBeenCalledTimes(2);
+    unmount();
+    expect(c.inUseCount('u/p1.webp')).toBe(0);
   });
 
   it('notifies subscribers', async () => {

@@ -119,6 +119,10 @@ const PROBLEM_NOTES: Record<LineProblem, string> = {
   unsafe: "The translation didn't pass the content check."
 };
 
+const SOFTWARE_NOTES: ReadonlySet<string> = new Set([...Object.values(PROBLEM_NOTES), 'The content check is unsure about this wording — please read it before publishing.']);
+/** An issue software found (script, glossary, untranslated, content check): a reviewer's "ok" never clears it. */
+export const isSoftwareIssue = (issue?: TextTranslation['issue']): boolean => !!issue && issue.severity === 'major' && SOFTWARE_NOTES.has(issue.note);
+
 // ── One chunk ────────────────────────────────────────────────────────────────
 
 export interface ChunkRequest {

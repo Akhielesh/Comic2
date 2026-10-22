@@ -1,30 +1,24 @@
 // "cast" card: the characters the director just captured, with their model-sheet status.
 // Tapping a character opens the board's Cast tab; leads/supports without a sheet can be
 // drawn from here (sheets are the identity anchors for every page).
+//
+// Non-human cast is first-class (director.md §3.5): animals, creatures, robots, toys,
+// vehicles and props carry a kind icon, a group shows "×3", and a recurring non-human
+// support reads as a "Companion". The status line is a real truncating text span (visualqa
+// P1-4: `truncate` on a flex container never shows an ellipsis).
 
 import React from 'react';
 import { AlertTriangle, Check, Users } from 'lucide-react';
-import type { Card, Character } from '../../../../shared/comic/doc';
+import { castKindOf, type Card, type Character } from '../../../../shared/comic/doc';
 import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
 import { CardShell, GhostButton, cx, plural } from '../ui';
+import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount } from './castVisual';
 import { useAction } from './useAction';
 
 type CastCardData = Extract<Card, { type: 'cast' }>;
 
-const TINTS = ['#E9D5C9', '#D6E4E5', '#E3DCEF', '#DDE7D3', '#F0E1C6', '#D9DFF0'];
-const tintFor = (id: string) => TINTS[[...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7) % TINTS.length];
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase())
-    .join('') || '?';
-
-const TIER_LABEL: Record<Character['tier'], string> = { lead: 'Lead', support: 'Support', extra: 'Extra' };
-
-const sheetStatus = (c: Character): { text: string; tone: 'ok' | 'busy' | 'bad' | 'none' } => {
+export const sheetStatus = (c: Character): { text: string; tone: 'ok' | 'busy' | 'bad' | 'none' } => {
   if (c.tier === 'extra') return { text: 'Described in text', tone: 'none' };
   switch (c.sheet.status) {
     case 'ready':
@@ -34,13 +28,28 @@ const sheetStatus = (c: Character): { text: string; tone: 'ok' | 'busy' | 'bad' 
     case 'rendering':
       return { text: 'Drawing sheet…', tone: 'busy' };
     case 'failed':
-      return { text: 'Sheet failed', tone: 'bad' };
+      return { text: 'Sheet didn’t finish', tone: 'bad' };
+    case 'stale':
+      return { text: 'Sheet out of date', tone: 'none' };
     default:
       return { text: 'No sheet yet', tone: 'none' };
   }
 };
 
 const needsSheet = (c: Character) => c.tier !== 'extra' && c.sheet.status !== 'ready' && c.sheet.status !== 'queued' && c.sheet.status !== 'rendering';
+
+/** "Lead · cat burglar · Sheet ready" / "Companion · ×3 · No sheet yet". */
+export const castStatusLine = (c: Character): string => {
+  const n = groupCount(c);
+  const kind = castKindOf(c);
+  const label = castRoleLabel(c);
+  const parts = [label];
+  if (c.role) parts.push(c.role);
+  else if (kind !== 'person' && !n && label !== 'Prop') parts.push(KIND_NAME[kind].toLowerCase());
+  if (n) parts.push(`group of ${n}`);
+  parts.push(sheetStatus(c).text);
+  return parts.join(' · ');
+};
 
 export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioController }> = ({ card, studio }) => {
   const doc = studio.doc;
@@ -51,6 +60,8 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
   const missing = cast.filter(needsSheet);
   const ready = cast.filter((c) => c.tier !== 'extra' && c.sheet.status === 'ready').length;
   const sheeted = cast.filter((c) => c.tier !== 'extra').length;
+  // Only worth saying while a companion still needs its sheet.
+  const companions = cast.filter((c) => castRoleLabel(c) === 'Companion' && needsSheet(c)).length;
   const estimate = estimateJobs([{ kind: 'sheet', count: missing.length, label: 'character sheets' }], doc.settings.quality, {
     override: doc.settings.imageModelOverride,
     byok: studio.byok
@@ -62,43 +73,40 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
       icon={<Users className="h-4 w-4" />}
       right={sheeted ? `${ready} of ${sheeted} sheets ready` : undefined}
       aria-label="Cast"
+      className="min-w-0 max-w-full"
     >
       {cast.length === 0 ? (
         <p className="text-[13px] text-[var(--ds-muted)]">These characters were removed from the comic.</p>
       ) : (
-        <ul className="flex flex-wrap gap-2">
+        <ul className="flex min-w-0 flex-wrap gap-2">
           {cast.map((c) => {
             const status = sheetStatus(c);
-            const url = c.sheet.status === 'ready' ? studio.urlFor(c.sheet.asset) : c.refs[0] ? studio.urlFor(c.refs[0]) : undefined;
+            const n = groupCount(c);
             return (
-              <li key={c.id}>
+              <li key={c.id} className="min-w-0 max-w-full">
                 <button
                   type="button"
                   onClick={() => studio.setTab('cast')}
                   title={c.look.summary || c.name}
-                  className="flex max-w-[15rem] items-center gap-2.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-1.5 pr-3 text-left transition-all duration-200 hover:border-[#D97757]/35 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+                  aria-label={`${castAriaLabel(c)}. ${status.text}. Open the cast`}
+                  className="flex w-full max-w-[16rem] items-center gap-2.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-1.5 pr-3 text-left transition-colors duration-200 hover:border-[#D97757]/35 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
                 >
-                  <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-xl" style={{ background: tintFor(c.id) }}>
-                    {url ? (
-                      <img src={url} alt="" className="h-full w-full object-cover object-left" />
-                    ) : (
-                      <span className="grid h-full w-full place-items-center text-[13px] font-semibold text-[#3d3a33]">{initials(c.name)}</span>
-                    )}
-                    {status.tone === 'busy' && <span className="studio-shimmer absolute inset-0" aria-hidden />}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-[13px] font-semibold text-[var(--ds-ink)]">{c.name}</span>
+                  <CastAvatar character={c} urlFor={studio.urlFor} size={40} busy={status.tone === 'busy'} showCount={false} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-baseline gap-1">
+                      <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{c.name}</span>
+                      {n && <span className="shrink-0 text-[11.5px] font-semibold tabular-nums text-[var(--ds-accent)]">×{n}</span>}
+                    </span>
                     <span
                       className={cx(
-                        'flex items-center gap-1 truncate text-[11px]',
-                        status.tone === 'bad' ? 'text-red-600 dark:text-red-300' : 'text-[var(--ds-muted)]'
+                        'flex min-w-0 items-center gap-1 text-[11px]',
+                        status.tone === 'bad' ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--ds-muted)]'
                       )}
                     >
-                      {status.tone === 'ok' && <Check className="h-3 w-3 text-emerald-600" aria-hidden />}
-                      {status.tone === 'bad' && <AlertTriangle className="h-3 w-3" aria-hidden />}
-                      {status.tone === 'busy' && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--ds-accent)]" aria-hidden />}
-                      {TIER_LABEL[c.tier]}
-                      {c.role ? ` · ${c.role}` : ''} · {status.text}
+                      {status.tone === 'ok' && <Check className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />}
+                      {status.tone === 'bad' && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
+                      {status.tone === 'busy' && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />}
+                      <span className="min-w-0 truncate">{castStatusLine(c)}</span>
                     </span>
                   </span>
                 </button>
@@ -107,16 +115,29 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
           })}
         </ul>
       )}
+      {companions > 0 && (
+        <p className="mt-2 text-[11.5px] leading-snug text-[var(--ds-muted)]">
+          {companions === 1 ? 'The companion gets' : 'Companions get'} a reference sheet too, so {companions === 1 ? 'it looks' : 'they look'} the same on every page.
+        </p>
+      )}
       {missing.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <GhostButton
             size="sm"
+            className="tap-target"
             busy={isPending('sheets')}
-            onClick={() => void run('sheets', { type: 'render_sheets', characterIds: missing.map((c) => c.id), force: missing.some((c) => c.sheet.status === 'failed') })}
+            onClick={() =>
+              void run('sheets', {
+                type: 'render_sheets',
+                characterIds: missing.map((c) => c.id),
+                force: missing.some((c) => c.sheet.status === 'failed'),
+                quotedUsd: estimate.usd
+              })
+            }
           >
             Draw {plural(missing.length, 'sheet')} <span className="text-[var(--ds-muted)]">≈ {formatUsd(estimate.usd)}</span>
           </GhostButton>
-          <span className="text-[11.5px] text-[var(--ds-muted)]">Sheets keep faces and outfits consistent on every page.</span>
+          <span className="min-w-0 text-[11.5px] text-[var(--ds-muted)]">Sheets keep faces, outfits and markings consistent on every page.</span>
         </div>
       )}
     </CardShell>

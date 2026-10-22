@@ -64,7 +64,9 @@ export interface MediaPreviewProps {
 export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, index, onIndex, edit }) => {
   const item = items[Math.max(0, Math.min(items.length - 1, index))];
   const pages = sortedPages(doc);
-  const [pageId, setPageId] = useState<string>(pages[0]?.id ?? '');
+  const [pickedPageId, setPageId] = useState<string>(pages[0]?.id ?? '');
+  // The picked page may have been deleted (or none existed when the preview opened): fall back to page 1.
+  const pageId = findPage(doc, pickedPageId) ? pickedPageId : pages[0]?.id ?? '';
   const choices = refChoices(doc);
   const [refKey, setRefKey] = useState<string>(choices[0]?.key ?? 'style');
   const [confirm, setConfirm] = useState<{ target: RenderTarget; label: string; why: string } | null>(null);
@@ -119,7 +121,8 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
     try {
       const res = await fetch(signed);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      downloadBlob(await res.blob(), downloadName(doc, item));
+      const blob = await res.blob();
+      downloadBlob(blob, downloadName(doc, item, blob.type || res.headers.get('content-type') || undefined));
     } catch {
       setNote("Couldn't download that image right now. Check your connection and try again.");
     }
@@ -140,7 +143,7 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
     ['Version', item.versionLabel ?? '—'],
     ['Model', item.modelLabel ?? (item.source === 'upload' ? 'Uploaded' : 'Not recorded')],
     ['Size', item.w && item.h ? `${item.w}×${item.h}` : 'Not recorded'],
-    ['Cost', versionCostLabel(item)],
+    ['Cost', item.source === 'upload' && typeof item.costUsd !== 'number' ? 'No AI cost (uploaded)' : versionCostLabel(item)],
     ['QC', typeof item.qcScore === 'number' ? item.qcScore.toFixed(2) : 'Not checked'],
     ['Made by', item.origin ? ORIGIN_LABEL[item.origin] : item.source === 'upload' ? 'Uploaded' : 'Not recorded'],
     ['Added', shortDate(item.at)]

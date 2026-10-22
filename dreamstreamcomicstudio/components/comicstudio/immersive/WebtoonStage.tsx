@@ -98,7 +98,9 @@ export const WebtoonStage = forwardRef<WebtoonStageHandle, WebtoonStageProps>(fu
   const width = Math.min(size.w, 800);
   const imgFull = useMemo<SlotImage>(() => ({ ...img, original: false }), [img]);
 
-  // Lazy decode window: pages within 1.5 viewports.
+  // Lazy decode window: pages within 1.5 viewports. Pages that leave it drop their image (the box keeps
+  // its size), so a long webtoon holds only a screenful or two of decoded pages; they reload from the
+  // HTTP cache as they come back.
   useEffect(() => {
     const root = scroller.current;
     if (!root || typeof IntersectionObserver === 'undefined') {
@@ -109,11 +111,19 @@ export const WebtoonStage = forwardRef<WebtoonStageHandle, WebtoonStageProps>(fu
       (entries) => {
         setNear((prev) => {
           const next = new Set(prev);
+          let changed = false;
           for (const e of entries) {
             const i = Number((e.target as HTMLElement).dataset.item);
-            if (e.isIntersecting) next.add(i);
+            if (!Number.isFinite(i)) continue;
+            if (e.isIntersecting && !next.has(i)) {
+              next.add(i);
+              changed = true;
+            } else if (!e.isIntersecting && next.has(i)) {
+              next.delete(i);
+              changed = true;
+            }
           }
-          return next.size === prev.size ? prev : next;
+          return changed ? next : prev;
         });
       },
       { root, rootMargin: '150% 0px' }

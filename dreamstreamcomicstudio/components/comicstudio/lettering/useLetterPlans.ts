@@ -108,13 +108,20 @@ export interface PagePlans {
   H: number;
 }
 
-/** Plans + placements for a page at `aspect` (w/h), re-planned when lettering faces finish loading. */
-export function useLetterPlans(doc: ComicDoc, page: Page, aspect: number): PagePlans {
+const NO_PLACEMENTS: Placements = { balloons: new Map(), fallback: new Set(), crowded: new Set() };
+
+/**
+ * Plans + placements for a page at `aspect` (w/h), re-planned when lettering faces finish loading.
+ * `placements: false` skips the second placement pass for read-only views (the reader and the board
+ * grid only draw; the full balloons behind the plans matter only to an editor).
+ */
+export function useLetterPlans(doc: ComicDoc, page: Page, aspect: number, opts: { placements?: boolean } = {}): PagePlans {
+  const wantPlacements = opts.placements !== false;
   const generation = useFontGeneration();
   const measure = measureForGeneration(generation);
   const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : letteringAspect(doc, page);
   const plans = useMemo(() => planLettering(doc, page, asp, measure), [doc, page, asp, measure]);
-  const placements = useMemo(() => resolvePlacements(doc, page, asp, measure), [doc, page, asp, measure]);
+  const placements = useMemo(() => (wantPlacements ? resolvePlacements(doc, page, asp, measure) : NO_PLACEMENTS), [wantPlacements, doc, page, asp, measure]);
   useEnsurePlanFonts(plans);
   return { plans, placements, measure, H: 1000 / asp };
 }

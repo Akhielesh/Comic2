@@ -2,7 +2,7 @@
 // the real engine (planLettering → svgMarkup), so the thumbnail is exact and costs nothing. Two views:
 // `chips` (Easy inspector: one horizontal row) and `grid` (side panel / style tab: name + blurb).
 
-import React, { useMemo } from 'react';
+import React, { useId, useMemo } from 'react';
 import { Check } from 'lucide-react';
 import { createEmptyDoc, type Balloon, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
 import { planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
@@ -44,7 +44,10 @@ export function previewDoc(presetId: LetteringPresetId, opts: { lang?: string; b
 
 /** Plans drawn inside a viewBox cropped to their outlines (thumbnails, font previews). */
 export const PlansPreview: React.FC<{ plans: LetterPlan[]; height?: number; className?: string; label?: string }> = ({ plans, height = 44, className, label }) => {
-  const nodes = useMemo(() => letteringNodes(plans, { aspect: PREVIEW_ASPECT, idPrefix: `pv${plans.map((p) => p.lineId).join('')}` }), [plans]);
+  // Unique per instance: every preview uses the same sample line ids, and a translucent preset's mask
+  // id must not collide with another preview's (or another gallery's) on the same screen.
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
+  const nodes = useMemo(() => letteringNodes(plans, { aspect: PREVIEW_ASPECT, idPrefix: `pv${uid}` }), [plans, uid]);
   if (!plans.length) return null;
   let x0 = Infinity;
   let y0 = Infinity;
@@ -115,7 +118,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
               value === id ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
             )}
           >
-            <span className="grid h-9 place-items-center rounded-md bg-[#e9e4da] px-1">
+            <span className="grid h-9 place-items-center rounded-md bg-[var(--ds-reader-paper-back)] px-1">
               <PlansPreview plans={plans.get(id) || []} height={32} />
             </span>
             <span className="max-w-[5.5rem] truncate text-[10.5px] font-medium text-[var(--ds-ink)]">{LETTERING_PRESETS[id].name}</span>
@@ -125,7 +128,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
     );
   }
   return (
-    <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
+    <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-1 gap-2 medium:grid-cols-2">
       {LETTERING_PRESET_IDS.map((id) => (
         <button
           key={id}
@@ -138,7 +141,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
             value === id ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
           )}
         >
-          <span className="grid h-12 w-[4.5rem] shrink-0 place-items-center overflow-hidden rounded-lg bg-[#e9e4da]">
+          <span className="grid h-12 w-[4.5rem] shrink-0 place-items-center overflow-hidden rounded-lg bg-[var(--ds-reader-paper-back)]">
             <PlansPreview plans={plans.get(id) || []} height={40} />
           </span>
           <span className="min-w-0 flex-1">

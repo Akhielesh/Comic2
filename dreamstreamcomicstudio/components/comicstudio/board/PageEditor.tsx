@@ -24,11 +24,13 @@ import {
   MessageSquare,
   MousePointer2,
   Plus,
+  Redo2,
   RotateCcw,
   SquareDashed,
   Trash2,
   TriangleAlert,
   Type,
+  Undo2,
   WandSparkles,
   X
 } from 'lucide-react';
@@ -567,6 +569,18 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
               canPro={canPro}
             />
           )}
+          {!(letteringEditable && lettering) && (
+            // Undo / redo stay one tap away in every mode (script edits, mark-up, in-art comics, phones
+            // without a keyboard) — not only while the lettering toolbar shows.
+            <span className="inline-flex items-center gap-0.5" role="group" aria-label="Undo and redo">
+              <IconButton size="sm" className="tap-target" label={studio.undoLabel ? `Undo ${studio.undoLabel}` : 'Undo'} disabled={!studio.canUndo} onClick={() => studio.undo?.()}>
+                <Undo2 className="h-3.5 w-3.5" aria-hidden />
+              </IconButton>
+              <IconButton size="sm" className="tap-target" label="Redo" disabled={!studio.canRedo} onClick={() => studio.redo?.()}>
+                <Redo2 className="h-3.5 w-3.5" aria-hidden />
+              </IconButton>
+            </span>
+          )}
           {letteringEditable && lettering && crowdedIds.length > 0 && (
             <button
               type="button"
@@ -584,7 +598,7 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
               : addKind
                 ? `Click on the page to place the ${LINE_KIND_LABEL[addKind].toLowerCase()} · Esc cancels`
                 : overlayLettering
-                  ? 'Drag balloons · Shift-click to multi-select · double-click edits text · arrows nudge'
+                  ? 'Drag balloons · Shift-click or drag a box to multi-select · double-click edits text · arrows nudge'
                   : 'Lettering is drawn into the art on this comic.'}
           </span>
         </div>

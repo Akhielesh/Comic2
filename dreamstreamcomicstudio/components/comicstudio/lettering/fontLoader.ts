@@ -108,20 +108,41 @@ const loadFile = (family: string, file: FontFile, timeoutMs: number): Promise<bo
 
 // ── Script faces (Google Fonts CSS2) ──────────────────────────────────────────
 
-const injectedHrefs = new Set<string>();
-const injectGoogleCss = (href: string) => {
-  if (typeof document === 'undefined' || injectedHrefs.has(href)) return;
-  injectedHrefs.add(href);
-  try {
-    if (document.querySelector(`link[data-ds-lettering-fonts][href="${CSS.escape ? CSS.escape(href) : href}"]`)) return;
-  } catch {
-    /* CSS.escape missing: fall through and add the link */
-  }
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  link.setAttribute('data-ds-lettering-fonts', '');
-  document.head.appendChild(link);
+const injectedHrefs = new Map<string, Promise<void>>();
+/**
+ * Add the Google Fonts CSS2 stylesheet once; resolves when it has loaded (or failed / timed out), so
+ * `document.fonts.load` runs only after its @font-face rules exist — otherwise the load resolves with
+ * no faces and the face is wrongly reported as failed.
+ */
+const injectGoogleCss = (href: string, timeoutMs: number): Promise<void> => {
+  if (typeof document === 'undefined') return Promise.resolve();
+  const known = injectedHrefs.get(href);
+  if (known) return known;
+  const ready = new Promise<void>((resolve) => {
+    let existing: HTMLLinkElement | null = null;
+    try {
+      existing = [...document.querySelectorAll<HTMLLinkElement>('link[data-ds-lettering-fonts]')].find((l) => l.getAttribute('href') === href) ?? null;
+    } catch {
+      existing = null;
+    }
+    if (existing?.sheet) return resolve();
+    const link = existing ?? document.createElement('link');
+    const timer = setTimeout(resolve, timeoutMs);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    link.addEventListener('load', done, { once: true });
+    link.addEventListener('error', done, { once: true });
+    if (!existing) {
+      link.rel = 'stylesheet';
+      link.href = href;
+      link.setAttribute('data-ds-lettering-fonts', '');
+      document.head.appendChild(link);
+    }
+  });
+  injectedHrefs.set(href, ready);
+  return ready;
 };
 
 const scriptLoads = new Map<string, Promise<boolean>>();
@@ -132,11 +153,14 @@ const loadScriptFace = (id: FontId, weight: number, sample: string, timeoutMs: n
   const p = (async () => {
     if (!hasFontApi()) return false;
     const href = googleFontsHref([id], [400, 700, weight]);
-    if (href) injectGoogleCss(href);
     try {
       const font = fontString(id, 16, weight, false);
+      // One budget for the stylesheet AND the face (the exporter waits at most `timeoutMs`).
       const ok = await Promise.race([
-        document.fonts.load(font, sample || undefined).then((faces) => faces.length > 0, () => false),
+        (async () => {
+          if (href) await injectGoogleCss(href, timeoutMs);
+          return document.fonts.load(font, sample || undefined).then((faces) => faces.length > 0, () => false);
+        })(),
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))
       ]);
       if (ok) bump();
@@ -202,7 +226,13 @@ export function isFontReady(id: FontId, weight = 400, italic = false): boolean {
   }
   if (!hasFontApi()) return false;
   try {
-    return document.fonts.check(fontString(id, 16, weight, false));
+    // document.fonts.check() is also true when NO face of the family is known yet (the Google CSS has
+    // not arrived), which would measure with a fallback face: require a loaded face of the family too.
+    let loaded = false;
+    document.fonts.forEach((f) => {
+      if (!loaded && f.status === 'loaded' && f.family.replace(/["']/g, '').trim() === meta.family) loaded = true;
+    });
+    return loaded && document.fonts.check(fontString(id, 16, weight, false));
   } catch {
     return false;
   }

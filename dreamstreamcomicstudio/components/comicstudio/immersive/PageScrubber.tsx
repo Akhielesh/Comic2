@@ -40,8 +40,8 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
     () =>
       views
         .map((v, i) => {
-          const first = v.items[0];
-          const title = first !== undefined ? items[first]?.page?.chapterTitle : undefined;
+          // A chapter may start on either page of a spread.
+          const title = v.items.map((it) => items[it]?.page?.chapterTitle?.trim()).find(Boolean);
           return title ? { view: i, title } : null;
         })
         .filter((c): c is { view: number; title: string } => !!c),
@@ -88,7 +88,7 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
           value={shown}
           dir={rtl ? 'rtl' : 'ltr'}
           aria-label="Page"
-          aria-valuetext={labelOf(shown)}
+          aria-valuetext={`${labelOf(shown)} (${shown + 1} of ${views.length})`}
           className="peer absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0"
           onPointerDown={() => {
             setDragging(true);
@@ -97,6 +97,11 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
           onPointerUp={() => {
             setDragging(false);
             if (preview !== null && preview !== view) onGoto(preview);
+            setPreview(null);
+          }}
+          onPointerCancel={() => {
+            // The browser took the gesture (scroll, system swipe): drop the preview, don't jump.
+            setDragging(false);
             setPreview(null);
           }}
           onBlur={() => {
