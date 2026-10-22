@@ -710,6 +710,64 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
 | C11 | Container asleep (11) | `live/driveUpload.ts:29` | ≤ **1** container wake per Drive save session |
 | C12 | Family live (12), native hub + port mapping (13), coturn past 1 TB/month | later | Separate ADRs |
 
+#### Status: C1, C2 and C11 (implemented on `impl/costs-frugal`, 2026-10-22)
+
+**C1 — recordings Drive or device first. Done.**
+- `cloudRecordings` defaults to `false` (`live/prefs.ts`). Prefs now carry `prefsVersion: 2`, and `migratePrefs` runs on
+  every load and on prefs synced from the account:
+  - a version-1 `false` was a real choice (the old default was `true`), so it is kept;
+  - a version-1 `true` can't be told apart from the old default, so it is turned off once, and the save sheet says so once
+    ("7-day copies are now made only when you choose one…") so anyone who did choose it can turn it back on;
+  - from version 2 on, whatever is saved was chosen, and is kept (including an explicit "on").
+- The save sheet (`live/components/SaveSheet.tsx`) lists Google Drive and this device first, each marked
+  **"Free · yours to keep"** or **"Free · on this device"**. The 7-day copy sits below them under "Or a 7-day copy ·
+  through our servers": its exact size, "Uses our storage and N of your upload", and **"kept 7 days · X of 10 GB used"** with a
+  meter. Nothing uploads until the host taps "Keep a 7-day copy". A host who turned on "Also keep a 7-day cloud copy" in
+  Customize still gets it right away, and the sheet says why. The word "free" is never on the copy.
+- Server quota: **10 GB rolling per account**, checked once at `op=init` (`live-worker/src/cloudCopyQuota.ts`; a 4-line hunk
+  in `index.ts`). The ledger is one empty R2 marker per copy, `quota/rec/<accountId>/<eventId>-<bytes>`, aged out after 7 days
+  and cleaned up on the account's next check. Cost: 1 R2 list + 1 marker write per cloud copy, nothing per part. A retry of
+  the same recording rewrites its own marker, so it never counts twice. The init needs the host's own Supabase token (the
+  Worker still holds no secrets) and the declared size. Sizes are what the app declares: a fair-use guard, not billing-grade
+  (D1). It refuses with an honest reason the sheet shows as-is: `cloud_copy_full` (with the GB used and the day space frees
+  up), `cloud_copy_too_big`, `sign_in_required`, `quota_unavailable` (fails closed: nothing is stored). `GET …/recordings?op=quota`
+  feeds the meter; it returns numbers only, never keys or the account id.
+- Copy: `live/config.ts` `LIMITS` ("Saved to this device or your Google Drive — free, and yours to keep. Nothing is kept on our
+  servers unless you choose a 7-day copy…") and the two Help entries in `live/components/Guide.tsx`.
+- Tests: `live/prefs.unit.test.ts` (default off, every migration path, cloud sync, notice once), `SaveSheet.test.tsx` (free
+  labels, no upload by default, explicit opt-in, no room, server "full", retry, notice), `live/cloudCopy.unit.test.ts`,
+  `live-worker/src/cloudCopyQuota.test.ts` (fits, full, retry, ageing out, too big, sign-in, host-key gate first, fail closed).
+- Not done here: Settings → Recording's toggle copy (`SettingsView.tsx:383`, WS-5) still says "Uploads in the background after
+  each recording" without the cost line from §4.2; `SummaryView.tsx:200` still points to "Customize → Quality & encoding".
+  The "What this costs DreamStream (est.)" expander waits for `STREAM_UNIT_PRICES` (A1), so prices live in one table.
+  The marker is written at `op=init`, so an upload that is started and then abandoned (never completed or retried) still
+  counts for its 7 days; dropping the marker when an upload is aborted, or confirming it at `op=complete` with the real
+  object size (WS-7), would close that gap.
+
+**C2 — push, not poll. Done.**
+- Invite page (`live/views/EventPage.tsx` + `live/invitePoll.ts`): a sliding-window cap of **6 looks per tab-hour (12
+  requests: each look is a Worker + a Durable Object request)**, from 120 looks (240 requests). Inside it: every 30 min far from
+  the start, a look 1 min before the start, then 2, 6 and 12 min later and every 20 min after. No start time: the same backoff.
+  Ended: never again. Hidden tab: no timer at all; coming back looks once if the last look is a minute old and the budget
+  allows. A failed look after the page has loaded no longer replaces it with "Event not found". The countdown re-renders every
+  5 s while visible, never while hidden.
+- `SoundLevelCard.tsx` and `WeekCard.tsx`: no timers. History is asked for when the card is shown, when the range changes, and
+  when it is stale (one chart bucket: 5/5/15 min for 1 h/6 h/24 h; 10 min for the week) and something new happens: the room's
+  pushed `minutes`, the page coming back into view or focus, or a socket reconnect. **0 history queries while hidden.**
+- Tests: `live/invitePoll.unit.test.ts` (budget over 6-hour waits for 8 schedules, with and without tab-switching),
+  `live/views/EventPage.test.tsx` (≤ 6 looks an hour, flips within 2 min, hidden = 0 requests and 0 timers, ended, blips),
+  `SoundLevelCard.test.tsx` and `WeekCard.test.tsx` (0 queries and 0 timers while hidden, refresh rules).
+
+**C11 — container asleep. Done.** `live/driveUpload.ts`: a good Drive status is reused for 10 min (`STATUS_TTL_MS`); a
+failed check is never cached; the cache is dropped when Google refuses the grant mid-upload or the backend says signed out.
+The save sheet reads the account email from the known status after an upload instead of asking again, so one save session
+is the status check plus the upload-session call: ≤ 1 container wake.
+
+**C3's IPv6 fix is not in this change.** `classifyPath` (`live/monitor/rtc.ts:47-52`, WS-6) treats any `host` candidate as
+Home Wi-Fi, so two phones on carrier IPv6 (global addresses, host candidates) show "Home Wi-Fi" and get the LAN upload budget.
+The fix: a host candidate counts as local only when its address is private (RFC 1918, `fc00::/7`, `fe80::/10`, an mDNS
+`.local` name); a global IPv6 host candidate is `internet`. It needs a `rtc.unit.test.ts` case for each.
+
 **Overall Phase C success measures** (Cost centre, 30 days):
 - Stream Studio marginal cost $0 at current scale.
 - List-price value per active nursery-month ≤ **$0.05**.

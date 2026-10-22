@@ -1,6 +1,7 @@
 /** REST + WebSocket client for the dreamstream-live worker. */
 
 import { accessToken } from './account';
+import { cloudCopyErrorFrom, parseQuota, type CloudCopyQuota } from './cloudCopy';
 import { WORKER_BASE } from './config';
 import type { EventMeta, ServerMsg, StatsResponse } from './protocol';
 
@@ -261,15 +262,18 @@ export async function uploadRecording(
   hostKey: string,
   blob: Blob,
   opts: { file: string; durMs: number; onProgress?: (frac: number) => void },
-): Promise<{ key: string }> {
+): Promise<{ key: string; quota: CloudCopyQuota | null }> {
   const headers = { 'x-host-key': hostKey, 'content-type': 'application/json' };
+  // 7-day copies are capped per account (10 GB rolling): the worker checks the size
+  // against the signed-in account before anything is stored, and says why if not.
+  const token = await accessToken();
   const init = await fetch(`${WORKER_BASE}/api/events/${id}/recordings?op=init`, {
     method: 'POST',
-    headers,
-    body: JSON.stringify({ file: opts.file, mime: blob.type || 'video/webm' }),
+    headers: { ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ file: opts.file, mime: blob.type || 'video/webm', bytes: blob.size }),
   });
-  if (!init.ok) throw new Error(`recording upload init failed (${init.status})`);
-  const { key, uploadId } = (await init.json()) as { key: string; uploadId: string };
+  if (!init.ok) throw await cloudCopyErrorFrom(init);
+  const { key, uploadId, quota } = (await init.json()) as { key: string; uploadId: string; quota?: unknown };
 
   const parts: { partNumber: number; etag: string }[] = [];
   const total = Math.max(1, Math.ceil(blob.size / REC_PART_BYTES));
@@ -301,7 +305,7 @@ export async function uploadRecording(
     body: JSON.stringify({ key, uploadId, parts, file: opts.file, bytes: blob.size, mime: blob.type || 'video/webm', durMs: opts.durMs }),
   });
   if (!complete.ok) throw new Error(`recording upload complete failed (${complete.status})`);
-  return { key };
+  return { key, quota: parseQuota(quota) };
 }
 
 export interface SegmentUploadResult {

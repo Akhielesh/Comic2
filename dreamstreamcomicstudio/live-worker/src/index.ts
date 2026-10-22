@@ -33,6 +33,7 @@
  */
 
 import { CallRoom } from './callRoom';
+import { cloudCopyUsageFor, reserveCloudCopy, usageBody } from './cloudCopyQuota';
 import { userLineName } from './directCalls';
 import { EventRoom } from './eventRoom';
 import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
@@ -241,7 +242,8 @@ export default {
 
       // /api/events/:id/recordings — host's server-side recording store.
       // Multipart upload (R2) so multi-GB masters fit through Worker limits:
-      //   POST ?op=init {file,mime}            → { key, uploadId }
+      //   POST ?op=init {file,mime,bytes}      → { key, uploadId, quota } (Bearer; 10 GB/account fair use)
+      //   GET  ?op=quota&k=hostKey             → { usedBytes, limitBytes, copies, nextFreeAt } (Bearer)
       //   PUT  ?op=part&key&uploadId&n=…       → { partNumber, etag }
       //   POST ?op=complete {key,uploadId,parts,file,bytes,mime,durMs}
       //   GET  ?k=hostKey                      → { recordings, expiresAt }
@@ -252,6 +254,10 @@ export default {
 
         if (req.method === 'GET') {
           if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
+          if (op === 'quota') {
+            const q = await cloudCopyUsageFor(env, req, Date.now(), (p) => ctx.waitUntil(p));
+            return withCors(q.ok ? json(usageBody(q.usage), 200, { 'cache-control': 'no-store' }) : json(q.body, q.status), cors);
+          }
           const download = url.searchParams.get('download');
           if (download) {
             if (!download.startsWith(`events/${id}/rec/`)) return withCors(json({ error: 'bad key' }, 400), cors);
@@ -275,13 +281,16 @@ export default {
         if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
 
         if (req.method === 'POST' && op === 'init') {
-          const { file, mime } = (await req.json().catch(() => ({}))) as { file?: string; mime?: string };
+          const { file, mime, bytes } = (await req.json().catch(() => ({}))) as { file?: string; mime?: string; bytes?: number };
+          // Fair use (ADR 0007 D5): 10 GB of 7-day copies per account, rolling. Honest error, nothing stored.
+          const quota = await reserveCloudCopy(env, req, { eventId: id, bytes }, Date.now(), (p) => ctx.waitUntil(p));
+          if (!quota.ok) return withCors(json(quota.body, quota.status), cors);
           const safe = String(file ?? 'recording.webm').replace(/[^\w.-]/g, '_').slice(0, 80);
           const key = `events/${id}/rec/${Date.now()}-${safe}`;
           const upload = await env.LIVE_BUCKET.createMultipartUpload(key, {
             httpMetadata: { contentType: String(mime ?? 'video/webm') },
           });
-          return withCors(json({ key, uploadId: upload.uploadId }), cors);
+          return withCors(json({ key, uploadId: upload.uploadId, quota: usageBody(quota.usage) }), cors);
         }
 
         if (req.method === 'PUT' && op === 'part') {

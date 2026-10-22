@@ -26,7 +26,14 @@ export const DRIVE_PRIVACY_NOTE = 'Stream Studio can only see files it saves —
 export const DRIVE_CHUNK_BYTES = 8 * 1024 * 1024;
 const CHUNK_QUANTUM = 256 * 1024;
 const OAUTH_RESULT = 'connector-oauth-result';
-const STATUS_TTL_MS = 60_000;
+/**
+ * A good answer is kept 10 min: each status check can wake the backend container
+ * (≈ $0.0027 a wake past the free hours), and a Drive save session should cost at
+ * most one wake (ADR 0007 C11). A failed check is not cached, and anything that
+ * says the connection changed (an upload refused, a consent finishing, sign-out)
+ * drops the cache.
+ */
+export const STATUS_TTL_MS = 10 * 60_000;
 
 /* ------------------------------------------------------------------ errors */
 
@@ -177,9 +184,10 @@ export function resetDriveStatus(): void {
   cache = null;
 }
 
-/** Fetch the Drive connection status (cached for a minute unless `force`). Never throws. */
+/** Fetch the Drive connection status (cached for STATUS_TTL_MS unless `force`). Never throws. */
 export function getDriveStatus(opts: { force?: boolean } = {}): Promise<DriveStatus> {
-  if (!opts.force && cache && Date.now() - cache.at < STATUS_TTL_MS) return Promise.resolve(cache.status);
+  // A failed check (offline, backend asleep and slow) is shown, but asked again next time.
+  if (!opts.force && cache && !cache.status.error && Date.now() - cache.at < STATUS_TTL_MS) return Promise.resolve(cache.status);
   if (inflight) return inflight;
   inflight = (async () => {
     const token = await accessToken().catch(() => null);
@@ -432,6 +440,7 @@ export async function createUploadSession(
   if (status !== 200 || typeof data?.uploadUrl !== 'string') {
     const err = errorFromApi(status, data);
     if (err.code === 'not_connected' || err.code === 'reconnect') void getDriveStatus({ force: true });
+    else if (err.code === 'signed_out') resetDriveStatus();
     throw err;
   }
   return {
@@ -650,7 +659,14 @@ export async function saveRecordingToDrive(
   const mimeType = opts.mimeType || blob.type || mimeFromName(name);
   const session = await createUploadSession({ name, mimeType, size: blob.size }, opts.signal);
   opts.onSession?.(session);
-  const file = await uploadResumable(session.uploadUrl, blob, opts);
+  let file: DriveFile;
+  try {
+    file = await uploadResumable(session.uploadUrl, blob, opts);
+  } catch (e) {
+    // Google refused the grant mid-upload: the cached "connected" is stale now.
+    if (e instanceof DriveError && (e.code === 'reconnect' || e.code === 'signed_out')) resetDriveStatus();
+    throw e;
+  }
   const webViewLink =
     file.webViewLink ||
     (file.id ? `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view` : session.folderUrl || 'https://drive.google.com/drive/my-drive');

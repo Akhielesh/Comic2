@@ -2,10 +2,19 @@
 // camera saw the baby sleep, night wakings, the longest stretch, crying, how
 // fast someone answered alerts, and the sound level while asleep. Six rows,
 // one headline — the few numbers worth knowing, not a wall of charts.
-import React, { useEffect, useMemo, useState } from 'react';
+//
+// Push, not poll (ADR 0007 C2): two weeks of day totals barely move within a
+// session, so it asks the room once when shown and again only when the page comes
+// back into view (or the socket reconnects) after 10 minutes — never on a timer,
+// never while hidden.
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { MonQuery } from '../../monitor/query';
 import { Icon } from '../../ui/icons';
+import { useOnPageReturn, usePageVisible } from '../../ui/pageVisibility';
 import { cx } from '../../ui/primitives';
+
+/** How old the week may get before coming back to the page asks again. */
+export const WEEK_STALE_MS = 10 * 60_000;
 
 interface Day {
   day: number;
@@ -53,20 +62,31 @@ const avg = (xs: (number | null)[]) => {
 
 export function WeekCard({ query, baby }: { query: MonQuery | null; baby: string }) {
   const [days, setDays] = useState<Day[] | null>(null);
+  const [nudge, setNudge] = useState(0);
+  const visible = usePageVisible();
+  const loadedAt = useRef(0);
+  const inflight = useRef<MonQuery | null>(null);
+  const mounted = useRef(true);
   useEffect(() => {
-    if (!query) return;
-    let alive = true;
-    const load = async () => {
-      const r = await query.ask<{ days: Day[] }>('weeks', { days: 14 });
-      if (alive && r) setDays(r.days);
-    };
-    void load();
-    const t = window.setInterval(() => void load(), 10 * 60_000);
+    mounted.current = true;
     return () => {
-      alive = false;
-      window.clearInterval(t);
+      mounted.current = false;
     };
-  }, [query]);
+  }, []);
+  useOnPageReturn(() => setNudge((n) => n + 1));
+
+  useEffect(() => {
+    if (!query || !visible) return; // 0 history queries while hidden
+    if (loadedAt.current && Date.now() - loadedAt.current < WEEK_STALE_MS) return;
+    if (inflight.current === query) return;
+    inflight.current = query;
+    void query.ask<{ days: Day[] }>('weeks', { days: 14 }).then((r) => {
+      if (inflight.current === query) inflight.current = null;
+      if (!mounted.current || !r) return;
+      loadedAt.current = Date.now();
+      setDays(r.days);
+    });
+  }, [query, visible, nudge]);
 
   const rows = useMemo(() => {
     if (!days || days.length < 8) return [];
