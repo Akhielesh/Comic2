@@ -180,6 +180,35 @@ describe('UserLine: being rung', () => {
     expect(push.sent.map((p) => p.data.call)).toEqual(['abcdefabcdef0001']);
   });
 
+  it('a caller you silenced doesn’t get through by having someone else add you to their call', async () => {
+    const phone = await w.app(sam, 'phone');
+    for (const id of ['abcdefabcdef0001', 'abcdefabcdef0002']) {
+      await ring(sam, alice, { id });
+      await w.say(sam, phone, { t: 'dcall_decline', id });
+    }
+    phone.sent = [];
+    // Regression: only whoever added you was checked, so June adding Sam to Alice's call rang him once more.
+    expect(await ring(sam, alice, { id: 'abcdefabcdef0003', by: { uid: gma.uid, name: 'June' } })).toMatchObject({ status: 'ringing' });
+    expect(phone.msgs('dcall_ring')).toEqual([]);
+  });
+
+  it('a missed call’s history line never waits for the push service either', async () => {
+    const phone = await w.app(sam, 'phone');
+    await w.say(sam, phone, { t: 'call_push', sub: SUB(1) });
+    await ring(sam, alice);
+    let release = () => undefined as void;
+    push.gate = new Promise<void>((r) => (release = r));
+    // Regression: the room's wrap-up waited on the missed-call push for callers who weren't
+    // blocked only — a caller cancelling at once could time it and tell they were blocked.
+    const rec = { id: 'abcdefabcdef0001', from: { uid: alice.uid, name: 'Alice' }, video: true, at: Date.now(), invited: [sam.uid], why: 'cancelled' };
+    const reply = w.lineOf(sam.uid).obj.fetch(new Request('https://line.internal/x/log', { method: 'POST', body: JSON.stringify({ rec, missed: true }) }));
+    const first = await Promise.race([reply.then(() => 'reply'), new Promise((r) => setTimeout(() => r('push first'), 50))]);
+    expect(first).toBe('reply');
+    release();
+    await w.settle();
+    expect(push.sent.map((p) => p.data.kind)).toContain('call_missed');
+  });
+
   it('an app opened from the notification sees the ringing call, ticket included', async () => {
     const phone = await w.app(sam, 'phone');
     await ring(sam, alice);
@@ -467,6 +496,30 @@ describe('UserLine: someone added to a call is rung as the call — and as whoev
     expect(push.sent.filter((p) => p.endpoint === SUB(4).endpoint)).toEqual([]);
   });
 
+  it('family added to a family call rings as family — even when their own app hasn’t been open for a while', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date('2026-10-22T10:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const nursery = { id: NID, name: 'Nursery', baby_name: 'Aria', people: [{ user_id: U(1), label: 'Mom' }, { user_id: U(3), label: 'Grandma' }, { user_id: U(4), label: 'Auntie' }] };
+    alice.nurseries = [nursery];
+    gma.nurseries = [nursery];
+    const dee = w.add({ uid: U(4), name: 'Dee', token: 'tok-dee', nurseries: [nursery] });
+    // Dee takes calls only from her family; her app read her family at t0 and then closed.
+    const deePhone = await w.app(dee, 'dee-phone');
+    await w.say(dee, deePhone, { t: 'prefs', who: 'family' });
+    w.lineOf(dee.uid).h.drop(deePhone);
+    vi.setSystemTime(t0 + 11 * 60_000);
+    // Alice calls June; June adds Dee.
+    const { id, calleePhone: gmaPhone } = await answeredCall(alice, gma);
+    await w.say(gma, gmaPhone, { t: 'dcall_invite', id, to: [dee.uid], token: gma.token });
+    // Regression: only Dee's own (11-minute-old) map could speak for Alice, so it was "restricted" —
+    // or, without family-only, rang as a stranger.
+    expect(gmaPhone.last('dcall_invited')).toEqual({ t: 'dcall_invited', id, status: 'ringing' });
+    const opened = await w.app(dee, 'dee-laptop');
+    const r = (opened.last('hello')!.ringing as RingingRec[]).find((x) => x.id === id)!;
+    expect(r.ctx).toMatchObject({ family: true, by: { uid: gma.uid, family: true } });
+  });
+
   it('whoever adds you vouches only for themselves: a stranger’s call isn’t “family” because your family added you', async () => {
     // Sam (a stranger to Alice) calls June; June (in Alice's family) adds Alice.
     const alicePhone = await w.app(alice, 'alice-phone');
@@ -508,6 +561,7 @@ describe('UserLine: hanging up before the call got going', () => {
     expect(samPhone.last('dcall_ring')).toBeTruthy();
     // Alice hung up before her app reached the call's room.
     await w.say(alice, phone, { t: 'dcall_cancel', ref: 'r1' });
+    await w.settle();
     expect(samPhone.last('dcall_update')).toEqual({ t: 'dcall_update', id, stop: true });
     expect((w.lineOf(alice.uid).h.store.get('log') as CallRecord[])[0]).toMatchObject({ id, why: 'cancelled' });
     const later = await w.app(sam, 'laptop');
@@ -520,6 +574,7 @@ describe('UserLine: hanging up before the call got going', () => {
     const placing = start(phone, alice, [sam], 'r1');
     await w.say(alice, phone, { t: 'dcall_cancel', ref: 'r1' });
     await placing;
+    await w.settle();
     expect(phone.last('call_err')).toEqual({ t: 'call_err', error: 'cancelled', ref: 'r1' });
     expect(phone.msgs('dcall_started')).toEqual([]);
     const later = await w.app(sam, 'laptop');

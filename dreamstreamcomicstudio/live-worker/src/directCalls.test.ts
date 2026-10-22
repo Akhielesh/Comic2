@@ -195,7 +195,8 @@ describe('judging a ring (who it’s really from)', () => {
   const A = { uid: U(1), name: 'Alice' };
   const B = { uid: U(2), name: 'Bob' };
   const GMA = { label: 'Grandma', where: 'Aria’s family' };
-  const judge = (over: Partial<Parameters<typeof judgeRing>[0]> = {}) => judgeRing({ from: A, by: null, others: [], mine: {}, mineAt: T - 60_000, now: T, vouch: false, vouchAt: 0, where: null, blocked: [], ...over });
+  // By default the ringing side's word is stale (over ten minutes): your own map decides.
+  const judge = (over: Partial<Parameters<typeof judgeRing>[0]> = {}) => judgeRing({ from: A, by: null, others: [], mine: {}, mineAt: T - 60_000, now: T, vouch: false, vouchAt: T - 20 * 60_000, where: null, blocked: [], ...over });
 
   it('the caller ringing: your own map, or the caller’s line vouching', () => {
     expect(judge({ mine: { [A.uid]: GMA } })).toMatchObject({ family: true, blocked: false, ringer: A, ctx: { family: true, label: 'Grandma', where: 'Aria’s family' } });
@@ -234,8 +235,27 @@ describe('judging a ring (who it’s really from)', () => {
     // Nothing older than ten minutes counts — on either side.
     expect(judge({ mine: { [A.uid]: GMA }, mineAt: T - 11 * 60_000, vouchAt: 0 }).family).toBe(false);
     expect(judge({ vouch: true, vouchAt: T - 11 * 60_000 }).family).toBe(false);
-    // The ringing side couldn't read its map (vouchAt 0): your own fresh map decides.
-    expect(judge({ mine: { [A.uid]: GMA }, vouchAt: 0 }).family).toBe(true);
+    // The ringing side couldn't read its map (vouchAt 0): only a map of your own read under a minute ago decides.
+    expect(judge({ mine: { [A.uid]: GMA }, mineAt: T - 30_000, vouchAt: 0 }).family).toBe(true);
+    // Regression: a removed member forcing their own read to fail handed the decision to your few-minutes-old
+    // map, read before you removed them — it rang as family.
+    expect(judge({ mine: { [A.uid]: GMA }, mineAt: T - 3 * 60_000, vouchAt: 0 }).family).toBe(false);
+  });
+
+  it('added by family to a family call: the caller’s own line vouches for the caller, so it rings as family even when your map is old', () => {
+    const DAD = { label: 'Dad', where: 'Aria’s family' };
+    // Regression: your map was 11 minutes old; Bob (family) added you to Alice's (family) call — it rang as a stranger.
+    const r = judge({ by: B, vouch: true, vouchAt: T - 1000, fromVouch: true, fromVouchAt: T - 2 * 60_000, mineAt: T - 11 * 60_000 });
+    expect(r).toMatchObject({ family: true, ctx: { family: true, by: { family: true } } });
+    expect(ctxText(r.ctx)).toBe('Your family');
+    // The caller's word dates from when the call was placed: over ten minutes old, it doesn't count.
+    expect(judge({ by: B, vouch: true, vouchAt: T - 1000, fromVouch: true, fromVouchAt: T - 11 * 60_000, mineAt: T - 11 * 60_000 }).family).toBe(false);
+    // Your newer map wins over it (you removed Alice after the call was placed).
+    expect(judge({ by: B, vouch: true, vouchAt: T - 1000, fromVouch: true, fromVouchAt: T - 5 * 60_000, mine: { [B.uid]: DAD }, mineAt: T - 1000 }).family).toBe(false);
+    // The caller's line couldn't read its map: it vouches for nobody.
+    expect(judge({ by: B, vouch: true, vouchAt: T - 1000, fromVouch: true, fromVouchAt: 0, mineAt: T - 11 * 60_000 }).family).toBe(false);
+    // No word kept for the caller (a call from before this change): your own map, as before.
+    expect(judge({ by: B, vouch: true, vouchAt: T - 1000, mine: { [A.uid]: GMA }, mineAt: T - 2 * 60_000 }).family).toBe(true);
   });
 
   it('“Decline & block” blocks a stranger who added you — never the caller they added you to', () => {

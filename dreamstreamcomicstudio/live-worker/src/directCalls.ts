@@ -307,6 +307,13 @@ export function ringCtx(mine: FamilyEntry | undefined, fromCaller: { family: boo
  *    the callee's older map still lists them — and nothing past
  *    FAMILY_TTL_MS counts at all. A vouch speaks only for the person who
  *    rang, never for someone else in the call.
+ *  - When someone else added you, the caller's own line vouched for the
+ *    caller when the call was placed (`fromVouch` / `fromVouchAt`, kept by
+ *    the call's room) — judged the same way, so a family member added to a
+ *    family call rings as family even when your map is old.
+ *  - A side whose map couldn't be read (`at` 0) vouches for nobody, and then
+ *    only a map of your own read under FAMILY_CALL_TTL_MS ago counts — a
+ *    failed read can't hand the decision to an older map.
  *  - It's family only when everyone responsible for the ring (the caller, and
  *    whoever added you) is.
  */
@@ -320,18 +327,25 @@ export function judgeRing(i: {
   vouch: boolean;
   /** When the ringing side's map was read (absent from an older room: then its word simply counts). */
   vouchAt?: number | null;
+  /** With `by`: what the caller's line said about the caller, when the call was placed, and when its map was read. */
+  fromVouch?: boolean;
+  fromVouchAt?: number | null;
   where: string | null;
   blocked: PersonRec[];
 }): { family: boolean; blocked: boolean; ringer: { uid: string; name: string }; ctx: RingCtx } {
   const { from, by, mine } = i;
   const fresh = (at: number) => at > 0 && i.now - at < FAMILY_TTL_MS;
   const own = (uid: string) => fresh(i.mineAt) && !!mine[uid];
+  const justRead = (uid: string) => i.mineAt > 0 && i.now - i.mineAt < FAMILY_CALL_TTL_MS && !!mine[uid];
+  /** Is `uid` family: the newer of your map and their side's vouch. */
+  const judge = (uid: string, vouch: boolean, at: number | null | undefined) =>
+    at == null ? own(uid) || vouch
+    : at <= 0 ? justRead(uid)
+    : fresh(at) && at >= i.mineAt ? vouch
+    : own(uid);
   const ringer = by ?? from;
-  const ringerFam =
-    i.vouchAt == null ? own(ringer.uid) || i.vouch
-    : fresh(i.vouchAt) && i.vouchAt >= i.mineAt ? i.vouch
-    : own(ringer.uid);
-  const fromFam = by ? own(from.uid) : ringerFam;
+  const ringerFam = judge(ringer.uid, i.vouch, i.vouchAt);
+  const fromFam = by ? (i.fromVouchAt == null ? own(from.uid) : judge(from.uid, i.fromVouch === true, i.fromVouchAt)) : ringerFam;
   const byFam = by ? ringerFam : true;
   const family = fromFam && byFam;
   const who = new Set([from.uid, ...(by ? [by.uid] : []), ...i.others]);

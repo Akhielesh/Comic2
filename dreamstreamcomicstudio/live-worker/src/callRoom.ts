@@ -59,7 +59,12 @@ interface Meta {
   id: string;
   from: { uid: string; name: string };
   video: boolean;
+  /** The caller's family when the call was placed (from their line), and when that map was read — vouches for the caller when someone else adds people. */
+  fromFam?: { at: number; uids: string[] };
 }
+
+/** Most people a caller's family vouch is kept for. */
+const FROM_FAM_CAP = 200;
 
 /** The caller's place in the call until their app reaches the room. */
 export const PENDING_SID = 'pending';
@@ -158,6 +163,8 @@ export class CallRoom {
    */
   private async ring(meta: Meta, call: Call, who: Invitee, ticket: string, famAt: number | null, by: { uid: string; name: string } | null = null): Promise<RingStatus> {
     const inCall = [...new Set(call.parts.map((p) => p.uid))].filter((u) => u !== meta.from.uid && u !== by?.uid && u !== who.uid);
+    // Added by someone else: the caller's own line still speaks for the caller.
+    const fromFam = by && meta.fromFam ? { fromFamily: meta.fromFam.uids.includes(who.uid), fromFamAt: meta.fromFam.at } : {};
     const r = await this.post<{ status?: RingStatus; name?: string }>(who.uid, '/x/ring', {
       id: meta.id,
       from: meta.from,
@@ -169,6 +176,7 @@ export class CallRoom {
       // When the ringing side's family map was read (the callee's line trusts the newer map).
       ...(famAt != null ? { famAt } : {}),
       ...(by ? { by } : {}),
+      ...fromFam,
       ...(inCall.length ? { with: inCall } : {}),
     });
     if (r?.name) {
@@ -189,7 +197,9 @@ export class CallRoom {
     const to = cleanInvitees(body.to, from.uid);
     if (!to.length) return json({ error: 'nobody' }, 400);
     const now = Date.now();
-    const meta: Meta = { id, from, video: body.video !== false };
+    const famAt = famAtOf(body);
+    const fam = Array.isArray(body.fam) ? [...new Set(body.fam.map((u) => clip(u, 40)).filter((u) => UUID_RE.test(u) && u !== from.uid))].slice(0, FROM_FAM_CAP) : null;
+    const meta: Meta = { id, from, video: body.video !== false, ...(fam && famAt != null ? { fromFam: { at: Math.min(famAt, now), uids: fam } } : {}) };
     const book = new CallBook();
     const call = book.start({ ...from, label: null, sid: PENDING_SID }, to.map((t) => t.uid), meta.video, id, now, { pending: true });
     if ('error' in call) return json({ error: call.error }, 400);

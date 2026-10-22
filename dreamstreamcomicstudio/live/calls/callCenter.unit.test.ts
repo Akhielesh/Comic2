@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   sockets: [] as FakeSock[],
   nurseries: [{ id: '11111111-2222-4333-8444-555555555555', name: 'Nursery', baby_name: 'Aria' }] as { id: string; name: string; baby_name: string | null }[],
   pushSub: null as Record<string, unknown> | null,
+  membersFns: [] as ((nid: string) => void)[],
 }));
 
 vi.mock('../account', () => ({ accessToken: async () => 'tok' }));
@@ -53,6 +54,10 @@ vi.mock('../monitor/client', () => {
     openMonitorSocket: (nid: string, _mode: string, onMsg: (m: unknown) => void, _bin: unknown, onStatus: (s: string) => void) => fake('nursery', nid, onMsg, onStatus),
     openUserLineSocket: (uid: string, onMsg: (m: unknown) => void, onStatus: (s: string) => void) => fake('me', uid, onMsg, onStatus),
     openCallRoomSocket: (id: string, ticket: string, onMsg: (m: unknown) => void, onStatus: (s: string) => void) => fake('room', id, onMsg, onStatus, ticket),
+    onMembersChanged: (fn: (nid: string) => void) => {
+      h.membersFns.push(fn);
+      return () => undefined;
+    },
   };
 });
 vi.mock('../monitor/push', () => ({ currentSubscription: async () => null, localNotify: async () => undefined, subscribe: async () => h.pushSub ?? { error: 'no' } }));

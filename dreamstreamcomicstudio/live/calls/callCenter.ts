@@ -33,7 +33,7 @@
 import { useSyncExternalStore } from 'react';
 import { accessToken } from '../account';
 import { MIC_CONSTRAINTS, preferSpeaker, type Facing } from '../monitor/camera';
-import { listNurseries, openCallRoomSocket, openMonitorSocket, openUserLineSocket, type MonitorSocket } from '../monitor/client';
+import { listNurseries, onMembersChanged, openCallRoomSocket, openMonitorSocket, openUserLineSocket, type MonitorSocket } from '../monitor/client';
 import { currentSubscription, localNotify, subscribe as pushSubscribe } from '../monitor/push';
 import { ScreenWakeLock } from '../wakeLock';
 import { CallMesh, failureText, pcConfig, type FailWhy, type PeerView } from './callMesh';
@@ -520,15 +520,19 @@ class CallCenter {
     if (key !== this.nurseryKey) {
       const first = !this.nurseryKey;
       this.nurseryKey = key;
-      if (!first) void this.familyChanged();
+      if (!first) void this.familyChanged(true);
     }
     this.emit();
   }
 
-  /** People were added to or removed from one of your nurseries: your line re-reads your family. */
-  async familyChanged(): Promise<void> {
+  /**
+   * Your line re-reads your family. `changed`: you just added or removed
+   * someone — re-read even if it was read moments ago, so someone removed
+   * stops ringing you as family straight away.
+   */
+  async familyChanged(changed = false): Promise<void> {
     const token = await accessToken();
-    if (token) this.ul?.sock.send({ t: 'family_refresh', token });
+    if (token) this.ul?.sock.send({ t: 'family_refresh', token, ...(changed ? { changed: true } : {}) });
   }
 
   /* ------------------------------------------------- your own line */
@@ -1555,6 +1559,8 @@ class CallCenter {
 }
 
 export const callCenter = new CallCenter();
+// Someone added to or removed from a nursery on this device: your line re-reads your family now.
+onMembersChanged(() => void callCenter.familyChanged(true));
 
 export function useCalls(): CallsSnapshot {
   return useSyncExternalStore(callCenter.subscribe, callCenter.snapshot, callCenter.snapshot);

@@ -315,9 +315,11 @@ export class UserLine {
       case 'prefs':
         return this.onPrefs(msg);
       case 'family_refresh': {
-        // At most once a minute (each read is a few Supabase calls).
+        // At most once a minute (each read is a few Supabase calls) — or every 10 s right after
+        // this member changed who's in a nursery, so someone removed stops counting at once.
         const [owner, cur] = await Promise.all([this.owner(), this.get<FamilyCache>('family')]);
-        if (owner && (!cur || Date.now() - cur.at > 60_000)) await this.refreshFamily(owner, clip(msg.token, 4096));
+        const gap = msg.changed === true ? 10_000 : 60_000;
+        if (owner && (!cur || Date.now() - cur.at > gap)) await this.refreshFamily(owner, clip(msg.token, 4096));
         return;
       }
     }
@@ -456,15 +458,19 @@ export class UserLine {
         video: msg.video !== false,
         to: to.map((u) => ({ uid: u, family: !!fam.map[u], where: fam.map[u]?.where ?? null })),
         famAt: fam.at,
+        // Kept by the call's room: speaks for this caller if someone else in the call adds people.
+        fam: Object.keys(fam.map),
       });
       rec = r?.status === 'ringing' && r.ticket ? { ref, at: now, id, ticket: r.ticket } : { ref, at: now, error: r?.status === 'restricted' ? 'restricted' : 'unavailable' };
     }
     const latest = ((await this.get<StartRec[]>('starts')) ?? []).filter((s) => now - s.at < START_DEDUPE_MS && s.ref !== ref);
     await this.state.storage.put('starts', [...latest, rec].slice(-20));
     // Hung up while the room was being made: the call ends before anyone answers into it.
+    // The answer goes first: waiting on the room's wrap-up (the callee's history line) would time how they treat you.
     if (ref && rec.id && (await this.cancelled(ref))) {
-      await this.toRoom(rec.id, '/x/cancel', { id: rec.id, by: owner.uid });
-      return this.answerStart(ws, { ref, at: now, error: 'cancelled' });
+      this.answerStart(ws, { ref, at: now, error: 'cancelled' });
+      this.background(this.toRoom(rec.id, '/x/cancel', { id: rec.id, by: owner.uid }));
+      return;
     }
     this.answerStart(ws, rec);
   }
@@ -491,7 +497,7 @@ export class UserLine {
     const rec = ((await this.get<StartRec[]>('starts')) ?? []).find((s) => s.ref === ref);
     const id = rec?.id ?? clip(msg.id, 20);
     // The room checks it's the caller's own call (and only ever drops the caller's not-yet-arrived place).
-    if (CALL_ID_RE.test(id)) await this.toRoom(id, '/x/cancel', { id, by: owner.uid });
+    if (CALL_ID_RE.test(id)) this.background(this.toRoom(id, '/x/cancel', { id, by: owner.uid }));
   }
 
   private answerStart(ws: WebSocket, rec: StartRec): void {
@@ -552,11 +558,15 @@ export class UserLine {
       now,
       vouch: body.family === true,
       vouchAt: typeof body.famAt === 'number' && Number.isFinite(body.famAt) ? Math.min(body.famAt, now) : null,
+      fromVouch: body.fromFamily === true,
+      fromVouchAt: typeof body.fromFamAt === 'number' && Number.isFinite(body.fromFamAt) ? Math.min(body.fromFamAt, now) : null,
       where: body.where ? clip(body.where, 60) : null,
       blocked: lists.blocked,
     });
     const { family, blocked, ringer, ctx } = judged;
-    const how = ringDecision({ claimed: true, verifiedAt: owner.verifiedAt, now, blocked, prefs: lists.prefs, family, history: hist?.[ringer.uid] });
+    let how = ringDecision({ claimed: true, verifiedAt: owner.verifiedAt, now, blocked, prefs: lists.prefs, family, history: hist?.[ringer.uid] });
+    // A caller you've silenced doesn't get through by having someone else add you to their call.
+    if (how === 'ring' && by && ringDecision({ claimed: true, verifiedAt: owner.verifiedAt, now, blocked, prefs: lists.prefs, family, history: hist?.[from.uid] }) === 'silent') how = 'silent';
 
     const seen = (await this.get<Record<string, Seen>>('seen')) ?? {};
     for (const [k, v] of Object.entries(seen)) if (now - v.at > SEEN_MS) delete seen[k];
@@ -622,7 +632,8 @@ export class UserLine {
     this.all({ t: 'call_log', rec });
     if (incoming && body.missed === true && seen?.how !== 'silent') {
       const ctx = seen?.ctx ?? { family: false, label: null, where: null };
-      await this.push({ title: `Missed ${rec.video ? 'video' : 'audio'} call`, body: `${ctx.label || rec.from.name} · ${ctxText(ctx)}`, kind: 'call_missed', call: rec.id, direct: true }, 6 * 3600, 'normal');
+      // Behind the reply, like the ring's: the room's wrap-up must take as long whoever you block.
+      this.background(this.push({ title: `Missed ${rec.video ? 'video' : 'audio'} call`, body: `${ctx.label || rec.from.name} · ${ctxText(ctx)}`, kind: 'call_missed', call: rec.id, direct: true }, 6 * 3600, 'normal'));
     }
     return json({ ok: true });
   }

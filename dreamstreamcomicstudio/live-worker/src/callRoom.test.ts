@@ -36,8 +36,8 @@ function setup(replies: Record<string, { status: string; name?: string }> = {}) 
     }),
   };
   const room = new CallRoom(h.state as never, { USER_LINE } as never);
-  const init = async (to: unknown[] = [{ uid: SAM.uid, family: false, where: null }]) => {
-    const res = await room.fetch(new Request('https://call.internal/x/init', { method: 'POST', body: JSON.stringify({ id: ID, from: ALICE, video: true, to }) }));
+  const init = async (to: unknown[] = [{ uid: SAM.uid, family: false, where: null }], extra: Record<string, unknown> = {}) => {
+    const res = await room.fetch(new Request('https://call.internal/x/init', { method: 'POST', body: JSON.stringify({ id: ID, from: ALICE, video: true, to, ...extra }) }));
     return (await res.json()) as { status: string; ticket?: string; error?: string };
   };
   const ticketFor = (uid: string) => posts.find((p) => p.path === '/x/ring' && p.uid === uid)?.body.ticket as string;
@@ -53,8 +53,8 @@ function setup(replies: Record<string, { status: string; name?: string }> = {}) 
   };
   const lastCall = (ws: FakeWS) => ws.last('call')?.call as Call | undefined;
   /** Alice places the call, both reach the room, Sam picks up. */
-  const answered = async () => {
-    const r = await init();
+  const answered = async (extra: Record<string, unknown> = {}) => {
+    const r = await init(undefined, extra);
     const alice = await enter(r.ticket!, 'alice');
     await say(alice, { t: 'call_join', id: ID, video: true, mic: true });
     const sam = await enter(ticketFor(SAM.uid), 'sam');
@@ -208,6 +208,27 @@ describe('CallRoom', () => {
     const second = posts.filter((p) => p.path === '/x/ring').at(-1)!;
     expect(second.body.by).toBeUndefined();
     expect(second.body.with).toEqual([SAM.uid]);
+  });
+
+  it('someone else adding a person: the caller’s own line (when the call was placed) still speaks for the caller', async () => {
+    const { answered, room, posts } = setup();
+    const OTHER = '00000000-0000-4000-8000-00000000000b';
+    // Alice's line sent her family with the call (read at 5000) — Jo is in it.
+    await answered({ famAt: 5000, fam: [JO.uid, 'not-a-uid', ALICE.uid] });
+    const add = (uid: string, by: string) =>
+      room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by, to: [{ uid, family: true, where: null }], famAt: 9000 }) }));
+    // Regression: a family member added by family rang as a stranger once the callee's own map was old.
+    await add(JO.uid, SAM.uid);
+    expect(posts.filter((p) => p.path === '/x/ring').at(-1)!.body).toMatchObject({ by: { uid: SAM.uid }, famAt: 9000, fromFamily: true, fromFamAt: 5000 });
+    await add(OTHER, SAM.uid);
+    expect(posts.filter((p) => p.path === '/x/ring').at(-1)!.body).toMatchObject({ fromFamily: false, fromFamAt: 5000 });
+  });
+
+  it('the caller adding people, or a call placed without a family word: no separate word for the caller', async () => {
+    const { answered, room, posts } = setup();
+    await answered();
+    await room.fetch(new Request('https://call.internal/x/invite', { method: 'POST', body: JSON.stringify({ id: ID, by: SAM.uid, to: [{ uid: JO.uid, family: true, where: null }], famAt: 9000 }) }));
+    expect(posts.filter((p) => p.path === '/x/ring').at(-1)!.body.fromFamAt).toBeUndefined();
   });
 
   it('the caller hanging up before reaching the room cancels the call there and then', async () => {
