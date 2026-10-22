@@ -1,0 +1,20 @@
+{
+  "name": "generate-all-drawn",
+  "about": "Bug: 'generate all pages' re-drew a ready, non-stale page. On a drawn 1-page book it must cost $0 (outcome `nothing`) with a breakdown and next steps; a real 'another take' asks first.",
+  "doc": "lake-drawn",
+  "turns": [
+    {
+      "say": "generate all pages",
+      "routeIntent": "nothing_to_draw",
+      "expectTools": ["render_pages"],
+      "director": [{ "toolCalls": [{ "name": "render_pages", "args": { "pages": [1] } }] }, { "text": "" }],
+      "expect": { "replyIncludes": "Everything is already drawn and up to date", "outcome": "nothing", "newImageCalls": 0, "newSpendUsd": 0, "cards": ["breakdown"], "nextSteps": ["Read it", "Make the cover", "Add a page", "New take of page 1"] }
+    },
+    {
+      "say": "draw page 1 again, a different take",
+      "expectTools": ["render_pages"],
+      "director": [{ "toolCalls": [{ "name": "render_pages", "args": { "pages": [1], "redraw": true } }] }, { "text": "" }],
+      "expect": { "replyIncludes": "tap Approve", "gateReason": "redraw", "newImageCalls": 0 }
+    }
+  ]
+}

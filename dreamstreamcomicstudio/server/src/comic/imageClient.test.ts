@@ -6,6 +6,8 @@ import {
   __resetImageClientForTests,
   classifyImageError,
   createImageGenerator,
+  imageFailureDetail,
+  imageFailureInfo,
   looksLikeRefusal,
   pickAlternateRoute,
   pickImageRoute,
@@ -577,5 +579,31 @@ describe('classifyImageError / looksLikeRefusal', () => {
   it('recognises refusals but not ordinary chatter', () => {
     expect(looksLikeRefusal("I'm unable to generate that because it violates our content policy")).toBe(true);
     expect(looksLikeRefusal('Here is the page you asked for.')).toBe(false);
+  });
+});
+
+describe('failure facts for the job runner (incident follow-up)', () => {
+  it('a final 429 carries the route, status, upstream provider and Retry-After — never the body or a key', async () => {
+    const body = {
+      error: {
+        code: 429,
+        message: 'Provider returned error sk-or-v1-abcdefabcdefabcdef',
+        metadata: { raw: 'rate limited upstream', provider_name: 'Google AI Studio', is_byok: false }
+      }
+    };
+    const { generate } = setup(OR, [json(body, 429, { 'retry-after': '12' }), json(body, 429, { 'retry-after': '12' })]);
+    const err = await generate(baseReq()).catch((e) => e);
+    expect(err).toMatchObject({ code: 'RATE_LIMIT' });
+    expect(imageFailureInfo(err)).toEqual({ route: 'openrouter', status: 429, providerName: 'Google AI Studio', isByok: false, retryAfterMs: 12_000 });
+    const detail = imageFailureDetail(err)!;
+    expect(detail).toBe('OpenRouter · 429 · upstream Google AI Studio');
+    expect(detail).not.toMatch(/sk-|Bearer|rate limited upstream/);
+  });
+
+  it('marks the user\'s own integration key and falls back to the error code when there is no status', () => {
+    const err = Object.assign(new StudioError('PROVIDER_ERROR', 'x'), { imageFailure: { route: 'gemini', isByok: true } });
+    expect(imageFailureDetail(err)).toBe('Gemini · PROVIDER_ERROR · your integration key');
+    expect(imageFailureInfo(new Error('plain'))).toBeUndefined();
+    expect(imageFailureDetail(new Error('plain'))).toBeUndefined();
   });
 });

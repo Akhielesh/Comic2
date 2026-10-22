@@ -11,11 +11,18 @@
 // lookup (a session is never handed to anyone but its owner). They are evicted after
 // 20 idle minutes with no subscribers, no running turn and no running jobs; all timers
 // are unref'd so an idle backend can sleep. See docs/features/comic-studio-v4.md §4.
+//
+// v5 (contract §12.4): every commit carries its origin/label on the ops event; a commit that
+// evicted archived versions (cap 300) is followed by an info notice — never silent
+// (decisions-final #8); composer uploads older than 24 h are pruned from the ref inbox on load
+// and by the sweeper; a user/director edit that would grow the doc past DOC_LIMITS.docBytesMax
+// is refused with 409 LIMIT (server work — renders, spend, messages — always lands).
 
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
-import { DOC_LIMITS as SHARED_DOC_LIMITS } from '../../../shared/comic/limits.js';
-import type { ComicDoc, RenderState, RenderTarget } from '../../../shared/comic/doc.js';
+import { DOC_LIMITS as SHARED_DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits.js';
+import { REF_LIMITS } from '../../../shared/comic/refs.js';
+import { archiveOf, collectAssetPaths, newId, refInboxOf, type ComicDoc, type RenderState, type RenderTarget } from '../../../shared/comic/doc.js';
 import { logger } from '../lib/logger.js';
 import { StudioError, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
 
@@ -26,9 +33,12 @@ import { StudioError, type DocStore, type ProjectRowSummary, type StudioEventLis
  */
 export const DOC_LIMITS = {
   ...SHARED_DOC_LIMITS,
-  /** Legacy per-entity ref cap still enforced below (= refsPerCharacter); P1-JOBS moves to REF_LIMITS/capFor. */
+  /** Legacy alias (= refsPerCharacter). Ref caps are per owner now: REF_LIMITS.character / .place. */
   refsPerEntity: SHARED_DOC_LIMITS.refsPerCharacter
 } as const;
+
+/** Ref cap for a character or place patch that sets `refs` wholesale (shared REF_LIMITS, same as capFor). */
+const refCapFor = (op: 'character' | 'place'): number => (op === 'character' ? REF_LIMITS.character : REF_LIMITS.place);
 
 /** Drop ops that would create entities past DOC_LIMITS (edits to existing ones always pass). */
 export function enforceDocLimits(doc: ComicDoc, ops: DocOp[]): DocOp[] {
@@ -72,8 +82,8 @@ export function enforceDocLimits(doc: ComicDoc, ops: DocOp[]): DocOp[] {
         }
       }
     }
-    if ((op.op === 'character' || op.op === 'place') && Array.isArray(op.patch.refs) && op.patch.refs.length > DOC_LIMITS.refsPerEntity) {
-      out.push({ ...op, patch: { ...op.patch, refs: op.patch.refs.slice(0, DOC_LIMITS.refsPerEntity) } } as DocOp);
+    if ((op.op === 'character' || op.op === 'place') && Array.isArray(op.patch.refs) && op.patch.refs.length > refCapFor(op.op)) {
+      out.push({ ...op, patch: { ...op.patch, refs: op.patch.refs.slice(0, refCapFor(op.op)) } } as DocOp);
       continue;
     }
     out.push(op);
@@ -93,6 +103,10 @@ export const SESSION_IDLE_MS = 20 * 60_000;
 export const INTERRUPTED_RENDER_ERROR = 'Interrupted — tap retry.';
 
 const SWEEP_INTERVAL_MS = 60_000;
+/** Composer uploads that were never sent or assigned are dropped from the inbox after this long. */
+export const REF_INBOX_TTL_MS = REF_LIMITS.inboxTtlMs;
+/** Re-measure the serialized doc at least every N commits (between, op sizes are added). */
+const DOC_BYTES_REMEASURE_EVERY = 25;
 /** Backoff for retrying a failed save when nothing else triggers one. */
 const SAVE_RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
 
@@ -141,6 +155,36 @@ export const recoveryOps = (doc: ComicDoc, opts: { now: number; allInFlight: boo
   return ops;
 };
 
+/** `ref_remove` ops for composer-inbox uploads older than REF_INBOX_TTL_MS (the storage GC removes the files). */
+export const pruneRefInboxOps = (doc: ComicDoc, now: number): DocOp[] =>
+  refInboxOf(doc)
+    .filter((r) => r?.path && typeof r.at === 'number' && now - r.at > REF_INBOX_TTL_MS)
+    .map((r): DocOp => ({ op: 'ref_remove', owner: { kind: 'inbox' }, path: r.path }));
+
+/**
+ * Archive paths a commit evicted (§5.3.1 step 5): gone from the archive AND referenced nowhere
+ * else afterwards (a version restored out of the archive is not an eviction).
+ */
+export const evictedArchivePaths = (before: ComicDoc, after: ComicDoc): string[] => {
+  const prev = archiveOf(before);
+  const next = archiveOf(after);
+  if (next === prev || next.length < MAX_ARCHIVE) return [];
+  const kept = new Set(next.map((a) => a.path));
+  const gone = prev.filter((a) => !kept.has(a.path)).map((a) => a.path);
+  if (!gone.length) return [];
+  const used = new Set(collectAssetPaths(after));
+  return [...new Set(gone.filter((p) => !used.has(p)))];
+};
+
+/** The info notice for an archive eviction (never silent — decisions-final #8). */
+export const archiveEvictionNotice = (count: number, now: number) => {
+  const text = `Version archive is full (${MAX_ARCHIVE}): removed ${count} oldest unstarred ${count === 1 ? 'version' : 'versions'} that nothing uses. Star a version to keep it forever.`;
+  return {
+    op: 'message' as const,
+    msg: { id: newId('msg'), role: 'assistant' as const, text, at: now, cards: [{ type: 'notice' as const, id: newId('card'), tone: 'info' as const, text }] }
+  };
+};
+
 // ── Session ──────────────────────────────────────────────────────────────────
 
 export interface StudioSessionOptions {
@@ -170,6 +214,10 @@ export class StudioSession implements StudioSessionApi {
   private saveFailures = 0;
   /** Set when a save failed with a terminal error (doc deleted / ownership lost); no more retries. */
   private gone = false;
+  /** Serialized size estimate of the doc (exact on re-measure, op sizes added between). */
+  private approxBytes = -1;
+  private commitsSinceMeasure = 0;
+  private warnedBytes = false;
 
   /** Turn mutex: the tail of the queue of exclusive work. */
   private lockTail: Promise<void> = Promise.resolve();
@@ -221,13 +269,20 @@ export class StudioSession implements StudioSessionApi {
     return this.gone;
   }
 
+  /**
+   * Apply ops atomically, bump rev, emit an `ops` event (with origin/label), schedule the save.
+   * Throws StudioError LIMIT (409) only for a user/director edit that would push the doc past
+   * DOC_LIMITS.docBytesMax; job commits (paid renders, spend, messages) always land.
+   */
   commit(rawOps: DocOp[], opts?: { origin?: OpsOrigin; label?: string }): ComicDoc {
     if (!Array.isArray(rawOps) || !rawOps.length) return this.current;
     const ops = enforceDocLimits(this.current, rawOps);
     if (!ops.length) return this.current;
     const at = this.now();
-    const next = applyOps(this.current, ops, at);
-    this.current = { ...next, rev: this.current.rev + 1, updatedAt: at };
+    const before = this.current;
+    const next = applyOps(before, ops, at);
+    this.checkSize(next, ops, opts?.origin);
+    this.current = { ...next, rev: before.rev + 1, updatedAt: at };
     this.touch();
     this.emit({
       type: 'ops',
@@ -237,7 +292,38 @@ export class StudioSession implements StudioSessionApi {
       ...(opts?.label ? { label: opts.label } : {})
     });
     this.scheduleSave(this.saveDebounceMs);
+    // Archive eviction is never silent (decisions-final #8).
+    const evicted = evictedArchivePaths(before, this.current);
+    if (evicted.length) {
+      logger.info('comic_archive_evicted', { projectId: this.projectId, count: evicted.length });
+      this.commit([archiveEvictionNotice(evicted.length, at)], { origin: 'job' });
+    }
     return this.current;
+  }
+
+  /** Doc size guard (DOC_LIMITS.docBytesWarn / docBytesMax), cheap between periodic re-measures. */
+  private checkSize(next: ComicDoc, ops: DocOp[], origin?: OpsOrigin): void {
+    const measure = () => {
+      this.approxBytes = JSON.stringify(next).length;
+      this.commitsSinceMeasure = 0;
+    };
+    this.commitsSinceMeasure += 1;
+    if (this.approxBytes < 0 || this.commitsSinceMeasure >= DOC_BYTES_REMEASURE_EVERY) measure();
+    else this.approxBytes += JSON.stringify(ops).length;
+    if (this.approxBytes > SHARED_DOC_LIMITS.docBytesMax && (origin === 'user' || origin === 'director')) {
+      measure();
+      if (this.approxBytes > SHARED_DOC_LIMITS.docBytesMax) {
+        logger.warn('comic_doc_too_large', { projectId: this.projectId, bytes: this.approxBytes });
+        this.approxBytes = -1; // the refused doc is not the current one: measure afresh next time
+        throw new StudioError('LIMIT', 'This comic has grown too large to save more changes. Delete unused pages or versions, or shorten the pasted script, then try again.', {
+          status: 409
+        });
+      }
+    }
+    if (this.approxBytes > SHARED_DOC_LIMITS.docBytesWarn && !this.warnedBytes) {
+      this.warnedBytes = true;
+      logger.warn('comic_doc_bytes', { projectId: this.projectId, bytes: this.approxBytes });
+    }
   }
 
   emit(event: StudioEvent): void {
@@ -410,6 +496,18 @@ export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
       evicted += 1;
       continue;
     }
+    // Old composer uploads leave the inbox on every sweep, idle or not (never during a turn).
+    if (!session.turnRunning) {
+      const pruned = pruneRefInboxOps(session.doc, now);
+      if (pruned.length) {
+        try {
+          session.commit(pruned, { origin: 'job', label: 'Clear old uploads' });
+          logger.info('comic_ref_inbox_pruned', { projectId, count: pruned.length });
+        } catch (err) {
+          logger.warn('comic_ref_inbox_prune_failed', { projectId, message: (err as Error)?.message });
+        }
+      }
+    }
     if (!session.isIdle(now)) continue;
     await session.flush();
     // Something may have started while flushing.
@@ -489,8 +587,13 @@ export async function getStudioSession(
     // queued/rendering was interrupted (restart, deploy, crash).
     const repair = recoveryOps(doc, { now: now(), allInFlight: true });
     if (repair.length) {
-      session.commit(repair);
+      session.commit(repair, { origin: 'job' });
       logger.info('comic_session_recovered', { projectId, ops: repair.length });
+    }
+    const pruned = pruneRefInboxOps(session.doc, now());
+    if (pruned.length) {
+      session.commit(pruned, { origin: 'job', label: 'Clear old uploads' });
+      logger.info('comic_ref_inbox_pruned', { projectId, count: pruned.length });
     }
     sessions.set(projectId, session);
     ensureSweeper();

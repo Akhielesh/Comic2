@@ -1,23 +1,29 @@
-// Job runner for Comic Studio (v4): direct studio actions, the spend gate, and the
-// image render pipeline.
+// Job runner for Comic Studio (v5): direct studio actions, the spend gate, and the image
+// render pipeline (contract §12.3).
 //
-// Every action either edits the doc (patch, pick a style, approve a plan, restore a
-// version) or SPENDS (style options, sheets, pages, edits, cover). Spend actions are
-// estimated with the shared registry first and stop at a Gate when the user's confirm
-// policy or budget cap says so — nothing is drawn until the gate is approved. Approved
-// work renders server-side (closing the tab never loses a paid image):
+// Every action either edits the doc (patch, pick a style, approve a plan, use a version) or
+// SPENDS (style options, sheets, pages, edits, cover). Spend actions are estimated with the
+// shared registry first and stop at a Gate when the user's confirm policy, the budget cap or
+// a director guard (first render, plan review, redraw, no draw intent) says so — nothing is
+// drawn until the gate is approved. A confirmed chip whose quote went stale is re-gated.
+// Approved work renders server-side (closing the tab never loses a paid image):
 //
 //   targets marked queued → [missing sheets] → page 1 alone (continuity anchor) →
-//   remaining pages in parallel (≤3 image calls per project) → per page: vision QC +
-//   balloon layout (fail-soft) → spend entry + signed URL for every image.
+//   remaining pages (+ the cover) in parallel (≤3 image calls per project; one at a time
+//   once the provider rate-limits this run) → per image: aspect check, pending safety
+//   verdict, QC + balloons (pages), URL after the verdict (20 s owner-only fail-open).
 //
-// Each image is billed per call (reserve → settle with the provider-reported cost →
-// release on failure); the doc's spend ledger records every paid call (BYOK flagged),
-// so the header total is always truthful. Cancellation stops work that has not started;
-// in-flight image calls finish and are kept (they are paid). Nothing is ever left
-// "queued". See docs/features/comic-studio-v4.md §2–§5.
+// Software first: an implicit request never redraws a ready, current target (R1); a version
+// made from exactly today's spec is put back for free (R2); an identical job's image is
+// copied (R3) or joined while still drawing (R7). Each reuse is a $0 ledger line with the
+// amount saved. Each image is billed per call (reserve → settle with the provider-reported
+// cost → release on failure); a rate-limited image is re-queued once after the provider's
+// Retry-After before it is marked failed. Conversation order follows causality: a director
+// turn carries the live progress card and the completion is a NEW message appended after
+// the reply, with next steps computed after the run. Nothing is ever left "queued".
 
 import {
+  archiveOf,
   collectAssetPaths,
   emptyRender,
   findCharacter,
@@ -25,9 +31,12 @@ import {
   findPlace,
   getRender,
   isPageStale,
+  isTargetStale,
+  mapAssetRefs,
   newId,
-  pageSpecHash,
   renderTargetKey,
+  specHashFor,
+  versionsOf,
   type AspectRatio,
   type AssetRef,
   type Balloon,
@@ -54,17 +63,24 @@ import {
   type Settings,
   type ShotType,
   type SpendKind,
-  type StyleBible
+  type StyleBible,
+  type VersionMeta
 } from '../../../shared/comic/doc.js';
 import { CLIENT_PATCHABLE_OPS, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
-import { effectiveRating } from '../../../shared/comic/safety.js';
+import { hashString } from '../../../shared/comic/hash.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
+import { coverNeedsDraw, pageTargets as planPageTargets } from '../../../shared/comic/plan.js';
+import { PLATFORM_CEILING, SAFE_TAKE_LINE, canServeToOwner, effectiveRating, safetyStatusOf, softenAction, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import {
   IMAGE_MODELS,
+  PLAN_USD_PER_PAGE,
   PLATFORM_MARKUP,
   QC_USD_PER_PAGE,
   TIER_PRESETS,
+  aspectFromSize,
+  aspectMatches,
   estimateJobs,
   formatUsd,
   imagePriceUsd,
@@ -78,9 +94,13 @@ import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared
 import type { ChatMessage } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
 import { actionHandlerFor } from './actions/index.js';
+import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
+import { imageFailureDetail, imageFailureInfo } from './imageClient.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
+import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
+import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
 import {
   StudioError,
@@ -107,8 +127,23 @@ export const MAX_PARALLEL_IMAGES = 3;
 export const LOW_QC_SCORE = 0.45;
 /** Attempts per image (the transport already retries 429/5xx once inside an attempt). */
 const MAX_IMAGE_ATTEMPTS = 2;
-/** Pauses between attempts (tests shorten them). */
-export const JOB_TIMINGS = { retryBackoffMs: 2500, saveRetryMs: 1000 };
+/** Pauses and waits (tests shorten them). */
+export const JOB_TIMINGS = {
+  retryBackoffMs: 2500,
+  saveRetryMs: 1000,
+  /** A rate-limited image that still failed waits this long (or the provider's Retry-After) before its one re-queue. */
+  rateLimitRequeueMs: 45_000,
+  /** Up to this much random jitter on that wait, so parallel failures don't return in the same second. */
+  requeueJitterMs: 5_000,
+  /** Lower bound on a provider's Retry-After hint for that wait. */
+  requeueMinMs: 5_000,
+  /** The owner's private view shows an image after this long even without a safety verdict (decisions-final #10). */
+  safetyFailOpenMs: 20_000,
+  /** A completion waits at most this long for the director's reply to be committed first. */
+  turnLockWaitMs: 30_000
+};
+/** Upper bound on a provider's Retry-After hint for the job-level re-queue. */
+const REQUEUE_MAX_MS = 120_000;
 /**
  * A rate-limited provider needs real breathing room before the job's second attempt (the
  * transport already waited and retried once): 5× the base pause plus up to one base pause
@@ -120,6 +155,10 @@ const DEFAULT_STYLE_DIRECTIONS = 3;
 /** Writer text spend for proposing style directions (one strong-model call, occasional repair). */
 const STYLE_DIRECTIONS_USD = 0.015;
 const MAX_PATCH_OPS = 200;
+/** Chips on one message (shared cap). */
+const MAX_NEXT_STEPS = DOC_LIMITS.nextSteps;
+/** Chips nextStepsFor() offers from doc state alone (a completion may prepend its own). */
+const DOC_NEXT_STEPS = 4;
 
 const TEXT_LIMIT = 4_000;
 const LONG_TEXT_LIMIT = 200_000;
@@ -160,6 +199,16 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener('abort', done, { once: true });
   });
 
+/** A timer that can be cancelled (no dangling timeouts after a race is decided). */
+const delay = (ms: number): { promise: Promise<'timeout'>; cancel: () => void } => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), Math.max(0, ms));
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return { promise, cancel: () => timer && clearTimeout(timer) };
+};
+
 const asStudioError = (err: unknown, fallback = 'Something went wrong. Please try again.'): StudioError => {
   if (err instanceof StudioError) return err;
   logger.error('comic_job_unexpected_error', { message: (err as Error)?.message, stack: (err as Error)?.stack?.split('\n').slice(0, 4).join(' | ') });
@@ -173,14 +222,25 @@ export const noticeCard = (tone: 'info' | 'warn' | 'error' | 'success', text: st
   text
 });
 
-const assistantMessage = (text: string, cards?: Card[], suggestions?: string[]): Msg => ({
-  id: newId('msg'),
-  role: 'assistant',
-  text,
-  at: Date.now(),
-  ...(cards?.length ? { cards } : {}),
-  ...(suggestions?.length ? { suggestions } : {})
-});
+/** An assistant message. `nextSteps` also fill the legacy string `suggestions` (old clients). */
+const assistantMessage = (text: string, cards?: Card[], steps?: NextStep[] | string[]): Msg => {
+  const list = (steps || []).slice(0, MAX_NEXT_STEPS);
+  const objects = list.filter((s): s is NextStep => typeof s === 'object' && !!s);
+  const labels = list.map((s) => (typeof s === 'string' ? s : s.label)).filter(Boolean);
+  return {
+    id: newId('msg'),
+    role: 'assistant',
+    text,
+    at: Date.now(),
+    ...(cards?.length ? { cards } : {}),
+    ...(labels.length ? { suggestions: labels } : {}),
+    ...(objects.length ? { nextSteps: objects } : {})
+  };
+};
+
+/** Commit with an ops origin (undo attribution) and an optional undo label. */
+const commitAs = (ctx: StudioContext, ops: DocOp[], origin?: OpsOrigin, label?: string): ComicDoc =>
+  ctx.session.commit(ops, { ...(origin ? { origin } : {}), ...(label ? { label } : {}) });
 
 const activity = (ctx: StudioContext, label: string) => {
   const id = newId('act');
@@ -267,6 +327,17 @@ const slotsFor = (session: StudioSessionApi) => {
   if (!s) {
     s = new Semaphore(MAX_PARALLEL_IMAGES);
     imageSlots.set(session, s);
+  }
+  return s;
+};
+
+/** Identical image jobs drawing right now, per project (R7). */
+const inflightJobs = new WeakMap<StudioSessionApi, InflightJobs>();
+const inflightFor = (session: StudioSessionApi) => {
+  let s = inflightJobs.get(session);
+  if (!s) {
+    s = new InflightJobs();
+    inflightJobs.set(session, s);
   }
   return s;
 };
@@ -386,21 +457,24 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
 /** Commit one spend entry for a text tracker (no-op when nothing was called). */
 export const recordTextSpend = (ctx: StudioContext, tracker: TextSpendTracker, kind: SpendKind, label: string): void => {
   if (!tracker.calls) return;
-  ctx.session.commit([
-    {
-      op: 'spend',
-      entry: {
-        id: newId('sp'),
-        at: Date.now(),
-        kind,
-        label,
-        usd: tracker.usd,
-        ...(tracker.model ? { model: tracker.model } : {}),
-        byok: tracker.byok,
-        estimated: tracker.estimated
+  ctx.session.commit(
+    [
+      {
+        op: 'spend',
+        entry: {
+          id: newId('sp'),
+          at: Date.now(),
+          kind,
+          label,
+          usd: tracker.usd,
+          ...(tracker.model ? { model: tracker.model } : {}),
+          byok: tracker.byok,
+          estimated: tracker.estimated
+        }
       }
-    }
-  ]);
+    ],
+    { origin: 'job' }
+  );
 };
 
 // ── Targets ──────────────────────────────────────────────────────────────────
@@ -408,14 +482,11 @@ export const recordTextSpend = (ctx: StudioContext, tracker: TextSpendTracker, k
 /** Lead/support characters (and anyone explicitly requested) whose sheet must be drawn. */
 const needsSheet = (c: Character) => c.tier !== 'extra' && c.sheet.status !== 'ready' && !isBusy(c.sheet);
 
-export const pageTargets = (doc: ComicDoc, action: { pageIds?: string[]; force?: boolean }): Page[] => {
-  const ids = Array.isArray(action.pageIds) && action.pageIds.length ? new Set(action.pageIds) : null;
-  return doc.pages
-    .filter((p) => (ids ? ids.has(p.id) : true))
-    .filter((p) => p.panels.length > 0 && !isBusy(p.render))
-    .filter((p) => action.force || p.render.status !== 'ready' || isPageStale(doc, p))
-    .sort((a, b) => a.n - b.n);
-};
+/**
+ * Pages a render_pages action draws. Without `force` never a ready, current page (R1):
+ * only undrawn, failed and out-of-date pages with panels, never busy ones (shared plan.ts).
+ */
+export const pageTargets = (doc: ComicDoc, action: { pageIds?: string[]; force?: boolean }): Page[] => planPageTargets(doc, action);
 
 /** Lead/support cast appearing on these pages that has no usable sheet yet. */
 export const missingSheetsFor = (doc: ComicDoc, pages: Page[]): Character[] => {
@@ -435,6 +506,9 @@ export const sheetTargets = (
     places: doc.places.filter((p) => ids.includes(p.id) && wanted(p.sheet))
   };
 };
+
+/** Whether a render_pages `includeCover` draws the cover now (forced: any idle cover; else undrawn or out of date). */
+const coverWanted = (doc: ComicDoc, force?: boolean): boolean => (force ? !isBusy(doc.cover.render) : coverNeedsDraw(doc));
 
 // Count what the runner will actually draw: sanitized directions (invalid ones are dropped),
 // else the default proposal count. Mirrors RenderRun.styleOptions.
@@ -459,6 +533,7 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
       const pages = pageTargets(doc, action);
       jobs.push({ kind: 'page', count: pages.length, label: 'pages' });
       jobs.push({ kind: 'sheet', count: missingSheetsFor(doc, pages).length, label: 'character sheets' });
+      if (action.includeCover && coverWanted(doc, action.force)) jobs.push({ kind: 'cover', count: 1, label: 'cover' });
       break;
     }
     case 'edit_page':
@@ -483,21 +558,53 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
 const budgetOf = (settings: Settings): number | undefined =>
   typeof settings.budgetUsd === 'number' && Number.isFinite(settings.budgetUsd) && settings.budgetUsd > 0 ? settings.budgetUsd : undefined;
 
+/** No page of the project has ever been drawn (first_render guard). */
+const neverDrawn = (doc: ComicDoc): boolean => doc.pages.every((p) => !p.render.asset && !p.render.history.length);
+
+/** A confirmed spend whose fresh estimate outgrew the price on the chip/button (same tolerance as a gate). */
+export const quoteIsStale = (quotedUsd: unknown, estimate: SpendEstimate): boolean =>
+  typeof quotedUsd === 'number' && Number.isFinite(quotedUsd) && quotedUsd >= 0 && estimate.usd > quotedUsd * 1.15 + 0.01;
+
 /**
- * Whether a spend must wait for the user. 'budget' when it would push the project past
- * its budget cap (even when confirmed, unless the user approved going over), else
- * 'policy' per the confirm setting when the spend is not already confirmed.
+ * Whether a spend must wait for the user, and why.
+ * - `budget`: it would push the project past its budget cap (even when confirmed, unless the
+ *   user approved going over).
+ * - Confirmed spends (the user's own click or an approved gate) run.
+ * - `forceGate`: a director guard. `redraw` and `policy` always stop (they replace paid work or
+ *   honour a stale quote); `first_render` / `plan_review` / `no_intent` are skipped under
+ *   confirm 'never'.
+ * - render_pages from the director: `first_render` (nothing drawn yet, reviewFirstRender) and
+ *   `plan_review` (the plan is still a draft), unless confirm is 'never'.
+ * - else `policy` per the confirm setting.
  */
 export function gateDecision(
   doc: ComicDoc,
   estimate: SpendEstimate,
   confirmed: boolean,
-  opts: { budgetApproved?: boolean; pendingUsd?: number; priorUsd?: number } = {}
-): null | 'policy' | 'budget' {
+  opts: {
+    budgetApproved?: boolean;
+    pendingUsd?: number;
+    priorUsd?: number;
+    forceGate?: Gate['reason'];
+    /** The spend would replace a ready, current image (a director redraw always stops). */
+    redraw?: boolean;
+    action?: SpendAction;
+  } = {}
+): Gate['reason'] | null {
   const budget = budgetOf(doc.settings);
   if (budget !== undefined && !opts.budgetApproved && round4(doc.spend.totalUsd + (opts.pendingUsd || 0) + estimate.usd) > budget + 1e-9) return 'budget';
   if (confirmed) return null;
-  switch (doc.settings.confirm) {
+  const policy = doc.settings.confirm;
+  if (opts.forceGate) {
+    if (opts.forceGate === 'redraw' || opts.forceGate === 'policy' || opts.forceGate === 'budget') return opts.forceGate;
+    if (policy !== 'never') return opts.forceGate;
+  }
+  if (opts.redraw) return 'redraw';
+  if (opts.action?.type === 'render_pages' && policy !== 'never') {
+    if (doc.settings.reviewFirstRender !== false && neverDrawn(doc)) return 'first_render';
+    if (doc.planStatus === 'draft') return 'plan_review';
+  }
+  switch (policy) {
     case 'always':
       return 'policy';
     case 'never':
@@ -515,22 +622,25 @@ export function gateDecision(
 export interface RunActionOptions {
   /** The user explicitly asked for this spend (a UI click or an approved gate). */
   confirmed: boolean;
-  /** Pro-tier spend is not allowed for this user; the message explains why. */
+  /** Pro-tier spend is not allowed for this user; the message explains why (derived user text). */
   qualityDenied?: string;
   /** Approving a budget gate lets this one action go over the budget. */
   budgetApproved?: boolean;
   /** USD this director turn has already started without approval (for the per-turn 'big' gate). */
   priorUsd?: number;
-  /** Cards meant for the conversation go here (director turns) instead of a new message. */
+  /** Director turns: cards (gate, live renders progress, breakdown, notices) go into the director's message. */
   collectCard?: (card: Card) => void;
-  // ── v5 (contract §12.3; optional until P1-JOBS makes caps/origin required) ──
-  /** What this user may do; replaces qualityDenied (kept as derived user text). Absent ⇒ ctx.caps ⇒ DEFAULT_CAPS. */
+  /**
+   * What this user may do (contract §12.3). Absent ⇒ ctx.caps; when neither is given the
+   * quality check falls back to `qualityDenied` (P2-SERVER makes this required once every
+   * caller passes it).
+   */
   caps?: StudioCaps;
   /** Director turns: next steps for the director's message. */
   collectNextSteps?: (steps: NextStep[]) => void;
   /** Force a gate even below bigSpendUsd (drawIntent 'none', first_render, plan_review, redraw). */
   forceGate?: Gate['reason'];
-  /** Ops origin for session.commit (undo + "saved by software" attribution). */
+  /** Ops origin for session.commit (undo + "saved by software" attribution). Absent ⇒ 'director' when collecting, else none. */
   origin?: OpsOrigin;
 }
 
@@ -550,17 +660,22 @@ export interface StartedAction {
 
 const finished = (outcome: ActionOutcome): StartedAction => ({ outcome, done: Promise.resolve() });
 
-/** Deliver conversation cards: into the director's message when collecting, else as a new assistant message. */
-const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards: Card[], suggestions?: string[]) => {
+/** The caller's origin; a director turn (collecting cards) is 'director'; otherwise none (old callers). */
+const originOf = (opts: Pick<RunActionOptions, 'origin' | 'collectCard'>): OpsOrigin | undefined => opts.origin ?? (opts.collectCard ? 'director' : undefined);
+
+/** Deliver conversation cards (and chips): into the director's message when collecting, else as a new assistant message. */
+const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards: Card[], steps?: NextStep[] | string[]) => {
   if (opts.collectCard) {
     cards.forEach((c) => opts.collectCard!(c));
+    const objects = (steps || []).filter((s): s is NextStep => typeof s === 'object' && !!s);
+    if (objects.length) opts.collectNextSteps?.(objects);
     return;
   }
-  ctx.session.commit([{ op: 'message', msg: assistantMessage(text, cards, suggestions) }]);
+  commitAs(ctx, [{ op: 'message', msg: assistantMessage(text, cards, steps) }], 'job');
 };
 
-const blocked = (ctx: StudioContext, opts: RunActionOptions, message: string, tone: 'info' | 'warn' | 'error' = 'warn', suggestions?: string[]) => {
-  deliver(ctx, opts, message, [noticeCard(tone, message)], suggestions);
+const blocked = (ctx: StudioContext, opts: RunActionOptions, message: string, tone: 'info' | 'warn' | 'error' = 'warn', steps?: NextStep[] | string[]) => {
+  deliver(ctx, opts, message, [noticeCard(tone, message)], steps);
   return finished({ status: 'blocked', message });
 };
 
@@ -589,19 +704,19 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
     case 'approve_gate':
       return approveGate(ctx, action.gateId, opts);
     case 'decline_gate':
-      return finished(declineGate(ctx, action.gateId));
+      return finished(declineGate(ctx, action.gateId, opts));
     case 'pick_style':
-      return finished(pickStyle(ctx, action.optionId));
+      return finished(pickStyle(ctx, action.optionId, opts));
     case 'plan_pages':
       return finished(await planPages(ctx, { instructions: action.instructions }, opts));
     case 'approve_plan':
-      return finished(approvePlan(ctx));
+      return finished(approvePlan(ctx, opts));
     case 'patch':
       return finished(applyPatch(ctx, action.ops, opts));
     case 'restore_render':
-      return finished(restoreRender(ctx, action.target, action.path));
+      return finished(restoreRender(ctx, action.target, action.path, opts));
     case 'relayout_balloons':
-      return finished(await relayoutBalloons(ctx, action.pageId));
+      return finished(await relayoutBalloons(ctx, action.pageId, { useVision: action.useVision === true }));
     case 'cancel':
       ctx.session.abort.abort();
       return finished({ status: 'done', message: 'Stopped. Anything already drawing will finish and be kept.' });
@@ -611,10 +726,21 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
 }
 
 /**
- * Run a registered feature action. Wave 0 calls the handler directly; P1-JOBS routes
- * `spend: true` handlers (translate) through estimate → gateDecision → run like startSpend.
+ * Run a registered feature action. Spend handlers with an estimate (translate) go through
+ * estimate → gateDecision → run exactly like the core spends (a stale chip quote re-gates).
  */
-async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
+export async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
+  if (!handler.spend || !handler.estimate || !isSpendAction(action)) return handler.run(ctx, action, opts);
+  const estimate = await handler.estimate(ctx, action);
+  const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
+  const reason = gateDecision(ctx.session.doc, estimate, opts.confirmed && !stale, {
+    budgetApproved: opts.budgetApproved,
+    pendingUsd: pendingUsdOf(ctx.session),
+    priorUsd: opts.priorUsd,
+    forceGate: stale ? 'policy' : opts.forceGate,
+    action
+  });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
   return handler.run(ctx, action, opts);
 }
 
@@ -638,24 +764,32 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   }
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
-  const estimate = estimateSpendAction(doc, gate.action, spendIsByok(ctx.keys));
-  const { nickname } = modelLabel(doc, describeSpend(doc, gate.action).kind);
+  const handler = actionHandlerFor(gate.action.type);
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendIsByok(ctx.keys));
+  const nickname = handler ? gate.model : modelLabel(doc, describeSpend(doc, gate.action).kind).nickname;
+  const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
     // The plan, quality or model changed since the card was shown: never run a bigger
     // or different spend on an old approval — re-quote instead.
-    ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'declined' } }]);
-    return startSpend(ctx, gate.action, { ...opts, confirmed: false, budgetApproved: false });
+    commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], origin);
+    return handler
+      ? runFeatureAction(ctx, handler, gate.action, { ...opts, confirmed: false, budgetApproved: false })
+      : startSpend(ctx, gate.action, { ...opts, confirmed: false, budgetApproved: false });
   }
   // Commit 'approved' first (before startSpend, so a same-kind open gate isn't flipped to
-  // 'declined' at startSpend:L749), then put the card back if the spend never started —
+  // 'declined' by startSpend), then put the card back if the spend never started —
   // so it never claims "drawing now" when a busy page / missing key / invalid-now blocked it.
-  ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'approved' } }]);
+  const ops: DocOp[] = [{ op: 'gate', gate: { ...gate, status: 'approved' } }];
+  // Approving the plan review IS approving the plan.
+  if (gate.reason === 'plan_review' && doc.planStatus === 'draft' && doc.pages.length) ops.push({ op: 'plan_status', status: 'approved' });
+  commitAs(ctx, ops, origin, 'Approve');
   const reopen = () => {
     const cur = ctx.session.doc.gate;
-    if (cur?.id === gate.id && cur.status === 'approved') ctx.session.commit([{ op: 'gate', gate: { ...cur, status: 'open' } }]);
+    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'open' } }], origin);
   };
+  const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
-    const started = await startSpend(ctx, gate.action, { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved });
+    const started = handler ? await handler.run(ctx, gate.action, next) : await startSpend(ctx, gate.action, next);
     if (started.outcome.status === 'blocked') reopen();
     return started;
   } catch (err) {
@@ -664,10 +798,10 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   }
 }
 
-function declineGate(ctx: StudioContext, gateId: string): ActionOutcome {
+function declineGate(ctx: StudioContext, gateId: string, opts: RunActionOptions): ActionOutcome {
   const gate = ctx.session.doc.gate;
   if (!gate || gate.id !== gateId) throw new StudioError('BAD_REQUEST', 'That approval is no longer open.', { status: 409 });
-  if (gate.status === 'open') ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'declined' } }]);
+  if (gate.status === 'open') commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], originOf(opts));
   return { status: 'done', message: 'Declined — nothing was spent.' };
 }
 
@@ -678,6 +812,17 @@ interface SpendPlan {
   /** Primary image kind (quality access + model naming). */
   kind: ImageJobKind;
 }
+
+/** "page 2" · "pages 1–3" · "pages 1, 3 and 4" · "5 pages". */
+const pagesPhrase = (pages: { n: number }[]): string => {
+  const ns = [...new Set(pages.map((p) => p.n))].sort((a, b) => a - b);
+  if (!ns.length) return 'no pages';
+  if (ns.length === 1) return `page ${ns[0]}`;
+  const consecutive = ns.every((n, i) => i === 0 || n === ns[i - 1] + 1);
+  if (consecutive) return `pages ${ns[0]}–${ns[ns.length - 1]}`;
+  if (ns.length <= 4) return `pages ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
+  return `${ns.length} pages`;
+};
 
 const describeSpend = (doc: ComicDoc, action: SpendAction): SpendPlan => {
   switch (action.type) {
@@ -693,16 +838,22 @@ const describeSpend = (doc: ComicDoc, action: SpendAction): SpendPlan => {
     case 'render_pages': {
       const pages = pageTargets(doc, action);
       const sheets = missingSheetsFor(doc, pages).length;
-      const pageText = pages.length === 1 ? `page ${pages[0].n}` : plural(pages.length, 'page');
-      const what = sheets ? `${pageText} + ${plural(sheets, 'character sheet')}` : pageText;
-      return { what, title: `Draw ${pageText}?`, kind: 'page' };
+      const cover = action.includeCover && coverWanted(doc, action.force);
+      const pageText = pages.length ? pagesPhrase(pages) : '';
+      const what = [pageText, sheets ? plural(sheets, 'character sheet') : '', cover ? 'the cover' : ''].filter(Boolean).join(' + ') || 'nothing';
+      const verb = action.force ? 'Redraw' : 'Draw';
+      return { what, title: `${verb} ${[pageText, cover ? 'the cover' : ''].filter(Boolean).join(' + ') || 'pages'}?`, kind: pages.length ? 'page' : cover ? 'cover' : 'page' };
     }
     case 'edit_page': {
       const page = findPage(doc, action.pageId);
       return { what: `an edit of page ${page?.n ?? '?'}`, title: `Edit page ${page?.n ?? '?'}?`, kind: 'edit' };
     }
     case 'render_cover':
-      return { what: 'the cover', title: 'Draw the cover?', kind: 'cover' };
+      return action.textless
+        ? { what: 'a textless cover (the title becomes editable text)', title: 'Redraw the cover without lettering?', kind: 'cover' }
+        : { what: 'the cover', title: 'Draw the cover?', kind: 'cover' };
+    case 'translate':
+      return { what: `a translation (${(action.languages || []).join(', ')})`, title: 'Translate?', kind: 'page' };
     default:
       return { what: 'images', title: 'Spend?', kind: 'page' };
   }
@@ -735,18 +886,33 @@ export const bindSpendAction = (doc: ComicDoc, action: SpendAction): SpendAction
 const gateStillHolds = (gate: Gate, estimate: SpendEstimate, nickname: string): boolean =>
   estimate.imageCount <= gate.imageCount && estimate.usd <= gate.estimateUsd * 1.15 + 0.01 && nickname === gate.model;
 
-function createGate(ctx: StudioContext, rawAction: SpendAction, estimate: SpendEstimate, reason: 'policy' | 'budget', opts: RunActionOptions): StartedAction {
+/** The bound action without its chip quote (the gate card is the new quote). */
+const withoutQuote = (action: SpendAction): SpendAction => {
+  if (!('quotedUsd' in action)) return action;
+  const copy = { ...action } as SpendAction & { quotedUsd?: number };
+  delete copy.quotedUsd;
+  return copy;
+};
+
+function createGate(
+  ctx: StudioContext,
+  rawAction: SpendAction,
+  estimate: SpendEstimate,
+  reason: Gate['reason'],
+  opts: RunActionOptions,
+  extra: { staleFrom?: number } = {}
+): StartedAction {
   const doc = ctx.session.doc;
-  const action = bindSpendAction(doc, rawAction);
+  const action = withoutQuote(bindSpendAction(doc, rawAction));
   const plan = describeSpend(doc, action);
-  const { nickname, resolution } = modelLabel(doc, plan.kind);
+  const handler = actionHandlerFor(action.type);
+  const { nickname, resolution } = handler ? { nickname: estimate.model, resolution: '' } : modelLabel(doc, plan.kind);
   const budget = budgetOf(doc.settings);
   const after = round4(doc.spend.totalUsd + pendingUsdOf(ctx.session) + estimate.usd);
+  const price = `≈ ${formatUsd(estimate.usd)}`;
   const summary =
-    `${plan.what} on ${nickname} (${resolution}) · ≈ ${formatUsd(estimate.usd)}` +
-    (reason === 'budget' && budget !== undefined
-      ? `. That would bring this comic to ${formatUsd(after)} — over your ${formatUsd(budget)} budget.`
-      : '.');
+    `${plan.what}${handler ? '' : ` on ${nickname} (${resolution})`} · ${price}` +
+    (reason === 'budget' && budget !== undefined ? `. That would bring this comic to ${formatUsd(after)} — over your ${formatUsd(budget)} budget.` : '.');
   const gate: Gate = {
     id: newId('gate'),
     action,
@@ -759,17 +925,49 @@ function createGate(ctx: StudioContext, rawAction: SpendAction, estimate: SpendE
     status: 'open',
     reason
   };
-  const card: Card = { type: 'gate', id: newId('card'), gateId: gate.id };
-  ctx.session.commit([{ op: 'gate', gate }]);
-  const text =
-    reason === 'budget'
-      ? `This would go over your budget: ≈ ${formatUsd(estimate.usd)} for ${plan.what}. Approve to go over, or raise the budget.`
-      : `Ready when you are: ≈ ${formatUsd(estimate.usd)} for ${plan.what} on ${nickname}.`;
-  deliver(ctx, opts, text, [card]);
-  const message =
-    reason === 'budget'
-      ? `Over budget: ${plan.what} (≈ ${formatUsd(estimate.usd)}) would take the comic to ${formatUsd(after)} (budget ${formatUsd(budget || 0)}). Waiting for the user to approve or raise the budget.`
-      : `Waiting for the user to approve ~${formatUsd(estimate.usd)} (${plan.what} on ${nickname}).`;
+  const cards: Card[] = [];
+  // The user sees what they approve (decisions-final #3): the breakdown of the bound pages above the gate.
+  if (action.type === 'render_pages') {
+    cards.push({ type: 'breakdown', id: newId('card'), pageIds: action.pageIds || [], cover: !!action.includeCover, view: 'cost', gateId: gate.id });
+  }
+  cards.push({ type: 'gate', id: newId('card'), gateId: gate.id });
+  commitAs(ctx, [{ op: 'gate', gate }], originOf(opts));
+  const onModel = handler ? '' : ` on ${nickname}`;
+  const text = (() => {
+    switch (reason) {
+      case 'budget':
+        return `This would go over your budget: ${price} for ${plan.what}. Approve to go over, or raise the budget.`;
+      case 'first_render':
+        return `Before the first drawing, here's exactly what I'll draw: ${plan.what}${onModel}, ${price}. Approve to start, or change anything first.`;
+      case 'plan_review':
+        return `Here's the plan I'd draw: ${plan.what}${onModel}, ${price}. Approve to draw it, or edit any page first.`;
+      case 'redraw':
+        return `That's already drawn and up to date — a new take of ${plan.what} costs ${price}. Approve to redraw.`;
+      case 'no_intent':
+        return `I can draw ${plan.what} for ${price}${onModel} — tap Approve if you want it.`;
+      default:
+        return extra.staleFrom !== undefined
+          ? `The price changed since that button was shown: ${plan.what} is now ${price} (was ${formatUsd(extra.staleFrom)}). Approve to go ahead.`
+          : `Ready when you are: ${price} for ${plan.what}${onModel}.`;
+    }
+  })();
+  deliver(ctx, opts, text, cards);
+  const message = (() => {
+    switch (reason) {
+      case 'budget':
+        return `Over budget: ${plan.what} (${price}) would take the comic to ${formatUsd(after)} (budget ${formatUsd(budget || 0)}). Waiting for the user to approve or raise the budget.`;
+      case 'first_render':
+        return `Quoted ${price} for ${plan.what} — the first drawing of this comic waits for the user's approval (the breakdown is shown).`;
+      case 'plan_review':
+        return `Quoted ${price} for ${plan.what} — the plan is still a draft, so the user reviews it and approves (the breakdown is shown).`;
+      case 'redraw':
+        return `Quoted ${price} for a new take of ${plan.what} — it is already drawn and current, so the user must approve the redraw.`;
+      case 'no_intent':
+        return `Quoted ${price} — waiting for the user (they didn't ask to draw).`;
+      default:
+        return `Waiting for the user to approve ~${formatUsd(estimate.usd)} (${plan.what}${onModel}).`;
+    }
+  })();
   return finished({ status: 'gated', message, gate });
 }
 
@@ -800,15 +998,81 @@ const validateSpendAction = (doc: ComicDoc, action: SpendAction): string | null 
   }
 };
 
-const nothingToDo = (action: SpendAction): string => {
+/** Whether this spend would replace a ready, current image (a director redraw always gates). */
+const replacesCurrentArt = (doc: ComicDoc, action: SpendAction): boolean => {
   switch (action.type) {
     case 'render_pages':
-      return 'Every page is already drawn and up to date. Ask to redraw a specific page if you want another take.';
+      return (
+        !!action.force &&
+        (pageTargets(doc, action).some((p) => p.render.status === 'ready' && !isPageStale(doc, p)) ||
+          (!!action.includeCover && doc.cover.render.status === 'ready' && !coverNeedsDraw(doc)))
+      );
     case 'render_sheets':
-      return 'All character sheets are already drawn.';
+      return !!action.force && sheetTargets(doc, action).characters.some((c) => c.sheet.status === 'ready' && !isTargetStale(doc, { kind: 'sheet', id: c.id }));
+    case 'render_cover':
+      return doc.cover.render.status === 'ready' && !!doc.cover.render.asset && !coverNeedsDraw(doc);
     default:
-      return 'Nothing to draw right now.';
+      return false;
   }
+};
+
+/** The quote for a single new take of one page / the cover (chip prices). */
+const quoteOf = (doc: ComicDoc, action: SpendAction, byok: boolean) => estimateSpendAction(doc, action, byok).usd;
+
+/** A spend that would draw nothing: what exists, what's next ($0). */
+const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean): { message: string; steps: NextStep[]; breakdown: boolean } => {
+  if (action.type === 'render_sheets') {
+    return { message: 'All character sheets are already drawn and up to date — nothing was spent.', steps: nextStepsFor(doc, { byok }), breakdown: false };
+  }
+  if (action.type !== 'render_pages') return { message: 'Nothing to draw right now — nothing was spent.', steps: nextStepsFor(doc, { byok }), breakdown: false };
+  const ids = action.pageIds?.length ? new Set(action.pageIds) : null;
+  const asked = doc.pages.filter((p) => !ids || ids.has(p.id)).sort((a, b) => a.n - b.n);
+  const busy = asked.filter((p) => isBusy(p.render));
+  const empty = asked.filter((p) => !p.panels.length);
+  const ready = asked.filter((p) => p.render.status === 'ready' && !isPageStale(doc, p));
+  const parts: string[] = [];
+  if (ready.length) {
+    parts.push(
+      ready.length === doc.pages.length && !ids
+        ? `Every page is already drawn and up to date (${plural(ready.length, 'page')}).`
+        : `${ready.length === 1 ? `Page ${ready[0].n} is` : `${capitalize(pagesPhrase(ready))} are`} already drawn and up to date.`
+    );
+    const multi = ready.filter((p) => versionsOf(p.render).length > 1);
+    if (multi.length) parts.push(`${multi.length === 1 ? `Page ${multi[0].n} has ${versionsOf(multi[0].render).length} versions` : `${capitalize(pagesPhrase(multi))} have earlier versions`} you can switch between for free.`);
+  }
+  if (busy.length) parts.push(`${capitalize(pagesPhrase(busy))} ${busy.length === 1 ? 'is' : 'are'} still drawing.`);
+  if (empty.length) parts.push(`${capitalize(pagesPhrase(empty))} ${empty.length === 1 ? 'has' : 'have'} no panels yet — write ${empty.length === 1 ? 'it' : 'them'} first.`);
+  const cover = doc.cover.render;
+  if (cover.status === 'ready') parts.push(coverNeedsDraw(doc) ? 'The cover is out of date.' : 'The cover is drawn too.');
+  else if (!isBusy(cover)) parts.push(`The cover isn't drawn yet (≈ ${formatUsd(quoteOf(doc, { type: 'render_cover' }, byok))}).`);
+  parts.push('Nothing was spent.');
+  const steps = nextStepsFor(doc, { byok });
+  // "A new take" is the honest paid alternative (a click is a confirmation; the chip carries its quote).
+  const first = ready[0];
+  if (first) {
+    const take: SpendAction = { type: 'render_pages', pageIds: [first.id], force: true };
+    const usd = quoteOf(doc, take, byok);
+    steps.push({ label: `New take of page ${first.n}`, action: { ...take, quotedUsd: usd }, usd });
+  }
+  return { message: parts.join(' '), steps: dedupeSteps(steps).slice(0, MAX_NEXT_STEPS), breakdown: true };
+};
+
+/** Quality/model access: caps when given (contract §12.3), else the legacy qualityDenied text. */
+const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageModelSpec): string | null => {
+  const caps = opts.caps ?? ctx.caps;
+  const doc = ctx.session.doc;
+  if (caps) {
+    const overridden = !!doc.settings.imageModelOverride && spec.id !== TIER_PRESETS[doc.settings.quality]?.model;
+    if (overridden && !caps.modelOverride) return `${spec.nickname} is an advanced model for paid plans or your own key.`;
+    if (!caps.qualityTiers.includes(doc.settings.quality) && spec.id !== TIER_PRESETS.standard.model) {
+      return `${capitalize(doc.settings.quality)} quality needs a paid plan or your own key.`;
+    }
+    return null;
+  }
+  const qualityDenied = opts.qualityDenied ?? (ctx as OrchestratorContext).qualityDenied;
+  // Anything other than the everyday model (Pro, or an advanced override such as
+  // GPT Image / FLUX / Seedream) is a paid-plan feature on the platform key.
+  return qualityDenied && spec.id !== TIER_PRESETS.standard.model ? qualityDenied : null;
 };
 
 async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
@@ -824,29 +1088,46 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   if (!imageRouteFor(spec, ctx.keys)) {
     return blocked(ctx, opts, `${spec.nickname} needs ${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key. Add one in Settings → API keys.`, 'error');
   }
-  const qualityDenied = opts.qualityDenied ?? (ctx as OrchestratorContext).qualityDenied;
-  // Anything other than the everyday model (Pro, or an advanced override such as
-  // GPT Image / FLUX / Seedream) is a paid-plan feature on the platform key.
-  if (qualityDenied && spec.id !== TIER_PRESETS.standard.model) {
-    return blocked(ctx, opts, `${qualityDenied} Switch to Standard quality to keep going.`, 'warn', ['Switch to Standard quality']);
+  const denied = qualityProblem(ctx, opts, spec);
+  if (denied) {
+    return blocked(ctx, opts, `${denied} Switch to Standard quality to keep going.`, 'warn', [
+      { label: 'Switch to Standard quality', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'standard' } }] }, usd: 0 }
+    ]);
   }
 
-  const estimate = estimateSpendAction(doc, action, spendIsByok(ctx.keys));
-  if (estimate.imageCount <= 0) return blocked(ctx, opts, nothingToDo(action), 'info');
+  const byok = spendIsByok(ctx.keys);
+  const estimate = estimateSpendAction(doc, action, byok);
+  if (estimate.imageCount <= 0) {
+    // Everything requested is ready and current (R1): $0, with what exists and what's next.
+    const nothing = nothingToDraw(doc, action, byok);
+    const cards: Card[] = nothing.breakdown
+      ? [{ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(action.type === 'render_pages' && action.pageIds?.length ? { pageIds: action.pageIds } : {}) }]
+      : [noticeCard('info', nothing.message)];
+    deliver(ctx, opts, nothing.message, cards, nothing.steps);
+    return finished({ status: 'nothing', message: nothing.message, nextSteps: nothing.steps });
+  }
 
-  const reason = gateDecision(doc, estimate, opts.confirmed, { budgetApproved: opts.budgetApproved, pendingUsd: pendingUsdOf(ctx.session), priorUsd: opts.priorUsd });
-  if (reason) return createGate(ctx, action, estimate, reason, opts);
+  const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
+  const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
+    budgetApproved: opts.budgetApproved,
+    pendingUsd: pendingUsdOf(ctx.session),
+    priorUsd: opts.priorUsd,
+    forceGate: stale ? 'policy' : opts.forceGate,
+    redraw: !opts.confirmed && replacesCurrentArt(doc, action),
+    action
+  });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
 
   // Proceeding: retire any open gate for the same kind of spend (it is now moot).
   const open = ctx.session.doc.gate;
-  if (open?.status === 'open' && open.action.type === action.type) ctx.session.commit([{ op: 'gate', gate: { ...open, status: 'declined' } }]);
+  if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
   // Pin the model/quality now so mid-run settings changes can't move this spend off the
   // quoted/authorised price (the latest sheets and pages are still used — see prepare()).
   const pinned: Pick<Settings, 'quality' | 'imageModelOverride'> = { quality: doc.settings.quality, imageModelOverride: doc.settings.imageModelOverride };
-  const runner = new RenderRun(ctx, estimate, pinned);
+  const runner = new RenderRun(ctx, estimate, pinned, opts, byok);
   runner.reserve();
-  const message = `Started drawing ${plan.what} (≈ ${formatUsd(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish.`;
+  const message = `Started drawing ${plan.what} (≈ ${formatUsd(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish; I'll post when they're ready.`;
   let done: Promise<void>;
   switch (action.type) {
     case 'render_style_options':
@@ -862,7 +1143,7 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
       done = runner.edit(action);
       break;
     case 'render_cover':
-      done = runner.cover();
+      done = runner.cover(action);
       break;
     default:
       throw badRequest('Unknown spend action.');
@@ -871,6 +1152,11 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
 }
 
 // ── Render run ───────────────────────────────────────────────────────────────
+
+interface CompileOpts {
+  /** Safe take: one notch gentler (safety.md §3.2). */
+  safe?: boolean;
+}
 
 interface ImageJob {
   target: RenderTarget;
@@ -881,16 +1167,26 @@ interface ImageJob {
   /** Live status line ("Drawing page 3"). */
   activityLabel: string;
   /** Compile against the CURRENT doc (so freshly drawn sheets/pages are used). */
-  compile: (doc: ComicDoc) => CompiledImageJob;
+  compile: (doc: ComicDoc, opts: CompileOpts) => CompiledImageJob;
   /** Render state before this run touched it (restored on cancel). */
   prev: { status: RenderState['status']; error?: string; hasAsset: boolean };
   /** Failure keeps the previous status (edits: the existing page is still good). */
   keepStatusOnFailure?: boolean;
   region?: Box;
-  /** Page specHash to record (pages only). */
-  hashPage?: boolean;
   /** Page id to QC + letter after the image lands. */
   qcPageId?: string;
+  /** Implicit request (draw what is missing or out of date): reuse rules R2/R3/R7 apply. */
+  implicit: boolean;
+  /** Start with the safe-take compile (explicit "Redraw safer"). */
+  safe?: boolean;
+  /** Edit instruction / redraw note recorded on the version. */
+  note?: string;
+  /** Doc view this job compiles and hashes against (textless cover). */
+  docFor?: (doc: ComicDoc) => ComicDoc;
+  /** Ops committed together with the new asset (textless cover → overlay title). */
+  landedOps?: () => DocOp[];
+  /** Already re-queued once after a provider rate limit. */
+  requeued?: boolean;
 }
 
 interface JobResult {
@@ -898,7 +1194,23 @@ interface JobResult {
   ok: boolean;
   skipped?: boolean;
   error?: string;
+  /** Reused for free (R2/R3/R7): what drawing it would have cost. */
+  savedUsd?: number;
+  /** Drawn, but the content check blocked it. */
+  blocked?: boolean;
+  /** …and the previous version is current again. */
+  previousBack?: boolean;
+  /** Came back in another shape ("1:1"), requested `want`. */
+  aspect?: { got: AspectRatio; want: AspectRatio };
+  /** The provider rate-limited it (even if a retry worked). */
+  rateLimited?: boolean;
+  /** "OpenRouter · 429 · 17:42 UTC" — sanitized, for the completion message. */
+  detail?: string;
+  /** Drawn on the safe-take retry after the image model's filter declined the first take. */
+  saferTake?: boolean;
 }
+
+type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
 
 const restoredStatus = (prev: ImageJob['prev']): RenderState['status'] =>
   prev.status === 'queued' || prev.status === 'rendering' ? (prev.hasAsset ? 'ready' : 'none') : prev.status;
@@ -914,6 +1226,16 @@ const withoutAssets = (doc: ComicDoc, missing: Set<string>): ComicDoc => {
     places: doc.places.map((p) => ({ ...p, refs: p.refs.filter((a) => !missing.has(a.path)), sheet: render(p.sheet) })),
     pages: doc.pages.map((p) => ({ ...p, render: render(p.render) }))
   };
+};
+
+/** Paths that can never be sent to an image model: blocked or quarantined by the content check. */
+const blockedPaths = (doc: ComicDoc): Set<string> => {
+  const out = new Set<string>();
+  mapAssetRefs(doc, (a) => {
+    if (a?.path && !canServeToOwner(a)) out.add(a.path);
+    return a;
+  });
+  return out;
 };
 
 /** Best-matching preset for a doc that never chose a style (genre/tone/kind/color fit). */
@@ -945,32 +1267,65 @@ const presetStylePatch = (preset: StylePreset, status: StyleBible['status']): Pa
 
 const nearestReadyBefore = (doc: ComicDoc, page: Page): Page | undefined =>
   doc.pages
-    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path)
+    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && canServeToOwner(p.render.asset))
     .sort((a, b) => b.n - a.n)[0];
+
+/** Fallback when a compiler doesn't support `safe` yet: the SAFE TAKE line plus the deterministic word softener. */
+const ensureSafeTake = (compiled: CompiledImageJob): CompiledImageJob =>
+  /SAFE TAKE/.test(compiled.prompt)
+    ? compiled
+    : { ...compiled, prompt: `${compiled.prompt.split('\n').map((line) => (line.trim() ? softenAction(line) : line)).join('\n')}\n\n${SAFE_TAKE_LINE}` };
+
+/**
+ * A textless cover must say so in words. Appended unless the compiler already asked for a
+ * TEXTLESS cover itself (a generic "no text except the title" line does not count).
+ */
+const ensureTextless = (compiled: CompiledImageJob): CompiledImageJob =>
+  /textless|Leave the image completely free of text/i.test(compiled.prompt)
+    ? compiled
+    : { ...compiled, prompt: `${compiled.prompt}\n\nLeave the image completely free of text: no title, no lettering, no logos, no signatures — the title is added later as editable text.` };
+
+/** Every user reference path (style, cast, places) — for VersionMeta.refPaths. */
+const userRefPaths = (doc: ComicDoc): Set<string> =>
+  new Set([...doc.style.refs, ...doc.cast.flatMap((c) => c.refs), ...doc.places.flatMap((p) => p.refs)].map((r) => r.path).filter(Boolean));
 
 class RenderRun {
   private readonly session: StudioSessionApi;
   /** Captured at start: only an explicit cancel stops this run (not a closed tab). */
   private readonly signal: AbortSignal;
   private readonly slots: Semaphore;
+  private readonly inflight: InflightJobs;
   private readonly results: JobResult[] = [];
   private readonly notices: Card[] = [];
+  /** Chips this run adds in front of the doc-state next steps (aspect fixes, fresh takes). */
+  private readonly extraSteps: NextStep[] = [];
   private stopReason: string | null = null;
   private spentUsd = 0;
+  private savedUsd = 0;
   /** Estimate still held as pending spend (released as images land or the run ends). */
   private reservedLeft = 0;
   private progressId: string | null = null;
   private progressCard: Extract<Card, { type: 'renders' }> | null = null;
+  /** The live progress card sits in the director's message; the completion is appended. */
+  private hosted = false;
   private readonly started = Date.now();
+  /** One image at a time after the provider rate-limited this run (incident 2026-10-22). */
+  private serial = false;
+  private inFlight = 0;
+  private turnWaiters: (() => void)[] = [];
 
   constructor(
     private readonly ctx: StudioContext,
     private readonly estimate: SpendEstimate,
-    private readonly pinned: Pick<Settings, 'quality' | 'imageModelOverride'>
+    private readonly pinned: Pick<Settings, 'quality' | 'imageModelOverride'>,
+    private readonly opts: RunActionOptions,
+    private readonly byok: boolean
   ) {
     this.session = ctx.session;
     this.signal = ctx.session.abort.signal;
     this.slots = slotsFor(ctx.session);
+    this.inflight = inflightFor(ctx.session);
+    this.signal.addEventListener('abort', () => this.wakeTurns(), { once: true });
   }
 
   /** Hold this run's estimate as pending spend so a concurrent budget check counts it. */
@@ -985,29 +1340,50 @@ class RenderRun {
     this.reservedLeft = 0;
   }
 
+  /** Release part of the pending reservation (a reuse that cost nothing). */
+  private releaseShare(usd: number) {
+    const share = Math.min(Math.max(0, usd), this.reservedLeft);
+    if (share > 0) {
+      this.reservedLeft = round4(this.reservedLeft - share);
+      addPending(this.session, -share);
+    }
+  }
+
+  /** What one image of this job would cost at the pinned quality (savedUsd, reservation shares, chip quotes). */
+  private priceOf(kind: ImageJobKind): number {
+    return estimateJobs([{ kind, count: 1 }], this.pinned.quality, { override: this.pinned.imageModelOverride, byok: this.byok }).usd;
+  }
+
+  private commit(ops: DocOp[], label?: string) {
+    return commitAs(this.ctx, ops, 'job', label);
+  }
+
   // ── Action bodies ─────────────────────────────────────────────────────────
 
   async pages(action: Extract<SpendAction, { type: 'render_pages' }>): Promise<void> {
     const doc = this.session.doc;
     const pages = pageTargets(doc, action);
     const sheets = missingSheetsFor(doc, pages);
-    const sheetJobs = sheets.map((c) => this.sheetJob(c));
-    const pageJobs = pages.map((p) => this.pageJob(p));
-    await this.run([...sheetJobs, ...pageJobs], `Drawing ${pages.length === 1 ? `page ${pages[0].n}` : plural(pages.length, 'page')}`, async () => {
+    const sheetJobs = sheets.map((c) => this.sheetJob(c, false));
+    const pageJobs = pages.map((p) => this.pageJob(p, action));
+    const coverJob = action.includeCover && coverWanted(doc, action.force) ? this.coverJob({ type: 'render_cover', ...(action.safe ? { safe: true } : {}) }, !!action.force) : null;
+    const jobs = [...sheetJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
+    const label = `Drawing ${[pages.length ? pagesPhrase(pages) : '', coverJob ? 'the cover' : ''].filter(Boolean).join(' and ') || 'the pages'}`;
+    await this.run(jobs, label, async () => {
       this.ensureStyle();
-      if (this.session.doc.planStatus === 'draft') this.session.commit([{ op: 'plan_status', status: 'approved' }]);
+      if (this.session.doc.planStatus === 'draft') this.commit([{ op: 'plan_status', status: 'approved' }]);
       // Sheets first: every page uses them as identity anchors.
       await Promise.all(sheetJobs.map((j) => this.runJob(j)));
-      // Page 1 alone: the continuity anchor for the rest.
+      // Page 1 alone: the continuity anchor for the rest; the cover can then use it too.
       const [first, ...rest] = pageJobs;
       if (first) await this.runJob(first);
-      await Promise.all(rest.map((j) => this.runJob(j)));
+      await Promise.all([...rest.map((j) => this.runJob(j)), ...(coverJob ? [this.runJob(coverJob)] : [])]);
     });
   }
 
   async sheets(action: Extract<SpendAction, { type: 'render_sheets' }>): Promise<void> {
     const { characters, places } = sheetTargets(this.session.doc, action);
-    const jobs = [...characters.map((c) => this.sheetJob(c)), ...places.map((p) => this.placeJob(p))];
+    const jobs = [...characters.map((c) => this.sheetJob(c, !!action.force)), ...places.map((p) => this.placeJob(p, !!action.force))];
     await this.run(jobs, `Drawing ${plural(jobs.length, 'sheet')}`, async () => {
       this.ensureStyle();
       await Promise.all(jobs.map((j) => this.runJob(j)));
@@ -1022,17 +1398,11 @@ class RenderRun {
     });
   }
 
-  async cover(): Promise<void> {
-    const job: ImageJob = {
-      target: { kind: 'cover' },
-      kind: 'cover',
-      spend: 'cover',
-      label: 'Cover',
-      activityLabel: 'Drawing the cover',
-      compile: (doc) => compileCover(doc),
-      prev: this.prevOf({ kind: 'cover' })
-    };
-    await this.run([job], 'Drawing the cover', async () => {
+  async cover(action: Extract<SpendAction, { type: 'render_cover' }>): Promise<void> {
+    const doc = this.session.doc;
+    const explicit = doc.cover.render.status === 'ready' && !coverNeedsDraw(doc);
+    const job = this.coverJob(action, explicit);
+    await this.run([job], action.textless ? 'Drawing a textless cover' : 'Drawing the cover', async () => {
       this.ensureStyle();
       await this.runJob(job);
     });
@@ -1062,19 +1432,16 @@ class RenderRun {
       end(false);
       const error = asStudioError(err);
       if (error.code === 'CANCELLED') return;
-      this.post(`I couldn't come up with style directions: ${error.userMessage}`, [noticeCard('error', error.userMessage)]);
+      await this.post(`I couldn't come up with style directions: ${error.userMessage}`, [noticeCard('error', error.userMessage)]);
       return;
     }
     if (!directions.length) {
-      this.post("I couldn't come up with style directions this time — pick a preset in Style instead.", [noticeCard('warn', 'No usable style directions came back.')]);
+      await this.post("I couldn't come up with style directions this time — pick a preset in Style instead.", [noticeCard('warn', 'No usable style directions came back.')]);
       return;
     }
     // Another batch committed while we were proposing: never clear options being paid for.
     if (this.session.doc.style.options.some((o) => isBusy(o.render))) {
-      this.post(
-        'Another set of style options is already drawing — pick from those, then ask for more if none fits.',
-        [noticeCard('info', 'Style options are already drawing.')]
-      );
+      await this.post('Another set of style options is already drawing — pick from those, then ask for more if none fits.', [noticeCard('info', 'Style options are already drawing.')]);
       return;
     }
     const at = Date.now();
@@ -1086,7 +1453,7 @@ class RenderRun {
     const options = isRetry
       ? matched.map((m, i) => ({ id: m!.id, name: directions[i].name, spec: directions[i].spec }))
       : directions.map((d) => ({ id: newId('so'), ...d }));
-    this.session.commit([
+    this.commit([
       ...(isRetry ? [] : [{ op: 'style_options_clear' } as DocOp]),
       ...options.map((o): DocOp => ({ op: 'style_option', id: o.id, patch: { name: o.name, spec: o.spec, render: { status: 'none', history: [], updatedAt: at } } }))
     ]);
@@ -1102,7 +1469,8 @@ class RenderRun {
           if (!option) throw badRequest('That style option was replaced.');
           return compileStyleOption(doc, option);
         },
-        prev: { status: 'none', hasAsset: false }
+        prev: { status: 'none', hasAsset: false },
+        implicit: true
       })
     );
     await this.run(jobs, `Drawing ${plural(jobs.length, 'style option')}`, async () => {
@@ -1117,7 +1485,7 @@ class RenderRun {
     return { status: r?.status || 'none', ...(r?.error ? { error: r.error } : {}), hasAsset: !!r?.asset?.path };
   }
 
-  private sheetJob(c: Character): ImageJob {
+  private sheetJob(c: Character, force: boolean): ImageJob {
     return {
       target: { kind: 'sheet', id: c.id },
       kind: 'sheet',
@@ -1129,11 +1497,13 @@ class RenderRun {
         if (!current) throw badRequest(`${c.name} is no longer in the cast.`);
         return compileCharacterSheet(doc, current);
       },
-      prev: this.prevOf({ kind: 'sheet', id: c.id })
+      prev: this.prevOf({ kind: 'sheet', id: c.id }),
+      implicit: !force,
+      ...(force ? { note: 'New take' } : {})
     };
   }
 
-  private placeJob(p: Place): ImageJob {
+  private placeJob(p: Place, force: boolean): ImageJob {
     return {
       target: { kind: 'place', id: p.id },
       kind: 'place',
@@ -1145,25 +1515,50 @@ class RenderRun {
         if (!current) throw badRequest(`${p.name} is no longer a location.`);
         return compilePlaceSheet(doc, current);
       },
-      prev: this.prevOf({ kind: 'place', id: p.id })
+      prev: this.prevOf({ kind: 'place', id: p.id }),
+      implicit: !force,
+      ...(force ? { note: 'New take' } : {})
     };
   }
 
-  private pageJob(p: Page): ImageJob {
+  private pageJob(p: Page, action: Extract<SpendAction, { type: 'render_pages' }>): ImageJob {
     return {
       target: { kind: 'page', id: p.id },
       kind: 'page',
       spend: 'page',
       label: `Page ${p.n}`,
       activityLabel: `Drawing page ${p.n}`,
-      compile: (doc) => {
+      compile: (doc, opts) => {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
-        return compilePage(doc, page, { previousPage: nearestReadyBefore(doc, page) });
+        const compileOpts: Record<string, unknown> = { previousPage: nearestReadyBefore(doc, page), ...(opts.safe ? { safe: true } : {}) };
+        return compilePage(doc, page, compileOpts as Parameters<typeof compilePage>[2]);
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),
-      hashPage: true,
-      qcPageId: p.id
+      qcPageId: p.id,
+      implicit: !action.force && !action.safe,
+      ...(action.safe ? { safe: true, note: 'Safer take' } : action.force ? { note: 'New take' } : {})
+    };
+  }
+
+  private coverJob(action: Extract<SpendAction, { type: 'render_cover' }>, explicit: boolean): ImageJob {
+    const textless = !!action.textless;
+    return {
+      target: { kind: 'cover' },
+      kind: 'cover',
+      spend: 'cover',
+      label: 'Cover',
+      activityLabel: textless ? 'Drawing a textless cover' : 'Drawing the cover',
+      compile: (doc) => (textless ? ensureTextless(compileCover(doc)) : compileCover(doc)),
+      prev: this.prevOf({ kind: 'cover' }),
+      implicit: !explicit && !textless && !action.safe,
+      ...(action.safe ? { safe: true, note: 'Safer take' } : textless ? { note: 'Textless cover' } : explicit ? { note: 'New take' } : {}),
+      ...(textless
+        ? {
+            docFor: (doc: ComicDoc): ComicDoc => ({ ...doc, cover: { ...doc.cover, lettering: 'overlay' } }),
+            landedOps: (): DocOp[] => [{ op: 'cover', patch: { lettering: 'overlay' } }]
+          }
+        : {})
     };
   }
 
@@ -1185,22 +1580,23 @@ class RenderRun {
       prev: this.prevOf({ kind: 'page', id: p.id }),
       keepStatusOnFailure: true,
       ...(region ? { region } : {}),
-      qcPageId: p.id
+      qcPageId: p.id,
+      implicit: false,
+      note: instruction,
+      ...(action.safe ? { safe: true } : {})
     };
   }
 
   // ── Orchestration ─────────────────────────────────────────────────────────
 
   /**
-   * Queue every target, post the progress message, run `body`, then make sure nothing is
-   * left queued/rendering and summarize the outcome in the conversation.
+   * Queue every target, show the progress card, run `body`, then make sure nothing is left
+   * queued/rendering and post the real outcome.
    */
   private async run(jobs: ImageJob[], label: string, body: () => Promise<void>): Promise<void> {
     if (!jobs.length) return;
     const at = Date.now();
-    this.session.commit(
-      jobs.map((j): DocOp => ({ op: 'render', target: j.target, patch: { status: 'queued', error: undefined, updatedAt: at } }))
-    );
+    this.commit(jobs.map((j): DocOp => ({ op: 'render', target: j.target, patch: { status: 'queued', error: undefined, updatedAt: at } })));
     this.startProgress(jobs, label);
     const end = activity(this.ctx, label);
     try {
@@ -1211,20 +1607,51 @@ class RenderRun {
     } finally {
       this.settleLeftovers(jobs);
       end(this.results.some((r) => r.ok) && !this.results.some((r) => !r.ok && !r.skipped));
-      this.finishProgress(jobs);
+      try {
+        await this.finishProgress(jobs);
+      } catch (err) {
+        logger.error('comic_render_finish_failed', { projectId: this.ctx.projectId, message: (err as Error)?.message });
+      }
     }
   }
 
+  /**
+   * Director turns: the live `renders` card goes INTO the director's message (no message is
+   * committed now). UI clicks: a progress message right after the click.
+   */
   private startProgress(jobs: ImageJob[], label: string) {
     this.progressCard = { type: 'renders', id: newId('card'), targets: jobs.map((j) => j.target), label };
+    if (this.opts.collectCard) {
+      this.hosted = true;
+      this.opts.collectCard(this.progressCard);
+      return;
+    }
     const msg = assistantMessage(`${label} (≈ ${formatUsd(this.estimate.usd)}).`, [this.progressCard]);
     this.progressId = msg.id;
-    this.session.commit([{ op: 'message', msg }]);
+    this.commit([{ op: 'message', msg }]);
   }
 
-  /** Background work always posts its own message (a director turn may have ended by now). */
-  private post(text: string, cards: Card[]) {
-    this.session.commit([{ op: 'message', msg: assistantMessage(text, cards) }]);
+  /**
+   * Run `fn` after any director turn that is still writing its reply, so a completion can
+   * never land above the message that started it. Bounded: never waits forever on a lock.
+   */
+  private async afterTurn(fn: () => void): Promise<void> {
+    const s = this.session as StudioSessionApi & { runExclusive?: <T>(work: () => Promise<T>) => Promise<T>; turnRunning?: boolean };
+    if (typeof s.runExclusive !== 'function' || !s.turnRunning) return fn();
+    let ran = false;
+    const once = () => {
+      if (ran) return;
+      ran = true;
+      fn();
+    };
+    const timer = delay(JOB_TIMINGS.turnLockWaitMs);
+    await Promise.race([s.runExclusive(async () => once()), timer.promise.then(once)]);
+    timer.cancel();
+  }
+
+  /** Background work always posts its own message, after a running director turn's reply. */
+  private async post(text: string, cards: Card[]) {
+    await this.afterTurn(() => this.commit([{ op: 'message', msg: assistantMessage(text, cards, nextStepsFor(this.session.doc, { byok: this.byok })) }]));
   }
 
   /** Anything still queued/rendering that this run owns goes back to its previous state (or failed). */
@@ -1241,59 +1668,115 @@ class RenderRun {
       this.results.push({ job, ok: false, skipped: true });
       ops.push({ op: 'render', target: job.target, patch: { status: restoredStatus(job.prev), error: job.prev.error, updatedAt: at } });
     }
-    if (ops.length) this.session.commit(ops);
+    if (ops.length) this.commit(ops);
   }
 
-  private finishProgress(jobs: ImageJob[]) {
-    if (!this.progressId) return;
-    const ok = this.results.filter((r) => r.ok);
+  /** The completion sentence(s): the real outcome, in plain words, with money spent and saved. */
+  private outcomeText(jobs: ImageJob[]): string {
+    const drawn = this.results.filter((r) => r.ok && !r.savedUsd && !r.blocked);
+    const reused = this.results.filter((r) => r.ok && !!r.savedUsd);
+    const blockedR = this.results.filter((r) => r.ok && r.blocked);
     const failed = this.results.filter((r) => !r.ok && !r.skipped);
     const skipped = this.results.filter((r) => r.skipped);
     const noun = (list: JobResult[]) => describeJobs(list.map((r) => r.job));
+    const are = (list: JobResult[]) => (list.length === 1 ? 'is' : 'are');
     const parts: string[] = [];
-    if (ok.length === jobs.length) {
-      parts.push(`Done — ${noun(ok)} (${formatUsd(this.spentUsd)}).`);
-    } else {
-      if (ok.length) parts.push(`Drew ${noun(ok)} (${formatUsd(this.spentUsd)}).`);
-      if (failed.length) {
-        const first = failed[0];
-        const reason = first.error ? first.error.trim().replace(/[.!\s]+$/, '') : '';
-        parts.push(`${capitalize(noun(failed))} failed${reason ? ` — ${first.job.label}: ${reason}` : ''}.`);
-      }
-      if (skipped.length) {
-        parts.push(
-          this.stopReason
-            ? `Stopped before ${noun(skipped)}: ${this.stopReason}`
-            : this.signal.aborted
-              ? `Stopped before ${noun(skipped)}.`
-              : `${capitalize(noun(skipped))} did not start.`
-        );
-      }
-      if (!ok.length && !failed.length && !skipped.length) parts.push('Nothing was drawn.');
-      if (failed.length && !this.stopReason) parts.push('Retry from the board or ask me to try again.');
+    const total = jobs.length;
+    if (drawn.length) {
+      const partial = drawn.length < total && total > 1;
+      parts.push(
+        partial && drawn.every((r) => r.job.kind === 'page') && jobs.every((j) => j.kind === 'page')
+          ? `${drawn.length} of ${total} pages are ready (${formatUsd(this.spentUsd)}): ${noun(drawn)}.`
+          : `${capitalize(noun(drawn))} ${are(drawn)} ready (${formatUsd(this.spentUsd)}).`
+      );
+    } else if (this.spentUsd > 0) {
+      parts.push(`Spent ${formatUsd(this.spentUsd)} on attempts that didn't produce a usable image.`);
     }
-    const lead = this.progressCard!.targets.every((t) => t.kind === 'style_option') && ok.length
-      ? [{ type: 'style_choice', id: newId('card') } as Card]
-      : [this.progressCard!];
+    const safer = drawn.filter((r) => r.saferTake);
+    if (safer.length) parts.push(`The first take of ${noun(safer)} tripped the image model's filter, so I drew ${safer.length === 1 ? 'it' : 'them'} a little tamer.`);
+    if (reused.length) {
+      const saved = round4(reused.reduce((s, r) => s + (r.savedUsd || 0), 0));
+      parts.push(`${capitalize(noun(reused))} reused an identical earlier drawing — free (saved ≈${formatUsd(saved)}).`);
+    }
+    if (blockedR.length) {
+      const back = blockedR.every((r) => r.previousBack);
+      parts.push(`${capitalize(noun(blockedR))} didn't fit the content rules${back ? ', so the previous version is back' : ' and stays hidden'} — a safer redraw is one tap away.`);
+    }
+    const shapes = this.results.filter((r) => r.aspect);
+    for (const r of shapes.slice(0, 2)) parts.push(`${r.job.label} came back ${r.aspect!.got} instead of ${r.aspect!.want}.`);
+    if (failed.length) {
+      const first = failed[0];
+      const reason = first.error ? first.error.trim().replace(/[.!\s]+$/, '') : '';
+      const limited = failed.filter((r) => r.rateLimited && r.job.requeued);
+      parts.push(
+        `${capitalize(noun(failed))} failed${reason ? ` — ${failed.length > 1 ? `${first.job.label}: ` : ''}${reason}` : ''}${first.detail ? ` [${first.detail}]` : ''}.`
+      );
+      if (limited.length) parts.push(`I already waited for the provider and tried ${limited.length === 1 ? 'it' : 'them'} once more.`);
+    }
+    if (skipped.length) {
+      parts.push(
+        this.stopReason
+          ? `Stopped before ${noun(skipped)}: ${this.stopReason}`
+          : this.signal.aborted
+            ? `Stopped before ${noun(skipped)}.`
+            : `${capitalize(noun(skipped))} did not start.`
+      );
+    }
+    if (!drawn.length && !reused.length && !blockedR.length && !failed.length && !skipped.length) parts.push('Nothing was drawn.');
+    if (failed.length && !this.stopReason) parts.push('Retry from the board or ask me to try again.');
+    const doc = this.session.doc;
+    const drewPages = [...drawn, ...reused].some((r) => r.job.kind === 'page');
+    if (drewPages && !failed.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
+      parts.push('Want the cover next?');
+    }
+    return parts.join(' ');
+  }
+
+  /**
+   * The real outcome as a message, with next steps computed AFTER the run. Director runs
+   * append it (the reply above carries the live card); UI runs rewrite their progress message
+   * in place while it is still the last message, else point to a new message below.
+   */
+  private async finishProgress(jobs: ImageJob[]) {
+    if (!this.progressCard) return;
+    const ok = this.results.filter((r) => r.ok);
+    const failed = this.results.filter((r) => !r.ok && !r.skipped);
+    const skipped = this.results.filter((r) => r.skipped);
+    const styleRun = this.progressCard.targets.every((t) => t.kind === 'style_option');
+    const outcome = this.outcomeText(jobs);
     const text =
-      lead[0].type === 'style_choice'
-        ? `Here ${ok.length === 1 ? 'is a direction' : `are ${ok.length} directions`} for the look — tap one to lock it.${failed.length || skipped.length ? ` ${parts.join(' ')}` : ''}`
-        : parts.join(' ');
-    const current = this.session.doc.conversation.find((m) => m.id === this.progressId);
-    const msg: Msg = {
-      ...(current || assistantMessage('')),
-      id: this.progressId,
-      role: 'assistant',
-      text,
-      cards: [...lead, ...this.notices]
-    };
-    this.session.commit([{ op: 'message', msg }]);
+      styleRun && ok.length
+        ? `Here ${ok.length === 1 ? 'is a direction' : `are ${ok.length} directions`} for the look — tap one to lock it.${failed.length || skipped.length ? ` ${outcome}` : ''}`
+        : outcome;
+    const steps = dedupeSteps([...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
+    const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
+    if (this.hosted) {
+      await this.afterTurn(() => this.commit([{ op: 'message', msg: assistantMessage(text, [...lead, ...this.notices], steps) }]));
+    } else {
+      const conversation = this.session.doc.conversation;
+      const current = conversation.find((m) => m.id === this.progressId);
+      const isLast = !!current && conversation[conversation.length - 1]?.id === this.progressId;
+      if (isLast || !current) {
+        const msg = assistantMessage(text, [...(lead.length ? lead : [this.progressCard]), ...this.notices], steps);
+        this.commit([{ op: 'message', msg: { ...msg, id: this.progressId!, ...(current ? { at: current.at } : {}) } }]);
+      } else {
+        // Other messages arrived meanwhile: keep the progress card where it was, point down, append the outcome.
+        const pointer = `${this.progressCard.label} — finished (${formatUsd(this.spentUsd)}); see below.`;
+        this.commit([
+          { op: 'message', msg: { ...current, text: pointer, cards: [this.progressCard] } },
+          { op: 'message', msg: assistantMessage(text, [...lead, ...this.notices], steps) }
+        ]);
+      }
+    }
     logger.info('comic_render_run_finished', {
       projectId: this.ctx.projectId,
       ok: ok.length,
       failed: failed.length,
       skipped: skipped.length,
+      reused: this.results.filter((r) => r.savedUsd).length,
+      serial: this.serial,
       usd: this.spentUsd,
+      savedUsd: this.savedUsd,
       ms: Date.now() - this.started
     });
   }
@@ -1305,8 +1788,33 @@ class RenderRun {
     const patch = presetStylePatch(preset, doc.style.status === 'locked' ? 'locked' : 'drafted');
     // Keep anything the user already said the art must avoid.
     patch.avoid = [...new Set([...(doc.style.avoid || []), ...preset.avoid])];
-    this.session.commit([{ op: 'style', patch }]);
+    this.commit([{ op: 'style', patch }]);
     this.notices.push(noticeCard('info', `No style was chosen yet, so I used “${preset.name}”. Pick another in Style any time.`));
+  }
+
+  // ── Serial mode (after a rate limit) ──────────────────────────────────────
+
+  private async takeTurn(): Promise<void> {
+    while (this.serial && this.inFlight > 0 && !this.signal.aborted) {
+      await new Promise<void>((resolve) => this.turnWaiters.push(resolve));
+    }
+    this.inFlight += 1;
+  }
+
+  private endTurn() {
+    this.inFlight = Math.max(0, this.inFlight - 1);
+    this.wakeTurns();
+  }
+
+  private wakeTurns() {
+    const waiters = this.turnWaiters.splice(0);
+    waiters.forEach((w) => w());
+  }
+
+  private noteRateLimit(job: ImageJob) {
+    if (this.serial) return;
+    this.serial = true;
+    logger.warn('comic_render_run_serial', { projectId: this.ctx.projectId, target: renderTargetKey(job.target) });
   }
 
   // ── One image ─────────────────────────────────────────────────────────────
@@ -1314,67 +1822,247 @@ class RenderRun {
   private restore(job: ImageJob) {
     const render = getRender(this.session.doc, job.target);
     if (render && isBusy(render)) {
-      this.session.commit([
-        { op: 'render', target: job.target, patch: { status: restoredStatus(job.prev), error: job.prev.error, updatedAt: Date.now() } }
-      ]);
+      this.commit([{ op: 'render', target: job.target, patch: { status: restoredStatus(job.prev), error: job.prev.error, updatedAt: Date.now() } }]);
     }
     this.results.push({ job, ok: false, skipped: true });
   }
 
-  private fail(job: ImageJob, message: string, attempts?: number) {
+  private fail(job: ImageJob, message: string, attempts?: number, extra: Partial<JobResult> = {}) {
     const status = job.keepStatusOnFailure ? restoredStatus(job.prev) : 'failed';
-    this.session.commit([
+    this.commit([
       {
         op: 'render',
         target: job.target,
         patch: { status, error: message, updatedAt: Date.now(), ...(attempts ? { attempts } : {}) }
       }
     ]);
-    this.results.push({ job, ok: false, error: message });
+    this.results.push({ job, ok: false, error: message, ...extra });
     if (job.keepStatusOnFailure) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
   }
 
   private async runJob(job: ImageJob): Promise<void> {
     if (this.stopReason || this.signal.aborted) return this.restore(job);
+    // R2: a version made from exactly today's spec comes back for free (no slot, no money).
+    if (job.implicit && this.reuseSpecVersion(job)) return;
     let release: (() => void) | null = null;
-    try {
-      release = await this.slots.acquire(this.signal);
-    } catch {
-      return this.restore(job);
+    for (;;) {
+      await this.takeTurn();
+      try {
+        release = await this.slots.acquire(this.signal);
+      } catch {
+        this.endTurn();
+        return this.restore(job);
+      }
+      // The provider rate-limited this run while we waited for a slot: let the others finish first.
+      if (this.serial && this.inFlight > 1 && !this.signal.aborted) {
+        release();
+        release = null;
+        this.endTurn();
+        continue;
+      }
+      break;
     }
+    let outcome: DrawOutcome = { kind: 'done' };
     try {
       if (this.stopReason || this.signal.aborted) return this.restore(job);
       if (!getRender(this.session.doc, job.target)) {
         this.results.push({ job, ok: false, skipped: true });
         return;
       }
-      await this.draw(job);
+      outcome = await this.draw(job);
     } catch (err) {
       const error = asStudioError(err);
       this.fail(job, error.userMessage);
     } finally {
       release?.();
+      this.endTurn();
+    }
+    if (outcome.kind === 'requeue') {
+      // Incident follow-up: wait for the provider (Retry-After or 45 s, jittered, abortable), then once more.
+      job.requeued = true;
+      const seconds = Math.max(1, Math.round(outcome.afterMs / 1000));
+      const end = activity(this.ctx, `Waiting for the provider… ${job.label.toLowerCase()} retries in ${seconds} s`);
+      await sleep(outcome.afterMs, this.signal);
+      end(!this.signal.aborted);
+      if (this.signal.aborted || this.stopReason) return this.restore(job);
+      return this.runJob(job);
     }
   }
 
-  /** Compile, attach references (dropping any that can't be loaded), bill, draw, save, record. */
-  private async draw(job: ImageJob): Promise<void> {
-    const { ctx, session } = this;
-    session.commit([{ op: 'render', target: job.target, patch: { status: 'rendering', updatedAt: Date.now() } }]);
+  /** R2 for one job: put back a stored version made from the current spec. True when reused. */
+  private reuseSpecVersion(job: ImageJob): boolean {
+    const doc = this.session.doc;
+    const match = findSpecHashVersion(doc, job.target);
+    if (!match) return false;
+    const saved = this.priceOf(job.kind);
+    // Un-busy first (render_use is a no-op on a busy target), then swap in the version.
+    this.commit(
+      [
+        { op: 'render', target: job.target, patch: { status: restoredStatus(job.prev), error: undefined, updatedAt: Date.now() } },
+        { op: 'render_use', target: job.target, path: match.path, at: Date.now() },
+        this.reuseSpend(job, saved, match.version.model)
+      ],
+      'Reuse version'
+    );
+    this.releaseShare(saved);
+    this.savedUsd = round4(this.savedUsd + saved);
+    this.results.push({ job, ok: true, savedUsd: saved });
+    this.extraStepFreshTake(job);
+    void this.ctx.publishUrls([match.path]);
+    logger.info('comic_render_reused', { projectId: this.ctx.projectId, rule: 'R2', target: renderTargetKey(job.target), from: match.from, savedUsd: saved });
+    return true;
+  }
+
+  /** A zero-cost ledger line for a reuse (decisions-final #6). */
+  private reuseSpend(job: ImageJob, savedUsd: number, model?: string): DocOp {
+    return {
+      op: 'spend',
+      entry: {
+        id: newId('sp'),
+        at: Date.now(),
+        kind: job.spend,
+        label: reusedLabel(job.label, savedUsd),
+        usd: 0,
+        ...(model ? { model } : {}),
+        byok: this.byok,
+        estimated: false,
+        target: renderTargetKey(job.target),
+        savedUsd
+      }
+    };
+  }
+
+  /** After a free reuse, the honest paid alternative stays one tap away. */
+  private extraStepFreshTake(job: ImageJob) {
+    const doc = this.session.doc;
+    let action: SpendAction | null = null;
+    if (job.target.kind === 'page') action = { type: 'render_pages', pageIds: [job.target.id], force: true };
+    else if (job.target.kind === 'cover') action = { type: 'render_cover' };
+    else if (job.target.kind === 'sheet') action = { type: 'render_sheets', characterIds: [job.target.id], force: true };
+    if (!action) return;
+    const usd = quoteOf(doc, action, this.byok);
+    if (usd <= 0) return;
+    this.extraSteps.push({ label: `Fresh take of ${job.label.toLowerCase()}`, action: { ...action, quotedUsd: usd }, usd });
+  }
+
+  /**
+   * Compile, attach references (dropping any that can't be loaded), reuse an identical job
+   * (R3/R7), bill, draw (safe-take retry once), save, check the shape, record the version.
+   */
+  private async draw(job: ImageJob): Promise<DrawOutcome> {
+    const { ctx } = this;
+    this.commit([{ op: 'render', target: job.target, patch: { status: 'rendering', updatedAt: Date.now() } }]);
     const end = activity(ctx, job.activityLabel);
 
-    let prepared: { compiled: CompiledImageJob; references: ImageReference[]; docAtCompile: ComicDoc };
+    let prepared: Awaited<ReturnType<RenderRun['prepare']>>;
     try {
-      prepared = await this.prepare(job);
+      prepared = await this.prepare(job, { safe: !!job.safe });
     } catch (err) {
       end(false);
-      return this.fail(job, asStudioError(err).userMessage);
+      this.fail(job, asStudioError(err).userMessage);
+      return { kind: 'done' };
     }
-    const { compiled, references, docAtCompile } = prepared;
-    const picked = imageRouteFor(compiled.spec, ctx.keys);
+
+    // R3 / R7: an identical job already drew (or is drawing) this exact image.
+    let settleInflight: ((asset: AssetRef | null) => void) | null = null;
+    if (job.implicit) {
+      const claim = await this.reuseIdenticalJob(job, prepared);
+      if (claim === 'reused') {
+        end(true);
+        return { kind: 'done' };
+      }
+      settleInflight = claim;
+    }
+    try {
+      const out = await this.drawPrepared(job, prepared, end);
+      settleInflight?.(out.asset);
+      return out.outcome;
+    } catch (err) {
+      settleInflight?.(null);
+      throw err;
+    }
+  }
+
+  /**
+   * R3 (same job hash anywhere in the doc), then R7 (the same job drawing right now). Returns
+   * 'reused', or this job's in-flight registration (claimed synchronously with the check, so
+   * two identical parallel jobs can never both pay).
+   */
+  private async reuseIdenticalJob(
+    job: ImageJob,
+    prepared: Awaited<ReturnType<RenderRun['prepare']>>
+  ): Promise<'reused' | ((asset: AssetRef | null) => void)> {
+    for (let round = 0; round < 2; round += 1) {
+      const found = findJobHashAsset(this.session.doc, prepared.jobHash, job.target);
+      if (found) {
+        await this.adopt(job, prepared, found.asset, found.meta, found.model, round ? 'R7' : 'R3');
+        return 'reused';
+      }
+      const joining = this.inflight.get(prepared.jobHash);
+      if (!joining) return this.inflight.register(prepared.jobHash);
+      if (round) break;
+      const asset = await joining;
+      if (!asset || this.signal.aborted) break;
+      // The other job landed: its asset (with its jobHash) is in the doc now — copy it (round 2).
+    }
+    return this.inflight.get(prepared.jobHash) ? () => undefined : this.inflight.register(prepared.jobHash);
+  }
+
+  /** Copy an identical job's image into this target for free, then letter it (QC once). */
+  private async adopt(
+    job: ImageJob,
+    prepared: Awaited<ReturnType<RenderRun['prepare']>>,
+    asset: AssetRef,
+    meta: VersionMeta,
+    model: string | undefined,
+    rule: 'R3' | 'R7'
+  ): Promise<void> {
+    const saved = this.priceOf(job.kind);
+    this.commit(
+      [
+        {
+          op: 'render',
+          target: job.target,
+          patch: {
+            status: 'ready',
+            asset: { ...asset },
+            ...(model ? { model } : {}),
+            ...prepared.meta,
+            ...(meta.qc ? { qc: meta.qc } : {}),
+            origin: 'reused',
+            costUsd: 0,
+            attempts: 0,
+            error: undefined,
+            updatedAt: Date.now()
+          }
+        },
+        this.reuseSpend(job, saved, model)
+      ],
+      'Reuse drawing'
+    );
+    this.releaseShare(saved);
+    this.savedUsd = round4(this.savedUsd + saved);
+    this.results.push({ job, ok: true, savedUsd: saved });
+    this.extraStepFreshTake(job);
+    logger.info('comic_render_reused', { projectId: this.ctx.projectId, rule, target: renderTargetKey(job.target), savedUsd: saved });
+    await this.ctx.publishUrls([asset.path]);
+    // QC once: the copied image keeps its report; balloons are placed from it for free.
+    if (job.qcPageId) await letterPage(this.ctx, job.qcPageId, null, this.signal, (card) => this.notices.push(card));
+  }
+
+  private async drawPrepared(
+    job: ImageJob,
+    initial: Awaited<ReturnType<RenderRun['prepare']>>,
+    end: (ok: boolean) => void
+  ): Promise<{ outcome: DrawOutcome; asset: AssetRef | null }> {
+    const { ctx, session } = this;
+    let prepared = initial;
+    let safe = !!job.safe;
+    const picked = imageRouteFor(prepared.compiled.spec, ctx.keys);
     if (!picked) {
       end(false);
-      return this.fail(job, `${compiled.spec.nickname} needs an OpenRouter or Gemini key. Add one in Settings → API keys.`);
+      this.fail(job, `${prepared.compiled.spec.nickname} needs an OpenRouter or Gemini key. Add one in Settings → API keys.`);
+      return { outcome: { kind: 'done' }, asset: null };
     }
 
     const reserved = await ctx.billing.reserve({
@@ -1383,22 +2071,30 @@ class RenderRun {
       model: picked.model,
       stage: job.spend,
       imageUnits: 1,
-      resolution: compiled.resolution
+      resolution: prepared.compiled.resolution
     });
     if (reserved.ok === false) {
       end(false);
       // Parallel jobs can be denied together: the first explains, the rest just don't start.
-      if (this.stopReason) return this.restore(job);
+      if (this.stopReason) {
+        this.restore(job);
+        return { outcome: { kind: 'done' }, asset: null };
+      }
       this.stopReason = reserved.message;
       this.notices.push(noticeCard('error', reserved.message));
-      return this.fail(job, reserved.message);
+      this.fail(job, reserved.message);
+      return { outcome: { kind: 'done' }, asset: null };
     }
     const reservation = reserved.reservation;
 
     let result: ImageResult | undefined;
     let lastError: StudioError | undefined;
+    let lastRaw: unknown;
     let attempts = 0;
     let failedSpend = 0;
+    let rateLimited = false;
+    let saferTake = false;
+    let safeRetried = false;
     // A deadline-abort hits a non-streaming request the provider keeps generating (and
     // billing); it is flagged `abandoned` so we settle an estimate instead of releasing.
     let abandonedUsd = 0;
@@ -1407,24 +2103,45 @@ class RenderRun {
       try {
         // No abort signal: a call that has started is paid and is always kept.
         result = await ctx.images({
-          spec: compiled.spec,
-          resolution: compiled.resolution,
-          aspect: compiled.aspect,
-          prompt: compiled.prompt,
-          references
+          spec: prepared.compiled.spec,
+          resolution: prepared.compiled.resolution,
+          aspect: prepared.compiled.aspect,
+          prompt: prepared.compiled.prompt,
+          references: prepared.references
         });
+        if (safe && safeRetried) saferTake = true;
         break;
       } catch (err) {
+        lastRaw = err;
         lastError = asStudioError(err, 'The image could not be drawn. Please try again.');
         const spent = (err as { spentUsd?: unknown })?.spentUsd;
         if (typeof spent === 'number' && Number.isFinite(spent) && spent > 0) failedSpend += spent;
+        if (lastError.code === 'RATE_LIMIT') {
+          rateLimited = true;
+          this.noteRateLimit(job);
+        }
         if ((err as { abandoned?: boolean })?.abandoned) {
           // Our own deadline fired after dispatch: the provider still bills it, so do not
           // retry (that would pay twice) — bill the registry price and stop.
-          abandonedUsd += imagePriceUsd(compiled.spec, compiled.resolution);
+          abandonedUsd += imagePriceUsd(prepared.compiled.spec, prepared.compiled.resolution);
           break;
         }
-        if (!lastError.retryable || attempts >= MAX_IMAGE_ATTEMPTS || this.signal.aborted || lastError.code === 'CANCELLED') break;
+        if (this.signal.aborted || lastError.code === 'CANCELLED') break;
+        // Safe take: the image model's filter declined this take (not billed) — recompile one
+        // notch gentler and try once more, within the approved spend (safety.md §3.2).
+        if (lastError.code === 'SAFETY_BLOCKED' && !safe && !safeRetried) {
+          safeRetried = true;
+          safe = true;
+          try {
+            prepared = await this.prepare(job, { safe: true });
+          } catch {
+            break;
+          }
+          attempts = Math.min(attempts, MAX_IMAGE_ATTEMPTS - 1);
+          logger.warn('comic_image_safe_take', { projectId: ctx.projectId, target: renderTargetKey(job.target) });
+          continue;
+        }
+        if (!lastError.retryable || attempts >= MAX_IMAGE_ATTEMPTS) break;
         logger.warn('comic_image_job_retry', { projectId: ctx.projectId, target: renderTargetKey(job.target), code: lastError.code });
         await sleep(
           lastError.code === 'RATE_LIMIT'
@@ -1441,22 +2158,41 @@ class RenderRun {
       const owed = round4(failedSpend + abandonedUsd);
       if (owed > 0) {
         await reservation.settle({ costUsd: owed, imageUnits: 0 });
-        this.recordImageSpend(job, compiled, owed, abandonedUsd > 0, picked.byok, abandonedUsd > 0 ? ' (timed out)' : ' (failed attempt)');
+        this.recordImageSpend(job, prepared.compiled, owed, abandonedUsd > 0, picked.byok, abandonedUsd > 0 ? ' (timed out)' : ' (failed attempt)');
       } else {
         await reservation.release(lastError?.code || 'image_failed');
       }
-      const message = lastError?.code === 'CANCELLED' ? 'Cancelled.' : lastError?.userMessage || 'The image could not be drawn.';
-      if (lastError?.code === 'CANCELLED') return this.restore(job);
-      return this.fail(job, message, attempts);
+      if (lastError?.code === 'CANCELLED') {
+        this.restore(job);
+        return { outcome: { kind: 'done' }, asset: null };
+      }
+      const detail = this.failureDetail(lastRaw);
+      logger.warn('comic_image_job_failed', {
+        projectId: ctx.projectId,
+        target: renderTargetKey(job.target),
+        code: lastError?.code,
+        detail,
+        requeued: !!job.requeued
+      });
+      // Incident follow-up: a rate-limited image is re-queued once after the provider's
+      // Retry-After (or 45 s) before it is marked failed.
+      if (lastError?.code === 'RATE_LIMIT' && !job.requeued && !this.signal.aborted && !this.stopReason) {
+        this.commit([{ op: 'render', target: job.target, patch: { status: 'queued', error: undefined, updatedAt: Date.now() } }]);
+        return { outcome: { kind: 'requeue', afterMs: this.requeueDelay(lastRaw) }, asset: null };
+      }
+      const message = lastError?.userMessage || 'The image could not be drawn.';
+      this.fail(job, message, attempts, { rateLimited, ...(detail ? { detail } : {}) });
+      return { outcome: { kind: 'done' }, asset: null };
     }
 
+    const { compiled } = prepared;
     const providerUsd = typeof result.costUsd === 'number' && Number.isFinite(result.costUsd) ? result.costUsd : undefined;
     const imageUsd = providerUsd ?? imagePriceUsd(compiled.spec, compiled.resolution);
     // Earlier paid-but-failed attempts of this same job are billed alongside the image.
     const settleUsd = failedSpend > 0 ? round4(imageUsd + failedSpend) : providerUsd;
-    let asset: AssetRef;
+    let saved: AssetRef;
     try {
-      asset = await this.saveImage(result.dataUrl, compiled.spec.id);
+      saved = await this.saveImage(result.dataUrl, compiled.spec.id);
     } catch (err) {
       // Paid but lost: bill it honestly and say so.
       end(false);
@@ -1464,53 +2200,167 @@ class RenderRun {
       if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
       this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, ' (not saved)');
       logger.error('comic_image_save_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
-      return this.fail(job, "The image was drawn but couldn't be saved. Please retry.", attempts);
+      this.fail(job, "The image was drawn but couldn't be saved. Please retry.", attempts);
+      return { outcome: { kind: 'done' }, asset: null };
     }
     await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
     if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
     const usd = this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, '');
 
-    const page = job.hashPage ? findPage(docAtCompile, (job.target as { id: string }).id) : undefined;
-    session.commit([
-      {
-        op: 'render',
-        target: job.target,
-        patch: {
-          status: 'ready',
-          asset,
-          model: compiled.spec.id,
-          resolution: compiled.resolution,
-          costUsd: usd,
-          attempts,
-          updatedAt: Date.now(),
-          error: undefined,
-          ...(job.qcPageId ? { qc: undefined } : {}),
-          ...(page ? { specHash: pageSpecHash(docAtCompile, page) } : {})
-        }
-      }
-    ]);
-    this.results.push({ job, ok: true });
+    // Shape check (free): never an automatic redraw or fit — offer them.
+    const aspect = this.checkAspect(job, compiled, saved, result.route);
+    // The safety verdict is pending until the check lands (the owner sees "Checking…").
+    const asset: AssetRef = { ...saved, safety: { pending: true, at: Date.now() } };
+    session.commit(
+      [
+        {
+          op: 'render',
+          target: job.target,
+          patch: {
+            status: 'ready',
+            asset,
+            model: compiled.spec.id,
+            costUsd: usd,
+            attempts,
+            updatedAt: Date.now(),
+            error: undefined,
+            ...prepared.meta,
+            ...(job.kind === 'edit' ? { origin: 'edit' as const } : { origin: 'render' as const }),
+            ...(safe && !job.note ? { note: 'Safer take' } : {})
+          }
+        },
+        ...(job.landedOps ? job.landedOps() : [])
+      ],
+      { origin: 'job' }
+    );
+    this.results.push({ job, ok: true, ...(aspect ? { aspect } : {}), ...(rateLimited ? { rateLimited } : {}), ...(saferTake ? { saferTake } : {}) });
+    if (saferTake) logger.info('comic_image_safe_take_ok', { projectId: ctx.projectId, target: renderTargetKey(job.target) });
     end(true);
     // The image is saved and paid for: nothing after this point may fail the render.
     try {
-      await ctx.publishUrls([asset.path]);
-      if (job.qcPageId) await this.letterPage(job.qcPageId, result.dataUrl);
+      const checked = await this.afterSave(job, asset, result.dataUrl);
+      if (checked.blocked) {
+        const r = this.results.find((x) => x.job === job && x.ok);
+        if (r) {
+          r.blocked = true;
+          r.previousBack = checked.previousBack;
+        }
+      }
     } catch (err) {
       logger.warn('comic_post_render_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
     }
+    return { outcome: { kind: 'done' }, asset };
   }
 
-  /** Compile with references we can actually load; recompile without any that are missing. */
-  private async prepare(job: ImageJob): Promise<{ compiled: CompiledImageJob; references: ImageReference[]; docAtCompile: ComicDoc }> {
+  /** "OpenRouter · 429 · upstream Google · 17:42 UTC" (sanitized; never a key or a body). */
+  private failureDetail(err: unknown): string | undefined {
+    const base = imageFailureDetail(err);
+    if (!base) return undefined;
+    const t = new Date();
+    const hh = String(t.getUTCHours()).padStart(2, '0');
+    const mm = String(t.getUTCMinutes()).padStart(2, '0');
+    return `${base} · ${hh}:${mm} UTC`;
+  }
+
+  /** The provider's Retry-After (bounded) or the default wait, plus jitter. */
+  private requeueDelay(err: unknown): number {
+    const hinted = imageFailureInfo(err)?.retryAfterMs;
+    const base =
+      typeof hinted === 'number' && Number.isFinite(hinted) && hinted > 0
+        ? Math.min(REQUEUE_MAX_MS, Math.max(JOB_TIMINGS.requeueMinMs, hinted))
+        : JOB_TIMINGS.rateLimitRequeueMs;
+    return Math.max(0, Math.round(base + Math.random() * JOB_TIMINGS.requeueJitterMs));
+  }
+
+  /** Log + notice + chips when the image came back in another shape (pages and covers). */
+  private checkAspect(job: ImageJob, compiled: CompiledImageJob, asset: AssetRef, route: ImageRoute): { got: AspectRatio; want: AspectRatio } | null {
+    if (aspectMatches(compiled.aspect, asset.w, asset.h)) return null;
+    const got = aspectFromSize(asset.w || 0, asset.h || 0);
+    const want = compiled.aspect;
+    logger.info('comic_aspect_mismatch', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), want, w: asset.w, h: asset.h, route, model: compiled.spec.id });
+    if (job.target.kind !== 'page' && job.target.kind !== 'cover') return { got, want };
+    const what = job.target.kind === 'cover' ? 'the cover' : job.label.toLowerCase().replace(/^edit /, '');
+    this.notices.push(noticeCard('warn', `${capitalize(what)} came back ${got} instead of ${want}. Fit it to ${want} for free, keep it, or redraw it.`));
+    const redraw: SpendAction =
+      job.target.kind === 'cover' ? { type: 'render_cover' } : { type: 'render_pages', pageIds: [job.target.id], force: true };
+    const usd = this.priceOf(job.target.kind === 'cover' ? 'cover' : 'page');
+    this.extraSteps.push(
+      { label: `Fit to ${want} (Free)`, action: { type: 'fit_render', target: job.target, mode: 'auto' }, usd: 0 },
+      { label: got === '1:1' ? 'Keep square' : `Keep ${got}`, say: `Keep ${what} as it is (${got}).` },
+      { label: `Redraw at ${want}`, action: { ...redraw, quotedUsd: usd }, usd }
+    );
+    return { got, want };
+  }
+
+  /**
+   * After the save: QC + balloons (pages), the safety verdict, then the URL. The URL waits
+   * for the verdict, or 20 s at most for the owner's private view (decisions-final #10).
+   * Resolves whether the verdict blocked the image and whether a previous version is back.
+   */
+  private async afterSave(job: ImageJob, asset: AssetRef, dataUrl: string): Promise<{ blocked: boolean; previousBack: boolean }> {
+    const { ctx } = this;
+    let verdict: SafetyVerdict | undefined;
+    const work = (async () => {
+      if (job.qcPageId) {
+        const lettered = await letterPage(ctx, job.qcPageId, dataUrl, this.signal, (card) => this.notices.push(card));
+        verdict = lettered.safety;
+      }
+      if (!verdict) verdict = await checkRenderSafety(ctx, job.target, asset).catch(() => undefined);
+      await onRenderVerdict(ctx, job.target, asset, verdict);
+    })();
+    const timer = delay(JOB_TIMINGS.safetyFailOpenMs);
+    const first = await Promise.race([work.then(() => 'verdict' as const, () => 'verdict' as const), timer.promise]);
+    timer.cancel();
+    let published = false;
+    if (first === 'timeout') {
+      // Fail open for the OWNER only; publishing re-checks everything.
+      logger.warn('comic_safety_fail_open', { projectId: ctx.projectId, target: renderTargetKey(job.target) });
+      await ctx.publishUrls([asset.path]);
+      published = true;
+    }
+    try {
+      await work;
+    } catch (err) {
+      logger.warn('comic_render_check_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
+    }
+    // Never "Checking…" forever: whatever the check found (or nothing — unchecked) is recorded.
+    const still = findAsset(ctx.session.doc, asset.path);
+    if (still?.safety?.pending) commitAs(ctx, [{ op: 'asset_meta', path: asset.path, patch: { safety: verdict ?? null } }], 'job');
+    const latest = findAsset(ctx.session.doc, asset.path) ?? asset;
+    const isBlocked = safetyStatusOf(verdict ?? latest.safety, PLATFORM_CEILING) === 'blocked' || !canServeToOwner(latest);
+    if (isBlocked) {
+      // The previous version (if any) is current again: make sure the owner can see it.
+      const current = getRender(ctx.session.doc, job.target)?.asset;
+      const previousBack = !!current?.path && current.path !== asset.path && canServeToOwner(current);
+      if (previousBack) await ctx.publishUrls([current!.path]);
+      return { blocked: true, previousBack };
+    }
+    if (!published) await ctx.publishUrls([asset.path]);
+    return { blocked: false, previousBack: false };
+  }
+
+  /** Compile with references we can actually load; recompile without any that are missing or blocked. */
+  private async prepare(
+    job: ImageJob,
+    opts: CompileOpts
+  ): Promise<{ compiled: CompiledImageJob; references: ImageReference[]; docAtCompile: ComicDoc; jobHash: string; meta: VersionMeta }> {
     // Use the live doc (freshly drawn sheets/pages) but pin the model/quality to what was
     // quoted and authorised, so a mid-run settings change can't pick a pricier/gated model.
     const live = this.session.doc;
-    const docAtCompile: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: this.pinned.imageModelOverride } };
-    const missing = new Set<string>();
+    const pinnedDoc: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: this.pinned.imageModelOverride } };
+    const docAtCompile = job.docFor ? job.docFor(pinnedDoc) : pinnedDoc;
+    // Blocked or quarantined images are never sent to a model (safety.md §3.2 reference gate).
+    const missing = blockedPaths(docAtCompile);
+    const compileWith = (doc: ComicDoc) => {
+      const compiled = job.compile(doc, opts);
+      return opts.safe ? ensureSafeTake(compiled) : compiled;
+    };
     let regionDataUrl: string | undefined;
-    for (let pass = 0; pass < 3; pass += 1) {
-      const compiled = job.compile(missing.size ? withoutAssets(docAtCompile, missing) : docAtCompile);
+    let result: { compiled: CompiledImageJob; references: ImageReference[]; attached: string[] } | null = null;
+    for (let pass = 0; pass < 3 && !result; pass += 1) {
+      const compiled = compileWith(missing.size ? withoutAssets(docAtCompile, missing) : docAtCompile);
       const references: ImageReference[] = [];
+      const attached: string[] = [];
       let dropped = false;
       for (const ref of compiled.references) {
         if (ref.path === '__region__') {
@@ -1521,10 +2371,12 @@ class RenderRun {
             regionDataUrl = await this.ctx.assets.outlineRegion(current, job.region);
           }
           references.push({ label: ref.label, dataUrl: regionDataUrl });
+          attached.push(`__region__:${job.region.x},${job.region.y},${job.region.w},${job.region.h}`);
           continue;
         }
         try {
           references.push({ label: ref.label, dataUrl: await this.ctx.assets.loadDataUrl(ref.path) });
+          attached.push(ref.path);
         } catch (err) {
           if (job.kind === 'edit' && references.length === 0) {
             throw new StudioError('NOT_FOUND', "Couldn't load the current page image to edit. Try redrawing the page.", { status: 404, cause: err });
@@ -1534,11 +2386,33 @@ class RenderRun {
           dropped = true;
         }
       }
-      if (!dropped) return { compiled, references, docAtCompile };
+      if (!dropped) result = { compiled, references, attached };
     }
     // Still missing after recompiles: give up on references rather than mislabel them.
-    const compiled = job.compile(withoutAssets(docAtCompile, new Set(collectAssetPaths(docAtCompile))));
-    return { compiled, references: [], docAtCompile };
+    if (!result) result = { compiled: compileWith(withoutAssets(docAtCompile, new Set(collectAssetPaths(docAtCompile)))), references: [], attached: [] };
+    const { compiled, references, attached } = result;
+    const jobHash = jobHashOf({ specId: compiled.spec.id, resolution: compiled.resolution, aspect: compiled.aspect, prompt: compiled.prompt, referencePaths: attached });
+    return { compiled, references, docAtCompile, jobHash, meta: this.versionMeta(job, compiled, docAtCompile, attached, jobHash) };
+  }
+
+  /** The full VersionMeta for this draw (contract §12.3: specHash for every target kind, aspect, lineage). */
+  private versionMeta(job: ImageJob, compiled: CompiledImageJob, docAtCompile: ComicDoc, attached: string[], jobHash: string): VersionMeta {
+    const base = getRender(docAtCompile, job.target);
+    // Edits keep the BASE version's spec hash (the edit didn't change the script); renders take today's.
+    const specHash = job.kind === 'edit' ? base?.specHash : specHashFor(docAtCompile, job.target);
+    const previous = compiled.references.find((r) => /PREVIOUS PAGE/.test(r.label) && attached.includes(r.path));
+    const userRefs = userRefPaths(docAtCompile);
+    const refPaths = attached.filter((p) => userRefs.has(p));
+    return {
+      ...(specHash ? { specHash } : {}),
+      resolution: compiled.resolution,
+      aspect: compiled.aspect,
+      jobHash,
+      ...(job.note ? { note: job.note.slice(0, 300) } : {}),
+      ...(job.kind === 'edit' && base?.asset?.path ? { parentPath: base.asset.path } : {}),
+      ...(previous ? { continuityPath: previous.path } : {}),
+      ...(refPaths.length ? { refPaths } : {})
+    };
   }
 
   private async saveImage(dataUrl: string, model: string): Promise<AssetRef> {
@@ -1562,34 +2436,51 @@ class RenderRun {
       this.reservedLeft = round4(this.reservedLeft - settled);
       addPending(this.session, -settled);
     }
-    this.session.commit([
+    this.commit([
       {
         op: 'spend',
-        entry: { id: newId('sp'), at: Date.now(), kind: job.spend, label: `${job.label}${suffix}`, usd, model: compiled.spec.id, byok, estimated }
+        entry: {
+          id: newId('sp'),
+          at: Date.now(),
+          kind: job.spend,
+          label: `${job.label}${suffix}`,
+          usd,
+          model: compiled.spec.id,
+          byok,
+          estimated,
+          target: renderTargetKey(job.target)
+        }
       }
     ]);
     return usd;
   }
-
-  /** Vision QC + balloon layout for a freshly drawn page (fail-soft to the layout fallback). */
-  private async letterPage(pageId: string, dataUrl: string): Promise<void> {
-    await letterPage(this.ctx, pageId, dataUrl, this.signal, (card) => this.notices.push(card));
-  }
 }
+
+/** The AssetRef with this path anywhere in the doc (current, history, refs…). */
+const findAsset = (doc: ComicDoc, path: string): AssetRef | undefined => {
+  let found: AssetRef | undefined;
+  mapAssetRefs(doc, (a) => {
+    if (!found && a?.path === path) found = a;
+    return a;
+  });
+  return found;
+};
 
 const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 const describeJobs = (jobs: ImageJob[]): string => {
   const count = (kind: ImageJobKind | ImageJobKind[]) => jobs.filter((j) => (Array.isArray(kind) ? kind.includes(j.kind) : j.kind === kind)).length;
   const pages = jobs.filter((j) => j.kind === 'page');
+  const pageNs = pages.map((j) => Number(/(\d+)$/.exec(j.label)?.[1])).filter((n) => Number.isFinite(n)).map((n) => ({ n }));
   const parts = [
-    pages.length === 1 ? pages[0].label.toLowerCase() : pages.length ? plural(pages.length, 'page') : '',
+    pages.length === 1 ? pages[0].label.toLowerCase() : pages.length ? (pageNs.length === pages.length ? pagesPhrase(pageNs) : plural(pages.length, 'page')) : '',
     count('edit') ? (count('edit') === 1 ? jobs.find((j) => j.kind === 'edit')!.label.toLowerCase().replace(/^edit /, 'the edit of ') : plural(count('edit'), 'edit')) : '',
     count(['sheet', 'place']) ? plural(count(['sheet', 'place']), 'sheet') : '',
     count('style_option') ? plural(count('style_option'), 'style option') : '',
     count('cover') ? 'the cover' : ''
   ].filter(Boolean);
-  return parts.join(', ') || 'nothing';
+  if (parts.length <= 1) return parts[0] || 'nothing';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 };
 
 const mergeBalloons = (page: Page, fresh: Balloon[], overlay: boolean): Balloon[] => {
@@ -1607,26 +2498,39 @@ const mergeBalloons = (page: Page, fresh: Balloon[], overlay: boolean): Balloon[
   return out;
 };
 
+/** What letterPage found: the safety verdict folded into QC (when the vision pass returned one). */
+export interface LetterResult {
+  safety?: SafetyVerdict;
+  /** A (billed) vision call ran. */
+  visionRan: boolean;
+}
+
 /**
  * Run the vision pass on a page image and commit its QC report + balloons. Never throws:
- * without vision (no key, billing denied, provider error, cancelled) balloons are laid
- * out from the panel blueprint.
+ * without vision (no key, billing denied, provider error, cancelled) balloons are laid out
+ * from the panel blueprint. QC once: an asset that already carries a QC report (restored,
+ * reused, derived fit) is never re-checked unless `forceVision` — its stored panel boxes
+ * place the balloons for free.
  */
 export async function letterPage(
   ctx: StudioContext,
   pageId: string,
   dataUrl: string | null,
   signal: AbortSignal,
-  onNotice: (card: Card) => void
-): Promise<void> {
+  onNotice: (card: Card) => void,
+  opts: { forceVision?: boolean } = {}
+): Promise<LetterResult> {
   const doc = ctx.session.doc;
   const page = findPage(doc, pageId);
-  if (!page) return;
+  if (!page) return { visionRan: false };
   const overlay = doc.format.lettering !== 'in_art';
   const layout = { readingDirection: doc.format.readingDirection, kind: doc.format.kind } as const;
+  const stored = page.render.asset ? page.render.qc : undefined;
   let qc: QcReport | undefined;
   let balloons: Balloon[] | undefined;
-  if (dataUrl && !signal.aborted) {
+  let safety: SafetyVerdict | undefined;
+  let visionRan = false;
+  if (dataUrl && !signal.aborted && (!stored || opts.forceVision)) {
     const end = activity(ctx, `Checking page ${page.n}`);
     const tracker = newTextSpendTracker();
     try {
@@ -1637,8 +2541,12 @@ export async function letterPage(
         llm: billedLlm(ctx, { stage: 'qc', operation: 'comic.text.vision', tracker }),
         signal
       });
+      visionRan = true;
       qc = analysis.qc;
       balloons = analysis.balloons;
+      // P1-RENDER folds the safety block into the QC answer (verdictFromVision); absent ⇒ unchecked.
+      const folded = (analysis as { safety?: unknown }).safety;
+      if (folded && typeof folded === 'object') safety = folded as SafetyVerdict;
       end(true);
     } catch (err) {
       end(false);
@@ -1651,11 +2559,18 @@ export async function letterPage(
   }
   // Re-read: lines may have been edited while the check ran.
   const current = findPage(ctx.session.doc, pageId);
-  if (!current) return;
-  if (!balloons) balloons = overlay ? fallbackBalloons(current, qc?.panelBoxes || estimatePanelBoxes(current, layout), layout) : [];
+  if (!current) return { ...(safety ? { safety } : {}), visionRan };
+  // A shape mismatch is a QC fact too (the board and the timeline show it).
+  const r = current.render;
+  if (qc && r.asset && r.aspect && !aspectMatches(r.aspect, r.asset.w, r.asset.h)) {
+    const note = `Came back ${aspectFromSize(r.asset.w || 0, r.asset.h || 0)} instead of ${r.aspect}.`;
+    if (!qc.issues.includes(note)) qc = { ...qc, issues: [...qc.issues, note] };
+  }
+  const boxes = qc?.panelBoxes || (current.render.asset ? current.render.qc?.panelBoxes : undefined);
+  if (!balloons) balloons = overlay ? fallbackBalloons(current, boxes || estimatePanelBoxes(current, layout), layout) : [];
   const ops: DocOp[] = [{ op: 'balloons', pageId, balloons: mergeBalloons(current, balloons, overlay) }];
   if (qc) ops.unshift({ op: 'render', target: { kind: 'page', id: pageId }, patch: { qc } });
-  ctx.session.commit(ops);
+  commitAs(ctx, ops, 'job');
   if (qc && qc.score < LOW_QC_SCORE) {
     const issues = qc.issues.slice(0, 3).join(' ');
     onNotice(
@@ -1665,6 +2580,7 @@ export async function letterPage(
       )
     );
   }
+  return { ...(safety ? { safety } : {}), visionRan };
 }
 
 // ── Doc-only actions ─────────────────────────────────────────────────────────
@@ -1690,55 +2606,111 @@ const sanitizeBox = (raw: unknown): Box | undefined => {
   return { x: round4(x), y: round4(y), w: round4(w), h: round4(h) };
 };
 
-function pickStyle(ctx: StudioContext, optionId: string): ActionOutcome {
+function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions): ActionOutcome {
   const doc = ctx.session.doc;
   const option = doc.style.options.find((o) => o.id === optionId);
   if (!option) throw badRequest('That style option is no longer available.');
   if (isBusy(option.render)) throw new StudioError('BAD_REQUEST', `“${option.name}” is still drawing — pick it when it's done.`, { status: 409 });
   const board = option.render.status === 'ready' ? option.render.asset : undefined;
-  ctx.session.commit([
-    {
-      op: 'style',
-      patch: { status: 'locked', name: option.name, spec: option.spec, board, presetId: undefined, palette: undefined, linework: undefined }
-    }
-  ]);
-  ctx.session.commit([
-    {
-      op: 'message',
-      msg: assistantMessage(`Locked “${option.name}”. Every sheet and page now follows it.`, undefined, suggestNextSteps(ctx.session.doc))
-    }
-  ]);
-  return { status: 'done', message: `Locked the style “${option.name}”.` };
+  const origin = originOf(opts);
+  commitAs(ctx, [{ op: 'style', patch: { status: 'locked', name: option.name, spec: option.spec, board, presetId: undefined, palette: undefined, linework: undefined } }], origin, 'Pick style');
+  const steps = nextStepsFor(ctx.session.doc, { byok: spendIsByok(ctx.keys) });
+  deliver(ctx, opts, `Locked “${option.name}”. Every sheet and page now follows it.`, [], steps);
+  return { status: 'done', message: `Locked the style “${option.name}”.`, nextSteps: steps };
 }
 
-function approvePlan(ctx: StudioContext): ActionOutcome {
+function approvePlan(ctx: StudioContext, opts: RunActionOptions): ActionOutcome {
   const doc = ctx.session.doc;
   if (!doc.pages.length) throw badRequest('There is no page plan to approve yet.');
-  if (doc.planStatus !== 'approved') ctx.session.commit([{ op: 'plan_status', status: 'approved' }]);
+  if (doc.planStatus !== 'approved') commitAs(ctx, [{ op: 'plan_status', status: 'approved' }], originOf(opts), 'Approve plan');
   return { status: 'done', message: 'Plan approved.' };
 }
 
+/** A page that has (or had) art: a current image or any history. */
+const hasArt = (p: Page) => !!p.render.asset?.path || p.render.history.length > 0;
+
 /**
- * Write (or revise) the page plan with the writer model. A full plan reuses existing page
- * ids by position so drawn pages are kept (shown as out of date), never wiped; a revision
- * rewrites only `pageIds`. New cast the writer introduced is added first.
+ * R5: fingerprint of everything the writer reads for a full plan (brief + notes, cast names and
+ * looks, places, the source script, the format). Unchanged + no instructions ⇒ the existing
+ * plan is returned for free.
+ */
+export const planInputHashOf = (doc: ComicDoc): string =>
+  hashString(
+    JSON.stringify([
+      'plan/1',
+      doc.brief,
+      doc.cast.map((c) => [c.id, c.name, c.tier, c.look, c.kind ?? 'person', c.count ?? 1, c.role ?? '', c.personality ?? '', c.voice ?? '']),
+      doc.places.map((p) => [p.id, p.name, p.look]),
+      hashString(doc.source.script || ''),
+      doc.format
+    ])
+  );
+
+/**
+ * The last plan-input hash per session. `ComicDoc.planInputHash` exists in the contract but no
+ * op writes it yet (amendment filed), so the hash also lives here for the session's lifetime.
+ */
+const planHashes = new WeakMap<StudioSessionApi, string>();
+const knownPlanHash = (session: StudioSessionApi): string | undefined => planHashes.get(session) ?? session.doc.planInputHash;
+
+/**
+ * Write (or revise) the page plan with the writer model.
+ * - Unchanged inputs and no instructions (R5): the existing plan comes back for free.
+ * - Nothing drawn yet: a full plan reuses existing page ids by position (harmless, no art).
+ * - Pages drawn: art must follow the story beat, not the slot. A full re-plan of the same
+ *   page count rewrites every page IN PLACE by id (drawn pages show as out of date); a
+ *   different count is refused with "use revise_pages / insert_page / delete_page" BEFORE
+ *   any paid call. A page the writer drops that has art goes to the trash, never lost.
+ * - Afterwards: newly introduced cast is added, recurring uncast beings are cast (castScan),
+ *   and the breakdown card shows the plan.
  */
 export async function planPages(
   ctx: StudioContext,
   args: { instructions?: string; pageIds?: string[] },
-  opts: Pick<RunActionOptions, 'collectCard'> = {}
+  opts: Pick<RunActionOptions, 'collectCard' | 'collectNextSteps' | 'origin'> = {}
 ): Promise<ActionOutcome> {
   const signal = ctx.session.abort.signal;
-  const revising = Array.isArray(args.pageIds) && args.pageIds.length > 0;
+  const before = ctx.session.doc;
+  const instructions = clean(args.instructions, 8000);
+  let pageIds = Array.isArray(args.pageIds) && args.pageIds.length ? args.pageIds : undefined;
+  const origin = originOf(opts);
+  const runOpts = { ...opts, confirmed: false } as RunActionOptions;
+  const byok = spendIsByok(ctx.keys);
+
+  if (!pageIds && !instructions && before.pages.length && before.planStatus !== 'none' && knownPlanHash(ctx.session) === planInputHashOf(before)) {
+    const steps = nextStepsFor(before, { byok });
+    const text = `Nothing changed since the plan was written, so here it is again — ${plural(before.pages.length, 'page')}, no writer call ($0).`;
+    deliver(ctx, runOpts, text, [{ type: 'breakdown', id: newId('card'), view: 'plan', cover: true }], steps);
+    return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
+  }
+
+  const drawn = before.pages.filter(hasArt);
+  let rewroteAll = false;
+  if (!pageIds && drawn.length) {
+    const wanted = Math.max(1, Math.round(before.format.pageCount || before.pages.length));
+    if (wanted !== before.pages.length) {
+      const message =
+        `${drawn.length === 1 ? `Page ${drawn[0].n} is` : `${capitalize(pagesPhrase(drawn))} are`} already drawn, so I won't re-plan the whole book from scratch — ` +
+        `the art could land on the wrong story beat. Use revise_pages for the pages to change, insert_page to add a page or delete_page to remove one. Nothing was spent.`;
+      const userText = `${drawn.length === 1 ? `Page ${drawn[0].n} is` : 'Some pages are'} already drawn, so I won't re-plan the whole book from scratch (the art could end up on the wrong page). Tell me which pages to change, or add/remove pages in the timeline — nothing was spent.`;
+      deliver(ctx, runOpts, userText, [noticeCard('info', userText)], nextStepsFor(before, { byok }));
+      return { status: 'blocked', message, code: 'CONFLICT' };
+    }
+    // Same page count: rewrite every page in place, by id (the writer returns the target ids).
+    pageIds = before.pages.map((p) => p.id);
+    rewroteAll = true;
+  }
+  const revising = !!pageIds;
+
   const tracker = newTextSpendTracker();
-  const end = activity(ctx, revising ? 'Rewriting pages' : 'Writing the page plan');
+  const end = activity(ctx, revising && !rewroteAll ? 'Rewriting pages' : 'Writing the page plan');
   let result: Awaited<ReturnType<typeof writePagePlan>>;
   try {
     result = await writePagePlan({
       doc: ctx.session.doc,
       llm: billedLlm(ctx, { stage: 'plan', operation: 'comic.text.writer', tracker }),
-      ...(clean(args.instructions, 8000) ? { instructions: clean(args.instructions, 8000) } : {}),
-      ...(revising ? { pageIds: args.pageIds } : {}),
+      ...(instructions ? { instructions } : {}),
+      ...(revising ? { pageIds } : {}),
       signal
     });
     end(true);
@@ -1746,7 +2718,7 @@ export async function planPages(
     end(false);
     throw asStudioError(err);
   } finally {
-    recordTextSpend(ctx, tracker, 'plan', revising ? 'Revise pages' : 'Page plan');
+    recordTextSpend(ctx, tracker, 'plan', revising && !rewroteAll ? 'Revise pages' : 'Page plan');
   }
 
   const doc = ctx.session.doc;
@@ -1757,28 +2729,60 @@ export async function planPages(
   }
   let pages: Page[];
   if (revising) {
+    // By id: every returned page lands on the page with the same id (art stays with its beat).
     pages = mergeRevisedPages(doc.pages, result.pages);
   } else {
     const old = [...doc.pages].sort((a, b) => a.n - b.n);
     const fresh = [...result.pages].sort((a, b) => a.n - b.n);
-    // Keep page identity by position so existing renders survive as "out of date".
-    const reassigned = fresh.map((p, i) => (old[i] ? { ...p, id: old[i].id } : p));
-    const merged = mergeRevisedPages(old.slice(0, reassigned.length), reassigned);
-    pages = [...merged, ...reassigned.slice(merged.length)];
+    const byId = new Set(old.map((p) => p.id));
+    const matchesById = fresh.some((p) => byId.has(p.id));
+    if (matchesById) {
+      // The writer returned existing ids: map by id; new ids are new pages.
+      const merged = mergeRevisedPages(old.filter((p) => fresh.some((f) => f.id === p.id)), fresh);
+      pages = fresh.map((f) => {
+        const m = merged.find((x) => x.id === f.id);
+        return m ? { ...m, n: f.n } : f;
+      });
+    } else {
+      // Nothing drawn (checked above): page identity by position is harmless.
+      const reassigned = fresh.map((p, i) => (old[i] && !hasArt(old[i]) ? { ...p, id: old[i].id } : p));
+      const merged = mergeRevisedPages(old.slice(0, reassigned.length), reassigned);
+      pages = [...merged, ...reassigned.slice(merged.length)];
+    }
+    // A page with art that the new plan drops goes to the trash (paid art is never silently lost).
+    const kept = new Set(pages.map((p) => p.id));
+    for (const p of old) if (!kept.has(p.id) && hasArt(p) && !isBusy(p.render)) ops.push({ op: 'page_delete', id: p.id, deletedAt: Date.now() });
   }
   ops.push({ op: 'pages', pages });
-  if (!revising || doc.planStatus === 'none') ops.push({ op: 'plan_status', status: 'draft' });
-  ctx.session.commit(ops);
+  // A (re)written plan is a draft again until the user approves it (a revision of some pages keeps the status).
+  if (!revising || rewroteAll || doc.planStatus === 'none') ops.push({ op: 'plan_status', status: 'draft' });
+  commitAs(ctx, ops, origin, revising && !rewroteAll ? 'Revise pages' : 'Plan pages');
+
+  // Software safety net: recurring animals, toys, vehicles… that the plan uses become cast.
+  let castNote = '';
+  try {
+    const beings = findUncastBeings(ctx.session.doc);
+    const castOps = beings.length ? castOpsForUncast(ctx.session.doc, beings) : [];
+    if (castOps.length) {
+      commitAs(ctx, castOps, origin, 'Add cast');
+      const names = beings.map((b) => (b.count && b.count > 1 ? `${b.name} ×${b.count}` : b.name));
+      castNote = ` Also added to the cast so they stay consistent: ${names.join(', ')}.`;
+    }
+  } catch (err) {
+    logger.warn('comic_cast_scan_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+  }
 
   const after = ctx.session.doc;
-  const headline = planHeadline(after, revising ? args.pageIds : undefined);
-  const card: Card = { type: 'plan', id: newId('card') };
-  const text = revising
-    ? `Rewrote ${plural(result.pages.length, 'page')}. Drawn pages that changed show as out of date until you redraw them.`
-    : `Here's the plan: ${plural(after.pages.length, 'page')}${result.newCast.length ? `, plus ${plural(result.newCast.length, 'new character')}` : ''}. Read it on the board — edit anything, then draw the pages.`;
-  if (opts.collectCard) opts.collectCard(card);
-  else ctx.session.commit([{ op: 'message', msg: assistantMessage(text, [card], suggestNextSteps(after)) }]);
-  return { status: 'done', message: headline };
+  planHashes.set(ctx.session, planInputHashOf(after));
+  const headline = planHeadline(after, revising && !rewroteAll ? pageIds : undefined);
+  const card: Card = { type: 'breakdown', id: newId('card'), view: 'plan', cover: true, ...(revising && !rewroteAll ? { pageIds } : {}) };
+  const drawnNote = drawn.length && revising ? ' Drawn pages that changed show as out of date until you redraw them.' : '';
+  const text = revising && !rewroteAll
+    ? `Rewrote ${plural(result.pages.length, 'page')}.${drawnNote}${castNote}`
+    : `Here's the plan: ${plural(after.pages.length, 'page')}${result.newCast.length ? `, plus ${plural(result.newCast.length, 'new character')}` : ''}. Read it here — edit anything, then draw the pages.${drawnNote}${castNote}`;
+  const steps = nextStepsFor(after, { byok });
+  deliver(ctx, runOpts, text, [card], steps);
+  return { status: 'done', message: `${headline}${castNote}`, nextSteps: steps };
 }
 
 /** "Planned 6 pages: 1. Maya arrives (4 panels) · 2. …" — the tool result the director reads. */
@@ -1788,37 +2792,80 @@ export const planHeadline = (doc: ComicDoc, onlyIds?: string[]): string => {
   return `${onlyIds ? 'Revised' : 'Planned'} ${plural(pages.length, 'page')}: ${lines.join(' · ')}`;
 };
 
-function restoreRender(ctx: StudioContext, target: RenderTarget, path: string): ActionOutcome {
+/**
+ * Compatibility action: put a stored version back (`render_use`). The version keeps its own
+ * meta, so a version made for another spec or shape stays "out of date" honestly; blocked or
+ * quarantined versions are refused.
+ */
+function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, opts: RunActionOptions): ActionOutcome {
   const doc = ctx.session.doc;
   if (!isObject(target) || typeof (target as { kind?: unknown }).kind !== 'string') throw badRequest('Unknown render target.');
   const render = getRender(doc, target);
   if (!render) throw badRequest('That image no longer exists.');
   if (isBusy(render)) throw new StudioError('BAD_REQUEST', 'Wait for the current drawing to finish before restoring a version.', { status: 409 });
   if (render.asset?.path === path) return { status: 'done', message: 'That version is already current.' };
-  const version = render.history.find((a) => a.path === path);
+  const key = renderTargetKey(target);
+  const version: (AssetRef & Partial<VersionMeta>) | undefined =
+    render.history.find((a) => a.path === path) ?? archiveOf(doc).find((a) => a.path === path && a.targetKey === key);
   if (!version) throw badRequest("That version isn't in this image's history.");
-  // v5 contract: restore_render is a compatibility action that commits `render_use` (history versions now carry
-  // their own VersionMeta, which render_use lifts onto the render; versions without meta come back without qc/specHash).
-  ctx.session.commit([{ op: 'render_use', target, path, at: Date.now() }]);
+  if (!canServeToOwner(version)) {
+    throw new StudioError('CONTENT_POLICY', "That version didn't pass the content check, so it can't be used.", { status: 422 });
+  }
+  commitAs(ctx, [{ op: 'render_use', target, path, at: Date.now() }], originOf(opts), 'Use version');
   void ctx.publishUrls([version.path]);
-  return { status: 'done', message: 'Restored that version.' };
+  // Truth about shape and freshness (bug 4:5 → 1:1: a restored square page used to look current).
+  if (target.kind !== 'page' && target.kind !== 'cover') return { status: 'done', message: 'Restored that version.' };
+  const after = ctx.session.doc;
+  const want = after.format.pageAspect;
+  const shapeOff = !aspectMatches(want, version.w, version.h);
+  const stale = isTargetStale(after, target);
+  if (!shapeOff && !stale) return { status: 'done', message: 'Restored that version.' };
+  const got = aspectFromSize(version.w || 0, version.h || 0);
+  const label = target.kind === 'cover' ? 'the cover' : `page ${findPage(after, target.id)?.n ?? '?'}`;
+  const byok = spendIsByok(ctx.keys);
+  const steps: NextStep[] = [];
+  const notes: string[] = [];
+  if (shapeOff) {
+    notes.push(`note it's ${got}, your pages are ${want}`);
+    const redraw: SpendAction = target.kind === 'cover' ? { type: 'render_cover' } : { type: 'render_pages', pageIds: [target.id], force: true };
+    const usd = quoteOf(after, redraw, byok);
+    steps.push(
+      { label: `Fit to ${want} (Free)`, action: { type: 'fit_render', target, mode: 'auto' }, usd: 0 },
+      { label: `Switch book to ${got} (Free)`, action: { type: 'patch', ops: [{ op: 'format', patch: { pageAspect: got } }] }, usd: 0 },
+      { label: `Redraw at ${want}`, action: { ...redraw, quotedUsd: usd }, usd }
+    );
+  }
+  if (stale) notes.push(`it was drawn for an earlier version of ${label}, so it shows as out of date`);
+  const message = `Restored ${label} — ${notes.join('; ')}.`;
+  deliver(ctx, opts, message, [], steps);
+  return { status: 'done', message, ...(steps.length ? { nextSteps: steps } : {}) };
 }
 
-async function relayoutBalloons(ctx: StudioContext, pageId: string): Promise<ActionOutcome> {
+/**
+ * Re-lay the balloons on a page. Free by default: the stored QC panel boxes (or the panel
+ * blueprint) place them with no AI call. `useVision` re-checks the art first (one vision
+ * call, QC-priced).
+ */
+async function relayoutBalloons(ctx: StudioContext, pageId: string, opts: { useVision?: boolean } = {}): Promise<ActionOutcome> {
   const doc = ctx.session.doc;
   const page = findPage(doc, pageId);
   if (!page) throw badRequest('That page is no longer in the plan.');
   const path = page.render.status === 'ready' ? page.render.asset?.path : undefined;
   let dataUrl: string | null = null;
-  if (path && (ctx.keys.openrouter?.key || ctx.keys.gemini?.key)) {
+  if (opts.useVision && path && (ctx.keys.openrouter?.key || ctx.keys.gemini?.key)) {
     dataUrl = await ctx.assets.loadDataUrl(path).catch((err) => {
       logger.warn('comic_relayout_load_failed', { projectId: ctx.projectId, pageId, message: (err as Error)?.message });
       return null;
     });
   }
   // A low score here is already visible on the page's QC report; no extra message.
-  await letterPage(ctx, pageId, dataUrl, ctx.session.abort.signal, () => undefined);
-  return { status: 'done', message: `Re-laid out the balloons on page ${page.n}.` };
+  const out = await letterPage(ctx, pageId, dataUrl, ctx.session.abort.signal, () => undefined, { forceVision: !!dataUrl });
+  return {
+    status: 'done',
+    message: out.visionRan
+      ? `Re-checked page ${page.n} and re-laid out its balloons.`
+      : `Re-laid out the balloons on page ${page.n} (free — no AI call).`
+  };
 }
 
 // ── Patch validation ─────────────────────────────────────────────────────────
@@ -1870,7 +2917,8 @@ export const sanitizeSettingsPatch = (raw: unknown): Partial<Settings> => {
       bigSpendUsd: (v) => num(v, 0, 1000),
       budgetUsd: (v) => (v === null ? null : num(v, 0, 100_000)),
       imageModelOverride: (v) =>
-        v === null || v === '' ? null : typeof v === 'string' && IMAGE_MODELS.some((m) => m.id === v && m.lifecycle !== 'deprecated') ? v : undefined
+        v === null || v === '' ? null : typeof v === 'string' && IMAGE_MODELS.some((m) => m.id === v && m.lifecycle !== 'deprecated') ? v : undefined,
+      reviewFirstRender: (v) => (typeof v === 'boolean' ? v : undefined)
     },
     'settings'
   );
@@ -1890,19 +2938,31 @@ export const sanitizeLook = (raw: unknown): Record<string, string> | undefined =
   return out;
 };
 
-/** Asset refs a client may set: only paths the doc already references (no foreign paths). */
+const ARCHIVE_ONLY_KEYS = ['targetKey', 'archivedAt', 'starred', 'balloons'] as const;
+const META_KEYS = ['specHash', 'qc', 'costUsd', 'resolution', 'aspect', 'jobHash', 'origin', 'note', 'parentPath', 'continuityPath', 'refPaths'] as const;
+
+/** An asset as a plain reference: version/archive bookkeeping stripped (refs carry no render meta). */
+const asPlainRef = (a: AssetRef): AssetRef => {
+  const copy = { ...a } as AssetRef & Record<string, unknown>;
+  const archived = typeof copy.targetKey === 'string';
+  for (const k of ARCHIVE_ONLY_KEYS) delete copy[k];
+  for (const k of META_KEYS) delete copy[k];
+  // An archive entry's `label` is a display name ("Page 3"), not a RefLabel.
+  if (archived) delete copy.label;
+  return copy;
+};
+
+/**
+ * Asset refs a client may set (refs, style board): any image the project already owns —
+ * renders, versions, archive, trash, uploads (`collectAssetPaths` scope, so the Media bin's
+ * "Use as reference" works) — never a foreign path, never a blocked or quarantined image.
+ */
 const knownAssets = (doc: ComicDoc) => {
   const known = new Map<string, AssetRef>();
-  const add = (a?: AssetRef) => a?.path && known.set(a.path, a);
-  doc.style.refs.forEach(add);
-  add(doc.style.board);
-  doc.style.options.forEach((o) => {
-    add(o.render.asset);
-    o.render.history.forEach(add);
+  mapAssetRefs(doc, (a) => {
+    if (a?.path && !known.has(a.path) && canServeToOwner(a)) known.set(a.path, asPlainRef(a));
+    return a;
   });
-  doc.cast.forEach((c) => c.refs.forEach(add));
-  doc.places.forEach((p) => p.refs.forEach(add));
-  doc.conversation.forEach((m) => m.attachments?.forEach(add));
   return known;
 };
 
@@ -2172,44 +3232,99 @@ const sanitizeBalloon = (raw: unknown, lineIds: Set<string>): Balloon => {
 
 function applyPatch(ctx: StudioContext, ops: unknown, opts: RunActionOptions): ActionOutcome {
   const sanitized = sanitizePatchOps(ctx.session.doc, ops, sanitizeCtxFor(ctx, opts));
-  if (opts.origin) ctx.session.commit(sanitized, { origin: opts.origin });
-  else ctx.session.commit(sanitized);
+  commitAs(ctx, sanitized, originOf(opts));
   return { status: 'done', message: `Saved ${plural(sanitized.length, 'change')}.` };
 }
 
-// ── Suggestions ──────────────────────────────────────────────────────────────
+// ── Next steps ───────────────────────────────────────────────────────────────
+
+const dedupeSteps = (steps: NextStep[]): NextStep[] => {
+  const seen = new Set<string>();
+  return steps.filter((s) => {
+    const key = s.label.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+/** The published comic is behind the studio: a page or the cover changed after the last publish. */
+const publicationBehind = (doc: ComicDoc): boolean => {
+  const pub = doc.publication;
+  if (!pub || pub.status !== 'live') return false;
+  const at = pub.publishedAt || 0;
+  return doc.pages.some((p) => (p.render.updatedAt || 0) > at && p.render.status === 'ready') || ((doc.cover.render.updatedAt || 0) > at && doc.cover.render.status === 'ready');
+};
 
 /**
- * 2–4 short next-step chips from doc state (deterministic). They follow the default
- * forward motion: idea → style → cast sheets → plan → render → cover → read.
+ * 2–4 acting chips from doc state (deterministic, $0). They follow the forward motion
+ * idea → style → cast → plan → draw → cover → read → share, and they act: a spend chip
+ * carries its action and quote (a tap is the confirmation; a stale quote re-gates),
+ * navigation is a client action, everything else is said to the director.
+ * - Never "draw all" when every page is drawn and current.
+ * - "Make the cover" as soon as page 1 is ready.
+ * - "Compare versions" before "Redraw" when a low-QC page has ≥ 2 versions.
+ * - "Share it" after the last page; "Update the published version" when the comic is behind.
  */
-export function suggestNextSteps(doc: ComicDoc): string[] {
-  const out: string[] = [];
+export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean } = {}): NextStep[] {
+  const byok = !!opts.byok;
+  const out: NextStep[] = [];
+  const add = (s: NextStep | null) => {
+    if (s && !out.some((o) => o.label === s.label)) out.push(s);
+  };
+  const say = (label: string): NextStep => ({ label });
+  const spend = (label: string, action: SpendAction): NextStep | null => {
+    const est = estimateSpendAction(doc, action, byok);
+    if (est.imageCount <= 0) return null;
+    return { label, action: { ...action, quotedUsd: est.usd }, usd: est.usd };
+  };
   const hasIdea = !!(clean(doc.brief.premise) || clean(doc.brief.logline) || clean(doc.source.script) || doc.cast.length);
-  const rendering = doc.pages.some((p) => isBusy(p.render)) || doc.cast.some((c) => isBusy(c.sheet));
-  if (!hasIdea) {
-    out.push('A heist comic set in Mumbai', 'Paste a script', 'A cozy fantasy for kids');
-    return out.slice(0, 4);
+  if (!hasIdea) return [say('A heist comic set in Mumbai'), say('Paste a script'), say('A cozy fantasy for kids')];
+
+  const pagesBusy = doc.pages.some((p) => isBusy(p.render));
+  const castBusy = doc.cast.some((c) => isBusy(c.sheet));
+  if (doc.style.status === 'empty' || (doc.style.status === 'drafted' && !doc.style.options.length && !doc.style.spec)) add(say('Show me 3 styles'));
+  if (!doc.cast.length) add(say('Suggest a cast'));
+  if (doc.style.status !== 'empty' && !castBusy && doc.cast.some(needsSheet) && doc.planStatus === 'none') add(spend('Draw the character sheets', { type: 'render_sheets' }));
+  if (doc.planStatus === 'none') {
+    const usd = round4(PLAN_USD_PER_PAGE * Math.max(1, doc.format.pageCount || 1) * (byok ? 1 : PLATFORM_MARKUP));
+    add({ label: 'Plan the pages', action: { type: 'plan_pages' }, usd });
   }
-  if (doc.style.status === 'empty') out.push('Show me 3 styles');
-  else if (doc.style.status === 'drafted' && !doc.style.options.length) out.push('Show me 3 styles');
-  const sheetless = doc.cast.filter((c) => c.tier !== 'extra' && c.sheet.status !== 'ready' && !isBusy(c.sheet));
-  if (doc.style.status !== 'empty' && sheetless.length) out.push('Draw the character sheets');
-  if (!doc.cast.length) out.push('Suggest a cast');
-  if (doc.planStatus === 'none') out.push('Plan the pages');
-  if (doc.planStatus === 'draft') out.push('Render all pages', 'Make page 1 more dramatic');
-  if (doc.planStatus === 'approved' && !rendering) {
-    const undrawn = doc.pages.filter((p) => p.render.status !== 'ready' && !isBusy(p.render));
+  if (doc.pages.length && !pagesBusy) {
+    const undrawn = doc.pages.filter((p) => p.render.status !== 'ready' && p.panels.length);
     const stale = doc.pages.filter((p) => isPageStale(doc, p));
-    if (undrawn.length) out.push(undrawn.length === doc.pages.length ? 'Render all pages' : 'Render the remaining pages');
-    else if (stale.length) out.push('Redraw the out-of-date pages');
+    if (doc.planStatus === 'draft') {
+      add(spend(undrawn.length === doc.pages.length ? 'Approve & draw all' : 'Approve & draw the rest', { type: 'render_pages' }));
+      add(say('Make page 1 more dramatic'));
+    } else if (doc.planStatus === 'approved') {
+      if (undrawn.length) add(spend(undrawn.length === doc.pages.length ? 'Draw all pages' : 'Draw the remaining pages', { type: 'render_pages' }));
+      else if (stale.length) add(spend('Redraw the out-of-date pages', { type: 'render_pages' }));
+    }
+  }
+  const page1 = doc.pages.find((p) => p.n === 1);
+  if (page1?.render.status === 'ready' && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render)) add(spend('Make the cover', { type: 'render_cover' }));
+  const weak = [...doc.pages].sort((a, b) => a.n - b.n).find((p) => p.render.status === 'ready' && typeof p.render.qc?.score === 'number' && p.render.qc.score < LOW_QC_SCORE && !isBusy(p.render));
+  if (weak) {
+    if (versionsOf(weak.render).length >= 2) add({ label: `Compare page ${weak.n} versions`, client: { type: 'open_page', pageId: weak.id } });
+    add(spend(`Redraw page ${weak.n}`, { type: 'render_pages', pageIds: [weak.id], force: true }));
   }
   const allDrawn = doc.pages.length > 0 && doc.pages.every((p) => p.render.status === 'ready');
-  if (allDrawn && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render)) out.push('Make the cover');
-  if (allDrawn) out.push('Read it');
-  if (out.length < 2 && doc.pages.length) out.push('Add a twist on the last page');
-  if (out.length < 2) out.push('Make it funnier');
-  return [...new Set(out)].slice(0, 4);
+  if (allDrawn) {
+    add({ label: 'Read it', client: { type: 'open_reader' } });
+    if (publicationBehind(doc)) add({ label: 'Update the published version', client: { type: 'open_share' } });
+    else if (!doc.publication) add({ label: 'Share it', client: { type: 'open_share' } });
+  }
+  if (out.length < 2 && doc.pages.length) add(say('Add a twist on the last page'));
+  if (out.length < 2) add(say('Make it funnier'));
+  return out.slice(0, DOC_NEXT_STEPS);
+}
+
+/**
+ * 2–4 short next-step chips as text (legacy `Msg.suggestions` and the director's reply);
+ * the labels of nextStepsFor().
+ */
+export function suggestNextSteps(doc: ComicDoc): string[] {
+  return nextStepsFor(doc).map((s) => s.label);
 }
 
 export { isSpendAction };

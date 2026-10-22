@@ -686,3 +686,76 @@ describe('parseJsonText / completeStructured', () => {
     expect(calls[0]).toMatchObject({ role: 'vision', temperature: 0.3, maxTokens: 100, signal: controller.signal });
   });
 });
+
+// ── v5 (P1-DIRECTOR): non-human cast, content rating, native language ────────
+
+describe('writer v5', () => {
+  it('newCast keeps kind/count (animals as first-class cast) and the schema stays strict', async () => {
+    const { llm } = fakeLlm([
+      json(
+        plan(
+          [rawPage(1, [rawPanel({ castIds: ['ch_maya', 'Ducklings'], action: 'Maya feeds three ducklings.' }), rawPanel({ n: 2, castIds: ['Ducklings'], action: 'The ducklings paddle off.' })])],
+          [{ name: 'Ducklings', role: 'companions', tier: 'support', kind: 'animal', count: 3, look: { summary: 'Three fluffy yellow ducklings', species: 'duckling', markings: 'orange beaks' }, personality: '', voice: '' }]
+        )
+      )
+    ]);
+    const out = await writePagePlan({ doc: baseDoc((d) => (d.format.pageCount = 1)), llm });
+    expect(out.newCast).toHaveLength(1);
+    expect(out.newCast[0]).toMatchObject({ name: 'Ducklings', kind: 'animal', count: 3, tier: 'support', look: { species: 'duckling', markings: 'orange beaks' } });
+    expect(out.pages[0].panels[1].castIds).toEqual([out.newCast[0].id]);
+    const props = (PAGE_PLAN_SCHEMA.properties.newCast as { items: { properties: Record<string, unknown> } }).items.properties;
+    expect(Object.keys(props)).toEqual(expect.arrayContaining(['kind', 'count']));
+  });
+
+  it('system prompt: non-human cast rules and a CONTENT RATING section (kids → PG/G)', () => {
+    const adult = writerSystemPrompt(baseDoc());
+    expect(adult).toContain('people AND animals, creatures, robots, toys, vehicles and key props');
+    expect(adult).toContain('CONTENT RATING (PG-13)');
+    expect(adult).toContain('Intense action, horror and suspense are fine');
+    expect(adult).toContain('Never: sexual content or nudity');
+    expect(adult).toContain('original homages');
+    const kids = writerSystemPrompt(baseDoc((d) => (d.brief.audience = 'kids 6–9')));
+    expect(kids).toContain('CONTENT RATING (PG)');
+    const little = writerSystemPrompt(baseDoc((d) => (d.brief.audience = 'toddlers')));
+    expect(little).toContain('CONTENT RATING (G)');
+    expect(little).toContain('Audience is little children');
+    const adapted = writerSystemPrompt(baseDoc((d) => (d.safety = { source: { hash: 'h', categories: ['graphic_gore'], adaptNotes: ['page 3: graphic injury'], at: 1 } })));
+    expect(adapted).toContain('ADAPTATION: the source has scenes beyond PG-13 (page 3: graphic injury)');
+  });
+
+  it('native language register and script-aware line lengths (i18n.md §8.8)', () => {
+    const telugu = writerSystemPrompt(baseDoc((d) => (d.format.language = 'te')));
+    expect(telugu).toContain('At most 18 words per balloon');
+    expect(telugu).toContain('natural, everyday spoken Telugu');
+    expect(telugu).toContain('not a translation from English');
+    const japanese = writerSystemPrompt(baseDoc((d) => (d.format.language = 'ja')));
+    expect(japanese).toContain('At most 40 characters per balloon');
+    expect(writerSystemPrompt(baseDoc())).toContain('Write every line in English.');
+    const kidsHindi = writerSystemPrompt(baseDoc((d) => ((d.format.language = 'hi'), (d.brief.audience = 'बच्चों के लिए'))));
+    expect(kidsHindi).toContain('For children: short, simple, warm words');
+  });
+
+  it('user message lists non-human cast with kind and count', () => {
+    const msg = writerUserMessage(
+      baseDoc((d) => d.cast.push({ id: 'ch_ducks', name: 'Ducklings', tier: 'support', kind: 'animal', count: 3, look: { summary: 'Fluffy ducklings', species: 'duckling' }, refs: [], sheet: emptyRender() })),
+      {}
+    );
+    expect(msg).toContain('"id":"ch_ducks","name":"Ducklings","tier":"support","kind":"animal","count":3');
+    expect(msg).toContain('species: duckling');
+  });
+
+  it('analyzeSource keeps kind/count for recurring animals and props', async () => {
+    const look = { summary: 'a red paper kite', age: '', gender: '', build: '', face: '', hair: '', eyes: '', skin: '', outfit: '', palette: '', props: '', marks: '', species: 'kite', markings: 'patched' };
+    const reply = {
+      brief: { title: 'Kite Day', logline: '', premise: '', genre: '', tone: '', audience: 'children', setting: '', themes: [], notes: [] },
+      cast: [{ name: 'Red Kite', role: 'prop', tier: 'extra', kind: 'object', count: 1, look, personality: '', voice: '' }],
+      places: [],
+      suggestedPageCount: 2,
+      styleHint: ''
+    };
+    const { llm } = fakeLlm([json(reply)]);
+    const out = await analyzeSource({ doc: baseDoc(), llm, text: 'The red kite flew. '.repeat(40) });
+    expect(out.cast[0]).toMatchObject({ name: 'Red Kite', kind: 'object', look: { species: 'kite', markings: 'patched' } });
+    expect(out.cast[0].count).toBeUndefined();
+  });
+});

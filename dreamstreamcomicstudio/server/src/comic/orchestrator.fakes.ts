@@ -96,6 +96,11 @@ export interface FakeAssetStore extends AssetStore {
   removed: string[];
   copies: { src: string; dst: string }[];
   puts: { path: string; contentType: string; cacheControl?: string; bytes: number }[];
+  /**
+   * Pixel size saveGenerated reports (default 1024×1536). A function gets the 1-based save
+   * number and the model, so a test can make one image come back square (bug 4:5 → 1:1).
+   */
+  generatedSize: { w: number; h: number } | ((n: number, model?: string) => { w: number; h: number });
 }
 
 const dataUrlOf = (mime: string, buffer: Buffer) => `data:${mime};base64,${buffer.toString('base64')}`;
@@ -118,7 +123,8 @@ export function fakeAssetStore(): FakeAssetStore {
       n += 1;
       const path = `u/${userId}/p/${projectId}/img/gen-${n}.webp`;
       store.files.set(path, dataUrl);
-      return { path, source: 'generated', at: Date.now(), w: 1024, h: 1536, ...(model ? { model } : {}) };
+      const size = typeof store.generatedSize === 'function' ? store.generatedSize(n, model) : store.generatedSize;
+      return { path, source: 'generated', at: Date.now(), w: size.w, h: size.h, ...(model ? { model } : {}) };
     },
     async saveUpload({ userId, projectId, dataUrl }) {
       if (!dataUrl.startsWith('data:image/')) throw new StudioError('BAD_REQUEST', 'Upload a PNG, JPEG, WebP or GIF image.', { status: 400 });
@@ -142,6 +148,7 @@ export function fakeAssetStore(): FakeAssetStore {
     },
 
     // ── v5 ──
+    generatedSize: { w: 1024, h: 1536 },
     signedTtl: [],
     encodeSize: { w: 1024, h: 1024 },
     crops: [],
@@ -380,6 +387,58 @@ export function plannedDoc(id = 'proj-1'): ComicDoc {
   doc.pages = [page(1, ['c_maya']), page(2, ['c_maya', 'c_arjun']), page(3, ['c_arjun'])];
   doc.planStatus = 'draft';
   doc.settings = { ...doc.settings, confirm: 'never' };
+  return doc;
+}
+
+/**
+ * The owner's first real v4 session, "Playtime at the Lake" (2026-10-22, data-insights.md):
+ * a 1-page kids storybook (ages 2–6) at 4:5 with 4 panels — a toddler by a lake with three
+ * ducklings, a frog and a bunny — watercolor storybook style, the plan still a draft, the
+ * default confirm policy ('big', $0.50) and nothing drawn yet. Synthetic fixture: no real
+ * user data, only the shape of the session.
+ */
+export function lakeDoc(id = 'lake-1'): ComicDoc {
+  const doc = createEmptyDoc(id, 'Playtime at the Lake', 1_792_670_000_000);
+  doc.brief = {
+    ...doc.brief,
+    logline: 'A baby plays by a lake with three ducklings, a frog and a bunny.',
+    premise: 'A cheerful toddler spends a sunny afternoon by a lily-pad lake making animal friends.',
+    genre: 'kids storybook',
+    tone: 'gentle, playful',
+    audience: 'kids 2–6',
+    setting: 'a grassy lake bank with lily pads'
+  };
+  doc.format = { ...doc.format, kind: 'storybook', pageCount: 1, pageAspect: '4:5', panelsPerPage: 4, lettering: 'overlay' };
+  doc.style = { ...doc.style, status: 'drafted', name: 'Watercolor Storybook', spec: 'Soft watercolor washes, gentle ink outlines, warm pastel palette, picture-book feel.' };
+  doc.cast = [
+    { id: 'c_baby', name: 'The Baby', tier: 'lead', look: { summary: 'A cheerful toddler in a striped onesie with a tuft of curly hair' }, refs: [], sheet: emptyRender() }
+  ];
+  const actions = [
+    'Three fluffy yellow ducklings waddle up to the baby on the grassy bank.',
+    'A small green frog hops onto a lily pad; the baby claps and giggles.',
+    'A brown bunny peeks out from the reeds at the baby and the ducklings.',
+    'At sunset the baby, the ducklings, the frog and the bunny sit together watching fireflies.'
+  ];
+  doc.pages = [
+    {
+      id: 'pg_lake_1',
+      n: 1,
+      summary: 'The baby makes animal friends by the lake.',
+      layout: 'Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.',
+      panels: actions.map((action, i) => ({
+        id: `pn_lake_${i + 1}`,
+        n: i + 1,
+        size: i === 0 || i === 3 ? 'wide' : 'medium',
+        shot: i === 0 ? 'establishing' : 'medium',
+        action,
+        castIds: ['c_baby'],
+        lines: i === 1 ? [{ id: 'ln_lake_giggle', kind: 'sfx', text: 'Giggle!' }] : i === 0 ? [{ id: 'ln_lake_quack', kind: 'sfx', text: 'Quack quack!' }] : []
+      })),
+      render: emptyRender(),
+      balloons: []
+    }
+  ];
+  doc.planStatus = 'draft';
   return doc;
 }
 

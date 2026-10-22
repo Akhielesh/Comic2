@@ -5,7 +5,9 @@
 // nothing is drawn yet. Status overlays and editor layers slot in via props/children.
 
 import React, { useState } from 'react';
-import type { Balloon, ComicDoc, Page } from '../../../shared/comic/doc';
+import type { Balloon, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
+import type { DocOp } from '../../../shared/comic/ops';
+import type { PatchOptions } from '../types';
 import { ImageDevelop } from '../../studio/kit/streamMotion';
 import { BalloonLayer } from './BalloonLayer';
 import { pageAspectOf } from './balloonGeometry';
@@ -18,7 +20,9 @@ export interface ComicPageViewProps {
   page: Page;
   imageUrl?: string;
   editable?: boolean;
-  onBalloonChange?: (lineId: string, patch: Partial<Balloon>) => void;
+  onBalloonChange?: (lineId: string, patch: Partial<Balloon>, opts?: { lang?: string }) => void;
+  /** Batched lettering edits from the balloon layer (delete, duplicate, z-order, lock, inline text). */
+  onLetteringOps?: (ops: DocOp[], opts?: PatchOptions) => void;
   className?: string;
   /** Status layer (shimmer, error, stale badge) drawn over the page. */
   overlay?: React.ReactNode;
@@ -37,6 +41,30 @@ export interface ComicPageViewProps {
   alt?: string;
   /** Called with the art's real width/height ratio once the image has loaded. */
   onAspectChange?: (aspect: number) => void;
+  /** aria-hidden on the lettering (the reader supplies its own ordered transcript). */
+  letteringAriaHidden?: boolean;
+  /** Balloons not in the set render at opacity 0 (guided reading). Undefined = all visible. */
+  visibleLineIds?: ReadonlySet<string>;
+  /** Insert the reader's paper layer (.ds-reader-paper) between the art and the lettering. */
+  paper?: boolean;
+  /**
+   * Variant pick: called with the page box's CSS width; return the best image URL for it (e.g.
+   * `w => studio.urlFor(asset, { width: w })`). Falls back to `imageUrl`.
+   */
+  srcWidth?: (boxWidthPx: number) => string | undefined;
+  /** Editing a translated edition: balloon geometry changes are reported with `{ lang }`. */
+  editionLang?: string;
+  /** Show the subtle "not translated yet" marker on fallback-language lines. */
+  markUntranslated?: boolean;
+  /** Multi-selection (primary first) for the page editor. */
+  selectedLineIds?: readonly string[];
+  onSelectionChange?: (ids: string[]) => void;
+  /** Inline balloon text editor (controlled). */
+  editingLineId?: string | null;
+  onEditingChange?: (lineId: string | null) => void;
+  /** Add mode: the next click on the page adds a line of this kind there. */
+  addKind?: LineKind | null;
+  onAddAt?: (kind: LineKind, point: { x: number; y: number }) => void;
 }
 
 /** Fallback page width for geometry before the box has been measured (and in tests). */
@@ -113,7 +141,20 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   develop = true,
   style,
   alt,
-  onAspectChange
+  onAspectChange,
+  letteringAriaHidden,
+  visibleLineIds,
+  paper,
+  srcWidth,
+  editionLang,
+  markUntranslated,
+  selectedLineIds,
+  onSelectionChange,
+  editingLineId,
+  onEditingChange,
+  addKind,
+  onAddAt,
+  onLetteringOps
 }) => {
   const [boxRef, size] = useElementSize<HTMLDivElement>();
   const [natural, setNatural] = useState<{ path: string; w: number; h: number } | null>(null);
@@ -124,13 +165,16 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   const aspect = naturalAspect || pageAspectOf(doc, page);
   const width = size.width || FALLBACK_WIDTH;
   const height = size.height || width / aspect;
-  const showImage = !!imageUrl && failed !== imageUrl;
-  const waitingForUrl = !imageUrl && !!assetPath;
+  // Variant pick from the real box width (only once measured; the plain URL until then).
+  const pickedUrl = srcWidth && size.width > 0 ? srcWidth(size.width) : undefined;
+  const src = pickedUrl || imageUrl;
+  const showImage = !!src && failed !== src;
+  const waitingForUrl = !src && !!assetPath;
   const lettering = doc.format.lettering === 'overlay' && showImage && !hideLettering;
 
   const img = showImage ? (
     <img
-      src={imageUrl}
+      src={src}
       alt={alt || `Page ${page.n}${page.summary ? ` — ${page.summary}` : ''}`}
       loading={loading}
       decoding="async"
@@ -144,7 +188,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
         }
       }}
       onError={() => {
-        setFailed(imageUrl || null);
+        setFailed(src || null);
         onImageError?.();
       }}
     />
@@ -162,7 +206,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
         // Keyed by asset: a new render remounts (and develops in when it just landed); the
         // wrapper never changes shape as time passes, so the image is never re-created.
         <div className="absolute inset-0">
-          <ImageDevelop key={assetPath || imageUrl} active={develop && isFreshRender(page.render)} className="h-full w-full" rounded="rounded-none">
+          <ImageDevelop key={assetPath || src} active={develop && isFreshRender(page.render)} className="h-full w-full" rounded="rounded-none">
             {img}
           </ImageDevelop>
         </div>
@@ -178,16 +222,29 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           )}
         </div>
       )}
+      {paper && showImage && <div className="ds-reader-paper pointer-events-none absolute inset-0" aria-hidden data-testid="reader-paper" />}
       {lettering && (
         <BalloonLayer
           doc={doc}
           page={page}
           pageWidth={width}
           pageHeight={height}
+          aspect={aspect}
           editable={editable}
           onBalloonChange={onBalloonChange}
+          onOps={onLetteringOps}
           selectedLineId={selectedLineId}
           onSelectLine={onSelectLine}
+          selectedLineIds={selectedLineIds}
+          onSelectionChange={onSelectionChange}
+          ariaHidden={letteringAriaHidden}
+          visibleLineIds={visibleLineIds}
+          editionLang={editionLang}
+          markUntranslated={markUntranslated}
+          editingLineId={editingLineId}
+          onEditingChange={onEditingChange}
+          addKind={addKind}
+          onAddAt={onAddAt}
         />
       )}
       {children}

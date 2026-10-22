@@ -21,7 +21,9 @@
 //  - one retry with backoff on 429/5xx/network; one "Generate the image now." nudge when
 //    the model answers with text instead of a picture; NO silent retry without
 //    imageConfig (that is how pages used to come back square),
-//  - every failure is a StudioError with an honest, user-safe message.
+//  - every failure is a StudioError with an honest, user-safe message; it also carries
+//    `imageFailure` (route, status, upstream provider, Retry-After — never a body or a key)
+//    so the job runner can re-queue after Retry-After and say who refused.
 
 import { createHash } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
@@ -186,6 +188,40 @@ export const providerDetail = (message: string): string => {
   // Nothing beyond what our own message already says.
   if (!text || /^(?:rate limited|too many requests|provider returned error|image provider error)\.?$/i.test(text)) return '';
   return text.length > 180 ? `${text.slice(0, 179).trimEnd()}…` : text;
+};
+
+/**
+ * Facts the job runner may keep about a failed image call: who answered, the HTTP status, the
+ * upstream provider and the provider's Retry-After hint. Never the message body or any key.
+ */
+export interface ImageFailureInfo {
+  route: ImageRoute;
+  status?: number;
+  providerName?: string;
+  /** OpenRouter routed through the user's own provider key (Integrations). */
+  isByok?: boolean;
+  /** Provider's Retry-After, in ms (rate limits). */
+  retryAfterMs?: number;
+}
+
+/** The failure facts attached to a StudioError thrown by the image generator (undefined otherwise). */
+export const imageFailureInfo = (err: unknown): ImageFailureInfo | undefined => {
+  const info = (err as { imageFailure?: unknown } | null)?.imageFailure;
+  return info && typeof info === 'object' ? (info as ImageFailureInfo) : undefined;
+};
+
+/** "OpenRouter · 429 · upstream Google" — short, sanitized, safe to store and show. */
+export const imageFailureDetail = (err: unknown): string | undefined => {
+  const info = imageFailureInfo(err);
+  if (!info) return undefined;
+  const code = (err as { code?: unknown })?.code;
+  const parts = [
+    ROUTE_LABEL[info.route] || 'Image provider',
+    Number.isFinite(info.status) && (info.status as number) > 0 ? String(info.status) : typeof code === 'string' ? code : '',
+    info.providerName ? `upstream ${info.providerName.replace(/[^\w .()-]/g, '').slice(0, 40)}` : '',
+    info.isByok ? 'your integration key' : ''
+  ].filter(Boolean);
+  return parts.join(' · ');
 };
 
 const withDetail = (base: string, provider: string, message: string): string => {
@@ -867,6 +903,17 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         }
         const transient = error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && error.retryable);
         const hinted = err instanceof ImageHttpError ? err.retryAfterMs : undefined;
+        // Facts the job runner keeps (re-queue after Retry-After; a sanitized "who refused" line).
+        if (!imageFailureInfo(error)) {
+          const failure: ImageFailureInfo = { route: picked.route };
+          const status = err instanceof ImageHttpError ? err.status : Number((err as { status?: unknown })?.status);
+          if (Number.isFinite(status) && status > 0) failure.status = status;
+          const meta = err instanceof ImageHttpError ? err.meta : undefined;
+          if (meta?.providerName) failure.providerName = meta.providerName;
+          if (meta?.isByok !== undefined) failure.isByok = meta.isByok;
+          if (hinted !== undefined) failure.retryAfterMs = hinted;
+          Object.assign(error, { imageFailure: failure });
+        }
         if (error.code === 'RATE_LIMIT') {
           // Everyone on this route+model+key waits at least this long before their next call.
           const ck = cooldownKey(picked);

@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyDoc, emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
+import { createEmptyDoc, emptyRender, type ArchivedVersion, type ComicDoc } from '../../../shared/comic/doc.js';
+import { DOC_LIMITS as SHARED_LIMITS, MAX_ARCHIVE, MAX_RENDER_HISTORY } from '../../../shared/comic/limits.js';
+import type { StudioEvent } from '../../../shared/comic/events.js';
 import { fakeDocStore, plannedDoc } from './orchestrator.fakes.js';
 import {
+  REF_INBOX_TTL_MS,
+  archiveEvictionNotice,
+  evictedArchivePaths,
+  pruneRefInboxOps,
   GATE_EXPIRY_MS,
   INTERRUPTED_RENDER_ERROR,
   INTERRUPTED_RENDER_MS,
@@ -370,5 +376,93 @@ describe('projectSummary', () => {
     expect(projectSummary(doc).coverPath).toBe('p2.webp');
     doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } };
     expect(projectSummary(doc).coverPath).toBe('cover.webp');
+  });
+});
+
+// ── v5 (contract §12.4) ──────────────────────────────────────────────────────
+
+describe('commit origin/label, archive eviction notice, inbox prune, size guard', () => {
+  afterEach(() => __resetSessionsForTests());
+
+  it('the ops event carries origin and label', () => {
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    const events: StudioEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    session.commit([{ op: 'note_add', text: 'x' }], { origin: 'director', label: 'Add note' });
+    expect(events[0]).toMatchObject({ type: 'ops', origin: 'director', label: 'Add note' });
+    session.dispose();
+  });
+
+  const fullArchive = (): ArchivedVersion[] =>
+    Array.from({ length: MAX_ARCHIVE }, (_, i) => ({
+      path: `arch-${i}.webp`,
+      source: 'generated' as const,
+      at: i,
+      targetKey: 'page:pg_9',
+      label: 'Page 9',
+      archivedAt: 1_000 + i
+    }));
+
+  it('a commit that evicts archived versions is followed by an info notice (never silent)', () => {
+    const doc = plannedDoc('p1');
+    doc.archive = fullArchive();
+    doc.archive[0] = { ...doc.archive[0], starred: true }; // starred: never evicted
+    const history = Array.from({ length: MAX_RENDER_HISTORY }, (_, i) => ({ path: `h-${i}.webp`, source: 'generated' as const, at: i }));
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'cur.webp', source: 'generated', at: 9 }, history };
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc, store: fakeDocStore() });
+    const events: StudioEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: { path: 'new.webp', source: 'generated', at: 10 }, updatedAt: 999_999 } }]);
+    const after = session.doc;
+    expect(after.archive).toHaveLength(MAX_ARCHIVE);
+    expect(after.archive!.some((a) => a.path === 'arch-0.webp')).toBe(true);
+    expect(after.archive!.some((a) => a.path === 'arch-1.webp')).toBe(false);
+    const notice = after.conversation.at(-1)!;
+    expect(notice.text).toBe(`Version archive is full (${MAX_ARCHIVE}): removed 1 oldest unstarred version that nothing uses. Star a version to keep it forever.`);
+    expect(notice.cards?.[0]).toMatchObject({ type: 'notice', tone: 'info' });
+    expect(events.filter((e) => e.type === 'ops')).toHaveLength(2);
+    expect(events[1]).toMatchObject({ origin: 'job' });
+    session.dispose();
+  });
+
+  it('no notice when nothing was evicted; a version restored out of the archive is not an eviction', () => {
+    const before = plannedDoc('p1');
+    before.archive = fullArchive();
+    const restored = { ...before, archive: before.archive.slice(1), pages: before.pages.map((p, i) => (i === 0 ? { ...p, render: { ...p.render, asset: { path: 'arch-0.webp', source: 'generated' as const, at: 0 } } } : p)) };
+    expect(evictedArchivePaths(before, restored)).toEqual([]);
+    expect(evictedArchivePaths(before, { ...before, archive: before.archive.slice(2) })).toEqual([]); // under the cap ⇒ not an eviction
+    expect(evictedArchivePaths(before, before)).toEqual([]);
+    expect(archiveEvictionNotice(3, 1).msg.text).toContain('removed 3 oldest unstarred versions');
+  });
+
+  it('prunes composer uploads older than 24 h on load and on the sweeper, keeping fresh ones', async () => {
+    const now = Date.now();
+    const store = fakeDocStore();
+    const doc = plannedDoc('p1');
+    doc.refInbox = [
+      { path: 'u/u1/p/p1/ref/old.webp', source: 'upload', at: now - REF_INBOX_TTL_MS - 1000 },
+      { path: 'u/u1/p/p1/ref/new.webp', source: 'upload', at: now - 1000 }
+    ];
+    expect(pruneRefInboxOps(doc, now)).toEqual([{ op: 'ref_remove', owner: { kind: 'inbox' }, path: 'u/u1/p/p1/ref/old.webp' }]);
+    store.docs.set('p1', { userId: 'u1', doc });
+    const session = await getStudioSession('p1', 'u1', store, { now: () => now });
+    expect(session.doc.refInbox!.map((r) => r.path)).toEqual(['u/u1/p/p1/ref/new.webp']);
+    const unsubscribe = session.subscribe(() => undefined); // live, so not evicted
+    await sweepIdleSessions(now + REF_INBOX_TTL_MS + 5000);
+    expect(session.doc.refInbox).toEqual([]);
+    expect(peekStudioSession('p1')).toBe(session);
+    unsubscribe();
+  });
+
+  it('refuses a user/director edit past docBytesMax with 409 LIMIT; server job commits still land', () => {
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    const big = 'x'.repeat(SHARED_LIMITS.docBytesMax + 10);
+    const rev = session.doc.rev;
+    expect(() => session.commit([{ op: 'source', patch: { script: big } }], { origin: 'user' })).toThrow(expect.objectContaining({ code: 'LIMIT', status: 409 }));
+    expect(session.doc.rev).toBe(rev);
+    expect(session.doc.source.script).toBeUndefined();
+    session.commit([{ op: 'note_add', text: 'job work' }], { origin: 'job' });
+    expect(session.doc.brief.notes).toEqual(['job work']);
+    session.dispose();
   });
 });

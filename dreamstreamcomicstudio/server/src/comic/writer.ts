@@ -8,9 +8,11 @@
 // author's script. Its output is the page plan the user reviews BEFORE any image spend.
 
 import {
+  CAST_KINDS,
   emptyRender,
   newId,
   type Brief,
+  type CastKind,
   type CastTier,
   type Character,
   type CharacterLook,
@@ -22,11 +24,14 @@ import {
   type PanelSize,
   type ShotType
 } from '../../../shared/comic/doc.js';
+import { languageSpec, lineLengthRule } from '../../../shared/comic/languages.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
+import { ALWAYS_RULE, RATING_RULES, effectiveRating, isKidsAudience, isLittleKidsAudience, softenAction, type ContentRating } from '../../../shared/comic/safety.js';
 import { STYLE_PRESETS, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { extractBalancedJson } from '../ai/jsonCoerce.js';
 import { effectiveLayout, harmonizePanelSizes, layoutPanelCount, parseLayout, synthesizeLayout } from './prompts.js';
+import { prefilterText } from './safety/index.js';
 import { StudioError, type LlmClient, type LlmResult, type TextRole } from './types.js';
 
 // ── Limits ───────────────────────────────────────────────────────────────────
@@ -45,7 +50,8 @@ const SHOT_TYPES: ShotType[] = ['establishing', 'wide', 'full', 'medium', 'close
 const LINE_KINDS: LineKind[] = ['speech', 'thought', 'whisper', 'shout', 'caption', 'sfx'];
 const SPOKEN_KINDS = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
 const CAST_TIERS: CastTier[] = ['lead', 'support', 'extra'];
-const LOOK_FIELDS = ['summary', 'age', 'gender', 'build', 'face', 'hair', 'eyes', 'skin', 'outfit', 'palette', 'props', 'marks'] as const;
+const LOOK_FIELDS = ['summary', 'age', 'gender', 'build', 'face', 'hair', 'eyes', 'skin', 'outfit', 'palette', 'props', 'marks', 'species', 'markings'] as const;
+const KIND_SCHEMA = { type: 'string', enum: CAST_KINDS } as const;
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -237,7 +243,7 @@ export const PAGE_PLAN_SCHEMA = obj({
   },
   newCast: {
     type: 'array',
-    items: obj({ name: str, role: str, tier: { type: 'string', enum: CAST_TIERS }, look: LOOK_SCHEMA, personality: str, voice: str })
+    items: obj({ name: str, role: str, tier: { type: 'string', enum: CAST_TIERS }, kind: KIND_SCHEMA, count: { type: 'integer' }, look: LOOK_SCHEMA, personality: str, voice: str })
   }
 });
 
@@ -277,10 +283,43 @@ const kindRules = (doc: ComicDoc): string[] => {
       'Reading order is RIGHT-TO-LEFT: the first panel of a row is on the right. Write tall-panel rows as "Rows 2–3: one tall panel on the right beside two stacked panels on the left."'
     );
   }
-  if (/\b(kid|kids|child|children|toddler|preschool|young readers|all ages|family)\b/i.test(clean(doc.brief.audience))) {
-    rules.push('Audience includes children: gentle stakes, simple vivid words, nothing gory or frightening beyond what the brief asks for.');
+  if (isKidsAudience(doc) || /\b(all ages|family)\b/i.test(clean(doc.brief.audience))) {
+    rules.push(
+      isLittleKidsAudience(doc)
+        ? 'Audience is little children: very short, warm, simple sentences; repetition and sound words are welcome; gentle stakes that resolve on the same page.'
+        : 'Audience includes children: gentle stakes, simple vivid words, nothing gory or frightening beyond what the brief asks for.'
+    );
   }
   return rules;
+};
+
+/** CONTENT RATING section (safety.md §3.2): the effective rating's story rule + the Always line + adaptation notes. */
+export const contentRatingSection = (doc: ComicDoc, rating?: ContentRating): string[] => {
+  const effective = rating ?? effectiveRating(doc).rating;
+  const lines = [
+    '',
+    `CONTENT RATING (${effective})`,
+    `- ${RATING_RULES[effective].story}`,
+    '- Action, adventure, horror, suspense, monsters, villains and peril are welcome — write them with energy, within the rating.',
+    `- ${ALWAYS_RULE}`,
+    '- Trademarked characters or brands become original homages: new names, distinct designs, same spirit.'
+  ];
+  const adapt = doc.safety?.source?.adaptNotes || [];
+  if (adapt.length) {
+    lines.push(
+      `- ADAPTATION: the source has scenes beyond ${effective} (${adapt.slice(0, 6).map((n) => clean(n)).filter(Boolean).join('; ')}). Adapt them within the rating (cut away before impact, imply rather than show); keep the plot and meaning.`
+    );
+  }
+  return lines;
+};
+
+/** "Write natural, everyday spoken Telugu…" — native register, not translationese (i18n.md §8.8). */
+const languageRule = (doc: ComicDoc, language: string): string => {
+  const code = clean(doc.format.language) || 'en';
+  const native = code.toLowerCase().startsWith('en')
+    ? `Write every line in ${language}.`
+    : `Write every line in natural, everyday spoken ${language}${languageSpec(code)?.endonym ? ` (${languageSpec(code)!.endonym})` : ''} as people really talk — not a translation from English, not textbook register. Character names stay as given in CAST.`;
+  return isKidsAudience(doc) && !code.toLowerCase().startsWith('en') ? `${native} For children: short, simple, warm words a parent would read aloud.` : native;
 };
 
 const panelsRule = (doc: ComicDoc): string => {
@@ -294,10 +333,12 @@ const panelsRule = (doc: ComicDoc): string => {
   return 'Panels per page: choose 3–6 by pacing — fewer, bigger panels (3–4) for action and big moments, more (5–6) for conversation. Never more than 7.';
 };
 
-export const writerSystemPrompt = (doc: ComicDoc): string => {
+export const writerSystemPrompt = (doc: ComicDoc, rating?: ContentRating): string => {
   const slots = characterSlots(doc);
   const language = languageName(doc.format.language);
   const inArt = doc.format.lettering === 'in_art';
+  const len = lineLengthRule(doc.format.language, inArt);
+  const unit = len.unit === 'chars' ? 'characters' : 'words';
   return [
     'You are a veteran comics writer and editor who has scripted hundreds of published pages. You turn a brief — and the author\'s script, when there is one — into a page-by-page plan an artist can draw without asking a single question. You plan; you never draw.',
     '',
@@ -323,22 +364,23 @@ export const writerSystemPrompt = (doc: ComicDoc): string => {
     '- Keep the 180° rule within a scene: characters keep their screen sides (say "on the left"/"on the right") unless the action motivates a change.',
     '- angle: "" or one of eye level, low angle, high angle, bird\'s-eye view, worm\'s-eye view, dutch tilt.',
     '- mood: a few words of emotion and light ("tense, cold blue dusk").',
-    '- castIds: every named character visible in the panel — nobody else will be drawn. Use ids from CAST. Unnamed background people go in the action text, never in castIds.',
-    `- At most ${slots} recurring named characters on any one page: the artist can only keep ${slots} identities on model. Give walk-ons and crowds no name.`,
+    '- castIds: every recurring character visible in the panel — people AND animals, creatures, robots, toys, vehicles and key props — nobody else will be drawn. Use ids from CAST. One-off unnamed background figures stay in the action text, never in castIds.',
+    `- At most ${slots} recurring named characters on any one page: the artist can only keep ${slots} identities on model (a group like "Ducklings ×3" counts as one). Give human walk-ons and crowds no name.`,
     '- placeId: an id from PLACES, or "" when none fits.',
     '',
     'DIALOGUE & LETTERING',
     '- lines are in reading order. kind: speech | thought | whisper | shout | caption | sfx.',
     '- speakerId: the character id for speech/thought/whisper/shout, "" for caption and sfx. Every speaker must be in that panel\'s castIds.',
-    `- At most ${inArt ? 18 : 25} words per balloon, at most 3 balloons per panel, at most 210 words of lettering per page.${inArt ? ' The artist letters these by hand, so keep lines short and plain.' : ''}`,
+    `- At most ${len.perLine} ${unit} per balloon, at most 3 balloons per panel, at most ${len.perPage} ${unit} of lettering per page.${inArt ? ' The artist letters these by hand, so keep lines short and plain.' : ''}`,
     '- Natural, in-character lines (use each character\'s voice). Never put stage directions, panel descriptions or prompt text in a line.',
     '- Captions only when they earn their place: a time/place jump ("Old Mumbai. Monsoon season.") or narration voice-over. Never describe what the art already shows. Silent panels are good — use them for reactions, atmosphere and action.',
     '- sfx: short onomatopoeia ("KRAK!") only for sounds that matter.',
-    `- Write every line in ${language}.`,
+    `- ${languageRule(doc, language)}`,
     '',
     'NEW CHARACTERS',
-    '- Prefer the existing cast. If the story needs a named character who is not in CAST, add them to newCast with a complete drawable look (summary plus every look field; "" only where nothing is known or needed) and refer to them by their exact name in castIds and speakerId. Tier: support if they recur or speak often, else extra. newCast is [] when no one new is needed.',
+    '- Prefer the existing cast. If the story needs a recurring character who is not in CAST — including animals, pets, sea creatures, toys, LEGO-style figures, vehicles, robots and key props (give unnamed ones a descriptive name such as "Ducklings" or "Frog") — add them to newCast with kind (person, animal, creature, robot, toy, vehicle, object), count (2–12 for a group drawn as one identity, else 1) and a complete drawable look (summary plus every look field; species and markings for non-humans; "" only where nothing is known), and refer to them by their exact name in castIds and speakerId. Tier: support if they recur or speak often, else extra. newCast is [] when no one new is needed.',
     ...(kindRules(doc).length ? ['', 'FORMAT NOTES', ...kindRules(doc).map((r) => `- ${r}`)] : []),
+    ...contentRatingSection(doc, rating),
     '',
     'OUTPUT',
     'Reply with JSON only, matching the schema. Every key is required: use "" or [] when something does not apply. Page n = page number; panel n starts at 1 on each page.'
@@ -347,7 +389,15 @@ export const writerSystemPrompt = (doc: ComicDoc): string => {
 
 const lookLine = (c: Character): string => {
   const l = c.look || ({ summary: '' } as CharacterLook);
-  return [clean(l.summary), clean(l.outfit) && `outfit: ${clean(l.outfit)}`, clean(l.marks) && `marks: ${clean(l.marks)}`].filter(Boolean).join('; ');
+  return [
+    clean(l.summary),
+    clean(l.species) && `species: ${clean(l.species)}`,
+    clean(l.outfit) && `outfit: ${clean(l.outfit)}`,
+    clean(l.marks) && `marks: ${clean(l.marks)}`,
+    clean(l.markings) && `markings: ${clean(l.markings)}`
+  ]
+    .filter(Boolean)
+    .join('; ');
 };
 
 const pageHeadline = (doc: ComicDoc, page: Page): string => {
@@ -425,7 +475,17 @@ export const writerUserMessage = (
       doc.cast.length
         ? doc.cast
             .map((c) =>
-              compactJson({ id: c.id, name: clean(c.name), tier: c.tier, role: clean(c.role), look: lookLine(c), personality: clean(c.personality), voice: clean(c.voice) })
+              compactJson({
+                id: c.id,
+                name: clean(c.name),
+                tier: c.tier,
+                kind: c.kind && c.kind !== 'person' ? c.kind : '',
+                count: c.count && c.count > 1 ? c.count : undefined,
+                role: clean(c.role),
+                look: lookLine(c),
+                personality: clean(c.personality),
+                voice: clean(c.voice)
+              })
             )
             .join('\n')
         : opts.outlineCast?.length
@@ -509,6 +569,13 @@ const looksLikeName = (token: string): boolean => {
   return !GROUP_WORDS.has(last);
 };
 
+const castKindOf = (v: unknown): CastKind | undefined => (typeof v === 'string' && (CAST_KINDS as readonly string[]).includes(v) ? (v as CastKind) : undefined);
+/** 2–12 = a group drawn as one identity; anything else = single. */
+const groupCountOf = (v: unknown): number | undefined => {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : undefined;
+  return n !== undefined && n >= 2 ? Math.min(12, n) : undefined;
+};
+
 const titleCase = (name: string) => clean(name).replace(/(^|\s)(\p{Ll})/gu, (_m, s: string, c: string) => s + c.toUpperCase());
 
 const cleanLook = (raw: unknown): CharacterLook => {
@@ -579,6 +646,8 @@ class CastResolver {
     const name = clean(entry.name);
     if (!looksLikeName(name) || this.find(name)) return;
     const tier = CAST_TIERS.includes(entry.tier as CastTier) ? (entry.tier as CastTier) : 'extra';
+    const kind = castKindOf(entry.kind);
+    const count = groupCountOf(entry.count);
     const draft: Character & { auto: boolean } = {
       id: newId('ch'),
       name: titleCase(name),
@@ -587,6 +656,8 @@ class CastResolver {
       refs: [],
       sheet: emptyRender(),
       auto: false,
+      ...(kind && kind !== 'person' ? { kind } : {}),
+      ...(count ? { count } : {}),
       ...(clean(entry.role) ? { role: clean(entry.role) } : {}),
       ...(clean(entry.personality) ? { personality: clean(entry.personality) } : {}),
       ...(clean(entry.voice) ? { voice: clean(entry.voice) } : {})
@@ -671,7 +742,7 @@ const cleanLineText = (value: unknown, speakerName?: string): string => {
   return clean(text);
 };
 
-const mentionSentence = (text: string, name: string): string => {
+export const mentionSentence = (text: string, name: string): string => {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(^|[^\\p{L}])${escaped}($|[^\\p{L}])`, 'iu');
   const sentences = clean(text).match(/[^.!?]+[.!?]*/g) || [];
@@ -684,7 +755,53 @@ interface PlanNormalizeContext {
   /** Revision targets (pageIds mode), or null for a full plan. */
   targets: Page[] | null;
   pageCount: number;
+  /** Effective content rating (post-plan pre-filter). */
+  rating?: ContentRating;
 }
+
+const safePrefilter = (text: string, rating: ContentRating) => {
+  try {
+    return prefilterText(text, rating);
+  } catch {
+    return { decision: 'clear' as const, categories: [], ip: [] };
+  }
+};
+
+/** Free pre-filter over a plan's actions and lines: what goes past the rating (for one repair round). */
+export const ratingProblems = (pages: Page[], rating: ContentRating): string[] => {
+  const problems: string[] = [];
+  for (const page of pages) {
+    for (const panel of page.panels) {
+      const texts = [panel.action, ...panel.lines.map((l) => l.text)];
+      const hit = texts.map((t) => safePrefilter(t, rating)).find((r) => r.decision === 'block');
+      if (hit) {
+        problems.push(
+          `Page ${page.n}, panel ${panel.n} goes past the ${rating} rating${hit.categories.length ? ` (${hit.categories.join(', ')})` : ''}: keep the creative goal but fit the rating — imply it, cut away before impact, or make it bloodless.`
+        );
+      }
+      if (problems.length >= 4) return problems;
+    }
+  }
+  return problems;
+};
+
+/** Post-plan pre-filter (safety.md §3.2): anything still past the rating is softened deterministically ($0). */
+export const softenPlanPages = (pages: Page[], rating: ContentRating): Page[] =>
+  pages.map((page) => {
+    let changed = false;
+    const panels = page.panels.map((panel) => {
+      const actionBlocked = safePrefilter(panel.action, rating).decision === 'block';
+      const lines = panel.lines.map((l) => {
+        if (safePrefilter(l.text, rating).decision !== 'block') return l;
+        changed = true;
+        return { ...l, text: softenAction(l.text) || l.text };
+      });
+      if (!actionBlocked && lines.every((l, i) => l === panel.lines[i])) return panel;
+      changed = true;
+      return { ...panel, action: actionBlocked ? softenAction(panel.action) || panel.action : panel.action, lines };
+    });
+    return changed ? { ...page, panels } : page;
+  });
 
 interface NormalizedPlan {
   pages: Page[];
@@ -821,6 +938,7 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
   }
 
   if (!pages.length) return { problems: problems.length ? problems : ['No usable pages were returned.'] };
+  problems.push(...ratingProblems(pages, ctx.rating ?? effectiveRating(doc).rating));
   if (!targets && pages.length !== ctx.pageCount) {
     problems.push(`Return exactly ${ctx.pageCount} page${ctx.pageCount > 1 ? 's' : ''} (you returned ${pages.length}).`);
   }
@@ -1016,13 +1134,16 @@ export async function writePagePlan(args: {
   instructions?: string;
   pageIds?: string[];
   signal?: AbortSignal;
+  /** Effective content rating (ctx.rating); default effectiveRating(doc). */
+  rating?: ContentRating;
 }): Promise<{ pages: Page[]; newCast: Character[]; costUsd?: number; model: string }> {
   const { doc } = args;
+  const rating = args.rating ?? effectiveRating(doc).rating;
   const revising = Array.isArray(args.pageIds) && args.pageIds.length > 0;
   const targets = revising ? doc.pages.filter((p) => args.pageIds!.includes(p.id)).sort((a, b) => a.n - b.n) : null;
   if (revising && !targets!.length) throw new StudioError('BAD_REQUEST', 'Those pages are no longer in the plan.', { status: 400 });
   const pageCount = clamp(Math.round(doc.format.pageCount || 1), 1, MAX_PAGES);
-  const system = writerSystemPrompt(doc);
+  const system = writerSystemPrompt(doc, rating);
   const failure = "The writer couldn't produce a usable page plan this time. Please try again.";
   let costUsd: number | undefined;
   let model = '';
@@ -1041,7 +1162,7 @@ export async function writePagePlan(args: {
       user: writerUserMessage(doc, { instructions: args.instructions, targets }),
       schemaName: 'comic_page_plan',
       schema: PAGE_PLAN_SCHEMA,
-      validate: (json) => normalizePlan(json, { doc, targets, pageCount }),
+      validate: (json) => normalizePlan(json, { doc, targets, pageCount, rating }),
       failure,
       temperature: 0.7,
       maxTokens: 2_500 + pagesToWrite * 1_400,
@@ -1060,7 +1181,7 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
-          const check = normalizePlan(json, { doc, targets: group, pageCount });
+          const check = normalizePlan(json, { doc, targets: group, pageCount, rating });
           if (!check.value || !isObject(json)) return { problems: check.problems };
           return { value: { pages: alignToTargets(orderedRawPages(json), group), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
@@ -1073,7 +1194,7 @@ export async function writePagePlan(args: {
       return result.value;
     });
     const combined = { pages: parts.flatMap((p) => p.pages), newCast: parts.flatMap((p) => p.newCast) };
-    const check = normalizePlan(combined, { doc, targets, pageCount });
+    const check = normalizePlan(combined, { doc, targets, pageCount, rating });
     if (!check.value) throw new StudioError('PROVIDER_ERROR', failure, { status: 502, retryable: true });
     normalized = check.value;
   } else {
@@ -1121,7 +1242,7 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
-          const check = normalizePlan(json, { doc, targets: null, pageCount: group.length });
+          const check = normalizePlan(json, { doc, targets: null, pageCount: group.length, rating });
           if (!check.value || !isObject(json)) return { problems: check.problems };
           return { value: { pages: orderedRawPages(json), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
@@ -1137,12 +1258,12 @@ export async function writePagePlan(args: {
       pages: parts.flatMap((p) => p.pages).map((p, i) => ({ ...p, n: i + 1 })),
       newCast: [...outlineResult.value.newCast, ...parts.flatMap((p) => p.newCast)]
     };
-    const check = normalizePlan(combined, { doc, targets: null, pageCount });
+    const check = normalizePlan(combined, { doc, targets: null, pageCount, rating });
     if (!check.value) throw new StudioError('PROVIDER_ERROR', failure, { status: 502, retryable: true });
     normalized = check.value;
   }
 
-  const pages = targets ? normalized.pages : enforcePageCount(normalized.pages, pageCount, doc);
+  const pages = softenPlanPages(targets ? normalized.pages : enforcePageCount(normalized.pages, pageCount, doc), rating);
   // Drop new characters that page-count enforcement removed from every page.
   const stillUsed = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => [...panel.castIds, ...panel.lines.map((l) => l.speakerId || '')])));
   return {
@@ -1172,7 +1293,7 @@ export const mergeRevisedPages = (oldPages: Page[], revised: Page[]): Page[] => 
 
 export interface SourceAnalysis {
   brief: Partial<Brief>;
-  cast: Array<{ name: string; role?: string; tier: CastTier; look: CharacterLook; personality?: string; voice?: string }>;
+  cast: Array<{ name: string; role?: string; tier: CastTier; look: CharacterLook; personality?: string; voice?: string; kind?: CastKind; count?: number }>;
   places: Array<{ name: string; look: string }>;
   suggestedPageCount?: number;
   styleHint?: string;
@@ -1194,7 +1315,7 @@ const ANALYSIS_SCHEMA = obj({
   }),
   cast: {
     type: 'array',
-    items: obj({ name: str, role: str, tier: { type: 'string', enum: CAST_TIERS }, look: LOOK_SCHEMA, personality: str, voice: str })
+    items: obj({ name: str, role: str, tier: { type: 'string', enum: CAST_TIERS }, kind: KIND_SCHEMA, count: { type: 'integer' }, look: LOOK_SCHEMA, personality: str, voice: str })
   },
   places: { type: 'array', items: obj({ name: str, look: str }) },
   suggestedPageCount: { type: 'integer' },
@@ -1229,9 +1350,9 @@ const ANALYSIS_SYSTEM = [
   '- Extract; never invent. Use only what the text states or strongly implies ("the old fisherman" implies an elderly man). When the text gives nothing for a field, use "" (or [] for lists). Never make up eye colors, outfits, ages, names or plot.',
   '- title: the work\'s title if stated, else a short evocative working title (2–5 words) drawn from the text.',
   '- logline: one sentence (≤ 30 words): protagonist, goal, obstacle. premise: 2–4 sentences covering the setup and the central conflict.',
-  '- genre, tone, audience ("children", "teens", "adults", "all ages" — only when implied), setting (time and place).',
+  '- genre, tone, audience ("children", "teens", "adults", "all ages" — only when implied; "children" for toddler or picture-book material), setting (time and place).',
   '- themes: up to 4 short phrases. notes: explicit wishes or constraints stated in the text ("ends on a cliffhanger", "no gore").',
-  '- cast: every named character who appears or speaks, plus unnamed roles that recur ("the Captain"). tier: lead = the protagonist(s) (1–2), support = recurring characters with real scenes, extra = walk-ons. Most important first.',
+  '- cast: every named character who appears or speaks, plus unnamed roles that recur ("the Captain") — including recurring animals, creatures, robots, toys, vehicles and key props (descriptive name like "Ducklings"; kind; count 2–12 for a group, else 1; kind "person" for people). tier: lead = the protagonist(s) (1–2), support = recurring characters with real scenes, extra = walk-ons. Most important first.',
   '- look: summary = one dense visual sentence an artist could draw from, built ONLY from stated or implied details ("" when the text describes nothing visual). Fill age, gender, build, face, hair, eyes, skin, outfit, palette (their colors), props and marks (scars, tattoos, signature items) only where stated or strongly implied, else "".',
   '- personality: 1 sentence from how they act. voice: how they talk (diction, rhythm, catchphrases), from their dialogue.',
   '- places: recurring or important locations, with a short visual description drawn from the text ("" when nothing is described).',
@@ -1264,10 +1385,14 @@ const normalizeAnalysis = (json: unknown): StructuredCheck<Omit<SourceAnalysis, 
     const key = normalizeName(name);
     if (!name || !key || seen.has(key)) continue;
     seen.add(key);
+    const kind = castKindOf(raw.kind);
+    const count = groupCountOf(raw.count);
     cast.push({
       name,
       tier: CAST_TIERS.includes(raw.tier as CastTier) ? (raw.tier as CastTier) : 'support',
       look: cleanLook(raw.look),
+      ...(kind && kind !== 'person' ? { kind } : {}),
+      ...(count ? { count } : {}),
       ...(clean(raw.role) ? { role: clean(raw.role) } : {}),
       ...(clean(raw.personality) ? { personality: clean(raw.personality) } : {}),
       ...(clean(raw.voice) ? { voice: clean(raw.voice) } : {})

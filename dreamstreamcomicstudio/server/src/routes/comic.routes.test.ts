@@ -3,8 +3,15 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioEvent } from '../../../shared/comic/events.js';
-import { emptyRender } from '../../../shared/comic/doc.js';
+import { emptyRender, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
+import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
+import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
+import type { ContentRating, SafetyVerdict } from '../../../shared/comic/safety.js';
 import { __resetSessionsForTests, peekStudioSession } from '../comic/session.js';
+import { __resetAccessCacheForTests } from '../comic/access.js';
+import { runDirectorTurn } from '../comic/director.js';
+import { respondBlocked, type ScreenResult } from '../comic/safety/index.js';
+import type { RoutedIntent } from '../comic/intents.js';
 import {
   KEYS,
   fakeAssetStore,
@@ -18,9 +25,27 @@ import {
   type FakeImages,
   type ScriptedLlm
 } from '../comic/orchestrator.fakes.js';
-import { JOB_TIMINGS } from '../comic/jobs.js';
+import { JOB_TIMINGS, noticeCard } from '../comic/jobs.js';
 import { StudioError } from '../comic/types.js';
-import { createComicPublicRouter, createComicRouter, legacyImportOps, parseStreamRequest, publicComicDoc } from './comic.js';
+import {
+  HIDDEN_MESSAGE_TEXT,
+  RESTRICTED_SPEND_MESSAGE,
+  STREAM_ACTION_TYPES,
+  blockedAssetPaths,
+  createComicPublicRouter,
+  createComicRouter,
+  isCostlyRequest,
+  legacyImportOps,
+  parseFocus,
+  parseStreamRequest,
+  restrictedRefusal
+} from './comic.js';
+
+// Wrap the real director so tests can see what the route handed it (focus, safety note).
+vi.mock('../comic/director.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../comic/director.js')>();
+  return { ...mod, runDirectorTurn: vi.fn(mod.runDirectorTurn) };
+});
 
 let store: FakeDocStore;
 let assets: FakeAssetStore;
@@ -28,6 +53,18 @@ let llm: ScriptedLlm;
 let images: FakeImages;
 let server: http.Server;
 let base: string;
+/** Moderation state the fake requireActiveUser() reports for every request. */
+let moderation: 'active' | 'restricted';
+let cooldown: { until: number } | null;
+let screen: (input: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }) => Promise<ScreenResult>;
+let screenCalls: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }[];
+let blockedResponses: string[];
+let intent: ((text: string) => RoutedIntent | null) | null;
+let plans: Map<string, string>;
+let publications: Map<string, PublicComicPayload>;
+let publicLoads: string[];
+
+const ALLOW: ScreenResult = { decision: 'allow', categories: [], strike: 0, blockedAttachmentPaths: [] };
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -36,13 +73,44 @@ app.use((req, _res, next) => {
   if (user) req.user = { id: user };
   next();
 });
-app.use('/api/comic/public', (req, res, next) => createComicPublicRouter({ store, assets })(req, res, next));
+app.use('/api/comic/public', (req, res, next) =>
+  createComicPublicRouter({
+    store,
+    assets,
+    loadPublicByProjectId: async (id) => {
+      publicLoads.push(id);
+      return publications.get(id) ?? null;
+    }
+  })(req, res, next)
+);
 app.use('/api/comic', (req, res, next) =>
   createComicRouter({
     store,
     assets,
     contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling() }),
     qualityAccess: async () => ({ ok: true }),
+    capsDeps: {
+      billingEnabled: true,
+      planFor: async (userId) => plans.get(userId) ?? 'free',
+      isAdminFor: async (r) => r.user?.id === 'admin-1',
+      accountCeilingFor: async () => 'PG-13'
+    },
+    requireActive: (_req, res, next) => {
+      res.locals.moderationStatus = moderation;
+      next();
+    },
+    safety: {
+      cooldownFor: async () => cooldown,
+      screenTurnInput: async (_ctx, input) => {
+        screenCalls.push(input);
+        return screen(input);
+      },
+      respondBlocked: async (ctx, prepared, result) => {
+        blockedResponses.push(prepared.userMsgId);
+        await respondBlocked(ctx, prepared, result);
+      }
+    },
+    ...(intent ? { routeIntent: (_doc, text) => intent!(text) } : {}),
     heartbeatMs: 20
   })(req, res, next)
 );
@@ -60,6 +128,17 @@ beforeEach(() => {
   assets = fakeAssetStore();
   llm = scriptedLlm();
   images = fakeImages();
+  moderation = 'active';
+  cooldown = null;
+  screen = async () => ALLOW;
+  screenCalls = [];
+  blockedResponses = [];
+  intent = null;
+  plans = new Map();
+  publications = new Map();
+  publicLoads = [];
+  __resetAccessCacheForTests();
+  vi.mocked(runDirectorTurn).mockClear();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -99,6 +178,22 @@ const seed = (doc = plannedDoc(), userId = 'user-1') => {
   store.docs.set(doc.id, { userId, doc });
   return doc;
 };
+
+/** Every structured log line printed to console.info, parsed. */
+const infoLines = (): Record<string, unknown>[] =>
+  vi
+    .mocked(console.info)
+    .mock.calls.map((c) => {
+      try {
+        return JSON.parse(String(c[0])) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    });
+const refusals = () => infoLines().filter((l) => l.event === 'comic_stream_refused');
+
+const BLOCKED: SafetyVerdict = { assessed: 'X', categories: ['graphic_gore'], by: 'qc', at: 1 };
+const ref = (path: string, extra: Partial<RefAsset> = {}): RefAsset => ({ path, source: 'upload', at: 1, ...extra });
 
 describe('auth and ownership', () => {
   it('requires a user', async () => {
@@ -229,6 +324,8 @@ describe('POST /projects/:id/stream', () => {
     const second = await stream('proj-1', { kind: 'message', text: 'two' });
     expect(second.events.map((e) => e.type)).toEqual(['hello', 'error', 'done']);
     expect(second.events[1]).toMatchObject({ code: 'BUSY' });
+    expect(refusals()).toEqual([expect.objectContaining({ code: 'BUSY', stage: 'stream', kind: 'message', userId: 'user-1' })]);
+    expect(JSON.stringify(refusals())).not.toContain('two');
     release();
     const firstResult = await first;
     expect(firstResult.events.some((e) => e.type === 'delta')).toBe(true);
@@ -285,12 +382,30 @@ describe('POST /projects/:id/stream', () => {
     expect(doc.source.script).toBe(script.trim());
     const userMsg = doc.conversation.find((m) => m.role === 'user')!;
     expect(userMsg.attachments).toHaveLength(1);
+    // Legacy data URLs are stored as PRIVATE refs (saveRef → u/<user>/p/<project>/ref/…), never the public lane.
+    expect(userMsg.attachments![0].path).toMatch(/^u\/user-1\/p\/proj-1\/ref\/.+\.webp$/);
     expect(userMsg.text).toContain('[Attached “script.txt” —');
-    expect(llm.calls[0].messages[llm.calls[0].messages.length - 1].content).toEqual(
-      expect.arrayContaining([{ type: 'image_url', image_url: { url: image } }])
-    );
-    const unsupported = await stream('proj-1', { kind: 'message', text: 'pdf', attachments: [{ name: 'a.pdf', mimeType: 'application/pdf', dataUrl: 'data:application/pdf;base64,AAAA' }] });
+    const lastTurn = llm.calls[0].messages[llm.calls[0].messages.length - 1].content;
+    expect(JSON.stringify(lastTurn)).toContain('image_url');
+    // The safety screen saw the stored image and the long script.
+    expect(screenCalls[0].attachments.map((a) => a.path)).toEqual([userMsg.attachments![0].path]);
+    expect(screenCalls[0].sourceText).toBe(script.trim());
+
+    // An unsupported file is a plain 400 and nothing is stored, even next to a valid image.
+    const before = assets.files.size;
+    const unsupported = await stream('proj-1', {
+      kind: 'message',
+      text: 'pdf',
+      attachments: [
+        { name: 'ok.png', mimeType: 'image/png', dataUrl: image },
+        { name: 'a.pdf', mimeType: 'application/pdf', dataUrl: 'data:application/pdf;base64,AAAA' }
+      ]
+    });
     expect(unsupported.res.status).toBe(400);
+    expect(assets.files.size).toBe(before);
+    // A non-base64 image data URL can't be read.
+    const notBase64 = await stream('proj-1', { kind: 'message', text: 'x', attachments: [{ name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png,abc' }] });
+    expect(notBase64.res.status).toBe(400);
   });
 });
 
@@ -347,28 +462,90 @@ describe('legacy import', () => {
   });
 });
 
-describe('public reader', () => {
-  it('serves only published comics, sanitized, with page/cover urls only', async () => {
+describe('public reader (GET /api/comic/public/:id)', () => {
+  const publication = (over: Partial<PublicPublicationInfo> = {}): PublicPublicationInfo => ({
+    slug: 'AbCdEfGhIjKlMnOpQ',
+    visibility: 'public',
+    languages: ['en'],
+    allowDownload: true,
+    allowEmbed: false,
+    publishedAt: 1,
+    updatedAt: 2,
+    card: {} as PublicPublicationInfo['card'],
+    ...over
+  });
+  const snapshot = (): ComicDoc => {
     const doc = plannedDoc();
-    doc.conversation = [{ id: 'm', role: 'user', text: 'secret', at: 1, attachments: [{ path: 'u/user-1/p/proj-1/img/photo.webp', source: 'upload', at: 1 }] }];
+    doc.conversation = [];
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'pub/AAAAAAAAAAAAAAAAAAAAAA/p1-0123456789ab.webp', source: 'generated', at: 1 } };
+    return doc;
+  };
+
+  const privateDoc = () => {
+    const doc = plannedDoc();
+    doc.conversation = [{ id: 'm', role: 'user', text: 'secret', at: 1, attachments: [{ path: 'u/user-1/p/proj-1/ref/photo.webp', source: 'upload', at: 1 }] }];
     doc.spend = { totalUsd: 1.2, byKind: { page: 1.2 }, entries: [{ id: 's', at: 1, kind: 'page', label: 'Page 1', usd: 1.2, byok: false, estimated: false }] };
     doc.source = { script: 'private script' };
     doc.memory = 'private memory';
     doc.settings.budgetUsd = 10;
-    doc.cast[0].refs = [{ path: 'u/user-1/p/proj-1/img/face.webp', source: 'upload', at: 1 }];
-    doc.cast[0].sheet = { ...emptyRender(), status: 'ready', asset: { path: 'sheet.webp', source: 'generated', at: 1 } };
-    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'page1.webp', source: 'generated', at: 1 } };
-    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } };
-    store.docs.set('proj-1', { userId: 'user-1', doc, isPublic: false });
+    doc.cast[0].refs = [{ path: 'u/user-1/p/proj-1/ref/face.webp', source: 'upload', at: 1 }];
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/page1.webp', source: 'generated', at: 1 } };
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/cover.webp', source: 'generated', at: 1 } };
+    return doc;
+  };
 
+  it('a comic with no live PUBLIC publication is a 404 for anonymous readers and other users — even if the old is_public flag is set', async () => {
+    store.docs.set('proj-1', { userId: 'user-1', doc: privateDoc(), isPublic: true });
+    const anon = await api('/api/comic/public/proj-1');
+    const other = await api('/api/comic/public/proj-1', { user: 'intruder' });
+    const missing = await api('/api/comic/public/does-not-exist', { user: 'intruder' });
+    const malformed = await api('/api/comic/public/bad%20id!', { user: 'intruder' });
+    const bodies = await Promise.all([anon, other, missing, malformed].map((r) => r.text()));
+    for (const r of [anon, other, missing, malformed]) {
+      expect(r.status).toBe(404);
+      expect(r.headers.get('cache-control')).toBe('no-store');
+    }
+    // One canonical body: nothing distinguishes private, unknown and malformed ids.
+    expect(new Set(bodies).size).toBe(1);
+    expect(JSON.parse(bodies[0])).toEqual({ error: { message: "This comic isn't available.", code: 'NOT_FOUND' } });
+    // Same lookups for an existing private comic and an unknown id (no timing oracle by short-circuit).
+    expect(publicLoads).toEqual(['proj-1', 'proj-1', 'does-not-exist']);
+  });
+
+  it('an UNLISTED publication is never reachable by project id (only by its slug)', async () => {
+    seed(privateDoc());
+    publications.set('proj-1', { publication: publication({ visibility: 'unlisted' }), doc: snapshot(), urls: {} });
     expect((await api('/api/comic/public/proj-1')).status).toBe(404);
-    // The owner can preview an unpublished comic.
-    expect((await api('/api/comic/public/proj-1', { user: 'user-1' })).status).toBe(200);
+    expect((await api('/api/comic/public/proj-1', { user: 'intruder' })).status).toBe(404);
+  });
 
-    store.docs.get('proj-1')!.isPublic = true;
-    const res = await api('/api/comic/public/proj-1');
+  it('serves the live public snapshot as-is (no live doc), with publication.slug for the legacy replaceState', async () => {
+    seed(privateDoc());
+    const snap = snapshot();
+    publications.set('proj-1', { publication: publication(), doc: snap, urls: { [snap.pages[0].render.asset!.path]: 'https://cdn.test/p1.webp' } });
+    for (const user of [undefined, 'intruder']) {
+      const res = await api('/api/comic/public/proj-1', { user });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+      const body = await res.json();
+      expect(body.publication.slug).toBe('AbCdEfGhIjKlMnOpQ');
+      expect(body.doc).toEqual(JSON.parse(JSON.stringify(snap)));
+      expect(body.urls).toEqual({ [snap.pages[0].render.asset!.path]: 'https://cdn.test/p1.webp' });
+      const json = JSON.stringify(body);
+      for (const secret of ['private script', 'private memory', '/ref/', 'u/user-1/']) expect(json).not.toContain(secret);
+      expect(body.languages).toEqual([{ code: 'en', endonym: 'English', english: 'English', complete: true, isSource: true }]);
+    }
+    expect(assets.signed).toEqual([]); // public copies are never re-signed from the private lanes
+  });
+
+  it('the owner previews the live doc sanitized, with no-store and page/cover urls only', async () => {
+    store.docs.set('proj-1', { userId: 'user-1', doc: privateDoc(), isPublic: false });
+    const res = await api('/api/comic/public/proj-1', { user: 'user-1' });
     expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(res.headers.get('vary')).toMatch(/authorization/i);
     const body = await res.json();
+    expect(body.preview).toBe(true);
     expect(body.doc.conversation).toEqual([]);
     expect(body.doc.spend).toEqual({ totalUsd: 0, byKind: {}, entries: [] });
     expect(body.doc.source).toEqual({});
@@ -376,10 +553,11 @@ describe('public reader', () => {
     expect(body.doc.gate).toBeNull();
     expect(body.doc.settings.budgetUsd).toBeUndefined();
     expect(body.doc.cast[0].refs).toEqual([]);
-    expect(Object.keys(body.urls).sort()).toEqual(['cover.webp', 'page1.webp']);
+    expect(Object.keys(body.urls).sort()).toEqual(['u/user-1/p/proj-1/img/cover.webp', 'u/user-1/p/proj-1/img/page1.webp']);
+    expect(publicLoads).toEqual([]); // the owner never needs the publication lookup
   });
 
-  it('public payload carries no render history, archive/trash/inbox, sheets, board or private text (P0-SEC)', async () => {
+  it('owner preview carries no render history, archive/trash/inbox, sheets, board or private text (P0-SEC)', async () => {
     const doc = plannedDoc();
     const draft = { path: 'u/user-1/p/proj-1/img/discarded.webp', source: 'generated' as const, at: 1 };
     doc.style = { ...doc.style, spec: 'SECRET STYLE SPEC', board: { path: 'u/user-1/p/proj-1/img/board.webp', source: 'generated', at: 1 } };
@@ -394,26 +572,46 @@ describe('public reader', () => {
       trash: [{ page: { id: 'pg_gone', summary: 'SECRET TRASH' } }],
       refInbox: [{ path: 'u/user-1/p/proj-1/ref/photo.webp' }]
     });
-    store.docs.set('proj-1', { userId: 'user-1', doc, isPublic: true });
-
-    for (const user of [undefined, 'user-1']) {
-      const res = await api('/api/comic/public/proj-1', { user });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      const json = JSON.stringify(body);
-      for (const secret of ['SECRET', 'discarded.webp', 'board.webp', 'sheet.webp', '/ref/']) expect(json).not.toContain(secret);
-      expect(body.doc.archive).toBeUndefined();
-      expect(body.doc.trash).toBeUndefined();
-      expect(body.doc.refInbox).toBeUndefined();
-      expect(body.doc.pages[0].render.history).toEqual([]);
-      expect(body.doc.style.board).toBeUndefined();
-      expect(Object.keys(body.urls).sort()).toEqual(['u/user-1/p/proj-1/img/cover.webp', 'u/user-1/p/proj-1/img/page1.webp']);
-    }
+    seed(doc);
+    const res = await api('/api/comic/public/proj-1', { user: 'user-1' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const json = JSON.stringify(body);
+    for (const secret of ['SECRET', 'discarded.webp', 'board.webp', 'sheet.webp', '/ref/']) expect(json).not.toContain(secret);
+    expect(body.doc.archive).toBeUndefined();
+    expect(body.doc.trash).toBeUndefined();
+    expect(body.doc.refInbox).toBeUndefined();
+    expect(body.doc.pages[0].render.history).toEqual([]);
+    expect(body.doc.style.board).toBeUndefined();
+    expect(Object.keys(body.urls).sort()).toEqual(['u/user-1/p/proj-1/img/cover.webp', 'u/user-1/p/proj-1/img/page1.webp']);
   });
 
-  it('publicComicDoc is idempotent', () => {
-    const once = publicComicDoc(plannedDoc());
-    expect(publicComicDoc(once)).toEqual(once);
+  it('owner preview withholds blocked art (no url, withheld placeholder) and localizes with ?lang', async () => {
+    const doc = privateDoc();
+    doc.pages[0].render.asset = { ...doc.pages[0].render.asset!, safety: BLOCKED };
+    doc.format = { ...doc.format, language: 'en' };
+    const line = doc.pages[0].panels[1].lines[0];
+    doc.i18n = {
+      editions: { te: { lang: 'te', lines: { [line.id]: { text: 'తెలుగు పంక్తి', status: 'machine', sourceHash: 'x', at: 1 } }, balloons: {} } },
+      glossary: []
+    } as unknown as ComicDoc['i18n'];
+    seed(doc);
+    const res = await api('/api/comic/public/proj-1?lang=te', { user: 'user-1' });
+    const body = await res.json();
+    expect(body.lang).toBe('te');
+    expect(body.doc.format.language).toBe('te');
+    expect(body.doc.pages[0].panels[1].lines[0].text).toBe('తెలుగు పంక్తి');
+    expect(body.languages.map((l: { code: string; isSource: boolean }) => [l.code, l.isSource])).toEqual([
+      ['en', true],
+      ['te', false]
+    ]);
+    expect(body.doc.pages[0].render.asset).toBeUndefined();
+    expect(body.doc.pages[0].render.withheld).toBe('safety');
+    expect(Object.keys(body.urls)).toEqual(['u/user-1/p/proj-1/img/cover.webp']);
+    // An unknown language is ignored (source shown), never an error.
+    const plain = await (await api('/api/comic/public/proj-1?lang=xx', { user: 'user-1' })).json();
+    expect(plain.lang).toBeUndefined();
+    expect(plain.doc.format.language).toBe('en');
   });
 });
 
@@ -424,5 +622,420 @@ describe('parseStreamRequest', () => {
     expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ dataUrl: 'https://evil' }] })).toThrow('could not be read');
     expect(parseStreamRequest({ kind: 'action', action: { type: 'approve_plan' } })).toEqual({ kind: 'action', action: { type: 'approve_plan' } });
     expect(() => parseStreamRequest({ kind: 'action', action: { type: 'drop_tables' } })).toThrow('Unknown action');
+  });
+
+  it('accepts exactly the shared spend + non-spend action sets (single source in shared/comic/ops.ts)', () => {
+    expect([...STREAM_ACTION_TYPES].sort()).toEqual([...SPEND_ACTION_TYPES, ...NON_SPEND_ACTION_TYPES].sort());
+    for (const type of ['fit_render', 'show_breakdown', 'use_preset', 'ref_crop', 'publish', 'unpublish', 'safety_recheck', 'swap_source_language', 'accept_translation_issue', 'library_use']) {
+      expect(NON_SPEND_ACTION_TYPES.has(type)).toBe(true);
+      expect(parseStreamRequest({ kind: 'action', action: { type } })).toEqual({ kind: 'action', action: { type } });
+    }
+    for (const type of ['translate', 'render_pages', 'render_cover']) expect(() => parseStreamRequest({ kind: 'action', action: { type } })).not.toThrow();
+    for (const type of ['', '__proto__', 'constructor', 'render_everything', 'restore_render ']) expect(() => parseStreamRequest({ kind: 'action', action: { type } })).toThrow('Unknown action');
+  });
+
+  it('passes focus through, keeping only valid parts', () => {
+    const lineIds = Array.from({ length: 90 }, (_, i) => `ln_${i}`);
+    const parsed = parseStreamRequest({ kind: 'message', text: 'make these red', focus: { pageId: 'pg_2', lineIds: [...lineIds, 'bad id!', 4], panelN: 3, surface: 'page_editor', extra: 'x' } });
+    expect(parsed).toEqual({ kind: 'message', text: 'make these red', focus: { pageId: 'pg_2', lineIds: lineIds.slice(0, 80), panelN: 3, surface: 'page_editor' } });
+    expect(parseFocus({ pageId: '<script>', panelN: 99, surface: 'kitchen' })).toBeUndefined();
+    expect(parseFocus('nope')).toBeUndefined();
+  });
+
+  it('accepts {inboxPath} items up to 12 images, de-duplicated, mixed with legacy data URLs', () => {
+    const inbox = Array.from({ length: 12 }, (_, i) => ({ inboxPath: `u/user-1/p/proj-1/ref/r${i}.webp` }));
+    expect(parseStreamRequest({ kind: 'message', text: '', attachments: inbox })).toEqual({ kind: 'message', text: '', attachments: inbox });
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [...inbox, { inboxPath: 'u/user-1/p/proj-1/ref/r12.webp' }] })).toThrow('up to 12 images');
+    // 11 inbox + 2 legacy images = 13 images → refused; a duplicate path counts once.
+    const legacy = { name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AA' };
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [...inbox.slice(0, 11), legacy, legacy] })).toThrow('up to 12 images');
+    const dup = parseStreamRequest({ kind: 'message', text: 'x', attachments: [inbox[0], inbox[0], legacy] }) as { attachments: unknown[] };
+    expect(dup.attachments).toHaveLength(2);
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ inboxPath: '' }] })).toThrow('could not be read');
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ inboxPath: 'a\nb' }] })).toThrow('could not be read');
+    expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments: [{ inboxPath: 'x'.repeat(600) }] })).toThrow('could not be read');
+  });
+
+  it('validates attachment targets', () => {
+    const attachments = [{ inboxPath: 'u/user-1/p/proj-1/ref/a.webp' }, { inboxPath: 'u/user-1/p/proj-1/ref/b.webp' }];
+    expect(
+      parseStreamRequest({ kind: 'message', text: '', attachments, attachmentTargets: [{ kind: 'new_character', name: '  Biscuit  ', castKind: 'animal' }, { kind: 'character', id: 'c_maya' }] })
+    ).toMatchObject({ attachmentTargets: [{ kind: 'new_character', name: 'Biscuit', castKind: 'animal' }, { kind: 'character', id: 'c_maya' }] });
+    // All-null targets are dropped; an inbox "target" means "leave it".
+    expect(parseStreamRequest({ kind: 'message', text: 'x', attachments, attachmentTargets: [null, { kind: 'inbox' }] })).not.toHaveProperty('attachmentTargets');
+    for (const bad of [[{ kind: 'character' }], [{ kind: 'new_character', name: '   ' }], [{ kind: 'villain', id: 'x' }], 'x', Array.from({ length: 13 }, () => null)]) {
+      expect(() => parseStreamRequest({ kind: 'message', text: 'x', attachments, attachmentTargets: bad })).toThrow('photo assignment');
+    }
+  });
+});
+
+describe('caps (GET/POST projects)', () => {
+  it('GET and POST carry caps resolved from the plan, own key, admin role and ceiling', async () => {
+    const created = await (await api('/api/comic/projects', { user: 'user-1', body: { title: 'Caps' } })).json();
+    expect(created.caps).toMatchObject({ plan: 'free', qualityTiers: ['draft', 'standard'], modelOverride: false, maxPages: 40, proEditor: true, ratingCeiling: 'PG-13', admin: false });
+    plans.set('user-1', 'creator');
+    __resetAccessCacheForTests();
+    const res = await api(`/api/comic/projects/${created.projectId}`, { user: 'user-1' });
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect((await res.json()).caps).toMatchObject({ plan: 'paid', qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true, defaultMode: 'pro' });
+    const admin = await (await api('/api/comic/projects', { user: 'admin-1', body: {} })).json();
+    expect(admin.caps).toMatchObject({ plan: 'admin', admin: true });
+  });
+
+  it('a storybook starts with its free title and end plates; an unknown kind is ignored', async () => {
+    const storybook = await (await api('/api/comic/projects', { user: 'user-1', body: { title: 'Bedtime', kind: 'storybook' } })).json();
+    expect(storybook.doc.format.kind).toBe('storybook');
+    expect(storybook.doc.book).toMatchObject({ titlePage: true, endPage: true });
+    const plain = await (await api('/api/comic/projects', { user: 'user-1', body: { title: 'Plain', kind: 'hologram' } })).json();
+    expect(plain.doc.format.kind).not.toBe('hologram');
+    expect(plain.doc.book?.titlePage ?? false).toBe(false);
+  });
+
+  it('the stream context carries caps and the effective rating', async () => {
+    seed();
+    plans.set('user-1', 'studio');
+    llm.script.director = [{ text: 'Hi.' }];
+    await stream('proj-1', { kind: 'message', text: 'hello there' });
+    const ctx = vi.mocked(runDirectorTurn).mock.calls[0][0];
+    expect(ctx.caps).toMatchObject({ plan: 'paid', qualityTiers: ['draft', 'standard', 'pro'] });
+    expect(ctx.rating).toBe('PG-13');
+  });
+});
+
+describe('POST /projects/:id/urls', () => {
+  it('signs only servable paths of this doc; private paths get the 300 s TTL', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/p1.webp', source: 'generated', at: 1 } };
+    doc.pages[1].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/bad.webp', source: 'generated', at: 1, safety: BLOCKED, variants: [{ path: 'u/user-1/p/proj-1/img/bad_w480.webp', w: 480, h: 600 }] } as never };
+    doc.cast[0].refs = [ref('u/user-1/p/proj-1/ref/face.webp')];
+    seed(doc);
+    const res = await api('/api/comic/projects/proj-1/urls', {
+      user: 'user-1',
+      body: { paths: ['u/user-1/p/proj-1/img/p1.webp', 'u/user-1/p/proj-1/ref/face.webp', 'u/user-1/p/proj-1/img/bad.webp', 'u/user-1/p/proj-1/img/bad_w480.webp', 'u/other/secret.webp', 'u/other/p/x/ref/r.webp', 42] }
+    });
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(Object.keys((await res.json()).urls).sort()).toEqual(['u/user-1/p/proj-1/img/p1.webp', 'u/user-1/p/proj-1/ref/face.webp']);
+    const privateCall = assets.signed.findIndex((paths) => paths.includes('u/user-1/p/proj-1/ref/face.webp'));
+    expect(assets.signed[privateCall]).toEqual(['u/user-1/p/proj-1/ref/face.webp']);
+    expect(assets.signedTtl[privateCall]).toBe(300);
+    const publicCall = assets.signed.findIndex((paths) => paths.includes('u/user-1/p/proj-1/img/p1.webp'));
+    expect(assets.signedTtl[publicCall]).toBeUndefined();
+    expect((await api('/api/comic/projects/proj-1/urls', { user: 'user-1', body: {} })).status).toBe(400);
+  });
+
+  it('GET /projects/:id signs display paths only (no history) and never a blocked asset', async () => {
+    const doc = plannedDoc();
+    const old = { path: 'u/user-1/p/proj-1/img/old.webp', source: 'generated' as const, at: 1 };
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/p1.webp', source: 'generated', at: 2 }, history: [old] };
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/cover.webp', source: 'generated', at: 2, safety: BLOCKED } };
+    seed(doc);
+    const body = await (await api('/api/comic/projects/proj-1', { user: 'user-1' })).json();
+    expect(Object.keys(body.urls)).toEqual(['u/user-1/p/proj-1/img/p1.webp']);
+    expect([...blockedAssetPaths(doc)]).toEqual(['u/user-1/p/proj-1/img/cover.webp']);
+  });
+});
+
+describe('IDOR: every /projects/:id route needs the JWT owner', () => {
+  const routes: { name: string; method: 'GET' | 'POST'; path: string; body?: unknown }[] = [
+    { name: 'GET project', method: 'GET', path: '/api/comic/projects/proj-1' },
+    { name: 'cancel', method: 'POST', path: '/api/comic/projects/proj-1/cancel', body: {} },
+    { name: 'urls', method: 'POST', path: '/api/comic/projects/proj-1/urls', body: { paths: ['u/user-1/p/proj-1/img/p1.webp'] } },
+    { name: 'stream message', method: 'POST', path: '/api/comic/projects/proj-1/stream', body: { kind: 'message', text: 'rename it to Owned', userId: 'user-1' } },
+    { name: 'stream patch', method: 'POST', path: '/api/comic/projects/proj-1/stream', body: { kind: 'action', action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'Owned' } }] }, userId: 'user-1' } },
+    { name: 'stream spend', method: 'POST', path: '/api/comic/projects/proj-1/stream', body: { kind: 'action', action: { type: 'render_cover' } } },
+    { name: 'stream publish', method: 'POST', path: '/api/comic/projects/proj-1/stream', body: { kind: 'action', action: { type: 'unpublish' } } }
+  ];
+
+  it.each(routes)('$name: anonymous → 401, another user → the same 404 as a missing project, nothing changes', async ({ method, path, body }) => {
+    const doc = seed();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/p1.webp', source: 'generated', at: 1 } };
+    const init = { method, ...(body !== undefined ? { body } : {}) };
+    const anon = await api(path, init);
+    expect(anon.status).toBe(401);
+    const intruder = await api(path, { ...init, user: 'intruder' });
+    const missing = await api(path.replace('proj-1', 'proj-404'), { ...init, user: 'intruder' });
+    expect(intruder.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(await intruder.text()).toBe(await missing.text());
+    expect(llm.calls).toHaveLength(0);
+    expect(images.calls).toHaveLength(0);
+    expect(assets.signed).toHaveLength(0);
+    expect(store.saves).toHaveLength(0);
+    expect(store.docs.get('proj-1')!.doc.brief.title).toBe('Spice Run');
+    expect(peekStudioSession('proj-1')?.abort.signal.aborted ?? false).toBe(false);
+  });
+
+  it('the owner id comes from the token, never the body', async () => {
+    seed(plannedDoc(), 'victim');
+    const res = await stream('proj-1', { kind: 'action', action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'Pwned' } }] }, userId: 'victim', user: 'victim' }, 'attacker');
+    expect(res.res.status).toBe(404);
+    expect(store.docs.get('proj-1')!.doc.brief.title).toBe('Spice Run');
+  });
+});
+
+describe('refusals before anything is persisted', () => {
+  it('a cooldown refuses messages and spend with a COOLDOWN event; free edits still work', async () => {
+    seed();
+    cooldown = { until: Date.now() + 9 * 60_000 };
+    const image = { name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' };
+    const msg = await stream('proj-1', { kind: 'message', text: 'draw a dragon', attachments: [image] });
+    expect(msg.events.map((e) => e.type)).toEqual(['hello', 'error', 'done']);
+    expect(msg.events[1]).toMatchObject({ code: 'COOLDOWN', message: expect.stringContaining('9 min') });
+    const spend = await stream('proj-1', { kind: 'action', action: { type: 'render_cover' } });
+    expect(spend.events[1]).toMatchObject({ code: 'COOLDOWN' });
+    expect(llm.calls).toHaveLength(0);
+    expect(images.calls).toHaveLength(0);
+    expect(assets.files.size).toBe(0); // the upload was never stored
+    expect(store.docs.get('proj-1')!.doc.conversation).toEqual([]);
+    const edit = await stream('proj-1', { kind: 'action', action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'Still editable' } }] } });
+    expect(edit.events.map((e) => e.type)).toEqual(['hello', 'ops', 'done']);
+    // Each refusal left one structured log line with codes only — never the user's text.
+    const lines = refusals();
+    expect(lines.map((l) => l.code)).toEqual(['COOLDOWN', 'COOLDOWN']);
+    expect(lines[0]).toMatchObject({ projectId: 'proj-1', userId: 'user-1', stage: 'stream', kind: 'message' });
+    expect(lines[1]).toMatchObject({ kind: 'action', action: 'render_cover' });
+    expect(JSON.stringify(lines)).not.toContain('dragon');
+    // An expired cooldown no longer applies.
+    cooldown = { until: Date.now() - 1 };
+    llm.script.director = [{ text: 'Back.' }];
+    expect((await stream('proj-1', { kind: 'message', text: 'hi' })).events.some((e) => e.type === 'delta')).toBe(true);
+  });
+
+  it('a restricted account cannot spend, upload or publish, but can read, edit and chat', async () => {
+    const doc = seed();
+    doc.settings.confirm = 'never';
+    moderation = 'restricted';
+    const spend = await stream('proj-1', { kind: 'action', action: { type: 'render_cover' } });
+    expect(spend.events[1]).toMatchObject({ code: 'FORBIDDEN', message: RESTRICTED_SPEND_MESSAGE });
+    const gate = await stream('proj-1', { kind: 'action', action: { type: 'approve_gate', gateId: 'g1' } });
+    expect(gate.events[1]).toMatchObject({ code: 'FORBIDDEN' });
+    const publish = await stream('proj-1', { kind: 'action', action: { type: 'publish', request: { visibility: 'public' } } });
+    expect(publish.events[1]).toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('publishing is paused') });
+    const upload = await stream('proj-1', { kind: 'message', text: 'here', attachments: [{ name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }] });
+    expect(upload.events[1]).toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('uploads are paused') });
+    expect(assets.files.size).toBe(0);
+    expect(images.calls).toHaveLength(0);
+    expect(refusals().map((l) => l.code)).toEqual(['FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN', 'FORBIDDEN']);
+
+    const edit = await stream('proj-1', { kind: 'action', action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'Edited' } }] } });
+    expect(edit.events.map((e) => e.type)).toEqual(['hello', 'ops', 'done']);
+    expect((await api('/api/comic/projects/proj-1', { user: 'user-1' })).status).toBe(200);
+
+    // A chat turn runs, but the director's draw request can't reserve image spend.
+    llm.script.director = [
+      { toolCalls: [{ id: 't1', name: 'render_cover', arguments: '{}' }] },
+      { text: 'I tried the cover.' }
+    ];
+    const chat = await stream('proj-1', { kind: 'message', text: 'draw the cover now please' });
+    expect(chat.events[chat.events.length - 1].type).toBe('done');
+    expect(images.calls).toHaveLength(0);
+    expect(vi.mocked(runDirectorTurn).mock.calls[0][0]).toMatchObject({ spendBlocked: RESTRICTED_SPEND_MESSAGE });
+  });
+
+  it('pre-stream refusals (401, 400, 404, stale inbox path) are logged without user text', async () => {
+    seed();
+    expect((await stream('proj-1', { kind: 'message', text: 'secret plot' }, '')).res.status).toBe(401);
+    expect((await stream('proj-1', { kind: 'message', text: 'x'.repeat(60_001) })).res.status).toBe(400);
+    expect((await stream('proj-404', { kind: 'message', text: 'secret plot' })).res.status).toBe(404);
+    expect((await stream('proj-1', { kind: 'message', text: 'see', attachments: [{ inboxPath: 'u/user-1/p/proj-1/ref/not-in-inbox.webp' }] })).res.status).toBe(400);
+    const lines = refusals();
+    expect(lines.map((l) => [l.code, l.status, l.stage])).toEqual([
+      ['FORBIDDEN', 401, 'pre_stream'],
+      ['BAD_REQUEST', 400, 'pre_stream'],
+      ['NOT_FOUND', 404, 'pre_stream'],
+      ['BAD_REQUEST', 400, 'pre_stream']
+    ]);
+    expect(lines[2]).toMatchObject({ projectId: 'proj-404', userId: 'user-1', kind: 'message' });
+    expect(JSON.stringify(lines)).not.toContain('secret plot');
+    expect(JSON.stringify(lines)).not.toContain('not-in-inbox');
+    expect(store.docs.get('proj-1')!.doc.conversation).toEqual([]);
+  });
+
+  it('isCostlyRequest / restrictedRefusal classify requests', () => {
+    expect(isCostlyRequest({ kind: 'message', text: 'hi' })).toBe(true);
+    expect(isCostlyRequest({ kind: 'action', action: { type: 'patch', ops: [] } })).toBe(false);
+    expect(isCostlyRequest({ kind: 'action', action: { type: 'plan_pages' } })).toBe(true);
+    expect(isCostlyRequest({ kind: 'action', action: { type: 'relayout_balloons', pageId: 'p' } })).toBe(false);
+    expect(isCostlyRequest({ kind: 'action', action: { type: 'relayout_balloons', pageId: 'p', useVision: true } })).toBe(true);
+    expect(restrictedRefusal({ kind: 'message', text: 'hi', attachments: [{ inboxPath: 'u/x/p/y/ref/a.webp' }] })).toBeNull();
+    expect(restrictedRefusal({ kind: 'action', action: { type: 'unpublish' } })).toBeNull();
+    expect(restrictedRefusal({ kind: 'action', action: { type: 'translate', languages: ['te'] } })).toBe(RESTRICTED_SPEND_MESSAGE);
+  });
+});
+
+describe('message pipeline: screen → intent router → director', () => {
+  it('a blocked message gets the deterministic reply: hidden text, no model call, nothing of it kept', async () => {
+    seed();
+    screen = async () => ({ decision: 'block', categories: ['graphic_gore'], strike: 1, blockedAttachmentPaths: [] });
+    const long = 'GORY SCRIPT '.repeat(600);
+    const { events } = await stream('proj-1', { kind: 'message', text: long });
+    expect(events[events.length - 1].type).toBe('done');
+    expect(llm.calls).toHaveLength(0);
+    expect(runDirectorTurn).not.toHaveBeenCalled();
+    const doc = store.docs.get('proj-1')!.doc;
+    expect(doc.conversation[0]).toMatchObject({ role: 'user', text: HIDDEN_MESSAGE_TEXT });
+    expect(doc.conversation[0].id).toBe(blockedResponses[0]);
+    expect(doc.conversation[1]).toMatchObject({ role: 'assistant' });
+    expect(doc.conversation[1].text.length).toBeGreaterThan(0);
+    expect(doc.source.script).toBeUndefined();
+    expect(JSON.stringify(doc)).not.toContain('GORY');
+    const line = refusals().find((l) => l.code === 'CONTENT_POLICY');
+    expect(line).toMatchObject({ categories: ['graphic_gore'], strike: 1 });
+    expect(JSON.stringify(line)).not.toContain('GORY');
+  });
+
+  it('adapt passes the safety note to the director; blocked images are dropped from the turn', async () => {
+    const doc = plannedDoc();
+    doc.refInbox = [ref('u/user-1/p/proj-1/ref/ok.webp'), ref('u/user-1/p/proj-1/ref/bad.webp'), ref('u/user-1/p/proj-1/ref/keep.webp')];
+    seed(doc);
+    screen = async () => ({ decision: 'adapt', categories: ['violence'], note: 'SAFETY NOTE: keep it spooky, not gory.', strike: 0, blockedAttachmentPaths: ['u/user-1/p/proj-1/ref/bad.webp'] });
+    llm.script.director = [{ text: 'Spooky, not gory.' }];
+    await stream('proj-1', { kind: 'message', text: 'zombie ambush', attachments: [{ inboxPath: 'u/user-1/p/proj-1/ref/ok.webp' }, { inboxPath: 'u/user-1/p/proj-1/ref/bad.webp' }] });
+    const input = vi.mocked(runDirectorTurn).mock.calls[0][1];
+    expect(input.safetyNote).toBe('SAFETY NOTE: keep it spooky, not gory.');
+    expect(input.attachments.map((a) => a.path)).toEqual(['u/user-1/p/proj-1/ref/ok.webp']);
+    expect(input.text).toContain("One image was removed");
+    const saved = store.docs.get('proj-1')!.doc;
+    // Both sent images left the inbox; the untouched one stays.
+    expect((saved.refInbox || []).map((r) => r.path)).toEqual(['u/user-1/p/proj-1/ref/keep.webp']);
+  });
+
+  it('a crashing screen fails open for the owner turn (logged), never silently', async () => {
+    seed();
+    screen = async () => {
+      throw new Error('classifier down');
+    };
+    llm.script.director = [{ text: 'On it.' }];
+    const { events } = await stream('proj-1', { kind: 'message', text: 'hello' });
+    expect(events.some((e) => e.type === 'delta')).toBe(true);
+    expect(vi.mocked(console.warn).mock.calls.some((c) => String(c[0]).includes('comic_screen_failed_open'))).toBe(true);
+  });
+
+  it('the intent router answers read-only requests for $0 with no model call', async () => {
+    seed();
+    intent = (text) =>
+      /show me the pages/i.test(text)
+        ? { kind: 'show_pages', reply: '3 pages, 9 panels.', cards: [noticeCard('info', 'breakdown')], nextSteps: [] }
+        : null;
+    const { events } = await stream('proj-1', { kind: 'message', text: 'show me the pages' });
+    expect(events.map((e) => e.type)).toEqual(['hello', 'ops', 'done']);
+    expect(llm.calls).toHaveLength(0);
+    expect(runDirectorTurn).not.toHaveBeenCalled();
+    expect((events[2] as { spentUsd: number }).spentUsd).toBe(0);
+    const convo = store.docs.get('proj-1')!.doc.conversation;
+    expect(convo.map((m) => [m.role, m.text])).toEqual([
+      ['user', 'show me the pages'],
+      ['assistant', '3 pages, 9 panels.']
+    ]);
+    expect(convo[1].cards).toHaveLength(1);
+    expect(infoLines().some((l) => l.event === 'comic_intent_routed' && l.kind === 'show_pages')).toBe(true);
+    // Anything else goes to the director.
+    llm.script.director = [{ text: 'Sure.' }];
+    await stream('proj-1', { kind: 'message', text: 'make Maya taller' });
+    expect(runDirectorTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('the real intent hook makes no LLM call for "show me the pages"', async () => {
+    seed();
+    const { events } = await stream('proj-1', { kind: 'message', text: 'show me the pages' });
+    expect(events[events.length - 1].type).toBe('done');
+    expect(llm.calls).toHaveLength(0);
+    const convo = store.docs.get('proj-1')!.doc.conversation;
+    expect(convo[convo.length - 1].role).toBe('assistant');
+    expect(convo[convo.length - 1].text.length).toBeGreaterThan(0);
+  });
+
+  it('the intent router is skipped when images are attached', async () => {
+    const doc = plannedDoc();
+    doc.refInbox = [ref('u/user-1/p/proj-1/ref/a.webp')];
+    seed(doc);
+    intent = () => ({ kind: 'show_pages', reply: 'nope', cards: [], nextSteps: [] });
+    llm.script.director = [{ text: 'Nice photo.' }];
+    await stream('proj-1', { kind: 'message', text: 'show me the pages', attachments: [{ inboxPath: 'u/user-1/p/proj-1/ref/a.webp' }] });
+    expect(runDirectorTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('focus reaches the director', async () => {
+    seed();
+    llm.script.director = [{ text: 'Done.' }];
+    await stream('proj-1', { kind: 'message', text: 'make these balloons red', focus: { pageId: 'pg_1', lineIds: ['ln_1_2'], surface: 'page_editor' } });
+    expect(vi.mocked(runDirectorTurn).mock.calls[0][1].focus).toEqual({ pageId: 'pg_1', lineIds: ['ln_1_2'], surface: 'page_editor' });
+  });
+});
+
+describe('inbox attachments and quick-assign', () => {
+  it('takes images from the inbox into the message and assigns them to the cast', async () => {
+    const doc = plannedDoc();
+    doc.refInbox = [ref('u/user-1/p/proj-1/ref/dog.webp'), ref('u/user-1/p/proj-1/ref/maya.webp')];
+    seed(doc);
+    llm.script.director = [{ text: 'Got Biscuit and Maya.' }];
+    const { events } = await stream('proj-1', {
+      kind: 'message',
+      text: 'these are my characters',
+      attachments: [{ inboxPath: 'u/user-1/p/proj-1/ref/dog.webp' }, { inboxPath: 'u/user-1/p/proj-1/ref/maya.webp' }],
+      attachmentTargets: [{ kind: 'new_character', name: 'Biscuit', castKind: 'animal' }, { kind: 'character', id: 'c_maya' }]
+    });
+    expect(events[events.length - 1].type).toBe('done');
+    const saved = store.docs.get('proj-1')!.doc;
+    expect(saved.refInbox || []).toEqual([]);
+    const biscuit = saved.cast.find((c) => c.name === 'Biscuit')!;
+    expect(biscuit.kind).toBe('animal');
+    expect(biscuit.refs.map((r) => r.path)).toEqual(['u/user-1/p/proj-1/ref/dog.webp']);
+    expect(saved.cast.find((c) => c.id === 'c_maya')!.refs.map((r) => r.path)).toEqual(['u/user-1/p/proj-1/ref/maya.webp']);
+    const userMsg = saved.conversation.find((m) => m.role === 'user')!;
+    expect(userMsg.attachments!.map((a) => a.path)).toEqual(['u/user-1/p/proj-1/ref/dog.webp', 'u/user-1/p/proj-1/ref/maya.webp']);
+    expect(userMsg.text).toContain('[Photos assigned:');
+  });
+
+  it("a path that isn't in this project's inbox is a 400 and nothing is committed", async () => {
+    const doc = plannedDoc();
+    doc.refInbox = [ref('u/user-1/p/proj-1/ref/mine.webp')];
+    seed(doc);
+    const res = await stream('proj-1', { kind: 'message', text: 'x', attachments: [{ inboxPath: 'u/user-1/p/proj-1/ref/mine.webp' }, { inboxPath: 'u/victim/p/other/ref/theirs.webp' }] });
+    expect(res.res.status).toBe(400);
+    const saved = store.docs.get('proj-1')!.doc;
+    expect((saved.refInbox || []).map((r) => r.path)).toEqual(['u/user-1/p/proj-1/ref/mine.webp']);
+    expect(saved.conversation).toEqual([]);
+    expect(llm.calls).toHaveLength(0);
+  });
+});
+
+describe('allowance notices', () => {
+  it('commit an assistant message with text, never an empty bubble', async () => {
+    seed();
+    const local = express();
+    local.use(express.json());
+    local.use((req, _res, next) => {
+      req.user = { id: 'user-1' };
+      req.allowanceNotices = [{ level: 'warn', message: "You've used 80% of your monthly DreamStream allowance — resets Nov 1." }] as never;
+      next();
+    });
+    local.use('/api/comic', createComicRouter({
+      store,
+      assets,
+      contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling() }),
+      qualityAccess: async () => ({ ok: true }),
+      capsDeps: { billingEnabled: false, isAdminFor: async () => false, accountCeilingFor: async () => 'PG-13' },
+      requireActive: (_req, _res, next) => next(),
+      safety: { cooldownFor: async () => null, screenTurnInput: async () => ALLOW },
+      heartbeatMs: 20
+    }));
+    const srv = local.listen(0);
+    await new Promise<void>((r) => srv.once('listening', () => r()));
+    try {
+      const port = (srv.address() as AddressInfo).port;
+      const res = await fetch(`http://127.0.0.1:${port}/api/comic/projects/proj-1/stream`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'action', action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'T' } }] } })
+      });
+      await res.text();
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+    const convo = store.docs.get('proj-1')!.doc.conversation;
+    const last = convo[convo.length - 1];
+    expect(last).toMatchObject({ role: 'assistant', text: expect.stringContaining('80% of your monthly') });
+    expect(convo.every((m) => m.text.trim().length > 0)).toBe(true);
   });
 });

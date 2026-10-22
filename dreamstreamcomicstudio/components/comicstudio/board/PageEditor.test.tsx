@@ -2,7 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { DocOp } from '../../../shared/comic/ops';
-import { PageEditor, editActionFor, lineKindOps } from './PageEditor';
+import { PageEditor, editActionFor, fitPageToStage, lineKindOps } from './PageEditor';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 
 beforeEach(() => {
@@ -158,12 +158,15 @@ describe('PageEditor', () => {
     expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', id: 'pg_1_l5', patch: null }]);
   });
 
-  it('saves balloon moves as balloon ops', () => {
+  it('saves balloon moves as undoable balloon ops', () => {
     const { studio, container } = open();
-    const balloon = document.querySelector<HTMLElement>('[data-testid="balloon"][data-line-id="pg_1_l2"]')!;
+    const balloon = document.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l2"]')!;
     expect(container).toBeTruthy();
     fireEvent.keyDown(balloon, { key: 'ArrowUp' });
-    expect(studio.patch).toHaveBeenCalledWith([{ op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l2', patch: { x: 0.06, y: 0.495, pinned: true } }]);
+    expect(studio.patch).toHaveBeenCalledWith(
+      [{ op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l2', patch: { x: 0.06, y: 0.495, pinned: true } }],
+      { undo: true, label: 'Move balloon', coalesce: 'balloon:pg_1:pg_1_l2' }
+    );
   });
 
   it('restores a previous version', () => {
@@ -190,5 +193,72 @@ describe('PageEditor', () => {
     open('pg_1', makeSampleDoc((d) => (d.format.lettering = 'in_art')));
     expect(screen.queryByRole('button', { name: /Re-letter/ })).toBeNull();
     expect(screen.getByText(/any script change marks the page out of date/)).toBeInTheDocument();
+  });
+
+  it('lettering: selecting a balloon opens the Easy inspector (8 styles, 6 shapes, no Pro tabs) and mirrors the selection to the chat', () => {
+    const { studio } = open();
+    const hit = document.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l4"]')!;
+    fireEvent.pointerDown(hit, { clientX: 5, clientY: 5, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerUp(window, { clientX: 5, clientY: 5 });
+    const inspector = screen.getByTestId('lettering-inspector');
+    expect(within(inspector).getByRole('radiogroup', { name: 'Lettering style' }).querySelectorAll('[role="radio"]')).toHaveLength(8);
+    expect(within(inspector).getByRole('radiogroup', { name: 'Balloon type' }).querySelectorAll('[role="radio"]')).toHaveLength(6);
+    expect(within(inspector).queryByRole('tablist')).toBeNull();
+    expect(within(inspector).getByText('Free — done by the editor, no AI cost.')).toBeInTheDocument();
+    expect(studio.setSelection).toHaveBeenLastCalledWith({ pageId: 'pg_1', lineIds: ['pg_1_l4'], surface: 'page_editor', panelN: 3 });
+  });
+
+  it('lettering: an Easy colour pick is one free, undoable line_style op', () => {
+    const { studio } = open();
+    const hit = document.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l4"]')!;
+    fireEvent.focus(hit);
+    const inspector = screen.getByTestId('lettering-inspector');
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Bubble colour: #ffd84a' }));
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l4'], patch: { fill: '#ffd84a' } }], { undo: true, label: 'Bubble colour' });
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
+  it('lettering: Pro view shows the full inspector when the user picks it', () => {
+    const doc = makeSampleDoc();
+    const studio = makeStudio(doc, { focusedPageId: 'pg_1', mode: 'pro' });
+    render(<PageEditor studio={studio} doc={doc} pageId="pg_1" />);
+    fireEvent.focus(document.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l4"]')!);
+    const inspector = screen.getByTestId('lettering-inspector');
+    expect(within(inspector).getByRole('tablist', { name: 'Lettering controls' })).toBeInTheDocument();
+    fireEvent.click(within(inspector).getByRole('radio', { name: 'Easy' }));
+    expect(studio.setMode).toHaveBeenCalledWith('easy');
+  });
+
+  it('lettering: + Speech then a click on the page adds a line with its balloon and opens the inline editor', () => {
+    const { studio } = open();
+    fireEvent.click(screen.getByRole('button', { name: 'Add speech balloon' }));
+    const layer = document.querySelector<HTMLElement>('[data-testid="balloon-layer"]')!;
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 900, right: 600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.pointerDown(layer, { clientX: 300, clientY: 700, button: 0, pointerType: 'mouse' });
+    const [ops, opts] = (studio.patch as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+    expect(ops[0]).toMatchObject({ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', patch: { kind: 'speech', text: 'Hello!' } });
+    expect(ops[1]).toMatchObject({ op: 'balloon', pageId: 'pg_1', lineId: ops[0].id, patch: { pinned: true } });
+    expect(opts).toEqual({ undo: true, label: 'Add speech' });
+  });
+
+  it('lettering: ⌘Z / ⇧⌘Z undo and redo; arrows never turn the page while a balloon is selected', () => {
+    const doc = makeSampleDoc();
+    const studio = makeStudio(doc, { focusedPageId: 'pg_1', selection: { pageId: 'pg_1', lineIds: ['pg_1_l2'], surface: 'page_editor' } });
+    render(<PageEditor studio={studio} doc={doc} pageId="pg_1" />);
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true });
+    expect(studio.undo).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true, shiftKey: true });
+    expect(studio.redo).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    expect(studio.openPage).not.toHaveBeenCalled();
+  });
+
+  it('stage: sizes the page from its content box and can never widen its column (visualqa P0-2)', () => {
+    expect(fitPageToStage({ w: 590, h: 640 }, 1)).toBeLessThanOrEqual(590 - 48);
+    expect(fitPageToStage({ w: 1000, h: 500 }, 2 / 3, 0)).toBe(333);
+    expect(fitPageToStage({ w: 0, h: 500 }, 1)).toBeUndefined();
+    open();
+    expect(screen.getByTestId('editor-stage').className).toMatch(/\bmin-w-0\b/);
+    expect(screen.getByTestId('editor-stage').className).toMatch(/\blg:min-w-0\b/);
   });
 });

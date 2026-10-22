@@ -8,13 +8,33 @@
 // The director never sees or writes image prompts; the job runner compiles those from
 // the doc. See docs/features/comic-studio-v4.md §6.8.
 
-import { newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg } from '../../../shared/comic/doc.js';
-import { formatUsd, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
-import { effectiveRating } from '../../../shared/comic/safety.js';
+import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
+import type { StudioFocus } from '../../../shared/comic/events.js';
+import { aspectFromSize, aspectMatches, estimateJobs, formatUsd, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
 import { billedLlm, newTextSpendTracker, noticeCard, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
-import { buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
+import { isProviderRefusal, looksLikeRefusal } from './llm.js';
+import { carriedImages, refIntentHint } from './refs/index.js';
+import {
+  REFUSAL_REPLY,
+  composeTurnReply,
+  detectNamedIp,
+  drawIntentOf,
+  ipNoteFor,
+  openQuestionsLine,
+  recapLine,
+  reconcileReply,
+  refusalCard,
+  retryNextSteps,
+  runOutcome,
+  understandingChanges,
+  userTurnCount,
+  wantsRecap
+} from './replies.js';
+import { prefilterText } from './safety/index.js';
+import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { toolGroups } from './tools/index.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
@@ -27,33 +47,36 @@ export const HISTORY_WINDOW = 14;
 export const MEMORY_TRIGGER = 40;
 /** Fold at least this many new out-of-window messages at a time (one cheap call). */
 const MEMORY_MIN_BATCH = 10;
-const MAX_TURN_IMAGES = 4;
+/** Images shown to the director per turn (768 px previews; attachments first, then carried ones). */
+export const MAX_TURN_IMAGES = 8;
+const PREVIEW_EDGE = 768;
 const SUMMARY_CHAR_BUDGET = 12_000;
 const MEMORY_MARKER = /\n?⟦through:([A-Za-z0-9_-]+)⟧\s*$/;
 
-// ── System prompt (§6.8) ─────────────────────────────────────────────────────
+// ── System prompt (§6.8, director.md §3.11) ──────────────────────────────────
 
-export const DIRECTOR_SYSTEM_PROMPT = `You are the Comic Director of DreamStream's Comic Studio — a warm, decisive comics editor and art director. The user makes a comic just by talking to you. You keep a structured document (the doc) up to date with tools; every image the studio draws is compiled from the doc, so anything that is not in the doc is lost.
+export const DIRECTOR_SYSTEM_PROMPT = `You are the Comic Director of DreamStream's Comic Studio — a warm, decisive comics editor and art director. The user makes a comic just by talking to you. You keep a structured document (the doc) up to date with tools; every image is compiled from the doc, so anything not in the doc is lost.
 
 RULES
-1. Capture first. Every concrete idea the user states goes into the doc in the same turn, through tools: brief (title, logline, premise, genre, tone, audience, setting), notes, cast (with every look detail they gave), places, format and style. Never ask for something the user already said. Give every character you create a drawable look.summary; where the user gave no details, choose sensible ones that fit the story and mention that they can be changed.
-2. One question at a time, always through ask_user with 2–5 tappable options. Put a sensible default first instead of interrogating. When a reasonable default exists, pick it, say so in a few words, and keep moving.
-3. Default forward motion: idea → style → character sheets → page plan → draw pages → cover. Every reply moves one step forward or offers the next step.
-4. Plan before pixels. Never draw pages before the user has seen the page plan (plan_pages), unless they explicitly ask to skip it. Plan changes go through revise_pages or edit_panel_text — they cost nothing in images.
-5. Money. The spend tools (propose_styles, render_character_sheets, render_pages, edit_page, render_cover) may answer "Waiting for the user to approve ~$X" — then tell the user the estimate in one line and stop; the approve button is already on screen. You cannot approve spending yourself — if the user says "yes" to a waiting approval, ask them to tap Approve on the card. Never claim something was drawn, saved or changed unless a tool result says it was. Drawing runs in the background: say it is on its way, not that it is done.
-6. Brevity. Replies of at most 80 words unless the user asks for depth. Plain sentences — no markdown headings, no lists of everything you saved. Mention what matters in one line.
+1. Capture first. Every concrete idea goes into the doc this turn through tools: brief, notes, cast (every look detail given), places, format, style. Never ask for what the user already said. Recurring animals, pets, sea creatures, toys, LEGO-style figures, vehicles, robots and key props are CAST too: upsert_character with kind (and count for a group). Vague group ("other animals")? Pick 2–3 that fit (lake + toddlers → three Ducklings, a Frog, a Bunny), name them, and let the user change them. Give everyone a drawable look.summary.
+2. Understand out loud. On early turns open with one line of what you understood ("Got it — a one-page watercolor storybook for toddlers: the baby by a lake with three ducklings, a frog and a bunny.").
+3. One question at a time (ask_user, 2–5 options, default first), only when something material is open (OPEN QUESTIONS). Put the price in options that spend.
+4. Plan before pixels: idea → style → plan_pages → pages → cover. Draw only after the user saw the plan, never in the turn you planned it (unless they said to skip review).
+5. FREE first. FREE tools cost nothing: use them for every edit they can do (text, line kinds, fonts, colors, balloons, page order, versions). When FREE or PAID could do it, do the FREE one and offer the PAID one with its price. Lettering is never fixed with a redraw.
+6. Money. Never call a PAID tool on a question, complaint or feedback — ask which fix, with prices. "Draw everything" = render_pages without pages (+ include_cover); it only draws what is missing and costs $0 when nothing is. redraw:true only when the user asked for another take. A spend may answer "Waiting for the user to approve ~$X": say the estimate in one line and stop — you cannot approve for them. Never claim something was drawn, saved, published or shared unless a tool result says so; drawing runs in the background ("on its way").
+7. Named characters and brands (Shin-chan, Baahubali, LEGO, Disney, Marvel…): warmly make an original homage — new name, distinct design, same spirit — say so once; never refuse silently.
+8. Brevity: at most 80 words, plain sentences, no headings or lists. Always at least one sentence, in the SAME message as your tool calls.
 
 HOW TO USE TOOLS
-- Call the tools first, then write your reply once, at the end. Do not narrate tool calls ("Let me save that…").
-- Several independent facts → several tool calls in the same round.
-- Use the ids from the DOC SUMMARY when you have them; names work too.
-- If a tool answers "Error: …", fix the arguments and try once more, or tell the user plainly what went wrong.
+- Write your reply in the same message as your tool calls; never send tool calls without a sentence.
+- Several independent facts → several calls in one round. Use ids from the DOC SUMMARY; names work too.
+- "Error: …" → fix the arguments once, or tell the user plainly what went wrong.
 - After ask_user, end your turn.
-- A long pasted script or story: if the message says it was already saved as the source script, call save_source with no arguments to read it; otherwise call save_source with useMessage:true. It extracts the brief, cast and places. Then offer the next step.
-- To change a page's dialogue, read it first with read_pages, then edit_panel_text. To change a drawn page's art, use edit_page; to change its script, revise_pages.
+- A long pasted script: save_source (no arguments if the message says it was already saved, else useMessage:true), then offer the next step.
+- Dialogue: read_pages, then edit_panel_text or set_line. A drawn page's art: edit_page; its script: revise_pages.
 
 ATTACHMENTS
-Images attached to the user's message are numbered "Attached image 1, 2, …" and you can see them. They are references: a person or drawing for a character (upsert_character with attachmentRefs), a look to follow (set_style with attachmentRefs), or a location (upsert_place with attachmentRefs). Do what the user says they are for; if that is unclear, ask with ask_user (for example "Is this Maya, or a style to follow?"). Also write what you see (face, hair, build, outfit, colors) into the look fields, so the identity holds even where the photo is not used.
+Images are numbered "Attached image 1, 2, …" (earlier unassigned images continue the numbering) and you can see them. Do what the user says they are for: a person or drawing for a character (upsert_character attachmentRefs — keep every photo of them), a look to follow (set_style), or a location (upsert_place). If unclear, ask ("Is this Maya, or a style to follow?"). Also write what you see into the look fields.
 
 The DOC SUMMARY below is the current truth — older messages may be out of date. Reply in the user's language.`;
 
@@ -67,11 +90,37 @@ const upper = (s?: string) => (s || '').trim().toUpperCase() || 'UNNAMED';
 
 const renderWord = (status: string, stale = false) => (stale ? 'out of date' : status === 'none' ? 'not drawn' : status);
 
+/** Non-person cast reads "animal ×3" in the summary (people stay as before). */
+const castKindTag = (c: ComicDoc['cast'][number]): string => {
+  const kind = castKindOf(c);
+  const count = c.count && c.count > 1 ? ` ×${c.count}` : '';
+  return kind === 'person' ? count : `, ${kind}${count}`;
+};
+
+const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
+  if (!focus) return '';
+  const page = focus.pageId ? doc.pages.find((p) => p.id === focus.pageId) : undefined;
+  const parts: string[] = [];
+  if (page) parts.push(`page ${page.n}${focus.panelN ? `, panel ${focus.panelN}` : ''}`);
+  const selected = (focus.lineIds || []).slice(0, 6).flatMap((id) => {
+    for (const p of doc.pages) for (const panel of p.panels) for (const l of panel.lines) if (l.id === id) return [`p${p.n} panel ${panel.n}: “${clip(l.text, 40)}” (${l.kind})`];
+    return [];
+  });
+  if (selected.length) parts.push(`selected balloons — ${selected.join('; ')}`);
+  return parts.length ? `Focus: the user is looking at ${parts.join('; ')}` : '';
+};
+
 /**
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
+ * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected.
  */
-export function summarizeDocForDirector(doc: ComicDoc, byok = false, extraLines: readonly string[] = []): string {
+export function summarizeDocForDirector(
+  doc: ComicDoc,
+  byok = false,
+  extraLines: readonly string[] = [],
+  opts: { userText?: string; focus?: StudioFocus } = {}
+): string {
   const b = doc.brief;
   const f = doc.format;
   const lines: string[] = [`DOC SUMMARY (rev ${doc.rev})`];
@@ -99,7 +148,7 @@ export function summarizeDocForDirector(doc: ComicDoc, byok = false, extraLines:
     lines.push(`Cast (${doc.cast.length}):`);
     for (const c of doc.cast.slice(0, 24)) {
       lines.push(
-        `- ${upper(c.name)} [${c.id}] ${c.tier}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; sheet ${renderWord(c.sheet.status)}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
+        `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${c.tier === 'extra' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
       );
     }
     if (doc.cast.length > 24) lines.push(`- …and ${doc.cast.length - 24} more`);
@@ -113,21 +162,30 @@ export function summarizeDocForDirector(doc: ComicDoc, byok = false, extraLines:
   if (doc.pages.length) {
     lines.push(`Plan: ${doc.planStatus} — ${doc.pages.length} page(s), ${totalPanels(doc)} panels`);
     for (const p of [...doc.pages].sort((a, b) => a.n - b.n).slice(0, 40)) {
-      lines.push(`- p${p.n} [${renderWord(p.render.status, isPageStale(doc, p))}${p.render.qc ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}] ${clip(p.summary, 110)} (${p.panels.length} panels)`);
+      const a = p.render.status === 'ready' ? p.render.asset : undefined;
+      const shape = a && !aspectMatches(f.pageAspect, a.w, a.h) && a.w && a.h ? `, drawn ${aspectFromSize(a.w, a.h)}` : '';
+      lines.push(`- p${p.n} [${renderWord(p.render.status, isPageStale(doc, p))}${shape}${p.render.qc ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}] ${clip(p.summary, 110)} (${p.panels.length} panels)`);
     }
   } else {
     lines.push('Plan: none yet');
   }
-  lines.push(`Cover: ${renderWord(doc.cover.render.status)}${doc.cover.title ? ` (title “${clip(doc.cover.title, 80)}”)` : ''}`);
+  lines.push(
+    `Cover: ${renderWord(doc.cover.render.status)}${doc.cover.title ? ` (title “${clip(doc.cover.title, 80)}”)` : ''}${(doc.cover.lettering ?? 'in_art') === 'overlay' ? ', title lettered on top (free edits)' : ''}`
+  );
   for (const extra of extraLines) if (extra) lines.push(clip(extra, 400));
+  const focus = focusLine(doc, opts.focus);
+  if (focus) lines.push(focus);
 
   const set = doc.settings;
   const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
+  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
   lines.push(
-    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ≈ ${formatUsd(tierPagePrice(set.quality, byok))}/page); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${formatUsd(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? formatUsd(set.budgetUsd) : 'none'}`
+    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ≈ ${formatUsd(tierPagePrice(set.quality, byok))}/page, cover ≈ ${formatUsd(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${formatUsd(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? formatUsd(set.budgetUsd) : 'none'}`
   );
   lines.push(`Spend so far: ${formatUsd(doc.spend.totalUsd)}`);
   if (doc.gate?.status === 'open') lines.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ≈ ${formatUsd(doc.gate.estimateUsd)} (${doc.gate.reason})`);
+  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
+  if (open) lines.push(open);
   const out = lines.join('\n');
   return out.length <= SUMMARY_CHAR_BUDGET ? out : `${out.slice(0, SUMMARY_CHAR_BUDGET - 1)}…`;
 }
@@ -199,6 +257,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   revise_pages: 'Rewriting pages',
   read_pages: 'Reading the plan',
   edit_panel_text: 'Editing dialogue',
+  set_line: 'Editing a line',
   render_pages: 'Preparing pages',
   edit_page: 'Preparing the edit',
   render_cover: 'Preparing the cover',
@@ -223,46 +282,116 @@ const parseArgs = (raw: string | undefined): { args: Record<string, unknown>; ma
   }
 };
 
-const firstSentence = (s: string) => (s.match(/^[^.!?]*[.!?]/)?.[0] || s).trim();
-
-async function loadTurnImages(ctx: StudioContext, attachments: AssetRef[]): Promise<MessagePart[]> {
+/** Show up to MAX_TURN_IMAGES images as ≤ 768 px previews (attachments, then carried unassigned images). */
+async function loadTurnImages(ctx: StudioContext, images: RefAsset[], attachedCount: number): Promise<MessagePart[]> {
   const parts: MessagePart[] = [];
-  for (const [i, a] of attachments.slice(0, MAX_TURN_IMAGES).entries()) {
+  for (const [i, a] of images.slice(0, MAX_TURN_IMAGES).entries()) {
+    const label = i < attachedCount ? `Attached image ${i + 1}:` : `Attached image ${i + 1} (from an earlier message, not assigned yet):`;
     try {
-      const url = await ctx.assets.loadDataUrl(a.path);
-      parts.push({ type: 'text', text: `Attached image ${i + 1}:` });
+      let url: string;
+      try {
+        url = await ctx.assets.previewDataUrl(a.path, PREVIEW_EDGE);
+      } catch {
+        url = await ctx.assets.loadDataUrl(a.path);
+      }
+      parts.push({ type: 'text', text: label });
       parts.push({ type: 'image_url', image_url: { url } });
     } catch (err) {
-      parts.push({ type: 'text', text: `Attached image ${i + 1}: (could not be loaded)` });
+      parts.push({ type: 'text', text: `${label.slice(0, -1)} (could not be loaded)` });
       logger.warn('comic_director_image_load_failed', { projectId: ctx.projectId, path: a.path, message: (err as Error)?.message });
     }
   }
   return parts;
 }
 
+/** Trademarked names to steer to an homage this turn (prefilter seam ∪ the built-in list), minus ones already explained. */
+const ipToSteer = (doc: ComicDoc, text: string, rating: ContentRating): string[] => {
+  let fromFilter: string[] = [];
+  try {
+    fromFilter = prefilterText(text, rating).ip || [];
+  } catch {
+    fromFilter = [];
+  }
+  const noted = new Set((doc.safety?.ipNoted || []).map((n) => n.toLowerCase()));
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const n of [...detectNamedIp(text), ...fromFilter]) {
+    const key = typeof n === 'string' ? n.trim().toLowerCase() : '';
+    if (!key || seen.has(key) || noted.has(key)) continue;
+    seen.add(key);
+    names.push(n.trim());
+  }
+  return names.slice(0, 4);
+};
+
+/** The model's own words, opened with the recap on the first turns when it gave none (never a duplicate). */
+const withEarlyRecap = (text: string, before: ComicDoc, after: ComicDoc, userText: string): string => {
+  if (!text || userTurnCount(after) > 2 || understandingChanges(before, after) < 2) return text;
+  // The recap phrases are English: never prepend them to a reply in another language.
+  if (!/^en\b/i.test(after.format.language || 'en') || /[^\p{Script=Latin}\p{N}\p{P}\p{S}\s]/u.test(`${userText} ${text}`)) return text;
+  if (/^(got it|love it|here'?s what|so[,:—-]|ok(?:ay)?[,!.—-]|great[,!.—-]|perfect[,!.—-])/i.test(text.trim())) return text;
+  const lower = text.toLowerCase();
+  if (after.cast.some((c) => c.name.trim().length > 2 && lower.includes(c.name.trim().toLowerCase()))) return text;
+  if ((text.match(/\S+/g) || []).length > 40) return text;
+  const recap = recapLine(after);
+  return recap ? `Got it — ${recap}. ${text}` : text;
+};
+
+export interface DirectorTurnInput {
+  text: string;
+  attachments: AssetRef[];
+  sourceSaved?: boolean;
+  /** What the user is looking at / has selected (page editor, balloons). */
+  focus?: StudioFocus;
+  /** SAFETY/IP NOTE from screenTurnInput (adapt decisions), appended to the user turn. */
+  safetyNote?: string;
+}
+
 /**
  * Run one director turn for a user message. Never throws for model/tool failures — they
- * become an honest notice in the conversation; only cancellation ends it quietly.
+ * become an honest notice in the conversation; only cancellation ends it quietly. Never
+ * silent: when the model writes nothing, composeTurnReply says what the turn actually did,
+ * and a reply is re-checked against the renders this turn started before it is committed.
  */
-export async function runDirectorTurn(ctx: StudioContext, input: { text: string; attachments: AssetRef[]; sourceSaved?: boolean }): Promise<void> {
+export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInput): Promise<void> {
   const session = ctx.session;
+  const startedAt = Date.now();
   const userText = (input.text || '').trim();
   const attachments = (input.attachments || []).filter((a) => a?.path);
   const userMsg: Msg = {
     id: newId('msg'),
     role: 'user',
     text: userText,
-    at: Date.now(),
+    at: startedAt,
     ...(attachments.length ? { attachments } : {})
   };
   session.commit([{ op: 'message', msg: userMsg }]);
 
+  const before = session.doc;
   const msgId = newId('msg');
+  let carried: RefAsset[] = [];
+  try {
+    carried = carriedImages(before, attachments).filter((r) => r?.path && !attachments.some((a) => a.path === r.path));
+  } catch (err) {
+    logger.warn('comic_director_carry_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+  }
+  const images: RefAsset[] = [...attachments, ...carried];
+  const rating = ctx.rating ?? effectiveRating(before, ctx.caps?.ratingCeiling).rating;
+  // The safety screen may already carry an IP NOTE (P1-SAFETY); never say it twice.
+  const ipNames = /\bIP NOTE\b/.test(input.safetyNote || '') ? [] : ipToSteer(before, userText, rating);
   const turn: DirectorTurn = createDirectorTurn({
     attachments,
     userText,
     sourceSaved: !!input.sourceSaved,
-    rating: ctx.rating ?? effectiveRating(session.doc, ctx.caps?.ratingCeiling).rating
+    rating,
+    drawIntent: drawIntentOf(userText),
+    images,
+    ...(input.focus ? { focus: input.focus } : {}),
+    ...(input.safetyNote ? { safetyNote: input.safetyNote } : {}),
+    startedAt,
+    runs: [],
+    bgErrors: [],
+    ipNames
   });
   // Core tools + the feature groups active this turn (contract §12.1).
   const toolset = buildTurnToolset(ctx, turn, toolGroups());
@@ -270,25 +399,54 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
   const toolByName = new Map(tools.map((t) => [t.spec.function.name, t]));
   const tracker = newTextSpendTracker();
   const llm = billedLlm(ctx, { stage: 'chat', operation: 'comic.text.director', tracker });
+  const byok = spendIsByok(ctx.keys);
 
   const doc = session.doc;
   const { summary: memory } = parseMemory(doc.memory);
   const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
-  const system = [prompt, summarizeDocForDirector(doc, spendIsByok(ctx.keys), toolset.summaryLines), memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : '']
+  const system = [
+    prompt,
+    summarizeDocForDirector(doc, byok, toolset.summaryLines, { userText, focus: input.focus }),
+    memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : ''
+  ]
     .filter(Boolean)
     .join('\n\n');
   const history = conversationForDirector(doc.conversation.filter((m) => m.id !== userMsg.id), HISTORY_WINDOW - 1);
-  const images = await loadTurnImages(ctx, attachments);
+  const imageParts = await loadTurnImages(ctx, images, attachments.length);
+  let hint: string | undefined;
+  try {
+    hint = images.length ? refIntentHint(userText, images.length) : undefined;
+  } catch {
+    hint = undefined;
+  }
+  const notes = [
+    input.safetyNote ? input.safetyNote.trim() : '',
+    ipNames.length ? ipNoteFor(ipNames) : '',
+    hint ? `REF HINT: ${hint}` : ''
+  ].filter(Boolean);
   const currentText =
     (userText || (attachments.length ? '(The user sent images without a message.)' : '')) +
-    (attachments.length > MAX_TURN_IMAGES ? `\n(${attachments.length} images attached; the first ${MAX_TURN_IMAGES} are shown.)` : '');
+    (images.length > MAX_TURN_IMAGES ? `\n(${images.length} images available; the first ${MAX_TURN_IMAGES} are shown.)` : '') +
+    (notes.length ? `\n\n${notes.join('\n')}` : '');
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     ...history,
-    { role: 'user', content: images.length ? [{ type: 'text', text: currentText }, ...images] : currentText }
+    { role: 'user', content: imageParts.length ? [{ type: 'text', text: currentText }, ...imageParts] : currentText }
   ];
   // Providers need the conversation to open with a user turn after the system prompt.
   if (messages[1]?.role !== 'user') messages.splice(1, 0, { role: 'user', content: '(continuing)' });
+
+  // Watch what this turn sets in motion: queued render targets and background error notices,
+  // so the committed reply can be checked against what actually happened (honest outcomes).
+  const unwatch = session.subscribe((e) => {
+    if (e.type !== 'ops') return;
+    for (const op of e.ops) {
+      if (op.op === 'render' && op.patch?.status === 'queued') turn.runs!.push(op.target);
+      else if (op.op === 'message' && op.msg.role === 'assistant' && op.msg.id !== msgId) {
+        for (const card of op.msg.cards || []) if (card.type === 'notice' && card.tone === 'error' && card.text) turn.bgErrors!.push(card.text);
+      }
+    }
+  });
 
   const spoken: string[] = [];
   let streamedChars = 0;
@@ -299,7 +457,6 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
     session.emit({ type: 'delta', msgId, text: t });
   };
 
-  let lastToolResult = '';
   let failure: StudioError | null = null;
   let cancelled = false;
   try {
@@ -348,7 +505,7 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
         else {
           const actId = newId('act');
           const label = TOOL_ACTIVITY[call.name] ?? toolset.activity[call.name];
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start' });
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: tool.cost === 'paid' ? 'image' : tool.cost });
           let committed = 0;
           const unsubscribe = session.subscribe((e) => {
             if (e.type === 'ops') committed += e.ops.length;
@@ -358,10 +515,11 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
           } finally {
             unsubscribe();
           }
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok: !output.startsWith('Error') });
-          turn.log.push({ tool: call.name, ok: !output.startsWith('Error'), cost: tool.cost, result: output.slice(0, 400), ops: committed });
+          const ok = !/^(Error|Refused)\b/.test(output);
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok });
+          turn.log.push({ tool: call.name, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
-        if (!output.startsWith('Error')) lastToolResult = output;
+        if (!tool || malformed) turn.log.push({ tool: call.name, ok: false, cost: tool?.cost ?? 'free', result: output.slice(0, 400), ops: 0 });
         messages.push({ role: 'tool', tool_call_id: call.id, content: output.slice(0, 16_000) });
       }
       if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
@@ -375,27 +533,59 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
       failure = error;
       logger.warn('comic_director_turn_failed', { projectId: ctx.projectId, code: error.code, message: (err as Error)?.message });
     }
+  } finally {
+    unwatch();
   }
 
+  const after = session.doc;
   let text = spoken.join('\n\n').trim();
   const cards = [...turn.cards];
+  // A provider refusal of the director turn (or a written refusal with no tool work) gets the
+  // deterministic, warm redirect — never an error wall, never a strike (providers over-block horror).
+  const refused = !cancelled && ((failure && isProviderRefusal(failure)) || (!failure && !turn.log.length && looksLikeRefusal(text)));
+  if (refused) {
+    if (failure) logger.info('comic_director_provider_refusal', { projectId: ctx.projectId, code: failure.code });
+    failure = null;
+    text = REFUSAL_REPLY;
+    cards.push(refusalCard(newId('card'), () => newId('opt')));
+  }
   if (failure) cards.push(noticeCard('error', failure.userMessage));
-  if (!text && !failure && !cancelled) {
-    text = turn.askedUser ? '' : lastToolResult ? firstSentence(lastToolResult) : "Sorry — I didn't catch that. Could you say it another way?";
+  if (!cancelled && !refused) {
+    if (text) text = reconcileReply(withEarlyRecap(text, before, after, userText), { after, turn });
+    else if (failure) {
+      text =
+        turn.outcome === 'started'
+          ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
+          : "Sorry — I couldn't finish that just now. Try again in a moment.";
+    } else text = composeTurnReply({ before, after, turn, userText });
   }
   if (cancelled && !text && !cards.length) {
     recordTextSpend(ctx, tracker, 'chat', 'Director');
     return;
   }
+  if (cancelled && !text) text = 'Stopped.';
+  // Early turns: a live recap card of what the studio understood (director.md §3.2).
+  if (!cancelled && !failure && !refused && wantsRecap(before, after)) cards.unshift({ type: 'recap', id: newId('card') } as Card);
+  // Honest retry chips for renders this turn started that already failed.
+  const run = runOutcome(after, turn);
+  if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));
+  if (failure && userText) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
   const final: Msg = {
     id: msgId,
     role: 'assistant',
     text: cancelled && text ? `${text} (stopped)` : text,
     at: Date.now(),
     ...(cards.length ? { cards } : {}),
-    ...(!cancelled && !failure ? { suggestions: suggestNextSteps(session.doc) } : {})
+    ...(!cancelled && !failure ? { suggestions: suggestNextSteps(after) } : {}),
+    ...(!cancelled && turn.nextSteps.length ? { nextSteps: turn.nextSteps } : {})
   };
-  session.commit([{ op: 'message', msg: final }]);
+  const ops = [{ op: 'message' as const, msg: final }];
+  session.commit(ops);
+  // Say the IP note once per name (doc.safety.ipNoted, server-only).
+  if (!cancelled && ipNames.length) {
+    const noted = [...new Set([...(after.safety?.ipNoted || []), ...ipNames])].slice(-40);
+    session.commit([{ op: 'safety', patch: { ipNoted: noted } }]);
+  }
   recordTextSpend(ctx, tracker, 'chat', 'Director');
 
   if (!cancelled) await maybeFoldMemory(ctx).catch(() => undefined);

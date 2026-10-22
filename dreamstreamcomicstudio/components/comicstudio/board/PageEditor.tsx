@@ -6,8 +6,16 @@
 // this page, with its price), re-render / re-letter, the vision QC report, every saved
 // version (restore any), and the script itself — panel actions and lines (text, speaker,
 // kind; add/remove) edited in place. ←/→ move between pages; Esc closes.
+//
+// Lettering (overlay comics) is edited right on the page, for free: a toolbar adds Speech /
+// Thought / Caption / SFX balloons, undo/redo, Tidy and Fix edges; selecting balloon(s) opens the
+// lettering inspector (Easy or Pro view of the same capability — fonts, sizes, colours, bubble
+// shapes, fill opacity / transparent, borders, tails, arrange, apply-to-all) beside the selection;
+// double-click edits text in place. The selection is mirrored to the chat as its focus.
+// The stage sizes the page from its CONTENT box and can never widen its column (min-w-0), so the
+// tools panel is never pushed off-screen (visualqa P0-2).
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -52,8 +60,38 @@ import {
 } from './boardModel';
 import { panelBoxesFor, panelForRegion, regionFromPoints, toPagePoint, type Point } from './pageLayout';
 import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, cx, useClickGuard, useElementSize, useFocusTrap } from './ui';
+import type { PatchOptions } from '../types';
+import type { StudioMode } from '../../../shared/comic/capabilities';
+import { LetteringInspector, type Rect } from '../lettering/LetteringInspector';
+import { LetteringToolbar } from '../lettering/LetteringToolbar';
+import { PresetGallery } from '../lettering/PresetGallery';
+import { useLetterPlans } from '../lettering/useLetterPlans';
+import { useLetteringSelection } from '../lettering/useLetteringSelection';
+import { addLineAtOps, fixSafeAreaOps, outlineFractions, presetOps, tidyOps } from '../lettering/styleOps';
+import { useFormFactor } from '../mobile/useFormFactor';
 
 type Mode = 'move' | 'markup';
+
+/**
+ * The page's on-screen width inside a stage (both dimensions fit; never wider than the stage).
+ * `pad` is the stage padding per side (0 when measuring the content box directly).
+ */
+export const fitPageToStage = (stage: { w: number; h: number }, aspect: number, pad = 24): number | undefined => {
+  const w = Math.max(0, stage.w - pad * 2);
+  const h = Math.max(0, stage.h - pad * 2);
+  if (!w || !h || !(aspect > 0)) return undefined;
+  return Math.floor(Math.min(w, h * aspect));
+};
+
+/** Default text for a balloon added from the toolbar (selected in the inline editor, so typing replaces it). */
+const NEW_LINE_TEXT: Record<LineKind, string> = {
+  speech: 'Hello!',
+  thought: 'Hmm…',
+  whisper: 'Psst…',
+  shout: 'Hey!',
+  caption: 'Meanwhile…',
+  sfx: 'POW!'
+};
 
 /** The edit_page action for an instruction (+ optional marked region / panel). */
 export const editActionFor = (pageId: string, instruction: string, region?: Box | null, panelN?: number): StudioAction => ({
@@ -81,6 +119,26 @@ const isEditableTarget = (el: EventTarget | null) => {
 
 const SELECT_CLS =
   'h-7 min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-1.5 text-[12px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none disabled:opacity-50';
+
+/** Any per-line, per-kind, per-speaker or base lettering overrides in the comic? */
+const hasLetteringOverrides = (doc: ComicDoc): boolean =>
+  !!(doc.letterStyle?.base || doc.letterStyle?.kinds || doc.letterStyle?.speakers) || doc.pages.some((p) => p.panels.some((pn) => pn.lines.some((l) => l.style)));
+
+/** "Reset all balloon styles": back to the chosen preset everywhere (one undoable batch). */
+const resetAllLetteringOps = (doc: ComicDoc): DocOp[] => {
+  const ops: DocOp[] = [];
+  const ls = doc.letterStyle;
+  if (ls?.base || ls?.kinds || ls?.speakers) {
+    const kinds = ls.kinds ? Object.fromEntries(Object.keys(ls.kinds).map((k) => [k, null])) : undefined;
+    const speakers = ls.speakers ? Object.fromEntries(Object.keys(ls.speakers).map((k) => [k, null])) : undefined;
+    ops.push({ op: 'letter_style', patch: { ...(ls.base ? { base: null } : {}), ...(kinds ? { kinds } : {}), ...(speakers ? { speakers } : {}) } });
+  }
+  for (const page of doc.pages) {
+    const ids = page.panels.flatMap((p) => p.lines.filter((l) => l.style).map((l) => l.id));
+    for (let i = 0; i < ids.length; i += 80) ops.push({ op: 'line_style', pageId: page.id, lineIds: ids.slice(i, i + 80), patch: null });
+  }
+  return ops;
+};
 
 // ── Mark-up layer ────────────────────────────────────────────────────────────
 
@@ -328,9 +386,13 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
   const [region, setRegion] = useState<Box | null>(null);
   const [instruction, setInstruction] = useState('');
   const [panelN, setPanelN] = useState<number | undefined>(undefined);
-  const [selectedLine, setSelectedLine] = useState<string | null>(null);
   const [lettering, setLettering] = useState(true);
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
+  const pageBoxRef = useRef<HTMLDivElement>(null);
+  const [addKind, setAddKind] = useState<LineKind | null>(null);
+  const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [inspectorClosed, setInspectorClosed] = useState(false);
+  const form = useFormFactor();
   const { busyKey, fire } = useClickGuard(2500);
   const byok = byokFromDoc(doc);
   const status = pageVisualStatus(doc, page);
@@ -345,17 +407,97 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
   const renderPrice = estimateDraw(doc, pagesForIds(doc, [page.id]), byok).estimate.usd;
   const spec = jobModel(doc, 'page');
 
-  // Fit the page inside the stage (both dimensions). Phones get a tighter frame so the page is as big as it can be.
-  const pad = stage.width > 0 && stage.width < 640 ? 12 : 24;
-  const availW = Math.max(0, stage.width - pad * 2);
-  const availH = Math.max(0, stage.height - pad * 2);
-  const pageWidth = availW && availH ? Math.min(availW, availH * aspect) : undefined;
+  // Fit the page inside the stage's CONTENT box (measured directly; no padding arithmetic).
+  const pageWidth = fitPageToStage({ w: stage.width, h: stage.height }, aspect, 0);
 
   const patch = useCallback((ops: DocOp[]) => void studio.patch(ops), [studio]);
+  /** Lettering edits: free, undoable, labelled ("Undo move balloon"). */
+  const apply = useCallback(
+    (ops: DocOp[], opts?: PatchOptions) => {
+      if (ops.length) void studio.patch(ops, { undo: true, ...opts });
+    },
+    [studio]
+  );
   const onBalloonChange = useCallback(
-    (lineId: string, p: Partial<Balloon>) => void studio.patch([{ op: 'balloon', pageId: page.id, lineId, patch: p }]),
+    (lineId: string, p: Partial<Balloon>) =>
+      void studio.patch([{ op: 'balloon', pageId: page.id, lineId, patch: p }], { undo: true, label: 'Move balloon', coalesce: `balloon:${page.id}:${lineId}` }),
     [studio, page.id]
   );
+
+  // ── Lettering: plans, selection, inspector ──────────────────────────────
+  const canPro = studio.caps?.proEditor !== false;
+  const viewMode: StudioMode = canPro ? studio.mode ?? 'easy' : 'easy';
+  const setViewMode = (m: StudioMode) => studio.setMode?.(m);
+  const { plans, placements, measure, H } = useLetterPlans(doc, page, aspect);
+  const validIds = useMemo(() => page.panels.flatMap((p) => p.lines.map((l) => l.id)), [page.panels]);
+  const panelOf = useCallback((id: string) => page.panels.find((p) => p.lines.some((l) => l.id === id))?.n, [page.panels]);
+  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection, panelOf });
+  const selectedLine = selection.primary;
+  const selectionKey = selection.ids.join('|');
+  useEffect(() => setInspectorClosed(false), [selectionKey]);
+  const letteringEditable = mode === 'move' && overlayLettering && !busy && drawn;
+  const tidy = useMemo(() => (overlayLettering ? tidyOps(doc, page, aspect, measure) : []), [overlayLettering, doc, page, aspect, measure]);
+  const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
+  const crowdedIds = [...placements.crowded];
+
+  const onAddAt = (kind: LineKind, point: { x: number; y: number }) => {
+    const { ops, id } = addLineAtOps(doc, page, kind, point, aspect);
+    const withText = ops.map((op) => (op.op === 'line' && op.patch ? { ...op, patch: { ...op.patch, text: NEW_LINE_TEXT[kind] } } : op));
+    apply(withText, { label: `Add ${LINE_KIND_LABEL[kind].toLowerCase()}` });
+    setAddKind(null);
+    selection.select(id);
+    setEditingLineId(id);
+  };
+
+  // Inspector anchor: the selection's outline bounds on screen (recomputed on resize/scroll).
+  const [anchor, setAnchor] = useState<Rect | null>(null);
+  const [viewportTick, setViewportTick] = useState(0);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const bump = () => setViewportTick((t) => t + 1);
+    window.addEventListener('resize', bump);
+    window.addEventListener('scroll', bump, true);
+    return () => {
+      window.removeEventListener('resize', bump);
+      window.removeEventListener('scroll', bump, true);
+    };
+  }, []);
+  useLayoutEffect(() => {
+    const el = pageBoxRef.current;
+    const sel = plans.filter((p) => selection.ids.includes(p.lineId));
+    if (!el || !sel.length) {
+      setAnchor(null);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const boxes = sel.map((p) => outlineFractions(p, H));
+    const next: Rect = {
+      left: r.left + Math.min(...boxes.map((b) => b.x)) * r.width,
+      top: r.top + Math.min(...boxes.map((b) => b.y)) * r.height,
+      right: r.left + Math.max(...boxes.map((b) => b.x + b.w)) * r.width,
+      bottom: r.top + Math.max(...boxes.map((b) => b.y + b.h)) * r.height
+    };
+    setAnchor((cur) => (cur && Math.abs(cur.left - next.left) < 0.5 && Math.abs(cur.top - next.top) < 0.5 && Math.abs(cur.right - next.right) < 0.5 && Math.abs(cur.bottom - next.bottom) < 0.5 ? cur : next));
+  }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Esc steps back: cancel "add", then deselect, before the dialog's Esc closes the editor.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || editingLineId) return;
+      if (addKind) {
+        e.preventDefault();
+        e.stopPropagation();
+        setAddKind(null);
+      } else if (selection.ids.length && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+        selection.clear();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [addKind, editingLineId, selection]);
 
   const markRegion = (box: Box) => {
     setRegion(box);
@@ -382,15 +524,18 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
       {/* Stage */}
-      <div className="flex h-[74vh] min-h-[320px] shrink-0 flex-col sm:h-[62vh] lg:h-auto lg:min-h-0 lg:flex-1">
-        <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+      <div className="flex h-[74vh] min-h-[320px] min-w-0 shrink-0 flex-col sm:h-[62vh] lg:h-auto lg:min-h-0 lg:min-w-0 lg:flex-1" data-testid="editor-stage">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 pt-3">
           <Segmented<Mode>
             label="Editing mode"
             size="xs"
             value={mode}
-            onChange={(m) => setMode(m)}
+            onChange={(m) => {
+              setMode(m);
+              setAddKind(null);
+            }}
             options={[
-              { value: 'move', label: (<><MousePointer2 className="h-3 w-3" aria-hidden /> {overlayLettering ? 'Move balloons' : 'View'}</>) },
+              { value: 'move', label: (<><MousePointer2 className="h-3 w-3" aria-hidden /> {overlayLettering ? 'Lettering' : 'View'}</>) },
               { value: 'markup', label: (<><SquareDashed className="h-3 w-3" aria-hidden /> Mark up</>), disabled: !drawn }
             ]}
           />
@@ -405,45 +550,105 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
               {lettering ? 'Hide lettering' : 'Show lettering'}
             </GhostButton>
           )}
+          {letteringEditable && lettering && (
+            <LetteringToolbar
+              addKind={addKind}
+              onAddKind={setAddKind}
+              canUndo={!!studio.canUndo}
+              canRedo={!!studio.canRedo}
+              undoLabel={studio.undoLabel}
+              onUndo={() => studio.undo?.()}
+              onRedo={() => studio.redo?.()}
+              onTidy={tidy.length ? () => apply(tidy, { label: 'Tidy balloons' }) : null}
+              outsideCount={outsideCount}
+              onFixEdges={() => apply(fixSafeAreaOps(doc, page, plans, H, placements.balloons), { label: 'Move balloons inside the safe area' })}
+              mode={viewMode}
+              onModeChange={setViewMode}
+              canPro={canPro}
+            />
+          )}
+          {letteringEditable && lettering && crowdedIds.length > 0 && (
+            <button
+              type="button"
+              data-testid="crowded-chip"
+              onClick={() => selection.select(crowdedIds[0])}
+              className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/[0.1] px-2 py-0.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-500/[0.16] dark:text-amber-200"
+              title="A balloon couldn’t find free space in its panel — free fixes in the lettering panel"
+            >
+              <TriangleAlert className="h-3 w-3" aria-hidden /> Crowded panel{crowdedIds.length > 1 ? ` (${crowdedIds.length})` : ''}
+            </button>
+          )}
           <span className="ml-auto hidden text-[11px] text-[var(--ds-muted)] xl:inline">
             {mode === 'markup'
               ? 'Drag on the page to mark what should change.'
-              : overlayLettering
-                ? 'Drag balloons · arrow keys nudge · Alt+arrows aim the tail'
-                : 'Lettering is drawn into the art on this comic.'}
+              : addKind
+                ? `Click on the page to place the ${LINE_KIND_LABEL[addKind].toLowerCase()} · Esc cancels`
+                : overlayLettering
+                  ? 'Drag balloons · Shift-click to multi-select · double-click edits text · arrows nudge'
+                  : 'Lettering is drawn into the art on this comic.'}
           </span>
         </div>
-        <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center p-3 sm:p-6">
-          <div style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className="shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
-            <ComicPageView
-              doc={doc}
-              page={page}
-              imageUrl={imageUrl}
-              editable={mode === 'move' && overlayLettering && !busy}
-              onBalloonChange={onBalloonChange}
-              selectedLineId={selectedLine}
-              onSelectLine={setSelectedLine}
-              hideLettering={!lettering}
-              loading="eager"
-              develop={false}
-              onAspectChange={setLoadedAspect}
-              overlay={
-                <RenderOverlay
-                  status={status}
-                  since={page.render.updatedAt}
-                  model={renderModelNickname(doc, busy ? undefined : page.render, 'page')}
-                  typicalSec={spec.latencySec}
-                  error={page.render.error}
-                  overImage={drawn && !!imageUrl}
-                  staleLabel="Out of date — re-render to apply"
-                />
-              }
-            >
-              <MarkupLayer active={mode === 'markup' && drawn && !busy} region={region} panelN={panelN} onRegion={markRegion} />
-            </ComicPageView>
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div ref={stageRef} className="absolute inset-3 flex min-w-0 items-center justify-center sm:inset-6" data-testid="editor-stage-content">
+            <div ref={pageBoxRef} style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className="shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+              <ComicPageView
+                doc={doc}
+                page={page}
+                imageUrl={imageUrl}
+                editable={letteringEditable}
+                onBalloonChange={onBalloonChange}
+                onLetteringOps={apply}
+                selectedLineIds={selection.ids}
+                onSelectionChange={selection.set}
+                editingLineId={editingLineId}
+                onEditingChange={setEditingLineId}
+                addKind={letteringEditable ? addKind : null}
+                onAddAt={onAddAt}
+                hideLettering={!lettering}
+                loading="eager"
+                develop={false}
+                onAspectChange={setLoadedAspect}
+                overlay={
+                  <RenderOverlay
+                    status={status}
+                    since={page.render.updatedAt}
+                    model={renderModelNickname(doc, busy ? undefined : page.render, 'page')}
+                    typicalSec={spec.latencySec}
+                    error={page.render.error}
+                    overImage={drawn && !!imageUrl}
+                    staleLabel="Out of date — re-render to apply"
+                  />
+                }
+              >
+                <MarkupLayer active={mode === 'markup' && drawn && !busy} region={region} panelN={panelN} onRegion={markRegion} />
+              </ComicPageView>
+            </div>
           </div>
         </div>
       </div>
+      {letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && (
+        <LetteringInspector
+          doc={doc}
+          page={page}
+          lineIds={selection.ids}
+          plans={plans}
+          placements={placements}
+          H={H}
+          apply={apply}
+          onEditText={(id) => {
+            selection.select(id);
+            setEditingLineId(id);
+          }}
+          onAskAI={(text) => void studio.send(`(about the selected balloon${selection.ids.length > 1 ? 's' : ''}) ${text}`, { focus: 'selection' })}
+          onDeselect={selection.clear}
+          mode={viewMode}
+          onModeChange={setViewMode}
+          canPro={canPro}
+          anchor={anchor}
+          compact={form.width < 640}
+          onClose={() => setInspectorClosed(true)}
+        />
+      )}
 
       {/* Side panel */}
       <aside
@@ -578,6 +783,29 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
           onRestore={(path) => fire('restore', () => studio.act({ type: 'restore_render', target: { kind: 'page', id: page.id }, path }))}
         />
 
+        {/* Lettering style (whole comic) */}
+        {overlayLettering && (
+          <section aria-labelledby="pe-lettering" className="space-y-2">
+            <SectionTitle id="pe-lettering" icon={<Type className="h-3.5 w-3.5" />} right={<span className="text-[11px] text-[var(--ds-muted)]">Free</span>}>
+              Lettering
+            </SectionTitle>
+            <PresetGallery value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => apply(presetOps(id), { label: 'Change lettering style' })} lang={doc.format.language} />
+            <div className="flex flex-wrap items-center gap-2">
+              <GhostButton
+                size="xs"
+                disabled={!hasLetteringOverrides(doc)}
+                onClick={() => apply(resetAllLetteringOps(doc), { label: 'Reset balloon styles' })}
+                title="Remove every per-balloon and per-speaker style so the whole comic follows the chosen style"
+              >
+                <RotateCcw className="h-3 w-3" aria-hidden /> Reset all balloon styles
+              </GhostButton>
+            </div>
+            <p className="px-1 text-[11px] leading-snug text-[var(--ds-muted)]">
+              Select a balloon on the page for fonts, colours, shapes and tails. Lettering edits are free — done by the editor, no AI cost.
+            </p>
+          </section>
+        )}
+
         {/* Script */}
         <section aria-labelledby="pe-script" className="space-y-2">
           <SectionTitle id="pe-script" icon={<MessageSquare className="h-3.5 w-3.5" />}>
@@ -605,7 +833,7 @@ const EditorBody: React.FC<{ studio: StudioController; doc: ComicDoc; page: Page
           </p>
           <div className="space-y-2">
             {page.panels.map((panel) => (
-              <PanelEditor key={panel.id} doc={doc} page={page} panel={panel} selectedLine={selectedLine} onSelectLine={setSelectedLine} patch={patch} />
+              <PanelEditor key={panel.id} doc={doc} page={page} panel={panel} selectedLine={selectedLine} onSelectLine={(id) => selection.select(id)} patch={patch} />
             ))}
           </div>
         </section>
@@ -629,7 +857,23 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.altKey || e.metaKey || e.ctrlKey || isEditableTarget(e.target)) return;
+      if (e.defaultPrevented || isEditableTarget(e.target)) return;
+      // Undo / redo (⌘Z, ⇧⌘Z, Ctrl+Y) — lettering, script and balloon edits.
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) studio.redo?.();
+        else studio.undo?.();
+        return;
+      }
+      if (mod && !e.altKey && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        studio.redo?.();
+        return;
+      }
+      if (e.altKey || mod) return;
+      // Never turn the page while balloons are selected (arrows nudge them instead).
+      if (studio.selection && studio.selection.lineIds.length > 0) return;
       if (e.key === 'ArrowLeft' && prev) {
         e.preventDefault();
         studio.openPage(prev.id);

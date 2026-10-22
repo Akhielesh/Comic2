@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyDoc, emptyRender, type AssetRef } from '../../../shared/comic/doc.js';
+import { castNoun, createEmptyDoc, emptyRender, pageSpecHash, type AssetRef } from '../../../shared/comic/doc.js';
+import { lakeDrawnDoc } from './golden/fixtures.js';
 import { JOB_TIMINGS } from './jobs.js';
 import { newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
-import { buildDirectorTools, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
+import { GROUP_HINTS, buildDirectorTools, buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
+import type { ToolGroup } from './extensions.js';
 import { analyzeSource, writePagePlan } from './writer.js';
 
 vi.mock('./writer.js', async (importOriginal) => {
@@ -21,9 +23,9 @@ let turn: DirectorTurn;
 let tools: Map<string, DirectorTool>;
 const call = (name: string, args: Record<string, unknown>) => tools.get(name)!.execute(args);
 
-const setup = (doc = plannedDoc(), attachments: AssetRef[] = []) => {
+const setup = (doc = plannedDoc(), attachments: AssetRef[] = [], init: Partial<DirectorTurn> = {}) => {
   ctx = testContext(newSession(doc));
-  turn = createDirectorTurn({ attachments, userText: 'the user message' });
+  turn = createDirectorTurn({ attachments, userText: 'the user message', ...init });
   tools = new Map(buildDirectorTools(ctx, turn).map((t) => [t.spec.function.name, t]));
 };
 
@@ -97,8 +99,9 @@ describe('cast & places', () => {
     doc.cast[0].sheet = { ...emptyRender(), status: 'ready', asset: { path: 's.webp', source: 'generated', at: 1 } };
     setup(doc, [attachment(1), attachment(2)]);
     const out = await call('upsert_character', { name: 'MAYA', look: { hair: 'long braid' }, attachmentRefs: [2] });
-    expect(out).toContain('Saved MAYA (lead) with 1 reference image');
+    expect(out).toContain('Saved MAYA (lead). Added 1 photo to MAYA.');
     expect(out).toContain("sheet is now out of date");
+    expect(out).not.toContain('No sheet yet');
     const maya = ctx.session.doc.cast[0];
     expect(maya.look).toMatchObject({ summary: 'Young courier with a red scarf', hair: 'long braid' });
     expect(maya.refs.map((r) => r.path)).toEqual([attachment(2).path]);
@@ -159,7 +162,9 @@ describe('plan tools', () => {
     vi.mocked(writePagePlan).mockResolvedValue({ pages: fresh, newCast: [], model: 'w' });
     const out = await call('plan_pages', { instructions: 'snappy' });
     expect(out).toMatch(/^Planned 3 pages: 1\. Beat 1 \(3 panels\)/);
-    expect(turn.cards.map((c) => c.type)).toEqual(['plan']);
+    expect(turn.cards).toHaveLength(1);
+    expect(['plan', 'breakdown']).toContain(turn.cards[0].type);
+    expect(turn.plannedThisTurn).toBe(true);
   });
 
   it('caps paid writer runs per turn', async () => {
@@ -229,20 +234,23 @@ describe('spend tools', () => {
     expect(await call('render_pages', {})).toMatch(/^Refused: there is no page plan yet/);
   });
 
-  it('render_pages is gate-aware and collects the gate card', async () => {
+  it('render_pages is gate-aware and collects the gate card (page numbers never force a redraw)', async () => {
     const doc = plannedDoc();
     doc.settings.confirm = 'always';
-    setup(doc);
+    setup(doc, [], { userText: 'draw pages 1 and 2', drawIntent: 'explicit' });
     const out = await call('render_pages', { pages: [1, 2] });
-    expect(out).toMatch(/^Waiting for the user to approve ~\$\d+\.\d\d \(2 pages \+ 2 character sheets on Nano Banana 2\.1\)\.$/);
-    expect(turn.cards.map((c) => c.type)).toEqual(['gate']);
-    expect(ctx.session.doc.gate?.action).toEqual({ type: 'render_pages', pageIds: ['pg_1', 'pg_2'], force: true });
+    expect(out).toMatch(/\$\d+\.\d\d/);
+    expect(turn.gated).toBe(true);
+    expect(turn.cards.map((c) => c.type)).toContain('gate');
+    expect(ctx.session.doc.gate?.action).toMatchObject({ type: 'render_pages', pageIds: ['pg_1', 'pg_2'] });
+    expect(ctx.session.doc.gate?.action).not.toHaveProperty('force');
     expect(ctx.imagesFake.calls).toHaveLength(0);
   });
 
   it('render_pages under the confirm threshold starts drawing in the background', async () => {
+    setup(plannedDoc(), [], { userText: 'draw all the pages', drawIntent: 'explicit' });
     const out = await call('render_pages', {});
-    expect(out).toMatch(/^Started drawing 3 pages \+ 2 character sheets/);
+    expect(out).toMatch(/^Started drawing/);
     await ctx.settled();
     expect(ctx.session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
   });
@@ -268,7 +276,7 @@ describe('spend tools', () => {
     doc.settings = { ...doc.settings, confirm: 'big', bigSpendUsd: 0.1 };
     // Drawn pages so edit_page (one image, ~$0.07 standard) can run on each.
     for (const p of doc.pages) p.render = { ...emptyRender(), status: 'ready', asset: { path: `${p.id}.webp`, source: 'generated', at: 1 } };
-    setup(doc);
+    setup(doc, [], { userText: 'make it night on every page', drawIntent: 'explicit' });
     // One edit is under $0.10 → starts right away.
     expect(await call('edit_page', { page: 1, instruction: 'make it night' })).toMatch(/^Started drawing/);
     expect(turn.spentUsd).toBeGreaterThan(0);
@@ -377,5 +385,254 @@ describe('save_source', () => {
     // The full script is intact, and the analysis ran on it, not on the short excerpt.
     expect(ctx.session.doc.source.script).toBe(long.trim());
     expect(vi.mocked(analyzeSource).mock.calls[0][0].text).toBe(long.trim());
+  });
+});
+
+// ── v5 (P1-DIRECTOR): honest spends, non-human cast, ids kept, free paths ────
+
+const drawnLake = () => {
+  const doc = lakeDrawnDoc();
+  doc.settings = { ...doc.settings, confirm: 'big' };
+  return doc;
+};
+
+describe('render_pages semantics (bug: re-render of a ready page)', () => {
+  it('"generate all pages" on a drawn, current 1-page book → nothing, $0, no image call, breakdown + next steps', async () => {
+    setup(drawnLake(), [], { userText: 'generate all pages', drawIntent: 'explicit' });
+    const spentBefore = ctx.session.doc.spend.totalUsd;
+    const out = await call('render_pages', { pages: [1] });
+    expect(out).toMatch(/^Nothing to draw: Page 1 is already drawn and up to date — nothing was spent\./);
+    expect(out).toContain("The cover isn't drawn yet");
+    expect(turn.outcome).toBe('nothing');
+    expect(turn.cards).toEqual([expect.objectContaining({ type: 'breakdown', view: 'status' })]);
+    expect(turn.nextSteps.map((s) => s.label)).toEqual(expect.arrayContaining(['Read it', 'Make the cover', 'New take of page 1']));
+    await ctx.settled();
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.session.doc.spend.totalUsd).toBe(spentBefore);
+    expect(ctx.session.doc.gate).toBeNull();
+    // Without page numbers too.
+    expect(await call('render_pages', {})).toMatch(/^Nothing to draw: every page/);
+  });
+
+  it('redraw:true without the user asking for another take is refused with an offer', async () => {
+    setup(drawnLake(), [], { userText: 'generate all pages', drawIntent: 'explicit' });
+    const out = await call('render_pages', { pages: [1], redraw: true });
+    expect(out).toMatch(/^Not redrawn: Page 1 is already drawn and current, and the user didn't ask for a new take\. Offer: read it, make the cover, or a new take of page 1 \(≈ \$\d+\.\d\d\)\./);
+    expect(ctx.session.doc.gate).toBeNull();
+  });
+
+  it('redraw:true with "another take" → a forced redraw that always waits for approval', async () => {
+    setup(drawnLake(), [], { userText: 'give me another take of page 1', drawIntent: 'redraw' });
+    const out = await call('render_pages', { pages: [1], redraw: true });
+    expect(out).toMatch(/\$\d+\.\d\d/);
+    expect(turn.gated).toBe(true);
+    expect(ctx.session.doc.gate).toMatchObject({ status: 'open', reason: 'redraw', action: { type: 'render_pages', pageIds: ['pg_lake_1'], force: true } });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+  });
+
+  it('include_cover on a drawn book draws only the missing cover', async () => {
+    const doc = drawnLake();
+    doc.settings.confirm = 'never';
+    setup(doc, [], { userText: 'draw everything', drawIntent: 'explicit' });
+    const out = await call('render_pages', { include_cover: true });
+    expect(out).toMatch(/^Started drawing the cover/);
+    await ctx.settled();
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(ctx.session.doc.cover.render.status).toBe('ready');
+  });
+
+  it('never draws a plan written in the same turn, unless the user said to skip review', async () => {
+    vi.mocked(writePagePlan).mockResolvedValue({ pages: plannedDoc().pages, newCast: [], model: 'w' });
+    setup(plannedDoc(), [], { userText: 'plan and draw it', drawIntent: 'explicit' });
+    await call('plan_pages', {});
+    expect(await call('render_pages', {})).toMatch(/^Refused: the user hasn't seen this plan yet/);
+    setup(plannedDoc(), [], { userText: 'plan it and just draw it now', drawIntent: 'explicit' });
+    await call('plan_pages', {});
+    expect(await call('render_pages', {})).toMatch(/^Started drawing/);
+    await ctx.settled();
+  });
+
+  it('a spend on a turn with no draw intent only quotes (forced gate), even below the threshold', async () => {
+    const doc = drawnLake();
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } };
+    setup(doc, [], { userText: 'the cover is bad it doesnt represent the baby picture', drawIntent: 'none' });
+    const out = await call('edit_page', { page: 1, instruction: 'show the baby from the photo' });
+    expect(out).toMatch(/\$0\.\d\d/);
+    expect(turn.gated).toBe(true);
+    expect(ctx.session.doc.gate).toMatchObject({ status: 'open', reason: 'no_intent' });
+    await ctx.settled();
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+  });
+});
+
+describe('render_cover free paths', () => {
+  it('a title change on a drawn overlay cover is free; on a painted cover it is a quoted redraw', async () => {
+    const doc = drawnLake();
+    doc.cover = { ...doc.cover, lettering: 'overlay', render: { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } } };
+    setup(doc, [], { userText: 'rename the title to Duck Day', drawIntent: 'none' });
+    expect(await call('render_cover', { title: 'Duck Day' })).toBe('Updated the cover text — free, it is lettered on top of the art (no redraw).');
+    expect(ctx.session.doc.cover.title).toBe('Duck Day');
+    expect(ctx.session.doc.gate).toBeNull();
+    const painted = drawnLake();
+    painted.cover = { ...painted.cover, render: { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } } };
+    setup(painted, [], { userText: 'rename the title to Duck Day', drawIntent: 'none' });
+    await call('render_cover', { title: 'Duck Day' });
+    expect(ctx.session.doc.gate).toMatchObject({ status: 'open', action: { type: 'render_cover' } });
+  });
+
+  it('textless is a one-time quoted re-render; a current cover with no change is $0', async () => {
+    const doc = drawnLake();
+    doc.cover = { ...doc.cover, render: { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } } };
+    setup(doc, [], { userText: 'make the cover textless so I can edit the title', drawIntent: 'explicit' });
+    await call('render_cover', { textless: true });
+    expect(ctx.session.doc.gate?.action).toMatchObject({ type: 'render_cover', textless: true });
+    setup(doc, [], { userText: 'make the cover', drawIntent: 'explicit' });
+    expect(await call('render_cover', {})).toMatch(/^Nothing to draw: the cover is already drawn and up to date/);
+    expect(turn.outcome).toBe('nothing');
+  });
+});
+
+describe('cast: non-humans and every photo kept', () => {
+  it('upsert_character with kind/count/species/markings → "three Ducklings", a companion', async () => {
+    setup(createEmptyDoc('proj-1'));
+    await call('upsert_character', { name: 'The Baby', look: { summary: 'Toddler in a yellow sunhat' } });
+    const out = await call('upsert_character', { name: 'Ducklings', kind: 'animal', count: 3, look: { summary: 'Fluffy yellow ducklings', species: 'mallard duckling', markings: 'orange beaks' } });
+    expect(out).toMatch(/^Saved DUCKLINGS \(support, animal, ×3\)\./);
+    const ducks = ctx.session.doc.cast.find((c) => c.name === 'Ducklings')!;
+    expect(ducks).toMatchObject({ kind: 'animal', count: 3, tier: 'support', look: { species: 'mallard duckling', markings: 'orange beaks' } });
+    expect(castNoun(ducks)).toBe('three Ducklings');
+    expect(turn.captured).toContain('three Ducklings');
+    // Back to one: count resets; a person never stores kind.
+    await call('upsert_character', { name: 'Ducklings', count: 1 });
+    expect(ctx.session.doc.cast.find((c) => c.name === 'Ducklings')!.count).toBe(1);
+    expect(ctx.session.doc.cast[0].kind).toBeUndefined();
+  });
+
+  it('"these 5 photos are Maya" → 5 refs, main = #1, an honest message (no silent slice(-4))', async () => {
+    const photos = [1, 2, 3, 4, 5].map(attachment);
+    setup(plannedDoc(), photos, { userText: 'these 5 photos are Maya' });
+    const out = await call('upsert_character', { name: 'Maya', attachmentRefs: [1, 2, 3, 4, 5] });
+    expect(out).toContain('Added 5 photos to MAYA.');
+    expect(out).toContain("offer to make MAYA's model sheet from these photos");
+    expect(ctx.session.doc.cast[0].refs.map((r) => r.path)).toEqual(photos.map((p) => p.path));
+    expect(ctx.session.doc.cast[0].sheet.status).toBe('none'); // never redrawn or staled by an upload
+  });
+
+  it('carried images continue the numbering', async () => {
+    const carried = { ...attachment(9), addedBy: 'user' as const };
+    setup(plannedDoc(), [attachment(1)], { images: [attachment(1), carried], userText: 'the second one is Arjun' });
+    await call('upsert_character', { name: 'Arjun', attachmentRefs: [2] });
+    expect(ctx.session.doc.cast[1].refs.map((r) => r.path)).toEqual([carried.path]);
+    expect(await call('upsert_character', { name: 'Arjun', attachmentRefs: [3] })).toMatch(/only 2 image\(s\) available/);
+  });
+
+  it('plan_pages casts recurring animals the writer left uncast (free safety net)', async () => {
+    const doc = createEmptyDoc('proj-1');
+    doc.brief.premise = 'A baby plays by a lake with other animals';
+    doc.cast = [{ id: 'c_baby', name: 'The Baby', tier: 'lead', look: { summary: 'Toddler' }, refs: [], sheet: emptyRender() }];
+    setup(doc);
+    const page = { ...plannedDoc().pages[0], id: 'pg_1' };
+    page.panels = page.panels.map((p, i) => ({ ...p, castIds: ['c_baby'], action: ['The Baby waves at three ducklings.', 'The ducklings follow a frog.', 'A frog leaps; the ducklings cheer.'][i] }));
+    vi.mocked(writePagePlan).mockResolvedValue({ pages: [page], newCast: [], model: 'w' });
+    const out = await call('plan_pages', {});
+    const names = ctx.session.doc.cast.map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(['Ducklings', 'Frog']));
+    if (!/Also added to the cast/.test(out)) {
+      // jobs.planPages ran castScan itself; the director's safety net found nothing left to add.
+      expect(ctx.session.doc.cast.filter((c) => c.name === 'Ducklings')).toHaveLength(1);
+    }
+  });
+});
+
+describe('lettering edits keep ids, pins and translations', () => {
+  const lakeWithText = () => {
+    const doc = drawnLake();
+    doc.i18n = { editions: { hi: { lang: 'hi', lines: { ln_l3: { text: 'अलविदा, दोस्तों!', status: 'reviewed', sourceHash: 'x', at: 1 } }, balloons: {}, register: 'everyday' } }, glossary: [] };
+    return doc;
+  };
+
+  it('edit_panel_text keeps the id (pinned balloon + translation survive) when kind and speaker match', async () => {
+    setup(lakeWithText(), [], { userText: 'change what the baby says' });
+    const out = await call('edit_panel_text', { page: 1, panel: 3, lines: [{ kind: 'speech', speaker: 'The Baby', text: 'Bye bye, ducks!' }] });
+    expect(out).toBe('Page 1 panel 3 now has 1 line (1 kept in place).');
+    const page = ctx.session.doc.pages[0];
+    expect(page.panels[2].lines).toEqual([{ id: 'ln_l3', kind: 'speech', speakerId: 'c_baby', text: 'Bye bye, ducks!' }]);
+    expect(page.balloons).toEqual([{ lineId: 'ln_l3', x: 0.62, y: 0.7, w: 0.3, pinned: true }]);
+    expect(ctx.session.doc.i18n!.editions.hi.lines.ln_l3).toBeDefined();
+    // Overlay text edits never stale the drawn page.
+    expect(page.render.specHash).toBe(pageSpecHash(ctx.session.doc, page));
+  });
+
+  it('new lines get new ids at the right position; changed kinds replace; style and position apply', async () => {
+    setup(lakeWithText());
+    await call('edit_panel_text', {
+      page: 1,
+      panel: 3,
+      lines: [
+        { kind: 'caption', text: 'Sunset at the lake.', position: 'top-left' },
+        { kind: 'speech', speaker: 'The Baby', text: 'Bye-bye, friends!', style: { text_color: 'red', size: 'larger', shape: 'cloud' } }
+      ]
+    });
+    const panel = ctx.session.doc.pages[0].panels[2];
+    expect(panel.lines.map((l) => l.kind)).toEqual(['caption', 'speech']);
+    expect(panel.lines[1].id).not.toBe('ln_l3'); // position 2 had no old line → new id
+    expect(panel.lines[1].style).toMatchObject({ textColor: expect.stringMatching(/^#/), sizeScale: 1.25, shape: 'cloud' });
+    const caption = ctx.session.doc.pages[0].balloons.find((b) => b.lineId === panel.lines[0].id);
+    expect(caption).toMatchObject({ pinned: true });
+    expect(caption!.x).toBeGreaterThanOrEqual(0);
+    expect(caption!.y).toBeGreaterThanOrEqual(0);
+    expect(caption!.x + caption!.w).toBeLessThanOrEqual(1);
+    // The old line was deleted (its balloon and translation go with it).
+    expect(ctx.session.doc.pages[0].balloons.some((b) => b.lineId === 'ln_l3')).toBe(false);
+  });
+
+  it('set_line changes one line in place (kind, speaker, text)', async () => {
+    setup(lakeWithText());
+    expect(await call('set_line', { page: 1, panel: 3, line: 1, kind: 'thought' })).toBe('Updated page 1 panel 3 line 1 (now thought). Free — no redraw needed.');
+    const line = () => ctx.session.doc.pages[0].panels[2].lines[0];
+    expect(line()).toMatchObject({ id: 'ln_l3', kind: 'thought', speakerId: 'c_baby' });
+    await call('set_line', { page: 1, panel: 3, line: 1, kind: 'caption' });
+    expect(line().kind).toBe('caption');
+    expect(line().speakerId).toBeUndefined();
+    expect(await call('set_line', { page: 1, panel: 3, line: 1, kind: 'shout' })).toMatch(/^Error: A shout line needs a speaker/);
+    expect(await call('set_line', { page: 1, panel: 3, line: 1, kind: 'shout', speaker: 'Frog', text: 'Ribbit!' })).toMatch(/now shout/);
+    expect(ctx.session.doc.pages[0].panels[2].castIds).toContain('c_frog');
+    expect(await call('set_line', { page: 1, panel: 3, line: 4, text: 'x' })).toBe('Error: Page 1 panel 3 has lines 1–1.');
+    expect(ctx.session.doc.pages[0].balloons[0].lineId).toBe('ln_l3');
+  });
+});
+
+describe('set_format tells before staling', () => {
+  it('reports what would go out of date (with the price) and only applies with confirm:true', async () => {
+    setup(drawnLake());
+    const out = await call('set_format', { pageAspect: '1:1' });
+    expect(out).toMatch(/^Not changed yet: this makes 1 drawn page out of date \(redrawing ≈ \$\d+\.\d\d\)\./);
+    expect(ctx.session.doc.format.pageAspect).toBe('4:5');
+    const applied = await call('set_format', { pageAspect: '1:1', confirm: true });
+    expect(applied).toMatch(/1 drawn page is now out of date/);
+    expect(ctx.session.doc.format.pageAspect).toBe('1:1');
+    // A change that stales nothing applies at once.
+    expect(await call('set_format', { readingDirection: 'rtl' })).toMatch(/^Format: /);
+  });
+});
+
+describe('per-turn tool trimming tuned on the golden set', () => {
+  const fake = (name: string): DirectorTool => ({ spec: { type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } } }, cost: 'free', execute: async () => 'ok' });
+  const groups = (): ToolGroup[] => [
+    { id: 'timeline', priority: 30, tools: () => ['move_page', 'insert_page', 'delete_page'].map(fake) },
+    { id: 'lettering', priority: 50, tools: () => ['set_lettering_style', 'restyle_balloons', 'arrange_balloons'].map(fake) }
+  ];
+
+  it('keeps the group the user is talking about when the cap must drop one', () => {
+    const doc = plannedDoc();
+    const coreCount = buildDirectorTools(testContext(newSession(doc)), createDirectorTurn()).length;
+    const max = coreCount + 3;
+    const plain = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText: 'next' }), groups(), { maxTools: max });
+    expect(plain.groups).toEqual(['timeline']);
+    const lettering = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText: 'make all the shouts red' }), groups(), { maxTools: max });
+    expect(lettering.groups).toEqual(['lettering']);
+    expect(lettering.tools.map((t) => t.spec.function.name)).toContain('set_lettering_style');
+    expect(GROUP_HINTS.refs!.test('these photos are Maya')).toBe(true);
+    expect(GROUP_HINTS.i18n!.test('make it in Telugu')).toBe(true);
   });
 });

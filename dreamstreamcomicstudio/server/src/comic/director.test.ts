@@ -8,7 +8,9 @@ import {
   runDirectorTurn,
   summarizeDocForDirector
 } from './director.js';
-import { newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
+import { lakeBriefDoc, lakeDrawnDoc } from './golden/fixtures.js';
+import { JOB_TIMINGS } from './jobs.js';
+import { fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { StudioError } from './types.js';
 
 beforeEach(() => {
@@ -40,7 +42,8 @@ describe('runDirectorTurn', () => {
     expect(doc.conversation.map((m) => m.role)).toEqual(['user', 'assistant']);
     const reply = doc.conversation[1];
     expect(reply.text).toBe('Love it — Maya is in.');
-    expect(reply.cards).toEqual([expect.objectContaining({ type: 'options', question: 'What tone?' })]);
+    // Early turn that learned something: a live recap card leads, then the question.
+    expect(reply.cards).toEqual([expect.objectContaining({ type: 'recap' }), expect.objectContaining({ type: 'options', question: 'What tone?' })]);
     expect(reply.suggestions!.length).toBeGreaterThanOrEqual(2);
     // ask_user ended the turn: one model call only.
     expect(llm.calls).toHaveLength(1);
@@ -77,7 +80,8 @@ describe('runDirectorTurn', () => {
     });
     expect(second[second.length - 2]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'Brief updated: title, genre.' });
     expect(second[second.length - 1]).toEqual({ role: 'tool', tool_call_id: 'c2', content: 'Noted (1 notes total).' });
-    expect(session.doc.conversation[1].text).toBe('Saved the basics. Want me to show you 3 styles?');
+    // First turn, two facts learned, and the model's line names neither: the recap leads (never a duplicate).
+    expect(session.doc.conversation[1].text).toBe('Got it — “Spice Run”, an adventure comic. Saved the basics. Want me to show you 3 styles?');
     // Activities announced for each tool.
     expect(ctx.events.filter((e) => e.type === 'activity').map((e) => (e as { label: string }).label)).toContain('Updating the story');
   });
@@ -175,7 +179,7 @@ describe('runDirectorTurn', () => {
       { type: 'image_url', image_url: { url: 'data:image/png;base64,UEhPVE8=' } }
     ]);
     expect(session.doc.conversation[0].attachments).toEqual([attachment]);
-    expect(session.doc.cast[0].refs).toEqual([attachment]);
+    expect(session.doc.cast[0].refs).toEqual([{ ...attachment, addedBy: 'user' }]);
   });
 
   it('builds the system prompt from the persona, doc summary and memory, and windows history', async () => {
@@ -252,5 +256,314 @@ describe('memory folding', () => {
     const ctx = testContext(session, { llm: scriptedLlm({ director: [new Error('down')] }) });
     await expect(maybeFoldMemory(ctx)).resolves.toBe(false);
     expect(session.doc.memory).toBeUndefined();
+  });
+});
+
+// ── v5 (P1-DIRECTOR): never silent, honest, understands non-human cast ───────
+
+const lakePlanJson = {
+  pages: [
+    {
+      n: 1,
+      summary: 'The baby splashes at the lake with ducklings, a frog and a bunny.',
+      layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+      turnHook: '',
+      panels: [1, 2, 3].map((n) => ({
+        n,
+        size: n === 1 ? 'wide' : 'medium',
+        shot: n === 1 ? 'establishing' : 'medium',
+        angle: '',
+        action: ['The Baby splashes while three Ducklings paddle close.', 'Frog hops onto a lily pad by the Baby.', 'Bunny peeks from the reeds; everyone waves.'][n - 1],
+        castIds: [['The Baby', 'Ducklings'], ['The Baby', 'Frog'], ['The Baby', 'Bunny']][n - 1],
+        placeId: '',
+        mood: '',
+        lines: []
+      }))
+    }
+  ],
+  newCast: []
+};
+
+describe('runDirectorTurn — never silent (contract §12.2)', () => {
+  beforeEach(() => {
+    JOB_TIMINGS.retryBackoffMs = 0;
+    JOB_TIMINGS.turnLockWaitMs = 20;
+  });
+
+  it('#1 ask_user only, no text: "Got it — recap." ending with the question, one model call', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const llm = scriptedLlm({
+      director: [
+        {
+          text: '',
+          toolCalls: [
+            toolCall('a', 'update_brief', { premise: 'A baby plays near a lake with friendly animals.', audience: 'kids 2–6', setting: 'a sunny lake shore' }),
+            toolCall('b', 'set_format', { kind: 'storybook', pageCount: 1, pageAspect: '4:5' }),
+            toolCall('c', 'upsert_character', { name: 'The Baby', tier: 'lead', look: { summary: 'Chubby toddler in a yellow sunhat' } }),
+            toolCall('d', 'upsert_character', { name: 'Ducklings', kind: 'animal', count: 3, look: { summary: 'Fluffy yellow ducklings', species: 'duckling' } }),
+            toolCall('e', 'upsert_character', { name: 'Frog', kind: 'animal', look: { summary: 'Round green frog', species: 'frog' } }),
+            toolCall('f', 'upsert_character', { name: 'Bunny', kind: 'animal', look: { summary: 'Small grey bunny', species: 'rabbit' } }),
+            toolCall('g', 'ask_user', { question: 'Which art style?', options: [{ label: 'Watercolor storybook' }, { label: 'Bright cartoon' }] })
+          ]
+        }
+      ]
+    });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'baby playing near a lake with other naimals a kids commic single page.', attachments: [] });
+    const reply = session.doc.conversation[1];
+    expect(llm.calls).toHaveLength(1);
+    expect(reply.text.startsWith('Got it — a 1-page storybook for kids 2–6, set at a sunny lake shore — The Baby with three Ducklings, a Frog and a Bunny.')).toBe(true);
+    expect(reply.text.endsWith('Which art style?')).toBe(true);
+    expect(reply.cards!.map((c) => c.type)).toEqual(['recap', 'options']);
+    expect(session.doc.cast.map((c) => [c.name, c.kind ?? 'person', c.count ?? 1])).toEqual([
+      ['The Baby', 'person', 1],
+      ['Ducklings', 'animal', 3],
+      ['Frog', 'animal', 1],
+      ['Bunny', 'animal', 1]
+    ]);
+  });
+
+  it('#2 plan + options, no text: the plan in one line and the question', async () => {
+    const doc = lakeBriefDoc();
+    doc.conversation = [{ id: 'u0', role: 'user', text: 'a lake story', at: 1 }, { id: 'a0', role: 'assistant', text: 'Got it.', at: 2 }];
+    const session = newSession(doc);
+    const llm = scriptedLlm({
+      director: [
+        { toolCalls: [toolCall('s', 'set_style', { presetId: 'watercolor-storybook' }), toolCall('p', 'plan_pages', {})] },
+        { toolCalls: [toolCall('q', 'ask_user', { question: 'Ready to draw?', options: [{ label: 'Draw it', reply: 'Draw it' }, { label: 'Change something' }] })] }
+      ],
+      writer: [{ json: lakePlanJson }]
+    });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'Use watercolor storybook style', attachments: [] });
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.role).toBe('assistant');
+    expect(reply.text).toContain("Here's the plan — 1 page, 3 panels");
+    expect(reply.text.endsWith('Ready to draw?')).toBe(true);
+  });
+
+  it('#3 a gate only: the price and "Approve"', async () => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'always';
+    for (const p of doc.pages) p.render = { ...emptyRender(), status: 'ready', asset: { path: `${p.id}.webp`, source: 'generated', at: 1 } };
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [{ toolCalls: [toolCall('c', 'render_cover', {})] }, { text: '' }] });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'make the cover', attachments: [] });
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.text).toMatch(/≈ \$\d+\.\d\d/);
+    expect(reply.text).toContain('Approve');
+    expect(reply.cards!.map((c) => c.type)).toContain('gate');
+  });
+
+  it('#5 recap card on turn 1 when the brief gained 2+ fields; not on turn 5 when only a note changed', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const llm = scriptedLlm({ director: [{ text: 'Lovely.', toolCalls: [toolCall('a', 'update_brief', { title: 'Splash Day', audience: 'kids 2–6' })] }, { text: 'Saved.' }] });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'Splash Day, for little kids', attachments: [] });
+    expect(session.doc.conversation[1].cards?.[0]).toMatchObject({ type: 'recap' });
+    const later = plannedDoc();
+    later.conversation = Array.from({ length: 8 }, (_, i): Msg => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `m${i}`, at: i }));
+    const s2 = newSession(later);
+    const l2 = scriptedLlm({ director: [{ text: 'Noted.', toolCalls: [toolCall('n', 'add_notes', { notes: ['no gore'] })] }, { text: '' }] });
+    await runDirectorTurn(testContext(s2, { llm: l2 }), { text: 'no gore please', attachments: [] });
+    const reply = s2.doc.conversation[s2.doc.conversation.length - 1];
+    expect(reply.cards?.some((c) => c.type === 'recap')).toBeFalsy();
+    expect(reply.text).toBe('Noted.');
+  });
+
+  it('#6 spend guard: "the cover is bad" + render_cover → quoted (gate), never started, even at $0.07', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'big', bigSpendUsd: 0.5 };
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'cover.webp', source: 'generated', at: 1 } };
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [{ toolCalls: [toolCall('c', 'render_cover', { direction: 'show the baby from the photo' })] }, { text: '' }] });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: "the cover is bad it doesn't represent the baby picture", attachments: [] });
+    await ctx.settled();
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.gate).toMatchObject({ status: 'open' });
+    expect(['no_intent', 'redraw']).toContain(session.doc.gate!.reason);
+    const toolMsg = llm.calls[1].messages.find((m) => m.role === 'tool');
+    expect(String(toolMsg?.content)).toMatch(/^Quoted ≈? ?\$\d+\.\d\d/);
+    expect(session.doc.conversation[session.doc.conversation.length - 1].text).toContain('tap Approve');
+  });
+
+  it('#7 a plan written this turn is never drawn in the same turn (unless "just draw it now")', async () => {
+    const run = async (text: string) => {
+      const session = newSession(lakeBriefDoc());
+      const llm = scriptedLlm({
+        director: [{ toolCalls: [toolCall('p', 'plan_pages', {})] }, { toolCalls: [toolCall('r', 'render_pages', {})] }, { text: '' }],
+        writer: [{ json: lakePlanJson }]
+      });
+      const ctx = testContext(session, { llm });
+      await runDirectorTurn(ctx, { text, attachments: [] });
+      await ctx.settled();
+      return { llm, ctx, session };
+    };
+    const lastToolResult = (llm: ReturnType<typeof scriptedLlm>) =>
+      String(llm.calls.filter((c) => c.role === 'director')[2].messages.filter((m) => m.role === 'tool').pop()?.content);
+    const refused = await run('plan it and draw it');
+    expect(lastToolResult(refused.llm)).toMatch(/^Refused: the user hasn't seen this plan yet/);
+    expect(refused.ctx.imagesFake.calls).toHaveLength(0);
+    expect(refused.session.doc.conversation[refused.session.doc.conversation.length - 1].text).toMatch(/^Here's the plan — 1 page, 3 panels/);
+    const skipped = await run('plan it and just draw it now');
+    expect(lastToolResult(skipped.llm)).not.toMatch(/^Refused/);
+  });
+
+  it('production bug (b4b5774f): the reply never claims runs that already failed are under way', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const images = fakeImages(() => new StudioError('PROVIDER_ERROR', 'The image service had a problem.', { status: 502, retryable: false }));
+    let ctxRef: ReturnType<typeof testContext>;
+    const allFailed = async () => {
+      for (let i = 0; i < 200; i += 1) {
+        const opts = ctxRef.session.doc.style.options;
+        if (opts.length === 3 && opts.every((o) => o.render.status === 'failed')) return;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    };
+    const llm = scriptedLlm({
+      director: [
+        {
+          toolCalls: [
+            toolCall('s', 'propose_styles', {
+              directions: [
+                { name: 'Ink', spec: 'Bold ink outlines, flat colors, strong blacks, comic halftone dots.' },
+                { name: 'Watercolor', spec: 'Soft watercolor washes, pencil lines, warm pastel palette.' },
+                { name: 'Pop', spec: 'Retro pop art, thick outlines, Ben-Day dots, primary colors.' }
+              ]
+            })
+          ]
+        },
+        async () => {
+          await allFailed(); // the renders fail before the model writes its line (7 s in production)
+          return { text: "I've kicked off 3 style tests — tap one when they land!" };
+        }
+      ]
+    });
+    ctxRef = testContext(session, { llm, images });
+    await runDirectorTurn(ctxRef, { text: 'show me some styles', attachments: [] });
+    const assistant = session.doc.conversation.filter((m) => m.role === 'assistant');
+    expect(assistant.some((m) => /kicked off/.test(m.text))).toBe(false);
+    const reply = assistant.find((m) => /^3 style tests didn't come through/.test(m.text))!;
+    expect(reply.text).toBe("3 style tests didn't come through — the image service had a problem. Nothing new was drawn — tap Try again or ask me to retry.");
+    expect(reply.nextSteps?.[0]).toMatchObject({ label: 'Try again', action: { type: 'render_style_options' } });
+    await ctxRef.settled();
+  });
+
+  it('a provider refusal gets the warm deterministic redirect (options, no error wall, no strike)', async () => {
+    for (const step of [new StudioError('SAFETY_BLOCKED', "The AI provider's safety filter blocked this request."), { text: "I'm sorry, but I can't help with that." }]) {
+      const session = newSession(plannedDoc());
+      await runDirectorTurn(testContext(session, { llm: scriptedLlm({ director: [step] }) }), { text: 'a zombie bites the hero', attachments: [] });
+      const reply = session.doc.conversation[session.doc.conversation.length - 1];
+      expect(reply.text).toBe("That one tripped the AI's filter — I can try a toned-down version that keeps the idea.");
+      expect(reply.cards!.map((c) => c.type)).toEqual(['options']);
+      expect(reply.cards!.some((c) => c.type === 'notice')).toBe(false);
+    }
+  });
+
+  it('a model failure is honest text + an error notice + a Try again chip', async () => {
+    const session = newSession(plannedDoc());
+    await runDirectorTurn(testContext(session, { llm: scriptedLlm({ director: [new StudioError('TIMEOUT', 'The director took too long to answer.')] }) }), { text: 'hello', attachments: [] });
+    const reply = session.doc.conversation[1];
+    expect(reply.text).toMatch(/^Sorry — I couldn't finish that just now\./);
+    expect(reply.nextSteps).toEqual([{ label: 'Try again', say: 'hello' }]);
+  });
+
+  it('named IP: an IP NOTE steers to an original homage, said once', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const llm = scriptedLlm({
+      director: [{ toolCalls: [toolCall('c', 'upsert_character', { name: 'Chintu', tier: 'lead', look: { summary: 'Cheeky 5-year-old in a red tee and yellow shorts' } })] }, { text: '' }, { text: 'Sure.' }]
+    });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'make a comic of Shin-chan pranking his dad', attachments: [] });
+    const user = llm.calls[0].messages[llm.calls[0].messages.length - 1];
+    expect(String(user.content)).toContain('IP NOTE: Shin-chan is trademarked — make an original homage');
+    expect(session.doc.conversation[1].text).toContain("Shin-chan is trademarked, so I'm making an original homage — Chintu with the same spirit.");
+    expect(session.doc.safety?.ipNoted).toEqual(['Shin-chan']);
+    await runDirectorTurn(ctx, { text: 'more Shin-chan pranks', attachments: [] });
+    const second = llm.calls[2].messages[llm.calls[2].messages.length - 1];
+    expect(String(second.content)).not.toContain('IP NOTE');
+  });
+
+  it('shows up to 8 images as 768 px previews', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const llm = scriptedLlm({ director: [{ text: 'Nice photos — who are they?' }] });
+    const ctx = testContext(session, { llm });
+    const atts = Array.from({ length: 9 }, (_, i) => ({ path: `u/user-1/p/proj-1/ref/r${i}.webp`, source: 'upload' as const, at: i }));
+    for (const a of atts) ctx.assetsFake.files.set(a.path, 'data:image/webp;base64,QQ==');
+    const preview = vi.spyOn(ctx.assetsFake, 'previewDataUrl');
+    await runDirectorTurn(ctx, { text: '', attachments: atts });
+    const content = llm.calls[0].messages[llm.calls[0].messages.length - 1].content as Array<{ type: string; text?: string }>;
+    expect(content.filter((p) => p.type === 'image_url')).toHaveLength(8);
+    expect(content[0].text).toContain('(9 images available; the first 8 are shown.)');
+    expect(preview).toHaveBeenCalledWith(atts[0].path, 768);
+  });
+
+  it('the doc summary shows non-human cast, off-shape drawings and the open question', () => {
+    const doc = lakeDrawnDoc();
+    doc.pages[0].render.asset = { ...doc.pages[0].render.asset!, w: 2048, h: 2048 };
+    const s = summarizeDocForDirector(doc, false, [], { userText: 'add other animals' });
+    expect(s).toContain('- DUCKLINGS [c_ducks] support, animal ×3 — Three identical fluffy yellow ducklings');
+    expect(s).toContain('drawn 1:1');
+    expect(s).not.toContain('OPEN QUESTIONS'); // the cast already has animals
+    expect(summarizeDocForDirector(createEmptyDoc('x'), false, [], { userText: 'a baby with other animals' })).toContain('OPEN QUESTIONS: the user mentioned a vague group');
+    const focused = summarizeDocForDirector(lakeDrawnDoc(), false, [], { focus: { pageId: 'pg_lake_1', panelN: 3, lineIds: ['ln_l3'] } });
+    expect(focused).toContain('Focus: the user is looking at page 1, panel 3; selected balloons — p1 panel 3: “Bye-bye, friends!” (speech)');
+  });
+});
+
+describe('never silent across 30 fake turns', () => {
+  beforeEach(() => {
+    JOB_TIMINGS.retryBackoffMs = 0;
+    JOB_TIMINGS.turnLockWaitMs = 20;
+  });
+
+  const scripts: Array<{ text: string; steps: Parameters<typeof scriptedLlm>[0]['director'] }> = [
+    { text: 'hi', steps: [{ text: '' }] },
+    { text: 'a heist in Mumbai', steps: [{ toolCalls: [toolCall('a', 'update_brief', { premise: 'A heist in Mumbai', genre: 'heist' })] }, { text: '' }] },
+    { text: 'my hero is Maya', steps: [{ toolCalls: [toolCall('a', 'upsert_character', { name: 'Maya', look: { summary: 'courier' } })] }, { text: '' }] },
+    { text: 'add a dog', steps: [{ toolCalls: [toolCall('a', 'upsert_character', { name: 'Biscuit', kind: 'animal', look: { summary: 'scruffy dog', species: 'terrier' } })] }, { text: '' }] },
+    { text: 'what style?', steps: [{ toolCalls: [toolCall('a', 'ask_user', { question: 'Which style?', options: ['Ink', 'Watercolor'] })] }] },
+    { text: 'noir please', steps: [{ toolCalls: [toolCall('a', 'set_style', { presetId: 'noir-ink' })] }, { text: '' }] },
+    { text: 'six pages', steps: [{ toolCalls: [toolCall('a', 'set_format', { pageCount: 6 })] }, { text: '' }] },
+    { text: 'no gore', steps: [{ toolCalls: [toolCall('a', 'add_notes', { notes: ['no gore'] })] }, { text: '' }] },
+    { text: 'bad args', steps: [{ toolCalls: [toolCall('a', 'update_brief', {})] }, { text: '' }] },
+    { text: 'unknown tool', steps: [{ toolCalls: [toolCall('a', 'nope', {})] }, { text: '' }] },
+    { text: 'malformed', steps: [{ toolCalls: [{ id: 'm', name: 'set_format', arguments: '{"kind": ' }] }, { text: '' }] },
+    { text: 'read page 1', steps: [{ toolCalls: [toolCall('a', 'read_pages', { pages: [1] })] }, { text: '' }] },
+    { text: 'change the line', steps: [{ toolCalls: [toolCall('a', 'edit_panel_text', { page: 1, panel: 2, lines: [{ kind: 'speech', speaker: 'Maya', text: 'Run!' }] })] }, { text: '' }] },
+    { text: 'make it a thought', steps: [{ toolCalls: [toolCall('a', 'set_line', { page: 1, panel: 2, line: 1, kind: 'thought' })] }, { text: '' }] },
+    { text: 'draw everything', steps: [{ toolCalls: [toolCall('a', 'render_pages', {})] }, { text: '' }] },
+    { text: 'generate all pages', steps: [{ toolCalls: [toolCall('a', 'render_pages', { pages: [1, 2, 3] })] }, { text: '' }] },
+    { text: 'redraw page 1', steps: [{ toolCalls: [toolCall('a', 'render_pages', { pages: [1], redraw: true })] }, { text: '' }] },
+    { text: 'make the cover', steps: [{ toolCalls: [toolCall('a', 'render_cover', { title: 'Spice Run' })] }, { text: '' }] },
+    { text: 'the cover is bad', steps: [{ toolCalls: [toolCall('a', 'ask_user', { question: 'Which fix?', options: [{ label: 'Fix the face', description: '≈ $0.07' }, { label: 'Keep it' }] })] }] },
+    { text: 'tighten money', steps: [{ toolCalls: [toolCall('a', 'set_settings', { budgetUsd: 3 })] }, { text: '' }] },
+    { text: 'loosen money', steps: [{ toolCalls: [toolCall('a', 'set_settings', { quality: 'pro' })] }, { text: '' }] },
+    { text: 'remove Arjun', steps: [{ toolCalls: [toolCall('a', 'remove_character', { name: 'Arjun' })] }, { text: '' }] },
+    { text: 'add the rooftops', steps: [{ toolCalls: [toolCall('a', 'upsert_place', { name: 'Rooftops', look: 'tin roofs' })] }, { text: '' }] },
+    { text: 'square pages', steps: [{ toolCalls: [toolCall('a', 'set_format', { pageAspect: '1:1' })] }, { text: '' }] },
+    { text: 'a refusal', steps: [new StudioError('SAFETY_BLOCKED', 'blocked')] },
+    { text: 'a timeout', steps: [new StudioError('TIMEOUT', 'The director took too long to answer.')] },
+    { text: 'a crash', steps: [new Error('boom')] },
+    { text: 'tool limit', steps: [...Array.from({ length: 8 }, (_, i) => ({ toolCalls: [toolCall(`n${i}`, 'add_notes', { notes: [`n${i}`] })] })), { text: '' }] },
+    { text: 'edit page art', steps: [{ toolCalls: [toolCall('a', 'edit_page', { page: 1, instruction: 'night' })] }, { text: '' }] },
+    { text: 'save my script', steps: [{ toolCalls: [toolCall('a', 'save_source', { text: 'A short premise about a heist.' })] }, { text: '' }] }
+  ];
+
+  it('has 30 scripted turns', () => expect(scripts).toHaveLength(30));
+
+  it('every committed assistant message has non-empty text', async () => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'big';
+    const session = newSession(doc);
+    for (const script of scripts) {
+      const llm = scriptedLlm({ director: [...(script.steps || [])] });
+      const ctx = testContext(session, { llm });
+      await runDirectorTurn(ctx, { text: script.text, attachments: [] });
+      await ctx.settled();
+      const reply = session.doc.conversation[session.doc.conversation.length - 1];
+      expect(reply.role, script.text).toBe('assistant');
+      expect(reply.text.trim().length, script.text).toBeGreaterThan(0);
+    }
+    const empty = session.doc.conversation.filter((m) => m.role === 'assistant' && !m.text.trim() && !m.cards?.some((c) => c.type === 'renders'));
+    expect(empty).toEqual([]);
   });
 });

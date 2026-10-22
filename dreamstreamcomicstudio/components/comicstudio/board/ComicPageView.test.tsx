@@ -84,4 +84,38 @@ describe('ComicPageView', () => {
     expect(pageBox(container).querySelector('[data-testid="ov"]')).toBeTruthy();
     expect(pageBox(container).querySelector('[data-testid="layer"]')).toBeTruthy();
   });
+
+  it('reader props: hides lettering from assistive tech, fades unrevealed balloons, adds the paper layer', () => {
+    const doc = makeSampleDoc();
+    const { container } = render(
+      <ComicPageView doc={doc} page={doc.pages[0]} imageUrl="https://cdn.test/p1.png" letteringAriaHidden paper visibleLineIds={new Set(['pg_1_l1'])} />
+    );
+    expect(container.querySelector('[data-testid="lettering-svg"]')).toHaveAttribute('aria-hidden', 'true');
+    expect(container.querySelector('[data-testid="reader-paper"]')).toHaveClass('ds-reader-paper');
+    expect(container.querySelector('[data-line-id="pg_1_l2"]')!.getAttribute('opacity')).toBe('0');
+    expect(container.querySelector('[data-line-id="pg_1_l1"]')!.getAttribute('opacity')).toBeNull();
+  });
+
+  it('picks an image variant for its measured width (srcWidth)', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 480, height: 720, right: 480, bottom: 720, x: 0, y: 0, toJSON: () => ({}) });
+    try {
+      const doc = makeSampleDoc();
+      const srcWidth = vi.fn((w: number) => `https://cdn.test/p1-${w}w.webp`);
+      const { container } = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl="https://cdn.test/p1.png" srcWidth={srcWidth} />);
+      expect(srcWidth).toHaveBeenCalledWith(480);
+      expect(container.querySelector('img')!.getAttribute('src')).toBe('https://cdn.test/p1-480w.webp');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('passes edition edits through with { lang }', () => {
+    const doc = makeSampleDoc();
+    const onBalloonChange = vi.fn();
+    const { container } = render(
+      <ComicPageView doc={doc} page={doc.pages[0]} imageUrl="https://cdn.test/p1.png" editable editionLang="hi" onBalloonChange={onBalloonChange} />
+    );
+    fireEvent.keyDown(container.querySelector('[data-testid="balloon-hit"][data-line-id="pg_1_l2"]')!, { key: 'ArrowRight' });
+    expect(onBalloonChange).toHaveBeenCalledWith('pg_1_l2', expect.objectContaining({ pinned: true }), { lang: 'hi' });
+  });
 });

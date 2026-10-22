@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AIProvider, GenerateTextRequest, GenerateTextResult } from '../ai/providers/types.js';
 import { makeProviderError, modelTimeoutError } from '../ai/providers/errors.js';
-import { createLlmClient, toLlmStudioError } from './llm.js';
+import { createLlmClient, isProviderRefusal, looksLikeRefusal, toLlmStudioError } from './llm.js';
 import { StudioError, type StudioKeys } from './types.js';
 
 const OR_KEYS: StudioKeys = { openrouter: { key: 'sk-or-test', byok: false } };
@@ -296,6 +296,17 @@ describe('toLlmStudioError', () => {
     expect(toLlmStudioError(new Error('failed: 400 flagged by content policy moderation'), ctx).code).toBe('SAFETY_BLOCKED');
     const original = new StudioError('BUDGET_EXCEEDED', 'x');
     expect(toLlmStudioError(original, ctx)).toBe(original);
+  });
+
+  it('tags provider refusals (the director answers them with a warm redirect, never a strike)', () => {
+    const refusal = toLlmStudioError(new Error('failed: 400 flagged by content policy moderation'), ctx);
+    expect(isProviderRefusal(refusal)).toBe(true);
+    expect(isProviderRefusal(toLlmStudioError(makeProviderError(503, 'OpenRouter failed: 503 Service Unavailable'), ctx))).toBe(false);
+    expect(isProviderRefusal(new Error('SAFETY_BLOCKED'))).toBe(false);
+    expect(looksLikeRefusal("I'm sorry, but I can't help with that.")).toBe(true);
+    expect(looksLikeRefusal('Sorry — I’m unable to assist with this request.')).toBe(true);
+    expect(looksLikeRefusal('I can draw that for you — want the cover too?')).toBe(false);
+    expect(looksLikeRefusal(`I can't wait to draw this! ${'More words. '.repeat(40)}`)).toBe(false);
   });
 
   it('never leaks raw provider bodies', () => {
