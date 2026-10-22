@@ -1,7 +1,8 @@
 # Google connectors — exact setup runbook
 
-Covers **Gmail, Drive, Calendar, Sheets, YouTube** (one OAuth client, one consent
-screen) and **Google Maps** (an API key). Follow top to bottom. Anywhere you see
+Covers **Gmail, Drive, Calendar, Sheets, YouTube** and **Stream Studio's "Save recordings
+to Google Drive"** (one OAuth client, one consent screen) and **Google Maps** (an API key).
+Follow top to bottom. Anywhere you see
 `dreamstreamstudio.ai`, that's your domain; replace `<...>` placeholders with your real
 values.
 
@@ -20,19 +21,23 @@ values.
   - the **enabled APIs** (Gmail/Drive/Calendar/Sheets/YouTube),
   - a **Maps API key** (separate auth model).
 
-You'll end with values for these Railway env vars:
+You'll end with values for these **backend** env vars:
 
-| Env var | Value |
-|---|---|
-| `GOOGLE_OAUTH_CLIENT_ID` | from the OAuth client (Part 5) |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | from the OAuth client (Part 5) — secret |
-| `GOOGLE_OAUTH_REDIRECT_URL` | `https://<your-backend-domain>/api/connectors/oauth/callback` |
-| `CONNECTORS_APP_RETURN_URL` | `https://dreamstreamstudio.ai/?view=connectors` |
-| `GOOGLE_MAPS_API_KEY` | from the Maps key (Part 7) — secret |
+| Env var | Value | Where it lives |
+|---|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID` | from the OAuth client (Part 5) | D1 `backend_env` row (or Worker secret) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | from the OAuth client (Part 5) — **secret** | D1 `backend_env` row (or Worker secret) |
+| `GOOGLE_OAUTH_REDIRECT_URL` | `https://dreamstreamstudio.ai/api/connectors/oauth/callback` | already in `api-proxy/wrangler.jsonc` `vars` |
+| `CONNECTORS_APP_RETURN_URL` | `https://dreamstreamstudio.ai/?view=chat` | already in `api-proxy/wrangler.jsonc` `vars` |
+| `GOOGLE_MAPS_API_KEY` | from the Maps key (Part 7) — **secret** | D1 `backend_env` row (or Worker secret) |
 
-> **Find `<your-backend-domain>`:** it's wherever your Railway API is reachable — the
-> same origin as `VITE_API_BASE_URL` (e.g. `https://api.dreamstreamstudio.ai`). The
-> callback path is always `/api/connectors/oauth/callback`.
+> **Where the backend runs (since 2026-10-19):** the Express API is the `Backend` container
+> inside the `dreamstream-api` Cloudflare Worker, served **same-origin** at
+> `https://dreamstreamstudio.ai/api/*` (see `docs/infrastructure/INFRA_MAP.md`). So the OAuth
+> callback is `https://dreamstreamstudio.ai/api/connectors/oauth/callback`. Railway is only a
+> dormant fallback; even if you switch back (`BACKEND_TARGET=origin`) the callback host does
+> **not** change — the Worker still fronts `/api/*`. **Never put a secret in
+> `wrangler.jsonc` — the repo is public.**
 
 ---
 
@@ -139,7 +144,7 @@ In `dreamstream-prod`, go to **APIs & Services → Library** and **Enable** each
 (search the name, click, **Enable**):
 
 - **Gmail API**
-- **Google Drive API**
+- **Google Drive API**  ← also needed by Stream Studio's "Save recordings to Google Drive"
 - **Google Calendar API**
 - **Google Sheets API**
 - **YouTube Data API v3**
@@ -176,14 +181,24 @@ Console path: **APIs & Services → OAuth consent screen** (newer consoles label
    https://www.googleapis.com/auth/userinfo.profile
    https://www.googleapis.com/auth/gmail.readonly
    https://www.googleapis.com/auth/drive.readonly
-   https://www.googleapis.com/auth/calendar.events.readonly
+   https://www.googleapis.com/auth/drive.file
+   https://www.googleapis.com/auth/calendar.events
    https://www.googleapis.com/auth/spreadsheets.readonly
    https://www.googleapis.com/auth/youtube.readonly
    ```
-   - **Sensitive:** Calendar, Sheets, YouTube.
-   - **Restricted:** Gmail, Drive — these are the ones that require a security assessment
-     before public launch (Part 8).
-   - All are **read-only** by design — keep it that way.
+   These are exactly what the code requests (`requiredScopes` in
+   `server/src/connectors/connectors/*.ts`) — keep the two in sync.
+   - **Non-sensitive:** `drive.file` — Stream Studio's "Save recordings to Google Drive"
+     (`google_drive_save`, Part 9). It lets the app create files and see **only the files
+     it created** (the "DreamStream Recordings" folder and the recordings in it) — never the
+     rest of the user's Drive. That's why saving uses it instead of `drive` /
+     `drive.readonly`: no restricted-scope review, no CASA assessment.
+   - **Sensitive:** Calendar (`calendar.events` — read **and** create/edit events; the
+     chat's "add to calendar" always asks the user to confirm first), Sheets, YouTube.
+   - **Restricted:** Gmail (`gmail.readonly`), Drive (`drive.readonly`) — these are the
+     ones that require a security assessment before public launch (Part 8).
+   - Writes are limited to Calendar events and files the app itself creates in Drive;
+     everything else is read-only — keep it that way.
    → **Save and continue.**
 7. **Test users → Add users:** add your own Google address(es) and any teammates who'll
    test. **In Testing mode, only these users can connect** (up to 100) — and you need
@@ -198,18 +213,26 @@ Console path: **APIs & Services → Credentials → Create credentials → OAuth
 
 1. **Application type: Web application.**
 2. Name: `dreamstream-connectors-prod`.
-3. **Authorized redirect URIs → Add URI** — add your backend callback **exactly**:
+3. **Authorized redirect URIs → Add URI** — add the backend callback **exactly**:
    ```
-   https://<your-backend-domain>/api/connectors/oauth/callback
+   https://dreamstreamstudio.ai/api/connectors/oauth/callback
    ```
-   (e.g. `https://api.dreamstreamstudio.ai/api/connectors/oauth/callback`)
    For the dev project/client also add:
    ```
    http://localhost:7071/api/connectors/oauth/callback
    ```
-4. **Authorized JavaScript origins:** not required for this flow (the token exchange is
-   server-side). You may leave it blank, or add `https://dreamstreamstudio.ai` if the
-   console insists.
+4. **Authorized JavaScript origins → Add URI** — the sites users record from:
+   ```
+   https://dreamstreamstudio.ai
+   https://comic2.pages.dev
+   http://localhost:7000
+   ```
+   The OAuth token exchange is server-side and doesn't need these. They're for Stream
+   Studio's Drive uploads: the backend opens a Drive *resumable upload session* and the
+   **browser** then `PUT`s the recording to Google directly (cross-origin). The session URL
+   carries its own credential and the backend forwards the browser's `Origin` when opening
+   it, which is what Google uses for the upload's CORS — the console list is
+   belt-and-braces (and harmless). `localhost:7000` belongs on the **dev** client only.
 5. **Create.** Copy the **Client ID** and **Client secret** immediately into your password
    manager.
 
@@ -218,24 +241,36 @@ Console path: **APIs & Services → Credentials → Create credentials → OAuth
 
 ---
 
-## Part 6 — Set the env vars in Railway (OAuth)
+## Part 6 — Set the backend env (OAuth)
 
-In **Railway → your backend service → Variables**, set:
+The backend runs on Cloudflare (table in Part 0). The two non-secret values are already
+committed in `api-proxy/wrangler.jsonc` `vars`:
+
+```
+GOOGLE_OAUTH_REDIRECT_URL=https://dreamstreamstudio.ai/api/connectors/oauth/callback
+CONNECTORS_APP_RETURN_URL=https://dreamstreamstudio.ai/?view=chat
+```
+
+Add the **secrets** as rows in the D1 database `dreamstream-backend-env`
+(table `backend_env(name, value)`), or as Worker secrets on `dreamstream-api`
+(`wrangler secret put …` — a Worker secret overrides the D1 row):
 
 ```
 GOOGLE_OAUTH_CLIENT_ID=<the Client ID from Part 5>
 GOOGLE_OAUTH_CLIENT_SECRET=<the Client secret from Part 5>
-GOOGLE_OAUTH_REDIRECT_URL=https://<your-backend-domain>/api/connectors/oauth/callback
-CONNECTORS_APP_RETURN_URL=https://dreamstreamstudio.ai/?view=connectors
 ```
 
 - `GOOGLE_OAUTH_REDIRECT_URL` **must equal** the redirect URI you registered in Part 5.
 - `CONNECTORS_ENABLED` defaults to `true`; leave it unless you want to hide the feature.
-- Redeploy the backend so the new vars load.
+- The container reads its env when it starts: let it sleep (15 min idle) or redeploy
+  `dreamstream-api` so new values load.
+- *(Dormant Railway fallback only:)* the same names go in Railway → service → Variables.
 
 **Verify it's wired:** sign into the app, open the browser console on the Connectors page,
-or hit `GET /api/connectors/catalog` — the Google connectors should now report
-`"configured": true`.
+or hit `GET /api/connectors/catalog` — the Google connectors (including
+`google_drive_save`) should now report `"configured": true`. In Stream Studio,
+**Customize → Recording & saving → Google Drive** should offer **Connect Google Drive**
+(not "Not available").
 
 ---
 
@@ -246,14 +281,13 @@ Maps uses an API **key** (not OAuth), so it's separate.
 1. **APIs & Services → Credentials → Create credentials → API key.** Copy the key.
 2. Click the key → **Edit**:
    - **API restrictions → Restrict key →** select **Geocoding API** and **Places API** only.
-   - **Application restrictions:** our server calls Maps server-side from Railway (no fixed
-     egress IP), so leave **None** *but* rely on the API restrictions above + a budget alert
-     (next step). If your Railway plan gives a static egress IP, prefer **IP addresses** and
-     add it.
+   - **Application restrictions:** our server calls Maps server-side from the Cloudflare
+     backend container (no fixed egress IP), so leave **None** *but* rely on the API
+     restrictions above + a budget alert (next step).
 3. **Billing + guardrails:** Maps requires a billing account. Set a **Budget alert**
    (**Billing → Budgets & alerts**) and consider a low quota cap (**APIs & Services →
    Geocoding/Places → Quotas**) so a mistake can't run up a bill.
-4. Railway var:
+4. Backend secret (D1 `backend_env` row or Worker secret, as in Part 6):
    ```
    GOOGLE_MAPS_API_KEY=<the restricted key>
    ```
@@ -276,11 +310,51 @@ verification**, and because Gmail + Drive are **restricted** scopes, that includ
   + cost; start ~6–8 weeks before launch).
 
 **Recommendation:** ship to your test users now; open the verification track in parallel and
-keep scopes minimal/read-only to ease review. If you only need Calendar/Sheets/YouTube at
-first (sensitive, not restricted), you can launch those without CASA and add Gmail/Drive
-once the assessment clears.
+keep scopes minimal to ease review. If you only need Calendar/Sheets/YouTube at first
+(sensitive, not restricted), you can launch those without CASA and add Gmail/Drive once the
+assessment clears. **Stream Studio's Drive saving (`drive.file`) is non-sensitive**, so it
+never needs CASA — but while the app is in Testing mode only listed test users can connect
+*any* Google service, this one included.
 
 ---
+
+## Part 9 — Stream Studio: "Save recordings to Google Drive" (`drive.file`)
+
+**What it is.** A separate connector, `google_drive_save` ("Google Drive — save
+recordings"), requesting only `drive.file` + `userinfo.email/profile`. Stream Studio
+(`/live`) uses it to upload finished recordings straight into a **"DreamStream
+Recordings"** folder in the user's Drive. The read-only `google_drive` connector is
+unchanged — connecting one never asks for the other's permission.
+
+**How it works.** `POST /api/connectors/drive/upload-session` (signed-in users only) finds
+the user's `google_drive_save` connection, refreshes its token, finds or creates the folder
+(id cached in `user_connections.metadata.recordingsFolderId`), and opens a Drive
+**resumable upload session** carrying the browser's `Origin`. It returns only the session
+URL — never the access token. The browser `PUT`s the file to Google in 8 MiB chunks and
+resumes after drops. Recording bytes never touch our backend (10 MB body limit).
+`GET /api/connectors/drive/status` and `POST /api/connectors/drive/disconnect` back the UI.
+
+**Owner checklist (Google Cloud console, project `dreamstream-prod`):**
+
+1. **APIs & Services → Library → Google Drive API → Enable** (skip if already enabled).
+2. **OAuth consent screen (Google Auth Platform) → Data access → Add or remove scopes →**
+   paste `https://www.googleapis.com/auth/drive.file` → tick it → **Update → Save**.
+   It lands under *non-sensitive* scopes.
+3. **Credentials → your Web OAuth client → Authorized JavaScript origins:** add
+   `https://dreamstreamstudio.ai` and `https://comic2.pages.dev` (on the dev client also
+   `http://localhost:7000`) → **Save**.
+4. Same client → **Authorized redirect URIs:** confirm
+   `https://dreamstreamstudio.ai/api/connectors/oauth/callback` is there, byte-for-byte.
+5. **Audience → Test users:** while Publishing status = Testing, add every Google account
+   that should be able to connect Drive (up to 100).
+6. Nothing else: no new env vars (it reuses `GOOGLE_OAUTH_CLIENT_ID/SECRET`) and no SQL
+   migration (the folder id lives in the existing `user_connections.metadata` JSON).
+
+**Test it:** `/live` → Customize → Recording & saving → **Connect Google Drive** → Google
+shows *"See, edit, create, and delete only the specific Google Drive files you use with
+this app"* → Allow. Record a few seconds → **Save to Google Drive** → progress bar →
+**Open in Drive**. Disconnecting there revokes the Google grant only when no other Google
+service (Gmail, Calendar…) is connected for the same account, so it never breaks those.
 
 ## Troubleshooting — test email bounces with `550 NoSuchUser` / `gsmtp`
 
@@ -312,12 +386,14 @@ mailboxes/Groups handle the mail instead.)
 - [ ] Cloud Identity on `dreamstreamstudio.ai`, domain TXT verified (Part 1)
 - [ ] `support@` / `privacy@` routing in Cloudflare (Part 1)
 - [ ] Project `dreamstream-prod` created, owner = `gcp-owners@` (Part 2)
-- [ ] 7 APIs enabled (Part 3)
-- [ ] Consent screen: External, scopes added, **you added as a test user** (Part 4)
-- [ ] OAuth Web client created; redirect URI registered (Part 5)
-- [ ] Railway OAuth vars set + redeployed; catalog shows `configured: true` (Part 6)
+- [ ] 7 APIs enabled — Drive API included (Part 3)
+- [ ] Consent screen: External, scopes added **incl. `drive.file`**, **you added as a test user** (Part 4)
+- [ ] OAuth Web client created; redirect URI `https://dreamstreamstudio.ai/api/connectors/oauth/callback`
+      registered; JavaScript origins added (Part 5)
+- [ ] OAuth client id/secret in D1 `backend_env` (or Worker secrets); catalog shows `configured: true` (Part 6)
 - [ ] Maps key created, restricted, budget alert set; `GOOGLE_MAPS_API_KEY` set (Part 7)
 - [ ] Verification/CASA track opened before public launch (Part 8)
+- [ ] Stream Studio Drive saving: connect → save → "Open in Drive" works for a test user (Part 9)
 
 When this is done: **app → Connectors → Connect Google → tick services → one Google consent
 → connected.**

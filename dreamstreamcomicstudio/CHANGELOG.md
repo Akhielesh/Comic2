@@ -24,6 +24,16 @@ All notable user-facing changes. Format loosely follows
     owners can read their own unpublished comic there.
   - **Gallery:** Settings → Gallery has a Comic Studio section showing a lettered page
     (drag the balloons) and the plan sketch shown before any spend.
+- **Admin Cost centre (2026-10-21):** DreamStream → Account → Admin → **Costs**: what the
+  platform costs to run against what it brings in, on real data — total cost with its
+  trend and run-rate, AI spend (provider vs billable, margin; users' own-key calls kept
+  apart), revenue (MRR from paid subscriptions, comped accounts shown separately), cost per
+  active user, a stacked daily chart with per-day hover breakdowns, where the money goes
+  (each line badged measured / estimated / fixed), and sortable, CSV-exportable tables:
+  products (cost vs requests vs users, with a verdict — e.g. what retiring the Code
+  Studio sandbox saves), AI by model / user, connectors vs their budgets, fixed costs and
+  revenue by tier. Live per-Worker Cloudflare usage appears once a read-only analytics
+  token is added.
 - **Tracker: the week at a glance, and richer logs (2026-10-21):** a Huckleberry-style
   week view (one 24-hour strip per day: sleep, feeds, diapers — tap a day to open it);
   mark a sleep as nap or night and how well it went; how full a diaper was; "skipped this
@@ -48,12 +58,36 @@ All notable user-facing changes. Format loosely follows
   now redirects to `dreamstreamstudio.ai`, so there's one sign-in instead of two.
 
 ### Changed
+- **Less text, more picture — Live monitor & Stream Studio (2026-10-21):** the monitor's
+  alert settings are now one card — a background-alerts switch, three presets
+  (Essentials · Recommended · Everything) and, only if you want them, topic tiles grouped
+  Baby / Safety / Room / Camera with a tap-to-hear preview (each tile switches the phone
+  notification and the on-screen alert together); rare per-device switches sit behind
+  "More on this device". The baby's state is an animated glyph (a moon with drifting z's
+  when calm, sound rings when crying) instead of a coloured dot, and Safety guards that are
+  fine show as a grid of tiles — only ones needing attention stay as text. In Stream
+  Studio the dashboard's stats carry icons, "How it works" is an animated camera → edge →
+  CDN → viewers diagram (the paragraph is one tap away), and the Recordings and Baby
+  monitor cards use icon chips; the Health tab's delivery path is a small diagram too.
+  The All view of the monitor is about a third shorter. Animations respect "reduce
+  motion". Fixed: nursery settings' segmented controls rendered vertically.
 - **Reactions, designed (2026-10-21):** Settings no longer shows a wall of 108 emoji.
   Pick your own six one-tap reactions (tap one, choose from the tabbed picker — it floats
   up just like on stream); viewers get your bar when you go live. The "+" picker is now
   sorted into Recent, Love, Hype, Cheer, Funny, Faces, Party and Things.
 
 ### Added
+- **Save recordings straight to Google Drive (2026-10-21):** in Stream Studio, connect
+  Google Drive once (one tap, Google's own sign-in) and finished recordings upload
+  directly into a **DreamStream Recordings** folder in your Drive — with a progress bar,
+  time left, and an **Open in Drive** link when it's done. Uploads resume on their own if
+  your connection drops, even for hour-long recordings. Stream Studio asks for the
+  narrowest Drive permission there is: it can only see files it saves — never the rest of
+  your Drive. Choose "Google Drive" as your remembered save destination and each recording
+  starts uploading as soon as it stops. Manage it in Customize → Recording & saving. The
+  no-sign-in routes (your Drive for desktop folder, the share menu on phones, or download
+  then drop into Drive) are still there as fallbacks, and errors say exactly what's wrong
+  (Drive full, reconnect needed, offline) with a one-tap fix.
 - **Family calls (2026-10-21):** a new **Calls** tab — FaceTime-style video and voice
   calls with anyone in your nurseries, or "Call everyone" for a group of up to four.
   Calls ring full-screen wherever Stream Studio is open, and with **Ring this device**

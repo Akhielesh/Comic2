@@ -27,15 +27,57 @@ const fmtWhen = (ev: MyEvent): string => {
 const evDuration = (ev: MyEvent): string =>
   ev.startedAt && ev.endedAt ? fmtDuration((ev.endedAt - ev.startedAt) / 1000) : '—';
 
-function StatTile({ label, value, sub, spark, color }: { label: string; value: string; sub: string; spark?: number[]; color?: string }) {
+function StatTile({ label, value, sub, spark, color, icon }: { label: string; value: string; sub: string; spark?: number[]; color?: string; icon: string }) {
   return (
-    <div className="stat-tile">
-      <div className="st-label">{label}</div>
+    <div className="stat-tile" style={{ '--st-c': color || 'var(--accent)' } as React.CSSProperties}>
+      <div className="st-label"><span className="st-ic"><Icon name={icon} size={14} /></span>{label}</div>
       <div className="st-value">{value}</div>
       <div className="st-row">
         <span className="st-sub">{sub}</span>
         {spark && spark.length > 1 && <Sparkline data={spark} color={color || 'var(--accent)'} w={64} h={22} />}
       </div>
+    </div>
+  );
+}
+
+// How a stream travels, as a picture instead of a paragraph: dots flow camera →
+// edge → CDN → viewers. The detail stays one tap away for the curious.
+const PIPE: { icon: string; label: string; sub: string }[] = [
+  { icon: 'video', label: 'Camera', sub: '6 s segments' },
+  { icon: 'cloud', label: 'Edge', sub: 'stored once' },
+  { icon: 'globe', label: 'CDN', sub: 'cached worldwide' },
+  { icon: 'users', label: 'Viewers', sub: '1 or 100, same cost' },
+];
+function HowItWorks() {
+  const [more, setMore] = useState(false);
+  return (
+    <div className="card card-pad how-card">
+      <div className="row" style={{ gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 14.5, flex: 1 }}>How it works</h3>
+        <button className="linkish" onClick={() => setMore((m) => !m)} aria-expanded={more}>{more ? 'Less' : 'Details'}</button>
+      </div>
+      <div className="how-pipe" aria-label="Camera to edge to CDN to viewers">
+        {PIPE.map((n, i) => (
+          <React.Fragment key={n.label}>
+            {i > 0 && <span className="how-wire" aria-hidden><i /><i /><i /></span>}
+            <span className="how-node" style={{ animationDelay: `${i * 0.12}s` }}>
+              <span className="how-ic"><Icon name={n.icon} size={17} /></span>
+              <b>{n.label}</b>
+              <small>{n.sub}</small>
+            </span>
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="how-facts">
+        <span><Icon name="gauge" size={13} />Quality adapts</span>
+        <span><Icon name="chat" size={13} />Chat beside video</span>
+        <span><Icon name="shield" size={13} />Ends safely</span>
+      </div>
+      {more && (
+        <p className="muted how-more">
+          Your camera becomes 6-second segments uploaded to the edge; viewers pull them through the CDN, so 100 viewers cost about the same as one. If your connection wobbles, quality adapts automatically and viewers’ players recover on their own. Chat, reactions and the lobby ride a websocket beside the video — and if your tab ever closes mid-stream, the room pauses for viewers and ends itself safely.
+        </p>
+      )}
     </div>
   );
 }
@@ -287,10 +329,10 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
 
       {/* stats */}
       <div className="stats-grid">
-        <StatTile label="Streams" value={String(events.length)} sub={`${past.length} finished`} />
-        <StatTile label="Hours streamed" value={(totalSec / 3600).toFixed(1)} sub="all time" color="var(--green)" />
-        <StatTile label="Peak viewers" value={String(peak)} sub="best session" spark={peaksSpark} color="var(--blue)" />
-        <StatTile label="Scheduled" value={String(scheduled.length)} sub="upcoming" />
+        <StatTile icon="broadcast" label="Streams" value={String(events.length)} sub={`${past.length} finished`} />
+        <StatTile icon="clock" label="Hours streamed" value={(totalSec / 3600).toFixed(1)} sub="all time" color="var(--green)" />
+        <StatTile icon="eye" label="Peak viewers" value={String(peak)} sub="best session" spark={peaksSpark} color="var(--blue)" />
+        <StatTile icon="calendar" label="Scheduled" value={String(scheduled.length)} sub="upcoming" color="var(--amber)" />
       </div>
 
       <div className="dash-cols">
@@ -361,7 +403,13 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
             <span className="mp-icon"><Icon name="baby" size={22} /></span>
             <span style={{ flex: 1, textAlign: 'left' }}>
               <b>Baby monitor</b>
-              <small>Use a spare phone as a private, never-recording baby camera — two-way talk, video calls and smart cry &amp; alarm alerts.</small>
+              <small>A spare phone becomes a private nursery camera.</small>
+              <span className="mp-chips">
+                <span><Icon name="mic" size={12} />Talk</span>
+                <span><Icon name="video" size={12} />Calls</span>
+                <span><Icon name="bell" size={12} />Cry alerts</span>
+                <span><Icon name="moon" size={12} />Sleep log</span>
+              </span>
             </span>
             <Icon name="chevronRight" size={16} className="faint" />
           </button>
@@ -369,8 +417,13 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
             <div className="card-head"><h3>Recordings</h3><span className="spacer" /><Icon name="download" size={15} className="faint" /></div>
             <div className="rec-list">
               {recordings.length === 0 && (
-                <div className="card-pad muted" style={{ fontSize: 13 }}>
-                  When a recording stops you choose where it goes — a folder, Google Drive, or Downloads. Chat is never burned in.
+                <div className="card-pad rec-empty">
+                  <div className="rec-dests">
+                    <span><Icon name="layers" size={16} />Folder</span>
+                    <span><Icon name="cloud" size={16} />Drive</span>
+                    <span><Icon name="download" size={16} />Downloads</span>
+                  </div>
+                  <small className="faint">You pick where each recording goes when it stops. Chat is never burned in.</small>
                 </div>
               )}
               {recordings.slice(0, 6).map((r) => (
@@ -384,12 +437,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
               ))}
             </div>
           </div>
-          <div className="card card-pad" style={{ fontSize: 13, lineHeight: 1.6 }}>
-            <h3 style={{ margin: '0 0 6px', fontSize: 14.5 }}>How it works</h3>
-            <span className="muted">
-              Your camera becomes 6-second segments uploaded to the edge; viewers pull them through the CDN, so 100 viewers cost about the same as one. If your connection wobbles, quality adapts automatically and viewers’ players recover on their own. Chat, reactions and the lobby ride a websocket beside the video — and if your tab ever closes mid-stream, the room pauses for viewers and ends itself safely.
-            </span>
-          </div>
+          <HowItWorks />
         </div>
       </div>
       {saving && <SaveSheet rec={saving} hostKey={findMyEvent(saving.eventId)?.hostKey} push={push} onClose={() => setSaving(null)} />}

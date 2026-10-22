@@ -1030,7 +1030,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   );
 
   const saveSheet = pendingSave ? (
-    <SaveSheet rec={pendingSave} hostKey={hostKey} push={push} onClose={closeSaveSheet} />
+    <SaveSheet rec={pendingSave} hostKey={hostKey} push={push} onClose={closeSaveSheet} autoStart={prefs.saveTarget === 'drive'} />
   ) : null;
 
   const mobileCtl: MobileCtl = {

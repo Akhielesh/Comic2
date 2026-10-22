@@ -348,7 +348,7 @@ from the app root and open `http://localhost:7000/live.html`. Deploy: see
 `live-worker/README.md` (R2 bucket + `wrangler deploy` + `VITE_LIVE_WORKER_URL`).
 
 Not yet built (next): multi-guest scenes (interview/grid — needs WebRTC ingest
-for guests), recording upload to R2/Drive, sub-second mode.
+for guests), recording upload to R2/Drive (Drive shipped — see §11), sub-second mode.
 
 ---
 
@@ -387,3 +387,75 @@ The guiding fact: on this rail the marginal cost of a viewer is ~zero, so
   against the 200-viewer ceiling; guest seats cap at 4.
 - **Account attach:** Settings → Account → Sign in round-trips the main app via
   `/?next=/live.html#/settings` (App.tsx honors same-origin `next` for 15 minutes).
+
+---
+
+## 11. Save recordings to Google Drive (2026-10-21)
+
+Finished recordings can now upload **straight into the user's Google Drive** through
+Google's API — no Drive app, synced folder or download-and-drag. (The earlier
+no-sign-in routes stay as fallbacks.)
+
+**Permission (least privilege).** A dedicated connector, `google_drive_save`
+("Google Drive — save recordings", Google provider group), asks for **`drive.file` only**
+(+ email/profile to show which account). `drive.file` lets the app create files and see
+**only the files it created** — never the rest of the Drive — and is a *non-sensitive*
+scope (no restricted-scope review, no CASA). The read-only `google_drive` connector the
+chat uses is unchanged. Connecting reuses the app's existing Google OAuth + PKCE popup
+(`POST /api/connectors/google_drive_save/connect` → `/api/connectors/oauth/callback`).
+
+**Upload path — bytes never touch our backend.**
+
+1. `POST /api/connectors/drive/upload-session` `{ name, mimeType, size }` (signed-in users,
+   30 per 10 min): validates (name sanitized, ≤ 120 chars; `video/*`/`audio/*` only;
+   1 B–20 GB), finds the caller's `google_drive_save` connection (404 `not_connected` /
+   409 `reconnect`), refreshes the token, finds or creates the **"DreamStream Recordings"**
+   folder (id cached in `user_connections.metadata.recordingsFolderId` and re-checked, so a
+   trashed folder is replaced), and opens a Drive **resumable upload session** carrying the
+   browser's `Origin` (only origins our CORS policy trusts) so Google allows the browser's
+   cross-origin PUTs. Returns `{ uploadUrl, folderId, folderUrl }` — never the access
+   token. Drive full → 403 `quota_exceeded`.
+2. The browser (`live/driveUpload.ts`) `PUT`s the recording to `uploadUrl` in **8 MiB**
+   chunks (`Content-Range`), following **308 Resume Incomplete** + `Range`. On a network
+   drop / 5xx / 429 it backs off (honoring `Retry-After`), asks Google how far it got
+   (`Content-Range: bytes */total`) and resumes — never re-sending stored bytes; while
+   offline it waits for the connection instead of burning retries. 404/410 = session
+   expired; 403 `storageQuotaExceeded` = Drive full. Stop sends `DELETE` to drop the
+   partial upload.
+3. The final response carries `id,name,webViewLink` → **Open in Drive**.
+
+`GET /api/connectors/drive/status` → `{ connected, email?, expired?, configured, folderUrl? }`;
+`POST /api/connectors/drive/disconnect` deletes the connection and revokes at Google
+**only** if no other Google connection (Gmail, Calendar…) shares that account's grant.
+
+**UX.**
+
+- **Save sheet:** *Save to Google Drive* when connected (primary; progress bar with
+  "x MB of y MB · about N min left", Stop, a tab-close guard, **Open in Drive** on
+  success); *Connect Google Drive* when not (one tap — the consent popup opens inside the
+  tap, then the upload starts by itself) with the note "Stream Studio can only see files
+  it saves — never the rest of your Drive"; *Reconnect Google Drive* when Google needs the
+  user again. Specific errors (not connected, reconnect, Drive full + "Manage Drive
+  storage", pop-up blocked, network, expired session) each with a one-tap fix. The
+  fallbacks stay right below with clear names: *Drive for desktop folder* (works
+  offline), *Send to the Google Drive app* (phones), *Download, then add to Drive*.
+  Signed-out users get the fallbacks plus a sign-in hint.
+- **Remembered "Google Drive":** when a recording stops, the sheet opens and starts the
+  upload by itself (visible progress) rather than silently writing to a desktop folder.
+- **Customize → Recording & saving → Google Drive:** connection status (account / Needs
+  reconnect), Connect · Reconnect · Disconnect, Open folder.
+
+**Owner setup** (Google Cloud): enable the Drive API, add `drive.file` to the consent
+screen, add the JavaScript origins, confirm the redirect URI, add test users — exact steps
+in `docs/connectors/google-setup.md` Part 9. No new env vars, no SQL migration.
+
+**Tests:** `server/src/routes/connectorsDrive.test.ts` (validation, 404/409/400/403,
+folder create-if-missing / reuse / cached / replaced, Origin forwarding, token never in
+the response, disconnect keeps shared grants), `live/driveUpload.unit.test.ts` (chunking,
+Content-Range, 308/Range resume, lost responses, partial chunks, 5xx/429 backoff, offline
+wait, stall guard, abort + DELETE), `live/components/SaveSheet.test.tsx`.
+
+**Not yet verified against real Google from a browser:** that Drive's upload endpoint
+answers the browser's cross-origin `PUT`s (CORS, and an exposed `Range` header on 308s)
+for a session opened server-side with the forwarded `Origin`. If it doesn't, the save
+fails with a clear error and the fallbacks still work.

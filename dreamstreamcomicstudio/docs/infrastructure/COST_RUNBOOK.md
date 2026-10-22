@@ -149,7 +149,18 @@ The codebase is genuinely well-architected here; **do not weaken these guardrail
 
 ## 7. Monthly cost-control checklist
 
-Run this once a month (or when a bill looks off):
+**Start with the admin Cost centre** (DreamStream → Account → Admin → Costs; API
+`GET /api/admin/costs?days=7|30|90`, `server/src/services/costCentre.ts`): every figure
+is labelled **measured** (AI spend from `generation_cost_events` — settled, platform-paid
+only; users' own-key calls shown apart; email and connector counts × list price),
+**estimated** (Code Studio sandbox from `studio_runs` awake time × standard-3 prices,
+25% CPU assumed; backend container ~$0.50) or **fixed** (Workers Paid $5, spread per day).
+Revenue counts only paid tiers with a Stripe subscription (admin-comped accounts are
+shown as "comped", not MRR). Per-Worker requests/CPU and R2 size appear once
+`CF_ANALYTICS_API_TOKEN` (Account › Account Analytics › Read) and `CLOUDFLARE_ACCOUNT_ID`
+are set on the `dreamstream-api` Worker or in D1 `backend_env`.
+
+Then run this once a month (or when a bill looks off):
 
 - [ ] Cloudflare: backend container (`dreamstream-api-backend`) shows 0 running instances
       when idle; Containers usage in Billing stays near the included amounts.
@@ -180,3 +191,4 @@ Run this once a month (or when a bill looks off):
 |---|---|
 | 2026-06-16 | Runbook created. App-Sleeping enabled on Comic2 + SearXNG; dead projects identified; Container cost landmine flagged. |
 | 2026-10-19 | Backend moved to a Cloudflare Container (`basic`, sleeps after 15 min). Railway dormant (trial expired). Cost model rewritten. |
+| 2026-10-21 | Admin Cost centre (real data, measured / estimated / fixed, cost-benefit per product, optional live Cloudflare analytics). |

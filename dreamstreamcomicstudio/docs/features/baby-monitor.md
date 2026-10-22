@@ -81,6 +81,12 @@ analyser + alarm detector keep working ("Basic ears").
   Events only go out after the room's `hello`; on every (re)connect the camera
   replays what's still going on (`SoundBrain.ongoing()`), so a cry that started
   during setup or a network drop alerts exactly once.
+- **Choosing alerts (viewer):** `live/views/monitor/AlertsCard.tsx`. One card: a
+  background-alerts switch, presets (Essentials · Recommended · Everything) and topic
+  tiles grouped Baby / Safety / Room / Camera & family. Each topic maps to Web Push
+  categories *and* on-screen cue categories, so a tile switches both together; the
+  smoke/CO alarm is locked on. The preset shown is derived from the current prefs (any
+  other mix reads "Custom"), so nothing new is stored.
 - **Incidents** (cry, alarm, glass, crash, danger zone, climb-out, very loud,
   camera moved, video paused, offline) carry who answered and how fast. A cry
   goes to whoever is **on duty** first and escalates to everyone after

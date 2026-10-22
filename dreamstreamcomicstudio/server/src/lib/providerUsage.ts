@@ -96,6 +96,16 @@ const budgetFor = (provider: string): ProviderBudget => {
   return { perMin: o?.perMin ?? base.perMin, perDay: o?.perDay ?? base.perDay };
 };
 
+/**
+ * The guardrail budget for a provider that has one configured (a DEFAULT_BUDGETS entry
+ * or a PROVIDER_BUDGETS override) — null for unknown hosts that only get the generic
+ * fallback. Read-only; used by the admin cost centre to show calls vs budget.
+ */
+export const getConfiguredProviderBudget = (provider: string): ProviderBudget | null => {
+  const budget = budgetFor(provider); // also loads envOverrides on first use
+  return DEFAULT_BUDGETS[provider] || envOverrides?.[provider] ? budget : null;
+};
+
 interface ProviderStat {
   dayKey: string;
   dayCalls: number;
