@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { CallBook, LINE_GRACE_MS, MAX_PARTS, missedBy, RING_MS, toRecord, type Call } from './familyCalls';
+import { CallBook, goneUntil, LINE_GRACE_MS, MAX_PARTS, missedBy, RING_MS, toRecord, VOUCH_CAP_MS, VOUCH_MS, type Call } from './familyCalls';
 
 const mom = { uid: 'u-mom', name: 'Alice', label: 'Mom', sid: 's-mom' };
 const grandma = { uid: 'u-gma', name: 'June', label: 'Grandma', sid: 's-gma' };
@@ -140,6 +140,66 @@ describe('CallBook', () => {
     const r = book.invite('c1', 's-gma', ['u-gpa', 'u-mom', 'u-gma'])!;
     expect(r.added).toEqual(['u-gpa']);
     expect(r.call.invited).toEqual(['u-gma', 'u-gpa']);
+  });
+
+  it('coming back on a new connection keeps the mic and camera as they were', () => {
+    const book = new CallBook();
+    ok(book.start(mom, ['u-gma'], true, 'c1', T));
+    ok(book.join('c1', grandma, true, T + 1000));
+    book.setMedia('c1', 's-gma', false, false);
+    book.drop('s-gma', T + 5000);
+    const back = ok(book.join('c1', { ...grandma, sid: 's-gma-2' }, false, T + 8000, false));
+    expect(back.parts.find((p) => p.uid === 'u-gma')).toMatchObject({ sid: 's-gma-2', mic: false, cam: false });
+    // A plain pick-up still starts unmuted.
+    expect(ok(book.join('c1', { ...grandma, sid: 's-gma-3' }, true, T + 9000)).parts.find((p) => p.uid === 'u-gma')?.mic).toBe(true);
+  });
+
+  it('keeps a phone that lost the room in the call while the others still get its media', () => {
+    const book = new CallBook();
+    ok(book.start(mom, ['u-gma'], true, 'c1', T));
+    ok(book.join('c1', grandma, true, T + 1000));
+    book.drop('s-gma', T + 10_000);
+    // Mom's phone still gets Grandma's video, and says so every 10 s.
+    for (let t = T + 20_000; t <= T + 60_000; t += 10_000) expect(book.vouch('c1', 's-mom', ['u-gma'], t)).toBe(true);
+    expect(book.expire(T + 10_000 + LINE_GRACE_MS + 30_000)).toEqual([]);
+    expect(book.nextDeadline()).toBe(T + 60_000 + VOUCH_MS);
+    // The media stopped too: 30 s after the last word for it, it's out.
+    const [ended] = book.expire(T + 60_000 + VOUCH_MS);
+    expect(ended.ended?.why).toBe('done');
+  });
+
+  it('vouching has limits: two minutes away at most, only from someone present, never for yourself', () => {
+    const book = new CallBook();
+    ok(book.start(mom, ['u-gma', 'u-gpa'], true, 'c1', T));
+    ok(book.join('c1', grandma, true, T + 1000));
+    ok(book.join('c1', grandpa, true, T + 1000));
+    book.drop('s-gma', T + 10_000);
+    book.drop('s-gpa', T + 10_000);
+    expect(book.vouch('c1', 's-gpa', ['u-gma'], T + 12_000)).toBe(false); // Grandpa is away himself
+    expect(book.vouch('c1', 's-mom', ['u-mom'], T + 12_000)).toBe(false);
+    expect(book.vouch('c1', 's-stranger', ['u-gma'], T + 12_000)).toBe(false);
+    for (let t = T + 12_000; t < T + 10_000 + VOUCH_CAP_MS; t += 10_000) book.vouch('c1', 's-mom', ['u-gma'], t);
+    expect(book.vouch('c1', 's-mom', ['u-gma'], T + 10_000 + VOUCH_CAP_MS)).toBe(false);
+    const gma = book.get('c1')!.parts.find((p) => p.uid === 'u-gma')!;
+    expect(goneUntil(gma)).toBe(T + 10_000 + VOUCH_CAP_MS);
+    // Grandpa, never vouched for, leaves after the usual grace; the call goes on with Mom + Grandma.
+    const [c] = book.expire(T + 10_000 + LINE_GRACE_MS);
+    expect(c.parts.map((p) => p.uid)).toEqual(['u-mom', 'u-gma']);
+    expect(c.ended).toBeNull();
+  });
+
+  it('keeps how connecting went (sanitised) in the history', () => {
+    const book = new CallBook();
+    ok(book.start(mom, ['u-gma'], true, 'c1', T));
+    ok(book.join('c1', grandma, true, T + 1000));
+    expect(book.stat('c1', 'u-gma', { ttc: 1234.4, path: 'internet', fail: null, turn: false }, T + 2000)).toBe(true);
+    expect(book.stat('c1', 'u-mom', { ttc: -5, path: 'mars' as never, fail: 'nat', turn: true }, T + 2000)).toBe(true);
+    expect(book.stat('c1', 'u-stranger', { ttc: 1 }, T + 2000)).toBe(false);
+    const [call] = book.leave('s-gma', T + 60_000);
+    expect(toRecord(call).stats).toEqual([
+      { uid: 'u-gma', ttc: 1234, path: 'internet', fail: null, turn: false },
+      { uid: 'u-mom', ttc: 0, path: null, fail: 'nat', turn: true },
+    ]);
   });
 
   it('round-trips through storage, dropping finished calls', () => {

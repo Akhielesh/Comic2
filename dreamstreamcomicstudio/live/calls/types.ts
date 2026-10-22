@@ -14,6 +14,18 @@ export interface CallPart extends CallPerson {
   cam: boolean;
   /** Lost the room at — reconnecting. */
   gone?: number;
+  /** While it was away, someone in the call still had its media at (keeps it in the call a little longer). */
+  seen?: number;
+}
+
+/** How one person's connection went (sent once per call; kept in the history). */
+export interface CallStat {
+  /** Milliseconds from answering to connected; null if it never connected. */
+  ttc: number | null;
+  path: 'lan' | 'internet' | 'relay' | null;
+  fail: string | null;
+  /** A relay (TURN) server was on offer. */
+  turn: boolean;
 }
 
 export type CallEndWhy = 'done' | 'no_answer' | 'declined' | 'cancelled';
@@ -29,6 +41,7 @@ export interface Call {
   parts: CallPart[];
   ever: Record<string, string>;
   ended: { at: number; why: CallEndWhy } | null;
+  stats?: Record<string, CallStat & { at: number }>;
 }
 
 export interface CallRecord {
@@ -41,6 +54,7 @@ export interface CallRecord {
   secs: number;
   answered: boolean;
   why: CallEndWhy;
+  stats?: ({ uid: string } & CallStat)[];
 }
 
 export type CallError = 'busy' | 'nobody' | 'ended' | 'full' | 'not_invited' | 'too_many' | 'push';
@@ -57,14 +71,26 @@ export type LineMsg =
       callLog: CallRecord[];
     }
   | { t: 'call'; call: Call }
-  | { t: 'call_started'; ref: string; id: string }
+  | { t: 'call_started'; ref: string; id: string; ice?: RTCIceServer[] }
+  /** To the device that just picked up: fresh relay credentials for this call. */
+  | { t: 'call_joined'; id: string; ice?: RTCIceServer[] }
   | { t: 'call_err'; error: CallError; ref?: string; id?: string }
   | { t: 'call_rtc'; id: string; from: string; d: CallSignal }
   | { t: 'call_log'; rec: CallRecord }
   | { t: 'error'; code: string; msg: string }
-  | { t: 'pong'; at: number };
+  | { t: 'pong'; at?: number };
 
-export type CallSignal = { sdp: RTCSessionDescriptionInit } | { cand: RTCIceCandidateInit };
+/**
+ * The WebRTC handshake between two devices. `cid` names the connection it
+ * belongs to (chosen by whoever offered it), so a fresh connection and an
+ * ICE restart of the current one are never confused. `restart` asks the
+ * device that offered the connection to restart it (only the offerer offers).
+ * Signals from older apps carry no cid.
+ */
+export type CallSignal =
+  | { sdp: RTCSessionDescriptionInit; cid?: string }
+  | { cand: RTCIceCandidateInit; cid?: string }
+  | { restart: true; cid?: string };
 
 /** Most people in one call (a mesh — every phone sends to every other). */
 export const MAX_IN_CALL = 4;

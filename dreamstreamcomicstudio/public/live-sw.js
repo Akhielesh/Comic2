@@ -56,7 +56,10 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = new URL((event.notification.data && event.notification.data.url) || '/live#/monitor', self.location.origin);
+  const base = (event.notification.data && event.notification.data.url) || '/live#/monitor';
+  // "Answer" on a ringing call picks up as soon as the app opens (one tap, no second ring screen).
+  const url = event.action === 'answer' && base.indexOf('#/call/') !== -1 ? `${base}?answer=1` : base;
+  const target = new URL(url, self.location.origin);
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

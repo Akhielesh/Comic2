@@ -1,0 +1,43 @@
+/* ============================================================================
+   Family calls — connection states (the call screen itself is in features.css).
+   "Still connecting…", an honest "Couldn't connect" with the reason and
+   Try again / Audio only, a per-person failure veil in group calls, the
+   busy-phone hint and the relay-test tag. The call screen is always dark.
+   ========================================================================== */
+
+.call-status .call-hint { font-size: 13px; opacity: .7; max-width: 30ch; }
+
+.call-status.failed .call-faces .avatar { filter: grayscale(.6); opacity: .8; }
+.call-status.failed > span { color: var(--amber); opacity: 1; font-weight: 600; }
+.call-fail-why { margin: 2px 0 0; max-width: 34ch; font-size: 15px; line-height: 1.45; opacity: .92; }
+.call-status.failed .call-end-acts { margin-top: 14px; flex-wrap: wrap; justify-content: center; }
+
+.call-pill.sm { padding: 7px 14px; font-size: 13px; gap: 6px; }
+
+/* One person in a group call couldn't connect: say why on their tile. */
+.call-tile-veil.failed { grid-auto-flow: row; justify-items: center; align-content: center; gap: 8px; padding: 18px; text-align: center; background: rgba(0, 0, 0, .62); font-weight: 500; }
+.call-tile-veil.failed b { display: inline-flex; align-items: center; gap: 6px; color: var(--amber); }
+.call-tile-veil.failed svg { animation: none; }
+.call-tile-veil.failed small { max-width: 30ch; font-size: 12.5px; line-height: 1.4; opacity: .85; }
+
+/* This phone's encoder can't keep up — smaller video is going out. */
+.call-busy {
+  position: absolute; z-index: 5; left: 50%; top: calc(64px + env(safe-area-inset-top)); transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; max-width: calc(100vw - 32px);
+  padding: 6px 12px; border-radius: 99px; background: rgba(0, 0, 0, .55); backdrop-filter: blur(8px);
+  color: var(--amber); font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  animation: callBusyIn .3s ease;
+}
+.call-root.quiet .call-busy { opacity: .7; }
+
+.call-relay-tag {
+  flex: none; padding: 3px 8px; border-radius: 99px; border: 1px solid currentColor;
+  color: var(--blue-wash); font-size: 11px; font-weight: 700; letter-spacing: .02em; opacity: .85;
+}
+
+@keyframes callBusyIn { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .call-busy { animation: none; }
+  .call-tile-veil svg { animation: none; }
+}

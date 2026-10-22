@@ -303,17 +303,65 @@ everyone asked can decline; the caller hanging up first is `cancelled`. Those wh
 never picked up (and didn't decline) get a **missed call** push that replaces the
 ring (same tag and topic), and a red entry + badge on the Calls tab.
 
-**Media.** A mesh: one RTCPeerConnection per pair, audio + video transceivers
-from the start, so mute / camera off / flip / turning the camera on in a voice
-call are `replaceTrack` or `enabled` — no renegotiation. Of any two people, the
-one who joined later makes the offer (`joinedAfter`), so there's no glare; the
-offerer restarts ICE on failure (three tries). Signaling (`call_rtc`) is relayed
-only between two devices in the same call. Peers are keyed by person, not
-socket, and a line that drops keeps its place for 20 s (`LINE_GRACE_MS`) — the
-app rejoins from its new connection and the media carries on. Video bitrate is
-shared across the uplink (1.5 / 0.9 / 0.6 Mbps for 1 / 2 / 3 others); each
-tile shows a weak-connection hint from packet loss and round-trip time, and
-"Home Wi-Fi" when everyone is on the local network.
+**Media.** A mesh: one RTCPeerConnection per pair (`max-bundle`, a one-entry
+candidate pool), audio + video transceivers from the start, so mute / camera off
+/ flip / turning the camera on in a voice call are `replaceTrack` or `enabled` —
+no renegotiation. Of any two people, the one who joined later makes the offer
+(`joinedAfter`); if their offer hasn't arrived after 4 s the other side offers
+instead. Every signal carries a connection id (`cid`, chosen by the offerer): a
+new cid is a new connection, the current cid an ICE restart of it, and two
+simultaneous new connections are settled by socket id. One person's signals are
+handled strictly in order. Signaling (`call_rtc`) is relayed only between two
+devices in the same call. Peers are keyed by person, not socket, and a line that
+drops keeps its place for 20 s (`LINE_GRACE_MS`) — longer (up to 2 min) while
+someone still in the call says its media still reaches them (`call_up`, sent only
+while a person is away) — and the app rejoins from its new connection, mute and
+camera as they were, and the media carries on. Video is shared across the uplink
+*and the phone's encoder*: 1.5 / 0.9 / 0.6 Mbps for 1 / 2 / 3 others, each copy
+at 360p with two or more others and 24 fps with three, `maintain-framerate`,
+H.264 first when the phone can encode it (the hardware encoder on iPhones), and a
+further step down when WebRTC reports the CPU as the limit ("Your phone is busy —
+sending smaller video"). Each person keeps one stable MediaStream, so the video
+element never reloads. Tiles show a weak-connection hint from packet loss and
+round-trip time, "Home Wi-Fi" when everyone is on the local network and "via
+relay" when TURN carries it. On iPhone the call declares a play-and-record audio
+session (`preferSpeaker`) so it plays on the loudspeaker, not the earpiece.
+
+**Connecting — fast, and honest when it can't** (2026-10-22). Answering sends
+`call_join` and the offer back to back (the room handles one socket's messages
+in order and saves the join before awaiting anything else), while the camera
+opens in parallel and slots in by `replaceTrack`; a connection is made ahead of
+time while the call rings, so its candidates are gathered before Accept. Locally
+(two browsers, one loaded machine) Accept → connected went from a median of
+~1.3–1.5 s to ~0.6–0.7 s. Each call gets fresh ICE servers (`call_started` /
+`call_joined` carry them; `live-worker/src/ice.ts`). Nothing spins forever: after
+8 s the screen says "Still connecting…", and after 15 s (20 s with a relay on
+offer) it says why, from the candidate types each side found
+(`classifyFailure`): your network blocks calls, theirs does, the two networks
+can't reach each other directly (no relay), the relay failed too, or their phone
+isn't responding — with **Try again** and **Audio only**. A dropped connection
+is ICE-restarted after 3 s (the offerer restarts; the other side asks it to);
+unanswered offers are resent every 2 s, at most 5 a minute, and go to the other
+phone's new room connection the moment it's back. Failed connections are rebuilt
+on "Try again", on `online` / network-type changes and when either app rejoins.
+`?relay=1` (or `ds-calls-relay=1` in local storage) forces relay-only for testing
+TURN — "Relay test" shows in the call. Each call's history keeps a small
+`call_stats` per person (time to connect, LAN / internet / relay, failure reason,
+relay on offer — no names or addresses), also logged as one line for
+`wrangler tail`. "Answer" on a call notification opens
+`#/call/<nursery>/<call>?answer=1`, which picks up as soon as the app is back in
+the room.
+
+**Line liveness.** Line sockets ping every 25 s (every 10 s while ringing or in a
+call) and treat a ping that hears nothing for 10 s as a dead socket: dropped and
+reopened at once (backoff capped at 2 s while ringing / in a call). Placing or
+answering a call first checks a line that's been quiet for 30 s. In the room,
+`{"t":"ping"}` is answered by the runtime (`setWebSocketAutoResponse`) without
+waking the Durable Object — nothing depends on pings reaching it (camera
+liveness is the camera's 2-s status, presence is the socket list, a guest's
+"last seen" is set at sign-in). While a call is up the alarm checks its lines
+every 30 s and drops one that hasn't pinged or spoken for a minute (a phone that
+died mid-call), so the call can end instead of hanging.
 
 **Screen.** Remote video full-bleed (a grid for groups), your picture in a
 draggable corner, controls that fade while you talk (mute, camera, flip, add
@@ -325,7 +373,10 @@ and missed calls; tap to call back.
 
 **Limits.** Four people per call (each phone uploads a copy per person). Ringing
 with the app closed needs notifications (on iPhone, the Home Screen app). Calls
-reach only members of a nursery you share.
+reach only members of a nursery you share. Without a TURN relay (production has
+none until the owner sets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN`), phones behind
+carrier or symmetric NAT can't reach each other — the call now says so within
+15 s instead of spinning, but only the relay makes those calls connect.
 
 ## Sound level, sleep and history
 

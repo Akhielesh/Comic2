@@ -3,9 +3,13 @@
 // everything — mute, camera, flip, add someone, hang up. Controls fade away
 // while you talk; a tap brings them back. Minimize keeps the call going in a
 // small floating window while you use the rest of the app.
+//
+// It never spins forever: after 8 s it says "Still connecting…", and if a
+// connection can't be made it says why (your network, theirs, or the two
+// can't reach each other directly) with Try again and Audio only.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { callCenter, type ActiveView } from '../../calls/callCenter';
-import type { PeerView } from '../../calls/callMesh';
+import { failureText, type PeerView } from '../../calls/callMesh';
 import { MAX_IN_CALL } from '../../calls/types';
 import { listPeople, type NurseryPerson } from '../../monitor/client';
 import { Icon } from '../../ui/icons';
@@ -33,8 +37,10 @@ function StreamVideo({ stream, muted, mirror, className }: { stream: MediaStream
 /** Whether a stream's video is really arriving (not a camera-off black frame). */
 function useHasVideo(stream: MediaStream | null, cam: boolean): boolean {
   const [live, setLive] = useState(false);
+  // The stream stays the same while tracks swap inside it: follow the track itself.
+  const track = stream?.getVideoTracks()[0] ?? null;
   useEffect(() => {
-    const t = stream?.getVideoTracks()[0];
+    const t = track;
     if (!t) {
       setLive(false);
       return;
@@ -49,29 +55,45 @@ function useHasVideo(stream: MediaStream | null, cam: boolean): boolean {
       t.removeEventListener('unmute', upd);
       t.removeEventListener('ended', upd);
     };
-  }, [stream]);
+  }, [track]);
   return live && cam;
 }
 
-function Tile({ p }: { p: PeerView }) {
+const tileText = (p: PeerView): string => {
+  if (p.state === 'connected') return p.cam ? '' : 'Camera off';
+  if (p.state === 'slow') return 'Still connecting…';
+  if (p.state === 'failed') return '';
+  return 'Connecting…';
+};
+
+/** One person. `solo`: the only other person (the big status panel explains a failure instead). */
+function Tile({ p, solo }: { p: PeerView; solo?: boolean }) {
   const video = useHasVideo(p.stream, p.cam);
   const who = p.label || p.name;
   return (
-    <div className={cx('call-tile', !video && 'no-video')} data-uid={p.uid}>
+    <div className={cx('call-tile', !video && 'no-video')} data-uid={p.uid} data-state={p.state}>
       <StreamVideo stream={p.stream} className={cx('call-tile-v', !video && 'hidden')} />
       {!video && (
         <div className="call-tile-face">
           <Avatar name={p.name} size={92} />
-          <span>{p.cam ? (p.state === 'connected' ? '' : 'Connecting…') : 'Camera off'}</span>
+          <span>{tileText(p)}</span>
         </div>
       )}
       <div className="call-tile-name">
         {!p.mic && <Icon name="micOff" size={13} />}
         <span>{who}</span>
-        {p.quality === 'poor' && <em className="call-weak">weak connection</em>}
+        {p.quality === 'poor' && p.state === 'connected' && <em className="call-weak">weak connection</em>}
       </div>
-      {(p.state === 'reconnecting' || p.away) && (
-        <div className="call-tile-veil"><Icon name="refresh" size={16} />Reconnecting…</div>
+      {p.state === 'failed' ? (
+        !solo && (
+          <div className="call-tile-veil failed" role="status">
+            <b><Icon name="alert" size={15} />Couldn’t connect</b>
+            <small>{failureText(p.why, who)}</small>
+            <button className="call-pill sm" onClick={() => callCenter.retry()}><Icon name="refresh" size={13} />Try again</button>
+          </div>
+        )
+      ) : (
+        (p.state === 'reconnecting' || p.away) && <div className="call-tile-veil"><Icon name="refresh" size={16} />Reconnecting…</div>
       )}
     </div>
   );
@@ -140,9 +162,18 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
     a.state === 'ended' ? a.ended?.text ?? 'Call ended'
     : a.state === 'calling' ? (a.call ? 'Ringing…' : 'Calling…')
     : a.state === 'connecting' || a.state === 'starting' ? 'Connecting…'
+    : a.state === 'slow' ? 'Still connecting…'
+    : a.state === 'failed' ? 'Couldn’t connect'
     : a.since ? clock(now - a.since) : '';
   const lan = others.length > 0 && others.every((p) => p.path === 'lan');
+  const relayed = a.state === 'connected' && others.some((p) => p.path === 'relay');
   const waiting = a.state !== 'connected';
+  const failed = a.state === 'failed';
+
+  const micText = async () => {
+    const err = await callCenter.toggleMic();
+    if (err) push(err, { icon: 'alert', duration: 6000 });
+  };
 
   const onSelfDown = (e: React.PointerEvent) => {
     drag.current = { x: e.clientX, y: e.clientY, moved: false };
@@ -185,7 +216,7 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
       {waiting && a.cam && <StreamVideo stream={a.local} muted mirror={a.facing === 'user'} className="call-backdrop" />}
       {others.length > 0 && (
         <div className="call-tiles">
-          {others.map((p) => <Tile key={p.uid} p={p} />)}
+          {others.map((p) => <Tile key={p.uid} p={p} solo={others.length === 1} />)}
         </div>
       )}
 
@@ -195,19 +226,34 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
           <b>{title}</b>
           <span>
             {a.call?.video === false && a.state !== 'ended' ? 'Audio · ' : ''}{status}
-            {lan && a.state === 'connected' ? ' · Home Wi-Fi' : ''}
+            {lan && a.state === 'connected' ? ' · Home Wi-Fi' : relayed ? ' · via relay' : ''}
           </span>
         </div>
+        {a.relayTest && a.state !== 'ended' && <span className="call-relay-tag" title="Relay test mode (?relay=1): media may only go through the relay server">Relay test</span>}
         <span className="call-lock" title="Encrypted device to device. Never recorded."><Icon name="lock" size={14} /></span>
       </div>
 
+      {a.busy && a.state === 'connected' && (
+        <div className="call-busy" role="status"><Icon name="alert" size={13} />Your phone is busy — sending smaller video to keep up</div>
+      )}
+
       {(waiting || others.length === 0) && (
-        <div className="call-status">
+        <div className={cx('call-status', failed && 'failed')} role={failed ? 'alert' : undefined}>
           <div className={cx('call-faces', a.state === 'calling' && 'pulse')}>
             {(a.asked.length ? a.asked.map((p) => p.name) : [a.call?.from.name ?? title]).slice(0, 3).map((n) => <Avatar key={n} name={n} size={a.asked.length > 1 ? 72 : 104} />)}
           </div>
           <b>{title}</b>
           <span>{status}</span>
+          {a.state === 'slow' && <small className="call-hint">Taking longer than usual — still trying.</small>}
+          {failed && (
+            <>
+              <p className="call-fail-why">{a.failText ?? 'The call couldn’t connect.'}</p>
+              <div className="call-end-acts">
+                <button className="call-pill" onClick={() => callCenter.retry()}><Icon name="refresh" size={15} />Try again</button>
+                {a.cam && <button className="call-pill ghost" onClick={() => callCenter.retry(true)}><Icon name="phone" size={15} />Audio only</button>}
+              </div>
+            </>
+          )}
           {a.state === 'ended' && (
             <div className="call-end-acts">
               {a.outgoing && a.asked.length > 0 && a.ended?.why !== 'done' && (
@@ -232,7 +278,7 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
 
       {a.state !== 'ended' && (
         <div className="call-ctl" role="toolbar" aria-label="Call controls">
-          <CallButton icon={a.mic ? 'mic' : 'micOff'} label={a.mic ? 'Mute' : 'Unmute'} on={!a.mic} onClick={() => callCenter.toggleMic()} />
+          <CallButton icon={a.mic ? 'mic' : 'micOff'} label={a.mic ? 'Mute' : 'Unmute'} on={!a.mic} onClick={() => void micText()} />
           <CallButton icon={a.cam ? 'video' : 'videoOff'} label={a.cam ? 'Camera' : 'Camera off'} on={!a.cam} onClick={() => void camText()} />
           <CallButton icon="flip" label="Flip" onClick={() => void callCenter.flip()} disabled={!a.canFlip || !a.cam} />
           <CallButton icon="users" label="Add" onClick={() => setAdding(true)} disabled={!a.id || full} />

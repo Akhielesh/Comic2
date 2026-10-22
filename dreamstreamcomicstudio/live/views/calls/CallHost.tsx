@@ -1,9 +1,11 @@
 // Mounted once in the app shell: keeps the family-call lines connected while
 // you're signed in, rings for incoming calls (full-screen, with a ringtone),
-// and shows the call screen on top of whatever you were doing.
+// and shows the call screen on top of whatever you were doing. "Answer" on a
+// call notification opens #/call/<nursery>/<call>?answer=1, which picks up as
+// soon as the app is back in the room — one tap from the lock screen.
 import React, { useEffect, useRef, useState } from 'react';
 import { useAccount } from '../../account';
-import { callCenter, useCalls, type Ringing } from '../../calls/callCenter';
+import { answerFromHash, callCenter, useCalls, type Ringing } from '../../calls/callCenter';
 import { chime, startRing, unlockCallAudio } from '../../calls/ringtone';
 import { Icon } from '../../ui/icons';
 import { Avatar, cx, gradFor, type PushToast } from '../../ui/primitives';
@@ -58,10 +60,45 @@ function IncomingCall({ r, busy, push }: { r: Ringing; busy: boolean; push: Push
   );
 }
 
+/** How long to wait for the call to show up after opening from the notification. */
+const AUTO_ANSWER_MS = 20_000;
+
 export function CallHost({ push, suspended }: { push: PushToast; suspended: boolean }) {
   const account = useAccount();
   const calls = useCalls();
   const member = account.status === 'member';
+
+  // Answer from the notification: pick up as soon as the call rings here.
+  const [autoAnswer, setAutoAnswer] = useState<{ nid: string; id: string; until: number } | null>(() => {
+    const x = typeof location !== 'undefined' ? answerFromHash(location.hash) : null;
+    return x ? { ...x, until: Date.now() + AUTO_ANSWER_MS } : null;
+  });
+  useEffect(() => {
+    const on = () => {
+      const x = answerFromHash(location.hash);
+      if (x) setAutoAnswer({ ...x, until: Date.now() + AUTO_ANSWER_MS });
+    };
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
+  useEffect(() => {
+    if (!autoAnswer) return;
+    const r = calls.ringing.find((x) => x.nid === autoAnswer.nid && x.call.id === autoAnswer.id);
+    if (r) {
+      setAutoAnswer(null);
+      // Answered once: a reload of this address mustn't answer again.
+      try {
+        history.replaceState(history.state, '', `${location.pathname}${location.search}#/calls`);
+      } catch { /* sandboxed */ }
+      void callCenter.accept(r.nid, r.call.id, r.call.video).then((err) => err && push(err, { icon: 'alert', duration: 7000 }));
+      return;
+    }
+    const t = window.setTimeout(() => {
+      setAutoAnswer(null);
+      if (callCenter.snapshot().active?.id !== autoAnswer.id) push('That call has ended.', { icon: 'phone', duration: 5000 });
+    }, Math.max(0, autoAnswer.until - Date.now()));
+    return () => window.clearTimeout(t);
+  }, [autoAnswer, calls.ringing, push]);
 
   useEffect(() => {
     if (member) callCenter.start();
