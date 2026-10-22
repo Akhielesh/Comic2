@@ -334,6 +334,13 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Calls: hardened before launch (2026-10-22):** a link can no longer answer a call for
+  you — only tapping **Answer** on the notification does; someone you blocked or silenced
+  can't reach you by having someone else add you to a call, and "Decline & block" blocks
+  whoever actually added you; someone removed from a nursery stops ringing as family on
+  their next call; and nothing about how quickly a call is answered or cancelled reveals
+  whether you've blocked someone or have the app open. Idle connections can't fill up
+  your devices' slots.
 - **AI agents can no longer use DreamStream (2026-10-02):** AI crawlers, AI assistants and
   automated browsers that open a page are sent to a check-in page instead — 50 questions about
   who they are and what they do with data, plus a clearly-labelled synthetic sample record that
