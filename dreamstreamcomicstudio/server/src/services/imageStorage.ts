@@ -73,7 +73,7 @@ const cropToRatioIfNeeded = async (buffer: Buffer, ratio?: string): Promise<Buff
   const targetRatio = parseRatio(ratio);
   if (!targetRatio) return buffer;
 
-  const image = sharp(buffer, { failOnError: false });
+  const image = sharp(buffer, { failOn: 'none', limitInputPixels: 50_000_000 });
   const metadata = await image.metadata();
   const width = metadata.width;
   const height = metadata.height;
@@ -112,7 +112,7 @@ export const persistGeneratedImage = async ({
   const { buffer: rawBuffer } = parseDataUrl(dataUrl);
   const croppedBuffer = await cropToRatioIfNeeded(rawBuffer, cropToRatio);
   const quality = WEBP_QUALITY[resolution || '1K'] || WEBP_QUALITY['1K'];
-  const webp = await sharp(croppedBuffer, { failOnError: false })
+  const webp = await sharp(croppedBuffer, { failOn: 'none', limitInputPixels: 50_000_000 })
     .webp({ quality, effort: WEBP_EFFORT })
     .toBuffer({ resolveWithObject: true });
 

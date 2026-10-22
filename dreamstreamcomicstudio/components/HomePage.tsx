@@ -187,7 +187,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
               <h3 className="text-2xl font-display mb-2">Comic Studio</h3>
               <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
-                Repurpose stream ideas into visual stories, characters, and shareable creative assets after the live session.
+                Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon.
               </p>
               <button
                 onClick={onEnterStudio}

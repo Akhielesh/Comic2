@@ -45,7 +45,10 @@ const openaiProvider = createOpenAICompatibleProvider({
 });
 const geminiProvider = createOpenAICompatibleProvider({
   id: 'gemini', label: 'Gemini', baseUrl: GEMINI_OPENAI_BASE_URL, timeoutMs: GEMINI_REQUEST_TIMEOUT_MS,
-  modelsPath: '/models', supportsTools: true
+  // supportsReasoningEffort: Gemini 2.5+ thinking models honour reasoning_effort on the
+  // OpenAI-compatible endpoint; forwarding it is what caps thinking so the padded
+  // max_tokens leaves room for the visible reply on the Gemini-direct route (see llm.ts).
+  modelsPath: '/models', supportsReasoningEffort: true, supportsTools: true
 });
 const deepseekProvider = createOpenAICompatibleProvider({
   id: 'deepseek', label: 'DeepSeek', baseUrl: DEEPSEEK_BASE_URL, timeoutMs: DEEPSEEK_REQUEST_TIMEOUT_MS,

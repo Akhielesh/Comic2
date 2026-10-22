@@ -63,6 +63,8 @@ import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
 import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
+import { comicPublicRouter, comicRouter } from './routes/comic.js';
+import { drainStudioSessions } from './comic/session.js';
 import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
 import { seedConnectorCatalog } from './connectors/index.js';
 
@@ -200,6 +202,9 @@ app.use('/api/chat', systemRateLimit, optionalAuth, attachAccountContext, chatPu
 // webhook token instead.
 app.use('/api/connectors', systemRateLimit, connectorsPublicRouter);
 app.use('/api/connectors/webhooks', systemRateLimit, connectorsWebhookRouter);
+// Comic Studio v4 reader for published comics (no session needed; optionalAuth lets an
+// owner preview their own unpublished comic). Must mount before the global requireAuth.
+app.use('/api/comic/public', systemRateLimit, optionalAuth, comicPublicRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
@@ -239,6 +244,9 @@ app.use('/api/chat', textRateLimit, chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
+// Comic Studio v4 (conversational studio) — auth'd, text-tier rate limited; renders are
+// billed per image inside the job runner.
+app.use('/api/comic', textRateLimit, comicRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
@@ -258,7 +266,7 @@ app.use('/api/learn', textRateLimit, learnRouter);
 
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`DreamStream API listening on :${PORT}`);
   // The mailer is dormant-by-design when unconfigured and skips sends WITHOUT logging to
   // email_log, so say so loudly here — otherwise "no emails and no errors" is undebuggable.
@@ -280,3 +288,21 @@ app.listen(PORT, () => {
   // Persist the code-defined connector catalog (enablement/admin config). Best-effort.
   void seedConnectorCatalog();
 });
+
+// Graceful shutdown: on a deploy/scale-down (Cloudflare Containers send SIGTERM), stop
+// accepting new requests, then flush the Comic Studio's in-memory sessions so debounced
+// commits, pending save retries and in-flight paid renders aren't lost. Bounded so a hung
+// store can never block exit past the drain timeout.
+let shuttingDown = false;
+const shutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} — draining studio sessions`);
+  httpServer.close();
+  const drainMs = Number(process.env.SHUTDOWN_DRAIN_MS) || 25_000;
+  void drainStudioSessions(drainMs)
+    .catch((err) => console.warn('[shutdown] drain error', (err as Error)?.message))
+    .finally(() => process.exit(0));
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

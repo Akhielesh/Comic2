@@ -1,0 +1,23 @@
+{
+  "title": "The Last Lamp",
+  "quality": "standard",
+  "style": "graphic-novel-painterly",
+  "format": {
+    "kind": "comic",
+    "pageCount": 2,
+    "pageAspect": "2:3",
+    "panelsPerPage": "auto",
+    "readingDirection": "ltr",
+    "lettering": "overlay",
+    "colorMode": "color",
+    "language": "en"
+  },
+  "script": "THE LAST LAMP — a two-page comic.\n\nEDITH MORROW is seventy-one, wiry and weather-beaten, with a long silver braid, deep-set grey eyes and a yellow oilskin coat over a cable-knit sweater. A brass whistle hangs from a leather cord around her neck. She has kept the Gull Point light for forty years and talks to the lamp like an old friend.\n\nPAGE 1\nPanel 1. Establishing shot. Dusk. A white lighthouse on black rocks; storm clouds stack over a heaving grey sea. Caption: Gull Point. The last manned light on the coast.\nPanel 2. The lamp room. Edith winds the clockwork that turns the great lens, jaw set, rain hammering the glass behind her.\nPanel 3. Insert: her weathered hands on the crank. The handle snaps clean off.\nPanel 4. Edith stares at the broken handle in her palm. Edith: Not tonight. Not tonight of all nights.\n\nPAGE 2\nPanel 1. Wide, through rain-streaked glass: the lights of a small fishing boat pitch toward the rocks.\nPanel 2. Edith loops the cord of her brass whistle around the gear spindle and hauls on it with both hands, boots braced against the brass rail.\nPanel 3. The great lens begins to turn. A white beam cuts across the storm. SFX: KLONK.\nPanel 4. Close on Edith, soaked, grinning through clenched teeth as the beam sweeps past her face. Edith: Keep turning, old girl. Keep turning.",
+  "checks": [
+    "Edith keeps the same silver braid, yellow oilskin and brass whistle in every panel and on both pages.",
+    "Page 2's storm lighting continues page 1 (previous-page reference).",
+    "Only Edith appears — no extra keeper or second woman.",
+    "Overlay lettering: no text drawn in the art; space left near the top of lettered panels.",
+    "The broken crank handle reads clearly in the insert panel."
+  ]
+}

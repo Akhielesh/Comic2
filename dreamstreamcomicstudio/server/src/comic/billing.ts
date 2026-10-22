@@ -1,0 +1,237 @@
+// Per-call billing for Comic Studio (v4).
+//
+// Wraps the platform ledger (services/usageEnforcer.ts) so every paid call — each page,
+// sheet, style board, edit, cover and text role — is reserved before it runs, settled
+// with the provider-reported cost when it lands, and released when it fails.
+//
+// Why a request clone per call: usageEnforcer keeps the reservation on
+// `req.usageReservation`, so N parallel page renders on one request would overwrite each
+// other's reservation and settle/release the wrong one. `Object.create(req)` gives each
+// call its own reservation slot while still reading the user, keys and headers through
+// the prototype. The clone also pins what the ledger sees: a tiny body (so the estimator
+// doesn't scan a 10 MB attachment payload), the model WE are calling (the client's
+// X-Gemini-Model header must not re-price it), and BYOK flags that match the key the
+// studio actually routes with.
+//
+// Bookkeeping never breaks a render: ledger errors are logged and swallowed (fail open).
+// The one thing that is never swallowed is a real denial (allowance/credits exhausted),
+// which the caller turns into an honest notice card.
+
+import type { Request } from 'express';
+import type { LimitExceededDetails } from '../../../shared/types/billing.js';
+import type { Resolution } from '../../../shared/comic/doc.js';
+import { getImageModel, imagePriceUsd, type ImageRoute } from '../../../shared/comic/models.js';
+import { BILLING_ENABLED } from '../config.js';
+import { logger } from '../lib/logger.js';
+import { releaseReservedOperation, reserveForOperation, settleReservedOperation } from '../services/usageEnforcer.js';
+import type { UsagePayload } from '../services/costEstimator.js';
+import { studioKeysFromRequest } from './keys.js';
+import type { BillingHooks, BillingReservation, BillingReserveResult } from './types.js';
+
+type ReserveArgs = Parameters<BillingHooks['reserve']>[0];
+
+export interface BillingDeps {
+  reserve?: typeof reserveForOperation;
+  settle?: typeof settleReservedOperation;
+  release?: typeof releaseReservedOperation;
+  /** Override BILLING_ENABLED (tests). */
+  enabled?: boolean;
+}
+
+const noopReservation: BillingReservation = {
+  async settle() {
+    return {};
+  },
+  async release() {
+    /* nothing reserved */
+  }
+};
+
+/** Hooks that allow everything and record nothing (billing disabled, tests, scripts). */
+export const noopBillingHooks: BillingHooks = {
+  async reserve() {
+    return { ok: true, reservation: noopReservation };
+  }
+};
+
+const ADD_KEY_HINT = 'add your own key in Settings → API keys';
+
+/** A friendly, actionable sentence for a ledger denial. */
+export const billingDenialMessage = (details?: Partial<LimitExceededDetails> | null): string => {
+  switch (details?.reason) {
+    case 'platform_allowance_exhausted':
+      return "You've used this month's included generation allowance. Add your own key in Settings → API keys, or upgrade.";
+    case 'MONTHLY_INCLUDED_EXHAUSTED':
+      return `You've used this month's included credits. Add credits or upgrade your plan — or ${ADD_KEY_HINT}.`;
+    case 'DAILY_LIMIT_EXCEEDED':
+      return `You've reached today's generation limit for your plan. It resets tomorrow — or upgrade, or ${ADD_KEY_HINT}.`;
+    case 'INSUFFICIENT_CREDITS':
+      return `You don't have enough credits for this. Add credits or upgrade — or ${ADD_KEY_HINT}.`;
+    case 'PAYMENT_METHOD_REQUIRED':
+      return 'Add a payment method in Settings → Billing to keep generating past your included credits.';
+    case 'OVERAGE_CAP_REACHED':
+      return `You've reached your monthly overage cap. Raise it in Settings → Billing, or ${ADD_KEY_HINT}.`;
+    default:
+      return `Billing couldn't approve this generation right now. Check your plan in Settings → Billing, or ${ADD_KEY_HINT}.`;
+  }
+};
+
+/** The ledger only prices 1K/2K/4K; a 512 swatch is billed as 1K. */
+const toLedgerResolution = (resolution?: Resolution): '1K' | '2K' | '4K' | undefined =>
+  resolution === '2K' || resolution === '4K' ? resolution : resolution ? '1K' : undefined;
+
+/** Registry list price for an image op, used when the provider reports no cost (Gemini direct). */
+const registryImageCostUsd = (model: string, resolution: Resolution | undefined, units: number): number | undefined => {
+  const spec = getImageModel(model);
+  if (!spec || units <= 0) return undefined;
+  return Math.round(imagePriceUsd(spec, resolution || '1K') * units * 1_000_000) / 1_000_000;
+};
+
+const finite = (n: unknown): number | undefined => (typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : undefined);
+
+/**
+ * A per-call view of the request for the ledger. Reads everything else through the
+ * prototype; owns its reservation slot.
+ */
+const cloneRequestForCall = (req: Request, args: ReserveArgs, byok: boolean): Request => {
+  const clone = Object.create(req) as Request;
+  clone.body = { model: args.model, operation: args.operation, stage: args.stage };
+  const header = ((name: string) => (/^x-gemini-model$/i.test(name) ? undefined : req.header(name))) as Request['header'];
+  clone.header = header;
+  clone.get = header as Request['get'];
+  clone.usageReservation = undefined;
+  clone.usageLimitDetails = undefined;
+  clone.allowanceNotices = undefined;
+  const providerKeys = { ...(req.apiKeys?.providerKeys || {}) };
+  const current = providerKeys[args.provider];
+  providerKeys[args.provider] = { key: current?.key ?? null, byok };
+  clone.apiKeys = { ...(req.apiKeys || {}), providerKeys };
+  return clone;
+};
+
+export function createBillingHooks(req: Request, projectId: string, deps: BillingDeps = {}): BillingHooks {
+  const enabled = deps.enabled ?? BILLING_ENABLED;
+  if (!enabled || !req?.user?.id) return noopBillingHooks;
+
+  const reserveFn = deps.reserve || reserveForOperation;
+  const settleFn = deps.settle || settleReservedOperation;
+  const releaseFn = deps.release || releaseReservedOperation;
+  // Same resolution the studio routes with, so BYOK-ness always matches the key used.
+  const keys = studioKeysFromRequest(req);
+
+  const reserve = async (args: ReserveArgs): Promise<BillingReserveResult> => {
+    const byok = Boolean(keys[args.provider as ImageRoute]?.byok);
+    const clone = cloneRequestForCall(req, args, byok);
+    const isImage = (args.imageUnits || 0) > 0;
+    const metadata: Record<string, unknown> = {
+      surface: 'comic_studio_v4',
+      stage: args.stage,
+      ...(args.resolution ? { resolution: args.resolution } : {})
+    };
+
+    let reserved: Awaited<ReturnType<typeof reserveForOperation>>;
+    try {
+      reserved = await reserveFn({
+        req: clone,
+        operation: args.operation,
+        provider: args.provider,
+        fallbackModel: args.model,
+        imageUnits: args.imageUnits ?? 0,
+        resolution: toLedgerResolution(args.resolution),
+        inputTokens: args.inputTokens,
+        outputTokens: args.outputTokens,
+        projectId,
+        comicId: projectId,
+        stage: args.stage,
+        metadata
+      });
+    } catch (err) {
+      logger.warn('comic_billing_reserve_failed', {
+        operation: args.operation,
+        model: args.model,
+        message: (err as Error)?.message
+      });
+      return { ok: true, reservation: noopReservation };
+    }
+
+    if (!reserved.allowed) {
+      const details = (reserved as { details?: LimitExceededDetails }).details;
+      logger.info('comic_billing_denied', { operation: args.operation, model: args.model, reason: details?.reason });
+      return { ok: false, code: 'BILLING_DENIED', message: billingDenialMessage(details) };
+    }
+
+    const seed = reserved.seed;
+    let done = false;
+
+    const reservation: BillingReservation = {
+      async settle(result) {
+        if (done) return {};
+        done = true;
+        const imageUnits = finite(result.imageUnits) ?? args.imageUnits ?? 0;
+        const reported = finite(result.costUsd);
+        // Gemini direct reports no cost: settle image ops at the registry list price for
+        // the resolution actually rendered, not a single flat catalog row.
+        const providerCostUsd = reported ?? (isImage ? registryImageCostUsd(args.model, args.resolution, imageUnits) : undefined);
+        const promptTokens = finite(result.promptTokens);
+        const completionTokens = finite(result.completionTokens);
+        const usage: UsagePayload = {
+          ...(promptTokens !== undefined ? { promptTokens } : {}),
+          ...(completionTokens !== undefined ? { candidatesTokens: completionTokens } : {}),
+          ...(promptTokens !== undefined || completionTokens !== undefined
+            ? { totalTokens: (promptTokens || 0) + (completionTokens || 0) }
+            : {}),
+          ...(providerCostUsd !== undefined && providerCostUsd > 0 ? { providerCostUsd } : {})
+        };
+        try {
+          const settled = await settleFn({
+            req: clone,
+            operation: args.operation,
+            provider: reserved.provider,
+            model: reserved.model,
+            seed,
+            usage,
+            imageUnits,
+            metadata: { ...metadata, providerCostReported: reported !== undefined }
+          });
+          // Surface allowance threshold notices (30/70/90%) on the real request so the
+          // route can drain them with consumeAllowanceNotices(req).
+          const notices = Object.prototype.hasOwnProperty.call(clone, 'allowanceNotices') ? clone.allowanceNotices : undefined;
+          if (notices?.length) req.allowanceNotices = [...(req.allowanceNotices || []), ...notices];
+          return { billableUsd: typeof settled?.billableUsd === 'number' ? settled.billableUsd : undefined };
+        } catch (err) {
+          logger.error('comic_billing_settle_failed', {
+            operation: args.operation,
+            model: args.model,
+            message: (err as Error)?.message
+          });
+          return {};
+        }
+      },
+      async release(reason) {
+        if (done) return;
+        done = true;
+        try {
+          await releaseFn({
+            req: clone,
+            operation: args.operation,
+            provider: reserved.provider,
+            model: reserved.model,
+            projectId,
+            reason: String(reason || 'released').slice(0, 300),
+            metadata
+          });
+        } catch (err) {
+          logger.error('comic_billing_release_failed', {
+            operation: args.operation,
+            model: args.model,
+            message: (err as Error)?.message
+          });
+        }
+      }
+    };
+
+    return { ok: true, reservation };
+  };
+
+  return { reserve };
+}

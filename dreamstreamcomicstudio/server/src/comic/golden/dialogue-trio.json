@@ -1,0 +1,23 @@
+{
+  "title": "Mother's Book",
+  "quality": "standard",
+  "style": "ligne-claire",
+  "format": {
+    "kind": "comic",
+    "pageCount": 2,
+    "pageAspect": "2:3",
+    "panelsPerPage": "auto",
+    "readingDirection": "ltr",
+    "lettering": "overlay",
+    "colorMode": "color",
+    "language": "en"
+  },
+  "script": "Three siblings sit at their late mother's kitchen table the night after the funeral, her handwritten recipe book between them.\n\nPRIYA (46, the eldest) has a neat grey-streaked bob, reading glasses on a beaded chain and a navy cardigan. She is organised and tired. DEV (38) is broad and rumpled, with a scruffy black beard, a denim jacket and a coffee mug he never puts down; he jokes when things hurt. ASHA (27, the youngest) has a shaved head, a small gold nose ring and a bright orange hoodie; she is blunt and the only one who still cooks.\n\nPriya wants to scan the book and give everyone a copy. \"It's the fair thing.\" Dev says Mum would have laughed at them fighting over dal. Asha says nobody gets it, because none of them ever made a single recipe in it. Priya, hurt, says she was at the hospital every day while Asha was \"finding herself\". Silence. Dev opens the book to the last page and finds a note in their mother's handwriting: \"For Asha, who will burn it the first time. Priya, make her try again. Dev, eat whatever they make.\" They laugh until Priya cries. Asha slides the book to the middle of the table. \"Sunday. Everyone cooks.\"",
+  "checks": [
+    "Three distinct, stable identities: Priya's glasses chain + navy cardigan, Dev's beard + denim jacket + mug, Asha's shaved head + orange hoodie.",
+    "Speakers keep consistent screen sides within the kitchen scene (180° rule).",
+    "Balloons sit near the right speaker, in reading order, never over faces.",
+    "Dialogue is trimmed to ≤ 25 words per balloon; the mother's note reads as a caption or insert, not invented dialogue.",
+    "No fourth sibling or stray extra appears at the table."
+  ]
+}
