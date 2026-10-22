@@ -499,13 +499,16 @@ caller's name comes from `live_me`, never the app; "Grandma · Aria’s family"
 appears only when you share a nursery (`judgeRing`: your own family map and the
 ringing side's map, re-read for the call, are compared and the newer one
 decides — someone just removed from a nursery stops counting at once; neither
-counts past 10 minutes), otherwise the ring says **Stream Studio member · not
+counts past 10 minutes; a side whose map couldn't be read vouches for nobody,
+and then only a map of your own read under a minute ago counts), otherwise the ring says **Stream Studio member · not
 in your family**, answers with the camera off unless you pick video, and offers
 **Decline & block**. Added to a call by someone else, the ring is judged as the
 call (the caller) *and* as the person who added you: a block of either — or of
 anyone already in the call — silences it, the rate limits count against
 whoever added you, it's family only when both are (the adder's side vouches
-only for themselves), the ring says "Added by Bob", and Decline & block blocks
+only for themselves; the caller's own line vouched for the caller when the call
+was placed, and the call's room keeps that word), a caller you silenced stays
+silenced, the ring says "Added by Bob", and Decline & block blocks
 a stranger who added you rather than the caller. **Who can call you**: everyone on Stream Studio (default)
 or only people in your nurseries (`restricted` is the honest reply). A
 **blocked** caller — or one silenced for ringing a non-family member 3 times in
