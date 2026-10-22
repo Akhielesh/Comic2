@@ -115,8 +115,19 @@ const docxToText = async (file: Blob): Promise<string> => {
 const pdfToText = async (file: Blob): Promise<string> => {
   // The legacy build polyfills newer JS (Promise.try etc.) for Safari < 18.2 and older engines.
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  // Use a dedicated worker ONLY in a real browser, where the module is served over http(s)
+  // and the worker loads cheaply. In Node/test/SSR (a file:// module URL) — and in any
+  // context where spawning a worker fails (strict CSP, resource-starved CI) — leave
+  // workerSrc unset so pdf.js parses on the main thread. That is deterministic and
+  // worker-spawn-free; the worker is only a performance optimization, not a requirement.
   if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
+    let workerUrl = '';
+    try {
+      workerUrl = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
+    } catch {
+      /* URL not resolvable here — fall back to the main thread */
+    }
+    if (/^https?:/i.test(workerUrl)) pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   }
   const task = pdfjs.getDocument({ data: new Uint8Array(await readBuffer(file)) });
   const pdf = await task.promise;
