@@ -39,7 +39,7 @@ import { Ema, fmtBps, fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { guestUrl, viewerUrl } from '../nav';
 import { loadPrefs, playChime, savePrefs } from '../prefs';
-import { useAccount } from '../account';
+import { accountSettled, getAccount, useAccount } from '../account';
 import { MAX_GUESTS, type ChatMsg, type EventKind, type LobbyEntry, type LogEntry, type PersonEntry, type StreamStatus } from '../protocol';
 import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
@@ -533,7 +533,12 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         if (!cancelled) setErr('Couldn’t load this event — check the studio link, or whether the streaming backend is reachable.');
         return;
       }
-      // Room first: the invite link and guests don't wait for the camera prompt.
+      // Room first: the invite link and guests don't wait for the camera prompt. The room
+      // learns the host's name at connect, so give the account a moment to load (a reload
+      // would otherwise announce "Host").
+      await accountSettled();
+      if (cancelled) return;
+      hostNameRef.current = prefs.hostName.trim() || getAccount().name?.trim() || hostNameRef.current;
       openSocket();
       await startMedia(p, takePrimedCamera());
     })();

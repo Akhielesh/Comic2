@@ -53,6 +53,26 @@ function set(a: LiveAccount): void {
 
 export const getAccount = (): LiveAccount => current;
 
+/** Resolves once the account has loaded (or after `maxMs`), so anything that announces the
+ *  user's name — the studio's room socket — doesn't go out as a placeholder. */
+export function accountSettled(maxMs = 3000): Promise<LiveAccount> {
+  if (current.status !== 'loading') return Promise.resolve(current);
+  return new Promise((resolve) => {
+    const done = (a: LiveAccount) => {
+      if (a.status === 'loading') return;
+      listeners.delete(done);
+      window.clearTimeout(timer);
+      resolve(a);
+    };
+    const timer = window.setTimeout(() => {
+      listeners.delete(done);
+      resolve(current);
+    }, maxMs);
+    listeners.add(done);
+    void refreshAccount();
+  });
+}
+
 /** React hook — every view shares one account state. */
 export function useAccount(): LiveAccount {
   const [a, setA] = useState(current);
