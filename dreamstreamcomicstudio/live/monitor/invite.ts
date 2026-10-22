@@ -109,7 +109,12 @@ export function onShareChannels(fn: () => void): () => void {
   return () => void channelFns.delete(fn);
 }
 
-/** A parent's own connection for the sheet when no watch screen is open (close it when done). */
+/**
+ * A parent's own connection for the sheet when no watch screen is open (close
+ * it when done). If the room ends it because this account is no longer a
+ * parent (or no longer in the nursery), lists of people re-read, so the sheet
+ * shows what this account can do now instead of controls that do nothing.
+ */
 export function adminChannel(nid: string): ShareChannel {
   const ch = new ShareChannel();
   const sock = openMonitorSocket(
@@ -119,7 +124,10 @@ export function adminChannel(nid: string): ShareChannel {
       if (m.t === 'hello') ch.set({ connected: true, err: null, me: { role: m.you.role, name: m.you.name, guest: false }, nursery: { name: m.nursery.name, baby: m.nursery.baby } });
       else if (m.t === 'share') ch.set({ share: m.share, err: null });
       else if (m.t === 'share_err') ch.set({ err: m.msg });
-      else if (m.t === 'error') ch.set({ err: m.msg });
+      else if (m.t === 'error') {
+        ch.set({ err: m.msg, ...(m.code === 'forbidden' || m.code === 'removed' ? { share: null } : {}) });
+        if (m.code === 'forbidden' || m.code === 'removed') peopleChanged(nid);
+      }
     },
     () => undefined,
     (s, detail) => ch.set({ connected: s === 'connected', ...(s === 'closed' && detail ? { err: detail } : {}) }),

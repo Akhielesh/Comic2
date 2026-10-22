@@ -88,8 +88,11 @@ export interface ShareInfo {
 
 export type JoinFail = { ok: false; reason: 'bad_link' | 'expired' | 'off' | 'locked' | 'wrong' | 'full' | 'slow_down' | 'name'; retryAt?: number; left?: number; disabled?: boolean };
 export type JoinResult = { ok: true; token: string; guest: GuestRow } | JoinFail;
-/** The link and passcode were right (nothing issued yet). */
-export type CheckResult = { ok: true; share: ShareRow; name: string } | JoinFail;
+/**
+ * The link and passcode were right (nothing issued yet). `seal` is the
+ * passcode version that was accepted: `issue` refuses if it changed meanwhile.
+ */
+export type CheckResult = { ok: true; share: ShareRow; name: string; seal: string } | JoinFail;
 
 export const PBKDF2_ROUNDS = 100_000;
 export const MAX_FAILS_IN_A_ROW = 5;
@@ -313,7 +316,7 @@ export class GuestAccess {
   async join(o: { code: string; pass: string; name: string; dev?: string; ip?: string }, now: number): Promise<JoinResult> {
     const c = await this.check(o, now);
     if (c.ok === false) return c as JoinFail;
-    return this.issue(c.share, { name: c.name, dev: o.dev }, now);
+    return this.issue(c, { name: c.name, dev: o.dev }, now);
   }
 
   /**
@@ -354,14 +357,28 @@ export class GuestAccess {
       return lock ? { ok: false, reason: 'locked', retryAt: now + LOCK_MS } : { ok: false, reason: 'wrong', left: MAX_FAILS_IN_A_ROW - fails };
     }
     this.sql.exec('UPDATE mon_shares SET fails = 0, total_fails = 0 WHERE id = ?', row.id);
-    return { ok: true, share: row, name };
+    return { ok: true, share: row, name, seal: String(full.pass_hash) };
   }
 
-  /** Start a guest session on a link whose passcode was just accepted. */
-  async issue(share: ShareRow, o: { name: string; dev?: string }, now: number): Promise<JoinResult> {
+  /**
+   * Start a guest session on a link whose passcode was just accepted. The
+   * caller may have waited on Supabase since `check`, and the room handles
+   * other messages meanwhile — so the link is read again here, in the same
+   * synchronous step as the insert: turned off, replaced, expired or given a
+   * new passcode since (a parent's "set a new passcode and sign out guests")
+   * and nobody gets in with the old one.
+   */
+  async issue(c: { share: ShareRow; seal: string }, o: { name: string; dev?: string }, now: number): Promise<JoinResult> {
+    const token = newToken();
+    const tokenHash = await sha256(token);
+    // Nothing below awaits: no other message can run between this check and the insert.
+    const cur = this.sql.exec('SELECT * FROM mon_shares WHERE id = ?', c.share.id).toArray()[0];
+    if (!cur || cur.revoked_at != null) return { ok: false, reason: 'off' };
+    const share = toShare(cur);
+    if (share.expires_at != null && share.expires_at <= now) return { ok: false, reason: 'expired' };
+    if (!sameString(String(cur.pass_hash), c.seal)) return { ok: false, reason: 'wrong' };
     const active = Number(this.sql.exec('SELECT COUNT(*) AS n FROM mon_guests WHERE share_id = ? AND revoked_at IS NULL AND expires_at > ?', share.id, now).toArray()[0]?.n ?? 0);
     if (active >= MAX_GUESTS) return { ok: false, reason: 'full' };
-    const token = newToken();
     const guest: GuestRow = {
       id: newGuestId(),
       share_id: share.id,
@@ -374,7 +391,7 @@ export class GuestAccess {
     };
     this.sql.exec(
       'INSERT INTO mon_guests (id, share_id, token_hash, name, role, dev, created_at, last_seen, expires_at, revoked_at) VALUES (?,?,?,?,?,?,?,?,?,NULL)',
-      guest.id, guest.share_id, await sha256(token), guest.name, guest.role, (o.dev || '').slice(0, 40) || null, now, now, guest.expires_at,
+      guest.id, guest.share_id, tokenHash, guest.name, guest.role, (o.dev || '').slice(0, 40) || null, now, now, guest.expires_at,
     );
     return { ok: true, token, guest };
   }

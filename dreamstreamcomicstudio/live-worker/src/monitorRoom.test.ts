@@ -1019,7 +1019,9 @@ describe('MonitorRoom guests (share link + passcode)', () => {
     const jo = await guestSocket(a.token, 'viewer', 'jo');
     const sam = await guestSocket(b.token, 'viewer', 'sam');
 
-    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true, ids: ['u-parent'] }), { status: 200 }));
+    vi.stubGlobal('fetch', async (url: string) =>
+      new Response(JSON.stringify(String(url).endsWith('/monitor_people') ? { ok: true, people: [{ user_id: 'u-parent', role: 'parent', label: 'Mom' }] } : { ok: true, ids: ['u-parent'] }), { status: 200 }),
+    );
     await say(mom, { t: 'members_changed', token: 'tok-parent' });
     expect(jo.closed).toBeNull();
 
@@ -1099,6 +1101,35 @@ describe('MonitorRoom guests (share link + passcode)', () => {
     expect((mom.msgs('share').at(-1)!.share as { guests: unknown[] }).guests).toHaveLength(0);
   });
 
+  it('a guest’s device hears when its pass ends now — in its hello, and again when a parent extends the link', async () => {
+    const { room, join, say } = setup();
+    const DAY = 24 * 3600_000;
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer', days: 1 });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    const body = (await (await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Grandma Jo' })).json()) as { token: string; guest: { until: number } };
+    expect(body.guest.until).toBeGreaterThan(Date.now() + DAY - 60_000);
+
+    // The room is the authority: its hello says when the pass ends.
+    const g = await join('', 'viewer', 'gran-ipad', { guest: body.token });
+    expect((g.msgs('hello')[0].you as { until?: number }).until).toBe(body.guest.until);
+    expect((mom.msgs('hello')[0].you as { until?: number }).until).toBeUndefined();
+
+    // "+7 days": the guest's device is told the new end right away…
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect(g.msgs('guest_pass')).toEqual([{ t: 'guest_pass', until: body.guest.until + 7 * DAY }]);
+    expect(mom.msgs('guest_pass')).toHaveLength(0);
+    // …and a device that was away hears it on its next connect.
+    const later = await join('', 'viewer', 'gran-phone', { guest: body.token });
+    expect((later.msgs('hello')[0].you as { until?: number }).until).toBe(body.guest.until + 7 * DAY);
+
+    // A new passcode that keeps guests signed in: their pass still ends when it did.
+    await new Promise((r) => setTimeout(r, 2));
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    expect(g.msgs('guest_pass').at(-1)).toEqual({ t: 'guest_pass', until: body.guest.until + 7 * DAY });
+    expect(g.closed).toBeNull();
+  });
+
   it('push and log copy point to Invite', async () => {
     const { room, join, say, subscribe } = setup();
     const mom = await join('tok-parent', 'viewer', 'phone');
@@ -1149,6 +1180,135 @@ describe('MonitorRoom admin socket (the Invite sheet off the watch screen)', () 
     const { join } = setup();
     const ws = await join('tok-care', 'admin' as never, 'hub');
     expect(ws.closed).toBe(4004);
+  });
+});
+
+describe('MonitorRoom: a role change reaches sockets already open', () => {
+  type Role = 'parent' | 'caregiver' | 'viewer';
+  /** Supabase as the room sees it: who each token is, and their role now (changed by a parent in the app). */
+  const supabase = (roles: Record<string, { uid: string; name: string; role: Role }>, o: { peopleDown?: boolean } = {}) =>
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      const token = String((init.headers as Record<string, string>).authorization).replace('Bearer ', '');
+      const fn = String(url).split('/rpc/')[1];
+      const body = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
+      const all = Object.values(roles);
+      const me = roles[token];
+      if (fn === 'monitor_my_role') return me ? body({ ok: true, user_id: me.uid, role: me.role, display_name: me.name, label: null, nursery_name: 'Nursery', baby_name: 'Aria' }) : body({ ok: false });
+      if (fn === 'monitor_member_ids') return body({ ok: true, ids: all.map((p) => p.uid) });
+      if (fn === 'monitor_people') return o.peopleDown ? body({ message: 'unavailable' }, 503) : body({ ok: true, people: all.map((p) => ({ user_id: p.uid, display_name: p.name, role: p.role, label: null })) });
+      return body({ ok: false }, 404);
+    });
+  const people = () => ({
+    'tok-parent': { uid: 'u-parent', name: 'Alice', role: 'parent' as Role },
+    'tok-dad': { uid: 'u-dad', name: 'Dan', role: 'parent' as Role },
+  });
+  /** Everything only a parent may send — none of it may work from a socket whose parent role is gone. */
+  const tryParentPowers = async (say: (ws: FakeWS, m: unknown) => Promise<void>, ws: FakeWS, guestId: string) => {
+    await say(ws, { t: 'share_set', pass: 'maple-river-lotus-55', role: 'caregiver', days: 30 });
+    await say(ws, { t: 'share_pass', pass: 'maple-river-lotus-55', signOut: true });
+    await say(ws, { t: 'share_extend', days: 30 });
+    await say(ws, { t: 'guest_remove', id: guestId });
+    await say(ws, { t: 'share_off' });
+    await say(ws, { t: 'members_changed', token: 'tok-dad' });
+  };
+  const joinHttp = (room: MonitorRoom, body: Record<string, unknown>) =>
+    room.fetch(new Request(`https://monitor.internal/guest?nid=${NID}`, { method: 'POST', body: JSON.stringify(body), headers: { 'cf-connecting-ip': '6.6.6.6' } }));
+  /** Mom, and Dad on every kind of socket: the Invite sheet, his watch screen, the crib camera and his call line. */
+  const family = async (roles: ReturnType<typeof people>, o: { peopleDown?: boolean } = {}) => {
+    const t = setup();
+    supabase(roles, o);
+    const mom = await t.join('tok-parent', 'viewer', 'phone');
+    const sheet = await t.join('tok-dad', 'admin' as never, 'dad-hub');
+    const watch = await t.join('tok-dad', 'viewer', 'dad-laptop');
+    const cam = await t.join('tok-dad', 'camera', 'crib');
+    const line = await t.join('tok-dad', 'line', 'dad-line');
+    await t.say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer', days: 7 });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    await joinHttp(t.room, { code, pass: 'blue-otter-42', name: 'Grandma Jo' });
+    const share = () => mom.msgs('share').at(-1)!.share as { code: string; pass_at: number; expires_at: number; role: string; on: boolean; guests: { id: string }[] };
+    expect(share().guests).toHaveLength(1);
+    expect(sheet.closed).toBeNull();
+    return { ...t, mom, sheet, watch, cam, line, share };
+  };
+
+  it('a parent made a Viewer loses every parent power at once: the Invite sheet closes, the camera stops, the watch screen can manage nothing', async () => {
+    const roles = people();
+    const { say, mom, sheet, watch, cam, line, share } = await family(roles);
+    const before = share();
+    const logs = mom.logs().length;
+
+    roles['tok-dad'].role = 'viewer';
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-dad'] });
+
+    // The Invite sheet (an 'admin' socket, which never gets roles_changed) is ended with the reason.
+    expect(sheet.msgs('error').at(-1)).toMatchObject({ code: 'forbidden', msg: 'Only parents can manage this nursery.' });
+    expect(sheet.closed).toBe(4004);
+    // A Viewer can't run a camera: it stops now (not at some later reconnect), saying why.
+    expect(cam.msgs('error').at(-1)).toMatchObject({ code: 'forbidden', msg: expect.stringMatching(/can watch but not run the camera/) });
+    expect(cam.closed).toBe(4004);
+    // The watch screen keeps watching, reconnects for its new role — and meanwhile can manage nothing.
+    expect(watch.closed).toBeNull();
+    expect(watch.msgs('roles_changed')).toHaveLength(1);
+    expect(line.closed).toBeNull();
+    const shares = watch.msgs('share').length;
+    await tryParentPowers(say, watch, before.guests[0].id);
+    await tryParentPowers(say, line, before.guests[0].id);
+    expect(share()).toEqual(before);
+    expect(mom.logs().slice(logs).map((e) => e.msg)).toEqual(['Alice updated who can access this nursery']);
+    // …and hears nothing more about the link (no new codes).
+    await new Promise((r) => setTimeout(r, 2));
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    expect(share().pass_at).toBeGreaterThan(before.pass_at);
+    expect(watch.msgs('share')).toHaveLength(shares);
+    // Mom's own access didn't change: her picture isn't restarted.
+    expect(mom.msgs('roles_changed')).toHaveLength(0);
+  });
+
+  it('with nobody named, everyone’s role is read again: a parent made a Caregiver keeps the camera but nothing a parent alone may do', async () => {
+    const roles = people();
+    const { say, mom, sheet, watch, cam, share } = await family(roles);
+    const before = share();
+    roles['tok-dad'].role = 'caregiver';
+    await say(mom, { t: 'members_changed', token: 'tok-parent' });
+    expect(sheet.closed).toBe(4004);
+    expect(cam.closed).toBeNull();
+    expect(watch.closed).toBeNull();
+    await tryParentPowers(say, watch, before.guests[0].id);
+    await tryParentPowers(say, cam, before.guests[0].id);
+    expect(share()).toEqual(before);
+    // Mom is still a parent.
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect(share().expires_at).toBe(before.expires_at + 7 * 24 * 3600_000);
+  });
+
+  it('if Supabase can’t list roles, the person named signs in again on the Invite sheet, and keeps watching with no parent-only power', async () => {
+    const roles = people();
+    const { say, mom, sheet, watch, cam, line, share } = await family(roles, { peopleDown: true });
+    const before = share();
+    roles['tok-dad'].role = 'viewer';
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-dad'] });
+    // The sheet reconnects (not a final code) and signs in with whatever role Supabase gives then.
+    expect(sheet.closed).toBe(4009);
+    // A Supabase hiccup never stops anyone watching the baby.
+    expect(cam.closed).toBeNull();
+    expect(watch.closed).toBeNull();
+    expect(line.closed).toBeNull();
+    await tryParentPowers(say, watch, before.guests[0].id);
+    await tryParentPowers(say, cam, before.guests[0].id);
+    expect(share()).toEqual(before);
+    // Only the person named: Mom keeps hers.
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect(share().expires_at).toBe(before.expires_at + 7 * 24 * 3600_000);
+  });
+
+  it('a demoted parent can’t take the Invite sheet back: signing in again as an admin is refused', async () => {
+    const roles = people();
+    const { join, say, mom } = await family(roles);
+    roles['tok-dad'].role = 'viewer';
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-dad'] });
+    const again = await join('tok-dad', 'admin' as never, 'dad-hub-2');
+    expect(again.closed).toBe(4004);
+    expect(again.msgs('share')).toHaveLength(0);
   });
 });
 
@@ -1240,6 +1400,57 @@ describe('MonitorRoom: guests who have an account (share link → member)', () =
     expect(bob.msgs('roles_changed')).toHaveLength(rolesBefore);
     // The old guest pass is gone for good.
     expect((await join('', 'viewer', 'sam-phone2', { guest: res.token })).closed).toBe(4004);
+  });
+
+  it('a new passcode (or "off") set while a join waits on Supabase wins: the old passcode gets no pass', async () => {
+    const { room, join, say } = setup();
+    supabase(new Set(['u-parent']));
+    // Hold the joiner's role look-up open, the way a slow Supabase does: the room takes other messages meanwhile.
+    const stub = globalThis.fetch;
+    let release: () => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const hold = () => {
+      const gate = new Promise<void>((r) => (release = () => r()));
+      const waiting = new Promise<void>((r) => (reached = () => r()));
+      vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+        if (String(url).endsWith('/monitor_my_role') && (init.headers as Record<string, string>).authorization === `Bearer ${T.sam}`) {
+          reached();
+          await gate;
+        }
+        return stub(url, init);
+      });
+      return waiting;
+    };
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+
+    // "Set a new passcode" + "sign out guests" lands after the old passcode was checked.
+    let waiting = hold();
+    let pending = joinHttp(room, { code, pass: 'blue-otter-42', name: 'Uncle Sam' }, T.sam);
+    await waiting;
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17', signOut: true });
+    release();
+    let r = await pending;
+    expect(r.status).toBe(401);
+    expect(await r.json()).toMatchObject({ ok: false, reason: 'wrong' });
+    let share = mom.msgs('share').at(-1)!.share as { guests: unknown[]; requests: unknown[] };
+    expect(share.guests).toEqual([]);
+    expect(share.requests).toEqual([]);
+    expect(mom.logs().some((e) => /Uncle Sam joined/.test(e.msg))).toBe(false);
+
+    // Turning the link off meanwhile: no pass either.
+    waiting = hold();
+    pending = joinHttp(room, { code, pass: 'cedar-heron-otter-17', name: 'Uncle Sam' }, T.sam, '7.7.7.8');
+    await waiting;
+    await say(mom, { t: 'share_off' });
+    release();
+    r = await pending;
+    expect(r.status).toBe(410);
+    expect(await r.json()).toMatchObject({ ok: false, reason: 'off' });
+    share = mom.msgs('share').at(-1)!.share as { guests: unknown[]; requests: unknown[] };
+    expect(share.guests).toEqual([]);
+    expect(mom.logs().some((e) => /Uncle Sam joined/.test(e.msg))).toBe(false);
   });
 
   it('a parent can keep them a guest instead', async () => {

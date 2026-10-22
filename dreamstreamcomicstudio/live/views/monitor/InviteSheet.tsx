@@ -8,7 +8,10 @@
 //   · Who has access: members, guests, and guests with an account a parent
 //     can make a member.
 // A real dialog: Esc closes it, focus starts inside and returns to what opened
-// it, the page behind is inert, the tabs work with the arrow keys.
+// it, the page behind is inert, the tabs work with the arrow keys. Because the
+// page behind is inert (and the app's toasts sit under the scrim), everything
+// the sheet has to say — above all what went wrong — is said inside it: an
+// inline alert next to what was tapped, or a line its own live region reads.
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { openAuth, searchPeople, useAccount, type Person } from '../../account';
@@ -59,6 +62,81 @@ function freshPasscode(avoid: (string | null | undefined)[]): string {
   let p = suggestPasscode();
   for (let i = 0; i < 6 && passcodeProblem(p, avoid); i++) p = suggestPasscode();
   return p;
+}
+
+/**
+ * What happened after a tap, shown next to it. A problem is an alert (read out
+ * at once, and again if it happens again); anything else is a short line the
+ * sheet's live region also reads, gone after a few seconds.
+ */
+interface Note {
+  text: string;
+  problem?: boolean;
+  /** Where it shows (a person's or a request's id), when there's more than one place. */
+  at?: string;
+  n: number;
+}
+
+let noteN = 0;
+function useNote(say: (t: string) => void): [Note | null, (text: string, o?: { problem?: boolean; at?: string }) => void, () => void] {
+  const [note, setNote] = useState<Note | null>(null);
+  useEffect(() => {
+    if (!note || note.problem) return;
+    const t = window.setTimeout(() => setNote(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [note]);
+  const show = (text: string, o: { problem?: boolean; at?: string } = {}) => {
+    setNote({ text, problem: o.problem, at: o.at, n: ++noteN });
+    if (!o.problem) say(text);
+  };
+  return [note, show, () => setNote(null)];
+}
+
+/** How long a change to the link or its guests may go unanswered before the sheet says so. */
+const ROOM_ANSWER_MS = 8000;
+const NO_ANSWER = 'The nursery didn’t answer, so this may not have changed — check your connection and try again.';
+
+/**
+ * After a change goes to the room: the room answers with the new share state
+ * (or an error). If neither comes back in time — the connection dropped, or
+ * the room refused it — `onSilence` says so instead of leaving a tap that
+ * silently did nothing.
+ */
+function useAnswerWatch(share: ShareInfo | null, err: string | null, onSilence: (at?: string) => void): (at?: string) => void {
+  const w = useRef<{ t: number; share: ShareInfo | null } | null>(null);
+  useEffect(() => {
+    const cur = w.current;
+    if (cur && (share !== cur.share || err)) {
+      window.clearTimeout(cur.t);
+      w.current = null;
+    }
+  }, [share, err]);
+  useEffect(() => () => void (w.current && window.clearTimeout(w.current.t)), []);
+  return (at) => {
+    if (w.current) window.clearTimeout(w.current.t);
+    w.current = {
+      share,
+      t: window.setTimeout(() => {
+        w.current = null;
+        onSilence(at);
+      }, ROOM_ANSWER_MS),
+    };
+  };
+}
+
+function NoteLine({ note, at }: { note: Note | null; at?: string }) {
+  if (!note || note.at !== at) return null;
+  return note.problem ? (
+    <div key={note.n} className="banner warn inv-alert" role="alert">
+      <Icon name="alert" size={15} />
+      <span>{note.text}</span>
+    </div>
+  ) : (
+    <p key={note.n} className="inv-ok">
+      <Icon name="check" size={14} />
+      {note.text}
+    </p>
+  );
 }
 
 /** Desktop: focus the first field. Phones: the dialog itself (no keyboard popping over the sheet). */
@@ -223,7 +301,7 @@ export function InviteSheet({ nid, initialTab, tabRequest, onClose, push }: {
     body = (
       <>
         <div className="banner info inv-ask"><Icon name="lock" size={15} /><span>Only parents can invite people — ask {nursery.owner_name || 'a parent'}.</span></div>
-        <WhoHasAccess nid={nid} nursery={nursery} people={people} share={null} isParent={false} ch={ch} viewers={viewerSt.viewers} push={push} say={say} onLeft={onClose} />
+        <WhoHasAccess nid={nid} nursery={nursery} people={people} share={null} err={null} isParent={false} ch={ch} viewers={viewerSt.viewers} push={push} say={say} onLeft={onClose} />
       </>
     );
   } else {
@@ -241,10 +319,10 @@ export function InviteSheet({ nid, initialTab, tabRequest, onClose, push }: {
           {tab === 'add' ? (
             <AddPanel nid={nid} nursery={nursery} nurseries={nurseries} people={people} ch={ch} baby={baby} push={push} say={say} onLinkTab={() => pickTab('link')} />
           ) : (
-            <LinkPanel nid={nid} ch={ch} st={st} baby={baby} nurseryName={nursery.name} push={push} say={say} onZoom={setZoom} />
+            <LinkPanel nid={nid} ch={ch} st={st} baby={baby} nurseryName={nursery.name} say={say} onZoom={setZoom} />
           )}
         </div>
-        <WhoHasAccess nid={nid} nursery={nursery} people={people} share={share} isParent ch={ch} viewers={viewerSt.viewers} push={push} say={say} onLeft={onClose} />
+        <WhoHasAccess nid={nid} nursery={nursery} people={people} share={share} err={st.err} isParent ch={ch} viewers={viewerSt.viewers} push={push} say={say} onLeft={onClose} />
       </>
     );
   }
@@ -397,6 +475,7 @@ function AddPanel({ nid, nursery, nurseries, people, ch, baby, push, say, onLink
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<{ text: string; code?: string } | null>(null);
   const [added, setAdded] = useState<(Pick & { role: MonRole }) | null>(null);
+  const [note, showNote] = useNote(say);
   const memberIds = useMemo(() => new Set((people ?? []).map((p) => p.user_id)), [people]);
   const full = (people?.length ?? 0) >= MAX_PEOPLE;
 
@@ -462,8 +541,8 @@ function AddPanel({ nid, nursery, nurseries, people, ch, baby, push, say, onLink
     if (!added) return;
     const msg = addedMessage(nid, baby, nursery.name);
     const r = await shareOrCopy(msg, `${msg.text} ${msg.url}`);
-    if (r === 'copied') push('Message copied — paste it to them', { icon: 'copy' });
-    else if (r === 'failed') push('Couldn’t open sharing — tell them to open Baby monitor in Stream Studio', { icon: 'info' });
+    if (r === 'copied') showNote('Message copied — paste it to them.');
+    else if (r === 'failed') showNote('Couldn’t open sharing or copy here — tell them to open Baby monitor in Stream Studio.', { problem: true });
   };
 
   if (added) {
@@ -479,6 +558,7 @@ function AddPanel({ nid, nursery, nurseries, people, ch, baby, push, say, onLink
           <Btn variant="solid" icon="share" onClick={() => void letThemKnow()}>Let them know</Btn>
           <Btn variant="ghost" icon="userPlus" onClick={() => setAdded(null)}>Add someone else</Btn>
         </div>
+        <NoteLine note={note} />
       </div>
     );
   }
@@ -583,13 +663,12 @@ function AddPanel({ nid, nursery, nurseries, people, ch, baby, push, say, onLink
 
 /* ------------------------------------------------------ share a link */
 
-function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
+function LinkPanel({ nid, ch, st, baby, nurseryName, say, onZoom }: {
   nid: string;
   ch: ShareChannel | null;
   st: ShareChannelState;
   baby: string;
   nurseryName: string;
-  push: PushToast;
   say: (t: string) => void;
   onZoom: (link: string) => void;
 }) {
@@ -604,6 +683,9 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
   const [confirm, setConfirm] = useState<'off' | 'new' | null>(null);
   const [justSet, setJustSet] = useState<string | null>(null);
   const pending = useRef<{ pass: string; since: number | null; kind: 'link' | 'pass' } | null>(null);
+  const [note, showNote, clearNote] = useNote(say);
+  /** The link's end when "+7 days" was tapped — confirmed when the room's answer moves it. */
+  const extending = useRef<number | null>(null);
 
   const link = share?.on && share.code ? shareLink(nid, share.code) : null;
   const passAt = share?.on ? (share.pass_at ?? share.created_at ?? null) : null;
@@ -626,18 +708,36 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
       setMaking(true);
     } else setNewPass(p.pass);
   }, [st.err]);
+  // "+7 days" is said once the room has moved the end, not when tapped.
+  const expiresAt = share?.on ? share.expires_at : null;
+  useEffect(() => {
+    if (extending.current == null || expiresAt == null || expiresAt === extending.current) return;
+    extending.current = null;
+    showNote(`Link extended — it now works until ${endsAt(expiresAt)}. Guests who joined with it can watch as long.`);
+  }, [expiresAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = (msg: Record<string, unknown>) => {
-    if (!ch) return;
+  const expectAnswer = useAnswerWatch(share, st.err, () => {
+    extending.current = null;
+    showNote(NO_ANSWER, { problem: true });
+  });
+  /** To the room — or say why it can't go now (never a tap that silently does nothing). */
+  const send = (msg: Record<string, unknown>): boolean => {
+    if (!ch || !st.connected) {
+      showNote('Not connected to the nursery right now — try again in a moment.', { problem: true });
+      return false;
+    }
+    clearNote();
     ch.set({ err: null });
     ch.send(msg);
+    expectAnswer();
+    return true;
   };
   const copy = async (text: string, what: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      push(`${what} copied`, { icon: 'check', duration: 1800 });
+      showNote(`${what} copied.`);
     } catch {
-      push('Couldn’t copy — select it and copy by hand', { icon: 'alert' });
+      showNote('Couldn’t copy — select it and copy by hand.', { problem: true });
     }
   };
 
@@ -662,9 +762,9 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
   const sendLink = async () => {
     if (!link) return;
     const r = await shareOrCopy(linkMessage(link, baby, nurseryName), link);
-    if (r === 'copied') push('Link copied — paste it into a message. Send the passcode separately.', { icon: 'copy', duration: 3500 });
-    else if (r === 'shared') say('Link sent. Now tell them the passcode another way.');
-    else if (r === 'failed') push('Couldn’t open sharing — use Copy', { icon: 'alert' });
+    if (r === 'copied') showNote('Link copied — paste it into a message. Send the passcode separately.');
+    else if (r === 'shared') showNote('Link sent. Now tell them the passcode another way.');
+    else if (r === 'failed') showNote('Couldn’t open sharing — use Copy.', { problem: true });
   };
 
   if (!st.connected && !share) {
@@ -761,6 +861,10 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
           </small>
         </div>
       </div>
+      <NoteLine note={note} />
+      {/* The room's answer to the last change (the passcode form shows its own). */}
+      {st.err && newPass == null && <div className="banner warn" role="alert"><Icon name="alert" size={15} /><span>{st.err}</span></div>}
+      {!st.connected && !st.err && <small className="faint">Reconnecting to the nursery…</small>}
 
       <div className="inv-pass">
         {justSet ? (
@@ -813,8 +917,8 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
           text={`Turn the link off? ${n ? `${n} guest${n === 1 ? ' is' : 's are'} signed out right away.` : 'Nobody can join with it after that.'}`}
           yes="Turn off"
           onYes={() => {
-            send({ t: 'share_off' });
             setConfirm(null);
+            if (!send({ t: 'share_off' })) return;
             setJustSet(null);
             say('The share link is off.');
           }}
@@ -835,7 +939,16 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
       ) : (
         <div className="inv-actions">
           {share!.expires_at && (
-            <Btn variant="subtle" size="sm" icon="clock" onClick={() => { send({ t: 'share_extend', days: 7 }); say('Link extended by 7 days.'); }}>+7 days</Btn>
+            <Btn
+              variant="subtle"
+              size="sm"
+              icon="clock"
+              onClick={() => {
+                if (send({ t: 'share_extend', days: 7 })) extending.current = share!.expires_at;
+              }}
+            >
+              +7 days
+            </Btn>
           )}
           <Btn variant="subtle" size="sm" icon="refresh" onClick={() => setConfirm('new')}>New link</Btn>
           <Btn variant="danger" size="sm" icon="x" onClick={() => setConfirm('off')}>Turn off</Btn>
@@ -847,11 +960,13 @@ function LinkPanel({ nid, ch, st, baby, nurseryName, push, say, onZoom }: {
 
 /* ---------------------------------------------------- who has access */
 
-function WhoHasAccess({ nid, nursery, people, share, isParent, ch, viewers, push, say, onLeft }: {
+function WhoHasAccess({ nid, nursery, people, share, err, isParent, ch, viewers, push, say, onLeft }: {
   nid: string;
   nursery: Nursery;
   people: NurseryPerson[] | null;
   share: ShareInfo | null;
+  /** The room's last refusal (its answer when a change didn't go through). */
+  err: string | null;
   isParent: boolean;
   ch: ShareChannel | null;
   viewers: ViewerPresence[] | null;
@@ -861,39 +976,57 @@ function WhoHasAccess({ nid, nursery, people, share, isParent, ch, viewers, push
 }) {
   const [removing, setRemoving] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [note, showNote, clearNote] = useNote(say);
   const requests: ShareRequest[] = share?.requests ?? [];
   const watchingNames = new Set((viewers ?? []).filter((v) => !v.guest).map((v) => v.name));
 
-  const save = async (p: NurseryPerson, r: MonRole, l: string) => {
-    const res = await setMember(nid, p.user_id, r, l);
-    if (!res.ok) {
-      push(addMemberError(res.error, firstName(p.display_name)), { icon: 'alert' });
+  const expectAnswer = useAnswerWatch(share, err, (at) => showNote(NO_ANSWER, { problem: true, at }));
+  /** To the room, or why it can't go now (shown at `at`). */
+  const toRoom = (msg: Record<string, unknown>, at: string): boolean => {
+    if (!ch?.snapshot().connected) {
+      showNote('Not connected to the nursery right now — try again in a moment.', { problem: true, at });
       return false;
     }
-    push(`${p.display_name} updated`, { icon: 'check' });
+    clearNote();
+    ch.send(msg);
+    expectAnswer(at);
+    return true;
+  };
+  const save = async (p: NurseryPerson, r: MonRole, l: string) => {
+    clearNote();
+    const res = await setMember(nid, p.user_id, r, l);
+    if (!res.ok) {
+      showNote(addMemberError(res.error, firstName(p.display_name)), { problem: true, at: p.user_id });
+      return false;
+    }
+    showNote(`${p.display_name} updated.`, { at: p.user_id });
     peopleChanged(nid);
     void announcePeople(nid, ch, [p.user_id]);
     return true;
   };
   const remove = async (p: NurseryPerson) => {
+    clearNote();
     const r = await removeMember(nid, p.user_id);
-    if (!r.ok) return push(addMemberError(r.error, firstName(p.display_name)), { icon: 'alert' });
-    push(p.is_me ? 'You left the nursery' : `${p.display_name} removed`, { icon: 'check' });
+    if (!r.ok) return showNote(addMemberError(r.error, firstName(p.display_name)), { problem: true, at: p.user_id });
     void announcePeople(nid, ch, [p.user_id]);
     peopleChanged(nid);
     if (p.is_me) {
+      // The sheet closes: the app's toast is the one place left to say it.
+      push('You left the nursery', { icon: 'check' });
       onLeft();
       location.hash = '#/monitor';
+      return;
     }
+    showNote(`${p.display_name} removed.`, { at: 'top' });
   };
   const makeMember = async (r: ShareRequest) => {
+    clearNote();
     setBusy(r.id);
     const res = await setMember(nid, r.uid, r.role, '');
     setBusy(null);
-    if (!res.ok) return push(addMemberError(res.error, firstName(r.account)), { icon: 'alert', duration: 5000 });
+    if (!res.ok) return showNote(addMemberError(res.error, firstName(r.account)), { problem: true, at: r.id });
     await announcePeople(nid, ch, [r.uid]);
-    push(`${r.name} is now a member — they’ll watch with their own account`, { icon: 'check', duration: 4000 });
-    say(`${r.name} is now a member.`);
+    showNote(`${r.name} is now a member — they’ll watch with their own account.`, { at: 'top' });
     markSetup(nid, 'family');
     peopleChanged(nid);
   };
@@ -910,6 +1043,7 @@ function WhoHasAccess({ nid, nursery, people, share, isParent, ch, viewers, push
       {viewers && viewers.length > 0 && (
         <p className="inv-now"><span className="inv-dot" aria-hidden />Watching now: {viewers.map((v) => `${v.label || v.name}${v.guest ? ' (guest)' : ''}`).join(', ')}</p>
       )}
+      <NoteLine note={note} at="top" />
 
       {isParent && requests.length > 0 && (
         <div className="inv-requests">
@@ -921,8 +1055,9 @@ function WhoHasAccess({ nid, nursery, people, share, isParent, ch, viewers, push
                 <small className="faint">Make them a member so they watch with their own account — no passcode, no end date.</small>
                 <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                   <Btn variant="solid" size="sm" icon="userPlus" disabled={busy === r.id} onClick={() => void makeMember(r)}>{busy === r.id ? 'Adding…' : 'Make member'}</Btn>
-                  <Btn variant="ghost" size="sm" onClick={() => ch?.send({ t: 'request_dismiss', id: r.id })}>Keep as guest</Btn>
+                  <Btn variant="ghost" size="sm" onClick={() => toRoom({ t: 'request_dismiss', id: r.id }, r.id) && say(`${r.name} stays a guest.`)}>Keep as guest</Btn>
                 </div>
+                <NoteLine note={note} at={r.id} />
               </div>
             </div>
           ))}
@@ -935,17 +1070,19 @@ function WhoHasAccess({ nid, nursery, people, share, isParent, ch, viewers, push
       ) : (
         <div className="people-list inv-people">
           {people.map((p) => (
-            <PersonRow
-              key={p.user_id}
-              p={p}
-              nurseryName={nursery.name}
-              canEdit={isParent && !p.is_owner}
-              canRelabelSelf={p.is_me}
-              canRemove={(isParent && !p.is_owner) || (p.is_me && !p.is_owner)}
-              watching={watchingNames.has(p.display_name)}
-              onSave={(r, l) => save(p, r, l)}
-              onRemove={() => void remove(p)}
-            />
+            <React.Fragment key={p.user_id}>
+              <PersonRow
+                p={p}
+                nurseryName={nursery.name}
+                canEdit={isParent && !p.is_owner}
+                canRelabelSelf={p.is_me}
+                canRemove={(isParent && !p.is_owner) || (p.is_me && !p.is_owner)}
+                watching={watchingNames.has(p.display_name)}
+                onSave={(r, l) => save(p, r, l)}
+                onRemove={() => void remove(p)}
+              />
+              <NoteLine note={note} at={p.user_id} />
+            </React.Fragment>
           ))}
           {people.length === 1 && isParent && <p className="faint inv-hint">It’s just you so far. Invite the other parent, grandparents or a sitter.</p>}
         </div>
@@ -965,9 +1102,8 @@ function WhoHasAccess({ nid, nursery, people, share, isParent, ch, viewers, push
                     text={`Remove ${g.name}? Their guest pass ends right away.`}
                     yes="Remove"
                     onYes={() => {
-                      ch?.send({ t: 'guest_remove', id: g.id });
                       setRemoving(null);
-                      say(`${g.name} removed.`);
+                      if (toRoom({ t: 'guest_remove', id: g.id }, 'top')) say(`${g.name} removed.`);
                     }}
                     onNo={() => setRemoving(null)}
                   />

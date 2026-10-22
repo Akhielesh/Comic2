@@ -12,7 +12,7 @@
 
 import { accessToken, supa } from '../account';
 import { WORKER_BASE } from '../config';
-import { clearGuest, loadGuest } from './guest';
+import { clearGuest, loadGuest, refreshGuest } from './guest';
 import type { MonMode, MonRole, MonServerMsg } from './protocol';
 
 export interface Nursery {
@@ -416,7 +416,12 @@ export function openMonitorSocket(
       } catch { /* no Intl zone */ }
       return { frame: { t: 'auth', token, mode, dev: dev.id, dn: dev.name, tz } };
     },
-    onMsg,
+    (m) => {
+      // The room is the authority on when a guest pass ends: keep this device's copy in step.
+      if (m.t === 'hello' && m.you.guest) refreshGuest(nid, m.you.until);
+      else if (m.t === 'guest_pass') refreshGuest(nid, m.until);
+      onMsg(m);
+    },
     onBinary,
     onStatus,
     {

@@ -314,7 +314,8 @@ export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'v
 export type MonServerMsg =
   | {
       t: 'hello';
-      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string; guest?: boolean };
+      /** Guests: `until` is when their pass ends now (the room is the authority — a parent may have extended the link). */
+      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string; guest?: boolean; until?: number };
       nursery: { id: string; name: string; baby: string | null };
       cams: CamPresence[];
       viewers: ViewerPresence[];
@@ -356,6 +357,8 @@ export type MonServerMsg =
   | { t: 'roles_changed' }
   /** This guest was made a member: drop the guest pass, reconnect with the account. */
   | { t: 'promoted' }
+  /** This guest's pass now ends at `until` (a parent extended the link). */
+  | { t: 'guest_pass'; until: number }
   | { t: 'push_ok'; prefs: Record<string, boolean> }
   | { t: 'notice'; text: string }
   | { t: 'pong'; at: number }

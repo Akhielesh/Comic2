@@ -202,6 +202,47 @@ describe('GuestAccess: a new passcode on the same link', () => {
     const { g } = make();
     expect(await g.setPasscode(NEW, false, 0)).toBeNull();
   });
+
+  it('a pass is only issued on the link exactly as it was checked (the room may wait on Supabase in between)', async () => {
+    const { sql, g } = make();
+    const guests = () => Number(sql.exec('SELECT COUNT(*) AS n FROM mon_guests').toArray()[0].n);
+    const checked = async (now: number) => {
+      const c = await g.check({ code: g.activeShare(now)!.code, pass: PASS, name: 'Uncle Sam' }, now);
+      if (!c.ok) throw new Error(c.reason);
+      return c;
+    };
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: 1, by: 'Mom' }, 0);
+
+    // A new passcode meanwhile ("sign out guests" or not): the old one gets nobody in.
+    let c = await checked(10);
+    await g.setPasscode(NEW, true, 20);
+    expect(await g.issue(c, { name: c.name }, 30)).toEqual({ ok: false, reason: 'wrong' });
+    c = await g.check({ code: share.code, pass: NEW, name: 'Uncle Sam' }, 40).then((r) => (r.ok ? r : Promise.reject(new Error(r.reason))));
+    await g.setPasscode(PASS, false, 50);
+    expect(await g.issue(c, { name: c.name }, 60)).toEqual({ ok: false, reason: 'wrong' });
+    expect(guests()).toBe(0);
+
+    // Turned off, or replaced by a new link, meanwhile.
+    c = await checked(70);
+    g.revokeShare(80);
+    expect(await g.issue(c, { name: c.name }, 90)).toEqual({ ok: false, reason: 'off' });
+    await g.createShare({ pass: PASS, role: 'caregiver', days: 1, by: 'Mom' }, 100);
+    c = await checked(110);
+    await g.createShare({ pass: PASS, role: 'caregiver', days: 1, by: 'Mom' }, 120);
+    expect(await g.issue(c, { name: c.name }, 130)).toEqual({ ok: false, reason: 'off' });
+    // Ended meanwhile.
+    c = await checked(140);
+    expect(await g.issue(c, { name: c.name }, 120 + 24 * 3600_000)).toEqual({ ok: false, reason: 'expired' });
+    expect(guests()).toBe(0);
+
+    // Nothing changed: in, with the link as it is now (an extension made meanwhile counts).
+    c = await checked(150);
+    g.extend(7, 160);
+    const r = await g.issue(c, { name: c.name }, 170);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.guest.expires_at).toBe(120 + 8 * 24 * 3600_000);
+    expect(await g.verify(r.token, 180)).not.toBeNull();
+  });
 });
 
 describe('GuestAccess: extending the link', () => {

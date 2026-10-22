@@ -32,6 +32,9 @@
 .inv-sub { margin: 14px 0 4px; }
 .inline-confirm { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--live-wash); color: var(--text); font-size: 13px; line-height: 1.45; margin-top: 8px; }
 .inv-note { display: grid; gap: 10px; justify-items: start; font-size: 14px; }
+/* What happened after a tap, next to it (toasts sit under the sheet's scrim). */
+.inv-alert { margin-top: 8px; }
+.inv-ok { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--green); }
 .inv-ask { margin-bottom: 4px; }
 
 /* add by name */
