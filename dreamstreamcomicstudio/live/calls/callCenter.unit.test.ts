@@ -139,6 +139,7 @@ async function setup() {
 
 beforeEach(() => {
   h.sockets.length = 0;
+  localStorage.clear();
   h.nurseries = [{ id: NID, name: 'Nursery', baby_name: 'Aria' }];
   h.pushSub = null;
   FakePC.all = [];
@@ -285,6 +286,61 @@ describe('call center', () => {
     callCenter.stop();
   });
 
+  it('a microphone opened after the call ended is let go at once — never left on with nobody there', async () => {
+    const { callCenter, line } = await setup();
+    line.onMsg({ t: 'call', call: ringing() });
+    const answered = callCenter.accept(NID, 'c1', false);
+    for (let i = 0; i < 4; i++) await tick();
+    gum.reject(new DOMException('dismissed', 'NotAllowedError'));
+    await answered;
+    expect(callCenter.snapshot().active?.mic).toBe(false);
+    // Unmute: the permission prompt comes up again…
+    const unmute = callCenter.toggleMic();
+    await tick();
+    // …and Mom hangs up while it's showing.
+    line.onMsg({ t: 'call', call: ringing({ ended: { at: 9, why: 'done' } }) });
+    expect(callCenter.snapshot().active?.state).toBe('ended');
+    const n = line.sent.length;
+    const mic = new FakeTrack('audio');
+    gum.resolve(new FakeStream([mic]));
+    expect(await unmute).toBeNull();
+    // Regression: the new track was added to the finished call and nothing ever stopped it.
+    expect(mic.stopped).toBe(true);
+    expect(callCenter.snapshot().active?.local.getAudioTracks()).toHaveLength(0);
+    expect(line.sent.slice(n).filter((m) => m.t === 'call_media')).toEqual([]);
+    callCenter.stop();
+  });
+
+  it('a camera turned on as the call ends is let go too', async () => {
+    const { callCenter, line } = await setup();
+    line.onMsg({ t: 'call', call: ringing({ video: false }) });
+    const answered = callCenter.accept(NID, 'c1', false);
+    for (let i = 0; i < 4; i++) await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await answered;
+    const camOn = callCenter.toggleCam();
+    await tick();
+    callCenter.hangup();
+    const cam = new FakeTrack('video');
+    gum.resolve(new FakeStream([cam]));
+    expect(await camOn).toBeNull();
+    expect(cam.stopped).toBe(true);
+    callCenter.stop();
+  });
+
+  it('a family call hung up before the room said it started: left the moment it does, not rung on', async () => {
+    const { callCenter, line } = await setup();
+    const placed = callCenter.call(NID, [{ uid: 'mom', name: 'Mom' }], false);
+    await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await placed;
+    const ref = line.sent.find((m) => m.t === 'call_start')!.ref;
+    callCenter.hangup();
+    line.onMsg({ t: 'call_started', ref, id: 'c9' });
+    expect(line.sent.at(-1)).toEqual({ t: 'call_leave', id: 'c9' });
+    callCenter.stop();
+  });
+
   it('declining stops the fast pings and closes the ringing-time connection', async () => {
     const { callCenter, line } = await setup();
     line.onMsg({ t: 'call', call: ringing() });
@@ -357,7 +413,7 @@ describe('direct calls', () => {
     await placed;
     const ref = me.sent.find((m) => m.t === 'dcall_start')!.ref;
     me.onMsg({ t: 'call_err', error: 'unavailable', ref });
-    expect(callCenter.snapshot().active).toMatchObject({ state: 'ended', ended: { why: 'error', text: expect.stringMatching(/^Sam can’t be reached right now/) } });
+    expect(callCenter.snapshot().active).toMatchObject({ state: 'ended', ended: { why: 'error', text: expect.stringMatching(/^Sam can’t be reached on Stream Studio right now/) } });
     callCenter.stop();
   });
 
@@ -449,9 +505,121 @@ describe('direct calls', () => {
       { t: 'prefs', who: 'everyone' },
       { t: 'block', uid: SAM, name: 'Sam', on: true },
     ]);
-    // Another device changed them: this one follows.
+    // Your line confirms them…
+    me.onMsg({ t: 'dcall_state', favs: [], blocked: [{ uid: SAM, name: 'Sam', at: 2 }], prefs: { who: 'everyone' } });
+    expect(callCenter.snapshot()).toMatchObject({ favs: [], blocked: [{ uid: SAM }], who: 'everyone' });
+    // …then another device changes them: this one follows.
     me.onMsg({ t: 'dcall_state', favs: [], blocked: [], prefs: { who: 'family' } });
     expect(callCenter.snapshot()).toMatchObject({ favs: [], blocked: [], who: 'family' });
+    callCenter.stop();
+  });
+
+  it('a favourite or “who can call me” changed while your line is down is kept — and goes through after its hello instead of being undone by it', async () => {
+    const { callCenter, me } = await setupDirect();
+    me.onStatus('reconnecting');
+    expect(callCenter.setFav({ uid: SAM, name: 'Sam' }, true)).toBe(false);
+    expect(callCenter.setWho('family')).toBe(false);
+    expect(me.sent.filter((m) => m.t === 'fav' || m.t === 'prefs')).toEqual([]);
+    // Back: the hello still has the old lists (the server never heard). Regression: it overwrote the changes.
+    me.onStatus('connected');
+    me.onMsg(meHello());
+    expect(callCenter.snapshot()).toMatchObject({ favs: [{ uid: SAM }], who: 'family' });
+    expect(me.sent.slice(-2)).toEqual([{ t: 'fav', uid: SAM, name: 'Sam', on: true }, { t: 'prefs', who: 'family' }]);
+    // Confirmed by the line: done — the next hello doesn't send them again.
+    me.onMsg({ t: 'dcall_state', favs: [{ uid: SAM, name: 'Sam', at: 1 }], blocked: [], prefs: { who: 'family' } });
+    const n = me.sent.length;
+    me.onMsg(meHello({ favs: [{ uid: SAM, name: 'Sam', at: 1 }], prefs: { who: 'family' } }));
+    expect(me.sent.slice(n).filter((m) => m.t === 'fav' || m.t === 'prefs')).toEqual([]);
+    callCenter.stop();
+  });
+
+  it('Decline & block with your line down: the block is kept — even across a reload — and goes through when the line is back', async () => {
+    const { callCenter, me } = await setupDirect();
+    me.onMsg({ t: 'dcall_ring', ring: ring() });
+    me.onStatus('reconnecting');
+    // Regression: it said "Sam is blocked" while the block never reached the server, and the next hello unblocked him.
+    expect(callCenter.decline(`d:${ID}`, ID, true)).toEqual({ who: { uid: SAM, name: 'Sam' }, now: false });
+    expect(callCenter.snapshot().blocked.map((b) => b.uid)).toEqual([SAM]);
+    callCenter.stop();
+    // The app is reloaded before the line came back.
+    vi.resetModules();
+    const again = (await import('./callCenter')).callCenter;
+    again.start(ME);
+    for (let i = 0; i < 5 && sock('me') === me; i++) await tick();
+    const me2 = sock('me');
+    expect(me2).not.toBe(me);
+    me2.onStatus('connected');
+    me2.onMsg(meHello());
+    expect(me2.sent).toContainEqual({ t: 'block', uid: SAM, name: 'Sam', on: true });
+    expect(again.snapshot().blocked.map((b) => b.uid)).toEqual([SAM]);
+    again.stop();
+  });
+
+  it('Decline & block names a stranger who added you — not the caller whose call it is', async () => {
+    const { callCenter, me } = await setupDirect();
+    me.onMsg({ t: 'dcall_ring', ring: ring({ ctx: { family: false, label: 'Grandma', where: null, by: { uid: 'bob', name: 'Bob', family: false } } }) });
+    expect(callCenter.decline(`d:${ID}`, ID, true)).toEqual({ who: { uid: 'bob', name: 'Bob' }, now: true });
+    expect(callCenter.snapshot().blocked.map((b) => b.uid)).toEqual(['bob']);
+    callCenter.stop();
+  });
+
+  it('your line coming back: one that gave up is reopened — back online, on the next refresh, or when you place a call', async () => {
+    const { callCenter, me } = await setupDirect();
+    // Regression: after "closed" (e.g. a phone that woke offline with an expired session) the line never came back.
+    me.onStatus('closed');
+    expect(callCenter.snapshot().directReady).toBe(false);
+    window.dispatchEvent(new Event('online'));
+    const second = sock('me');
+    expect(second).not.toBe(me);
+    second.onStatus('closed');
+    await callCenter.refresh();
+    const third = sock('me');
+    expect(third).not.toBe(second);
+    third.onStatus('closed');
+    const placed = callCenter.callUser([{ uid: SAM, name: 'Sam' }], false);
+    await tick();
+    const fourth = sock('me');
+    expect(fourth).not.toBe(third);
+    fourth.onStatus('connected');
+    fourth.onMsg(meHello());
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    expect(await placed).toBeNull();
+    expect(fourth.sent.some((m) => m.t === 'dcall_start')).toBe(true);
+    callCenter.stop();
+  });
+
+  it('hanging up before your line placed the call cancels it there — the person isn’t left ringing for 20 s', async () => {
+    const { callCenter, me } = await setupDirect();
+    const placed = callCenter.callUser([{ uid: SAM, name: 'Sam' }], false);
+    await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await placed;
+    const ref = me.sent.find((m) => m.t === 'dcall_start')!.ref;
+    callCenter.hangup();
+    expect(me.sent.at(-1)).toEqual({ t: 'dcall_cancel', ref });
+    // Its answer arrives after all (regression: ignored, so the call rang on): cancelled with its id, its room never opened.
+    const rooms = h.sockets.filter((x) => x.kind === 'room').length;
+    me.onMsg({ t: 'dcall_started', ref, id: ID, ticket: 'tkt', status: 'ringing' });
+    expect(me.sent.at(-1)).toEqual({ t: 'dcall_cancel', ref, id: ID });
+    expect(h.sockets.filter((x) => x.kind === 'room')).toHaveLength(rooms);
+    // If the line dropped meanwhile, its next hello repeats the cancel.
+    me.onMsg(meHello());
+    expect(me.sent).toContainEqual({ t: 'dcall_cancel', ref });
+    callCenter.stop();
+  });
+
+  it('hanging up after it started but before your app reached its room: cancelled through your line as well', async () => {
+    const { callCenter, me } = await setupDirect();
+    const placed = callCenter.callUser([{ uid: SAM, name: 'Sam' }], false);
+    await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await placed;
+    const ref = me.sent.find((m) => m.t === 'dcall_start')!.ref;
+    me.onMsg({ t: 'dcall_started', ref, id: ID, ticket: 'tkt', status: 'ringing' });
+    const room = sock('room');
+    callCenter.hangup();
+    expect(room.sent.at(-1)).toEqual({ t: 'call_leave', id: ID });
+    expect(me.sent.at(-1)).toEqual({ t: 'dcall_cancel', ref, id: ID });
     callCenter.stop();
   });
 

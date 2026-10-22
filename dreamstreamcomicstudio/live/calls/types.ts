@@ -59,7 +59,7 @@ export interface CallRecord {
   stats?: ({ uid: string } & CallStat)[];
 }
 
-export type CallError = 'busy' | 'nobody' | 'ended' | 'full' | 'not_invited' | 'too_many' | 'push' | 'unavailable' | 'restricted' | 'slow_down';
+export type CallError = 'busy' | 'nobody' | 'ended' | 'full' | 'not_invited' | 'too_many' | 'push' | 'unavailable' | 'restricted' | 'slow_down' | 'auth' | 'cancelled';
 
 /** Room → a call line. */
 export type LineMsg =
@@ -106,14 +106,16 @@ export const CALL_ERROR_TEXT: Record<CallError, string> = {
   not_invited: 'That call wasn’t for you.',
   too_many: 'Too many calls are going on in this nursery right now — try again in a moment.',
   push: 'This browser’s notification service isn’t supported for ringing.',
-  unavailable: 'They can’t be reached right now — Stream Studio isn’t open on any of their devices. Try again later.',
+  unavailable: 'They can’t be reached on Stream Studio right now. Try again later.',
   restricted: 'They only take calls from people in their nurseries.',
   slow_down: 'You’ve placed a lot of calls just now — wait a few minutes and try again.',
+  auth: 'Couldn’t confirm your account just now — try again in a moment.',
+  cancelled: 'Call cancelled',
 };
 
 /** The call errors that name the person (“Sam can’t be reached right now”). */
 export function callErrorText(error: CallError, who?: string | null): string {
-  if (who && error === 'unavailable') return `${who} can’t be reached right now — Stream Studio isn’t open on any of their devices. Try again later.`;
+  if (who && error === 'unavailable') return `${who} can’t be reached on Stream Studio right now. Try again later.`;
   if (who && error === 'restricted') return `${who} only takes calls from people in their nurseries.`;
   return CALL_ERROR_TEXT[error] ?? 'The call couldn’t connect.';
 }
@@ -122,15 +124,25 @@ export function callErrorText(error: CallError, who?: string | null): string {
 
 /** How a direct call reads on the ring screen: from your family, or someone else on Stream Studio. */
 export interface DirectCtx {
+  /** Everyone behind the ring (the caller, and whoever added you) is in your family. */
   family: boolean;
   /** Their label in a nursery you share ("Grandma"). */
   label: string | null;
   /** Which family ("Aria’s family"). */
   where: string | null;
+  /** Someone in the call (not the caller) added you — and whether they're in your family. */
+  by?: { uid: string; name: string; family: boolean } | null;
 }
 
 export const NOT_FAMILY = 'Stream Studio member · not in your family';
-export const ctxText = (c: DirectCtx | null | undefined): string => (c?.family ? c.where || 'Your family' : NOT_FAMILY);
+export const ctxText = (c: DirectCtx | null | undefined): string =>
+  c?.family ? c.where || 'Your family' : c?.by && !c.by.family ? `Added by ${c.by.name} · not in your family` : NOT_FAMILY;
+
+/** Who “Decline & block” blocks (the line decides the same way): a stranger who added you, otherwise the caller. */
+export function blockTarget(from: { uid: string; name: string }, ctx: DirectCtx | null | undefined): { uid: string; name: string } {
+  const by = ctx?.by;
+  return by && !by.family ? { uid: by.uid, name: by.name } : { uid: from.uid, name: from.name };
+}
 
 /** A direct call ringing for you: the ticket lets this device into the call's room. */
 export interface DirectRing {

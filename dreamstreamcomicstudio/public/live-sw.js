@@ -93,23 +93,67 @@ self.addEventListener('push', (event) => {
   );
 });
 
+/* "Answer" on a ringing call picks up as soon as the app opens (one tap, no second
+ * ring screen). Only a real tap may do that: the app answers only with a one-time
+ * proof left here (Cache Storage, read and deleted by the app's takeAnswerProof),
+ * bound to that call and good for 90 s — never because an address says so, since
+ * anyone can send a link to #/call/…?answer=1. */
+const ANSWER_KEY = '/__ds/answer/';
+const ANSWER_PROOF_MS = 90 * 1000;
+const CALL_HASH = /#\/call\/([0-9a-f-]{36}|d)\/([0-9a-f]{8,24})$/;
+
+async function answerProof(base) {
+  const m = CALL_HASH.exec(base);
+  if (!m) return null;
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const proof = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  try {
+    const cache = await caches.open(STATE_CACHE);
+    await cache.put(ANSWER_KEY + proof, new Response(JSON.stringify({ call: m[2], where: m[1], at: Date.now() }), { headers: { 'content-type': 'application/json' } }));
+    return proof;
+  } catch (e) {
+    return null; // no proof: the app opens on the ringing call, one more tap to answer
+  }
+}
+
+/** Proofs nobody used (the app never opened in time) are cleared. */
+async function tidyProofs() {
+  try {
+    const cache = await caches.open(STATE_CACHE);
+    for (const req of await cache.keys()) {
+      if (new URL(req.url).pathname.indexOf(ANSWER_KEY) !== 0) continue;
+      const hit = await cache.match(req);
+      const at = hit ? Number((await hit.json().catch(() => ({}))).at) : 0;
+      if (!(Date.now() - at < ANSWER_PROOF_MS)) await cache.delete(req);
+    }
+  } catch (e) {
+    /* nothing to tidy */
+  }
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const base = (event.notification.data && event.notification.data.url) || '/live#/monitor';
-  // "Answer" on a ringing call picks up as soon as the app opens (one tap, no second ring screen).
-  const url = event.action === 'answer' && base.indexOf('#/call/') !== -1 ? `${base}?answer=1` : base;
-  const target = new URL(url, self.location.origin);
   event.waitUntil(
     (async () => {
-      const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const c of all) {
-        if (new URL(c.url).pathname.startsWith('/live')) {
-          await c.focus();
-          if ('navigate' in c) return c.navigate(target.href);
-          return undefined;
+      const proof = event.action === 'answer' ? await answerProof(base) : null;
+      const target = new URL(proof ? `${base}?answer=${proof}` : base, self.location.origin);
+      const open = async () => {
+        const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const c of all) {
+          if (new URL(c.url).pathname.startsWith('/live')) {
+            await c.focus();
+            if ('navigate' in c) return c.navigate(target.href);
+            return undefined;
+          }
         }
+        return self.clients.openWindow(target.href);
+      };
+      try {
+        return await open();
+      } finally {
+        await tidyProofs();
       }
-      return self.clients.openWindow(target.href);
     })(),
   );
 });

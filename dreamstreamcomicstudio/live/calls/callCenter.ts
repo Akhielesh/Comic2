@@ -19,7 +19,13 @@
  *    calls, rings you, and keeps your favourites, blocks and direct-call
  *    history. Each direct call has its own room, reached with a ticket from
  *    your line; it's just another line here, keyed `d:<call id>`, so the call
- *    itself runs exactly like a family call.
+ *    itself runs exactly like a family call. Your line is never left closed:
+ *    it's reopened when back online, on every refresh and when you place a
+ *    call. Favourite / block / "who can call me" changes made while it's
+ *    down are kept (across reloads too) and replayed after its hello; a call
+ *    hung up before it got going is cancelled for real, not left ringing.
+ *  - Media opened after a call ended (an Unmute whose permission prompt was
+ *    still up, a camera turned on as it ended) is stopped at once.
  *
  * Views read it with useCalls(); nothing here renders.
  */
@@ -32,6 +38,7 @@ import { currentSubscription, localNotify, subscribe as pushSubscribe } from '..
 import { ScreenWakeLock } from '../wakeLock';
 import { CallMesh, failureText, pcConfig, type FailWhy, type PeerView } from './callMesh';
 import {
+  blockTarget,
   callErrorText,
   ctxText,
   RING_SECS,
@@ -87,6 +94,8 @@ interface Active {
   inRoom: boolean;
   /** The camera / mic are still opening (answering doesn't wait for them). */
   opening: boolean;
+  /** A mic that couldn't open when answering is being opened now (from Unmute). */
+  micOpening?: boolean;
   /** The last connection outcome told to the room (telemetry). */
   reported: string | null;
   rejoinAt: number;
@@ -159,6 +168,21 @@ const SILENT_MS = 30_000;
 const ICE_MAX_AGE_MS = 20 * 60 * 60_000;
 /** While connected, tell the room every 10 s whose media still reaches us. */
 const VOUCH_MS = 10_000;
+/** A call hung up before it got going is cancelled for real when its start is heard of within this long. */
+const CANCEL_MS = 60_000;
+/** Changes to your favourites, blocks and "who can call me" your line hasn't confirmed yet (per account). */
+const PENDING_KEY = 'ds-call-pending';
+const PENDING_CAP = 50;
+
+/** A change to the lists your line keeps for you. */
+type ListOp = { t: 'fav' | 'block'; uid: string; name: string; on: boolean } | { t: 'prefs'; who: CallWho };
+const opKey = (op: ListOp): string => (op.t === 'prefs' ? 'prefs' : `${op.t}:${op.uid}`);
+function cleanOp(v: unknown): ListOp | null {
+  const o = (v ?? {}) as Record<string, unknown>;
+  if (o.t === 'prefs') return o.who === 'family' || o.who === 'everyone' ? { t: 'prefs', who: o.who } : null;
+  if ((o.t === 'fav' || o.t === 'block') && typeof o.uid === 'string' && typeof o.name === 'string' && typeof o.on === 'boolean') return { t: o.t, uid: o.uid, name: o.name, on: o.on };
+  return null;
+}
 
 /** "Aria’s family" — how a nursery reads in calls. */
 export const familyName = (n: { name: string; baby: string | null } | null | undefined) => (n?.baby ? `${n.baby}’s family` : n?.name ?? 'Family');
@@ -195,15 +219,47 @@ export function callFailText(peers: Pick<PeerView, 'state' | 'why' | 'label' | '
   return failureText(first.why, first.label || first.name);
 }
 
+/** Where the service worker leaves its one-time proof that "Answer" was tapped on a call notification (public/live-sw.js). */
+export const ANSWER_CACHE = 'ds-sw-state';
+export const ANSWER_KEY = '/__ds/answer/';
+/** A proof is good this long after the tap (opening the app on a phone can take a while). */
+export const ANSWER_PROOF_MS = 90_000;
+const PROOF_RE = /^[0-9a-f]{32}$/;
+
 /**
- * `#/call/<nursery>/<call>?answer=1` (a family call) or `#/call/d/<call>?answer=1`
- * (a direct call, whose line here is `d:<call>`) — opened by "Answer" on a call
- * notification (public/live-sw.js).
+ * `#/call/<nursery>/<call>?answer=<proof>` (a family call) or
+ * `#/call/d/<call>?answer=<proof>` (a direct call, whose line here is
+ * `d:<call>`) — opened by "Answer" on a call notification (public/live-sw.js).
+ * Only a proof counts: anyone can link to `?answer=1`, and that must never
+ * pick up a call — it just opens the app, where the call rings as usual.
  */
-export function answerFromHash(hash: string): { nid: string; id: string } | null {
+export function answerFromHash(hash: string): { nid: string; id: string; proof: string } | null {
   const m = /^#\/?call\/([0-9a-f-]{36}|d)\/([0-9a-f]{8,24})\?(.*)$/.exec(hash);
-  if (!m || new URLSearchParams(m[3]).get('answer') !== '1') return null;
-  return { nid: m[1] === 'd' ? `d:${m[2]}` : m[1], id: m[2] };
+  const proof = m ? new URLSearchParams(m[3]).get('answer') ?? '' : '';
+  if (!m || !PROOF_RE.test(proof)) return null;
+  return { nid: m[1] === 'd' ? `d:${m[2]}` : m[1], id: m[2], proof };
+}
+
+/**
+ * Use up the proof the service worker left when "Answer" was tapped on this
+ * call's notification. True only once, only for that call, and only shortly
+ * after the tap — a link someone sent, a reload or a guessed address answers
+ * nothing.
+ */
+export async function takeAnswerProof(x: { nid: string; id: string; proof: string }): Promise<boolean> {
+  try {
+    if (typeof caches === 'undefined' || !PROOF_RE.test(x.proof)) return false;
+    const cache = await caches.open(ANSWER_CACHE);
+    const key = `${ANSWER_KEY}${x.proof}`;
+    const hit = await cache.match(key);
+    if (!hit) return false;
+    await cache.delete(key);
+    const d = (await hit.json()) as { call?: unknown; where?: unknown; at?: unknown };
+    const age = Date.now() - Number(d.at);
+    return d.call === x.id && d.where === (x.nid.startsWith('d:') ? 'd' : x.nid) && age > -5000 && age < ANSWER_PROOF_MS;
+  } catch {
+    return false;
+  }
 }
 
 /** Recents: family and direct calls together, newest first, each call once (a later report of a call wins). */
@@ -319,6 +375,10 @@ class CallCenter {
   private notified = new Set<string>();
   /** Connections made while a call rings (by call id), network candidates already gathered. */
   private warm = new Map<string, RTCPeerConnection>();
+  /** Calls hung up before they got going, by ref: cancelled for real as soon as their start is heard of. */
+  private cancels = new Map<string, { nid: string; at: number }>();
+  /** List changes your line hasn't confirmed yet: kept on top of what it says, replayed after its hello. */
+  private pending = new Map<string, ListOp>();
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -351,7 +411,10 @@ class CallCenter {
 
   /** Signed in: open a line to each nursery, and your own line (direct calls). */
   start(uid?: string): void {
-    if (uid) this.ulUid = uid;
+    if (uid && uid !== this.ulUid) {
+      this.ulUid = uid;
+      this.loadPending(uid);
+    }
     if (this.on) {
       this.openMe(); // the account's id arrived after the lines opened
       return;
@@ -362,6 +425,7 @@ class CallCenter {
     void this.refresh();
     this.refreshTimer = window.setInterval(() => void this.refresh(), 10 * 60_000);
     document.addEventListener('visibilitychange', this.onVis);
+    window.addEventListener('online', this.onOnline);
     // Ringing calls time out on screen even if the room's "no answer" is late.
     this.ringTimer = window.setInterval(() => {
       this.prewarm();
@@ -375,12 +439,15 @@ class CallCenter {
     window.clearInterval(this.refreshTimer);
     window.clearInterval(this.ringTimer);
     document.removeEventListener('visibilitychange', this.onVis);
+    window.removeEventListener('online', this.onOnline);
     this.hangup();
     for (const l of this.lines.values()) l.sock.close();
     this.lines.clear();
     this.ul?.sock.close();
     this.ul = null;
     this.ulUid = null;
+    this.pending.clear(); // (kept in storage for this account's next sign-in)
+    this.cancels.clear();
     this.direct.clear();
     this.favs = [];
     this.blocked = [];
@@ -428,9 +495,15 @@ class CallCenter {
     if (document.visibilityState === 'visible') void this.refresh();
   };
 
-  /** Pick up nurseries created or joined since the last look. */
+  /** Back online: a personal line that gave up opens again (nursery lines come back on their own). */
+  private onOnline = () => {
+    if (this.on && !this.suspended) this.openMe();
+  };
+
+  /** Pick up nurseries created or joined since the last look — and reopen your own line if it gave up. */
   async refresh(): Promise<void> {
     if (!this.on || this.suspended) return;
+    this.openMe();
     const r = await listNurseries();
     if (!this.on || this.suspended || !r.ok || !r.nurseries) return;
     const want = new Set(r.nurseries.map((n) => n.id));
@@ -494,6 +567,10 @@ class CallCenter {
         this.favs = m.favs ?? [];
         this.blocked = m.blocked ?? [];
         this.who = m.prefs?.who === 'family' ? 'family' : 'everyone';
+        // Changes made while the line was down go through now (and stay on screen meanwhile).
+        this.settleLists(line, true);
+        // Calls hung up before they got going: make sure the line has cancelled them.
+        for (const [ref, c] of this.cancels) if (this.cancelled(ref) && (c.nid === 'me' || isDirect(c.nid))) line.sock.send({ t: 'dcall_cancel', ref });
         for (const r of m.log ?? []) this.log.set(r.id, this.directRec(r));
         // What rings right now (also for an app a notification just opened).
         const live = new Set((m.ringing ?? []).map((r) => r.id));
@@ -523,6 +600,9 @@ class CallCenter {
           a.id = m.id;
           a.nid = `d:${m.id}`;
           this.openRoom(m.id, m.ticket, DIRECT_PLACE);
+        } else if (this.cancelled(m.ref)) {
+          // Hung up before it got going: it's cancelled now, not left ringing on their phones.
+          line.sock.send({ t: 'dcall_cancel', ref: m.ref, id: m.id });
         }
         this.emit();
         return;
@@ -534,6 +614,7 @@ class CallCenter {
         this.favs = m.favs ?? [];
         this.blocked = m.blocked ?? [];
         this.who = m.prefs?.who === 'family' ? 'family' : 'everyone';
+        this.settleLists(line, false);
         this.emit();
         return;
       case 'call_err': {
@@ -660,30 +741,93 @@ class CallCenter {
 
   /* --------------------------------------- favourites, blocks, who */
 
-  /** Star / unstar someone (synced to your other devices). False when your line isn't connected. */
+  /**
+   * Star / unstar someone (synced to your other devices). True when it went
+   * to your line now; false when the line isn't connected — the change is
+   * kept (across reloads too) and goes through after the line's next hello.
+   */
   setFav(p: { uid: string; name: string }, on: boolean): boolean {
-    const rest = this.favs.filter((x) => x.uid !== p.uid);
-    this.favs = on ? [...rest, { uid: p.uid, name: p.name, at: Date.now() }] : rest;
-    this.ul?.sock.send({ t: 'fav', uid: p.uid, name: p.name, on });
-    this.emit();
-    return !!this.ul?.connected;
+    return this.queue({ t: 'fav', uid: p.uid, name: p.name, on });
   }
 
-  /** Block / unblock someone: their direct calls never reach you (they can't tell). */
+  /** Block / unblock someone: their direct calls never reach you (they can't tell). Same delivery as setFav. */
   setBlocked(p: { uid: string; name: string }, on: boolean): boolean {
-    const rest = this.blocked.filter((x) => x.uid !== p.uid);
-    this.blocked = on ? [...rest, { uid: p.uid, name: p.name, at: Date.now() }] : rest;
-    this.ul?.sock.send({ t: 'block', uid: p.uid, name: p.name, on });
-    this.emit();
-    return !!this.ul?.connected;
+    return this.queue({ t: 'block', uid: p.uid, name: p.name, on });
   }
 
-  /** Who can call you directly: everyone on Stream Studio, or only people in your nurseries. */
+  /** Who can call you directly: everyone on Stream Studio, or only people in your nurseries. Same delivery as setFav. */
   setWho(who: CallWho): boolean {
-    this.who = who;
-    this.ul?.sock.send({ t: 'prefs', who });
+    return this.queue({ t: 'prefs', who });
+  }
+
+  /**
+   * A change to your lists: shown at once and kept until your line confirms
+   * it (a hello or update that already has it). Sent now when the line is up
+   * (unless something else already carries it, like a decline with block);
+   * otherwise — or if it got lost on a dying connection — the line's next
+   * hello replays it, so a hello never quietly undoes it.
+   */
+  private queue(op: ListOp, send = true): boolean {
+    this.pending.delete(opKey(op));
+    this.pending.set(opKey(op), op);
+    while (this.pending.size > PENDING_CAP) this.pending.delete(this.pending.keys().next().value as string);
+    this.savePending();
+    this.applyOp(op);
+    const up = !!this.ul?.connected;
+    if (up && send) this.ul!.sock.send(op);
     this.emit();
-    return !!this.ul?.connected;
+    return up;
+  }
+
+  private applyOp(op: ListOp): void {
+    if (op.t === 'prefs') {
+      this.who = op.who;
+      return;
+    }
+    const list = op.t === 'fav' ? this.favs : this.blocked;
+    const rest = list.filter((x) => x.uid !== op.uid);
+    const next = op.on ? [...rest, { uid: op.uid, name: op.name, at: Date.now() }] : rest;
+    if (op.t === 'fav') this.favs = next;
+    else this.blocked = next;
+  }
+
+  /** The line's lists already have this change. */
+  private reflected(op: ListOp): boolean {
+    if (op.t === 'prefs') return this.who === op.who;
+    return (op.t === 'fav' ? this.favs : this.blocked).some((x) => x.uid === op.uid) === op.on;
+  }
+
+  /** The line's lists just arrived: confirmed changes are done; the rest stay on top (and after a hello, go again). */
+  private settleLists(line: Line, replay: boolean): void {
+    for (const [k, op] of [...this.pending]) {
+      if (this.reflected(op)) {
+        this.pending.delete(k);
+        continue;
+      }
+      this.applyOp(op);
+      if (replay) line.sock.send(op);
+    }
+    this.savePending();
+  }
+
+  private savePending(): void {
+    const uid = this.ulUid;
+    if (!uid) return;
+    try {
+      if (this.pending.size) localStorage.setItem(`${PENDING_KEY}:${uid}`, JSON.stringify([...this.pending.values()]));
+      else localStorage.removeItem(`${PENDING_KEY}:${uid}`);
+    } catch { /* storage unavailable */ }
+  }
+
+  private loadPending(uid: string): void {
+    this.pending.clear();
+    try {
+      const raw = JSON.parse(localStorage.getItem(`${PENDING_KEY}:${uid}`) || '[]') as unknown;
+      for (const v of Array.isArray(raw) ? raw.slice(-PENDING_CAP) : []) {
+        const op = cleanOp(v);
+        if (op) this.pending.set(opKey(op), op);
+      }
+    } catch { /* storage unavailable */ }
   }
 
   private openLine(nid: string, name: string, baby: string | null): void {
@@ -734,6 +878,9 @@ class CallCenter {
           const c = this.calls.get(m.id)?.call;
           if (c) this.onActiveCall(line, c);
           this.prewarm();
+        } else if (this.cancelled(m.ref, line.nid)) {
+          // Hung up before the room answered: leave it now, so it doesn't ring on with nobody calling.
+          line.sock.send({ t: 'call_leave', id: m.id });
         }
         this.emit();
         return;
@@ -967,6 +1114,8 @@ class CallCenter {
    */
   async callUser(people: { uid: string; name: string }[], video: boolean): Promise<string | null> {
     if (this.active && !this.active.ended) return 'You’re already in a call.';
+    // A line that gave up gets another go right now (fresh() below waits for it).
+    if (!this.ul) this.openMe();
     const line = this.ul;
     if (!line) return 'Calls aren’t connected yet — check your internet and try again.';
     if (!people.length) return callErrorText('nobody');
@@ -1036,21 +1185,31 @@ class CallCenter {
   /**
    * Say no. A direct call is declined through your line (which also stops your
    * other devices ringing — and works from an app a notification opened);
-   * `block` also blocks the caller, who can't tell.
+   * `block` also blocks whoever rang (a stranger who added you, else the
+   * caller), who can't tell. Returns who was blocked and whether it reached
+   * your line now — if not, the block is kept and goes through as soon as the
+   * line is back (until then their calls can still ring your other devices).
    */
-  decline(nid: string, id: string, block = false): void {
+  decline(nid: string, id: string, block = false): { who: { uid: string; name: string }; now: boolean } | null {
     this.declined.add(id);
+    let out: { who: { uid: string; name: string }; now: boolean } | null = null;
     if (isDirect(nid)) {
       this.lines.get(nid)?.sock.send({ t: 'call_decline', id });
+      const ring = this.direct.get(id);
+      const from = ring?.from ?? this.calls.get(id)?.call.from;
+      const now = !!this.ul?.connected;
       this.ul?.sock.send({ t: 'dcall_decline', id, block });
-      if (block) {
-        const from = this.direct.get(id)?.from ?? this.calls.get(id)?.call.from;
-        if (from) this.blocked = [...this.blocked.filter((b) => b.uid !== from.uid), { uid: from.uid, name: from.name, at: Date.now() }];
+      if (block && from) {
+        const who = blockTarget(from, ring?.ctx);
+        // The decline carries the block when the line is up; kept until the line confirms it either way.
+        this.queue({ t: 'block', uid: who.uid, name: who.name, on: true }, false);
+        out = { who, now };
       }
       this.stopDirect(id);
     } else this.lines.get(nid)?.sock.send({ t: 'call_decline', id });
     this.prewarm();
     this.emit();
+    return out;
   }
 
   hangup(): void {
@@ -1058,11 +1217,32 @@ class CallCenter {
     if (!a) return;
     if (!a.ended) {
       if (a.id) this.lines.get(a.nid)?.sock.send({ t: 'call_leave', id: a.id });
+      // Hung up before the call got going: cancel it for real, not leave them ringing.
+      if (a.outgoing && !a.inRoom) this.cancelStart(a);
       this.finish({ why: 'done', text: 'Call ended' });
     }
     this.active = null;
     this.pruneRooms();
     this.emit();
+  }
+
+  /**
+   * A call we placed was hung up before our app was in its room: remember it
+   * (by ref) so that when its start is heard of, it's cancelled there and
+   * then. A direct call is also cancelled through your line right away — the
+   * line knows it by its ref even before we have its id.
+   */
+  private cancelStart(a: Active): void {
+    const now = Date.now();
+    for (const [ref, c] of this.cancels) if (now - c.at > CANCEL_MS) this.cancels.delete(ref);
+    this.cancels.set(a.ref, { nid: a.nid, at: now });
+    if (a.nid === 'me' || isDirect(a.nid)) this.ul?.sock.send({ t: 'dcall_cancel', ref: a.ref, ...(a.id ? { id: a.id } : {}) });
+  }
+
+  /** A call (by ref) hung up before it got going, on this line (nursery) or any. */
+  private cancelled(ref: string, nid?: string): boolean {
+    const c = this.cancels.get(ref);
+    return !!ref && !!c && Date.now() - c.at < CANCEL_MS && (nid == null || c.nid === nid);
   }
 
   /** Close the "call ended" screen. */
@@ -1093,28 +1273,42 @@ class CallCenter {
     this.emit();
   }
 
+  /** This call is over (or another took its place) while something was opening: whatever opened is let go at once. */
+  private gone(a: Active, s: MediaStream): boolean {
+    if (this.active === a && !a.ended) return false;
+    for (const t of s.getTracks()) t.stop();
+    return true;
+  }
+
   /** Mute / unmute. A mic that couldn't open when answering is opened now (from the tap). */
   async toggleMic(): Promise<string | null> {
     const a = this.active;
-    if (!a) return null;
+    if (!a || a.ended) return null;
     if (!a.mic && !a.opening && !a.local.getAudioTracks().length) {
+      if (a.micOpening) return null; // already asking (a second tap while the prompt is up)
+      a.micOpening = true;
+      let s: MediaStream;
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: callAudio() });
-        a.local = new MediaStream([...a.local.getTracks(), ...s.getAudioTracks()]);
-        a.mesh?.refreshLocal();
+        s = await navigator.mediaDevices.getUserMedia({ audio: callAudio() });
       } catch (e) {
         return mediaText(e);
+      } finally {
+        a.micOpening = false;
       }
+      // The call ended while the permission prompt was up: the mic must not stay on.
+      if (this.gone(a, s)) return null;
+      a.local = new MediaStream([...a.local.getTracks(), ...s.getAudioTracks()]);
+      a.mesh?.refreshLocal();
     }
     a.mic = !a.mic;
     for (const t of a.local.getAudioTracks()) t.enabled = a.mic;
-    this.sendMedia();
+    this.sendMedia(a);
     return null;
   }
 
   async toggleCam(): Promise<string | null> {
     const a = this.active;
-    if (!a || a.opening) return null; // the camera is still starting (a second or so after answering)
+    if (!a || a.ended || a.opening) return null; // the camera is still starting (a second or so after answering)
     const v = a.local.getVideoTracks()[0];
     if (v) {
       a.cam = !a.cam;
@@ -1123,15 +1317,20 @@ class CallCenter {
       // An audio call turning its camera on: open it now, no renegotiation needed.
       try {
         const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: a.facing }, width: { ideal: 1280 }, height: { ideal: 720 } } });
-        a.local.addTrack(s.getVideoTracks()[0]);
-        a.local = new MediaStream(a.local.getTracks());
+        if (this.gone(a, s)) return null;
+        if (a.local.getVideoTracks().length) {
+          for (const t of s.getTracks()) t.stop(); // a second tap got there first
+        } else {
+          a.local.addTrack(s.getVideoTracks()[0]);
+          a.local = new MediaStream(a.local.getTracks());
+        }
         a.cam = true;
         a.mesh?.refreshLocal();
       } catch (e) {
         return mediaText(e);
       }
     }
-    this.sendMedia();
+    this.sendMedia(a);
     return null;
   }
 
@@ -1139,10 +1338,16 @@ class CallCenter {
   async flip(): Promise<void> {
     const a = this.active;
     const old = a?.local.getVideoTracks()[0];
-    if (!a || !old) return;
+    if (!a || !old || a.ended) return;
     const facing: Facing = a.facing === 'user' ? 'environment' : 'user';
     try {
       const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+      // Over meanwhile — or the camera changed under us (another flip): keep what's there.
+      if (this.gone(a, s)) return;
+      if (a.local.getVideoTracks()[0] !== old) {
+        for (const t of s.getTracks()) t.stop();
+        return;
+      }
       const fresh = s.getVideoTracks()[0];
       fresh.enabled = a.cam;
       old.stop();
@@ -1201,9 +1406,9 @@ class CallCenter {
     if (uids.length) this.lines.get(a.nid)?.sock.send({ t: 'call_up', id: a.id, uids });
   }
 
-  private sendMedia(): void {
-    const a = this.active;
-    if (a?.id) this.lines.get(a.nid)?.sock.send({ t: 'call_media', id: a.id, mic: a.mic, cam: a.cam });
+  /** Tell the room this call's mic / camera state (never for a call that's over or no longer the one on). */
+  private sendMedia(a: Active | null = this.active): void {
+    if (a && a === this.active && !a.ended && a.id) this.lines.get(a.nid)?.sock.send({ t: 'call_media', id: a.id, mic: a.mic, cam: a.cam });
     this.emit();
   }
 

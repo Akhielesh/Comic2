@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   allowStart,
   appendLog,
+  blockTarget,
   CLAIM_STALE_MS,
   cleanPerson,
   cleanPrefs,
@@ -16,6 +17,7 @@ import {
   familyFrom,
   hashTicket,
   HOUR,
+  judgeRing,
   mintTicket,
   newCallId,
   noteCaller,
@@ -32,18 +34,24 @@ import {
 
 const T = 1_700_000_000_000;
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const base = { claimed: true, verifiedAt: T - HOUR, now: T, blocked: false, prefs: DEFAULT_PREFS, family: false, history: null as CallerHistory | null, via: 'app' as const };
+const base = { claimed: true, verifiedAt: T - HOUR, now: T, blocked: false, prefs: DEFAULT_PREFS, family: false, history: null as CallerHistory | null };
 
 describe('ringDecision', () => {
-  it('rings a claimed line that can be reached', () => {
+  it('rings a claimed line', () => {
     expect(ringDecision(base)).toBe('ring');
-    expect(ringDecision({ ...base, via: 'push' })).toBe('ring');
   });
 
-  it('is unavailable when never claimed, when the claim lapsed, or with nothing to ring', () => {
+  it('is unavailable only when never claimed or the claim lapsed — the same for every caller', () => {
     expect(ringDecision({ ...base, claimed: false })).toBe('unavailable');
     expect(ringDecision({ ...base, verifiedAt: T - CLAIM_STALE_MS - 1 })).toBe('unavailable');
-    expect(ringDecision({ ...base, via: 'none' })).toBe('unavailable');
+  });
+
+  it('whether the member has an app open (or push) plays no part: a blocked caller can’t watch them come online', () => {
+    // (Regression: "nothing to ring" answered unavailable at once — but only to callers who
+    // weren't blocked, so a blocked caller could tell when the member's app was open.)
+    const noDevice = { via: 'none' } as object;
+    expect(statusOf(ringDecision({ ...base, ...noDevice }))).toBe('ringing');
+    expect(statusOf(ringDecision({ ...base, ...noDevice, blocked: true }))).toBe('ringing');
   });
 
   it('family-only refuses people outside the family, honestly', () => {
@@ -56,7 +64,7 @@ describe('ringDecision', () => {
     // From outside, silent and ring are the same answer…
     expect(statusOf(ringDecision({ ...base, blocked: true }))).toBe(statusOf(ringDecision(base)));
     // …in every situation the caller could otherwise tell apart.
-    for (const over of [{ via: 'none' as const }, { prefs: { who: 'family' as const } }, { claimed: false }, { family: true }, { via: 'push' as const }]) {
+    for (const over of [{ prefs: { who: 'family' as const } }, { claimed: false }, { family: true }, { history: { rings: [T, T, T], declines: [] } }]) {
       expect(statusOf(ringDecision({ ...base, ...over, blocked: true }))).toBe(statusOf(ringDecision({ ...base, ...over })));
     }
   });
@@ -180,5 +188,59 @@ describe('family', () => {
     expect(ringCtx(undefined, { family: true, where: 'Aria’s family' })).toEqual({ family: true, label: null, where: 'Aria’s family' });
     const stranger = ringCtx(undefined, { family: false, where: null });
     expect(ctxText(stranger)).toBe('Stream Studio member · not in your family');
+  });
+});
+
+describe('judging a ring (who it’s really from)', () => {
+  const A = { uid: U(1), name: 'Alice' };
+  const B = { uid: U(2), name: 'Bob' };
+  const GMA = { label: 'Grandma', where: 'Aria’s family' };
+  const judge = (over: Partial<Parameters<typeof judgeRing>[0]> = {}) => judgeRing({ from: A, by: null, others: [], mine: {}, mineAt: T - 60_000, now: T, vouch: false, vouchAt: 0, where: null, blocked: [], ...over });
+
+  it('the caller ringing: your own map, or the caller’s line vouching', () => {
+    expect(judge({ mine: { [A.uid]: GMA } })).toMatchObject({ family: true, blocked: false, ringer: A, ctx: { family: true, label: 'Grandma', where: 'Aria’s family' } });
+    expect(judge({ vouch: true, vouchAt: T - 1000, where: 'Aria’s family' })).toMatchObject({ family: true, ctx: { family: true, label: null, where: 'Aria’s family' } });
+    expect(judge()).toMatchObject({ family: false, ctx: { family: false } });
+  });
+
+  it('added by someone else: a block of whoever added you (or of anyone in the call) counts; the limits are theirs', () => {
+    const blocked = [{ uid: B.uid, name: 'Bob', at: 1 }];
+    // Regression: a ring was only checked against the caller, so someone you blocked could ring you by adding you to another person's call.
+    expect(judge({ by: B, blocked })).toMatchObject({ blocked: true, ringer: B });
+    expect(judge({ others: [B.uid], blocked })).toMatchObject({ blocked: true, ringer: A });
+    expect(judge({ by: B })).toMatchObject({ blocked: false, ringer: B });
+  });
+
+  it('added by someone else: their side vouches only for themselves — family only when the caller is yours too', () => {
+    // Regression: Bob shares a nursery with you, Alice doesn't — Alice's call rang you as family.
+    const r = judge({ by: B, vouch: true, vouchAt: T - 1000, where: 'Aria’s family' });
+    expect(r.family).toBe(false);
+    expect(r.ctx).toMatchObject({ family: false, where: null, by: { uid: B.uid, name: 'Bob', family: true } });
+    expect(ctxText(r.ctx)).toBe('Stream Studio member · not in your family');
+    // A stranger adding you to a call from your family: not family either (camera off first), and it says who added you.
+    const s = judge({ by: B, mine: { [A.uid]: GMA } });
+    expect(s).toMatchObject({ family: false, ctx: { family: false, label: 'Grandma', by: { family: false } } });
+    expect(ctxText(s.ctx)).toBe('Added by Bob · not in your family');
+    // Both yours: family.
+    expect(judge({ by: B, mine: { [A.uid]: GMA, [B.uid]: { label: 'Dad', where: 'Aria’s family' } } })).toMatchObject({ family: true, ctx: { family: true, label: 'Grandma', by: { family: true } } });
+  });
+
+  it('the newer map decides for whoever rang — someone just removed from your nursery stops counting at once', () => {
+    // Regression: your own map (read a few minutes ago) still listed a caregiver removed since; the
+    // caller's map, re-read for this very call, says otherwise — the newer one wins.
+    expect(judge({ mine: { [A.uid]: GMA }, mineAt: T - 5 * 60_000, vouch: false, vouchAt: T - 1000 }).family).toBe(false);
+    // Your map is the newer one (you just added them): it wins too.
+    expect(judge({ mine: { [A.uid]: GMA }, mineAt: T - 1000, vouch: false, vouchAt: T - 30_000 }).family).toBe(true);
+    // Nothing older than ten minutes counts — on either side.
+    expect(judge({ mine: { [A.uid]: GMA }, mineAt: T - 11 * 60_000, vouchAt: 0 }).family).toBe(false);
+    expect(judge({ vouch: true, vouchAt: T - 11 * 60_000 }).family).toBe(false);
+    // The ringing side couldn't read its map (vouchAt 0): your own fresh map decides.
+    expect(judge({ mine: { [A.uid]: GMA }, vouchAt: 0 }).family).toBe(true);
+  });
+
+  it('“Decline & block” blocks a stranger who added you — never the caller they added you to', () => {
+    expect(blockTarget(A, { by: { uid: B.uid, name: 'Bob', family: false } })).toEqual(B);
+    expect(blockTarget(A, { by: { uid: B.uid, name: 'Bob', family: true } })).toEqual(A);
+    expect(blockTarget(A, null)).toEqual(A);
   });
 });

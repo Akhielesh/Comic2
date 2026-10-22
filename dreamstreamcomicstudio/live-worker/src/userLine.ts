@@ -7,13 +7,23 @@
  *    it's a member with this very uid, which also claims the line. Only a
  *    claimed line ever rings, and a claim nobody has renewed for 30 days
  *    lapses — so a line rings only for a real, current member.
- *  - Placing a call (dcall_start): the caller's limits, then the call's own
- *    room is made (callRoom.ts → /x/init) and rings everyone asked.
+ *  - Placing a call (dcall_start): the caller's token is checked again
+ *    (membership can be revoked while a socket stays open) and their family
+ *    re-read unless that was under a minute ago; then the caller's limits,
+ *    then the call's own room is made (callRoom.ts → /x/init) and rings
+ *    everyone asked. Hanging up before the call got going (dcall_cancel)
+ *    really cancels it — even while the room is still being made.
  *  - Being rung (/x/ring, from a call's room): the rules in directCalls.ts
  *    decide; the open apps get `dcall_ring` (with a ticket into the call's
  *    room) and phones with "Ring this device" a Web Push — signed with the
  *    same VAPID key pair as the baby monitor's (a browser keeps one
- *    subscription per key, so a second pair would break nursery alerts).
+ *    subscription per key, so a second pair would break nursery alerts). The
+ *    reply never waits for the push, so a ring and a silenced ring take the
+ *    same time.
+ *  - Sockets: only the member's own authenticated apps count towards the
+ *    10-device limit; sockets that haven't authenticated have a small pool of
+ *    their own (the oldest is let go first), so knowing a member's id isn't
+ *    enough to crowd their apps off the line.
  *  - Keeps the member's direct-call history (missed calls marked), their
  *    favourites, the people they blocked and who may call them — synced to
  *    every device.
@@ -25,6 +35,7 @@ import {
   allowStart,
   appendLog,
   BLOCKED_CAP,
+  blockTarget,
   CALL_ID_RE,
   CLAIM_STALE_MS,
   cleanPerson,
@@ -33,14 +44,15 @@ import {
   ctxText,
   DEFAULT_PREFS,
   DIRECT_LOG_CAP,
+  FAMILY_CALL_TTL_MS,
   FAMILY_TTL_MS,
   familyFrom,
   FAVS_CAP,
+  judgeRing,
   MAX_DIRECT_TO,
   newCallId,
   noteCaller,
   PUSH_SUBS_CAP,
-  ringCtx,
   ringDecision,
   statusOf,
   setPerson,
@@ -71,6 +83,10 @@ interface Attach {
   sid: string;
   at: number;
   authed: boolean;
+  /** Its auth frame arrived and is being checked. */
+  authing?: boolean;
+  /** Closed by us (the runtime can still list a closing socket): no longer counted, never authenticated. */
+  gone?: boolean;
   dev?: string;
   dn?: string;
 }
@@ -94,6 +110,8 @@ interface Seen {
   name: string;
   at: number;
   ctx: RingCtx;
+  /** Someone the member blocked was behind it (the caller, whoever added them, or someone in the call). */
+  blocked?: boolean;
 }
 
 interface StartRec {
@@ -105,14 +123,18 @@ interface StartRec {
 }
 
 const AUTH_TIMEOUT_MS = 10_000;
-/** Open apps per member. */
-const MAX_SOCKETS = 10;
+/** Open apps per member (authenticated sockets only). */
+export const MAX_SOCKETS = 10;
+/** Sockets still waiting for their auth frame; past this the oldest is let go. */
+export const MAX_PENDING = 6;
 const FRAME_MAX = 8 * 1024;
 /** How long a ringing call is offered to a device that opens the app. */
 const RINGING_MS = RING_MS + 5000;
 /** Calls that rang here are remembered this long (a call's history line can come hours later). */
 const SEEN_MS = 24 * 60 * 60_000;
 const START_DEDUPE_MS = 60_000;
+/** A call hung up before it got going is remembered (by its ref) this long. */
+const CANCEL_MS = 60_000;
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 const clip = (s: unknown, n: number) => String(s ?? '').trim().slice(0, n);
@@ -189,28 +211,45 @@ export class UserLine {
     if (!known) await this.state.storage.put('uid', uid);
     else if (known !== uid) return json({ error: 'bad line' }, 400);
     const pair = new WebSocketPair();
-    const server = pair[1];
-    if (this.sockets().length >= MAX_SOCKETS) {
-      server.accept();
-      try {
-        server.send(JSON.stringify({ t: 'error', code: 'full', msg: 'Stream Studio is open on too many devices.' }));
-        server.close(4003, 'full');
-      } catch { /* closing */ }
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-    this.state.acceptWebSocket(server);
-    server.serializeAttachment({ sid: crypto.randomUUID().slice(0, 10), at: Date.now(), authed: false } satisfies Attach);
+    this.admit(pair[1]);
     await this.ensureAlarm(AUTH_TIMEOUT_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
+  /**
+   * A new socket waits for its auth frame. Only authenticated apps count
+   * towards the member's device limit (checked at auth); unauthenticated
+   * sockets get a small pool of their own, and when it's full the oldest
+   * goes — one that never even sent an auth frame first — so anyone who
+   * knows a member's id can't fill the line and keep their apps off it.
+   */
+  admit(ws: WebSocket): void {
+    const pending = this.sockets()
+      .filter((s) => !s.a.authed)
+      .sort((x, y) => Number(!!x.a.authing) - Number(!!y.a.authing) || x.a.at - y.a.at);
+    for (const s of pending.slice(0, Math.max(0, pending.length - MAX_PENDING + 1))) this.retire(s.ws, s.a, 4000, 'crowded');
+    this.state.acceptWebSocket(ws);
+    ws.serializeAttachment({ sid: crypto.randomUUID().slice(0, 10), at: Date.now(), authed: false } satisfies Attach);
+  }
+
+  /** Open sockets (one we closed may still be listed while it closes — it doesn't count). */
   private sockets(): { ws: WebSocket; a: Attach }[] {
     const out: { ws: WebSocket; a: Attach }[] = [];
     for (const ws of this.state.getWebSockets()) {
       const a = ws.deserializeAttachment() as Attach | null;
-      if (a) out.push({ ws, a });
+      if (a && !a.gone) out.push({ ws, a });
     }
     return out;
+  }
+
+  /** Close a socket and stop counting it at once (a peer that never finishes the close can't keep its slot). */
+  private retire(ws: WebSocket, a: Attach, code: number, reason: string): void {
+    try {
+      ws.serializeAttachment({ ...a, authed: false, authing: false, gone: true } satisfies Attach);
+    } catch { /* closed */ }
+    try {
+      ws.close(code, reason);
+    } catch { /* closed */ }
   }
 
   private apps(): { ws: WebSocket; a: Attach }[] {
@@ -235,6 +274,8 @@ export class UserLine {
 
   private reject(ws: WebSocket, code: string, msg: string, close: number): void {
     this.send(ws, { t: 'error', code, msg });
+    const a = ws.deserializeAttachment() as Attach | null;
+    if (a) return this.retire(ws, a, close, code);
     try {
       ws.close(close, code);
     } catch { /* closed */ }
@@ -242,7 +283,7 @@ export class UserLine {
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     const a = ws.deserializeAttachment() as Attach | null;
-    if (!a || typeof raw !== 'string' || raw.length > FRAME_MAX) return;
+    if (!a || a.gone || typeof raw !== 'string' || raw.length > FRAME_MAX) return;
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(raw);
@@ -250,7 +291,7 @@ export class UserLine {
       return;
     }
     if (!a.authed) {
-      if (msg.t === 'auth') await this.onAuth(ws, a, msg);
+      if (msg.t === 'auth' && !a.authing) await this.onAuth(ws, a, msg);
       return;
     }
     switch (msg.t) {
@@ -260,6 +301,8 @@ export class UserLine {
         return this.onStart(ws, msg);
       case 'dcall_invite':
         return this.onInvite(ws, msg);
+      case 'dcall_cancel':
+        return this.onCancel(msg);
       case 'dcall_decline':
         return this.onDecline(msg);
       case 'call_push':
@@ -280,14 +323,15 @@ export class UserLine {
     }
   }
 
-  async webSocketClose(): Promise<void> {
-    /* nothing to tidy: a line holds no per-socket state */
+  /** Finish the closing handshake and stop counting the socket (the runtime can list it until the close completes). */
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    const a = ws.deserializeAttachment() as Attach | null;
+    if (a && !a.gone) this.retire(ws, a, 1000, 'bye');
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    try {
-      ws.close(1011, 'error');
-    } catch { /* closed */ }
+    const a = ws.deserializeAttachment() as Attach | null;
+    if (a && !a.gone) this.retire(ws, a, 1011, 'error');
   }
 
   /** The member's own token: live_me must say it's a member with this line's uid. That claims the line. */
@@ -295,10 +339,17 @@ export class UserLine {
     const token = clip(msg.token, 4096);
     const uid = await this.get<string>('uid');
     if (!token || !uid) return this.reject(ws, 'auth', 'Sign in again to make calls.', 4001);
+    a.authing = true;
+    ws.serializeAttachment(a);
     const res = await callRpc<{ member?: boolean; user_id?: string; profile?: { display_name?: string } }>(this.env, token, 'live_me');
+    // Let go while it was being checked (crowded out, or closed): nothing more to do.
+    if ((ws.deserializeAttachment() as Attach | null)?.gone) return;
+    a.authing = false;
     if (!res.ok) return this.reject(ws, 'auth', res.status === 401 ? 'Your session expired — sign in again.' : 'Could not verify your account right now.', 4001);
     if (!res.data.member || !res.data.user_id) return this.reject(ws, 'forbidden', 'Unlock Stream Studio with your welcome code to make calls.', 4003);
     if (res.data.user_id !== uid) return this.reject(ws, 'forbidden', 'This line belongs to someone else.', 4003);
+    // Only the member's own apps count towards the limit ('full' — the app tries again later).
+    if (this.apps().length >= MAX_SOCKETS) return this.reject(ws, 'full', 'Stream Studio is open on too many devices.', 4003);
     const now = Date.now();
     const owner: Owner = { uid, name: clip(res.data.profile?.display_name || 'Member', 40), verifiedAt: now };
     await this.state.storage.put('owner', owner);
@@ -344,34 +395,54 @@ export class UserLine {
   }
 
   /**
-   * The family map. Placing a call never waits on a refresh it doesn't need:
-   * an older map is used as it is and re-read behind the call (a token came
-   * along); only a member with no map yet waits for the first read.
+   * The family map for placing a call: re-read first (with the caller's own,
+   * just-checked token) unless it's under a minute old, so someone removed
+   * from a nursery stops counting as family on their very next call. A map
+   * that can't be re-read vouches for nobody.
    */
   private async family(owner: Owner, token: string): Promise<FamilyCache> {
     const cur = await this.get<FamilyCache>('family');
-    if (cur && Date.now() - cur.at < FAMILY_TTL_MS) return cur;
-    if (cur) {
-      if (token) void this.refreshFamily(owner, token).catch(() => null);
-      return cur;
+    if (cur && Date.now() - cur.at < FAMILY_CALL_TTL_MS) return cur;
+    return (await this.refreshFamily(owner, token).catch(() => null)) ?? { at: 0, map: {} };
+  }
+
+  /**
+   * Every call is placed with a fresh token, checked again here (cached for a
+   * minute): a membership revoked while this socket stayed open stops calls
+   * at once. A token that doesn't check out sends the app to sign in again.
+   */
+  private async caller(ws: WebSocket, msg: Record<string, unknown>, ref?: string): Promise<{ owner: Owner; token: string } | null> {
+    const owner = await this.owner();
+    if (!owner) return null;
+    const token = clip(msg.token, 4096);
+    const who = token ? await verifyMember(this.env, token) : null;
+    if (!who || who.userId !== owner.uid) {
+      this.send(ws, { t: 'call_err', error: 'auth', ...(ref != null ? { ref } : {}), ...(msg.id ? { id: clip(msg.id, 20) } : {}) });
+      this.reject(ws, 'auth', 'Sign in again to make calls.', 4001);
+      return null;
     }
-    return (token ? await this.refreshFamily(owner, token) : null) ?? { at: 0, map: {} };
+    const fresh: Owner = { uid: owner.uid, name: clip(who.displayName || owner.name, 40), verifiedAt: Date.now() };
+    await this.state.storage.put('owner', fresh);
+    return { owner: fresh, token };
   }
 
   // ------------------------------------------------------ placing a call
   private async onStart(ws: WebSocket, msg: Record<string, unknown>): Promise<void> {
-    const owner = await this.owner();
     const ref = clip(msg.ref, 20);
-    if (!owner) return;
     const now = Date.now();
-    const to = cleanUids(msg.to, MAX_DIRECT_TO).filter((u) => u !== owner.uid);
-    if (!to.length) return this.send(ws, { t: 'call_err', error: 'nobody', ref });
     // The same start again (its answer was lost with a connection): the same answer.
     const starts = ((await this.get<StartRec[]>('starts')) ?? []).filter((s) => now - s.at < START_DEDUPE_MS);
     const prev = starts.find((s) => s.ref === ref);
     if (prev && ref) return this.answerStart(ws, prev);
+    // Hung up before this even arrived.
+    if (ref && (await this.cancelled(ref))) return this.answerStart(ws, { ref, at: now, error: 'cancelled' });
 
-    const fam = await this.family(owner, clip(msg.token, 4096));
+    const me = await this.caller(ws, msg, ref);
+    if (!me) return;
+    const { owner, token } = me;
+    const to = cleanUids(msg.to, MAX_DIRECT_TO).filter((u) => u !== owner.uid);
+    if (!to.length) return this.send(ws, { t: 'call_err', error: 'nobody', ref });
+    const fam = await this.family(owner, token);
     const rate = allowStart(await this.get<StartRate>('rate'), now, to.filter((u) => !fam.map[u]));
     await this.state.storage.put('rate', rate.rate);
     let rec: StartRec;
@@ -384,11 +455,43 @@ export class UserLine {
         from: { uid: owner.uid, name: owner.name },
         video: msg.video !== false,
         to: to.map((u) => ({ uid: u, family: !!fam.map[u], where: fam.map[u]?.where ?? null })),
+        famAt: fam.at,
       });
       rec = r?.status === 'ringing' && r.ticket ? { ref, at: now, id, ticket: r.ticket } : { ref, at: now, error: r?.status === 'restricted' ? 'restricted' : 'unavailable' };
     }
-    await this.state.storage.put('starts', [...starts, rec].slice(-20));
+    const latest = ((await this.get<StartRec[]>('starts')) ?? []).filter((s) => now - s.at < START_DEDUPE_MS && s.ref !== ref);
+    await this.state.storage.put('starts', [...latest, rec].slice(-20));
+    // Hung up while the room was being made: the call ends before anyone answers into it.
+    if (ref && rec.id && (await this.cancelled(ref))) {
+      await this.toRoom(rec.id, '/x/cancel', { id: rec.id, by: owner.uid });
+      return this.answerStart(ws, { ref, at: now, error: 'cancelled' });
+    }
     this.answerStart(ws, rec);
+  }
+
+  /** A call this member hung up on (by its ref) before it got going. */
+  private async cancelled(ref: string): Promise<boolean> {
+    const now = Date.now();
+    return ((await this.get<{ ref: string; at: number }[]>('cancels')) ?? []).some((c) => c.ref === ref && now - c.at < CANCEL_MS);
+  }
+
+  /**
+   * Hung up before the call got going (the app had no call id yet, or hadn't
+   * reached the call's room): the call is cancelled at once — the people
+   * being rung stop ringing — rather than ringing on until the caller's
+   * grace runs out. Works whichever comes first, this or the start.
+   */
+  private async onCancel(msg: Record<string, unknown>): Promise<void> {
+    const owner = await this.owner();
+    const ref = clip(msg.ref, 20);
+    if (!owner || !ref) return;
+    const now = Date.now();
+    const cancels = ((await this.get<{ ref: string; at: number }[]>('cancels')) ?? []).filter((c) => now - c.at < CANCEL_MS && c.ref !== ref);
+    await this.state.storage.put('cancels', [...cancels, { ref, at: now }].slice(-20));
+    const rec = ((await this.get<StartRec[]>('starts')) ?? []).find((s) => s.ref === ref);
+    const id = rec?.id ?? clip(msg.id, 20);
+    // The room checks it's the caller's own call (and only ever drops the caller's not-yet-arrived place).
+    if (CALL_ID_RE.test(id)) await this.toRoom(id, '/x/cancel', { id, by: owner.uid });
   }
 
   private answerStart(ws: WebSocket, rec: StartRec): void {
@@ -396,15 +499,17 @@ export class UserLine {
     else this.send(ws, { t: 'dcall_started', ref: rec.ref, id: rec.id, ticket: rec.ticket, status: 'ringing' });
   }
 
-  /** Ring more people into a direct call you're in (the same limits as placing one). */
+  /** Ring more people into a direct call you're in (the same checks and limits as placing one). */
   private async onInvite(ws: WebSocket, msg: Record<string, unknown>): Promise<void> {
-    const owner = await this.owner();
     const id = clip(msg.id, 20);
-    if (!owner || !CALL_ID_RE.test(id)) return;
+    if (!CALL_ID_RE.test(id)) return;
+    const me = await this.caller(ws, msg);
+    if (!me) return;
+    const { owner, token } = me;
     const to = cleanUids(msg.to, MAX_DIRECT_TO).filter((u) => u !== owner.uid);
     if (!to.length) return;
     const now = Date.now();
-    const fam = await this.family(owner, clip(msg.token, 4096));
+    const fam = await this.family(owner, token);
     const rate = allowStart(await this.get<StartRate>('rate'), now, to.filter((u) => !fam.map[u]));
     await this.state.storage.put('rate', rate.rate);
     if (!rate.ok) return this.send(ws, { t: 'dcall_invited', id, status: 'slow_down' });
@@ -412,12 +517,19 @@ export class UserLine {
       id,
       by: owner.uid,
       to: to.map((u) => ({ uid: u, family: !!fam.map[u], where: fam.map[u]?.where ?? null })),
+      famAt: fam.at,
     });
     this.send(ws, { t: 'dcall_invited', id, status: r?.status ?? 'unavailable' });
   }
 
   // -------------------------------------------------------- being rung
-  /** A call's room rings this member. Answers only what any caller would hear. */
+  /**
+   * A call's room rings this member. Answers only what any caller would hear,
+   * as fast as any caller would hear it. `by` is whoever added this member to
+   * the call (when it isn't the caller) and `with` who's already in it: a
+   * block of any of them silences the ring, and the rate limits count against
+   * whoever rang.
+   */
   private async handleRing(body: Record<string, unknown>): Promise<Response> {
     const owner = await this.owner();
     const now = Date.now();
@@ -427,34 +539,50 @@ export class UserLine {
     const from = cleanPerson(body.from);
     const ticket = clip(body.ticket, 100);
     if (!CALL_ID_RE.test(id) || !from || !ticket || from.uid === owner.uid) return json({ status: 'unavailable' });
-    const [fam, lists, hist, push] = await Promise.all([this.get<FamilyCache>('family'), this.lists(), this.get<Record<string, CallerHistory>>('hist'), this.get<PushRec[]>('push')]);
-    const mine = fam?.map[from.uid];
-    const family = !!mine || body.family === true;
-    const blocked = lists.blocked.some((b) => b.uid === from.uid);
-    const via = this.apps().length ? 'app' : push?.length ? 'push' : 'none';
-    const how = ringDecision({ claimed: true, verifiedAt: owner.verifiedAt, now, blocked, prefs: lists.prefs, family, history: hist?.[from.uid], via });
-    const ctx = ringCtx(mine, { family: body.family === true, where: body.where ? clip(body.where, 60) : null });
+    const by0 = cleanPerson(body.by);
+    const by = by0 && by0.uid !== from.uid && by0.uid !== owner.uid ? by0 : null;
+    const [fam, lists, hist] = await Promise.all([this.get<FamilyCache>('family'), this.lists(), this.get<Record<string, CallerHistory>>('hist')]);
+    // Your own map and the ringing side's (re-read for this call): the newer decides.
+    const judged = judgeRing({
+      from,
+      by,
+      others: cleanUids(body.with, 8).filter((u) => u !== owner.uid),
+      mine: fam?.map ?? {},
+      mineAt: fam?.at ?? 0,
+      now,
+      vouch: body.family === true,
+      vouchAt: typeof body.famAt === 'number' && Number.isFinite(body.famAt) ? Math.min(body.famAt, now) : null,
+      where: body.where ? clip(body.where, 60) : null,
+      blocked: lists.blocked,
+    });
+    const { family, blocked, ringer, ctx } = judged;
+    const how = ringDecision({ claimed: true, verifiedAt: owner.verifiedAt, now, blocked, prefs: lists.prefs, family, history: hist?.[ringer.uid] });
 
     const seen = (await this.get<Record<string, Seen>>('seen')) ?? {};
     for (const [k, v] of Object.entries(seen)) if (now - v.at > SEEN_MS) delete seen[k];
-    seen[id] = { how, from: from.uid, name: from.name, at: now, ctx };
+    seen[id] = { how, from: from.uid, name: from.name, at: now, ctx, ...(blocked ? { blocked: true } : {}) };
     const keys = Object.keys(seen);
     for (const k of keys.slice(0, Math.max(0, keys.length - 100))) delete seen[k];
     await this.state.storage.put('seen', seen);
-    // Rings from outside the family count towards "3 an hour" (silenced ones too).
-    if ((how === 'ring' || how === 'silent') && !family && !blocked) await this.state.storage.put('hist', noteCaller(hist ?? {}, from.uid, 'ring', now));
+    // Rings from outside the family count towards "3 an hour" (silenced ones too) — for whoever rang.
+    if ((how === 'ring' || how === 'silent') && !family && !blocked) await this.state.storage.put('hist', noteCaller(hist ?? {}, ringer.uid, 'ring', now));
 
     if (how === 'ring') {
       const video = body.video !== false;
       const rec: RingingRec = { id, from, video, at: Number(body.at) || now, ticket, ctx };
+      // Kept even with no app open: an app opened while it rings picks it up from the hello.
       await this.state.storage.put('ringing', [...(await this.ringing(now)).filter((r) => r.id !== id), rec].slice(-6));
       this.all({ t: 'dcall_ring', ring: rec });
-      await this.push(
-        { title: ctx.label || from.name, body: `${video ? 'Video' : 'Audio'} call · ${ctxText(ctx)}`, kind: 'call', call: id, direct: true },
-        Math.round(RING_MS / 1000),
-        'high',
-      );
       await this.ensureAlarm(RINGING_MS);
+      // The push goes out behind the reply: waiting on it would make a ring
+      // measurably slower than a silenced one, and give a block away.
+      this.background(
+        this.push(
+          { title: ctx.label || from.name, body: `${video ? 'Video' : 'Audio'} call · ${ctxText(ctx)}`, kind: 'call', call: id, direct: true },
+          Math.round(RING_MS / 1000),
+          'high',
+        ),
+      );
     }
     const status = statusOf(how);
     // The name (as live_me has it) is for the call's room to show who's in the call.
@@ -485,9 +613,9 @@ export class UserLine {
     const incoming = rec.from.uid !== owner.uid;
     const seen = ((await this.get<Record<string, Seen>>('seen')) ?? {})[rec.id];
     if (incoming) {
-      // Nothing of a blocked caller — or of a refused one — ever reaches the member.
+      // Nothing of a blocked caller (or of a call someone blocked added you to) — or of a refused one — ever reaches the member.
       const { blocked } = await this.lists();
-      if (blocked.some((b) => b.uid === rec.from.uid) || seen?.how === 'restricted') return json({ ok: true });
+      if (blocked.some((b) => b.uid === rec.from.uid) || seen?.blocked || seen?.how === 'restricted') return json({ ok: true });
       if (!seen && !rec.invited?.includes(owner.uid)) return json({ ok: false });
     }
     await this.state.storage.put('log', appendLog((await this.get<CallRecord[]>('log')) ?? [], rec));
@@ -497,6 +625,14 @@ export class UserLine {
       await this.push({ title: `Missed ${rec.video ? 'video' : 'audio'} call`, body: `${ctx.label || rec.from.name} · ${ctxText(ctx)}`, kind: 'call_missed', call: rec.id, direct: true }, 6 * 3600, 'normal');
     }
     return json({ ok: true });
+  }
+
+  /** Work that carries on after the reply (an in-flight fetch keeps the object alive; waitUntil where the runtime has it). */
+  private background(p: Promise<unknown>): void {
+    const done = p.catch(() => undefined);
+    try {
+      (this.state as DurableObjectState & { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(done);
+    } catch { /* not supported */ }
   }
 
   /** Web Push to this member's devices that asked to be rung. */
@@ -526,12 +662,15 @@ export class UserLine {
     const seen = ((await this.get<Record<string, Seen>>('seen')) ?? {})[id];
     // Only someone who really rang this line, named as the server knows them.
     const caller = rec?.from ?? (seen ? { uid: seen.from, name: seen.name } : null);
-    const family = rec?.ctx.family ?? seen?.ctx.family ?? false;
-    if (caller && !family) await this.state.storage.put('hist', noteCaller((await this.get<Record<string, CallerHistory>>('hist')) ?? {}, caller.uid, 'decline', now));
-    // Decline & block.
+    const ctx = rec?.ctx ?? seen?.ctx ?? null;
+    const family = ctx?.family ?? false;
+    // Whoever rang: the person who added you, else the caller.
+    const ringer = ctx?.by ? { uid: ctx.by.uid, name: ctx.by.name } : caller;
+    if (ringer && !family) await this.state.storage.put('hist', noteCaller((await this.get<Record<string, CallerHistory>>('hist')) ?? {}, ringer.uid, 'decline', now));
+    // Decline & block: whoever added you if they're not your family, else the caller.
     if (msg.block === true && caller) {
       const lists = await this.lists();
-      await this.state.storage.put('blocked', setPerson(lists.blocked, caller, true, BLOCKED_CAP, now));
+      await this.state.storage.put('blocked', setPerson(lists.blocked, blockTarget(caller, ctx), true, BLOCKED_CAP, now));
       await this.sendLists();
     }
     await this.toRoom(id, '/x/decline', { id, uid: owner.uid });
@@ -584,11 +723,8 @@ export class UserLine {
     let want: number | null = null;
     for (const { ws, a } of this.sockets()) {
       if (a.authed) continue;
-      if (now - a.at > AUTH_TIMEOUT_MS) {
-        try {
-          ws.close(4001, 'auth timeout');
-        } catch { /* closed */ }
-      } else want = Math.min(want ?? Infinity, a.at + AUTH_TIMEOUT_MS);
+      if (now - a.at > AUTH_TIMEOUT_MS) this.retire(ws, a, 4001, 'auth timeout');
+      else want = Math.min(want ?? Infinity, a.at + AUTH_TIMEOUT_MS);
     }
     // Calls that stopped ringing without word (their room tells us when it can).
     const stored = (await this.get<RingingRec[]>('ringing')) ?? [];

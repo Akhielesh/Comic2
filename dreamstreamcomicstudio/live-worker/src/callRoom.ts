@@ -16,6 +16,14 @@
  *    (CallBook.canRelay), never stores media.
  *  - When the call ends, each person's line gets the history line (and the
  *    missed-call push where it's due); the room wipes itself 2 minutes later.
+ *  - Someone in the call adding a person (/x/invite) rings them as the call
+ *    it is (from the caller) *and* as the person who added them, with who's
+ *    already in it — their line judges all of those (blocks, family, limits).
+ *    A line's family vouch speaks only for its own owner.
+ *  - The caller hanging up before their app reached the room (/x/cancel,
+ *    from their line) cancels the call there and then.
+ *  - Only sockets that hold a valid ticket count towards the device limit;
+ *    sockets still waiting to authenticate have a small pool of their own.
  *
  * The worker routes only /ws here; /x/* is for other Durable Objects.
  */
@@ -32,6 +40,10 @@ interface Attach {
   sid: string;
   at: number;
   authed: boolean;
+  /** Its auth frame arrived and is being checked. */
+  authing?: boolean;
+  /** Closed by us (the runtime can still list a closing socket): no longer counted. */
+  gone?: boolean;
   uid?: string;
   name?: string;
   dev?: string;
@@ -56,8 +68,10 @@ const LINE_CHECK_MS = 30_000;
 const LINE_STALE_MS = 60_000;
 /** A finished call's room is wiped this long after it ended. */
 export const CLEANUP_MS = 2 * 60_000;
-/** Devices in one call's room (every person's pre-connected phones and computers). */
-const MAX_SOCKETS = 16;
+/** Devices in one call's room (every person's pre-connected phones and computers) — authenticated ones only. */
+export const MAX_SOCKETS = 16;
+/** Sockets still waiting for their ticket; past this the oldest is let go. */
+export const MAX_PENDING = 8;
 const FRAME_MAX = 8 * 1024;
 const RTC_FRAME_MAX = 64 * 1024;
 
@@ -75,6 +89,9 @@ function cleanInvitees(v: unknown, not: string): Invitee[] {
   }
   return out.slice(0, MAX_DIRECT_TO);
 }
+
+/** When the asking line's family map was read (its vouches are that fresh). */
+const famAtOf = (body: Record<string, unknown>): number | null => (typeof body.famAt === 'number' && Number.isFinite(body.famAt) ? body.famAt : null);
 
 export class CallRoom {
   /** When each socket last sent anything (pings are answered by the runtime). */
@@ -94,6 +111,7 @@ export class CallRoom {
       if (url.pathname === '/x/init') return this.handleInit(body);
       if (url.pathname === '/x/invite') return this.handleInvite(body);
       if (url.pathname === '/x/decline') return this.handleDecline(body);
+      if (url.pathname === '/x/cancel') return this.handleCancel(body);
     }
     return json({ error: 'not found' }, 404);
   }
@@ -133,8 +151,13 @@ export class CallRoom {
     return out;
   }
 
-  /** Ring one person through their line. Their name comes back from it (verified there). */
-  private async ring(meta: Meta, call: Call, who: Invitee, ticket: string): Promise<RingStatus> {
+  /**
+   * Ring one person through their line. Their name comes back from it (verified
+   * there). `by`: who added them, when it isn't the caller — their line then
+   * also judges the ring by that person, and by everyone already in the call.
+   */
+  private async ring(meta: Meta, call: Call, who: Invitee, ticket: string, famAt: number | null, by: { uid: string; name: string } | null = null): Promise<RingStatus> {
+    const inCall = [...new Set(call.parts.map((p) => p.uid))].filter((u) => u !== meta.from.uid && u !== by?.uid && u !== who.uid);
     const r = await this.post<{ status?: RingStatus; name?: string }>(who.uid, '/x/ring', {
       id: meta.id,
       from: meta.from,
@@ -143,6 +166,10 @@ export class CallRoom {
       ticket,
       family: who.family,
       where: who.where,
+      // When the ringing side's family map was read (the callee's line trusts the newer map).
+      ...(famAt != null ? { famAt } : {}),
+      ...(by ? { by } : {}),
+      ...(inCall.length ? { with: inCall } : {}),
     });
     if (r?.name) {
       const names = (await this.state.storage.get<Record<string, string>>('names')) ?? {};
@@ -170,7 +197,7 @@ export class CallRoom {
     await this.state.storage.put({ meta, calls: book.toJSON(), names: { [from.uid]: from.name } });
     const tickets = await this.mint([from.uid, ...to.map((t) => t.uid)]);
     await this.armDeadlines();
-    const statuses = await Promise.all(to.map((t) => this.ring(meta, call, t, tickets.get(t.uid)!)));
+    const statuses = await Promise.all(to.map((t) => this.ring(meta, call, t, tickets.get(t.uid)!, famAtOf(body))));
     const status = overallStatus(statuses);
     if (status !== 'ringing') {
       // Nobody it was for can be rung: over at once (the caller hears why; the unreachable get a missed call).
@@ -197,7 +224,11 @@ export class CallRoom {
     if (!r || !r.added.length) return json({ status: 'ringing', added: [] });
     await this.commit(book, [r.call]);
     const tickets = await this.mint(r.added);
-    const statuses = await Promise.all(want.filter((w) => r.added.includes(w.uid)).map((w) => this.ring(meta, r.call, w, tickets.get(w.uid)!)));
+    // Someone other than the caller is adding people: they're rung as the call (from the caller)
+    // *and* as the person adding them. The inviter's line vouches only for the inviter.
+    const names = (await this.state.storage.get<Record<string, string>>('names')) ?? {};
+    const inviter = by === meta.from.uid ? null : { uid: by, name: names[by] || r.call.ever[by] || me.name || 'Member' };
+    const statuses = await Promise.all(want.filter((w) => r.added.includes(w.uid)).map((w) => this.ring(meta, r.call, w, tickets.get(w.uid)!, famAtOf(body), inviter)));
     await this.armDeadlines();
     return json({ status: overallStatus(statuses), added: r.added });
   }
@@ -210,6 +241,24 @@ export class CallRoom {
     const call = book.decline(meta.id, clip(body.uid, 40), Date.now());
     if (call) await this.commit(book, [call]);
     return json({ ok: !!call });
+  }
+
+  /**
+   * The caller hung up before their app reached the room (from their line):
+   * their not-yet-arrived place goes, so a call nobody answered is cancelled
+   * at once — the people being rung stop ringing — instead of after the grace.
+   * (Once their app is in the room, hanging up is an ordinary call_leave.)
+   */
+  private async handleCancel(body: Record<string, unknown>): Promise<Response> {
+    const meta = await this.meta();
+    if (!meta || clip(body.id, 20) !== meta.id || clip(body.by, 40) !== meta.from.uid) return json({ ok: false });
+    const book = await this.book();
+    const changed = book.leave(PENDING_SID, Date.now(), meta.id);
+    if (changed.length) {
+      await this.commit(book, changed);
+      await this.armDeadlines();
+    }
+    return json({ ok: changed.length > 0 });
   }
 
   // -------------------------------------------------------------- sockets
@@ -230,21 +279,44 @@ export class CallRoom {
       return new Response(null, { status: 101, webSocket: pair[0] });
     };
     if (!meta || meta.id !== id) return refuse('ended', 'That call has ended.', 4006);
-    if (this.sockets().length >= MAX_SOCKETS) return refuse('full', 'Too many devices are in this call right now.', 4003);
-    this.state.acceptWebSocket(server);
-    const a: Attach = { sid: crypto.randomUUID().slice(0, 10), at: Date.now(), authed: false };
-    server.serializeAttachment(a);
+    this.admit(server);
     await this.ensureAlarm(AUTH_TIMEOUT_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
+  /**
+   * A new socket waits for its ticket. Only sockets with a valid ticket count
+   * towards the room's device limit (checked at auth); the rest share a small
+   * pool of their own, the oldest let go first (one that never sent a frame
+   * before one being checked), so nobody can fill the room with idle sockets.
+   */
+  admit(ws: WebSocket): void {
+    const pending = this.sockets()
+      .filter((s) => !s.a.authed)
+      .sort((x, y) => Number(!!x.a.authing) - Number(!!y.a.authing) || x.a.at - y.a.at);
+    for (const s of pending.slice(0, Math.max(0, pending.length - MAX_PENDING + 1))) this.retire(s.ws, s.a, 4000, 'crowded');
+    this.state.acceptWebSocket(ws);
+    ws.serializeAttachment({ sid: crypto.randomUUID().slice(0, 10), at: Date.now(), authed: false } satisfies Attach);
+  }
+
+  /** Open sockets (one we closed may still be listed while it closes — it doesn't count). */
   private sockets(): { ws: WebSocket; a: Attach }[] {
     const out: { ws: WebSocket; a: Attach }[] = [];
     for (const ws of this.state.getWebSockets()) {
       const a = ws.deserializeAttachment() as Attach | null;
-      if (a) out.push({ ws, a });
+      if (a && !a.gone) out.push({ ws, a });
     }
     return out;
+  }
+
+  /** Close a socket and stop counting it at once (a peer that never finishes the close can't keep its slot). */
+  private retire(ws: WebSocket, a: Attach, code: number, reason: string): void {
+    try {
+      ws.serializeAttachment({ ...a, authed: false, authing: false, gone: true } satisfies Attach);
+    } catch { /* closed */ }
+    try {
+      ws.close(code, reason);
+    } catch { /* closed */ }
   }
 
   private send(ws: WebSocket, obj: unknown): void {
@@ -255,6 +327,8 @@ export class CallRoom {
 
   private reject(ws: WebSocket, code: string, msg: string, close: number): void {
     this.send(ws, { t: 'error', code, msg });
+    const a = ws.deserializeAttachment() as Attach | null;
+    if (a) return this.retire(ws, a, close, code);
     try {
       ws.close(close, code);
     } catch { /* closed */ }
@@ -262,7 +336,7 @@ export class CallRoom {
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     const a = ws.deserializeAttachment() as Attach | null;
-    if (!a || typeof raw !== 'string' || raw.length > RTC_FRAME_MAX) return;
+    if (!a || a.gone || typeof raw !== 'string' || raw.length > RTC_FRAME_MAX) return;
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(raw);
@@ -271,7 +345,7 @@ export class CallRoom {
     }
     if (msg.t !== 'call_rtc' && msg.t !== 'auth' && raw.length > FRAME_MAX) return;
     if (!a.authed) {
-      if (msg.t === 'auth') await this.onAuth(ws, a, msg);
+      if (msg.t === 'auth' && !a.authing) await this.onAuth(ws, a, msg);
       return;
     }
     this.seen.set(a.sid, Date.now());
@@ -279,28 +353,40 @@ export class CallRoom {
     return this.onCallMsg(ws, a, msg);
   }
 
+  /** Finish the closing handshake and stop counting the socket; a device in the call gets the usual grace. */
   async webSocketClose(ws: WebSocket): Promise<void> {
     const a = ws.deserializeAttachment() as Attach | null;
-    if (!a?.authed) return;
+    if (!a || a.gone) return;
+    this.retire(ws, a, 1000, 'bye');
+    if (!a.authed) return;
     this.seen.delete(a.sid);
     await this.onGone(a);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    try {
-      ws.close(1011, 'error');
-    } catch { /* closed */ }
+    const a = ws.deserializeAttachment() as Attach | null;
+    if (!a || a.gone) return;
+    this.retire(ws, a, 1011, 'error');
+    if (!a.authed) return;
+    this.seen.delete(a.sid);
+    await this.onGone(a);
   }
 
   private async onAuth(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    a.authing = true;
+    ws.serializeAttachment(a);
     const ticket = clip(msg.ticket, 100);
     const tickets = (await this.state.storage.get<Record<string, string>>('tickets')) ?? {};
     const uid = ticket ? tickets[await hashTicket(ticket)] : undefined;
+    // Let go while it was being checked (crowded out, or closed).
+    if ((ws.deserializeAttachment() as Attach | null)?.gone) return;
+    a.authing = false;
     if (!uid) return this.reject(ws, 'forbidden', 'That call isn’t for you.', 4003);
     const meta = await this.meta();
     const book = await this.book();
     const call = meta ? book.get(meta.id) : null;
     if (!meta || !call || call.ended || (await this.state.storage.get<number>('endedAt')) != null) return this.reject(ws, 'ended', 'That call has ended.', 4006);
+    if (this.sockets().filter((s) => s.a.authed).length >= MAX_SOCKETS) return this.reject(ws, 'full', 'Too many devices are in this call right now.', 4003);
     const names = (await this.state.storage.get<Record<string, string>>('names')) ?? {};
     a.authed = true;
     a.uid = uid;
@@ -436,9 +522,7 @@ export class CallRoom {
         pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
       } catch { /* not supported */ }
       if (now - Math.max(a.at, pinged, this.seen.get(a.sid) ?? 0) < LINE_STALE_MS) continue;
-      try {
-        ws.close(4008, 'stale');
-      } catch { /* closed */ }
+      this.retire(ws, a, 4008, 'stale');
       this.seen.delete(a.sid);
       await this.onGone(a);
     }
@@ -467,11 +551,8 @@ export class CallRoom {
 
     for (const { ws, a } of this.sockets()) {
       if (a.authed) continue;
-      if (now - a.at > AUTH_TIMEOUT_MS) {
-        try {
-          ws.close(4001, 'auth timeout');
-        } catch { /* closed */ }
-      } else soon(a.at + AUTH_TIMEOUT_MS);
+      if (now - a.at > AUTH_TIMEOUT_MS) this.retire(ws, a, 4001, 'auth timeout');
+      else soon(a.at + AUTH_TIMEOUT_MS);
     }
 
     if ((await this.state.storage.get<number>('endedAt')) == null) {
