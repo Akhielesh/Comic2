@@ -96,8 +96,18 @@ const RESTORABLE_VIEWS = new Set<AppView>([
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
 const POST_LOGIN_NEXT_KEY = 'ds.postLoginNext';
-/** Same-origin absolute path only — never protocol-relative or external. */
-const isSafeNextPath = (p: string): boolean => /^\/(?!\/)/.test(p);
+/** A same-origin path, as the browser will read it — never protocol-relative or external. Control
+ *  characters and backslashes are refused outright: browsers drop tab/newline/CR from URLs and read
+ *  '\\' as '/', so '/\t/evil.com' or '/\\evil.com' would otherwise become '//evil.com'. */
+const safeNextPath = (p: string | null | undefined): string | null => {
+  if (!p || !p.startsWith('/') || p.startsWith('//') || /[\u0000-\u001f\u007f\\]/.test(p)) return null;
+  try {
+    const url = new URL(p, window.location.origin);
+    return url.origin === window.location.origin ? url.pathname + url.search + url.hash : null;
+  } catch {
+    return null;
+  }
+};
 
 
 type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
@@ -245,8 +255,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (authLoading) return;
     const params = new URLSearchParams(window.location.search);
-    const next = params.get('next');
-    if (!next || !isSafeNextPath(next)) return;
+    const next = safeNextPath(params.get('next'));
+    if (!next) return;
     try {
       localStorage.setItem(POST_LOGIN_NEXT_KEY, JSON.stringify({ path: next, at: Date.now() }));
     } catch { /* storage unavailable */ }
@@ -266,8 +276,9 @@ const App: React.FC = () => {
     try {
       localStorage.removeItem(POST_LOGIN_NEXT_KEY);
     } catch { /* storage unavailable */ }
-    if (isSafeNextPath(saved.path) && Date.now() - (saved.at ?? 0) < 15 * 60_000) {
-      window.location.replace(saved.path);
+    const dest = safeNextPath(saved.path);
+    if (dest && Date.now() - (saved.at ?? 0) < 15 * 60_000) {
+      window.location.replace(dest);
     }
   }, [user]);
   // Which tab the auth page opens on: existing users sign in; everyone else can
