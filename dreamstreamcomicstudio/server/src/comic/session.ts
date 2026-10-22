@@ -29,6 +29,20 @@ export const DOC_LIMITS = { cast: 40, places: 30, linesPerPanel: 8, refsPerEntit
 export function enforceDocLimits(doc: ComicDoc, ops: DocOp[]): DocOp[] {
   const cast = new Set(doc.cast.map((c) => c.id));
   const places = new Set(doc.places.map((p) => p.id));
+  // Running set of line ids per panel, so deletes earlier in the same batch make room for
+  // adds later in it (e.g. edit_panel_text replaces a full panel with N deletes then N adds).
+  const panelLines = new Map<string, Set<string>>();
+  const linesOf = (pageId: string, panelId: string): Set<string> | null => {
+    const key = `${pageId}\u0000${panelId}`;
+    let set = panelLines.get(key);
+    if (!set) {
+      const panel = doc.pages.find((p) => p.id === pageId)?.panels.find((p) => p.id === panelId);
+      if (!panel) return null;
+      set = new Set(panel.lines.map((l) => l.id));
+      panelLines.set(key, set);
+    }
+    return set;
+  };
   const out: DocOp[] = [];
   let dropped = 0;
   for (const op of ops) {
@@ -42,9 +56,16 @@ export function enforceDocLimits(doc: ComicDoc, ops: DocOp[]): DocOp[] {
       cast.delete(op.id);
     } else if (op.op === 'place_remove') {
       places.delete(op.id);
-    } else if (op.op === 'line' && op.patch) {
-      const panel = doc.pages.find((p) => p.id === op.pageId)?.panels.find((p) => p.id === op.panelId);
-      if (panel && !panel.lines.some((l) => l.id === op.id) && panel.lines.length >= DOC_LIMITS.linesPerPanel) { dropped += 1; continue; }
+    } else if (op.op === 'line') {
+      const lines = linesOf(op.pageId, op.panelId);
+      if (lines) {
+        if (op.patch === null) {
+          lines.delete(op.id);
+        } else if (!lines.has(op.id)) {
+          if (lines.size >= DOC_LIMITS.linesPerPanel) { dropped += 1; continue; }
+          lines.add(op.id);
+        }
+      }
     }
     if ((op.op === 'character' || op.op === 'place') && Array.isArray(op.patch.refs) && op.patch.refs.length > DOC_LIMITS.refsPerEntity) {
       out.push({ ...op, patch: { ...op.patch, refs: op.patch.refs.slice(0, DOC_LIMITS.refsPerEntity) } } as DocOp);
@@ -142,6 +163,8 @@ export class StudioSession implements StudioSessionApi {
   /** Revision of the last doc the store accepted. */
   private savedRev: number;
   private saveFailures = 0;
+  /** Set when a save failed with a terminal error (doc deleted / ownership lost); no more retries. */
+  private gone = false;
 
   /** Turn mutex: the tail of the queue of exclusive work. */
   private lockTail: Promise<void> = Promise.resolve();
@@ -178,9 +201,19 @@ export class StudioSession implements StudioSessionApi {
     return this.listeners.size;
   }
 
-  /** True when every committed revision has been persisted. */
+  /** True when every committed revision has been persisted (a gone session never saves again, so nothing waits on it). */
   get persisted(): boolean {
-    return this.savedRev >= this.current.rev && !this.saving;
+    return this.gone || (this.savedRev >= this.current.rev && !this.saving);
+  }
+
+  /** True while a director turn or render is in flight (shutdown drain / eviction guard). */
+  get busy(): boolean {
+    return this.activeWork > 0 || this.exclusiveDepth > 0;
+  }
+
+  /** True once a save failed terminally (the comic was deleted or ownership moved). */
+  get isGone(): boolean {
+    return this.gone;
   }
 
   commit(rawOps: DocOp[]): ComicDoc {
@@ -281,7 +314,8 @@ export class StudioSession implements StudioSessionApi {
     this.listeners.clear();
   }
 
-  private touch(): void {
+  /** Mark recent use (pushes back idle eviction). Callable on a cache hit so a looked-up session isn't swept. */
+  touch(): void {
     this.lastActiveAt = this.now();
   }
 
@@ -298,6 +332,7 @@ export class StudioSession implements StudioSessionApi {
   private async persist(): Promise<void> {
     // Coalesce: wait for the save in flight, then save once more only if needed.
     while (this.saving) await this.saving;
+    if (this.gone) return; // doc is gone — stop trying to save it
     if (this.savedRev >= this.current.rev) return;
     const doc = this.current;
     const run = (async () => {
@@ -307,13 +342,22 @@ export class StudioSession implements StudioSessionApi {
         this.saveFailures = 0;
       } catch (err) {
         this.saveFailures += 1;
+        const code = (err as StudioError)?.code;
         logger.error('comic_session_save_failed', {
           projectId: this.projectId,
           rev: doc.rev,
           failures: this.saveFailures,
-          code: (err as StudioError)?.code,
+          code,
           message: (err as Error)?.message
         });
+        // NOT_FOUND / FORBIDDEN are terminal: the comic was deleted or ownership moved, so
+        // retrying can never succeed. Stop retrying, abort any renders, and tell the user.
+        if (code === 'NOT_FOUND' || code === 'FORBIDDEN') {
+          this.gone = true;
+          this.controller.abort();
+          this.emit({ type: 'error', code, message: "This comic no longer exists, so your latest changes couldn't be saved." });
+          return;
+        }
         // Retry on a backoff (a later commit or flush retries sooner).
         const delay = SAVE_RETRY_DELAYS_MS[this.saveFailures - 1];
         if (delay !== undefined) this.scheduleSave(delay);
@@ -348,6 +392,13 @@ const ensureSweeper = () => {
 export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
   let evicted = 0;
   for (const [projectId, session] of [...sessions]) {
+    if (session.isGone) {
+      // Terminal save failure: drop it right away so it stops reloading and leaking heap.
+      sessions.delete(projectId);
+      session.dispose();
+      evicted += 1;
+      continue;
+    }
     if (!session.isIdle(now)) continue;
     await session.flush();
     // Something may have started while flushing.
@@ -365,6 +416,22 @@ export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
 };
 
 /**
+ * Shutdown (SIGTERM/SIGINT): wait, bounded, for running turns/renders to settle — an image
+ * call is paid for once started, so it is drained rather than aborted — then persist every
+ * cached session. flush() never throws; the outer race keeps a hung store from blocking exit.
+ */
+export const drainStudioSessions = async (timeoutMs = 25_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while ([...sessions.values()].some((s) => s.busy) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  await Promise.race([
+    Promise.allSettled([...sessions.values()].map((s) => s.flush())),
+    new Promise((r) => setTimeout(r, Math.max(1_000, deadline - Date.now())))
+  ]);
+};
+
+/**
  * The session for a project, loading it (owner-scoped) on first use. Throws
  * StudioError NOT_FOUND when the project is missing or belongs to someone else.
  */
@@ -376,8 +443,16 @@ export async function getStudioSession(
 ): Promise<StudioSession> {
   if (!projectId || !userId) throw notFound();
   const cached = sessions.get(projectId);
-  if (cached) {
-    if (cached.userId === userId) return cached;
+  if (cached?.isGone) {
+    // A terminal save failure retired this session; drop it and load fresh (which re-checks the store).
+    sessions.delete(projectId);
+    cached.dispose();
+  } else if (cached) {
+    // Refresh the idle clock on every hit so the sweeper can't evict a session a request just looked up.
+    if (cached.userId === userId) {
+      cached.touch();
+      return cached;
+    }
     // Never share a session across users. The store decides whether this user owns it.
     const doc = await store.load(projectId, userId).catch(() => null);
     if (!doc) throw notFound();

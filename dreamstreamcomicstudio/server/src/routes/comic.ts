@@ -434,6 +434,18 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     const session = await sessionFor(req);
     const busy = request.kind === 'message' && session.turnRunning;
 
+    // A Stop from an earlier turn no longer applies to this request: clear it BEFORE any
+    // upload, so a Stop pressed from now on — during the upload or during the turn — cancels
+    // THIS request instead of being undone later. The turn signal and its res.on('close')
+    // are set up here too, so a disconnect mid-upload aborts the turn even before the stream
+    // is open (the listener would otherwise be registered after 'close' had already fired).
+    if (session.abort.signal.aborted) session.resetAbort();
+    const sessionSignal = session.abort.signal;
+    const turnAbort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) turnAbort.abort();
+    });
+
     // Uploads are stored before the stream opens so a bad file is a plain 400.
     const prepared =
       request.kind === 'message' && !busy
@@ -467,15 +479,12 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     send({ type: 'hello', rev: session.doc.rev, turnId: newId('turn') });
     const unsubscribe = session.subscribe(send);
 
-    if (session.abort.signal.aborted) session.resetAbort();
     // The director loop stops when the user cancels OR closes the tab; renders only on cancel.
-    const turnAbort = new AbortController();
-    const sessionSignal = session.abort.signal;
+    // A Stop that landed during the upload already aborted turnAbort's source signal above, so
+    // honor it now instead of resetting it; otherwise listen for a Stop during the turn.
     const onSessionAbort = () => turnAbort.abort();
-    sessionSignal.addEventListener('abort', onSessionAbort, { once: true });
-    res.on('close', () => {
-      if (!res.writableEnded) turnAbort.abort();
-    });
+    if (sessionSignal.aborted) turnAbort.abort();
+    else sessionSignal.addEventListener('abort', onSessionAbort, { once: true });
 
     const startSpend = session.doc.spend.totalUsd;
     try {
@@ -498,7 +507,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         if (request.kind === 'message') {
           await session.runExclusive(async () => {
             if (prepared!.ops.length) session.commit(prepared!.ops);
-            await runDirectorTurn(ctx, { text: prepared!.text, attachments: prepared!.attachments });
+            await runDirectorTurn(ctx, { text: prepared!.text, attachments: prepared!.attachments, sourceSaved: prepared!.ops.some((o) => o.op === 'source') });
           });
         } else {
           const action = request.action;

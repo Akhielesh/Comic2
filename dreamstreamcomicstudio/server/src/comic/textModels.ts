@@ -22,6 +22,16 @@ export interface TextRoleDefaults {
   timeoutMs: number;
   temperature: number;
   maxTokens: number;
+  /**
+   * Reasoning effort for reasoning-capable models. Several configured models have
+   * reasoning {mandatory:true} (Sonnet 5.5 defaults to 'high', the Gemini flash/argon
+   * models to 'medium'), and the thinking tokens count against max_tokens. Left at the
+   * model default, a tight max_tokens is spent thinking and the JSON comes back empty or
+   * truncated. Setting this BOUNDS the thinking budget (OpenRouter maps it to
+   * reasoning.max_tokens); llm.ts also pads max_tokens by the budget so visible output
+   * still has room.
+   */
+  reasoningEffort: 'low' | 'medium' | 'high';
   /** Friendly name used in user-facing error messages. */
   label: string;
 }
@@ -33,6 +43,7 @@ export const TEXT_ROLE_DEFAULTS: Readonly<Record<TextRole, TextRoleDefaults>> = 
     timeoutMs: 90_000,
     temperature: 0.6,
     maxTokens: 2500,
+    reasoningEffort: 'low',
     label: 'studio assistant'
   },
   writer: {
@@ -44,6 +55,7 @@ export const TEXT_ROLE_DEFAULTS: Readonly<Record<TextRole, TextRoleDefaults>> = 
     timeoutMs: 150_000,
     temperature: 0.8,
     maxTokens: 16_000,
+    reasoningEffort: 'medium',
     label: 'story planner'
   },
   vision: {
@@ -52,6 +64,7 @@ export const TEXT_ROLE_DEFAULTS: Readonly<Record<TextRole, TextRoleDefaults>> = 
     timeoutMs: 60_000,
     temperature: 0.1,
     maxTokens: 2500,
+    reasoningEffort: 'low',
     label: 'page checker'
   }
 };

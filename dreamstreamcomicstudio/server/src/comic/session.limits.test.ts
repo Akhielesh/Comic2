@@ -15,10 +15,28 @@ describe('document size limits', () => {
   it('caps lines per panel and refs per entity', () => {
     const doc = plannedDoc();
     const lines: DocOp[] = Array.from({ length: 20 }, (_, i) => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_1', id: `l_${i}`, patch: { text: 'x' } }));
-    expect(enforceDocLimits(doc, lines)).toHaveLength(20); // panel starts empty; batch-relative growth is bounded by MAX_PATCH_OPS
+    expect(enforceDocLimits(doc, lines)).toHaveLength(DOC_LIMITS.linesPerPanel); // the per-panel cap applies within a single batch too
     const refs = Array.from({ length: 30 }, (_, i) => ({ path: `u/a/p/b/img/${i}.webp`, source: 'upload' as const, at: 1 }));
     const [op] = enforceDocLimits(doc, [{ op: 'character', id: 'c_maya', patch: { refs } }]);
     expect((op as Extract<DocOp, { op: 'character' }>).patch.refs).toHaveLength(DOC_LIMITS.refsPerEntity);
+  });
+
+  it('lets a batch replace a full panel: earlier deletes free room for the new lines', () => {
+    const doc = plannedDoc();
+    // pn_1_1 starts empty; fill it to the cap so pre-batch it is full.
+    doc.pages[0].panels[0].lines = Array.from({ length: DOC_LIMITS.linesPerPanel }, (_, i) => ({ id: `old_${i}`, kind: 'speech' as const, text: `old ${i}` }));
+    const deletes: DocOp[] = doc.pages[0].panels[0].lines.map((l) => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_1', id: l.id, patch: null }));
+    const adds: DocOp[] = Array.from({ length: 3 }, (_, i) => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_1', id: `new_${i}`, patch: { text: `new ${i}` } }));
+    const kept = enforceDocLimits(doc, [...deletes, ...adds]);
+    expect(kept).toHaveLength(DOC_LIMITS.linesPerPanel + 3); // all deletes + all adds survive
+    expect(kept.filter((o) => o.op === 'line' && o.patch !== null)).toHaveLength(3);
+  });
+
+  it('still drops new lines that would exceed the cap on an already-full panel', () => {
+    const doc = plannedDoc();
+    doc.pages[0].panels[0].lines = Array.from({ length: DOC_LIMITS.linesPerPanel }, (_, i) => ({ id: `old_${i}`, kind: 'speech' as const, text: 'x' }));
+    const adds: DocOp[] = Array.from({ length: 3 }, (_, i) => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_1', id: `new_${i}`, patch: { text: 'y' } }));
+    expect(enforceDocLimits(doc, adds)).toHaveLength(0);
   });
 
   it('session.commit applies the limits', () => {

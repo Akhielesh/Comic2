@@ -33,6 +33,7 @@ import {
   type ResolvedKey,
   type StudioKeys
 } from './types.js';
+import { prefersGeminiDirect } from './keys.js';
 
 // ── Dependencies (injectable for tests) ──────────────────────────────────────
 
@@ -100,6 +101,15 @@ const SAFETY_TEXT_RE =
 const NETWORK_RE = /fetch failed|network|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|other side closed|terminated/i;
 const KEY_RE = /api key not valid|invalid api key|api_key_invalid|unauthorized|no auth credentials|user not found/i;
 
+// A moderation rejection (e.g. OpenRouter 403 '…flagged for "violence". No credits were
+// charged.') contains "credit(s)" but is NOT a capacity failure. It must never trip the
+// shared-key breaker (which would degrade chat for every tenant) nor be reported as "at
+// capacity". Only genuine credit/limit text counts — same narrow shape the text provider uses.
+const MODERATION_RE = /flagged|moderation|content.?policy/i;
+const CAPACITY_403_RE = /key limit|limit exceeded|total limit|quota|insufficient (?:credits|funds|balance)/i;
+const isCapacityError = (status: number, message: string): boolean =>
+  status === 402 || (status === 403 && !MODERATION_RE.test(message) && CAPACITY_403_RE.test(message));
+
 /** A text-only reply that reads as a policy refusal rather than a glitch. */
 export const looksLikeRefusal = (text: string): boolean =>
   SAFETY_TEXT_RE.test(text) && /can(?:'|no)?t|unable|won'?t|not able|refus/i.test(text);
@@ -121,11 +131,18 @@ const noImage = (cause?: unknown) =>
     cause
   });
 
+// Our OWN client-side deadline fired after the request was dispatched — the provider very
+// likely still generated (and billed) the image. `abandoned` tells the job runner to bill
+// the registry price and NOT retry (a retry would pay for a second generation). A provider
+// 408/504 (classifyImageError) is a different case and is NOT marked abandoned.
 const timeoutError = (ms: number) =>
-  new StudioError('TIMEOUT', `The image model took longer than ${Math.round(ms / 1000)}s and was stopped. Please try again.`, {
-    status: 504,
-    retryable: true
-  });
+  Object.assign(
+    new StudioError('TIMEOUT', `The image model took longer than ${Math.round(ms / 1000)}s and was stopped. Please try again.`, {
+      status: 504,
+      retryable: true
+    }),
+    { abandoned: true }
+  );
 
 /** Map an HTTP / SDK / network failure to a StudioError. */
 export const classifyImageError = (err: unknown, ctx: { route: ImageRoute; byok: boolean }): StudioError => {
@@ -137,11 +154,24 @@ export const classifyImageError = (err: unknown, ctx: { route: ImageRoute; byok:
 
   if (e.name === 'AbortError') return cancelled();
 
-  if (status === 402 || (status === 403 && /limit|quota|credit|insufficient/i.test(message))) {
+  if (isCapacityError(status, message)) {
     return new StudioError(
       'PROVIDER_ERROR',
       ctx.byok
         ? `Your ${provider} key is out of credits or over its spending limit. Top it up (or raise the limit), then try again.`
+        : 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.',
+      { status: 503, retryable: false, cause: err }
+    );
+  }
+  // Gemini image models have no free tier: an unbilled project gets 429 RESOURCE_EXHAUSTED
+  // "…free_tier_requests, limit: 0…". Retrying can never succeed, so say what to fix rather
+  // than "busy, wait a minute" (which sends the client and job runner into dead retries).
+  // A free-tier per-minute 429 carries a non-zero limit and stays a transient RATE_LIMIT.
+  if (ctx.route === 'gemini' && (status === 429 || /resource.?exhausted/i.test(message)) && /\blimit:\s*0\b/i.test(message)) {
+    return new StudioError(
+      'PROVIDER_ERROR',
+      ctx.byok
+        ? 'Your Gemini key has no image-generation quota (its Google Cloud project has no billing). Enable billing for that project in Google AI Studio, or add an OpenRouter key in Settings → API keys.'
         : 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.',
       { status: 503, retryable: false, cause: err }
     );
@@ -202,6 +232,13 @@ export interface PickedImageRoute {
 
 /** OpenRouter when it has a key AND serves the model, else Gemini direct, else NO_IMAGE_KEY. */
 export const pickImageRoute = (spec: ImageModelSpec, keys: StudioKeys): PickedImageRoute => {
+  // A user who brought their own Gemini key (and no BYOK OpenRouter key) should draw on
+  // THEIR key, not the platform's — so when they prefer Gemini-direct and the model has a
+  // Gemini route, take it ahead of the platform OpenRouter key. Models with no Gemini route
+  // still fall through to OpenRouter below.
+  if (prefersGeminiDirect(keys) && keys.gemini?.key && spec.routes.gemini) {
+    return { route: 'gemini', model: spec.routes.gemini, key: keys.gemini };
+  }
   if (keys.openrouter?.key && spec.routes.openrouter) {
     return { route: 'openrouter', model: spec.routes.openrouter, key: keys.openrouter };
   }
@@ -454,11 +491,24 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     const message = `OpenRouter ${path} ${res.status}: ${res.message || ''}`;
     // Same circuit the text provider trips: a capped PLATFORM key should stop chat from
     // hammering it too. A BYOK key's limits never affect anyone else.
-    if (!key.byok && (res.status === 402 || (res.status === 403 && /limit|quota|credit/i.test(message)))) markSharedKeyCapped();
+    if (!key.byok && isCapacityError(res.status, message)) markSharedKeyCapped();
     throw new ImageHttpError(res.status, message, res.retryAfterMs);
   };
 
   /** Image URL → data URL (some providers return hosted URLs). */
+  // The image was generated and billed (a 200 with usage/cost) — if DOWNLOADING or decoding
+  // it then fails, the money is already spent, so tag the thrown error with `spentUsd` from
+  // the response so the job runner records it instead of silently dropping the charge.
+  const downloadPaid = async (download: () => Promise<string>, json: unknown): Promise<string> => {
+    try {
+      return await download();
+    } catch (err) {
+      const cost = costOf(json);
+      if (typeof cost === 'number' && cost > 0) (err as { spentUsd?: number }).spentUsd = cost;
+      throw err;
+    }
+  };
+
   const toDataUrl = async (url: string, signal: AbortSignal): Promise<string> => {
     if (url.startsWith('data:')) return url;
     const res = await doFetch(url, { signal });
@@ -503,7 +553,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       const mediaType = String(item?.media_type || json?.media_type || 'image/png');
       let dataUrl: string | undefined;
       if (typeof item?.b64_json === 'string' && item.b64_json) dataUrl = `data:${mediaType};base64,${item.b64_json}`;
-      else if (typeof item?.url === 'string' && item.url) dataUrl = await toDataUrl(item.url, signal);
+      else if (typeof item?.url === 'string' && item.url) dataUrl = await downloadPaid(() => toDataUrl(item.url as string, signal), json);
       return {
         dataUrl,
         model: typeof json?.model === 'string' ? json.model : undefined,
@@ -553,7 +603,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         .map((img) => (img as { image_url?: { url?: unknown }; url?: unknown })?.image_url?.url ?? (img as { url?: unknown })?.url)
         .find((url): url is string => typeof url === 'string' && url.length > 0);
       const finish = choice?.native_finish_reason || choice?.finish_reason;
-      const dataUrl = first ? await toDataUrl(first, signal) : undefined;
+      const dataUrl = first ? await downloadPaid(() => toDataUrl(first, signal), json) : undefined;
       return {
         dataUrl,
         text: textOf(message?.content) || undefined,
@@ -675,7 +725,14 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
             : await geminiAttempt(picked, req, prepared, prompt);
       } catch (err) {
         const error = classifyImageError(err, errCtx);
-        if (error.code === 'CANCELLED') throw error;
+        // Carry forward money already spent on this attempt (e.g. a paid 200 whose image
+        // failed to download) so a retry or the final failure still bills it.
+        const priorSpend = (err as { spentUsd?: unknown })?.spentUsd;
+        if (typeof priorSpend === 'number' && Number.isFinite(priorSpend) && priorSpend > 0) spent = (spent || 0) + priorSpend;
+        if (error.code === 'CANCELLED') {
+          if (spent) (error as { spentUsd?: number }).spentUsd = spent;
+          throw error;
+        }
         const transient = error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && error.retryable);
         if (transient && transientRetries > 0 && !req.signal?.aborted) {
           transientRetries -= 1;

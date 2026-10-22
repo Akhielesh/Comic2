@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { Request } from 'express';
-import { hasAnyStudioKey, studioKeysFromRequest } from './keys.js';
+import { hasAnyStudioKey, prefersGeminiDirect, studioKeysFromRequest } from './keys.js';
 
 const reqWith = (apiKeys: Request['apiKeys']) => ({ apiKeys }) as unknown as Request;
+
+// A fake request that also carries an `X-Allowed-Sources` governance header.
+const reqWithAllowed = (apiKeys: Request['apiKeys'], allowed: string) =>
+  ({ apiKeys, header: (h: string) => (h === 'X-Allowed-Sources' ? allowed : undefined) }) as unknown as Request;
 
 describe('studioKeysFromRequest', () => {
   it('reads the generic providerKeys map first', () => {
@@ -53,7 +57,7 @@ describe('studioKeysFromRequest', () => {
     expect(hasAnyStudioKey(keys)).toBe(true);
   });
 
-  it('drops a misplaced OpenRouter key when a real OpenRouter key exists', () => {
+  it('promotes a BYOK key in the Gemini slot over a non-BYOK platform OpenRouter key', () => {
     const keys = studioKeysFromRequest(
       reqWith({
         providerKeys: {
@@ -62,11 +66,56 @@ describe('studioKeysFromRequest', () => {
         }
       })
     );
-    expect(keys).toEqual({ openrouter: { key: 'sk-or-platform', byok: false } });
+    expect(keys).toEqual({ openrouter: { key: 'sk-or-user', byok: true } });
+  });
+
+  it('keeps an existing BYOK OpenRouter key over a misplaced sk-or key', () => {
+    const keys = studioKeysFromRequest(
+      reqWith({
+        providerKeys: {
+          openrouter: { key: 'sk-or-other', byok: true },
+          gemini: { key: 'sk-or-user', byok: true }
+        }
+      })
+    );
+    expect(keys).toEqual({ openrouter: { key: 'sk-or-other', byok: true } });
+  });
+
+  it('drops a misplaced OpenRouter key entirely when governance disabled OpenRouter', () => {
+    const keys = studioKeysFromRequest(
+      reqWithAllowed({ providerKeys: { gemini: { key: 'sk-or-user', byok: true } } }, 'gemini')
+    );
+    expect(keys).toEqual({});
+    expect(hasAnyStudioKey(keys)).toBe(false);
+  });
+
+  it('still promotes a misplaced OpenRouter key when governance allows OpenRouter', () => {
+    const keys = studioKeysFromRequest(
+      reqWithAllowed({ providerKeys: { gemini: { key: 'sk-or-user', byok: true } } }, 'gemini,openrouter')
+    );
+    expect(keys).toEqual({ openrouter: { key: 'sk-or-user', byok: true } });
   });
 
   it('coerces a missing byok flag to false', () => {
     const keys = studioKeysFromRequest(reqWith({ geminiKey: 'AIza-x' }));
     expect(keys.gemini).toEqual({ key: 'AIza-x', byok: false });
+  });
+});
+
+describe('prefersGeminiDirect', () => {
+  it('is true when a BYOK Gemini key sits beside a non-BYOK (platform) OpenRouter key', () => {
+    expect(prefersGeminiDirect({ gemini: { key: 'AIza-user', byok: true }, openrouter: { key: 'sk-or-platform', byok: false } })).toBe(true);
+  });
+
+  it('is false when the OpenRouter key is itself BYOK', () => {
+    expect(prefersGeminiDirect({ gemini: { key: 'AIza-user', byok: true }, openrouter: { key: 'sk-or-user', byok: true } })).toBe(false);
+  });
+
+  it('is false for a non-BYOK (platform) Gemini key', () => {
+    expect(prefersGeminiDirect({ gemini: { key: 'AIza-platform', byok: false }, openrouter: { key: 'sk-or-platform', byok: false } })).toBe(false);
+  });
+
+  it('is false when there is no Gemini key', () => {
+    expect(prefersGeminiDirect({ openrouter: { key: 'sk-or-platform', byok: false } })).toBe(false);
   });
 });

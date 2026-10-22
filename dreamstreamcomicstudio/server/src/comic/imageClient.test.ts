@@ -79,8 +79,13 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('pickImageRoute', () => {
-  it('prefers OpenRouter, then Gemini direct', () => {
-    expect(pickImageRoute(NB21, { ...OR, ...GEM })).toMatchObject({ route: 'openrouter', model: 'google/gemini-nano-banana-2.1' });
+  it('prefers OpenRouter, but a BYOK Gemini key beats a PLATFORM OpenRouter key', () => {
+    // Platform OpenRouter key + the user's own Gemini key → draw on the user's key, not the
+    // platform's (findings 19/28: a BYOK key must not be ignored and silently platform-billed).
+    expect(pickImageRoute(NB21, { ...OR, ...GEM })).toMatchObject({ route: 'gemini', model: 'gemini-nano-banana-2.1', key: GEM.gemini });
+    // The user's OWN OpenRouter key still wins over their Gemini key (OpenRouter preferred).
+    expect(pickImageRoute(NB21, { ...OR_BYOK, ...GEM })).toMatchObject({ route: 'openrouter', model: 'google/gemini-nano-banana-2.1' });
+    // Gemini-only → Gemini.
     expect(pickImageRoute(NB21, GEM)).toMatchObject({ route: 'gemini', model: 'gemini-nano-banana-2.1', key: GEM.gemini });
   });
 
@@ -263,6 +268,21 @@ describe('createImageGenerator — OpenRouter', () => {
     expect(isSharedKeyCapped()).toBe(false);
   });
 
+  it('treats a 403 moderation rejection as SAFETY_BLOCKED and never trips the shared-key circuit', async () => {
+    const body = {
+      error: {
+        code: 403,
+        message:
+          'openai/gpt-image-2.5-sunburst requires moderation on OpenAI. Your input was flagged for "violence". No credits were charged.',
+        metadata: { reasons: ['violence'], flagged_input: '...', provider_name: 'OpenAI', model_slug: 'openai/gpt-image-2.5-sunburst' }
+      }
+    };
+    const { generate, fetchMock } = setup(OR, [json(body, 403)]);
+    await expect(generate(baseReq({ spec: GPT }))).rejects.toMatchObject({ code: 'SAFETY_BLOCKED' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(isSharedKeyCapped()).toBe(false);
+  });
+
   it('times out at spec.timeoutMs with an honest TIMEOUT (no retry)', async () => {
     const spec: ImageModelSpec = { ...NB21, timeoutMs: 20 };
     const hang = () => new Promise<Response>(() => undefined);
@@ -363,6 +383,22 @@ describe('createImageGenerator — Gemini direct', () => {
     const b = setup(GEM, [], { generateContent: failing });
     await expect(b.generate(baseReq())).rejects.toMatchObject({ code: 'PROVIDER_ERROR', retryable: false });
     expect(failing).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a billing error (no retry, no wait) when a Gemini image model has no free-tier quota', async () => {
+    const quota = Object.assign(
+      new Error(
+        '{"error":{"code":429,"message":"Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-image","status":"RESOURCE_EXHAUSTED"}}'
+      ),
+      { status: 429 }
+    );
+    const generateContent = vi.fn().mockRejectedValue(quota);
+    const { generate, sleep } = setup(GEM, [], { generateContent });
+    const err = await generate(baseReq()).catch((e) => e);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false });
+    expect(err.userMessage).toMatch(/billing/i);
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it('maps an invalid Gemini key', async () => {

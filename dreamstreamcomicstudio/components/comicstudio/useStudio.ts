@@ -182,18 +182,6 @@ export function useStudio(projectId: string): ComicStudioController {
     setTabState(initialTabFor(stateRef.current));
   }, [loadedDocId]);
 
-  // Unmount: stop everything.
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      abortStreams();
-      if (patchTimerRef.current) clearTimeout(patchTimerRef.current);
-      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
-      patchQueueRef.current.splice(0).forEach((p) => p.resolve());
-    };
-  }, [abortStreams]);
-
   // ── Refresh ────────────────────────────────────────────────────────────────
 
   const refresh = useCallback((): Promise<void> => {
@@ -311,9 +299,26 @@ export function useStudio(projectId: string): ComicStudioController {
       now: Date.now()
     });
     batch.forEach((b) => b.resolve());
-    if (result.ok ? hasClearIntent(ops) : result.aborted) void refresh();
+    // Don't fire a resync GET after the component is gone (unmount flushes a final batch).
+    if (mountedRef.current && (result.ok ? hasClearIntent(ops) : result.aborted)) void refresh();
     if (patchQueueRef.current.length) void flushPatches();
   }, [guarded, refresh, runStream]);
+
+  // Unmount: stop everything, but flush pending edits instead of dropping them. A rename
+  // (or any blur-commit) followed immediately by Back queues an edit behind the 150 ms
+  // debounce; discarding it silently lost the user's change. flushPatches clears the timer
+  // and sends the queue now. An in-flight save is left running (abort everything but patch)
+  // so it finishes; its completion chains the remaining batch. Dispatches are guarded no-ops
+  // once unmounted, so the folded-in state updates are harmless — only the network save matters.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+      abortStreams((kind) => kind !== 'patch');
+      void flushPatches();
+    };
+  }, [abortStreams, flushPatches]);
 
   const patch = useCallback(
     (ops: DocOp[]): Promise<void> => {

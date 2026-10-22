@@ -16,7 +16,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { logger } from '../lib/logger.js';
-import { hashString, normalizeDoc, type ComicDoc } from '../../../shared/comic/doc.js';
+import { hashString, normalizeDoc, type ComicDoc, type RenderState } from '../../../shared/comic/doc.js';
 import { StudioError, type DocStore, type ProjectRowSummary } from './types.js';
 
 const PROJECT_NAME_MAX = 200;
@@ -68,9 +68,24 @@ export function buildLegacyProjectState(doc: ComicDoc): Record<string, unknown> 
 }
 
 /**
+ * Reduce a RenderState to what a public reader needs: its status and current asset.
+ * Drops the render `history` (holds discarded drafts whose paths are fetchable from
+ * the public bucket), plus qc/error/model and other private render internals.
+ */
+const publicRender = (r: RenderState): RenderState => ({
+  status: r.status,
+  ...(r.asset ? { asset: r.asset } : {}),
+  history: []
+});
+
+/**
  * Strip everything private from a published doc: the conversation (and its
  * attachments), spend, gate, director memory, pasted source, and the user's own
- * reference uploads (often personal photos). Pages, cover, cast sheets and style stay.
+ * reference uploads (often personal photos). Pages, cover, cast sheets and style stay,
+ * but every render is reduced to its status + current asset — the draft history, QC
+ * notes and model metadata never reach the public payload (those storage paths are
+ * directly fetchable from the public comic-assets bucket). The unchosen style options
+ * are dropped too, since the reader only renders the locked style.
  */
 export function sanitizePublicDoc(doc: ComicDoc): ComicDoc {
   const settings = { ...doc.settings };
@@ -83,9 +98,11 @@ export function sanitizePublicDoc(doc: ComicDoc): ComicDoc {
     gate: null,
     source: {},
     settings,
-    style: { ...doc.style, refs: [] },
-    cast: doc.cast.map((c) => ({ ...c, refs: [] })),
-    places: doc.places.map((p) => ({ ...p, refs: [] }))
+    style: { ...doc.style, refs: [], options: [] },
+    cast: doc.cast.map((c) => ({ ...c, refs: [], sheet: publicRender(c.sheet) })),
+    places: doc.places.map((p) => ({ ...p, refs: [], sheet: publicRender(p.sheet) })),
+    pages: doc.pages.map((p) => ({ ...p, render: publicRender(p.render) })),
+    cover: { ...doc.cover, render: publicRender(doc.cover.render) }
   };
   delete clean.memory;
   return clean;

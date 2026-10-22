@@ -15,6 +15,7 @@
 // is released immediately and the late result is discarded (and never streamed).
 
 import { getProvider as gatewayGetProvider } from '../ai/gateway.js';
+import { reasoningBudget } from '../ai/providers/openrouter.js';
 import type { AIProvider, ChatMessage, GenerateTextRequest, GenerateTextResult, JsonSchemaSpec } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult, type StudioKeys, type TextRole } from './types.js';
@@ -184,6 +185,13 @@ const isTransient = (err: StudioError): boolean => {
 };
 
 /**
+ * True when the provider cut the reply off at the token cap (the reply came back empty or
+ * truncated because mandatory reasoning spent max_tokens). generateTextOnce tags these with
+ * publicCode 'TRUNCATED'; unlike a transient blip, retrying only helps with a bigger budget.
+ */
+const isTruncated = (err: unknown): boolean => (err as TaggedProviderError)?.publicCode === 'TRUNCATED';
+
+/**
  * Gemini's OpenAI-compatible endpoint only gets `response_format: json_object` (no
  * schema), so the model must be told the shape explicitly.
  */
@@ -226,13 +234,23 @@ export function createLlmClient(keys: StudioKeys, deps: LlmClientDeps = {}): Llm
       ? { ...req.jsonSchema, strict: req.jsonSchema.strict ?? true }
       : undefined;
 
+    // Several configured models have mandatory reasoning (Sonnet 5.5 defaults to 'high', the
+    // Gemini flash/argon models to 'medium') and the thinking tokens are drawn from max_tokens.
+    // Bound the thinking to the role's effort (OpenRouter maps it to reasoning.max_tokens) AND
+    // pad max_tokens by that budget so the visible JSON reply still fits — otherwise thinking
+    // eats the whole cap and the reply comes back empty/truncated (Anthropic also requires
+    // max_tokens > the reasoning budget). The ×1.5 leaves slack for the budget→thinkingLevel
+    // rounding Gemini 3 does.
+    const effort = defaults.reasoningEffort;
+    const visibleMaxTokens = req.maxTokens ?? defaults.maxTokens;
     const genReq: GenerateTextRequest = {
       model: route.model,
       messages: route.route === 'gemini' && jsonSchema ? withSchemaInstruction(req.messages, jsonSchema) : req.messages,
       jsonSchema,
       tools: req.tools?.length ? req.tools : undefined,
       temperature: req.temperature ?? defaults.temperature,
-      maxTokens: req.maxTokens ?? defaults.maxTokens,
+      maxTokens: visibleMaxTokens + Math.ceil(reasoningBudget(effort) * 1.5),
+      reasoningEffort: effort,
       timeoutMs: defaults.timeoutMs,
       // One provider-level attempt; the single transient retry below is classified properly
       // (the provider's own retry only recognises 429/503 by message text).
@@ -280,10 +298,22 @@ export function createLlmClient(keys: StudioKeys, deps: LlmClientDeps = {}): Llm
         result = await attempt();
       } catch (first) {
         const error = toLlmStudioError(first, errCtx);
+        const truncated = isTruncated(first);
         // Never retry once text has streamed to the user (it would duplicate), or after cancel.
-        if (!isTransient(error) || streamedAny || req.signal?.aborted) throw error;
-        logger.warn('comic_llm_retry', { role: req.role, route: route.route, model: route.model, code: error.code });
-        await sleep(error.code === 'RATE_LIMIT' ? RATE_LIMIT_RETRY_DELAY_MS : RETRY_DELAY_MS);
+        if ((!isTransient(error) && !truncated) || streamedAny || req.signal?.aborted) throw error;
+        logger.warn('comic_llm_retry', {
+          role: req.role,
+          route: route.route,
+          model: route.model,
+          code: truncated ? 'TRUNCATED' : error.code
+        });
+        if (truncated) {
+          // Reasoning consumed the budget — give the visible reply more room rather than
+          // sleeping (it is not a transient blip) and rather than a JSON repair (it won't help).
+          genReq.maxTokens = (genReq.maxTokens ?? defaults.maxTokens) * 2;
+        } else {
+          await sleep(error.code === 'RATE_LIMIT' ? RATE_LIMIT_RETRY_DELAY_MS : RETRY_DELAY_MS);
+        }
         if (req.signal?.aborted) throw cancelledError();
         result = await attempt();
       }

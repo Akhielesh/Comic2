@@ -66,10 +66,20 @@ export interface DirectorTurn {
   attachments: AssetRef[];
   /** The user's message text this turn (save_source can store it verbatim). */
   userText: string;
+  /** The route already saved the user's full paste/attachment to source.script this turn. */
+  sourceSaved: boolean;
+  /** USD of image spends this turn has already started without approval (per-turn 'big' gate). */
+  spentUsd: number;
+  /** A spend this turn is waiting on the user's approval — stop starting more. */
+  gated: boolean;
+  /** Paid writer calls (plan/revise/source analysis) made this turn. */
+  paidText: number;
 }
 
 /** Source material shorter than this is stored without a (paid) writer analysis. */
 export const ANALYZE_SOURCE_MIN_CHARS = 1500;
+/** Paid writer calls (plan/revise/source analysis) allowed in a single director turn. */
+export const MAX_PAID_TEXT_PER_TURN = 2;
 const MAX_REFS_PER_ENTITY = 4;
 const MAX_SOURCE_CHARS = 200_000;
 const SPOKEN = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
@@ -82,6 +92,10 @@ export const createDirectorTurn = (init: Partial<DirectorTurn> = {}): DirectorTu
   askedUser: false,
   attachments: [],
   userText: '',
+  sourceSaved: false,
+  spentUsd: 0,
+  gated: false,
+  paidText: 0,
   ...init
 });
 
@@ -222,10 +236,15 @@ const lookChanged = (before: CharacterLook, patch: Partial<CharacterLook>) =>
 
 async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, args: Record<string, unknown>): Promise<string> {
   const doc = ctx.session.doc;
+  const stored = (doc.source.script || '').trim();
   let script = typeof args.text === 'string' ? args.text.trim() : '';
   if (!script && args.useMessage === true) script = turn.userText.trim();
+  // The route already saved the user's full paste/attachment to source.script this turn; the
+  // message text the model can see holds only a short excerpt. Never let that excerpt (via
+  // useMessage or an inlined text arg) overwrite the full script — read it back instead.
+  if (turn.sourceSaved && stored && script.length < stored.length) script = '';
   const fromStore = !script;
-  if (fromStore) script = (doc.source.script || '').trim();
+  if (fromStore) script = stored;
   if (!script) throw argError('No source text: pass text, set useMessage:true to save the user’s message, or ask the user to paste their script.');
   script = script.slice(0, MAX_SOURCE_CHARS);
   if (!fromStore) ctx.session.commit([{ op: 'source', patch: { script, updatedAt: Date.now() } }]);
@@ -233,6 +252,7 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   const words = (script.match(/\S+/g) || []).length;
   const analyze = args.analyze === true || (args.analyze !== false && script.length >= ANALYZE_SOURCE_MIN_CHARS);
   if (!analyze) return `Saved the source (${words.toLocaleString('en-US')} words).`;
+  guardPaidText(ctx, turn);
 
   const tracker = newTextSpendTracker();
   let analysis: Awaited<ReturnType<typeof analyzeSource>>;
@@ -340,10 +360,36 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
 // ── Spend helpers ────────────────────────────────────────────────────────────
 
 async function spend(ctx: StudioContext, turn: DirectorTurn, action: SpendAction): Promise<string> {
-  const started = await startAction(ctx, action, { confirmed: false, collectCard: (card) => turn.cards.push(card) });
+  // One approval per turn: once a spend is waiting on the user, stop starting more so a turn
+  // can't slip many individually-small spends past the 'big' threshold while one is unapproved.
+  if (turn.gated) {
+    return 'Refused: a spend from this turn is already waiting for the user to approve it. Tell them the estimate and stop; continue after they approve.';
+  }
+  // priorUsd lets the 'big' gate weigh this spend against what the turn has already started,
+  // not just this one call — so N small edits in a turn still gate once their total is "big".
+  const started = await startAction(ctx, action, { confirmed: false, priorUsd: turn.spentUsd, collectCard: (card) => turn.cards.push(card) });
+  if (started.outcome.status === 'started') turn.spentUsd += started.outcome.estimate.usd;
+  else if (started.outcome.status === 'gated') turn.gated = true;
   // Renders continue after the turn; the stream stays open until they settle.
   void ctx.track(started.done);
   return outcomeText(started.outcome);
+}
+
+/**
+ * Cap the paid writer calls (page planning, revisions, source analysis) a single turn can
+ * run, and stop once the comic is at its budget cap — text spend otherwise goes through
+ * neither the approval gate nor the budget, so an over-eager (or injected) run could spend
+ * freely. Throws a ToolArgError the model surfaces to the user.
+ */
+function guardPaidText(ctx: StudioContext, turn: DirectorTurn): void {
+  if (turn.paidText >= MAX_PAID_TEXT_PER_TURN) {
+    throw argError('Already ran the writer twice this turn — show the user the result and ask before planning, revising or re-reading the script again.');
+  }
+  const budget = ctx.session.doc.settings.budgetUsd;
+  if (typeof budget === 'number' && budget > 0 && ctx.session.doc.spend.totalUsd >= budget) {
+    throw argError('The comic is at its budget cap — ask the user to raise it in Settings before running the writer again.');
+  }
+  turn.paidText += 1;
 }
 
 // ── Tool set ─────────────────────────────────────────────────────────────────
@@ -430,7 +476,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'save_source',
-      "Store the user's script/story/notes as the source. text = the material; or useMessage:true to store the user's current message as-is (best for long pastes); or no text to re-read the stored source. Long material is analyzed: brief, cast and places get filled in. Returns what was extracted.",
+      "Store the user's script/story/notes as the source. If the message says it was already saved as the source (a long paste or text attachment), call with no arguments to read the full text — the message shows only an excerpt. Otherwise: text = the material, or useMessage:true for the current message. Long material is analyzed (brief, cast, places).",
       schema({
         text: S('The source material (omit when useMessage is true).'),
         useMessage: B("Store the user's current message text as the source."),
@@ -677,6 +723,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const d = doc();
         const hasStory = !!(d.brief.premise || d.brief.logline || d.source.script || d.cast.length || d.brief.notes.length);
         if (!hasStory) throw argError('Nothing to plan yet — capture the story (brief, cast or source) first.');
+        guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions: text(args.instructions, 4000) }, { collectCard: (c) => state.cards.push(c) });
         return `${outcome.message} The user can review and edit the plan on the board before any page is drawn.`;
       }
@@ -693,6 +740,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!instructions) throw argError('Say what to change.');
         const pages = pagesByNumbers(d, intList(args.pages));
         if (!pages.length) throw argError('Pass the page numbers to rewrite.');
+        guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions, pageIds: pages.map((p) => p.id) }, { collectCard: (c) => state.cards.push(c) });
         return outcome.message;
       }

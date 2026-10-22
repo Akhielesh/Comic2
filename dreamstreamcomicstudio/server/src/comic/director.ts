@@ -17,6 +17,8 @@ import { buildDirectorTools, createDirectorTurn, type DirectorTool, type Directo
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
+/** Tool calls honored in a single round; extras are refused so one round can't fan out unboundedly. */
+export const MAX_CALLS_PER_ROUND = 12;
 /** Conversation messages the director sees verbatim each turn. */
 export const HISTORY_WINDOW = 14;
 /** Past this many messages, older ones are folded into doc.memory. */
@@ -45,7 +47,7 @@ HOW TO USE TOOLS
 - Use the ids from the DOC SUMMARY when you have them; names work too.
 - If a tool answers "Error: …", fix the arguments and try once more, or tell the user plainly what went wrong.
 - After ask_user, end your turn.
-- A long pasted script or story: call save_source with useMessage:true (it extracts the brief, cast and places), then offer the next step.
+- A long pasted script or story: if the message says it was already saved as the source script, call save_source with no arguments to read it; otherwise call save_source with useMessage:true. It extracts the brief, cast and places. Then offer the next step.
 - To change a page's dialogue, read it first with read_pages, then edit_panel_text. To change a drawn page's art, use edit_page; to change its script, revise_pages.
 
 ATTACHMENTS
@@ -236,7 +238,7 @@ async function loadTurnImages(ctx: StudioContext, attachments: AssetRef[]): Prom
  * Run one director turn for a user message. Never throws for model/tool failures — they
  * become an honest notice in the conversation; only cancellation ends it quietly.
  */
-export async function runDirectorTurn(ctx: StudioContext, input: { text: string; attachments: AssetRef[] }): Promise<void> {
+export async function runDirectorTurn(ctx: StudioContext, input: { text: string; attachments: AssetRef[]; sourceSaved?: boolean }): Promise<void> {
   const session = ctx.session;
   const userText = (input.text || '').trim();
   const attachments = (input.attachments || []).filter((a) => a?.path);
@@ -250,7 +252,7 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
   session.commit([{ op: 'message', msg: userMsg }]);
 
   const msgId = newId('msg');
-  const turn: DirectorTurn = createDirectorTurn({ attachments, userText });
+  const turn: DirectorTurn = createDirectorTurn({ attachments, userText, sourceSaved: !!input.sourceSaved });
   const tools: DirectorTool[] = buildDirectorTools(ctx, turn);
   const toolByName = new Map(tools.map((t) => [t.spec.function.name, t]));
   const tracker = newTextSpendTracker();
@@ -290,11 +292,18 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
     let rounds = 0;
     for (;;) {
       const allowTools = rounds < MAX_TOOL_ROUNDS && !turn.askedUser;
+      // On the forced final round we KEEP sending the tool specs: the history already holds
+      // assistant tool_calls and their tool results, and some providers (Anthropic) reject a
+      // request that carries those but defines no tools. We discard any tool call made here
+      // (see `calls` below) and nudge the model to answer in words instead.
+      if (!allowTools && rounds > 0) {
+        messages.push({ role: 'user', content: '(Tool limit reached for this turn. Reply to the user now in plain words — do not call tools.)' });
+      }
       streamedChars = 0;
       const result: LlmResult = await llm.complete({
         role: 'director',
         messages,
-        ...(allowTools ? { tools: tools.map((t) => t.spec) } : {}),
+        tools: tools.map((t) => t.spec),
         onDelta,
         signal: ctx.signal
       });
@@ -308,8 +317,15 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
         content: result.text || '',
         tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments || '{}' } }))
       });
-      // Sequential: every tool mutates the same doc.
-      for (const call of calls) {
+      // Sequential: every tool mutates the same doc. Re-check for a cancel before each call so
+      // a Stop part-way through a round stops starting further (sometimes paid) work, and cap
+      // the calls honored per round so a model that fans out can't run an unbounded number.
+      for (const [i, call] of calls.entries()) {
+        if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
+        if (i >= MAX_CALLS_PER_ROUND) {
+          messages.push({ role: 'tool', tool_call_id: call.id, content: 'Error: too many tool calls in one round — this one was skipped. Reply to the user or make fewer calls.' });
+          continue;
+        }
         const tool = toolByName.get(call.name);
         const { args, malformed } = parseArgs(call.arguments);
         let output: string;

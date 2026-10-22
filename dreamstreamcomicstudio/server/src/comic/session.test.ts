@@ -8,6 +8,7 @@ import {
   SESSION_IDLE_MS,
   StudioSession,
   __resetSessionsForTests,
+  drainStudioSessions,
   getStudioSession,
   peekStudioSession,
   projectSummary,
@@ -199,6 +200,19 @@ describe('StudioSession turn lock and abort', () => {
     expect(after.signal.aborted).toBe(false);
     session.dispose();
   });
+
+  it('reports busy while exclusive work is in flight', async () => {
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    expect(session.busy).toBe(false);
+    let release!: () => void;
+    const run = session.runExclusive(() => new Promise<void>((r) => (release = r)));
+    await flushMicrotasks();
+    expect(session.busy).toBe(true);
+    release();
+    await run;
+    expect(session.busy).toBe(false);
+    session.dispose();
+  });
 });
 
 describe('recovery', () => {
@@ -286,6 +300,65 @@ describe('getStudioSession', () => {
     const release = watched.retain();
     expect(await sweepIdleSessions(Date.now() + SESSION_IDLE_MS + 1000)).toBe(0);
     release();
+  });
+
+  it('refreshes the idle clock on a cache hit so a just-looked-up session is not swept', async () => {
+    const store = fakeDocStore();
+    store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    let clock = 1_000_000;
+    const now = () => clock;
+    const session = await getStudioSession('p1', 'u1', store, { now });
+    // Far past the idle threshold, but a lookup lands just before the next sweep.
+    clock += SESSION_IDLE_MS + 1000;
+    expect(await getStudioSession('p1', 'u1', store, { now })).toBe(session); // touches it
+    expect(await sweepIdleSessions(clock)).toBe(0);
+    expect(peekStudioSession('p1')).toBe(session);
+  });
+
+  it('drainStudioSessions flushes debounced commits before shutdown', async () => {
+    const store = fakeDocStore();
+    store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    const session = await getStudioSession('p1', 'u1', store);
+    const before = store.saves.length;
+    session.commit([{ op: 'note_add', text: 'pending' }]);
+    expect(session.persisted).toBe(false);
+    await drainStudioSessions(1000);
+    expect(session.persisted).toBe(true);
+    expect(store.saves.length).toBe(before + 1);
+  });
+
+  it('retires a session on a terminal save failure: notifies, aborts, and reports persisted', async () => {
+    const store = fakeDocStore();
+    store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const session = await getStudioSession('p1', 'u1', store);
+    const events: unknown[] = [];
+    session.subscribe((e) => events.push(e));
+    store.docs.delete('p1'); // comic deleted out from under the session
+    session.commit([{ op: 'note_add', text: 'late edit' }]);
+    await session.flush();
+    expect(session.isGone).toBe(true);
+    expect(session.persisted).toBe(true); // gone sessions report persisted so flush/sweep never block
+    expect(session.abort.signal.aborted).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: 'NOT_FOUND' }));
+    // The next lookup must not return the dead session.
+    await expect(getStudioSession('p1', 'u1', store)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    errors.mockRestore();
+  });
+
+  it('a gone session is swept out at once, without waiting for the idle window', async () => {
+    const store = fakeDocStore();
+    store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const session = await getStudioSession('p1', 'u1', store);
+    store.docs.delete('p1');
+    session.commit([{ op: 'note_add', text: 'x' }]);
+    await session.flush();
+    expect(session.isGone).toBe(true);
+    expect(peekStudioSession('p1')).toBe(session);
+    expect(await sweepIdleSessions(Date.now())).toBe(1); // evicted though never idle
+    expect(peekStudioSession('p1')).toBeUndefined();
+    errors.mockRestore();
   });
 });
 

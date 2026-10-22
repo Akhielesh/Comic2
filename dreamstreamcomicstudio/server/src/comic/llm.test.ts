@@ -60,7 +60,9 @@ describe('createLlmClient — routing', () => {
     expect(req.models).toEqual(['anthropic/claude-sonnet-5.5', 'google/gemini-4-argon', 'google/gemini-3.8-flash']);
     expect(req.jsonSchema).toEqual({ name: 'plan', schema: { type: 'object' }, strict: true });
     expect(req.temperature).toBe(0.8);
-    expect(req.maxTokens).toBe(16_000);
+    // writer visible budget (16_000) + medium reasoning headroom (ceil(2048 * 1.5) = 3072).
+    expect(req.maxTokens).toBe(19_072);
+    expect(req.reasoningEffort).toBe('medium');
     expect(req.timeoutMs).toBe(150_000);
     expect(req.retries).toBe(1);
     expect(ctx).toEqual({ apiKey: 'sk-or-test', byok: false });
@@ -85,7 +87,9 @@ describe('createLlmClient — routing', () => {
     });
     const req = (provider.generateText as ReturnType<typeof vi.fn>).mock.calls[0][0] as GenerateTextRequest;
     expect(req.temperature).toBe(0.3);
-    expect(req.maxTokens).toBe(99);
+    // explicit visible budget (99) + vision 'low' reasoning headroom (ceil(1024 * 1.5) = 1536).
+    expect(req.maxTokens).toBe(1635);
+    expect(req.reasoningEffort).toBe('low');
     expect(req.jsonSchema?.strict).toBe(false);
     expect(req.timeoutMs).toBe(60_000);
   });
@@ -184,6 +188,30 @@ describe('createLlmClient — failures', () => {
     expect(err.code).toBe('PROVIDER_ERROR');
     expect(err.userMessage).toMatch(/couldn't be read/);
     expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a truncated reply once with a doubled token budget and no backoff sleep', async () => {
+    const truncated = Object.assign(new Error('Model reply truncated (finish_reason=length)'), { publicCode: 'TRUNCATED' });
+    const generateText = vi.fn().mockRejectedValueOnce(truncated).mockResolvedValueOnce(ok({ json: { pages: [] } }));
+    const { client, sleep, provider } = setup(OR_KEYS, { generateText });
+    const result = await client.complete({ role: 'writer', messages: [], jsonSchema: { name: 'p', schema: {} } });
+    expect(result.json).toEqual({ pages: [] });
+    expect(generateText).toHaveBeenCalledTimes(2);
+    // Truncation isn't a transient blip — it's retried immediately, not after a backoff.
+    expect(sleep).not.toHaveBeenCalled();
+    // Writer start budget 19_072 (16_000 visible + 3072 medium headroom) doubled on the retry.
+    const req = (provider.generateText as ReturnType<typeof vi.fn>).mock.calls[1][0] as GenerateTextRequest;
+    expect(req.maxTokens).toBe(38_144);
+  });
+
+  it('gives up after exactly one truncation retry', async () => {
+    const generateText = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('Model reply truncated (finish_reason=length)'), { publicCode: 'TRUNCATED' }));
+    const { client } = setup(OR_KEYS, { generateText });
+    const err = await client.complete({ role: 'writer', messages: [], jsonSchema: { name: 'p', schema: {} } }).catch((e) => e);
+    expect(err).toBeInstanceOf(StudioError);
+    expect(generateText).toHaveBeenCalledTimes(2);
   });
 
   it('retries an empty reply once, then fails honestly', async () => {

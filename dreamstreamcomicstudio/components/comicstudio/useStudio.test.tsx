@@ -341,4 +341,27 @@ describe('useStudio — cancel and cleanup', () => {
     hook.unmount();
     expect(s.signal?.aborted).toBe(true);
   });
+
+  it('flushes a pending edit on unmount instead of dropping it', async () => {
+    const hook = await setup();
+    // A rename queued behind the debounce (e.g. blur-then-Back): nothing sent yet.
+    act(() => void hook.result.current.patch([{ op: 'brief', patch: { title: 'Saved on exit' } }]));
+    expect(api.streamStudio).not.toHaveBeenCalled();
+    hook.unmount();
+    // Unmount sends the queued edit to the server rather than discarding it.
+    await waitFor(() => expect(api.streamStudio).toHaveBeenCalledTimes(1));
+    expect(lastStream().req).toEqual({
+      kind: 'action',
+      action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'Saved on exit' } }] }
+    });
+  });
+
+  it('lets an in-flight save finish when unmounting instead of aborting it', async () => {
+    const hook = await setup();
+    act(() => void hook.result.current.patch([{ op: 'brief', patch: { title: 'In flight' } }]));
+    await waitFor(() => expect(api.streamStudio).toHaveBeenCalledTimes(1));
+    const s = lastStream();
+    hook.unmount();
+    expect(s.signal?.aborted).toBe(false);
+  });
 });

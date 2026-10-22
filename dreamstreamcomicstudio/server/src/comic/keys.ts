@@ -7,6 +7,7 @@
 // do for every other route. Nothing here reads raw headers or env vars.
 
 import type { Request } from 'express';
+import { allowedProviderFilter } from '../middleware/keys.js';
 import type { ResolvedKey, StudioKeys } from './types.js';
 
 /** OpenRouter keys are recognisable by prefix; Gemini direct can never use one. */
@@ -35,9 +36,15 @@ export function studioKeysFromRequest(req: Request): StudioKeys {
 
   // Users regularly paste an OpenRouter key into the Gemini slot (the legacy studio
   // accepted that). Gemini direct would reject it on every call, so treat it as the
-  // OpenRouter key it is — unless a real OpenRouter key is already present.
+  // OpenRouter key it is. Two guards keep that from undoing the user's intent:
+  //  - governance: never promote to OpenRouter when `X-Allowed-Sources` turned it off
+  //    (the key is simply dropped, so the studio shows its "connect a key" notice);
+  //  - precedence: the user's own key (BYOK) beats a non-BYOK platform OpenRouter key,
+  //    so it is not silently overridden (header > account > platform env).
   if (gemini && OPENROUTER_KEY_PREFIX.test(gemini.key)) {
-    if (!openrouter) openrouter = gemini;
+    // Tests pass a bare fake request without header(); real requests always have one.
+    const openRouterAllowed = typeof req.header !== 'function' || allowedProviderFilter(req)('openrouter');
+    if (openRouterAllowed && (!openrouter || (gemini.byok && !openrouter.byok))) openrouter = gemini;
     gemini = undefined;
   }
 
@@ -49,3 +56,13 @@ export function studioKeysFromRequest(req: Request): StudioKeys {
 
 /** True when at least one provider key is usable. */
 export const hasAnyStudioKey = (keys: StudioKeys): boolean => Boolean(keys.openrouter || keys.gemini);
+
+/**
+ * The user's own Gemini key beats a non-BYOK platform OpenRouter key (precedence
+ * header > account > platform env). Routing and billing helpers consult this so a BYOK
+ * user is actually billed against — and served by — their own key: google/* work goes to
+ * Gemini direct instead of the platform OpenRouter key, with OpenRouter-only models still
+ * falling through to the platform route.
+ */
+export const prefersGeminiDirect = (keys: StudioKeys): boolean =>
+  Boolean(keys.gemini?.key && keys.gemini.byok && !keys.openrouter?.byok);

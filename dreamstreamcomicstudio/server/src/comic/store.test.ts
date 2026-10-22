@@ -184,6 +184,53 @@ describe('sanitizePublicDoc', () => {
     expect(clean.places[0].refs).toEqual([]);
     expect(doc.conversation).toHaveLength(1); // input untouched
   });
+
+  it('drops discarded render drafts, QC/model metadata and unchosen style tests from the public payload', () => {
+    const draft = { path: 'u/a/discarded.webp', source: 'generated' as const, at: 1 };
+    const current = { path: 'u/a/current.webp', source: 'generated' as const, at: 2 };
+    const leaky = {
+      status: 'ready' as const,
+      asset: current,
+      history: [draft],
+      model: 'secret-image-model',
+      costUsd: 0.42,
+      error: 'last attempt failed with a private hint',
+      qc: { score: 0.4, issues: ['private qc note'], checkedAt: 1 },
+      specHash: 'abc'
+    };
+    const doc = docWith({
+      style: {
+        status: 'locked',
+        refs: [],
+        board: { path: 'u/a/board.webp', source: 'generated', at: 1 },
+        options: [{ id: 'o1', name: 'Test look', spec: 'test', render: { status: 'ready', history: [draft], asset: draft } }]
+      },
+      cast: [{ id: 'c1', name: 'Maya', tier: 'lead', look: { summary: 's' }, refs: [], sheet: { ...leaky } }],
+      places: [{ id: 'pl1', name: 'Market', look: 'busy', refs: [], sheet: { ...leaky } }],
+      pages: [{ id: 'pg_1', n: 1, summary: 'Page 1', layout: 'one panel', panels: [], render: { ...leaky }, balloons: [] }],
+      cover: { render: { ...leaky } }
+    });
+    const clean = sanitizePublicDoc(doc);
+
+    // Unchosen style tests are gone; the locked board stays.
+    expect(clean.style.options).toEqual([]);
+    expect(clean.style.board?.path).toBe('u/a/board.webp');
+
+    // Every render keeps only status + current asset — no history/qc/error/model.
+    for (const render of [clean.pages[0].render, clean.cover.render, clean.cast[0].sheet, clean.places[0].sheet]) {
+      expect(render.history).toEqual([]);
+      expect(render.asset?.path).toBe('u/a/current.webp');
+      expect(render.qc).toBeUndefined();
+      expect(render.error).toBeUndefined();
+      expect(render.model).toBeUndefined();
+      expect(render.costUsd).toBeUndefined();
+      expect(render.specHash).toBeUndefined();
+    }
+
+    // Input is untouched.
+    expect(doc.pages[0].render.history).toEqual([draft]);
+    expect(doc.style.options).toHaveLength(1);
+  });
 });
 
 describe('createSupabaseDocStore', () => {

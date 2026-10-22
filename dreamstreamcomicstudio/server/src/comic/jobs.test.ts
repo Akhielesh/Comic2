@@ -145,6 +145,17 @@ describe('estimateSpendAction', () => {
       4
     );
   });
+
+  it('style options add the writer cost only when directions must be proposed', () => {
+    const doc = plannedDoc();
+    const imagesOnly = estimateJobs([{ kind: 'style_option', count: 3 }], 'standard', { byok: false });
+    const proposed = estimateSpendAction(doc, { type: 'render_style_options' }, false);
+    expect(proposed.usd).toBeGreaterThan(imagesOnly.usd);
+    expect(proposed.lines.some((l) => l.label === 'style directions')).toBe(true);
+    // Directions supplied: no writer call, so the image-only quote stands.
+    const given = estimateSpendAction(doc, { type: 'render_style_options', directions: [{ name: 'a', spec: 'b' }, { name: 'c', spec: 'd' }] }, false);
+    expect(given.lines.some((l) => l.label === 'style directions')).toBe(false);
+  });
 });
 
 // ── render_pages ─────────────────────────────────────────────────────────────
@@ -271,6 +282,36 @@ describe('runAction render_pages', () => {
     await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true }, { confirmed: true });
     expect(session.doc.spend.entries.map((e) => e.label)).toEqual(['Page 1 (failed attempt)']);
     expect(ctx.billingFake.settled).toEqual([{ costUsd: 0.01, imageUnits: 0 }]);
+  });
+
+  it('bills an earlier paid-but-failed attempt alongside the image when the retry succeeds', async () => {
+    const doc = plannedDoc();
+    doc.cast.forEach((c) => (c.sheet = { ...emptyRender(), status: 'ready', asset: { path: `${c.id}.webp`, source: 'generated', at: 1 } }));
+    const session = newSession(doc);
+    // First attempt is paid but returns no image (retryable); the retry succeeds.
+    const images = fakeImages((_req, i) => (i === 0 ? Object.assign(new StudioError('NO_IMAGE', 'No image came back.', { retryable: true }), { spentUsd: 0.02 }) : undefined));
+    const ctx = testContext(session, { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true }, { confirmed: true });
+    const pageEntries = session.doc.spend.entries.filter((e) => e.kind === 'page');
+    // Both are billed (ledger order is newest-first, so assert membership, not sequence).
+    expect(pageEntries.map((e) => e.label).sort()).toEqual(['Page 1', 'Page 1 (failed attempt)']);
+    expect(session.doc.pages[0].render.status).toBe('ready');
+    // The successful settle carries both the image price and the earlier paid attempt.
+    expect(ctx.billingFake.settled.filter((s) => s.imageUnits === 1)).toEqual([{ costUsd: Math.round((0.05 + 0.02) * 10000) / 10000, imageUnits: 1 }]);
+  });
+
+  it('pins the image model at start, so a mid-run quality change cannot switch it', async () => {
+    const doc = plannedDoc();
+    doc.cast.forEach((c) => (c.sheet = { ...emptyRender(), status: 'ready', asset: { path: `${c.id}.webp`, source: 'generated', at: 1 } }));
+    const session = newSession(doc);
+    // Flip to Pro while page 1 is drawing; later pages must still use the quoted Standard model.
+    const images = fakeImages((_req, i) => {
+      if (i === 0) session.commit([{ op: 'settings', patch: { quality: 'pro' } }]);
+      return undefined;
+    });
+    const ctx = testContext(session, { images });
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    for (const page of session.doc.pages) expect(page.render.model).toBe('nano-banana-2.1');
   });
 
   it('cancel stops unstarted work and restores previous statuses; in-flight images are kept', async () => {
@@ -446,6 +487,22 @@ describe('spend gating', () => {
     await allowed.done;
   });
 
+  it('keeps an approval open (not a false "drawing now") when the spend cannot start', async () => {
+    const doc = plannedDoc();
+    doc.pages[0] = readyPage(doc.pages[0], 'page1.webp');
+    doc.settings.confirm = 'always';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', instruction: 'make it night' }, { confirmed: false });
+    const gate = session.doc.gate!;
+    expect(gate.status).toBe('open');
+    // The page starts drawing before the user taps Approve, so the edit can't run.
+    session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'rendering' } }]);
+    await expect(runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: false })).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 409 });
+    expect(session.doc.gate?.status).toBe('open');
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+  });
+
   it('nothing to draw → an info notice, no gate', async () => {
     const doc = plannedDoc();
     doc.cast.forEach((c) => (c.sheet = { ...emptyRender(), status: 'ready', asset: { path: `${c.id}.webp`, source: 'generated', at: 1 } }));
@@ -515,6 +572,25 @@ describe('style options and doc actions', () => {
 
     await runAction(ctx, { type: 'pick_style', optionId: options[0].id }, { confirmed: false });
     expect(session.doc.style).toMatchObject({ status: 'locked', name: 'Ink Noir', spec: 'Heavy blacks', board: options[0].render.asset });
+  });
+
+  it('a per-option retry redraws that option in place, keeping the other paid options', async () => {
+    const doc = plannedDoc();
+    const ready = (path: string) => ({ ...emptyRender(), status: 'ready' as const, asset: { path, source: 'generated' as const, at: 1 } });
+    doc.style.options = [
+      { id: 'o_a', name: 'Ink Noir', spec: 'Heavy blacks', render: ready('a.webp') },
+      { id: 'o_b', name: 'Pastel', spec: 'Soft', render: ready('b.webp') },
+      { id: 'o_c', name: 'Retro', spec: 'Halftone', render: { ...emptyRender(), status: 'failed', error: 'blocked' } }
+    ];
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    // The failed tile's Retry sends just that direction — it must not clear the two ready boards.
+    await runAction(ctx, { type: 'render_style_options', directions: [{ name: 'Retro', spec: 'Halftone' }] }, { confirmed: true });
+    const options = session.doc.style.options;
+    expect(options.map((o) => o.id)).toEqual(['o_a', 'o_b', 'o_c']);
+    expect(options.every((o) => o.render.status === 'ready')).toBe(true);
+    expect(options[0].render.asset?.path).toBe('a.webp');
+    expect(ctx.imagesFake.calls).toHaveLength(1);
   });
 
   it('proposes directions with the writer when none are given (billed as style spend)', async () => {

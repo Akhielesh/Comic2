@@ -103,6 +103,8 @@ const MAX_IMAGE_ATTEMPTS = 2;
 export const JOB_TIMINGS = { retryBackoffMs: 2500, saveRetryMs: 1000 };
 const MAX_STYLE_DIRECTIONS = 4;
 const DEFAULT_STYLE_DIRECTIONS = 3;
+/** Writer text spend for proposing style directions (one strong-model call, occasional repair). */
+const STYLE_DIRECTIONS_USD = 0.015;
 const MAX_PATCH_OPS = 200;
 
 const TEXT_LIMIT = 4_000;
@@ -255,6 +257,13 @@ const slotsFor = (session: StudioSessionApi) => {
   return s;
 };
 
+// Spend a run has committed to but not yet landed. The budget gate adds this so two
+// back-to-back requests on the single-threaded server each see the other's reservation
+// (otherwise concurrent runs each quote against a stale `doc.spend.totalUsd` and overshoot).
+const pendingSpend = new WeakMap<StudioSessionApi, number>();
+const pendingUsdOf = (s: StudioSessionApi) => pendingSpend.get(s) || 0;
+const addPending = (s: StudioSessionApi, delta: number) => pendingSpend.set(s, Math.max(0, round4(pendingUsdOf(s) + delta)));
+
 // ── Billed text calls ────────────────────────────────────────────────────────
 
 export interface TextSpendTracker {
@@ -289,6 +298,8 @@ const UNKNOWN_TEXT_PRICE = { input: 1, output: 5 };
 export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operation: string; tracker: TextSpendTracker }): LlmClient {
   return {
     async complete(req) {
+      // Cancelled before we even reserved: nothing to bill or release.
+      if (req.signal?.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
       const route = resolveTextRoute(req.role, ctx.keys);
       const size = textOf(req.messages);
       const approxPrompt = Math.ceil(size.chars / 4) + size.images * 1100;
@@ -304,6 +315,13 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
         });
         if (reserved.ok === false) throw new StudioError('BILLING_DENIED', reserved.message, { status: 402 });
         reservation = reserved.reservation;
+        // Cancelled while the reserve was in flight: release it — nothing was dispatched, so
+        // billing the usual CANCELLED estimate here would be charging for a call never made.
+        // (Nothing is awaited between here and llm.ts's own pre-dispatch abort check.)
+        if (req.signal?.aborted) {
+          await reservation.release('cancelled_before_dispatch');
+          throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
+        }
       }
       let result: LlmResult;
       try {
@@ -404,8 +422,11 @@ export const sheetTargets = (
   };
 };
 
+// Count what the runner will actually draw: sanitized directions (invalid ones are dropped),
+// else the default proposal count. Mirrors RenderRun.styleOptions.
+const styleDirections = (action: Extract<SpendAction, { type: 'render_style_options' }>) => sanitizeDirections(action.directions);
 const styleDirectionCount = (action: Extract<SpendAction, { type: 'render_style_options' }>) =>
-  Math.min(MAX_STYLE_DIRECTIONS, action.directions?.length || DEFAULT_STYLE_DIRECTIONS);
+  styleDirections(action).length || DEFAULT_STYLE_DIRECTIONS;
 
 /** Registry estimate for a spend action (counts what would actually be drawn now). */
 export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: boolean): SpendEstimate {
@@ -435,7 +456,14 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
     default:
       break;
   }
-  return estimateJobs(jobs, doc.settings.quality, { override: doc.settings.imageModelOverride, byok });
+  const est = estimateJobs(jobs, doc.settings.quality, { override: doc.settings.imageModelOverride, byok });
+  // When no directions are passed the runner also makes a writer call to propose them; the
+  // image-only estimate would understate the quote and the budget gate. Add that text line.
+  if (action.type === 'render_style_options' && !styleDirections(action).length) {
+    const usd = round4(STYLE_DIRECTIONS_USD * (byok ? 1 : PLATFORM_MARKUP));
+    return { ...est, usd: round4(est.usd + usd), lines: [...est.lines, { label: 'style directions', count: 1, usd }] };
+  }
+  return est;
 }
 
 const budgetOf = (settings: Settings): number | undefined =>
@@ -450,10 +478,10 @@ export function gateDecision(
   doc: ComicDoc,
   estimate: SpendEstimate,
   confirmed: boolean,
-  opts: { budgetApproved?: boolean } = {}
+  opts: { budgetApproved?: boolean; pendingUsd?: number; priorUsd?: number } = {}
 ): null | 'policy' | 'budget' {
   const budget = budgetOf(doc.settings);
-  if (budget !== undefined && !opts.budgetApproved && round4(doc.spend.totalUsd + estimate.usd) > budget + 1e-9) return 'budget';
+  if (budget !== undefined && !opts.budgetApproved && round4(doc.spend.totalUsd + (opts.pendingUsd || 0) + estimate.usd) > budget + 1e-9) return 'budget';
   if (confirmed) return null;
   switch (doc.settings.confirm) {
     case 'always':
@@ -462,7 +490,9 @@ export function gateDecision(
       return null;
     case 'big':
     default:
-      return estimate.usd > (Number.isFinite(doc.settings.bigSpendUsd) ? doc.settings.bigSpendUsd : 0.5) ? 'policy' : null;
+      // 'big' weighs this spend against what the same director turn has already started
+      // (priorUsd), so many individually-small spends can't add up past the threshold unseen.
+      return round4((opts.priorUsd || 0) + estimate.usd) > (Number.isFinite(doc.settings.bigSpendUsd) ? doc.settings.bigSpendUsd : 0.5) ? 'policy' : null;
   }
 }
 
@@ -475,6 +505,8 @@ export interface RunActionOptions {
   qualityDenied?: string;
   /** Approving a budget gate lets this one action go over the budget. */
   budgetApproved?: boolean;
+  /** USD this director turn has already started without approval (for the per-turn 'big' gate). */
+  priorUsd?: number;
   /** Cards meant for the conversation go here (director turns) instead of a new message. */
   collectCard?: (card: Card) => void;
 }
@@ -567,8 +599,22 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'declined' } }]);
     return startSpend(ctx, gate.action, { ...opts, confirmed: false, budgetApproved: false });
   }
+  // Commit 'approved' first (before startSpend, so a same-kind open gate isn't flipped to
+  // 'declined' at startSpend:L749), then put the card back if the spend never started —
+  // so it never claims "drawing now" when a busy page / missing key / invalid-now blocked it.
   ctx.session.commit([{ op: 'gate', gate: { ...gate, status: 'approved' } }]);
-  return startSpend(ctx, gate.action, { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved });
+  const reopen = () => {
+    const cur = ctx.session.doc.gate;
+    if (cur?.id === gate.id && cur.status === 'approved') ctx.session.commit([{ op: 'gate', gate: { ...cur, status: 'open' } }]);
+  };
+  try {
+    const started = await startSpend(ctx, gate.action, { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved });
+    if (started.outcome.status === 'blocked') reopen();
+    return started;
+  } catch (err) {
+    reopen();
+    throw err;
+  }
 }
 
 function declineGate(ctx: StudioContext, gateId: string): ActionOutcome {
@@ -648,7 +694,7 @@ function createGate(ctx: StudioContext, rawAction: SpendAction, estimate: SpendE
   const plan = describeSpend(doc, action);
   const { nickname, resolution } = modelLabel(doc, plan.kind);
   const budget = budgetOf(doc.settings);
-  const after = round4(doc.spend.totalUsd + estimate.usd);
+  const after = round4(doc.spend.totalUsd + pendingUsdOf(ctx.session) + estimate.usd);
   const summary =
     `${plan.what} on ${nickname} (${resolution}) · ≈ ${formatUsd(estimate.usd)}` +
     (reason === 'budget' && budget !== undefined
@@ -741,14 +787,18 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   const estimate = estimateSpendAction(doc, action, spendIsByok(ctx.keys));
   if (estimate.imageCount <= 0) return blocked(ctx, opts, nothingToDo(action), 'info');
 
-  const reason = gateDecision(doc, estimate, opts.confirmed, { budgetApproved: opts.budgetApproved });
+  const reason = gateDecision(doc, estimate, opts.confirmed, { budgetApproved: opts.budgetApproved, pendingUsd: pendingUsdOf(ctx.session), priorUsd: opts.priorUsd });
   if (reason) return createGate(ctx, action, estimate, reason, opts);
 
   // Proceeding: retire any open gate for the same kind of spend (it is now moot).
   const open = ctx.session.doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) ctx.session.commit([{ op: 'gate', gate: { ...open, status: 'declined' } }]);
 
-  const runner = new RenderRun(ctx, estimate);
+  // Pin the model/quality now so mid-run settings changes can't move this spend off the
+  // quoted/authorised price (the latest sheets and pages are still used — see prepare()).
+  const pinned: Pick<Settings, 'quality' | 'imageModelOverride'> = { quality: doc.settings.quality, imageModelOverride: doc.settings.imageModelOverride };
+  const runner = new RenderRun(ctx, estimate, pinned);
+  runner.reserve();
   const message = `Started drawing ${plan.what} (≈ ${formatUsd(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish.`;
   let done: Promise<void>;
   switch (action.type) {
@@ -770,7 +820,7 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     default:
       throw badRequest('Unknown spend action.');
   }
-  return { outcome: { status: 'started', message, estimate }, done: done.catch(() => undefined) };
+  return { outcome: { status: 'started', message, estimate }, done: done.catch(() => undefined).finally(() => runner.releaseReservation()) };
 }
 
 // ── Render run ───────────────────────────────────────────────────────────────
@@ -860,17 +910,32 @@ class RenderRun {
   private readonly notices: Card[] = [];
   private stopReason: string | null = null;
   private spentUsd = 0;
+  /** Estimate still held as pending spend (released as images land or the run ends). */
+  private reservedLeft = 0;
   private progressId: string | null = null;
   private progressCard: Extract<Card, { type: 'renders' }> | null = null;
   private readonly started = Date.now();
 
   constructor(
     private readonly ctx: StudioContext,
-    private readonly estimate: SpendEstimate
+    private readonly estimate: SpendEstimate,
+    private readonly pinned: Pick<Settings, 'quality' | 'imageModelOverride'>
   ) {
     this.session = ctx.session;
     this.signal = ctx.session.abort.signal;
     this.slots = slotsFor(ctx.session);
+  }
+
+  /** Hold this run's estimate as pending spend so a concurrent budget check counts it. */
+  reserve() {
+    this.reservedLeft = this.estimate.usd;
+    addPending(this.session, this.reservedLeft);
+  }
+
+  /** Give back whatever estimate never landed (run failed, cancelled, or had no jobs). */
+  releaseReservation() {
+    if (this.reservedLeft > 0) addPending(this.session, -this.reservedLeft);
+    this.reservedLeft = 0;
   }
 
   // ── Action bodies ─────────────────────────────────────────────────────────
@@ -957,10 +1022,25 @@ class RenderRun {
       this.post("I couldn't come up with style directions this time — pick a preset in Style instead.", [noticeCard('warn', 'No usable style directions came back.')]);
       return;
     }
+    // Another batch committed while we were proposing: never clear options being paid for.
+    if (this.session.doc.style.options.some((o) => isBusy(o.render))) {
+      this.post(
+        'Another set of style options is already drawing — pick from those, then ask for more if none fits.',
+        [noticeCard('info', 'Style options are already drawing.')]
+      );
+      return;
+    }
     const at = Date.now();
-    const options = directions.map((d) => ({ id: newId('so'), ...d }));
+    // Per-option retry: every requested direction matches an existing not-ready option, so
+    // redraw those in place instead of clearing the whole board (and any paid, ready options).
+    const existing = this.session.doc.style.options;
+    const matched = directions.map((d) => existing.find((o) => o.name === d.name && o.spec === d.spec && o.render.status !== 'ready'));
+    const isRetry = matched.every((m): m is NonNullable<typeof m> => !!m) && new Set(matched.map((m) => m!.id)).size === matched.length;
+    const options = isRetry
+      ? matched.map((m, i) => ({ id: m!.id, name: directions[i].name, spec: directions[i].spec }))
+      : directions.map((d) => ({ id: newId('so'), ...d }));
     this.session.commit([
-      { op: 'style_options_clear' },
+      ...(isRetry ? [] : [{ op: 'style_options_clear' } as DocOp]),
       ...options.map((o): DocOp => ({ op: 'style_option', id: o.id, patch: { name: o.name, spec: o.spec, render: { status: 'none', history: [], updatedAt: at } } }))
     ]);
     const jobs = options.map(
@@ -1106,9 +1186,12 @@ class RenderRun {
     const ops: DocOp[] = [];
     const at = Date.now();
     for (const job of jobs) {
+      // Already settled by this run: any busy state on the target now belongs to another
+      // run (e.g. a Retry that queued it). Never write our stale `prev` over it.
+      if (this.results.some((r) => r.job === job)) continue;
       const render = getRender(doc, job.target);
       if (!render || !isBusy(render)) continue;
-      if (!this.results.some((r) => r.job === job)) this.results.push({ job, ok: false, skipped: true });
+      this.results.push({ job, ok: false, skipped: true });
       ops.push({ op: 'render', target: job.target, patch: { status: restoredStatus(job.prev), error: job.prev.error, updatedAt: at } });
     }
     if (ops.length) this.session.commit(ops);
@@ -1268,6 +1351,9 @@ class RenderRun {
     let lastError: StudioError | undefined;
     let attempts = 0;
     let failedSpend = 0;
+    // A deadline-abort hits a non-streaming request the provider keeps generating (and
+    // billing); it is flagged `abandoned` so we settle an estimate instead of releasing.
+    let abandonedUsd = 0;
     while (attempts < MAX_IMAGE_ATTEMPTS) {
       attempts += 1;
       try {
@@ -1284,6 +1370,12 @@ class RenderRun {
         lastError = asStudioError(err, 'The image could not be drawn. Please try again.');
         const spent = (err as { spentUsd?: unknown })?.spentUsd;
         if (typeof spent === 'number' && Number.isFinite(spent) && spent > 0) failedSpend += spent;
+        if ((err as { abandoned?: boolean })?.abandoned) {
+          // Our own deadline fired after dispatch: the provider still bills it, so do not
+          // retry (that would pay twice) — bill the registry price and stop.
+          abandonedUsd += imagePriceUsd(compiled.spec, compiled.resolution);
+          break;
+        }
         if (!lastError.retryable || attempts >= MAX_IMAGE_ATTEMPTS || this.signal.aborted || lastError.code === 'CANCELLED') break;
         logger.warn('comic_image_job_retry', { projectId: ctx.projectId, target: renderTargetKey(job.target), code: lastError.code });
         await sleep(JOB_TIMINGS.retryBackoffMs, this.signal);
@@ -1293,9 +1385,10 @@ class RenderRun {
 
     if (!result) {
       end(false);
-      if (failedSpend > 0) {
-        await reservation.settle({ costUsd: failedSpend, imageUnits: 0 });
-        this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
+      const owed = round4(failedSpend + abandonedUsd);
+      if (owed > 0) {
+        await reservation.settle({ costUsd: owed, imageUnits: 0 });
+        this.recordImageSpend(job, compiled, owed, abandonedUsd > 0, picked.byok, abandonedUsd > 0 ? ' (timed out)' : ' (failed attempt)');
       } else {
         await reservation.release(lastError?.code || 'image_failed');
       }
@@ -1305,19 +1398,24 @@ class RenderRun {
     }
 
     const providerUsd = typeof result.costUsd === 'number' && Number.isFinite(result.costUsd) ? result.costUsd : undefined;
+    const imageUsd = providerUsd ?? imagePriceUsd(compiled.spec, compiled.resolution);
+    // Earlier paid-but-failed attempts of this same job are billed alongside the image.
+    const settleUsd = failedSpend > 0 ? round4(imageUsd + failedSpend) : providerUsd;
     let asset: AssetRef;
     try {
       asset = await this.saveImage(result.dataUrl, compiled.spec.id);
     } catch (err) {
       // Paid but lost: bill it honestly and say so.
       end(false);
-      await reservation.settle({ costUsd: providerUsd, imageUnits: 1 });
-      this.recordImageSpend(job, compiled, providerUsd ?? imagePriceUsd(compiled.spec, compiled.resolution), providerUsd === undefined, result.byok, ' (not saved)');
+      await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
+      if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
+      this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, ' (not saved)');
       logger.error('comic_image_save_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
       return this.fail(job, "The image was drawn but couldn't be saved. Please retry.", attempts);
     }
-    await reservation.settle({ costUsd: providerUsd, imageUnits: 1 });
-    const usd = this.recordImageSpend(job, compiled, providerUsd ?? imagePriceUsd(compiled.spec, compiled.resolution), providerUsd === undefined, result.byok, '');
+    await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
+    if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
+    const usd = this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, '');
 
     const page = job.hashPage ? findPage(docAtCompile, (job.target as { id: string }).id) : undefined;
     session.commit([
@@ -1351,7 +1449,10 @@ class RenderRun {
 
   /** Compile with references we can actually load; recompile without any that are missing. */
   private async prepare(job: ImageJob): Promise<{ compiled: CompiledImageJob; references: ImageReference[]; docAtCompile: ComicDoc }> {
-    const docAtCompile = this.session.doc;
+    // Use the live doc (freshly drawn sheets/pages) but pin the model/quality to what was
+    // quoted and authorised, so a mid-run settings change can't pick a pricier/gated model.
+    const live = this.session.doc;
+    const docAtCompile: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: this.pinned.imageModelOverride } };
     const missing = new Set<string>();
     let regionDataUrl: string | undefined;
     for (let pass = 0; pass < 3; pass += 1) {
@@ -1402,6 +1503,12 @@ class RenderRun {
   private recordImageSpend(job: ImageJob, compiled: CompiledImageJob, providerUsd: number, estimated: boolean, byok: boolean, suffix: string): number {
     const usd = chargedUsd(providerUsd, byok);
     this.spentUsd = round4(this.spentUsd + usd);
+    // Move this amount out of the pending reservation in the same tick it is committed.
+    const settled = Math.min(usd, this.reservedLeft);
+    if (settled > 0) {
+      this.reservedLeft = round4(this.reservedLeft - settled);
+      addPending(this.session, -settled);
+    }
     this.session.commit([
       {
         op: 'spend',

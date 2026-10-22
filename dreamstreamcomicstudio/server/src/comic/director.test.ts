@@ -97,16 +97,39 @@ describe('runDirectorTurn', () => {
     expect(toolMsgs[1].content).toBe('Error: unknown tool "no_such_tool".');
   });
 
-  it('stops offering tools after 8 rounds and forces a written answer', async () => {
+  it('stops honoring tools after 8 rounds and forces a written answer (tools still sent)', async () => {
     const session = newSession(createEmptyDoc('proj-1'));
     const looping = Array.from({ length: 8 }, (_, i) => ({ toolCalls: [toolCall(`n${i}`, 'add_notes', { notes: [`note ${i}`] })] }));
     const llm = scriptedLlm({ director: [...looping, { text: 'Done noting.' }] });
     const ctx = testContext(session, { llm });
     await runDirectorTurn(ctx, { text: 'lots of notes', attachments: [] });
     expect(llm.calls).toHaveLength(9);
-    expect(llm.calls[8].tools).toBeUndefined();
+    // The forced final round KEEPS sending the tool specs (so providers that require `tools`
+    // alongside the tool_call history don't 400), and nudges a written reply instead.
+    expect(llm.calls[8].tools).toBeDefined();
+    const nudged = llm.calls[8].messages.some((m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('Tool limit reached'));
+    expect(nudged).toBe(true);
     expect(session.doc.brief.notes).toHaveLength(8);
     expect(session.doc.conversation[1].text).toBe('Done noting.');
+  });
+
+  it('checks for a cancel before each tool in a round, so a Stop mid-round runs no further tools', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const controller = new AbortController();
+    // One round returns two tools, but the user cancels while the model is still responding.
+    const llm = scriptedLlm({
+      director: [
+        () => {
+          controller.abort();
+          return { toolCalls: [toolCall('n1', 'add_notes', { notes: ['first'] }), toolCall('n2', 'add_notes', { notes: ['second'] })] };
+        }
+      ]
+    });
+    const ctx = testContext(session, { llm, signal: controller.signal });
+    await runDirectorTurn(ctx, { text: 'note two things', attachments: [] });
+    // Neither note is committed: the abort check fires before the first tool executes.
+    expect(session.doc.brief.notes).toHaveLength(0);
+    expect(session.doc.conversation.map((m) => m.role)).toEqual(['user']);
   });
 
   it('turns a model failure into an honest notice instead of throwing', async () => {

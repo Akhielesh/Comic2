@@ -40,6 +40,22 @@ const JSON_REPAIR_INSTRUCTION =
 // Reasoning/thinking model families (id-based), kept in sync with the client capability index.
 const REASONING_MODEL_RE = /(?:^|[/:_-])(?:o1|o3|o4-mini|r1|qwq|deepseek-r1?|magistral|phi-4-reasoning|grok-3-mini)(?:[:_-]|$)|reasoning|thinking/i;
 
+// Bound the thinking budget so chat stays responsive. Unbounded `effort: 'high'` was
+// running 55-109s in production (the model rambling in its thinking phase). A capped
+// reasoning token budget keeps small/medium turns fast (they finish well under the
+// ceiling) while still allowing meaningful reasoning; genuinely deep work uses the agent
+// swarm, whose depth comes from running many agents rather than one giant reasoning call.
+// (Env-overridable via REASONING_BUDGET_* if a deployment wants more headroom.)
+//
+// Exported so callers that must also size max_tokens around the thinking budget (reasoning
+// tokens count against max_tokens, and Anthropic requires max_tokens > budget) can reuse
+// the exact same numbers instead of hard-coding a second copy.
+export const reasoningBudget = (effort: 'low' | 'medium' | 'high'): number => {
+  const defaults = { low: 1024, medium: 2048, high: 4096 };
+  const raw = Number(process.env[`REASONING_BUDGET_${effort.toUpperCase()}`]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaults[effort];
+};
+
 const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -284,17 +300,7 @@ const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
   }
 
   // Engage step-by-step reasoning on reasoning-capable models, but BOUND the thinking
-  // budget so chat stays responsive. Unbounded `effort: 'high'` was running 55-109s in
-  // production (the model rambling in its thinking phase). A capped reasoning token
-  // budget keeps small/medium turns fast (they finish well under the ceiling) while
-  // still allowing meaningful reasoning; genuinely deep work uses the agent swarm,
-  // whose depth comes from running many agents rather than one giant reasoning call.
-  // (Env-overridable via REASONING_BUDGET_* if a deployment wants more headroom.)
-  const reasoningBudget = (effort: 'low' | 'medium' | 'high'): number => {
-    const defaults = { low: 1024, medium: 2048, high: 4096 };
-    const raw = Number(process.env[`REASONING_BUDGET_${effort.toUpperCase()}`]);
-    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaults[effort];
-  };
+  // budget so chat stays responsive (see reasoningBudget's module-level comment).
   if (req.reasoningEffort) {
     baseBody.reasoning = { max_tokens: reasoningBudget(req.reasoningEffort) };
   } else if (REASONING_EFFORT !== 'off' && REASONING_MODEL_RE.test(req.model)) {
@@ -418,6 +424,10 @@ const streamOnce = async (
   let usage: ProviderUsage = {};
   let citations: { url: string; title?: string }[] | undefined;
   let raw: any = null;
+  // OpenRouter's documented mid-stream failure arrives as HTTP 200 carrying a single event
+  // with a top-level `error` (and finish_reason:'error'), after which the stream terminates.
+  // Capture it so the turn fails instead of silently returning a truncated reply.
+  let streamError: { code?: unknown; message?: string } | null = null;
   const toolAcc = new Map<number, { id: string; name: string; args: string }>();
 
   const buildResult = (): GenerateTextResult => {
@@ -460,6 +470,9 @@ const streamOnce = async (
       if (chunk.model) model = chunk.model;
       if (chunk.usage) usage = parseUsage(chunk);
       const choice = chunk.choices?.[0];
+      if (chunk.error || choice?.finish_reason === 'error') {
+        streamError = chunk.error || { message: 'stream error' };
+      }
       const delta = choice?.delta;
       if (delta?.content) { text += delta.content; onDelta({ content: delta.content }); }
       if (typeof delta?.reasoning === 'string' && delta.reasoning) { reasoning += delta.reasoning; onDelta({ reasoning: delta.reasoning }); }
@@ -501,6 +514,19 @@ const streamOnce = async (
     const tail = buffer.trim();
     if (tail.startsWith('data:')) handle(tail.slice(5).trim());
 
+    // A documented mid-stream error terminates the stream with a 200 — do NOT return the
+    // partial text as a success. Keep the "failed: NNN" shape llm.ts statusOf parses, and
+    // mark it `streamed` so generateTextStream does not re-run on the fallback model and
+    // duplicate the deltas already sent to the user.
+    if (streamError) {
+      const status = Number(streamError.code) || 502;
+      const err = new Error(
+        `OpenRouter stream failed: ${status} ${String(streamError.message || 'stream error').slice(0, 300)}`
+      ) as Error & { streamed?: boolean };
+      err.streamed = Boolean(text || toolAcc.size);
+      throw err;
+    }
+
     return buildResult();
   } catch (err) {
     // On our own timeout, keep whatever already streamed (partial answer / partial tool
@@ -526,7 +552,10 @@ const generateTextStream = async (
   } catch (err) {
     const msg = String((err as Error)?.message || '');
     const retriable = /\b404\b|\b429\b|no endpoints|rate.?limit/i.test(msg);
-    if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable) {
+    // Never retry on the fallback model once deltas have already streamed to the user — a
+    // mid-stream failure (err.streamed) would replay the whole answer and duplicate output.
+    const streamed = Boolean((err as { streamed?: boolean })?.streamed);
+    if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable && !streamed) {
       return await streamOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx, onDelta);
     }
     throw err;
