@@ -1,5 +1,10 @@
 # June 25 Stream Studio MVP Launch Plan
 
+> **Superseded 2026-10:** `comic2.pages.dev` now 301-redirects to `dreamstreamstudio.ai`
+> (path, query and `#` link kept; `functions/_middleware.ts`). The temporary Pages launch
+> path described below is history — see [`docs/infrastructure/INFRA_MAP.md`](../infrastructure/INFRA_MAP.md)
+> and [`docs/features/accounts-and-access.md`](../features/accounts-and-access.md) for the current setup.
+
 > Status: active launch source of truth as of 2026-06-18.
 >
 > This document supersedes broad-suite positioning for the June 25 beta push. DreamStream can still become a larger creative operating system, but the launch wedge is **Stream Studio**.

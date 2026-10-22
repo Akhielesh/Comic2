@@ -9,7 +9,6 @@ import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } 
 import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { parsePrivateStudioLink, viewerUrl } from '../nav';
-import { loadPrefs } from '../prefs';
 import { useAccount } from '../account';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
@@ -139,8 +138,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [checkingBackend, setCheckingBackend] = useState(false);
   const account = useAccount();
-  // Re-read on sign-in / sign-out: the last account's name and events must not linger.
-  const prefs = useMemo(loadPrefs, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-read on sign-in / sign-out: the last account's events must not linger.
   const recordings = useMemo(listMyRecordings, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
   const [saving, setSaving] = useState<FinishedRecording | null>(null);
@@ -214,8 +212,8 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
 
   const greet = (() => {
     const h = new Date().getHours();
-    // Only ever the signed-in person's name — never a previous account's.
-    const who = account.status === 'member' ? (account.name || prefs.hostName).trim().split(/\s+/)[0] : '';
+    // The one account name — only ever the signed-in person's (the store resets on sign-out).
+    const who = (account.name ?? '').trim().split(/\s+/)[0];
     const day = h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
     return `Good ${day}${who ? `, ${who}` : ''}`;
   })();

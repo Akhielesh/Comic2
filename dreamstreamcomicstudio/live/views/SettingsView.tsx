@@ -20,7 +20,8 @@ import type { Nav } from '../nav';
 import { DEFAULT_PREFS, LOOK_LABELS, loadPrefs, playChime, savePrefs, type StudioPrefs } from '../prefs';
 import { normalizeQuick } from '../emoji';
 import { QuickBarEditor } from '../components/EmojiPicker';
-import { StudiosCard } from '../components/StudiosCard';
+import { StudiosCard, useAccountAccess } from '../components/StudiosCard';
+import { NAME_MAX, cleanName } from '@/shared/accountName';
 import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
@@ -66,7 +67,12 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [prefs, setPrefsState] = useState<StudioPrefs>(loadPrefs);
   const [account, setAccount] = useState<StudioAccess | null>(null);
   const live = useAccount();
+  // The one account name: Stream Studio's copy for members, else the server's answer
+  // (the same one the Studios card shows) — so it's editable before the welcome code too.
+  const access = useAccountAccess();
+  const accountName = live.name || access?.account.name || live.suggestedName || '';
   const [displayName, setDisplayName] = useState('');
+  const [savingName, setSavingName] = useState(false);
   const [driveFolder, setDriveFolder] = useState<string | null>(null);
   const gdrive = useDriveStatus(live.status === 'loading' ? null : live.userId);
   const [driveBusy, setDriveBusy] = useState<'connect' | 'disconnect' | null>(null);
@@ -95,8 +101,8 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
   };
 
   useEffect(() => {
-    if (live.name) setDisplayName(live.name);
-  }, [live.name]);
+    if (accountName) setDisplayName(accountName);
+  }, [accountName]);
 
   useEffect(() => {
     void getDriveFolder().then((d) => setDriveFolder(d?.name ?? null));
@@ -128,6 +134,20 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
     setPrefsState(next);
     savePrefs(next);
     void pushPrefsToCloud(); // mirrored to the account when signed in
+  };
+
+  const nameDraft = cleanName(displayName);
+  const saveName = () => {
+    if (!nameDraft || nameDraft === accountName || savingName) return;
+    const previous = accountName;
+    setSavingName(true);
+    void updateDisplayName(nameDraft)
+      .then((r) => {
+        push(r.ok ? 'Name updated in every studio' : r.error || 'Could not update', { icon: r.ok ? 'check' : 'alert' });
+        // An on-stream name that was just a copy of the old account name follows the rename.
+        if (r.ok && previous && prefs.hostName.trim() === previous) set('hostName', '');
+      })
+      .finally(() => setSavingName(false));
   };
 
   const preset = presetById(prefs.qualityId);
@@ -192,20 +212,33 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                       Sign out
                     </Btn>
                   </Row>
-                  {live.status === 'needs_code' ? (
+                  {live.status === 'needs_code' && (
                     <Row title="Unlock Stream Studio" desc="Enter the welcome code you were given to host streams and use the baby monitor.">
                       <Btn variant="solid" size="sm" icon="lock" onClick={() => openAuth('code')}>Enter code</Btn>
                     </Row>
-                  ) : (
-                    <Row title="Your name" desc="How family finds you in the baby monitor and what viewers see by default.">
-                      <div className="row" style={{ gap: 8 }}>
-                        <input className="input" style={{ width: 200 }} value={displayName} maxLength={40} aria-label="Display name" onChange={(e) => setDisplayName(e.target.value)} />
-                        <Btn variant="soft" size="sm" disabled={!displayName.trim() || displayName === live.name} onClick={() => {
-                          void updateDisplayName(displayName).then((r) => push(r.ok ? 'Name updated' : r.error || 'Could not update', { icon: r.ok ? 'check' : 'alert' }));
-                        }}>Save</Btn>
-                      </div>
-                    </Row>
                   )}
+                  <Row
+                    title="Your name"
+                    desc={`One name across DreamStream, Stream Studio, the baby monitor and calls — family and nursery members see it, and it's what viewers see by default. ${access?.account.username ? `@${access.account.username}` : 'Your @username'} stays your sign-in handle.`}
+                  >
+                    <div className="row" style={{ gap: 8 }}>
+                      <input
+                        className="input"
+                        style={{ width: 200 }}
+                        value={displayName}
+                        maxLength={NAME_MAX}
+                        placeholder="Your name"
+                        aria-label="Your name"
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveName();
+                        }}
+                      />
+                      <Btn variant="soft" size="sm" disabled={!nameDraft || nameDraft === accountName || savingName} onClick={saveName}>
+                        {savingName ? 'Saving…' : 'Save'}
+                      </Btn>
+                    </div>
+                  </Row>
                   <StudiosCard />
                   <Row title="Cloud sync" desc="Events, recaps and settings sync to your account automatically.">
                     <Btn
@@ -361,7 +394,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               <div className="scene-edit-list">
                 {SCENES.map((s, i) => (
                   <div className="scene-edit" key={s.id}>
-                    <div className="se-thumb"><SceneSketch kind={s.id} initial={(prefs.hostName || 'H')[0]} /></div>
+                    <div className="se-thumb"><SceneSketch kind={s.id} initial={(prefs.hostName.trim() || accountName || 'H')[0]} /></div>
                     <div className="se-meta">
                       <div className="se-name">{i + 1}. {s.name}</div>
                       <div className="se-desc">{s.desc}</div>
@@ -370,14 +403,17 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                   </div>
                 ))}
               </div>
-              <Row title="Your name" desc="Shown to viewers, on the invite page and in chat.">
+              <Row
+                title="On-stream name (optional)"
+                desc="Shown to viewers, on the invite page and in chat. Leave it empty to use your account name (Account & sync) — renames then show up here too."
+              >
                 <input
                   className="input"
                   style={{ width: 200 }}
                   value={prefs.hostName}
-                  maxLength={40}
-                  placeholder="e.g. Akhielesh"
-                  aria-label="Host name"
+                  maxLength={NAME_MAX}
+                  placeholder={accountName || 'Your account name'}
+                  aria-label="On-stream name"
                   onChange={(e) => set('hostName', e.target.value)}
                 />
               </Row>

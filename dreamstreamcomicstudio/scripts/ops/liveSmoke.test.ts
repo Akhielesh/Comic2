@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CANONICAL_ORIGIN,
   classifySmokeResponse,
   detectCloudflareChallenge,
   discoverLiveBundlePaths,
   EXPECTED_LIVE_WORKER_BASE,
   formatSmokeReport,
   parseSmokeScope,
+  DEFAULT_SMOKE_TARGETS,
   runLiveSmoke,
   smokeTargetsForScope,
   type SmokeTarget
@@ -13,8 +15,15 @@ import {
 
 const LIVE_BUNDLE_TARGET: SmokeTarget = {
   name: 'stream studio bundle',
-  url: 'https://comic2.pages.dev/live.html',
-  kind: 'live-bundle',
+  url: 'https://dreamstreamstudio.ai/live.html',
+  kind: 'live-bundle'
+};
+
+const REDIRECT_TARGET: SmokeTarget = {
+  name: 'Pages host redirects to the custom domain',
+  url: 'https://comic2.pages.dev/live.html?e=smokeprobe',
+  kind: 'redirect',
+  redirectTo: 'https://dreamstreamstudio.ai/live.html?e=smokeprobe',
   scopes: ['temporary-launch']
 };
 
@@ -58,18 +67,23 @@ const jsResponse = (body: string, init: ResponseInit = {}) =>
   });
 
 describe('live smoke target scopes', () => {
-  it('keeps the temporary launch gate focused on Pages + workers.dev instead of the challenged custom domain', () => {
+  it('keeps the temporary launch gate focused on the Pages redirect + workers.dev instead of the challenged custom domain', () => {
     const targets = smokeTargetsForScope('temporary-launch');
     expect(targets.map((target) => target.name)).toEqual([
-      'fallback app',
-      'stream studio',
-      'stream studio bundle',
+      'Pages host redirects to the custom domain',
       'fallback live worker',
       'fallback live worker CORS preflight',
       'fallback live worker recording upload CORS preflight',
       'api backend (workers.dev)'
     ]);
     expect(targets.some((target) => target.url.includes('dreamstreamstudio.ai'))).toBe(false);
+  });
+
+  it('no longer expects content from comic2.pages.dev — it only redirects to the custom domain', () => {
+    for (const target of DEFAULT_SMOKE_TARGETS.filter((t) => t.url.includes('comic2.pages.dev'))) {
+      expect(target.kind).toBe('redirect');
+      expect(target.redirectTo?.startsWith(`${CANONICAL_ORIGIN}/`)).toBe(true);
+    }
   });
 
   it('maps CLI flags to the temporary launch smoke scope', () => {
@@ -111,6 +125,33 @@ describe('live smoke classification', () => {
 
     expect(result.status).toBe('pass');
     expect(result.detail).toContain('app shell');
+  });
+
+  it('passes a redirect target only on a permanent redirect to the exact custom-domain URL, without following it', async () => {
+    const seen: RequestInit[] = [];
+    const answer = (status: number, location?: string) => async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return new Response(null, { status, headers: location ? { location } : {} });
+    };
+
+    const ok = await runLiveSmoke({ targets: [REDIRECT_TARGET], timeoutMs: 100, fetcher: answer(301, REDIRECT_TARGET.redirectTo) });
+    expect(ok[0].status).toBe('pass');
+    expect(ok[0].detail).toContain('301 → https://dreamstreamstudio.ai/live.html?e=smokeprobe');
+    expect(seen[0].redirect).toBe('manual');
+
+    const dropsQuery = await runLiveSmoke({ targets: [REDIRECT_TARGET], timeoutMs: 100, fetcher: answer(301, 'https://dreamstreamstudio.ai/') });
+    expect(dropsQuery[0].status).toBe('fail');
+    expect(dropsQuery[0].detail).toContain('instead of https://dreamstreamstudio.ai/live.html?e=smokeprobe');
+
+    const temporary = await runLiveSmoke({ targets: [REDIRECT_TARGET], timeoutMs: 100, fetcher: answer(302, REDIRECT_TARGET.redirectTo) });
+    expect(temporary[0].status).toBe('fail');
+  });
+
+  it('fails a redirect target when the old host still serves the app (middleware not deployed)', () => {
+    const body = '<!doctype html><div id="live-root"></div><script type="module" src="/assets/live-abc.js"></script>';
+    const result = classifySmokeResponse(REDIRECT_TARGET, htmlResponse(body), body, 40);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('expected a permanent redirect');
   });
 
   it('requires the backend health endpoint to return status ok JSON', () => {

@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import { requestAuthEmail } from '@/services/authEmail';
 import { claimDevice } from './accountPurge';
+import type { AccountNameResult } from '@/services/accountName';
 
 export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'member' | 'offline';
 
@@ -465,11 +466,21 @@ export async function redeemWelcomeCode(code: string, displayName?: string): Pro
   return { ok: true };
 }
 
-export async function updateDisplayName(name: string): Promise<{ ok: boolean; error?: string }> {
-  const r = await rpc<{ ok: boolean; error?: string }>('live_update_profile', { p_display_name: name });
-  if (!r.data?.ok) return { ok: false, error: friendlyError(r.data?.error ?? r.error ?? undefined) };
+/** One name for the whole account (DreamStream, Stream Studio, the monitor and calls):
+ *  saved through the server, which also renames the Stream Studio profile when there is
+ *  one — so it works before the welcome code too. (The live_update_profile RPC stays for
+ *  tabs still running an older build.) */
+export async function updateDisplayName(name: string): Promise<{ ok: boolean; error?: string; name?: string }> {
+  let r: AccountNameResult;
+  try {
+    const { updateAccountName } = await import('@/services/accountName');
+    r = await updateAccountName(name);
+  } catch {
+    return { ok: false, error: 'Couldn’t save your name right now — try again.' };
+  }
+  if (!r.ok) return { ok: false, error: r.error };
   await refreshAccount();
-  return { ok: true };
+  return { ok: true, name: r.name };
 }
 
 export async function searchPeople(q: string): Promise<Person[]> {

@@ -16,7 +16,6 @@ import { GuideHost, openHelp, useFirstVisitTour, type TourId } from './component
 import { sweepDiscardedRecordings } from './components/SaveSheet';
 import { findMyEvent } from './events';
 import type { Nav } from './nav';
-import { loadPrefs } from './prefs';
 import { pullPrefsFromCloud } from './sync';
 import { ACCENTS, applyAppearance, loadAppearance, saveAppearance, type Appearance } from './theme';
 import { CreateView } from './views/CreateView';
@@ -159,7 +158,6 @@ const TOUR_FOR: Partial<Record<Route['view'], TourId>> = {
 function AccountButton({ onSettings, push, compact }: { onSettings: () => void; push: PushToast; compact?: boolean }) {
   const account = useAccount();
   const [menu, setMenu] = useState(false);
-  const prefsName = loadPrefs().hostName;
   if (account.status !== 'member' && account.status !== 'needs_code') {
     if (compact) {
       return (
@@ -176,7 +174,9 @@ function AccountButton({ onSettings, push, compact }: { onSettings: () => void; 
       </button>
     );
   }
-  const name = account.name || prefsName || account.email || 'You';
+  // The one account name (never the per-device on-stream name). Before the welcome code
+  // there's no Stream Studio profile yet: live_me's suggestion reads the same account name.
+  const name = account.name || account.suggestedName || account.email?.split('@')[0] || 'You';
   return (
     <div className={cx('acct-wrap', compact && 'compact')}>
       <button className="rail-user" data-tour="account" onClick={() => setMenu((m) => !m)} aria-expanded={menu} aria-label="Account menu">
