@@ -45,8 +45,8 @@ export function MonitorGate({ children }: { children: React.ReactNode }) {
           <div className="mh-icon"><Icon name="baby" size={30} /></div>
           <h1 className="page-title">Baby monitor</h1>
           <p className="page-sub">
-            Turn any phone into a private baby camera and watch from your other devices — live, encrypted
-            device-to-device, and <b>never recorded</b>. Talk or video-call into the nursery, and get an alert the
+            Turn any phone into a private baby camera and watch from your other devices — live, end-to-end
+            encrypted device-to-device wherever your network allows, and <b>never recorded</b>. Talk or video-call into the nursery, and get an alert the
             moment the camera phone hears crying, coughing or a smoke alarm.
           </p>
           <div className="monitor-points">
@@ -188,7 +188,7 @@ function MonitorList({ nav, push }: { nav: Nav; push: PushToast }) {
         <h3 className="serif" style={{ margin: '0 0 10px', fontSize: 18 }}>How it works</h3>
         <ol>
           <li><b>Camera:</b> on a spare phone, sign in, open the nursery and tap <i>Be the camera</i>. Prop it 1–2 m from the crib, plugged in.</li>
-          <li><b>Watch:</b> on your phone or laptop, sign in and tap <i>Watch</i>. Video and sound go device-to-device, encrypted — or, when a network blocks that, through our server (passed along, never stored).</li>
+          <li><b>Watch:</b> on your phone or laptop, sign in and tap <i>Watch</i>. Video and sound go device-to-device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead — in memory only, never stored, not end-to-end encrypted.</li>
           <li><b>Alerts:</b> turn on alerts while watching — a cry or an offline camera notifies you even with the app closed.</li>
           <li><b>Family:</b> tap <i>Invite</i> — add someone with an account by name (Parent, Caregiver or Viewer, and a name like “Grandma”), or share a link + passcode, with a QR code to scan, for anyone without one.</li>
         </ol>

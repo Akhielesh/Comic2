@@ -257,18 +257,29 @@ export class RelaySoundPlayer {
   stats: JitterStats = { ms: 0, playing: false, underruns: 0 };
   readonly ready: Promise<boolean>;
 
-  private constructor(C: Ctx) {
+  private constructor(C: Ctx, onState?: () => void) {
     this.ctx = new C();
+    // Started (a tap), or stopped (a call, Siri, the lock screen): the screen shows which.
+    if (onState) {
+      try {
+        this.ctx.addEventListener('statechange', () => {
+          if (!this.closed) onState();
+        });
+      } catch { /* no state events: the screen polls */ }
+    }
     this.dest = this.ctx.createMediaStreamDestination();
     this.ready = this.init();
   }
 
-  /** Null when this browser can't (relay sound is then simply absent, as before). */
-  static create(): RelaySoundPlayer | null {
+  /**
+   * Null when this browser can't (relay sound is then simply absent, as before).
+   * Make it inside a tap where possible: iPhones only start sound from one.
+   */
+  static create(onState?: () => void): RelaySoundPlayer | null {
     const C = audioCtor();
     if (!C || !canPlayRelaySound()) return null;
     try {
-      return new RelaySoundPlayer(C);
+      return new RelaySoundPlayer(C, onState);
     } catch {
       return null;
     }

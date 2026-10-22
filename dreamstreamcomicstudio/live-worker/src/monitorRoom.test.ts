@@ -414,6 +414,10 @@ describe('MonitorRoom relay video (WebCodecs, sound, windows)', () => {
     const keys = cam.msgs('relay_key').length;
     tick(1500);
     await say(v, { t: 'rx', s: unpack(v.bin[0])!.seq, k: 1 });
+    // Within 2 s of its subscription's key frame: the camera's next regular one will do.
+    expect(cam.msgs('relay_key')).toHaveLength(keys);
+    tick(600);
+    await say(v, { t: 'rx', s: unpack(v.bin[0])!.seq, k: 1 });
     expect(cam.msgs('relay_key')).toHaveLength(keys + 1);
     tick();
     await room.webSocketMessage(cam as never, video());
@@ -550,6 +554,193 @@ describe('MonitorRoom relay video (WebCodecs, sound, windows)', () => {
     expect(new Uint8Array(bareJpeg(pack({ kind: 'jpeg', seq: 3, ts: 1, body: Uint8Array.of(0xff, 0xd8) })))).toEqual(Uint8Array.of(0xff, 0xd8));
     expect(seqDiff(2, 0xffffffff)).toBe(3);
     expect(relayCodecMask(['vp9', 'avc', 'nope'])).toBe(5);
+  });
+});
+
+/**
+ * A relay viewer stalls — a mobile-network blip, an app switch, a main-thread
+ * pause — while its socket stays open, then gets everything held meanwhile in
+ * one burst. Deterministic, against the real room: a camera at 15 fps (a key
+ * frame every 2 s and whenever the room asks), `owd` ms each way, both
+ * directions held during the stall. The viewer acknowledges like
+ * RelayDecoder: at most every 500 ms, on a message ('old' viewers — what's
+ * deployed — only then; 'new' ones also acknowledge the last message of a
+ * burst, ≤ 500 ms later). Before the fix the window froze for good after a
+ * 5–9 s stall: nothing more ever reached the viewer, and the camera was asked
+ * for a key frame every second for as long as it stayed.
+ */
+describe('MonitorRoom relay: a viewer that stalls never freezes for good', () => {
+  // A failed expectation must not leave Date.now frozen for the tests after it.
+  afterEach(() => vi.restoreAllMocks());
+  type Kind = 'sound' | 'video' | 'jpeg';
+  const STALL_AT = 4000;
+  const AFTER = 9000;
+
+  async function stall(o: { kind: Kind; stallMs: number; owd: number; client: 'old' | 'new' }) {
+    const t0 = 9_000_000;
+    let t = t0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    try {
+      const { room, join, say } = setup();
+      const cam = await join('tok-parent', 'camera', 'crib');
+      const v = await join('tok-viewer', 'viewer', 'v');
+      // kind 3 (video + sound), kind 2 (video, no sound) — or a JPEG-only viewer of a video camera.
+      await say(v, { t: 'relay', on: true, dev: 'crib', codecs: o.kind === 'jpeg' ? [] : ['vp8'] });
+      const from = t0 + STALL_AT;
+      const to = from + o.stallMs;
+      const end = to + AFTER;
+      const hold = (at: number) => (at >= from && at < to ? to : at);
+      const down: { sent: number; at: number; buf: ArrayBuffer }[] = [];
+      const up: { at: number; msg: Record<string, unknown> }[] = [];
+      const got: { at: number; sent: number; kind: string }[] = [];
+      let seen = 0;
+      let arrived = 0;
+      // The viewer's acknowledgements.
+      let last: number | null = null;
+      let acked: number | null = null;
+      let ackAt = -Infinity;
+      const ack = () => {
+        up.push({ at: hold(t + o.owd), msg: { t: 'rx', s: last } });
+        ackAt = t;
+        acked = last;
+      };
+      // The camera.
+      let seq = 0;
+      let keyAt = -Infinity;
+      let asked = cam.msgs('relay_key').length;
+      let nextFrame = t0;
+      let nextJpeg = t0;
+      let keysAfter = 0;
+      for (; t <= end; t += 5) {
+        if (t >= nextFrame) {
+          nextFrame += 66;
+          const n = cam.msgs('relay_key').length;
+          if (t >= to) keysAfter += n - asked;
+          const key = n > asked || t - keyAt >= 2000;
+          asked = n;
+          if (key) keyAt = t;
+          const audio = o.kind === 'sound' ? new Uint8Array(500).fill(0x55) : null;
+          await room.webSocketMessage(cam as never, pack({ kind: 'video', key, seq: seq++, ts: t - t0, codec: 'vp8', body: new Uint8Array(key ? 6000 : 1500).fill(1), audio }));
+        }
+        if (o.kind === 'jpeg' && t >= nextJpeg) {
+          nextJpeg += 250; // 4 a second, alongside the video
+          await room.webSocketMessage(cam as never, pack({ kind: 'jpeg', seq: seq++, ts: t - t0, body: Uint8Array.of(0xff, 0xd8, 0xff, 1, 2, 3) }));
+        }
+        for (; seen < v.bin.length; seen++) down.push({ sent: t, at: Math.max(hold(t + o.owd), down.at(-1)?.at ?? 0), buf: v.bin[seen] });
+        while (arrived < down.length && down[arrived].at <= t) {
+          const m = down[arrived++];
+          const u = unpack(m.buf)!;
+          got.push({ at: t, sent: m.sent, kind: u.kind });
+          last = u.seq;
+          if (t - ackAt >= 500) ack();
+        }
+        // The trailing acknowledgement (new viewers): the last message of a burst too.
+        if (o.client === 'new' && last != null && last !== acked && t - ackAt >= 500) ack();
+        while (up.length && up[0].at <= t) await say(v, up.shift()!.msg);
+      }
+      const pics = got.filter((g) => g.kind === (o.kind === 'jpeg' ? 'jpeg' : 'video') && g.sent >= to);
+      // Sound comes on its own while the picture waits, or inside the video messages.
+      const sound = got.filter((g) => (g.kind === 'audio' || (o.kind === 'sound' && g.kind === 'video')) && g.sent >= to);
+      // Pictures per second over the last six seconds, one count per second.
+      const perSecond = Array.from({ length: 6 }, (_, i) => pics.filter((g) => g.at >= end - 6000 + i * 1000 && g.at < end - 5000 + i * 1000).length);
+      return { firstPicture: pics.length ? pics[0].at - to : Infinity, firstSound: sound.length ? sound[0].at - to : Infinity, perSecond, keysAfter };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  for (const kind of ['sound', 'video', 'jpeg'] as const) {
+    it(`${kind === 'sound' ? 'video + sound' : kind === 'video' ? 'video without sound' : 'JPEG-only viewer'}: after a 5–9 s stall the picture is back within ~2 s, and stays`, async () => {
+      for (const stallMs of [5000, 7000, 9000]) {
+        for (const owd of [40, 100, 200]) {
+          for (const client of ['old', 'new'] as const) {
+            const r = await stall({ kind, stallMs, owd, client });
+            const at = `${client} viewer, ${stallMs} ms stall, ${owd} ms each way: ${JSON.stringify(r)}`;
+            expect(r.firstPicture, at).toBeLessThanOrEqual(2000);
+            if (kind === 'sound') expect(r.firstSound, at).toBeLessThanOrEqual(1600);
+            // Flowing again, not one lucky frame: every second, at the full rate.
+            expect(Math.min(...r.perSecond), at).toBeGreaterThanOrEqual(kind === 'jpeg' ? 3 : 12);
+            // And it doesn't drive the camera to a key frame every second.
+            expect(r.keysAfter, at).toBeLessThanOrEqual(2);
+          }
+        }
+      }
+    });
+  }
+
+  it('a stall the viewer never comes back from costs one small message a second, then one every 5 s — and no key frames', async () => {
+    let t = 9_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    let seq = 0;
+    const sizes: { at: number; bytes: number }[] = [];
+    let seen = 0;
+    const start = t;
+    let keys0 = 0;
+    for (let i = 0; i < 30 * 15; i++, t += 66) {
+      if (i === 15) keys0 = cam.msgs('relay_key').length;
+      await room.webSocketMessage(cam as never, pack({ kind: 'video', key: i % 30 === 0, seq: seq++, ts: i * 66, codec: 'vp8', body: new Uint8Array(1500).fill(1), audio: new Uint8Array(400).fill(0x55) }));
+      for (; seen < v.bin.length; seen++) sizes.push({ at: t - start, bytes: v.bin[seen].byteLength });
+    }
+    spy.mockRestore();
+    // The window (a key frame and 30 more), then sound up to 60 — then probes only.
+    const later = sizes.filter((s) => s.at > 6000);
+    const mid = later.filter((s) => s.at <= 13_000);
+    const late = later.filter((s) => s.at > 15_000);
+    // About one a second while it might be back (each one a chance to answer)…
+    expect(mid.length).toBeGreaterThanOrEqual(3);
+    expect(mid.length).toBeLessThanOrEqual(8);
+    // …then one every 5 s.
+    expect(late.length).toBeGreaterThanOrEqual(2);
+    expect(late.length).toBeLessThanOrEqual(4);
+    expect(later.every((s) => s.bytes < 1000)).toBe(true); // sound only, never a whole frame
+    expect(cam.msgs('relay_key').length - keys0).toBeLessThanOrEqual(1);
+  });
+
+  it('re-sending the same subscription starts its window over (a stuck viewer is unstuck by asking again)', async () => {
+    let t = 9_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    const sub = { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] };
+    await say(v, sub);
+    let seq = 0;
+    const send = async (key = false) => {
+      t += 66;
+      await room.webSocketMessage(cam as never, pack({ kind: 'video', key, seq: seq++, ts: t, codec: 'vp8', body: new Uint8Array(800).fill(1) }));
+    };
+    await send(true);
+    for (let i = 0; i < 40; i++) await send(); // never acknowledged: it waits
+    const n = v.bin.length;
+    await send(true);
+    expect(v.bin.length).toBe(n); // too far behind for this key frame
+    await say(v, sub);
+    await send(true);
+    await send();
+    expect(v.bin.length).toBe(n + 2);
+    expect(unpack(v.bin.at(-2)!)).toMatchObject({ kind: 'video', key: true });
+    spy.mockRestore();
+  });
+
+  it('a viewer that keeps asking can’t drive the camera to a key frame every second', async () => {
+    let t = 9_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    const k0 = cam.msgs('relay_key').length;
+    for (let i = 0; i < 20; i++) {
+      t += 1000;
+      await say(v, { t: 'rx', s: i, k: 1 });
+      await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    }
+    expect(cam.msgs('relay_key').length - k0).toBeLessThanOrEqual(10); // one per 2 s at most
+    spy.mockRestore();
   });
 });
 

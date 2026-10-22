@@ -43,7 +43,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'studio-health', title: 'Health', body: 'Upload speed, auto-quality and any skipped segments. If it says “Degraded”, close other uploads or pick a lower quality.' },
   ],
   monitor: [
-    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Video and sound go device-to-device, encrypted (through our server, never stored, only when a network blocks that), and nothing is ever recorded.' },
+    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Nothing is ever recorded. Video and sound go device-to-device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, not end-to-end encrypted.' },
     { target: 'monitor-create', title: 'Create a nursery', body: 'One per baby or room. Add the baby’s name to get personal alerts like “Aria is crying”.' },
     { target: 'monitor-new', title: 'More nurseries', body: 'Grandparents’ house? Daycare? Add up to five.' },
   ],

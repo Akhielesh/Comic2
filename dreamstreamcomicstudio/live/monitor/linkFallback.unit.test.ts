@@ -33,12 +33,30 @@ describe('linkFallback: fallback when P2P can’t connect', () => {
   it('a late P2P connect cancels the retry; the relay goes once the direct picture is on screen', () => {
     let r = run([{ t: 'cam', dev: 'crib' }, { t: 'link', state: 'failed' }, { t: 'link', state: 'connected' }]);
     expect(r.fx.slice(2)).toEqual([{ t: 'retry_clear' }]);
-    expect(r.s).toMatchObject({ relay: true, retry: false, fails: 0 });
+    // Connected proves nothing yet (a full camera connects, then turns us away): the back-off stays.
+    expect(r.s).toMatchObject({ relay: true, retry: false, fails: 1 });
     // The (cleared) timer firing anyway does nothing.
     expect(stepFallback(r.s, { t: 'retry' }).fx).toEqual([]);
     r = run([{ t: 'rendered' }], r.s);
     expect(r.fx).toEqual([{ t: 'relay_off' }]);
-    expect(r.s.relay).toBe(false);
+    expect(r.s).toMatchObject({ relay: false, fails: 0 });
+  });
+
+  it('a full camera connects, then turns us away: the back-off still grows (30 s, 1, 2, 4, 5 min) — reset only by a direct picture', () => {
+    // What the camera really does: ICE + DTLS complete ('connected'), then {bye, full} once it knows our network path.
+    const fullAttempt: FallbackInput[] = [{ t: 'retry' }, { t: 'link', state: 'connecting' }, { t: 'link', state: 'connected' }, { t: 'link', state: 'failed' }];
+    let r = run([{ t: 'cam', dev: 'crib' }, { t: 'link', state: 'connecting' }, { t: 'link', state: 'connected' }, { t: 'link', state: 'failed' }]);
+    const delays = r.fx.filter((e): e is { t: 'retry_in'; ms: number } => e.t === 'retry_in').map((e) => e.ms);
+    for (let i = 0; i < 5; i++) {
+      r = run(fullAttempt, r.s);
+      delays.push(...r.fx.filter((e): e is { t: 'retry_in'; ms: number } => e.t === 'retry_in').map((e) => e.ms));
+    }
+    expect(delays).toEqual([30_000, 60_000, 120_000, 240_000, 300_000, 300_000]);
+    // A slot freed up: the direct picture really arrives — the relay goes and the back-off starts over.
+    r = run([{ t: 'retry' }, { t: 'link', state: 'connecting' }, { t: 'link', state: 'connected' }, { t: 'rendered' }], r.s);
+    expect(r.s).toMatchObject({ relay: false, fails: 0 });
+    r = run([{ t: 'link', state: 'reconnecting' }, { t: 'link', state: 'failed' }], r.s);
+    expect(r.fx).toContainEqual({ t: 'retry_in', ms: 30_000 });
   });
 
   it('retries P2P when the timer fires, keeping the relay until it connects', () => {

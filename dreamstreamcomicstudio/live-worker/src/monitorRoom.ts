@@ -34,7 +34,7 @@
  */
 
 import { iceServers } from './ice';
-import { audioOnly, bareJpeg, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDIO, readHead, seqDiff, type RelayHead } from './relayWire';
+import { audioOnly, bareJpeg, KIND_AUDIO, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDIO, readHead, seqDiff, type RelayHead } from './relayWire';
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord, type CallStat } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
@@ -338,12 +338,24 @@ const RELAY_BYTES_PER_S = 1536 * 1024;
  * acknowledged and it skips video until a key frame arrives with no more than
  * RELAY_RESUME (≈1 s) in flight — sound keeps going meanwhile. Past RELAY_DEAD
  * with no acknowledgement for 3 s it gets nothing.
+ *
+ * The window never freezes for good: a viewer whose acknowledgements stopped
+ * for RELAY_PROBE_MS while nothing reached it (after a stall it may never
+ * have acknowledged the end of the burst) gets one message that stands alone
+ * — a key frame, a JPEG or sound — and its answer reopens the window. Quiet
+ * for RELAY_PROBE_SLOW_AFTER_MS, it's probably gone: one every
+ * RELAY_PROBE_SLOW_MS, and no key-frame requests for it.
  */
 const RELAY_LAG = 30;
 const RELAY_RESUME = 15;
 const RELAY_DEAD = 150;
-/** At most one key-frame request per camera per second (the camera also sends one every 2 s). */
+const RELAY_PROBE_MS = 1000;
+const RELAY_PROBE_SLOW_AFTER_MS = 10_000;
+const RELAY_PROBE_SLOW_MS = 5000;
+/** At most one key-frame request per camera per second (the camera also sends one every 2 s)… */
 const RELAY_KEY_GAP_MS = 1000;
+/** …and one per viewer every 2 s, so a viewer that keeps falling behind can't drive the camera to one a second. */
+const RELAY_VIEWER_KEY_MS = 2000;
 /** A camera that sent no video for this long is treated as JPEG-only. */
 const RELAY_VIDEO_STALE_MS = 5000;
 const PURGE_EVERY_MS = 6 * 60 * 60_000;
@@ -469,7 +481,24 @@ export function relayRoute(head: RelayHead, raw: ArrayBuffer, rc: number | undef
   return vc === 0 || decodes(vc) ? raw : null;
 }
 
-const freshRx = () => ({ fw: null as number | null, ack: null as number | null, ackAt: Date.now(), wait: true });
+/**
+ * One viewer's relay window: the last seq forwarded (`fw`, at `fwAt`) and
+ * acknowledged (`ack`, at `ackAt`), waiting for a key frame, when it last
+ * asked the camera for one (`keyAt`), whether a probe went out since
+ * (answering it earns a key frame at once), and how many of its messages
+ * were held back since the last one it was sent.
+ */
+type RelayRx = { fw: number | null; ack: number | null; ackAt: number; fwAt: number; wait: boolean; keyAt: number; probed: boolean; held: number };
+const freshRx = (keyAt = -Infinity): RelayRx => ({ fw: null, ack: null, ackAt: Date.now(), fwAt: Date.now(), wait: true, keyAt, probed: false, held: 0 });
+
+/**
+ * A probe for a viewer the window holds back: what of this message stands
+ * alone — its sound (small, so that first), a JPEG, or a key frame whole — or null.
+ */
+function relayProbe(head: RelayHead, raw: ArrayBuffer, out: ArrayBuffer): ArrayBuffer | null {
+  if (head.kind === KIND_VIDEO_AUDIO) return audioOnly(raw);
+  return head.kind === KIND_JPEG || head.kind === KIND_AUDIO || head.key ? out : null;
+}
 
 function sendBin(ws: WebSocket, buf: ArrayBuffer): void {
   try {
@@ -506,8 +535,8 @@ export class MonitorRoom {
   private relayBuckets = new Map<string, FrameBucket>();
   /** Per camera: the video codec it last sent (and when), and its key-frame requests. */
   private relayCams = new Map<string, { codec: number; at: number; keyAt: number; keyPending: boolean }>();
-  /** Per viewer socket: last seq forwarded / acknowledged, waiting for a key frame. */
-  private relayRx = new Map<string, { fw: number | null; ack: number | null; ackAt: number; wait: boolean }>();
+  /** Per viewer socket: its relay window. */
+  private relayRx = new Map<string, RelayRx>();
   /** Cameras paused for privacy: nothing of theirs is relayed. */
   private relayPrivacy = new Set<string>();
   private lastStatusAt = new Map<string, number>();
@@ -1715,10 +1744,17 @@ export class MonitorRoom {
     a.rc = a.relay && Array.isArray(msg.codecs) ? relayCodecMask(msg.codecs) : undefined;
     a.ri = a.relay && msg.instant ? true : undefined;
     ws.serializeAttachment(a);
+    const rx = this.relayRx.get(a.sid);
     if (!a.relay) this.relayRx.delete(a.sid);
-    else if (a.relay !== prev || a.rc !== prevRc || !this.relayRx.has(a.sid)) {
-      this.relayRx.set(a.sid, freshRx());
+    else if (a.relay !== prev || a.rc !== prevRc || !rx) {
+      this.relayRx.set(a.sid, freshRx(Date.now()));
       this.requestKey(a.relay);
+    } else {
+      // The same subscription again: its window starts over where the camera is
+      // now (what it missed isn't still owed). A flowing picture keeps going; a
+      // waiting one asks for a key frame (at most once per RELAY_VIEWER_KEY_MS).
+      Object.assign(rx, { fw: null, ack: null, ackAt: Date.now(), fwAt: Date.now(), probed: false, held: 0 });
+      if (rx.wait && this.getsVideo(a)) this.viewerKey(a.relay, rx);
     }
     if (prev && prev !== a.relay) this.updateRelayWant(prev);
     if (a.relay) this.updateRelayWant(a.relay);
@@ -1760,6 +1796,20 @@ export class MonitorRoom {
     this.broadcast({ t: 'relay_key' }, (x) => x.mode === 'camera' && x.dev === dev);
   }
 
+  /** This viewer decodes the video its camera sends now (JPEG-only viewers never wait for a key frame). */
+  private getsVideo(a: Attach): boolean {
+    const codec = (a.relay && this.relayCams.get(a.relay)?.codec) || 0;
+    return codec > 0 && a.rc != null && (a.rc & (1 << (codec - 1))) !== 0;
+  }
+
+  /** A key frame for this viewer: at most once per RELAY_VIEWER_KEY_MS, unless `force` (it just answered a probe). */
+  private viewerKey(dev: string, rx: RelayRx, force = false): void {
+    const now = Date.now();
+    if (!force && now - rx.keyAt < RELAY_VIEWER_KEY_MS) return;
+    rx.keyAt = now;
+    this.requestKey(dev);
+  }
+
   /** A viewer's acknowledgement: the last seq it got; `k` = its decoder needs a key frame. */
   private onRelayAck(a: Attach, msg: Record<string, unknown>): void {
     if (a.mode !== 'viewer' || !a.relay || a.rc == null) return;
@@ -1767,13 +1817,20 @@ export class MonitorRoom {
     if (!rx) this.relayRx.set(a.sid, (rx = freshRx()));
     const s = Number(msg.s);
     if (Number.isInteger(s) && s >= 0 && s <= 0xffffffff) {
-      rx.ack = s;
+      // Only forward: an older acknowledgement still on its way changes nothing.
+      if (rx.ack == null || seqDiff(s, rx.ack) > 0) rx.ack = s;
       rx.ackAt = Date.now();
       rx.fw ??= s;
+      // Caught up while its picture waits (after a stall, or answering a probe):
+      // a key frame now, rather than at the camera's next one (if it gets the video at all).
+      if (rx.wait && !msg.k && seqDiff(rx.fw, s) <= RELAY_RESUME && this.getsVideo(a)) {
+        this.viewerKey(a.relay, rx, rx.probed);
+        rx.probed = false;
+      }
     }
     if (msg.k) {
       rx.wait = true;
-      this.requestKey(a.relay);
+      this.viewerKey(a.relay, rx);
     }
   }
 
@@ -1803,7 +1860,6 @@ export class MonitorRoom {
     }
     if (cam.keyPending && now - cam.keyAt >= RELAY_KEY_GAP_MS) this.requestKey(dev);
     const vc = now - cam.at < RELAY_VIDEO_STALE_MS ? cam.codec : 0;
-    let wantKey = false;
     for (const s of this.authed()) {
       const v = s.a;
       if (v.mode !== 'viewer' || v.relay !== dev) continue;
@@ -1819,40 +1875,55 @@ export class MonitorRoom {
       if (rx.ack == null) rx.ack = (head.seq - 1) >>> 0;
       if (rx.fw == null) rx.fw = rx.ack;
       let lag = seqDiff(rx.fw, rx.ack);
-      if (lag > RELAY_DEAD) {
-        // Still acknowledging but far apart: the numbers restarted — start over. Silent: it's gone.
-        if (now - rx.ackAt > 3000) continue;
+      if (lag > RELAY_DEAD && now - rx.ackAt <= 3000) {
+        // Still acknowledging but far apart: the numbers restarted — start over.
         rx.ack = (head.seq - 1) >>> 0;
         rx.fw = rx.ack;
         rx.wait = true;
+        rx.held = 0;
         lag = 0;
       }
-      if (isVideo) {
+      let send: ArrayBuffer | null = out;
+      if (lag > RELAY_DEAD) {
+        send = null; // nothing acknowledged for 3 s: probably gone (probes only)
+      } else if (isVideo) {
         if (!rx.wait && lag > RELAY_LAG) {
           rx.wait = true;
-          wantKey = true;
+          this.viewerKey(dev, rx);
         }
         if (rx.wait) {
           if (head.key && lag <= RELAY_RESUME) {
             rx.wait = false;
+            rx.probed = false;
           } else {
             // The picture waits for a key frame; the sound doesn't.
-            const snd = head.kind === KIND_VIDEO_AUDIO && lag <= RELAY_LAG * 2 ? audioOnly(raw) : null;
-            if (snd) {
-              sendBin(s.ws, snd);
-              rx.fw = head.seq;
-            }
-            if (head.key) wantKey = true;
-            continue;
+            send = head.kind === KIND_VIDEO_AUDIO && lag <= RELAY_LAG * 2 ? audioOnly(raw) : null;
           }
         }
       } else if (head.kind === KIND_JPEG && lag > RELAY_LAG) {
-        continue; // every JPEG stands alone: a viewer that's behind just skips some
+        send = null; // every JPEG stands alone: a viewer that's behind just skips some
       }
-      sendBin(s.ws, out);
+      if (!send) {
+        // Held back — and if it has gone quiet meanwhile, find out where it really is.
+        const quiet = now - rx.ackAt;
+        const gap = quiet >= RELAY_PROBE_SLOW_AFTER_MS ? RELAY_PROBE_SLOW_MS : RELAY_PROBE_MS;
+        send = quiet < gap || now - rx.fwAt < gap ? null : relayProbe(head, raw, out);
+        if (!send) {
+          rx.held += 1;
+          // Only picture deltas without sound: a key frame will do (not for one that's probably gone).
+          if (quiet >= gap && now - rx.fwAt >= gap && quiet < RELAY_PROBE_SLOW_AFTER_MS) this.viewerKey(dev, rx);
+          continue;
+        }
+        rx.probed = true;
+      }
+      // What it was held back from isn't in flight: the window counts what it was sent,
+      // so resuming on a key frame doesn't count the gap before it.
+      if (rx.held && seqDiff(rx.fw, rx.ack) >= 0) rx.ack = (rx.ack + rx.held) >>> 0;
+      rx.held = 0;
+      sendBin(s.ws, send);
       rx.fw = head.seq;
+      rx.fwAt = now;
     }
-    if (wantKey) this.requestKey(dev);
   }
 
   /** Every viewer of this camera waits for its next key frame. */

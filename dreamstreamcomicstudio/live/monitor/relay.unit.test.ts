@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chooseCodec, encoderConfig, NO_WANT, probeDecoders, probeEncoders, readWant, RelayDecoder, RelayEncoder, RelayRate, relaySize, resetProbe, type RelayWant } from './relay';
+import { chooseCodec, encoderConfig, NO_WANT, probeDecoders, probeEncoders, readWant, RelayDecoder, RelayEncoder, RelayRate, relaySize, resetProbe, soundControls, watchersNote, type RelayWant } from './relay';
 import { pack, unpack, type RelayCodec } from './relayWire';
 
 /* ------------------------------------------------------------ fakes */
@@ -22,8 +22,9 @@ class FakeEncoder {
   encodeQueueSize = 0;
   config: VideoEncoderConfig | null = null;
   frames: { key: boolean; ts: number }[] = [];
-  /** Size of the next chunks (bytes). */
+  /** Size of the next chunks (bytes); key frames `keySize` when set. */
   size = 1200;
+  keySize: number | null = null;
   constructor(private init: { output: (c: FakeChunk) => void; error: (e: unknown) => void }) {
     encoders.push(this);
   }
@@ -36,7 +37,7 @@ class FakeEncoder {
   encode(f: { timestamp: number }, o?: { keyFrame?: boolean }) {
     this.frames.push({ key: !!o?.keyFrame, ts: f.timestamp });
     if (FakeEncoder.failing.has(this.config?.codec ?? '')) return this.init.error(new Error('encoder died'));
-    this.init.output(new FakeChunk(o?.keyFrame ? 'key' : 'delta', f.timestamp, this.size));
+    this.init.output(new FakeChunk(o?.keyFrame ? 'key' : 'delta', f.timestamp, o?.keyFrame ? this.keySize ?? this.size : this.size));
   }
   fail() {
     this.init.error(new Error('boom'));
@@ -199,7 +200,7 @@ describe('relay picture: sizes, codecs, rates', () => {
 describe('RelayEncoder (camera)', () => {
   function rig(opts: { buffered?: number; paused?: boolean } = {}) {
     const sent: ArrayBuffer[] = [];
-    const state = { now: 1_000_000, buffered: opts.buffered ?? 0, paused: opts.paused ?? false, accept: true };
+    const state = { now: 1_000_000, buffered: opts.buffered ?? 0, paused: opts.paused ?? false, accept: true, open: true };
     const video = { readyState: 4, videoWidth: 1280, videoHeight: 720 } as HTMLVideoElement;
     const enc = new RelayEncoder({
       source: () => video,
@@ -210,6 +211,7 @@ describe('RelayEncoder (camera)', () => {
       },
       buffered: () => state.buffered,
       paused: () => state.paused,
+      open: () => state.open,
       now: () => state.now,
     });
     const frames = () => sent.map((b) => unpack(b)!);
@@ -371,6 +373,117 @@ describe('RelayEncoder (camera)', () => {
     enc.stop();
   });
 
+  it('leaving a backlog carries on with the next frame — no key frame to refill the socket — once it drains below 32 KB', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { enc, frames, step, state } = rig();
+    enc.setWant(want({ n: 1, vp8: 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    step();
+    step();
+    state.buffered = 70 * 1024;
+    step(); // the first backlog steps the rate down: a new encoder, whose first frame is a key frame
+    state.buffered = 1000;
+    step();
+    step();
+    expect(frames().map((m) => m.key)).toEqual([true, false, true, false]);
+    // Backed up again within 3 s: same rate, same encoder.
+    state.buffered = 70 * 1024;
+    step();
+    state.buffered = 48 * 1024; // below 64 KB, but not yet below 32 KB: still skipping
+    step();
+    step();
+    expect(frames()).toHaveLength(4);
+    state.buffered = 20 * 1024;
+    step();
+    step();
+    // The skipped frames never reached the encoder: the next one codes against the last one sent.
+    expect(frames().map((m) => m.key)).toEqual([true, false, true, false, false, false]);
+    expect(encoders).toHaveLength(2);
+    enc.stop();
+  });
+
+  it('a tight uplink keeps a moving picture (deltas), not key frames at a frame or two a second', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const sent: { at: number; key: boolean }[] = [];
+    const s = { now: 1_000_000, buffered: 90 * 1024 };
+    // 288 kbit/s: 2 KB deltas at 12 fps and a 20 KB key frame every 2 s fit; a key frame on every recovery doesn't.
+    const UPLINK = 36; // bytes per ms
+    vi.stubGlobal(
+      'VideoEncoder',
+      class extends FakeEncoder {
+        size = 2000;
+        keySize = 20_000;
+      },
+    );
+    const video = { readyState: 4, videoWidth: 1280, videoHeight: 720 } as HTMLVideoElement;
+    const enc = new RelayEncoder({
+      source: () => video,
+      send: (b) => {
+        s.buffered += b.byteLength;
+        const m = unpack(b)!;
+        if (m.kind === 'video') sent.push({ at: s.now, key: m.key });
+        return true;
+      },
+      buffered: () => s.buffered,
+      paused: () => false,
+      now: () => s.now,
+    });
+    enc.setWant(want({ n: 1, vp8: 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    let last = s.now;
+    for (let i = 0; i < 400; i++) {
+      s.now += Math.round(1000 / enc.rate.fps);
+      s.buffered = Math.max(0, s.buffered - (s.now - last) * UPLINK);
+      last = s.now;
+      enc.step();
+    }
+    const tail = sent.filter((f) => f.at > s.now - 20_000);
+    const keys = tail.filter((f) => f.key).length;
+    expect(tail.length / 20).toBeGreaterThanOrEqual(8); // frames a second
+    expect(keys / tail.length).toBeLessThan(0.2);
+    enc.stop();
+  });
+
+  it('the JPEG pace steps down while the socket is backed up (it never saw its own 80 KB mark: frames stop at 64 KB)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { enc, step, state } = rig();
+    enc.setWant(want({ n: 1, jpeg: 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(enc.jpegFps).toBe(3);
+    state.buffered = 70 * 1024;
+    for (let i = 0; i < 20; i++) step();
+    expect(enc.jpegFps).toBe(2);
+    enc.stop();
+  });
+
+  it('encodes nothing while the room socket is down (every send would fail), and starts again on a key frame', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { enc, frames, step, state } = rig();
+    enc.setWant(want({ n: 2, vp8: 1, jpeg: 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    step();
+    step();
+    await vi.advanceTimersByTimeAsync(0);
+    const encoded = encoders.at(-1)!.frames.length;
+    const drawn = canvases[0].draws;
+    const n = frames().length;
+    state.open = false;
+    state.accept = false;
+    for (let i = 0; i < 45; i++) {
+      enc.pushSound(new Float32Array(3200).fill(0.2), 48_000);
+      step();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(encoders.at(-1)!.frames.length).toBe(encoded); // no encoding (let alone key frames)…
+    expect(canvases[0].draws).toBe(drawn); // …no drawing, no JPEG
+    state.open = true;
+    state.accept = true;
+    step();
+    const back = frames().slice(n).filter((m) => m.kind === 'video');
+    expect(back[0]).toMatchObject({ key: true, audio: null }); // nothing captured during the outage goes out
+    enc.stop();
+  });
+
   it('stops when nobody is left on the relay', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { enc, sent } = rig();
@@ -443,6 +556,35 @@ describe('RelayDecoder (viewer)', () => {
     expect(acks.every((a) => !a.k)).toBe(true);
   });
 
+  it('acknowledges the last message of a burst too, a moment later (or the room holds it back for good)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { dec, acks, t, video } = rig();
+    dec.handle(video(true));
+    // A stall ends: everything held meanwhile arrives at once.
+    for (let i = 0; i < 20; i++) dec.handle(video(false));
+    expect(acks.map((a) => a.s)).toEqual([100]);
+    t.now += 499;
+    vi.advanceTimersByTime(499);
+    expect(acks).toHaveLength(1);
+    t.now += 1;
+    vi.advanceTimersByTime(1);
+    expect(acks.map((a) => a.s)).toEqual([100, 120]);
+    // Nothing newer: nothing more to say.
+    t.now += 3000;
+    vi.advanceTimersByTime(3000);
+    expect(acks).toHaveLength(2);
+    // Steady messages: still one acknowledgement per 500 ms, the newest each time.
+    for (let i = 0; i < 15; i++) {
+      t.now += 66;
+      vi.advanceTimersByTime(66);
+      dec.handle(video(false));
+    }
+    t.now += 500;
+    vi.advanceTimersByTime(500);
+    expect(acks.slice(2).map((a) => a.s)).toEqual([121, 128, 135]);
+    dec.close();
+  });
+
   it('a decoder error closes it, asks for a key frame, and three in a row fall back to still pictures', () => {
     const { dec, acks, t, video, fallbacks } = rig();
     dec.handle(video(true));
@@ -509,5 +651,140 @@ describe('RelayDecoder (viewer)', () => {
     for (const b of blobs) dec.push(b);
     await new Promise((r) => setTimeout(r, 10));
     expect(decoders[0].chunks.map((c) => c.type)).toEqual(['key', 'delta', 'delta']);
+  });
+});
+
+/* ------------------------------------------------------ viewer: sound */
+
+describe('RelayDecoder sound on phones (a context only starts inside a tap)', () => {
+  let posted: unknown[];
+  let ctxs: FakeAudioCtx[];
+  class FakeAudioCtx {
+    /** Like WebKit: resume() only starts it inside a tap. */
+    static tap = false;
+    state: string = 'suspended';
+    private fns: (() => void)[] = [];
+    constructor() {
+      ctxs.push(this);
+    }
+    get audioWorklet() {
+      return { addModule: async () => undefined };
+    }
+    async resume() {
+      if (FakeAudioCtx.tap && this.state !== 'running') this.set('running');
+    }
+    async close() {
+      this.state = 'closed';
+    }
+    addEventListener(_t: string, f: () => void) {
+      this.fns.push(f);
+    }
+    /** A phone call, Siri or the lock screen. */
+    set(state: string) {
+      this.state = state;
+      for (const f of this.fns) f();
+    }
+    createMediaStreamDestination() {
+      const track = { kind: 'audio', stop() {} };
+      return { stream: { getAudioTracks: () => [track] } };
+    }
+    createBiquadFilter() {
+      return { type: '', frequency: { value: 0 }, Q: { value: 0 }, connect: (x: unknown) => x };
+    }
+  }
+  class FakeWorkletNode {
+    port = { postMessage: (m: unknown) => void posted.push(m), onmessage: null as unknown };
+    connect(x: unknown) {
+      return x;
+    }
+    disconnect() {}
+  }
+  class FakeMediaStream {
+    constructor(readonly tracks: { kind: string }[]) {}
+    getAudioTracks() {
+      return this.tracks.filter((x) => x.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((x) => x.kind === 'video');
+    }
+  }
+  beforeEach(() => {
+    posted = [];
+    ctxs = [];
+    FakeAudioCtx.tap = false;
+    vi.stubGlobal('window', { AudioContext: FakeAudioCtx });
+    vi.stubGlobal('AudioWorkletNode', FakeWorkletNode);
+    vi.stubGlobal('MediaStream', FakeMediaStream);
+  });
+
+  function rig() {
+    let changes = 0;
+    const streams: (MediaStream | null)[] = [];
+    // A canvas that can't be captured (the <video> then gets the sound alone).
+    const canvas = { width: 0, height: 0, getContext: () => ({ drawImage() {} }) } as unknown as HTMLCanvasElement;
+    const dec = new RelayDecoder({
+      canvas: () => canvas,
+      onPicture: () => undefined,
+      onAck: () => undefined,
+      onStream: (x) => streams.push(x),
+      onSound: () => void changes++,
+    });
+    let seq = 1;
+    const sound = () => dec.handle(pack({ kind: 'audio', seq: seq++, ts: seq * 100, codec: null, audio: new Uint8Array(400).fill(0x55) }));
+    return { dec, sound, streams, changes: () => changes };
+  }
+
+  it('Listen tapped before the relay took over: the player is made and started in that tap, so relay sound plays when it comes', async () => {
+    const { dec, sound } = rig();
+    FakeAudioCtx.tap = true;
+    dec.prepareSound(); // the Listen tap — still on the direct picture
+    FakeAudioCtx.tap = false;
+    await flush();
+    expect(ctxs).toHaveLength(1);
+    expect(ctxs[0].state).toBe('running');
+    // Later, from the socket (no tap): the relay's first sound.
+    sound();
+    sound();
+    expect(posted.filter((m) => m instanceof Float32Array)).toHaveLength(2);
+    expect(dec.hasSound).toBe(true);
+    expect(dec.soundBlocked).toBe(false);
+    dec.close();
+  });
+
+  it('relay sound that arrives outside a tap is reported blocked until a tap starts it (and again after a phone call)', async () => {
+    const { dec, sound, streams, changes } = rig();
+    sound();
+    await flush();
+    expect(dec.hasSound).toBe(true);
+    expect(dec.soundBlocked).toBe(true); // arriving, not playing: the screen must not say "Sound on"
+    expect(changes()).toBeGreaterThan(0);
+    expect(streams.at(-1)?.getAudioTracks()).toHaveLength(1);
+    const c = changes();
+    FakeAudioCtx.tap = true;
+    dec.resumeSound(); // a tap anywhere
+    await flush();
+    expect(dec.soundBlocked).toBe(false);
+    expect(changes()).toBeGreaterThan(c);
+    ctxs[0].set('interrupted');
+    expect(dec.soundBlocked).toBe(true);
+    dec.close();
+  });
+
+  it('the sound controls never say "Sound on" while relay sound waits for a tap', () => {
+    expect(soundControls({ muted: false, hearable: true, relaySound: true, blocked: true })).toEqual({ on: false, tap: true });
+    expect(soundControls({ muted: false, hearable: true, relaySound: true, blocked: false })).toEqual({ on: true, tap: false });
+    expect(soundControls({ muted: true, hearable: true, relaySound: false, blocked: false })).toEqual({ on: false, tap: true });
+    // The direct picture's sound plays through the <video>: a stale relay player doesn't matter.
+    expect(soundControls({ muted: false, hearable: true, relaySound: false, blocked: true })).toEqual({ on: true, tap: false });
+    expect(soundControls({ muted: true, hearable: false, relaySound: false, blocked: false })).toEqual({ on: false, tap: false });
+  });
+});
+
+describe('camera: who gets the picture through the server', () => {
+  it('counts viewers bridging while their direct picture connects (their picture passes through the server too)', () => {
+    // Two viewers connecting: both on the instant picture — not listed as "on the relay", but relayed.
+    expect(watchersNote({ viewers: 2, direct: 0, onRelay: 0, relayed: 2, jpeg: false })).toBe(' · connecting… · 2 through the server');
+    expect(watchersNote({ viewers: 3, direct: 2, onRelay: 1, relayed: 1, jpeg: true })).toBe(' · 1 through the server (still pictures)');
+    expect(watchersNote({ viewers: 2, direct: 2, onRelay: 0, relayed: 0, jpeg: false })).toBe('');
   });
 });
