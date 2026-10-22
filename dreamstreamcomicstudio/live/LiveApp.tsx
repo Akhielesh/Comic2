@@ -256,8 +256,10 @@ export function LiveApp() {
     void consumeAuthReturn().then((r) => {
       if (!r) return;
       setRoute(parseRoute());
-      if ('confirmed' in r) push('Email confirmed — you’re signed in', { icon: 'sparkles' });
-      else if (r.error === 'expired') {
+      if ('confirmed' in r) push(r.handoff ? 'Signed in with your DreamStream account' : 'Email confirmed — you’re signed in', { icon: 'sparkles' });
+      else if (r.handoff) {
+        openAuth('signin', 'That sign-in link has expired or was already used — sign in here, or continue with DreamStream.');
+      } else if (r.error === 'expired') {
         openAuth('signin', 'That link has expired or was already used. If you tapped it once already, your email is confirmed — just sign in.');
       } else {
         openAuth('signin', `That link didn’t work${r.message ? ` (${r.message})` : ''}. Sign in — we’ll send a fresh link if it’s still needed.`);

@@ -1,5 +1,5 @@
 /**
- * dreamstream-live — API worker for DreamStream Live.
+ * dreamstream-live — API worker for Stream Studio.
  *
  * Delivery rail: the streamer's browser uploads short self-contained media
  * segments here; they land in R2 (zero egress fees) and viewers fetch them

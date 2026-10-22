@@ -56,6 +56,8 @@ import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
+import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
+import { openLiveApp } from './services/liveLink';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
 // first-paint bundle — the floating assistant isn't needed for initial render.
 const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
@@ -96,8 +98,11 @@ const RESTORABLE_VIEWS = new Set<AppView>([
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
 const POST_LOGIN_NEXT_KEY = 'ds.postLoginNext';
-/** Same-origin absolute path only — never protocol-relative or external. */
-const isSafeNextPath = (p: string): boolean => /^\/(?!\/)/.test(p);
+/** Same-origin absolute path only — never protocol-relative or external ('//x', '/\\x' — browsers
+ *  read a backslash as a slash). With Stream Studio on its own host, its address is allowed too:
+ *  the hand-back then signs the person in there (services/liveLink.ts). */
+const isSafeNextPath = (p: string): boolean =>
+  /^\/(?![/\\])[^\\]*$/.test(p) || (STREAM_HOST_ON && isStreamUrl(p));
 
 
 type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
@@ -144,7 +149,7 @@ const ProductGateScreen: React.FC<{ productLabel: string; canStream: boolean; on
       <div className="flex flex-wrap gap-2 justify-center mt-6">
         {canStream && (
           <button
-            onClick={() => { window.location.href = '/live.html'; }}
+            onClick={() => { void openLiveApp('/live.html'); }}
             className="px-4 py-2 bg-brand-yellow border-2 border-black rounded-lg font-bold shadow-comic hover:translate-y-0.5 hover:shadow-none transition-all"
           >
             Open Stream Studio
@@ -214,36 +219,45 @@ const App: React.FC = () => {
     const connected = params.get('connected');
     const error = params.get('connector_error');
     if (!connected && !error) return;
-    try {
-      window.opener.postMessage({ type: 'connector-oauth-result', connected, error }, window.location.origin);
-    } catch {
-      /* cross-origin opener; the opener's own polling will reconcile on close */
+    // Stream Studio on its own host opens this popup too (Drive saving): tell it as well.
+    // The payload is only a nudge — the opener re-reads its status from the server.
+    for (const target of STREAM_HOST_ON ? [window.location.origin, STREAM_ORIGIN] : [window.location.origin]) {
+      try {
+        window.opener.postMessage({ type: 'connector-oauth-result', connected, error }, target);
+      } catch {
+        /* cross-origin opener; the opener's own polling will reconcile on close */
+      }
     }
     window.close();
   }, []);
 
   // Standalone Stream Studio accounts (confined, and stream_studio is the ONLY active
-  // product) live at /live.html — send them there once instead of showing a suite they
-  // can't use. The ref guards against repeat assignments while the SPA stays mounted;
-  // /live.html is a separate entry point, so no redirect loop is possible. Admins are
-  // never gated (their probe may still be resolving, so the check stays in the deps).
+  // product) live in Stream Studio — send them there once (signed in, when it has its own
+  // host) instead of showing a suite they can't use. The ref guards against repeat
+  // assignments while the SPA stays mounted; Stream Studio is a separate entry point, so no
+  // redirect loop is possible. Admins are never gated (their probe may still be resolving,
+  // so the check stays in the deps).
   useEffect(() => {
     if (streamOnlyRedirectedRef.current) return;
     if (authLoading || !user || isAdmin) return;
     if (!allowedProducts) return; // unrestricted or still unknown
     if (allowedProducts.size === 1 && allowedProducts.has('stream_studio')) {
       streamOnlyRedirectedRef.current = true;
-      window.location.replace('/live.html');
+      void openLiveApp('/live.html', { replace: true });
     }
   }, [authLoading, user, isAdmin, allowedProducts]);
 
-  // Post-login hand-back: sub-apps (Stream Studio at /live.html) link here with
-  // ?next=<same-origin path> to attach the suite account, then come straight
-  // back. The target is remembered across the whole auth round trip
-  // (localStorage survives the magic-link tab) and expires after 15 minutes so
-  // a stale value can't ambush a later, unrelated sign-in.
+  // Post-login hand-back: sub-apps link here with ?next=<same-origin path> — or, with
+  // Stream Studio on its own host, ?next=https://stream.dreamstreamstudio.ai/#/<screen>
+  // ("Continue with DreamStream") — to attach the suite account, then come straight
+  // back (signed in, via the handoff, for Stream Studio). The target is remembered across
+  // the whole auth round trip (localStorage survives the magic-link tab) and expires after
+  // 15 minutes so a stale value can't ambush a later, unrelated sign-in.
   useEffect(() => {
     if (authLoading) return;
+    // An emailed or handoff sign-in link finishes in the /auth/callback handler, which
+    // follows its own `next` once the link is verified.
+    if (window.location.pathname === '/auth/callback') return;
     const params = new URLSearchParams(window.location.search);
     const next = params.get('next');
     if (!next || !isSafeNextPath(next)) return;
@@ -267,7 +281,8 @@ const App: React.FC = () => {
       localStorage.removeItem(POST_LOGIN_NEXT_KEY);
     } catch { /* storage unavailable */ }
     if (isSafeNextPath(saved.path) && Date.now() - (saved.at ?? 0) < 15 * 60_000) {
-      window.location.replace(saved.path);
+      if (isStreamUrl(saved.path)) void openLiveApp(saved.path, { replace: true });
+      else window.location.replace(saved.path);
     }
   }, [user]);
   // Which tab the auth page opens on: existing users sign in; everyone else can
@@ -334,7 +349,7 @@ const App: React.FC = () => {
 
   const clearAuthUrlArtifacts = () => {
     const url = new URL(window.location.href);
-    const authParams = ['code', 'type', 'token_hash', 'error', 'error_description', 'flow'];
+    const authParams = ['code', 'type', 'token_hash', 'error', 'error_description', 'flow', 'next'];
     authParams.forEach((key) => url.searchParams.delete(key));
     if (url.hash) url.hash = '';
     if (url.pathname === '/auth/callback') {
@@ -562,6 +577,8 @@ const App: React.FC = () => {
     const accessToken = hashParams.get('access_token');
     const refreshToken = hashParams.get('refresh_token');
     const authError = searchParams.get('error_description') || hashParams.get('error_description');
+    // A sign-in handoff from Stream Studio says where to go next: straight there once verified.
+    const nextAfterAuth = searchParams.get('next');
     const hasAuthIntent =
       url.pathname === '/auth/callback' ||
       Boolean(code || tokenHash || accessToken || authError);
@@ -602,6 +619,10 @@ const App: React.FC = () => {
         }
 
         if (!active) return;
+        if (type !== 'recovery' && nextAfterAuth && isSafeNextPath(nextAfterAuth) && !isStreamUrl(nextAfterAuth)) {
+          window.location.replace(nextAfterAuth);
+          return;
+        }
         setAuthCallbackStatus('success');
         setAuthCallbackFlow(type || 'magiclink');
         setAuthCallbackMessage(

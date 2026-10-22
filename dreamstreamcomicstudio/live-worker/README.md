@@ -1,6 +1,6 @@
-# dreamstream-live — DreamStream Live worker
+# dreamstream-live — Stream Studio's live worker
 
-The backend for **DreamStream Live** (Stream Studio): one Durable Object per event
+The backend for **Stream Studio** (`stream.dreamstreamstudio.ai`): one Durable Object per event
 (chat, lobby, presence, moderation, stream state) plus the R2 segment rail —
 the streamer's browser uploads short self-contained media segments, viewers pull
 them back through the Cloudflare cache. R2 has **zero egress fees**, so a
@@ -42,7 +42,7 @@ https://dreamstream-live.akhieleshsrirangam.workers.dev
 `live/config.ts`. Since 2026-10-22 that host only 301s to `dreamstreamstudio.ai`
 (`functions/_middleware.ts`), so the fallback serves just tabs opened before the switch;
 `ALLOWED_ORIGINS` keeps `https://comic2.pages.dev` for them until a later cleanup.
-Custom domains use same-origin `/live-api` (`dreamstreamstudio.ai/live-api/*`).
+Custom domains use same-origin `/live-api`: `stream.dreamstreamstudio.ai/live-api/*` (Stream Studio's own host) and `dreamstreamstudio.ai/live-api/*` (the old address, kept for installed apps and open tabs).
 
 If you move accounts or workers.dev subdomains, either update
 `FALLBACK_PAGES_LIVE_WORKER_BASE` in `live/config.ts` or set this in the frontend

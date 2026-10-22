@@ -19,9 +19,10 @@ import {
   type ProductAccessGrant,
   type ProductId
 } from '../../services/productAccess';
+import { streamAddressLabel } from '../../shared/streamHost';
 
 const STUDIO_BLURB: Record<ProductId, string> = {
-  stream_studio: 'Go-live streaming at /live.html — standalone accounts land there directly.',
+  stream_studio: `Go-live streaming and the baby monitor at ${streamAddressLabel()} — standalone accounts land there directly.`,
   comic_studio: 'Script-to-comic creation: dashboard, editors and the public library.',
   chat_studio: 'The AI chat workspace with 100+ models, widgets and dashboards.'
 };
@@ -129,7 +130,7 @@ export const ProductAccessPanel: React.FC = () => {
       <p className="text-xs text-slate-500">
         Onboard a user to a standalone studio (or revoke one). Accounts with <strong>no grants</strong> have
         default access to everything; <strong>any grant confines the account</strong> to exactly its active
-        studios. A user granted only Stream Studio is routed straight to /live.html.
+        studios. A user granted only Stream Studio is routed straight to {streamAddressLabel()}.
       </p>
 
       {/* Lookup */}

@@ -3,6 +3,8 @@
 // (GET /api/account/studios), so the two can never disagree.
 import React, { useEffect, useState } from 'react';
 import { fetchAccountAccess, onAccountAccessChange, type AccountAccess, type StudioAccess } from '@/services/studioAccessApi';
+import { openLiveApp, openMainApp } from '@/services/liveLink';
+import { isStreamUrl } from '@/shared/streamHost';
 import { useAccount } from '../account';
 import { Icon } from '../ui/icons';
 import { cx } from '../ui/primitives';
@@ -40,10 +42,25 @@ export function useAccountAccess(): AccountAccess | null | undefined {
   return data;
 }
 
-/** Opens a studio — Stream Studio routes stay in this app, the rest open the main app. */
-function go(href: string): void {
+/**
+ * Opens a studio — Stream Studio routes stay in this app ('/live#/monitor', or its own host's
+ * 'https://stream.dreamstreamstudio.ai/#/monitor'); the rest open the main app, signed in when
+ * Stream Studio is on its own host (services/liveLink.ts). mailto: and other links open as-is.
+ */
+export function go(href: string): void {
   if (href.startsWith('/live#')) {
     location.hash = href.slice('/live'.length);
+    return;
+  }
+  if (isStreamUrl(href)) {
+    const url = new URL(href);
+    if (url.origin !== location.origin) void openLiveApp(href);
+    else if (url.hash) location.hash = url.hash;
+    else location.assign(href);
+    return;
+  }
+  if (href.startsWith('/')) {
+    void openMainApp(href);
     return;
   }
   location.assign(href);

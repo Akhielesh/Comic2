@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker, { type BackendNamespace } from './proxy';
 import { buildBackendEnv, loadBackendEnv, type EnvDb } from './backendEnv';
 import { detectAgent } from './agent-gate';
-import { onRequest } from '../../functions/_middleware';
+import { createOnRequest, onRequest } from '../../functions/_middleware';
+import { STREAM_HOST_ON } from '../../shared/streamHost';
 
 const HUMAN = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 const env: Record<string, unknown> = { BACKEND_TARGET: 'origin', BACKEND_ORIGIN: 'https://backend.example' };
@@ -111,6 +112,151 @@ describe('Pages middleware', () => {
       const res = await onRequest({ request: new Request(`https://${host}/live`, { headers: { 'user-agent': HUMAN } }), next });
       expect(await res.text()).toBe('app');
     }
+  });
+});
+
+describe('Stream Studio host (stream.dreamstreamstudio.ai)', () => {
+  const STREAM = 'https://stream.dreamstreamstudio.ai';
+  // The Pages asset server, with its pretty URLs: /live.html answers 308 → /live.
+  const assetServer = () =>
+    vi.fn(async (input: Request | string | URL) => {
+      const u = new URL(input instanceof Request ? input.url : String(input));
+      if (u.pathname === '/live.html') return new Response(null, { status: 308, headers: { location: '/live' } });
+      if (u.pathname === '/live') return new Response('<live app>', { headers: { 'content-type': 'text/html' } });
+      return new Response('index', { headers: { 'content-type': 'text/html' } });
+    });
+  const setup = (streamHostOn: boolean) => {
+    const handler = createOnRequest({ streamHostOn });
+    const next = vi.fn(async () => new Response('app'));
+    const assets = assetServer();
+    const go = (u: string, ua = HUMAN, method = 'GET') =>
+      handler({ request: new Request(u, { method, headers: { 'user-agent': ua } }), next, env: { ASSETS: { fetch: assets } } });
+    /** Follow redirects through the middleware the way a browser would; fails on a loop. */
+    const land = async (u: string): Promise<{ url: string; res: Response; hops: number }> => {
+      let url = u;
+      for (let hops = 0; hops < 5; hops++) {
+        const res = await go(url);
+        const loc = res.headers.get('location');
+        if (res.status < 300 || res.status >= 400 || !loc) return { url, res, hops };
+        url = new URL(loc, url).toString();
+      }
+      throw new Error(`redirect loop from ${u}`);
+    };
+    return { go, land, next, assets };
+  };
+
+  it('serves the live app at / and on every page, without redirecting', async () => {
+    for (const on of [false, true]) {
+      const { go, next, assets } = setup(on);
+      for (const path of ['/', '/?e=evt_1', '/anything/deep', '/index.html', '/auth/callback?token_hash=h&type=magiclink']) {
+        const res = await go(`${STREAM}${path}`);
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe('<live app>');
+      }
+      expect(next).not.toHaveBeenCalled();
+      // Asked for /live first (pretty URL), never the redirecting /live.html.
+      expect(assets.mock.calls.every((c) => new URL((c[0] as Request).url).pathname === '/live')).toBe(true);
+    }
+  });
+
+  it('keeps old viewer, guest and studio links working there: /live… → / with the query', async () => {
+    const { go, land } = setup(false);
+    const viewer = await go(`${STREAM}/live.html?e=evt_1`);
+    expect(viewer.status).toBe(301);
+    expect(viewer.headers.get('location')).toBe(`${STREAM}/?e=evt_1`);
+    expect((await go(`${STREAM}/live`)).headers.get('location')).toBe(`${STREAM}/`);
+    expect((await go(`${STREAM}/live/?after=monitor`)).headers.get('location')).toBe(`${STREAM}/?after=monitor`);
+    const landed = await land(`${STREAM}/live.html?e=evt_1`);
+    expect(landed).toMatchObject({ url: `${STREAM}/?e=evt_1`, hops: 1 });
+    expect(await landed.res.text()).toBe('<live app>');
+  });
+
+  it('leaves files, the APIs and crawl files to Pages and the Worker routes', async () => {
+    const { go, next, assets } = setup(true);
+    for (const path of ['/assets/index-abc.js', '/live-sw.js', '/live.webmanifest', '/stream.webmanifest', '/stream-studio.svg', '/api/health', '/live-api/api/events/x', '/robots.txt', '/.well-known/security.txt']) {
+      expect(await (await go(`${STREAM}${path}`)).text()).toBe('app');
+    }
+    expect(assets).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(9);
+    // Not a page load: Pages answers it as before.
+    expect(await (await go(`${STREAM}/`, HUMAN, 'POST')).text()).toBe('app');
+  });
+
+  it('sends AI agents to the check-in on the same host (the gate is unchanged)', async () => {
+    const { go, assets } = setup(true);
+    const res = await go(`${STREAM}/`, 'GPTBot/1.2');
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${STREAM}/api/agent-gate?from=%2F`);
+    expect((await go(`${STREAM}/agents`)).headers.get('location')).toBe(`${STREAM}/api/agent-gate`);
+    expect(await (await go(`${STREAM}/robots.txt`, 'GPTBot/1.2')).text()).toBe('app');
+    expect(assets).not.toHaveBeenCalled();
+  });
+
+  it('redirects www.stream to the Stream Studio host', async () => {
+    const { go } = setup(false);
+    const res = await go('https://www.stream.dreamstreamstudio.ai/?e=evt_1');
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe(`${STREAM}/?e=evt_1`);
+  });
+
+  it('never passes on a redirect from the asset server (no rewrite loops)', async () => {
+    const handler = createOnRequest({ streamHostOn: true });
+    const fetch = vi.fn(async () => new Response(null, { status: 308, headers: { location: '/live' } }));
+    const res = await handler({ request: new Request(`${STREAM}/`, { headers: { 'user-agent': HUMAN } }), next: async () => new Response('app'), env: { ASSETS: { fetch } } });
+    expect(res.status).toBe(503);
+    expect(res.headers.get('location')).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('switch off: the apex serves /live, /live.html and viewer links exactly as before', async () => {
+    const { go, next } = setup(false);
+    for (const path of ['/live', '/live/', '/live.html', '/live.html?e=evt_1']) {
+      expect(await (await go(`https://dreamstreamstudio.ai${path}`)).text()).toBe('app');
+    }
+    expect(next).toHaveBeenCalledTimes(4);
+    expect((await go('https://comic2.pages.dev/live.html?e=evt_1')).headers.get('location')).toBe('https://dreamstreamstudio.ai/live.html?e=evt_1');
+    // The production export is the switch as committed.
+    const res = await onRequest({ request: new Request('https://dreamstreamstudio.ai/live.html?e=evt_1', { headers: { 'user-agent': HUMAN } }), next });
+    expect(res.status).toBe(STREAM_HOST_ON ? 301 : 200);
+  });
+
+  it('switch on: the apex app addresses move to the Stream Studio host, everything else stays', async () => {
+    const { go, land, next } = setup(true);
+    const cases: [string, string][] = [
+      ['/live', `${STREAM}/`],
+      ['/live/', `${STREAM}/`],
+      ['/live.html', `${STREAM}/`],
+      ['/live.html?e=evt_1', `${STREAM}/?e=evt_1`],
+      ['/live?after=monitor&token_hash=h&type=signup', `${STREAM}/?after=monitor&token_hash=h&type=signup`],
+    ];
+    for (const [path, to] of cases) {
+      const res = await go(`https://dreamstreamstudio.ai${path}`);
+      expect(res.status).toBe(301);
+      expect(res.headers.get('location')).toBe(to);
+      expect(res.headers.get('cache-control')).toBe('public, max-age=86400');
+    }
+    // Old installed apps, service workers and open tabs keep their APIs and files on the apex.
+    for (const path of ['/', '/models', '/live-api/api/events/x', '/api/health', '/assets/live-abc.js', '/live-sw.js', '/live.webmanifest', '/livestream', '/live.html?legacy=1']) {
+      expect(await (await go(`https://dreamstreamstudio.ai${path}`)).text()).toBe('app');
+    }
+    // The Pages alias goes straight to the new host (one hop) for app links, to the apex otherwise.
+    expect((await go('https://comic2.pages.dev/live.html?e=evt_1')).headers.get('location')).toBe(`${STREAM}/?e=evt_1`);
+    expect((await go('https://www.dreamstreamstudio.ai/live')).headers.get('location')).toBe(`${STREAM}/`);
+    expect((await go('https://comic2.pages.dev/models')).headers.get('location')).toBe('https://dreamstreamstudio.ai/models');
+    // No loops: every old address lands on the app in one hop.
+    for (const start of ['https://dreamstreamstudio.ai/live.html?e=evt_1', 'https://comic2.pages.dev/live', 'https://www.stream.dreamstreamstudio.ai/live.html']) {
+      const landed = await land(start);
+      expect(landed.res.status).toBe(200);
+      expect(landed.hops).toBeLessThanOrEqual(2);
+    }
+    expect(next.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it('switch on: AI agents asking for /live follow the move and are gated on the new host', async () => {
+    const { go } = setup(true);
+    const res = await go('https://dreamstreamstudio.ai/live', 'ClaudeBot/1.0');
+    expect(res.headers.get('location')).toBe(`${STREAM}/`);
+    expect((await go(`${STREAM}/`, 'ClaudeBot/1.0')).headers.get('location')).toBe(`${STREAM}/api/agent-gate?from=%2F`);
   });
 });
 

@@ -4,8 +4,10 @@
  * once the app is added to the Home Screen — Apple's rule for web push).
  */
 
+import { LIVE_SW_SCOPE } from '../host';
+
 export const SW_URL = '/live-sw.js';
-export const SW_SCOPE = '/live';
+export const SW_SCOPE = LIVE_SW_SCOPE; // '/' on Stream Studio's own host (live/host.ts)
 
 export function pushSupported(): boolean {
   return typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;

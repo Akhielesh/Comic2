@@ -14,6 +14,9 @@ import {
 } from '../account';
 import { Turnstile, resetTurnstile } from '@/components/Turnstile';
 import { turnstileEnabled } from '@/services/clientConfig';
+import { continueWithDreamStream, mainAppUrl } from '@/services/liveLink';
+import { STREAM_HOST_ON, screenOfHash } from '@/shared/streamHost';
+import { ON_STREAM_HOST } from '../host';
 import { Icon } from '../ui/icons';
 import { Btn, cx, type PushToast } from '../ui/primitives';
 
@@ -214,7 +217,7 @@ function AuthSheet({
           {mode === 'create' && (
             <label className="auth-agree">
               <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-              <span>I agree to the <a href="/?view=terms" target="_blank" rel="noopener">Terms</a> and <a href="/?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+              <span>I agree to the <a href={mainAppUrl('/?view=terms')} target="_blank" rel="noopener">Terms</a> and <a href={mainAppUrl('/?view=privacy')} target="_blank" rel="noopener">Privacy Policy</a>.</span>
             </label>
           )}
         </div>
@@ -226,6 +229,18 @@ function AuthSheet({
         <Btn variant="solid" size="lg" type="submit" disabled={busy} className="auth-submit">
           {busy ? 'One moment…' : mode === 'signin' ? 'Sign in' : mode === 'create' ? 'Create account' : mode === 'code' ? 'Unlock Stream Studio' : 'Send reset link'}
         </Btn>
+
+        {mode === 'signin' && ON_STREAM_HOST && STREAM_HOST_ON && (
+          // Stream Studio has its own address, so its sign-in is separate from dreamstreamstudio.ai's.
+          // Already signed in there? One tap brings that sign-in here (POST /api/auth/handoff).
+          <div className="auth-continue">
+            <span className="faint">or</span>
+            <Btn variant="soft" size="lg" type="button" icon="user" className="auth-submit" onClick={() => continueWithDreamStream(screenOfHash(location.hash) ?? '')}>
+              Continue with DreamStream
+            </Btn>
+            <span className="faint auth-continue-note">Signed in at dreamstreamstudio.ai? You’ll be back here, signed in.</span>
+          </div>
+        )}
 
         <div className="auth-switch">
           {mode === 'signin' && (

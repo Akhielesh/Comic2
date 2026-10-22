@@ -50,7 +50,7 @@ of proactivity** layered on the existing Chat Studio.
 ## Where this fits honestly (focus statement)
 
 The platform today spans Comic Studio, Chat Studio (100+ tools, artifacts,
-dashboards), DreamStream Live, LearnHub, Model Bench, ventures specs, and four
+dashboards), Stream Studio, LearnHub, Model Bench, ventures specs, and four
 Cloudflare workers (Code Studio and its sandbox worker were retired on 2026-10-22). That is **real sprawl for the team size**,
 and the owner has asked for honesty about it, so:
 

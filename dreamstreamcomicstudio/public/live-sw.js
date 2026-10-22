@@ -11,6 +11,9 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 const STATE_CACHE = 'ds-sw-state';
 const CAMERA_KEY = '/__ds/camera';
 const CAMERA_MAX_MS = 24 * 60 * 60 * 1000;
+/* The app's own pages: under this worker's scope — /live on dreamstreamstudio.ai, everything on
+ * Stream Studio's own host (stream.dreamstreamstudio.ai, scope '/'). */
+const isAppPage = (u) => new URL(u).pathname.startsWith(new URL(self.registration.scope).pathname);
 
 self.addEventListener('message', (event) => {
   const d = event.data || {};
@@ -23,7 +26,7 @@ self.addEventListener('message', (event) => {
 async function isCameraDevice() {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   if (all.some((c) => /#\/monitor\/[0-9a-f-]{36}\/camera/.test(c.url))) return true;
-  if (!all.some((c) => new URL(c.url).pathname.startsWith('/live'))) return false;
+  if (!all.some((c) => isAppPage(c.url))) return false;
   try {
     const hit = await (await caches.open(STATE_CACHE)).match(CAMERA_KEY);
     return !!hit && Date.now() - Number(await hit.text()) < CAMERA_MAX_MS;
@@ -103,7 +106,7 @@ self.addEventListener('notificationclick', (event) => {
     (async () => {
       const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const c of all) {
-        if (new URL(c.url).pathname.startsWith('/live')) {
+        if (isAppPage(c.url)) {
           await c.focus();
           if ('navigate' in c) return c.navigate(target.href);
           return undefined;

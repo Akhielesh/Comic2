@@ -1,4 +1,4 @@
-/** Tiny metric helpers for the live studio/viewer overlays. */
+/** Tiny metric helpers for the Stream Studio host and viewer overlays. */
 
 /** Exponential moving average — smooths jittery per-segment measurements. */
 export class Ema {
