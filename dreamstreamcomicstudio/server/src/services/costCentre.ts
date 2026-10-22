@@ -757,7 +757,9 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
       id: 'stream',
       label: 'Stream Studio & Baby monitor',
       costUsd: 0,
-      requests: liveWorker ? liveWorker.requests : monthlyRequests.get('stream_studio') || 0,
+      // Without Cloudflare analytics there is no request count: model_usage_monthly's
+      // 'stream_studio' row was Code Studio's model calls (mislabelled), not Stream Studio.
+      requests: liveWorker ? liveWorker.requests : 0,
       users: rows.liveProfiles,
       revenueUsd: null,
       note: liveWorker

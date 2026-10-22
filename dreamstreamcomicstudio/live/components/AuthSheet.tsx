@@ -110,7 +110,11 @@ function AuthSheet({
         }
         const r = await createAccount({ name, email, password, dob, code });
         if (!r.ok) setErr(r.error || 'Could not create the account.');
-        else if (r.confirmEmail) setAwaiting({ email: email.trim(), password, fresh: true });
+        else if (r.confirmEmail) {
+          // A note means the account exists but the email didn't go out: resend right away.
+          setAwaiting({ email: email.trim(), password, fresh: !r.note });
+          if (r.note) push(r.note, { icon: 'alert', duration: 9000 });
+        }
         else push('Welcome to Stream Studio!', { icon: 'sparkles' });
       } else if (mode === 'code') {
         const r = await redeemWelcomeCode(code, name);

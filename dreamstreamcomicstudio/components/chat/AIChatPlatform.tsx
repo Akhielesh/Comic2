@@ -1201,9 +1201,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   let resolvedView: StudioView = view === 'chat' && !activeSession ? 'home' : view;
   // Gallery is an admin-only surface — a non-admin who deep-links ?cview=gallery falls back home.
   if (resolvedView === 'gallery' && !isAdmin) resolvedView = activeSession ? 'chat' : 'home';
+  // One name across every studio (PATCH /api/account/name keeps display_name current).
+  const meta = user?.user_metadata as Record<string, unknown> | undefined;
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
   const accountName =
-    (user?.user_metadata?.full_name as string | undefined) ||
-    (user?.user_metadata?.name as string | undefined) ||
+    str(meta?.display_name) ||
+    str([meta?.first_name, meta?.last_name].filter((v) => typeof v === 'string' && v.trim()).join(' ')) ||
+    str(meta?.full_name) ||
+    str(meta?.name) ||
     user?.email?.split('@')[0] ||
     undefined;
 
