@@ -2,8 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { isMissed } from '../views/callsBadge';
 import { candidateType, classifyFailure, encodingFor, failureText, hasTurnServer, joinedAfter, preferH264, rateQuality, videoBitrate } from './callMesh';
-import { answerFromHash, callFailText, deriveActiveState, familyName, withMe } from './callCenter';
-import type { Call, CallRecord } from './types';
+import { answerFromHash, callFailText, deriveActiveState, familyName, recentsOf, ringAsCall, withMe } from './callCenter';
+import { badgeFor, familyMap, needsConfirm, recentPeople } from '../views/calls/people';
+import { callErrorText, ctxText, type Call, type CallRecord } from './types';
 
 const baseCall = (over: Partial<Call> = {}): Call => ({
   id: 'c1', from: { uid: 'mom', name: 'Alice', label: 'Mom' }, video: true, invited: ['gpa'], declined: [], at: 1, answeredAt: null,
@@ -137,5 +138,82 @@ describe('call history', () => {
     expect(familyName({ name: 'Nursery', baby: 'Aria' })).toBe('Aria’s family');
     expect(familyName({ name: 'Grandma’s house', baby: null })).toBe('Grandma’s house');
     expect(familyName(null)).toBe('Family');
+  });
+});
+
+describe('direct calls (anyone on Stream Studio)', () => {
+  const NID = '11111111-2222-4333-8444-555555555555';
+  const rec = (over: Partial<CallRecord>): CallRecord => ({
+    id: 'c', from: { uid: 'sam', name: 'Sam', label: null }, invited: ['me'], joined: [{ uid: 'sam', name: 'Sam' }],
+    video: true, at: 1, secs: 0, answered: false, why: 'no_answer', ...over,
+  });
+  const nurseries = [{ id: NID, name: 'Nursery', baby_name: 'Aria' }, { id: 'n2', name: 'Lake house', baby_name: null }];
+  const people = {
+    [NID]: [
+      { user_id: 'me', display_name: 'Alice', role: 'parent' as const, label: 'Mom', is_owner: true, is_me: true },
+      { user_id: 'gma', display_name: 'June', role: 'caregiver' as const, label: 'Grandma', is_owner: false, is_me: false },
+    ],
+    n2: [{ user_id: 'gma', display_name: 'June', role: 'viewer' as const, label: 'Nana', is_owner: false, is_me: false }],
+  };
+
+  it('“Answer” on a direct call’s notification: #/call/d/<call> → its room’s line', () => {
+    expect(answerFromHash('#/call/d/0123456789abcdef?answer=1')).toEqual({ nid: 'd:0123456789abcdef', id: '0123456789abcdef' });
+    expect(answerFromHash('#/call/d/0123456789abcdef')).toBeNull();
+    expect(answerFromHash('#/call/x/0123456789abcdef?answer=1')).toBeNull();
+  });
+
+  it('recents: family and direct calls merged, newest first, each call once', () => {
+    const family = [{ ...rec({ id: 'a', at: 5 }), nid: NID, nursery: 'Aria’s family' }, { ...rec({ id: 'b', at: 1 }), nid: NID, nursery: 'Aria’s family' }];
+    const direct = [{ ...rec({ id: 'c', at: 3 }), nid: 'direct', nursery: 'Stream Studio' }, { ...rec({ id: 'a', at: 5 }), nid: 'direct', nursery: 'Stream Studio' }];
+    expect(recentsOf([family, direct]).map((r) => `${r.id}:${r.nid}`)).toEqual(['a:direct', 'c:direct', 'b:' + NID]);
+    expect(recentsOf([family, direct], 2)).toHaveLength(2);
+  });
+
+  it('a missed direct call counts like a family one', () => {
+    expect(isMissed(rec({}), 'me')).toBe(true);
+    expect(isMissed(rec({ why: 'declined' }), 'me')).toBe(false);
+    expect(isMissed(rec({ answered: true, why: 'done', joined: [{ uid: 'sam', name: 'Sam' }, { uid: 'me', name: 'Alice' }] }), 'me')).toBe(false);
+  });
+
+  it('your family: everyone sharing a nursery (the first one wins), never you', () => {
+    const fam = familyMap(nurseries, people);
+    expect([...fam.keys()]).toEqual(['gma']);
+    expect(fam.get('gma')).toMatchObject({ label: 'Grandma', nid: NID, where: 'Aria’s family' });
+    expect(badgeFor('gma', fam)).toEqual({ family: true, text: 'In Aria’s family' });
+    expect(badgeFor('sam', fam)).toEqual({ family: false, text: 'Stream Studio member' });
+  });
+
+  it('who a recent call was with, and who to ring back', () => {
+    const names: Record<string, string> = { sam: 'Sam P.' };
+    const nameOf = (u: string) => names[u] ?? null;
+    // You called Sam and he never picked up: his name is remembered from when you called.
+    expect(recentPeople(rec({ from: { uid: 'me', name: 'Alice', label: null }, invited: ['sam'], joined: [{ uid: 'me', name: 'Alice' }] }), 'me', nameOf)).toEqual({ names: ['Sam P.'], back: [{ uid: 'sam', name: 'Sam P.' }] });
+    expect(recentPeople(rec({ from: { uid: 'me', name: 'Alice', label: null }, invited: ['zed'] }), 'me', nameOf).names).toEqual(['Someone']);
+    expect(recentPeople(rec({}), 'me', () => null)).toEqual({ names: ['Sam'], back: [{ uid: 'sam', name: 'Sam' }] });
+  });
+
+  it('checks before a first call to someone outside your family', () => {
+    const family = familyMap(nurseries, people);
+    const base = { family, favs: [], log: [] as CallRecord[], me: 'me', confirmed: new Set<string>() };
+    expect(needsConfirm('sam', base)).toBe(true);
+    expect(needsConfirm('gma', base)).toBe(false);
+    expect(needsConfirm('sam', { ...base, confirmed: new Set(['sam']) })).toBe(false);
+    expect(needsConfirm('sam', { ...base, favs: [{ uid: 'sam', name: 'Sam', at: 1 }] })).toBe(false);
+    expect(needsConfirm('sam', { ...base, log: [rec({})] })).toBe(false); // Sam called you before
+    expect(needsConfirm('sam', { ...base, log: [rec({ from: { uid: 'me', name: 'Alice', label: null }, invited: ['sam'] })] })).toBe(false);
+  });
+
+  it('says why a direct call can’t go through, naming them', () => {
+    expect(callErrorText('unavailable', 'Sam')).toMatch(/^Sam can’t be reached right now/);
+    expect(callErrorText('restricted', 'Sam')).toBe('Sam only takes calls from people in their nurseries.');
+    expect(callErrorText('slow_down')).toMatch(/wait a few minutes/);
+    expect(callErrorText('busy', 'Sam')).toBe('You’re already in a call on this device.');
+  });
+
+  it('a direct ring is shown at once as a call for you, labelled from your family or as someone else', () => {
+    const ring = { id: 'd1', from: { uid: 'sam', name: 'Sam' }, video: true, at: 9, ticket: 't', ctx: { family: false, label: null, where: null } };
+    expect(ringAsCall(ring, 'me')).toMatchObject({ id: 'd1', from: { uid: 'sam', name: 'Sam', label: null }, invited: ['me'], parts: [], answeredAt: null, ended: null });
+    expect(ctxText(ring.ctx)).toBe('Stream Studio member · not in your family');
+    expect(ctxText({ family: true, label: 'Grandma', where: 'Aria’s family' })).toBe('Aria’s family');
   });
 });

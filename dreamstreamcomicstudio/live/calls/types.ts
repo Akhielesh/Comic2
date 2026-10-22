@@ -1,5 +1,7 @@
 // Family calls — the shapes the nursery room sends (mirror of
-// live-worker/src/familyCalls.ts).
+// live-worker/src/familyCalls.ts), and for direct calls (anyone on Stream
+// Studio) the shapes a member's line sends (live-worker/src/userLine.ts). A
+// direct call's own room speaks the nursery line protocol (LineMsg).
 
 export interface CallPerson {
   uid: string;
@@ -57,7 +59,7 @@ export interface CallRecord {
   stats?: ({ uid: string } & CallStat)[];
 }
 
-export type CallError = 'busy' | 'nobody' | 'ended' | 'full' | 'not_invited' | 'too_many' | 'push';
+export type CallError = 'busy' | 'nobody' | 'ended' | 'full' | 'not_invited' | 'too_many' | 'push' | 'unavailable' | 'restricted' | 'slow_down';
 
 /** Room → a call line. */
 export type LineMsg =
@@ -104,4 +106,70 @@ export const CALL_ERROR_TEXT: Record<CallError, string> = {
   not_invited: 'That call wasn’t for you.',
   too_many: 'Too many calls are going on in this nursery right now — try again in a moment.',
   push: 'This browser’s notification service isn’t supported for ringing.',
+  unavailable: 'They can’t be reached right now — Stream Studio isn’t open on any of their devices. Try again later.',
+  restricted: 'They only take calls from people in their nurseries.',
+  slow_down: 'You’ve placed a lot of calls just now — wait a few minutes and try again.',
 };
+
+/** The call errors that name the person (“Sam can’t be reached right now”). */
+export function callErrorText(error: CallError, who?: string | null): string {
+  if (who && error === 'unavailable') return `${who} can’t be reached right now — Stream Studio isn’t open on any of their devices. Try again later.`;
+  if (who && error === 'restricted') return `${who} only takes calls from people in their nurseries.`;
+  return CALL_ERROR_TEXT[error] ?? 'The call couldn’t connect.';
+}
+
+/* ------------------------------------------------------- direct calls */
+
+/** How a direct call reads on the ring screen: from your family, or someone else on Stream Studio. */
+export interface DirectCtx {
+  family: boolean;
+  /** Their label in a nursery you share ("Grandma"). */
+  label: string | null;
+  /** Which family ("Aria’s family"). */
+  where: string | null;
+}
+
+export const NOT_FAMILY = 'Stream Studio member · not in your family';
+export const ctxText = (c: DirectCtx | null | undefined): string => (c?.family ? c.where || 'Your family' : NOT_FAMILY);
+
+/** A direct call ringing for you: the ticket lets this device into the call's room. */
+export interface DirectRing {
+  id: string;
+  from: { uid: string; name: string };
+  video: boolean;
+  at: number;
+  ticket: string;
+  ctx: DirectCtx;
+}
+
+export interface PersonRec {
+  uid: string;
+  name: string;
+  at: number;
+}
+
+/** Who can call you directly. */
+export type CallWho = 'everyone' | 'family';
+
+/** Your line → your app. */
+export type UserLineMsg =
+  | {
+      t: 'hello';
+      you: { sid: string; uid: string; name: string };
+      vapid: string | null;
+      ringing: DirectRing[];
+      log: CallRecord[];
+      favs: PersonRec[];
+      blocked: PersonRec[];
+      prefs: { who: CallWho };
+    }
+  | { t: 'dcall_ring'; ring: DirectRing }
+  /** Picked up on another of your devices, declined, or over: stop ringing. */
+  | { t: 'dcall_update'; id: string; stop?: boolean }
+  | { t: 'dcall_started'; ref: string; id: string; ticket: string; status: 'ringing' }
+  | { t: 'dcall_invited'; id: string; status: 'ringing' | 'unavailable' | 'restricted' | 'slow_down' }
+  | { t: 'dcall_state'; favs: PersonRec[]; blocked: PersonRec[]; prefs: { who: CallWho } }
+  | { t: 'call_err'; error: CallError; ref?: string; id?: string }
+  | { t: 'call_log'; rec: CallRecord }
+  | { t: 'error'; code: string; msg: string }
+  | { t: 'pong'; at?: number };

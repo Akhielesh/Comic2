@@ -138,7 +138,14 @@ export class CallBook {
     return due.length ? Math.min(...due) : null;
   }
 
-  start(caller: CallPerson & { sid: string }, to: string[], video: boolean, id: string, now: number): Call | { error: CallError } {
+  /**
+   * Place a call. `pending`: the caller isn't connected to the room yet (a direct
+   * call's room is made before the caller's app reaches it) — their place starts
+   * as "lost the room", so nobody offers or relays to it, and if they never
+   * arrive the call ends as cancelled after the usual grace. Their join swaps
+   * in the real connection.
+   */
+  start(caller: CallPerson & { sid: string }, to: string[], video: boolean, id: string, now: number, opts: { pending?: boolean } = {}): Call | { error: CallError } {
     if (this.calls.some((c) => c.parts.some((p) => p.sid === caller.sid))) return err('busy');
     const invited = [...new Set(to.filter((u) => typeof u === 'string' && u && u !== caller.uid))].slice(0, MAX_INVITED);
     if (!invited.length) return err('nobody');
@@ -151,7 +158,7 @@ export class CallBook {
       declined: [],
       at: now,
       answeredAt: null,
-      parts: [{ uid: caller.uid, name: caller.name, label: caller.label, sid: caller.sid, at: now, mic: true, cam: video }],
+      parts: [{ uid: caller.uid, name: caller.name, label: caller.label, sid: caller.sid, at: now, mic: true, cam: video, ...(opts.pending ? { gone: now } : {}) }],
       ever: { [caller.uid]: caller.name },
       ended: null,
     };
@@ -288,6 +295,14 @@ export class CallBook {
     return true;
   }
 
+  /** End a call that's still ringing or on (e.g. nobody it was for could be rung). */
+  endCall(id: string, why: CallEndWhy, now: number): Call | null {
+    const call = this.get(id);
+    if (!call || call.ended) return null;
+    this.end(call, why, now);
+    return call;
+  }
+
   /** Drop finished calls from the book (after they've been announced and logged). */
   sweep(): Call[] {
     const done = this.calls.filter((c) => c.ended);
@@ -295,10 +310,10 @@ export class CallBook {
     return done;
   }
 
-  /** Signaling may only flow between two devices in the same call. */
+  /** Signaling may only flow between two devices in the same call (both in the room). */
   canRelay(id: string, fromSid: string, toSid: string): boolean {
     const call = this.get(id);
-    return !!call && !call.ended && fromSid !== toSid && call.parts.some((p) => p.sid === fromSid) && call.parts.some((p) => p.sid === toSid && p.gone == null);
+    return !!call && !call.ended && fromSid !== toSid && call.parts.some((p) => p.sid === fromSid && p.gone == null) && call.parts.some((p) => p.sid === toSid && p.gone == null);
   }
 
   private end(call: Call, why: CallEndWhy, now: number): void {

@@ -143,15 +143,25 @@ export const FAST_PING_MS = 10_000;
 export const PONG_WAIT_MS = 10_000;
 const PING = '{"t":"ping"}';
 
-export function openMonitorSocket(
-  nid: string,
-  mode: MonMode | 'admin' | 'line',
-  onMsg: (m: MonServerMsg) => void,
+/** The first frame (a member token, a guest pass or a call ticket) — or why there can't be one. */
+export type AuthFrame = { frame: Record<string, unknown>; guest?: boolean } | { error: string };
+
+/**
+ * A realtime socket to one of the live Worker's rooms (a nursery, a member's
+ * call line, a direct call): authenticates in the first frame, keeps itself
+ * alive (ping + watchdog, faster while ringing or in a call), and reconnects —
+ * re-authenticating with a fresh frame every time — until it's told to stop.
+ */
+export function openLiveSocket<M extends { t: string }>(
+  path: string,
+  auth: () => Promise<AuthFrame>,
+  onMsg: (m: M) => void,
   onBinary: (data: Blob) => void,
   onStatus: (s: MonSocketStatus, detail?: string) => void,
-  opts: { fast?: boolean } = {},
+  opts: { fast?: boolean; onFinal?: (code: number, guest: boolean) => void } = {},
 ): MonitorSocket {
   let ws: WebSocket | null = null;
+  let usedGuest = false;
   let closedByUs = false;
   let attempts = 0;
   let lastError: string | undefined;
@@ -221,8 +231,7 @@ export function openMonitorSocket(
     stopTimers();
     if (closedByUs) return;
     if (FINAL.has(code) && code !== 4001) {
-      // A removed or expired guest pass is gone for good on this device.
-      if (guest && code === 4004) clearGuest(nid);
+      opts.onFinal?.(code, guest);
       onStatus('closed', lastError);
       return;
     }
@@ -252,31 +261,24 @@ export function openMonitorSocket(
         onStatus('reconnecting');
         retryIn(0);
       }
-    } else lost(1006, mode === 'viewer' && !!loadGuest(nid));
+    } else lost(1006, usedGuest);
   };
 
   const connect = async () => {
     const my = ++gen;
     onStatus(attempts === 0 ? 'connecting' : 'reconnecting');
-    // A guest pass for this nursery wins on the watch screen; members otherwise.
-    const guest = mode === 'viewer' ? loadGuest(nid) : null;
-    const token = guest ? null : await accessToken();
+    const a = await auth();
     if (my !== gen || closedByUs) return;
-    if (!token && !guest) {
-      onStatus('closed', 'Sign in to use the baby monitor.');
+    if ('error' in a) {
+      onStatus('closed', a.error);
       return;
     }
-    const dev = getDevice();
-    const sock = new WebSocket(`${WORKER_BASE.replace(/^http/, 'ws')}/api/monitor/${nid}/ws`);
+    usedGuest = !!a.guest;
+    const sock = new WebSocket(`${WORKER_BASE.replace(/^http/, 'ws')}${path}`);
     ws = sock;
     sock.binaryType = 'blob';
     sock.onopen = () => {
-      // The camera phone's time zone sets the nursery's (reports, night vs nap).
-      let tz: string | undefined;
-      try {
-        tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      } catch { /* no Intl zone */ }
-      sock.send(JSON.stringify(guest ? { t: 'auth', guest: guest.token, mode, dev: dev.id, dn: dev.name } : { t: 'auth', token, mode, dev: dev.id, dn: dev.name, tz }));
+      sock.send(JSON.stringify(a.frame));
       schedulePing();
     };
     sock.onmessage = (ev) => {
@@ -288,7 +290,7 @@ export function openMonitorSocket(
         return;
       }
       try {
-        const m = JSON.parse(ev.data) as MonServerMsg;
+        const m = JSON.parse(ev.data) as M & { msg?: string };
         if (m.t === 'hello') {
           attempts = 0;
           onStatus('connected');
@@ -300,7 +302,7 @@ export function openMonitorSocket(
     sock.onclose = (ev) => {
       if (ws !== sock) return;
       ws = null;
-      lost(ev.code, !!guest);
+      lost(ev.code, usedGuest);
     };
   };
 
@@ -362,6 +364,76 @@ export function openMonitorSocket(
       else retryIn(0);
     },
   };
+}
+
+/** A nursery's room: the member's own token (or a guest pass, on the watch screen) in the first frame. */
+export function openMonitorSocket(
+  nid: string,
+  mode: MonMode | 'admin' | 'line',
+  onMsg: (m: MonServerMsg) => void,
+  onBinary: (data: Blob) => void,
+  onStatus: (s: MonSocketStatus, detail?: string) => void,
+  opts: { fast?: boolean } = {},
+): MonitorSocket {
+  return openLiveSocket<MonServerMsg>(
+    `/api/monitor/${nid}/ws`,
+    async () => {
+      const dev = getDevice();
+      // A guest pass for this nursery wins on the watch screen; members otherwise.
+      const guest = mode === 'viewer' ? loadGuest(nid) : null;
+      if (guest) return { frame: { t: 'auth', guest: guest.token, mode, dev: dev.id, dn: dev.name }, guest: true };
+      const token = await accessToken();
+      if (!token) return { error: 'Sign in to use the baby monitor.' };
+      // The camera phone's time zone sets the nursery's (reports, night vs nap).
+      let tz: string | undefined;
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch { /* no Intl zone */ }
+      return { frame: { t: 'auth', token, mode, dev: dev.id, dn: dev.name, tz } };
+    },
+    onMsg,
+    onBinary,
+    onStatus,
+    {
+      ...opts,
+      // A removed or expired guest pass is gone for good on this device.
+      onFinal: (code, guest) => {
+        if (guest && code === 4004) clearGuest(nid);
+      },
+    },
+  );
+}
+
+/** A member's personal line for direct calls (live-worker userLine.ts): their own token in the first frame. */
+export function openUserLineSocket<M extends { t: string }>(uid: string, onMsg: (m: M) => void, onStatus: (s: MonSocketStatus, detail?: string) => void, opts: { fast?: boolean } = {}): MonitorSocket {
+  return openLiveSocket<M>(
+    `/api/calls/u/${uid}/ws`,
+    async () => {
+      const token = await accessToken();
+      if (!token) return { error: 'Sign in to make calls.' };
+      const dev = getDevice();
+      return { frame: { t: 'auth', token, dev: dev.id, dn: dev.name } };
+    },
+    onMsg,
+    () => undefined,
+    onStatus,
+    opts,
+  );
+}
+
+/** A direct call's own room (live-worker callRoom.ts): the ticket your line handed you in the first frame. */
+export function openCallRoomSocket<M extends { t: string }>(id: string, ticket: string, onMsg: (m: M) => void, onStatus: (s: MonSocketStatus, detail?: string) => void, opts: { fast?: boolean } = {}): MonitorSocket {
+  return openLiveSocket<M>(
+    `/api/calls/c/${id}/ws`,
+    async () => {
+      const dev = getDevice();
+      return { frame: { t: 'auth', ticket, dev: dev.id, dn: dev.name } };
+    },
+    onMsg,
+    () => undefined,
+    onStatus,
+    opts,
+  );
 }
 
 /**

@@ -22,20 +22,31 @@
  *   GET  /api/monitor/:nurseryId/export    CSV history (Authorization: Bearer; parents & caregivers)
  *   POST /api/monitor/:nurseryId/guest     share link + passcode → guest pass (no account)
  *
+ * Direct calls (Calls → search → call anyone on Stream Studio):
+ *   GET  /api/calls/u/:userId/ws           WebSocket → that member's UserLine (auth = first frame, own token)
+ *   GET  /api/calls/c/:callId/ws           WebSocket → the call's CallRoom (auth = first frame, call ticket)
+ *   (Nothing else under /api/calls: the Durable Objects' /x/* endpoints are internal.)
+ *
  * Creating an event requires a signed-in Stream Studio member (welcome-code
  * gated; verified against Supabase with the caller's own token). Watching
  * never needs an account.
  */
 
+import { CallRoom } from './callRoom';
+import { userLineName } from './directCalls';
 import { EventRoom } from './eventRoom';
 import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
 import { bearerFrom, verifyMember } from './supabaseAuth';
+import { UserLine } from './userLine';
 
-export { EventRoom, MonitorRoom };
+export { CallRoom, EventRoom, MonitorRoom, UserLine };
 
 export interface Env {
   EVENT_ROOM: DurableObjectNamespace;
   MONITOR_ROOM: DurableObjectNamespace;
+  /** Direct calls: one line per member, one room per call. */
+  USER_LINE: DurableObjectNamespace;
+  CALL_ROOM: DurableObjectNamespace;
   LIVE_BUCKET: R2Bucket;
   ALLOWED_ORIGINS: string;
   SUPABASE_URL?: string;
@@ -136,6 +147,25 @@ export default {
         }
       } catch (err) {
         console.error('monitor route error', err);
+        return withCors(json({ error: 'internal error' }, 500), cors);
+      }
+      return withCors(json({ error: 'not found' }, 404), cors);
+    }
+
+    // ---------------------------------------------------------- direct calls
+    // Strict: a member's line or a call's room, sockets only.
+    if (pathname.startsWith('/api/calls/')) {
+      const line = pathname.match(/^\/api\/calls\/u\/([0-9a-f-]{36})\/ws$/);
+      const call = pathname.match(/^\/api\/calls\/c\/([0-9a-f]{16})\/ws$/);
+      try {
+        if (line && UUID_RE.test(line[1]) && env.USER_LINE) {
+          return env.USER_LINE.get(env.USER_LINE.idFromName(userLineName(line[1]))).fetch(new Request(`https://line.internal/ws?uid=${line[1]}`, req));
+        }
+        if (call && env.CALL_ROOM) {
+          return env.CALL_ROOM.get(env.CALL_ROOM.idFromName(call[1])).fetch(new Request(`https://call.internal/ws?id=${call[1]}`, req));
+        }
+      } catch (err) {
+        console.error('calls route error', err);
         return withCors(json({ error: 'internal error' }, 500), cors);
       }
       return withCors(json({ error: 'not found' }, 404), cors);

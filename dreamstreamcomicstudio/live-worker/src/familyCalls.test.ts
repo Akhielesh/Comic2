@@ -202,6 +202,40 @@ describe('CallBook', () => {
     ]);
   });
 
+  describe('a pending caller (a direct call placed before the caller reaches its room)', () => {
+    it('nobody offers or relays to the caller until they arrive', () => {
+      const book = new CallBook();
+      const call = ok(book.start({ ...mom, sid: 'pending' }, ['u-gma'], true, 'd1', T, { pending: true }));
+      expect(call.parts[0]).toMatchObject({ uid: 'u-mom', gone: T });
+      ok(book.join('d1', grandma, true, T + 500));
+      // Grandma picked up first: her signals can't reach a caller who isn't there.
+      expect(book.canRelay('d1', 's-gma', 'pending')).toBe(false);
+      expect(book.canRelay('d1', 'pending', 's-gma')).toBe(false);
+    });
+
+    it('ends as cancelled after the grace if the caller never connects', () => {
+      const book = new CallBook();
+      ok(book.start({ ...mom, sid: 'pending' }, ['u-gma'], true, 'd1', T, { pending: true }));
+      expect(book.nextDeadline()).toBe(T + LINE_GRACE_MS);
+      expect(book.expire(T + LINE_GRACE_MS - 1)).toEqual([]);
+      const [c] = book.expire(T + LINE_GRACE_MS);
+      expect(c.ended).toEqual({ at: T + LINE_GRACE_MS, why: 'cancelled' });
+      expect(missedBy(c)).toEqual(['u-gma']);
+    });
+
+    it('the caller’s join swaps in the real connection and leaves answeredAt alone', () => {
+      const book = new CallBook();
+      ok(book.start({ ...mom, sid: 'pending' }, ['u-gma'], true, 'd1', T, { pending: true }));
+      const call = ok(book.join('d1', mom, true, T + 800));
+      expect(call.parts).toEqual([expect.objectContaining({ uid: 'u-mom', sid: 's-mom', at: T + 800 })]);
+      expect(call.parts[0].gone).toBeUndefined();
+      expect(call.answeredAt).toBeNull();
+      ok(book.join('d1', grandma, true, T + 3000));
+      expect(call.answeredAt).toBe(T + 3000);
+      expect(book.canRelay('d1', 's-gma', 's-mom')).toBe(true);
+    });
+  });
+
   it('round-trips through storage, dropping finished calls', () => {
     const book = new CallBook();
     ok(book.start(mom, ['u-gma'], true, 'c1', T));

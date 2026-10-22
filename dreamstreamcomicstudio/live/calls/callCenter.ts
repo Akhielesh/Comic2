@@ -14,17 +14,39 @@
  *  - Honesty: a call that can't connect says why within 15 s and offers Try
  *    again; lines ping faster while ringing or in a call and reconnect as soon
  *    as they stop hearing the room.
+ *  - Direct calls (anyone on Stream Studio, found by name in Calls): one more
+ *    socket to your personal line (live-worker userLine.ts), which places
+ *    calls, rings you, and keeps your favourites, blocks and direct-call
+ *    history. Each direct call has its own room, reached with a ticket from
+ *    your line; it's just another line here, keyed `d:<call id>`, so the call
+ *    itself runs exactly like a family call.
  *
  * Views read it with useCalls(); nothing here renders.
  */
 
 import { useSyncExternalStore } from 'react';
+import { accessToken } from '../account';
 import { MIC_CONSTRAINTS, preferSpeaker, type Facing } from '../monitor/camera';
-import { listNurseries, openMonitorSocket, type MonitorSocket } from '../monitor/client';
+import { listNurseries, openCallRoomSocket, openMonitorSocket, openUserLineSocket, type MonitorSocket } from '../monitor/client';
 import { currentSubscription, localNotify, subscribe as pushSubscribe } from '../monitor/push';
 import { ScreenWakeLock } from '../wakeLock';
 import { CallMesh, failureText, pcConfig, type FailWhy, type PeerView } from './callMesh';
-import { CALL_ERROR_TEXT, RING_SECS, type Call, type CallEndWhy, type CallPart, type CallRecord, type CallSignal, type LineMsg } from './types';
+import {
+  callErrorText,
+  ctxText,
+  RING_SECS,
+  type Call,
+  type CallEndWhy,
+  type CallPart,
+  type CallRecord,
+  type CallSignal,
+  type CallWho,
+  type DirectCtx,
+  type DirectRing,
+  type LineMsg,
+  type PersonRec,
+  type UserLineMsg,
+} from './types';
 
 interface Line {
   nid: string;
@@ -74,6 +96,8 @@ export interface Ringing {
   nid: string;
   nursery: string;
   call: Call;
+  /** A direct call: whether it's from your family (and as whom), or someone else on Stream Studio. */
+  direct: DirectCtx | null;
 }
 
 export interface ActiveView {
@@ -107,14 +131,27 @@ export interface ActiveView {
 export interface CallsSnapshot {
   on: boolean;
   uid: string | null;
+  /** Nursery lines (family calls). */
   lines: { nid: string; name: string; baby: string | null; connected: boolean }[];
+  /** Your personal line is up: direct calls can be placed and received. */
+  directReady: boolean;
   ringing: Ringing[];
   active: ActiveView | null;
+  /** Family and direct calls together, newest first (direct ones have nid 'direct'). */
   log: (CallRecord & { nid: string; nursery: string })[];
   ringOn: boolean;
+  favs: PersonRec[];
+  blocked: PersonRec[];
+  /** Who can call you directly. */
+  who: CallWho;
+  /** Something to tell you (e.g. the person you added can't be reached), newest wins. */
+  notice: { text: string; at: number } | null;
 }
 
 const RING_KEY = 'ds-call-ring';
+/** Names of people you've called directly (a call nobody picked up carries no name for them). */
+const NAMES_KEY = 'ds-call-names';
+const NAMES_CAP = 200;
 const RELAY_KEY = 'ds-calls-relay';
 /** A line this quiet may be dead (a network change can leave a socket OPEN): check it before a call. */
 const SILENT_MS = 30_000;
@@ -158,11 +195,42 @@ export function callFailText(peers: Pick<PeerView, 'state' | 'why' | 'label' | '
   return failureText(first.why, first.label || first.name);
 }
 
-/** `#/call/<nursery>/<call>?answer=1` — opened by "Answer" on a call notification (public/live-sw.js). */
+/**
+ * `#/call/<nursery>/<call>?answer=1` (a family call) or `#/call/d/<call>?answer=1`
+ * (a direct call, whose line here is `d:<call>`) — opened by "Answer" on a call
+ * notification (public/live-sw.js).
+ */
 export function answerFromHash(hash: string): { nid: string; id: string } | null {
-  const m = /^#\/?call\/([0-9a-f-]{36})\/([0-9a-f]{8,24})\?(.*)$/.exec(hash);
+  const m = /^#\/?call\/([0-9a-f-]{36}|d)\/([0-9a-f]{8,24})\?(.*)$/.exec(hash);
   if (!m || new URLSearchParams(m[3]).get('answer') !== '1') return null;
-  return { nid: m[1], id: m[2] };
+  return { nid: m[1] === 'd' ? `d:${m[2]}` : m[1], id: m[2] };
+}
+
+/** Recents: family and direct calls together, newest first, each call once (a later report of a call wins). */
+export function recentsOf<T extends { id: string; at: number }>(lists: Iterable<T>[], limit = 60): T[] {
+  const by = new Map<string, T>();
+  for (const list of lists) for (const r of list) by.set(r.id, r);
+  return [...by.values()].sort((a, b) => b.at - a.at).slice(0, limit);
+}
+
+/** A direct call's line here. */
+export const isDirect = (nid: string): boolean => nid.startsWith('d:');
+const DIRECT_PLACE = 'Stream Studio';
+
+/** A direct call ringing for you, as a call — shown at once; its room fills in the rest. */
+export function ringAsCall(r: DirectRing, me: string): Call {
+  return {
+    id: r.id,
+    from: { uid: r.from.uid, name: r.from.name, label: r.ctx.label },
+    video: r.video,
+    invited: [me],
+    declined: [],
+    at: r.at,
+    answeredAt: null,
+    parts: [],
+    ever: { [r.from.uid]: r.from.name },
+    ended: null,
+  };
 }
 
 /** The call as the room will have it once our join lands — so answering needn't wait for the echo. */
@@ -220,7 +288,19 @@ function mediaText(e: unknown): string {
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 class CallCenter {
+  /** Nursery lines, and direct calls' rooms (keyed `d:<call id>`). */
   private lines = new Map<string, Line>();
+  /** Your personal line (direct calls). */
+  private ul: Line | null = null;
+  private ulUid: string | null = null;
+  /** Direct calls ringing for you, by call id (with their tickets). */
+  private direct = new Map<string, DirectRing>();
+  private favs: PersonRec[] = [];
+  private blocked: PersonRec[] = [];
+  private who: CallWho = 'everyone';
+  private notice: { text: string; at: number } | null = null;
+  private nurseryKey = '';
+  private names: Record<string, string> | null = null;
   private calls = new Map<string, { nid: string; call: Call; seenAt: number }>();
   private log = new Map<string, CallRecord & { nid: string; nursery: string }>();
   private declined = new Set<string>();
@@ -263,14 +343,22 @@ class CallCenter {
     for (const { nid, call } of this.calls.values()) if (this.isRingingForMe(call)) ringing.add(nid);
     // (A line's socket reports 'connecting' before openMonitorSocket has returned it.)
     for (const l of this.lines.values()) l.sock?.setFast(a?.nid === l.nid || ringing.has(l.nid));
+    // Your own line carries the decline, and the start of a call you place.
+    this.ul?.sock?.setFast(this.direct.size > 0 || a?.nid === 'me' || (!!a && isDirect(a.nid)));
   }
 
   /* ---------------------------------------------------------- lines */
 
-  /** Signed in: open a line to each nursery. */
-  start(): void {
-    if (this.on) return;
+  /** Signed in: open a line to each nursery, and your own line (direct calls). */
+  start(uid?: string): void {
+    if (uid) this.ulUid = uid;
+    if (this.on) {
+      this.openMe(); // the account's id arrived after the lines opened
+      return;
+    }
     this.on = true;
+    this.tellWorker();
+    this.openMe();
     void this.refresh();
     this.refreshTimer = window.setInterval(() => void this.refresh(), 10 * 60_000);
     document.addEventListener('visibilitychange', this.onVis);
@@ -290,6 +378,14 @@ class CallCenter {
     this.hangup();
     for (const l of this.lines.values()) l.sock.close();
     this.lines.clear();
+    this.ul?.sock.close();
+    this.ul = null;
+    this.ulUid = null;
+    this.direct.clear();
+    this.favs = [];
+    this.blocked = [];
+    this.who = 'everyone';
+    this.nurseryKey = '';
     this.calls.clear();
     this.log.clear();
     this.uid = null;
@@ -301,13 +397,31 @@ class CallCenter {
   setSuspended(s: boolean): void {
     if (s === this.suspended) return;
     this.suspended = s;
+    this.tellWorker();
     if (s && !this.active) {
       for (const l of this.lines.values()) l.sock.close();
       this.lines.clear();
+      this.ul?.sock.close();
+      this.ul = null;
+      this.direct.clear();
       this.calls.clear();
       this.prewarm();
       this.emit();
-    } else if (!s) void this.refresh();
+    } else if (!s) {
+      this.openMe();
+      void this.refresh();
+    }
+  }
+
+  /**
+   * Tell the service worker whether this device is running as a nursery
+   * camera: if so it shows call pushes silently (the baby's phone must never
+   * ring), even from a subscription made before it became the camera.
+   */
+  private tellWorker(): void {
+    try {
+      navigator.serviceWorker?.controller?.postMessage({ t: 'ds-camera', on: this.suspended && this.on });
+    } catch { /* no service worker */ }
   }
 
   private onVis = () => {
@@ -321,13 +435,255 @@ class CallCenter {
     if (!this.on || this.suspended || !r.ok || !r.nurseries) return;
     const want = new Set(r.nurseries.map((n) => n.id));
     for (const [nid, l] of this.lines) {
+      if (isDirect(nid)) continue; // a direct call's room, not a nursery
       if (!want.has(nid)) {
         l.sock.close();
         this.lines.delete(nid);
       }
     }
     for (const n of r.nurseries) if (!this.lines.has(n.id)) this.openLine(n.id, n.name, n.baby_name);
+    // Your family changed (a nursery joined or left): your line re-reads who counts as family.
+    const key = [...want].sort().join(',');
+    if (key !== this.nurseryKey) {
+      const first = !this.nurseryKey;
+      this.nurseryKey = key;
+      if (!first) void this.familyChanged();
+    }
     this.emit();
+  }
+
+  /** People were added to or removed from one of your nurseries: your line re-reads your family. */
+  async familyChanged(): Promise<void> {
+    const token = await accessToken();
+    if (token) this.ul?.sock.send({ t: 'family_refresh', token });
+  }
+
+  /* ------------------------------------------------- your own line */
+
+  private openMe(): void {
+    const uid = this.ulUid;
+    if (!uid || this.ul || !this.on || this.suspended) return;
+    const line: Line = { nid: 'me', sock: null as unknown as MonitorSocket, connected: false, me: null, nursery: null, ice: [], iceAt: 0, helloAt: 0, vapid: null };
+    this.ul = line;
+    line.sock = openUserLineSocket<UserLineMsg>(
+      uid,
+      (m) => this.onMeMsg(line, m),
+      (st) => {
+        line.connected = st === 'connected';
+        if (st === 'closed' && this.ul === line) this.ul = null;
+        this.emit();
+      },
+    );
+  }
+
+  /** A direct call's history line as Recents shows it. */
+  private directRec(r: CallRecord): CallRecord & { nid: string; nursery: string } {
+    return { ...r, nid: 'direct', nursery: DIRECT_PLACE };
+  }
+
+  private onMeMsg(line: Line, m: UserLineMsg): void {
+    if (this.ul !== line) return;
+    switch (m.t) {
+      case 'hello': {
+        const now = Date.now();
+        line.me = { sid: m.you.sid, uid: m.you.uid, name: m.you.name, label: null };
+        line.vapid = m.vapid;
+        line.iceAt = now;
+        line.helloAt = now;
+        this.uid = m.you.uid;
+        this.favs = m.favs ?? [];
+        this.blocked = m.blocked ?? [];
+        this.who = m.prefs?.who === 'family' ? 'family' : 'everyone';
+        for (const r of m.log ?? []) this.log.set(r.id, this.directRec(r));
+        // What rings right now (also for an app a notification just opened).
+        const live = new Set((m.ringing ?? []).map((r) => r.id));
+        for (const id of [...this.direct.keys()]) if (!live.has(id)) this.stopDirect(id);
+        for (const r of m.ringing ?? []) this.onRing(r);
+        if (this.ringOn) void this.sendRing(line);
+        // A call we were placing whose start got lost with the old connection: place it again (the line knows it by its ref).
+        const a = this.active;
+        if (a && !a.ended && a.nid === 'me' && !a.id) void this.sendStart(line, a);
+        this.prewarm();
+        this.emit();
+        return;
+      }
+      case 'dcall_ring':
+        this.onRing(m.ring);
+        this.prewarm();
+        this.emit();
+        return;
+      case 'dcall_update':
+        if (m.stop) this.stopDirect(m.id);
+        this.prewarm();
+        this.emit();
+        return;
+      case 'dcall_started': {
+        const a = this.active;
+        if (a && !a.ended && a.nid === 'me' && a.ref === m.ref && !a.id) {
+          a.id = m.id;
+          a.nid = `d:${m.id}`;
+          this.openRoom(m.id, m.ticket, DIRECT_PLACE);
+        }
+        this.emit();
+        return;
+      }
+      case 'dcall_invited':
+        if (m.status !== 'ringing') this.say(m.status === 'slow_down' ? callErrorText('slow_down') : 'They can’t be reached right now — they weren’t added.');
+        return;
+      case 'dcall_state':
+        this.favs = m.favs ?? [];
+        this.blocked = m.blocked ?? [];
+        this.who = m.prefs?.who === 'family' ? 'family' : 'everyone';
+        this.emit();
+        return;
+      case 'call_err': {
+        const a = this.active;
+        if (a && !a.ended && a.nid === 'me' && m.ref && a.ref === m.ref) this.finish({ why: 'error', text: callErrorText(m.error, a.asked.length === 1 ? a.asked[0].name : null) });
+        this.emit();
+        return;
+      }
+      case 'call_log':
+        this.log.set(m.rec.id, this.directRec(m.rec));
+        this.emit();
+        return;
+    }
+  }
+
+  private say(text: string): void {
+    this.notice = { text, at: Date.now() };
+    this.emit();
+  }
+
+  private async sendStart(line: Line, a: Active): Promise<void> {
+    const token = await accessToken();
+    if (this.active !== a || a.ended || a.id) return;
+    line.sock.send({ t: 'dcall_start', to: a.asked.map((p) => p.uid), video: a.video, ref: a.ref, token });
+  }
+
+  /** A direct call rings: show it at once, and connect to its room while it rings (so Accept is instant). */
+  private onRing(r: DirectRing): void {
+    if (this.suspended || !this.uid || this.declined.has(r.id)) return;
+    this.direct.set(r.id, r);
+    this.remember([r.from]);
+    if (!this.calls.has(r.id)) this.put(`d:${r.id}`, ringAsCall(r, this.uid));
+    const line = this.openRoom(r.id, r.ticket, ctxText(r.ctx));
+    // The tab is in the background (and push is off): a local notification.
+    const c = this.calls.get(r.id)?.call;
+    if (c) this.maybeNotify(line, c);
+  }
+
+  /** A direct call's room: one more line, keyed `d:<id>`. */
+  private openRoom(id: string, ticket: string, place: string): Line {
+    const nid = `d:${id}`;
+    const have = this.lines.get(nid);
+    if (have) return have;
+    const line: Line = { nid, sock: null as unknown as MonitorSocket, connected: false, me: null, nursery: { id: nid, name: place, baby: null }, ice: [], iceAt: 0, helloAt: 0, vapid: null };
+    this.lines.set(nid, line);
+    line.sock = openCallRoomSocket<LineMsg>(
+      id,
+      ticket,
+      (m) => this.onLineMsg(line, m),
+      (st) => {
+        line.connected = st === 'connected';
+        if (st === 'closed' && this.lines.get(nid) === line) {
+          // The room said the call is over (or it wasn't ours): stop showing it.
+          this.lines.delete(nid);
+          this.direct.delete(id);
+          for (const c of [...this.calls.values()]) if (c.nid === nid) this.calls.delete(c.call.id);
+          const a = this.active;
+          if (a && a.nid === nid && !a.ended) this.finish({ why: 'done', text: 'Call ended' });
+          this.prewarm();
+        }
+        this.emit();
+      },
+      { fast: true },
+    );
+    return line;
+  }
+
+  /** A direct call stopped ringing here (picked up elsewhere, declined, over). */
+  private stopDirect(id: string): void {
+    this.direct.delete(id);
+    const a = this.active;
+    if (a && a.id === id && !a.ended) return;
+    this.closeRoom(id);
+  }
+
+  private closeRoom(id: string): void {
+    const nid = `d:${id}`;
+    const l = this.lines.get(nid);
+    if (l) {
+      this.lines.delete(nid);
+      l.sock.close();
+    }
+    for (const c of [...this.calls.values()]) if (c.nid === nid) this.calls.delete(c.call.id);
+  }
+
+  /** Rooms of direct calls that neither ring here nor carry the call on this device are closed. */
+  private pruneRooms(): void {
+    const a = this.active && !this.active.ended ? this.active : null;
+    for (const nid of [...this.lines.keys()]) {
+      if (!isDirect(nid) || a?.nid === nid) continue;
+      const id = nid.slice(2);
+      if (!this.direct.has(id) || this.declined.has(id)) this.closeRoom(id);
+    }
+  }
+
+  /** Who someone is, by name, if you've called them, starred them or been rung by them here. */
+  nameOf(uid: string): string | null {
+    return this.favs.find((f) => f.uid === uid)?.name ?? this.loadNames()[uid] ?? null;
+  }
+
+  private loadNames(): Record<string, string> {
+    if (this.names) return this.names;
+    try {
+      this.names = JSON.parse(localStorage.getItem(NAMES_KEY) || '{}') as Record<string, string>;
+    } catch {
+      this.names = {};
+    }
+    return this.names;
+  }
+
+  private remember(people: { uid: string; name: string }[]): void {
+    const names = { ...this.loadNames() };
+    for (const p of people) {
+      delete names[p.uid];
+      names[p.uid] = p.name.slice(0, 40);
+    }
+    const keys = Object.keys(names);
+    for (const k of keys.slice(0, Math.max(0, keys.length - NAMES_CAP))) delete names[k];
+    this.names = names;
+    try {
+      localStorage.setItem(NAMES_KEY, JSON.stringify(names));
+    } catch { /* storage unavailable */ }
+  }
+
+  /* --------------------------------------- favourites, blocks, who */
+
+  /** Star / unstar someone (synced to your other devices). False when your line isn't connected. */
+  setFav(p: { uid: string; name: string }, on: boolean): boolean {
+    const rest = this.favs.filter((x) => x.uid !== p.uid);
+    this.favs = on ? [...rest, { uid: p.uid, name: p.name, at: Date.now() }] : rest;
+    this.ul?.sock.send({ t: 'fav', uid: p.uid, name: p.name, on });
+    this.emit();
+    return !!this.ul?.connected;
+  }
+
+  /** Block / unblock someone: their direct calls never reach you (they can't tell). */
+  setBlocked(p: { uid: string; name: string }, on: boolean): boolean {
+    const rest = this.blocked.filter((x) => x.uid !== p.uid);
+    this.blocked = on ? [...rest, { uid: p.uid, name: p.name, at: Date.now() }] : rest;
+    this.ul?.sock.send({ t: 'block', uid: p.uid, name: p.name, on });
+    this.emit();
+    return !!this.ul?.connected;
+  }
+
+  /** Who can call you directly: everyone on Stream Studio, or only people in your nurseries. */
+  setWho(who: CallWho): boolean {
+    this.who = who;
+    this.ul?.sock.send({ t: 'prefs', who });
+    this.emit();
+    return !!this.ul?.connected;
   }
 
   private openLine(nid: string, name: string, baby: string | null): void {
@@ -351,7 +707,8 @@ class CallCenter {
       case 'hello': {
         const now = Date.now();
         line.me = { sid: m.you.sid, uid: m.you.uid, name: m.you.name, label: m.you.label };
-        line.nursery = m.nursery;
+        // A direct call's room keeps the label we gave it (from your family, or someone else on Stream Studio).
+        if (!isDirect(line.nid)) line.nursery = m.nursery;
         line.ice = m.ice ?? [];
         line.iceAt = now;
         line.helloAt = now;
@@ -360,7 +717,9 @@ class CallCenter {
         for (const c of [...this.calls.values()]) if (c.nid === line.nid) this.calls.delete(c.call.id);
         for (const c of m.calls) this.put(line.nid, c);
         for (const r of m.callLog) this.log.set(r.id, { ...r, nid: line.nid, nursery: familyName(m.nursery) });
-        if (this.ringOn) void this.sendRing(line);
+        if (this.ringOn && !isDirect(line.nid)) void this.sendRing(line);
+        // A direct call that's no longer on in its room stops ringing here.
+        if (isDirect(line.nid) && !m.calls.some((c) => c.id === line.nid.slice(2))) this.stopDirect(line.nid.slice(2));
         this.rejoin(line);
         this.prewarm();
         this.emit();
@@ -390,13 +749,14 @@ class CallCenter {
       case 'call':
         this.put(line.nid, m.call);
         if (this.active && this.active.nid === line.nid && this.active.id === m.call.id) this.onActiveCall(line, m.call);
+        else if (isDirect(line.nid) && m.call.ended) this.stopDirect(m.call.id);
         this.maybeNotify(line, m.call);
         this.prewarm();
         this.emit();
         return;
       case 'call_err': {
         const a = this.active;
-        if (a && a.nid === line.nid && ((m.ref && a.ref === m.ref) || (m.id && a.id === m.id))) this.finish({ why: 'error', text: CALL_ERROR_TEXT[m.error] ?? 'The call couldn’t connect.' });
+        if (a && a.nid === line.nid && ((m.ref && a.ref === m.ref) || (m.id && a.id === m.id))) this.finish({ why: 'error', text: callErrorText(m.error) });
         this.emit();
         return;
       }
@@ -406,7 +766,7 @@ class CallCenter {
         return;
       }
       case 'call_log':
-        this.log.set(m.rec.id, { ...m.rec, nid: line.nid, nursery: familyName(line.nursery) });
+        this.log.set(m.rec.id, isDirect(line.nid) ? this.directRec(m.rec) : { ...m.rec, nid: line.nid, nursery: familyName(line.nursery) });
         this.emit();
         return;
     }
@@ -467,7 +827,8 @@ class CallCenter {
     if (typeof document === 'undefined' || !document.hidden || this.notified.has(call.id)) return;
     if (!this.isRingingForMe(call)) return;
     this.notified.add(call.id);
-    void localNotify(`📹 ${call.from.label || call.from.name}`, `${call.video ? 'Video' : 'Audio'} call · ${familyName(line.nursery)}`, `call-${call.id}`, `/live#/call/${line.nid}/${call.id}`);
+    const url = isDirect(line.nid) ? `/live#/call/d/${call.id}` : `/live#/call/${line.nid}/${call.id}`;
+    void localNotify(`📹 ${call.from.label || call.from.name}`, `${call.video ? 'Video' : 'Audio'} call · ${familyName(line.nursery)}`, `call-${call.id}`, url);
   }
 
   private isRingingForMe(call: Call): boolean {
@@ -530,16 +891,22 @@ class CallCenter {
     if (sub) line.sock.send({ t: 'call_push', sub: sub.toJSON() });
   }
 
+  /** Lines that ring this device by push: your own line and each nursery's (never a direct call's room). */
+  private ringLines(): Line[] {
+    return [...(this.ul ? [this.ul] : []), ...[...this.lines.values()].filter((l) => !isDirect(l.nid))];
+  }
+
   /** Ring this device with the app closed (from a tap — it asks for notification permission). */
   async enableRinging(): Promise<{ ok: true } | { error: string }> {
-    const vapid = [...this.lines.values()].find((l) => l.vapid)?.vapid;
+    // Your own line has the key even with no nursery (it's the same key pair as the monitor's).
+    const vapid = this.ul?.vapid ?? this.ringLines().find((l) => l.vapid)?.vapid;
     if (!vapid) return { error: 'Not connected yet — try again in a moment.' };
     const r = await pushSubscribe(vapid);
     if ('error' in r) return { error: r.error };
     try {
       localStorage.setItem(RING_KEY, '1');
     } catch { /* storage unavailable */ }
-    for (const l of this.lines.values()) l.sock.send({ t: 'call_push', sub: r });
+    for (const l of this.ringLines()) l.sock.send({ t: 'call_push', sub: r });
     this.emit();
     return { ok: true };
   }
@@ -549,7 +916,7 @@ class CallCenter {
       localStorage.removeItem(RING_KEY);
     } catch { /* storage unavailable */ }
     const sub = await currentSubscription();
-    if (sub) for (const l of this.lines.values()) l.sock.send({ t: 'call_push_off', endpoint: sub.endpoint });
+    if (sub) for (const l of this.ringLines()) l.sock.send({ t: 'call_push_off', endpoint: sub.endpoint });
     this.emit();
   }
 
@@ -593,6 +960,31 @@ class CallCenter {
   }
 
   /**
+   * Call anyone on Stream Studio (from a tap) — up to three people, found by
+   * name. Your line places it (and rings them through theirs); the camera
+   * opens meanwhile. If they can't be reached, or only take calls from their
+   * family, it says so at once.
+   */
+  async callUser(people: { uid: string; name: string }[], video: boolean): Promise<string | null> {
+    if (this.active && !this.active.ended) return 'You’re already in a call.';
+    const line = this.ul;
+    if (!line) return 'Calls aren’t connected yet — check your internet and try again.';
+    if (!people.length) return callErrorText('nobody');
+    const [reachable, local] = await Promise.all([this.fresh(line), openLocal(video, 'user').catch((e: unknown) => e)]);
+    if (!(local instanceof MediaStream)) return mediaText(local);
+    if (!reachable || (this.active && !this.active.ended) || this.ul !== line) {
+      for (const t of local.getTracks()) t.stop();
+      return reachable && this.ul === line ? 'You’re already in a call.' : 'Not connected right now — check your internet and try again.';
+    }
+    this.remember(people);
+    const a: Active = { nid: 'me', id: null, ref: newRef(), outgoing: true, video, call: null, local, mic: true, cam: video, facing: 'user', mesh: null, ended: null, asked: people.slice(0, 3), ice: null, relayOnly: relayOnly(), mySid: null, inRoom: false, opening: false, reported: null, rejoinAt: 0 };
+    this.begin(a);
+    this.emit();
+    await this.sendStart(line, a);
+    return null;
+  }
+
+  /**
    * Pick up (from a tap). Joins at once and builds the connections right
    * behind the join (the room handles one socket's messages in order); the
    * camera and mic open in parallel and slot in when they're ready. If they
@@ -601,7 +993,8 @@ class CallCenter {
    */
   async accept(nid: string, id: string, video: boolean): Promise<string | null> {
     const line = this.lines.get(nid);
-    if (!line?.connected || !this.calls.has(id)) return 'That call has ended.';
+    // (A direct call's room may still be connecting — fresh() below waits for it.)
+    if (!line || (!line.connected && !isDirect(nid)) || !this.calls.has(id)) return 'That call has ended.';
     if (this.active && !this.active.ended) this.hangup();
     if (!(await this.fresh(line))) return 'Not connected right now — check your internet and try again.';
     const ring = this.calls.get(id);
@@ -640,9 +1033,22 @@ class CallCenter {
     }
   }
 
-  decline(nid: string, id: string): void {
+  /**
+   * Say no. A direct call is declined through your line (which also stops your
+   * other devices ringing — and works from an app a notification opened);
+   * `block` also blocks the caller, who can't tell.
+   */
+  decline(nid: string, id: string, block = false): void {
     this.declined.add(id);
-    this.lines.get(nid)?.sock.send({ t: 'call_decline', id });
+    if (isDirect(nid)) {
+      this.lines.get(nid)?.sock.send({ t: 'call_decline', id });
+      this.ul?.sock.send({ t: 'dcall_decline', id, block });
+      if (block) {
+        const from = this.direct.get(id)?.from ?? this.calls.get(id)?.call.from;
+        if (from) this.blocked = [...this.blocked.filter((b) => b.uid !== from.uid), { uid: from.uid, name: from.name, at: Date.now() }];
+      }
+      this.stopDirect(id);
+    } else this.lines.get(nid)?.sock.send({ t: 'call_decline', id });
     this.prewarm();
     this.emit();
   }
@@ -655,6 +1061,7 @@ class CallCenter {
       this.finish({ why: 'done', text: 'Call ended' });
     }
     this.active = null;
+    this.pruneRooms();
     this.emit();
   }
 
@@ -662,6 +1069,7 @@ class CallCenter {
   dismiss(): void {
     if (this.active?.ended) {
       this.active = null;
+      this.pruneRooms();
       this.emit();
     }
   }
@@ -748,7 +1156,13 @@ class CallCenter {
   /** Ring more people into this call. */
   invite(uids: string[]): void {
     const a = this.active;
-    if (a?.id && uids.length) this.lines.get(a.nid)?.sock.send({ t: 'call_invite', id: a.id, to: uids });
+    const id = a?.id;
+    if (!a || !id || !uids.length) return;
+    // A direct call: your line rings them (with the same limits as placing a call).
+    if (isDirect(a.nid)) {
+      const line = this.ul;
+      void accessToken().then((token) => line?.sock.send({ t: 'dcall_invite', id, to: uids, token }));
+    } else this.lines.get(a.nid)?.sock.send({ t: 'call_invite', id, to: uids });
   }
 
   private begin(a: Active): void {
@@ -869,6 +1283,8 @@ class CallCenter {
     netInfo()?.removeEventListener('change', this.onNet);
     releaseAudioSession();
     this.prewarm();
+    if (isDirect(a.nid)) this.direct.delete(a.nid.slice(2));
+    this.pruneRooms();
     this.emit();
   }
 
@@ -877,13 +1293,16 @@ class CallCenter {
   private build(): CallsSnapshot {
     const now = Date.now();
     const a = this.active;
-    const nurseryName = (nid: string) => familyName(this.lines.get(nid)?.nursery);
+    const nurseryName = (nid: string) => (nid === 'me' ? DIRECT_PLACE : familyName(this.lines.get(nid)?.nursery));
     const ringing: Ringing[] = [];
     for (const { nid, call, seenAt } of this.calls.values()) {
       if (!this.isRingingForMe(call) || (a && !a.ended && a.id === call.id)) continue;
       // A group call keeps "ringing" you while it's on; a 1:1 stops when the room's timer would.
       if (call.answeredAt == null && now - seenAt > (RING_SECS + 8) * 1000) continue;
-      ringing.push({ nid, nursery: nurseryName(nid), call });
+      const d = isDirect(nid) ? this.direct.get(call.id) : undefined;
+      // A direct call rings only while your line says so.
+      if (isDirect(nid) && !d) continue;
+      ringing.push({ nid, nursery: nurseryName(nid), call, direct: d?.ctx ?? null });
     }
     let active: ActiveView | null = null;
     if (a) {
@@ -916,11 +1335,16 @@ class CallCenter {
     return {
       on: this.on && !this.suspended,
       uid: this.uid,
-      lines: [...this.lines.values()].map((l) => ({ nid: l.nid, name: l.nursery?.name ?? 'Nursery', baby: l.nursery?.baby ?? null, connected: l.connected })),
+      lines: [...this.lines.values()].filter((l) => !isDirect(l.nid)).map((l) => ({ nid: l.nid, name: l.nursery?.name ?? 'Nursery', baby: l.nursery?.baby ?? null, connected: l.connected })),
+      directReady: !!this.ul?.connected,
       ringing,
       active,
-      log: [...this.log.values()].sort((x, y) => y.at - x.at).slice(0, 40),
+      log: recentsOf([this.log.values()]),
       ringOn: this.ringOn,
+      favs: this.favs,
+      blocked: this.blocked,
+      who: this.who,
+      notice: this.notice,
     };
   }
 }

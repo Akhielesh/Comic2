@@ -7,7 +7,7 @@
 //   ?e=ID                  → invite page or watch page (meta decides)
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
 //                            #/account, #/monitor[/NURSERY[/camera|/watch]],
-//                            #/calls, #/call/NURSERY/CALL (a call notification → Calls)
+//                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls)
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { consumeAuthReturn, openAuth, signOutEverywhereLocal, useAccount } from './account';
 import { getEvent } from './api';
@@ -78,7 +78,7 @@ export function parseRoute(): Route {
   if (hash === 'settings' || hash === 'account') return { view: 'settings' };
   if (hash === 'monitor') return { view: 'monitor' };
   // A ringing call's notification lands on Calls; the call itself rings on top.
-  if (hash === 'calls' || /^call\/[0-9a-f-]{36}\/[0-9a-f]{8,24}$/.test(hash)) return { view: 'calls' };
+  if (hash === 'calls' || /^call\/(?:[0-9a-f-]{36}|d)\/[0-9a-f]{8,24}$/.test(hash)) return { view: 'calls' };
   // Share link: #/monitor/join/<nursery>/<code> (the passcode is typed, never in the link).
   const join = hash.match(/^monitor\/join\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{16,64})$/);
   if (join) return { view: 'monitor-join', nid: join[1], code: join[2] };

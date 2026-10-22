@@ -23,7 +23,7 @@ relays signaling, status numbers and events.
 | Sound level meter | `live/monitor/soundLevel.ts` | IEC 61672 A-weighting (bilinear biquads) + Fast (125 ms) time weighting in an AudioWorklet; live dB(A), per-minute LAeq / Lmax / L10 / L50 / L90 / peak; two-step calibration (quiet room ≈ 30 dB, or match a meter); never reads below the mic's floor. |
 | Vision | `live/monitor/vision.ts` | 64×48 frames at 4 fps: exposure-normalised cell differences, crib + danger zones, climb-out, visits, lights on/off, dark/covered lens, camera moved (scene signature + phone tilt). |
 | Smart vision (beta) | `live/monitor/scene.ts`, `live/monitor/sceneAi.ts`, `public/models/mediapipe/` | On the camera phone, ~1 fps: Google MediaPipe object detector (EfficientDet-Lite0 int8, 80 COCO classes, CPU) + pose landmarker (BlazePose lite, 33 points, GPU with CPU fallback), both Apache-2.0, SHA-256 verified. `SceneWatch` turns frames into held, cooled-down events: posture, stood in crib, rolled, holding, risky object within reach, soft toy near a lying baby, in/left a play area. |
-| Family calls | `live-worker/src/familyCalls.ts` (rules), `monitorRoom.ts` (switchboard), `live/calls/*` (app), `live/views/calls/*`, `live/views/CallsView.tsx` | FaceTime-style video / voice calls between a nursery's members — see “Family calls” below. |
+| Family calls | `live-worker/src/familyCalls.ts` (rules), `monitorRoom.ts` (switchboard), `directCalls.ts` + `userLine.ts` + `callRoom.ts` (direct calls), `live/calls/*` (app), `live/views/calls/*`, `live/views/CallsView.tsx` | FaceTime-style video / voice calls between a nursery's members — or with anyone on Stream Studio, found by name — see “Family calls” below. |
 | Two-way audio safety | `live/monitor/voice.ts` | Parent's mic: high-pass → compressor → soft fade-in. Camera: howl (feedback) detector mutes the speaker and switches the parent's phone to walkie-talkie; a closed-loop governor holds talk ≤ 65 dB and soothing sounds ≤ 50 dB at the crib. |
 | Screen-on | `live/wakeLock.ts`, `public/keep-awake.mp4` | Wake Lock re-acquired on release + 15 s watchdog; looping-video fallback where it's refused; state shown to the family. |
 | Alarm detector | `live/monitor/alarmTone.ts` | Smoke (T3) / CO (T4) beep patterns from the spectrum — independent of the model. |
@@ -283,6 +283,8 @@ position or face covering. Not a medical device.
 FaceTime-style video and voice calls between the people in a nursery — one
 person or a group of up to four — from the **Calls** tab (or the call buttons
 next to each person). Device to device (WebRTC, DTLS-SRTP), never recorded.
+Since 2026-10-22 Calls also reaches **anyone on Stream Studio**, found by name
+(see “Direct calls” below).
 
 **Switchboard.** Each nursery's MonitorRoom is that family's switchboard. While a
 member is signed in, the app keeps a light `line` socket to each of their
@@ -371,9 +373,68 @@ state ("Grandpa can’t talk right now", "Call again"). The screen stays awake
 during a call. Calls history (last 60 per nursery) shows who, which way, how long
 and missed calls; tap to call back.
 
+**Direct calls — anyone on Stream Studio** (2026-10-22). Calls opens with a
+search box (`live_search_people` via `searchPeople`, 250 ms debounce — names
+only, never emails). Each result says **In Aria’s family** (from your own
+nurseries' people) or **Stream Studio member**, with voice, video and a star;
+stars become a Favourites row of faces at the top. Recents merge family and
+direct calls. A member with no nursery gets search instead of a dead end.
+Family members are still called through their nursery (unchanged); anyone else
+through two new Durable Objects — no SQL:
+
+- `UserLine` (`userLine.ts`, one per member, `idFromName('u:'+uid)`, socket
+  `GET /api/calls/u/<uid>/ws`) — your personal line. The first frame carries
+  your own token; `live_me` must say you're a member with that very uid (else
+  4003), which **claims** the line. Only a claimed line rings; a claim nobody
+  renews for 30 days lapses, and a ring to an unclaimed line writes nothing.
+  Hello: `{you, vapid, ringing (with tickets), log, favs, blocked, prefs}` —
+  VAPID from the monitor's `KEY_HOLDER` (the **same** key pair, so nursery
+  alerts keep working). It works out your family (`monitor_list` +
+  `monitor_people` with your token, after the hello, cached 10 min). It places
+  calls (`dcall_start`, `dcall_invite`), rings you (`dcall_ring` to open apps +
+  Web Push `{direct:true}` → `#/call/d/<id>`), takes `dcall_decline {block?}`,
+  `fav`, `block`, `prefs {who}`, `call_push(_off)`, and keeps your direct-call
+  history (60, missed-call push).
+- `CallRoom` (`callRoom.ts`, one per call, 16-hex id, socket
+  `GET /api/calls/c/<id>/ws`) speaks the nursery line protocol, so the call
+  mesh and call screen are the same. It's made by the caller's line
+  (`/x/init`): the call starts with the caller *pending* (`CallBook.start(…,
+  {pending:true})` — nobody offers or relays to them; they're cancelled after
+  20 s if they never arrive), and everyone asked is rung through their line
+  (`/x/ring`). Sockets authenticate with a **ticket** (24 random bytes per
+  person, only their SHA-256 kept, handed out only through that person's
+  authenticated line) — no Supabase round trip on answer. The hello carries
+  fresh ICE. Picking up tells the person's other devices to stop ringing
+  (`/x/update`); at the end every line gets the history line (`/x/log`,
+  missed calls marked), and the room wipes itself 2 minutes later.
+- The worker routes only those two sockets (`/api/calls/u/<uuid>/ws`,
+  `/api/calls/c/<16 hex>/ws`); the objects' `/x/*` endpoints are never routed.
+  Migration `v3` adds both classes (`wrangler.jsonc`).
+
+Privacy and abuse controls (`directCalls.ts`, pure and unit-tested): the
+caller's name comes from `live_me`, never the app; "Grandma · Aria’s family"
+appears only when you share a nursery (your own family map, or the caller's
+side vouching), otherwise the ring says **Stream Studio member · not in your
+family**, answers with the camera off unless you pick video, and offers
+**Decline & block**. **Who can call you**: everyone on Stream Studio (default)
+or only people in your nurseries (`restricted` is the honest reply). A
+**blocked** caller — or one silenced for ringing a non-family member 3 times in
+an hour, or after 2 declines in a day — gets exactly the reply anyone else
+would (it rings out as "no answer") while nothing reaches you: no ring, no push,
+no history; the checks a caller can observe all come before the block. Nobody
+reachable (no app open, no push) is said at once ("Sam can’t be reached right
+now") and leaves a missed call. Caller limits: 8 calls per 10 minutes, 40 a
+day, 15 different people outside the family a day (`slow_down`). The first call
+to someone outside your family asks first ("Sam isn’t in any of your nurseries
+— they’ll see your name"), since two people can share a name. A device running
+as the nursery camera closes your line too, and the service worker shows call
+pushes silently on it (the app tells it; an open camera screen counts too).
+
 **Limits.** Four people per call (each phone uploads a copy per person). Ringing
-with the app closed needs notifications (on iPhone, the Home Screen app). Calls
-reach only members of a nursery you share. Without a TURN relay (production has
+with the app closed needs notifications (on iPhone, the Home Screen app). Family
+calls reach members of a nursery you share; direct calls reach any Stream Studio
+member whose app has been open in the last 30 days (unless they take calls only
+from their family, or blocked you). Without a TURN relay (production has
 none until the owner sets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN`), phones behind
 carrier or symmetric NAT can't reach each other — the call now says so within
 15 s instead of spinning, but only the relay makes those calls connect.

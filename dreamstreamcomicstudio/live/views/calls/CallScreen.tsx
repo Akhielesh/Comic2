@@ -8,7 +8,8 @@
 // connection can't be made it says why (your network, theirs, or the two
 // can't reach each other directly) with Try again and Audio only.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { callCenter, type ActiveView } from '../../calls/callCenter';
+import { searchPeople, type Person } from '../../account';
+import { callCenter, isDirect, useCalls, type ActiveView } from '../../calls/callCenter';
 import { failureText, type PeerView } from '../../calls/callMesh';
 import { MAX_IN_CALL } from '../../calls/types';
 import { listPeople, type NurseryPerson } from '../../monitor/client';
@@ -99,6 +100,55 @@ function Tile({ p, solo }: { p: PeerView; solo?: boolean }) {
   );
 }
 
+/**
+ * Add someone to a direct call: your favourites, or anyone on Stream Studio
+ * by name. Their phones ring through their own line.
+ */
+function DirectAdd({ inCall, onPick, onClose }: { inCall: Set<string>; onPick: (p: { uid: string; name: string }) => void; onClose: () => void }) {
+  const { favs, uid } = useCalls();
+  const [q, setQ] = useState('');
+  const [found, setFound] = useState<Person[] | null>(null);
+  useEffect(() => {
+    if (q.trim().length < 2) {
+      setFound(null);
+      return;
+    }
+    let alive = true;
+    const t = window.setTimeout(() => void searchPeople(q).then((r) => alive && setFound(r)), 250);
+    return () => {
+      alive = false;
+      window.clearTimeout(t);
+    };
+  }, [q]);
+  const searching = q.trim().length >= 2;
+  const list = (searching ? (found ?? []).map((p) => ({ uid: p.user_id, name: p.display_name })) : favs.map((f) => ({ uid: f.uid, name: f.name }))).filter((p) => p.uid !== uid && !inCall.has(p.uid));
+  return (
+    <div className="call-add" role="dialog" aria-label="Add someone to the call">
+      <div className="call-add-head">
+        <b>Add to the call</b>
+        <button className="call-icon-btn" onClick={onClose} aria-label="Close"><Icon name="x" size={18} /></button>
+      </div>
+      <label className="call-add-search">
+        <Icon name="search" size={15} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Stream Studio by name" aria-label="Search people by name" autoFocus />
+      </label>
+      {searching && found === null ? (
+        <p className="call-add-empty">Searching…</p>
+      ) : list.length === 0 ? (
+        <p className="call-add-empty">{searching ? `No one named “${q.trim()}” to add.` : 'Search for someone by name — or star people in Calls to see them here.'}</p>
+      ) : (
+        list.map((p) => (
+          <button key={p.uid} className="call-add-row" onClick={() => onPick(p)}>
+            <Avatar name={p.name} size={36} />
+            <span><b>{p.name}</b><small>{searching ? 'Stream Studio member' : 'Favourite'}</small></span>
+            <Icon name="phone" size={18} />
+          </button>
+        ))
+      )}
+    </div>
+  );
+}
+
 function CallButton({ icon, label, on, danger, onClick, disabled }: { icon: string; label: string; on?: boolean; danger?: boolean; onClick: () => void; disabled?: boolean }) {
   return (
     <button className={cx('call-btn', on && 'on', danger && 'danger')} onClick={onClick} aria-label={label} aria-pressed={on} disabled={disabled}>
@@ -142,10 +192,12 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
   }, [a.state, a.ended?.why]);
 
   // Who else could join: the nursery's people not already in (or rung for) the call.
+  const direct = isDirect(a.nid) || a.nid === 'me';
   useEffect(() => {
-    if (!adding || people) return;
+    if (!adding || people || direct) return;
     void listPeople(a.nid).then((r) => setPeople(r.ok ? r.people ?? [] : []));
-  }, [adding, people, a.nid]);
+  }, [adding, people, a.nid, direct]);
+  const callAgain = () => void (direct ? callCenter.callUser(a.asked, a.video) : callCenter.call(a.nid, a.asked, a.video)).then((e) => e && push(e, { icon: 'alert' }));
 
   const others = a.peers;
   const inCall = new Set([...(a.call?.parts.map((p) => p.uid) ?? [])]);
@@ -257,7 +309,7 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
           {a.state === 'ended' && (
             <div className="call-end-acts">
               {a.outgoing && a.asked.length > 0 && a.ended?.why !== 'done' && (
-                <button className="call-pill" onClick={() => void callCenter.call(a.nid, a.asked, a.video).then((e) => e && push(e, { icon: 'alert' }))}><Icon name="refresh" size={15} />Call again</button>
+                <button className="call-pill" onClick={callAgain}><Icon name="refresh" size={15} />Call again</button>
               )}
               <button className="call-pill ghost" onClick={() => callCenter.dismiss()}>Close</button>
             </div>
@@ -286,7 +338,18 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
         </div>
       )}
 
-      {adding && (
+      {adding && direct && (
+        <DirectAdd
+          inCall={inCall}
+          onClose={() => setAdding(false)}
+          onPick={(p) => {
+            callCenter.invite([p.uid]);
+            setAdding(false);
+            push(`Ringing ${p.name}…`, { icon: 'phone' });
+          }}
+        />
+      )}
+      {adding && !direct && (
         <div className="call-add" role="dialog" aria-label="Add someone to the call">
           <div className="call-add-head">
             <b>Add to the call</b>

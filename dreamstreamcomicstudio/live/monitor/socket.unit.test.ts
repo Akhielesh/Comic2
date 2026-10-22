@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../account', () => ({ accessToken: async () => 'tok', supa: async () => null }));
 
-import { FAST_PING_MS, openMonitorSocket, PING_MS, PONG_WAIT_MS } from './client';
+import { FAST_PING_MS, openCallRoomSocket, openMonitorSocket, openUserLineSocket, PING_MS, PONG_WAIT_MS } from './client';
 
 class FakeWS {
   static CONNECTING = 0;
@@ -147,5 +147,41 @@ describe('room socket liveness', () => {
     expect(sock.sendBinary(new ArrayBuffer(4))).toBe(false);
     expect(sock.sendBinary(new ArrayBuffer(4), 1024 * 1024)).toBe(true);
     sock.close();
+  });
+});
+
+describe('direct-call sockets (same liveness, their own first frame)', () => {
+  const UID = '00000000-0000-4000-8000-0000000000a1';
+
+  it('your line: the member’s own token in the first frame, never in the URL', async () => {
+    const status: string[] = [];
+    const sock = openUserLineSocket(UID, () => undefined, (s) => status.push(s));
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeWS.all.at(-1)!;
+    expect(ws.url).toMatch(new RegExp(`/api/calls/u/${UID}/ws$`));
+    expect(ws.url).not.toContain('tok');
+    ws.open();
+    expect(JSON.parse(ws.sent[0] as string)).toMatchObject({ t: 'auth', token: 'tok', dev: expect.any(String) });
+    ws.msg({ t: 'hello' });
+    expect(status.at(-1)).toBe('connected');
+    // The same watchdog: a ping that hears nothing drops the socket and reconnects.
+    await vi.advanceTimersByTimeAsync(PING_MS + PONG_WAIT_MS);
+    expect(ws.closedWith).toBe(4000);
+    sock.close();
+  });
+
+  it('a call’s room: the ticket in the first frame; “that call has ended” is final', async () => {
+    const status: string[] = [];
+    openCallRoomSocket('0123456789abcdef', 'tkt', () => undefined, (s, d) => status.push(d ? `${s}:${d}` : s));
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = FakeWS.all.at(-1)!;
+    expect(ws.url).toMatch(/\/api\/calls\/c\/0123456789abcdef\/ws$/);
+    ws.open();
+    expect(JSON.parse(ws.sent[0] as string)).toMatchObject({ t: 'auth', ticket: 'tkt' });
+    ws.msg({ t: 'error', code: 'ended', msg: 'That call has ended.' });
+    ws.onclose?.({ code: 4006 });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(status.at(-1)).toBe('closed:That call has ended.');
+    expect(FakeWS.all).toHaveLength(1);
   });
 });
