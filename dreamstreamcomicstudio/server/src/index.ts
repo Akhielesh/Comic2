@@ -176,7 +176,10 @@ app.get('/api/health', (_req, res) => {
   // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
   // EMAIL_WORKER_URL/EMAIL_HMAC_SECRET is checkable from outside (no admin login, no log access).
   const emailConfigured = Boolean(EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<'));
-  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant' });
+  // build: which commit is live (set by deploy-api-proxy.yml; the repo is public), so "is the
+  // fix deployed?" is answerable from outside without container logs.
+  const build = String(process.env.GIT_SHA || '').slice(0, 12) || undefined;
+  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant', ...(build ? { build, builtAt: process.env.BUILD_TIMESTAMP } : {}) });
 });
 
 // Public routes

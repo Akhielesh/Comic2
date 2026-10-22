@@ -469,6 +469,21 @@ describe('createImageGenerator — same-model route fallback and shared cooldown
     expect(generateContent).toHaveBeenCalledTimes(1);
   });
 
+  it('reads OpenRouter\'s error metadata (object raw, provider, BYOK flag) end to end', async () => {
+    const body = {
+      error: {
+        code: 429,
+        message: 'Provider returned error',
+        metadata: { raw: { error: { message: 'google/gemini-nano-banana-2.1 is temporarily rate-limited upstream.' } }, provider_name: 'Google AI Studio', is_byok: false }
+      }
+    };
+    const { generate } = setup(OR_BYOK, [json(body, 429), json(body, 429)]);
+    const err = await generate(baseReq()).catch((e) => e);
+    expect(err).toMatchObject({ code: 'RATE_LIMIT' });
+    expect(err.userMessage).toMatch(/^Nano Banana 2\.1 is being throttled by its provider \(Google AI Studio\)/);
+    expect(err.userMessage).toMatch(/OpenRouter said: .*temporarily rate-limited upstream/);
+  });
+
   it('makes the next call on the same route+model+key wait out a 429 instead of piling on', async () => {
     let clock = 1_000_000;
     const fetchMock = vi
@@ -513,6 +528,23 @@ describe('classifyImageError / looksLikeRefusal', () => {
       'The image model is busy right now (rate limited). Wait a minute and try again. (OpenRouter said: Resource has been exhausted (e.g. check quota). key=….)'
     );
     expect(err.userMessage).not.toMatch(/sk-or|abcdef0123456789/);
+  });
+
+  it('says who refused a 429: the upstream provider, the user\'s OpenRouter-integration key, or OpenRouter itself', () => {
+    const ctx = { route: 'openrouter' as const, byok: true, model: 'Nano Banana 2.1' };
+    const upstream = Object.assign(new Error('OpenRouter /images 429: Provider returned error'), {
+      status: 429,
+      meta: { providerName: 'Google AI Studio', isByok: false }
+    });
+    expect(classifyImageError(upstream, ctx).userMessage).toMatch(
+      /^Nano Banana 2\.1 is being throttled by its provider \(Google AI Studio\) for everyone on OpenRouter right now — your key and limits are fine\./
+    );
+    const integration = Object.assign(new Error('OpenRouter /images 429: Provider returned error'), { status: 429, meta: { isByok: true } });
+    expect(classifyImageError(integration, ctx).userMessage).toMatch(/Google key in your OpenRouter Integrations/);
+    const platform = Object.assign(new Error('OpenRouter /images 429: Rate limit exceeded'), { status: 429 });
+    expect(classifyImageError(platform, ctx).userMessage).toMatch(/^The image model is busy right now \(rate limited\)/);
+    // Every variant is still a retryable RATE_LIMIT.
+    for (const e of [upstream, integration, platform]) expect(classifyImageError(e, ctx)).toMatchObject({ code: 'RATE_LIMIT', retryable: true });
   });
 
   it('adds no detail when the provider said nothing useful, and keeps long plain words', () => {
