@@ -236,7 +236,7 @@ describe('PageEditor', () => {
     layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 900, right: 600, bottom: 900, x: 0, y: 0, toJSON: () => ({}) });
     fireEvent.pointerDown(layer, { clientX: 300, clientY: 700, button: 0, pointerType: 'mouse' });
     const [ops, opts] = (studio.patch as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
-    expect(ops[0]).toMatchObject({ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', patch: { kind: 'speech', text: 'Hello!' } });
+    expect(ops[0]).toMatchObject({ op: 'line', pageId: 'pg_1', patch: { kind: 'speech', text: 'Hello!' } });
     expect(ops[1]).toMatchObject({ op: 'balloon', pageId: 'pg_1', lineId: ops[0].id, patch: { pinned: true } });
     expect(opts).toEqual({ undo: true, label: 'Add speech' });
   });

@@ -54,7 +54,7 @@ let images: FakeImages;
 let server: http.Server;
 let base: string;
 /** Moderation state the fake requireActiveUser() reports for every request. */
-let moderation: 'active' | 'restricted';
+let moderation: 'active' | 'restricted' | 'suspended';
 let cooldown: { until: number } | null;
 let screen: (input: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }) => Promise<ScreenResult>;
 let screenCalls: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }[];
@@ -96,6 +96,10 @@ app.use('/api/comic', (req, res, next) =>
       accountCeilingFor: async () => 'PG-13'
     },
     requireActive: (_req, res, next) => {
+      if (moderation === 'suspended') {
+        res.status(403).json({ error: { message: 'This account is suspended.', code: 'FORBIDDEN' } });
+        return;
+      }
       res.locals.moderationStatus = moderation;
       next();
     },
@@ -193,7 +197,7 @@ const infoLines = (): Record<string, unknown>[] =>
 const refusals = () => infoLines().filter((l) => l.event === 'comic_stream_refused');
 
 const BLOCKED: SafetyVerdict = { assessed: 'X', categories: ['graphic_gore'], by: 'qc', at: 1 };
-const ref = (path: string, extra: Partial<RefAsset> = {}): RefAsset => ({ path, source: 'upload', at: 1, ...extra });
+const ref = (path: string, extra: Partial<RefAsset> = {}): RefAsset => ({ path, source: 'upload', at: Date.now(), ...extra });
 
 describe('auth and ownership', () => {
   it('requires a user', async () => {
@@ -526,7 +530,9 @@ describe('public reader (GET /api/comic/public/:id)', () => {
     for (const user of [undefined, 'intruder']) {
       const res = await api('/api/comic/public/proj-1', { user });
       expect(res.status).toBe(200);
-      expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+      // Never cached: an unpublish must stop the comic being served at once.
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('vary')).toMatch(/authorization/i);
       const body = await res.json();
       expect(body.publication.slug).toBe('AbCdEfGhIjKlMnOpQ');
       expect(body.doc).toEqual(JSON.parse(JSON.stringify(snap)));
@@ -851,6 +857,39 @@ describe('refusals before anything is persisted', () => {
     expect(store.docs.get('proj-1')!.doc.conversation).toEqual([]);
   });
 
+  it('a suspended account is refused by the moderation gate, and the refusal is logged (codes only)', async () => {
+    seed();
+    moderation = 'suspended';
+    const res = await api('/api/comic/projects/proj-1/stream', { user: 'user-1', body: { kind: 'message', text: 'secret plot' } });
+    expect(res.status).toBe(403);
+    await res.text();
+    const created = await api('/api/comic/projects', { user: 'user-1', body: { title: 'Secret title' } });
+    expect(created.status).toBe(403);
+    await created.text();
+    expect(store.docs.size).toBe(1); // no project was created
+    expect(refusals()).toEqual([expect.objectContaining({ code: 'FORBIDDEN', status: 403, stage: 'pre_stream', reason: 'moderation', kind: 'message', projectId: 'proj-1', userId: 'user-1' })]);
+    const created403 = infoLines().filter((l) => l.event === 'comic_request_refused');
+    expect(created403).toEqual([expect.objectContaining({ code: 'FORBIDDEN', status: 403, reason: 'moderation', method: 'POST', userId: 'user-1' })]);
+    expect(JSON.stringify(infoLines())).not.toMatch(/secret plot|Secret title/);
+  });
+
+  it('non-stream studio refusals (open, sign, cancel, import) leave one structured line with the route pattern', async () => {
+    seed();
+    expect((await api('/api/comic/projects/proj-1', { user: 'intruder' })).status).toBe(404);
+    expect((await api('/api/comic/projects/proj-1/urls', { user: 'user-1', body: {} })).status).toBe(400);
+    expect((await api('/api/comic/projects/proj-1/cancel', { body: {} })).status).toBe(401);
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'someone-elses' } })).status).toBe(404);
+    const lines = infoLines().filter((l) => l.event === 'comic_request_refused');
+    expect(lines.map((l) => [l.method, l.route, l.code, l.status, l.userId])).toEqual([
+      ['GET', '/projects/:id', 'NOT_FOUND', 404, 'intruder'],
+      ['POST', '/projects/:id/urls', 'BAD_REQUEST', 400, 'user-1'],
+      ['POST', '/projects/:id/cancel', 'FORBIDDEN', 401, null],
+      ['POST', '/projects', 'NOT_FOUND', 404, 'user-1']
+    ]);
+    expect(lines[0].projectId).toBe('proj-1');
+    expect(JSON.stringify(lines)).not.toContain('someone-elses');
+  });
+
   it('isCostlyRequest / restrictedRefusal classify requests', () => {
     expect(isCostlyRequest({ kind: 'message', text: 'hi' })).toBe(true);
     expect(isCostlyRequest({ kind: 'action', action: { type: 'patch', ops: [] } })).toBe(false);
@@ -859,6 +898,8 @@ describe('refusals before anything is persisted', () => {
     expect(isCostlyRequest({ kind: 'action', action: { type: 'relayout_balloons', pageId: 'p', useVision: true } })).toBe(true);
     expect(restrictedRefusal({ kind: 'message', text: 'hi', attachments: [{ inboxPath: 'u/x/p/y/ref/a.webp' }] })).toBeNull();
     expect(restrictedRefusal({ kind: 'action', action: { type: 'unpublish' } })).toBeNull();
+    // A new link re-publishes the comic: refused like publish (the REST route refuses it too).
+    expect(restrictedRefusal({ kind: 'action', action: { type: 'regenerate_link' } })).toContain('publishing is paused');
     expect(restrictedRefusal({ kind: 'action', action: { type: 'translate', languages: ['te'] } })).toBe(RESTRICTED_SPEND_MESSAGE);
   });
 });

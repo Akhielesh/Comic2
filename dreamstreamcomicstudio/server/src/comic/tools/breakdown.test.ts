@@ -88,7 +88,8 @@ describe('show_pages', () => {
 
   it('is honest about unknown pages and an empty book', async () => {
     const { turn, tools } = setup();
-    expect(await tools.show_pages.execute({ pages: [7, 9] })).toBe('There is no pages 7, 9. This book has pages 1–3. Nothing was shown.');
+    expect(await tools.show_pages.execute({ pages: [7, 9] })).toBe('There are no pages 7, 9. This book has pages 1–3. Nothing was shown.');
+    expect(await tools.show_pages.execute({ pages: [7] })).toBe('There is no page 7. This book has pages 1–3. Nothing was shown.');
     expect(turn.cards).toHaveLength(0);
     const partial = await tools.show_pages.execute({ pages: [1, 8] });
     expect(partial).toContain('There is no page 8');
@@ -99,6 +100,24 @@ describe('show_pages', () => {
     const e = setup(empty);
     expect(await e.tools.show_pages.execute({})).toMatch(/no pages yet/);
     expect(e.turn.cards).toHaveLength(0);
+  });
+});
+
+describe('cover honesty', () => {
+  it('a cover drawn from an older title is "out of date", a failed one "failed" — never "not drawn"', async () => {
+    const stale = drawnDoc();
+    stale.cover = { ...stale.cover, render: { status: 'ready', history: [], asset: { path: 'u/x/cover.webp', source: 'generated', at: 1 }, specHash: 'an-older-title' } };
+    const cover = estimateSpendAction(stale, { type: 'render_cover' }, false);
+    const a = setup(stale);
+    const text = await a.tools.show_pages.execute({});
+    expect(text).toContain(`cover out of date — the title, style or cast changed since it was drawn (≈${formatUsd(cover.usd)} to redraw)`);
+    expect(text).not.toContain('cover not drawn');
+    expect(breakdownToolGroup.summaryLines?.(stale, createDirectorTurn())[0]).toContain('cover out of date.');
+
+    const failed = drawnDoc();
+    failed.cover = { ...failed.cover, render: { status: 'failed', history: [], error: 'boom' } };
+    expect(await setup(failed).tools.show_pages.execute({})).toContain(`cover failed (≈${formatUsd(cover.usd)} to try again)`);
+    expect(breakdownToolGroup.summaryLines?.(failed, createDirectorTurn())[0]).toContain('cover failed.');
   });
 });
 
@@ -115,7 +134,18 @@ describe('quote', () => {
     const per = unitPrice(drawn.session.doc, 'page', { byok: false }).usd;
     expect(zero).toMatch(/^\$0 — nothing would be drawn\./);
     expect(zero).toContain('Already drawn and current (not counted): page 2.');
-    expect(zero).toContain(`A new take is only for when the user asks for another version: ≈${formatUsd(per)} a page`);
+    expect(zero).toContain(`A new take is only for when the user asks for another version: ≈${formatUsd(per)} a page (1 page ≈${formatUsd(per)}).`);
+  });
+
+  it('a new take of a drawn page whose character has no sheet is priced with that sheet (the gate draws it too)', async () => {
+    const doc = drawnDoc();
+    doc.cast = doc.cast.map((c, i) => (i === 0 ? { ...c, sheet: { status: 'none', history: [] } } : c));
+    const page = doc.pages.find((p) => p.panels.some((panel) => panel.castIds.includes(doc.cast[0].id)))!;
+    page.render = { ...page.render, specHash: pageSpecHash(doc, page) }; // drawn and current with the sheet missing
+    const gate = estimateSpendAction(doc, { type: 'render_pages', pageIds: [page.id], force: true }, false);
+    const text = await setup(doc).tools.quote.execute({ action: 'render_pages', pages: [page.n] });
+    expect(text).toMatch(/^\$0 — nothing would be drawn\./);
+    expect(text).toContain(`(1 page ≈${formatUsd(gate.usd)} incl. 1 character sheet).`);
   });
 
   it('include_cover adds the cover; cover, sheets and edits use the gate estimate', async () => {

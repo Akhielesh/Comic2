@@ -307,6 +307,10 @@ describe('toLlmStudioError', () => {
     expect(looksLikeRefusal('Sorry — I’m unable to assist with this request.')).toBe(true);
     expect(looksLikeRefusal('I can draw that for you — want the cover too?')).toBe(false);
     expect(looksLikeRefusal(`I can't wait to draw this! ${'More words. '.repeat(40)}`)).toBe(false);
+    expect(looksLikeRefusal("Sorry, I can't create that kind of content.")).toBe(true);
+    // A plain "not yet" is a real answer, never swapped for the filter redirect.
+    expect(looksLikeRefusal("I can't draw yet — we need a plan first. Want me to plan the pages?")).toBe(false);
+    expect(looksLikeRefusal("Sorry, I can't make it look exactly like the photo, but a reference sheet helps a lot.")).toBe(false);
   });
 
   it('never leaks raw provider bodies', () => {

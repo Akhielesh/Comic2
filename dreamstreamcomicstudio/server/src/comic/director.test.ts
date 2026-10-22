@@ -407,6 +407,69 @@ describe('runDirectorTurn — never silent (contract §12.2)', () => {
     expect(lastToolResult(skipped.llm)).not.toMatch(/^Refused/);
   });
 
+  it('a bare "yes" to the studio\'s own "draw page 2?" draws (no extra Approve tap); a non-answer only quotes', async () => {
+    const run = async (answer: string) => {
+      const doc = plannedDoc();
+      doc.planStatus = 'approved';
+      doc.settings = { ...doc.settings, confirm: 'big', bigSpendUsd: 0.5 };
+      doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 } };
+      doc.conversation = [
+        { id: 'u0', role: 'user', text: 'draw page 1', at: 1 },
+        { id: 'a0', role: 'assistant', text: 'Page 1 is ready. Want me to draw page 2 next (≈ $0.07)?', at: 2 }
+      ];
+      const session = newSession(doc);
+      const llm = scriptedLlm({ director: [{ text: 'On it.', toolCalls: [toolCall('r', 'render_pages', { pages: [2] })] }, { text: '' }] });
+      const ctx = testContext(session, { llm });
+      await runDirectorTurn(ctx, { text: answer, attachments: [] });
+      await ctx.settled();
+      return { session, ctx };
+    };
+    const yes = await run('yes');
+    expect(yes.session.doc.gate?.status === 'open').toBe(false);
+    expect(yes.ctx.imagesFake.calls.length).toBeGreaterThan(0);
+    const unrelated = await run('nice colours');
+    expect(unrelated.session.doc.gate).toMatchObject({ status: 'open', reason: 'no_intent' });
+    expect(unrelated.ctx.imagesFake.calls).toHaveLength(0);
+  });
+
+  it('never silent even when the turn breaks outside the model loop', async () => {
+    const doc = plannedDoc();
+    (doc.pages[0].render as { qc?: unknown }).qc = { issues: [] }; // a malformed qc (no score) no longer breaks the summary…
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [{ text: 'never reached' }] });
+    const ctx = testContext(session, { llm });
+    // …but anything else that throws before the model loop still gets an honest reply.
+    Object.defineProperty(ctx, 'rating', { get: () => { throw new Error('boom'); } });
+    await expect(runDirectorTurn(ctx, { text: 'hello there', attachments: [] })).resolves.toBeUndefined();
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.role).toBe('assistant');
+    expect(reply.text).toBe("Sorry — I couldn't finish that just now. Try again in a moment.");
+    expect(reply.nextSteps).toEqual([{ label: 'Try again', say: 'hello there' }]);
+    const s2 = newSession(doc);
+    await runDirectorTurn(testContext(s2, { llm: scriptedLlm({ director: [{ text: 'Hi!' }] }) }), { text: 'hello', attachments: [] });
+    expect(s2.doc.conversation[s2.doc.conversation.length - 1].text).toBe('Hi!');
+  });
+
+  it('a stop after a tool card says "Stopped." once (never "Stopped. (stopped)")', async () => {
+    const session = newSession(plannedDoc());
+    const controller = new AbortController();
+    const llm = scriptedLlm({
+      director: [{ text: '', toolCalls: [toolCall('q', 'ask_user', { question: 'Which?', options: ['A', 'B'] }), toolCall('n', 'add_notes', { notes: ['x'] })] }]
+    });
+    const ctx = testContext(session, { llm, signal: controller.signal });
+    // The user taps Stop right after the first tool (ask_user) finishes.
+    const off = session.subscribe((e) => {
+      if (e.type === 'activity' && e.phase === 'end') controller.abort();
+    });
+    await runDirectorTurn(ctx, { text: 'hm', attachments: [] });
+    off();
+    expect(session.doc.brief.notes).toHaveLength(0);
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.role).toBe('assistant');
+    expect(reply.text).toBe('Stopped.');
+    expect(reply.cards?.map((c) => c.type)).toEqual(['options']);
+  });
+
   it('production bug (b4b5774f): the reply never claims runs that already failed are under way', async () => {
     const session = newSession(createEmptyDoc('proj-1'));
     const images = fakeImages(() => new StudioError('PROVIDER_ERROR', 'The image service had a problem.', { status: 502, retryable: false }));

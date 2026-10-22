@@ -102,6 +102,17 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ -
 // Longest words first so "teddy bear" wins over "bear", "sea turtle" over "turtle".
 const ENTRIES = [...LEXICON].sort((a, b) => b.word.length - a.word.length);
 
+/** One compiled matcher per entry, built once (a 40-page plan scans ~240 panels; compiling per call blocked the event loop for >1 s). */
+const formsOf = (e: Entry): string[] => [pluralOf(e), e.word].filter((v, i, a) => a.indexOf(v) === i);
+const squashForm = (s: string) => s.toLowerCase().replace(/[ -]/g, '');
+const MATCHERS = new Map<Entry, { all: RegExp; first: RegExp; keys: string[] }>(
+  ENTRIES.map((e) => {
+    const body = `(^|[^\\p{L}])(${formsOf(e).map(esc).join('|')})(?=$|[^\\p{L}])`;
+    // Cheap substring keys: the regex only runs when one of them occurs in the text.
+    return [e, { all: new RegExp(body, 'giu'), first: new RegExp(body, 'iu'), keys: formsOf(e).map((f) => squashForm(f).slice(0, 4)) }];
+  })
+);
+
 /** A noun phrase: determiner, number, possessive or adjective-ish word right before the noun, or a plural. */
 const DETERMINER =
   "(?:a|an|the|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\\d{1,2}|few|several|some|many|his|her|their|its|our|my|your|this|that|these|those|little|tiny|small|big|giant|baby|old|young|cute|fluffy|friendly|brave|shy|playful|grumpy|happy|sleepy|red|blue|green|yellow|white|black|brown|grey|gray|pink|orange|purple|golden|silver|wooden|magic|mother|father|pet|toy|robot|[\\p{L}]+'s)";
@@ -133,9 +144,12 @@ export function scanText(text: string): Hit[] {
   const t = ` ${String(text || '').replace(/\s+/g, ' ')} `;
   const taken: Array<[number, number]> = [];
   const hits: Hit[] = [];
+  const flat = squashForm(t);
   for (const entry of ENTRIES) {
-    const forms = [pluralOf(entry), entry.word].filter((v, i, a) => a.indexOf(v) === i);
-    const re = new RegExp(`(^|[^\\p{L}])(${forms.map(esc).join('|')})(?=$|[^\\p{L}])`, 'giu');
+    const matcher = MATCHERS.get(entry)!;
+    if (!matcher.keys.some((k) => flat.includes(k))) continue;
+    const re = matcher.all;
+    re.lastIndex = 0;
     let found: Hit | undefined;
     for (let m = re.exec(t); m; m = re.exec(t)) {
       const start = m.index + m[1].length;
@@ -183,9 +197,7 @@ const STOP_WORDS = new RegExp(`^(?:${FUNCTION_WORDS}|a|an|the|one|two|three|four
 
 /** The adjectives the plan used for this noun ("small green" in "a small green frog"), ≤ 3 words. */
 const adjectivesFor = (text: string, entry: Entry): string => {
-  const forms = [pluralOf(entry), entry.word].map(esc).join('|');
-  const re = new RegExp(`(^|[^\\p{L}])(${forms})(?=$|[^\\p{L}])`, 'iu');
-  const m = re.exec(` ${String(text || '').replace(/\s+/g, ' ')} `);
+  const m = MATCHERS.get(entry)!.first.exec(` ${String(text || '').replace(/\s+/g, ' ')} `);
   if (!m) return '';
   const before = ` ${String(text || '').replace(/\s+/g, ' ')} `.slice(0, m.index + m[1].length).split(/[;,.!?:()]/).pop() || '';
   const out: string[] = [];
@@ -278,6 +290,16 @@ export function castOpsForUncast(doc: ComicDoc, beings: ReturnType<typeof findUn
   const totalPanels = doc.pages.reduce((n, p) => n + p.panels.length, 0) || 1;
   const panelAdds = new Map<string, { pageId: string; panelId: string; castIds: string[] }>();
   const existingNames = new Set(doc.cast.map((c) => c.name.trim().toLowerCase()));
+  // Scan each panel once (not once per being).
+  const panelWords = new Map<string, Set<string>>();
+  const wordsIn = (action: string): Set<string> => {
+    let set = panelWords.get(action);
+    if (!set) {
+      set = new Set(scanText(action).map((h) => h.entry.word));
+      panelWords.set(action, set);
+    }
+    return set;
+  };
   for (const being of beings) {
     const entry = ENTRIES.find((e) => e.word === being.noun);
     if (!entry || existingNames.has(being.name.toLowerCase())) continue;
@@ -304,7 +326,7 @@ export function castOpsForUncast(doc: ComicDoc, beings: ReturnType<typeof findUn
       const current = page.render.status === 'ready' && !isPageStale(doc, page);
       if (current) continue;
       for (const panel of page.panels) {
-        if (!scanText(panel.action).some((h) => h.entry.word === entry.word)) continue;
+        if (!wordsIn(panel.action || '').has(entry.word)) continue;
         const key = `${page.id}/${panel.id}`;
         const prev = panelAdds.get(key) || { pageId: page.id, panelId: panel.id, castIds: [...panel.castIds] };
         if (!prev.castIds.includes(id)) prev.castIds.push(id);

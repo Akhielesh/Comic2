@@ -14,10 +14,24 @@
 // corner, w = its width as a fraction of the page width; tailX/tailY = the tail tip.
 // Height is derived from the text by the renderer; estimateBalloonHeight() mirrors it.
 
-import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, Line, LineKind, Page, QcReport } from '../../../shared/comic/doc.js';
+import type {
+  AspectRatio,
+  Balloon,
+  Box,
+  ComicDoc,
+  ComicKind,
+  KeepOut,
+  Line,
+  LineKind,
+  Page,
+  QcReport,
+  SpeakerMark
+} from '../../../shared/comic/doc.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
+import { SAFETY_CATEGORIES, effectiveRating, type SafetyCategory, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import type { MessagePart } from '../ai/providers/types.js';
 import { layoutPanelCount, pageAspectFor, parseLayout, stagePanel, synthesizeLayout, upperName, type ParsedLayout } from './prompts.js';
+import { prefilterText, verdictFromVision } from './safety/index.js';
 import { completeStructured, type StructuredCheck } from './writer.js';
 import type { LlmClient } from './types.js';
 
@@ -345,13 +359,17 @@ export const fallbackBalloons = (page: Page, panelBoxes?: Box[], opts: LayoutOpt
 
 // ── Lettering verification ───────────────────────────────────────────────────
 
-/** Lowercase, straight quotes, no accents/punctuation, single spaces. */
+/**
+ * Lowercase, straight quotes, no Latin accents/punctuation, single spaces. Combining marks
+ * (\p{M}) are KEPT: Indic vowel signs and viramas are letters of the word (bug: "नमस्ते"
+ * became "नमस त" and every Hindi/Telugu in-art line read as misspelled).
+ */
 export const normalizeLettering = (text: string): string =>
   clean(text)
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -457,6 +475,12 @@ const strict = (properties: Record<string, unknown>) => ({
   properties
 });
 
+const point = strict({ x: num, y: num });
+export const KEEP_OUT_KINDS: readonly KeepOut['kind'][] = ['face', 'hands', 'action', 'text', 'other'];
+/** At most this many keep-out regions / head marks are kept per panel (the prompt asks for ≤ 3). */
+export const MAX_MARKS_PER_PANEL = 4;
+export const VISION_RATINGS = ['G', 'PG', 'PG-13', 'X'] as const;
+
 export const VISION_SCHEMA = strict({
   panels: { type: 'array', items: strict({ n: { type: 'integer' }, box: strict({ x: num, y: num, w: num, h: num }) }) },
   issues: { type: 'array', items: { type: 'string' } },
@@ -466,8 +490,27 @@ export const VISION_SCHEMA = strict({
   balloons: {
     type: 'array',
     items: strict({ lineId: { type: 'string' }, x: num, y: num, w: num, tailX: num, tailY: num })
-  }
+  },
+  /** safety.md §3.3: the page's own rating, folded by verdictFromVision (missing ⇒ unchecked). */
+  safety: strict({
+    rating: { type: 'string', enum: [...VISION_RATINGS] },
+    categories: { type: 'array', items: { type: 'string', enum: [...SAFETY_CATEGORIES] } },
+    notes: { type: 'array', items: { type: 'string' } }
+  }),
+  /** lettering.md §6.6: regions balloons must not cover, and where speakers' heads are (tail aiming). */
+  keepOut: {
+    type: 'array',
+    items: strict({ panel: { type: 'integer' }, kind: { type: 'string', enum: [...KEEP_OUT_KINDS] }, box: strict({ x: num, y: num, w: num, h: num }) })
+  },
+  heads: { type: 'array', items: strict({ panel: { type: 'integer' }, name: { type: 'string' }, head: point, mouth: point }) }
 });
+
+/** Compact rating anchors for the vision rubric (item 7); the IMAGE is rated, never the script. */
+const SAFETY_RUBRIC =
+  'G = gentle: nobody hurt, no weapons aimed at anyone. PG = bloodless action and short spooky moments, modest clothing. ' +
+  'PG-13 = intense action or horror with minimal blood; no exposed wounds, no gore. ' +
+  'X = any nudity, a sexualized pose or outfit, anyone who looks under 18 shown in a suggestive way, gore or exposed wounds, dismemberment, hate symbols. ' +
+  'Action, monsters, darkness and peril are NOT X.';
 
 const visionSystemPrompt = (doc: ComicDoc): string => {
   const rtl = doc.format.readingDirection === 'rtl';
@@ -487,6 +530,10 @@ const visionSystemPrompt = (doc: ComicDoc): string => {
     overlay
       ? `6. balloons: exactly one per script line, using its lineId. x, y = the balloon's top-left corner; w = its width (0.16–0.34, longer text wider; height is about 0.03 per line of lettering). tailX, tailY = where the tail tip points, just beside the speaker's mouth or head. Rules: inside the line's own panel; near the speaker — above or beside their head; never over a face, hands or the key action — use empty areas such as sky, walls or background; reading order — an earlier line sits higher, or at the same height further ${start}; captions in the panel's top-${start} corner with tailX = tailY = -1; sound effects next to the action that makes the sound, tailX = tailY = -1.`
       : '6. balloons: [] — this page is lettered in the art.',
+    `7. safety: rate the IMAGE only (not the script) as rating G, PG, PG-13 or X using these anchors: ${SAFETY_RUBRIC} categories: the matching ones from the allowed list ([] when none). notes: at most 2 short, neutral phrases such as "blood on the floor in panel 3" — never a graphic description.`,
+    overlay
+      ? '8. keepOut: areas balloons must not cover — at most 3 per panel, most important first (faces, then hands, then the key action; "text" only for signs drawn in the scene), each {panel: n, kind, box}. heads: for each named character in each panel where they appear, {panel: n, name: as written in the script, head: the centre of the head, mouth: the mouth, or {x: -1, y: -1} when it is not visible}.'
+      : '8. keepOut: [] and heads: [] — this page is lettered in the art.',
     '',
     'Reply with JSON only, matching the schema.'
   ].join('\n');
@@ -546,23 +593,112 @@ interface VisionReading {
   characterNotes: string[];
   score: number;
   balloons: { lineId: string; x: number; y: number; w: number; tailX?: number; tailY?: number }[];
+  keepOut: KeepOut[];
+  heads: SpeakerMark[];
+  /** The raw `safety` block (verdictFromVision folds it); undefined when the model left it out. */
+  safety?: Record<string, unknown>;
 }
 
 /**
  * Vision models are asked for 0–1 fractions but sometimes answer on Gemini's native 0–1000
  * grid or in pixels. Detect the scale from the largest coordinate and convert to fractions
- * (pixels need the render's size); null when the numbers can't be interpreted.
+ * (pixels need the render's size); null when the numbers can't be interpreted. Up to 1.5 is
+ * still fractions — a box that overshoots the edge a little ("w: 1.02") is clamped later; on
+ * the 0–1000 grid every value ≤ 1.5 would sit in a 0.15 % corner, and reading it as the grid
+ * shrank every box to nothing and cost a paid repair round.
  */
 export const coordinateScale = (values: number[], size?: { w?: number; h?: number }): { sx: number; sy: number } | null => {
   const finite = values.filter((v) => Number.isFinite(v) && v >= 0);
   const max = finite.length ? Math.max(...finite) : 0;
-  if (max <= 1.0001) return { sx: 1, sy: 1 };
+  if (max <= 1.5) return { sx: 1, sy: 1 };
   if (max <= 1000) return { sx: 1000, sy: 1000 };
   if (size?.w && size?.h && max <= Math.max(size.w, size.h) * 1.01) return { sx: size.w, sy: size.h };
   return null;
 };
 
-const normalizeVision = (json: unknown, page: Page, overlay: boolean): StructuredCheck<VisionReading> => {
+const KIND_PRIORITY: Record<KeepOut['kind'], number> = { face: 0, hands: 1, action: 2, text: 3, other: 4 };
+
+/** "MAYA", "Maya", "DUCKLINGS ×3" → the comparable name. */
+const nameKey = (name: unknown) => clean(name).replace(/\s*×\s*\d+$|\s+x\s*\d+$/i, '').toLowerCase();
+
+/**
+ * keepOut / heads from a vision reply (lettering.md §6.6): their own coordinate scale (an
+ * unreadable scale — pixels without a known size — drops them, never the whole reading),
+ * clamped to the page, panels that exist only, head names resolved to cast ids, faces
+ * first and at most MAX_MARKS_PER_PANEL per panel. Optional data: problems never trigger a
+ * paid repair round.
+ */
+export const normalizeMarks = (
+  json: Record<string, unknown>,
+  doc: Pick<ComicDoc, 'cast'>,
+  page: Page
+): { keepOut: KeepOut[]; heads: SpeakerMark[] } => {
+  const rawKeep = (Array.isArray(json.keepOut) ? json.keepOut : []).filter(isObject);
+  const rawHeads = (Array.isArray(json.heads) ? json.heads : []).filter(isObject);
+  const pt = (v: unknown): number[] => (isObject(v) ? [Number(v.x), Number(v.y)] : []);
+  const values = [
+    ...rawKeep.flatMap((k) => (isObject(k.box) ? [k.box.x, k.box.y, k.box.w, k.box.h].map(Number) : [])),
+    ...rawHeads.flatMap((h) => [...pt(h.head), ...pt(h.mouth)])
+  ].filter((v) => Number.isFinite(v) && v >= 0);
+  if (!values.length) return { keepOut: [], heads: [] };
+  const scale = coordinateScale(values, page.render?.asset);
+  if (!scale) return { keepOut: [], heads: [] };
+  const panelNs = new Set(page.panels.map((p) => p.n));
+  const panelOf = (v: unknown): number | undefined => (Number.isInteger(v) && panelNs.has(v as number) ? (v as number) : undefined);
+  const count = new Map<string, number>();
+  const room = (key: string) => {
+    const n = count.get(key) || 0;
+    if (n >= MAX_MARKS_PER_PANEL) return false;
+    count.set(key, n + 1);
+    return true;
+  };
+
+  const keepOut: KeepOut[] = [];
+  const ordered = rawKeep
+    .map((k, i) => ({ k, i, kind: (KEEP_OUT_KINDS as readonly string[]).includes(k.kind as string) ? (k.kind as KeepOut['kind']) : 'other' }))
+    .sort((a, b) => KIND_PRIORITY[a.kind] - KIND_PRIORITY[b.kind] || a.i - b.i);
+  for (const { k, kind } of ordered) {
+    const panel = panelOf(k.panel);
+    if (panel === undefined || !isObject(k.box)) continue;
+    const bx = Number(k.box.x) / scale.sx;
+    const by = Number(k.box.y) / scale.sy;
+    const bw = Number(k.box.w) / scale.sx;
+    const bh = Number(k.box.h) / scale.sy;
+    if (![bx, by, bw, bh].every((v) => Number.isFinite(v) && v >= 0) || bx > 1 || by > 1) continue;
+    const box = { x: round4(clamp01(bx)), y: round4(clamp01(by)), w: round4(clamp(bw, 0, 1 - clamp01(bx))), h: round4(clamp(bh, 0, 1 - clamp01(by))) };
+    if (box.w < 0.01 || box.h < 0.01 || !room(`k${panel}`)) continue;
+    keepOut.push({ panel, box, kind });
+  }
+
+  const castByName = new Map(doc.cast.map((c) => [nameKey(c.name), c.id]));
+  const heads: SpeakerMark[] = [];
+  const seen = new Set<string>();
+  for (const h of rawHeads) {
+    const panel = panelOf(h.panel);
+    const head = pt(h.head);
+    if (panel === undefined || head.length !== 2) continue;
+    const hx = head[0] / scale.sx;
+    const hy = head[1] / scale.sy;
+    if (![hx, hy].every((v) => Number.isFinite(v) && v >= 0 && v <= 1)) continue;
+    const characterId = castByName.get(nameKey(h.name));
+    const key = `${panel}:${characterId || nameKey(h.name) || heads.length}`;
+    if (seen.has(key) || !room(`h${panel}`)) continue;
+    seen.add(key);
+    const mouth = pt(h.mouth);
+    const mx = mouth[0] / scale.sx;
+    const my = mouth[1] / scale.sy;
+    const hasMouth = mouth.length === 2 && [mx, my].every((v) => Number.isFinite(v) && v >= 0 && v <= 1);
+    heads.push({
+      panel,
+      ...(characterId ? { characterId } : {}),
+      head: { x: round4(hx), y: round4(hy) },
+      ...(hasMouth ? { mouth: { x: round4(mx), y: round4(my) } } : {})
+    });
+  }
+  return { keepOut, heads };
+};
+
+const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page, overlay: boolean): StructuredCheck<VisionReading> => {
   if (!isObject(json)) return { problems: ['The reply must be a JSON object.'] };
   const strings = (v: unknown) => (Array.isArray(v) ? v.map(clean).filter(Boolean) : []);
   const rawPanels = (Array.isArray(json.panels) ? json.panels : []).filter(isObject);
@@ -607,13 +743,17 @@ const normalizeVision = (json: unknown, page: Page, overlay: boolean): Structure
     });
   }
   const score = typeof json.score === 'number' && Number.isFinite(json.score) ? clamp(json.score, 0, 1) : Number.NaN;
+  const marks = overlay ? normalizeMarks(json, doc, page) : { keepOut: [], heads: [] };
   const reading: VisionReading = {
     panels,
     issues: strings(json.issues),
     textFound: strings(json.textFound),
     characterNotes: strings(json.extraOrMissingCharacters),
     score,
-    balloons
+    balloons,
+    ...marks,
+    // Missing ⇒ unchecked (never a pass); no repair round is spent on it.
+    ...(isObject(json.safety) ? { safety: json.safety } : {})
   };
   const problems: string[] = [];
   if (!panels.length && page.panels.length) problems.push('"panels" is empty: give every panel\'s rectangle.');
@@ -684,10 +824,60 @@ const dedupe = (items: string[]) => {
   });
 };
 
+const TEXT_BLOCK_NOTE = 'text drawn in the art breaks the content rules';
+const MAX_TEXT_FOUND = 100;
+
+/**
+ * Pre-filter (free, safety.md §3.3) every piece of text the vision pass read off the art:
+ * entries the word filter blocks are dropped from qc.textFound (never stored or quoted back)
+ * and escalate the page verdict to X with their categories.
+ */
+export const prefilterFoundText = (
+  doc: ComicDoc,
+  textFound: string[]
+): { kept: string[]; blocked: number; categories: SafetyCategory[] } => {
+  const rating = effectiveRating(doc).rating;
+  const kept: string[] = [];
+  const categories = new Set<SafetyCategory>();
+  let blocked = 0;
+  // Bounded: a runaway reply can't make us screen (or store) thousands of strings.
+  for (const text of textFound.slice(0, MAX_TEXT_FOUND)) {
+    const result = prefilterText(text, rating);
+    if (result?.decision === 'block') {
+      blocked += 1;
+      for (const c of result.categories || []) categories.add(c);
+    } else kept.push(text);
+  }
+  return { kept, blocked, categories: [...categories] };
+};
+
+/** The image verdict with blocked drawn text folded in (X, union of categories, ≤ 2 notes). */
+const foldTextVerdict = (
+  verdict: SafetyVerdict | undefined,
+  text: { blocked: number; categories: SafetyCategory[] },
+  model: string | undefined,
+  at: number
+): SafetyVerdict | undefined => {
+  if (!text.blocked) return verdict;
+  const categories = [...new Set([...(verdict?.categories || []), ...text.categories])];
+  const notes = [...new Set([...(verdict?.notes || []), TEXT_BLOCK_NOTE])].slice(0, 2);
+  return {
+    ...(verdict || {}),
+    assessed: 'X',
+    ...(categories.length ? { categories } : {}),
+    notes,
+    by: verdict?.by || 'qc',
+    ...(verdict?.model || model ? { model: verdict?.model || model } : {}),
+    at: verdict?.at || at
+  };
+};
+
 /**
  * Vision QC + balloon layout for one rendered page. Transport errors (no key, rate limit,
  * cancel) propagate as StudioErrors; an unusable reply after one repair degrades to the
- * layout-based fallback with an honest QC note instead of failing the page.
+ * layout-based fallback with an honest QC note instead of failing the page. The same call
+ * rates the image (`safety`, folded by verdictFromVision; absent ⇒ unchecked) and, for
+ * overlay pages, marks faces/hands/action and speakers' heads for balloon placement.
  */
 export async function analyzePageRender(args: {
   doc: ComicDoc;
@@ -695,7 +885,7 @@ export async function analyzePageRender(args: {
   dataUrl: string;
   llm: LlmClient;
   signal?: AbortSignal;
-}): Promise<{ qc: QcReport; balloons: Balloon[]; costUsd?: number; model: string }> {
+}): Promise<{ qc: QcReport; balloons: Balloon[]; costUsd?: number; model: string; safety?: SafetyVerdict }> {
   const { doc, page } = args;
   const overlay = doc.format.lettering !== 'in_art';
   const opts: LayoutOptions = { readingDirection: doc.format.readingDirection, kind: doc.format.kind, pageAspect: pageAspectForDoc(doc, page) };
@@ -713,11 +903,11 @@ export async function analyzePageRender(args: {
     user,
     schemaName: 'comic_page_check',
     schema: VISION_SCHEMA,
-    validate: (json) => normalizeVision(json, page, overlay),
+    validate: (json) => normalizeVision(json, doc, page, overlay),
     failure: "The page check didn't return a usable result.",
     fallback: () => null,
     temperature: 0.2,
-    maxTokens: Math.min(8_000, 2_000 + lineCount * 80),
+    maxTokens: Math.min(8_000, 2_200 + lineCount * 80 + (overlay ? page.panels.length * 90 : 0)),
     signal: args.signal
   });
   const checkedAt = Date.now();
@@ -743,22 +933,30 @@ export async function analyzePageRender(args: {
   const countOk = reading.panels.length === n;
   const boxes = countOk ? reading.panels : estimated;
   const issues: string[] = [...reading.issues, ...reading.characterNotes];
+  // Drawn text is screened before anything reads or stores it ($0).
+  const screened = prefilterFoundText(doc, reading.textFound);
+  const textFound = screened.kept;
+  const safety = foldTextVerdict(verdictFromVision(reading.safety, result.model), screened, result.model, checkedAt);
   let score = reading.score;
   if (!countOk && reading.panels.length) {
     issues.unshift(`Expected ${n} panel${n === 1 ? '' : 's'} but the page shows ${reading.panels.length}.`);
     score = Math.min(score, 0.6);
   }
+  if (screened.blocked) {
+    issues.unshift('Some text drawn in the art breaks the content rules — redraw this page safer.');
+    score = Math.min(score, 0.4);
+  }
   if (reading.characterNotes.length) score = Math.min(score, 0.75);
 
   if (overlay) {
-    const stray = reading.textFound.filter((t) => (normalizeLettering(t).match(/\p{L}/gu) || []).length >= 3);
-    const letters = reading.textFound.reduce((s, t) => s + (normalizeLettering(t).match(/\p{L}/gu) || []).length, 0);
+    const stray = textFound.filter((t) => (normalizeLettering(t).match(/\p{L}/gu) || []).length >= 3);
+    const letters = textFound.reduce((s, t) => s + (normalizeLettering(t).match(/\p{L}/gu) || []).length, 0);
     if (stray.length || letters >= 6) {
-      issues.push(`Stray text drawn in the art: ${stray.slice(0, 3).map((t) => quoteShort(t, 40)).join(', ') || quoteShort(reading.textFound.join(' '), 40)} — overlay pages should be text-free.`);
+      issues.push(`Stray text drawn in the art: ${stray.slice(0, 3).map((t) => quoteShort(t, 40)).join(', ') || quoteShort(textFound.join(' '), 40)} — overlay pages should be text-free.`);
       score = Math.min(score, 0.8);
     }
   } else {
-    const check = compareLettering(page, reading.textFound);
+    const check = compareLettering(page, textFound);
     for (const m of check.missing.slice(0, 6)) issues.push(`Panel ${m.panel}: line missing from the art — ${quoteShort(m.line.text)}.`);
     for (const m of check.misspelled.slice(0, 6)) {
       issues.push(`Panel ${m.panel}: lettering differs from the script — expected ${quoteShort(m.line.text)}, found ${quoteShort(m.found)}.`);
@@ -775,9 +973,11 @@ export async function analyzePageRender(args: {
     score: round4(clamp(score, 0, 1)),
     issues: dedupe(issues).slice(0, 14),
     panelBoxes: boxes.map((b) => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) })),
-    ...(reading.textFound.length ? { textFound: reading.textFound.slice(0, 60) } : {}),
+    ...(textFound.length ? { textFound: textFound.slice(0, 60) } : {}),
     checkedAt,
-    ...(result.model ? { model: result.model } : {})
+    ...(result.model ? { model: result.model } : {}),
+    ...(reading.keepOut.length ? { keepOut: reading.keepOut } : {}),
+    ...(reading.heads.length ? { heads: reading.heads } : {})
   };
-  return { qc, balloons, ...cost, model: result.model };
+  return { qc, balloons, ...cost, model: result.model, ...(safety ? { safety } : {}) };
 }

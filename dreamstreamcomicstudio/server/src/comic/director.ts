@@ -21,13 +21,14 @@ import {
   REFUSAL_REPLY,
   composeTurnReply,
   detectNamedIp,
-  drawIntentOf,
+  drawIntentInContext,
   ipNoteFor,
   openQuestionsLine,
   recapLine,
   reconcileReply,
   refusalCard,
   retryNextSteps,
+  runFailureLine,
   runOutcome,
   understandingChanges,
   userTurnCount,
@@ -164,7 +165,7 @@ export function summarizeDocForDirector(
     for (const p of [...doc.pages].sort((a, b) => a.n - b.n).slice(0, 40)) {
       const a = p.render.status === 'ready' ? p.render.asset : undefined;
       const shape = a && !aspectMatches(f.pageAspect, a.w, a.h) && a.w && a.h ? `, drawn ${aspectFromSize(a.w, a.h)}` : '';
-      lines.push(`- p${p.n} [${renderWord(p.render.status, isPageStale(doc, p))}${shape}${p.render.qc ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}] ${clip(p.summary, 110)} (${p.panels.length} panels)`);
+      lines.push(`- p${p.n} [${renderWord(p.render.status, isPageStale(doc, p))}${shape}${typeof p.render.qc?.score === 'number' ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}] ${clip(p.summary, 110)} (${p.panels.length} panels)`);
     }
   } else {
     lines.push('Plan: none yet');
@@ -312,11 +313,13 @@ const ipToSteer = (doc: ComicDoc, text: string, rating: ContentRating): string[]
   } catch {
     fromFilter = [];
   }
-  const noted = new Set((doc.safety?.ipNoted || []).map((n) => n.toLowerCase()));
+  // "Shin-chan" (built-in list) and "shinchan" (prefilter) are one name.
+  const keyOf = (n: unknown) => (typeof n === 'string' ? n.toLowerCase().replace(/^the\s+/, '').replace(/[^\p{L}\p{N}]+/gu, '') : '');
+  const noted = new Set((doc.safety?.ipNoted || []).map(keyOf));
   const seen = new Set<string>();
   const names: string[] = [];
   for (const n of [...detectNamedIp(text), ...fromFilter]) {
-    const key = typeof n === 'string' ? n.trim().toLowerCase() : '';
+    const key = keyOf(n);
     if (!key || seen.has(key) || noted.has(key)) continue;
     seen.add(key);
     names.push(n.trim());
@@ -366,9 +369,38 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     ...(attachments.length ? { attachments } : {})
   };
   session.commit([{ op: 'message', msg: userMsg }]);
-
-  const before = session.doc;
   const msgId = newId('msg');
+  try {
+    await directorTurnBody(ctx, input, { userMsg, msgId, startedAt, userText, attachments });
+  } catch (err) {
+    // Never silent, even when something outside the model loop breaks (a malformed doc, a seam that
+    // throws): the user's message always gets an honest answer and a way to try again.
+    if (ctx.signal.aborted || session.doc.conversation.some((m) => m.id === msgId)) return;
+    logger.error('comic_director_turn_crashed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    session.commit([
+      {
+        op: 'message',
+        msg: {
+          id: msgId,
+          role: 'assistant',
+          text: "Sorry — I couldn't finish that just now. Try again in a moment.",
+          at: Date.now(),
+          cards: [noticeCard('error', 'The studio assistant hit a snag. Please try again.')],
+          ...(userText ? { nextSteps: [{ label: 'Try again', say: userText }] } : {})
+        }
+      }
+    ]);
+  }
+}
+
+async function directorTurnBody(
+  ctx: StudioContext,
+  input: DirectorTurnInput,
+  t: { userMsg: Msg; msgId: string; startedAt: number; userText: string; attachments: AssetRef[] }
+): Promise<void> {
+  const session = ctx.session;
+  const { userMsg, msgId, startedAt, userText, attachments } = t;
+  const before = session.doc;
   let carried: RefAsset[] = [];
   try {
     carried = carriedImages(before, attachments).filter((r) => r?.path && !attachments.some((a) => a.path === r.path));
@@ -384,7 +416,8 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     userText,
     sourceSaved: !!input.sourceSaved,
     rating,
-    drawIntent: drawIntentOf(userText),
+    // "yes" to the studio's own "Ready to draw?" counts as asking (director.md §3.4; gates still apply).
+    drawIntent: drawIntentInContext(before, userText),
     images,
     ...(input.focus ? { focus: input.focus } : {}),
     ...(input.safetyNote ? { safetyNote: input.safetyNote } : {}),
@@ -553,8 +586,11 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
   if (!cancelled && !refused) {
     if (text) text = reconcileReply(withEarlyRecap(text, before, after, userText), { after, turn });
     else if (failure) {
-      text =
-        turn.outcome === 'started'
+      // Never claim work "keeps drawing" when it already failed (b4b5774f): say what really happened.
+      const runLine = runFailureLine(after, runOutcome(after, turn));
+      text = runLine
+        ? `Sorry — I couldn't finish my reply. ${runLine}`
+        : turn.outcome === 'started'
           ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
           : "Sorry — I couldn't finish that just now. Try again in a moment.";
     } else text = composeTurnReply({ before, after, turn, userText });
@@ -563,6 +599,7 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     recordTextSpend(ctx, tracker, 'chat', 'Director');
     return;
   }
+  const spokeBeforeStop = cancelled && !!text;
   if (cancelled && !text) text = 'Stopped.';
   // Early turns: a live recap card of what the studio understood (director.md §3.2).
   if (!cancelled && !failure && !refused && wantsRecap(before, after)) cards.unshift({ type: 'recap', id: newId('card') } as Card);
@@ -573,7 +610,7 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
   const final: Msg = {
     id: msgId,
     role: 'assistant',
-    text: cancelled && text ? `${text} (stopped)` : text,
+    text: spokeBeforeStop ? `${text} (stopped)` : text,
     at: Date.now(),
     ...(cards.length ? { cards } : {}),
     ...(!cancelled && !failure ? { suggestions: suggestNextSteps(after) } : {}),
@@ -581,8 +618,8 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
   };
   const ops = [{ op: 'message' as const, msg: final }];
   session.commit(ops);
-  // Say the IP note once per name (doc.safety.ipNoted, server-only).
-  if (!cancelled && ipNames.length) {
+  // Say the IP note once per name (doc.safety.ipNoted, server-only) — only once a real reply carried it.
+  if (!cancelled && !failure && !refused && ipNames.length) {
     const noted = [...new Set([...(after.safety?.ipNoted || []), ...ipNames])].slice(-40);
     session.commit([{ op: 'safety', patch: { ipNoted: noted } }]);
   }

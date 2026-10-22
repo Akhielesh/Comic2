@@ -3,7 +3,7 @@
 // chat card, the board and the gate can never disagree about what "draw" would cost.
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
-import { estimateSpendAction } from '../../server/src/comic/jobs';
+import { LOW_QC_SCORE as SERVER_LOW_QC_SCORE, estimateSpendAction } from '../../server/src/comic/jobs';
 import { plannedDoc } from '../../server/src/comic/orchestrator.fakes';
 import { normalizeDoc, pageSpecHash, type ComicDoc, type QualityTier } from './doc';
 import { estimateJobs } from './models';
@@ -34,7 +34,16 @@ const tiers: QualityTier[] = ['draft', 'standard', 'pro'];
 describe('quoteRenderPages === the server gate (estimateSpendAction render_pages)', () => {
   for (const [name, doc] of Object.entries(fixtures())) {
     it(`matches on the ${name} fixture for every tier, payer, subset and force`, () => {
-      const cases: { pageIds?: string[]; force?: boolean }[] = [{}, { force: true }, { pageIds: [doc.pages[0].id] }, { pageIds: [doc.pages[0].id], force: true }, { pageIds: doc.pages.slice(1).map((p) => p.id) }];
+      const cases: { pageIds?: string[]; force?: boolean; includeCover?: boolean }[] = [
+        {},
+        { force: true },
+        { pageIds: [doc.pages[0].id] },
+        { pageIds: [doc.pages[0].id], force: true },
+        { pageIds: doc.pages.slice(1).map((p) => p.id) },
+        { includeCover: true },
+        { includeCover: true, force: true },
+        { pageIds: [doc.pages[0].id], includeCover: true }
+      ];
       for (const tier of tiers) {
         for (const byok of [false, true]) {
           const d: ComicDoc = { ...doc, settings: { ...doc.settings, quality: tier } };
@@ -131,13 +140,17 @@ describe('summarizeBook', () => {
     const perPage = unitPrice(sample, 'page', { byok: false }).usd;
     expect(s.pages.filter((p) => p.quoteUsd !== undefined).map((p) => p.id)).toEqual(['pg_2', 'pg_5', 'pg_6']);
     expect(s.pages[1].quoteUsd).toBe(perPage);
-    expect(s.pages[0]).toMatchObject({ status: 'ready', aspectOk: true, qcScore: 0.82, redrawUsd: perPage });
+    // a new take of drawn pg_1 is the gate's forced quote: the page plus ARJUN's missing sheet
+    const redo = quoteRenderPages(sample, { pageIds: ['pg_1'], force: true, byok: false, tier: sample.settings.quality });
+    expect(redo.sheetIds).toEqual(['ch_arjun']);
+    expect(redo.usd).toBeGreaterThan(perPage);
+    expect(s.pages[0]).toMatchObject({ status: 'ready', aspectOk: true, qcScore: 0.82, redrawUsd: redo.usd });
     expect(s.pages[0].model).toBeTruthy();
     expect(s.pages[0].quoteUsd).toBeUndefined();
     expect(s.totals.toDrawUsd).toBe(quoteRenderPages(sample, { byok: false, tier: sample.settings.quality }).usd);
     expect(s.pricing).toMatchObject({ pageUsd: perPage, tier: sample.settings.quality, byok: false, locked: false });
     expect(s.cover.quoteUsd).toBe(unitPrice(sample, 'cover', { byok: false }).usd);
-    expect(LOW_QC_SCORE).toBe(0.45);
+    expect(LOW_QC_SCORE).toBe(SERVER_LOW_QC_SCORE);
   });
 
   it('scopes to a subset and flags off-aspect art and missing references', () => {

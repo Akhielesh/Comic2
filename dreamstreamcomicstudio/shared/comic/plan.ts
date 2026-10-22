@@ -137,7 +137,7 @@ export interface PageSummary {
   spentUsd?: number;
   /** Friendly name of the model that drew the current art. */
   model?: string;
-  /** Price of a forced new take of a drawn page (render_pages force), for "New take · ≈$X". */
+  /** Price of a forced new take of a drawn page (render_pages force, missing sheets included), for "New take · ≈$X". */
   redrawUsd?: number;
 }
 export interface BookSummary {
@@ -221,7 +221,10 @@ export function summarizeBook(doc: ComicDoc, opts: { pageIds?: string[]; byok: b
       const spent = ledger.get(`page:${p.id}`);
       if (spent && spent.usd > 0) summary.spentUsd = spent.usd;
       if (drawable.has(p.id)) summary.quoteUsd = page1.usd;
-      else if (p.render.status === 'ready' && p.panels.length) summary.redrawUsd = page1.usd;
+      else if (p.render.status === 'ready' && p.panels.length) {
+        // The gate's own forced quote: a new take also draws any missing lead/support sheet first.
+        summary.redrawUsd = quoteRenderPages(doc, { pageIds: [p.id], force: true, byok: opts.byok, tier, modelOverride: override }).usd;
+      }
       return summary;
     });
   const coverQuote = coverNeedsDraw(doc) ? cover1.usd : undefined;

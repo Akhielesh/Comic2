@@ -928,7 +928,9 @@ function createGate(
   const cards: Card[] = [];
   // The user sees what they approve (decisions-final #3): the breakdown of the bound pages above the gate.
   if (action.type === 'render_pages') {
-    cards.push({ type: 'breakdown', id: newId('card'), pageIds: action.pageIds || [], cover: !!action.includeCover, view: 'cost', gateId: gate.id });
+    // The cover tile shows only when the quote includes it (an already drawn, current cover is not re-quoted).
+    const cover = !!action.includeCover && coverWanted(doc, action.force);
+    cards.push({ type: 'breakdown', id: newId('card'), pageIds: action.pageIds || [], cover, view: 'cost', gateId: gate.id });
   }
   cards.push({ type: 'gate', id: newId('card'), gateId: gate.id });
   commitAs(ctx, [{ op: 'gate', gate }], originOf(opts));
@@ -1196,6 +1198,8 @@ interface JobResult {
   error?: string;
   /** Reused for free (R2/R3/R7): what drawing it would have cost. */
   savedUsd?: number;
+  /** Which reuse rule put it there (the completion says it honestly). */
+  reuse?: 'R2' | 'R3' | 'R7';
   /** Drawn, but the content check blocked it. */
   blocked?: boolean;
   /** …and the previous version is current again. */
@@ -1308,6 +1312,13 @@ class RenderRun {
   private progressCard: Extract<Card, { type: 'renders' }> | null = null;
   /** The live progress card sits in the director's message; the completion is appended. */
   private hosted = false;
+  /**
+   * The director's message can still take the card: false once the run awaited anything before
+   * its progress card (style directions proposed by the writer) — the reply may be committed by then.
+   */
+  private hostable = true;
+  /** A late director run's own progress message, committed after the director's reply. */
+  private progressPosted: Promise<void> | null = null;
   private readonly started = Date.now();
   /** One image at a time after the provider rate-limited this run (incident 2026-10-22). */
   private serial = false;
@@ -1325,8 +1336,11 @@ class RenderRun {
     this.signal = ctx.session.abort.signal;
     this.slots = slotsFor(ctx.session);
     this.inflight = inflightFor(ctx.session);
-    this.signal.addEventListener('abort', () => this.wakeTurns(), { once: true });
+    this.signal.addEventListener('abort', this.onAbort, { once: true });
   }
+
+  /** Waiters for a serial turn give up on cancel (removed when the run ends: no listener build-up per session). */
+  private readonly onAbort = () => this.wakeTurns();
 
   /** Hold this run's estimate as pending spend so a concurrent budget check counts it. */
   reserve() {
@@ -1334,10 +1348,11 @@ class RenderRun {
     addPending(this.session, this.reservedLeft);
   }
 
-  /** Give back whatever estimate never landed (run failed, cancelled, or had no jobs). */
+  /** Give back whatever estimate never landed (run failed, cancelled, or had no jobs). Called once the run is over. */
   releaseReservation() {
     if (this.reservedLeft > 0) addPending(this.session, -this.reservedLeft);
     this.reservedLeft = 0;
+    this.signal.removeEventListener('abort', this.onAbort);
   }
 
   /** Release part of the pending reservation (a reuse that cost nothing). */
@@ -1414,6 +1429,8 @@ class RenderRun {
     try {
       directions = sanitizeDirections(action.directions);
       if (!directions.length) {
+        // The writer call is awaited before the progress card exists: too late to ride the reply.
+        this.hostable = false;
         const tracker = newTextSpendTracker();
         try {
           const proposed = await proposeStyleDirections({
@@ -1621,13 +1638,19 @@ class RenderRun {
    */
   private startProgress(jobs: ImageJob[], label: string) {
     this.progressCard = { type: 'renders', id: newId('card'), targets: jobs.map((j) => j.target), label };
-    if (this.opts.collectCard) {
+    if (this.opts.collectCard && this.hostable) {
       this.hosted = true;
       this.opts.collectCard(this.progressCard);
       return;
     }
     const msg = assistantMessage(`${label} (≈ ${formatUsd(this.estimate.usd)}).`, [this.progressCard]);
     this.progressId = msg.id;
+    if (this.opts.collectCard) {
+      // A director run that started late (after the writer proposed style directions): the card
+      // gets its own progress message — below the director's reply, never above it.
+      this.progressPosted = this.afterTurn(() => this.commit([{ op: 'message', msg: { ...msg, at: Date.now() } }]));
+      return;
+    }
     this.commit([{ op: 'message', msg }]);
   }
 
@@ -1673,8 +1696,8 @@ class RenderRun {
 
   /** The completion sentence(s): the real outcome, in plain words, with money spent and saved. */
   private outcomeText(jobs: ImageJob[]): string {
-    const drawn = this.results.filter((r) => r.ok && !r.savedUsd && !r.blocked);
-    const reused = this.results.filter((r) => r.ok && !!r.savedUsd);
+    const drawn = this.results.filter((r) => r.ok && !r.reuse && !r.blocked);
+    const reused = this.results.filter((r) => r.ok && !!r.reuse);
     const blockedR = this.results.filter((r) => r.ok && r.blocked);
     const failed = this.results.filter((r) => !r.ok && !r.skipped);
     const skipped = this.results.filter((r) => r.skipped);
@@ -1694,10 +1717,15 @@ class RenderRun {
     }
     const safer = drawn.filter((r) => r.saferTake);
     if (safer.length) parts.push(`The first take of ${noun(safer)} tripped the image model's filter, so I drew ${safer.length === 1 ? 'it' : 'them'} a little tamer.`);
-    if (reused.length) {
-      const saved = round4(reused.reduce((s, r) => s + (r.savedUsd || 0), 0));
-      parts.push(`${capitalize(noun(reused))} reused an identical earlier drawing — free (saved ≈${formatUsd(saved)}).`);
+    const backFree = reused.filter((r) => r.reuse === 'R2');
+    const copied = reused.filter((r) => r.reuse !== 'R2');
+    const savedOf = (list: JobResult[]) => formatUsd(round4(list.reduce((s, r) => s + (r.savedUsd || 0), 0)));
+    if (backFree.length) {
+      parts.push(
+        `${capitalize(noun(backFree))} ${backFree.length === 1 ? 'is' : 'are'} back from an earlier version drawn from exactly this script — free (saved ≈${savedOf(backFree)}).`
+      );
     }
+    if (copied.length) parts.push(`${capitalize(noun(copied))} reused an identical earlier drawing — free (saved ≈${savedOf(copied)}).`);
     if (blockedR.length) {
       const back = blockedR.every((r) => r.previousBack);
       parts.push(`${capitalize(noun(blockedR))} didn't fit the content rules${back ? ', so the previous version is back' : ' and stays hidden'} — a safer redraw is one tap away.`);
@@ -1753,6 +1781,7 @@ class RenderRun {
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: assistantMessage(text, [...lead, ...this.notices], steps) }]));
     } else {
+      if (this.progressPosted) await this.progressPosted;
       const conversation = this.session.doc.conversation;
       const current = conversation.find((m) => m.id === this.progressId);
       const isLast = !!current && conversation[conversation.length - 1]?.id === this.progressId;
@@ -1773,7 +1802,7 @@ class RenderRun {
       ok: ok.length,
       failed: failed.length,
       skipped: skipped.length,
-      reused: this.results.filter((r) => r.savedUsd).length,
+      reused: this.results.filter((r) => r.reuse).length,
       serial: this.serial,
       usd: this.spentUsd,
       savedUsd: this.savedUsd,
@@ -1843,7 +1872,7 @@ class RenderRun {
   private async runJob(job: ImageJob): Promise<void> {
     if (this.stopReason || this.signal.aborted) return this.restore(job);
     // R2: a version made from exactly today's spec comes back for free (no slot, no money).
-    if (job.implicit && this.reuseSpecVersion(job)) return;
+    if (job.implicit && (await this.reuseSpecVersion(job))) return;
     let release: (() => void) | null = null;
     for (;;) {
       await this.takeTurn();
@@ -1890,11 +1919,12 @@ class RenderRun {
   }
 
   /** R2 for one job: put back a stored version made from the current spec. True when reused. */
-  private reuseSpecVersion(job: ImageJob): boolean {
+  private async reuseSpecVersion(job: ImageJob): Promise<boolean> {
     const doc = this.session.doc;
     const match = findSpecHashVersion(doc, job.target);
     if (!match) return false;
     const saved = this.priceOf(job.kind);
+    const balloonsBefore = job.target.kind === 'page' ? findPage(doc, job.target.id)?.balloons : undefined;
     // Un-busy first (render_use is a no-op on a busy target), then swap in the version.
     this.commit(
       [
@@ -1906,10 +1936,20 @@ class RenderRun {
     );
     this.releaseShare(saved);
     this.savedUsd = round4(this.savedUsd + saved);
-    this.results.push({ job, ok: true, savedUsd: saved });
+    this.results.push({ job, ok: true, savedUsd: saved, reuse: 'R2' });
     this.extraStepFreshTake(job);
     void this.ctx.publishUrls([match.path]);
     logger.info('comic_render_reused', { projectId: this.ctx.projectId, rule: 'R2', target: renderTargetKey(job.target), from: match.from, savedUsd: saved });
+    // The version brought its own balloon layout back when it had one; otherwise (an archived
+    // version, or the lines changed) the balloons are re-laid from its stored QC — free, QC once.
+    const page = job.target.kind === 'page' ? findPage(this.session.doc, job.target.id) : undefined;
+    if (page && page.balloons === balloonsBefore) {
+      try {
+        await letterPage(this.ctx, page.id, null, this.signal, (card) => this.notices.push(card));
+      } catch (err) {
+        logger.warn('comic_reuse_relayout_failed', { projectId: this.ctx.projectId, pageId: page.id, message: (err as Error)?.message });
+      }
+    }
     return true;
   }
 
@@ -1992,18 +2032,23 @@ class RenderRun {
     job: ImageJob,
     prepared: Awaited<ReturnType<RenderRun['prepare']>>
   ): Promise<'reused' | ((asset: AssetRef | null) => void)> {
-    for (let round = 0; round < 2; round += 1) {
+    let joined = false;
+    // Bounded: each round either copies, registers, or waits for a leader to finish. When a
+    // leader fails (rate limit, billing, filter), ONE waiting twin takes over as the new leader
+    // and the others join it — identical twins never all pay after a failure.
+    for (let round = 0; round < 4; round += 1) {
       const found = findJobHashAsset(this.session.doc, prepared.jobHash, job.target);
       if (found) {
-        await this.adopt(job, prepared, found.asset, found.meta, found.model, round ? 'R7' : 'R3');
+        await this.adopt(job, prepared, found.asset, found.meta, found.model, joined ? 'R7' : 'R3');
         return 'reused';
       }
       const joining = this.inflight.get(prepared.jobHash);
       if (!joining) return this.inflight.register(prepared.jobHash);
-      if (round) break;
-      const asset = await joining;
-      if (!asset || this.signal.aborted) break;
-      // The other job landed: its asset (with its jobHash) is in the doc now — copy it (round 2).
+      joined = true;
+      await joining;
+      if (this.signal.aborted) break;
+      // Landed: its asset (with its jobHash) is in the doc now — the next round copies it.
+      // Failed: the next round registers this job as the new leader (or joins whoever did).
     }
     return this.inflight.get(prepared.jobHash) ? () => undefined : this.inflight.register(prepared.jobHash);
   }
@@ -2018,6 +2063,8 @@ class RenderRun {
     rule: 'R3' | 'R7'
   ): Promise<void> {
     const saved = this.priceOf(job.kind);
+    // A copied picture in the wrong frame gets the same honest notice and free Fit chip as a fresh one.
+    const aspect = this.checkAspect(job, prepared.compiled, asset);
     this.commit(
       [
         {
@@ -2042,7 +2089,7 @@ class RenderRun {
     );
     this.releaseShare(saved);
     this.savedUsd = round4(this.savedUsd + saved);
-    this.results.push({ job, ok: true, savedUsd: saved });
+    this.results.push({ job, ok: true, savedUsd: saved, reuse: rule, ...(aspect ? { aspect } : {}) });
     this.extraStepFreshTake(job);
     logger.info('comic_render_reused', { projectId: this.ctx.projectId, rule, target: renderTargetKey(job.target), savedUsd: saved });
     await this.ctx.publishUrls([asset.path]);
@@ -2273,11 +2320,11 @@ class RenderRun {
   }
 
   /** Log + notice + chips when the image came back in another shape (pages and covers). */
-  private checkAspect(job: ImageJob, compiled: CompiledImageJob, asset: AssetRef, route: ImageRoute): { got: AspectRatio; want: AspectRatio } | null {
+  private checkAspect(job: ImageJob, compiled: CompiledImageJob, asset: AssetRef, route?: ImageRoute): { got: AspectRatio; want: AspectRatio } | null {
     if (aspectMatches(compiled.aspect, asset.w, asset.h)) return null;
     const got = aspectFromSize(asset.w || 0, asset.h || 0);
     const want = compiled.aspect;
-    logger.info('comic_aspect_mismatch', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), want, w: asset.w, h: asset.h, route, model: compiled.spec.id });
+    logger.info('comic_aspect_mismatch', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), want, w: asset.w, h: asset.h, route: route ?? 'reused', model: compiled.spec.id });
     if (job.target.kind !== 'page' && job.target.kind !== 'cover') return { got, want };
     const what = job.target.kind === 'cover' ? 'the cover' : job.label.toLowerCase().replace(/^edit /, '');
     this.notices.push(noticeCard('warn', `${capitalize(what)} came back ${got} instead of ${want}. Fit it to ${want} for free, keep it, or redraw it.`));

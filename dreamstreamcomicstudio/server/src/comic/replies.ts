@@ -104,6 +104,40 @@ export function drawIntentOf(text: string): DrawIntent {
   return 'explicit';
 }
 
+/** A short, whole-message yes ("yes", "ok go", "sure, go ahead!", "yes please"). Thanks/acknowledgements are not a yes. */
+const AFFIRM_WORDS = new Set(['yes', 'yeah', 'yep', 'yup', 'ya', 'yea', 'sure', 'ok', 'okay', 'k', 'go', 'ahead', 'for', 'it', 'do', 'lets', 'sounds', 'looks', 'good', 'great', 'perfect', 'absolutely', 'definitely', 'of', 'course', 'alright', 'please', 'fine', 'cool', 'awesome', 'right', 'away', 'now']);
+const STRONG_AFFIRM = /\b(yes|yeah|yep|yup|ya|yea|sure|ok|okay|go|perfect|absolutely|definitely|course|alright|great|awesome|cool|fine)\b/;
+const isAffirmation = (text: string): boolean => {
+  const t = clean(text).toLowerCase().replace(/[’']/g, '').replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const tokens = t ? t.split(' ') : [];
+  return tokens.length > 0 && tokens.length <= 6 && tokens.every((w) => AFFIRM_WORDS.has(w)) && STRONG_AFFIRM.test(t);
+};
+/** The studio's own question offered a drawing ("Ready to draw?", "Shall I make the cover (≈ $0.07)?"). */
+const DRAW_QUESTION_RE =
+  /\b(draw|drawing|render|re-?draw|paint|illustrate|generate|start drawing|make (?:the |a |your )?(?:cover|pages?|sheets?|model sheets?|style tests?|style options?)|new take|another take|try (?:it )?again)\b/i;
+
+/**
+ * drawIntentOf, plus the conversation: a bare "yes" / "ok go" answering the studio's own offer to
+ * draw is a request to draw (it still goes through every gate and threshold). Never while an
+ * approval card is open — that "yes" belongs to the Approve button.
+ */
+export function drawIntentInContext(doc: ComicDoc, userText: string): DrawIntent {
+  const own = drawIntentOf(userText);
+  if (own === 'redraw' || !isAffirmation(userText) || doc.gate?.status === 'open') return own;
+  const conv = doc.conversation;
+  let i = conv.length - 1;
+  while (i >= 0 && conv[i].role === 'user') i -= 1;
+  const prev = i >= 0 ? conv[i] : undefined;
+  if (!prev || prev.role !== 'assistant') return own;
+  const questions = [
+    ...sentencesOf(prev.text || '').filter((q) => /\?["”')]*$/.test(q)),
+    ...(prev.cards || []).flatMap((c) => (c.type === 'options' ? [c.question] : []))
+  ];
+  const offer = questions.find((q) => DRAW_QUESTION_RE.test(q) && !NEGATED_DRAW_RE.test(q));
+  if (!offer) return own;
+  return REDRAW_RE.test(offer) ? 'redraw' : 'explicit';
+}
+
 // ── Named IP (decisions-final #5) ────────────────────────────────────────────
 
 const IP_NAMES: ReadonlyArray<[RegExp, string]> = [
@@ -113,8 +147,10 @@ const IP_NAMES: ReadonlyArray<[RegExp, string]> = [
   [/\blego\b/i, 'LEGO'],
   [/\bdisney\b/i, 'Disney'],
   [/\bpixar\b/i, 'Pixar'],
-  [/\bmarvel\b/i, 'Marvel'],
-  [/\bavengers?\b/i, 'the Avengers'],
+  // Ordinary words that are also brands only count when written as the brand (or with brand context):
+  // "they marvel at the sky", "the villain's minions", "a snoopy neighbour" are not IP.
+  [/\bMarvel\b(?!\s+at\b)|\bMARVEL\b|\bmarvel (?:comics?|universe|superheroe?s?|heroes|movies?|films?|characters?|style|mcu)\b/, 'Marvel'],
+  [/\bAvengers\b|\bavengers (?:assemble|team|tower|movie|style)\b/, 'the Avengers'],
   [/\bspider[- ]?man\b/i, 'Spider-Man'],
   [/\biron[- ]?man\b/i, 'Iron Man'],
   [/\bbatman\b/i, 'Batman'],
@@ -123,28 +159,28 @@ const IP_NAMES: ReadonlyArray<[RegExp, string]> = [
   [/\bnaruto\b/i, 'Naruto'],
   [/\bone piece\b|\bluffy\b/i, 'One Piece'],
   [/\bdragon ball\b|\bgoku\b/i, 'Dragon Ball'],
-  [/\bmickey(?: mouse)?\b/i, 'Mickey Mouse'],
+  [/\bMickey(?: Mouse)?\b(?<!take the Mickey)(?<!taking the Mickey)|\b[Mm]ickey [Mm]ouse\b/, 'Mickey Mouse'],
   [/\bfrozen\b.*\belsa\b|\belsa\b.*\bfrozen\b/i, 'Frozen'],
   [/\bharry potter\b|\bhogwarts\b/i, 'Harry Potter'],
   [/\bpeppa pig\b/i, 'Peppa Pig'],
   [/\bpaw patrol\b/i, 'Paw Patrol'],
-  [/\bbluey\b/i, 'Bluey'],
+  [/\bBluey\b(?!-)|\bBLUEY\b/, 'Bluey'],
   [/\bminecraft\b/i, 'Minecraft'],
   [/\bsuper mario\b|\bmario\b(?= (?:and|&) luigi|\s+bros)/i, 'Mario'],
   [/\bsonic the hedgehog\b/i, 'Sonic'],
-  [/\bbarbie\b/i, 'Barbie'],
+  [/\bBarbie\b|\bBARBIE\b|\bbarbie (?:doll|dreamhouse|movie|style)s?\b/, 'Barbie'],
   [/\bhello kitty\b/i, 'Hello Kitty'],
   [/\bchhota bheem\b|\bchota bheem\b/i, 'Chhota Bheem'],
   [/\bmotu patlu\b/i, 'Motu Patlu'],
   [/\bstar wars\b|\bdarth vader\b|\byoda\b/i, 'Star Wars'],
-  [/\btransformers?\b|\boptimus prime\b/i, 'Transformers'],
+  [/\bTransformers\b|\b[Oo]ptimus [Pp]rime\b|\b[Aa]utobots?\b|\b[Dd]ecepticons?\b/, 'Transformers'],
   [/\bspongebob\b/i, 'SpongeBob'],
   [/\btom and jerry\b/i, 'Tom and Jerry'],
   [/\bscooby[- ]?doo\b/i, 'Scooby-Doo'],
-  [/\bgarfield\b/i, 'Garfield'],
-  [/\bsnoopy\b|\bpeanuts gang\b/i, 'Snoopy'],
+  [/\bGarfield\b(?= the cat|\s+(?:and|&) (?:odie|Odie)|\s+(?:style|comic|lasagna))|\bgarfield (?:the cat|comics?|cartoon)\b/i, 'Garfield'],
+  [/\bSnoopy\b|\bsnoopy (?:and|&) (?:[Ww]oodstock|[Cc]harlie [Bb]rown)\b|\b[Pp]eanuts gang\b/, 'Snoopy'],
   [/\bshrek\b/i, 'Shrek'],
-  [/\bminions?\b/i, 'the Minions'],
+  [/\bMinions?\b|\bminions? from despicable me\b|\bdespicable me\b/, 'the Minions'],
   [/\btotoro\b|\bghibli\b/i, 'Studio Ghibli'],
   [/\bwinnie the pooh\b/i, 'Winnie the Pooh'],
   [/\bpower rangers?\b/i, 'Power Rangers'],
@@ -242,7 +278,7 @@ export function materialGaps(doc: ComicDoc, userText: string): MaterialGap[] {
   if (VAGUE_GROUP_RE.test(premise) && !doc.cast.some((c) => castKindOf(c) !== 'person')) gaps.push('vague_group');
   const story = !!(clean(doc.brief.premise) || clean(doc.brief.logline) || doc.cast.length || clean(doc.source.script));
   const stated = PAGE_COUNT_RE.test(text) || doc.brief.notes.some((n) => PAGE_COUNT_RE.test(n)) || PAGE_COUNT_RE.test(clean(doc.brief.premise));
-  if (doc.planStatus === 'none' && !doc.pages.length && story && !stated && doc.format.pageCount === 6 && doc.format.kind !== 'strip') gaps.push('page_count');
+  if (doc.planStatus === 'none' && !doc.pages.length && story && !stated && doc.format.pageCount === DEFAULT_FORMAT.pageCount && doc.format.kind !== 'strip') gaps.push('page_count');
   const drawn = doc.pages.some((p) => p.render.status === 'ready') || doc.cover.render.status === 'ready' || doc.cast.some((c) => c.sheet.status === 'ready');
   if (drawn && COMPLAINT_RE.test(text) && drawIntentOf(text) === 'none') gaps.push('spend_intent');
   return gaps;
@@ -288,10 +324,12 @@ export function runOutcome(after: ComicDoc, turn: Pick<DirectorTurn, 'runs' | 's
     if (!r) continue;
     out.targets.push(t);
     if (isBusy(r.status)) out.busy.push(t);
-    else if (r.status === 'failed' || (!!r.error && (r.updatedAt ?? 0) >= since)) {
+    else if (r.status === 'ready' && !(r.error && (r.updatedAt ?? 0) >= since)) out.ready.push(t);
+    else {
+      // Failed, or put back un-drawn (a stopped or skipped job restores 'none'/'stale'): nothing new was drawn.
       out.failed.push(t);
-      if (!out.reason && r.error) out.reason = clean(r.error).replace(/[.!\s]+$/, '');
-    } else out.ready.push(t);
+      if (!out.reason && r.error && (r.status === 'failed' || (r.updatedAt ?? 0) >= since)) out.reason = clean(r.error).replace(/[.!\s]+$/, '');
+    }
   }
   if (!out.reason && turn.bgErrors?.length) out.reason = clean(turn.bgErrors[0]).replace(/[.!\s]+$/, '');
   return out;
@@ -315,6 +353,9 @@ export function describeTargets(doc: ComicDoc, targets: RenderTarget[]): string 
 /** A sentence that claims work is under way ("I've kicked off…", "on its way", "drawing now"). */
 const PROGRESS_CLAIM_RE =
   /\b(kick(?:ed|ing)? off|start(?:ed|ing)?|on (?:its|their|the) way|(?:are|is|now) (?:drawing|rendering|generating|cooking|being drawn)|drawing (?:them|it|now|your)|will (?:appear|land|show up)|coming (?:right )?up|in (?:the )?(?:works|progress)|appear on the board|working on (?:it|them|the))/i;
+
+/** A reply that already admits the work failed. */
+const FAILURE_ACK_RE = /\b(failed|didn'?t (?:work|come through|go through|finish)|couldn'?t (?:draw|finish|make|render)|went wrong|hit a (?:snag|problem)|not drawn)\b/i;
 
 /** The honest line for a run that already settled badly; '' when there is nothing to correct. */
 export function runFailureLine(doc: ComicDoc, run: RunOutcome): string {
@@ -340,7 +381,10 @@ export function reconcileReply(text: string, i: { after: ComicDoc; turn: Directo
   const run = runOutcome(i.after, i.turn);
   const line = runFailureLine(i.after, run) || backgroundFailureLine(i.turn);
   if (!line) return text;
-  const kept = sentencesOf(text).filter((s) => !PROGRESS_CLAIM_RE.test(s));
+  const sentences = sentencesOf(text);
+  // The model already said it honestly (and claims nothing is under way): keep its own words.
+  if (FAILURE_ACK_RE.test(text) && !sentences.some((s) => PROGRESS_CLAIM_RE.test(s))) return text;
+  const kept = sentences.filter((s) => !PROGRESS_CLAIM_RE.test(s));
   return [line, ...kept].join(' ').trim();
 }
 
@@ -401,6 +445,33 @@ export function phaseHint(doc: ComicDoc): string {
   return 'Read it, or tell me what to change.';
 }
 
+/**
+ * "Everything is already drawn and up to date — 6 pages and the cover." only when the cover is
+ * current too; otherwise "All 6 pages are already drawn and up to date … The cover isn't drawn yet."
+ * ('' when some page still needs drawing). Shared by the composer and the $0 intent router.
+ */
+export function drawnBookLine(doc: ComicDoc, opts: { offerCover?: boolean } = {}): string {
+  const drawn = doc.pages.filter((p) => p.render.status === 'ready' && !isPageStale(doc, p)).length;
+  if (!drawn || drawn < doc.pages.length || pageTargets(doc).length) return '';
+  const cover = doc.cover.render;
+  if (cover.status === 'ready' && !isTargetStale(doc, { kind: 'cover' })) {
+    return `Everything is already drawn and up to date — ${plural(drawn, 'page')} and the cover. Nothing was spent.`;
+  }
+  const pages = drawn === 1 ? 'The page is' : `All ${drawn} pages are`;
+  const coverState = isBusy(cover.status) ? 'The cover is drawing now' : cover.status === 'ready' ? 'The cover is out of date' : 'The cover isn’t drawn yet';
+  return `${pages} already drawn and up to date — nothing was spent. ${coverState}${opts.offerCover && !isBusy(cover.status) ? ' — want it?' : '.'}`;
+}
+
+/** The honest $0 line for a `nothing` outcome: only claims what is really drawn and current. */
+export function nothingLine(doc: ComicDoc, turn: Pick<DirectorTurn, 'log'>): string {
+  if (doc.pages.some((p) => isBusy(p.render.status))) return "It's already drawing — nothing new to start, and nothing was spent.";
+  const askedCover = turn.log.some((l) => l.tool === 'render_cover') && !turn.log.some((l) => l.tool === 'render_pages');
+  const coverDone = doc.cover.render.status === 'ready' && !isTargetStale(doc, { kind: 'cover' });
+  if (askedCover && coverDone) return 'The cover is already drawn and up to date — nothing was spent.';
+  if (askedCover && isBusy(doc.cover.render.status)) return 'The cover is already drawing — nothing new to start, and nothing was spent.';
+  return drawnBookLine(doc) || 'Nothing new needed drawing — nothing was spent.';
+}
+
 // ── Composer ─────────────────────────────────────────────────────────────────
 
 export interface ComposeInput {
@@ -449,7 +520,10 @@ const GATED_RE = /(?:approve|approval)[^$]*?(\$[\d.]+)\s*\(([^)]+?)(?: on [^)]+)
  */
 export function composeTurnReply(i: ComposeInput): string {
   const { before, after, turn } = i;
-  const clauses: string[] = [];
+  // Each clause has a drop priority for the word budget: 0 = never dropped (money, failures,
+  // the IP homage, errors — honesty beats brevity), higher numbers are dropped first.
+  const clauses: Array<{ text: string; drop: number }> = [];
+  const add = (text: string, drop = 0) => clauses.push({ text, drop });
   const run = runOutcome(after, turn);
   const failure = runFailureLine(after, run) || backgroundFailureLine(turn);
 
@@ -457,63 +531,66 @@ export function composeTurnReply(i: ComposeInput): string {
   const recap = recapLine(after);
   const changes = understandingChanges(before, after);
   const early = userTurnCount(after) <= 3;
-  if (recap && ((early && changes >= 1) || changes >= 2)) clauses.push(`Got it — ${recap}.`);
+  const recapped = !!recap && ((early && changes >= 1) || changes >= 2);
+  if (recapped) add(`Got it — ${recap}.`, 2);
 
-  // 2) IP homage, said once.
+  // 2) IP homage, said once (never dropped: doc.safety.ipNoted marks it as said).
   if (turn.ipNames?.length) {
     const fresh = after.cast.filter((c) => !before.cast.some((b) => b.id === c.id));
-    clauses.push(
+    add(
       `${joinList(turn.ipNames)} ${turn.ipNames.length === 1 ? 'is' : 'are'} trademarked, so I'm making an original homage${fresh.length ? ` — ${joinList(fresh.slice(0, 3).map((c) => c.name))}` : ''} with the same spirit.`
     );
   }
 
   // 3) Style and cast changes not already covered by the recap.
-  const recapped = clauses.length > 0 && !!recap;
-  if (!recapped && clean(before.style.name) !== clean(after.style.name) && clean(after.style.name)) clauses.push(`Style: ${clean(after.style.name)}.`);
+  if (!recapped && clean(before.style.name) !== clean(after.style.name) && clean(after.style.name)) add(`Style: ${clean(after.style.name)}.`, 3);
   const added = after.cast.filter((c) => !before.cast.some((b) => b.id === c.id));
-  if (!recapped && added.length) clauses.push(`Cast: ${joinList(added.slice(0, 5).map((c) => castNoun(c)))}${added.length > 5 ? ` and ${added.length - 5} more` : ''}.`);
+  if (!recapped && added.length) add(`Cast: ${joinList(added.slice(0, 5).map((c) => castNoun(c)))}${added.length > 5 ? ` and ${added.length - 5} more` : ''}.`, 3);
   else if (recapped && added.some((c) => castKindOf(c) !== 'person') && /\b(other|some|few|several|animals|creatures|friends|critters)\b/i.test(i.userText)) {
-    clauses.push('I picked those companions — change them any time.');
+    add('I picked those companions — change them any time.', 3);
   }
 
   // 4) The plan.
   const planned = turn.plannedThisTurn && after.pages.length;
   if (planned) {
     const p1 = [...after.pages].sort((a, b) => a.n - b.n)[0];
-    clauses.push(
-      `Here's the plan — ${plural(after.pages.length, 'page')}, ${plural(totalPanels(after), 'panel')}${p1?.summary ? `: ${clip(clean(p1.summary), 90)}` : ''}.`
-    );
+    add(`Here's the plan — ${plural(after.pages.length, 'page')}, ${plural(totalPanels(after), 'panel')}${p1?.summary ? `: ${clip(clean(p1.summary), 90)}` : ''}.`, 1);
   }
 
   // 5) Money: failed runs, started runs, gates, nothing to draw.
-  if (failure) clauses.push(failure);
+  if (failure) add(failure);
   else {
     const started = turn.log.map((l) => STARTED_RE.exec(l.result)).find(Boolean);
-    if (started) clauses.push(`Drawing ${started[1]} now (≈ ${started[2]}) — it appears on the board as it finishes.`);
+    if (started) add(`Drawing ${started[1]} now (≈ ${started[2]}) — it appears on the board as it finishes.`);
     const gate = after.gate?.status === 'open' && before.gate?.id !== after.gate.id ? after.gate : null;
-    if (gate) clauses.push(`That's ≈ ${formatUsd(gate.estimateUsd)} for ${clean(gate.title).replace(/^Draw |\?$/g, '') || 'the drawing'} — tap Approve when you're ready.`);
+    if (gate) add(`That's ≈ ${formatUsd(gate.estimateUsd)} for ${clean(gate.title).replace(/^Draw |\?$/g, '') || 'the drawing'} — tap Approve when you're ready.`);
     else if (!started) {
       const gatedLog = turn.log.map((l) => GATED_RE.exec(l.result)).find(Boolean);
-      if (gatedLog) clauses.push(`That's ≈ ${gatedLog[1]} for ${gatedLog[2]} — tap Approve when you're ready.`);
+      if (gatedLog) add(`That's ≈ ${gatedLog[1]} for ${gatedLog[2]} — tap Approve when you're ready.`);
     }
-    if (turn.outcome === 'nothing') {
-      const drawn = after.pages.filter((p) => p.render.status === 'ready' && !isPageStale(after, p)).length;
-      clauses.push(`Everything is already drawn and up to date — ${plural(drawn, 'page')}${after.cover.render.status === 'ready' && !isTargetStale(after, { kind: 'cover' }) ? ' and the cover' : ''}. Nothing was spent.`);
-    }
+    if (turn.outcome === 'nothing' && !started) add(nothingLine(after, turn));
   }
 
   // 6) Small free edits.
-  if (!clauses.length && turn.captured.length) clauses.push(`Done — ${joinList(turn.captured.slice(0, 4))}.`);
+  if (!clauses.length && turn.captured.length) add(`Done — ${joinList(turn.captured.slice(0, 4))}.`);
 
   // 7) Errors only.
   if (!clauses.length && turn.log.length && turn.log.every((l) => !l.ok)) {
     const err = firstErrorLine(turn);
-    clauses.push(err ? `I couldn't do that: ${err}` : "I couldn't do that one — could you say it another way?");
+    add(err ? `I couldn't do that: ${err}` : "I couldn't do that one — could you say it another way?");
   }
 
-  // 8) The question (always last), else a forward step.
+  // 8) Fit the budget by dropping the least important clauses first (never the money/failure lines).
   const question = clean(turn.question);
-  let body = limitWords(clauses.join(' '), question ? 48 : 60);
+  const budget = question ? 48 : 60;
+  const kept = [...clauses];
+  const total = () => kept.reduce((n, c) => n + words(c.text), 0);
+  while (total() > budget) {
+    const worst = kept.reduce((w, c, idx) => (c.drop > 0 && (w < 0 || c.drop >= kept[w].drop) ? idx : w), -1);
+    if (worst < 0 || kept.length === 1) break;
+    kept.splice(worst, 1);
+  }
+  let body = kept.map((c) => c.text).join(' ').trim();
   if (question) body = body ? `${body} ${/[?]$/.test(question) ? question : `${question}?`}` : question;
   if (!body) body = turn.log.length ? `Done. ${phaseHint(after)}` : phaseHint(after);
   return body.trim();

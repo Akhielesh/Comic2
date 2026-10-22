@@ -871,6 +871,35 @@ describe('message ordering (director.md §3.7)', () => {
     expect(conv[2].nextSteps!.find((s) => s.label === 'Make the cover')).toMatchObject({ action: { type: 'render_cover', quotedUsd: expect.any(Number) }, usd: expect.any(Number) });
   });
 
+  it.each([
+    ['while the director is still writing', 5],
+    ['after the turn ended', 40]
+  ])('a director run that starts late (the writer proposes style directions first, %s): its own progress message lands below the reply', async (_when, writerMs) => {
+    const session = newSession(plannedDoc());
+    const ctx = testContext(session);
+    vi.mocked(proposeStyleDirections).mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, writerMs));
+      return { options: [{ name: 'Ink Noir', spec: 'Heavy blacks' }, { name: 'Pastel', spec: 'Soft washes' }], model: 'w' };
+    });
+    const { replyId } = await directorTurn(ctx, 'show me some styles', async ({ opts }) => {
+      const started = await startTracked(ctx, { type: 'render_style_options' }, opts);
+      expect(started.outcome.status).toBe('started');
+      return 'Drawing a few looks for you.';
+    });
+    const conv = session.doc.conversation;
+    expect(conv.map((m) => m.role)).toEqual(['user', 'assistant', 'assistant']);
+    expect(conv[1].id).toBe(replyId);
+    expect(conv[1].cards ?? []).toEqual([]);
+    expect(conv[2].cards?.map((c) => c.type)).toEqual(['style_choice']);
+    expect(conv[2].at).toBeGreaterThanOrEqual(conv[1].at);
+    // The live card was shown — in its own message, committed after the reply (never lost, never above it).
+    const msgOps = opsOf(ctx.events).flatMap((o) => (o.op === 'message' ? [o.msg] : []));
+    const replyIdx = msgOps.findIndex((m) => m.id === replyId);
+    const progressIdx = msgOps.findIndex((m) => m.cards?.some((c) => c.type === 'renders'));
+    expect(progressIdx).toBeGreaterThan(replyIdx);
+    expect(msgOps[progressIdx].id).toBe(conv[2].id);
+  });
+
   it('a UI-started run rewrites its progress message only while it is the last; otherwise it points down and appends', async () => {
     const doc = onePage(plannedDoc());
     readySheets(doc);
@@ -1208,8 +1237,32 @@ describe('software reuse with savedUsd (decisions-final #6)', () => {
     expect(session.doc.spend.savedUsd).toBe(entry.savedUsd);
     expect(session.doc.spend.totalUsd).toBe(0);
     const last = session.doc.conversation.at(-1)!;
-    expect(last.text).toContain('reused an identical earlier drawing — free');
+    expect(last.text).toContain('Page 1 is back from an earlier version drawn from exactly this script — free');
     expect(labelsOf(last.nextSteps)).toContain('Fresh take of page 1');
+  });
+
+  it('R2 from the archive (no balloon snapshot) re-lays the balloons from the blueprint for free; a wrong-shape version is never brought back', async () => {
+    const doc = onePage(plannedDoc());
+    readySheets(doc);
+    doc.planStatus = 'approved';
+    const spec = pageSpecHash(doc, doc.pages[0]);
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', specHash: 'older-spec', asset: { path: 'cur.webp', source: 'generated', at: 3, w: 1024, h: 1280 } };
+    // Balloons placed for the outgoing picture.
+    doc.pages[0].balloons = [{ lineId: 'ln_1_2', x: 0.97, y: 0.97, w: 0.05 }];
+    doc.archive = [
+      { path: 'arch-square.webp', source: 'generated', at: 2, targetKey: 'page:pg_1', label: 'Page 1', archivedAt: 2, specHash: spec, aspect: '4:5', w: 2048, h: 2048 },
+      { path: 'arch-tall.webp', source: 'generated', at: 1, targetKey: 'page:pg_1', label: 'Page 1', archivedAt: 1, specHash: spec, aspect: '4:5', w: 1638, h: 2048 }
+    ];
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(vi.mocked(analyzePageRender)).not.toHaveBeenCalled();
+    expect(session.doc.pages[0].render.asset?.path).toBe('arch-tall.webp');
+    const balloon = session.doc.pages[0].balloons.find((b) => b.lineId === 'ln_1_2');
+    expect(balloon).toBeTruthy();
+    expect(balloon!.x).not.toBe(0.97);
+    expect(session.doc.spend.totalUsd).toBe(0);
   });
 
   it('R2 never applies to an explicit redraw', async () => {
@@ -1244,6 +1297,19 @@ describe('software reuse with savedUsd (decisions-final #6)', () => {
     expect(ctx.imagesFake.calls).toHaveLength(0);
     expect(session.doc.pages[0].render).toMatchObject({ status: 'ready', origin: 'reused', jobHash, costUsd: 0, asset: { path: 'identical.webp' } });
     expect(session.doc.spend.entries[0]).toMatchObject({ usd: 0, savedUsd: expect.any(Number) });
+    expect(session.doc.conversation.at(-1)!.text).toContain('Page 1 reused an identical earlier drawing — free');
+
+    // A copied picture in the wrong frame is not silently passed off: same notice and free Fit chip as a fresh draw.
+    const squareDoc = make();
+    squareDoc.pages[0].render = { ...emptyRender(), status: 'none', history: [{ path: 'identical-square.webp', source: 'generated', at: 1, jobHash, w: 2048, h: 2048 }] };
+    const squareSession = newSession(squareDoc);
+    const squareCtx = testContext(squareSession);
+    await runAction(squareCtx, { type: 'render_pages' }, { confirmed: true });
+    expect(squareCtx.imagesFake.calls).toHaveLength(0);
+    const want = squareSession.doc.pages[0].render.aspect!;
+    const last = squareSession.doc.conversation.at(-1)!;
+    expect(last.text).toContain(`Page 1 came back 1:1 instead of ${want}.`);
+    expect(labelsOf(last.nextSteps)).toContain(`Fit to ${want} (Free)`);
   });
 
   it('R7: two identical jobs in flight pay once — the second joins the first', async () => {
@@ -1256,6 +1322,23 @@ describe('software reuse with savedUsd (decisions-final #6)', () => {
     expect(b.render.status).toBe('ready');
     expect(b.render.asset?.path).toBe(a.render.asset?.path);
     expect(session.doc.spend.entries.filter((e) => e.kind === 'style' && e.usd === 0 && (e.savedUsd || 0) > 0)).toHaveLength(1);
+  });
+
+  it('R7: when the leading twin fails, ONE waiting twin draws and the other joins it (never both pay)', async () => {
+    const session = newSession(plannedDoc());
+    const images = fakeImages((_req, i) => (i === 0 ? new StudioError('PROVIDER_ERROR', 'The provider refused this one.', { retryable: false }) : undefined));
+    const ctx = testContext(session, { images });
+    const same = { spec: 'Soft pastel washes' };
+    await runAction(ctx, { type: 'render_style_options', directions: [{ name: 'Soft A', ...same }, { name: 'Soft B', ...same }, { name: 'Soft C', ...same }] }, { confirmed: true });
+    expect(images.calls).toHaveLength(2); // the failed leader + one new leader
+    const [a, b, c] = session.doc.style.options;
+    expect(a.render.status).toBe('failed');
+    expect(b.render.status).toBe('ready');
+    expect(c.render.status).toBe('ready');
+    expect(c.render.asset?.path).toBe(b.render.asset?.path);
+    const style = session.doc.spend.entries.filter((e) => e.kind === 'style');
+    expect(style.filter((e) => e.usd > 0)).toHaveLength(1);
+    expect(style.filter((e) => e.usd === 0 && (e.savedUsd || 0) > 0)).toHaveLength(1);
   });
 });
 

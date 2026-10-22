@@ -178,23 +178,60 @@ describe('actions and money', () => {
     expect(studio.setTab).toHaveBeenCalledWith('pages');
   });
 
-  it('a drawn page offers a forced New take, never a "to draw" quote', async () => {
+  it('a drawn page offers a forced New take priced like the gate (missing sheets included), never a "to draw" quote', async () => {
     const studio = makeFakeStudio();
+    const doc = studio.doc!;
     renderCard(bd(), studio);
     fireEvent.click(screen.getByRole('button', { name: 'Panels & actions' })); // page 1 (drawn)
     expect(screen.queryByRole('button', { name: /Draw this page/ })).toBeNull();
-    const usd = unitPrice(studio.doc!, 'page', { byok: false }).usd;
-    fireEvent.click(screen.getByRole('button', { name: `New take · ≈${formatUsd(usd)}` }));
+    // The server's forced render_pages also draws ARJUN's missing sheet: the button must say so.
+    const redo = quoteRenderPages(doc, { pageIds: ['pg_1'], force: true, byok: false, tier: doc.settings.quality });
+    expect(redo.usd).toBeGreaterThan(unitPrice(doc, 'page', { byok: false }).usd);
+    expect(screen.getByText(/Includes 1 character sheet \(Arjun\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `New take · ≈${formatUsd(redo.usd)}` }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_1'], force: true, quotedUsd: usd });
+    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_1'], force: true, quotedUsd: redo.usd });
   });
 
-  it('inside a gate every spend button is hidden (the gate owns approval)', () => {
+  it('a drawn page whose cast all have sheets: New take is exactly one page', () => {
+    const doc = drawnDoc();
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd(), studio);
+    fireEvent.click(screen.getByRole('button', { name: 'Panels & actions' }));
+    expect(screen.getByRole('button', { name: `New take · ≈${formatUsd(unitPrice(doc, 'page', { byok: false }).usd)}` })).toBeInTheDocument();
+    expect(screen.queryByText(/Includes \d+ character sheet/)).toBeNull();
+  });
+
+  it('inside a gate every spend button is hidden (the gate owns approval); free fixes stay', () => {
     renderCard(bd({ gateId: 'gate_1' }), makeFakeStudio({ mode: 'pro' }));
     expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Draw/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /New take|Make the cover/ })).toBeNull();
     expect(screen.getByRole('button', { name: /Edit/ })).toBeInTheDocument();
+    // adding a reference photo is free and is the best fix before approving the drawing
+    expect(screen.getByRole('button', { name: 'Add a photo (free)' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('list', { name: /Pages in this book/ }), { key: 'Home' });
+    expect(screen.getByRole('region', { name: 'Cover details' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Make the cover|New cover|Redraw the cover|Try the cover again/ })).toBeNull();
+  });
+
+  it('a stale cover is called out of date and offered as a redraw, not "make"', () => {
+    const doc = drawnDoc();
+    doc.cover = { ...doc.cover, render: { status: 'ready', history: [], asset: { path: 'u/x/cover.webp', source: 'generated', at: 1 }, specHash: 'an-older-title' } };
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd(), studio);
+    const usd = unitPrice(doc, 'cover', { byok: false }).usd;
+    expect(screen.getByRole('button', { name: `Redraw the cover · ≈${formatUsd(usd)}` })).toBeInTheDocument();
+    expect(screen.getByText(/The cover is out of date/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Cover, out of date/ })).toBeInTheDocument();
+  });
+
+  it('nothing to draw because a page has no panels: an honest note instead of silence', () => {
+    const doc = drawnDoc();
+    doc.pages.push({ ...doc.pages[0], id: 'pg_4', n: 4, panels: [], render: { status: 'none', history: [] } });
+    renderCard(bd(), makeFakeStudio({ doc }));
+    expect(screen.queryByRole('button', { name: /Approve|Draw|Read it/ })).toBeNull();
+    expect(screen.getByText('Page 4 has no panels yet — add panels (free) before it can be drawn.')).toBeInTheDocument();
   });
 
   it('all pages drawn: Make the cover, then Read it', async () => {
@@ -284,6 +321,21 @@ describe('views', () => {
     const tile = screen.getByRole('button', { name: /^Page 1,/ });
     expect(tile.querySelector('img')).toBeNull();
     expect(tile).toHaveTextContent('Held for review');
+  });
+
+  it('a cast avatar whose sheet is held by the safety check shows initials, never the image', () => {
+    const doc = makeSampleDoc();
+    const maya = doc.cast.find((c) => c.id === 'c_maya')!;
+    maya.sheet = { ...maya.sheet, asset: { ...maya.sheet.asset!, safety: { assessed: 'X', at: 1 } } };
+    renderCard(bd(), makeFakeStudio({ doc, mode: 'pro' }));
+    const panels = screen.getByRole('list', { name: 'Panels on page 1' });
+    expect(panels.querySelector('img')).toBeNull();
+    expect(within(panels).getAllByTitle('Maya')[0]).toHaveTextContent('MA');
+    // and a clean sheet does render as an avatar image
+    const ok = makeSampleDoc();
+    const { unmount } = render(<BreakdownCard card={bd({ id: 'card_ok' })} message={msg} studio={makeFakeStudio({ doc: ok, mode: 'pro' })} />);
+    expect(screen.getAllByRole('list', { name: 'Panels on page 1' })[1].querySelector('img')).not.toBeNull();
+    unmount();
   });
 
   it('flags missing references in the detail row with a free shortcut to add one', () => {

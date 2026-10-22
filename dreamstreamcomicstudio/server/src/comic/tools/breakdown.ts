@@ -11,6 +11,7 @@
 import { newId, type Card, type ComicDoc, type Page } from '../../../../shared/comic/doc.js';
 import { formatUsd } from '../../../../shared/comic/models.js';
 import { LANGUAGES, languageSpec } from '../../../../shared/comic/languages.js';
+import { coverStatus } from '../../../../shared/comic/book.js';
 import { coverNeedsDraw, pageTargets, quoteRenderPages, sheetTargets, summarizeBook, unitPrice, type BookSummary } from '../../../../shared/comic/plan.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import { estimateSpendAction, spendIsByok } from '../jobs.js';
@@ -40,6 +41,8 @@ export const pageRanges = (ns: number[]): string => {
   return parts.join(', ');
 };
 const pagesLabel = (ns: number[]) => `${ns.length === 1 ? 'page' : 'pages'} ${pageRanges(ns)}`;
+/** "There is no page 8" / "There are no pages 7, 9". */
+const noSuchPages = (ns: number[]) => `There ${ns.length === 1 ? 'is no' : 'are no'} ${pagesLabel(ns)}`;
 
 /** Default facet: the layout before anything is drawn, the art afterwards. */
 export const defaultBreakdownView = (doc: ComicDoc): BreakdownView =>
@@ -125,9 +128,12 @@ export function breakdownText(doc: ComicDoc, summary: BookSummary, opts: { subse
   }
   if (!opts.subset) {
     const c = summary.cover;
+    const price = `≈${formatUsd(c.quoteUsd ?? summary.pricing?.coverUsd ?? 0)}`;
     if (c.status === 'ready' || c.status === 'custom') parts.push(`cover drawn${c.spentUsd ? ` (${formatUsd(c.spentUsd)})` : ''}`);
     else if (c.status === 'queued' || c.status === 'rendering') parts.push('cover drawing now');
-    else parts.push(`cover not drawn (≈${formatUsd(c.quoteUsd ?? summary.pricing?.coverUsd ?? 0)})`);
+    else if (c.status === 'stale') parts.push(`cover out of date — the title, style or cast changed since it was drawn (${price} to redraw)`);
+    else if (c.status === 'failed') parts.push(`cover failed (${price} to try again)`);
+    else parts.push(`cover not drawn (${price})`);
   }
   let text = `${parts.join(' · ')}.`;
 
@@ -180,7 +186,7 @@ function showPagesTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
       const doc = ctx.session.doc;
       if (!doc.pages.length) return 'There are no pages yet, so there is nothing to show. Plan the pages first (plan_pages), then show them.';
       const { pages, unknown } = resolvePageNumbers(doc, args.pages);
-      if (pages && !pages.length) return `There is no ${pagesLabel(unknown)}. ${existingPagesText(doc)} Nothing was shown.`;
+      if (pages && !pages.length) return `${noSuchPages(unknown)}. ${existingPagesText(doc)} Nothing was shown.`;
       const view = typeof args.view === 'string' && (BREAKDOWN_VIEWS as readonly string[]).includes(args.view) ? (args.view as BreakdownView) : undefined;
       const card = breakdownCardFor(doc, { pageIds: pages?.map((p) => p.id), view });
       // One breakdown card per message: a second call this turn re-scopes the first instead of stacking.
@@ -189,7 +195,7 @@ function showPagesTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
       else turn.cards.push(card);
       const byok = spendIsByok(ctx.keys);
       const summary = summarizeBook(doc, { pageIds: card.pageIds, byok });
-      const missing = unknown.length ? ` (There is no ${pagesLabel(unknown)}; ${existingPagesText(doc)})` : '';
+      const missing = unknown.length ? ` (${noSuchPages(unknown)}; ${existingPagesText(doc)})` : '';
       return `Showed the breakdown card (${card.view} view). ${breakdownText(doc, summary, { subset: !!card.pageIds, byok })}${missing} The card is visible to the user — refer to it briefly instead of repeating it.`;
     }
   );
@@ -226,7 +232,7 @@ async function quoteText(ctx: StudioContext, args: Record<string, unknown>): Pro
     case 'render_pages': {
       if (!doc.pages.length) return `There are no pages to draw yet — plan them first.${tail}`;
       const { pages, unknown } = resolvePageNumbers(doc, args.pages);
-      if (pages && !pages.length) return `There is no ${pagesLabel(unknown)}. ${existingPagesText(doc)}${tail}`;
+      if (pages && !pages.length) return `${noSuchPages(unknown)}. ${existingPagesText(doc)}${tail}`;
       const scope = pages ?? sortedPages(doc);
       const q = quoteRenderPages(doc, { pageIds: pages?.map((p) => p.id), includeCover: args.include_cover === true, byok, tier, modelOverride: override });
       const fresh = scope.filter((p) => !q.pageIds.includes(p.id) && p.render.status === 'ready' && p.panels.length && !isBusy(p));
@@ -236,11 +242,13 @@ async function quoteText(ctx: StudioContext, args: Record<string, unknown>): Pro
       if (fresh.length) notes.push(`Already drawn and current (not counted): ${pagesLabel(fresh.map((p) => p.n))}.`);
       if (busy.length) notes.push(`Drawing now (not counted): ${pagesLabel(busy.map((p) => p.n))}.`);
       if (empty.length) notes.push(`No panels yet (not counted): ${pagesLabel(empty.map((p) => p.n))}.`);
-      if (unknown.length) notes.push(`There is no ${pagesLabel(unknown)}.`);
+      if (unknown.length) notes.push(`${noSuchPages(unknown)}.`);
       if (q.nothing) {
-        const redraw = fresh.length ? unitPrice(doc, 'page', { byok, tier, modelOverride: override }).usd : 0;
-        const take = fresh.length
-          ? ` A new take is only for when the user asks for another version: ≈${formatUsd(redraw)} a page (${plural(fresh.length, 'page')} ≈${formatUsd(redraw * fresh.length)}).`
+        // The gate's own forced quote (a new take also draws any missing lead/support sheet).
+        const per = fresh.length ? unitPrice(doc, 'page', { byok, tier, modelOverride: override }).usd : 0;
+        const redo = fresh.length ? quoteRenderPages(doc, { pageIds: fresh.map((p) => p.id), force: true, byok, tier, modelOverride: override }) : null;
+        const take = redo
+          ? ` A new take is only for when the user asks for another version: ≈${formatUsd(per)} a page (${plural(fresh.length, 'page')} ≈${formatUsd(redo.usd)}${redo.sheetIds.length ? ` incl. ${plural(redo.sheetIds.length, 'character sheet')}` : ''}).`
           : '';
         return `$0 — nothing would be drawn.${notes.length ? ` ${notes.join(' ')}` : ''}${take}${tail}`;
       }
@@ -270,7 +278,7 @@ async function quoteText(ctx: StudioContext, args: Record<string, unknown>): Pro
     case 'edit_page': {
       const { pages, unknown } = resolvePageNumbers(doc, args.pages);
       if (!pages || !pages.length) {
-        return unknown.length ? `There is no ${pagesLabel(unknown)}. ${existingPagesText(doc)}${tail}` : `Say which page to edit (pages: [n]). ${existingPagesText(doc)}${tail}`;
+        return unknown.length ? `${noSuchPages(unknown)}. ${existingPagesText(doc)}${tail}` : `Say which page to edit (pages: [n]). ${existingPagesText(doc)}${tail}`;
       }
       const page = pages[0];
       if (page.render.status !== 'ready' || !page.render.asset) {
@@ -340,8 +348,9 @@ export const breakdownToolGroup: ToolGroup = {
     const q = quoteRenderPages(doc, { byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
     const drawn = doc.pages.filter((p) => p.render.status === 'ready').length;
     const toDraw = targets.length ? `to draw now: ${pagesLabel(targets.map((p) => p.n))} ≈${formatUsd(q.usd)}` : 'nothing left to draw ($0)';
-    const c = doc.cover.render.status;
-    const cover = c === 'queued' || c === 'rendering' ? 'drawing' : coverNeedsDraw(doc) ? 'not drawn' : 'drawn';
+    const cs = coverStatus(doc);
+    const cover =
+      cs === 'queued' || cs === 'rendering' ? 'drawing' : cs === 'ready' || cs === 'custom' ? 'drawn' : cs === 'stale' ? 'out of date' : cs === 'failed' ? 'failed' : 'not drawn';
     return [`Breakdown: ${plural(doc.pages.length, 'page')}, ${drawn} drawn; ${toDraw}; cover ${cover}.`];
   },
   activity: { show_pages: 'Laying out the pages', quote: 'Pricing it' }

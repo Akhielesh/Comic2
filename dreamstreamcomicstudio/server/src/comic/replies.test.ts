@@ -6,9 +6,11 @@ import { plannedDoc } from './orchestrator.fakes.js';
 import {
   composeTurnReply,
   detectNamedIp,
+  drawIntentInContext,
   drawIntentOf,
   limitWords,
   materialGaps,
+  nothingLine,
   nothingNextSteps,
   openQuestionsLine,
   recapLine,
@@ -62,7 +64,48 @@ describe('drawIntentOf', () => {
   });
 });
 
+describe('drawIntentInContext (a bare "yes" to the studio\'s own offer to draw)', () => {
+  const asked = (question: string, viaCard = false): ComicDoc => {
+    const doc = lakePlannedDoc();
+    doc.conversation = [
+      { id: 'u1', role: 'user', text: 'a lake story', at: 1 },
+      viaCard
+        ? { id: 'a1', role: 'assistant', text: 'Here is the plan.', at: 2, cards: [{ type: 'options', id: 'o1', question, choices: [{ id: 'x', label: 'Yes' }, { id: 'y', label: 'Not yet' }], answered: ['Yes'] }] }
+        : { id: 'a1', role: 'assistant', text: `The plan is on the board. ${question}`, at: 2 },
+      { id: 'u2', role: 'user', text: 'yes', at: 3 }
+    ];
+    return doc;
+  };
+
+  it.each([
+    ['Ready to draw page 1 (≈ $0.07)?', 'yes', 'explicit'],
+    ['Shall I make the cover?', 'ok go', 'explicit'],
+    ['Want a new take of page 1 (≈ $0.07)?', 'yes please', 'redraw'],
+    ['Which style do you like?', 'yes', 'none'],
+    ['Ready to draw page 1?', 'ok thanks', 'none'],
+    ['Ready to draw page 1?', 'yes but smaller', 'none'],
+    ['Ready to draw page 1?', 'go ahead', 'explicit']
+  ])('"%s" → "%s" → %s', (question, answer, want) => {
+    expect(drawIntentInContext(asked(question), answer)).toBe(want);
+  });
+
+  it('a tapped "Yes" on an options card counts; never while an approval card is open', () => {
+    expect(drawIntentInContext(asked('Ready to draw?', true), 'Yes')).toBe('explicit');
+    const gated = asked('Ready to draw?');
+    gated.gate = { id: 'g1', action: { type: 'render_pages' }, title: 'Draw 1 page?', summary: '', estimateUsd: 0.07, imageCount: 1, model: 'NB', createdAt: 1, status: 'open', reason: 'first_render' } as ComicDoc['gate'];
+    expect(drawIntentInContext(gated, 'yes')).toBe('none');
+    expect(drawIntentInContext(gated, 'draw it')).toBe('explicit'); // the user's own words still count
+  });
+});
+
 describe('detectNamedIp', () => {
+  it('ordinary words that are also brands are not IP ("marvel at", "minions", "a barbie", "bluey-green")', () => {
+    for (const t of ['they marvel at the stars', "the villain's minions attack", 'the transformer blew up', 'a snoopy neighbour', 'bluey-green water', 'a barbie on the beach', 'taking the mickey', 'my uncle Garfield', 'the avengers of the village']) {
+      expect(detectNamedIp(t), t).toEqual([]);
+    }
+    expect(detectNamedIp('a Marvel style hero with the Minions and Optimus Prime')).toEqual(['Marvel', 'Transformers', 'the Minions']);
+  });
+
   it('finds trademarked names (and nothing in ordinary text)', () => {
     expect(detectNamedIp('make a comic of Shin-chan pranking his dad')).toEqual(['Shin-chan']);
     expect(detectNamedIp('Baahubali fights with LEGO soldiers')).toEqual(['Baahubali', 'LEGO']);
@@ -124,7 +167,22 @@ describe('composeTurnReply (never silent)', () => {
   it('nothing to draw: $0 said plainly', () => {
     const doc = withUserTurns(lakeDrawnDoc(), 6);
     const text = composeTurnReply({ before: doc, after: doc, turn: turnOf({ outcome: 'nothing' }), userText: 'generate all pages' });
-    expect(text).toBe('Everything is already drawn and up to date — 1 page. Nothing was spent.');
+    expect(text).toBe('The page is already drawn and up to date — nothing was spent. The cover isn’t drawn yet.');
+    const all = withUserTurns(lakeDrawnDoc(), 6);
+    all.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'c.webp', source: 'generated', at: 1 } };
+    expect(composeTurnReply({ before: all, after: all, turn: turnOf({ outcome: 'nothing' }), userText: 'draw everything' })).toBe(
+      'Everything is already drawn and up to date — 1 page and the cover. Nothing was spent.'
+    );
+  });
+
+  it('nothing to draw never claims "everything" when only the cover is current (or pages are drawing)', () => {
+    const doc = withUserTurns(lakePlannedDoc(), 6);
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { path: 'c.webp', source: 'generated', at: 1 } };
+    const coverTurn = turnOf({ outcome: 'nothing', log: [{ tool: 'render_cover', ok: true, cost: 'paid', result: 'Nothing to draw: the cover is already drawn' }] });
+    expect(nothingLine(doc, coverTurn)).toBe('The cover is already drawn and up to date — nothing was spent.');
+    expect(composeTurnReply({ before: doc, after: doc, turn: coverTurn, userText: 'make the cover' })).not.toMatch(/Everything|0 pages/);
+    doc.pages[0].render = { ...emptyRender(), status: 'rendering' };
+    expect(nothingLine(doc, turnOf({ outcome: 'nothing' }))).toBe("It's already drawing — nothing new to start, and nothing was spent.");
   });
 
   it('started drawing, free edits, errors only, and nothing at all', () => {
@@ -170,6 +228,10 @@ describe('honest run outcomes (production bug 2026-10-22: "kicked off" after the
       "3 style tests didn't come through — the image service is busy right now (rate limited). Nothing new was drawn — tap Try again or ask me to retry. Love the vibe! Want a cast next?"
     );
     expect(text).not.toMatch(/kicked off/);
+    // A reply that already says so honestly is kept as written (no double failure line).
+    expect(reconcileReply('The style tests failed — the image service is busy. Want me to try again?', { after, turn })).toBe(
+      'The style tests failed — the image service is busy. Want me to try again?'
+    );
   });
 
   it('leaves a reply alone while the runs are still drawing, and offers retry chips once they failed', () => {
@@ -179,6 +241,28 @@ describe('honest run outcomes (production bug 2026-10-22: "kicked off" after the
     expect(reconcileReply("I've kicked off 3 style tests.", { after, turn })).toBe("I've kicked off 3 style tests.");
     const steps = retryNextSteps(failedStyles(), runs);
     expect(steps).toEqual([expect.objectContaining({ label: 'Try again', action: expect.objectContaining({ type: 'render_style_options', directions: expect.any(Array), quotedUsd: expect.any(Number) }) })]);
+  });
+
+  it('a target put back un-drawn (stopped/skipped job) is never reported as ready', () => {
+    const after = failedStyles();
+    after.style.options[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'a.webp', source: 'generated', at: 2000 }, updatedAt: 2000 };
+    after.style.options[1].render = { ...emptyRender(), status: 'none', updatedAt: 2000 };
+    const turn = turnOf({ runs, outcome: 'started' });
+    const out = runOutcome(after, turn);
+    expect(out.ready).toEqual([runs[0]]);
+    expect(out.failed).toEqual([runs[1], runs[2]]);
+    expect(reconcileReply('On their way!', { after, turn })).toMatch(/^The style test is ready, but 2 style tests didn't come through/);
+  });
+
+  it('a long early-turn recap never pushes the failure line out of the word budget', () => {
+    const before = withUserTurns(createEmptyDoc('d', 'Untitled comic', 1), 1);
+    const after = withUserTurns(lakeBriefDoc(), 1);
+    after.style.options = failedStyles().style.options;
+    const text = composeTurnReply({ before, after, turn: turnOf({ runs, outcome: 'started', question: 'Which style should we try next?' }), userText: 'baby by a lake with other animals' });
+    expect(text).toContain("3 style tests didn't come through");
+    expect(text).toContain('tap Try again');
+    expect(text.endsWith('Which style should we try next?')).toBe(true);
+    expect(text).not.toContain('I picked those companions'); // the least important clause went first
   });
 
   it('a silent model after failed runs still gets the honest line', () => {

@@ -62,6 +62,8 @@ import {
   canServeToOwner,
   effectiveRating,
   isKidsAudience,
+  minRating,
+  safetyStatusOf,
   saferRating,
   softenAction,
   type ContentRating
@@ -82,7 +84,11 @@ export interface CompiledRenderJob extends CompiledImageJob {
 /** Shared compile options. `safe` = the one-notch-gentler "safe take" (PG-13 → PG → G). */
 export interface CompileOptions {
   safe?: boolean;
-  /** The effective rating when the caller knows more than the doc (account-age ceiling). Default effectiveRating(doc). */
+  /**
+   * A further ceiling the caller knows about (the account-age ceiling, or the account-clamped
+   * effective rating). It can only LOWER the doc's effective rating, never raise it: passing
+   * 'PG-13' for a kids comic still draws at PG.
+   */
   rating?: ContentRating;
 }
 
@@ -307,16 +313,37 @@ const mergeAvoid = (...lists: readonly (readonly string[])[]): string[] => {
 };
 
 /**
+ * The style's own avoid list followed by the rating negatives. Every safety phrase is kept
+ * VERBATIM: a style phrase only ever drops out when a safety phrase already covers it, never
+ * the other way round — so a style avoid such as "no nudity restrictions" can't swallow the
+ * "nudity" negative (it would read "Never: no nudity restrictions").
+ */
+const withSafetyAvoid = (own: readonly string[], safety: readonly string[]): string[] => {
+  const covered = safety.map(wordsIn);
+  return [...mergeAvoid(own).filter((item) => !covered.some((s) => s.includes(wordsIn(item)))), ...safety];
+};
+
+/** The doc's effective rating, lowered (never raised) by a caller's ceiling. */
+const ceilingRating = (doc: ComicDoc, rating?: ContentRating): ContentRating =>
+  minRating(effectiveRating(doc).rating, rating && CONTENT_RATINGS.includes(rating) ? rating : undefined);
+
+/**
  * Rating negatives for the "Never:" line of every image prompt: the platform's always-avoid
  * art list plus the rating's own avoid list (RATING_RULES), deduplicated.
  */
-export const SAFETY_AVOID: Readonly<Record<ContentRating, readonly string[]>> = Object.fromEntries(
-  CONTENT_RATINGS.map((r) => [r, mergeAvoid(ALWAYS_ART_AVOID, RATING_RULES[r].avoid)])
-) as Record<ContentRating, readonly string[]>;
+export const SAFETY_AVOID: Readonly<Record<ContentRating, readonly string[]>> = {
+  G: mergeAvoid(ALWAYS_ART_AVOID, RATING_RULES.G.avoid),
+  PG: mergeAvoid(ALWAYS_ART_AVOID, RATING_RULES.PG.avoid),
+  'PG-13': mergeAvoid(ALWAYS_ART_AVOID, RATING_RULES['PG-13'].avoid)
+};
 
-/** The rating the art is drawn at: effective (or the caller's) rating, one notch stricter for a safe take. */
+/**
+ * The rating the art is drawn at: the doc's effective rating (lowered by the caller's ceiling,
+ * never raised — the PG-13 platform ceiling and kids ceilings always hold), one notch stricter
+ * for a safe take.
+ */
 export const artRatingFor = (doc: ComicDoc, opts: CompileOptions = {}): ContentRating => {
-  const base = opts.rating && CONTENT_RATINGS.includes(opts.rating) ? opts.rating : effectiveRating(doc).rating;
+  const base = ceilingRating(doc, opts.rating);
   return opts.safe ? saferRating(base) : base;
 };
 
@@ -336,8 +363,8 @@ const safeText = (text: string, opts: CompileOptions): string => (opts.safe ? so
 /**
  * The style every image is drawn in: the doc's style bible, filled from its preset, else
  * a preset matching the comic kind (when its color mode fits), else DEFAULT_STYLE_SPEC.
- * `avoid` always ends with the rating negatives (SAFETY_AVOID) for `rating` (default: the
- * doc's effective rating).
+ * `avoid` always ends with the rating negatives (SAFETY_AVOID), verbatim, for `rating` (the
+ * doc's effective rating, lowered — never raised — by the given one).
  */
 export const resolveStyle = (doc: ComicDoc, rating?: ContentRating): ResolvedStyle => {
   const preset = getStylePreset(doc.style.presetId);
@@ -347,7 +374,7 @@ export const resolveStyle = (doc: ComicDoc, rating?: ContentRating): ResolvedSty
       : undefined;
   const base = preset || kindPreset;
   const own = (doc.style.avoid?.length ? doc.style.avoid : base?.avoid || DEFAULT_AVOID).map(clean).filter(Boolean);
-  const avoid = mergeAvoid(own, SAFETY_AVOID[rating && CONTENT_RATINGS.includes(rating) ? rating : effectiveRating(doc).rating]);
+  const avoid = withSafetyAvoid(own, SAFETY_AVOID[ceilingRating(doc, rating)]);
   return {
     spec: sentence(doc.style.spec) || sentence(base?.spec) || DEFAULT_STYLE_SPEC,
     palette: doc.style.palette?.length ? doc.style.palette : base?.palette || [],
@@ -422,19 +449,16 @@ export const coverAspectFor = (doc: ComicDoc, spec: ImageModelSpec): AspectRatio
 /**
  * The frame shape stated in words (bug: a 4:5 page came back 1:1). Image models honour the
  * aspect parameter unevenly, so every page and cover prompt also SAYS the shape:
- * "FRAME: a tall 4:5 portrait image — taller than it is wide (4 wide by 5 tall)…".
+ * "FRAME: a tall 4:5 portrait page, taller than wide (4 wide by 5 tall)…".
  */
 export const frameSentence = (aspect: AspectRatio, what = 'image'): string => {
   const [w, h] = aspect.split(':').map(Number);
   const r = ratioOf(aspect);
   const orientation = orientationOf(aspect);
-  if (r >= 0.95 && r <= 1.05) return `FRAME: a ${aspect} square ${what}, exactly as wide as it is tall; fill the whole frame, no letterboxing or empty bands.`;
+  if (r >= 0.95 && r <= 1.05) return `FRAME: a ${aspect} square ${what}, as wide as it is tall; fill the whole frame, no letterboxing.`;
   const tall = r < 0.95;
   const adjective = tall ? (orientation === 'tall vertical' ? '' : 'tall ') : orientation === 'wide panoramic' ? '' : 'wide ';
-  return (
-    `FRAME: a ${adjective}${aspect} ${orientation} ${what} — ${tall ? 'taller than it is wide' : 'wider than it is tall'} ` +
-    `(${w} wide by ${h} tall). Fill the whole frame; never square, no letterboxing or empty bands.`
-  );
+  return `FRAME: a ${adjective}${aspect} ${orientation} ${what}, ${tall ? 'taller than wide' : 'wider than tall'} (${w} wide by ${h} tall); fill the whole frame — never square, no letterboxing.`;
 };
 
 /** Nearest supported aspect for an existing image's pixel size. */
@@ -476,9 +500,10 @@ const isProp = (c: Character) => castKindOf(c) === 'object';
 
 const KIND_WORD: Record<string, string> = { animal: 'animal', creature: 'creature', robot: 'robot', toy: 'toy', vehicle: 'vehicle', object: 'object' };
 
-/** Possessive pronoun for legend instructions ("Match her face…"). */
+/** Possessive pronoun for legend instructions ("Match her face…"); a group is always "their". */
 const possessive = (c: Character): string => {
-  if (castKindOf(c) !== 'person') return groupSize(c) > 1 ? 'their' : 'its';
+  if (groupSize(c) > 1) return 'their';
+  if (castKindOf(c) !== 'person') return 'its';
   const gender = clean(c.look?.gender).toLowerCase();
   const probe = gender || clean(c.look?.summary).toLowerCase();
   if (FEMALE_WORDS.test(probe)) return 'her';
@@ -567,7 +592,7 @@ export const describeLook = (c: Character, opts: { colors?: boolean } = {}): str
     // What it IS, once: the species ("mallard duckling"), else the kind ("animal") unless the summary says it.
     const species = stripEnd(clean(look.species));
     if (species && !seen.includes(species.toLowerCase())) parts.push(`species: ${species}`);
-    else if (!species && kind !== 'object' && !seen.includes(KIND_WORD[kind])) parts.push(`kind: ${KIND_WORD[kind]}`);
+    else if (!species && kind !== 'object' && KIND_WORD[kind] && !seen.includes(KIND_WORD[kind])) parts.push(`kind: ${KIND_WORD[kind]}`);
   }
   add('build', look.build);
   add('face', look.face);
@@ -928,9 +953,13 @@ const LABEL_WORDS: Record<RefLabel, string> = {
   other: ''
 };
 
-/** The author's note as quoted DATA: one line, ≤ 140 chars, never instructions. */
+/** Legend keywords a note must never spell in capitals (labels are matched downstream, e.g. PREVIOUS PAGE). */
+const RESERVED_LABEL_WORDS = /\b(?:previous page|current page|story page|style board|style reference|character sheet|character reference|author reference|location photo|location|photo of|reference images|same page)\b/gi;
+
+/** The author's note as quoted DATA: one line, ≤ 140 chars, never instructions, never a legend keyword. */
 const noteText = (ref: RefAsset): string => {
-  const note = clean(typeof ref.note === 'string' ? ref.note.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ') : '');
+  const raw = typeof ref.note === 'string' ? ref.note.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ') : '';
+  const note = clean(raw).replace(RESERVED_LABEL_WORDS, (m) => m.toLowerCase());
   return note ? quoteForPrompt(clip(note, REF_LIMITS.noteChars)) : '';
 };
 
@@ -1012,7 +1041,9 @@ const likenessWanted = (c: Character, spare: number): boolean => {
  *  - pass 1: one ref each (sheet, else the best photo) — unchanged ordering and budget;
  *  - pass 2: spare slots add "PHOTO OF MAYA (likeness)" next to a photo-based character's sheet;
  *  - pass 3: spare slots add a second, different photo for characters that have no sheet.
- * Extras are never referenced (text-locked). Counts against characters AND total caps.
+ * Extras are text-locked on pages; a cover references whoever it features (coverCastOf only
+ * features extras when the book has no leads, supports or companions). Counts against
+ * characters AND total caps.
  */
 const castReferences = (
   cast: Character[],
@@ -1025,7 +1056,7 @@ const castReferences = (
   const groups: { c: Character; refs: PlannedReference[] }[] = [];
   for (const c of cast) {
     if (slots <= 0) break;
-    if (c.tier === 'extra') continue;
+    if (c.tier === 'extra' && purpose === 'page') continue;
     const ref = characterReference(c, ctxFor(c), purpose);
     if (!ref) continue;
     groups.push({ c, refs: [ref] });
@@ -1446,7 +1477,7 @@ export const compileCharacterSheet = (doc: ComicDoc, character: Character, opts:
   const field = (label: string, value?: string) => (clean(value) ? `${label}: ${sentence(value)}` : '');
   const summary = sentence(look.summary);
   const kindLine =
-    kind !== 'person' && kind !== 'object' && !species && !summaryText.toLowerCase().includes(KIND_WORD[kind]) ? `Kind: ${KIND_WORD[kind]}.` : '';
+    kind !== 'person' && kind !== 'object' && KIND_WORD[kind] && !species && !summaryText.toLowerCase().includes(KIND_WORD[kind]) ? `Kind: ${KIND_WORD[kind]}.` : '';
   const description = [
     summary,
     idParts ? `Identity: ${idParts}.` : '',
@@ -1631,6 +1662,10 @@ export const compileEdit = (
 ): CompiledRenderJob => {
   const current = page.render.asset?.path;
   if (!current) throw new StudioError('BAD_REQUEST', `Page ${page.n} has no image to edit yet — render it first.`, { status: 400 });
+  // Reference gate (safety.md §3.2): a blocked or quarantined take is never sent to a model, not even to fix it.
+  if (!servable(page.render.asset)) {
+    throw new StudioError('BAD_REQUEST', `Page ${page.n}'s current take didn't pass the content check, so it can't be edited — redraw it safer instead.`, { status: 400 });
+  }
   const asked = sentence(args.instruction);
   if (!asked) throw new StudioError('BAD_REQUEST', 'Say what to change on the page.', { status: 400 });
   const instruction = sentence(safeText(asked, args)) || asked;
@@ -1717,11 +1752,14 @@ export const coverTitleBand = (doc: ComicDoc): { side: 'top' | 'bottom'; pct: nu
 
 /**
  * The book's art as a free consistency anchor for the cover (timeline.md §3.2): the first
- * ready, servable page — preferring one that is not out of date.
+ * ready, servable page — preferring one that is not out of date. A page judged above the
+ * cover's rating is never the anchor (it would pull the cover over the rating too).
  */
-const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }): PlannedReference[] => {
+const storyPageReference = (doc: ComicDoc, budget: { total: number; objects: number }, rating: ContentRating): PlannedReference[] => {
   if (budget.objects <= 0 || budget.total <= 0) return [];
-  const ready = doc.pages.filter((p) => p.render.status === 'ready' && servable(p.render.asset)).sort((a, b) => a.n - b.n);
+  const ready = doc.pages
+    .filter((p) => p.render.status === 'ready' && servable(p.render.asset) && safetyStatusOf(p.render.asset.safety, rating) !== 'over_rating')
+    .sort((a, b) => a.n - b.n);
   const page = ready.find((p) => !isPageStale(doc, p)) || ready[0];
   if (!page?.render.asset) return [];
   budget.objects -= 1;
@@ -1754,7 +1792,7 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
   const featured = coverCastOf(doc).slice(0, spec.refs.characters > 0 ? spec.refs.characters : 4);
   const characters = castReferences(featured, spec, budget, 'cover', () => ({ effectiveRating: rating }));
   const style = styleReferences(doc, spec, budget, { effectiveRating: rating });
-  const refs = [...characters, ...style, ...storyPageReference(doc, budget)];
+  const refs = [...characters, ...style, ...storyPageReference(doc, budget, rating)];
   const index = indexReferences(refs);
   const bw = doc.format.colorMode === 'bw';
 

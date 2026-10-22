@@ -3,11 +3,9 @@
 # scripts, and third-party surfaces (maps, embeds, model CDNs) must be inventoried from
 # real violation reports before anything is enforced. The share/reader route /c/* gets
 # an ENFORCED CSP from its Pages Function (_headers never applies to Function responses).
-# `report-uri /api/csp-report` is deliberately NOT set yet: until the edge handler for
-# that path exists in the dreamstream-api Worker, reports would be forwarded to the
-# backend container and wake it (CLAUDE.md "keep it sleepable"). The owner of the edge
-# route appends "; report-uri /api/csp-report" to the policy below when it lands.
-# Until then violations show in the browser console only.
+# Violations are reported to /api/csp-report, which the dreamstream-api Worker answers AT
+# THE EDGE (api-proxy/src/cspReport.ts: sampled, sanitized log; rate-limited; it never reaches
+# or wakes the backend container — CLAUDE.md "keep it sleepable").
 # Allowed third parties, by purpose: Cloudflare Web Analytics (static.cloudflareinsights.com
 # script, cloudflareinsights.com beacon) and Turnstile (challenges.cloudflare.com script +
 # frame) are injected by Cloudflare/our auth forms; cdn.jsdelivr.net serves Pyodide (and its
@@ -16,7 +14,7 @@
 # video/map embeds and the Sandpack playground. img-src/media-src allow any https source
 # because chat shows images and media from the open web (search results, news, maps).
 /*
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://aistudiocdn.com https://static.cloudflareinsights.com https://challenges.cloudflare.com https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cloudflareinsights.com https://challenges.cloudflare.com https://*.workers.dev wss://*.workers.dev https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://nominatim.openstreetmap.org; frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://*.codesandbox.io; worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://aistudiocdn.com https://static.cloudflareinsights.com https://challenges.cloudflare.com https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cloudflareinsights.com https://challenges.cloudflare.com https://*.workers.dev wss://*.workers.dev https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://nominatim.openstreetmap.org; frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://*.codesandbox.io; worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'; report-uri /api/csp-report
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 

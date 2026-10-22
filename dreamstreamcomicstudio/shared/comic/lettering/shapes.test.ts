@@ -271,38 +271,72 @@ describe('linked balloon neck', () => {
   });
 });
 
+/** FNV-1a (32-bit) of a string — a compact golden fingerprint. */
+const fnv = (s: string) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+};
+
+// Golden values were produced by the PRE-v5 generators (components/comicstudio/board/balloonGeometry.ts at
+// commit 24a6070, before the move to shared/). They are frozen here on purpose: balloonGeometry.ts now
+// re-exports these very functions, so comparing against it alone would prove nothing.
 describe('classic parity (pre-v5 balloonGeometry.ts, strings equal)', () => {
-  it('the moved generators are byte-identical', () => {
+  it('the moved generators are byte-identical to the frozen pre-v5 output', () => {
+    expect(speechBodyPath(200, 60, { x: 15, y: 13 }).startsWith('M204 30C204 33.7 203.55 38.2 202.66 41.1C201.77 44 200.44 45.53 198.65 47.39C196')).toBe(true);
+    expect(captionPath(200, 60)).toBe('M0 0L200 0L200 60L0 60Z');
+    expect(tailPath(200, 60, { x: 80, y: 110 }, 'curved')).toBe('M80.71 47.43Q74.45 77.24 80 110Q90.87 81.34 108.82 54.46Z');
+    expect(hashSeed('pg_1_l5')).toBe(306277198);
+    const parts: string[] = [];
     for (const [w, h] of [[200, 60], [120, 110], [90, 200], [310, 44]]) {
       for (const inset of [undefined, { x: 15, y: 13 }, { x: 6, y: 4 }]) {
-        expect(speechBodyPath(w, h, inset)).toBe(boardSpeechBodyPath(w, h, inset));
-        for (const seed of [1, 7, boardHashSeed('pg_1_l3')]) {
-          expect(cloudPath(w, h, seed, inset)).toBe(boardCloudPath(w, h, seed, inset));
-          expect(burstPath(w, h, seed, inset)).toBe(boardBurstPath(w, h, seed, inset));
+        parts.push(speechBodyPath(w, h, inset));
+        for (const seed of [1, 7, hashSeed('pg_1_l3')]) {
+          parts.push(cloudPath(w, h, seed, inset));
+          parts.push(burstPath(w, h, seed, inset));
         }
       }
-      expect(captionPath(w, h)).toBe(boardCaptionPath(w, h));
+      parts.push(captionPath(w, h));
       for (const tip of [{ x: w * 0.4, y: h + 50 }, { x: -40, y: h / 2 }, { x: w + 30, y: -20 }]) {
-        expect(tailPath(w, h, tip, 'curved')).toBe(boardTailPath(w, h, tip, 'curved'));
-        expect(tailPath(w, h, tip, 'straight')).toBe(boardTailPath(w, h, tip, 'straight'));
-        expect(thoughtBubbles(w, h, tip)).toEqual(boardThoughtBubbles(w, h, tip));
+        parts.push(String(tailPath(w, h, tip, 'curved')));
+        parts.push(String(tailPath(w, h, tip, 'straight')));
+        parts.push(JSON.stringify(thoughtBubbles(w, h, tip)));
       }
     }
-    expect(hashSeed('pg_1_l5')).toBe(boardHashSeed('pg_1_l5'));
+    parts.push(String(hashSeed('pg_1_l5')));
+    expect(parts).toHaveLength(125);
+    expect(fnv(parts.join('|'))).toBe('5f11047a');
   });
 
-  it('the classic preset → bubbleGeometry equals balloonShape for every LineKind', () => {
+  it('the board re-exports are the shared generators (one implementation)', () => {
+    for (const [w, h] of [[200, 60], [90, 200]]) {
+      expect(boardSpeechBodyPath(w, h, { x: 15, y: 13 })).toBe(speechBodyPath(w, h, { x: 15, y: 13 }));
+      expect(boardCloudPath(w, h, 7)).toBe(cloudPath(w, h, 7));
+      expect(boardBurstPath(w, h, 7)).toBe(burstPath(w, h, 7));
+      expect(boardCaptionPath(w, h)).toBe(captionPath(w, h));
+      expect(boardTailPath(w, h, { x: -40, y: h / 2 })).toBe(tailPath(w, h, { x: -40, y: h / 2 }));
+      expect(boardThoughtBubbles(w, h, { x: w + 30, y: -20 })).toEqual(thoughtBubbles(w, h, { x: w + 30, y: -20 }));
+    }
+    expect(boardHashSeed('pg_1_l5')).toBe(hashSeed('pg_1_l5'));
+  });
+
+  it('the classic preset → bubbleGeometry equals the pre-v5 balloonShape for every LineKind', () => {
     const preset = LETTERING_PRESETS.classic;
     const geometryFor = (kind: LineKind, w: number, h: number, tip: P | null, seed: number, inset: P): BubbleGeometry => {
       const style = { ...preset.base, ...(preset.kinds[kind] || {}) };
       return bubbleGeometry(style.shape, w, h, { inset, seed, tip, tail: resolveTailStyle(style.tail, kind, style.shape), tailWidth: style.tailWidth, stroke: 2.8, borderStyle: style.borderStyle });
     };
+    const golden: string[] = [];
     for (const kind of LINE_KINDS)
       for (const [w, h] of [[200, 60], [140, 90]]) {
-        const seed = boardHashSeed(`pg_2_${kind}`);
+        const seed = hashSeed(`pg_2_${kind}`);
         const inset = { x: 15, y: 13 };
         for (const tip of [{ x: w * 0.45, y: h + 60 }, null]) {
           const ours = geometryFor(kind, w, h, tip, seed, inset);
+          golden.push(JSON.stringify([ours.body ?? null, ours.tail ?? null, ours.bubbles]));
           const board = balloonShape(kind, w, h, { tip, seed, inset });
           expect(ours.body, kind).toBe(board.body);
           expect(ours.tail, kind).toBe(board.tail);
@@ -311,6 +345,9 @@ describe('classic parity (pre-v5 balloonGeometry.ts, strings equal)', () => {
           expect(ours.extras, kind).toBeUndefined();
         }
       }
+    expect(LINE_KINDS).toEqual(['speech', 'thought', 'caption', 'sfx', 'whisper', 'shout']);
+    expect(golden).toHaveLength(24);
+    expect(fnv(golden.join('|'))).toBe('fabbf490');
     // Whispers keep the classic dashed outline through borderStyle.
     expect({ ...preset.base, ...preset.kinds.whisper }.borderStyle).toBe('dashed');
   });

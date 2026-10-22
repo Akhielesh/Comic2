@@ -1,0 +1,944 @@
+// Owner publication operations (sharing.md §4, contract §12.7): publish / update / regenerate
+// / unpublish, readiness, the owner view, and the legacy public read by project id.
+//
+// Invariants (owner addendum "read-only + very strong security"):
+//  - every operation is owner-scoped: ctx.userId comes from the verified JWT, the session is
+//    loaded owner-scoped, and the publication row is read/written by (project_id, user_id);
+//  - readers only ever see the frozen, allow-listed snapshot and opaque pub/<assetKey>/ copies;
+//    later edits never go live until the owner republishes (which re-runs the safety gate);
+//  - the safety gate (runPublishGate) runs for BOTH visibilities; unchecked content is never
+//    published (fail closed: 503 with an honest message), blocked pages need explicit consent;
+//  - regenerate and unpublish kill the old slug the moment the row commits (the edge does no
+//    caching) and delete the old pub/ objects; publishing again after an unpublish mints a NEW slug;
+//  - projects.is_public is mirrored by the service role only.
+
+import crypto from 'node:crypto';
+import { newId, type AssetRef, type Card, type ComicDoc, type Msg, type SafetyBlocker } from '../../../../shared/comic/doc.js';
+import type { DocOp } from '../../../../shared/comic/ops.js';
+import { editionReadiness } from '../../../../shared/comic/i18n.js';
+import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
+import {
+  ASSET_KEY_RE,
+  PUBLISH_DEFAULTS,
+  SLUG_RE,
+  type PublicationMirror,
+  type PublicationOwnerView,
+  type PublicationSettingsPatch,
+  type PublicComicPayload,
+  type PublishReadiness,
+  type PublishRequest,
+  type ShareCard
+} from '../../../../shared/comic/publication.js';
+import { effectiveRating, safetyStatusOf, type ContentRating, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { COMICS_ORIGIN, comicShareUrl } from '../../../../services/productHost.js';
+import { logger } from '../../lib/logger.js';
+import { runPublishGate, type PublishGateResult } from '../safety/index.js';
+import { PUBLIC_BUCKET } from '../storagePaths.js';
+import { StudioError, type StudioContext, type StudioErrorCode } from '../types.js';
+import type { PublicationRow, SnapshotPlan, StatsRow } from './index.js';
+import { newAssetKey, newSlug } from './ids.js';
+import { ogHash, renderOgCard, dominantColor, type OgRenderInput } from './ogImage.js';
+import {
+  buildShareCard,
+  buildSnapshot,
+  cleanText,
+  contentFingerprint,
+  coverUrlOf,
+  drawnPages,
+  hasPublishableArt,
+  kindLabelOf,
+  languagesLabel,
+  localizedText,
+  ogPath,
+  OG_PATH_RE,
+  planSnapshot,
+  snapshotPaths
+} from './snapshot.js';
+import { createSupabasePublicationStore, SlugTakenError, type PublicationBackend } from './store.js';
+
+// ── Dependencies (injectable for tests) ──────────────────────────────────────
+
+export interface PublicationDeps {
+  store: PublicationBackend;
+  gate: typeof runPublishGate;
+  now: () => number;
+  /** Public object URL of a pub/ path (Supabase public bucket). */
+  publicUrl: (path: string) => string;
+  renderOg: (input: OgRenderInput) => Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }>;
+  newSlug: () => string;
+  newAssetKey: () => string;
+}
+
+const supabaseOrigin = (): string => (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+
+/** Public URL of an object in the public bucket; each path segment encoded. */
+export const publicObjectUrl = (path: string, origin = supabaseOrigin(), bucket = PUBLIC_BUCKET): string =>
+  `${origin}/storage/v1/object/public/${encodeURIComponent(bucket)}/${path.split('/').map(encodeURIComponent).join('/')}`;
+
+let overrides: Partial<PublicationDeps> = {};
+let defaultStore: PublicationBackend | null = null;
+
+const deps = (): PublicationDeps => ({
+  store: overrides.store || (defaultStore ??= createSupabasePublicationStore()),
+  gate: overrides.gate || runPublishGate,
+  now: overrides.now || (() => Date.now()),
+  publicUrl: overrides.publicUrl || ((p) => publicObjectUrl(p)),
+  renderOg: overrides.renderOg || renderOgCard,
+  newSlug: overrides.newSlug || newSlug,
+  newAssetKey: overrides.newAssetKey || newAssetKey
+});
+
+/** Test hook: swap dependencies; returns a restore function. */
+export function configurePublication(next: Partial<PublicationDeps>): () => void {
+  const prev = overrides;
+  overrides = { ...overrides, ...next };
+  return () => {
+    overrides = prev;
+  };
+}
+
+// ── Errors ───────────────────────────────────────────────────────────────────
+
+export type PublishErrorReason = 'BAD_REQUEST' | 'NOT_FOUND' | 'NOT_READY' | 'SAFETY_BLOCKED' | 'LANG_INCOMPLETE' | 'CONFLICT' | 'SAFETY_UNAVAILABLE' | 'FORBIDDEN';
+
+/** A StudioError that carries the public API code and machine-readable details. */
+export class PublishError extends StudioError {
+  readonly reason: PublishErrorReason;
+  readonly details?: Record<string, unknown>;
+  constructor(reason: PublishErrorReason, message: string, opts: { status: number; code: StudioErrorCode; details?: Record<string, unknown> }) {
+    super(opts.code, message, { status: opts.status });
+    this.reason = reason;
+    if (opts.details) this.details = opts.details;
+  }
+}
+
+const badRequest = (message: string) => new PublishError('BAD_REQUEST', message, { status: 400, code: 'BAD_REQUEST' });
+const notFound = (message = "This comic isn't published.") => new PublishError('NOT_FOUND', message, { status: 404, code: 'NOT_FOUND' });
+
+// ── Validation (strict allow-lists; unknown keys are refused) ────────────────
+
+const LANG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
+const MAX_LANGUAGES = 12;
+const REQUEST_KEYS = new Set(['visibility', 'languages', 'defaultLang', 'startPage', 'allowDownload', 'allowEmbed', 'showCreator', 'excludePageIds']);
+const PATCH_KEYS = new Set(['visibility', 'defaultLang', 'startPage', 'allowDownload', 'allowEmbed', 'showCreator']);
+const PAGE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const optBool = (v: unknown, key: string): boolean | undefined => {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'boolean') throw badRequest(`“${key}” must be true or false.`);
+  return v;
+};
+const optStartPage = (v: unknown): number | null | undefined => {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 500) throw badRequest('“startPage” must be a page number from 1 to 500.');
+  return v;
+};
+const optLang = (v: unknown, key: string): string | undefined => {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string' || !LANG_RE.test(v)) throw badRequest(`“${key}” must be a language code like “en” or “hi”.`);
+  return v;
+};
+
+/** Validate a PublishRequest body (unknown keys → 400). */
+export function parsePublishRequest(body: unknown): PublishRequest {
+  if (!isRecord(body)) throw badRequest('Send a publish request.');
+  for (const key of Object.keys(body)) if (!REQUEST_KEYS.has(key)) throw badRequest(`Unknown field “${key.slice(0, 40)}”.`);
+  if (body.visibility !== 'unlisted' && body.visibility !== 'public') throw badRequest('Choose who can see it: “unlisted” or “public”.');
+  const req: PublishRequest = { visibility: body.visibility };
+  if (body.languages !== undefined) {
+    if (!Array.isArray(body.languages) || !body.languages.length || body.languages.length > MAX_LANGUAGES) throw badRequest(`Pick 1 to ${MAX_LANGUAGES} languages.`);
+    const langs: string[] = [];
+    for (const l of body.languages) {
+      const lang = optLang(l, 'languages');
+      if (lang && !langs.some((x) => sameLanguage(x, lang))) langs.push(lang);
+    }
+    req.languages = langs;
+  }
+  const defaultLang = optLang(body.defaultLang, 'defaultLang');
+  if (defaultLang) req.defaultLang = defaultLang;
+  const startPage = optStartPage(body.startPage);
+  if (startPage !== undefined) req.startPage = startPage;
+  const allowDownload = optBool(body.allowDownload, 'allowDownload');
+  if (allowDownload !== undefined) req.allowDownload = allowDownload;
+  const allowEmbed = optBool(body.allowEmbed, 'allowEmbed');
+  if (allowEmbed !== undefined) req.allowEmbed = allowEmbed;
+  const showCreator = optBool(body.showCreator, 'showCreator');
+  if (showCreator !== undefined) req.showCreator = showCreator;
+  if (body.excludePageIds !== undefined) {
+    if (!Array.isArray(body.excludePageIds) || body.excludePageIds.length > 500 || !body.excludePageIds.every((id) => typeof id === 'string' && PAGE_ID_RE.test(id))) {
+      throw badRequest('“excludePageIds” must be a list of page ids.');
+    }
+    req.excludePageIds = [...new Set(body.excludePageIds as string[])];
+  }
+  return req;
+}
+
+/** Validate a settings patch (no languages or content; unknown keys → 400). */
+export function parseSettingsPatch(body: unknown): PublicationSettingsPatch {
+  if (!isRecord(body)) throw badRequest('Send the settings to change.');
+  for (const key of Object.keys(body)) if (!PATCH_KEYS.has(key)) throw badRequest(`Unknown field “${key.slice(0, 40)}”.`);
+  const patch: PublicationSettingsPatch = {};
+  if (body.visibility !== undefined) {
+    if (body.visibility !== 'unlisted' && body.visibility !== 'public') throw badRequest('Choose “unlisted” or “public”.');
+    patch.visibility = body.visibility;
+  }
+  const defaultLang = optLang(body.defaultLang, 'defaultLang');
+  if (defaultLang) patch.defaultLang = defaultLang;
+  const startPage = optStartPage(body.startPage);
+  if (startPage !== undefined) patch.startPage = startPage;
+  for (const key of ['allowDownload', 'allowEmbed', 'showCreator'] as const) {
+    const v = optBool(body[key], key);
+    if (v !== undefined) patch[key] = v;
+  }
+  if (!Object.keys(patch).length) throw badRequest('Nothing to change.');
+  return patch;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+// Per-user write budget for publish/update/regenerate/unpublish (contract §14.3: 10/min, 60/day).
+// The REST routes also sit behind comicPublishRateLimit; this one covers the stream actions too.
+const WRITE_WINDOWS = [
+  { ms: 60_000, max: 10 },
+  { ms: 24 * 60 * 60_000, max: 60 }
+];
+const writeLog = new Map<string, number[]>();
+const MAX_TRACKED_USERS = 5000;
+
+/** Throws RATE_LIMIT (429) when this user has published too often; records the attempt otherwise. */
+export function takePublishBudget(userId: string, now = Date.now()): void {
+  const day = WRITE_WINDOWS[WRITE_WINDOWS.length - 1].ms;
+  const recent = (writeLog.get(userId) || []).filter((t) => now - t < day);
+  for (const w of WRITE_WINDOWS) {
+    if (recent.filter((t) => now - t < w.ms).length >= w.max) {
+      throw new StudioError('RATE_LIMIT', w.ms <= 60_000 ? 'That was a lot of publishing in a minute — wait a moment and try again.' : "You've reached today's publishing limit. Try again tomorrow.", {
+        status: 429,
+        retryable: true
+      });
+    }
+  }
+  recent.push(now);
+  writeLog.delete(userId);
+  if (writeLog.size >= MAX_TRACKED_USERS) {
+    const oldest = writeLog.keys().next().value as string | undefined;
+    if (oldest !== undefined) writeLog.delete(oldest);
+  }
+  writeLog.set(userId, recent);
+}
+
+/** Test hook. */
+export function __resetPublishBudget(): void {
+  writeLog.clear();
+}
+
+/** Run under the project's session lock (serializes with director turns and other publishes). */
+async function withLock<T>(ctx: StudioContext, fn: () => Promise<T>): Promise<T> {
+  const s = ctx.session as StudioContext['session'] & { runExclusive?: <R>(work: () => Promise<R>) => Promise<R> };
+  return typeof s.runExclusive === 'function' ? s.runExclusive(fn) : fn();
+}
+
+const ratingOf = (ctx: StudioContext, doc: ComicDoc): ContentRating => ctx.rating ?? effectiveRating(doc, ctx.caps?.ratingCeiling).rating;
+
+const isLiveish = (row: PublicationRow | null): row is PublicationRow & { slug: string; assetKey: string } =>
+  !!row && (row.status === 'live' || row.status === 'suspended') && !!row.slug && SLUG_RE.test(row.slug) && !!row.assetKey && ASSET_KEY_RE.test(row.assetKey);
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+const bufferOf = async (ctx: StudioContext, path: string | undefined): Promise<Buffer | null> => {
+  if (!path) return null;
+  try {
+    const dataUrl = await ctx.assets.loadDataUrl(path);
+    const comma = dataUrl.indexOf(',');
+    return comma > 0 ? Buffer.from(dataUrl.slice(comma + 1), 'base64') : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The 1080 variant (else the original) of a live asset: what the OG renderer reads. */
+const previewPathOf = (asset?: AssetRef): string | undefined =>
+  asset ? ((asset.variants || []).find((v) => v.w === 1080) || (asset.variants || []).slice(-1)[0] || asset).path : undefined;
+
+const pubPathsOfCard = (card: ShareCard | Record<string, never> | undefined): string[] =>
+  isRecord(card) && isRecord((card as unknown as ShareCard).og) ? Object.values((card as unknown as ShareCard).og).map((o) => o?.path).filter((p): p is string => typeof p === 'string') : [];
+
+const mirrorOf = (row: PublicationRow): PublicationMirror | null =>
+  isLiveish(row)
+    ? {
+        visibility: row.visibility,
+        status: row.status === 'suspended' ? 'suspended' : 'live',
+        slug: row.slug,
+        publishedRev: row.publishedRev,
+        publishedAt: row.publishedAt ?? row.updatedAt ?? 0,
+        languages: [...row.languages]
+      }
+    : null;
+
+/** The doc mirror op, only when it differs from what the doc holds. */
+const mirrorOps = (doc: ComicDoc, row: PublicationRow | null): DocOp[] => {
+  const value = row ? mirrorOf(row) : null;
+  const current = doc.publication ?? null;
+  return JSON.stringify(current) === JSON.stringify(value) ? [] : [{ op: 'publication', value }];
+};
+
+const ogUrlOf = (card: ShareCard | Record<string, never>, lang?: string): string | undefined => {
+  const og = isRecord(card) && isRecord((card as unknown as ShareCard).og) ? (card as unknown as ShareCard).og : undefined;
+  if (!og) return undefined;
+  const entry = (lang && og[lang]) || Object.values(og)[0];
+  return entry && OG_PATH_RE.test(entry.path) ? `${COMICS_ORIGIN}/og/${entry.path.slice('pub/'.length)}` : undefined;
+};
+
+// ── Readiness ────────────────────────────────────────────────────────────────
+
+const STATUS_WORD: Record<string, string> = { none: 'not drawn yet', queued: 'waiting to draw', rendering: 'drawing now', failed: "didn't draw", stale: 'out of date' };
+
+/** Live readiness from the doc (no network, no spend): drives the sheet and the publish card. */
+export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: PublishRequest): Promise<PublishReadiness> {
+  const rating = ratingOf(ctx, doc);
+  const exclude = new Set(req?.excludePageIds || []);
+  const pages = (doc.pages || []).filter((p) => !exclude.has(p.id));
+  const missing: PublishReadiness['missing'] = [];
+  if (!hasPublishableArt(doc.cover?.render)) missing.push({ kind: 'cover', status: STATUS_WORD[doc.cover?.render?.status || 'none'] || 'not drawn yet' });
+  for (const p of pages) if (!hasPublishableArt(p.render) || p.render.status !== 'ready') {
+    if (p.render.status === 'stale' && hasPublishableArt(p.render)) continue;
+    missing.push({ kind: 'page', n: p.n, status: STATUS_WORD[p.render.status] || p.render.status });
+  }
+  const stalePages = pages.filter((p) => p.render.status === 'stale').map((p) => p.n);
+  const drawn = pages.filter((p) => hasPublishableArt(p.render));
+
+  const blockedPages: number[] = [];
+  const reasons = new Set<string>();
+  let unchecked = false;
+  const look = (status: SafetyStatus, categories?: string[], n?: number) => {
+    if (status === 'blocked' || status === 'over_rating') {
+      if (typeof n === 'number') blockedPages.push(n);
+      (categories || []).forEach((c) => reasons.add(c));
+      if (status === 'over_rating') reasons.add(`over ${rating}`);
+    } else if (status !== 'pass') unchecked = true;
+  };
+  for (const p of drawn) look(safetyStatusOf(p.render.asset?.safety, rating), p.render.asset?.safety?.categories, p.n);
+  if (hasPublishableArt(doc.cover?.render)) look(safetyStatusOf(doc.cover.render.asset?.safety, rating), doc.cover.render.asset?.safety?.categories);
+
+  const source = doc.format?.language || 'en';
+  const wanted = req?.languages?.length ? req.languages : doc.publication?.languages?.length ? doc.publication.languages : [source];
+  const languages = wanted.map((lang) => {
+    const r = editionReadiness(doc, lang);
+    return { lang, publishable: r.publishable, blocking: r.issues.filter((i) => i.blocking).map((i) => i.text) };
+  });
+  const safetyStatus: PublishReadiness['safety']['status'] = blockedPages.length ? 'blocked' : unchecked ? 'needs_check' : 'cleared';
+  return {
+    ok: drawn.length > 0 && missing.length === 0 && stalePages.length === 0 && safetyStatus !== 'blocked' && languages.every((l) => l.publishable),
+    drawnPages: drawn.length,
+    plannedPages: pages.length,
+    missing,
+    stalePages,
+    safety: { status: safetyStatus, blockedPages, reasons: [...reasons] },
+    languages
+  };
+}
+
+// ── Owner view ───────────────────────────────────────────────────────────────
+
+function summarizeStats(row: PublicationRow, days: StatsRow[], now: number): PublicationOwnerView['stats'] {
+  const since7 = new Date(now - 7 * 86_400_000).toISOString().slice(0, 10);
+  const recent = days.filter((d) => d.day >= since7);
+  const byChannel7d: Record<string, number> = {};
+  for (const d of recent) for (const [k, v] of Object.entries(d.byChannel || {})) byChannel7d[k] = (byChannel7d[k] || 0) + (Number(v) || 0);
+  return {
+    views: row.viewsCount || 0,
+    uniques7d: recent.reduce((s, d) => s + d.uniques, 0),
+    completes7d: recent.reduce((s, d) => s + d.completes, 0),
+    byChannel7d,
+    daily: days.slice(-14).map((d) => ({ day: d.day, views: d.views }))
+  };
+}
+
+async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow | null, opts: { stats?: boolean; req?: PublishRequest } = {}): Promise<PublicationOwnerView> {
+  const d = deps();
+  const readiness = await getReadiness(ctx, doc, opts.req ?? (row && row.languages.length ? { visibility: row.visibility, languages: row.languages } : undefined));
+  const live = isLiveish(row);
+  const view: PublicationOwnerView = {
+    visibility: live ? row.visibility : 'private',
+    status: row ? row.status : null,
+    languages: row?.languages?.length ? [...row.languages] : [doc.format?.language || 'en'],
+    allowDownload: row ? row.allowDownload : PUBLISH_DEFAULTS.allowDownload,
+    allowEmbed: row ? row.allowEmbed : PUBLISH_DEFAULTS.allowEmbed,
+    showCreator: row ? row.showCreator : PUBLISH_DEFAULTS.showCreator,
+    publishedRev: live ? row.publishedRev : 0,
+    docRev: doc.rev,
+    behind: live ? contentFingerprint(doc, row.languages) !== String(row.safety?.contentHash || '') : false,
+    readiness
+  };
+  if (live) {
+    view.slug = row.slug;
+    view.url = comicShareUrl(row.slug);
+    const og = ogUrlOf(row.card, row.defaultLang || row.languages[0]);
+    if (og) view.ogImageUrl = og;
+    if (row.publishedAt) view.publishedAt = row.publishedAt;
+    if (row.startPage !== undefined) view.startPage = row.startPage ?? null;
+  }
+  if (row?.defaultLang) view.defaultLang = row.defaultLang;
+  if (row?.firstPublishedAt) view.firstPublishedAt = row.firstPublishedAt;
+  if (row?.status === 'suspended') view.suspendedReason = 'Our team paused this link while it is reviewed. Readers see “This link isn’t active”.';
+  if (opts.stats && row?.id) {
+    try {
+      view.stats = summarizeStats(row, await d.store.stats(row.id, 14), d.now());
+    } catch {
+      /* stats are optional */
+    }
+  }
+  return view;
+}
+
+/** GET /publication: the owner's view (readiness computed live; stats for the last 14 days). */
+export async function getPublicationView(ctx: StudioContext): Promise<PublicationOwnerView> {
+  const row = await deps().store.get(ctx.projectId, ctx.userId);
+  return buildView(ctx, ctx.session.doc, row, { stats: true });
+}
+
+// ── Gate interpretation ──────────────────────────────────────────────────────
+
+const BAD: ReadonlySet<SafetyStatus> = new Set(['blocked', 'over_rating']);
+const UNSURE: ReadonlySet<SafetyStatus> = new Set(['unchecked', 'pending']);
+
+interface GateDecision {
+  pageIds: string[];
+  includeCover: boolean;
+  blockers: SafetyBlocker[];
+}
+
+/** Turn a gate result into the pages that may go out, or throw the honest refusal. */
+export function interpretGate(doc: ComicDoc, gate: PublishGateResult, pageIds: string[], includeCover: boolean, exclude: Set<string>): GateDecision {
+  const byId = new Map(doc.pages.map((p) => [p.id, p]));
+  const blockers: SafetyBlocker[] = [];
+  if (BAD.has(gate.text?.status)) {
+    throw new PublishError('SAFETY_BLOCKED', "Some of the comic's words don't fit the content rules, so it can't be published yet. Edit the flagged text and try again.", {
+      status: 422,
+      code: 'SAFETY_BLOCKED',
+      details: { text: true, reasons: gate.text.reasons || [] }
+    });
+  }
+  const blockedPages: number[] = [];
+  const reasons = new Set<string>();
+  const out: string[] = [];
+  let unsure = UNSURE.has(gate.text?.status ?? 'unchecked');
+  for (const id of pageIds) {
+    const verdict = gate.pages?.[id];
+    const status: SafetyStatus = verdict?.status ?? 'unchecked';
+    if (BAD.has(status)) {
+      blockers.push({ target: { kind: 'page', id }, status: status as SafetyBlocker['status'], categories: [], ...(verdict?.reasons?.[0] ? { note: verdict.reasons[0].slice(0, 140) } : {}) });
+      if (!exclude.has(id)) {
+        blockedPages.push(byId.get(id)?.n ?? 0);
+        (verdict?.reasons || []).forEach((r) => reasons.add(r));
+      }
+      continue;
+    }
+    if (UNSURE.has(status)) unsure = true;
+    else out.push(id);
+  }
+  if (blockedPages.length) {
+    const list = blockedPages.sort((a, b) => a - b).join(', ');
+    throw new PublishError('SAFETY_BLOCKED', `Page ${list} ${blockedPages.length === 1 ? "doesn't" : "don't"} fit the content rules. Publish without ${blockedPages.length === 1 ? 'it' : 'them'}, or redraw ${blockedPages.length === 1 ? 'it' : 'them'} first.`, {
+      status: 422,
+      code: 'SAFETY_BLOCKED',
+      details: { blockedPages, reasons: [...reasons], blockers }
+    });
+  }
+  let cover = includeCover;
+  if (includeCover) {
+    const status: SafetyStatus = gate.cover?.status ?? 'unchecked';
+    if (BAD.has(status)) {
+      cover = false; // a blocked cover is simply left out; the preview falls back to page 1
+      blockers.push({ target: { kind: 'cover' }, status: status as SafetyBlocker['status'], categories: [] });
+    } else if (UNSURE.has(status)) unsure = true;
+  }
+  if (unsure || gate.status === 'needs_check') {
+    throw new PublishError('SAFETY_UNAVAILABLE', "Safety checks are unavailable right now, so nothing was published — your comic stays private. Try again in a few minutes.", {
+      status: 503,
+      code: 'NOT_AVAILABLE'
+    });
+  }
+  if (!out.length) throw new PublishError('NOT_READY', 'There are no pages left to publish.', { status: 422, code: 'NOT_READY' });
+  return { pageIds: out, includeCover: cover, blockers };
+}
+
+// ── Publish ──────────────────────────────────────────────────────────────────
+
+export interface PublishOutcome {
+  view: PublicationOwnerView;
+  blockers: SafetyBlocker[];
+  firstTime: boolean;
+}
+
+/** Copy every planned object that the previous snapshot doesn't already hold; returns the plan minus failed variants. */
+async function copyPlanned(ctx: StudioContext, plan: SnapshotPlan, have: Set<string>): Promise<{ plan: SnapshotPlan; copied: string[] }> {
+  const copied: string[] = [];
+  const failedOriginals: string[] = [];
+  const paths = { ...plan.paths };
+  const originals = new Set<string>();
+  // Originals are the entries whose target has no -w480/-w1080 suffix.
+  for (const [src, dst] of Object.entries(paths)) if (!/-w(480|1080)\.webp$/.test(dst)) originals.add(src);
+  await mapLimit(Object.entries(plan.paths), 4, async ([src, dst]) => {
+    if (have.has(dst)) return;
+    try {
+      await ctx.assets.copyObject(src, dst);
+      copied.push(dst);
+    } catch (err) {
+      if (originals.has(src)) failedOriginals.push(src);
+      else delete paths[src]; // a missing downscale only costs bandwidth: readers fall back to the full image
+      logger.warn('comic_publish_copy_failed', { projectId: ctx.projectId, variant: !originals.has(src), message: (err as Error)?.message });
+    }
+  });
+  if (failedOriginals.length) {
+    if (copied.length) await ctx.assets.remove(copied).catch(() => undefined);
+    throw new StudioError('NOT_AVAILABLE', "Couldn't copy your pages for publishing right now. Nothing was published — please try again.", { status: 503, retryable: true });
+  }
+  return { plan: { ...plan, paths }, copied };
+}
+
+/** Give assets without downscales their 480/1080 variants (P1-STORAGE), best-effort. */
+async function withVariants(ctx: StudioContext, doc: ComicDoc, pageIds: string[], includeCover: boolean): Promise<ComicDoc> {
+  const want = new Set(pageIds);
+  const targets: { asset: AssetRef; set: (a: AssetRef) => void }[] = [];
+  const pages = doc.pages.map((p) => ({ ...p, render: { ...p.render } }));
+  for (const p of pages) if (want.has(p.id) && p.render.asset && !(p.render.asset.variants || []).length) targets.push({ asset: p.render.asset, set: (a) => (p.render.asset = a) });
+  const cover = { ...doc.cover, render: { ...doc.cover.render } };
+  if (includeCover && cover.render.asset && !(cover.render.asset.variants || []).length) targets.push({ asset: cover.render.asset, set: (a) => (cover.render.asset = a) });
+  if (!targets.length) return doc;
+  await mapLimit(targets, 2, async (t) => {
+    try {
+      const variants = await ctx.assets.ensureVariants(t.asset);
+      if (variants?.length) t.set({ ...t.asset, variants });
+    } catch {
+      /* stub or failure: publish without downscales */
+    }
+  });
+  return { ...doc, pages, cover };
+}
+
+async function buildOg(
+  ctx: StudioContext,
+  doc: ComicDoc,
+  snapshot: ComicDoc,
+  plan: SnapshotPlan,
+  languages: string[],
+  previous: ShareCard | null
+): Promise<{ og: ShareCard['og']; themeColor?: string; written: string[] }> {
+  const d = deps();
+  const og: ShareCard['og'] = {};
+  const written: string[] = [];
+  const pageCount = snapshot.pages.length;
+  const coverAsset = plan.includeCover ? doc.cover.render.asset : undefined;
+  const firstPage = doc.pages.find((p) => p.id === plan.pageIds[0])?.render.asset;
+  const coverPath = previewPathOf(coverAsset) || previewPathOf(firstPage);
+  const kind = kindLabelOf(doc.format.kind);
+  const langsLabel = languagesLabel(languages);
+  const source = localizedText(doc, doc.format.language, pageCount);
+  let coverBuf: Buffer | null | undefined;
+  let themeColor = previous?.themeColor;
+  for (const lang of languages) {
+    const text = localizedText(doc, lang, pageCount);
+    const base = { title: text.title, subtitle: text.description, kindLabel: kind, pageCount, lang, showMark: true as const, languagesLabel: langsLabel, fallbackTitle: source.title };
+    const hash = ogHash({ ...base, coverPath });
+    const path = ogPath(plan.assetKey, lang, hash);
+    const alt = cleanText(`Cover of ${text.title}, a ${kind.toLowerCase()}`, 200);
+    if (previous?.og?.[lang]?.path === path) {
+      og[lang] = { path, w: 1200, h: 630, alt };
+      continue;
+    }
+    try {
+      if (coverBuf === undefined) coverBuf = await bufferOf(ctx, coverPath);
+      if (!themeColor) themeColor = await dominantColor(coverBuf);
+      const out = await d.renderOg({ ...base, coverBuf, fallbackPageBuf: null, ...(themeColor ? { themeColor } : {}) });
+      await ctx.assets.putObject(path, out.jpeg, 'image/jpeg', '31536000');
+      written.push(path);
+      og[lang] = { path, w: 1200, h: 630, alt };
+      themeColor = out.themeColor || themeColor;
+    } catch (err) {
+      // The preview image is a nicety: the link still previews with the cover image.
+      logger.warn('comic_og_render_failed', { projectId: ctx.projectId, lang, message: (err as Error)?.message });
+    }
+  }
+  return { og, ...(themeColor ? { themeColor } : {}), written };
+}
+
+/** Publish or update. Throws PublishError with an honest message on every refusal; nothing changes on a refusal. */
+export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequest): Promise<PublishOutcome> {
+  const req = parsePublishRequest(rawReq);
+  takePublishBudget(ctx.userId, deps().now());
+  return withLock(ctx, async () => {
+    const d = deps();
+    const doc = ctx.session.doc;
+    const flags = await d.store.projectFlags(ctx.projectId, ctx.userId);
+    if (!flags.exists) throw new PublishError('NOT_FOUND', "That comic doesn't exist or you don't have access to it.", { status: 404, code: 'NOT_FOUND' });
+    if (flags.forcedPrivate) {
+      throw new PublishError('FORBIDDEN', 'This comic is paused by DreamStream moderation, so it can’t be published right now. You can still read and edit it.', { status: 403, code: 'FORBIDDEN' });
+    }
+    const existing = await d.store.get(ctx.projectId, ctx.userId);
+    const live = isLiveish(existing) ? existing : null;
+
+    // Languages: each the source or a publishable edition.
+    const source = doc.format?.language || 'en';
+    const languages = req.languages?.length ? req.languages : live?.languages?.length ? live.languages : [source];
+    const incomplete = languages
+      .map((lang) => ({ lang, r: editionReadiness(doc, lang) }))
+      .filter((x) => !x.r.publishable)
+      .map((x) => ({ lang: x.lang, name: languageSpec(x.lang)?.english || x.lang, blocking: x.r.issues.filter((i) => i.blocking).map((i) => i.text) }));
+    if (incomplete.length) {
+      throw new PublishError('LANG_INCOMPLETE', `${incomplete.map((x) => x.name).join(', ')} ${incomplete.length === 1 ? "isn't" : "aren't"} ready to publish yet: ${incomplete[0].blocking[0] || 'translation not finished'}`, {
+        status: 422,
+        code: 'NOT_READY',
+        details: { languages: incomplete }
+      });
+    }
+    const defaultLang = req.defaultLang && languages.some((l) => sameLanguage(l, req.defaultLang)) ? languages.find((l) => sameLanguage(l, req.defaultLang))! : live?.defaultLang && languages.includes(live.defaultLang) ? live.defaultLang : languages[0];
+
+    // Pages: drawn and not excluded; nothing mid-render.
+    const exclude = new Set(req.excludePageIds || []);
+    const busy = (doc.pages || []).filter((p) => !exclude.has(p.id) && (p.render.status === 'queued' || p.render.status === 'rendering'));
+    if (busy.length || doc.cover?.render?.status === 'rendering' || doc.cover?.render?.status === 'queued') {
+      const what = busy.length ? `Page ${busy.map((p) => p.n).join(', ')} ${busy.length === 1 ? 'is' : 'are'}` : 'The cover is';
+      throw new PublishError('CONFLICT', `${what} still drawing — publish when ${busy.length === 1 || !busy.length ? 'it’s' : 'they’re'} done.`, { status: 409, code: 'CONFLICT' });
+    }
+    const candidates = drawnPages(doc).filter((p) => !exclude.has(p.id));
+    if (!candidates.length) throw new PublishError('NOT_READY', 'Draw at least one page before publishing.', { status: 422, code: 'NOT_READY' });
+    const wantCover = hasPublishableArt(doc.cover?.render);
+
+    // Safety gate (both visibilities; platform-paid).
+    const gate = await d.gate(ctx, doc, { pageIds: candidates.map((p) => p.id), includeCover: wantCover, languages });
+    const decision = interpretGate(doc, gate, candidates.map((p) => p.id), wantCover, exclude);
+
+    // Identity: keep the live link on an update; a NEW slug + key after an unpublish.
+    const now = d.now();
+    const assetKey = live ? live.assetKey : d.newAssetKey();
+    const publicationId = existing?.id || crypto.randomUUID();
+    const prepared = await withVariants(ctx, doc, decision.pageIds, decision.includeCover);
+    const basePlan = planSnapshot(prepared, { assetKey, pageIds: decision.pageIds, includeCover: decision.includeCover, languages, defaultLang });
+    const prevSnapshotPaths = live?.snapshot ? snapshotPaths(live.snapshot) : [];
+    const prevOg = live ? pubPathsOfCard(live.card) : [];
+    const have = new Set(prevSnapshotPaths);
+    const { plan: copiedPlan, copied } = await copyPlanned(ctx, basePlan, have);
+    const plan: SnapshotPlan = { ...copiedPlan, publicationId, publishedAt: now, rev: doc.rev };
+    const snapshot = buildSnapshot(prepared, plan);
+
+    const previousCard = live && isRecord(live.card) && (live.card as unknown as ShareCard).v === 1 ? (live.card as unknown as ShareCard) : null;
+    const { og, themeColor, written } = await buildOg(ctx, prepared, snapshot, plan, languages, previousCard);
+    const showCreator = req.showCreator ?? existing?.showCreator ?? PUBLISH_DEFAULTS.showCreator;
+    const creator = showCreator ? await d.store.publicUsername(ctx.userId) : undefined;
+    const card = buildShareCard({ doc: prepared, snapshot, languages, publicUrl: d.publicUrl, og, ...(themeColor ? { themeColor } : {}), ...(creator ? { creator } : {}) });
+
+    const startPage = req.startPage !== undefined ? req.startPage : live?.startPage ?? null;
+    const row: PublicationRow = {
+      id: publicationId,
+      projectId: ctx.projectId,
+      userId: ctx.userId,
+      status: 'live',
+      visibility: req.visibility,
+      slug: live ? live.slug : d.newSlug(),
+      assetKey,
+      languages,
+      defaultLang,
+      startPage: typeof startPage === 'number' ? Math.min(startPage, Math.max(1, snapshot.pages.length)) : null,
+      allowDownload: req.allowDownload ?? existing?.allowDownload ?? PUBLISH_DEFAULTS.allowDownload,
+      allowEmbed: req.allowEmbed ?? existing?.allowEmbed ?? PUBLISH_DEFAULTS.allowEmbed,
+      showCreator,
+      snapshot,
+      card,
+      publishedRev: doc.rev,
+      safety: {
+        status: gate.status,
+        rating: gate.rating,
+        checkedHash: gate.checkedHash,
+        costUsd: gate.costUsd,
+        excludedPageIds: [...exclude].filter((id) => doc.pages.some((p) => p.id === id)),
+        contentHash: contentFingerprint(doc, languages)
+      },
+      firstPublishedAt: existing?.firstPublishedAt ?? now,
+      publishedAt: now,
+      unpublishedAt: null,
+      updatedAt: now
+    };
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await d.store.upsert(row);
+          break;
+        } catch (err) {
+          if (!(err instanceof SlugTakenError) || live || attempt >= 3) throw err;
+          row.slug = d.newSlug(); // a 101-bit collision: mint again
+        }
+      }
+    } catch (err) {
+      // Nothing went live: remove what this attempt copied/wrote (a brand-new key only owns them).
+      const mine = [...copied, ...written];
+      if (mine.length) await ctx.assets.remove(mine).catch(() => undefined);
+      throw err;
+    }
+
+    // Listing mirror (service role). The row is the truth; a failed mirror is logged, not fatal.
+    await ctx.session.flush().catch(() => undefined);
+    const publicCover = coverUrlPath(snapshot);
+    try {
+      await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: row.visibility === 'public', shareSlug: row.slug, publicCover, publishedAt: now });
+    } catch (err) {
+      logger.warn('comic_publication_mirror_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    }
+
+    // Objects the new snapshot no longer references (same key only).
+    if (live) {
+      const keep = new Set([...snapshotPaths(snapshot), ...pubPathsOfCard(card)]);
+      const stale = [...prevSnapshotPaths, ...prevOg].filter((p) => p.startsWith(`pub/${assetKey}/`) && !keep.has(p));
+      if (stale.length) await ctx.assets.remove(stale).catch((err) => logger.warn('comic_publish_cleanup_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
+    }
+
+    const ops = mirrorOps(ctx.session.doc, row);
+    if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'Publish' });
+    logger.info('comic_published', { projectId: ctx.projectId, visibility: row.visibility, pages: snapshot.pages.length, languages: languages.length, update: !!live });
+    return { view: await buildView(ctx, ctx.session.doc, row, { stats: false }), blockers: decision.blockers, firstTime: !live };
+  });
+}
+
+/** The gallery thumbnail: the opaque 1080 copy of the cover (else page 1). */
+function coverUrlPath(snapshot: ComicDoc): string | null {
+  const asset = snapshot.cover?.render?.asset || snapshot.pages?.[0]?.render?.asset;
+  if (!asset) return null;
+  return ((asset.variants || []).find((v) => v.w === 1080) || asset).path;
+}
+
+/** Publish or update (contract §12.7). */
+export async function publish(ctx: StudioContext, req: PublishRequest): Promise<PublicationOwnerView> {
+  return (await publishWithOutcome(ctx, req)).view;
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+export async function updatePublication(ctx: StudioContext, rawPatch: PublicationSettingsPatch): Promise<PublicationOwnerView> {
+  const patch = parseSettingsPatch(rawPatch);
+  takePublishBudget(ctx.userId, deps().now());
+  return withLock(ctx, async () => {
+    const d = deps();
+    const row = await d.store.get(ctx.projectId, ctx.userId);
+    if (!row || row.status !== 'live' || !isLiveish(row)) throw notFound();
+    const next: PublicationRow = { ...row, updatedAt: d.now() };
+    const doc = ctx.session.doc;
+    if (patch.visibility && patch.visibility !== row.visibility) {
+      if (patch.visibility === 'public') {
+        const flags = await d.store.projectFlags(ctx.projectId, ctx.userId);
+        if (!flags.exists) throw notFound("That comic doesn't exist or you don't have access to it.");
+        if (flags.forcedPrivate) {
+          throw new PublishError('FORBIDDEN', 'This comic is paused by DreamStream moderation, so it can’t go public right now.', { status: 403, code: 'FORBIDDEN' });
+        }
+        // Going to the public gallery re-runs the gate (it may hold public-only rules).
+        const pageIds = (row.snapshot?.pages || []).map((p) => p.id).filter((id) => doc.pages.some((p) => p.id === id));
+        const gate = await d.gate(ctx, doc, { pageIds, includeCover: !!row.snapshot?.cover?.render?.asset, languages: row.languages });
+        if (pageIds.length) interpretGate(doc, gate, pageIds, false, new Set());
+        else if (gate.status !== 'cleared') throw new PublishError('SAFETY_UNAVAILABLE', 'Safety checks are unavailable right now. Try again in a few minutes.', { status: 503, code: 'NOT_AVAILABLE' });
+      }
+      next.visibility = patch.visibility;
+    }
+    if (patch.defaultLang !== undefined) {
+      const match = row.languages.find((l) => sameLanguage(l, patch.defaultLang));
+      if (!match) throw badRequest('The default language must be one of the published languages.');
+      next.defaultLang = match;
+    }
+    if (patch.startPage !== undefined) {
+      const pages = row.snapshot?.pages?.length || 0;
+      if (patch.startPage !== null && patch.startPage > pages) throw badRequest(`The published comic has ${pages} ${pages === 1 ? 'page' : 'pages'}.`);
+      next.startPage = patch.startPage;
+    }
+    if (patch.allowDownload !== undefined) next.allowDownload = patch.allowDownload;
+    if (patch.allowEmbed !== undefined) next.allowEmbed = patch.allowEmbed;
+    if (patch.showCreator !== undefined && patch.showCreator !== row.showCreator) {
+      next.showCreator = patch.showCreator;
+      const card = { ...(row.card as ShareCard) };
+      if (patch.showCreator) {
+        const name = await d.store.publicUsername(ctx.userId);
+        if (name) card.creator = cleanText(name, 40);
+      } else delete card.creator;
+      next.card = card;
+    }
+    await d.store.upsert(next);
+    if (next.visibility !== row.visibility) {
+      await ctx.session.flush().catch(() => undefined);
+      await d.store.mirrorProject({
+        projectId: ctx.projectId,
+        userId: ctx.userId,
+        isPublic: next.visibility === 'public',
+        shareSlug: next.slug,
+        publicCover: next.snapshot ? coverUrlPath(next.snapshot) : null,
+        publishedAt: next.publishedAt ?? null
+      });
+    }
+    const ops = mirrorOps(ctx.session.doc, next);
+    if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'Publication settings' });
+    return buildView(ctx, ctx.session.doc, next, { stats: false });
+  });
+}
+
+// ── Regenerate / unpublish ───────────────────────────────────────────────────
+
+const rekey = <T>(value: T, from: string, to: string): T => JSON.parse(JSON.stringify(value).split(`pub/${from}/`).join(`pub/${to}/`)) as T;
+
+/** New slug AND new asset prefix; the old link 404s as soon as the row commits; old objects are deleted. */
+export async function regenerateLink(ctx: StudioContext): Promise<PublicationOwnerView> {
+  takePublishBudget(ctx.userId, deps().now());
+  return withLock(ctx, async () => {
+    const d = deps();
+    const row = await d.store.get(ctx.projectId, ctx.userId);
+    if (!row || row.status !== 'live' || !isLiveish(row) || !row.snapshot) throw notFound();
+    const oldKey = row.assetKey;
+    const newKey = d.newAssetKey();
+    const objects = [...snapshotPaths(row.snapshot), ...pubPathsOfCard(row.card)].filter((p) => p.startsWith(`pub/${oldKey}/`));
+    const copied: string[] = [];
+    try {
+      await mapLimit(objects, 4, async (p) => {
+        const dst = `pub/${newKey}/${p.slice(`pub/${oldKey}/`.length)}`;
+        await ctx.assets.copyObject(p, dst);
+        copied.push(dst);
+      });
+    } catch (err) {
+      if (copied.length) await ctx.assets.remove(copied).catch(() => undefined);
+      logger.warn('comic_regenerate_copy_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+      throw new StudioError('NOT_AVAILABLE', "Couldn't make a new link right now. Your current link still works — please try again.", { status: 503, retryable: true });
+    }
+    const card = rekey(row.card as ShareCard, oldKey, newKey);
+    if (row.snapshot) {
+      const fresh = coverUrlOf(rekey(row.snapshot, oldKey, newKey), d.publicUrl);
+      if (fresh) card.coverUrl = fresh;
+    }
+    const next: PublicationRow = { ...row, slug: d.newSlug(), assetKey: newKey, snapshot: rekey(row.snapshot, oldKey, newKey), card, updatedAt: d.now() };
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await d.store.upsert(next);
+        break;
+      } catch (err) {
+        if (!(err instanceof SlugTakenError) || attempt >= 3) {
+          await ctx.assets.remove(copied).catch(() => undefined);
+          throw err;
+        }
+        next.slug = d.newSlug();
+      }
+    }
+    await ctx.session.flush().catch(() => undefined);
+    try {
+      await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: next.visibility === 'public', shareSlug: next.slug, publicCover: next.snapshot ? coverUrlPath(next.snapshot) : null, publishedAt: next.publishedAt ?? null });
+    } catch (err) {
+      logger.warn('comic_publication_mirror_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    }
+    await ctx.assets.removePrefix(`pub/${oldKey}/`).catch((err) => logger.warn('comic_regenerate_cleanup_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
+    const ops = mirrorOps(ctx.session.doc, next);
+    if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'New share link' });
+    logger.info('comic_publication_regenerated', { projectId: ctx.projectId });
+    return buildView(ctx, ctx.session.doc, next, { stats: false });
+  });
+}
+
+/** Idempotent. The slug dies, the snapshot and copies are deleted; stats are kept. Re-publishing mints a NEW slug. */
+export async function unpublish(ctx: StudioContext): Promise<PublicationOwnerView> {
+  return withLock(ctx, async () => {
+    const d = deps();
+    const row = await d.store.get(ctx.projectId, ctx.userId);
+    let next = row;
+    if (row && row.status !== 'unpublished') {
+      const oldKey = row.assetKey;
+      next = { ...row, status: 'unpublished', slug: null, assetKey: null, snapshot: null, card: {}, unpublishedAt: d.now(), updatedAt: d.now() };
+      await d.store.upsert(next);
+      await ctx.session.flush().catch(() => undefined);
+      try {
+        await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: false, shareSlug: null, publicCover: null, publishedAt: null });
+      } catch (err) {
+        logger.warn('comic_publication_mirror_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+      }
+      if (oldKey && ASSET_KEY_RE.test(oldKey)) {
+        await ctx.assets.removePrefix(`pub/${oldKey}/`).catch((err) => logger.warn('comic_unpublish_cleanup_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
+      }
+      logger.info('comic_unpublished', { projectId: ctx.projectId });
+    }
+    const ops = mirrorOps(ctx.session.doc, null);
+    if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'Unpublish' });
+    return buildView(ctx, ctx.session.doc, next, { stats: false });
+  });
+}
+
+// ── Public side ──────────────────────────────────────────────────────────────
+
+/** The reader payload of a live row: `urls` maps every snapshot path to its public object URL. */
+export function payloadOf(row: PublicationRow, publicUrl = deps().publicUrl): PublicComicPayload | null {
+  if (!isLiveish(row) || row.status !== 'live' || !row.snapshot) return null;
+  const prefix = `pub/${row.assetKey}/`;
+  const urls: Record<string, string> = {};
+  for (const p of snapshotPaths(row.snapshot)) if (p.startsWith(prefix)) urls[p] = publicUrl(p);
+  return {
+    publication: {
+      slug: row.slug,
+      visibility: row.visibility,
+      languages: [...row.languages],
+      ...(row.defaultLang ? { defaultLang: row.defaultLang } : {}),
+      startPage: row.startPage ?? null,
+      allowDownload: row.allowDownload,
+      allowEmbed: row.allowEmbed,
+      publishedAt: row.publishedAt ?? 0,
+      updatedAt: row.updatedAt ?? 0,
+      card: row.card as ShareCard
+    },
+    doc: row.snapshot,
+    urls
+  };
+}
+
+/** Legacy /api/comic/public/:id: only a live + PUBLIC publication (never unlisted, never force-private). */
+export async function loadPublicByProjectId(projectId: string): Promise<PublicComicPayload | null> {
+  if (!projectId || !/^[A-Za-z0-9-]{1,64}$/.test(projectId)) return null;
+  const row = await deps().store.getLivePublic(projectId);
+  if (!row || row.visibility !== 'public') return null;
+  return payloadOf(row);
+}
+
+// ── Maintenance ──────────────────────────────────────────────────────────────
+
+/** Weekly sweep: delete pub/<key>/ prefixes that no live/suspended publication owns. Returns objects removed. */
+export async function sweepOrphanPublications(assets: { removePrefix(prefix: string): Promise<number> }, limit = 100): Promise<number> {
+  const keys = await deps().store.orphanKeys(limit);
+  let removed = 0;
+  for (const key of keys) {
+    if (!ASSET_KEY_RE.test(key)) continue;
+    removed += await assets.removePrefix(`pub/${key}/`).catch(() => 0);
+  }
+  if (keys.length) logger.info('comic_publication_orphans_swept', { keys: keys.length, removed });
+  return removed;
+}
+
+// ── Conversation helpers (the publish card) ──────────────────────────────────
+
+/** Ops that patch one card inside its message (no-op when the card is gone). */
+export function cardPatchOps(doc: ComicDoc, cardId: string | undefined, patch: Partial<Extract<Card, { type: 'publish' }>>): DocOp[] {
+  if (!cardId) return [];
+  const msg = (doc.conversation || []).find((m) => (m.cards || []).some((c) => c.id === cardId && c.type === 'publish'));
+  if (!msg) return [];
+  const cards = (msg.cards || []).map((c) => (c.id === cardId && c.type === 'publish' ? ({ ...c, ...patch } as Card) : c));
+  return [{ op: 'message_patch', id: msg.id, patch: { cards } }];
+}
+
+export const assistantNotice = (text: string, tone: 'success' | 'info' | 'warn' | 'error' = 'info', extraCards: Card[] = []): Msg => ({
+  id: newId('msg'),
+  role: 'assistant',
+  text,
+  at: Date.now(),
+  cards: [{ type: 'notice', id: newId('card'), tone, text }, ...extraCards]
+});
+
+export { ogUrlOf, isLiveish };

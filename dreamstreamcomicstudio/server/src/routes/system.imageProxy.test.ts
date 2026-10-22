@@ -22,7 +22,8 @@ const FORCED_CLASSIC = '44444444-4444-4444-8444-444444444444';
 const db = vi.hoisted(() => ({
   tables: {} as Record<string, Record<string, unknown>[]>,
   tokens: {} as Record<string, string>,
-  signed: [] as string[]
+  signed: [] as string[],
+  signedWith: [] as { bucket: string; path: string; ttl: number }[]
 }));
 
 vi.mock('../services/supabase.js', () => {
@@ -49,9 +50,10 @@ vi.mock('../services/supabase.js', () => {
   const admin = {
     from: (table: string) => new Query(table),
     storage: {
-      from: () => ({
-        createSignedUrl: async (path: string) => {
+      from: (bucket: string) => ({
+        createSignedUrl: async (path: string, ttl: number) => {
           db.signed.push(path);
+          db.signedWith.push({ bucket, path, ttl });
           return { data: { signedUrl: `https://signed.example/${path}` }, error: null };
         }
       })
@@ -87,6 +89,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 beforeEach(() => {
   db.signed = [];
+  db.signedWith = [];
   db.tokens = { 'owner-token': OWNER, 'stranger-token': STRANGER };
   const project = (id: string, extra: Row = {}): Row => ({
     id,
@@ -241,5 +244,69 @@ describe('image proxy: dot-segment / encoding traversal', () => {
     const res = await fetchImage(classicPath('img/page-1.webp'), 'stranger-token');
     expect(res.status).toBe(200);
     expect(db.signed).toEqual([classicPath('img/page-1.webp')]);
+  });
+});
+
+describe('image proxy: bucket routing (P1-STORAGE, contract §12.5)', () => {
+  const ref = (owner = OWNER, pid = V4) => `u/${owner}/p/${pid}/ref/photo.webp`;
+
+  it('signs an owner ref from the PRIVATE bucket for 5 minutes, never cached', async () => {
+    const res = await fetchImage(ref(), 'owner-token');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toMatchObject({ path: ref(), expiresIn: 300 });
+    expect(db.signedWith).toEqual([{ bucket: 'comic-private', path: ref(), ttl: 300 }]);
+  });
+
+  it('signs generated art from the public bucket with the usual TTL', async () => {
+    const res = await fetchImage(v4Path('img/page.webp'), 'owner-token');
+    expect(await res.json()).toMatchObject({ expiresIn: 1800 });
+    expect(db.signedWith).toEqual([{ bucket: 'comic-assets', path: v4Path('img/page.webp'), ttl: 1800 }]);
+  });
+
+  it('a ref under a non-UUID project id is still owner-only (decided by its namespace, not the project)', async () => {
+    const odd = `u/${OWNER}/p/not-a-uuid/ref/photo.webp`;
+    // Even an image_assets row pointing at a PUBLIC classic project cannot open it.
+    db.tables.image_assets = [{ path: odd, user_id: OWNER, project_id: CLASSIC }];
+    expect((await fetchImage(odd, 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(odd)).status).toBe(401);
+    expect(db.signed).toEqual([]);
+    expect((await fetchImage(odd, 'owner-token')).status).toBe(200);
+    expect(db.signedWith[0]).toMatchObject({ bucket: 'comic-private', ttl: 300 });
+  });
+
+  it('refs of a public classic project and of another owner are denied', async () => {
+    expect((await fetchImage(ref(OWNER, CLASSIC), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(ref(STRANGER, CLASSIC), 'owner-token')).status).toBe(403);
+    expect(db.signed).toEqual([]);
+  });
+
+  it('quarantine is never signed here, not even for its owner', async () => {
+    const q = `q/${OWNER}/${V4}/bad-0123abcd.webp`;
+    expect((await fetchImage(q, 'owner-token')).status).toBe(403);
+    expect((await fetchImage(q, 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(q)).status).toBe(401);
+    expect(db.signed).toEqual([]);
+  });
+
+  it('opaque publication copies and the versioned library are public', async () => {
+    const pub = 'pub/Ab3dEf6hIj9kLm2nOp5qRs/p1-0123456789ab.webp';
+    expect((await fetchImage(pub)).status).toBe(200);
+    expect((await fetchImage('library/v1/style.noir-ink/1@320.webp')).status).toBe(200);
+    expect(db.signedWith.map((c) => c.bucket)).toEqual(['comic-assets', 'comic-assets']);
+    // A malformed pub key is not the publication lane.
+    expect((await fetchImage('pub/short/p1.webp')).status).toBe(401);
+  });
+
+  it('keeps the P0-SEC traversal guard in front of the bucket rules', async () => {
+    for (const attack of [
+      `u/${STRANGER}/%2e%2e/${OWNER}/p/${V4}/ref/photo.webp`,
+      `pub/Ab3dEf6hIj9kLm2nOp5qRs/%2e%2e/%2e%2e/u/${OWNER}/p/${V4}/ref/photo.webp`,
+      `library/v1/../../u/${OWNER}/p/${V4}/ref/photo.webp`,
+      `q/${OWNER}/./x.webp`
+    ]) {
+      expect((await fetchImage(attack, 'stranger-token')).status).toBe(400);
+    }
+    expect(db.signed).toEqual([]);
   });
 });

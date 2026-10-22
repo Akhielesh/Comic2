@@ -297,3 +297,477 @@ describe('createMemoryAssetStore', () => {
     });
   });
 });
+
+// ── v5 (contract §12.5): buckets, variants, refs, derive, quarantine, publication primitives ──
+
+type StoredObject = { data: Buffer; type?: string };
+
+/** A two-bucket Supabase fake: per-bucket objects plus a tiny image_assets table. */
+const makeBuckets = () => {
+  const buckets = new Map<string, Map<string, StoredObject>>();
+  const bucket = (name: string) => {
+    if (!buckets.has(name)) buckets.set(name, new Map());
+    return buckets.get(name)!;
+  };
+  const calls = {
+    upload: [] as { bucket: string; path: string; opts: Record<string, unknown> }[],
+    sign: [] as { bucket: string; paths: string[]; ttl: number }[],
+    copy: [] as { bucket: string; from: string; to: string; dst: string }[],
+    remove: [] as { bucket: string; paths: string[] }[],
+    download: [] as { bucket: string; path: string }[]
+  };
+  const fail = { upload: null as null | ((path: string) => boolean) };
+  const err = (message: string, statusCode: string) => Object.assign(new Error(message), { statusCode });
+  const api = (name: string) => ({
+    upload: async (path: string, data: Buffer, opts: Record<string, unknown>) => {
+      calls.upload.push({ bucket: name, path, opts });
+      if (fail.upload?.(path)) return { data: null, error: err('storage down', '500') };
+      if (bucket(name).has(path) && !opts?.upsert) return { data: null, error: err('The resource already exists', '409') };
+      bucket(name).set(path, { data: Buffer.from(data), type: String(opts?.contentType || '') });
+      return { data: { path }, error: null };
+    },
+    download: async (path: string) => {
+      calls.download.push({ bucket: name, path });
+      const hit = bucket(name).get(path);
+      return hit
+        ? { data: new Blob([new Uint8Array(hit.data)], { type: hit.type || 'image/webp' }), error: null }
+        : { data: null, error: err('Object not found', '404') };
+    },
+    createSignedUrls: async (paths: string[], ttl: number) => {
+      calls.sign.push({ bucket: name, paths, ttl });
+      return {
+        data: paths.map((p) =>
+          bucket(name).has(p) ? { path: p, signedUrl: `https://signed.example/${name}/${p}?ttl=${ttl}`, error: null } : { path: p, signedUrl: '', error: 'Object not found' }
+        ),
+        error: null
+      };
+    },
+    copy: async (from: string, to: string, opts?: { destinationBucket?: string }) => {
+      const dst = opts?.destinationBucket || name;
+      calls.copy.push({ bucket: name, from, to, dst });
+      const hit = bucket(name).get(from);
+      if (!hit) return { data: null, error: err('Object not found', '404') };
+      if (bucket(dst).has(to)) return { data: null, error: err('The resource already exists', '409') };
+      bucket(dst).set(to, { ...hit });
+      return { data: { path: to }, error: null };
+    },
+    remove: async (paths: string[]) => {
+      calls.remove.push({ bucket: name, paths });
+      for (const p of paths) bucket(name).delete(p);
+      return { data: [], error: null };
+    },
+    list: async (folder: string, opts: { limit: number; offset: number }) => {
+      const prefix = `${folder}/`;
+      const names = [...bucket(name).keys()]
+        .filter((k) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/'))
+        .sort()
+        .map((k) => ({ name: k.slice(prefix.length), id: `id-${k}` }));
+      return { data: names.slice(opts.offset, opts.offset + opts.limit), error: null };
+    }
+  });
+  const rows: Record<string, unknown>[] = [];
+  const updateIn = (patch: Record<string, unknown>) => ({
+    in: async (col: string, values: unknown[]) => {
+      rows.filter((r) => values.includes(r[col])).forEach((r) => Object.assign(r, patch));
+      return { data: null, error: null };
+    }
+  });
+  const client = {
+    storage: { from: (name: string) => api(name) },
+    from: () => ({
+      insert: async (row: Record<string, unknown>) => {
+        if (rows.some((r) => r.path === row.path)) return { error: { code: '23505' } };
+        rows.push({ ...row });
+        return { error: null };
+      },
+      update: (patch: Record<string, unknown>) => updateIn(patch)
+    })
+  };
+  return { client: client as unknown as SupabaseClient, bucket, calls, rows, fail };
+};
+
+const PUB = 'comic-assets';
+const PRIV = 'comic-private';
+const KEY22 = 'Ab3dEf6hIj9kLm2nOp5qRs';
+
+const solidPng = (width: number, height: number, background: string | { r: number; g: number; b: number } = '#ffffff') =>
+  sharp({ create: { width, height, channels: 3, background } }).png().toBuffer();
+
+/** Deterministic noise (sharp detail everywhere): a 32-bit LCG. */
+const noisePng = async (width: number, height: number, seed = 7) => {
+  const raw = Buffer.alloc(width * height * 3);
+  let s = seed >>> 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    raw[i] = s >>> 24;
+  }
+  return sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+};
+
+/** A photo-like image with real structure (smooth waves at seed-dependent frequencies). */
+const wavesPng = (width: number, height: number, seed = 1) => {
+  const raw = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      // Low-frequency structure (what dHash is built for): 1–3 periods across the frame.
+      const v = 127 + 70 * Math.sin((x / width) * Math.PI * (seed + 1) + seed) + 50 * Math.cos((y / height) * Math.PI * (seed % 3 + 1));
+      const i = (y * width + x) * 3;
+      raw[i] = Math.max(0, Math.min(255, v));
+      raw[i + 1] = Math.max(0, Math.min(255, 255 - v));
+      raw[i + 2] = Math.max(0, Math.min(255, (v + x) % 256));
+    }
+  }
+  return sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+};
+
+const v5Store = () => {
+  const fake = makeBuckets();
+  const store = createSupabaseAssetStore({ admin: () => fake.client });
+  return { fake, store };
+};
+
+describe('v5: size variants (480/1080, inline, best-effort)', () => {
+  it('writes only the widths narrower than the original, ascending, and registers them', async () => {
+    const { fake, store } = v5Store();
+    const ref = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: `data:image/png;base64,${(await solidPng(2000, 1000)).toString('base64')}`, model: 'm/x' });
+    expect(ref.variants).toEqual([
+      { path: ref.path.replace(/\.webp$/, '_w480.webp'), w: 480, h: 240 },
+      { path: ref.path.replace(/\.webp$/, '_w1080.webp'), w: 1080, h: 540 }
+    ]);
+    for (const v of ref.variants!) {
+      expect(fake.bucket(PUB).has(v.path)).toBe(true);
+      const meta = await sharp(fake.bucket(PUB).get(v.path)!.data).metadata();
+      expect([meta.format, meta.width, meta.height]).toEqual(['webp', v.w, v.h]);
+    }
+    expect(fake.rows.filter((r) => r.source === 'variant').map((r) => r.path)).toEqual(ref.variants!.map((v) => v.path));
+  });
+
+  it('never enlarges: an 800 px wide image gets only the 480 variant, a 300 px one none', async () => {
+    const { store } = v5Store();
+    const mid = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: `data:image/png;base64,${(await solidPng(800, 1000)).toString('base64')}` });
+    expect(mid.variants?.map((v) => [v.w, v.h])).toEqual([[480, 600]]);
+    const small = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: `data:image/png;base64,${(await solidPng(300, 450)).toString('base64')}` });
+    expect(small.variants).toBeUndefined();
+  });
+
+  it('a variant failure never fails the save (the render is kept, variants omitted)', async () => {
+    const { fake, store } = v5Store();
+    fake.fail.upload = (path) => path.includes('_w');
+    const ref = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: `data:image/png;base64,${(await solidPng(1600, 1600)).toString('base64')}` });
+    expect(fake.bucket(PUB).has(ref.path)).toBe(true);
+    expect(ref.variants).toBeUndefined();
+  });
+
+  it('ensureVariants backfills an older asset idempotently and skips private-quarantine and publication lanes', async () => {
+    const { fake, store } = v5Store();
+    const path = `u/${USER}/p/${PROJECT}/img/old.webp`;
+    fake.bucket(PUB).set(path, { data: await sharp(await solidPng(1200, 1500)).webp().toBuffer(), type: 'image/webp' });
+    const first = await store.ensureVariants({ path, source: 'generated', at: 1, w: 1200, h: 1500 });
+    expect(first).toEqual([
+      { path: `u/${USER}/p/${PROJECT}/img/old_w480.webp`, w: 480, h: 600 },
+      { path: `u/${USER}/p/${PROJECT}/img/old_w1080.webp`, w: 1080, h: 1350 }
+    ]);
+    const again = await store.ensureVariants({ path, source: 'generated', at: 1, w: 1200, h: 1500 });
+    expect(again).toEqual(first); // existing objects count as made
+    expect(await store.ensureVariants({ path, source: 'generated', at: 1, w: 1200, h: 1500, variants: first })).toEqual(first);
+    expect(await store.ensureVariants({ path: `pub/${KEY22}/p1-0123456789ab.webp`, source: 'generated', at: 1, w: 2000 })).toEqual([]);
+    expect(await store.ensureVariants({ path: `q/${USER}/${PROJECT}/x.webp`, source: 'generated', at: 1, w: 2000 })).toEqual([]);
+    expect(await store.ensureVariants({ path: `u/${USER}/p/${PROJECT}/img/old_w1080.webp`, source: 'generated', at: 1, w: 1080 })).toEqual([]);
+  });
+});
+
+describe('v5: reference uploads (encodeUploadBuffer + saveRef)', () => {
+  it('stores refs in the PRIVATE bucket under …/ref/ and registers them there', async () => {
+    const { fake, store } = v5Store();
+    const encoded = await store.encodeUploadBuffer(await noisePng(640, 480), 'image/png');
+    expect(encoded).toMatchObject({ mime: 'image/webp', w: 640, h: 480 });
+    expect(encoded.bytes).toBe(encoded.buffer.byteLength);
+    const ref = await store.saveRef({ userId: USER, projectId: PROJECT, encoded });
+    expect(ref.path).toMatch(new RegExp(`^u/${USER}/p/${PROJECT}/ref/[0-9a-f-]{36}\\.webp$`));
+    expect(ref).toMatchObject({ source: 'upload', w: 640, h: 480 });
+    expect(fake.bucket(PRIV).has(ref.path)).toBe(true);
+    expect(fake.bucket(PUB).has(ref.path)).toBe(false);
+    expect(fake.rows.find((r) => r.path === ref.path)).toMatchObject({ bucket: PRIV, user_id: USER, project_id: PROJECT, source: 'upload' });
+    // Its 480 variant is private too.
+    expect(ref.variants?.map((v) => v.w)).toEqual([480]);
+    expect(fake.bucket(PRIV).has(ref.variants![0].path)).toBe(true);
+  });
+
+  it('accepts AVIF and normalizes it to WebP', async () => {
+    const { store } = v5Store();
+    const avif = await sharp(await noisePng(300, 200)).avif({ quality: 60 }).toBuffer();
+    const out = await store.encodeUploadBuffer(avif, 'image/avif');
+    expect(out).toMatchObject({ mime: 'image/webp', w: 300, h: 200 });
+    expect((await sharp(out.buffer).metadata()).format).toBe('webp');
+  });
+
+  it('rejects by magic bytes, never by the claimed type: text, SVG, HTML and HEIC', async () => {
+    const { store } = v5Store();
+    await expect(store.encodeUploadBuffer(Buffer.from('plain text pretending to be a png'), 'image/png')).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 415 });
+    await expect(store.encodeUploadBuffer(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), 'image/png')).rejects.toMatchObject({ status: 415 });
+    await expect(store.encodeUploadBuffer(Buffer.from('  <!doctype html><script>alert(1)</script>'), 'image/jpeg')).rejects.toMatchObject({ status: 415 });
+    await expect(store.encodeUploadBuffer(Buffer.from('<svg/>'), 'image/svg+xml')).rejects.toMatchObject({ status: 415 });
+    const heic = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic'), Buffer.from([0, 0, 0, 0]), Buffer.from('mif1heic'), Buffer.alloc(64)]);
+    const heicErr = await store.encodeUploadBuffer(heic, 'image/jpeg').catch((e) => e);
+    expect(heicErr).toMatchObject({ status: 415 });
+    expect(heicErr.userMessage).toMatch(/HEIC/);
+    await expect(store.encodeUploadBuffer(await solidPng(200, 200), 'image/heic')).rejects.toMatchObject({ status: 415 });
+    await expect(store.encodeUploadBuffer(await solidPng(200, 200), 'application/pdf')).rejects.toMatchObject({ status: 415 });
+  });
+
+  it('a mislabelled but real image is accepted on its content (camera rolls lie about types)', async () => {
+    const { store } = v5Store();
+    await expect(store.encodeUploadBuffer(await solidPng(200, 200), 'image/jpeg; charset=binary')).resolves.toMatchObject({ w: 200, h: 200 });
+  });
+
+  it('enforces the minimum edge (128 px), the size cap and the pixel cap', async () => {
+    const { store } = v5Store();
+    await expect(store.encodeUploadBuffer(await solidPng(100, 400), 'image/png')).rejects.toMatchObject({ status: 422 });
+    await expect(store.encodeUploadBuffer(await solidPng(128, 128), 'image/png')).resolves.toMatchObject({ w: 128, h: 128 });
+    await expect(store.encodeUploadBuffer(Buffer.alloc(10 * 1024 * 1024 + 1), 'image/png')).rejects.toMatchObject({ status: 413 });
+    const huge = await sharp({ create: { width: 9000, height: 9000, channels: 3, background: '#ffffff' } }).png({ compressionLevel: 9 }).toBuffer();
+    await expect(store.encodeUploadBuffer(huge, 'image/png')).rejects.toMatchObject({ status: 413 });
+  });
+
+  it('downscales to a 2048 long edge and honours EXIF orientation', async () => {
+    const { store } = v5Store();
+    const rotated = await sharp(await solidPng(3000, 1000)).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    const out = await store.encodeUploadBuffer(rotated, 'image/jpeg');
+    expect([out.w, out.h]).toEqual([683, 2048]); // stored upright (90° turn)
+  });
+});
+
+describe('v5: dHash and reference quality flags', () => {
+  it('dHash is 16 hex, stable across calls and re-encodes, and far for different images', async () => {
+    const { store } = v5Store();
+    const a = await wavesPng(400, 300, 1);
+    const h1 = await store.dHash(a);
+    expect(h1).toMatch(/^[0-9a-f]{16}$/);
+    expect(await store.dHash(a)).toBe(h1);
+    const reencoded = await sharp(a).webp({ quality: 85 }).toBuffer();
+    const distance = (x: string, y: string) => [...x].reduce((n, c, i) => n + ((parseInt(c, 16) ^ parseInt(y[i], 16)).toString(2).split('1').length - 1), 0);
+    expect(distance(h1, await store.dHash(reencoded))).toBeLessThanOrEqual(4);
+    expect(distance(h1, await store.dHash(await wavesPng(400, 300, 5)))).toBeGreaterThan(10);
+    // Resizing (what the upload encoder does) keeps it a near-duplicate too.
+    expect(distance(h1, await store.dHash(await sharp(a).resize(200).png().toBuffer()))).toBeLessThanOrEqual(4);
+    expect((await store.measureRef(a)).dhash).toBe(h1); // one implementation
+  });
+
+  it('flags blurry, dark and low-res photos — and nothing on a sharp, bright, large one', async () => {
+    const { store } = v5Store();
+    const sharpPhoto = await noisePng(800, 600);
+    expect(await store.measureRef(sharpPhoto)).toEqual({ dhash: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    const blurred = await sharp(sharpPhoto).blur(6).png().toBuffer();
+    expect((await store.measureRef(blurred)).quality).toMatchObject({ blurry: true });
+    const dark = await sharp(await noisePng(800, 600, 3)).linear(0.12, 0).png().toBuffer();
+    expect((await store.measureRef(dark)).quality).toMatchObject({ dark: true });
+    expect((await store.measureRef(await noisePng(300, 400))).quality).toEqual({ lowRes: true });
+    await expect(store.measureRef(Buffer.from('nope'))).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('v5: signed URLs per bucket', () => {
+  it('signs refs from the private bucket for 300 s (never longer), art from the public one for 1 h', async () => {
+    const { fake, store } = v5Store();
+    const refPath = `u/${USER}/p/${PROJECT}/ref/a.webp`;
+    const artPath = `u/${USER}/p/${PROJECT}/img/b.webp`;
+    fake.bucket(PRIV).set(refPath, { data: Buffer.from('r') });
+    fake.bucket(PUB).set(artPath, { data: Buffer.from('a') });
+    const urls = await store.signUrls([refPath, artPath]);
+    expect(urls[refPath]).toBe(`https://signed.example/${PRIV}/${refPath}?ttl=300`);
+    expect(urls[artPath]).toBe(`https://signed.example/${PUB}/${artPath}?ttl=3600`);
+    expect(fake.calls.sign).toEqual([
+      { bucket: PRIV, paths: [refPath], ttl: 300 },
+      { bucket: PUB, paths: [artPath], ttl: 3600 }
+    ]);
+    // Asking for longer never stretches a private URL.
+    __resetAssetCachesForTests();
+    const long = await store.signUrls([refPath], { ttlSec: 86_400 });
+    expect(long[refPath]).toMatch(/ttl=300$/);
+    // A ref path is never looked up in the public bucket.
+    expect(fake.calls.sign.every((c) => c.bucket === PRIV || !c.paths.includes(refPath))).toBe(true);
+  });
+
+  it('loads a private ref from the private bucket', async () => {
+    const { fake, store } = v5Store();
+    const refPath = `u/${USER}/p/${PROJECT}/ref/c.webp`;
+    fake.bucket(PRIV).set(refPath, { data: await sharp(await solidPng(10, 10)).webp().toBuffer(), type: 'image/webp' });
+    expect(await store.loadDataUrl(refPath)).toMatch(/^data:image\/webp;base64,/);
+    expect(fake.calls.download).toEqual([{ bucket: PRIV, path: refPath }]);
+  });
+});
+
+describe('v5: previews, crops and fits', () => {
+  it('previewDataUrl gives ≤ 768 px WebP and caches it per path', async () => {
+    const { fake, store } = v5Store();
+    const path = `u/${USER}/p/${PROJECT}/ref/big.webp`;
+    fake.bucket(PRIV).set(path, { data: await sharp(await noisePng(2000, 1000)).webp().toBuffer(), type: 'image/webp' });
+    const url = await store.previewDataUrl(path);
+    const meta = await sharp(decode(url)).metadata();
+    expect([meta.format, meta.width, meta.height]).toEqual(['webp', 768, 384]);
+    await store.previewDataUrl(path);
+    expect(fake.calls.download).toHaveLength(1);
+    const fromBuffer = await store.previewDataUrl(await solidPng(300, 200), 128);
+    expect((await sharp(decode(fromBuffer)).metadata()).width).toBe(128);
+  });
+
+  it('cropRef crops a box into a new PRIVATE ref and records crop + original', async () => {
+    const { fake, store } = v5Store();
+    const src = `u/${USER}/p/${PROJECT}/ref/photo.webp`;
+    fake.bucket(PRIV).set(src, { data: await sharp(await noisePng(1000, 800)).webp().toBuffer(), type: 'image/webp' });
+    const out = await store.cropRef({ userId: USER, projectId: PROJECT, path: src, box: { x: 0.1, y: 0.25, w: 0.5, h: 0.5 } });
+    expect(out.path).toMatch(new RegExp(`^u/${USER}/p/${PROJECT}/ref/`));
+    expect(fake.bucket(PRIV).has(out.path)).toBe(true);
+    expect(out).toMatchObject({ source: 'derived', derivedFrom: src, w: 500, h: 400, crop: { x: 0.1, y: 0.25, w: 0.5, h: 0.5 }, original: { path: src, w: 1000, h: 800 } });
+  });
+
+  it('cropRef with an aspect follows the attention point (an object on the right)', async () => {
+    const { fake, store } = v5Store();
+    const W = 1000;
+    const H = 400;
+    const raw = Buffer.alloc(W * H * 3, 120);
+    for (let y = 150; y < 250; y += 1) {
+      for (let x = 800; x < 900; x += 1) {
+        const i = (y * W + x) * 3;
+        const on = ((x >> 3) + (y >> 3)) & 1;
+        raw[i] = 255;
+        raw[i + 1] = on ? 255 : 0;
+        raw[i + 2] = on ? 255 : 0;
+      }
+    }
+    const src = `u/${USER}/p/${PROJECT}/ref/wide.webp`;
+    fake.bucket(PRIV).set(src, { data: await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).webp().toBuffer(), type: 'image/webp' });
+    const out = await store.cropRef({ userId: USER, projectId: PROJECT, path: src, aspect: '1:1' });
+    expect([out.w, out.h]).toEqual([400, 400]);
+    expect(out.crop!.x).toBeGreaterThan(0.45); // window moved toward the object (x 0.8–0.9)
+    expect(out.crop!.x + out.crop!.w).toBeGreaterThanOrEqual(0.9 - 1e-6);
+  });
+
+  it('crop and fit refuse other users’ paths and quarantine', async () => {
+    const { store } = v5Store();
+    const OTHER = '33333333-3333-4333-8333-333333333333';
+    await expect(store.cropRef({ userId: USER, projectId: PROJECT, path: `u/${OTHER}/p/${PROJECT}/ref/x.webp`, aspect: '1:1' })).rejects.toMatchObject({ status: 403 });
+    await expect(store.fitToAspect({ userId: USER, projectId: PROJECT, path: `u/${OTHER}/p/${PROJECT}/img/x.webp`, aspect: '4:5', mode: 'pad' })).rejects.toMatchObject({ status: 403 });
+    await expect(store.cropRef({ userId: USER, projectId: PROJECT, path: `q/${USER}/${PROJECT}/x.webp`, aspect: '1:1' })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('fitToAspect stores a NEW derived asset in the art lane with variants (2048² → 4:5 pad = 1638×2048)', async () => {
+    const { fake, store } = v5Store();
+    const src = `u/${USER}/p/${PROJECT}/img/square.webp`;
+    fake.bucket(PUB).set(src, { data: await sharp(await solidPng(2048, 2048, '#f4f1ea')).webp().toBuffer(), type: 'image/webp' });
+    const out = await store.fitToAspect({ userId: USER, projectId: PROJECT, path: src, aspect: '4:5', mode: 'pad' });
+    expect(out.path).not.toBe(src);
+    expect(out.path).toMatch(new RegExp(`^u/${USER}/p/${PROJECT}/img/`));
+    expect(out).toMatchObject({ source: 'derived', derivedFrom: src, w: 1638, h: 2048 });
+    expect(out.variants?.map((v) => [v.w, v.h])).toEqual([
+      [480, 600],
+      [1080, 1350]
+    ]);
+    expect(fake.bucket(PUB).has(src)).toBe(true); // the original is never touched
+    expect(fake.rows.find((r) => r.path === out.path)).toMatchObject({ source: 'derived', bucket: PUB });
+  });
+});
+
+describe('v5: quarantine, remove and the publication primitives', () => {
+  it('quarantine moves the object (and its variants) to the private q/ lane with a 90-day hold', async () => {
+    const { fake, store } = v5Store();
+    const path = `u/${USER}/p/${PROJECT}/img/bad.webp`;
+    fake.bucket(PUB).set(path, { data: Buffer.from('bad-bytes') });
+    fake.bucket(PUB).set(`u/${USER}/p/${PROJECT}/img/bad_w480.webp`, { data: Buffer.from('v') });
+    const { quarantinePath } = await store.quarantine(path, 'blocked:violence');
+    expect(quarantinePath).toMatch(new RegExp(`^q/${USER}/${PROJECT}/bad-[0-9a-f]{8}\\.webp$`));
+    expect(fake.bucket(PRIV).get(quarantinePath)?.data.toString()).toBe('bad-bytes');
+    expect(fake.bucket(PUB).has(path)).toBe(false);
+    expect(fake.bucket(PUB).has(`u/${USER}/p/${PROJECT}/img/bad_w480.webp`)).toBe(false);
+    const row = fake.rows.find((r) => r.path === quarantinePath)!;
+    expect(row).toMatchObject({ bucket: PRIV, source: 'quarantine' });
+    const holdDays = (Date.parse(String(row.expires_at)) - Date.now()) / 86_400_000;
+    expect(holdDays).toBeGreaterThan(89.9);
+    expect(holdDays).toBeLessThanOrEqual(90);
+    // Retried after the source is gone: same quarantine path, no error.
+    expect(await store.quarantine(path, 'blocked:violence')).toEqual({ quarantinePath });
+    // A quarantined object is never signed as the original path again and never removed by remove().
+    await store.remove([quarantinePath]);
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(true);
+  });
+
+  it('quarantine drops every cached preview size of the original (no stale preview reaches the director or safety)', async () => {
+    const { fake, store } = v5Store();
+    const path = `u/${USER}/p/${PROJECT}/ref/flagged.webp`;
+    fake.bucket(PRIV).set(path, { data: await sharp(await noisePng(900, 600)).webp().toBuffer(), type: 'image/webp' });
+    // Two unusual edges, each cached after one read of the stored object.
+    for (const edge of [300, 640, 300, 640]) await store.previewDataUrl(path, edge);
+    expect(fake.calls.download).toHaveLength(2);
+    await store.quarantine(path, 'blocked:sexual');
+    // Both previews now go back to storage — where the original no longer exists.
+    await expect(store.previewDataUrl(path, 300)).rejects.toMatchObject({ status: 404 });
+    await expect(store.previewDataUrl(path, 640)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('remove deletes per bucket and marks the image_assets rows deleted', async () => {
+    const { fake, store } = v5Store();
+    const art = `u/${USER}/p/${PROJECT}/img/a.webp`;
+    const ref = `u/${USER}/p/${PROJECT}/ref/b.webp`;
+    fake.bucket(PUB).set(art, { data: Buffer.from('a') });
+    fake.bucket(PRIV).set(ref, { data: Buffer.from('b') });
+    fake.rows.push({ path: art, deleted_at: null }, { path: ref, deleted_at: null });
+    await store.remove([art, ref, '../escape']);
+    expect(fake.bucket(PUB).has(art)).toBe(false);
+    expect(fake.bucket(PRIV).has(ref)).toBe(false);
+    expect(fake.calls.remove).toEqual([
+      { bucket: PUB, paths: [art] },
+      { bucket: PRIV, paths: [ref] }
+    ]);
+    expect(fake.rows.every((r) => r.deleted_at)).toBe(true);
+  });
+
+  it('copyObject copies across buckets into pub/ only; putObject writes real images to pub/ or library/ only', async () => {
+    const { fake, store } = v5Store();
+    const art = `u/${USER}/p/${PROJECT}/img/page.webp`;
+    fake.bucket(PUB).set(art, { data: Buffer.from('page') });
+    const dst = `pub/${KEY22}/p1-0123456789ab.webp`;
+    await store.copyObject(art, dst);
+    await store.copyObject(art, dst); // idempotent (content-hashed name)
+    expect(fake.bucket(PUB).get(dst)?.data.toString()).toBe('page');
+    await expect(store.copyObject(art, `u/${USER}/p/${PROJECT}/img/guessable.webp`)).rejects.toMatchObject({ status: 400 });
+    await expect(store.copyObject(`q/${USER}/${PROJECT}/x.webp`, dst)).rejects.toMatchObject({ status: 400 });
+
+    const jpg = await sharp(await solidPng(40, 20)).jpeg().toBuffer();
+    await store.putObject(`pub/${KEY22}/og-en-0123456789ab.jpg`, jpg, 'image/jpeg', 'public, max-age=31536000');
+    const put = fake.calls.upload.find((c) => c.path.endsWith('og-en-0123456789ab.jpg'))!;
+    expect(put).toMatchObject({ bucket: PUB, opts: { contentType: 'image/jpeg', cacheControl: 'public, max-age=31536000', upsert: true } });
+    await expect(store.putObject(`pub/${KEY22}/x.svg`, Buffer.from('<svg/>'), 'image/svg+xml')).rejects.toMatchObject({ status: 415 });
+    await expect(store.putObject(`pub/${KEY22}/x.jpg`, Buffer.from('<html>'), 'image/jpeg')).rejects.toMatchObject({ status: 415 });
+    await expect(store.putObject(`u/${USER}/p/${PROJECT}/img/x.webp`, jpg, 'image/jpeg')).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('removePrefix sweeps one publication folder and refuses anything else', async () => {
+    const { fake, store } = v5Store();
+    for (let i = 0; i < 3; i += 1) fake.bucket(PUB).set(`pub/${KEY22}/p${i}-0123456789ab.webp`, { data: Buffer.from('x') });
+    fake.bucket(PUB).set(`pub/Zb3dEf6hIj9kLm2nOp5qRs/keep.webp`, { data: Buffer.from('x') });
+    expect(await store.removePrefix(`pub/${KEY22}/`)).toBe(3);
+    expect(fake.bucket(PUB).has('pub/Zb3dEf6hIj9kLm2nOp5qRs/keep.webp')).toBe(true);
+    await expect(store.removePrefix(`u/${USER}/`)).rejects.toMatchObject({ status: 400 });
+    await expect(store.removePrefix('pub/')).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('v5: memory store implements the whole surface', () => {
+  it('saves private refs, measures, crops, fits, makes variants and quarantines', async () => {
+    const store = createMemoryAssetStore();
+    const encoded = await store.encodeUploadBuffer(await noisePng(1200, 900), 'image/png');
+    const ref = await store.saveRef({ userId: 'user-1', projectId: 'proj-1', encoded });
+    expect(ref.path).toMatch(/^u\/user-1\/p\/proj-1\/ref\//);
+    expect(ref.variants?.map((v) => v.w)).toEqual([480, 1080]);
+    expect(await store.signUrls([ref.path], { ttlSec: 3600 })).toEqual({ [ref.path]: `mem://${ref.path}` });
+    expect(store.signedTtl[ref.path]).toBe(300);
+    const crop = await store.cropRef({ userId: 'user-1', projectId: 'proj-1', path: ref.path, aspect: '3:4' });
+    expect(crop).toMatchObject({ source: 'derived', derivedFrom: ref.path, w: 675, h: 900 });
+    store.put('u/user-1/p/proj-1/img/page.webp', `data:image/png;base64,${(await solidPng(2048, 2048)).toString('base64')}`);
+    const fit = await store.fitToAspect({ userId: 'user-1', projectId: 'proj-1', path: 'u/user-1/p/proj-1/img/page.webp', aspect: '4:5', mode: 'pad' });
+    expect([fit.w, fit.h]).toEqual([1638, 2048]);
+    const { quarantinePath } = await store.quarantine('u/user-1/p/proj-1/img/page.webp', 'blocked');
+    expect(quarantinePath.startsWith('q/user-1/proj-1/')).toBe(true);
+    expect(store.files.has('u/user-1/p/proj-1/img/page.webp')).toBe(false);
+  });
+});

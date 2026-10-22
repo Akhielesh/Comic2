@@ -12,7 +12,7 @@
 import { isPageStale, isTargetStale, newId, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
 import { estimateJobs, formatUsd } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, pageTargets, quoteRenderPages } from '../../../shared/comic/plan.js';
-import { nothingNextSteps } from './replies.js';
+import { drawnBookLine, nothingNextSteps } from './replies.js';
 
 export interface RoutedIntent {
   kind: 'show_pages' | 'nothing_to_draw';
@@ -132,11 +132,8 @@ export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean 
     const pages = pageTargets(doc);
     if (pages.length || (wantsBook && coverNeedsDraw(doc))) return null; // real work → the director quotes it
     const busy = doc.pages.some((p) => p.render.status === 'queued' || p.render.status === 'rendering');
-    const coverMissing = coverNeedsDraw(doc);
-    const drawn = doc.pages.filter((p) => p.render.status === 'ready').length;
-    const reply = busy
-      ? 'Everything is either drawn or already drawing — nothing new to start, and nothing was spent.'
-      : `Everything is already drawn and up to date — ${plural(drawn, 'page')}${doc.cover.render.status === 'ready' ? ' and the cover' : ''}. Nothing was spent.${coverMissing ? ' The cover isn’t drawn yet — want it?' : ''}`;
+    // Never "Everything is drawn" while the cover is missing or out of date (drawnBookLine says which).
+    const reply = (!busy && drawnBookLine(doc, { offerCover: true })) || 'Everything is either drawn or already drawing — nothing new to start, and nothing was spent.';
     return { kind: 'nothing_to_draw', reply, cards: [breakdownCard('status')], nextSteps: nothingNextSteps(doc, byok) };
   }
 

@@ -33,6 +33,17 @@ ENV NODE_ENV=production \
     NODE_OPTIONS=--max-old-space-size=512
 COPY --from=build /out/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund --loglevel=error && npm cache clean --force
+# Share-link preview images (P1-PUBLISH, server/src/comic/publication/ogImage.ts) are lettered by
+# sharp's Pango/HarfBuzz with the vendored OFL fonts (≈2 MB; provenance + SHA-256 in
+# server/assets/fonts/README.md). fontconfig lets Pango find them. The build FAILS here if the
+# fonts aren't visible or Devanagari + Latin text doesn't render, so a broken image never ships.
+RUN apt-get update && apt-get install -y --no-install-recommends fontconfig && rm -rf /var/lib/apt/lists/*
+COPY server/assets/fonts /usr/local/share/fonts/dreamstream
+ENV COMIC_OG_FONT_DIR=/usr/local/share/fonts/dreamstream
+RUN fc-cache -f /usr/local/share/fonts/dreamstream \
+ && fc-list : family | grep -q "Noto Sans Devanagari" \
+ && fc-list : family | grep -q "Bangers" \
+ && node --input-type=module -e "const { default: sharp } = await import('sharp'); const { data, info } = await sharp({ text: { text: 'नमस्ते Hello', font: 'Noto Sans Devanagari, Bangers 48px', rgba: true } }).png().toBuffer({ resolveWithObject: true }); if (data.length < 200 || info.width < 120) { console.error('OG font smoke failed', info); process.exit(1); } console.log('OG font smoke ok', info.width + 'x' + info.height);"
 COPY --from=build /out/server.mjs ./server.mjs
 # Pyodide caches packages it downloads next to itself — the app user must own /app.
 RUN chown -R node:node /app

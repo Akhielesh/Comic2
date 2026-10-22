@@ -2,7 +2,8 @@ import type { Request } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import { createEmptyDoc } from '../../../shared/comic/doc.js';
 import type { StudioEvent } from '../../../shared/comic/events.js';
-import { createStudioContext } from './context.js';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
+import { createStudioContext, signAssetPaths, spendLockedBilling } from './context.js';
 import { KEYS, fakeAssetStore, fakeBilling, fakeDocStore, fakeImages, scriptedLlm } from './orchestrator.fakes.js';
 import { SESSION_IDLE_MS, StudioSession } from './session.js';
 
@@ -79,5 +80,50 @@ describe('createStudioContext', () => {
     release();
     await ctx.settled();
     expect(session.isIdle(later)).toBe(true);
+  });
+});
+
+describe('v5 context: caps, rating, spend lock, private signing', () => {
+  it('carries caps and the effective rating when given', () => {
+    const session = new StudioSession({ projectId: 'p1', userId: 'user-1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    const caps = { ...DEFAULT_CAPS, plan: 'paid' as const };
+    const ctx = createStudioContext({ req, session, deps: { keys: KEYS, llm: scriptedLlm(), images: fakeImages().generate, assets: fakeAssetStore(), billing: fakeBilling() }, caps, rating: 'PG' });
+    expect(ctx.caps).toBe(caps);
+    expect(ctx.rating).toBe('PG');
+    expect(ctx.spendBlocked).toBeUndefined();
+  });
+
+  it('a restricted account cannot reserve image or translation spend; text work still reserves', async () => {
+    const billing = fakeBilling();
+    const locked = spendLockedBilling(billing, 'Paused.');
+    expect(await locked.reserve({ operation: 'comic.image.page', provider: 'openrouter', model: 'm', stage: 'page', imageUnits: 1 })).toEqual({ ok: false, code: 'BILLING_DENIED', message: 'Paused.' });
+    expect(await locked.reserve({ operation: 'comic.text.translate', provider: 'openrouter', model: 'm', stage: 'translate', inputTokens: 10 })).toMatchObject({ ok: false });
+    expect(billing.reserves).toHaveLength(0);
+    expect(await locked.reserve({ operation: 'comic.text.director', provider: 'openrouter', model: 'm', stage: 'chat', inputTokens: 10 })).toMatchObject({ ok: true });
+    expect(billing.reserves).toHaveLength(1);
+
+    const session = new StudioSession({ projectId: 'p1', userId: 'user-1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    const ctx = createStudioContext({ req, session, deps: { keys: KEYS, llm: scriptedLlm(), images: fakeImages().generate, assets: fakeAssetStore(), billing: fakeBilling() }, spendBlocked: 'Paused.' });
+    expect(ctx.spendBlocked).toBe('Paused.');
+    expect(await ctx.billing.reserve({ operation: 'x', provider: 'gemini', model: 'm', stage: 'cover', imageUnits: 1 })).toMatchObject({ ok: false, message: 'Paused.' });
+  });
+
+  it('signs private paths (refs, quarantine) with the 300 s TTL and keeps the lanes independent', async () => {
+    const assets = fakeAssetStore();
+    const urls = await signAssetPaths(assets, ['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp', 'q/a/b/z.webp', 'u/a/p/b/img/x.webp', '']);
+    expect(Object.keys(urls).sort()).toEqual(['q/a/b/z.webp', 'u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp']);
+    expect(assets.signed).toEqual([['u/a/p/b/img/x.webp'], ['u/a/p/b/ref/y.webp', 'q/a/b/z.webp']]);
+    expect(assets.signedTtl).toEqual([undefined, 300]);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const original = assets.signUrls.bind(assets);
+    assets.signUrls = async (paths, opts) => {
+      if (opts?.ttlSec) throw new Error('private bucket down');
+      return original(paths, opts);
+    };
+    expect(await signAssetPaths(assets, ['u/a/p/b/img/x.webp', 'u/a/p/b/ref/y.webp'])).toEqual({ 'u/a/p/b/img/x.webp': 'https://signed.test/u/a/p/b/img/x.webp' });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    expect(await signAssetPaths(assets, [])).toEqual({});
   });
 });

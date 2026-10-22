@@ -263,16 +263,35 @@ const wrapUnitList = (units: WrapUnit[], lang: string, maxWidth: number, measure
   if (!units.length) return [];
   const lines: string[] = [];
   let current = '';
+  // A unit wider than the line breaks at grapheme boundaries. Kinsoku still holds there, without ever
+  // overrunning the balloon: a mark that may not start a line (。、！?» NBSP …) pulls the grapheme before it
+  // down with it (oidashi: "HELL" / "O!" rather than "HELLO" / "!"); only a pure run of such marks hangs,
+  // and then at most one glyph past the width (so "!!!!!!!!" or "。。。。" still wraps).
   const pushLong = (word: string) => {
-    let chunk = '';
+    let chunk: string[] = [];
+    const joined = (gs: string[]) => gs.join('');
     for (const g of graphemes(word, lang)) {
-      // Kinsoku also holds inside a broken word: a forbidden mark hangs on the line it follows.
-      if (chunk && measure(chunk + g) > maxWidth && !NO_LINE_START.has(g)) {
-        lines.push(chunk);
-        chunk = g;
-      } else chunk += g;
+      if (!chunk.length || measure(joined(chunk) + g) <= maxWidth) {
+        chunk.push(g);
+        continue;
+      }
+      if (NO_LINE_START.has(g)) {
+        let k = chunk.length - 1;
+        while (k > 0 && NO_LINE_START.has(chunk[k])) k -= 1;
+        if (k > 0) {
+          lines.push(joined(chunk.slice(0, k)));
+          chunk = [...chunk.slice(k), g];
+          continue;
+        }
+        if (measure(joined(chunk)) <= maxWidth) {
+          chunk.push(g);
+          continue;
+        }
+      }
+      lines.push(joined(chunk));
+      chunk = [g];
     }
-    return chunk;
+    return joined(chunk);
   };
   for (const unit of units) {
     if (unit.hard && current) {
@@ -386,6 +405,9 @@ export interface FitInput {
   /** Padding per side as page-WIDTH fractions (default LETTER_METRICS.padX / padY). */
   padX?: number;
   padY?: number;
+  /** Grow toward the panel's LEFT edge, keeping the right edge put (rtl-anchored captions, i18n §5.3).
+   *  The caller re-anchors x = (balloon.x + balloon.w) − result.w. */
+  growLeft?: boolean;
 }
 export interface FitResult {
   w: number;
@@ -399,7 +421,8 @@ export interface FitResult {
 
 /**
  * Deterministic auto-fit (board, print, PNG/PDF and motion agree because it depends only on the text,
- * font and page size): grow the width (unpinned, within the panel, ≤ 0.42) in 0.02 steps → shrink the
+ * font and page size): grow the width (unpinned, within the panel, ≤ 0.42; leftwards for rtl-anchored
+ * captions) in 0.02 steps → shrink the
  * font in 4 % steps down to max(9px, 0.82 × base) → otherwise `overflow: true`. Never clips: an
  * overflowing result keeps every line (the balloon simply grows past the panel).
  */
@@ -440,7 +463,10 @@ export const fitBalloonText = (input: FitInput): FitResult => {
 
   let grew = false;
   if (!b.pinned) {
-    const limit = Math.min(MAX_FIT_BALLOON_W, Math.max(w, panel.x + panel.w - b.x), 1 - Math.max(0, b.x));
+    const right = Math.min(1, Math.max(0, b.x) + w);
+    const limit = input.growLeft
+      ? Math.min(MAX_FIT_BALLOON_W, Math.max(w, right - panel.x), right)
+      : Math.min(MAX_FIT_BALLOON_W, Math.max(w, panel.x + panel.w - b.x), 1 - Math.max(0, b.x));
     while (w + 1e-9 < limit) {
       w = Math.min(limit, round4(w + 0.02));
       lines = wrapAt(w, fontPx);

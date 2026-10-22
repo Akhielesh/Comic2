@@ -12,6 +12,8 @@ import {
   estimateBalloonHeight,
   estimatePanelBoxes,
   fallbackBalloons,
+  normalizeLettering,
+  normalizeMarks,
   visionSpecText
 } from './vision.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult } from './types.js';
@@ -447,5 +449,138 @@ describe('vision spec & schema', () => {
       if (node.type === 'array') walk(node.items as Record<string, unknown>);
     };
     walk(VISION_SCHEMA as Record<string, unknown>);
+  });
+});
+
+// ── P1-RENDER: Indic lettering, keep-outs and heads ─────────────────────────
+
+describe('normalizeLettering keeps combining marks (Indic vowel signs)', () => {
+  it('Hindi and Telugu survive intact; Latin accents and punctuation still fold', () => {
+    expect(normalizeLettering('नमस्ते दोस्त')).toBe('नमस्ते दोस्त');
+    expect(normalizeLettering('నమస్తే స్నేహితుడా!')).toBe('నమస్తే స్నేహితుడా');
+    expect(normalizeLettering('  Café — "OLÉ"!  ')).toBe('cafe ole');
+  });
+
+  it('an exactly lettered Hindi line is neither missing nor misspelled', () => {
+    const pg = page([panel(1, ['maya'], [line('l1', 'speech', 'नमस्ते दोस्त, चलो!', 'maya')])]);
+    expect(compareLettering(pg, ['नमस्ते दोस्त, चलो!'])).toEqual({ missing: [], misspelled: [], unexpected: [] });
+    expect(compareLettering(pg, ['नमस्ते दोस्त चलो'])).toEqual({ missing: [], misspelled: [], unexpected: [] });
+  });
+});
+
+describe('normalizeMarks (keepOut / heads)', () => {
+  const pg = () => page([panel(1, ['maya', 'arjun']), panel(2, ['maya'])]);
+
+  it('keeps fractions, resolves names, drops unknown panels, faces first, ≤ 4 per panel', () => {
+    const faces = Array.from({ length: 6 }, (_, i) => ({ panel: 1, kind: 'face', box: { x: 0.05 + i * 0.1, y: 0.1, w: 0.08, h: 0.08 } }));
+    const out = normalizeMarks(
+      {
+        keepOut: [
+          { panel: 2, kind: 'action', box: { x: 0.2, y: 0.6, w: 0.3, h: 0.2 } },
+          { panel: 2, kind: 'weird', box: { x: 0.6, y: 0.6, w: 0.1, h: 0.1 } },
+          { panel: 2, kind: 'face', box: { x: 0.4, y: 0.55, w: 0.1, h: 0.1 } },
+          { panel: 9, kind: 'face', box: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 } },
+          { panel: 1, kind: 'hands', box: { x: 0.9, y: 0.9, w: 0.5, h: 0.5 } },
+          ...faces
+        ],
+        heads: [
+          { panel: 1, name: 'MAYA', head: { x: 0.3, y: 0.2 }, mouth: { x: 0.31, y: 0.24 } },
+          { panel: 1, name: 'Arjun', head: { x: 0.7, y: 0.2 }, mouth: { x: -1, y: -1 } },
+          { panel: 1, name: 'MAYA', head: { x: 0.35, y: 0.25 }, mouth: { x: 0.3, y: 0.3 } },
+          { panel: 2, name: 'Stranger', head: { x: 0.5, y: 0.7 }, mouth: { x: -1, y: -1 } },
+          { panel: 3, name: 'MAYA', head: { x: 0.5, y: 0.5 }, mouth: { x: 0.5, y: 0.5 } }
+        ]
+      },
+      doc(),
+      pg()
+    );
+    const p1 = out.keepOut.filter((k) => k.panel === 1);
+    expect(p1).toHaveLength(4);
+    expect(p1.every((k) => k.kind === 'face')).toBe(true); // faces outrank the hands box
+    const p2 = out.keepOut.filter((k) => k.panel === 2);
+    expect(p2.map((k) => k.kind)).toEqual(['face', 'action', 'other']);
+    expect(p2[1].box).toEqual({ x: 0.2, y: 0.6, w: 0.3, h: 0.2 });
+    expect(out.keepOut.some((k) => k.panel === 9)).toBe(false);
+    expect(out.heads).toEqual([
+      { panel: 1, characterId: 'maya', head: { x: 0.3, y: 0.2 }, mouth: { x: 0.31, y: 0.24 } },
+      { panel: 1, characterId: 'arjun', head: { x: 0.7, y: 0.2 } },
+      { panel: 2, head: { x: 0.5, y: 0.7 } }
+    ]);
+  });
+
+  it('matches group labels ("DUCKLINGS ×3") without eating names that end in x + digits', () => {
+    const d = doc((x) => {
+      x.cast.push({ id: 'rex', name: 'Rex 2', tier: 'support', look: { summary: 'Robot dog' }, refs: [], sheet: emptyRender() });
+      x.cast.push({ id: 'duck', name: 'Ducklings', tier: 'support', count: 3, look: { summary: 'ducklings' }, refs: [], sheet: emptyRender() });
+    });
+    const out = normalizeMarks(
+      {
+        heads: [
+          { panel: 1, name: 'REX 2', head: { x: 0.2, y: 0.2 }, mouth: { x: -1, y: -1 } },
+          { panel: 1, name: 'DUCKLINGS ×3', head: { x: 0.6, y: 0.2 }, mouth: { x: -1, y: -1 } }
+        ]
+      },
+      d,
+      pg()
+    );
+    expect(out.heads.map((h) => h.characterId)).toEqual(['rex', 'duck']);
+  });
+
+  it('clamps boxes to the page and converts the 0–1000 grid; pixels without a known size are rejected', () => {
+    const grid = normalizeMarks({ keepOut: [{ panel: 1, kind: 'face', box: { x: 800, y: 100, w: 400, h: 100 } }], heads: [] }, doc(), pg());
+    expect(grid.keepOut).toEqual([{ panel: 1, kind: 'face', box: { x: 0.8, y: 0.1, w: 0.2, h: 0.1 } }]);
+    const unsized = { ...pg(), render: { ...pg().render, asset: { path: 'p.png', source: 'generated' as const, at: 1 } } };
+    const pixels = { keepOut: [{ panel: 1, kind: 'face', box: { x: 1200, y: 300, w: 200, h: 200 } }], heads: [{ panel: 1, name: 'MAYA', head: { x: 1300, y: 400 }, mouth: { x: 1300, y: 450 } }] };
+    expect(normalizeMarks(pixels, doc(), unsized)).toEqual({ keepOut: [], heads: [] });
+    const sized = { ...pg(), render: { ...pg().render, asset: { path: 'p.png', source: 'generated' as const, at: 1, w: 2000, h: 3000 } } };
+    const conv = normalizeMarks(pixels, doc(), sized);
+    expect(conv.keepOut[0].box).toEqual({ x: 0.6, y: 0.1, w: 0.1, h: 0.0667 });
+    expect(conv.heads[0]).toEqual({ panel: 1, characterId: 'maya', head: { x: 0.65, y: 0.1333 }, mouth: { x: 0.65, y: 0.15 } });
+    expect(normalizeMarks({}, doc(), pg())).toEqual({ keepOut: [], heads: [] });
+  });
+
+  it('analyzePageRender stores keepOut/heads on overlay pages and asks for them in the prompt', async () => {
+    const reply = {
+      panels: [{ n: 1, box: { x: 0.02, y: 0.02, w: 0.96, h: 0.96 } }],
+      issues: [],
+      textFound: [],
+      extraOrMissingCharacters: [],
+      score: 0.9,
+      balloons: [{ lineId: 'l1', x: 0.1, y: 0.1, w: 0.2, tailX: 0.3, tailY: 0.3 }],
+      safety: { rating: 'G', categories: [], notes: [] },
+      keepOut: [{ panel: 1, kind: 'face', box: { x: 0.4, y: 0.3, w: 0.2, h: 0.2 } }],
+      heads: [{ panel: 1, name: 'MAYA', head: { x: 0.5, y: 0.35 }, mouth: { x: 0.5, y: 0.42 } }]
+    };
+    const { llm, calls } = fakeLlm([{ json: reply, text: JSON.stringify(reply) }]);
+    const pg = page([panel(1, ['maya'], [line('l1', 'speech', 'Hi.', 'maya')])]);
+    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:image/png;base64,AAAA', llm });
+    expect(out.qc.keepOut).toEqual([{ panel: 1, kind: 'face', box: { x: 0.4, y: 0.3, w: 0.2, h: 0.2 } }]);
+    expect(out.qc.heads).toEqual([{ panel: 1, characterId: 'maya', head: { x: 0.5, y: 0.35 }, mouth: { x: 0.5, y: 0.42 } }]);
+    const system = String(calls[0].messages[0].content);
+    expect(system).toContain('7. safety: rate the IMAGE only (not the script)');
+    expect(system).toContain('Action, monsters, darkness and peril are NOT X.');
+    expect(system).toContain('8. keepOut: areas balloons must not cover — at most 3 per panel');
+
+    // In-art pages: no marks requested or stored.
+    const inArt = doc((d) => (d.format.lettering = 'in_art'));
+    const again = fakeLlm([{ json: { ...reply, textFound: ['Hi.'] }, text: '' }]);
+    const art = await analyzePageRender({ doc: inArt, page: pg, dataUrl: 'data:image/png;base64,AAAA', llm: again.llm });
+    expect(art.qc.keepOut).toBeUndefined();
+    expect(art.qc.heads).toBeUndefined();
+    expect(String(again.calls[0].messages[0].content)).toContain('8. keepOut: [] and heads: [] — this page is lettered in the art.');
+  });
+});
+
+describe('review: coordinate scale tolerance', () => {
+  it('a box that overshoots the edge a little is still fractions (no paid repair round)', () => {
+    expect(coordinateScale([0.2, 0.9, 1.02])).toEqual({ sx: 1, sy: 1 });
+    expect(coordinateScale([0.2, 1.5])).toEqual({ sx: 1, sy: 1 });
+    expect(coordinateScale([0.2, 2])).toEqual({ sx: 1000, sy: 1000 });
+    const marks = normalizeMarks(
+      { keepOut: [{ panel: 1, kind: 'action', box: { x: 0.1, y: 0, w: 0.3, h: 1.04 } }], heads: [] },
+      doc(),
+      page([panel(1, ['maya'])])
+    );
+    expect(marks.keepOut).toEqual([{ panel: 1, kind: 'action', box: { x: 0.1, y: 0, w: 0.3, h: 1 } }]);
   });
 });

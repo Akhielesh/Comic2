@@ -69,6 +69,10 @@ export function buildLegacyProjectState(doc: ComicDoc, opts: { isPublic?: boolea
     studioRendered: readyPages.length
   };
   if (coverImageId) state.coverImageId = coverImageId;
+  // Server-written share mirror (P1-PUBLISH): re-asserted on every save so a racing listing
+  // write can never drop it. Unlisted slugs stay owner-only (projects RLS hides private rows).
+  const pub = doc?.publication;
+  if (pub && pub.status === 'live' && typeof pub.slug === 'string' && /^[A-Za-z0-9]{17}$/.test(pub.slug)) state.shareSlug = pub.slug;
   return state;
 }
 
@@ -470,28 +474,35 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     await mirrorProject(projectId, userId, doc, summary);
   };
 
+  /**
+   * Public read by project id: ONLY the frozen, allow-listed snapshot of a live + PUBLIC
+   * publication of a project that is not force-private (P1-PUBLISH). The live doc is never
+   * served to readers any more; unlisted comics are reachable only by their slug at the edge.
+   * Fails closed: any lookup error or an unmigrated database serves nothing.
+   */
   const loadPublic: DocStore['loadPublic'] = async (projectId) => {
     if (!projectId) return null;
     const db = admin();
-    let project: { is_public?: boolean | null; is_forced_private?: boolean | null } | null = null;
-    const first = await db.from('projects').select('id, is_public, is_forced_private').eq('id', projectId).maybeSingle();
-    if (first.error) {
-      if (isInvalidId(first.error)) return null;
-      if (pgCode(first.error) !== '42703') throw storeError(first.error, 'load');
-      // Moderation columns not migrated on this database — visibility is is_public alone.
-      const fallback = await db.from('projects').select('id, is_public').eq('id', projectId).maybeSingle();
-      if (fallback.error) throw storeError(fallback.error, 'load');
-      project = fallback.data as typeof project;
-    } else {
-      project = first.data as typeof project;
+    const pub = await db
+      .from('comic_publications')
+      .select('snapshot, status, visibility')
+      .eq('project_id', projectId)
+      .eq('status', 'live')
+      .eq('visibility', 'public')
+      .maybeSingle();
+    if (pub.error) {
+      if (isInvalidId(pub.error) || isMissingTable(pub.error)) return null;
+      throw storeError(pub.error, 'load');
     }
-    if (!project || project.is_public !== true || project.is_forced_private === true) return null;
-
-    const { data, error } = await db.from('comic_docs').select('project_id, doc, rev').eq('project_id', projectId).maybeSingle();
-    if (error) throw storeError(error, 'load');
-    if (!data) return null;
-    const doc = hydrateDoc(projectId, (data as { doc?: unknown }).doc, (data as { rev?: unknown }).rev);
-    return doc ? sanitizePublicDoc(doc) : null;
+    const snapshot = (pub.data as { snapshot?: unknown } | null)?.snapshot;
+    if (!isRecord(snapshot)) return null;
+    const flags = await db.from('projects').select('id, is_forced_private').eq('id', projectId).maybeSingle();
+    if (flags.error) {
+      if (pgCode(flags.error) !== '42703') return null;
+    } else if (!flags.data || (flags.data as { is_forced_private?: boolean | null }).is_forced_private === true) {
+      return null;
+    }
+    return normalizeDoc({ ...(snapshot as Partial<ComicDoc>), id: String((snapshot as { id?: unknown }).id || 'publication') });
   };
 
   const loadLegacyState: DocStore['loadLegacyState'] = async (projectId, userId) => {

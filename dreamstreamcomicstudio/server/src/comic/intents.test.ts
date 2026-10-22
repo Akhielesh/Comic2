@@ -77,8 +77,9 @@ describe('routeIntent phrase table (40+ phrasings)', () => {
     const doc = /everything|finish/.test(text) ? sixPageDrawnDoc() : lakeDrawnDoc();
     const r = routeIntent(doc, text);
     expect(r?.kind).toBe('nothing_to_draw');
-    expect(r!.reply).toMatch(/^Everything is already drawn and up to date — (1 page|6 pages)/);
-    expect(r!.reply).toContain('Nothing was spent.');
+    expect(r!.reply).toMatch(/^(Everything is already drawn and up to date — 6 pages and the cover\.|The page is already drawn and up to date — nothing was spent\. The cover isn’t drawn yet — want it\?)/);
+    expect(r!.reply).toMatch(/nothing was spent/i);
+    expect(r!.reply).not.toMatch(/^Everything.*cover isn’t drawn/); // never "everything" while the cover is missing
     expect(r!.nextSteps.map((s) => s.label)).toContain('Read it');
   });
 

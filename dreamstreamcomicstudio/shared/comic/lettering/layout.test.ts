@@ -128,6 +128,26 @@ describe('planLettering: page fit, safe area, overflow', () => {
   });
 });
 
+describe('planLettering: rtl captions', () => {
+  it('an rtl caption that needs room grows leftwards (its right, reading-start edge stays put)', () => {
+    const text = 'Far away, in a city that never slept, the market woke before the sun did.';
+    const at = (dir: 'ltr' | 'rtl') => {
+      const { doc, page } = sample((d) => {
+        d.format = { ...d.format, readingDirection: dir };
+        d.pages[0].panels[0].lines[0].text = text;
+        d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l1' ? { lineId: b.lineId, x: 0.6, y: 0.38, w: 0.12 } : b));
+      });
+      return planLettering(doc, page, ASPECT, fixedMeasure).find((p) => p.lineId === 'pg_1_l1')!;
+    };
+    const rtl = at('rtl');
+    const ltr = at('ltr');
+    expect(rtl.w).toBeGreaterThan(120);
+    expect(rtl.x + rtl.w).toBeCloseTo(720, 1);
+    expect(rtl.x).toBeLessThan(600);
+    expect(ltr.x).toBeCloseTo(600, 1);
+  });
+});
+
 describe('planLettering: styles and scripts', () => {
   it('presets change fonts, case and shapes (storybook keeps mixed case)', () => {
     const { doc, page } = sample((d) => {

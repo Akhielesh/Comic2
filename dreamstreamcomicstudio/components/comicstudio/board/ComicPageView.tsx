@@ -3,6 +3,9 @@
 // loads), overlay balloons on top when the comic is lettered as an overlay, and a plan
 // sketch (estimated panel grid, panel numbers, first beat of each panel's action) when
 // nothing is drawn yet. Status overlays and editor layers slot in via props/children.
+// Reader props (contract §13.3): `letteringAriaHidden`, `visibleLineIds` (guided reveal), `paper`
+// (the reader's paper layer between art and lettering), `srcWidth` (variant pick from the measured
+// box width) and `editionLang` (edition geometry edits are reported with { lang }).
 
 import React, { useState } from 'react';
 import type { Balloon, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';

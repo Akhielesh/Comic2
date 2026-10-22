@@ -503,7 +503,7 @@ function useVersionTool(ctx: StudioContext): DirectorTool {
       }
       if (isTargetStale(after, target)) notes.push('It was drawn before the latest script/style changes, so it shows as out of date.');
       const nowStale = newlyStalePages(doc, after);
-      if (nowStale.length) notes.push(`${capitalize(pagesWord(nowStale))} now show as out of date.`);
+      if (nowStale.length) notes.push(`${capitalize(pagesWord(nowStale))} now ${nowStale.length === 1 ? 'shows' : 'show'} as out of date.`);
       return `${label} now uses v${pick.n} ($0, free and undoable).${notes.length ? ` ${notes.join(' ')}` : ''}`;
     }
   );

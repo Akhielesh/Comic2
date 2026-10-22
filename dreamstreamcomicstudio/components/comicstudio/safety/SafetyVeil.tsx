@@ -1,9 +1,14 @@
-// Safety veil around an image (contract §13.3; owner P1-SAFETY).
-// Wave 0 (P0-C) stub: renders its children, except that a BLOCKED asset becomes a neutral tile —
-// a blocked image is never put in an <img>, even before the real veil (redraw safer / change
-// rating / check again) lands.
+// Safety veil around an image (contract §13.3; safety.md §10; owner P1-SAFETY).
+//
+//   pass / unchecked → the children, untouched
+//   pending          → the children with a quiet "Checking…" pill (the URL arrives after the verdict)
+//   over_rating      → the children blurred (CSS only, no image swap) + "Rated PG-13 — your comic is PG"
+//                      with Show / Redraw safer / Change rating (only the actions the caller offers)
+//   blocked          → a neutral tile. The children are NEVER rendered, so a blocked image never
+//                      becomes an <img> (no URL is signed for it either). Redraw safer / Check again.
+// Respects reduced motion; every button is a 44 px target.
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { AssetRef } from '../../../shared/comic/doc';
 import { safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 
@@ -16,18 +21,101 @@ export interface SafetyVeilProps {
   onCheckAgain?(): void;
 }
 
-export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children }) => {
-  if (safetyStatusOf(asset?.safety, rating) !== 'blocked') return <>{children}</>;
+const BUTTON =
+  'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full px-3 text-[12px] font-medium transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const PRIMARY = `${BUTTON} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+const QUIET = `${BUTTON} border border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
+
+const Actions: React.FC<{ items: { label: string; onClick?: () => void; primary?: boolean }[] }> = ({ items }) => {
+  const shown = items.filter((i) => i.onClick);
+  if (!shown.length) return null;
   return (
-    <div
-      role="img"
-      aria-label="Image withheld"
-      data-safety="blocked"
-      className="grid h-full min-h-[4rem] w-full place-items-center rounded-[inherit] bg-[var(--ds-well-strong)] px-3 text-center text-[12px] text-[var(--ds-muted)]"
-    >
-      Image withheld
+    <div className="mt-2 flex max-w-full flex-wrap items-center justify-center gap-1.5">
+      {shown.map((i) => (
+        <button
+          key={i.label}
+          type="button"
+          className={i.primary ? PRIMARY : QUIET}
+          onClick={(e) => {
+            e.stopPropagation();
+            i.onClick?.();
+          }}
+        >
+          {i.label}
+        </button>
+      ))}
     </div>
   );
+};
+
+export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children, onRedrawSafer, onChangeRating, onCheckAgain }) => {
+  const status = safetyStatusOf(asset?.safety, rating);
+  const [shown, setShown] = useState(false);
+  // A different image (or a new verdict) is veiled again.
+  useEffect(() => setShown(false), [asset?.path, asset?.safety?.assessed]);
+
+  if (status === 'blocked') {
+    return (
+      <div
+        role="img"
+        aria-label="Image withheld"
+        data-safety="blocked"
+        className="grid h-full min-h-[4rem] w-full place-items-center overflow-hidden rounded-[inherit] bg-[var(--ds-well-strong)] px-3 py-3 text-center"
+      >
+        <div className="min-w-0 max-w-full">
+          <p className="break-words text-[12px] leading-snug text-[var(--ds-muted)]">This take didn&apos;t fit the content rules.</p>
+          <Actions
+            items={[
+              { label: 'Redraw safer', onClick: onRedrawSafer, primary: true },
+              { label: 'Check again', onClick: onCheckAgain }
+            ]}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'pending') {
+    return (
+      <div className="relative h-full w-full" data-safety="pending">
+        {children}
+        <span
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none absolute left-2 top-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)] shadow-sm"
+        >
+          Checking…
+        </span>
+      </div>
+    );
+  }
+
+  if (status === 'over_rating' && !shown) {
+    const assessed = asset?.safety?.assessed;
+    return (
+      <div className="relative h-full w-full overflow-hidden rounded-[inherit]" data-safety="over_rating">
+        <div aria-hidden="true" className="h-full w-full [filter:blur(18px)] motion-safe:transition-[filter]">
+          {children}
+        </div>
+        <div className="absolute inset-0 grid place-items-center p-3 text-center">
+          <div className="min-w-0 max-w-full rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-2 shadow-sm">
+            <p className="break-words text-[12px] font-medium leading-snug text-[var(--ds-ink)]">
+              Rated {assessed} — your comic is {rating}
+            </p>
+            <Actions
+              items={[
+                { label: 'Show', onClick: () => setShown(true) },
+                { label: 'Redraw safer', onClick: onRedrawSafer, primary: true },
+                { label: 'Change rating', onClick: onChangeRating }
+              ]}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 };
 
 export default SafetyVeil;

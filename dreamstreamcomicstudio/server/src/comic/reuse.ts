@@ -31,7 +31,7 @@ import {
   type RenderVersion,
   type VersionMeta
 } from '../../../shared/comic/doc.js';
-import { formatUsd } from '../../../shared/comic/models.js';
+import { aspectMatches, formatUsd } from '../../../shared/comic/models.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
 
 const isBusy = (r?: RenderState) => r?.status === 'queued' || r?.status === 'rendering';
@@ -54,9 +54,15 @@ export interface SpecHashMatch {
 }
 
 /**
+ * A version whose pixels came back in another shape than it asked for (bug 4:5 → 1:1) is never
+ * brought back implicitly: the spec hash says "same script", but the picture is the wrong frame.
+ */
+const rightShape = (v: { aspect?: VersionMeta['aspect']; w?: number; h?: number }): boolean => !v.aspect || aspectMatches(v.aspect, v.w, v.h);
+
+/**
  * A stored version of this target made from exactly the target's CURRENT spec (newest first),
- * that the owner may see. Null when the target has no spec hash (style options), the current
- * asset already matches (R1), or nothing matches.
+ * that the owner may see and that came back in the shape it asked for. Null when the target has
+ * no spec hash (style options), the current asset already matches (R1), or nothing matches.
  */
 export const findSpecHashVersion = (doc: ComicDoc, target: RenderTarget): SpecHashMatch | null => {
   const render = getRender(doc, target);
@@ -66,11 +72,13 @@ export const findSpecHashVersion = (doc: ComicDoc, target: RenderTarget): SpecHa
   const current = render.asset?.path;
   if (current && render.status === 'ready' && render.specHash === want) return null;
   for (const v of render.history) {
-    if (v?.path && v.path !== current && v.specHash === want && canServeToOwner(v)) return { path: v.path, from: 'history', version: v };
+    if (v?.path && v.path !== current && v.specHash === want && canServeToOwner(v) && rightShape(v)) return { path: v.path, from: 'history', version: v };
   }
   const key = renderTargetKey(target);
   for (const a of archiveOf(doc)) {
-    if (a?.path && a.targetKey === key && a.path !== current && a.specHash === want && canServeToOwner(a)) return { path: a.path, from: 'archive', version: a };
+    if (a?.path && a.targetKey === key && a.path !== current && a.specHash === want && canServeToOwner(a) && rightShape(a)) {
+      return { path: a.path, from: 'archive', version: a };
+    }
   }
   return null;
 };

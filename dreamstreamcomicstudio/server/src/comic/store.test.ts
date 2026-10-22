@@ -14,7 +14,7 @@ type PgErr = { code: string; message: string };
 
 /** A tiny PostgREST look-alike: enough of the builder API for store.ts. */
 const makeDb = () => {
-  const tables: Record<string, Row[]> = { projects: [], comic_docs: [] };
+  const tables: Record<string, Row[]> = { projects: [], comic_docs: [], comic_publications: [] };
   const failures: { table: string; op: string; error: PgErr }[] = [];
   const calls: { table: string; op: string; payload?: unknown }[] = [];
 
@@ -485,22 +485,46 @@ describe('createSupabaseDocStore', () => {
     expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p1.webp');
   });
 
-  it('serves public docs only when published and not force-private, sanitized', async () => {
+  it('serves ONLY the frozen snapshot of a live, public, non-force-private publication (P1-PUBLISH)', async () => {
     const { db, store } = setup();
     await store.create({ projectId: PID, userId: USER, doc: docWith({ conversation: [{ id: 'm', role: 'user', text: 'hi', at: 1 }] }) });
-    expect(await store.loadPublic(PID)).toBeNull();
+    // A public listing row alone (no publication) never exposes the live doc.
     db.tables.projects[0].is_public = true;
+    expect(await store.loadPublic(PID)).toBeNull();
+    const snapshot = { ...createEmptyDoc('pub-1', 'Spice Market', 5), conversation: [] };
+    db.tables.comic_publications.push({ project_id: PID, user_id: USER, status: 'live', visibility: 'unlisted', snapshot });
+    // Unlisted is reachable by slug only, never by project id.
+    expect(await store.loadPublic(PID)).toBeNull();
+    db.tables.comic_publications[0].visibility = 'public';
+    const doc = await store.loadPublic(PID);
+    expect(doc?.id).toBe('pub-1');
+    expect(doc?.id).not.toBe(PID);
+    expect(doc?.conversation).toEqual([]);
     db.tables.projects[0].is_forced_private = true;
     expect(await store.loadPublic(PID)).toBeNull();
     db.tables.projects[0].is_forced_private = false;
-    const doc = await store.loadPublic(PID);
-    expect(doc?.id).toBe(PID);
-    expect(doc?.conversation).toEqual([]);
-    // Databases without the moderation columns fall back to is_public alone.
+    db.tables.comic_publications[0].status = 'suspended';
+    expect(await store.loadPublic(PID)).toBeNull();
+    db.tables.comic_publications[0].status = 'live';
+    // Databases without the moderation columns fall back to the publication alone.
     db.failNext('projects', 'select', { code: '42703', message: 'column projects.is_forced_private does not exist' });
-    expect((await store.loadPublic(PID))?.id).toBe(PID);
-    db.failNext('projects', 'select', { code: '22P02', message: 'invalid uuid' });
+    expect((await store.loadPublic(PID))?.id).toBe('pub-1');
+    // Any other moderation lookup error fails closed.
+    db.failNext('projects', 'select', { code: 'XX000', message: 'boom' });
+    expect(await store.loadPublic(PID)).toBeNull();
+    // An unmigrated database (no publications table) and bad ids serve nothing.
+    db.failNext('comic_publications', 'select', { code: '42P01', message: 'relation does not exist' });
+    expect(await store.loadPublic(PID)).toBeNull();
+    db.failNext('comic_publications', 'select', { code: '22P02', message: 'invalid uuid' });
     expect(await store.loadPublic('bad')).toBeNull();
+  });
+
+  it('re-asserts the live share slug in the listing mirror (P1-PUBLISH)', () => {
+    const live = docWith({ publication: { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 3, publishedAt: 9, languages: ['en'] } });
+    expect(buildLegacyProjectState(live).shareSlug).toBe('Ab3dEf6hIj9kLm2nP');
+    expect(buildLegacyProjectState(docWith()).shareSlug).toBeUndefined();
+    const suspended = docWith({ publication: { visibility: 'public', status: 'suspended', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 3, publishedAt: 9, languages: ['en'] } });
+    expect(buildLegacyProjectState(suspended).shareSlug).toBeUndefined();
   });
 
   it('loads the legacy state for its owner only', async () => {

@@ -455,6 +455,18 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
 
 type SpendKind = 'pages' | 'cover' | 'sheets' | 'edit' | 'style';
 
+/** The comic has at least one generated image (style test, sheet, page or cover): its image model is locked. */
+export const hasComicImage = (doc: ComicDoc): boolean => {
+  const drawn = (r?: { status?: string; asset?: unknown; history?: unknown[] }) => !!r && (r.status === 'ready' || !!r.asset || !!r.history?.length);
+  return (
+    doc.pages.some((p) => drawn(p.render)) ||
+    drawn(doc.cover.render) ||
+    doc.cast.some((c) => drawn(c.sheet)) ||
+    doc.places.some((p) => drawn(p.sheet)) ||
+    doc.style.options.some((o) => drawn(o.render))
+  );
+};
+
 /** No page of the book has ever been drawn (the first render gates for a review). */
 const neverDrawn = (doc: ComicDoc) => doc.pages.every((p) => p.render.status !== 'ready' && !p.render.history.length);
 
@@ -530,7 +542,12 @@ function castUncastBeings(ctx: StudioContext): string {
   const ops = castOpsForUncast(ctx.session.doc, beings);
   if (!ops.length) return '';
   ctx.session.commit(ops);
-  return ` Also added to the cast so they stay consistent: ${describeUncast(beings)} (free; the user can change or remove them).`;
+  // Companions (tier support) get a model sheet with the next drawing: say what that costs.
+  const companions = ops.flatMap((o) => (o.op === 'character' && o.patch.tier === 'support' && o.patch.name ? [o.patch.name] : []));
+  const sheetNote = companions.length
+    ? ` ${joinList(companions)} ${companions.length === 1 ? 'gets' : 'get'} a model sheet with the next drawing (≈ ${formatUsd(priceOf(ctx, 'sheet', companions.length))}); make ${companions.length === 1 ? 'it' : 'them'} text-only (tier extra) to skip that.`
+    : '';
+  return ` Also added to the cast so they stay consistent: ${describeUncast(beings)} (free; the user can change or remove them).${sheetNote}`;
 }
 
 // ── Lettering helpers for edit_panel_text ────────────────────────────────────
@@ -1338,6 +1355,16 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (loosened.length) {
           throw argError(
             `Only the user can change ${loosened.join(', ')} (it raises what can be spent). Tell them to tap the quality chip under the message box or open Settings — one tap — and do not retry this call.`
+          );
+        }
+        // Model lock (decisions-final, owner 2026-10-22 evening; models.md §3.4 #6): once the comic has
+        // its first image, the director never changes the model or resolution — the user does, after a
+        // warning that character consistency can be affected and the real redraw cost.
+        if (patch.quality && patch.quality !== current.quality && hasComicImage(doc())) {
+          const from = resolveImageJob('page', current.quality, current.imageModelOverride).spec.nickname;
+          const to = resolveImageJob('page', patch.quality, current.imageModelOverride).spec.nickname;
+          throw argError(
+            `Locked comic: its images are drawn on ${from}${from !== to ? ` and ${patch.quality} would switch to ${to}` : ` at ${current.quality} quality`}, which can change how the characters look. Quality changes are the user's call — tell them to tap the quality chip (it shows the consistency warning and the real redraw cost). Do not retry this call.`
           );
         }
         commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }]);

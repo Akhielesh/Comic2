@@ -1,0 +1,223 @@
+// Immersive reader integration (reader.md §15, jsdom): the cover intro (skippable by key, once per
+// session), turns (instant under reduced motion), the End card taking focus, Guided View by `G` with
+// "Panel 1 of 3" announced, deep links (?p=3 and an undrawn page), the Escape cascade, the transcript
+// with aria-hidden lettering, settings, and closing.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import React from 'react';
+import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
+import type { ComicDoc } from '../../../shared/comic/doc';
+import { ImmersiveReader } from './ImmersiveReader';
+import { pageImageCache } from './pageImageCache';
+
+const drawnDoc = (): ComicDoc =>
+  makeSampleDoc((d) => {
+    d.cover.render = { status: 'ready', history: [], asset: { path: 'u/cover.png', source: 'generated', at: 0, w: 1000, h: 1500 } };
+    d.pages.forEach((p, i) => {
+      p.render = { status: 'ready', history: [], asset: { path: `u/p${i + 1}.png`, source: 'generated', at: 0, w: 1000, h: 1500 } };
+    });
+  });
+
+let reduce = false;
+const realMatchMedia = window.matchMedia;
+const setViewport = (w: number, h: number) => {
+  Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+  Object.defineProperty(window, 'innerHeight', { value: h, configurable: true });
+};
+
+beforeEach(() => {
+  reduce = false;
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('prefers-reduced-motion') ? reduce : query.includes('hover: hover') || query.includes('any-pointer: fine'),
+    media: query,
+    onchange: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => false
+  })) as unknown as typeof window.matchMedia;
+  setViewport(390, 844);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['img'], { type: 'image/png' }), { status: 200 })));
+  let n = 0;
+  (URL as unknown as { createObjectURL: (b: Blob) => string }).createObjectURL = () => `blob:test/${(n += 1)}`;
+  (URL as unknown as { revokeObjectURL: (u: string) => void }).revokeObjectURL = () => undefined;
+  (HTMLImageElement.prototype as unknown as { decode: () => Promise<void> }).decode = () => Promise.resolve();
+  vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  pageImageCache.clear();
+
+});
+
+const root = () => screen.getByTestId('immersive-reader');
+const press = (key: string, init: Partial<KeyboardEvent> = {}) => fireEvent.keyDown(root(), { key, ...init });
+const counter = () => screen.getByTestId('reader-hud-counter').textContent;
+
+describe('ImmersiveReader', () => {
+  it('opens as a modal dialog with the cover intro, skippable by a key (once per session)', () => {
+    const onExit = vi.fn();
+    const { unmount } = render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro onExit={onExit} />);
+    expect(root()).toHaveAttribute('role', 'dialog');
+    expect(root()).toHaveAttribute('aria-modal', 'true');
+    expect(root()).toHaveAttribute('aria-label', 'Reading The Saffron Thief');
+    expect(root().dataset.phase).toBe('intro');
+    expect(screen.getByTestId('cover-intro')).toHaveAccessibleName('Open The Saffron Thief');
+    press('ArrowRight');
+    expect(root().dataset.phase).toBe('reading');
+    unmount();
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro onExit={onExit} />);
+    expect(root().dataset.phase).toBe('reading');
+  });
+
+  it('turns pages with the keyboard (instant crossfade under reduced motion) and lands on the End card with focus', async () => {
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    expect(counter()).toBe('Cover');
+    press('ArrowRight');
+    expect(counter()).toBe('Page 1 of 6');
+    press('ArrowLeft');
+    expect(counter()).toBe('Cover');
+    press(' ');
+    press(' ');
+    expect(counter()).toBe('Page 2 of 6');
+    press('End');
+    expect(counter()).toBe('The End');
+    await waitFor(() => expect(document.activeElement).toHaveTextContent('The End'));
+    expect(screen.getByRole('button', { name: /Read again/ })).toBeInTheDocument();
+    expect(screen.getByTestId('reader-live').textContent).toBe('The End.');
+  });
+
+  it('a right-to-left comic turns forward with ←', () => {
+    reduce = true;
+    const doc = drawnDoc();
+    doc.format = { ...doc.format, readingDirection: 'rtl', kind: 'manga' };
+    render(<ImmersiveReader doc={doc} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    press('ArrowLeft');
+    expect(counter()).toBe('Page 1 of 6');
+  });
+
+  it('G opens Guided View one tap away: overview, then "Panel 1 of 3" announced', () => {
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    expect(root().dataset.guided).toBe('false');
+    press('g');
+    expect(root().dataset.guided).toBe('true');
+    expect(screen.getByTestId('reader-live').textContent).toBe('Page 1. Whole page.');
+    press('ArrowRight');
+    expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 1 of 3\. Panel 1\. The spice market at dawn/);
+    press('ArrowRight');
+    expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 2 of 3\..*Maya whispers: “Just one more…”/);
+  });
+
+  it('deep links: ?p=3 opens page 3; an undrawn page shows the nearest one and says so', () => {
+    reduce = true;
+    const { unmount } = render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro initialPage={3} onExit={() => undefined} />);
+    expect(root().dataset.phase).toBe('reading'); // a deep link skips the intro
+    expect(counter()).toBe('Page 3 of 6');
+    unmount();
+    render(<ImmersiveReader doc={makeSampleDoc()} urlFor={fakeUrlFor} intro={false} initialPage={3} onExit={() => undefined} />);
+    expect(counter()).toBe('Page 1 of 2');
+    expect(screen.getByRole('status')).toHaveTextContent('Page 3 isn’t drawn yet — showing page 1.');
+  });
+
+  it('?guided=1&panel=2 opens Guided View at that panel', () => {
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} initialGuided initialPanel={2} onExit={() => undefined} />);
+    expect(root().dataset.guided).toBe('true');
+    expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 2 of 3/);
+  });
+
+  it('Escape: leave Guided View first, then close the reader', () => {
+    reduce = true;
+    const onExit = vi.fn();
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={onExit} />);
+    press('g');
+    press('Escape');
+    expect(root().dataset.guided).toBe('false');
+    expect(onExit).not.toHaveBeenCalled();
+    press('Escape');
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('screen readers get an ordered transcript; the lettering layer is aria-hidden', async () => {
+    reduce = true;
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    const transcript = screen.getByTestId('reader-transcript');
+    expect(transcript).toHaveTextContent('Page 1.');
+    expect(transcript).toHaveTextContent('Caption: Old Delhi. Before the heat.');
+    expect(transcript).toHaveTextContent('Vendor shouts: “Thief!”');
+    await waitFor(() => expect(screen.getAllByTestId('balloon-layer').length).toBeGreaterThan(0));
+    for (const layer of screen.getAllByTestId('balloon-layer')) expect(layer).toHaveAttribute('aria-hidden', 'true');
+    // The visible page is a labelled group inside the book region.
+    expect(screen.getByRole('region', { name: 'The Saffron Thief' })).toBeInTheDocument();
+  });
+
+  it('settings persist locally; the close button exits', () => {
+    reduce = true;
+    const onExit = vi.fn();
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={onExit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reader settings' }));
+    const dialog = screen.getByRole('dialog', { name: 'Reader settings' });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Page-turn sound'));
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ sound: true });
+    fireEvent.click(screen.getByRole('radio', { name: 'Slide' }));
+    expect(JSON.parse(window.localStorage.getItem('comicstudio.reader.prefs.v1')!)).toMatchObject({ turn: 'slide' });
+    press('Escape');
+    expect(screen.queryByRole('dialog', { name: 'Reader settings' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloads only when allowed', () => {
+    reduce = true;
+    setViewport(1280, 800);
+    const { unmount } = render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+    unmount();
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} allowDownload={false} onExit={() => undefined} />);
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+  });
+
+  it('wide screens read in spreads with the cover alone on the right', () => {
+    reduce = true;
+    setViewport(1280, 800);
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    expect(root().dataset.layout).toBe('spread');
+    const cover = document.querySelector('[data-slot="i0"]') as HTMLElement;
+    expect(cover.dataset.side).toBe('right');
+    act(() => {
+      press('ArrowRight');
+    });
+    expect(counter()).toBe('Page 1 of 6');
+    expect((document.querySelector('[data-slot="ep-front"]') as HTMLElement).dataset.visible).toBe('true');
+  });
+
+  it('a real paper turn folds the page, lands, and leaves no styles behind', async () => {
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
+    expect(counter()).toBe('Page 1 of 6');
+    const page1 = document.querySelector('[data-slot="i1"]') as HTMLElement;
+    const page2 = document.querySelector('[data-slot="i2"]') as HTMLElement;
+    expect(page2.dataset.visible).toBe('false'); // mounted early (decoded, measured), not shown
+    press('ArrowRight');
+    expect(page2.dataset.visible).toBe('true'); // revealed under the leaf
+    await waitFor(() => expect(page1.style.clipPath).toMatch(/^polygon\(/));
+    expect(screen.getByTestId('paper-back')).toBeInTheDocument();
+    await waitFor(() => expect(counter()).toBe('Page 2 of 6'), { timeout: 3000 });
+    expect(page1.style.clipPath).toBe('');
+    expect(page1.dataset.visible).toBe('false');
+    expect(screen.queryByTestId('paper-back')).toBeNull();
+  });
+
+  it('nothing drawn yet: an honest empty state', () => {
+    render(<ImmersiveReader doc={makeSampleDoc((d) => d.pages.forEach((p) => (p.render = { status: 'none', history: [] })))} urlFor={fakeUrlFor} intro onExit={() => undefined} />);
+    expect(screen.getByText('Nothing to read yet')).toBeInTheDocument();
+  });
+});

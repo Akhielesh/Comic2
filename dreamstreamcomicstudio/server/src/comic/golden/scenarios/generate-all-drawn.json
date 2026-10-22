@@ -8,7 +8,7 @@
       "routeIntent": "nothing_to_draw",
       "expectTools": ["render_pages"],
       "director": [{ "toolCalls": [{ "name": "render_pages", "args": { "pages": [1] } }] }, { "text": "" }],
-      "expect": { "replyIncludes": "Everything is already drawn and up to date", "outcome": "nothing", "newImageCalls": 0, "newSpendUsd": 0, "cards": ["breakdown"], "nextSteps": ["Read it", "Make the cover", "Add a page", "New take of page 1"] }
+      "expect": { "replyIncludes": "The page is already drawn and up to date — nothing was spent. The cover isn’t drawn yet.", "outcome": "nothing", "newImageCalls": 0, "newSpendUsd": 0, "cards": ["breakdown"], "nextSteps": ["Read it", "Make the cover", "Add a page", "New take of page 1"] }
     },
     {
       "say": "draw page 1 again, a different take",

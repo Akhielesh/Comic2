@@ -66,6 +66,13 @@ const AUTOMATED_BROWSERS: { name: string; pattern: RegExp }[] = [
 /** Search engines keep indexing the real site. */
 const SEARCH_ENGINES = /Googlebot|Google-InspectionTool|Bingbot|BingPreview|DuckDuckBot|YandexBot|Baiduspider|Applebot(?!-Extended)|Slurp|LinkedInBot|Twitterbot|facebookexternalhit|Slackbot|Discordbot|WhatsApp|TelegramBot/i;
 
+/**
+ * Link-preview fetchers (chat apps, social networks, unfurlers) that render a shared comic's
+ * card — they read only the public preview head, never act. The AI list above still runs first,
+ * so assistants (ChatGPT-User, Claude-User, …) stay gated per the owner's policy.
+ */
+export const LINK_PREVIEW = /Pinterestbot|redditbot|Mastodon\/|Bluesky|Cardyb|SkypeUriPreview|Iframely|Embedly|Viber|Line\/|LinkedInBot|Snap URL Preview|vkShare|Google-PageRenderer|Google-Read-Aloud|Yahoo! Slurp|MicrosoftPreview|Applebot\b(?!-Extended)|Facebot/i;
+
 export type GateScope = "api" | "page";
 
 export function detectAgent(request: Request, scope: GateScope): AgentMatch | null {
@@ -77,7 +84,7 @@ export function detectAgent(request: Request, scope: GateScope): AgentMatch | nu
   const cf = (request as Request & { cf?: { verifiedBotCategory?: string } }).cf;
   const category = cf?.verifiedBotCategory ?? "";
   if (/AI (Crawler|Assistant|Search)/i.test(category)) return { name: `Verified bot: ${category}`, reason: "cloudflare verified bot category", kind: "ai" };
-  if (scope === "api" || SEARCH_ENGINES.test(ua)) return null;
+  if (scope === "api" || SEARCH_ENGINES.test(ua) || LINK_PREVIEW.test(ua)) return null;
   for (const a of AUTOMATED_BROWSERS) if (a.pattern.test(ua)) return { name: a.name, reason: "user-agent", kind: "automation" };
   return null;
 }

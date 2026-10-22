@@ -62,17 +62,28 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
     onCancel();
   };
 
+  // Stay inside the page box (it clips): at least 140 px wide, shifted left near the right edge,
+  // and the hint goes above the field near the bottom.
+  const widthFrac = Math.min(1, Math.max(plan.w / 1000, 0.16, pageWidthPx > 0 ? 140 / pageWidthPx : 0.16));
+  const leftFrac = Math.max(0, Math.min(plan.x / 1000, 1 - widthFrac));
+  const topFrac = Math.max(0, Math.min(plan.y / H, 0.9));
+  const hintAbove = topFrac > 0.75;
+  const hint = (
+    <p className={`${hintAbove ? 'mb-1' : 'mt-1'} rounded-md bg-black/70 px-1.5 py-0.5 text-center text-[10.5px] font-medium text-white`}>
+      Enter to save · Shift+Enter new line · Esc to cancel
+    </p>
+  );
   return (
     <div
       className="absolute z-[8]"
       style={{
-        left: `${(plan.x / 1000) * 100}%`,
-        top: `${(plan.y / H) * 100}%`,
-        width: `${Math.max(plan.w / 1000, 0.16) * 100}%`,
-        minWidth: 140
+        left: `${leftFrac * 100}%`,
+        ...(hintAbove ? { bottom: `${Math.max(0, (1 - (plan.y + plan.h) / H) * 100)}%` } : { top: `${topFrac * 100}%` }),
+        width: `${widthFrac * 100}%`
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
+      {hintAbove && hint}
       <label className="sr-only" htmlFor={`bte-${plan.lineId}`}>
         Balloon text
       </label>
@@ -109,9 +120,7 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
           background: fill && fill.opacity >= 0.6 ? fill.color : '#ffffff'
         }}
       />
-      <p className="mt-1 rounded-md bg-black/70 px-1.5 py-0.5 text-center text-[10.5px] font-medium text-white">
-        Enter to save · Shift+Enter new line · Esc to cancel
-      </p>
+      {!hintAbove && hint}
     </div>
   );
 };

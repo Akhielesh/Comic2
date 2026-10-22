@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { balloonWidthForText, estimateBalloonHeight, wrapBalanced, wrapText } from '../../components/comicstudio/board/balloonGeometry';
 import {
   estimateTextHeight,
   estimateWidthForText,
@@ -24,6 +23,73 @@ const withoutSegmenter = <T>(fn: () => T): T => {
 afterEach(() => {
   (Intl as unknown as { Segmenter?: unknown }).Segmenter = realSegmenter;
 });
+
+// ── Frozen pre-v5 reference (components/comicstudio/board/balloonGeometry.ts at commit 24a6070) ──
+// Copied verbatim so the golden comparisons stay meaningful after the board file becomes a thin
+// re-export of this module (wave 2): comparing a function with itself would prove nothing.
+const LEGACY = { charW: 0.0105, padW: 0.03, padH: 0.026, lineH: 0.022 };
+const legacyClean = (value: unknown): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
+const legacyRound4 = (n: number) => Math.round(n * 10000) / 10000;
+const balloonWidthForText = (text: string): number => {
+  const len = legacyClean(text).length;
+  const t = Math.min(1, Math.max(0, (len - 12) / (110 - 12)));
+  return legacyRound4(0.16 + t * (0.34 - 0.16));
+};
+const estimateBalloonHeight = (text: string, w: number, pageAspect = 2 / 3): number => {
+  const perLine = Math.max(6, Math.floor((w - LEGACY.padW) / LEGACY.charW));
+  let lines = 1;
+  let current = 0;
+  for (const word of legacyClean(text).split(' ')) {
+    if (!word) continue;
+    const len = word.length;
+    if (current === 0) current = Math.min(len, perLine);
+    else if (current + 1 + len <= perLine) current += 1 + len;
+    else {
+      lines += 1 + Math.floor(Math.max(0, len - 1) / perLine);
+      current = len % perLine || perLine;
+    }
+  }
+  return legacyRound4((lines * LEGACY.lineH + LEGACY.padH) * pageAspect);
+};
+const wrapText = (text: string, maxWidth: number, measure: (s: string) => number): string[] => {
+  const words = legacyClean(text).split(' ').filter(Boolean);
+  if (!words.length) return [];
+  const lines: string[] = [];
+  let current = '';
+  const pushLongWord = (word: string) => {
+    let chunk = '';
+    for (const ch of word) {
+      if (chunk && measure(chunk + ch) > maxWidth) {
+        lines.push(chunk);
+        chunk = ch;
+      } else chunk += ch;
+    }
+    return chunk;
+  };
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (measure(candidate) <= maxWidth) {
+      current = candidate;
+      continue;
+    }
+    if (current) lines.push(current);
+    current = measure(word) > maxWidth ? pushLongWord(word) : word;
+  }
+  if (current) lines.push(current);
+  return lines;
+};
+const wrapBalanced = (text: string, maxWidth: number, measure: (s: string) => number): string[] => {
+  const greedy = wrapText(text, maxWidth, measure);
+  if (greedy.length <= 1) return greedy;
+  let lo = maxWidth * 0.4;
+  let hi = maxWidth;
+  for (let i = 0; i < 10; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (wrapText(text, mid, measure).length <= greedy.length) hi = mid;
+    else lo = mid;
+  }
+  return wrapText(text, hi, measure);
+};
 
 /** One unit per grapheme cluster (a stand-in for canvas measureText). */
 const perGrapheme = (lang: string, unit = 10) => (s: string) => graphemes(s, lang).length * unit;
@@ -182,6 +248,21 @@ describe('script-aware wrapping', () => {
     // Even an emergency break inside a too-long unit never starts a line with ? » or a no-break space.
     for (const l of wrapLines(text, 'fr', 30, (s) => s.length * 7).slice(1)) expect(l).not.toMatch(new RegExp(`^[?!»${NBSP}${NNBSP}]`));
   });
+  it('kinsoku never lets a line overrun its width by more than one glyph (oidashi; runs of marks still wrap)', () => {
+    const m = (s: string) => graphemes(s, 'en').length * 10;
+    for (const text of ['AAAAAAAAAAAH!!!!!!!!!!!!!!!!!!!!', '!!!!!!!!!!!!!!!!!!!!!!!!', 'NOOOOOOOOOOO...........']) {
+      for (const lines of [wrapLines(text, 'en', 50, m), wrapBalancedLines(text, 'en', 50, m)]) {
+        expect(lines.join('')).toBe(text);
+        for (const l of lines) expect(m(l)).toBeLessThanOrEqual(60);
+      }
+    }
+    // A closing mark pulls the grapheme before it down instead of starting a line alone.
+    expect(wrapLines('HELLO!', 'en', 50, m)).toEqual(['HELL', 'O!']);
+    const ja = '待って。。。。。。。。。。。。';
+    const lines = wrapLines(ja, 'ja', 40, perGrapheme('ja'));
+    expect(lines.join('')).toBe(ja);
+    for (const l of lines) expect(perGrapheme('ja')(l)).toBeLessThanOrEqual(50);
+  });
   it('Arabic / Urdu: units are in logical order; wrapping is direction-agnostic', () => {
     expect(wrapUnits('مرحبا بك يا صديقي', 'ar').map((u) => u.text)).toEqual(['مرحبا', 'بك', 'يا', 'صديقي']);
     expect(wrapLines('یہ میرا دوست ہے', 'ur', 80, (s) => s.length * 10)).toEqual(['یہ میرا', 'دوست ہے']);
@@ -215,6 +296,17 @@ describe('fitBalloonText', () => {
     expect(r.w).toBeLessThanOrEqual(0.42);
     expect(r.overflow).toBe(false);
     expect(r.heightPx).toBeLessThanOrEqual((0.45 - 0.33) * 1050);
+  });
+  it('(b2) rtl-anchored captions grow leftwards within the panel, keeping their right edge', () => {
+    const rtl = { ...tight, kind: 'caption' as const, balloon: { x: 0.45, y: 0.33, w: 0.16 }, growLeft: true };
+    const r = fitBalloonText(rtl);
+    expect(r.grew).toBe(true);
+    expect(r.w).toBeGreaterThan(0.16);
+    expect(r.w).toBeLessThanOrEqual(Math.min(0.42, 0.45 + 0.16 - 0.05) + 1e-9);
+    // Leftward room (0.56) exceeds the rightward room the panel leaves (0.2), so growth is not capped at 0.2.
+    const ltr = fitBalloonText({ ...rtl, growLeft: false });
+    expect(r.w).toBeGreaterThanOrEqual(ltr.w);
+    expect(ltr.w).toBeLessThanOrEqual(0.2 + 1e-9);
   });
   it('(c) a pinned balloon does not grow; the font shrinks instead', () => {
     const r = fitBalloonText({ ...tight, balloon: { ...tight.balloon, y: 0.38, pinned: true }, text: long.slice(0, 60) });

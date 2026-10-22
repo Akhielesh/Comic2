@@ -564,7 +564,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
                 'absolute select-none rounded-[30%] focus:outline-none',
                 addKind ? 'pointer-events-none' : 'pointer-events-auto',
                 p.locked ? 'cursor-not-allowed' : 'cursor-move',
-                sel && 'outline-dashed outline-2 outline-offset-2 outline-[#D97757]',
+                // A selected balloon owns its touches (drag at once); unselected ones let the page pan/scroll.
+                sel && 'touch-none outline-dashed outline-2 outline-offset-2 outline-[#D97757]',
                 'focus-visible:outline-dashed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D97757]',
                 lifted === id && 'scale-[1.04] shadow-[0_10px_30px_rgba(0,0,0,0.35)] motion-reduce:scale-100'
               )}

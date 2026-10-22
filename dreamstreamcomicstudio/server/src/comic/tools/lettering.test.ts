@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyRender, type ComicDoc } from '../../../../shared/comic/doc.js';
+import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { estimateMeasure, letteringSizer } from '../../../../shared/comic/lettering/layout.js';
 import { safeAreaBox } from '../../../../shared/comic/lettering/place.js';
 import { newSession, opsOf, plannedDoc, testContext, type TestContext } from '../orchestrator.fakes.js';
@@ -85,6 +85,21 @@ describe('set_lettering_style', () => {
     expect(ctx.session.doc.letterStyle?.kinds?.sfx).toBeUndefined();
   });
 
+  it('counts only balloons that really changed; a more specific override is called out', async () => {
+    const { ctx, call } = setup((d) => {
+      d.letterStyle = { presetId: 'classic', kinds: { speech: { textColor: '#1d3557' } } };
+      d.pages[0].panels[0].lines = [{ id: 'cap_x', kind: 'caption', text: 'Meanwhile…' }];
+    });
+    const res = await call('set_lettering_style', { style: { text_color: 'red' } });
+    const speech = ctx.session.doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).filter((l) => l.kind === 'speech' && l.text.trim()).length;
+    const all = ctx.session.doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).filter((l) => l.text.trim()).length;
+    expect(all - speech).toBe(1);
+    expect(res).toMatch(/1 balloon restyled/);
+    expect(res).toMatch(new RegExp(`${speech} balloons? keeps? a more specific setting`));
+    const again = await call('set_lettering_style', { style: { text_color: 'red' } });
+    expect(again).toMatch(/0 balloons restyled/);
+  });
+
   it('honest errors: unknown font / speaker / preset; a font without the comic’s script is called out', async () => {
     const { call } = setup((d) => (d.format = { ...d.format, language: 'te' }));
     expect(await call('set_lettering_style', { style: { font: 'wingdings' } })).toMatch(/^Error: I don't have a font called "wingdings". Choose one of: Comic Neue/);
@@ -134,6 +149,9 @@ describe('restyle_balloons', () => {
     const { ctx, call } = setup((d) => (d.pages[0].panels[1].lines[0].style = { textColor: '#000000' }));
     expect(await call('restyle_balloons', { target: { page: 1 }, reset: true })).toMatch(/back to the comic's lettering/);
     expect(ctx.session.doc.pages[0].panels[1].lines[0].style).toBeUndefined();
+    ctx.session.commit([{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { textColor: '#000000', italic: true } }], { origin: 'director', label: 't' });
+    await call('restyle_balloons', { target: { page: 1 }, reset: true, style: { shape: 'burst' } });
+    expect(ctx.session.doc.pages[0].panels[1].lines[0].style).toEqual({ shape: 'burst' });
   });
 });
 
@@ -177,6 +195,30 @@ describe('arrange_balloons', () => {
     expect(patch.y + s.bounds.y).toBeGreaterThanOrEqual(safe.y - 1e-4);
   });
 
+  it('moving several balloons to one spot stacks them (outlines never overlap), inside the safe area', async () => {
+    for (const position of ['bottom', 'center', 'top-left']) {
+      const { ctx, call } = setup(richDoc);
+      expect(await call('arrange_balloons', { page: 1, action: 'move', target: { panel: 3 }, position })).toMatch(/^Moved 2 balloons/);
+      const doc = ctx.session.doc;
+      const page = doc.pages[0];
+      const sizer = letteringSizer(doc, page, 2 / 3, estimateMeasure);
+      const safe = safeAreaBox(0.03, 2 / 3);
+      const outlines = page.panels[2].lines.map((line) => {
+        const b = page.balloons.find((x) => x.lineId === line.id)!;
+        const s = sizer(line, b.w);
+        return { x: b.x + s.bounds.x, y: b.y + s.bounds.y, w: s.bounds.w, h: s.bounds.h };
+      });
+      const [a, b] = outlines;
+      const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+      expect(overlapX <= 0 || overlapY <= 0, position).toBe(true);
+      for (const o of outlines) {
+        expect(o.y).toBeGreaterThanOrEqual(safe.y - 1e-4);
+        expect(o.y + o.h).toBeLessThanOrEqual(safe.y + safe.h + 1e-4);
+      }
+    }
+  });
+
   it('nudge clamps to the page; resize / front / lock / link behave; errors are actionable', async () => {
     const { ctx, call } = setup(richDoc);
     expect(await call('arrange_balloons', { page: 1, action: 'nudge', target: { line_ids: ['sp1'] } })).toMatch(/^Error: nudge needs dx/);
@@ -189,9 +231,12 @@ describe('arrange_balloons', () => {
     expect(ctx.session.doc.pages[0].balloons.find((b) => b.lineId === 'sp2')).toMatchObject({ locked: true, pinned: true });
     expect(await call('arrange_balloons', { page: 1, action: 'link', target: { speaker: 'maya' } })).toMatch(/must be in the same panel/);
     expect(await call('arrange_balloons', { page: 1, action: 'link', target: { panel: 3 } })).toMatch(/^Linked 2 balloons in panel 3/);
-    expect(ctx.session.doc.pages[0].balloons.find((b) => b.lineId === 'sp1')!.linkTo).toBe('sp2');
-    expect(await call('arrange_balloons', { page: 1, action: 'unlink', target: { panel: 3 } })).toMatch(/^Unlinked 1 balloon/);
+    // Board convention (styleOps.linkOps): the later balloon links to the previous one.
+    expect(ctx.session.doc.pages[0].balloons.find((b) => b.lineId === 'sp2')!.linkTo).toBe('sp1');
     expect(ctx.session.doc.pages[0].balloons.find((b) => b.lineId === 'sp1')!.linkTo).toBeUndefined();
+    // Unlinking either end of a link removes it.
+    expect(await call('arrange_balloons', { page: 1, action: 'unlink', target: { line_ids: ['sp1'] } })).toMatch(/^Unlinked 1 balloon/);
+    expect(ctx.session.doc.pages[0].balloons.find((b) => b.lineId === 'sp2')!.linkTo).toBeUndefined();
     expect(await call('arrange_balloons', { page: 9, action: 'move' })).toMatch(/^Error: No page 9 — the comic has 3 pages/);
     expect(await call('arrange_balloons', { page: 1, action: 'move', position: 'top' })).toMatch(/^Error: Which balloon on page 1\?/);
     noSpend(ctx);
@@ -208,13 +253,30 @@ describe('arrange_balloons', () => {
     expect(missing).toMatch(/Arjun isn't in panel 3 \(.*\)|Arjun isn't in panel 3 on this page/);
   });
 
-  it('recheck asks the vision path explicitly (only when requested)', async () => {
-    const { call } = setup((d) => {
+  it('linking never creates a loop with an older link (contract: no cycles)', async () => {
+    const { ctx, call } = setup((d) => {
       richDoc(d);
-      d.pages[0].render = emptyRender();
+      d.pages[0].balloons = [
+        { lineId: 'sp1', x: 0.6, y: 0.6, w: 0.2, pinned: true, linkTo: 'sp2' },
+        { lineId: 'sp2', x: 0.6, y: 0.75, w: 0.2, pinned: true }
+      ];
     });
+    expect(await call('arrange_balloons', { page: 1, action: 'link', target: { panel: 3 } })).toMatch(/^Linked 2 balloons/);
+    const page = ctx.session.doc.pages[0];
+    expect(page.balloons.find((b) => b.lineId === 'sp2')!.linkTo).toBe('sp1');
+    expect(page.balloons.find((b) => b.lineId === 'sp1')!.linkTo).toBeUndefined();
+    noSpend(ctx);
+  });
+
+  it('a "re-check" request never starts a paid vision call from the tool (free layout + honest note)', async () => {
+    const { ctx, call, tools } = setup(richDoc);
+    const arrange = tools.find((t) => t.spec.function.name === 'arrange_balloons')!;
+    expect(JSON.stringify(arrange.spec.function.parameters)).not.toMatch(/recheck/);
     const res = await call('arrange_balloons', { page: 1, action: 'auto_layout', recheck: true });
-    expect(res).toMatch(/vision model/);
+    expect(res).toMatch(/^Re-lettered page 1/);
+    expect(res).toMatch(/stored analysis \(free\); a fresh AI re-read of the artwork is a separate paid step/);
+    noSpend(ctx);
+    expect(opsOf(ctx.events).map((o) => o.op)).toEqual(['balloons']); // the layout only: no render/QC writes
   });
 });
 

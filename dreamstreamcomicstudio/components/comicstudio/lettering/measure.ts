@@ -11,22 +11,9 @@
 import { estimateMeasure, type Measure } from '../../../shared/comic/lettering/layout';
 import { fontByFamily } from '../../../shared/comic/lettering/fonts';
 import { isFontReady } from './fontLoader';
+import { parseFont } from './svgMarkup';
 
-const FONT_RE = /^(italic\s+)?(?:(\d{3})\s+)?([\d.]+)px\s+"([^"]+)"/;
-
-export interface ParsedFont {
-  italic: boolean;
-  weight: number;
-  px: number;
-  family: string;
-}
-
-/** Parse a lettering font shorthand ("italic 700 17px "DSL Comic Neue", …"). */
-export const parseFont = (font: string): ParsedFont | null => {
-  const m = FONT_RE.exec((font || '').trim());
-  if (!m) return null;
-  return { italic: !!m[1], weight: m[2] ? Number(m[2]) : 400, px: Number(m[3]), family: m[4] };
-};
+export { parseFont, type ParsedFont } from './svgMarkup';
 
 let sharedCtx: CanvasRenderingContext2D | null | undefined;
 const canvasContext = (): CanvasRenderingContext2D | null => {

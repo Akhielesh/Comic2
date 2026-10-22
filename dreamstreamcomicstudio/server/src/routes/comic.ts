@@ -145,9 +145,18 @@ const httpError = (res: Response, err: unknown, next: NextFunction) => {
 };
 
 const handle =
-  (fn: (req: Request, res: Response) => Promise<unknown>) =>
+  (fn: (req: Request, res: Response) => Promise<unknown>, onRefusal?: (req: Request, err: StudioError) => void) =>
   (req: Request, res: Response, next: NextFunction) => {
-    fn(req, res).catch((err) => httpError(res, err, next));
+    fn(req, res).catch((err) => {
+      if (onRefusal && err instanceof StudioError) {
+        try {
+          onRefusal(req, err);
+        } catch {
+          /* logging never changes the answer */
+        }
+      }
+      httpError(res, err, next);
+    });
   };
 
 const requireUser = (req: Request): string => {
@@ -194,6 +203,21 @@ const logRefusal = (req: Request, stage: RefusalStage, fields: RefusalLog) => {
     projectId: loggableId(req.params?.id),
     userId: req.user?.id || null,
     stage,
+    ...fields
+  });
+};
+
+/**
+ * One structured line per refused non-stream studio request (create, open, sign, cancel):
+ * the route PATTERN (never the raw URL), ids and codes only.
+ */
+const logRequestRefused = (req: Request, fields: { code: string; status?: number; [key: string]: unknown }) => {
+  logger.info('comic_request_refused', {
+    requestId: req.requestId,
+    method: req.method,
+    route: typeof req.route?.path === 'string' ? req.route.path : undefined,
+    projectId: req.params?.id === undefined ? undefined : loggableId(req.params.id),
+    userId: req.user?.id || null,
     ...fields
   });
 };
@@ -504,7 +528,8 @@ export const restrictedRefusal = (request: StreamRequest): string | null => {
   if (request.kind === 'message') return hasLegacyImageUpload(request) ? RESTRICTED_UPLOAD_MESSAGE : null;
   const action = request.action;
   if (isSpendAction(action) || action.type === 'approve_gate') return RESTRICTED_SPEND_MESSAGE;
-  if (action.type === 'publish' || action.type === 'update_publication') return RESTRICTED_PUBLISH_MESSAGE;
+  // regenerate_link re-publishes under a new slug (POST /publication/regenerate is refused too).
+  if (action.type === 'publish' || action.type === 'update_publication' || action.type === 'regenerate_link') return RESTRICTED_PUBLISH_MESSAGE;
   return null;
 };
 
@@ -683,7 +708,30 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
   const store = lazy(() => deps.store || createSupabaseDocStore());
   const assets = lazy(() => deps.assets || createSupabaseAssetStore());
   const heartbeatMs = deps.heartbeatMs ?? HEARTBEAT_MS;
-  const requireActive = deps.requireActive ?? requireActiveUser();
+  const moderationGate = deps.requireActive ?? requireActiveUser();
+  /**
+   * The moderation gate, plus one structured line when it answers the request itself
+   * (suspended → 403) so the refusal leaves a trace like every other one.
+   */
+  const requireActive: RequestHandler = (req, res, next) => {
+    let passed = false;
+    const streamRoute = req.params?.id !== undefined;
+    res.once('finish', () => {
+      if (passed || res.statusCode < 400) return;
+      const fields = { code: res.statusCode === 403 ? 'FORBIDDEN' : 'MODERATION', status: res.statusCode, reason: 'moderation' };
+      if (streamRoute) logRefusal(req, 'pre_stream', { ...fields, ...bodyShape(req.body) });
+      else logRequestRefused(req, fields);
+    });
+    moderationGate(req, res, (err?: unknown) => {
+      passed = true;
+      next(err as Parameters<NextFunction>[0]);
+    });
+  };
+  /** Owner-route handler: a StudioError refusal (401/400/404/…) leaves one structured log line. */
+  const owned = (fn: (req: Request, res: Response) => Promise<unknown>) =>
+    handle(fn, (req, err) => {
+      if (err.code !== 'CANCELLED') logRequestRefused(req, { code: err.code, status: err.status });
+    });
   const safety: RouteSafetyDeps = {
     cooldownFor: deps.safety?.cooldownFor ?? cooldownFor,
     screenTurnInput: deps.safety?.screenTurnInput ?? screenTurnInput,
@@ -719,7 +767,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
   router.post(
     '/projects',
     requireActive,
-    handle(async (req, res) => {
+    owned(async (req, res) => {
       const userId = requireUser(req);
       const body = isObject(req.body) ? req.body : {};
       const projectId = randomUUID();
@@ -752,7 +800,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
 
   router.get(
     '/projects/:id',
-    handle(async (req, res) => {
+    owned(async (req, res) => {
       const session = await sessionFor(req);
       const { byok } = keysFor(req);
       const [caps, urls] = await Promise.all([capsFor(req, byok), signDisplay(session.doc)]);
@@ -763,7 +811,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
 
   router.post(
     '/projects/:id/cancel',
-    handle(async (req, res) => {
+    owned(async (req, res) => {
       const session = await sessionFor(req);
       session.abort.abort();
       res.json({ ok: true });
@@ -772,14 +820,14 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
 
   router.post(
     '/projects/:id/urls',
-    handle(async (req, res) => {
+    owned(async (req, res) => {
       const session = await sessionFor(req);
       const raw = isObject(req.body) && Array.isArray(req.body.paths) ? req.body.paths : null;
       if (!raw) throw new StudioError('BAD_REQUEST', 'Send the paths to sign.', { status: 400 });
       // Allow-list: every path the doc references (history, archive and trash included), minus
       // anything with a blocked verdict. Foreign paths are silently absent from the answer.
       const allowed = new Set(servablePaths(session.doc, collectAssetPaths(session.doc)));
-      const paths = [...new Set(raw.filter((p): p is string => typeof p === 'string' && allowed.has(p)))].slice(0, MAX_URL_PATHS);
+      const paths = [...new Set(raw.slice(0, MAX_URL_PATHS * 4).filter((p): p is string => typeof p === 'string' && allowed.has(p)))].slice(0, MAX_URL_PATHS);
       res.set('Cache-Control', 'private, no-store');
       res.json({ urls: await signAssetPaths(assets(), paths, { projectId: session.projectId, via: 'urls' }) });
     })
@@ -984,14 +1032,16 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     if (ops.length) session.commit(ops);
 
     // Free, read-only answers ("show me the pages", "what's left?") — no model call, $0.
-    if (!attachments.length && screened.decision === 'allow' && text) {
+    // Skipped when the screen left a note for the director (adapt / IP steering).
+    if (!attachments.length && screened.decision === 'allow' && !screened.note && text) {
       let routed: ReturnType<typeof routeIntent> = null;
       try {
         routed = intentFor(session.doc, text, { byok: spendIsByok(ctx.keys) });
       } catch (err) {
         logger.warn('comic_intent_failed', { requestId: req.requestId, projectId: ctx.projectId, message: (err as Error)?.message });
       }
-      if (routed) {
+      // A routed answer must say something (never an empty bubble); otherwise the director answers.
+      if (routed && typeof routed.reply === 'string' && routed.reply.trim()) {
         const at = Date.now();
         const user: Msg = { id: newId('msg'), role: 'user', text, at };
         const reply: Msg = {
@@ -1016,7 +1066,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       attachments,
       sourceSaved: prepared.ops.some((o) => o.op === 'source'),
       ...(prepared.focus ? { focus: prepared.focus } : {}),
-      ...(screened.decision === 'adapt' && screened.note ? { safetyNote: screened.note } : {})
+      ...(screened.note ? { safetyNote: screened.note } : {})
     });
   }
 
@@ -1097,7 +1147,9 @@ export function createComicPublicRouter(deps: ComicPublicRouterDeps = {}): Route
       }
       const languages = readerLanguages(payload.doc, payload.publication.languages);
       const lang = pickLang(req.query.lang, languages);
-      res.set('Cache-Control', 'private, max-age=60');
+      // no-store like the edge /s/:slug read: an unpublish or a made-private comic must stop
+      // being served at once (a browser cache would keep it for the max-age).
+      res.set('Cache-Control', 'no-store');
       res.json({
         doc: lang ? localizeDoc(payload.doc, lang) : payload.doc,
         urls: payload.urls,

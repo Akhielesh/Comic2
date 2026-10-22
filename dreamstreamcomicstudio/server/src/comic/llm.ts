@@ -97,10 +97,14 @@ export const isProviderRefusal = (err: unknown): boolean =>
 const REFUSAL_TEXT_RE =
   /^(?:i['’]?m sorry|i am sorry|sorry|i apologi[sz]e|unfortunately)?[,.!\s—-]*(?:but\s+)?(?:i|we)\s*(?:can(?:not|['’]t)|won['’]?t|will not|am not able to|['’]m not able to|am unable to|['’]m unable to|must decline to)\s+(?:help|assist|create|make|do|generate|write|draw|comply|provide|fulfil|fulfill|continue|produce)\b/i;
 
+/** What makes "I can't …" a refusal rather than a plan ("I can't draw yet — we need a plan first"). */
+const REFUSAL_OBJECT_RE =
+  /\b(?:help|assist)(?: you)? with (?:that|this|your request|such)\b|\b(?:help|assist|comply)\s*(?:[.!]|$)|\b(?:create|make|do|generate|write|draw|produce|provide|fulfil|fulfill|continue)\s+(?:that|this|such|content like|this kind of|that kind of|these|those)\b|\b(?:polic(?:y|ies)|guidelines?|inappropriate|not appropriate|harmful|explicit|sexual|graphic violence|unsafe|not allowed)\b/i;
+
 /** A short written reply that is a refusal ("I'm sorry, but I can't help with that."), not a comic answer. */
 export const looksLikeRefusal = (text: string): boolean => {
   const t = (text || '').replace(/\s+/g, ' ').trim();
-  return t.length > 0 && t.length <= 320 && REFUSAL_TEXT_RE.test(t);
+  return t.length > 0 && t.length <= 320 && REFUSAL_TEXT_RE.test(t) && REFUSAL_OBJECT_RE.test(t);
 };
 
 /**

@@ -51,6 +51,24 @@ describe('R2 findSpecHashVersion', () => {
     expect(findSpecHashVersion(doc, page1)).toBeNull();
   });
 
+  it('never brings back a version that came back in the wrong shape (4:5 asked, 1:1 drawn)', () => {
+    const doc = plannedDoc();
+    const spec = pageSpecHash(doc, doc.pages[0]);
+    withPage1(doc, {
+      ...emptyRender(),
+      status: 'failed',
+      history: [
+        { path: 'square.webp', source: 'generated', at: 2, specHash: spec, aspect: '4:5', w: 2048, h: 2048 },
+        { path: 'tall.webp', source: 'generated', at: 1, specHash: spec, aspect: '4:5', w: 1638, h: 2048 }
+      ]
+    });
+    expect(findSpecHashVersion(doc, page1)).toMatchObject({ path: 'tall.webp' });
+    doc.pages[0].render.history = doc.pages[0].render.history.slice(0, 1);
+    expect(findSpecHashVersion(doc, page1)).toBeNull();
+    doc.archive = [{ path: 'arch-square.webp', source: 'generated', at: 1, targetKey: 'page:pg_1', label: 'Page 1', archivedAt: 1, specHash: spec, aspect: '4:5', w: 1024, h: 1024 }];
+    expect(findSpecHashVersion(doc, page1)).toBeNull();
+  });
+
   it('style options have no spec hash: never reused by spec', () => {
     const doc = plannedDoc();
     doc.style.options = [{ id: 'so_1', name: 'A', spec: 'a', render: { ...emptyRender(), history: [{ path: 'x.webp', source: 'generated', at: 1, specHash: 'h' }] } }];

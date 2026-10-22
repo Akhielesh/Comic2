@@ -420,14 +420,25 @@ const TARGET_SCHEMA = {
 const currentScopeStyle = (doc: ComicDoc, scope: 'comic' | 'kind' | 'speaker', kind?: LineKind, speakerId?: string): LetterStyle =>
   resolveLetterStyle(doc, { id: '_scope', kind: scope === 'kind' && kind ? kind : 'speech', text: '', ...(scope === 'speaker' && speakerId ? { speakerId } : {}) });
 
-const overridesBlocking = (doc: ComicDoc, keys: string[], filter: (l: Line) => boolean): number => {
-  if (!keys.length) return 0;
-  let n = 0;
-  for (const h of allHits(doc, doc.pages)) {
-    if (!filter(h.line) || !h.line.style) continue;
-    if (keys.some((k) => k in (h.line.style as Record<string, unknown>))) n += 1;
-  }
-  return n;
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** Lines in scope whose resolved style really changed between two docs (what the user will see). */
+const restyledCount = (before: ComicDoc, after: ComicDoc, filter: (l: Line) => boolean): number => {
+  const old = new Map(allHits(before, before.pages).map((h) => [h.line.id, h.line]));
+  return allHits(after, after.pages).filter(
+    (h) => filter(h.line) && !sameValue(resolveLetterStyle(before, old.get(h.line.id) ?? h.line), resolveLetterStyle(after, h.line))
+  ).length;
+};
+
+/** Lines in scope where a more specific setting (kind / speaker / balloon) still wins over `patch`. */
+const overridesBlocking = (doc: ComicDoc, patch: LetterStylePatch | undefined, filter: (l: Line) => boolean): number => {
+  const entries = Object.entries(patch ?? {});
+  if (!entries.length) return 0;
+  return allHits(doc, doc.pages).filter((h) => {
+    if (!filter(h.line)) return false;
+    const resolved = resolveLetterStyle(doc, h.line) as unknown as Record<string, unknown>;
+    return entries.some(([k, v]) => !sameValue(resolved[k], v));
+  }).length;
 };
 
 const coverageNote = (doc: ComicDoc, font: FontId | undefined): string => {
@@ -506,8 +517,8 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
       const lines = allHits(after, after.pages);
       const inScope = (l: Line) => (scope === 'kind' ? l.kind === kind : scope === 'speaker' ? l.speakerId === speakerId : true);
       const affected = lines.filter((h) => inScope(h.line)).length;
-      const keys = Object.keys(stylePatch ?? {});
-      const blocked = overridesBlocking(after, keys, inScope);
+      const changed = restyledCount(doc, after, inScope);
+      const blocked = overridesBlocking(after, stylePatch, inScope);
       const who = scope === 'kind' ? `${KIND_WORD[kind!]} balloons` : scope === 'speaker' ? `${speakerName}'s balloons` : 'the comic';
       const parts: string[] = [];
       if (preset) {
@@ -517,8 +528,12 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
       }
       if (reset && !stylePatch) parts.push(`Reset the custom lettering for ${who}${preset ? '' : ` back to the ${LETTERING_PRESETS[(after.letterStyle ?? DEFAULT_LETTERING).presetId].name} preset`}.`);
       if (stylePatch) parts.push(`Set ${describePatch(stylePatch)} for ${who}.`);
-      parts.push(affected ? `${plural(affected, 'balloon')} restyled.` : 'No lettered lines yet — new ones will use it.');
-      if (blocked) parts.push(`${plural(blocked, 'balloon')} keep${blocked === 1 ? 's' : ''} its own per-balloon setting for that (use restyle_balloons with reset to clear it).`);
+      parts.push(affected ? `${plural(changed, 'balloon')} restyled.` : 'No lettered lines yet — new ones will use it.');
+      if (blocked) {
+        parts.push(
+          `${plural(blocked, 'balloon')} keep${blocked === 1 ? 's' : ''} a more specific setting for that (a per-kind, per-speaker or per-balloon override wins; restyle_balloons with reset clears a balloon's own).`
+        );
+      }
       const note = coverageNote(after, stylePatch?.font);
       return `${parts.join(' ')}${note} ${FREE_NOTE}`;
     }
@@ -534,7 +549,7 @@ function restyleBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
     'Restyle specific balloons (per-balloon overrides): pick them by page, panel, kind, speaker, words, line ids or the user\'s selection, then set style changes or reset them to the comic\'s lettering.',
     {
       type: 'object',
-      properties: { target: TARGET_SCHEMA, style: STYLE_SCHEMA, reset: { type: 'boolean', description: 'Remove these balloons\' own overrides' } },
+      properties: { target: TARGET_SCHEMA, style: STYLE_SCHEMA, reset: { type: 'boolean', description: 'Remove these balloons\' own overrides (with style: replace them by it)' } },
       required: ['target']
     },
     (args) => {
@@ -560,7 +575,8 @@ function restyleBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
       const ops: DocOp[] = [];
       for (const g of groups.values()) {
         for (let i = 0; i < g.ids.length; i += 80) {
-          ops.push(runSanitizer(doc, { op: 'line_style', pageId: g.pageId, lineIds: g.ids.slice(i, i + 80), patch: g.patch, mode: 'merge' }, ctx));
+          // reset + style = replace the balloons' own overrides with just this style.
+          ops.push(runSanitizer(doc, { op: 'line_style', pageId: g.pageId, lineIds: g.ids.slice(i, i + 80), patch: g.patch, mode: reset && g.patch ? 'replace' : 'merge' }, ctx));
         }
       }
       ctx.session.commit(ops, { origin: 'director', label: reset && !summary ? 'Reset balloon style' : 'Restyle balloons' });
@@ -612,7 +628,12 @@ const pageCtx = (doc: ComicDoc, page: Page): PageCtx => {
 };
 
 /** Where to put a balloon of `line` at `pos` inside its panel, keeping the outline inside the safe area. */
-const positionIn = (pc: PageCtx, hit: Hit, w: number, pos: Position): { x: number; y: number; h: number } => {
+const positionIn = (
+  pc: PageCtx,
+  hit: Hit,
+  w: number,
+  pos: Position
+): { x: number; y: number; h: number; bounds: { x: number; y: number; w: number; h: number }; yMin: number; yMax: number } => {
   const box = pc.boxes[hit.panelIndex] ?? { x: 0, y: 0, w: 1, h: 1 };
   const safe = safeAreaBox(pc.safeMargin, pc.aspect);
   const s = pc.sizer(hit.line, w);
@@ -632,8 +653,9 @@ const positionIn = (pc: PageCtx, hit: Hit, w: number, pos: Position): { x: numbe
   const y = yHi >= yLo ? yLo + (yHi - yLo) * vert : (yLo + yHi) / 2;
   // Never off the safe area even when the panel is smaller than the balloon.
   const sx = clamp(x, safe.x - s.bounds.x, safe.x + safe.w - (s.bounds.x + s.bounds.w));
-  const sy = clamp(y, safe.y - s.bounds.y, safe.y + safe.h - (s.bounds.y + s.bounds.h));
-  return { x: sx, y: sy, h: s.h };
+  const yMin = safe.y - s.bounds.y;
+  const yMax = Math.max(yMin, safe.y + safe.h - (s.bounds.y + s.bounds.h));
+  return { x: sx, y: clamp(y, yMin, yMax), h: s.h, bounds: s.bounds, yMin, yMax };
 };
 
 const balloonOp = (pc: PageCtx, lineId: string, patch: Partial<Balloon>): DocOp => {
@@ -652,7 +674,7 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
   return defineTool(
     'arrange_balloons',
     'free',
-    'Place balloons on a page: auto_layout (re-letter the page around faces, free), move to a panel position, nudge, resize, aim_tail at a speaker, front/back, lock/unlock, link/unlink consecutive balloons, fit_text. recheck:true with auto_layout re-reads the drawn page with the vision model first (a small AI cost).',
+    'Place balloons on a page: auto_layout (re-letter the page around faces, free, from the page\'s stored analysis), move to a panel position, nudge, resize, aim_tail at a speaker, front/back, lock/unlock, link/unlink consecutive balloons, fit_text.',
     {
       type: 'object',
       properties: {
@@ -664,12 +686,11 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         dy: { type: 'number', description: 'nudge: fraction of page height (+ down)' },
         width_scale: { type: 'number', description: 'resize: 0.5–2' },
         tail_to: { type: 'string', description: 'aim_tail: character name' },
-        include_pinned: { type: 'boolean', description: 'auto_layout: also move balloons the user placed (never locked ones)' },
-        recheck: { type: 'boolean' }
+        include_pinned: { type: 'boolean', description: 'auto_layout: also move balloons the user placed (never locked ones)' }
       },
       required: ['page', 'action']
     },
-    async (args) => {
+    (args) => {
       const doc = ctx.session.doc;
       requireOverlay(doc);
       const n = int(args.page);
@@ -704,17 +725,17 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
 
       switch (action) {
         case 'auto_layout': {
-          if (args.recheck === true) {
-            const { startAction } = await import('../jobs.js');
-            const started = await startAction(ctx, { type: 'relayout_balloons', pageId: page.id, useVision: true }, { confirmed: false, collectCard: (card) => turn?.cards.push(card) });
-            void ctx.track(started.done);
-            return `${started.outcome.message} (Re-checked page ${page.n} with the vision model first — a small AI cost.)`;
-          }
+          // Lettering tools are FREE by contract (lettering.md §8): never start a vision call from here, even
+          // when asked to "re-check" — that paid step is a gated spend action of its own (recheck_page).
+          const recheckNote =
+            args.recheck === true
+              ? ' I used the page\'s stored analysis (free); a fresh AI re-read of the artwork is a separate paid step that I don\'t start from here.'
+              : '';
           const lockedIds = new Set(page.balloons.filter((b) => b.locked).map((b) => b.lineId));
           const pinnedIds = new Set(page.balloons.filter((b) => b.pinned && !b.locked).map((b) => b.lineId));
           const targetIds = hits.map((h) => h.line.id).filter((id) => !lockedIds.has(id) && (args.include_pinned === true || !pinnedIds.has(id)));
           if (!targetIds.length) {
-            return `Every chosen balloon on page ${page.n} is ${lockedIds.size ? 'locked or ' : ''}placed by you (pinned), so I left them alone. Say "include the ones I moved" to re-letter those too.`;
+            return `Every chosen balloon on page ${page.n} is ${lockedIds.size ? 'locked or ' : ''}placed by you (pinned), so I left them alone. Say "include the ones I moved" to re-letter those too.${recheckNote}`;
           }
           const qc = page.render.qc;
           const res = placeBalloonsDetailed({
@@ -733,20 +754,25 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
             parts.push(`${plural(lines.length, 'balloon')} still had no clear spot (${lines.map((h) => `panel ${h.panelN} ${quote(h.line.text, 24)}`).join('; ')}) — shortening that text or moving it to another panel fixes it.`);
           }
           if (!qc?.panelBoxes?.length) parts.push('Panel edges are estimated from the layout (the page has no measured panels yet).');
-          return `${parts.join(' ')} ${FREE_NOTE}`;
+          return `${parts.join(' ')}${recheckNote} ${FREE_NOTE}`;
         }
         case 'move': {
           const pos = args.position !== undefined ? enumArg(args.position, POSITIONS, 'position') : undefined;
           if (!pos) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel). Use nudge with dx/dy for small shifts.`);
-          const stackY = new Map<number, number>();
+          // Several balloons sent to one spot stack in reading order (outline to outline, 0.01 apart):
+          // downwards from a top/middle spot, upwards from a bottom one — never on top of each other.
+          const stacks = new Map<number, { top: number; bottom: number }>();
           for (const h of hits) {
             const cur = pc.current.get(h.line.id);
             if (!cur) continue;
             const p = positionIn(pc, h, cur.w, pos);
             let y = p.y;
-            const prevBottom = stackY.get(h.panelIndex);
-            if (prevBottom !== undefined && pos.startsWith('top')) y = Math.max(y, prevBottom + 0.01);
-            stackY.set(h.panelIndex, y + p.h);
+            const prev = stacks.get(h.panelIndex);
+            if (prev) y = pos.startsWith('bottom') ? Math.min(y, prev.top - 0.01 - (p.bounds.y + p.bounds.h)) : Math.max(y, prev.bottom + 0.01 - p.bounds.y);
+            y = clamp(y, p.yMin, p.yMax);
+            const top = y + p.bounds.y;
+            const bottom = top + p.bounds.h;
+            stacks.set(h.panelIndex, prev ? { top: Math.min(prev.top, top), bottom: Math.max(prev.bottom, bottom) } : { top, bottom });
             ops.push(balloonOp(pc, h.line.id, { x: p.x, y, w: cur.w, pinned: true }));
           }
           commit();
@@ -847,16 +873,31 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
           if (hits.length < 2) throw toolArgError('link needs at least two balloons (e.g. target {page, panel, speaker}) — consecutive lines in one panel.');
           const panels = new Set(hits.map((h) => h.panelIndex));
           if (panels.size > 1) throw toolArgError(`Linked balloons must be in the same panel — these are in panels ${[...new Set(hits.map((h) => h.panelN))].join(', ')}.`);
-          for (let i = 0; i < hits.length - 1; i += 1) ops.push(balloonOp(pc, hits[i].line.id, { linkTo: hits[i + 1].line.id }));
+          // Same convention as the board (lettering/styleOps linkOps): each balloon links to the PREVIOUS one in
+          // reading order. One `balloons` op: unstored chain members get their complete current balloon, and
+          // any older link that would now close a loop is dropped (the contract forbids cycles).
+          const chain = hits.map((h) => h.line.id);
+          const next = page.balloons.map((b) => ({ ...b }));
+          for (const id of chain) {
+            const cur = pc.current.get(id);
+            if (!next.some((b) => b.lineId === id) && cur) next.push({ ...cur });
+          }
+          for (const b of next) {
+            const k = chain.indexOf(b.lineId);
+            if (k > 0) b.linkTo = chain[k - 1];
+          }
+          ops.push({ op: 'balloons', pageId: page.id, balloons: breakLinkCycles(next, new Set(chain.slice(1))) });
           commit();
           return `Linked ${plural(hits.length, 'balloon')} in panel ${hits[0].panelN} on page ${page.n} with connector necks, in reading order. ${FREE_NOTE}`;
         }
         case 'unlink': {
+          // A link touches a balloon from either end (it links to its previous line; the next one links to it).
           const ids = new Set(hits.map((h) => h.line.id));
-          const linked = page.balloons.filter((b) => ids.has(b.lineId) && b.linkTo);
+          const touches = (b: Balloon) => !!b.linkTo && (ids.has(b.lineId) || ids.has(b.linkTo));
+          const linked = page.balloons.filter(touches);
           if (!linked.length) return `None of those balloons on page ${page.n} are linked — nothing changed.`;
           const balloons = page.balloons.map((b) => {
-            if (!ids.has(b.lineId) || !b.linkTo) return b;
+            if (!touches(b)) return b;
             const { linkTo: _drop, ...rest } = b;
             return rest;
           });
@@ -886,6 +927,26 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
       }
     }
   );
+}
+
+/** Drop the fewest links that close a loop, never one in `keep` while another member of the loop can go. */
+function breakLinkCycles(balloons: Balloon[], keep: ReadonlySet<string>): Balloon[] {
+  const byId = new Map(balloons.map((b) => [b.lineId, b]));
+  for (const start of balloons) {
+    const path: Balloon[] = [];
+    const seen = new Set<string>();
+    let cur: Balloon | undefined = start;
+    while (cur?.linkTo && !seen.has(cur.lineId)) {
+      seen.add(cur.lineId);
+      path.push(cur);
+      cur = byId.get(cur.linkTo);
+    }
+    if (!cur || !seen.has(cur.lineId)) continue;
+    const loop = path.slice(path.indexOf(cur));
+    const victim = loop.find((b) => !keep.has(b.lineId)) ?? loop[0];
+    delete victim.linkTo;
+  }
+  return balloons;
 }
 
 // ── Helpers for core tools (edit_panel_text style/position, P1-DIRECTOR / P2-SERVER) ──

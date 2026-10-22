@@ -1,26 +1,29 @@
-// Frozen publications (contract §12.7, sharing.md §4). Wave-0 stub by P0-B; owned in wave 1
-// by P1-PUBLISH, which replaces every function IN PLACE (same names, same signatures).
+// Frozen publications (contract §12.7, sharing.md §4). Owned by P1-PUBLISH.
 //
-// Stub behaviour: every publication operation throws StudioError NOT_AVAILABLE (501);
-// loadPublicByProjectId → null (the legacy /public/:id path serves nothing new).
-// newSlug/newAssetKey are REAL already (pure crypto; their shape is part of the contract).
+// Module map (all in this folder):
+//   ids.ts          newSlug / newAssetKey (CSPRNG base62, unbiased)
+//   snapshot.ts     the §9.3 allow-list snapshot, the publish plan, the ShareCard, fingerprints
+//   ogImage.ts      the 1200×630 preview card (sharp + Pango + vendored OFL fonts, $0)
+//   store.ts        comic_publications persistence (Supabase service role + memory fake)
+//   publication.ts  owner operations (publish/update/regenerate/unpublish), readiness, views
+//
+// Readers never reach this module for /c/<slug>: the edge (Pages Function + dreamstream-api
+// Worker) reads live rows through the anon RPCs, so a share link never wakes the container.
 
-import crypto from 'node:crypto';
 import type { AspectRatio, ComicDoc } from '../../../../shared/comic/doc.js';
-import {
-  ASSET_KEY_RE,
-  SLUG_LENGTH,
-  SLUG_RE,
-  type PublicComicPayload,
-  type PublicationOwnerView,
-  type PublicationSettingsPatch,
-  type PublicationStatus,
-  type PublishReadiness,
-  type PublishRequest,
-  type ShareCard
+import type {
+  PublicComicPayload,
+  PublicationOwnerView,
+  PublicationSettingsPatch,
+  PublicationStatus,
+  PublishReadiness,
+  PublishRequest,
+  ShareCard
 } from '../../../../shared/comic/publication.js';
-import { notAvailableError } from '../extensions.js';
 import type { StudioContext } from '../types.js';
+import { renderOgCard } from './ogImage.js';
+import * as ops from './publication.js';
+import { buildSnapshot } from './snapshot.js';
 
 // ── Rows and inputs ──────────────────────────────────────────────────────────
 
@@ -43,7 +46,7 @@ export interface PublicationRow {
   snapshot: ComicDoc | null;
   card: ShareCard | Record<string, never>;
   publishedRev: number;
-  /** PublishGateResult summary. */
+  /** PublishGateResult summary + `contentHash` (the "changes since publishing" fingerprint). */
   safety: Record<string, unknown>;
   viewsCount?: number;
   firstPublishedAt?: number | null;
@@ -70,6 +73,12 @@ export interface SnapshotPlan {
   defaultLang?: string;
   /** Live asset path → its opaque copy under pub/<assetKey>/ (variants included). */
   paths: Record<string, string>;
+  /** Snapshot `id` (the publication id — never the project id). */
+  publicationId?: string;
+  /** Snapshot createdAt/updatedAt (published_at, epoch ms). */
+  publishedAt?: number;
+  /** Snapshot `rev` (published_rev). */
+  rev?: number;
 }
 
 /** OG image input (sharing.md §6). */
@@ -92,80 +101,71 @@ export interface PublicationStore {
   stats(id: string, days: number): Promise<StatsRow[]>;
 }
 
-const PUBLISHING_UNAVAILABLE = "Publishing from the studio isn't available yet.";
-
 // ── Owner operations ─────────────────────────────────────────────────────────
 
-export async function getPublicationView(_ctx: StudioContext): Promise<PublicationOwnerView> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function getPublicationView(ctx: StudioContext): Promise<PublicationOwnerView> {
+  return ops.getPublicationView(ctx);
 }
 
-export async function getReadiness(_ctx: StudioContext, _doc: ComicDoc, _req?: PublishRequest): Promise<PublishReadiness> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: PublishRequest): Promise<PublishReadiness> {
+  return ops.getReadiness(ctx, doc, req);
 }
 
 /** Publish or update (runs under the session lock). */
-export async function publish(_ctx: StudioContext, _req: PublishRequest): Promise<PublicationOwnerView> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function publish(ctx: StudioContext, req: PublishRequest): Promise<PublicationOwnerView> {
+  return ops.publish(ctx, req);
 }
 
-export async function updatePublication(_ctx: StudioContext, _patch: PublicationSettingsPatch): Promise<PublicationOwnerView> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function updatePublication(ctx: StudioContext, patch: PublicationSettingsPatch): Promise<PublicationOwnerView> {
+  return ops.updatePublication(ctx, patch);
 }
 
-export async function regenerateLink(_ctx: StudioContext): Promise<PublicationOwnerView> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function regenerateLink(ctx: StudioContext): Promise<PublicationOwnerView> {
+  return ops.regenerateLink(ctx);
 }
 
 /** Re-publishing later mints a NEW slug. */
-export async function unpublish(_ctx: StudioContext): Promise<PublicationOwnerView> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function unpublish(ctx: StudioContext): Promise<PublicationOwnerView> {
+  return ops.unpublish(ctx);
 }
 
 // ── Public side ──────────────────────────────────────────────────────────────
 
 /** The §9.3 allow-list snapshot (exact key sets; no u/ paths, no project id). */
-export function buildPublicSnapshot(_doc: ComicDoc, _plan: SnapshotPlan): ComicDoc {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export function buildPublicSnapshot(doc: ComicDoc, plan: SnapshotPlan): ComicDoc {
+  return buildSnapshot(doc, plan);
 }
 
 /** Legacy /api/comic/public/:id: only a live + PUBLIC publication (never unlisted). */
-export async function loadPublicByProjectId(_projectId: string): Promise<PublicComicPayload | null> {
-  return null;
+export async function loadPublicByProjectId(projectId: string): Promise<PublicComicPayload | null> {
+  return ops.loadPublicByProjectId(projectId);
 }
 
 /** 1200×630 OG card (sharp + Pango, $0). */
-export async function renderOgImage(_input: OgInput): Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }> {
-  throw notAvailableError(PUBLISHING_UNAVAILABLE);
+export async function renderOgImage(input: OgInput): Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }> {
+  return renderOgCard(input);
 }
 
 // ── Identifiers (real) ───────────────────────────────────────────────────────
 
-const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+export { newAssetKey, newSlug } from './ids.js';
 
-/** Unbiased base62: bytes ≥ 248 (= 4 × 62) are rejected so every symbol is equally likely. */
-const randomBase62 = (length: number): string => {
-  let out = '';
-  while (out.length < length) {
-    for (const byte of crypto.randomBytes(length * 2)) {
-      if (byte >= 248) continue;
-      out += BASE62[byte % 62];
-      if (out.length === length) break;
-    }
-  }
-  return out;
-};
+// ── Extras for routes, actions, tools and tests ──────────────────────────────
 
-/** Public share slug: 17 × base62 ≈ 101 bits (matches SLUG_RE). */
-export function newSlug(): string {
-  const slug = randomBase62(SLUG_LENGTH);
-  if (!SLUG_RE.test(slug)) throw new Error('newSlug: shape mismatch');
-  return slug;
-}
-
-/** Storage key for pub/<key>/: 22 × base62 ≈ 131 bits (matches ASSET_KEY_RE). */
-export function newAssetKey(): string {
-  const key = randomBase62(22);
-  if (!ASSET_KEY_RE.test(key)) throw new Error('newAssetKey: shape mismatch');
-  return key;
-}
+export {
+  cardPatchOps,
+  configurePublication,
+  parsePublishRequest,
+  parseSettingsPatch,
+  payloadOf,
+  publicObjectUrl,
+  publishWithOutcome,
+  PublishError,
+  sweepOrphanPublications,
+  type PublicationDeps,
+  type PublishErrorReason,
+  type PublishOutcome
+} from './publication.js';
+export { contentFingerprint, planSnapshot, snapshotPaths } from './snapshot.js';
+export { escPango, ogHash, scriptsCovered } from './ogImage.js';
+export { createMemoryPublicationStore, createSupabasePublicationStore, type MemoryPublicationStore, type PublicationBackend } from './store.js';

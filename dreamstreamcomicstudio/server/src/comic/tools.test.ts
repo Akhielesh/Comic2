@@ -304,6 +304,18 @@ describe('settings & ask_user', () => {
     expect(ctx.session.doc.settings).toMatchObject({ quality: 'draft', confirm: 'always', budgetUsd: 2 });
   });
 
+  it('model lock: once the comic has an image, the director never changes the quality (model/resolution)', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, quality: 'pro' };
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 } };
+    setup(doc);
+    const out = await call('set_settings', { quality: 'standard' });
+    expect(out).toMatch(/^Error: Locked comic: its images are drawn on .+ would switch to .+ tap the quality chip/);
+    expect(ctx.session.doc.settings.quality).toBe('pro');
+    // Other tightening still works on a locked comic.
+    expect(await call('set_settings', { budgetUsd: 4 })).toContain('budget $4.00');
+  });
+
   it('ask_user adds an options card once per turn', async () => {
     expect(await call('ask_user', { question: 'Tone?', options: ['Funny'] })).toBe('Error: Give 2–5 distinct options.');
     const out = await call('ask_user', { question: 'Which tone?', options: [{ label: 'Funny' }, { label: 'Tense', description: 'Thriller pacing' }, 'Cozy', 'funny'] });

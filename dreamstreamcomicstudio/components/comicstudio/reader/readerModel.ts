@@ -6,6 +6,7 @@
 // page on the right.
 
 import type { AssetRef, ComicDoc, Page } from '../../../shared/comic/doc';
+import { canServeToOwner } from '../../../shared/comic/safety';
 
 export type ReaderMode = 'scroll' | 'page' | 'spread';
 
@@ -86,3 +87,52 @@ export const tapDelta = (fraction: number, rtl: boolean): -1 | 0 | 1 => {
 
 /** Sensible starting mode: webtoons scroll; everything else reads a page at a time. */
 export const defaultReaderMode = (doc: ComicDoc): ReaderMode => (doc.format.kind === 'webtoon' ? 'scroll' : 'page');
+
+/** Resolve a 1-based page number (0 = cover) to an item. An undrawn page falls back to the nearest
+ *  drawn one (earlier first), and says so via `exact: false` and the page number actually shown. */
+export const resolvePageN = (items: ReaderItem[], n: number): { index: number; exact: boolean; shownN: number } => {
+  if (!items.length) return { index: 0, exact: false, shownN: 0 };
+  const want = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+  if (want === 0) {
+    const cover = items.findIndex((i) => i.kind === 'cover');
+    return cover >= 0 ? { index: cover, exact: true, shownN: 0 } : { index: 0, exact: false, shownN: items[0].page?.n ?? 0 };
+  }
+  const exact = items.findIndex((i) => i.page?.n === want);
+  if (exact >= 0) return { index: exact, exact: true, shownN: want };
+  let best = -1;
+  let bestScore = Infinity;
+  items.forEach((item, idx) => {
+    if (!item.page) return;
+    const d = item.page.n - want;
+    // Prefer the page just before (you never skip story), then the one just after.
+    const score = d < 0 ? -d * 2 - 1 : d * 2;
+    if (score < bestScore) {
+      bestScore = score;
+      best = idx;
+    }
+  });
+  if (best < 0) return { index: 0, exact: false, shownN: 0 };
+  return { index: best, exact: false, shownN: items[best].page!.n };
+};
+
+/** The item index for a 1-based page number (0 = cover), nearest drawn page when it isn't drawn. */
+export const itemIndexForPageN = (items: ReaderItem[], n: number): number => resolvePageN(items, n).index;
+
+/** The chapter an item belongs to: the latest chapter start at or before it. */
+export const chapterOf = (items: ReaderItem[], index: number): { title: string; startIndex: number } | undefined => {
+  for (let i = Math.min(index, items.length - 1); i >= 0; i -= 1) {
+    const title = items[i]?.page?.chapterTitle;
+    if (typeof title === 'string' && title.trim()) return { title: title.trim(), startIndex: i };
+  }
+  return undefined;
+};
+
+/** Chapter starts in reading order (scrubber marks, End-card list). */
+export const chapterStarts = (items: ReaderItem[]): { index: number; title: string; n: number }[] =>
+  items.flatMap((item, index) => {
+    const title = item.page?.chapterTitle;
+    return typeof title === 'string' && title.trim() && item.page ? [{ index, title: title.trim(), n: item.page.n }] : [];
+  });
+
+/** A blocked image is never shown or fetched: the reader draws a neutral "withheld" tile instead. */
+export const isWithheld = (item: ReaderItem): boolean => !canServeToOwner(item.asset);

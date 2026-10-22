@@ -254,12 +254,12 @@ const memoFit = (measure: Measure, key: string, compute: () => FitResult): FitRe
 const layoutText = (
   setup: LineSetup,
   measure: Measure,
-  b: { x: number; y: number; w: number; pinned: boolean },
+  b: { x: number; y: number; w: number; pinned: boolean; growLeft?: boolean },
   panel: Box,
   H: number
 ): { w: number; h: number; fontSize: number; lines: string[]; overflow: boolean } => {
   const { style, lang, text, pad, lineHeight } = setup;
-  const key = [lang, setup.fontId, setup.weight, setup.italic ? 1 : 0, style.letterSpacing, r4(setup.baseSize), r4(lineHeight), r4(pad.x), r4(pad.y), setup.line.kind === 'sfx' ? 1 : 0, r4(b.x), r4(b.y), r4(b.w), b.pinned ? 1 : 0, r4(panel.x), r4(panel.y), r4(panel.w), r4(panel.h), r2(H), text].join('|');
+  const key = [lang, setup.fontId, setup.weight, setup.italic ? 1 : 0, style.letterSpacing, r4(setup.baseSize), r4(lineHeight), r4(pad.x), r4(pad.y), setup.line.kind === 'sfx' ? 1 : 0, r4(b.x), r4(b.y), r4(b.w), b.pinned ? 1 : 0, b.growLeft ? 1 : 0, r4(panel.x), r4(panel.y), r4(panel.w), r4(panel.h), r2(H), text].join('|');
   const fit = memoFit(measure, key, () => {
     if (setup.line.kind === 'sfx') {
       // Display lettering sized to the box: the longest word fits 94 % of the balloon width.
@@ -285,7 +285,8 @@ const layoutText = (
       measure: (s, px) => setup.measureAt(s, px),
       lineHeight,
       padX: pad.x / PLAN_W,
-      padY: pad.y / PLAN_W
+      padY: pad.y / PLAN_W,
+      ...(b.growLeft ? { growLeft: true } : {})
     });
   });
   return { w: fit.w * PLAN_W, h: fit.heightPx, fontSize: fit.fontPx, lines: fit.lines, overflow: fit.overflow };
@@ -444,8 +445,10 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     const setup = lineSetup(doc, line, m);
     const panelBox = boxes[panelIndex] ?? { x: 0, y: 0, w: 1, h: 1 };
     const pinned = !!(b.pinned || b.locked);
-    const t = layoutText(setup, m, { x: b.x, y: b.y, w: b.w, pinned }, panelBox, H);
-    let x = b.x * PLAN_W;
+    // Captions of rtl comics are anchored at their right (reading-start) edge: they grow leftwards.
+    const growLeft = rtl && line.kind === 'caption';
+    const t = layoutText(setup, m, { x: b.x, y: b.y, w: b.w, pinned, growLeft }, panelBox, H);
+    let x = growLeft ? (b.x + b.w) * PLAN_W - t.w : b.x * PLAN_W;
     let y = b.y * H;
     const w = t.w;
     const h = t.h;

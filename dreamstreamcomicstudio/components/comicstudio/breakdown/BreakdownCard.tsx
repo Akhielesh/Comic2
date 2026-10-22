@@ -39,7 +39,6 @@ import {
 } from 'lucide-react';
 import {
   findCharacter,
-  isPageStale,
   type Card,
   type Character,
   type ComicDoc,
@@ -58,7 +57,7 @@ import {
   type PageSummary
 } from '../../../shared/comic/plan';
 import { aspectMismatch, continuityHint } from '../../../shared/comic/book';
-import { effectiveRating } from '../../../shared/comic/safety';
+import { effectiveRating, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety';
 import {
   SHOT_LABEL,
   SIZE_LABEL,
@@ -184,9 +183,16 @@ const TIER_LABEL: Record<QualityTier, string> = { draft: 'Draft', standard: 'Sta
 
 // ── Avatars ──────────────────────────────────────────────────────────────────
 
-const CastAvatar: React.FC<{ character: Character; urlFor: BreakdownCardProps['studio']['urlFor'] }> = ({ character, urlFor }) => {
+/** Art the safety check holds (blocked, or above this comic's rating) is never shown as an image here. */
+const isHeld = (asset: { safety?: SafetyVerdict } | undefined, rating: ContentRating): boolean => {
+  const s = safetyStatusOf(asset?.safety, rating);
+  return s === 'blocked' || s === 'over_rating';
+};
+
+const CastAvatar: React.FC<{ character: Character; rating: ContentRating; urlFor: BreakdownCardProps['studio']['urlFor'] }> = ({ character, rating, urlFor }) => {
   const [failed, setFailed] = useState(false);
-  const src = character.sheet.status === 'ready' && character.sheet.asset && !failed ? urlFor(character.sheet.asset, { width: 48 }) : undefined;
+  const sheet = character.sheet.status === 'ready' ? character.sheet.asset : undefined;
+  const src = sheet && !failed && !isHeld(sheet, rating) ? urlFor(sheet, { width: 48 }) : undefined;
   if (src) {
     return (
       <img
@@ -336,11 +342,13 @@ const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<
             label={
               <span className="inline-flex items-center gap-1">
                 Next pages draw on {pricing.model}
-                {pricing.locked && <Lock className="h-3 w-3 text-[var(--ds-muted)]" aria-label="Model locked for this comic" />}
+                {pricing.locked && (
+                  <Lock className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" role="img" aria-label="Your chosen model for this comic" />
+                )}
               </span>
             }
             value={`≈${formatUsd(pricing.pageUsd)}/page`}
-            note={`${TIER_LABEL[pricing.tier] ?? pricing.tier} quality · cover ≈${formatUsd(pricing.coverUsd)} · prices from the model price list${pricing.byok ? ', no markup on your key' : ''}`}
+            note={`${pricing.locked ? 'Your pick for this comic' : `${TIER_LABEL[pricing.tier] ?? pricing.tier} quality`} · cover ≈${formatUsd(pricing.coverUsd)} · prices from the model price list${pricing.byok ? ', no markup on your key' : ''}`}
           />
         )}
       </div>
@@ -423,7 +431,8 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
     const out: Tile[] = [];
     if (showCover) {
       const c = book.cover;
-      const cost = tileCost({ status: c.status, spentUsd: c.spentUsd, quoteUsd: c.quoteUsd });
+      const rc = doc.cover.render.costUsd;
+      const cost = tileCost({ status: c.status, spentUsd: c.spentUsd, costUsd: typeof rc === 'number' ? rc : undefined, quoteUsd: c.quoteUsd });
       out.push({
         key: 'cover',
         kind: 'cover',
@@ -667,6 +676,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         inGate={inGate}
         open={detailsOpen}
         pro={pro}
+        rating={rating}
         urlFor={studio.urlFor}
         onToggle={() => setDetailsOpen((v) => !v)}
         pending={isPending(`page:${selected.page.id}`)}
@@ -711,7 +721,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
       const usd = book.cover.quoteUsd;
       primary = (
         <PrimaryButton size="sm" className="tap-target" busy={isPending('cover')} disabled={anyPending} onClick={() => void run('cover', { type: 'render_cover', quotedUsd: usd })}>
-          <Sparkles className="h-3.5 w-3.5" aria-hidden /> Make the cover · ≈{formatUsd(usd)}
+          <Sparkles className="h-3.5 w-3.5" aria-hidden /> {book.cover.status === 'stale' ? 'Redraw the cover' : book.cover.status === 'failed' ? 'Try the cover again' : 'Make the cover'} · ≈{formatUsd(usd)}
         </PrimaryButton>
       );
     } else if (allDrawn) {
@@ -723,13 +733,18 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
     }
   }
 
+  const noPanels = book.pages.filter((p) => !p.panels.length).map((p) => p.n);
   const note = inGate
     ? null
-    : drawing > 0
+    : quote.nothing && !allDrawn && drawing === 0 && noPanels.length
+      ? `${noPanels.length === 1 ? `Page ${noPanels[0]} has` : `Pages ${noPanels.join(', ')} have`} no panels yet — add panels (free) before ${noPanels.length === 1 ? 'it' : 'they'} can be drawn.`
+      : drawing > 0
       ? `Drawing ${plural(drawing, 'page')} — they appear here as they finish.`
       : allDrawn
         ? coverNeeds && !coverBusy
-          ? 'Every page is drawn. The cover is the last step.'
+          ? book.cover.status === 'stale'
+            ? 'Every page is drawn. The cover is out of date — the title, style or cast changed since it was drawn.'
+            : 'Every page is drawn. The cover is the last step.'
           : 'Every page is drawn. Ask for changes any time — only what you change is redrawn.'
         : !quote.nothing
           ? `${approved ? '' : 'Nothing is drawn until you approve. '}${quote.model} · ${plural(quote.imageCount, 'image')}${byok ? ' · your own key' : ''}.`
@@ -808,6 +823,7 @@ const PageDetail: React.FC<{
   inGate: boolean;
   open: boolean;
   pro: boolean;
+  rating: ContentRating;
   urlFor: BreakdownCardProps['studio']['urlFor'];
   onToggle(): void;
   pending: boolean;
@@ -815,14 +831,20 @@ const PageDetail: React.FC<{
   onDraw(force: boolean, usd: number): void;
   onEdit(): void;
   onBoard(): void;
-}> = ({ doc, page, s, byok, inGate, open, pro, urlFor, onToggle, pending, disabled, onDraw, onEdit, onBoard }) => {
+}> = ({ doc, page, s, byok, inGate, open, pro, rating, urlFor, onToggle, pending, disabled, onDraw, onEdit, onBoard }) => {
   const id = `bd-${useId().replace(/:/g, '')}`;
   const tier = doc.settings.quality;
   const override = doc.settings.imageModelOverride;
   const busy = isBusyStatus(s.status);
-  const toDraw = !busy && page.panels.length > 0 && (page.render.status !== 'ready' || isPageStale(doc, page));
-  const q = toDraw ? quoteRenderPages(doc, { pageIds: [page.id], byok, tier, modelOverride: override }) : null;
-  const redrawUsd = !toDraw && !busy && page.panels.length > 0 ? s.redrawUsd ?? unitPrice(doc, 'page', { byok, tier, modelOverride: override }).usd : undefined;
+  // The gate's own quotes (shared/comic/plan.ts): "draw" only when the server would draw it, and a
+  // forced new take only for a drawn, current page. Both include any missing lead/support sheet.
+  const drawQ = quoteRenderPages(doc, { pageIds: [page.id], byok, tier, modelOverride: override });
+  const q = drawQ.nothing ? null : drawQ;
+  const redo = !q && !busy && page.render.status === 'ready' && page.panels.length > 0
+    ? quoteRenderPages(doc, { pageIds: [page.id], force: true, byok, tier, modelOverride: override })
+    : null;
+  const redrawUsd = redo && !redo.nothing ? redo.usd : undefined;
+  const sheetQ = q ?? redo;
   const mismatch = page.render.status === 'ready' ? aspectMismatch(doc, page.render.asset) : null;
   const lowQc = typeof s.qcScore === 'number' && s.qcScore < LOW_QC_SCORE;
   const neighbors = pro && page.render.status === 'ready' && continuityHint(doc, page);
@@ -844,19 +866,14 @@ const PageDetail: React.FC<{
         <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
           {missing.length > 0 && (
             <Chip icon={<TriangleAlert className="h-3 w-3" aria-hidden />}>
-              {listNames(missing.map((c) => c.name.toUpperCase()))} {missing.length === 1 ? 'has' : 'have'} no reference — may vary between pages
-              {!inGate && (
-                <>
-                  {' '}
-                  <button
-                    type="button"
-                    onClick={() => composeInStudio({ text: `This is ${missing[0].name.toUpperCase()}: `, pickFiles: true, focus: true })}
-                    className="font-medium text-[var(--ds-accent)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
-                  >
-                    Add a photo (free)
-                  </button>
-                </>
-              )}
+              {listNames(missing.map((c) => c.name.toUpperCase()))} {missing.length === 1 ? 'has' : 'have'} no reference — may vary between pages{' '}
+              <button
+                type="button"
+                onClick={() => composeInStudio({ text: `This is ${missing[0].name.toUpperCase()}: `, pickFiles: true, focus: true })}
+                className="font-medium text-[var(--ds-accent)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+              >
+                Add a photo (free)
+              </button>
             </Chip>
           )}
           {s.status === 'stale' && <Chip icon={<RotateCcw className="h-3 w-3" aria-hidden />}>The script changed since this was drawn</Chip>}
@@ -891,7 +908,7 @@ const PageDetail: React.FC<{
                     <span className="flex shrink-0 items-center -space-x-1.5">
                       <span className="sr-only">Cast: {cast.map((c) => c.name).join(', ')}.</span>
                       {cast.slice(0, MAX_AVATARS).map((c) => (
-                        <CastAvatar key={c.id} character={c} urlFor={urlFor} />
+                        <CastAvatar key={c.id} character={c} rating={rating} urlFor={urlFor} />
                       ))}
                       {cast.length > MAX_AVATARS && (
                         <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[var(--ds-well-strong)] px-1 text-[9px] font-semibold text-[var(--ds-ink)] ring-2 ring-[var(--ds-surface-soft)]" aria-hidden>
@@ -965,9 +982,9 @@ const PageDetail: React.FC<{
               Ask AI to change…
             </GhostButton>
           </div>
-          {q && q.sheetIds.length > 0 && !inGate && (
+          {sheetQ && sheetQ.sheetIds.length > 0 && !inGate && (
             <p className="mt-1.5 break-words text-[11px] text-[var(--ds-muted)]">
-              Includes {plural(q.sheetIds.length, 'character sheet')} ({q.sheetIds.map((cid) => findCharacter(doc, cid)?.name).filter(Boolean).join(', ')}) so the cast stays consistent.
+              Includes {plural(sheetQ.sheetIds.length, 'character sheet')} ({sheetQ.sheetIds.map((cid) => findCharacter(doc, cid)?.name).filter(Boolean).join(', ')}) so the cast stays consistent.
             </p>
           )}
         </div>
@@ -1005,6 +1022,9 @@ const CoverDetail: React.FC<{
         <StatusPill status={c.status} className="shrink-0" />
       </div>
       <p className="mt-1 line-clamp-2 break-words text-[13px] leading-snug text-[var(--ds-ink)]">{c.title || 'Untitled'}</p>
+      {c.status === 'stale' && (
+        <p className="mt-1 break-words text-[11.5px] text-[var(--ds-ink)]">The title, style or cast changed since this cover was drawn.</p>
+      )}
       <p className="mt-0.5 text-[11.5px] text-[var(--ds-muted)]">
         {c.lettering === 'overlay' ? 'Title as editable text — changing it later is free.' : 'Title painted into the art.'}
         {pro && c.model ? ` Drawn with ${c.model}.` : ''}
@@ -1014,7 +1034,7 @@ const CoverDetail: React.FC<{
         <div id={id} className="mt-2.5 flex min-w-0 flex-wrap items-center gap-1.5">
           {!inGate && !busy && (
             <GhostButton size="sm" className="tap-target" busy={pending} disabled={disabled} onClick={() => onDraw(usd)}>
-              <Sparkles className="h-3.5 w-3.5" aria-hidden /> {drawn ? 'New cover' : 'Make the cover'} · ≈{formatUsd(usd)}
+              <Sparkles className="h-3.5 w-3.5" aria-hidden /> {drawn ? 'New cover' : c.status === 'stale' ? 'Redraw the cover' : c.status === 'failed' ? 'Try the cover again' : 'Make the cover'} · ≈{formatUsd(usd)}
             </GhostButton>
           )}
           {!inGate && busy && (
