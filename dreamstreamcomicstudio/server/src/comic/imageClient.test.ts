@@ -7,7 +7,9 @@ import {
   classifyImageError,
   createImageGenerator,
   looksLikeRefusal,
+  pickAlternateRoute,
   pickImageRoute,
+  providerDetail,
   prepareImageRequest,
   stripUnsupported,
   type GeminiModelsLike
@@ -416,7 +418,122 @@ describe('createImageGenerator — Gemini direct', () => {
   });
 });
 
+describe('createImageGenerator — same-model route fallback and shared cooldown', () => {
+  const BOTH_BYOK: StudioKeys = { ...OR_BYOK, ...GEM };
+  const geminiImage = () => ({
+    candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'R0VN' } }] }, finishReason: 'STOP' }],
+    modelVersion: 'gemini-nano-banana-2.1'
+  });
+
+  it('only pairs routes with the same payer and the same model', () => {
+    const primary = pickImageRoute(NB21, BOTH_BYOK);
+    expect(primary.route).toBe('openrouter');
+    expect(pickAlternateRoute(NB21, BOTH_BYOK, primary)).toMatchObject({ route: 'gemini', model: 'gemini-nano-banana-2.1', key: GEM.gemini });
+    // The user's own OpenRouter key never falls back onto a PLATFORM Gemini key (DreamStream would pay)…
+    const platformGemini: StudioKeys = { ...OR_BYOK, gemini: { key: 'AIza-platform', byok: false } };
+    expect(pickAlternateRoute(NB21, platformGemini, pickImageRoute(NB21, platformGemini))).toBeNull();
+    // …and a model with no Gemini route has nowhere to go.
+    expect(pickAlternateRoute(GPT, BOTH_BYOK, pickImageRoute(GPT, BOTH_BYOK))).toBeNull();
+  });
+
+  it('draws the same model through the user\'s Gemini key when their OpenRouter route stays rate-limited', async () => {
+    const generateContent = vi.fn().mockResolvedValue(geminiImage());
+    const { generate, fetchMock } = setup(BOTH_BYOK, [json({ error: { message: 'Provider returned error' } }, 429), json({}, 429)], {
+      generateContent
+    });
+    const result = await generate(baseReq());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    expect(generateContent.mock.calls[0][0]).toMatchObject({ model: 'gemini-nano-banana-2.1' });
+    expect(result).toMatchObject({ route: 'gemini', byok: true, dataUrl: 'data:image/png;base64,R0VN' });
+  });
+
+  it('falls back on a provider outage too, but never on a safety block or a rejected key', async () => {
+    const generateContent = vi.fn().mockResolvedValue(geminiImage());
+    const outage = setup(BOTH_BYOK, [json({}, 503), json({}, 503)], { generateContent });
+    await expect(outage.generate(baseReq())).resolves.toMatchObject({ route: 'gemini' });
+
+    const blocked = vi.fn().mockResolvedValue(geminiImage());
+    const safety = setup(BOTH_BYOK, [json({ error: { message: 'flagged for content policy' } }, 403)], { generateContent: blocked });
+    await expect(safety.generate(baseReq())).rejects.toMatchObject({ code: 'SAFETY_BLOCKED' });
+    const badKey = setup(BOTH_BYOK, [json({ error: { message: 'No auth credentials found' } }, 401)], { generateContent: blocked });
+    await expect(badKey.generate(baseReq())).rejects.toMatchObject({ code: 'PROVIDER_ERROR', retryable: false });
+    expect(blocked).not.toHaveBeenCalled();
+  });
+
+  it('reports the preferred route\'s error when the fallback fails as well', async () => {
+    const unbilled = Object.assign(new Error('RESOURCE_EXHAUSTED free_tier_requests, limit: 0'), { status: 429 });
+    const generateContent = vi.fn().mockRejectedValue(unbilled);
+    const { generate } = setup(BOTH_BYOK, [json({}, 429), json({}, 429)], { generateContent });
+    await expect(generate(baseReq())).rejects.toMatchObject({ code: 'RATE_LIMIT', retryable: true });
+    expect(generateContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes the next call on the same route+model+key wait out a 429 instead of piling on', async () => {
+    let clock = 1_000_000;
+    const fetchMock = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(json({}, 429, { 'retry-after': '9' }))
+      .mockResolvedValueOnce(json({}, 429, { 'retry-after': '9' }))
+      .mockResolvedValueOnce(imagesOk());
+    const sleep = vi.fn(async () => undefined);
+    const generate = createImageGenerator(OR, { fetch: fetchMock as unknown as typeof fetch, sleep, now: () => clock });
+    await expect(generate(baseReq())).rejects.toMatchObject({ code: 'RATE_LIMIT' });
+    sleep.mockClear();
+    clock += 2000;
+    await expect(generate(baseReq())).resolves.toMatchObject({ dataUrl: expect.stringContaining('QUJD') });
+    // Waited the rest of the provider's 9 s before sending anything.
+    expect(sleep).toHaveBeenCalledWith(7000, undefined);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not make other keys wait for someone else\'s 429', async () => {
+    const clock = 5_000_000;
+    const sleep = vi.fn(async () => undefined);
+    const limited = createImageGenerator(OR, {
+      fetch: vi.fn(async () => json({}, 429, { 'retry-after': '9' })) as unknown as typeof fetch,
+      sleep,
+      now: () => clock
+    });
+    await expect(limited(baseReq())).rejects.toMatchObject({ code: 'RATE_LIMIT' });
+    sleep.mockClear();
+    const other = createImageGenerator(OR_BYOK, { fetch: vi.fn(async () => imagesOk()) as unknown as typeof fetch, sleep, now: () => clock });
+    await expect(other(baseReq())).resolves.toMatchObject({ byok: true });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
 describe('classifyImageError / looksLikeRefusal', () => {
+  it('shows what the provider said on a rate limit, without keys or JSON noise', () => {
+    const raw =
+      'OpenRouter /images 429: Provider returned error — {"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota). key=sk-or-v1-abcdef0123456789","status":"RESOURCE_EXHAUSTED"}}';
+    const err = classifyImageError(Object.assign(new Error(raw), { status: 429 }), { route: 'openrouter', byok: true });
+    expect(err.code).toBe('RATE_LIMIT');
+    expect(err.userMessage).toBe(
+      'The image model is busy right now (rate limited). Wait a minute and try again. (OpenRouter said: Resource has been exhausted (e.g. check quota). key=….)'
+    );
+    expect(err.userMessage).not.toMatch(/sk-or|abcdef0123456789/);
+  });
+
+  it('adds no detail when the provider said nothing useful, and keeps long plain words', () => {
+    expect(classifyImageError(Object.assign(new Error('OpenRouter /images 429: rate limited'), { status: 429 }), { route: 'openrouter', byok: true }).userMessage).toBe(
+      'The image model is busy right now (rate limited). Wait a minute and try again.'
+    );
+    expect(providerDetail('Quota exceeded for metric generate_content_free_tier_requests, limit: 50')).toBe(
+      'Quota exceeded for metric generate_content_free_tier_requests, limit: 50'
+    );
+    expect(providerDetail('token 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc rejected')).toBe('token … rejected');
+    expect(providerDetail('x'.repeat(400)).length).toBeLessThanOrEqual(180);
+  });
+
+  it('explains a "limit: 0" quota error that comes back through OpenRouter (BYOK Google key, no billing)', () => {
+    const err = Object.assign(new Error('OpenRouter /images 429: Provider returned error — RESOURCE_EXHAUSTED free_tier_requests, limit: 0'), { status: 429 });
+    const mine = classifyImageError(err, { route: 'openrouter', byok: true });
+    expect(mine).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false });
+    expect(mine.userMessage).toMatch(/OpenRouter integrations/);
+    expect(classifyImageError(err, { route: 'openrouter', byok: false }).userMessage).toMatch(/shared image service/);
+  });
+
   it('classifies statuses', () => {
     const ctx = { route: 'openrouter' as const, byok: false };
     expect(classifyImageError({ status: 404, message: 'no such model' }, ctx).userMessage).toMatch(/isn't available/);

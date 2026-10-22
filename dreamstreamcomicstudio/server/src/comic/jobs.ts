@@ -109,6 +109,12 @@ export const LOW_QC_SCORE = 0.45;
 const MAX_IMAGE_ATTEMPTS = 2;
 /** Pauses between attempts (tests shorten them). */
 export const JOB_TIMINGS = { retryBackoffMs: 2500, saveRetryMs: 1000 };
+/**
+ * A rate-limited provider needs real breathing room before the job's second attempt (the
+ * transport already waited and retried once): 5× the base pause plus up to one base pause
+ * of jitter, so parallel jobs that failed together do not all come back in the same second.
+ */
+const RATE_LIMIT_BACKOFF_FACTOR = 5;
 const MAX_STYLE_DIRECTIONS = 4;
 const DEFAULT_STYLE_DIRECTIONS = 3;
 /** Writer text spend for proposing style directions (one strong-model call, occasional repair). */
@@ -1251,7 +1257,8 @@ class RenderRun {
       if (ok.length) parts.push(`Drew ${noun(ok)} (${formatUsd(this.spentUsd)}).`);
       if (failed.length) {
         const first = failed[0];
-        parts.push(`${capitalize(noun(failed))} failed${first.error ? ` — ${first.job.label}: ${first.error}` : ''}.`);
+        const reason = first.error ? first.error.trim().replace(/[.!\s]+$/, '') : '';
+        parts.push(`${capitalize(noun(failed))} failed${reason ? ` — ${first.job.label}: ${reason}` : ''}.`);
       }
       if (skipped.length) {
         parts.push(
@@ -1419,7 +1426,12 @@ class RenderRun {
         }
         if (!lastError.retryable || attempts >= MAX_IMAGE_ATTEMPTS || this.signal.aborted || lastError.code === 'CANCELLED') break;
         logger.warn('comic_image_job_retry', { projectId: ctx.projectId, target: renderTargetKey(job.target), code: lastError.code });
-        await sleep(JOB_TIMINGS.retryBackoffMs, this.signal);
+        await sleep(
+          lastError.code === 'RATE_LIMIT'
+            ? JOB_TIMINGS.retryBackoffMs * RATE_LIMIT_BACKOFF_FACTOR + Math.round(Math.random() * JOB_TIMINGS.retryBackoffMs)
+            : JOB_TIMINGS.retryBackoffMs,
+          this.signal
+        );
         if (this.signal.aborted) break;
       }
     }
