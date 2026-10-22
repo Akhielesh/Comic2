@@ -1,14 +1,17 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { probeLiveWorker } from '../api';
-import { hydrateMyEvents, listMyRecordings } from '../events';
+import { createEvent, probeLiveWorker } from '../api';
+import { addMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
 import type { Nav } from '../nav';
+import { takeScheduleRequest, takeStudioIntent } from '../quickStart';
 import { fetchStudioAccess, syncMyEvents } from '../sync';
 import { DashboardView } from './DashboardView';
 
 vi.mock('../api', () => ({
   probeLiveWorker: vi.fn(),
+  createEvent: vi.fn(),
+  SignInRequiredError: class SignInRequiredError extends Error {},
 }));
 
 vi.mock('../events', () => ({
@@ -21,6 +24,11 @@ vi.mock('../sync', () => ({
   fetchStudioAccess: vi.fn(),
   pushEventToCloud: vi.fn(),
   syncMyEvents: vi.fn(),
+}));
+
+vi.mock('../account', () => ({
+  useAccount: () => ({ status: 'member', name: 'Akhil Rao', userId: 'u1' }),
+  openAuth: vi.fn(),
 }));
 
 const blockedProbe = {
@@ -56,13 +64,14 @@ describe('DashboardView live-worker readiness gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
     vi.mocked(fetchStudioAccess).mockResolvedValue({ allowed: true, signedIn: false, scope: 'full' });
     vi.mocked(syncMyEvents).mockResolvedValue(undefined);
     vi.mocked(hydrateMyEvents).mockResolvedValue([]);
     vi.mocked(listMyRecordings).mockReturnValue([]);
   });
 
-  it('lets hosts retry a failed backend probe and re-enables event creation when the live worker recovers', async () => {
+  it('lets hosts retry a failed backend probe and re-enables the quick starts when the live worker recovers', async () => {
     vi.mocked(probeLiveWorker)
       .mockResolvedValueOnce(blockedProbe)
       .mockResolvedValueOnce(reachableProbe);
@@ -72,13 +81,43 @@ describe('DashboardView live-worker readiness gate', () => {
 
     expect(await screen.findByText(/Streaming backend check failed/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Backend blocked/i })[0]).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: /Instant meeting/i })[0]).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: /Retry check/i }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /New event/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Go live now/i })[0]).toBeEnabled());
     expect(screen.queryByText(/Streaming backend check failed/i)).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /New event/i }));
+    // "Schedule…" opens Create with Advanced → Schedule ready.
+    fireEvent.click(screen.getByRole('button', { name: /Schedule…/i }));
     expect(nav.create).toHaveBeenCalledTimes(1);
+    expect(takeScheduleRequest()).toBe(true);
   }, 15_000); // renders the whole dashboard twice; slow under a loaded parallel run
+
+  it('starts an Instant meeting straight from the dashboard', async () => {
+    vi.mocked(probeLiveWorker).mockResolvedValue(reachableProbe);
+    vi.mocked(createEvent).mockResolvedValue({ id: 'ev9', hostKey: 'hk9' });
+    const nav = createNav();
+
+    render(<DashboardView nav={nav} push={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Instant meeting/i })[0]).toBeEnabled());
+    fireEvent.click(screen.getAllByRole('button', { name: /Instant meeting/i })[0]);
+
+    await waitFor(() => expect(nav.studio).toHaveBeenCalledWith('ev9', 'hk9'));
+    expect(createEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'meeting', access: 'open', scheduledAt: null, title: expect.stringMatching(/^Akhil’s meeting · /) }));
+    expect(addMyEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'ev9', kind: 'meeting' }));
+    expect(takeStudioIntent('ev9')).toBe('meeting');
+  }, 15_000);
+
+  it('labels meetings in the event list', async () => {
+    vi.mocked(probeLiveWorker).mockResolvedValue(reachableProbe);
+    const meeting: MyEvent = { id: 'm1', hostKey: 'k', title: 'Team sync', createdAt: Date.now(), scheduledAt: null, status: 'idle', kind: 'meeting' };
+    vi.mocked(hydrateMyEvents).mockResolvedValue([meeting]);
+
+    render(<DashboardView nav={createNav()} push={vi.fn()} />);
+
+    expect(await screen.findByText('Team sync')).toBeInTheDocument();
+    expect(screen.getByText('Meeting')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rejoin' })).toBeInTheDocument();
+  }, 15_000);
 });

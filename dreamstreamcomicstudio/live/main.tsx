@@ -7,6 +7,7 @@ import './styles/studio.css';
 import './styles/screens.css';
 import './styles/features.css';
 import './styles/calls.css';
+import './styles/meeting.css';
 
 const el = document.getElementById('live-root');
 if (el) createRoot(el).render(<LiveApp />);

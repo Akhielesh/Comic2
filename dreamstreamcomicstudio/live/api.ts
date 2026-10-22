@@ -162,6 +162,8 @@ export async function createEvent(opts: {
   segMs: number;
   scheduledAt?: number | null;
   maxViewers?: number;
+  /** 'meeting' = guests on camera, nothing broadcast until the host goes live. */
+  kind?: 'meeting' | 'broadcast';
 }): Promise<CreatedEvent> {
   // Hosting is for signed-in members; the worker verifies this token with Supabase.
   const token = await accessToken();

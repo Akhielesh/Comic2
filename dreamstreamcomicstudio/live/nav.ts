@@ -61,6 +61,15 @@ export const viewerUrl = (id: string): string => `${location.origin}${location.p
 export const studioUrl = (id: string, key: string): string =>
   `${location.origin}${location.pathname}?e=${enc(id)}#/studio?k=${enc(key)}`;
 
-/** On-air guest URL — semi-private: anyone holding it takes a guest seat. */
-export const guestUrl = (id: string, guestKey: string): string =>
-  `${location.origin}${location.pathname}?e=${enc(id)}#/guest?g=${enc(guestKey)}`;
+/**
+ * On-air guest URL — semi-private: anyone holding it takes a guest seat.
+ * `meeting` adds `m=1` (in the fragment, beside the key) so the guest page speaks
+ * "meeting" from the first paint, before the room's meta arrives.
+ */
+export const guestUrl = (id: string, guestKey: string, opts: { meeting?: boolean } = {}): string =>
+  `${location.origin}${location.pathname}?e=${enc(id)}#/guest?g=${enc(guestKey)}${opts.meeting ? '&m=1' : ''}`;
+
+/** Whether a guest link carries the meeting flag (`#/guest?g=…&m=1`). */
+export function isMeetingGuestLink(hash: string): boolean {
+  return hashParams(hash).get('m') === '1';
+}

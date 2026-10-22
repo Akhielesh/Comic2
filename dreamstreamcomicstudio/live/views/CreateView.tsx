@@ -1,5 +1,6 @@
-// Create / schedule an event — title, host name, when (now / scheduled),
-// description + cover for the invite page, quality, access, auto-record.
+// Start now — one tap to an Instant meeting or Go live now (QuickStart), with every
+// other option under Advanced: host name, when (now / scheduled), description + cover
+// for the invite page, quality, access, viewer cap and auto-record.
 import React, { useEffect, useMemo, useState } from 'react';
 import { openAuth, useAccount } from '../account';
 import { SignInRequiredError, createEvent, probeLiveWorker, type LiveWorkerProbeResult } from '../api';
@@ -9,16 +10,28 @@ import { pushEventToCloud } from '../sync';
 import type { Nav } from '../nav';
 import { studioUrl, viewerUrl } from '../nav';
 import { loadPrefs, savePrefs } from '../prefs';
+import { autoTitle, loadAdvancedOpen, quickDefaultsLine, saveAdvancedOpen, takeScheduleRequest, type QuickKind } from '../quickStart';
 import { downloadIcs } from '../schedule';
 import { COVER_THEMES } from '../theme';
 import { Icon } from '../ui/icons';
 import { Btn, Field, LinkBox, Segmented, Toggle, cx, redactUrlSearchParams, type PushToast } from '../ui/primitives';
+import { QuickStart } from './create/QuickStart';
+import { useQuickStart } from './create/useQuickStart';
+
+/** Local YYYY-MM-DD for the date picker's `min` (no scheduling in the past). */
+const todayIso = (): string => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const prefs = useMemo(loadPrefs, []);
+  // "Schedule…" from the dashboard lands here with Advanced → Schedule ready.
+  const scheduleRequested = useMemo(takeScheduleRequest, []);
+  const [advOpen, setAdvOpen] = useState(() => scheduleRequested || loadAdvancedOpen());
   const [title, setTitle] = useState('');
   const [host, setHost] = useState(prefs.hostName);
-  const [when, setWhen] = useState<'now' | 'later'>('now');
+  const [when, setWhen] = useState<'now' | 'later'>(scheduleRequested ? 'later' : 'now');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('18:00');
   const [desc, setDesc] = useState('');
@@ -33,6 +46,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
   const account = useAccount();
+  const quick = useQuickStart(nav);
   // No on-stream name of its own (Settings → Scenes): start from the account name.
   useEffect(() => {
     if (account.status === 'member' && account.name) setHost((h) => h || account.name || '');
@@ -42,7 +56,36 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const preset = presetById(quality);
   const scheduled = when === 'later';
   const scheduledMs = scheduled && date ? new Date(`${date}T${time || '18:00'}`).getTime() : null;
+  // "Schedule" needs a real future time — before, an empty or past date silently
+  // created an unscheduled event while the success screen still said "scheduled".
+  const scheduleInvalid = scheduled && !(scheduledMs != null && Number.isFinite(scheduledMs) && scheduledMs > Date.now());
   const backendBlocked = backendProbe != null && !backendProbe.ok;
+
+  const toggleAdvanced = (open = !advOpen) => {
+    setAdvOpen(open);
+    saveAdvancedOpen(open);
+  };
+
+  /** One tap: create with the current settings (defaults unless changed under Advanced) and open the studio. */
+  const startQuick = (kind: QuickKind) => {
+    void quick.start(kind, {
+      title,
+      host: host.trim() || account.name || 'Host',
+      titleName: host.trim() || account.name || '',
+      rememberHost: true,
+      quality,
+      access,
+      maxViewers: cap,
+      cover,
+      desc,
+      autoRecord: rec,
+      probe: backendProbe,
+      onProbe: (r) => {
+        setBackendProbe(r);
+        if (r.ok) setError(null);
+      },
+    });
+  };
 
   const refreshBackendProbe = async (): Promise<LiveWorkerProbeResult> => {
     setCheckingBackend(true);
@@ -76,6 +119,10 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
       setError(`Streaming backend is not reachable: ${backendProbe?.detail ?? 'live-worker route unavailable'}`);
       return;
     }
+    if (scheduleInvalid) {
+      setError('Pick a date and time in the future to schedule.');
+      return;
+    }
     setBusy(true);
     setError(null);
     const cleanTitle = title.trim() || 'Untitled stream';
@@ -96,25 +143,28 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
         access,
         quality,
         segMs: SEGMENT_MS,
-        scheduledAt: scheduledMs && scheduledMs > Date.now() ? scheduledMs : null,
+        scheduledAt: scheduled ? scheduledMs : null,
         maxViewers: cap,
+        kind: 'broadcast',
       });
       const mine = {
         id: res.id,
         hostKey: res.hostKey,
         title: cleanTitle,
         createdAt: Date.now(),
-        scheduledAt: scheduledMs,
+        scheduledAt: scheduled ? scheduledMs : null,
         status: 'idle' as const,
         quality,
         access,
         cover,
+        kind: 'broadcast' as const,
+        autoRecord: rec, // this event only — the default for new events lives in Customize
       };
       addMyEvent(mine);
       void pushEventToCloud(mine); // cross-device history when signed in
       // Remember defaults for next time. The host name is kept only when it differs from
       // the account name — otherwise it stays empty so a later rename flows through.
-      savePrefs({ ...prefs, hostName: cleanHost === account.name || cleanHost === 'Host' ? '' : cleanHost, qualityId: quality, autoRecord: rec });
+      savePrefs({ ...prefs, hostName: cleanHost === account.name || cleanHost === 'Host' ? '' : cleanHost, qualityId: quality });
       setCreated(res);
     } catch (e) {
       if (e instanceof SignInRequiredError) {
@@ -156,8 +206,8 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
             />
           </Field>
           <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-            <Icon name="users" size={13} /> Want co-hosts? Grab the <b>guest invite link</b> inside the studio
-            (People panel) — up to 4 guests join on air with cam, mic and screen share.
+            <Icon name="users" size={13} /> Want people on camera with you? In the studio, tap <b>Invite</b> —
+            up to 4 guests join with cam, mic and screen share, no account needed.
           </p>
           <hr className="divider" />
           <div className="wrap-row">
@@ -179,8 +229,8 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
       <button className="back-link" onClick={() => nav.dashboard()}><Icon name="arrowLeft" size={15} />Dashboard</button>
       <div className="page-head">
         <div>
-          <h1 className="page-title">New event</h1>
-          <p className="page-sub">Go live now, or schedule one and share an invite — like an event page for your stream.</p>
+          <h1 className="page-title">Start now</h1>
+          <p className="page-sub">Meet face-to-face or go live to an audience. One tap; fine-tune under Advanced.</p>
         </div>
       </div>
 
@@ -213,12 +263,39 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
         </div>
       )}
 
+      <QuickStart
+        title={title}
+        onTitle={setTitle}
+        placeholder={autoTitle('meeting', host.trim() || account.name || '')}
+        busy={quick.busy}
+        disabled={backendBlocked}
+        maxViewers={cap}
+        defaultsLine={quickDefaultsLine({ quality, access, maxViewers: cap, autoRecord: rec })}
+        onStart={startQuick}
+        onOpenAdvanced={() => {
+          toggleAdvanced(true);
+          setTimeout(() => document.getElementById('create-advanced-panel')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }), 30);
+        }}
+        error={quick.error}
+      />
+
+      <button
+        type="button"
+        className={cx('adv-toggle', advOpen && 'is-open')}
+        aria-expanded={advOpen}
+        aria-controls="create-advanced-panel"
+        data-tour="create-advanced"
+        onClick={() => toggleAdvanced()}
+      >
+        <Icon name="sliders" size={15} />
+        <span className="adv-label"><b>Advanced</b><span className="adv-sub"> — schedule, invite page, quality, who can watch, viewer cap, recording</span></span>
+        <Icon name="chevronDown" size={16} className="adv-chev" />
+      </button>
+
+      <div id="create-advanced-panel" className="adv-panel" hidden={!advOpen}>
+      {advOpen && (
       <div className="create-grid">
         <div className="card card-pad" style={{ display: 'grid', gap: 20 }}>
-          <Field label="Title" className="tour-anchor">
-            <input data-tour="create-title" className="input" value={title} maxLength={120} placeholder="Inking the final issue — live draw-along" onChange={(e) => setTitle(e.target.value)} />
-          </Field>
-
           <Field label="Your name" hint="shown to viewers and on the invite">
             <input className="input" value={host} maxLength={40} placeholder={account.name || 'Your name'} onChange={(e) => setHost(e.target.value)} />
           </Field>
@@ -232,10 +309,18 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
               onChange={(v) => setWhen(v as 'now' | 'later')}
             />
             {scheduled && (
-              <div className="sched-row">
-                <div className="sched-field"><Icon name="calendar" size={15} className="faint" /><input className="input" type="date" aria-label="Date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-                <div className="sched-field"><Icon name="clock" size={15} className="faint" /><input className="input" type="time" aria-label="Time" value={time} onChange={(e) => setTime(e.target.value)} /></div>
-              </div>
+              <>
+                <div className="sched-row">
+                  <div className="sched-field"><Icon name="calendar" size={15} className="faint" /><input className="input" type="date" aria-label="Date" min={todayIso()} value={date} aria-invalid={!!date && scheduleInvalid} onChange={(e) => setDate(e.target.value)} /></div>
+                  <div className="sched-field"><Icon name="clock" size={15} className="faint" /><input className="input" type="time" aria-label="Time" value={time} aria-invalid={!!date && scheduleInvalid} onChange={(e) => setTime(e.target.value)} /></div>
+                </div>
+                {scheduleInvalid && (
+                  <div className={cx('sched-hint', !!date && 'is-error')} role={date ? 'alert' : undefined}>
+                    <Icon name={date ? 'alert' : 'info'} size={13} />
+                    Pick a date and time in the future to schedule.
+                  </div>
+                )}
+              </>
             )}
           </Field>
 
@@ -303,8 +388,8 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
 
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div>
-              <div style={{ fontWeight: 600, fontSize: 13.5 }}>Auto-record the program feed</div>
-              <div className="muted" style={{ fontSize: 12.5 }}>A master copy written to this device as you stream; you choose where it’s saved when it stops. Uses extra CPU — leave off on weaker devices.</div>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>Auto-record this event</div>
+              <div className="muted" style={{ fontSize: 12.5 }}>A master copy written to this device as you stream; you choose where it’s saved when it stops. Uses extra CPU — leave off on weaker devices. The default for new events lives in Customize.</div>
             </div>
             <Toggle on={rec} onChange={setRec} label="Auto-record" />
           </div>
@@ -313,7 +398,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
 
           <hr className="divider" />
           <div className="row">
-            <Btn variant="solid" size="lg" icon={backendBlocked ? 'alert' : scheduled ? 'calendar' : 'check'} onClick={() => void submit()} disabled={busy || checkingBackend || backendBlocked} data-tour="create-submit">
+            <Btn variant="solid" size="lg" icon={backendBlocked ? 'alert' : scheduled ? 'calendar' : 'check'} onClick={() => void submit()} disabled={busy || checkingBackend || backendBlocked || scheduleInvalid || quick.busy != null} data-tour="create-submit">
               {busy
                 ? 'Creating…'
                 : checkingBackend
@@ -340,6 +425,8 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
             ))}
           </div>
         </div>
+      </div>
+      )}
       </div>
     </div>
   );

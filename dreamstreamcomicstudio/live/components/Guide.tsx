@@ -19,7 +19,7 @@ export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | '
 export const TOURS: Record<TourId, TourStep[]> = {
   welcome: [
     { title: 'Welcome to Stream Studio 👋', body: 'Go live from your browser — viewers join with just a name — and run a private baby monitor from any of your devices. This 30-second tour shows you around.' },
-    { target: 'nav-create', title: 'Start a stream', body: 'Create an event to go live now or schedule one with an invite page. Hosting needs a free account (with your welcome code); watching never does.' },
+    { target: 'nav-create', title: 'Meet or go live', body: 'One tap starts an instant meeting (people you invite join on camera) or a live stream; schedule one with an invite page under Advanced. Hosting needs a free account (with your welcome code); joining or watching never does.' },
     { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
     { target: 'nav-calls', title: 'Calls', body: 'FaceTime-style video and voice calls with your family — or anyone on Stream Studio, found by name. One person or up to four at once.' },
     { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys.' },
@@ -28,13 +28,16 @@ export const TOURS: Record<TourId, TourStep[]> = {
   ],
   create: [
     { target: 'host-signin', title: 'Sign in to host', body: 'Hosting is for account holders. Your viewers will never need an account.' },
-    { target: 'create-title', title: 'Name your stream', body: 'This shows on the watch page and the invite.' },
-    { target: 'create-quality', title: 'Pick a quality you can sustain', body: 'Choose by your upload speed. Stream Studio also lowers the bitrate automatically if your connection struggles, so viewers keep a smooth picture.' },
-    { target: 'create-submit', title: 'Create & share', body: 'You’ll get a viewer link to share and a private studio link (keep that one secret — it controls the stream).' },
+    { target: 'create-meeting', title: 'Instant meeting', body: 'People you invite join on camera — nothing is broadcast until you go live. The invite link is ready the moment the studio opens.' },
+    { target: 'create-golive', title: 'Go live now', body: 'One tap: a quick camera and mic check, a 3-second countdown, and you’re on air. Then share the watch link.' },
+    { target: 'create-title', title: 'Name it — or don’t', body: 'We name it for you (“Your meeting · today”). Change it if you like; it shows on the watch page and the invite.' },
+    { target: 'create-advanced', title: 'Advanced', body: 'Schedule, invite page, quality, who can watch, viewer cap and recording live here. Quick starts use whatever you set.' },
   ],
   studio: [
     { target: 'studio-preview', title: 'Your program', body: 'Exactly what viewers see. Scene cuts, camera flips and screen shares never interrupt the stream.' },
-    { target: 'studio-golive', title: 'Go live', body: 'Press G or this button. On phones the screen stays awake while you’re live.' },
+    { target: 'studio-ready', title: 'Ready check', body: 'Camera, mic and room check out, then a 3-second countdown takes you live. Cancel any time.' },
+    { target: 'studio-invite', title: 'Invite people', body: 'Share a link and up to 4 people join on camera — no account. They see and hear each other too. Make a new link to cut off old ones. (Shortcut: I)' },
+    { target: 'studio-golive', title: 'Go live', body: 'Press G or this button. In a meeting, “Go live with this meeting” broadcasts it. On phones the screen stays awake while you’re live.' },
     { target: 'studio-record', title: 'Record (optional)', body: 'Records to this device’s disk as you go — even hour-long sessions don’t eat memory. When it stops, you choose where it’s saved. Set a time limit in Customize to get 5-min and 1-min heads-ups.' },
     { target: 'studio-scenes', title: 'Scenes', body: 'Number keys 1–6 cut between layouts. Be-right-back pauses uploads.' },
     { target: 'studio-health', title: 'Health', body: 'Upload speed, auto-quality and any skipped segments. If it says “Degraded”, close other uploads or pick a lower quality.' },
@@ -407,10 +410,13 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     section: 'Going live',
     icon: 'broadcast',
     items: [
-      { q: 'Start a stream', a: 'New event → name it → Create. Open the studio, allow camera/mic, press Go live (or G). Share the viewer link.' },
+      { q: 'Start an instant meeting', a: 'Go live tab (or the Dashboard) → Instant meeting. The studio opens with the Invite sheet: share the link and up to 4 people join on camera with no account — they see and hear each other. Nothing is broadcast until you press “Go live with this meeting”. End meeting closes it for everyone.', tags: 'meeting call video conference invite' },
+      { q: 'Go live in one tap', a: 'Go live tab (or the Dashboard) → Go live now. Allow camera and mic once; a ready check confirms camera, mic and room, then a 3-second countdown takes you live (Cancel stops it). Then tap Share watch link.', tags: 'quick start countdown' },
+      { q: 'Start a stream', a: 'One tap: Go live now. To schedule one with an invite page, or change quality, access, viewer cap or recording first, open Advanced on the same page and press Create or Schedule.' },
       { q: 'Keep the private studio link secret', a: 'It contains the host key: anyone with it can control your stream. Share the viewer link instead.' },
-      { q: 'Guests on air', a: 'People panel → copy the guest link. Up to 4 guests join with cam, mic and screen share; Grid / Spotlight / Sidebar mix them in.' },
-      { q: 'Hotkeys', a: 'G go live/end · Space mic · V camera · R record · B be-right-back · 1–6 scenes · M metrics · / chat.' },
+      { q: 'Guests on air', a: 'Studio → Invite (or press I) → Share invite. Up to 4 guests join with cam, mic and screen share and hear each other; Grid / Spotlight / Sidebar mix them in. New link cuts off old ones.' },
+      { q: 'A guest can’t connect', a: 'Most often a strict network (mobile data, office Wi-Fi) blocking direct video — the studio retries by itself, and switching to Wi-Fi usually fixes it. If the camera is blocked, allow it from the address bar (🔒) and tap Try again.', tags: 'guest connecting stuck linking camera blocked' },
+      { q: 'Hotkeys', a: 'G go live/end · I invite · Space mic · V camera · R record · B be-right-back · 1–6 scenes · M metrics · / chat.' },
     ],
   },
   {
