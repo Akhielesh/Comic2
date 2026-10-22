@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Icon } from '../ui/icons';
 import { Btn, cx } from '../ui/primitives';
+import { STREAM_HOST_ON, STREAM_HOSTNAME } from '@/shared/streamHost';
 
 export interface TourStep {
   target?: string;
@@ -403,6 +404,13 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'How do I create an account?', a: 'Tap your name/avatar (bottom of the menu) → Create account. Enter your name, email, password, date of birth and the welcome code you were given. Then confirm your email if asked.', tags: 'sign up register' },
       { q: 'What is the welcome code?', a: 'An invite code required for new accounts. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
       { q: 'I already had a DreamStream account', a: 'Just sign in — accounts created before Stream Studio accounts launched are unlocked automatically.' },
+      ...(STREAM_HOST_ON
+        ? [{
+            q: `Stream Studio’s address: ${STREAM_HOSTNAME}`,
+            a: `Stream Studio has its own address — ${STREAM_HOSTNAME} — and old dreamstreamstudio.ai/live links (viewer, guest and studio links included) bring you here. It has its own sign-in: tap “Continue with DreamStream” to bring yours over in one tap. If you added Stream Studio to your Home Screen before, add it again from this address, then turn “Alerts on this device” back on there.`,
+            tags: 'address url domain moved subdomain home screen alerts sign in',
+          }]
+        : []),
       { q: 'Finding people', a: 'Tap Invite → Add by name. People from your other nurseries come first; or search by name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory invite add' },
       { q: 'What happens if our internet goes down?', a: 'Phones on the same Wi-Fi as the camera keep the live picture, sound and alerts — they talk to each other directly (the picture shows “Home Wi-Fi”). Phones away from home, and notifications, come back when the internet does.', tags: 'offline wifi lan outage local network' },
       { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent taps Invite → Share a link → Create link, then sends the link (or shows the QR code) and tells them the passcode separately. Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents qr code invite' },

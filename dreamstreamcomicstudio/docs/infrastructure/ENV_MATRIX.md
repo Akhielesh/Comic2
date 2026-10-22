@@ -112,6 +112,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 |---|---|---|---|---|
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
 | `AUTH_LINK_ORIGINS` | `services/authEmailLinks.ts` (backend auth emails) | ⭕ | — | Comma-separated **exact** origins auth-email links may point at besides `APP_PUBLIC_URL` (e.g. `http://localhost:3000,http://localhost:7000` for local dev). Default empty. Never wildcards — see `docs/email/SETUP.md` |
+| *(not an env var)* `STREAM_HOST_ON` | `shared/streamHost.ts` — Pages middleware, both apps, backend, email Worker | — | — | **Code constant on purpose** (one switch shipped in one push to every consumer). Moves Stream Studio to `https://stream.dreamstreamstudio.ai`; Stream Studio links in auth emails, the sign-in handoff (`POST /api/auth/handoff`) and the apex `/live*` 301 follow it. See `INFRA_MAP.md` §2a. |
 | `VITE_LIVE_WORKER_URL` | frontend (Stream Studio) | ⭕ | — | |
 | `VENTURES_ENABLED` / `VENTURES_KILL` / `VENTURES_*` | autopilot | ⭕ | 💸 (Redis, only for `ventures:worker`) | `false` in `wrangler.jsonc` (admins still get in); `VENTURES_PILOT_INLINE=false`. Build stage retired (ADR 0005). `VENTURES_INTAKE_TIMEOUT_MS` (default 120000) bounds the intake model call |
 
@@ -136,7 +137,7 @@ the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 | `BACKEND_ORIGIN` | dreamstream-api | ⭕ | — | Dormant Railway origin, used only when `BACKEND_TARGET=origin` |
 | `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | dreamstream-live | ✅ | — | Member checks for creating events + every baby-monitor socket (RPCs run as the caller's JWT) |
 | `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN, 1 TB/mo free) | Relay for baby-monitor video **and family calls** on strict networks (carrier / symmetric NAT, blocked UDP); STUN-only without them, and those calls fail (now with a clear reason). Check: a call's `call_started` / `call_joined` lists `turn.cloudflare.com`, and a `?relay=1` call connects |
-| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list |
+| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list (includes `https://stream.dreamstreamstudio.ai`, Stream Studio's own host) |
 
 ---
 

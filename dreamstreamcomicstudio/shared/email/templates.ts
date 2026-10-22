@@ -11,6 +11,7 @@
 // values with escapeHtml on the HTML side.
 
 import { BrandConfig, COLORS, resolveBrand } from './theme.js';
+import { streamAppHref } from '../streamHost.js';
 import {
   button,
   codeBadge,
@@ -461,10 +462,11 @@ export const parseStudioIds = (value: string | undefined): StudioInviteId[] => {
 const studioInvite: Renderer = (params, brand) => {
   const content = STUDIO_INVITES[isStudioInviteId(params.studio) ? params.studio : 'stream_studio'];
   const studio = (params.studioName || content.name).trim();
-  // Deep link per studio: stream lives at /live.html; the suite studios open the app root.
+  // Deep link per studio: Stream Studio's address (shared/streamHost.ts — /live.html, or its own
+  // host once switched on); the suite studios open the app root.
   const url =
     params.inviteUrl ||
-    (content.path === '/' ? brand.appUrl : `${brand.appUrl.replace(/\/+$/, '')}${content.path}`);
+    (content.path === '/' ? brand.appUrl : streamAppHref(`${brand.appUrl.replace(/\/+$/, '')}${content.path}`));
   const inviter = (params.inviterName || '').trim();
   const intro = inviter
     ? `${escapeHtml(inviter)} has invited you to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(

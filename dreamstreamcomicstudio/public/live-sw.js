@@ -11,6 +11,13 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 const STATE_CACHE = 'ds-sw-state';
 const CAMERA_KEY = '/__ds/camera';
 const CAMERA_MAX_MS = 24 * 60 * 60 * 1000;
+/* The app's own pages: under this worker's scope — /live on dreamstreamstudio.ai, everything on
+ * Stream Studio's own host (stream.dreamstreamstudio.ai, scope '/'). */
+const isAppPage = (u) => new URL(u).pathname.startsWith(new URL(self.registration.scope).pathname);
+/* An app screen ('#/monitor') under this worker's scope — /live#… there, /#… on Stream Studio's own
+ * host — so tapping a notification only changes the screen of an open app, never reloads it (an open
+ * monitor or a ringing call would drop its connection). */
+const appUrl = (hash) => new URL(hash, self.registration.scope).href;
 
 self.addEventListener('message', (event) => {
   const d = event.data || {};
@@ -23,7 +30,7 @@ self.addEventListener('message', (event) => {
 async function isCameraDevice() {
   const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   if (all.some((c) => /#\/monitor\/[0-9a-f-]{36}\/camera/.test(c.url))) return true;
-  if (!all.some((c) => new URL(c.url).pathname.startsWith('/live'))) return false;
+  if (!all.some((c) => isAppPage(c.url))) return false;
   try {
     const hit = await (await caches.open(STATE_CACHE)).match(CAMERA_KEY);
     return !!hit && Date.now() - Number(await hit.text()) < CAMERA_MAX_MS;
@@ -64,10 +71,10 @@ self.addEventListener('push', (event) => {
   // A ringing call opens the app on it (it rings on top); a missed one opens Calls.
   // A direct call (anyone on Stream Studio) has no nursery: #/call/d/<call>.
   const url =
-    kind === 'call' && data.direct && data.call ? `/live#/call/d/${data.call}`
-    : kind === 'call' && data.nid && data.call ? `/live#/call/${data.nid}/${data.call}`
-    : isCall ? '/live#/calls'
-    : data.nid ? `/live#/monitor/${data.nid}/watch` : '/live#/monitor';
+    kind === 'call' && data.direct && data.call ? appUrl(`#/call/d/${data.call}`)
+    : kind === 'call' && data.nid && data.call ? appUrl(`#/call/${data.nid}/${data.call}`)
+    : isCall ? appUrl('#/calls')
+    : data.nid ? appUrl(`#/monitor/${data.nid}/watch`) : appUrl('#/monitor');
   event.waitUntil(
     (async () => {
       // On the nursery camera a call shows quietly: no sound, no buzz, nothing held on screen.
@@ -133,7 +140,7 @@ async function tidyProofs() {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const base = (event.notification.data && event.notification.data.url) || '/live#/monitor';
+  const base = (event.notification.data && event.notification.data.url) || appUrl('#/monitor');
   event.waitUntil(
     (async () => {
       const proof = event.action === 'answer' ? await answerProof(base) : null;
@@ -141,7 +148,7 @@ self.addEventListener('notificationclick', (event) => {
       const open = async () => {
         const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
         for (const c of all) {
-          if (new URL(c.url).pathname.startsWith('/live')) {
+          if (isAppPage(c.url)) {
             await c.focus();
             if ('navigate' in c) return c.navigate(target.href);
             return undefined;

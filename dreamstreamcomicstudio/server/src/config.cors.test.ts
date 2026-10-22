@@ -17,6 +17,11 @@ describe("isAllowedOrigin", () => {
     expect(isAllowedOrigin("https://3000-uabc-deadbeef.dreamstreamstudio.ai")).toBe(true);
   });
 
+  it("trusts Stream Studio's own host (stream.dreamstreamstudio.ai)", () => {
+    expect(isAllowedOrigin("https://stream.dreamstreamstudio.ai")).toBe(true);
+    expect(isAllowedOrigin("http://stream.dreamstreamstudio.ai")).toBe(false);
+  });
+
   it("trusts the live Cloudflare Pages frontend and its preview deploys", () => {
     expect(isAllowedOrigin("https://comic2.pages.dev")).toBe(true);
     // Cloudflare preview deploys are <hash>.comic2.pages.dev

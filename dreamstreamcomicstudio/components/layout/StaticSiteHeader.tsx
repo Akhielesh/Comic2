@@ -7,6 +7,7 @@ import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
 import { useProductAccess } from '../../services/productAccess';
+import { openLiveApp } from '../../services/liveLink';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
@@ -64,7 +65,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
       { label: 'Model Catalog', onClick: () => onNavigate('models') },
     ] }] : []),
     { heading: 'Live', items: showLive
-      ? [{ label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } }]
+      ? [{ label: 'Open Stream Studio', onClick: () => { void openLiveApp('/live.html'); } }]
       : [{ label: 'Get notified', onClick: notify }] },
     { heading: 'Models', items: [
       { label: 'Browse Models', onClick: () => onNavigate('models') },
@@ -125,7 +126,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 icon={<Radio size={14} />}
                 variant="blue"
                 items={[
-                  { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { window.location.href = '/live.html'; } },
+                  { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { void openLiveApp('/live.html'); } },
                 ]}
               />
             ) : (

@@ -1,8 +1,11 @@
 # Stream Studio — Live Streaming for DreamStream
 
 Status: **v2 implemented on the R2 rail** — see §9 for what shipped and how to test.
-Scope: minimalist live streaming for up to ~100 concurrent viewers, hosted inside the
-DreamStream website, built entirely on the Cloudflare stack we already run
+Address: **`stream.dreamstreamstudio.ai`** — its own host, behind the `STREAM_HOST_ON` switch in
+`shared/streamHost.ts` (until it's on, `dreamstreamstudio.ai/live`; old `/live` links keep
+working either way — see `docs/features/accounts-and-access.md` § One address per app).
+Scope: minimalist live streaming for up to ~100 concurrent viewers, part of the
+DreamStream suite, built entirely on the Cloudflare stack we already run
 (Workers, Durable Objects, R2) plus Supabase (auth, metadata) and Cloudflare Stream.
 
 ---
@@ -167,7 +170,7 @@ screens (Studio / Viewer / Lobby / Schedule).
 
 ---
 
-## 7. Standalone product potential ("DreamStream Live")
+## 7. Standalone product potential (Stream Studio)
 
 The same Worker + DO + Stream architecture is multi-tenant by construction (an event is
 just a row + a DO + a live input). Expansion ladder:
@@ -183,8 +186,8 @@ just a row + a DO + a live input). Expansion ladder:
 4. **API tier:** the REST surface (create event, mint tokens, webhooks for
    started/ended/recording-ready) is the product for developers.
 
-Suggested rollout: ship inside DreamStream → separate `live.dreamstream*` subdomain →
-embeds/API → billing.
+Suggested rollout: ship inside DreamStream → its own subdomain (done:
+`stream.dreamstreamstudio.ai`, 2026-10-22) → embeds/API → billing.
 
 ---
 

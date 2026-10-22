@@ -4,6 +4,8 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, BookOpen, Check, Lock, MessageSquare, Radio, Baby } from 'lucide-react';
 import { fetchAccountAccess, onAccountAccessChange, type AccountAccess, type StudioAccess } from '../../services/studioAccessApi';
+import { followLiveLink } from '../../services/liveLink';
+import { isStreamUrl } from '../../shared/streamHost';
 
 const ICON: Record<StudioAccess['id'], React.ComponentType<{ size?: number }>> = {
   comic_studio: BookOpen,
@@ -61,7 +63,11 @@ export const StudiosAccess: React.FC = () => {
                   <b.Icon size={11} />{b.text}
                 </span>
                 {href && (
-                  <a href={href} className="inline-flex items-center gap-1 text-sm font-bold underline-offset-2 hover:underline" aria-label={s.status === 'open' ? `Open ${s.label}` : s.action?.label}>
+                  <a
+                    href={href}
+                    // Stream Studio on its own host: arrive there signed in (one-time handoff link).
+                    onClick={isStreamUrl(href) ? (e) => followLiveLink(e, href) : undefined}
+                    className="inline-flex items-center gap-1 text-sm font-bold underline-offset-2 hover:underline" aria-label={s.status === 'open' ? `Open ${s.label}` : s.action?.label}>
                     {s.status === 'open' ? <ArrowRight size={16} /> : s.action?.label}
                   </a>
                 )}

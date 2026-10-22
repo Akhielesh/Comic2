@@ -109,16 +109,18 @@ describe('encoding and codecs', () => {
 describe('“Answer” on a call notification (the service worker, public/live-sw.js)', () => {
   const SW = readFileSync(new URL('../../public/live-sw.js', import.meta.url), 'utf8');
   /** The service worker in a sandbox: its listeners, its Cache Storage, and where it sent the app. */
-  function loadSW() {
+  function loadSW(scope = 'https://dreamstreamstudio.ai/live') {
     const listeners: Record<string, (e: unknown) => void> = {};
     const c = fakeCaches();
     const navigated: string[] = [];
-    const client = { url: 'https://dreamstreamstudio.ai/live#/calls', focus: async () => undefined, navigate: async (u: string) => void navigated.push(u) };
+    const shown: { title: string; opts: { data: { url: string } } }[] = [];
+    const origin = new URL(scope).origin;
+    const client = { url: `${scope}#/calls`, focus: async () => undefined, navigate: async (u: string) => void navigated.push(u) };
     const self = {
       addEventListener: (t: string, fn: (e: unknown) => void) => void (listeners[t] = fn),
       clients: { matchAll: async () => [client], openWindow: async (u: string) => void navigated.push(u), claim: async () => undefined },
-      location: { origin: 'https://dreamstreamstudio.ai' },
-      registration: { showNotification: async () => undefined },
+      location: { origin },
+      registration: { scope, showNotification: async (title: string, opts: { data: { url: string } }) => void shown.push({ title, opts }) },
       skipWaiting: () => undefined,
     };
     new Function('self', 'caches', SW)(self, c);
@@ -128,8 +130,27 @@ describe('“Answer” on a call notification (the service worker, public/live-s
       await done;
       return navigated.at(-1)!;
     };
-    return { click, caches: c };
+    const push = async (data: Record<string, unknown>) => {
+      let done: Promise<unknown> = Promise.resolve();
+      listeners.push({ data: { json: () => data }, waitUntil: (p: Promise<unknown>) => void (done = p) });
+      await done;
+      return shown.at(-1)!.opts.data.url;
+    };
+    return { click, push, caches: c };
   }
+
+  it('a notification opens the app at its own address — so an open app only changes screen, never reloads', async () => {
+    // Regression: on Stream Studio's own host the links said /live#…, so tapping a cry alert or a
+    // ringing call reloaded the open app (dropping the live picture or the call being set up).
+    const onStream = loadSW('https://stream.dreamstreamstudio.ai/');
+    expect(await onStream.push({ kind: 'call', direct: true, call: '0123456789abcdef' })).toBe('https://stream.dreamstreamstudio.ai/#/call/d/0123456789abcdef');
+    expect(await onStream.push({ kind: 'cry', nid: '11111111-2222-4333-8444-555555555555' })).toBe('https://stream.dreamstreamstudio.ai/#/monitor/11111111-2222-4333-8444-555555555555/watch');
+    const onMain = loadSW();
+    expect(await onMain.push({ kind: 'call_missed', call: '0123456789abcdef', direct: true })).toBe('https://dreamstreamstudio.ai/live#/calls');
+    const href = await onStream.click('answer', 'https://stream.dreamstreamstudio.ai/#/call/d/0123456789abcdef');
+    expect(new URL(href).pathname).toBe('/');
+    expect(answerFromHash(new URL(href).hash)).toMatchObject({ id: '0123456789abcdef' });
+  });
 
   it('leaves a one-time proof bound to that call, opens the app with it — and that proof answers exactly once', async () => {
     const sw = loadSW();

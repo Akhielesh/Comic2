@@ -93,6 +93,19 @@ describe('consumeAuthReturn — token_hash links from our backend', () => {
     expect(location.search + location.hash).toBe('');
   });
 
+  it('finishes the sign-in handoff from DreamStream (type=magiclink) and cleans the URL', async () => {
+    verifyOtp.mockResolvedValue({ data: { session: { access_token: 't' } }, error: null });
+    go('/live?token_hash=hand0ff&type=magiclink&after=calls');
+    expect(await consumeAuthReturn()).toEqual({ confirmed: true, handoff: true });
+    expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'hand0ff', type: 'magiclink' });
+    expect(location.pathname + location.search + location.hash).toBe('/live#/calls');
+    // A used or stale handoff link says so (the app then offers sign-in).
+    verifyOtp.mockResolvedValue({ data: { session: null }, error: { code: 'otp_expired', status: 403, message: 'expired' } });
+    go('/live?token_hash=used&type=magiclink');
+    expect(await consumeAuthReturn()).toEqual({ error: 'expired', handoff: true });
+    expect(location.search).toBe('');
+  });
+
   it('reports other failures with their message and defaults an unknown type to signup', async () => {
     verifyOtp.mockResolvedValue({ data: { session: null }, error: { status: 500, message: 'Network down' } });
     go('/live?after=settings&token_hash=h&type=bogus');

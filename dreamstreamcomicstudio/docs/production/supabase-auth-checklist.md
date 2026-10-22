@@ -11,6 +11,10 @@ Use this checklist to make signup verification and account policies work in prod
    confirmation / reset / magic link to a dead page on the user's phone.
 3. Add Redirect URLs:
    - `https://dreamstreamstudio.ai/**` (main app `/auth/callback`, Stream Studio `/live?after=…`)
+   - `https://stream.dreamstreamstudio.ai/**` — Stream Studio's own host (`shared/streamHost.ts`).
+     Our token-hash links and the sign-in handoff don't depend on it (verified in the page), but
+     without it any `redirectTo` there would fall back to the Site URL. Add it before flipping
+     `STREAM_HOST_ON`.
    - `https://comic2.pages.dev/**` and `https://*.comic2.pages.dev/**` — **keep both**, even
      though `comic2.pages.dev` now 301s to the custom domain (2026-10-22): emails already sent
      carry that `redirect_to` (the tokens ride in the `#fragment`, which survives the
@@ -27,7 +31,8 @@ Use this checklist to make signup verification and account policies work in prod
 
 > **Since 2026-10-22 the backend sends sign-up confirmation, resend, password reset and magic
 > link itself** (`POST /api/auth/email/*`: service-role `auth.admin.generateLink` + our
-> templates through the email Worker). Supabase's built-in mailer allows ~2 emails/hour for the
+> templates through the email Worker; `POST /api/auth/handoff` uses the same call for the
+> one-time sign-in link between DreamStream and Stream Studio — no email). Supabase's built-in mailer allows ~2 emails/hour for the
 > whole project, and its limit applies before the Send Email Hook, so the hook alone could not
 > fix failed sign-ups. Supabase now only sends email change, reauthentication, security
 > notices, and the client's fallback mail when the backend is unreachable, which makes items

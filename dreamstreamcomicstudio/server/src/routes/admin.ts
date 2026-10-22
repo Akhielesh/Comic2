@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import type { BillingPlanTier } from '../../../shared/types/billing.js';
+import { streamAppHref } from '../../../shared/streamHost.js';
 import { setUserPlanTier } from '../services/billingLedger.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { hydrateAccessProfile, requireAdmin, requireModerator } from '../middleware/requireAdmin.js';
@@ -644,9 +645,10 @@ adminRouter.post('/product-access', requireAdmin, async (req, res, next) => {
       const r = await sendStudioInvite(
         email,
         {
-          inviteUrl: `${APP_PUBLIC_URL}${target.path}`,
+          // Stream Studio's address follows shared/streamHost.ts (its own host once switched on).
+          inviteUrl: product === 'stream_studio' ? streamAppHref(`${APP_PUBLIC_URL}${target.path}`) : `${APP_PUBLIC_URL}${target.path}`,
           // The studio id selects the per-studio feature cards + deep link in the
-          // shared template (stream → /live.html, comic/chat → the suite root).
+          // shared template (stream → Stream Studio, comic/chat → the suite root).
           studio: product,
           studioName: target.name,
           inviterName,

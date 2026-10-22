@@ -32,6 +32,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { accessToken } from '../account';
+import { LIVE_APP_PATH } from '../host';
 import { MIC_CONSTRAINTS, preferSpeaker, type Facing } from '../monitor/camera';
 import { listNurseries, onMembersChanged, openCallRoomSocket, openMonitorSocket, openUserLineSocket, type MonitorSocket } from '../monitor/client';
 import { currentSubscription, localNotify, subscribe as pushSubscribe } from '../monitor/push';
@@ -978,7 +979,8 @@ class CallCenter {
     if (typeof document === 'undefined' || !document.hidden || this.notified.has(call.id)) return;
     if (!this.isRingingForMe(call)) return;
     this.notified.add(call.id);
-    const url = isDirect(line.nid) ? `/live#/call/d/${call.id}` : `/live#/call/${line.nid}/${call.id}`;
+    // This app's own address (no reload of an open app): /live#… here, /#… on Stream Studio's own host.
+    const url = isDirect(line.nid) ? `${LIVE_APP_PATH}#/call/d/${call.id}` : `${LIVE_APP_PATH}#/call/${line.nid}/${call.id}`;
     void localNotify(`📹 ${call.from.label || call.from.name}`, `${call.video ? 'Video' : 'Audio'} call · ${familyName(line.nursery)}`, `call-${call.id}`, url);
   }
 

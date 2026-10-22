@@ -224,9 +224,12 @@ Console path: **APIs & Services → Credentials → Create credentials → OAuth
 4. **Authorized JavaScript origins → Add URI** — the sites users record from:
    ```
    https://dreamstreamstudio.ai
+   https://stream.dreamstreamstudio.ai
    https://comic2.pages.dev
    http://localhost:7000
    ```
+   (`https://stream.dreamstreamstudio.ai` is Stream Studio's own address — `shared/streamHost.ts`.
+   Add it before `STREAM_HOST_ON` is flipped, or Drive uploads from there fail CORS.)
    The OAuth token exchange is server-side and doesn't need these. They're for Stream
    Studio's Drive uploads: the backend opens a Drive *resumable upload session* and the
    **browser** then `PUT`s the recording to Google directly (cross-origin). The session URL
@@ -343,8 +346,10 @@ resumes after drops. Recording bytes never touch our backend (10 MB body limit).
    paste `https://www.googleapis.com/auth/drive.file` → tick it → **Update → Save**.
    It lands under *non-sensitive* scopes.
 3. **Credentials → your Web OAuth client → Authorized JavaScript origins:** add
-   `https://dreamstreamstudio.ai` (on the dev client also `http://localhost:7000`) →
-   **Save**. (`https://comic2.pages.dev` is optional — that host only redirects now.)
+   `https://dreamstreamstudio.ai` **and `https://stream.dreamstreamstudio.ai`** (Stream Studio's
+   own address) (on the dev client also `http://localhost:7000`) → **Save**.
+   (`https://comic2.pages.dev` is optional — that host only redirects now.) The redirect URI
+   stays on the main domain: the consent popup finishes there and tells Stream Studio's window.
 4. Same client → **Authorized redirect URIs:** confirm
    `https://dreamstreamstudio.ai/api/connectors/oauth/callback` is there, byte-for-byte.
 5. **Audience → Test users:** while Publishing status = Testing, add every Google account
