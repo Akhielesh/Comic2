@@ -29,6 +29,7 @@ import { Ema, fmtBps, fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { guestUrl, viewerUrl } from '../nav';
 import { loadPrefs, playChime, savePrefs } from '../prefs';
+import { useAccount } from '../account';
 import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
 import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
@@ -86,7 +87,12 @@ function AudioSink({ stream }: { stream: MediaStream }) {
 
 export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; hostKey: string; nav: Nav; push: PushToast }) {
   const prefs = useMemo(loadPrefs, []);
-  const hostName = prefs.hostName.trim() || 'Host';
+  const account = useAccount();
+  // The on-stream name (Settings → Scenes) when set, else the account name — so a rename shows up here.
+  const hostName = prefs.hostName.trim() || account.name?.trim() || 'Host';
+  // The setup effect below runs once; it reads the latest name (the account may finish loading after mount).
+  const hostNameRef = useRef(hostName);
+  hostNameRef.current = hostName;
 
   // ------------------------------------------------------------------ refs
   const camRef = useRef<MediaStream | null>(null);          // current camera (video; first one also carries audio)
@@ -234,7 +240,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         const cs = cam.getVideoTracks()[0]?.getSettings() ?? {};
         const dims = fitCanvasToSource(cs.width || p.width, cs.height || p.height, p.width, p.height);
         const comp = new ProgramCompositor(dims.w, dims.h, prefs.fps);
-        comp.setHostInitial(hostName);
+        comp.setHostInitial(hostNameRef.current);
         comp.setLook(prefs.look);
         comp.setPipLayout(prefs.pipPos, prefs.pipSize);
         comp.setCamera(cam);
@@ -319,7 +325,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
 
       socketRef.current = openRoomSocket(
         eventId,
-        { name: hostName, k: hostKey },
+        { name: hostNameRef.current, k: hostKey },
         (msg) => {
           switch (msg.t) {
             case 'hello':
@@ -476,6 +482,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId, hostKey]);
+
+  // The account name can land after the program started: keep the host tile's label current.
+  useEffect(() => {
+    compRef.current?.setHostInitial(hostName);
+  }, [hostName]);
 
   // Lobby alerts (someone knocked).
   useEffect(() => {

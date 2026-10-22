@@ -91,6 +91,27 @@ describe('Pages middleware', () => {
     expect(res.status).toBe(301);
     expect(res.headers.get('location')).toBe('https://dreamstreamstudio.ai/live?x=1');
   });
+
+  it('sends the Pages production host to the custom domain, keeping path + query', async () => {
+    const go = (u: string, ua = HUMAN) => onRequest({ request: new Request(u, { headers: { 'user-agent': ua } }), next });
+    const served = next.mock.calls.length;
+    const res = await go('https://comic2.pages.dev/live.html?e=evt_1');
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe('https://dreamstreamstudio.ai/live.html?e=evt_1');
+    expect((await go('https://comic2.pages.dev/')).headers.get('location')).toBe('https://dreamstreamstudio.ai/');
+    // Host redirect wins over the agent gate (the gate runs on the custom domain).
+    expect((await go('https://comic2.pages.dev/models', 'GPTBot/1.2')).headers.get('location')).toBe('https://dreamstreamstudio.ai/models');
+    // Crawl files and /.well-known redirect too: the host serves nothing of its own.
+    expect((await go('https://comic2.pages.dev/robots.txt')).status).toBe(301);
+    expect(next.mock.calls.length).toBe(served);
+  });
+
+  it('leaves Pages preview and branch deploys alone', async () => {
+    for (const host of ['a1b2c3d4.comic2.pages.dev', 'dreamstrream-v1.comic2.pages.dev']) {
+      const res = await onRequest({ request: new Request(`https://${host}/live`, { headers: { 'user-agent': HUMAN } }), next });
+      expect(await res.text()).toBe('app');
+    }
+  });
 });
 
 function fakeContainer(handler: (req: Request) => Promise<Response>) {

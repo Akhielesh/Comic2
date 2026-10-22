@@ -17,7 +17,8 @@ See `COST_RUNBOOK.md` for the optimization playbook.
 
 ```
 Browser
-  → Cloudflare Pages (comic2.pages.dev / dreamstreamstudio.ai)            [frontend, ~free]
+  → Cloudflare Pages: dreamstreamstudio.ai                                 [frontend, ~free]
+      (comic2.pages.dev + www 301 to it; previews <hash>.comic2.pages.dev serve)
   → /api/*  →  dreamstream-api Worker  →  Backend Container (Express)     [billed only while awake]
                   (BACKEND_TARGET=origin → Railway instead: dormant fallback)
                   backend → Supabase  (Postgres + Auth + Storage)          [free tier]
@@ -86,7 +87,7 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 | D1 | **2**: `dreamstream-backend-env` (id `16181ceb-…`, WNAM) — the backend's secrets, table `backend_env(name, value, source, updated_at)`, read by the `Backend` container at start (binding `BACKEND_ENV`); and `akhielesh-portfolio-analytics` (owner's portfolio analytics), of which DreamStream uses only the `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
 | KV namespaces | **0** |
 | Durable Objects | `EventRoom` + `MonitorRoom` (live-worker), `Sandbox` (studio-worker), `Backend` (api-proxy, container-backed) — all SQLite |
-| Pages | `comic2.pages.dev` + `dreamstreamstudio.ai` (frontend). **Pages Functions:** one middleware (`functions/_middleware.ts`) — the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. **Static AI model:** `/models/yamnet/yamnet-v1.onnx` (16 MB, Apache-2.0, cached `immutable`) + ONNX Runtime WASM in `/assets` (13 MB / 24 MB, under Pages' 25 MiB file limit) — the baby monitor's on-device sound model (`docs/features/baby-monitor.md`). |
+| Pages | `dreamstreamstudio.ai` (frontend). `comic2.pages.dev` (the production alias) and `www.` only **301** to it, keeping path + query (2026-10-22: one host, one sign-in — sessions are per host); preview/branch deploys (`<hash>.comic2.pages.dev`) still serve. **Pages Functions:** one middleware (`functions/_middleware.ts`) — those host redirects, then the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. **Static AI model:** `/models/yamnet/yamnet-v1.onnx` (16 MB, Apache-2.0, cached `immutable`) + ONNX Runtime WASM in `/assets` (13 MB / 24 MB, under Pages' 25 MiB file limit) — the baby monitor's on-device sound model (`docs/features/baby-monitor.md`). |
 
 ---
 
@@ -107,6 +108,8 @@ All 5 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 > **`dreamstream-live` `ALLOWED_ORIGINS`** was tightened from `"*"` to the known
 > frontends (`https://dreamstreamstudio.ai,https://comic2.pages.dev`) on 2026-06-16
 > (security finding H4). Append any new custom/preview origin that needs the live API.
+> `comic2.pages.dev` stays only for tabs opened before that host started redirecting
+> (2026-10-22); drop it in a later cleanup.
 
 ---
 

@@ -173,7 +173,9 @@ a per-user minimum interval (~60 s) between emails.
 - **Site URL:** `https://dreamstreamstudio.ai` (never `localhost` — any disallowed
   `redirect_to` falls back to it).
 - **Redirect URLs:** `https://dreamstreamstudio.ai/**`, `https://comic2.pages.dev/**`,
-  `http://localhost:*/**`.
+  `https://*.comic2.pages.dev/**`, `http://localhost:*/**`. Keep the `comic2` entries even
+  though that host now 301s to the custom domain (2026-10-22): links in emails already sent
+  carry it as `redirect_to`, and preview deploys still serve there.
 
 The worker only formats `redirect_to` into the link; Supabase validates it against this list
 when the link is opened.

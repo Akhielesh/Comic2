@@ -1,4 +1,4 @@
-export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle' | 'cors-preflight';
+export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle' | 'cors-preflight' | 'redirect';
 export type SmokeScope = 'all' | 'temporary-launch';
 export type SmokeTargetScope = Exclude<SmokeScope, 'all'>;
 
@@ -7,9 +7,13 @@ export type SmokeTargetScope = Exclude<SmokeScope, 'all'>;
  * live fallback (see live/config.ts). If a stale/misbuilt Pages deploy ships without
  * it, the studio falls back to dead same-origin /live-api even though endpoint probes
  * still pass — so the 'live-bundle' target asserts the string is actually in the bundle.
+ * (Legacy since comic2.pages.dev redirects to the custom domain; kept until that code goes.)
  */
 export const EXPECTED_LIVE_WORKER_BASE = 'dreamstream-live.akhieleshsrirangam.workers.dev';
-const TEMPORARY_LAUNCH_ORIGIN = 'https://comic2.pages.dev';
+export const CANONICAL_ORIGIN = 'https://dreamstreamstudio.ai';
+/** The Pages production host. It only 301s to CANONICAL_ORIGIN now (functions/_middleware.ts);
+ *  the live worker still allows it as a CORS origin for tabs opened before the switch. */
+const LEGACY_PAGES_ORIGIN = 'https://comic2.pages.dev';
 const DEFAULT_LIVE_WORKER_PREFLIGHT_METHOD = 'POST';
 const DEFAULT_LIVE_WORKER_PREFLIGHT_HEADERS = 'content-type,x-host-key';
 
@@ -33,6 +37,8 @@ export type SmokeTarget = {
    * uses POST by default; recording multipart uploads need PUT, so this stays
    * per-target instead of hard-coding one method for all launch gates. */
   preflight?: CorsPreflightSpec;
+  /** 'redirect' targets: the exact Location a permanent redirect must point at. */
+  redirectTo?: string;
 };
 
 export type SmokeStatus = 'pass' | 'fail';
@@ -62,9 +68,18 @@ const COLD_START_RETRIES = 4;
 
 export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
-  { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend', scopes: ['temporary-launch'] },
-  { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend', scopes: ['temporary-launch'] },
-  { name: 'stream studio bundle', url: 'https://comic2.pages.dev/live.html', kind: 'live-bundle', scopes: ['temporary-launch'] },
+  // The Pages production host and www only redirect (one host, one sign-in). Fetched with
+  // redirect: 'manual' — following would land on the custom domain's datacenter challenge.
+  {
+    name: 'Pages host redirects to the custom domain',
+    url: `${LEGACY_PAGES_ORIGIN}/live.html?e=smokeprobe`,
+    kind: 'redirect',
+    redirectTo: `${CANONICAL_ORIGIN}/live.html?e=smokeprobe`,
+    scopes: ['temporary-launch']
+  },
+  { name: 'www redirects to the custom domain', url: 'https://www.dreamstreamstudio.ai/live?e=smokeprobe', kind: 'redirect', redirectTo: `${CANONICAL_ORIGIN}/live?e=smokeprobe` },
+  { name: 'stream studio', url: `${CANONICAL_ORIGIN}/live.html`, kind: 'frontend' },
+  { name: 'stream studio bundle', url: `${CANONICAL_ORIGIN}/live.html`, kind: 'live-bundle' },
   { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api', scopes: ['temporary-launch'] },
   { name: 'fallback live worker CORS preflight', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events', kind: 'cors-preflight', scopes: ['temporary-launch'] },
   {
@@ -97,7 +112,7 @@ export function parseSmokeScope(args: string[]): SmokeScope {
 
 export function formatSmokeScopeBanner(scope: SmokeScope): string | null {
   if (scope !== 'temporary-launch') return null;
-  return 'Scope: temporary launch — checking comic2.pages.dev + workers.dev; custom-domain targets intentionally omitted until the Cloudflare challenge is fixed.';
+  return 'Scope: temporary launch — checking the comic2.pages.dev redirect + workers.dev; custom-domain targets intentionally omitted until the Cloudflare challenge is fixed.';
 }
 
 const CLOUDFLARE_CHALLENGE_MARKERS = [
@@ -217,7 +232,7 @@ const headerIncludesToken = (response: Response, headerName: string, token: stri
 };
 
 const preflightSpecForTarget = (target: SmokeTarget): Required<CorsPreflightSpec> => ({
-  origin: target.preflight?.origin ?? TEMPORARY_LAUNCH_ORIGIN,
+  origin: target.preflight?.origin ?? LEGACY_PAGES_ORIGIN,
   method: (target.preflight?.method ?? DEFAULT_LIVE_WORKER_PREFLIGHT_METHOD).toUpperCase(),
   headers: target.preflight?.headers ?? DEFAULT_LIVE_WORKER_PREFLIGHT_HEADERS
 });
@@ -251,6 +266,23 @@ const classifyCorsPreflight = (target: SmokeTarget, response: Response, body: st
   return { status: 'pass', detail: `CORS preflight ok for ${spec.origin} (${spec.method})` };
 };
 
+const PERMANENT_REDIRECT_STATUSES = new Set([301, 308]);
+
+const classifyRedirect = (target: SmokeTarget, response: Response, body: string): Pick<SmokeResult, 'status' | 'detail'> => {
+  const expected = target.redirectTo ?? CANONICAL_ORIGIN;
+  if (detectCloudflareChallenge(response, body)) {
+    return { status: 'fail', detail: 'Cloudflare challenge/interstitial returned instead of the redirect' };
+  }
+  const location = response.headers.get('location');
+  if (!PERMANENT_REDIRECT_STATUSES.has(response.status)) {
+    return { status: 'fail', detail: `expected a permanent redirect to ${expected}, got HTTP ${response.status} (is functions/_middleware.ts deployed?)` };
+  }
+  if (location !== expected) {
+    return { status: 'fail', detail: `redirects to ${location || 'nowhere'} instead of ${expected}` };
+  }
+  return { status: 'pass', detail: `${response.status} → ${expected}` };
+};
+
 export function classifySmokeResponse(
   target: SmokeTarget,
   response: Response,
@@ -263,7 +295,9 @@ export function classifySmokeResponse(
       ? classifyLiveApi(response, body)
       : target.kind === 'cors-preflight'
         ? classifyCorsPreflight(target, response, body)
-        : classifyFrontend(response, body);
+        : target.kind === 'redirect'
+          ? classifyRedirect(target, response, body)
+          : classifyFrontend(response, body);
   return {
     target,
     status: classified.status,
@@ -278,12 +312,13 @@ const fetchUrlWithTimeout = async (
   url: string,
   timeoutMs: number,
   headers?: Record<string, string>,
-  method = 'GET'
+  method = 'GET',
+  redirect: RequestRedirect = 'follow'
 ): Promise<Response> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(url, { method, signal: controller.signal, redirect: 'follow', headers });
+    return await fetcher(url, { method, signal: controller.signal, redirect, headers });
   } finally {
     clearTimeout(timeout);
   }
@@ -297,6 +332,10 @@ const fetchWithTimeout = (fetcher: SmokeFetcher, target: SmokeTarget, timeoutMs:
       'access-control-request-method': spec.method,
       'access-control-request-headers': spec.headers
     }, 'OPTIONS');
+  }
+
+  if (target.kind === 'redirect') {
+    return fetchUrlWithTimeout(fetcher, target.url, timeoutMs, { accept: 'text/html' }, 'GET', 'manual');
   }
 
   return fetchUrlWithTimeout(

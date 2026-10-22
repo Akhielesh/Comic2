@@ -1,5 +1,10 @@
 # DreamStream / Stream Studio Launch Readiness Report
 
+> **Superseded 2026-10:** `comic2.pages.dev` now 301-redirects to `dreamstreamstudio.ai`
+> (path, query and `#` link kept; `functions/_middleware.ts`). The temporary Pages launch
+> path described below is history — see [`docs/infrastructure/INFRA_MAP.md`](../infrastructure/INFRA_MAP.md)
+> and [`docs/features/accounts-and-access.md`](../features/accounts-and-access.md) for the current setup.
+
 > Generated: 2026-06-18 from repo state, live smoke output, Cloudflare/Railway/Supabase CLI evidence, and council findings.
 >
 > Updated: 2026-06-18 after the Pages fallback live-worker fix. `comic2.pages.dev` now ships a Stream Studio bundle that references `dreamstream-live.akhieleshsrirangam.workers.dev`, and the fallback live-worker smoke passes. The remaining P0 launch blockers are the custom-domain Cloudflare challenge and real browser E2E proof.

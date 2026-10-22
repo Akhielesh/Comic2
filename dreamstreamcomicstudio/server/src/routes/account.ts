@@ -4,6 +4,7 @@ import { decryptLegacyClientBlob, decryptSecret, encryptSecret, isSecureStoreAva
 import { canonicalAccountProvider, invalidateAccountKeys } from '../middleware/accountKeys.js';
 import { isByokFallbackMode, setBillingPrefs, type BillingPrefs } from '../services/platformAllowance.js';
 import { logger } from '../lib/logger.js';
+import { cleanName, NAME_MAX, splitName } from '../../../shared/accountName.js';
 
 // Authenticated account endpoints. Mounted under /api/account after requireAuth.
 export const accountRouter = Router();
@@ -132,6 +133,55 @@ accountRouter.patch('/billing-prefs', async (req, res, next) => {
 
     const prefs = await setBillingPrefs(req.user.id, patch);
     res.json({ ok: true, prefs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---- One display name ------------------------------------------------------------
+//
+// PATCH /api/account/name { name }
+// The one name every studio shows (DreamStream, Stream Studio, the baby monitor and
+// calls), written to all three places it lives so the apps can never disagree:
+//   - profile_private.first_name/last_name (DreamStream's profile),
+//   - live_profiles.display_name — only when the person already has a Stream Studio
+//     membership; never created here (membership stays welcome-code gated, live_join),
+//   - auth user_metadata.display_name (+ first/last) — what live__default_name, a later
+//     live_join, auth-email greetings and Chat Studio read.
+// The @username (profiles.username) is the sign-in/Comic handle and is never touched.
+
+accountRouter.patch('/name', async (req, res, next) => {
+  try {
+    const uid = req.user?.id;
+    if (!uid) return res.status(401).json({ error: { message: 'User not authenticated' } });
+    const name = cleanName(req.body?.name);
+    if (!name) return res.status(400).json({ error: { message: `Add your name (1–${NAME_MAX} characters).` } });
+    if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
+      return res.status(503).json({ error: { message: 'Accounts are unavailable right now — try again shortly.' } });
+    }
+
+    const db = getSupabaseAdmin();
+    const { first, last } = splitName(name);
+    const failed = (stage: string, message: string) => {
+      logger.warn('account_name_save_failed', { stage, message });
+      return res.status(500).json({ error: { message: 'Couldn’t save your name right now — try again.' } });
+    };
+    // Upsert: older accounts may not have a private-profile row yet.
+    const pp = await db.from('profile_private').upsert({ id: uid, first_name: first, last_name: last }, { onConflict: 'id' });
+    if (pp.error) return failed('profile_private', pp.error.message);
+    // Rename only (UPDATE, never INSERT). The table has no updated_at trigger.
+    const lp = await db
+      .from('live_profiles')
+      .update({ display_name: name, updated_at: new Date().toISOString() })
+      .eq('user_id', uid)
+      .select('user_id');
+    if (lp.error) return failed('live_profiles', lp.error.message);
+    // Best effort: the two tables above are what the apps read back; the metadata only
+    // seeds future defaults, so a failure here is logged rather than failing the save.
+    const meta = await db.auth.admin.updateUserById(uid, { user_metadata: { display_name: name, first_name: first, last_name: last } });
+    if (meta.error) logger.warn('account_name_meta_failed', { message: meta.error.message });
+
+    res.json({ ok: true, name, stream: (lp.data?.length ?? 0) > 0 });
   } catch (err) {
     next(err);
   }

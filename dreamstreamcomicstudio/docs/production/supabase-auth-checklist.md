@@ -11,7 +11,10 @@ Use this checklist to make signup verification and account policies work in prod
    confirmation / reset / magic link to a dead page on the user's phone.
 3. Add Redirect URLs:
    - `https://dreamstreamstudio.ai/**` (main app `/auth/callback`, Stream Studio `/live?after=…`)
-   - `https://comic2.pages.dev/**` and `https://*.comic2.pages.dev/**` (Pages previews)
+   - `https://comic2.pages.dev/**` and `https://*.comic2.pages.dev/**` — **keep both**, even
+     though `comic2.pages.dev` now 301s to the custom domain (2026-10-22): emails already sent
+     carry that `redirect_to` (the tokens ride in the `#fragment`, which survives the
+     redirect), and Pages preview deploys still serve on `*.comic2.pages.dev`
    - `http://localhost:*/**` (local development)
 4. Verify without sending email (an invalid token redirects to the URL GoTrue accepted, or
    to the Site URL if it didn't):
