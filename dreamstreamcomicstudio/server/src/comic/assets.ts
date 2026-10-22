@@ -492,7 +492,47 @@ export function createSupabaseAssetStore(opts: SupabaseAssetStoreOptions = {}): 
     saveUpload,
     loadDataUrl,
     signUrls,
-    outlineRegion: outlineRegionDataUrl
+    outlineRegion: outlineRegionDataUrl,
+    ...notAvailableAssetMethods()
+  };
+}
+
+/** The v5 AssetStore methods P1-STORAGE has not built yet (contract §12.5): each throws NOT_AVAILABLE (501). */
+type V5AssetMethods = Pick<
+  AssetStore,
+  | 'encodeUploadBuffer'
+  | 'saveRef'
+  | 'previewDataUrl'
+  | 'measureRef'
+  | 'dHash'
+  | 'cropRef'
+  | 'fitToAspect'
+  | 'ensureVariants'
+  | 'quarantine'
+  | 'remove'
+  | 'copyObject'
+  | 'putObject'
+  | 'removePrefix'
+>;
+
+export function notAvailableAssetMethods(): V5AssetMethods {
+  const na = (what: string) => async (): Promise<never> => {
+    throw new StudioError('NOT_AVAILABLE', `${what} isn't available yet.`, { status: 501 });
+  };
+  return {
+    encodeUploadBuffer: na('Uploading reference photos'),
+    saveRef: na('Saving reference photos'),
+    previewDataUrl: na('Image previews'),
+    measureRef: na('Measuring reference photos'),
+    dHash: na('Image fingerprints'),
+    cropRef: na('Cropping reference photos'),
+    fitToAspect: na('Fitting an image to its page shape'),
+    ensureVariants: na('Image size variants'),
+    quarantine: na('Quarantining images'),
+    remove: na('Removing stored images'),
+    copyObject: na('Copying stored images'),
+    putObject: na('Writing stored images'),
+    removePrefix: na('Removing stored images')
   };
 }
 
@@ -593,6 +633,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
     async outlineRegion(dataUrl, box) {
       outlines.push({ dataUrl, box });
       return dataUrl;
-    }
+    },
+    ...notAvailableAssetMethods()
   };
 }

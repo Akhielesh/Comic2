@@ -8,12 +8,18 @@
 import type {
   AspectRatio,
   AssetRef,
+  AssetVariant,
+  Box,
   ComicDoc,
+  RefAsset,
+  RefQuality,
   Resolution,
   SpendKind
 } from '../../../shared/comic/doc.js';
 import type { DocOp } from '../../../shared/comic/ops.js';
-import type { StudioEvent } from '../../../shared/comic/events.js';
+import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
+import type { StudioCaps } from '../../../shared/comic/capabilities.js';
+import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { ImageModelSpec, ImageRoute } from '../../../shared/comic/models.js';
 import type { ChatMessage, JsonSchemaSpec, ToolCall, ToolSpec } from '../ai/providers/types.js';
 
@@ -33,7 +39,20 @@ export type StudioErrorCode =
   | 'NOT_FOUND'
   | 'FORBIDDEN'
   | 'CANCELLED'
-  | 'INTERNAL';
+  | 'INTERNAL'
+  // v5 (contract §12.9)
+  /** 422: the text or image breaks the content policy for this comic's rating. */
+  | 'CONTENT_POLICY'
+  /** 429: a safety cooldown is active for this account. */
+  | 'COOLDOWN'
+  /** 409: a count limit (refs, pages, editions, doc size) would be exceeded. */
+  | 'LIMIT'
+  /** 422: the comic is not ready for this (nothing drawn, edition not reviewed…). */
+  | 'NOT_READY'
+  /** 409: a conflicting operation is running (busy render, publish in progress). */
+  | 'CONFLICT'
+  /** 501 (not built yet) or 503 (dependency down): the feature cannot run right now. */
+  | 'NOT_AVAILABLE';
 
 export class StudioError extends Error {
   readonly code: StudioErrorCode;
@@ -68,7 +87,11 @@ export interface StudioKeys {
 
 // ── Text LLM ─────────────────────────────────────────────────────────────────
 
-export type TextRole = 'director' | 'writer' | 'vision';
+/**
+ * v5 adds `safety` (platform-paid classifier), `translator` (the writer-class chain) and
+ * `linguist` (automated translation review); see textModels.ts TEXT_ROLE_DEFAULTS.
+ */
+export type TextRole = 'director' | 'writer' | 'vision' | 'safety' | 'translator' | 'linguist';
 
 export interface LlmRequest {
   role: TextRole;
@@ -142,6 +165,20 @@ export interface CompiledImageJob {
 
 // ── Assets ───────────────────────────────────────────────────────────────────
 
+/** A validated, re-encoded image ready to store (contract §12.5). */
+export interface EncodedImage {
+  buffer: Buffer;
+  mime: 'image/webp';
+  w: number;
+  h: number;
+  bytes: number;
+}
+
+/**
+ * Storage for studio images. The v5 methods (encodeUploadBuffer … removePrefix) throw
+ * StudioError NOT_AVAILABLE in the real store until P1-STORAGE lands them; the in-memory
+ * fakes (orchestrator.fakes.ts) implement all of them so feature tests run today.
+ */
 export interface AssetStore {
   /** Store a generated image (no cropping) under the project; returns its AssetRef. */
   saveGenerated(args: { userId: string; projectId: string; dataUrl: string; model?: string }): Promise<AssetRef>;
@@ -149,10 +186,36 @@ export interface AssetStore {
   saveUpload(args: { userId: string; projectId: string; dataUrl: string }): Promise<AssetRef>;
   /** Load a stored asset as a data URL (for references). Implementations cache. */
   loadDataUrl(path: string): Promise<string>;
-  /** Short-lived signed URLs for display. Missing/failed paths are omitted. */
-  signUrls(paths: string[]): Promise<Record<string, string>>;
+  /**
+   * Short-lived signed URLs for display. Missing/failed paths are omitted. v5: routes each
+   * path to its bucket (storagePaths.bucketForPath); private paths sign with a 300 s TTL.
+   */
+  signUrls(paths: string[], opts?: { ttlSec?: number }): Promise<Record<string, string>>;
   /** Draw a red outline box (normalized) on a copy of an image (Mark-up edits). */
   outlineRegion(dataUrl: string, box: { x: number; y: number; w: number; h: number }): Promise<string>;
+
+  // ── v5 (contract §12.5) ──
+  /** Magic-byte sniff + pixel limits + AVIF + min edge 128 → WebP. */
+  encodeUploadBuffer(buffer: Buffer, mime: string): Promise<EncodedImage>;
+  /** Store a reference photo in the PRIVATE bucket under u/<user>/p/<project>/ref/. */
+  saveRef(args: { userId: string; projectId: string; encoded: EncodedImage }): Promise<RefAsset>;
+  /** ≤ 768 px WebP data URL for the safety check and the director's eyes. */
+  previewDataUrl(pathOrBuffer: string | Buffer, edge?: number): Promise<string>;
+  measureRef(buffer: Buffer): Promise<{ dhash: string; quality?: RefQuality }>;
+  /** 64-bit difference hash (16 hex); the single implementation for refs and safety. */
+  dHash(buffer: Buffer): Promise<string>;
+  cropRef(args: { userId: string; projectId: string; path: string; box?: Box; aspect?: '1:1' | '3:4' | '4:3' }): Promise<RefAsset>;
+  /** Pad/crop a stored image to an aspect; returns a NEW asset with source 'derived'. */
+  fitToAspect(args: { userId: string; projectId: string; path: string; aspect: AspectRatio; mode: 'pad' | 'crop' | 'auto' }): Promise<AssetRef>;
+  ensureVariants(asset: AssetRef): Promise<AssetVariant[]>;
+  /** Move an object to the private quarantine lane (q/…); the original path stops resolving. */
+  quarantine(path: string, reason: string): Promise<{ quarantinePath: string }>;
+  remove(paths: string[]): Promise<void>;
+  /** Server-side copy (any bucket → the public pub/ lane). */
+  copyObject(srcPath: string, dstPath: string): Promise<void>;
+  putObject(path: string, buffer: Buffer, contentType: string, cacheControl?: string): Promise<void>;
+  /** Delete every object under a prefix (pub/<key>/ cleanup); returns the count removed. */
+  removePrefix(prefix: string): Promise<number>;
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────
@@ -209,8 +272,11 @@ export interface StudioSessionApi {
   readonly userId: string;
   /** Current committed doc (immutable snapshot). */
   get doc(): ComicDoc;
-  /** Apply ops atomically, bump rev, emit an `ops` event, schedule persistence. Returns the new doc. */
-  commit(ops: DocOp[]): ComicDoc;
+  /**
+   * Apply ops atomically, bump rev, emit an `ops` event, schedule persistence. Returns the new doc.
+   * `origin`/`label` ride on the ops event (undo labels, "saved by software" attribution).
+   */
+  commit(ops: DocOp[], opts?: { origin?: OpsOrigin; label?: string }): ComicDoc;
   emit(event: StudioEvent): void;
   subscribe(listener: StudioEventListener): () => void;
   /** Persist now (end of turn). */
@@ -234,4 +300,8 @@ export interface StudioContext {
   publishUrls(paths: string[]): Promise<void>;
   /** Tracks background work started by this turn so the stream stays open until it settles. */
   track<T>(work: Promise<T>): Promise<T>;
+  /** v5: what this user may do (resolveStudioCaps). Absent ⇒ DEFAULT_CAPS. */
+  caps?: StudioCaps;
+  /** v5: effectiveRating() resolved for this request (account ceiling applied). Absent ⇒ computed from the doc. */
+  rating?: ContentRating;
 }

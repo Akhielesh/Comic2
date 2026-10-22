@@ -11,19 +11,36 @@
 //     tab doesn't keep the backend awake.
 //   - When the client may have missed changes (rev gap, broken stream, renders running
 //     with no stream attached after a reload) it refetches, bounded and only while needed.
+//
+// v5 seams (contract §13.1, wave 0 / P0-C): caps, the Easy/Pro view, selection, next-step
+// chips, client actions, ref uploads and the lazily fetched publication work minimally here;
+// undo/redo are inert (canUndo stays false) until P1-CLIENTSTATE lands useUndo.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { DocOp, StudioAction } from '../../shared/comic/ops';
-import type { StreamRequest } from '../../shared/comic/events';
-import type { AssetRef, RenderTarget } from '../../shared/comic/doc';
-import type { BoardTab, PendingAttachment, StudioController } from './types';
+import type { StreamRequest, StudioFocus } from '../../shared/comic/events';
+import type { AssetRef, ClientAction, NextStep, RefOwner, RenderTarget } from '../../shared/comic/doc';
+import { DEFAULT_CAPS, type StudioCaps, type StudioMode } from '../../shared/comic/capabilities';
+import type { PublicationOwnerView } from '../../shared/comic/publication';
+import type {
+  BoardTab,
+  PatchOptions,
+  PendingAttachment,
+  RefUploadOptions,
+  RefUploadResult,
+  SendOptions,
+  StudioController,
+  StudioSelection
+} from './types';
 import {
   cancelStudio,
+  getPublication,
   isAbortError,
   loadStudioProject,
   signStudioUrls,
   streamStudio,
-  toStudioApiError
+  toStudioApiError,
+  uploadStudioRef
 } from './studioApi';
 import {
   assetPath,
@@ -80,6 +97,48 @@ const CANCEL_SAFETY_MS = 20_000;
 
 const IMAGE_SPEND_KINDS = new Set(['style', 'sheet', 'page', 'edit', 'cover']);
 
+/** localStorage key of the Easy/Pro view (contract §13.5). */
+export const MODE_STORAGE_KEY = 'comicstudio.mode';
+/** Inbox paths per message (the server enforces the same cap). */
+const MAX_INBOX_ATTACHMENTS = 12;
+/** StudioFocus.lineIds cap. */
+const MAX_FOCUS_LINES = 80;
+
+const readStoredMode = (): StudioMode | null => {
+  try {
+    const v = typeof window !== 'undefined' ? window.localStorage.getItem(MODE_STORAGE_KEY) : null;
+    return v === 'easy' || v === 'pro' ? v : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeStoredMode = (mode: StudioMode) => {
+  try {
+    window.localStorage.setItem(MODE_STORAGE_KEY, mode);
+  } catch {
+    /* not persisted (private mode, blocked storage) */
+  }
+};
+
+/** The view a user gets: their pick, else the plan default; Pro needs the proEditor capability. */
+export const resolveStudioMode = (stored: StudioMode | null, caps: StudioCaps): StudioMode => {
+  const mode = stored ?? caps.defaultMode;
+  return mode === 'pro' && !caps.proEditor ? 'easy' : mode;
+};
+
+/** The turn focus a selection implies (what the user is looking at when they send). */
+export const focusFromSelection = (sel: StudioSelection | null): StudioFocus | undefined => {
+  if (!sel || !sel.pageId) return undefined;
+  const lineIds = sel.lineIds.filter((id) => typeof id === 'string' && id).slice(0, MAX_FOCUS_LINES);
+  return {
+    pageId: sel.pageId,
+    ...(lineIds.length ? { lineIds } : {}),
+    ...(typeof sel.panelN === 'number' ? { panelN: sel.panelN } : {}),
+    surface: sel.surface
+  };
+};
+
 let localSeq = 0;
 const localId = (prefix: string) => `${prefix}_${Date.now().toString(36)}${(localSeq = (localSeq + 1) % 1e6).toString(36)}`;
 
@@ -124,6 +183,12 @@ export function useStudio(projectId: string): ComicStudioController {
 
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
+  const [caps, setCaps] = useState<StudioCaps>(DEFAULT_CAPS);
+  const [storedMode, setStoredMode] = useState<StudioMode | null>(readStoredMode);
+  const [selection, setSelectionState] = useState<StudioSelection | null>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const [publication, setPublication] = useState<PublicationOwnerView | null>(null);
   const manualTabAtRef = useRef(0);
   const tabRef = useRef(tab);
   tabRef.current = tab;
@@ -161,10 +226,15 @@ export function useStudio(projectId: string): ComicStudioController {
     refreshPromiseRef.current = null;
     manualTabAtRef.current = 0;
     setFocusedPageId(null);
+    setSelectionState(null);
+    setPublication(null);
     dispatch({ type: 'load_start' });
 
     loadStudioProject(projectId, { signal: ctrl.signal })
-      .then(({ doc, urls }) => d({ type: 'load_success', doc, urls, now: Date.now() }))
+      .then(({ doc, urls, caps: loadedCaps }) => {
+        if (loadedCaps && mountedRef.current && generation === generationRef.current) setCaps(loadedCaps);
+        d({ type: 'load_success', doc, urls, now: Date.now() });
+      })
       .catch((err) => {
         if (isAbortError(err)) return;
         d({ type: 'load_error', message: toStudioApiError(err, 'project').message });
@@ -189,8 +259,12 @@ export function useStudio(projectId: string): ComicStudioController {
     const id = projectRef.current;
     const d = guarded(generationRef.current);
     d({ type: 'refresh_start' });
+    const generation = generationRef.current;
     const work = loadStudioProject(id)
-      .then(({ doc, urls }) => d({ type: 'refresh_success', doc, urls, now: Date.now() }))
+      .then(({ doc, urls, caps: loadedCaps }) => {
+        if (loadedCaps && mountedRef.current && generation === generationRef.current) setCaps(loadedCaps);
+        d({ type: 'refresh_success', doc, urls, now: Date.now() });
+      })
       .catch((err) => {
         const e = toStudioApiError(err, 'project');
         d({ type: 'refresh_error', message: stateRef.current.base ? `Couldn't resync the comic. ${e.message}` : e.message });
@@ -239,10 +313,13 @@ export function useStudio(projectId: string): ComicStudioController {
   );
 
   const send = useCallback(
-    async (text: string, attachments: PendingAttachment[] = []) => {
+    async (text: string, opts?: SendOptions | PendingAttachment[]) => {
+      // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
+      const o: SendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
       const clean = (text || '').trim();
-      const files = (attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
-      if (!clean && !files.length) return;
+      const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
+      const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
+      if (!clean && !files.length && !inbox.length) return;
       if (messageInFlightRef.current || !stateRef.current.base) return;
       messageInFlightRef.current = true;
       const streamId = localId('stream');
@@ -250,9 +327,22 @@ export function useStudio(projectId: string): ComicStudioController {
         type: 'message_pending',
         message: { id: localId('pending'), text: clean, attachments: files, at: Date.now(), status: 'sending', streamId }
       });
+      const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
+      const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
+      const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
       const generation = generationRef.current;
       try {
-        await runStream('message', { kind: 'message', text: clean, ...(files.length ? { attachments: files } : {}) }, { streamId });
+        await runStream(
+          'message',
+          {
+            kind: 'message',
+            text: clean,
+            ...(attachments.length ? { attachments } : {}),
+            ...(targets ? { attachmentTargets: targets } : {}),
+            ...(focus ? { focus } : {})
+          },
+          { streamId }
+        );
       } finally {
         if (generation === generationRef.current) messageInFlightRef.current = false;
       }
@@ -320,8 +410,9 @@ export function useStudio(projectId: string): ComicStudioController {
     };
   }, [abortStreams, flushPatches]);
 
+  // PatchOptions (undo/coalesce/label) feed the undo stack, which P1-CLIENTSTATE adds.
   const patch = useCallback(
-    (ops: DocOp[]): Promise<void> => {
+    (ops: DocOp[], _opts?: PatchOptions): Promise<void> => {
       const list = (ops || []).filter((op) => op && typeof op.op === 'string');
       if (!list.length || !stateRef.current.base) return Promise.resolve();
       return new Promise<void>((resolve) => {
@@ -465,8 +556,9 @@ export function useStudio(projectId: string): ComicStudioController {
   }, [projectId]);
 
   const urls = state.urls;
+  // opts.width (variant pick) is honored once P1-CLIENTSTATE lands variants; until then: the original.
   const urlFor = useCallback(
-    (asset?: AssetRef | string | null): string | undefined => {
+    (asset?: AssetRef | string | null, _opts?: { width?: number }): string | undefined => {
       if (typeof asset === 'string' && isDirectUrl(asset)) return asset;
       const path = assetPath(asset);
       if (!path) return undefined;
@@ -533,6 +625,108 @@ export function useStudio(projectId: string): ComicStudioController {
     if (focusedPageId && pageIds !== undefined && !pageIds.split('|').includes(focusedPageId)) setFocusedPageId(null);
   }, [focusedPageId, pageIds]);
 
+  // ── v5 seams: mode, selection, next steps, uploads, publication ─────────────
+
+  const mode = resolveStudioMode(storedMode, caps);
+  const setMode = useCallback((next: StudioMode) => {
+    if (next !== 'easy' && next !== 'pro') return;
+    writeStoredMode(next);
+    setStoredMode(next);
+  }, []);
+
+  const setSelection = useCallback((sel: StudioSelection | null) => setSelectionState(sel), []);
+
+  // Undo/redo: inert until P1-CLIENTSTATE (useUndo + inverseOps). canUndo stays false so no UI offers it.
+  const undo = useCallback(() => undefined, []);
+  const redo = useCallback(() => undefined, []);
+
+  const runClientAction = useCallback(
+    (action: ClientAction) => {
+      if (!action || typeof action !== 'object') return;
+      switch (action.type) {
+        case 'open_reader':
+          setTab('read');
+          return;
+        case 'open_page':
+          if (typeof action.pageId === 'string' && action.pageId) openPage(action.pageId);
+          return;
+        case 'open_tab':
+          if (typeof action.tab === 'string') setTab(action.tab);
+          return;
+        case 'open_share':
+          // The Share sheet (P1-PUBLISH) hangs off the reader; until then, the Read tab.
+          setTab('read');
+          return;
+        case 'undo':
+          undo();
+          return;
+        case 'set_mode':
+          setMode(action.mode);
+          return;
+        default:
+          return;
+      }
+    },
+    [setTab, openPage, undo, setMode]
+  );
+
+  const runNextStep = useCallback(
+    async (step: NextStep): Promise<void> => {
+      if (!step || typeof step !== 'object') return;
+      if (step.action) return act(step.action);
+      if (step.client) return runClientAction(step.client);
+      const text = (typeof step.say === 'string' && step.say.trim() ? step.say : step.label || '').trim();
+      if (text) return send(text);
+    },
+    [act, runClientAction, send]
+  );
+
+  const uploadRef = useCallback(
+    async (file: Blob, target: RefOwner, opts: RefUploadOptions = {}): Promise<RefUploadResult> => {
+      const generation = generationRef.current;
+      opts.onProgress?.(0);
+      const res = await uploadStudioRef(
+        projectRef.current,
+        file,
+        {
+          to: target,
+          ...(opts.label ? { label: opts.label } : {}),
+          ...(opts.name ? { name: opts.name } : {}),
+          ...(typeof opts.index === 'number' ? { index: opts.index } : {})
+        },
+        { signal: opts.signal }
+      );
+      opts.onProgress?.(1);
+      if (mountedRef.current && generation === generationRef.current) {
+        if (Object.keys(res.urls).length) dispatch({ type: 'urls_merge', urls: res.urls, now: Date.now() });
+        // The server committed `ref_add` outside a stream: resync once to pick it up.
+        if (res.ref || res.ops.length) void refresh();
+      }
+      return {
+        ...(res.ref ? { ref: res.ref } : {}),
+        ...(res.duplicateOf ? { duplicateOf: res.duplicateOf } : {}),
+        ...(res.notice ? { notice: res.notice } : {})
+      };
+    },
+    [refresh]
+  );
+
+  const refreshPublication = useCallback(async (): Promise<void> => {
+    const generation = generationRef.current;
+    try {
+      const view = await getPublication(projectRef.current);
+      if (mountedRef.current && generation === generationRef.current) setPublication(view);
+    } catch (err) {
+      const e = toStudioApiError(err, 'project');
+      // Not published / not available yet ⇒ "no publication", not an error.
+      if (e.kind === 'not_available' || e.kind === 'not_found') {
+        if (mountedRef.current && generation === generationRef.current) setPublication(null);
+        return;
+      }
+      throw e;
+    }
+  }, []);
+
   // ── Controller ─────────────────────────────────────────────────────────────
 
   const doc = state.doc;
@@ -576,7 +770,21 @@ export function useStudio(projectId: string): ComicStudioController {
       refreshing: state.refreshing,
       lastSpentUsd: state.lastSpentUsd,
       byok,
-      renderingTotal: rendering
+      renderingTotal: rendering,
+      caps,
+      mode,
+      setMode,
+      undo,
+      redo,
+      canUndo: false,
+      canRedo: false,
+      selection,
+      setSelection,
+      runNextStep,
+      runClientAction,
+      uploadRef,
+      publication,
+      refreshPublication
     }),
     [
       doc,
@@ -606,7 +814,19 @@ export function useStudio(projectId: string): ComicStudioController {
       state.refreshing,
       state.lastSpentUsd,
       byok,
-      rendering
+      rendering,
+      caps,
+      mode,
+      setMode,
+      undo,
+      redo,
+      selection,
+      setSelection,
+      runNextStep,
+      runClientAction,
+      uploadRef,
+      publication,
+      refreshPublication
     ]
   );
 }

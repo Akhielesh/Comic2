@@ -99,3 +99,29 @@ describe('estimateTextCostUsd', () => {
     expect(estimateTextCostUsd('mystery/model', 10, 10)).toBeUndefined();
   });
 });
+
+describe('v5 roles (safety, translator, linguist)', () => {
+  it('pins the contract §12.9 chains and settings', () => {
+    expect(TEXT_ROLE_DEFAULTS.safety).toMatchObject({ models: ['openai/gpt-6-luna', 'google/gemini-3.8-flash'], temperature: 0, timeoutMs: 20_000 });
+    expect(TEXT_ROLE_DEFAULTS.translator).toMatchObject({ models: TEXT_ROLE_DEFAULTS.writer.models, temperature: 0.3, timeoutMs: 120_000 });
+    expect(TEXT_ROLE_DEFAULTS.linguist).toMatchObject({ models: ['google/gemini-3.8-flash', 'openai/gpt-6-luna'], temperature: 0.1, timeoutMs: 60_000 });
+  });
+
+  it('resolve on OpenRouter and on Gemini direct (google/* only)', () => {
+    for (const role of ['safety', 'translator', 'linguist'] as const) {
+      const or = resolveTextRoute(role, OR, {});
+      expect(or).toMatchObject({ route: 'openrouter', models: TEXT_ROLE_DEFAULTS[role].models });
+      const direct = resolveTextRoute(role, GEM, {});
+      expect(direct?.route).toBe('gemini');
+      expect(direct!.models.every((m) => !m.includes('/'))).toBe(true);
+    }
+    expect(resolveTextRoute('safety', GEM, {})?.models).toEqual(['gemini-3.8-flash']);
+    expect(resolveTextRoute('translator', GEM, {})?.models).toEqual(['gemini-4-argon', 'gemini-3.8-flash']);
+  });
+
+  it('the translator follows a writer override unless it has its own', () => {
+    expect(roleModelChain('translator', { COMIC_WRITER_MODEL: 'google/gemini-4-argon' })).toEqual(['google/gemini-4-argon']);
+    expect(roleModelChain('translator', { COMIC_WRITER_MODEL: 'google/gemini-4-argon', COMIC_TRANSLATOR_MODEL: 'gemini-3.8-flash' })).toEqual(['google/gemini-3.8-flash']);
+    expect(roleModelChain('linguist', { COMIC_WRITER_MODEL: 'x/y' })).toEqual([...TEXT_ROLE_DEFAULTS.linguist.models]);
+  });
+});

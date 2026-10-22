@@ -19,15 +19,18 @@ import {
   type Line,
   type LineKind,
   type Msg,
+  type NextStep,
   type OptionChoice,
   type Page,
   type Place,
+  type RefAsset,
   type StyleBible
 } from '../../../shared/comic/doc.js';
+import type { StudioFocus } from '../../../shared/comic/events.js';
+import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { DocOp, SpendAction } from '../../../shared/comic/ops.js';
 import { formatUsd } from '../../../shared/comic/models.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
-import type { ToolSpec } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
 import {
   ASPECT_RATIOS,
@@ -47,12 +50,26 @@ import {
   startAction,
   type ActionOutcome
 } from './jobs.js';
+import {
+  MAX_TOOLS_PER_TURN,
+  ToolArgError,
+  defineTool,
+  type DirectorTool,
+  type ToolCost,
+  type ToolGroup
+} from './extensions.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
 
-export interface DirectorTool {
-  spec: ToolSpec;
-  execute(args: Record<string, unknown>): Promise<string>;
+export type { DirectorTool, ToolCost } from './extensions.js';
+
+/** One executed tool call this turn (feeds composeTurnReply, P1-DIRECTOR). */
+export interface TurnLogEntry {
+  tool: string;
+  ok: boolean;
+  cost: ToolCost;
+  result: string;
+  ops?: number;
 }
 
 /** Per-turn state shared between the director loop and its tools. */
@@ -74,6 +91,25 @@ export interface DirectorTurn {
   gated: boolean;
   /** Paid writer calls (plan/revise/source analysis) made this turn. */
   paidText: number;
+  // ── v5 (contract §12.2) ──
+  /** Every executed tool call, in order. */
+  log: TurnLogEntry[];
+  /** Short facts saved this turn ("kids 2–6", "1 page, 4:5"). */
+  captured: string[];
+  /** From userText or the tapped option reply (DRAW_RE / REDRAW_RE). */
+  drawIntent: 'explicit' | 'redraw' | 'none';
+  /** plan_pages/revise_pages ran this turn: render_pages refuses same-turn draws unless SKIP_REVIEW_RE. */
+  plannedThisTurn: boolean;
+  /** Current attachments + carried unassigned images (numbering continues). */
+  images: RefAsset[];
+  /** What the user is looking at / has selected (balloons, page, panel). */
+  focus?: StudioFocus;
+  /** Next steps attached to the assistant message. */
+  nextSteps: NextStep[];
+  /** SAFETY/IP NOTE appended to the user turn (adapt decisions). */
+  safetyNote?: string;
+  /** effectiveRating() at turn start. */
+  rating: ContentRating;
 }
 
 /** Source material shorter than this is stored without a (paid) writer analysis. */
@@ -96,6 +132,13 @@ export const createDirectorTurn = (init: Partial<DirectorTurn> = {}): DirectorTu
   spentUsd: 0,
   gated: false,
   paidText: 0,
+  log: [],
+  captured: [],
+  drawIntent: 'none',
+  plannedThisTurn: false,
+  images: [],
+  nextSteps: [],
+  rating: 'PG-13',
   ...init
 });
 
@@ -115,15 +158,7 @@ const upper = (name?: string) => (name || '').trim().toUpperCase() || 'UNNAMED';
 const castList = (doc: ComicDoc) => (doc.cast.length ? doc.cast.map((c) => upper(c.name)).join(', ') : '(none)');
 const placeList = (doc: ComicDoc) => (doc.places.length ? doc.places.map((p) => upper(p.name)).join(', ') : '(none)');
 
-class ToolArgError extends Error {}
 const argError = (message: string) => new ToolArgError(message);
-
-const errorText = (err: unknown): string => {
-  if (err instanceof ToolArgError) return `Error: ${err.message}`;
-  if (err instanceof StudioError) return `Error: ${err.userMessage}`;
-  logger.warn('comic_tool_unexpected_error', { message: (err as Error)?.message });
-  return 'Error: that did not work. Try again with simpler arguments.';
-};
 
 const outcomeText = (outcome: ActionOutcome): string => outcome.message;
 
@@ -157,21 +192,17 @@ const lookSchema = {
   )
 };
 
+/**
+ * A core tool. Cost is recorded on the tool (turn log, trimming); the description is kept
+ * verbatim in wave 0 — P1-DIRECTOR switches core tools to the cost prefix (defineTool's default).
+ */
 const define = (
   name: string,
+  cost: ToolCost,
   description: string,
   parameters: Record<string, unknown>,
   run: (args: Record<string, unknown>) => Promise<string> | string
-): DirectorTool => ({
-  spec: { type: 'function', function: { name, description, parameters } },
-  async execute(args) {
-    try {
-      return await run(isObject(args) ? args : {});
-    } catch (err) {
-      return errorText(err);
-    }
-  }
-});
+): DirectorTool => defineTool(name, cost, description, parameters, run, { prefix: false });
 
 // ── Resolution helpers ───────────────────────────────────────────────────────
 
@@ -407,6 +438,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
   return [
     define(
       'update_brief',
+      'free',
       'Save story facts the user stated. Only include fields that change.',
       schema({
         title: S('Comic title.'),
@@ -433,6 +465,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'add_notes',
+      'free',
       "Record the user's decisions or wishes that don't fit a brief field (e.g. 'no gore', 'ends on a cliffhanger').",
       schema({ notes: A({ type: 'string' }, 'Short notes, one idea each.') }, ['notes']),
       (args) => {
@@ -445,6 +478,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'set_format',
+      'free',
       'Set the format: kind, page count (1–40), page aspect, panels per page, reading direction, lettering, color mode, dialogue language.',
       schema({
         kind: S('Comic kind.', { enum: COMIC_KINDS }),
@@ -476,6 +510,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'save_source',
+      'text',
       "Store the user's script/story/notes as the source. If the message says it was already saved as the source (a long paste or text attachment), call with no arguments to read the full text — the message shows only an excerpt. Otherwise: text = the material, or useMessage:true for the current message. Long material is analyzed (brief, cast, places).",
       schema({
         text: S('The source material (omit when useMessage is true).'),
@@ -487,6 +522,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'upsert_character',
+      'free',
       'Create or update a character (matched by id or name). Fill every look field the user gave. attachmentRefs = numbers of images attached to this message that show this character (1 = first).',
       schema(
         {
@@ -549,6 +585,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'remove_character',
+      'free',
       'Remove a character from the cast (and from every panel).',
       schema({ id: S('Character id.'), name: S('Character name.') }),
       (args) => {
@@ -561,6 +598,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'upsert_place',
+      'free',
       'Create or update a recurring location (matched by id or name). attachmentRefs = attached image numbers showing it.',
       schema(
         {
@@ -597,6 +635,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'remove_place',
+      'free',
       'Remove a location.',
       schema({ id: S('Place id.'), name: S('Place name.') }),
       (args) => {
@@ -609,6 +648,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'set_style',
+      'free',
       `Set the art style: presetId (one of: ${STYLE_PRESETS.map((p) => p.id).join(', ')}), OR a custom name + spec (medium, linework, color, shading, influences as visible traits). lock:true locks the style. attachmentRefs adds attached images as style references.`,
       schema({
         presetId: S('Preset id.', { enum: STYLE_PRESETS.map((p) => p.id) }),
@@ -673,6 +713,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'propose_styles',
+      'paid',
       'Draw 3 cheap style-test images (or the given 2–4 directions) so the user can tap one to lock. Spends a little money; may need approval.',
       schema({
         directions: A(
@@ -692,6 +733,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'render_character_sheets',
+      'paid',
       'Draw model sheets (turnaround + expressions) for lead/support characters that lack one, or for the named characters/places (force:true redraws). Spends money; may need approval.',
       schema({
         names: A({ type: 'string' }, 'Character (or place) names; omit for every lead/support missing a sheet.'),
@@ -717,6 +759,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'plan_pages',
+      'text',
       'Write the page-by-page script (layout, panels, shots, cast, dialogue) for the whole comic from the doc. No image spend. Replaces the current plan (drawn pages are kept and marked out of date).',
       schema({ instructions: S('Extra direction for the writer (pacing, what to emphasize).') }),
       async (args) => {
@@ -731,6 +774,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'revise_pages',
+      'text',
       'Rewrite specific pages of the plan following instructions (e.g. "make page 2 a splash", "Maya should be angrier"). Drawn pages become out of date, never wiped.',
       schema({ pages: A({ type: 'integer' }, 'Page numbers to rewrite.'), instructions: S('What to change.') }, ['pages', 'instructions']),
       async (args) => {
@@ -748,6 +792,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'read_pages',
+      'free',
       'Read the full script of planned pages (panels, cast, dialogue with line kinds) before editing them.',
       schema({ pages: A({ type: 'integer' }, 'Page numbers.') }, ['pages']),
       (args) => {
@@ -773,6 +818,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'edit_panel_text',
+      'free',
       "Replace ALL dialogue/captions of one panel with the given lines (exact text). Use [] to make it silent.",
       schema(
         {
@@ -829,6 +875,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'render_pages',
+      'paid',
       'Draw pages from the plan: by default every undrawn or out-of-date page; with page numbers, those pages are (re)drawn. Draws missing character sheets first. Spends money; may need approval. Only after the user saw the plan.',
       schema({ pages: A({ type: 'integer' }, 'Page numbers to (re)draw; omit for all that need it.') }),
       (args) => {
@@ -847,6 +894,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'edit_page',
+      'paid',
       'Change part of a DRAWN page with an instruction (e.g. "make it night", "Maya smiles"), optionally limited to one panel. Everything else is kept. Spends money; may need approval.',
       schema({ page: I('Page number.'), instruction: S('What to change, concretely.'), panel: I('Panel number (optional).') }, ['page', 'instruction']),
       (args) => {
@@ -866,6 +914,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'render_cover',
+      'paid',
       'Draw the cover. Optional title/tagline/direction override what is shown. Spends money; may need approval.',
       schema({ title: S('Cover title (defaults to the comic title).'), tagline: S('Short tagline.'), direction: S('Cover composition idea.') }),
       (args) => {
@@ -883,6 +932,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'set_settings',
+      'free',
       'Tighten money settings: lower the quality tier, require more confirmations, lower the "big spend" threshold, or set/lower a budget cap in USD. Upgrading quality or loosening confirmations/budget is the user\'s call — tell them to use the quality chip or Settings.',
       schema({
         quality: S('Quality tier.', { enum: QUALITY_TIERS }),
@@ -926,6 +976,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
     define(
       'ask_user',
+      'free',
       'Ask the user ONE question with 2–5 tappable options (propose a sensible default first). End your turn right after calling this.',
       schema(
         {
@@ -983,4 +1034,73 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
 /** Exposed for tests and the director: the tool names in the order offered. */
 export const directorToolNames = (tools: DirectorTool[]) => tools.map((t) => t.spec.function.name);
+
+// ── Core + feature groups (contract §12.1) ───────────────────────────────────
+
+/** Everything one director turn offers: tools, extra prompt rules, summary lines, activity labels. */
+export interface TurnToolset {
+  tools: DirectorTool[];
+  /** Ids of the feature groups whose tools made it into this turn (core excluded). */
+  groups: ToolGroup['id'][];
+  /** Rules appended to DIRECTOR_SYSTEM_PROMPT (active groups only). */
+  promptRules: string[];
+  /** Extra DOC SUMMARY lines (active groups only). */
+  summaryLines: string[];
+  /** TOOL_ACTIVITY labels contributed by feature groups. */
+  activity: Record<string, string>;
+}
+
+const groupFailed = (ctx: StudioContext, id: string, stage: string, err: unknown) =>
+  logger.warn('comic_tool_group_failed', { projectId: ctx.projectId, group: id, stage, message: (err as Error)?.message });
+
+/**
+ * Merge the core tools with the feature groups that pass their phase gate, by priority
+ * (lower first; ties keep registration order). Groups are kept or dropped WHOLE so a
+ * feature is never half-offered; one that would push the turn past MAX_TOOLS_PER_TURN
+ * is skipped (a smaller, lower-priority group may still fit). Tool names are unique:
+ * a feature tool can never shadow a core tool or an earlier group's. A group that throws
+ * is skipped and logged — a broken feature never breaks the director turn.
+ */
+export function buildTurnToolset(
+  ctx: StudioContext,
+  turn: DirectorTurn,
+  groups: readonly ToolGroup[] = [],
+  opts: { core?: DirectorTool[]; maxTools?: number } = {}
+): TurnToolset {
+  const core = opts.core ?? buildDirectorTools(ctx, turn);
+  const max = opts.maxTools ?? MAX_TOOLS_PER_TURN;
+  const tools = [...core];
+  const names = new Set(tools.map((t) => t.spec.function.name));
+  const out: TurnToolset = { tools, groups: [], promptRules: [], summaryLines: [], activity: {} };
+  const doc = ctx.session.doc;
+  const ordered = groups.map((g, i) => ({ g, i })).sort((a, b) => a.g.priority - b.g.priority || a.i - b.i);
+  for (const { g } of ordered) {
+    if (g.activity) Object.assign(out.activity, g.activity);
+    let offered: DirectorTool[];
+    try {
+      if (g.when && !g.when(ctx, turn)) continue;
+      offered = (g.tools(ctx, turn) || []).filter((t) => t?.spec?.function?.name && !names.has(t.spec.function.name));
+    } catch (err) {
+      groupFailed(ctx, g.id, 'tools', err);
+      continue;
+    }
+    if (tools.length + offered.length > max) {
+      logger.info('comic_tool_group_trimmed', { projectId: ctx.projectId, group: g.id, tools: offered.length, offered: tools.length });
+      continue;
+    }
+    for (const t of offered) {
+      names.add(t.spec.function.name);
+      tools.push(t);
+    }
+    out.groups.push(g.id);
+    try {
+      const rules = g.promptRules?.(doc)?.trim();
+      if (rules) out.promptRules.push(rules);
+      for (const line of g.summaryLines?.(doc, turn) || []) if (typeof line === 'string' && line.trim()) out.summaryLines.push(line.trim());
+    } catch (err) {
+      groupFailed(ctx, g.id, 'prompt', err);
+    }
+  }
+  return out;
+}
 

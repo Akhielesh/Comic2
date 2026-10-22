@@ -43,6 +43,7 @@ import {
   type LetteringMode,
   type LineKind,
   type Msg,
+  type NextStep,
   type Page,
   type PanelSize,
   type Place,
@@ -56,6 +57,9 @@ import {
   type StyleBible
 } from '../../../shared/comic/doc.js';
 import { CLIENT_PATCHABLE_OPS, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import type { OpsOrigin } from '../../../shared/comic/events.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
+import { effectiveRating } from '../../../shared/comic/safety.js';
 import {
   IMAGE_MODELS,
   PLATFORM_MARKUP,
@@ -73,7 +77,9 @@ import {
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
+import { actionHandlerFor } from './actions/index.js';
 import type { OrchestratorContext } from './context.js';
+import type { ActionHandler, SanitizeCtx } from './extensions.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
 import {
@@ -85,10 +91,12 @@ import {
   type LlmClient,
   type LlmResult,
   type StudioContext,
+  type StudioErrorCode,
   type StudioKeys,
   type StudioSessionApi
 } from './types.js';
 import { analyzePageRender, estimatePanelBoxes, fallbackBalloons } from './vision.js';
+import { opSanitizerFor, patchScreens } from './sanitize/index.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
 
 // ── Limits & constants ───────────────────────────────────────────────────────
@@ -101,6 +109,12 @@ export const LOW_QC_SCORE = 0.45;
 const MAX_IMAGE_ATTEMPTS = 2;
 /** Pauses between attempts (tests shorten them). */
 export const JOB_TIMINGS = { retryBackoffMs: 2500, saveRetryMs: 1000 };
+/**
+ * A rate-limited provider needs real breathing room before the job's second attempt (the
+ * transport already waited and retried once): 5× the base pause plus up to one base pause
+ * of jitter, so parallel jobs that failed together do not all come back in the same second.
+ */
+const RATE_LIMIT_BACKOFF_FACTOR = 5;
 const MAX_STYLE_DIRECTIONS = 4;
 const DEFAULT_STYLE_DIRECTIONS = 3;
 /** Writer text spend for proposing style directions (one strong-model call, occasional repair). */
@@ -509,13 +523,24 @@ export interface RunActionOptions {
   priorUsd?: number;
   /** Cards meant for the conversation go here (director turns) instead of a new message. */
   collectCard?: (card: Card) => void;
+  // ── v5 (contract §12.3; optional until P1-JOBS makes caps/origin required) ──
+  /** What this user may do; replaces qualityDenied (kept as derived user text). Absent ⇒ ctx.caps ⇒ DEFAULT_CAPS. */
+  caps?: StudioCaps;
+  /** Director turns: next steps for the director's message. */
+  collectNextSteps?: (steps: NextStep[]) => void;
+  /** Force a gate even below bigSpendUsd (drawIntent 'none', first_render, plan_review, redraw). */
+  forceGate?: Gate['reason'];
+  /** Ops origin for session.commit (undo + "saved by software" attribution). */
+  origin?: OpsOrigin;
 }
 
 export type ActionOutcome =
-  | { status: 'done'; message: string }
+  | { status: 'done'; message: string; nextSteps?: NextStep[] }
   | { status: 'started'; message: string; estimate: SpendEstimate }
   | { status: 'gated'; message: string; gate: Gate }
-  | { status: 'blocked'; message: string };
+  | { status: 'blocked'; message: string; code?: StudioErrorCode }
+  /** Everything requested is already ready and fresh ($0). */
+  | { status: 'nothing'; message: string; nextSteps: NextStep[] };
 
 export interface StartedAction {
   outcome: ActionOutcome;
@@ -556,6 +581,9 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
   if (!action || typeof action !== 'object' || typeof (action as { type?: unknown }).type !== 'string') {
     throw badRequest('Unknown action.');
   }
+  // Feature actions (contract §12.1) go through the registry; core types never do.
+  const handler = actionHandlerFor(action.type);
+  if (handler) return runFeatureAction(ctx, handler, action, opts);
   if (isSpendAction(action)) return startSpend(ctx, action, opts);
   switch (action.type) {
     case 'approve_gate':
@@ -569,7 +597,7 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
     case 'approve_plan':
       return finished(approvePlan(ctx));
     case 'patch':
-      return finished(applyPatch(ctx, action.ops));
+      return finished(applyPatch(ctx, action.ops, opts));
     case 'restore_render':
       return finished(restoreRender(ctx, action.target, action.path));
     case 'relayout_balloons':
@@ -581,6 +609,25 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
       throw badRequest(`Unknown action "${(action as { type: string }).type}".`);
   }
 }
+
+/**
+ * Run a registered feature action. Wave 0 calls the handler directly; P1-JOBS routes
+ * `spend: true` handlers (translate) through estimate → gateDecision → run like startSpend.
+ */
+async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
+  return handler.run(ctx, action, opts);
+}
+
+/** Who is patching, for the feature sanitizers (§12.1 SanitizeCtx). */
+export const sanitizeCtxFor = (ctx: StudioContext, opts: Pick<RunActionOptions, 'caps'> = {}): SanitizeCtx => {
+  const caps = opts.caps ?? ctx.caps ?? DEFAULT_CAPS;
+  return {
+    userId: ctx.userId,
+    caps,
+    rating: ctx.rating ?? effectiveRating(ctx.session.doc, caps.ratingCeiling).rating,
+    now: Date.now()
+  };
+};
 
 // ── Gates ────────────────────────────────────────────────────────────────────
 
@@ -1210,7 +1257,8 @@ class RenderRun {
       if (ok.length) parts.push(`Drew ${noun(ok)} (${formatUsd(this.spentUsd)}).`);
       if (failed.length) {
         const first = failed[0];
-        parts.push(`${capitalize(noun(failed))} failed${first.error ? ` — ${first.job.label}: ${first.error}` : ''}.`);
+        const reason = first.error ? first.error.trim().replace(/[.!\s]+$/, '') : '';
+        parts.push(`${capitalize(noun(failed))} failed${reason ? ` — ${first.job.label}: ${reason}` : ''}.`);
       }
       if (skipped.length) {
         parts.push(
@@ -1378,7 +1426,12 @@ class RenderRun {
         }
         if (!lastError.retryable || attempts >= MAX_IMAGE_ATTEMPTS || this.signal.aborted || lastError.code === 'CANCELLED') break;
         logger.warn('comic_image_job_retry', { projectId: ctx.projectId, target: renderTargetKey(job.target), code: lastError.code });
-        await sleep(JOB_TIMINGS.retryBackoffMs, this.signal);
+        await sleep(
+          lastError.code === 'RATE_LIMIT'
+            ? JOB_TIMINGS.retryBackoffMs * RATE_LIMIT_BACKOFF_FACTOR + Math.round(Math.random() * JOB_TIMINGS.retryBackoffMs)
+            : JOB_TIMINGS.retryBackoffMs,
+          this.signal
+        );
         if (this.signal.aborted) break;
       }
     }
@@ -1870,7 +1923,7 @@ const assetList = (known: Map<string, AssetRef>) => (v: unknown): AssetRef[] | u
  * re-built from known keys with bounded values; anything structurally wrong rejects the
  * whole batch (BAD_REQUEST) so a half-applied edit never happens.
  */
-export function sanitizePatchOps(doc: ComicDoc, ops: unknown): DocOp[] {
+export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: SanitizeCtx): DocOp[] {
   if (!Array.isArray(ops) || !ops.length) throw badRequest('Nothing to change.');
   if (ops.length > MAX_PATCH_OPS) throw badRequest('Too many changes at once.');
   const known = knownAssets(doc);
@@ -2077,12 +2130,26 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown): DocOp[] {
         out.push({ op: 'plan_status', status });
         break;
       }
-      default:
-        throw badRequest(`“${kind}” can't be changed directly.`);
+      default: {
+        // v5 feature ops (letter_style, page_*, ref_*, edition*, …): their own sanitizer.
+        const sanitizer = opSanitizerFor(kind);
+        if (!sanitizer) throw badRequest(`“${kind}” can't be changed directly.`);
+        out.push(sanitizer.sanitize(doc, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc)));
+      }
     }
   }
-  return out;
+  let screened = out;
+  for (const screen of patchScreens()) screened = screen(doc, screened, sanitizeCtx ?? defaultSanitizeCtx(doc));
+  return screened;
 }
+
+/** Patches validated without a request context (tools, tests): default caps, the doc's own rating. */
+const defaultSanitizeCtx = (doc: ComicDoc): SanitizeCtx => ({
+  userId: '',
+  caps: DEFAULT_CAPS,
+  rating: effectiveRating(doc, DEFAULT_CAPS.ratingCeiling).rating,
+  now: Date.now()
+});
 
 const sanitizeBalloon = (raw: unknown, lineIds: Set<string>): Balloon => {
   if (!isObject(raw) || typeof raw.lineId !== 'string' || !lineIds.has(raw.lineId)) throw badRequest('Invalid balloon.');
@@ -2103,9 +2170,10 @@ const sanitizeBalloon = (raw: unknown, lineIds: Set<string>): Balloon => {
   };
 };
 
-function applyPatch(ctx: StudioContext, ops: unknown): ActionOutcome {
-  const sanitized = sanitizePatchOps(ctx.session.doc, ops);
-  ctx.session.commit(sanitized);
+function applyPatch(ctx: StudioContext, ops: unknown, opts: RunActionOptions): ActionOutcome {
+  const sanitized = sanitizePatchOps(ctx.session.doc, ops, sanitizeCtxFor(ctx, opts));
+  if (opts.origin) ctx.session.commit(sanitized, { origin: opts.origin });
+  else ctx.session.commit(sanitized);
   return { status: 'done', message: `Saved ${plural(sanitized.length, 'change')}.` };
 }
 

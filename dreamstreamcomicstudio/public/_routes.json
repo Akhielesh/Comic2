@@ -12,6 +12,8 @@
     "/favicon.ico",
     "/live-sw.js",
     "/live.webmanifest",
-    "/models/*"
+    "/models/*",
+    "/app.webmanifest",
+    "/icons/*"
   ]
 }

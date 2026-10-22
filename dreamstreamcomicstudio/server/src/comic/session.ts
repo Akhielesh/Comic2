@@ -13,7 +13,8 @@
 // are unref'd so an idle backend can sleep. See docs/features/comic-studio-v4.md §4.
 
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
-import type { StudioEvent } from '../../../shared/comic/events.js';
+import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
+import { DOC_LIMITS as SHARED_DOC_LIMITS } from '../../../shared/comic/limits.js';
 import type { ComicDoc, RenderState, RenderTarget } from '../../../shared/comic/doc.js';
 import { logger } from '../lib/logger.js';
 import { StudioError, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
@@ -23,7 +24,11 @@ import { StudioError, type DocStore, type ProjectRowSummary, type StudioEventLis
  * tools, the writer's new cast) funnels through commit(), so the caps live here: one user
  * must never be able to grow an in-memory session until the shared backend runs out of heap.
  */
-export const DOC_LIMITS = { cast: 40, places: 30, linesPerPanel: 8, refsPerEntity: 12 } as const;
+export const DOC_LIMITS = {
+  ...SHARED_DOC_LIMITS,
+  /** Legacy per-entity ref cap still enforced below (= refsPerCharacter); P1-JOBS moves to REF_LIMITS/capFor. */
+  refsPerEntity: SHARED_DOC_LIMITS.refsPerCharacter
+} as const;
 
 /** Drop ops that would create entities past DOC_LIMITS (edits to existing ones always pass). */
 export function enforceDocLimits(doc: ComicDoc, ops: DocOp[]): DocOp[] {
@@ -216,7 +221,7 @@ export class StudioSession implements StudioSessionApi {
     return this.gone;
   }
 
-  commit(rawOps: DocOp[]): ComicDoc {
+  commit(rawOps: DocOp[], opts?: { origin?: OpsOrigin; label?: string }): ComicDoc {
     if (!Array.isArray(rawOps) || !rawOps.length) return this.current;
     const ops = enforceDocLimits(this.current, rawOps);
     if (!ops.length) return this.current;
@@ -224,7 +229,13 @@ export class StudioSession implements StudioSessionApi {
     const next = applyOps(this.current, ops, at);
     this.current = { ...next, rev: this.current.rev + 1, updatedAt: at };
     this.touch();
-    this.emit({ type: 'ops', rev: this.current.rev, ops });
+    this.emit({
+      type: 'ops',
+      rev: this.current.rev,
+      ops,
+      ...(opts?.origin ? { origin: opts.origin } : {}),
+      ...(opts?.label ? { label: opts.label } : {})
+    });
     this.scheduleSave(this.saveDebounceMs);
     return this.current;
   }

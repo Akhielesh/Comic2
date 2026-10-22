@@ -9,7 +9,12 @@
 //    labels ("Image 2: CHARACTER SHEET: ARJUN") so the model can bind label → picture.
 //
 // Reliability rules (each was a real failure in the old studio):
-//  - never switch models (a failed page must not silently come back in another style),
+//  - never switch models (a failed page must not silently come back in another style);
+//    when a route is rate-limited or down, the SAME model may be retried once on the other
+//    route — only between keys with the same payer (the user's own ↔ the user's own,
+//    platform ↔ platform), never silently moving spend between the user and DreamStream,
+//  - a 429 puts that route+model+key on a short shared cooldown so parallel jobs (three
+//    style tests, a page batch) wait it out instead of piling more requests on,
 //  - aspect ratio and resolution are request parameters, validated against the registry
 //    (never prose), and parameters the model rejects are stripped,
 //  - reference counts are capped at the model's limit,
@@ -18,6 +23,7 @@
 //    imageConfig (that is how pages used to come back square),
 //  - every failure is a StudioError with an honest, user-safe message.
 
+import { createHash } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
 import { GEMINI_BASE_URL, OPENROUTER_APP_TITLE, OPENROUTER_APP_URL, OPENROUTER_BASE_URL } from '../config.js';
 import { markSharedKeyCapped } from '../ai/providerCircuit.js';
@@ -73,12 +79,27 @@ const cancelled = () => new StudioError('CANCELLED', 'Cancelled.', { status: 499
 
 const ROUTE_LABEL: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemini: 'Gemini' };
 
+/**
+ * Who actually refused, from OpenRouter's error metadata. A 429 means very different things:
+ * the model's upstream provider throttling everyone (nothing the user can change), a Google
+ * key the user attached in OpenRouter → Integrations (their own quota), or OpenRouter's
+ * own limit on the key. The owner once raised their OpenRouter limit for an upstream
+ * throttle because all three looked like "busy".
+ */
+export interface ProviderErrorMeta {
+  providerName?: string;
+  /** OpenRouter routed through the user's own provider key (OpenRouter BYOK integration). */
+  isByok?: boolean;
+  errorType?: string;
+}
+
 /** Internal transport failure before classification. */
 class ImageHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly retryAfterMs?: number
+    readonly retryAfterMs?: number,
+    readonly meta?: ProviderErrorMeta
   ) {
     super(message);
     this.name = 'ImageHttpError';
@@ -144,10 +165,59 @@ const timeoutError = (ms: number) =>
     { abandoned: true }
   );
 
+// Keys and tokens: OpenRouter/Gemini key shapes, bearer values, and long mixed letter+digit runs.
+const SECRET_LIKE_RE =
+  /\b(?:sk-[A-Za-z0-9_-]{6,}|AIza[0-9A-Za-z_-]{10,}|Bearer\s+\S+|(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,})/g;
+
+/**
+ * What the provider itself said, short and safe to show: the transport prefix and JSON
+ * wrapping are dropped, anything key-like is redacted. Without this the owner could only
+ * see "busy" and had no way to tell an upstream capacity limit from their own quota.
+ */
+export const providerDetail = (message: string): string => {
+  let text = String(message || '').replace(/^OpenRouter \/[\w/]+ \d{3}:\s*/, '');
+  const quoted = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (quoted) text = quoted[1].replace(/\\(.)/g, '$1');
+  text = text
+    .replace(SECRET_LIKE_RE, '…')
+    .replace(/[{}"\[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Nothing beyond what our own message already says.
+  if (!text || /^(?:rate limited|too many requests|provider returned error|image provider error)\.?$/i.test(text)) return '';
+  return text.length > 180 ? `${text.slice(0, 179).trimEnd()}…` : text;
+};
+
+const withDetail = (base: string, provider: string, message: string): string => {
+  const detail = providerDetail(message);
+  return detail ? `${base} (${provider} said: ${detail.replace(/\.$/, '')}.)` : base;
+};
+
+const rateLimitMessage = (
+  ctx: { route: ImageRoute; byok: boolean; model?: string },
+  meta: ProviderErrorMeta | undefined,
+  message: string
+): string => {
+  const model = ctx.model || 'This image model';
+  if (ctx.route === 'openrouter') {
+    if (meta?.isByok) {
+      return `OpenRouter sent ${model} through the Google key in your OpenRouter Integrations, and that key is rate-limited. Wait a minute, or check that key's quota and billing in Google AI Studio.`;
+    }
+    if (meta?.providerName || /upstream/i.test(message)) {
+      const upstream = meta?.providerName ? ` (${meta.providerName})` : '';
+      return `${model} is being throttled by its provider${upstream} for everyone on OpenRouter right now — your key and limits are fine. Wait a minute or two and try again.`;
+    }
+  }
+  return 'The image model is busy right now (rate limited). Wait a minute and try again.';
+};
+
 /** Map an HTTP / SDK / network failure to a StudioError. */
-export const classifyImageError = (err: unknown, ctx: { route: ImageRoute; byok: boolean }): StudioError => {
+export const classifyImageError = (
+  err: unknown,
+  ctx: { route: ImageRoute; byok: boolean; model?: string }
+): StudioError => {
   if (err instanceof StudioError) return err;
-  const e = (err || {}) as { status?: unknown; code?: unknown; message?: unknown; name?: unknown };
+  const e = (err || {}) as { status?: unknown; code?: unknown; message?: unknown; name?: unknown; meta?: ProviderErrorMeta };
   const message = String(e.message || err || '');
   const status = Number(e.status);
   const provider = ROUTE_LABEL[ctx.route];
@@ -167,17 +237,21 @@ export const classifyImageError = (err: unknown, ctx: { route: ImageRoute; byok:
   // "…free_tier_requests, limit: 0…". Retrying can never succeed, so say what to fix rather
   // than "busy, wait a minute" (which sends the client and job runner into dead retries).
   // A free-tier per-minute 429 carries a non-zero limit and stays a transient RATE_LIMIT.
-  if (ctx.route === 'gemini' && (status === 429 || /resource.?exhausted/i.test(message)) && /\blimit:\s*0\b/i.test(message)) {
+  // The same "limit: 0" can come back through OpenRouter when the account routes Google
+  // models through its own Google key (OpenRouter BYOK integration) on an unbilled project.
+  if ((status === 429 || /resource.?exhausted/i.test(message)) && /\blimit:\s*0\b/i.test(message)) {
     return new StudioError(
       'PROVIDER_ERROR',
-      ctx.byok
-        ? 'Your Gemini key has no image-generation quota (its Google Cloud project has no billing). Enable billing for that project in Google AI Studio, or add an OpenRouter key in Settings → API keys.'
-        : 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.',
+      !ctx.byok
+        ? 'The shared image service is at capacity right now. Try again later, or add your own key in Settings → API keys.'
+        : ctx.route === 'gemini'
+          ? 'Your Gemini key has no image-generation quota (its Google Cloud project has no billing). Enable billing for that project in Google AI Studio, or add an OpenRouter key in Settings → API keys.'
+          : 'OpenRouter is sending this model through a Google key with no image quota (its Google Cloud project has no billing). Enable billing for that project, or remove that Google key from your OpenRouter integrations.',
       { status: 503, retryable: false, cause: err }
     );
   }
   if (status === 429 || /resource.?exhausted|rate.?limit|too many requests/i.test(message)) {
-    return new StudioError('RATE_LIMIT', 'The image model is busy right now (rate limited). Wait a minute and try again.', {
+    return new StudioError('RATE_LIMIT', withDetail(rateLimitMessage(ctx, e.meta, message), provider, message), {
       status: 429,
       retryable: true,
       cause: err
@@ -206,16 +280,20 @@ export const classifyImageError = (err: unknown, ctx: { route: ImageRoute; byok:
     return new StudioError('TIMEOUT', 'The image provider timed out. Please try again.', { status: 504, retryable: true, cause: err });
   }
   if ((Number.isFinite(status) && status >= 500) || NETWORK_RE.test(message)) {
-    return new StudioError('PROVIDER_ERROR', 'The image provider had a temporary problem. Please try again.', {
+    return new StudioError('PROVIDER_ERROR', withDetail('The image provider had a temporary problem. Please try again.', provider, message), {
       status: 502,
       retryable: true,
       cause: err
     });
   }
   if (status === 400 || status === 422) {
-    return new StudioError('PROVIDER_ERROR', 'The image model rejected the request.', { status: 502, retryable: false, cause: err });
+    return new StudioError('PROVIDER_ERROR', withDetail('The image model rejected the request.', provider, message), {
+      status: 502,
+      retryable: false,
+      cause: err
+    });
   }
-  return new StudioError('PROVIDER_ERROR', 'The image model failed unexpectedly. Please try again.', {
+  return new StudioError('PROVIDER_ERROR', withDetail('The image model failed unexpectedly. Please try again.', provider, message), {
     status: 502,
     retryable: true,
     cause: err
@@ -253,6 +331,20 @@ export const pickImageRoute = (spec: ImageModelSpec, keys: StudioKeys): PickedIm
       : 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.',
     { status: 400 }
   );
+};
+
+/**
+ * The SAME model on the other route, for a one-time fallback when the picked route is
+ * rate-limited or down. Only between keys with the same payer: a BYOK request never moves
+ * onto the platform's key (DreamStream would pay) and a platform request never moves onto
+ * the user's key (the user would pay without asking). Null when there is no such route.
+ */
+export const pickAlternateRoute = (spec: ImageModelSpec, keys: StudioKeys, primary: PickedImageRoute): PickedImageRoute | null => {
+  const route: ImageRoute = primary.route === 'openrouter' ? 'gemini' : 'openrouter';
+  const model = spec.routes[route];
+  const key = keys[route];
+  if (!model || !key?.key || key.byok !== primary.key.byok) return null;
+  return { route, model, key };
 };
 
 /** Parameter aliases across transports, so `spec.unsupported` can name either form. */
@@ -395,17 +487,41 @@ const parseRetryAfterMs = (value: string | null): number | undefined => {
   return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
 };
 
+type ErrorBody = {
+  error?: { message?: unknown; metadata?: { raw?: unknown; provider_name?: unknown; is_byok?: unknown; error_type?: unknown } } | string;
+  message?: unknown;
+};
+
 const readErrorMessage = (bodyText: string): string => {
   try {
-    const parsed = JSON.parse(bodyText) as { error?: { message?: unknown; metadata?: { raw?: unknown } } | string; message?: unknown };
+    const parsed = JSON.parse(bodyText) as ErrorBody;
     const err = parsed?.error;
     if (typeof err === 'string') return err;
-    const parts = [err?.message, err?.metadata?.raw, parsed?.message].filter((p) => typeof p === 'string' && p) as string[];
+    // `raw` is the upstream provider's own body: a string, or an object we keep as JSON.
+    const raw = err?.metadata?.raw;
+    const rawText = typeof raw === 'string' ? raw : raw && typeof raw === 'object' ? JSON.stringify(raw) : '';
+    const parts = [err?.message, rawText, parsed?.message].filter((p) => typeof p === 'string' && p) as string[];
     if (parts.length) return parts.join(' — ');
   } catch {
     /* not JSON */
   }
   return bodyText;
+};
+
+/** Provider / BYOK / error-type fields from an OpenRouter error body (see ProviderErrorMeta). */
+const readErrorMeta = (bodyText: string): ProviderErrorMeta | undefined => {
+  try {
+    const err = (JSON.parse(bodyText) as ErrorBody)?.error;
+    const meta = err && typeof err === 'object' ? err.metadata : undefined;
+    if (!meta || typeof meta !== 'object') return undefined;
+    const out: ProviderErrorMeta = {};
+    if (typeof meta.provider_name === 'string' && meta.provider_name) out.providerName = meta.provider_name.slice(0, 60);
+    if (typeof meta.is_byok === 'boolean') out.isByok = meta.is_byok;
+    if (typeof meta.error_type === 'string' && meta.error_type) out.errorType = meta.error_type.slice(0, 60);
+    return Object.keys(out).length ? out : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const textOf = (content: unknown): string => {
@@ -433,9 +549,20 @@ const MAX_REMOTE_IMAGE_BYTES = 40 * 1024 * 1024;
 const imagesApiUnavailableUntil = new Map<string, number>();
 const IMAGES_API_RECHECK_MS = 15 * 60_000;
 
+/**
+ * Route+model+key → time until which the provider asked us to back off (429). Parallel
+ * jobs of one run share a key, so the first 429 makes the others wait instead of each
+ * burning its retries in the same second. Keyed by a hash, never the key itself.
+ */
+const rateLimitedUntil = new Map<string, number>();
+const MAX_COOLDOWN_WAIT_MS = 20_000;
+const cooldownKey = (picked: PickedImageRoute): string =>
+  `${picked.route}|${picked.model}|${createHash('sha256').update(picked.key.key).digest('hex').slice(0, 16)}`;
+
 /** Test hook. */
 export const __resetImageClientForTests = (): void => {
   imagesApiUnavailableUntil.clear();
+  rateLimitedUntil.clear();
 };
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -460,6 +587,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     json?: any;
     message?: string;
     retryAfterMs?: number;
+    meta?: ProviderErrorMeta;
   }
 
   /** POST JSON to OpenRouter. Non-2xx answers come back as data so 404/405 can be handled. */
@@ -481,7 +609,8 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         ok: false,
         status: res.status,
         message: readErrorMessage(text).slice(0, 600),
-        retryAfterMs: parseRetryAfterMs(res.headers?.get?.('retry-after') ?? null)
+        retryAfterMs: parseRetryAfterMs(res.headers?.get?.('retry-after') ?? null),
+        meta: readErrorMeta(text)
       };
     }
     return { ok: true, status: res.status, json: await res.json() };
@@ -492,7 +621,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     // Same circuit the text provider trips: a capped PLATFORM key should stop chat from
     // hammering it too. A BYOK key's limits never affect anyone else.
     if (!key.byok && isCapacityError(res.status, message)) markSharedKeyCapped();
-    throw new ImageHttpError(res.status, message, res.retryAfterMs);
+    throw new ImageHttpError(res.status, message, res.retryAfterMs, res.meta);
   };
 
   /** Image URL → data URL (some providers return hosted URLs). */
@@ -683,19 +812,22 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     };
   };
 
-  return async (req: ImageRequest): Promise<ImageResult> => {
-    const picked = pickImageRoute(req.spec, keys);
-    const prepared = prepareImageRequest(req);
-    if (prepared.droppedReferences) {
-      logger.warn('comic_image_references_capped', {
-        model: picked.model,
-        cap: req.spec.refs.total,
-        dropped: prepared.droppedReferences
-      });
+  /** Wait out a cooldown another job set on this route+model+key (bounded, abortable). */
+  const waitForCooldown = async (picked: PickedImageRoute, signal?: AbortSignal): Promise<void> => {
+    const wait = Math.min(MAX_COOLDOWN_WAIT_MS, (rateLimitedUntil.get(cooldownKey(picked)) || 0) - now());
+    if (wait <= 0) return;
+    logger.warn('comic_image_cooldown_wait', { route: picked.route, model: picked.model, ms: wait });
+    try {
+      await sleep(wait, signal);
+    } catch {
+      throw cancelled();
     }
-    if (req.signal?.aborted) throw cancelled();
+  };
 
-    const errCtx = { route: picked.route, byok: picked.key.byok };
+  /** One image on one route: transient retry, text-only nudge, honest classification. */
+  const runOnRoute = async (picked: PickedImageRoute, req: ImageRequest, prepared: PreparedImageRequest): Promise<ImageResult> => {
+    await waitForCooldown(picked, req.signal);
+    const errCtx = { route: picked.route, byok: picked.key.byok, model: req.spec.nickname };
     const started = now();
     let prompt = req.prompt;
     let transientRetries = 1;
@@ -734,10 +866,18 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
           throw error;
         }
         const transient = error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && error.retryable);
+        const hinted = err instanceof ImageHttpError ? err.retryAfterMs : undefined;
+        if (error.code === 'RATE_LIMIT') {
+          // Everyone on this route+model+key waits at least this long before their next call.
+          const ck = cooldownKey(picked);
+          const until = now() + Math.min(MAX_COOLDOWN_WAIT_MS, Math.max(4000, hinted ?? 4000));
+          rateLimitedUntil.set(ck, Math.max(rateLimitedUntil.get(ck) || 0, until));
+        }
         if (transient && transientRetries > 0 && !req.signal?.aborted) {
           transientRetries -= 1;
-          const hinted = err instanceof ImageHttpError ? err.retryAfterMs : undefined;
-          const delay = error.code === 'RATE_LIMIT' ? Math.min(20_000, Math.max(4000, hinted ?? 4000)) : 2000;
+          const cooling = (rateLimitedUntil.get(cooldownKey(picked)) || 0) - now();
+          const delay =
+            error.code === 'RATE_LIMIT' ? Math.min(MAX_COOLDOWN_WAIT_MS, Math.max(4000, hinted ?? 4000, cooling)) : 2000;
           logger.warn('comic_image_retry', { route: picked.route, model: picked.model, code: error.code, delay });
           try {
             await sleep(delay, req.signal);
@@ -777,6 +917,52 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         return fail(safetyBlocked(new Error(`refusal: ${attempt.text.slice(0, 200)}`)));
       }
       return fail(noImage(new Error(`no image; text=${(attempt.text || '').slice(0, 200)}`)));
+    }
+  };
+
+  return async (req: ImageRequest): Promise<ImageResult> => {
+    const picked = pickImageRoute(req.spec, keys);
+    const prepared = prepareImageRequest(req);
+    if (prepared.droppedReferences) {
+      logger.warn('comic_image_references_capped', {
+        model: picked.model,
+        cap: req.spec.refs.total,
+        dropped: prepared.droppedReferences
+      });
+    }
+    if (req.signal?.aborted) throw cancelled();
+
+    try {
+      return await runOnRoute(picked, req, prepared);
+    } catch (err) {
+      // Same model, other route: only for capacity/outage failures (a safety block, a bad
+      // key or our own deadline would fail — or bill — the same way there), and only when
+      // the other route draws on the same payer.
+      const error = err as StudioError & { spentUsd?: number; abandoned?: boolean };
+      const fallbackable =
+        err instanceof StudioError &&
+        !error.abandoned &&
+        (error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && error.retryable));
+      const alt = fallbackable && !req.signal?.aborted ? pickAlternateRoute(req.spec, keys, picked) : null;
+      if (!alt) throw err;
+      logger.warn('comic_image_route_fallback', { from: picked.route, to: alt.route, model: req.spec.id, code: error.code });
+      const primarySpent = typeof error.spentUsd === 'number' && error.spentUsd > 0 ? error.spentUsd : 0;
+      try {
+        const result = await runOnRoute(alt, req, prepared);
+        return primarySpent ? { ...result, costUsd: (result.costUsd || 0) + primarySpent } : result;
+      } catch (altErr) {
+        // Report the preferred route's failure (what the user's setup said), and carry any
+        // money spent on either route so the job still bills it.
+        const altSpent = (altErr as { spentUsd?: unknown })?.spentUsd;
+        const total = primarySpent + (typeof altSpent === 'number' && altSpent > 0 ? altSpent : 0);
+        if (total > 0) error.spentUsd = total;
+        logger.warn('comic_image_route_fallback_failed', {
+          to: alt.route,
+          model: req.spec.id,
+          code: (altErr as StudioError)?.code
+        });
+        throw err;
+      }
     }
   };
 }

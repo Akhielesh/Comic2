@@ -1,6 +1,18 @@
+import fs from 'fs';
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+
+// Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
+// (`npm run qa:build` → dist-qa/), so production dist/ never contains it.
+const qaInput = (): Record<string, string> => {
+  if (process.env.QA_BUILD !== '1') return {};
+  const entry = path.resolve(__dirname, 'qa/comic-qa.html');
+  if (!fs.existsSync(entry)) {
+    throw new Error('QA_BUILD=1 but qa/comic-qa.html does not exist yet (the QA harness entry is added by P1-QA).');
+  }
+  return { qa: entry };
+};
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
@@ -37,7 +49,8 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),
-          live: path.resolve(__dirname, 'live.html')
+          live: path.resolve(__dirname, 'live.html'),
+          ...qaInput()
         },
         output: {
           // Split heavy, independently-cacheable vendors out of the entry chunks so a change
@@ -74,7 +87,8 @@ export default defineConfig(({ mode }) => {
       globals: true,
       environment: 'jsdom',
       setupFiles: './tests/setup.ts',
-      exclude: ['**/node_modules/**', '**/dist/**', '**/server/dist/**']
+      // tests/e2e holds Playwright specs (npm run qa:mobile), not vitest suites.
+      exclude: ['**/node_modules/**', '**/dist/**', '**/dist-qa/**', '**/server/dist/**', 'tests/e2e/**']
     }
   };
 });
