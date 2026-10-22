@@ -10,6 +10,7 @@ import { estimateTokensFromTextInput } from '../../services/reporting';
 import { assignImageTags, collectStateImageEntries } from '../../services/imageTags';
 import { MasterGalleryModal, MasterGalleryItem } from './MasterGalleryModal';
 import { downloadBlob } from '../../services/download';
+import { isStudioV4Project } from '../../services/studioDeepLink';
 
 interface ProjectInfoModalProps {
   project: Project;
@@ -119,6 +120,9 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   const localUserId = useMemo(() => getLocalUserId(), []);
   const [commentVotes, setCommentVotes] = useState<Record<string, VoteState>>({});
   const [isPublic, setIsPublic] = useState(!!project.isPublic);
+  // Comic Studio (v4) comics are published only from the studio Share sheet (server-side;
+  // the database refuses client is_public changes on them), so no toggle here.
+  const isStudioComic = isStudioV4Project(project);
   const [exportData, setExportData] = useState<Awaited<ReturnType<typeof exportProject>> | null>(null);
   const [isLoadingExport, setIsLoadingExport] = useState(false);
   const [exportUpdatedAt, setExportUpdatedAt] = useState<number | null>(null);
@@ -813,6 +817,16 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
               <div className="border-4 border-black rounded-xl p-4 bg-slate-50 shadow-comic">
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-bold uppercase text-slate-500">Overview</div>
+                  {isStudioComic ? (
+                  <span
+                    className="flex items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-1 text-xs font-semibold text-[var(--ds-muted)]"
+                    title="Comic Studio comics are published from the studio's Share sheet."
+                    data-testid="studio-publish-hint"
+                  >
+                    {isPublic ? <Globe size={14} aria-hidden /> : <Lock size={14} aria-hidden />}
+                    {isPublic ? 'Public' : 'Private'} · Publish from the studio
+                  </span>
+                  ) : (
                   <button
                     onClick={() => {
                       const next = !isPublic;
@@ -837,6 +851,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     {isPublic ? <Globe size={14} /> : <Lock size={14} />}
                     {isPublic ? 'Public' : 'Private'}
                   </button>
+                  )}
                 </div>
                 <textarea
                   value={overview}

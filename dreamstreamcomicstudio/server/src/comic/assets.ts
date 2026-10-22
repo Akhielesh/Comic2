@@ -68,14 +68,23 @@ export const buildAssetPath = (userId: string, projectId: string, imageId: strin
   return isUuid(projectId) ? `u/${user}/p/${sanitizeSegment(projectId)}/img/${imageId}.webp` : `u/${user}/tmp/${imageId}.webp`;
 };
 
-/** Path hygiene for anything we read or sign (no traversal, bounded length). */
+/**
+ * Path hygiene for anything we read or sign (no traversal, bounded length).
+ * Paths are authorized as literal strings but then signed/downloaded through a URL (storage-js
+ * does not encode them), and URL parsing collapses dot segments — including percent-encoded
+ * ones — so `u/<me>/%2e%2e/<victim>/…` would pass an ownership prefix check yet resolve to the
+ * victim's object. Storage paths are plain segments: refuse percent-escapes, query/fragment
+ * markers, control characters, and empty or dot segments (same rule as the image proxy).
+ */
 export const isSafeStoragePath = (path: unknown): path is string =>
   typeof path === 'string' &&
   path.length > 0 &&
   path.length <= STORAGE_PATH_MAX_LENGTH &&
   !path.startsWith('/') &&
   !path.includes('..') &&
-  !path.includes('\\');
+  !path.includes('\\') &&
+  !/[%?#\u0000-\u001f\u007f]/.test(path) &&
+  !path.split('/').some((segment) => segment === '' || segment === '.');
 
 /** True when a storage path belongs to `userId` (current u/{id}/… layout or the legacy {id}/file). */
 export const isOwnedAssetPath = (path: string, userId: string): boolean => {

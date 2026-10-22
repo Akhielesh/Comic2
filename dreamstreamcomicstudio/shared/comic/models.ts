@@ -255,7 +255,8 @@ export const TIER_PRESETS: Record<QualityTier, TierPreset> = {
     sheetRes: '2K',
     coverModel: 'nano-banana-pro',
     coverRes: '2K',
-    lettering: 'in_art'
+    // v5: overlay by default (in_art is an explicit opt-in). Existing docs keep their own format.lettering.
+    lettering: 'overlay'
   }
 };
 
@@ -370,6 +371,43 @@ export const formatUsd = (usd: number): string => {
 };
 
 /** Per-page display price for a tier (with markup unless BYOK). */
+// ── Aspect checks (one definition for the server check, the badges and the library) ──
+
+/** |ln(actual w/h) − ln(target)| tolerance. */
+export const ASPECT_TOLERANCE = 0.03;
+const ASPECTS: AspectRatio[] = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', '1:4', '4:1', '1:8', '8:1'];
+/** '4:5' → 0.8 */
+export const aspectRatioOf = (a: AspectRatio): number => {
+  const [w, h] = String(a).split(':').map(Number);
+  return w > 0 && h > 0 ? w / h : 1;
+};
+/** Unknown dimensions ⇒ true (never flag what we cannot measure). */
+export const aspectMatches = (want: AspectRatio, w?: number, h?: number, tol = ASPECT_TOLERANCE): boolean => {
+  if (!w || !h || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return true;
+  return Math.abs(Math.log(w / h) - Math.log(aspectRatioOf(want))) <= tol;
+};
+/** Nearest known ratio for a size (old assets, badges: "came back 1:1"). */
+export const aspectFromSize = (w: number, h: number): AspectRatio => {
+  if (!(w > 0) || !(h > 0)) return '1:1';
+  const target = Math.log(w / h);
+  return ASPECTS.reduce((best, a) =>
+    Math.abs(Math.log(aspectRatioOf(a)) - target) < Math.abs(Math.log(aspectRatioOf(best)) - target) ? a : best
+  );
+};
+
+// ── Platform / safety cost constants ──
+
+/** relayout_balloons {useVision:true} quote (one vision call; QC-priced). */
+export const RELAYOUT_VISION_USD = QC_USD_PER_PAGE;
+/** Platform-paid safety check estimates (never billed to the user; for logs/admin cost tiles). */
+export const SAFETY_CHECK_USD = 0.0012; // ≤768 px image check
+export const SAFETY_TEXT_USD = 0.0002; // text classifier, short input
+/** Platform-owned library spend (no markup): image + analysis per asset. 0.15 when the model is unknown. */
+export const libraryAssetCostUsd = (modelId: string, res: Resolution): number => {
+  const spec = getImageModel(modelId);
+  return spec ? Math.round((imagePriceUsd(spec, res) + QC_USD_PER_PAGE) * 10000) / 10000 : 0.15;
+};
+
 export const tierPagePrice = (tier: QualityTier, byok = false): number => {
   const { spec, resolution } = resolveImageJob('page', tier);
   return (imagePriceUsd(spec, resolution) + QC_USD_PER_PAGE) * (byok ? 1 : PLATFORM_MARKUP);

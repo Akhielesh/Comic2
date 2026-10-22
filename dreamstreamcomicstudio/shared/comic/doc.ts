@@ -1,4 +1,4 @@
-// ComicDoc — the single source of truth for a Comic Studio (v4) project.
+// ComicDoc — the single source of truth for a Comic Studio (v4/v5) project.
 //
 // The conversational studio is built around ONE structured document that the
 // server-side Comic Director keeps up to date as the user talks ("sticking the
@@ -7,11 +7,26 @@
 // applies the same DocOps the server emits (shared/comic/ops.ts), so both sides
 // stay in lockstep without re-sending the whole document.
 //
-// Rules for this file:
+// Rules for this file (contract §0):
 //  - Dependency-free (shared by the Node server and the Vite client).
 //  - Every field added later must be OPTIONAL or defaulted in normalizeDoc(), so
-//    stored documents keep loading.
+//    stored documents keep loading (R1). Every new top-level field is assigned
+//    explicitly in normalizeDoc with its OLD-doc default (R3).
+//  - pageSpecHash output for existing docs never changes (R2).
 //  - Images are referenced by storage path (AssetRef.path), never inlined as base64.
+//  - New optional top-level fields are read only through accessors (R9).
+
+import type { LetteringStyle, LetterStylePatch } from './lettering/style.js';
+import type { AssessedRating, ContentRating, SafetyCategory, SafetyStatus, SafetyVerdict } from './safety.js';
+import type { PublishRequest, PublicationMirror } from './publication.js';
+import type { StudioMode } from './capabilities.js';
+import { DEFAULT_LETTERING, sanitizeLetteringStyle, sanitizeLetterStylePatch } from './lettering/style.js';
+import { normalizeI18n } from './i18n.js';
+import { isPublicationMirror } from './publication.js';
+import { hashString } from './hash.js';
+import { DOC_LIMITS } from './limits.js';
+export { hashString } from './hash.js';
+export { MAX_RENDER_HISTORY, MAX_SPEND_ENTRIES, MAX_CONVERSATION, MAX_ARCHIVE, MAX_TRASH } from './limits.js';
 
 export const COMIC_DOC_VERSION = 1;
 
@@ -30,16 +45,94 @@ export type LetteringMode = 'overlay' | 'in_art';
 export type ConfirmPolicy = 'always' | 'big' | 'never';
 export type ColorMode = 'color' | 'bw' | 'limited';
 
-/** A stored image (Supabase storage path in the comic-assets bucket). */
+// ── Assets, references, versions ─────────────────────────────────────────────
+
+export type AssetSource = 'upload' | 'generated' | 'derived' | 'library';
+export interface AssetVariant { path: string; w: number; h: number }
+
+/** A stored image (Supabase storage path). */
 export interface AssetRef {
   path: string;
   w?: number;
   h?: number;
-  source: 'upload' | 'generated';
+  source: AssetSource;
   /** Image model that produced it (generated only). */
   model?: string;
   at: number;
+  /** SERVER-ONLY. WebP downscales made at save time: widths 480 and 1080, only those narrower than the
+   *  original, ascending. Keys are `path`, so the GC (`$.**.path`) protects them. Never set by a client. */
+  variants?: AssetVariant[];
+  /** SERVER-ONLY. Content-safety verdict for THIS image; travels with versions, copies, archive and trash. */
+  safety?: SafetyVerdict;
+  /** source 'library': platform library id ("style.noir-ink") or a My-library item id. */
+  libraryId?: string;
+  /** source 'derived': path of the image it was made from (informational; NOT GC-protecting). */
+  derivedFrom?: string;
 }
+
+export type RefLabel =
+  | 'face' | 'front' | 'three_quarter' | 'side' | 'back' | 'full_body' | 'outfit' | 'expression' | 'pose' | 'detail'
+  | 'wide' | 'exterior' | 'interior' | 'lighting'
+  | 'linework' | 'color' | 'texture' | 'mood' | 'composition'
+  | 'other';
+export type CastKind = 'person' | 'animal' | 'creature' | 'robot' | 'toy' | 'vehicle' | 'object';
+export type RefSubject = CastKind | 'place' | 'artwork' | 'other';
+export interface RefQuality { blurry?: true; dark?: true; lowRes?: true; multiSubject?: true }
+
+/** Every CastKind (validation lists). */
+export const CAST_KINDS: readonly CastKind[] = ['person', 'animal', 'creature', 'robot', 'toy', 'vehicle', 'object'];
+
+/** A user reference image. Order in the owning array = priority; index 0 = the "main" ref (no separate flag). */
+export interface RefAsset extends AssetRef {
+  label?: RefLabel;
+  /** ≤ 140 chars, user/director ("her festival outfit"); sent to the image model in the legend. */
+  note?: string;
+  /** SERVER-ONLY ≤ 160 chars (vision piggyback on the upload safety check). */
+  caption?: string;
+  /** SERVER-ONLY (vision piggyback); drives ranking. */
+  subject?: RefSubject;
+  /** SERVER-ONLY. sha256(original bytes) first 16 hex (client-computed, server re-checked) — exact-dup hint. */
+  hash?: string;
+  /** SERVER-ONLY. 64-bit dHash (16 hex) of the stored image — near-dup + denylist. */
+  dhash?: string;
+  /** SERVER-ONLY. Free sharp heuristics at upload. */
+  quality?: RefQuality;
+  /** Sanitized original filename, ≤ 80. */
+  name?: string;
+  /** SERVER-ONLY. Pre-crop image (kept for "Reset crop"; GC-protected via `path`). */
+  original?: { path: string; w?: number; h?: number };
+  /** SERVER-ONLY. Crop box applied to `original` (normalized). */
+  crop?: Box;
+  addedBy?: 'user' | 'director' | 'import' | 'library';
+}
+
+/** Who owns a reference list. Defined here (not ops.ts) so doc.ts card types can use it without a cycle. */
+export type RefOwner =
+  | { kind: 'character'; id: string }
+  | { kind: 'place'; id: string }
+  | { kind: 'style' }
+  | { kind: 'inbox' };
+
+export type VersionOrigin = 'render' | 'edit' | 'derived' | 'adopted' | 'upload' | 'reused' | 'variation';
+
+/** What a render was made from. On RenderState for the current asset; on RenderVersion in history. */
+export interface VersionMeta {
+  specHash?: string; // pageSpecHash / sheetSpecHash / placeSpecHash / coverSpecHash at render time
+  qc?: QcReport;
+  costUsd?: number;
+  resolution?: Resolution;
+  aspect?: AspectRatio; // the aspect REQUESTED from the model
+  jobHash?: string; // exact job fingerprint (reuse dedup)
+  origin?: VersionOrigin;
+  note?: string; // edit instruction / redraw note
+  parentPath?: string; // edits: the version it was made from
+  continuityPath?: string; // previous-page reference actually attached
+  refPaths?: string[]; // user ref paths actually attached ("drawn from older photos" hint)
+}
+/** Every VersionMeta key (asset replacement clears exactly these). */
+export const VERSION_META_KEYS: readonly (keyof VersionMeta)[] = [
+  'specHash', 'qc', 'costUsd', 'resolution', 'aspect', 'jobHash', 'origin', 'note', 'parentPath', 'continuityPath', 'refPaths'
+];
 
 export type RenderStatus = 'none' | 'queued' | 'rendering' | 'ready' | 'failed' | 'stale';
 
@@ -51,6 +144,9 @@ export interface Box {
   h: number;
 }
 
+export interface KeepOut { panel: number; box: Box; kind: 'face' | 'hands' | 'action' | 'text' | 'other' }
+export interface SpeakerMark { panel: number; characterId?: string; head: { x: number; y: number }; mouth?: { x: number; y: number } }
+
 export interface QcReport {
   /** 0..1 — overall confidence the render matches its spec. */
   score: number;
@@ -61,23 +157,48 @@ export interface QcReport {
   textFound?: string[];
   checkedAt: number;
   model?: string;
+  /** Regions balloons must not cover (from the per-render vision pass; ≤ 4 per panel). */
+  keepOut?: KeepOut[];
+  /** Where each speaking character's head/mouth is (tail aiming). */
+  heads?: SpeakerMark[];
 }
 
-export interface RenderState {
+export interface RenderVersion extends AssetRef, VersionMeta {
+  /** Page targets: the balloon layout that belonged to this image (≤ MAX_BALLOON_SNAPSHOT). */
+  balloons?: Balloon[];
+  /** Starred versions are never evicted from the archive. */
+  starred?: boolean;
+}
+
+export interface RenderState extends VersionMeta {
   status: RenderStatus;
   asset?: AssetRef;
-  /** Previous renders, newest first (capped). Restoring swaps one back into `asset`. */
-  history: AssetRef[];
+  /** Previous versions, newest first (cap MAX_RENDER_HISTORY; overflow moves to doc.archive). */
+  history: RenderVersion[];
   model?: string;
-  resolution?: Resolution;
-  costUsd?: number;
   error?: string;
   attempts?: number;
   updatedAt?: number;
-  qc?: QcReport;
-  /** Fingerprint of the spec this asset was rendered from — differs ⇒ the render is stale. */
-  specHash?: string;
+  /** PUBLIC SNAPSHOT ONLY: art withheld from readers. Never set on a live doc. */
+  withheld?: 'safety';
 }
+
+/** A version pushed out of a target's history — still restorable and GC-protected. Lean: no qc/balloons. */
+export interface ArchivedVersion extends AssetRef {
+  targetKey: string; // renderTargetKey(): 'page:pg_x' | 'cover' | 'sheet:c_x' | 'place:pl_x' | 'style_option:so_x'
+  label: string; // "Page 3", "Cover", "MAYA sheet", "Deleted page 4"
+  archivedAt: number;
+  specHash?: string;
+  costUsd?: number;
+  origin?: VersionOrigin;
+  aspect?: AspectRatio;
+  starred?: boolean;
+}
+
+/** A deleted page, restorable (Undo / Media → Deleted). */
+export interface TrashedPage { page: Page; fromN: number; deletedAt: number }
+
+// ── Story ────────────────────────────────────────────────────────────────────
 
 export interface Brief {
   title: string;
@@ -101,7 +222,7 @@ export interface Format {
   readingDirection: 'ltr' | 'rtl';
   lettering: LetteringMode;
   colorMode: ColorMode;
-  /** BCP-47 language for dialogue (default 'en'). */
+  /** BCP-47 language for dialogue (default 'en'). The SOURCE language of every translation. */
   language: string;
 }
 
@@ -129,7 +250,7 @@ export interface StyleBible {
   avoid?: string[];
   presetId?: string;
   /** User-supplied style reference images. */
-  refs: AssetRef[];
+  refs: RefAsset[];
   /** The locked style board — the canonical visual anchor for every render. */
   board?: AssetRef;
   options: StyleOption[];
@@ -150,6 +271,10 @@ export interface CharacterLook {
   props?: string;
   /** Distinguishing marks that must never drift (scar over left eye, red scarf). */
   marks?: string;
+  /** Non-humans: what they are ("mallard duckling", "LEGO-style minifigure"). ≤ 120. */
+  species?: string;
+  /** Non-humans: coat/feather/paint markings that must never drift. ≤ 120. */
+  markings?: string;
 }
 
 export type CastTier = 'lead' | 'support' | 'extra';
@@ -165,16 +290,22 @@ export interface Character {
   /** How they talk — feeds dialogue writing. */
   voice?: string;
   /** User-supplied reference images (photos, drawings). */
-  refs: AssetRef[];
+  refs: RefAsset[];
   /** Model sheet (turnaround + expressions) — the identity anchor in every page render. */
   sheet: RenderState;
+  /** Absent = 'person'. Non-humans are first-class cast (data-insights). */
+  kind?: CastKind;
+  /** 2–12 = a group drawn as one identity class ("three ducklings"). Absent/1 = single. */
+  count?: number;
+  /** Pages: 'auto' (default) = sheet + main photo for photo-based leads when spare character slots exist. */
+  likeness?: 'auto' | 'sheet_only' | 'sheet_and_photo';
 }
 
 export interface Place {
   id: string;
   name: string;
   look: string;
-  refs: AssetRef[];
+  refs: RefAsset[];
   sheet: RenderState;
 }
 
@@ -192,6 +323,13 @@ export interface Line {
   /** Character id for speech/thought/whisper/shout; omitted for captions/sfx. */
   speakerId?: string;
   text: string;
+  /** Overlay lettering overrides for this line (Pro inspector / restyle_balloons). Never hashed. */
+  style?: LetterStylePatch;
+  /** Rendering language when it differs from format.language (set by localizeDoc on fallback lines,
+   *  or by the author for a deliberately foreign line). Never hashed. */
+  lang?: string;
+  /** Never translate this line (spell, made-up word, song). Never hashed. */
+  noTranslate?: boolean;
 }
 
 export interface Panel {
@@ -221,6 +359,12 @@ export interface Balloon {
   tailY?: number;
   /** User moved it — never auto-relayout over it. */
   pinned?: boolean;
+  /** Stacking order (higher draws later). Absent = reading order. Integer −100..100. */
+  z?: number;
+  /** Never moved by auto-layout or dragged; implies pinned. */
+  locked?: boolean;
+  /** Linked balloon: draw a connector neck to the balloon of this lineId (same panel, no cycles). */
+  linkTo?: string;
 }
 
 export interface Page {
@@ -235,14 +379,134 @@ export interface Page {
   panels: Panel[];
   render: RenderState;
   balloons: Balloon[];
+  /** Starts a chapter here (reader scrubber marks, End-card TOC). ≤ 60 chars. Not hashed. */
+  chapterTitle?: string;
 }
+
+export interface CoverTitleStyle {
+  title?: LetterStylePatch;
+  tagline?: LetterStylePatch;
+  /** Title block, page-normalized. Default { x: 0.06, y: 0.04, w: 0.88, h: 0.2 }. */
+  box?: Box;
+  /** Tagline top (0..1). Default: just under the title block. */
+  taglineY?: number;
+}
+export const DEFAULT_COVER_TITLE_BOX: Box = { x: 0.06, y: 0.04, w: 0.88, h: 0.2 };
 
 export interface Cover {
   title?: string;
   tagline?: string;
   direction?: string;
   render: RenderState;
+  /** 'in_art' (ABSENT = in_art) = title painted by the image model — the default for new AND old covers
+   *  (decisions-final #2). 'overlay' = textless art + software title (free edits, per-language titles).
+   *  Once a painted cover exists, overlay is reached only via the one-time quoted `render_cover {textless:true}`;
+   *  before the first cover render the author may pick it for free (a `cover` patch). */
+  lettering?: LetteringMode;
+  titleStyle?: CoverTitleStyle;
 }
+
+/** Deterministic book furniture — laid out by software, never billed. */
+export interface BookSettings {
+  titlePage: boolean;
+  /** "The End" + credits page. */
+  endPage: boolean;
+  backCover: 'none' | 'auto';
+  /** Back-cover blurb (default: brief.logline). ≤ 600. */
+  blurb?: string;
+  /** Author-written credit lines (≤ 8 × 120). Software never inserts the owner's name unless
+   *  the publication's showCreator is on (then only the public username). */
+  credits?: string[];
+  /** Spreads: page 1 is a right-hand page. */
+  firstPageRight: boolean;
+  /** Exports letterbox every sheet to format.pageAspect. */
+  uniformTrim: boolean;
+}
+export const DEFAULT_BOOK: BookSettings = { titlePage: false, endPage: false, backCover: 'none', firstPageRight: true, uniformTrim: true };
+
+export type PageTurnStyle = 'paper' | 'slide' | 'fade';
+/** How the published comic presents (creator's choice; viewers override locally). Guided View is never default. */
+export interface ReaderSettings {
+  turn: PageTurnStyle;
+  /** Guided View shows the whole page before zooming into panels. */
+  guidedOverview: boolean;
+  paperTexture: boolean;
+  ambient: boolean;
+  credits?: string; // End-card line, ≤ 140
+  dedication?: string; // inside-cover line, ≤ 140
+}
+export const DEFAULT_READER: ReaderSettings = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true };
+
+// ── Translations, safety ─────────────────────────────────────────────────────
+
+/** 'stale', 'missing', 'stale_edited' are DERIVED (i18n.ts translationStatus), never stored. */
+export type TranslationStatus = 'machine' | 'reviewed' | 'edited';
+export interface TextTranslation {
+  text: string;
+  /** machine = unreviewed model output; reviewed = passed the automated linguist review; edited = author wrote it. */
+  status: TranslationStatus;
+  /** lineSourceHash()/textSourceHash() of the source when translated. Mismatch ⇒ stale. */
+  sourceHash: string;
+  /** Linguist gloss of THIS translation, written in the SOURCE language. */
+  gloss?: string;
+  /** Open linguist finding; cleared by edit / accept / re-translate. */
+  issue?: { severity: 'minor' | 'major'; note: string; suggestion?: string };
+  model?: string;
+  at: number;
+}
+export interface BalloonGeometryOverride {
+  x?: number; y?: number; w?: number; tailX?: number; tailY?: number;
+  /** Multiplier on the kind's font size for this language (pinned auto-fit), 0.7–1.3. */
+  fontScale?: number;
+  pinned?: boolean;
+}
+export type TranslationRegister = 'everyday' | 'formal' | 'code_mixed';
+export type EditionTextField = 'cover.title' | 'cover.tagline' | 'brief.title' | 'brief.logline';
+export interface LanguageEdition {
+  /** BCP-47 tag from LANGUAGES (languages.ts); never the source language. */
+  lang: string;
+  /** lineId → translation. */
+  lines: Record<string, TextTranslation>;
+  cover?: { title?: TextTranslation; tagline?: TextTranslation };
+  brief?: { title?: TextTranslation; logline?: TextTranslation };
+  /** lineId → geometry override for this language only (style stays on Line.style). */
+  balloons: Record<string, BalloonGeometryOverride>;
+  register: TranslationRegister;
+}
+export interface GlossaryTerm {
+  id: string;
+  term: string; // source-language form
+  kind: 'character' | 'place' | 'title' | 'term';
+  refId?: string; // Character/Place id when seeded from cast/places
+  policy: 'transliterate' | 'translate' | 'keep';
+  forms: Record<string, string>; // lang → target form
+  note?: string;
+}
+/** format.language is the SOURCE language and never appears in editions.
+ *  A language is publishable when editionReadiness(...).publishable (translated + reviewed, overlay lettering). */
+export interface I18nState {
+  editions: Record<string, LanguageEdition>;
+  glossary: GlossaryTerm[];
+}
+
+export interface SafetyBlocker {
+  target: RenderTarget | { kind: 'text'; lang?: string };
+  status: Exclude<SafetyStatus, 'pass'>;
+  categories: SafetyCategory[];
+  note?: string;
+}
+export interface DocSafety {
+  /** Last check over every publishable word (title, logline, cover text, cast names, dialogue, published translations). */
+  text?: { hash: string; assessed?: AssessedRating; categories: SafetyCategory[]; at: number; model?: string };
+  /** Last publish gate result. */
+  publish?: { ok: boolean; rating: ContentRating; rev: number; at: number; blockers: SafetyBlocker[] };
+  /** Screening of the source script (no excerpts, neutral locators only). */
+  source?: { hash: string; assessed?: AssessedRating; categories: SafetyCategory[]; adaptNotes: string[]; at: number };
+  /** Trademark names already explained to the user (no repeated IP notes). */
+  ipNoted?: string[];
+}
+
+// ── Settings, spend, gate ────────────────────────────────────────────────────
 
 export interface Settings {
   quality: QualityTier;
@@ -253,9 +517,14 @@ export interface Settings {
   budgetUsd?: number;
   /** Advanced: force a specific registry image model id. */
   imageModelOverride?: string;
+  /** The rating the author chose; clamped at use by effectiveRating() (audience + account ceilings). */
+  rating?: ContentRating;
+  /** Gate the first page render of a project (director-initiated spends only). Director may only tighten. */
+  reviewFirstRender?: boolean;
 }
 
-export type SpendKind = 'chat' | 'plan' | 'style' | 'sheet' | 'page' | 'edit' | 'cover' | 'qc';
+export type SpendKind = 'chat' | 'plan' | 'style' | 'sheet' | 'page' | 'edit' | 'cover' | 'qc' | 'translate';
+// Safety checks are platform-paid (decisions-final #10): they never create a SpendEntry.
 
 export interface SpendEntry {
   id: string;
@@ -268,6 +537,11 @@ export interface SpendEntry {
   byok: boolean;
   /** True when the provider didn't report a cost and this is the registry estimate. */
   estimated: boolean;
+  /** renderTargetKey of the image this paid for (per-clip cost badges survive reorders). */
+  target?: string;
+  /** Honest "saved by software" amount: a reuse of an identical render, or a FREE step the user picked
+   *  over a quoted PAID one in the same message (amount = that quote). usd is 0 for such entries. */
+  savedUsd?: number;
 }
 
 export interface Spend {
@@ -275,6 +549,8 @@ export interface Spend {
   byKind: Partial<Record<SpendKind, number>>;
   /** Most recent first, capped. */
   entries: SpendEntry[];
+  /** Running total of SpendEntry.savedUsd. */
+  savedUsd?: number;
 }
 
 /** A spend the studio is waiting on the user to approve. */
@@ -289,9 +565,42 @@ export interface Gate {
   model: string;
   createdAt: number;
   status: 'open' | 'approved' | 'declined';
-  /** Why it stopped: policy=confirm setting, budget=would exceed the budget cap. */
-  reason: 'policy' | 'budget';
+  /** Why it stopped: policy=confirm setting, budget=would exceed the budget cap, first_render / plan_review /
+   *  redraw / no_intent = director-initiated spends the user must confirm. */
+  reason: 'policy' | 'budget' | 'first_render' | 'plan_review' | 'redraw' | 'no_intent';
 }
+
+// ── Conversation ─────────────────────────────────────────────────────────────
+
+export type StudioTab = 'story' | 'cast' | 'style' | 'pages' | 'media' | 'languages' | 'read';
+
+/** Client-only actions (never sent to the server). */
+export type ClientAction =
+  | { type: 'open_reader'; immersive?: boolean; guided?: boolean }
+  | { type: 'open_page'; pageId: string }
+  | { type: 'open_tab'; tab: StudioTab }
+  | { type: 'open_share' }
+  | { type: 'undo' }
+  | { type: 'set_mode'; mode: StudioMode };
+
+/** A tappable chip. Exactly ONE of say | action | client (validated by normalizeDoc + server). */
+export interface NextStep {
+  label: string;
+  /** Text sent to the director as the user's message (default: label when nothing else is set). */
+  say?: string;
+  /** Runs directly (no LLM). Spend actions carry quotedUsd so a stale chip re-quotes instead of overspending. */
+  action?: import('./ops.js').StudioAction;
+  client?: ClientAction;
+  /** Price badge; 0 renders as "Free". */
+  usd?: number;
+}
+
+export type OptionVisual =
+  | { kind: 'layout'; panels: number; layout?: string }
+  | { kind: 'pages'; count: number }
+  | { kind: 'preset'; presetId: string }
+  | { kind: 'cast'; characterId: string }
+  | { kind: 'lettering'; presetId: string };
 
 export interface OptionChoice {
   id: string;
@@ -299,9 +608,10 @@ export interface OptionChoice {
   description?: string;
   /** Message sent on the user's behalf when picked (defaults to label). */
   reply?: string;
+  visual?: OptionVisual;
 }
 
-/** Interactive cards that live inside the conversation. Most render LIVE doc state. */
+/** Interactive cards that live inside the conversation. Every card renders LIVE doc state. */
 export type Card =
   | { type: 'options'; id: string; question: string; choices: OptionChoice[]; multi?: boolean; allowCustom?: boolean; answered?: string[] }
   | { type: 'style_choice'; id: string }
@@ -309,7 +619,19 @@ export type Card =
   | { type: 'plan'; id: string }
   | { type: 'gate'; id: string; gateId: string }
   | { type: 'renders'; id: string; targets: RenderTarget[]; label: string }
-  | { type: 'notice'; id: string; tone: 'info' | 'warn' | 'error' | 'success'; text: string };
+  | { type: 'notice'; id: string; tone: 'info' | 'warn' | 'error' | 'success'; text: string }
+  | { type: 'recap'; id: string }
+  | { type: 'breakdown'; id: string; pageIds?: string[]; cover?: boolean; view?: 'plan' | 'status' | 'cost'; gateId?: string }
+  | { type: 'versions'; id: string; target: RenderTarget }
+  | { type: 'style_presets'; id: string; presetIds: string[]; note?: string; picked?: string }
+  | { type: 'refs'; id: string; owner: RefOwner; paths: string[] }
+  | {
+      type: 'publish'; id: string; mode: 'publish' | 'update' | 'unpublish' | 'regenerate';
+      request?: PublishRequest; status: 'pending' | 'running' | 'done' | 'declined' | 'failed';
+      result?: { url?: string; error?: string; blockers?: SafetyBlocker[] };
+    }
+  | { type: 'share'; id: string }
+  | { type: 'translation'; id: string; languages: string[] };
 
 export type RenderTarget =
   | { kind: 'page'; id: string }
@@ -323,10 +645,12 @@ export interface Msg {
   role: 'user' | 'assistant';
   text: string;
   at: number;
-  attachments?: AssetRef[];
+  attachments?: RefAsset[];
   cards?: Card[];
-  /** Suggested next prompts shown as chips under the latest assistant message. */
+  /** Suggested next prompts shown as chips under the latest assistant message (old clients). */
   suggestions?: string[];
+  /** Acting chips (≤ DOC_LIMITS.nextSteps). `suggestions: string[]` stays for old clients. */
+  nextSteps?: NextStep[];
 }
 
 export interface ComicDoc {
@@ -352,11 +676,24 @@ export interface ComicDoc {
   conversation: Msg[];
   /** Compressed memory of older conversation turns that scrolled out of the director's window. */
   memory?: string;
+  /** Always filled by normalizeDoc; read via letterStyleOf(). */
+  letterStyle?: LetteringStyle;
+  book?: BookSettings;
+  reader?: ReaderSettings;
+  /** Newest first, cap MAX_ARCHIVE (oldest unstarred + unreferenced evicted). */
+  archive?: ArchivedVersion[];
+  /** Newest first, cap MAX_TRASH. */
+  trash?: TrashedPage[];
+  /** Uploaded but not yet assigned/sent (composer drafts). Pruned after 24 h by the server. */
+  refInbox?: RefAsset[];
+  i18n?: I18nState;
+  /** Server-only. */
+  safety?: DocSafety;
+  /** Server-only mirror of comic_publications (absent = private). */
+  publication?: PublicationMirror;
+  /** Writer input fingerprint (free re-plan when unchanged). */
+  planInputHash?: string;
 }
-
-export const MAX_RENDER_HISTORY = 8;
-export const MAX_SPEND_ENTRIES = 200;
-export const MAX_CONVERSATION = 160;
 
 export const emptyRender = (): RenderState => ({ status: 'none', history: [] });
 
@@ -374,7 +711,8 @@ export const DEFAULT_FORMAT: Format = {
 export const DEFAULT_SETTINGS: Settings = {
   quality: 'standard',
   confirm: 'big',
-  bigSpendUsd: 0.5
+  bigSpendUsd: 0.5,
+  reviewFirstRender: true
 };
 
 export const createEmptyDoc = (id: string, title = 'Untitled comic', now = Date.now()): ComicDoc => ({
@@ -395,14 +733,148 @@ export const createEmptyDoc = (id: string, title = 'Untitled comic', now = Date.
   settings: { ...DEFAULT_SETTINGS },
   spend: { totalUsd: 0, byKind: {}, entries: [] },
   gate: null,
-  conversation: []
+  conversation: [],
+  letterStyle: { presetId: 'classic', auto: true }, // NEW docs: director may auto-pick a preset
+  book: { ...DEFAULT_BOOK },
+  reader: { ...DEFAULT_READER },
+  archive: [],
+  trash: [],
+  refInbox: [],
+  i18n: { editions: {}, glossary: [] }
 });
 
+// ── Normalization ────────────────────────────────────────────────────────────
+
 const asArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const asRender = (value: unknown): RenderState => {
   const r = (value && typeof value === 'object' ? value : {}) as Partial<RenderState>;
-  return { ...r, status: r.status || 'none', history: asArray<AssetRef>(r.history) };
+  return { ...r, status: r.status || 'none', history: asArray<RenderVersion>(r.history) };
 };
+
+/** Every RefLabel (local copy: doc.ts may not import refs.ts — §2 cycle rule). */
+const REF_LABEL_SET: ReadonlySet<string> = new Set<RefLabel>([
+  'face', 'front', 'three_quarter', 'side', 'back', 'full_body', 'outfit', 'expression', 'pose', 'detail',
+  'wide', 'exterior', 'interior', 'lighting',
+  'linework', 'color', 'texture', 'mood', 'composition',
+  'other'
+]);
+
+export const normalizeRefs = (value: unknown): RefAsset[] => {
+  const seen = new Set<string>();
+  return asArray<RefAsset>(value)
+    .filter((r) => isObject(r) && typeof r.path === 'string' && !!r.path && !seen.has(r.path) && !!seen.add(r.path))
+    .map((r) => {
+      const ref: RefAsset = { ...r, source: r.source || 'upload' };
+      if (ref.label !== undefined && !REF_LABEL_SET.has(ref.label)) delete ref.label;
+      if (ref.note !== undefined) {
+        if (typeof ref.note === 'string') ref.note = ref.note.slice(0, DOC_LIMITS.refNoteChars);
+        else delete ref.note;
+      }
+      return ref;
+    });
+};
+
+const normalizeLine = (l: Line): Line => {
+  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l; // identity
+  const next: Line = { ...l }; // key order kept
+  const style = sanitizeLetterStylePatch(l.style);
+  if (style) next.style = style;
+  else delete next.style;
+  if (typeof l.lang !== 'string' || !l.lang) delete next.lang;
+  if (l.noTranslate !== true) delete next.noTranslate;
+  return next;
+};
+
+/** Extracted from the existing pages mapper + v5 fields. */
+export const normalizePage = (p: Page, i: number): Page => {
+  const page: Page = {
+    ...p,
+    n: typeof p.n === 'number' ? p.n : i + 1,
+    summary: p.summary || '',
+    layout: p.layout || '',
+    panels: asArray<Panel>(p.panels).map((panel, j) => ({
+      ...panel,
+      n: typeof panel.n === 'number' ? panel.n : j + 1,
+      size: panel.size || 'medium',
+      shot: panel.shot || 'medium',
+      action: panel.action || '',
+      castIds: asArray<string>(panel.castIds),
+      lines: asArray<Line>(panel.lines).map(normalizeLine)
+    })),
+    render: asRender(p.render),
+    balloons: asArray<Balloon>(p.balloons)
+  };
+  if (typeof page.chapterTitle === 'string' && page.chapterTitle.trim()) {
+    page.chapterTitle = page.chapterTitle.trim().slice(0, DOC_LIMITS.chapterTitleChars);
+  } else delete page.chapterTitle;
+  return page;
+};
+
+/** Stable sort by (n, original index) then n = i+1. Idempotent; repairs gaps/duplicates; n is never hashed. */
+export const renumberPages = (pages: Page[]): Page[] =>
+  pages
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => a.p.n - b.p.n || a.i - b.i)
+    .map(({ p }, i) => (p.n === i + 1 ? p : { ...p, n: i + 1 }));
+
+/** Exactly ONE (or none) of say | action | client, and a non-empty label. */
+export const isValidNextStep = (s: unknown): s is NextStep =>
+  isObject(s) &&
+  typeof s.label === 'string' &&
+  !!s.label.trim() &&
+  [s.say !== undefined, s.action !== undefined, s.client !== undefined].filter(Boolean).length <= 1;
+
+const normalizeMsg = (m: Msg): Msg => {
+  const msg: Msg = { ...m };
+  if (m.attachments !== undefined) msg.attachments = normalizeRefs(m.attachments);
+  if (m.nextSteps !== undefined) {
+    const steps = asArray<NextStep>(m.nextSteps).filter(isValidNextStep).slice(0, DOC_LIMITS.nextSteps);
+    if (steps.length) msg.nextSteps = steps;
+    else delete msg.nextSteps;
+  }
+  return msg;
+};
+
+/** Validate book settings (also used by the `book` op). */
+export const pickBook = (raw: unknown): BookSettings => {
+  const b = isObject(raw) ? raw : {};
+  return {
+    titlePage: typeof b.titlePage === 'boolean' ? b.titlePage : DEFAULT_BOOK.titlePage,
+    endPage: typeof b.endPage === 'boolean' ? b.endPage : DEFAULT_BOOK.endPage,
+    backCover: b.backCover === 'auto' ? 'auto' : 'none',
+    ...(typeof b.blurb === 'string' ? { blurb: b.blurb.slice(0, DOC_LIMITS.bookBlurbChars) } : {}),
+    ...(Array.isArray(b.credits)
+      ? {
+          credits: b.credits
+            .filter((c): c is string => typeof c === 'string')
+            .slice(0, DOC_LIMITS.bookCredits)
+            .map((c) => c.slice(0, DOC_LIMITS.bookCreditChars))
+        }
+      : {}),
+    firstPageRight: typeof b.firstPageRight === 'boolean' ? b.firstPageRight : DEFAULT_BOOK.firstPageRight,
+    uniformTrim: typeof b.uniformTrim === 'boolean' ? b.uniformTrim : DEFAULT_BOOK.uniformTrim
+  };
+};
+
+/** Validate reader settings (also used by the `reader` op). */
+export const pickReader = (raw: unknown): ReaderSettings => {
+  const r = isObject(raw) ? raw : {};
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, DOC_LIMITS.readerTextChars) : undefined);
+  const out: ReaderSettings = {
+    turn: r.turn === 'slide' || r.turn === 'fade' ? r.turn : 'paper',
+    guidedOverview: typeof r.guidedOverview === 'boolean' ? r.guidedOverview : DEFAULT_READER.guidedOverview,
+    paperTexture: typeof r.paperTexture === 'boolean' ? r.paperTexture : DEFAULT_READER.paperTexture,
+    ambient: typeof r.ambient === 'boolean' ? r.ambient : DEFAULT_READER.ambient
+  };
+  const credits = text(r.credits);
+  if (credits) out.credits = credits;
+  const dedication = text(r.dedication);
+  if (dedication) out.dedication = dedication;
+  return out;
+};
+
+const CONTENT_RATING_SET: ReadonlySet<string> = new Set(['G', 'PG', 'PG-13']);
 
 /**
  * Fill defaults on a stored/partial document so every consumer can rely on the full
@@ -420,51 +892,83 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
   doc.style = {
     ...base.style,
     ...style,
-    refs: asArray<AssetRef>(style.refs),
+    refs: normalizeRefs(style.refs),
     options: asArray<StyleOption>(style.options).map((o) => ({ ...o, render: asRender(o.render) }))
   };
+  // kind/count/species/markings: untouched (no back-fill → no hash churn)
   doc.cast = asArray<Character>(input.cast).map((c) => ({
     ...c,
     tier: c.tier || 'support',
     look: { summary: '', ...(c.look || {}) },
-    refs: asArray<AssetRef>(c.refs),
+    refs: normalizeRefs(c.refs),
     sheet: asRender(c.sheet)
   }));
   doc.places = asArray<Place>(input.places).map((p) => ({
     ...p,
     look: p.look || '',
-    refs: asArray<AssetRef>(p.refs),
+    refs: normalizeRefs(p.refs),
     sheet: asRender(p.sheet)
   }));
-  doc.pages = asArray<Page>(input.pages).map((p, i) => ({
-    ...p,
-    n: typeof p.n === 'number' ? p.n : i + 1,
-    summary: p.summary || '',
-    layout: p.layout || '',
-    panels: asArray<Panel>(p.panels).map((panel, j) => ({
-      ...panel,
-      n: typeof panel.n === 'number' ? panel.n : j + 1,
-      size: panel.size || 'medium',
-      shot: panel.shot || 'medium',
-      action: panel.action || '',
-      castIds: asArray<string>(panel.castIds),
-      lines: asArray<Line>(panel.lines)
-    })),
-    render: asRender(p.render),
-    balloons: asArray<Balloon>(p.balloons)
-  }));
-  doc.cover = { ...(input.cover || {}), render: asRender(input.cover?.render) };
+  doc.pages = renumberPages(asArray<Page>(input.pages).map(normalizePage));
+  doc.cover = { ...(input.cover || {}), render: asRender(input.cover?.render) }; // lettering ABSENT stays absent (= in_art)
   doc.planStatus = input.planStatus || (doc.pages.length ? 'draft' : 'none');
-  doc.settings = { ...DEFAULT_SETTINGS, ...(input.settings || {}) };
+  doc.settings = { ...DEFAULT_SETTINGS, ...(input.settings || {}) }; // old docs get reviewFirstRender: true (intended)
+  if (doc.settings.rating !== undefined && !CONTENT_RATING_SET.has(doc.settings.rating)) delete doc.settings.rating;
   const spend = (input.spend || {}) as Partial<Spend>;
   doc.spend = {
     totalUsd: typeof spend.totalUsd === 'number' ? spend.totalUsd : 0,
     byKind: { ...(spend.byKind || {}) },
-    entries: asArray<SpendEntry>(spend.entries)
+    entries: asArray<SpendEntry>(spend.entries),
+    ...(Number.isFinite(spend.savedUsd) && (spend.savedUsd as number) > 0 ? { savedUsd: spend.savedUsd } : {})
   };
   doc.gate = input.gate || null;
-  doc.conversation = asArray<Msg>(input.conversation);
+  doc.conversation = asArray<Msg>(input.conversation).map(normalizeMsg);
+  // ── v5 additions: explicit assignment (R3) ──
+  doc.letterStyle = sanitizeLetteringStyle(input.letterStyle); // missing/invalid → { presetId: 'classic' } (NO auto)
+  doc.book = pickBook(input.book); // storybook plates default is applied only on create / set_format
+  doc.reader = pickReader(input.reader);
+  doc.archive = asArray<ArchivedVersion>(input.archive).filter(
+    (a) => isObject(a) && typeof a.path === 'string' && typeof a.targetKey === 'string'
+  ); // never sliced here
+  doc.trash = asArray<TrashedPage>(input.trash)
+    .filter((t) => isObject(t) && isObject(t.page) && typeof (t.page as Page).id === 'string')
+    .map((t) => ({
+      page: normalizePage(t.page, 0),
+      fromN: typeof t.fromN === 'number' ? t.fromN : 1,
+      deletedAt: typeof t.deletedAt === 'number' ? t.deletedAt : 0
+    }));
+  doc.refInbox = normalizeRefs(input.refInbox);
+  doc.i18n = normalizeI18n(input.i18n, doc.format.language);
+  if (!isObject(input.safety)) delete doc.safety;
+  if (!isPublicationMirror(input.publication)) delete doc.publication;
+  if (typeof input.planInputHash !== 'string') delete doc.planInputHash;
   return doc;
+};
+
+// ── Accessors (R9) ───────────────────────────────────────────────────────────
+
+export const letterStyleOf = (doc: ComicDoc): LetteringStyle => doc.letterStyle ?? DEFAULT_LETTERING;
+export const bookOf = (doc: ComicDoc): BookSettings => doc.book ?? DEFAULT_BOOK;
+export const readerOf = (doc: ComicDoc): ReaderSettings => doc.reader ?? DEFAULT_READER;
+export const archiveOf = (doc: ComicDoc): ArchivedVersion[] => doc.archive ?? [];
+export const trashOf = (doc: ComicDoc): TrashedPage[] => doc.trash ?? [];
+export const refInboxOf = (doc: ComicDoc): RefAsset[] => doc.refInbox ?? [];
+export const safetyOf = (doc: ComicDoc): DocSafety => doc.safety ?? {};
+// i18nOf lives in i18n.ts (re-exported by index.ts).
+
+// ── Cast helpers ─────────────────────────────────────────────────────────────
+
+export const castKindOf = (c: Character): CastKind => c.kind ?? 'person';
+/** Derived label (no new tier): recurring non-human with a sheet. */
+export const isCompanion = (c: Character): boolean => castKindOf(c) !== 'person' && c.tier !== 'extra';
+
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+/** "three Ducklings" / "Frog" (English number words 2–12, digits otherwise). */
+export const castNoun = (c: Character): string => {
+  const name = (c.name || '').trim() || 'Unnamed';
+  const count = typeof c.count === 'number' && Number.isFinite(c.count) ? Math.floor(c.count) : 1;
+  if (count <= 1) return name;
+  return `${count <= 12 ? NUMBER_WORDS[count] : String(count)} ${name}`;
 };
 
 // ── Lookups ──────────────────────────────────────────────────────────────────
@@ -502,11 +1006,151 @@ export const getRender = (doc: ComicDoc, target: RenderTarget): RenderState | un
 export const renderTargetKey = (target: RenderTarget): string =>
   target.kind === 'cover' ? 'cover' : `${target.kind}:${target.id}`;
 
-/** Every storage path the document references (asset GC, URL signing, export). */
+/** Inverse of renderTargetKey. */
+export const parseTargetKey = (key: string): RenderTarget | null => {
+  if (key === 'cover') return { kind: 'cover' };
+  const m = /^(page|sheet|place|style_option):(.+)$/.exec(typeof key === 'string' ? key : '');
+  if (!m) return null;
+  return { kind: m[1] as 'page' | 'sheet' | 'place' | 'style_option', id: m[2] };
+};
+
+/** "Page 3" | "Cover" | "MAYA sheet" | "DOCKS" | "Style option". */
+export const targetLabel = (doc: ComicDoc, target: RenderTarget): string => {
+  switch (target.kind) {
+    case 'page': {
+      const p = findPage(doc, target.id);
+      return p ? `Page ${p.n}` : 'Page';
+    }
+    case 'cover':
+      return 'Cover';
+    case 'sheet': {
+      const c = findCharacter(doc, target.id);
+      return c ? `${c.name.toUpperCase()} sheet` : 'Character sheet';
+    }
+    case 'place': {
+      const p = findPlace(doc, target.id);
+      return p ? p.name.toUpperCase() : 'Place';
+    }
+    default:
+      return 'Style option';
+  }
+};
+
+const metaOfRender = (r: RenderState): VersionMeta => {
+  const out: Record<string, unknown> = {};
+  for (const k of VERSION_META_KEYS) if (r[k] !== undefined && r[k] !== null) out[k] = r[k];
+  return out as VersionMeta;
+};
+
+/** Current asset as a version (with RenderState meta) first, then history. */
+export const versionsOf = (r: RenderState): RenderVersion[] => {
+  const current = currentVersion(r);
+  return current ? [current, ...r.history] : [...r.history];
+};
+export const currentVersion = (r: RenderState): RenderVersion | undefined =>
+  r.asset ? { ...r.asset, ...metaOfRender(r) } : undefined;
+
+/** Smallest variant with w ≥ minW, else the asset itself. */
+export const thumbOf = (asset: AssetRef | undefined, minW = 320): { path: string; w?: number; h?: number } | undefined => {
+  if (!asset) return undefined;
+  const v = (asset.variants || []).filter((x) => x && x.w >= minW).sort((a, b) => a.w - b.w)[0];
+  return v ? { path: v.path, w: v.w, h: v.h } : { path: asset.path, w: asset.w, h: asset.h };
+};
+/** Variant for a display box: smallest with w ≥ cssWidth × min(dpr, 2), else the original. */
+export const variantFor = (asset: AssetRef, cssWidth: number, dpr = 1): { path: string; w?: number; h?: number } => {
+  const need = Math.max(0, cssWidth) * Math.min(Math.max(dpr || 1, 1), 2);
+  const v = (asset.variants || []).filter((x) => x && x.w >= need).sort((a, b) => a.w - b.w)[0];
+  return v ? { path: v.path, w: v.w, h: v.h } : { path: asset.path, w: asset.w, h: asset.h };
+};
+
+// ── Asset traversal ──────────────────────────────────────────────────────────
+
+/** Every AssetRef in the doc mapped by fn (used by asset_meta and server path rewrites).
+ *  Visits: style.refs, style.board, style.options[].render, cast[].refs/sheet, places[].refs/sheet,
+ *  pages[].render, cover.render, archive[], trash[].page.render, refInbox[], conversation[].attachments.
+ *  RenderState = asset + history[]. Returns the SAME doc object when fn changed nothing. */
+export const mapAssetRefs = (doc: ComicDoc, fn: (a: AssetRef) => AssetRef): ComicDoc => {
+  let changed = false;
+  const one = <T extends AssetRef>(a: T | undefined): T | undefined => {
+    if (!a) return a;
+    const next = fn(a) as T;
+    if (next !== a) changed = true;
+    return next;
+  };
+  const list = <T extends AssetRef>(arr: T[] | undefined): T[] | undefined => {
+    if (!arr) return arr;
+    let local = false;
+    const out = arr.map((a) => {
+      const n = one(a)!;
+      if (n !== a) local = true;
+      return n;
+    });
+    return local ? out : arr;
+  };
+  const render = (r: RenderState): RenderState => {
+    const asset = one(r.asset);
+    const history = list(r.history)!;
+    return asset !== r.asset || history !== r.history ? { ...r, asset, history } : r;
+  };
+  const styleRefs = list(doc.style.refs)!;
+  const board = one(doc.style.board);
+  const options = doc.style.options.map((o) => {
+    const r = render(o.render);
+    return r === o.render ? o : { ...o, render: r };
+  });
+  const optionsChanged = options.some((o, i) => o !== doc.style.options[i]);
+  const cast = doc.cast.map((c) => {
+    const refs = list(c.refs)!;
+    const sheet = render(c.sheet);
+    return refs === c.refs && sheet === c.sheet ? c : { ...c, refs, sheet };
+  });
+  const places = doc.places.map((p) => {
+    const refs = list(p.refs)!;
+    const sheet = render(p.sheet);
+    return refs === p.refs && sheet === p.sheet ? p : { ...p, refs, sheet };
+  });
+  const pages = doc.pages.map((p) => {
+    const r = render(p.render);
+    return r === p.render ? p : { ...p, render: r };
+  });
+  const coverRender = render(doc.cover.render);
+  const archive = list(doc.archive);
+  const trash = doc.trash?.map((t) => {
+    const r = render(t.page.render);
+    return r === t.page.render ? t : { ...t, page: { ...t.page, render: r } };
+  });
+  const refInbox = list(doc.refInbox);
+  const conversation = doc.conversation.map((m) => {
+    const attachments = list(m.attachments);
+    return attachments === m.attachments ? m : { ...m, attachments };
+  });
+  if (!changed) return doc;
+  const out: ComicDoc = {
+    ...doc,
+    style: styleRefs !== doc.style.refs || board !== doc.style.board || optionsChanged
+      ? { ...doc.style, refs: styleRefs, ...(doc.style.board || board ? { board } : {}), options: optionsChanged ? options : doc.style.options }
+      : doc.style,
+    cast: cast.some((c, i) => c !== doc.cast[i]) ? cast : doc.cast,
+    places: places.some((p, i) => p !== doc.places[i]) ? places : doc.places,
+    pages: pages.some((p, i) => p !== doc.pages[i]) ? pages : doc.pages,
+    cover: coverRender === doc.cover.render ? doc.cover : { ...doc.cover, render: coverRender },
+    conversation: conversation.some((m, i) => m !== doc.conversation[i]) ? conversation : doc.conversation
+  };
+  if (doc.archive !== undefined) out.archive = archive;
+  if (doc.trash !== undefined) out.trash = trash && trash.some((t, i) => t !== doc.trash![i]) ? trash : doc.trash;
+  if (doc.refInbox !== undefined) out.refInbox = refInbox;
+  return out;
+};
+
+/** Every storage path the doc references (GC protection, /urls allow-list, export). */
 export const collectAssetPaths = (doc: ComicDoc): string[] => {
   const out = new Set<string>();
-  const add = (a?: AssetRef) => {
-    if (a?.path) out.add(a.path);
+  const add = (a?: AssetRef | RefAsset) => {
+    if (!a?.path) return;
+    out.add(a.path);
+    a.variants?.forEach((v) => v?.path && out.add(v.path));
+    const original = (a as RefAsset).original;
+    if (original?.path) out.add(original.path);
   };
   const addRender = (r?: RenderState) => {
     if (!r) return;
@@ -527,17 +1171,50 @@ export const collectAssetPaths = (doc: ComicDoc): string[] => {
   doc.pages.forEach((p) => addRender(p.render));
   addRender(doc.cover.render);
   doc.conversation.forEach((m) => m.attachments?.forEach(add));
+  archiveOf(doc).forEach(add);
+  trashOf(doc).forEach((t) => addRender(t.page.render));
+  refInboxOf(doc).forEach(add);
   return [...out];
 };
 
-/** Short, stable, dependency-free string hash (FNV-1a 32-bit, hex). */
-export const hashString = (input: string): string => {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < input.length; i += 1) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0');
+/** What GET /projects/:id signs eagerly: current assets (+variants) of pages, cover, sheets, places,
+ *  style options, style.board, every ref (+original), refInbox, conversation attachments.
+ *  NOT history/archive/trash (signed lazily through POST /projects/:id/urls). */
+export const displayAssetPaths = (doc: ComicDoc): string[] => {
+  const out = new Set<string>();
+  const add = (a?: AssetRef | RefAsset) => {
+    if (!a?.path) return;
+    out.add(a.path);
+    a.variants?.forEach((v) => v?.path && out.add(v.path));
+    const original = (a as RefAsset).original;
+    if (original?.path) out.add(original.path);
+  };
+  doc.style.refs.forEach(add);
+  add(doc.style.board);
+  doc.style.options.forEach((o) => add(o.render.asset));
+  doc.cast.forEach((c) => {
+    c.refs.forEach(add);
+    add(c.sheet.asset);
+  });
+  doc.places.forEach((p) => {
+    p.refs.forEach(add);
+    add(p.sheet.asset);
+  });
+  doc.pages.forEach((p) => add(p.render.asset));
+  add(doc.cover.render.asset);
+  refInboxOf(doc).forEach(add);
+  doc.conversation.forEach((m) => m.attachments?.forEach(add));
+  return [...out];
+};
+
+// ── Spec hashes (R2: invariance for pageSpecHash) ────────────────────────────
+
+/** Keys that never affect drawn art. Lines without them keep object identity → identical JSON. */
+const hashableLine = (l: Line): Line => {
+  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { style: _s, lang: _l, noTranslate: _n, ...rest } = l; // insertion order of the rest is preserved
+  return rest as Line;
 };
 
 /**
@@ -549,9 +1226,13 @@ export const pageSpecHash = (doc: ComicDoc, page: Page): string => {
   const castIds = new Set(page.panels.flatMap((p) => p.castIds));
   const cast = doc.cast
     .filter((c) => castIds.has(c.id))
-    .map((c) => [c.id, c.look, c.sheet.asset?.path || ''])
+    .map((c) =>
+      c.count && c.count > 1
+        ? [c.id, c.look, c.sheet.asset?.path || '', c.count] // groups only; absent/1 ⇒ old tuple
+        : [c.id, c.look, c.sheet.asset?.path || '']
+    )
     .sort();
-  const lettering = doc.format.lettering === 'in_art' ? page.panels.map((p) => p.lines) : [];
+  const lettering = doc.format.lettering === 'in_art' ? page.panels.map((p) => p.lines.map(hashableLine)) : [];
   return hashString(
     JSON.stringify([
       page.layout,
@@ -571,10 +1252,79 @@ export const pageSpecHash = (doc: ComicDoc, page: Page): string => {
 export const isPageStale = (doc: ComicDoc, page: Page): boolean =>
   page.render.status === 'ready' && !!page.render.specHash && page.render.specHash !== pageSpecHash(doc, page);
 
+/** Leads (else supports) + companions ranked by panel appearances; if none, extras by appearances. ≤ 6.
+ *  prompts.ts takes .slice(0, spec.refs.characters); the hash uses this list. */
+export const coverCastOf = (doc: ComicDoc): Character[] => {
+  const appearances = new Map<string, number>();
+  for (const page of doc.pages) for (const panel of page.panels) for (const id of panel.castIds) appearances.set(id, (appearances.get(id) || 0) + 1);
+  const rank = (list: Character[]) =>
+    list
+      .map((c, i) => ({ c, i, n: appearances.get(c.id) || 0 }))
+      .sort((a, b) => b.n - a.n || a.i - b.i)
+      .map((x) => x.c);
+  const leads = doc.cast.filter((c) => c.tier === 'lead');
+  const primary = leads.length ? leads : doc.cast.filter((c) => c.tier === 'support');
+  const chosen = new Set(primary.map((c) => c.id));
+  const picked = doc.cast.filter((c) => chosen.has(c.id) || isCompanion(c));
+  const list = picked.length ? rank(picked) : rank(doc.cast.filter((c) => c.tier === 'extra' && (appearances.get(c.id) || 0) > 0));
+  return list.slice(0, 6);
+};
+
+export const sheetSpecHash = (doc: ComicDoc, c: Character): string =>
+  hashString(JSON.stringify(['sheet/1', c.look, castKindOf(c), c.count ?? 1, doc.style.spec, doc.style.board?.path, doc.format.colorMode]));
+export const placeSpecHash = (doc: ComicDoc, p: Place): string =>
+  hashString(JSON.stringify(['place/1', p.look, doc.style.spec, doc.style.board?.path, doc.format.colorMode]));
+export const coverSpecHash = (doc: ComicDoc): string => {
+  const lettering = doc.cover.lettering ?? 'in_art';
+  return hashString(
+    JSON.stringify([
+      'cover/1',
+      lettering,
+      lettering === 'in_art' ? [doc.cover.title ?? doc.brief.title, doc.cover.tagline ?? ''] : [], // overlay titles are software
+      doc.cover.direction ?? '',
+      coverCastOf(doc).map((c) => [c.id, c.look, c.sheet.asset?.path || '', c.count ?? 1]),
+      doc.style.spec,
+      doc.style.board?.path,
+      doc.format.pageAspect,
+      doc.format.colorMode
+    ])
+  );
+};
+
+/** The current spec hash of a target (style_option and missing targets → undefined). */
+export const specHashFor = (doc: ComicDoc, target: RenderTarget): string | undefined => {
+  switch (target.kind) {
+    case 'page': {
+      const page = findPage(doc, target.id);
+      return page ? pageSpecHash(doc, page) : undefined;
+    }
+    case 'cover':
+      return coverSpecHash(doc);
+    case 'sheet': {
+      const c = findCharacter(doc, target.id);
+      return c ? sheetSpecHash(doc, c) : undefined;
+    }
+    case 'place': {
+      const p = findPlace(doc, target.id);
+      return p ? placeSpecHash(doc, p) : undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
+/** ready && render.specHash && render.specHash !== specHashFor(...). Pages: identical to isPageStale. */
+export const isTargetStale = (doc: ComicDoc, target: RenderTarget): boolean => {
+  const r = getRender(doc, target);
+  if (!r || r.status !== 'ready' || !r.specHash) return false;
+  const want = specHashFor(doc, target);
+  return want !== undefined && r.specHash !== want;
+};
+
 export const totalPanels = (doc: ComicDoc) => doc.pages.reduce((n, p) => n + p.panels.length, 0);
 
 let idCounter = 0;
-/** Short unique id (prefix_random). Safe on server and client. */
+/** Short unique id (prefix_random). Safe on server and client. Never called inside applyOp (R5). */
 export const newId = (prefix: string): string => {
   idCounter = (idCounter + 1) % 1679616;
   const rand =
