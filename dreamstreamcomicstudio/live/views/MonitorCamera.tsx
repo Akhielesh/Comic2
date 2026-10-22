@@ -3,9 +3,11 @@
 // A FaceTime-grade camera: real lenses (back, ultra-wide, front) with live
 // preview, zoom, flip, two-way audio (parents' voices play on this speaker)
 // and parents' video calls shown full-screen. Live only, never recorded:
-// video/audio go peer-to-peer (encrypted) to the family's devices — and, for
-// viewers the direct picture can't reach, as one small relay stream through
-// the room (not end-to-end encrypted, never stored; monitor/relay.ts). All
+// video/audio go peer-to-peer (end-to-end encrypted) to the family's devices —
+// and, for viewers the direct picture can't reach (a network that blocks it,
+// a full camera, or for a moment while it connects), as one small relay
+// stream through the room (not end-to-end encrypted, never stored;
+// monitor/relay.ts). All
 // sound and motion analysis — including the AI sound model — runs on this
 // phone; only events and a few numbers go to the room.
 import React, { useEffect, useRef, useState } from 'react';
@@ -17,7 +19,7 @@ import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket 
 import { STATE_INFO, STATE_RANK, type BabyState, type MonServerMsg, type MonSettings, type ViewerPresence } from '../monitor/protocol';
 import { CameraHub, type Quality } from '../monitor/rtc';
 import { sceneIntervalMs } from '../monitor/videoBudget';
-import { readWant, RelayEncoder, type RelayWant } from '../monitor/relay';
+import { NO_WANT, readWant, RelayEncoder, watchersNote, type RelayWant } from '../monitor/relay';
 import type { BrainEvent } from '../monitor/soundBrain';
 import { SOUND_INFO, type SoundCat } from '../monitor/soundClasses';
 import { NurseryEars, type EarsSnapshot, type ModelState } from '../monitor/soundEngine';
@@ -184,6 +186,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [p2pCount, setP2pCount] = useState(0);
   /** What the relay sends right now (for the status line): a video codec, JPEG, or nothing. */
   const [relayMode, setRelayMode] = useState<string | null>(null);
+  /** Viewers getting the relay picture — including those only bridging while their direct picture connects. */
+  const [relayViewers, setRelayViewers] = useState(0);
   const [snap, setSnap] = useState<EarsSnapshot>(EMPTY_SNAP);
   const [motion, setMotion] = useState(0);
   const [light, setLight] = useState(128);
@@ -657,7 +661,12 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
     sockRef.current = openMonitorSocket(id, 'camera', onMsg, () => undefined, (st, detail) => {
       setSock(st);
-      if (st !== 'connected') authedRef.current = false;
+      if (st !== 'connected') {
+        authedRef.current = false;
+        // Nothing can reach relay viewers now: stop encoding for them (the home Wi-Fi
+        // keeps the direct picture going). The room re-sends relay_want when we rejoin.
+        setRelay(NO_WANT);
+      }
       if (st === 'closed' && detail) {
         setErr(detail);
         setPhase('error');
@@ -990,9 +999,11 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         send: (buf, max) => !!sockRef.current?.sendBinary(buf, max),
         buffered: () => sockRef.current?.bufferedAmount() ?? 0,
         paused: () => privacyRef.current,
+        open: () => !!sockRef.current?.open,
       });
       relayRef.current = enc;
     }
+    setRelayViewers(want.n);
     if (!enc) return;
     enc.setWant(want);
     // The microphone feeds the relay's sound only while someone is on it.
@@ -1052,7 +1063,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             {phase === 'starting' ? 'Opening the camera…' : err ? 'Try again' : 'Allow camera & microphone'}
           </Btn>
           <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>
-            <Icon name="shield" size={12} /> Live only. Nothing is recorded or stored — the picture goes straight to your family’s devices, encrypted (through our server, passed along but not stored, only when a network blocks that).
+            <Icon name="shield" size={12} /> Live only — nothing is recorded or stored. The picture and sound go device-to-device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, not end-to-end encrypted.
           </p>
         </div>
       </div>
@@ -1211,8 +1222,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   // ---- running
   const talkLine = talkers.length ? `${talkers.join(' & ')} ${talkers.length > 1 ? 'are' : 'is'} talking` : null;
   // Viewers on the relay picture aren't "connecting" — they're watching through the server
-  // (those only bridging while their direct picture connects aren't counted here).
-  const relayN = viewers.filter((v) => v.relay).length;
+  // (those only bridging while their direct picture connects still are, but count as through it).
+  const watching = watchersNote({ viewers: viewers.length, direct: p2pCount, onRelay: viewers.filter((v) => v.relay).length, relayed: relayViewers, jpeg: relayMode === 'jpeg' });
   const busy = (hubRef.current?.pressure ?? 0) > 0;
   return (
     <div className={cx('cam-run', dim && 'dimmed')} onPointerDown={touch}>
@@ -1310,7 +1321,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           <Icon name="users" size={14} />
           {viewers.length === 0
             ? 'No one is watching right now — alerts still go out'
-            : <>Watching: {viewers.map((v) => v.label || v.name).join(', ')}{p2pCount < viewers.length - relayN ? ' · connecting…' : ''}{relayN ? ` · ${relayN} through the server${relayMode === 'jpeg' ? ' (still pictures)' : ''}` : ''}</>}
+            : <>Watching: {viewers.map((v) => v.label || v.name).join(', ')}{watching}</>}
         </div>
         {busy && (
           <div className="cam-busy" role="status">

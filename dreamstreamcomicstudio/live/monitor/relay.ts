@@ -17,17 +17,26 @@
  *  - a key frame every 2 s and whenever the room asks (`relay_key`: someone
  *    subscribed, fell behind, or their decoder failed);
  *  - skips frames (rather than queueing them) while more than 64 KB is still
- *    waiting on the socket, and starts again on a key frame; a frame that
- *    couldn't be sent drops every frame after it until the next key frame
- *    (they'd decode as garbage); keeps backing off while the uplink is tight;
+ *    waiting on the socket, until it drains below 32 KB — then carries on
+ *    with the next frame (a skipped frame never reached the encoder, so
+ *    nothing is missing: no key frame needed, which would only refill the
+ *    socket); a frame that couldn't be sent drops every frame after it until
+ *    the next key frame (they'd decode as garbage); keeps backing off while
+ *    the uplink is tight (the JPEG pace too);
  *  - bundles the sound captured since the last frame into each message
  *    (relayAudio.ts); sound goes alone only when no frame went out for 150 ms;
- *  - sends nothing at all while the video is paused for privacy.
+ *  - sends nothing at all while the video is paused for privacy, and encodes
+ *    nothing while the camera's room socket is down (the sends would only
+ *    fail — while the home Wi-Fi keeps the direct picture going).
  *
  * Viewer — `RelayDecoder`: VideoDecoder → canvas (every frame closed right
  * away), JPEG via createImageBitmap, sound through RelaySoundPlayer; acks
  * what it received every 500 ms (`{t:'rx', s}`, plus `k: 1` when its decoder
- * needs a key frame); falls back to JPEG after repeated decoder errors.
+ * needs a key frame) — and always the last message of a burst, a moment
+ * later, so the room never holds a viewer back on an old acknowledgement;
+ * falls back to JPEG after repeated decoder errors. Its sound is started
+ * from a tap (Listen) — phones play nothing otherwise — and `soundBlocked`
+ * tells the screen when relay sound is arriving but not playing.
  * `stream()` is the canvas (captureStream) plus the sound, for the watch
  * screen's <video> — so picture-in-picture and the Listen button work on the
  * relay just as on the direct picture.
@@ -42,8 +51,10 @@ import { CODEC_STRING, MAX_JPEG_BYTES, MAX_VIDEO_BYTES, nextSeq, pack, RELAY_COD
 
 export const RELAY_LONG_SIDE = 640;
 export const KEY_EVERY_MS = 2000;
-/** Skip frames while more than this is still waiting on the socket. */
+/** Skip frames while more than this is still waiting on the socket… */
 export const SEND_BACKLOG = 64 * 1024;
+/** …until it has drained below this (hysteresis: no stop-start on every frame). */
+export const SEND_RESUME = 32 * 1024;
 /** Sound is small and matters most: it may queue behind a little more. */
 const SOUND_MAX_BUFFERED = 256 * 1024;
 /** No frame went out for this long: the sound goes on its own. */
@@ -174,6 +185,20 @@ export class RelayRate {
 
 /* -------------------------------------------------------------- camera */
 
+/**
+ * The camera's "who's watching" line, after the names: whether some are still
+ * connecting, and how many get the picture through the server. That's
+ * everyone the room relays to (`relayed`, from relay_want) — including those
+ * only bridging while their direct picture connects, which the presence list
+ * doesn't mark as on the relay (`onRelay`): their picture passes through the
+ * server too, so the camera says so.
+ */
+export function watchersNote(o: { viewers: number; direct: number; onRelay: number; relayed: number; jpeg: boolean }): string {
+  const through = Math.max(o.onRelay, o.relayed);
+  const connecting = o.direct < o.viewers - o.onRelay ? ' · connecting…' : '';
+  return `${connecting}${through ? ` · ${through} through the server${o.jpeg ? ' (still pictures)' : ''}` : ''}`;
+}
+
 export interface RelayEncoderDeps {
   /** The camera's live picture. */
   source: () => HTMLVideoElement | null;
@@ -183,6 +208,8 @@ export interface RelayEncoderDeps {
   buffered: () => number;
   /** Video paused for privacy: nothing at all leaves the phone. */
   paused: () => boolean;
+  /** The room socket is open (absent = always): while it's down nothing is encoded — every send would fail. */
+  open?: () => boolean;
   now?: () => number;
 }
 
@@ -234,7 +261,11 @@ export class RelayEncoder {
 
   /** Microphone audio from the sound engine (only kept while someone is on the relay). */
   pushSound(pcm: Float32Array, rate: number): void {
-    if (this.running && !this.deps.paused()) this.sound.push(pcm, rate);
+    if (this.running && !this.deps.paused() && this.isOpen()) this.sound.push(pcm, rate);
+  }
+
+  private isOpen(): boolean {
+    return this.deps.open ? this.deps.open() : true;
   }
 
   get active(): boolean {
@@ -245,6 +276,11 @@ export class RelayEncoder {
   get mode(): RelayCodec | 'jpeg' | null {
     if (!this.running) return null;
     return this.codec && this.enc ? this.codec : 'jpeg';
+  }
+
+  /** The JPEG pace (frames a second) for viewers who can't decode the video. */
+  get jpegFps(): number {
+    return this.pacer.fps;
   }
 
   /** Pictures (video or JPEG) actually sent per second, over the last five seconds. */
@@ -288,25 +324,31 @@ export class RelayEncoder {
     const now = this.now();
     // Until the phone's encoders are known (a few ms): what to send depends on it.
     if (!this.encoders) return;
-    if (this.deps.paused()) {
+    if (this.deps.paused() || !this.isOpen()) {
       // Privacy: nothing goes out — and nothing captured meanwhile goes out later.
+      // Socket down: no drawing or encoding for sends that can't happen; the room
+      // starts every viewer over on a key frame when the camera rejoins.
       this.sound.clear();
       this.forceKey = true;
       return;
     }
     const buffered = this.deps.buffered();
-    if (buffered > SEND_BACKLOG) {
+    if (buffered > SEND_BACKLOG || (this.backlogged && buffered > SEND_RESUME)) {
       if (!this.backlogged && this.rate.onBacklog(now)) this.reconfigure();
       this.backlogged = true;
+      // The JPEG pace steps down too (it would never see its own threshold: we return first).
+      if (this.jpegViewers() > 0 && now - this.jpegAt >= this.pacer.intervalMs) {
+        this.jpegAt = now;
+        this.pacer.onBacklog();
+      }
       this.flushSound(now);
       return;
     }
-    if (this.backlogged) {
-      this.backlogged = false;
-      this.forceKey = true;
-    } else if (this.rate.onClear(now)) {
-      this.reconfigure();
-    }
+    // Back under the resume mark: carry on with the next frame. Skipped frames never
+    // reached the encoder, so the next one codes against the last one sent — a key
+    // frame here would only refill the socket (and lock a tight uplink into key frames).
+    if (this.backlogged) this.backlogged = false;
+    else if (this.rate.onClear(now)) this.reconfigure();
     const v = this.deps.source();
     if (v && v.readyState >= 2 && v.videoWidth > 0) {
       const { w, h } = relaySize(v.videoWidth, v.videoHeight);
@@ -314,11 +356,16 @@ export class RelayEncoder {
         const codec = this.encoders ? chooseCodec(this.encoders.filter((c) => (this.broken.get(c) ?? 0) < 3), this.want, this.codec) : null;
         if (codec) this.encode(codec, w, h, now);
         else if (this.enc) this.closeEncoder();
-        const jpegViewers = this.want.n - (codec ? this.want[codec] : 0);
+        const jpegViewers = this.jpegViewers(codec);
         if (jpegViewers > 0 && !this.jpegBusy && now - this.jpegAt >= this.pacer.intervalMs && this.pacer.tick(buffered)) this.sendJpeg(now);
       }
     }
     this.flushSound(now);
+  }
+
+  /** Relay viewers who get JPEG (they decode none of what's being encoded). */
+  private jpegViewers(codec: RelayCodec | null = this.enc ? this.codec : null): number {
+    return this.want.n - (codec ? this.want[codec] : 0);
   }
 
   private draw(v: HTMLVideoElement, w: number, h: number): boolean {
@@ -476,6 +523,19 @@ export class RelayEncoder {
 
 /* -------------------------------------------------------------- viewer */
 
+/**
+ * What the watch screen's sound controls say. `relaySound`: the <video>
+ * plays the relay stream and it carries sound; `blocked`: that sound is
+ * arriving but the phone hasn't started it (RelayDecoder.soundBlocked);
+ * `hearable`: there is something to hear (the direct picture, or relay
+ * sound). Never "Sound on" while the nursery is silent — blocked relay sound
+ * brings the tap-to-hear prompt back even after Listen was tapped.
+ */
+export function soundControls(o: { muted: boolean; hearable: boolean; relaySound: boolean; blocked: boolean }): { on: boolean; tap: boolean } {
+  const on = !o.muted && !(o.relaySound && o.blocked);
+  return { on, tap: o.hearable && !on };
+}
+
 export interface RelayDecoderOpts {
   canvas: () => HTMLCanvasElement | null;
   /** A picture was drawn. */
@@ -486,8 +546,13 @@ export interface RelayDecoderOpts {
   onStream?: (s: MediaStream | null) => void;
   /** Video keeps failing here: watch the JPEG picture instead. */
   onFallback?: () => void;
+  /** The relay sound changed: it started arriving, or started / stopped playing (`soundBlocked`). */
+  onSound?: () => void;
   now?: () => number;
 }
+
+/** The viewer acknowledges at most this often — and the last message of a burst at most this late. */
+export const ACK_EVERY_MS = 500;
 
 export class RelayDecoder {
   private dec: VideoDecoder | null = null;
@@ -495,12 +560,17 @@ export class RelayDecoder {
   private waitKey = true;
   private last: number | null = null;
   private ackAt = -Infinity;
+  /** The seq last acknowledged (a trailing ack only goes when something newer arrived). */
+  private acked: number | null = null;
+  private ackTimer: ReturnType<typeof setTimeout> | undefined;
   private keyAskAt = -Infinity;
   private needKey = false;
   private errors: number[] = [];
   private jpegSeq = { next: 0, drawn: -1 };
   private chain: Promise<void> = Promise.resolve();
   private player: RelaySoundPlayer | null | undefined;
+  /** Relay sound arrived since the last reset (the camera is sending some). */
+  private heard = false;
   private captured: MediaStream | null = null;
   private capturedFrom: HTMLCanvasElement | null = null;
   private closed = false;
@@ -524,13 +594,22 @@ export class RelayDecoder {
       .catch(() => undefined);
   }
 
-  /** Sound is playing (or queued to). */
+  /** Relay sound is arriving and this browser can play it (it may still need a tap — see soundBlocked). */
   get hasSound(): boolean {
-    return !!this.player;
+    return !!this.player && this.heard;
   }
 
   get soundRunning(): boolean {
     return !!this.player?.running;
+  }
+
+  /**
+   * Relay sound is arriving but isn't playing: the phone hasn't let it start
+   * (no tap yet, or a call / Siri / the lock screen interrupted it). The
+   * screen must say so — never "Sound on" while the nursery is silent.
+   */
+  get soundBlocked(): boolean {
+    return this.hasSound && !this.soundRunning;
   }
 
   /** Jitter-buffer reading (for diagnostics). */
@@ -541,6 +620,27 @@ export class RelayDecoder {
   /** Call from a tap: phones only start sound from a gesture. */
   resumeSound(): void {
     void this.player?.resume();
+  }
+
+  /**
+   * Call from the Listen tap, even before the relay is in use: iPhones only
+   * start an AudioContext inside a gesture, and the relay can take over at
+   * any moment later (the network blocks the direct picture, the camera is
+   * full, ICE drops) — when its first sound arrives from the socket, outside
+   * any tap, a context made then would stay silent. So it's made and started
+   * now, while the tap counts.
+   */
+  prepareSound(): void {
+    if (this.closed) return;
+    if (this.ensurePlayer() && this.capturedFrom) this.rebuildStream(this.capturedFrom);
+    void this.player?.resume();
+  }
+
+  /** The sound player, made once (null when this browser can't play relay sound). True when just made. */
+  private ensurePlayer(): boolean {
+    if (this.player !== undefined) return false;
+    this.player = canPlayRelaySound() ? RelaySoundPlayer.create(() => this.opts.onSound?.()) : null;
+    return !!this.player;
   }
 
   handle(ab: ArrayBuffer): void {
@@ -555,12 +655,31 @@ export class RelayDecoder {
   }
 
   private maybeAck(): void {
-    const now = this.now();
     if (this.last == null) return;
+    const now = this.now();
     const ask = this.needKey && now - this.keyAskAt >= 1000;
-    if (!ask && now - this.ackAt < 500) return;
-    this.opts.onAck(ask ? { s: this.last, k: 1 } : { s: this.last });
+    if (ask || now - this.ackAt >= ACK_EVERY_MS) return this.sendAck(now, ask);
+    // Inside the 500 ms: this message is still acknowledged, a moment later, if
+    // nothing newer is. Otherwise the last message of a burst (after a stall)
+    // is never acknowledged, the room thinks this viewer is far behind and
+    // holds everything back — and with nothing arriving, it never acks again.
+    if (this.ackTimer === undefined) this.ackTimer = setTimeout(this.trailingAck, Math.max(1, ACK_EVERY_MS - (now - this.ackAt)));
+  }
+
+  private trailingAck = (): void => {
+    this.ackTimer = undefined;
+    if (this.closed || this.last == null || this.last === this.acked) return;
+    const now = this.now();
+    this.sendAck(now, this.needKey && now - this.keyAskAt >= 1000);
+  };
+
+  private sendAck(now: number, ask: boolean): void {
+    clearTimeout(this.ackTimer);
+    this.ackTimer = undefined;
+    const s = this.last!;
+    this.opts.onAck(ask ? { s, k: 1 } : { s });
     this.ackAt = now;
+    this.acked = s;
     if (ask) {
       this.keyAskAt = now;
       this.needKey = false;
@@ -694,12 +813,16 @@ export class RelayDecoder {
   }
 
   private playSound(ulaw: Uint8Array): void {
-    if (this.player === undefined) {
-      this.player = canPlayRelaySound() ? RelaySoundPlayer.create() : null;
-      if (this.player) {
-        const c = this.opts.canvas();
-        if (c) this.rebuildStream(c);
-      }
+    this.ensurePlayer();
+    const snd = this.player?.track;
+    // The <video> plays the sound with the picture: its stream needs the track.
+    if (snd && !this.captured?.getAudioTracks().some((t) => t === snd)) {
+      const c = this.capturedFrom ?? this.opts.canvas();
+      if (c) this.rebuildStream(c);
+    }
+    if (!this.heard) {
+      this.heard = !!this.player;
+      if (this.heard) this.opts.onSound?.();
     }
     this.player?.push(ulaw);
   }
@@ -734,14 +857,20 @@ export class RelayDecoder {
     this.closeDecoder();
     this.waitKey = true;
     this.last = null;
+    this.acked = null;
+    clearTimeout(this.ackTimer);
+    this.ackTimer = undefined;
     this.needKey = false;
     this.jpegSeq.drawn = this.jpegSeq.next;
     this.codec = null;
+    this.heard = false;
     this.player?.reset();
   }
 
   close(): void {
     this.closed = true;
+    clearTimeout(this.ackTimer);
+    this.ackTimer = undefined;
     this.closeDecoder();
     this.player?.close();
     this.player = undefined;

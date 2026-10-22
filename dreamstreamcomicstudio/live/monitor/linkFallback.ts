@@ -15,6 +15,10 @@
  * runs the effects. The bugs this replaced:
  *  - a late P2P connect (between the 10 s give-up and the retry) was torn down
  *    by the retry timer,
+ *  - a camera that's full lets the call connect and only then says so (it
+ *    learns the viewer's network path once connected): resetting the back-off
+ *    on 'connected' retried every 30 s all night — it's reset only once the
+ *    direct picture is confirmed ('rendered': drawn, or connected for 5 s),
  *  - after the room socket reconnected, the relay subscription (kept per
  *    socket by the room) was never sent again, so the picture froze,
  *  - switching cameras while on the relay kept showing the other camera.
@@ -32,7 +36,7 @@ export interface Fallback {
   /** The camera being watched (device id), null when there is none. */
   dev: string | null;
   link: LinkState;
-  /** Failed P2P attempts in a row (sets the retry back-off). */
+  /** Failed P2P attempts in a row (sets the retry back-off); reset only once a direct picture is confirmed. */
   fails: number;
   /** A P2P retry is scheduled. */
   retry: boolean;
@@ -45,7 +49,7 @@ export type FallbackInput =
   | { t: 'link'; state: LinkState }
   /** The direct picture's head start is over (instant_in elapsed). */
   | { t: 'instant_due' }
-  /** The direct picture drew its first frame (or gave up waiting for one). */
+  /** The direct picture drew its first frame (or stayed connected RENDER_WAIT_MS without one). */
   | { t: 'rendered' }
   /** The room socket said hello — a fresh connection with no subscriptions. */
   | { t: 'hello' }
@@ -117,9 +121,11 @@ export function stepFallback(s0: Fallback, input: FallbackInput): { s: Fallback;
       unschedule();
       if (state === 'connected') {
         // Includes ICE that got through after we'd given up: keep it, cancel the
-        // retry. The relay stays until the direct picture has drawn a frame.
+        // retry. The relay stays until the direct picture has drawn a frame — and
+        // the back-off stays too: a full camera connects first and turns us away
+        // a moment later ({bye, full}), so 'connected' proves nothing yet.
         if (s.retry) fx.push({ t: 'retry_clear' });
-        return { s: { ...s, link: state, fails: 0, retry: false }, fx };
+        return { s: { ...s, link: state, retry: false }, fx };
       }
       if (state === 'closed') {
         // The camera hung up, or there's none: no retry; a stopgap relay goes too.
@@ -142,9 +148,11 @@ export function stepFallback(s0: Fallback, input: FallbackInput): { s: Fallback;
       }
       return { s, fx };
     case 'rendered':
-      if (s.link !== 'connected' || !s.relay) return { s, fx };
+      if (s.link !== 'connected') return { s, fx };
+      // The direct picture is confirmed: the next failure starts the back-off over.
+      if (!s.relay) return { s: s.fails ? { ...s, fails: 0 } : s, fx };
       fx.push({ t: 'relay_off' });
-      return { s: { ...s, relay: false, early: false }, fx };
+      return { s: { ...s, relay: false, early: false, fails: 0 }, fx };
     case 'hello':
       // The room keeps the subscription per socket: a new socket starts with none.
       if (s.relay && s.dev) fx.push({ t: 'relay_on', dev: s.dev, instant: s.early });

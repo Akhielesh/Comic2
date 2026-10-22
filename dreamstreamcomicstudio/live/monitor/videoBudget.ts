@@ -53,8 +53,7 @@ export class RelayPacer {
   tick(buffered: number, busy = false): boolean {
     if (busy) return false;
     if (buffered > RELAY_BACKLOG) {
-      this.clean = 0;
-      this.fps = Math.max(this.min, this.fps - 1);
+      this.onBacklog();
       return false;
     }
     if (buffered < CLEAR) {
@@ -67,6 +66,12 @@ export class RelayPacer {
       this.clean = 0;
     }
     return true;
+  }
+
+  /** The socket is backed up (also when the caller skips frames at its own, lower mark): one step down. */
+  onBacklog(): void {
+    this.clean = 0;
+    this.fps = Math.max(this.min, this.fps - 1);
   }
 
   /** A frame went out: `bytes` long, at `now`. */

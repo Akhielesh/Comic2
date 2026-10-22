@@ -19,7 +19,7 @@ import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subsc
 import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
 import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
 import { RelayMeter } from '../monitor/videoBudget';
-import { probeDecoders, RelayDecoder } from '../monitor/relay';
+import { probeDecoders, RelayDecoder, soundControls } from '../monitor/relay';
 import type { RelayCodec } from '../monitor/relayWire';
 import { SOUND_INFO, SOUND_CATS, soundHeadline, type SoundCat } from '../monitor/soundClasses';
 import { SOOTHE_OPTIONS, type SootheKind } from '../monitor/soothe';
@@ -216,11 +216,14 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   /** The camera's direct slots were full, so this viewer watches the relay. */
   const [relayFull, setRelayFull] = useState(false);
   /** The relay picture as it really is: frames a second, stopped, or not started — and video or still pictures, with sound or not. */
-  const [relayView, setRelayView] = useState<{ has: boolean; fps: number; stale: boolean; jpeg?: boolean; sound?: boolean }>({ has: false, fps: 0, stale: false });
+  // `blocked`: relay sound is arriving but the phone hasn't started it (it needs a tap).
+  const [relayView, setRelayView] = useState<{ has: boolean; fps: number; stale: boolean; jpeg?: boolean; sound?: boolean; blocked?: boolean }>({ has: false, fps: 0, stale: false });
   /** The <video> element plays the relay's stream (canvas capture + sound): PiP and Listen work on it. */
   const [relaySrc, setRelaySrc] = useState<{ video: boolean; sound: boolean } | null>(null);
   const [hasVideo, setHasVideo] = useState(false);
   const [muted, setMuted] = useState(true);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   const [night, setNight] = useState(false);
   const [quality, setQuality] = useState<Quality>('hd');
   const [talk, setTalk] = useState<'off' | 'starting' | 'on'>('off');
@@ -292,6 +295,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   if (roomCam) lastCamRef.current = roomCam;
   const cam = roomCam ?? (linkState === 'connected' ? lastCamRef.current : null);
   const camStatus = cam ? status[cam.dev] : undefined;
+  /** The camera is up and not paused: a relay picture that stops now is stuck, not resting. */
+  const camLiveRef = useRef(false);
+  camLiveRef.current = !!camStatus && Date.now() - camStatus.at < 30_000 && !camStatus.st.paused;
   camSidRef.current = camSid;
   const qualityRef = useRef(quality);
   qualityRef.current = quality;
@@ -305,9 +311,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     fallbackRef.current = s;
     setRelayOn(s.relay);
     setRelayEarly(s.early);
-    // "Camera full" holds through background retries until a direct picture gets through.
+    // "Camera full" holds through background retries until a direct picture gets
+    // through (not merely 'connected': a full camera connects, then turns us away).
     if (input.t === 'link' && input.state === 'failed' && linkRef.current?.full) fullRef.current = true;
-    else if (input.t === 'link' && input.state === 'connected') fullRef.current = false;
+    else if (!s.relay) fullRef.current = false;
     setRelayFull(s.relay && !s.early && fullRef.current);
     for (const e of fx) {
       if (e.t === 'relay_on') sendRelay(e.dev, e.instant);
@@ -391,10 +398,12 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         const first = relayMeterRef.current.last == null;
         relayMeterRef.current.frame(now);
         if (first) {
-          setRelayView({ has: true, fps: 0, stale: false, jpeg: dec.codec === 'jpeg', sound: dec.hasSound });
+          setRelayView({ has: true, fps: 0, stale: false, jpeg: dec.codec === 'jpeg', sound: dec.hasSound, blocked: dec.soundBlocked });
           syncVideo();
         }
       },
+      // Relay sound arrived, or started / stopped playing: the sound controls follow it at once.
+      onSound: () => setRelayView((v) => (v.sound === dec.hasSound && v.blocked === dec.soundBlocked ? v : { ...v, sound: dec.hasSound, blocked: dec.soundBlocked })),
       onAck: (a) => sockRef.current?.send({ t: 'rx', ...a }),
       onStream: (s) => {
         relayStreamRef.current = s;
@@ -422,14 +431,23 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     sockRef.current = sockNow;
     const tick = window.setInterval(() => setClock((c) => c + 1), 5000);
     const cues = cuesRef.current;
-    const unlock = () => cues.unlock();
+    // Any tap also (re)starts the relay's sound where a phone stopped it — and,
+    // once Listen is on, makes it ready inside the tap (iPhones need one).
+    const unlock = () => {
+      cues.unlock();
+      if (mutedRef.current) dec.resumeSound();
+      else dec.prepareSound();
+    };
     window.addEventListener('pointerdown', unlock);
+    // A touch only counts as a tap (user activation) on its way up — iPhones go by that.
+    window.addEventListener('pointerup', unlock);
     return () => {
       window.clearInterval(tick);
       window.clearTimeout(retryRef.current);
       window.clearTimeout(instantRef.current);
       fallbackRef.current = { ...fallbackRef.current, pending: false };
       window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('pointerup', unlock);
       link.close();
       dec.close();
       if (relayDecRef.current === dec) relayDecRef.current = null;
@@ -869,14 +887,24 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   // The relay picture as it really is — frames a second, or stopped.
   useEffect(() => {
     if (!relayOn) return;
+    let askedAt = Date.now();
     const t = window.setInterval(() => {
       const m = relayMeterRef.current;
       const dec = relayDecRef.current;
       const now = Date.now();
-      const next = { has: m.last != null, fps: m.fps(now), stale: m.stale(now), jpeg: dec?.codec === 'jpeg', sound: !!dec?.hasSound };
-      setRelayView((v) => (v.has === next.has && v.fps === next.fps && v.stale === next.stale && v.jpeg === next.jpeg && v.sound === next.sound ? v : next));
+      const next = { has: m.last != null, fps: m.fps(now), stale: m.stale(now), jpeg: dec?.codec === 'jpeg', sound: !!dec?.hasSound, blocked: !!dec?.soundBlocked };
+      setRelayView((v) => (v.has === next.has && v.fps === next.fps && v.stale === next.stale && v.jpeg === next.jpeg && v.sound === next.sound && v.blocked === next.blocked ? v : next));
+      // Stopped while the camera is up and not paused: subscribe again — the room then
+      // starts this viewer's window over (besides its own probes and our trailing ack),
+      // so "it picks up again by itself" stays true.
+      const f = fallbackRef.current;
+      if (next.stale && camLiveRef.current && f.relay && f.dev && now - askedAt >= 8000) {
+        askedAt = now;
+        sendRelay(f.dev, f.early);
+      }
     }, 1000);
     return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayOn]);
 
   useEffect(() => {
@@ -928,8 +956,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       v.muted = !on;
       if (on) void v.play().catch(() => undefined);
     }
-    // The relay's sound plays through an AudioContext: phones start it only from a tap.
-    if (on) relayDecRef.current?.resumeSound();
+    // The relay's sound plays through an AudioContext: phones start it only from a
+    // tap — so it's made and started now, even before the relay is in use.
+    if (on) relayDecRef.current?.prepareSound();
     cuesRef.current.unlock();
   };
 
@@ -1178,6 +1207,13 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   // What the relay pill says (honest: through our server, not end-to-end encrypted, never stored).
   const relayFps = relayView.has && !relayView.stale && relayView.fps ? ` · ${relayView.fps} fps` : '';
   const relayNoSound = relayView.has && !relayView.sound;
+  // What the sound controls say — never "Sound on" while relay sound waits for a tap.
+  const soundUi = soundControls({
+    muted,
+    hearable: !!cam && ((hasVideo && !showRelay) || (showRelay && !!relaySrc?.sound)),
+    relaySound: !!relaySrc?.sound,
+    blocked: !!relayView.blocked,
+  });
   const relayTitle = relayEarly
     ? 'A quick preview through our server while the encrypted direct connection starts — passed along in memory, never stored, not end-to-end encrypted.'
     : `${relayFull
@@ -1264,7 +1300,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         )}
         <button className="mv-mini" onClick={fullscreen} aria-label="Fullscreen" title="Fullscreen"><Icon name="maximize" size={16} /></button>
       </div>
-      {cam && muted && ((hasVideo && !showRelay) || (showRelay && !!relaySrc?.sound)) && (
+      {soundUi.tap && (
         <button className="mv-listen" onClick={() => listen(true)}><Icon name="volume" size={18} />Tap to hear the nursery</button>
       )}
       {(talk === 'on' || others) && (
@@ -1274,8 +1310,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         </div>
       )}
       <div className="mv-controls">
-        <button className={cx('mv-round', !muted && 'on')} onClick={() => listen(muted)} aria-label={muted ? 'Listen' : 'Mute nursery sound'} aria-pressed={!muted}>
-          <Icon name={muted ? 'volumeOff' : 'volume'} size={20} /><span>{muted ? 'Listen' : 'Sound on'}</span>
+        <button className={cx('mv-round', soundUi.on && 'on')} onClick={() => listen(!soundUi.on)} aria-label={soundUi.on ? 'Mute nursery sound' : 'Listen'} aria-pressed={soundUi.on}>
+          <Icon name={soundUi.on ? 'volume' : 'volumeOff'} size={20} /><span>{soundUi.on ? 'Sound on' : 'Listen'}</span>
         </button>
         {canAct && cam && (
           <button
@@ -1587,7 +1623,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
             }
           : null
       }
-      muted={muted}
+      muted={!soundUi.on}
       canAct={canAct}
       talking={talk === 'on'}
       wake={wake}
