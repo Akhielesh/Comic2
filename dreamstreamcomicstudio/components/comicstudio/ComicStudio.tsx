@@ -7,7 +7,9 @@
 //
 // The header carries the project-level controls: back, the editable title, quality,
 // the truthful spend chip (with a by-kind breakdown and BYOK note), Read, and Settings
-// (confirm policy, budget cap, lettering, reading direction).
+// (confirm policy, budget cap, lettering, reading direction). Feature controls (Share,
+// Easy/Pro, savings) join through the header slot registry (features.ts, contract §13.2),
+// interleaved with the built-ins by `order`.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -39,6 +41,7 @@ import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from 
 import { renderingPageCount } from './studioReducer';
 import { useStudio, type ComicStudioController } from './useStudio';
 import type { BoardTab } from './types';
+import { BUILTIN_HEADER_ORDER, registeredHeaderSlots, type HeaderSlotRegistration } from './features';
 
 export const SPLIT_STORAGE_KEY = 'comicstudio.split';
 const DEFAULT_SPLIT = [40, 60];
@@ -238,6 +241,41 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
   );
 };
 
+/** A feature header control; a crash inside it hides the control, never the studio. */
+class HeaderSlotBoundary extends React.Component<{ id: string; children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error(`[comicstudio] header slot "${this.props.id}" failed to render`, error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+const HeaderSlots: React.FC<{ slots: readonly HeaderSlotRegistration[]; from: number; to: number; studio: ComicStudioController; compact: boolean }> = ({
+  slots,
+  from,
+  to,
+  studio,
+  compact
+}) => (
+  <>
+    {slots
+      .filter((slot) => slot.order >= from && slot.order < to)
+      .map((slot) => (
+        <HeaderSlotBoundary key={slot.id} id={slot.id}>
+          <slot.Component studio={studio} compact={compact} />
+        </HeaderSlotBoundary>
+      ))}
+  </>
+);
+
 const QUALITY_DOT: Record<string, string> = { draft: 'bg-sky-500', standard: 'bg-emerald-500', pro: 'bg-[var(--ds-accent)]' };
 
 const headerBtn = `inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`;
@@ -248,8 +286,14 @@ const StudioHeader: React.FC<{
   onBack: () => void;
   onRead: () => void;
   onOpenSettings: () => void;
-}> = ({ studio, doc, onBack, onRead, onOpenSettings }) => {
+  /** Narrow header (single-column studio): slots render their compact form. */
+  compact?: boolean;
+}> = ({ studio, doc, onBack, onRead, onOpenSettings, compact = false }) => {
   const [open, setOpen] = useState<'quality' | 'spend' | 'menu' | null>(null);
+  const slots = registeredHeaderSlots();
+  const H = BUILTIN_HEADER_ORDER;
+  const slotRange = (from: number, to: number) =>
+    slots.length ? <HeaderSlots slots={slots} from={from} to={to} studio={studio} compact={compact} /> : null;
   const qualityRef = useRef<HTMLDivElement>(null);
   const spendRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -271,6 +315,7 @@ const StudioHeader: React.FC<{
       <TitleField title={doc.brief.title || 'Untitled comic'} onCommit={(title) => void studio.patch([{ op: 'brief', patch: { title } }])} />
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {slotRange(-Infinity, H.quality)}
         <div ref={qualityRef} className="relative">
           <button type="button" onClick={() => toggle('quality')} aria-haspopup="dialog" aria-expanded={open === 'quality'} className={headerBtn} title="Quality">
             <span className={cx('h-2 w-2 rounded-full', QUALITY_DOT[tier] || QUALITY_DOT.standard)} aria-hidden />
@@ -281,6 +326,7 @@ const StudioHeader: React.FC<{
             <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} onDone={close} />
           </PopSheet>
         </div>
+        {slotRange(H.quality, H.spend)}
 
         <div ref={spendRef} className="relative">
           <button
@@ -297,11 +343,13 @@ const StudioHeader: React.FC<{
             <SpendBreakdown doc={doc} />
           </PopSheet>
         </div>
+        {slotRange(H.spend, H.read)}
 
         <button type="button" onClick={onRead} className={headerBtn} aria-label="Read the comic">
           <BookOpen className="h-3.5 w-3.5" aria-hidden />
           <span className="hidden sm:inline">Read</span>
         </button>
+        {slotRange(H.read, H.more)}
 
         <div ref={menuRef} className="relative">
           <button
@@ -341,6 +389,7 @@ const StudioHeader: React.FC<{
             </div>
           </PopSheet>
         </div>
+        {slotRange(H.more, Infinity)}
       </div>
     </header>
   );
@@ -640,7 +689,7 @@ export const ComicStudio: React.FC<{ projectId: string; onBack: () => void }> = 
 
   return (
     <div className={`flex h-full min-h-0 w-full flex-col font-sans ${CANVAS_BG} text-[var(--ds-ink)]`}>
-      <StudioHeader studio={studio} doc={doc} onBack={onBack} onRead={onRead} onOpenSettings={() => setSettingsOpen(true)} />
+      <StudioHeader studio={studio} doc={doc} onBack={onBack} onRead={onRead} onOpenSettings={() => setSettingsOpen(true)} compact={!wide} />
 
       {wide ? (
         <div className="min-h-0 flex-1">

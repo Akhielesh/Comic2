@@ -1,11 +1,18 @@
 // The Board — the "living comic". A structured, always-current view of the ComicDoc that
 // fills in as the director works: Story · Cast · Style · Pages · Read. Each tab keeps its
 // own scroll position; the page editor opens over everything when a page is focused.
+//
+// Feature tabs (Media, Languages, …) come from the tab registry (features.ts, contract
+// §13.2): they merge with the built-ins by `order` and show only while `visible(doc, caps)`.
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { BookOpen, FileText, LayoutGrid, Palette, Users } from 'lucide-react';
 import { formatUsd } from '../../../shared/comic/models';
-import type { BoardTab, StudioController } from '../types';
+import type { ComicDoc } from '../../../shared/comic/doc';
+import type { StudioCaps } from '../../../shared/comic/capabilities';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import type { BoardTab, StudioController, StudioTab } from '../types';
+import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
 import { HAIRLINE } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
@@ -17,6 +24,7 @@ import { StyleTab } from './StyleTab';
 import { pageProgress } from './boardModel';
 import { GhostButton, PrimaryButton, cx, useClickGuard } from './ui';
 
+/** The built-in tabs (always present, in this order). */
 export const BOARD_TABS: { id: BoardTab; label: string; icon: React.ReactNode }[] = [
   { id: 'story', label: 'Story', icon: <FileText className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'cast', label: 'Cast', icon: <Users className="h-3.5 w-3.5" aria-hidden /> },
@@ -24,6 +32,32 @@ export const BOARD_TABS: { id: BoardTab; label: string; icon: React.ReactNode }[
   { id: 'pages', label: 'Pages', icon: <LayoutGrid className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'read', label: 'Read', icon: <BookOpen className="h-3.5 w-3.5" aria-hidden /> }
 ];
+
+interface ShownTab {
+  id: StudioTab;
+  label: string;
+  icon: React.ReactNode;
+  /** Set for registry tabs; built-ins render their own panel below. */
+  registration?: BoardTabRegistration;
+}
+
+const isVisible = (reg: BoardTabRegistration, doc: ComicDoc, caps: StudioCaps): boolean => {
+  if (!reg.visible) return true;
+  try {
+    return !!reg.visible(doc, caps);
+  } catch {
+    return false; // a feature's visibility check must never break the board
+  }
+};
+
+/** Built-in tabs plus the registered tabs visible for this doc, sorted by `order` (stable). */
+export const boardTabsFor = (doc: ComicDoc, caps: StudioCaps): ShownTab[] => {
+  const builtIns = BOARD_TABS.map((t, i) => ({ tab: t as ShownTab, order: BUILTIN_TAB_ORDER[t.id] ?? (i + 1) * 100, i }));
+  const extra = registeredTabs()
+    .filter((reg) => isVisible(reg, doc, caps))
+    .map((reg, i) => ({ tab: { id: reg.id, label: reg.label, icon: reg.icon, registration: reg }, order: reg.order, i: BOARD_TABS.length + i }));
+  return [...builtIns, ...extra].sort((a, b) => a.order - b.order || a.i - b.i).map((x) => x.tab);
+};
 
 /** An open spend approval, mirrored on the board so a click here can be answered here. */
 const GateBanner: React.FC<{ studio: StudioController }> = ({ studio }) => {
@@ -83,15 +117,18 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
     if (scrollRef.current) scrollRef.current.scrollTop = scrollTops.current[tab] || 0;
   }, [tab]);
 
+  const caps = studio.caps || DEFAULT_CAPS;
+  const tabs = useMemo(() => (doc ? boardTabsFor(doc, caps) : []), [doc, caps]);
+
   const onTabKey = (e: React.KeyboardEvent, index: number) => {
     let next = -1;
-    if (e.key === 'ArrowRight') next = (index + 1) % BOARD_TABS.length;
-    else if (e.key === 'ArrowLeft') next = (index - 1 + BOARD_TABS.length) % BOARD_TABS.length;
+    if (e.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
     else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = BOARD_TABS.length - 1;
+    else if (e.key === 'End') next = tabs.length - 1;
     if (next < 0) return;
     e.preventDefault();
-    const id = BOARD_TABS[next].id;
+    const id = tabs[next].id;
     setTab(id);
     tabRefs.current[id]?.focus();
   };
@@ -139,7 +176,7 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
       <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-3 py-2 sm:px-4', HAIRLINE)}>
         <span className="hidden text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] md:inline">Board</span>
         <div role="tablist" aria-label="Board" className="-mx-1 flex min-w-0 flex-1 gap-0.5 overflow-x-auto px-1 [scrollbar-width:none]">
-          {BOARD_TABS.map((t, i) => {
+          {tabs.map((t, i) => {
             const active = t.id === tab;
             const b = badge(t.id);
             return (
@@ -185,6 +222,10 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
         {tab === 'style' && <StyleTab studio={studio} doc={doc} />}
         {tab === 'pages' && <PagesTab studio={studio} doc={doc} />}
         {tab === 'read' && <ReaderTab studio={studio} doc={doc} />}
+        {(() => {
+          const reg = tabs.find((t) => t.id === tab)?.registration;
+          return reg ? <reg.Component studio={studio} /> : null;
+        })()}
       </div>
       {focused && <PageEditor studio={studio} doc={doc} pageId={focused} />}
     </div>
