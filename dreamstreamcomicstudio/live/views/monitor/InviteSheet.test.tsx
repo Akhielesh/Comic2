@@ -251,6 +251,115 @@ describe('InviteSheet — share a link', () => {
   });
 });
 
+describe('InviteSheet — what happened is said inside the sheet (the app’s toasts sit under its scrim, and the page behind is inert)', () => {
+  const sam = { id: 'r1', uid: 'u-sam', account: 'Sam Smith', name: 'Uncle Sam', guest_id: 'g2', role: 'caregiver' as const, at: 1 };
+
+  it('a failed "Make member" says why, next to it, as an alert — and it can be tried again', async () => {
+    vi.mocked(setMember).mockResolvedValueOnce({ ok: false, error: 'limit_reached' });
+    open();
+    const sock = await connect(linkOn({ requests: [sam] }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite to Nursery' });
+    fireEvent.click(screen.getByRole('button', { name: 'Make member' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('This nursery has 20 people — the most it can have. Remove someone, or share a link instead.');
+    expect(alert.closest('.inv-req')).toHaveTextContent('Uncle Sam joined with the link');
+    expect(push).not.toHaveBeenCalled();
+    expect(sock.sent.some((m) => m.t === 'members_changed')).toBe(false);
+    expect((screen.getByRole('button', { name: 'Make member' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('a role change that doesn’t save says why under that person, and stays open to try again', async () => {
+    vi.mocked(setMember).mockResolvedValueOnce({ ok: false, error: 'forbidden' });
+    open();
+    await connect(noLink);
+    const dialog = screen.getByRole('dialog', { name: 'Invite to Nursery' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Bob' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Only a parent of this nursery can add people.');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('Copy says it worked (and the sheet reads it out), or that it didn’t', async () => {
+    open();
+    await connect(linkOn());
+    const dialog = screen.getByRole('dialog', { name: 'Invite to Nursery' });
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await within(dialog).findByText('Link copied.')).toBeTruthy();
+    await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent('Link copied.'));
+
+    writeText.mockRejectedValueOnce(new Error('denied'));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Couldn’t copy — select it and copy by hand.');
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('"+7 days" is confirmed once the room has moved the end; offline it says it can’t, and sends nothing', async () => {
+    open();
+    const sock = await connect(linkOn());
+    const dialog = screen.getByRole('dialog', { name: 'Invite to Nursery' });
+    const end = linkOn().expires_at!;
+    fireEvent.click(screen.getByRole('button', { name: '+7 days' }));
+    expect(sock.sent).toContainEqual({ t: 'share_extend', days: 7 });
+    expect(within(dialog).queryByText(/Link extended/)).toBeNull();
+    act(() => sock.onMsg({ t: 'share', share: linkOn({ expires_at: end + 7 * 24 * 3600_000 }) }));
+    expect(within(dialog).getByText(/Link extended — it now works until .*Guests who joined with it can watch as long\./)).toBeTruthy();
+
+    act(() => sock.onStatus('reconnecting'));
+    const sent = sock.sent.length;
+    fireEvent.click(screen.getByRole('button', { name: '+7 days' }));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Not connected to the nursery right now — try again in a moment.');
+    expect(sock.sent).toHaveLength(sent);
+  });
+
+  it('a change the room refuses shows its reason; one it never answers says so instead of nothing', async () => {
+    open();
+    const sock = await connect(linkOn());
+    const dialog = screen.getByRole('dialog', { name: 'Invite to Nursery' });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Grandma Jo' }));
+      fireEvent.click(within(screen.getByRole('group', { name: 'Remove' })).getByRole('button', { name: 'Remove' }));
+      expect(sock.sent).toContainEqual({ t: 'guest_remove', id: 'g1' });
+      act(() => void vi.advanceTimersByTime(9000));
+      expect(within(dialog).getByRole('alert')).toHaveTextContent('The nursery didn’t answer, so this may not have changed — check your connection and try again.');
+
+      // Answered in time: nothing more to say.
+      fireEvent.click(screen.getByRole('button', { name: '+7 days' }));
+      act(() => sock.onMsg({ t: 'share', share: linkOn({ expires_at: Date.now() + 14 * 24 * 3600_000 }) }));
+      act(() => void vi.advanceTimersByTime(9000));
+      expect(within(dialog).getAllByText(/didn’t answer/)).toHaveLength(1); // only the removal's, still where it was
+      expect(within(dialog).getByText(/Link extended/)).toBeTruthy();
+
+      // Refused: the room's reason.
+      fireEvent.click(screen.getByRole('button', { name: '+7 days' }));
+      act(() => sock.onMsg({ t: 'share_err', msg: 'There’s no link to change — make a new one.' }));
+      expect(within(dialog).getAllByRole('alert').map((x) => x.textContent)).toContain('There’s no link to change — make a new one.');
+      act(() => void vi.advanceTimersByTime(9000));
+      expect(within(dialog).getAllByText(/didn’t answer/)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('InviteSheet — a parent made a caregiver or viewer while the sheet is open', () => {
+  it('the room ends the sheet’s connection; the sheet shows what this account can do now', async () => {
+    open();
+    const sock = await connect(linkOn());
+    expect(screen.getByRole('tab', { name: /Share a link/ })).toBeTruthy();
+    h.myRole = 'viewer';
+    act(() => sock.onMsg({ t: 'error', code: 'forbidden', msg: 'Only parents can manage this nursery.' }));
+    expect(await screen.findByText('Only parents can invite people — ask Alice.')).toBeTruthy();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByText(CODE, { exact: false })).toBeNull();
+    expect(screen.queryByText('Grandma Jo')).toBeNull();
+    await waitFor(() => expect(sock.closed).toBe(true));
+  });
+});
+
 describe('InviteSheet — who sees what', () => {
   it('caregivers and viewers see who has access, and who to ask', async () => {
     h.myRole = 'viewer';

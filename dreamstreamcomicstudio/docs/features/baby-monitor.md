@@ -277,11 +277,32 @@ settings, and `#/monitor/<nid>/invite`.
   `request_dismiss`, `ping`. `members_changed` may name the `uids` whose access
   changed: only they get `roles_changed`, so adding Grandma doesn't restart
   everyone's live picture (no `uids` = everyone, as before).
+- **Role changes reach sockets already open**: a socket's role is read when it
+  signs in, so on `members_changed` the room re-reads everyone's role
+  (`monitor_people`) and updates every open socket in every mode — Invite
+  sheet, watch screen, camera, call line — before anything else runs. A parent
+  made a Caregiver or Viewer can't send `share_*`, `guest_remove`,
+  `request_dismiss` or `members_changed` any more and stops getting `share`
+  (new link codes); their Invite sheet's `admin` socket is ended with
+  `forbidden` (the sheet re-reads and shows what they can do now); a camera
+  run by someone now a Viewer stops at once, saying why (parents get the usual
+  offline alert) rather than at some later reconnect. If Supabase can't list
+  the roles, the sockets concerned keep watching but with no parent-only power
+  until they sign in again (an Invite sheet reconnects at once, close 4009) —
+  a Supabase hiccup never stops anyone watching.
 - **Accessibility**: `role="dialog"` + `aria-modal`, Esc closes, focus starts in
   the sheet (the search field with a mouse/keyboard) and returns to the button
   that opened it, the page behind is `inert`, tabs are a real tablist (arrow
   keys, Home/End), role chips a radiogroup, a `role="status"` live region for
   "added" / "passcode shown", 44 px targets on touch, reduced motion honoured.
+- **Nothing fails silently**: the app's toasts sit under the sheet's scrim (and
+  the page behind is inert), so the sheet says everything itself — a problem as
+  a `role="alert"` next to what was tapped (a failed "Make member" or role
+  change under that person, "Couldn't copy", "Not connected"), anything else as
+  a short line its live region reads ("Link copied", "+7 days" once the room has
+  moved the end). A change the room doesn't answer within 8 s (no new `share`,
+  no `share_err`) says "The nursery didn't answer, so this may not have
+  changed".
 - **Members never become guests by accident**: the join page sends a signed-in
   member straight to watching ("You're already in …"), the watch screen drops a
   stale guest pass once the account is a member, and the room answers
@@ -310,6 +331,12 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
   device, sent in the socket's first frame. It ends with the link (1 / 7 / 30
   days or until turned off; at most 90 days), when a parent removes the guest,
   or when the link is replaced or turned off. Up to 10 guests per link.
+  The room is the authority on when it ends: a guest's `hello` carries
+  `you.until`, and `{t:'guest_pass', until}` reaches connected guests after
+  `share_extend` / `share_pass`; the device keeps its saved copy in step and
+  never drops a pass because that copy has passed (the link may have been
+  extended while it was away) — only the room's refusal (4004) clears it, or a
+  saved end more than 90 days old.
 - **Roles**: "Watch & listen" (viewer) or "Also talk, soothe & answer alerts"
   (caregiver). Guests can never run a camera, change settings, manage people or
   download history; Supabase member re-checks never touch them.
@@ -319,6 +346,12 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
   signed in unless `signOut`. **Extend** (`share_extend {days: 1|7|30|null}`):
   adds to the link's current end (an absent value is never "forever") and moves
   its guests' passes with it — never past 90 days from their join.
+- **Joining is checked twice**: the passcode is checked (`check`), then a
+  signed-in joiner's account is looked up in Supabase, during which the room
+  handles other messages. `issue` re-reads the link in the same synchronous step
+  as the insert: turned off, replaced, ended, or given a new passcode since
+  (`pass_hash` changed — "set a new passcode and sign out guests") and nobody
+  gets a pass with the old one.
   `ShareInfo` also carries `max_guests` and `pass_at`.
 - **Guests who have an account** (`mon_requests` in the room's SQLite — no
   Supabase migration): a signed-in person's join sends their own bearer token

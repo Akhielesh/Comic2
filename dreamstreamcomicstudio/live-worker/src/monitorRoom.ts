@@ -304,6 +304,13 @@ interface Duty {
   until: number;
 }
 
+/** A member as Supabase's monitor_people lists them. */
+interface Person {
+  user_id?: unknown;
+  role?: unknown;
+  label?: unknown;
+}
+
 const DEFAULT_SETTINGS: Settings = {
   sensitivity: 'medium', cryRepeatMin: 3, cryEscalateMin: 5, noiseDb: 70, machineCheck: true, sleepTracking: true, zones: {}, tz: 'UTC',
 };
@@ -899,11 +906,11 @@ export class MonitorRoom {
     a.role = g.role;
     a.label = null;
     a.guest = g.id;
-    return this.admit(ws, a, 'viewer', msg, await this.meta());
+    return this.admit(ws, a, 'viewer', msg, await this.meta(), g.expires_at);
   }
 
-  /** Common to members and guests once they're verified. */
-  private async admit(ws: WebSocket, a: Attach, mode: MonMode, msg: Record<string, unknown>, meta: { name: string; baby: string | null }): Promise<void> {
+  /** Common to members and guests once they're verified (`until`: when a guest's pass ends — the room is the authority). */
+  private async admit(ws: WebSocket, a: Attach, mode: MonMode, msg: Record<string, unknown>, meta: { name: string; baby: string | null }, until?: number): Promise<void> {
     const nid = (await this.state.storage.get<string>('nid')) || '';
     a.mode = mode;
     a.dev = clip(msg.dev, 40) || a.sid;
@@ -938,7 +945,7 @@ export class MonitorRoom {
     const [tl, ice, vapid, duty, sleep] = await Promise.all([this.timeline(), this.iceServers(), this.vapidKeys(), this.duty(), this.sleepStatus()]);
     this.send(ws, {
       t: 'hello',
-      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev, ...(a.guest ? { guest: true } : {}) },
+      you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev, ...(a.guest ? { guest: true, until } : {}) },
       nursery: { id: nid, ...meta },
       ...this.presence(),
       log: this.store.events({ limit: LOG_HELLO }).reverse().map(toLog),
@@ -2149,7 +2156,8 @@ export class MonitorRoom {
         if (role.ok && role.data.ok && role.data.role) return json({ ok: false, reason: 'member' }, 409);
       }
     }
-    const r = c.ok ? await this.guests.issue(c.share, { name: c.name, dev: clip(body.dev, 40) }, now) : c;
+    // `issue` re-reads the link: a new passcode, a new link or "off" while we waited on Supabase wins.
+    const r = c.ok ? await this.guests.issue(c, { name: c.name, dev: clip(body.dev, 40) }, now) : c;
     const meta = await this.meta();
     if (r.ok) {
       if (account) this.guests.addRequest({ uid: account.userId, account: account.displayName, name: r.guest.name, guest_id: r.guest.id }, now);
@@ -2214,6 +2222,7 @@ export class MonitorRoom {
     const n = r.removed.length;
     await this.addLog({ kind: 'people', msg: `${a.name} set a new passcode for the share link${n ? ` and signed out ${n} guest${n > 1 ? 's' : ''}` : ' (guests stay signed in)'}`, by: a.name });
     this.sendShareInfo();
+    this.sendGuestPasses();
   }
 
   /** Keep the link working longer — or until a parent turns it off. */
@@ -2226,6 +2235,7 @@ export class MonitorRoom {
     if (!s) return;
     await this.addLog({ kind: 'people', msg: `${a.name} ${days == null ? 'made the share link work until it’s turned off' : `extended the share link by ${days} day${days > 1 ? 's' : ''}`}`, by: a.name });
     this.sendShareInfo();
+    this.sendGuestPasses();
   }
 
   /** "Keep as a guest": hide the make-member suggestion for this person. */
@@ -2273,14 +2283,29 @@ export class MonitorRoom {
     for (const s of this.authed()) if (s.a.role === 'parent' && !s.a.guest) this.send(s.ws, { t: 'share', share: info });
   }
 
-  /** A parent changed the member list: drop sockets of anyone removed. */
+  /** Each connected guest's device keeps its pass's end date: when it moves (a parent extended the link), say so. */
+  private sendGuestPasses(): void {
+    const until = new Map(this.guests.guests(Date.now()).map((g) => [g.id, g.expires_at]));
+    for (const s of this.authed()) {
+      const t = s.a.guest ? until.get(s.a.guest) : undefined;
+      if (t != null) this.send(s.ws, { t: 'guest_pass', until: t });
+    }
+  }
+
+  /** A parent changed the member list: drop sockets of anyone removed; everyone else's open sockets take their role now. */
   private async onMembersChanged(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent') return;
     const token = clip(msg.token, 4096);
     const nid = await this.state.storage.get<string>('nid');
     if (!token || !nid) return;
-    const res = await callRpc<{ ok?: boolean; ids?: string[] }>(this.env, token, 'monitor_member_ids', { p_nursery: nid });
-    if (!res.ok || !res.data.ok || !Array.isArray(res.data.ids)) return;
+    // Whose access changed, when the app says (none named = anyone's may have).
+    const who = Array.isArray(msg.uids) ? new Set(msg.uids.slice(0, 40).map((u) => clip(u, 64))) : null;
+    const [res, ppl] = await Promise.all([
+      callRpc<{ ok?: boolean; ids?: string[] }>(this.env, token, 'monitor_member_ids', { p_nursery: nid }),
+      callRpc<{ ok?: boolean; people?: Person[] }>(this.env, token, 'monitor_people', { p_nursery: nid }),
+    ]);
+    const people = ppl.ok && ppl.data.ok && Array.isArray(ppl.data.people) ? ppl.data.people : null;
+    if (!res.ok || !res.data.ok || !Array.isArray(res.data.ids)) return void this.recheckRoles(people, who);
     const ids = new Set(res.data.ids);
     const cut: string[] = [];
     for (const s of this.authed()) {
@@ -2293,6 +2318,8 @@ export class MonitorRoom {
         } catch { /* closed */ }
       }
     }
+    // At once, before anything else awaits: a demoted parent's next message is a non-parent's.
+    const moved = this.recheckRoles(people, who, new Set(cut));
     // Removed people leave any family call at once and are never rung again.
     const book = await this.callBook();
     const changed = cut.flatMap((sid) => book.leave(sid, Date.now()));
@@ -2322,9 +2349,52 @@ export class MonitorRoom {
     }
     // Only the people whose access changed need to reconnect (when the app says
     // who) — adding Grandma shouldn't restart everyone else's live picture.
-    const who = Array.isArray(msg.uids) ? new Set(msg.uids.slice(0, 40).map((u) => clip(u, 64))) : null;
-    if (who) this.broadcast({ t: 'roles_changed' }, (x) => !!x.uid && who.has(x.uid));
+    if (who) this.broadcast({ t: 'roles_changed' }, (x) => !!x.uid && (who.has(x.uid) || moved.has(x.sid)));
     else this.broadcast({ t: 'roles_changed' });
+  }
+
+  /**
+   * A socket's role is read when it signs in; roles changed in Supabase take
+   * effect on sockets already open here, so a demoted parent's Invite sheet,
+   * watch screen, camera or call line keeps no power it no longer has. An
+   * Invite sheet that's no longer a parent's, or a camera run by someone now a
+   * viewer, is closed with the reason signing in again would give.
+   *
+   * If Supabase couldn't list the roles, the sockets concerned (the people
+   * named; everyone's when nobody is) may do nothing only a parent may until
+   * they sign in again: an Invite sheet signs in again at once (close 4009, it
+   * reconnects), and a watch screen or camera keeps running as a caregiver at
+   * most — a Supabase hiccup must never stop anyone watching the baby. (A call
+   * line has nothing a role grants.) Returns the sockets whose role changed.
+   */
+  private recheckRoles(people: Person[] | null, who: Set<string> | null, skip?: Set<string>): Set<string> {
+    const changed = new Set<string>();
+    const now = people ? new Map(people.map((p) => [String(p.user_id), p])) : null;
+    for (const { ws, a } of this.authed()) {
+      if (!a.uid || a.guest || skip?.has(a.sid)) continue;
+      if (!now) {
+        if (who && !who.has(a.uid)) continue;
+        if (a.mode === 'admin') {
+          try {
+            ws.close(4009, 'recheck');
+          } catch { /* closed */ }
+        } else if (a.role === 'parent' && a.mode !== 'line') {
+          ws.serializeAttachment({ ...a, role: 'caregiver' });
+          changed.add(a.sid);
+        }
+        continue;
+      }
+      const p = now.get(a.uid);
+      const role = p?.role === 'parent' || p?.role === 'caregiver' || p?.role === 'viewer' ? p.role : null;
+      if (!role) continue; // not a member any more: cut off above
+      const label = typeof p?.label === 'string' ? p.label : null;
+      if (role === a.role && label === (a.label ?? null)) continue;
+      ws.serializeAttachment({ ...a, role, label });
+      changed.add(a.sid);
+      if (a.mode === 'admin' && role !== 'parent') this.reject(ws, 'forbidden', 'Only parents can manage this nursery.');
+      else if (a.mode === 'camera' && role === 'viewer') this.reject(ws, 'forbidden', 'Your role can watch but not run the camera. Ask a parent to make you a caregiver.');
+    }
+    return changed;
   }
 
   /** Panic button: end every viewing session but the parent's own. */

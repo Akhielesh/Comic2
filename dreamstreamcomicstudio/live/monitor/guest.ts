@@ -12,12 +12,23 @@ export interface GuestPass {
   token: string;
   name: string;
   role: Extract<MonRole, 'viewer' | 'caregiver'>;
-  /** When the pass ends (epoch ms). */
+  /**
+   * When the pass ends (epoch ms), as the room last said — a hint only: a
+   * parent can extend the link, and the room (the authority) refuses a pass
+   * that has really ended, which clears it (see openMonitorSocket).
+   */
   until: number;
   nursery: { name: string; baby: string | null };
 }
 
 const key = (nid: string) => `ds-monitor-guest-${nid}`;
+
+/**
+ * No pass outlives 90 days from its join, however often the link is extended
+ * (live-worker/src/monitorGuests.ts GUEST_TTL_MS; a test keeps them equal).
+ * A pass whose last known end is more than that ago can't still work.
+ */
+export const GUEST_PASS_MAX_MS = 90 * 24 * 60 * 60_000;
 
 /**
  * Why a passcode isn't good enough, or null — the same rule the nursery's
@@ -64,7 +75,10 @@ export function loadGuest(nid: string): GuestPass | null {
   try {
     const g = JSON.parse(localStorage.getItem(key(nid)) || 'null') as GuestPass | null;
     if (!g?.token) return null;
-    if (g.until && g.until < Date.now()) {
+    // Past its saved end is not "ended": the link may have been extended since
+    // (the room says so in the next hello). Only a pass that can't possibly
+    // still work is dropped here; the room's refusal clears the rest.
+    if (g.until && g.until + GUEST_PASS_MAX_MS < Date.now()) {
       localStorage.removeItem(key(nid));
       return null;
     }
@@ -72,6 +86,13 @@ export function loadGuest(nid: string): GuestPass | null {
   } catch {
     return null;
   }
+}
+
+/** The room said when this device's pass ends now (its hello, or `guest_pass` after a parent extended the link). */
+export function refreshGuest(nid: string, until: unknown): void {
+  if (typeof until !== 'number' || !Number.isFinite(until)) return;
+  const g = loadGuest(nid);
+  if (g && g.until !== until) saveGuest(nid, { ...g, until });
 }
 
 export function saveGuest(nid: string, g: GuestPass): void {
