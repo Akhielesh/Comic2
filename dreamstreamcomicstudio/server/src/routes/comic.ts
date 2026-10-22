@@ -30,7 +30,7 @@ import { runDirectorTurn } from '../comic/director.js';
 import { ASPECT_RATIOS, noticeCard, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
 import { getStudioSession, peekStudioSession, type StudioSession } from '../comic/session.js';
-import { createSupabaseDocStore } from '../comic/store.js';
+import { createSupabaseDocStore, sanitizePublicDoc } from '../comic/store.js';
 import { ANALYZE_SOURCE_MIN_CHARS } from '../comic/tools.js';
 import { StudioError, type AssetStore, type DocStore } from '../comic/types.js';
 
@@ -172,7 +172,13 @@ async function prepareMessage(
     ops.push({ op: 'source', patch: { script: text, updatedAt: Date.now() } });
     text = `${text.slice(0, 400).trimEnd()}…\n\n[Pasted ${words.toLocaleString('en-US')} words — saved as the source script. Call save_source (no text) to read it.]`;
   }
-  for (const a of req.attachments || []) {
+  for (const raw of req.attachments || []) {
+    // v5 contract: `{ inboxPath }` items (uploaded via POST /refs) are wired by P1-REFS/P1-ROUTES; until then
+    // only the legacy data-URL items are accepted.
+    if (!raw || typeof raw !== 'object' || !('dataUrl' in raw)) {
+      throw new StudioError('BAD_REQUEST', 'Uploaded reference attachments are not supported yet — attach the image directly.', { status: 400 });
+    }
+    const a = raw;
     const mime = a.mimeType || mimeOfDataUrl(a.dataUrl);
     if (mime.startsWith('image/')) {
       attachments.push(await ctx.assets.saveUpload({ userId: ctx.userId, projectId: ctx.projectId, dataUrl: a.dataUrl }));
@@ -317,24 +323,15 @@ const importWelcome = (summary: ReturnType<typeof legacyImportOps>['summary'], d
 
 // ── Public sanitization ──────────────────────────────────────────────────────
 
-/** Strip everything private from a published doc (idempotent). */
+/**
+ * Strip everything private from a doc served by the public reader (idempotent). Applied to
+ * every doc the public handler returns — the published doc *and* the owner's unpublished
+ * preview — so render history, the version archive/trash/ref inbox, model sheets, the style
+ * board and the private planning text (style spec, cast looks, panel actions, page summaries)
+ * never reach a reader payload. Delegates to the store's sanitizer so both stay identical.
+ */
 export function publicComicDoc(doc: ComicDoc): ComicDoc {
-  const settings = { ...doc.settings };
-  delete settings.budgetUsd;
-  delete settings.imageModelOverride;
-  const out: ComicDoc = {
-    ...doc,
-    conversation: [],
-    spend: { totalUsd: 0, byKind: {}, entries: [] },
-    gate: null,
-    source: {},
-    settings,
-    style: { ...doc.style, refs: [] },
-    cast: doc.cast.map((c) => ({ ...c, refs: [] })),
-    places: doc.places.map((p) => ({ ...p, refs: [] }))
-  };
-  delete out.memory;
-  return out;
+  return sanitizePublicDoc(doc);
 }
 
 const publicAssetPaths = (doc: ComicDoc): string[] =>

@@ -9,6 +9,7 @@ import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatu
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/worldExtraction.js';
 import { capabilityReport } from '../ai/capabilities.js';
 import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
+import { projectHasComicDoc } from '../comic/store.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
@@ -56,6 +57,13 @@ const sanitizeImagePath = (value: unknown): string | null => {
   if (!normalized) return null;
   if (normalized.length > STORAGE_PATH_MAX_LENGTH) return null;
   if (normalized.includes('..') || normalized.includes('\\')) return null;
+  // The path is authorized as a literal string but signed through a URL (storage-js does not
+  // encode it), and URL parsing collapses dot segments — including percent-encoded ones
+  // (`%2e%2e`) — so `u/<me>/%2e%2e/<victim>/...` would be authorized as the requester's own
+  // path yet signed as the victim's. Storage paths are plain [A-Za-z0-9._-] segments: refuse
+  // percent-escapes, query/fragment markers, control characters and empty or dot segments.
+  if (/[%?#\u0000-\u001f\u007f]/.test(normalized)) return null;
+  if (normalized.split('/').some((segment) => segment === '' || segment === '.')) return null;
   return normalized;
 };
 
@@ -93,10 +101,16 @@ const resolveRequesterId = async (authorizationHeader: unknown): Promise<string 
   }
 };
 
-const parseProjectScopedPath = (imagePath: string): { ownerId: string; projectId: string } | null => {
-  const match = imagePath.match(/^u\/([0-9a-f-]{36})\/p\/([0-9a-f-]{36})\/img\/.+$/i);
+/**
+ * Any project-scoped storage path: `u/<owner>/p/<projectId>/<rest>`. `kind` is `ref` for
+ * reference uploads (`.../ref/...`, often personal photos) and `asset` for everything else
+ * (generated art, `img/...`).
+ */
+const parseProjectScopedPath = (imagePath: string): { ownerId: string; projectId: string; kind: 'ref' | 'asset' } | null => {
+  const match = imagePath.match(/^u\/([0-9a-f-]{36})\/p\/([0-9a-f-]{36})\/(.+)$/i);
   if (!match) return null;
-  return { ownerId: match[1], projectId: match[2] };
+  const rest = match[3];
+  return { ownerId: match[1], projectId: match[2], kind: /^ref\//i.test(rest) ? 'ref' : 'asset' };
 };
 
 const parseTempPath = (imagePath: string): { ownerId: string } | null => {
@@ -131,6 +145,9 @@ const readStringArray = (value: unknown): string[] => {
 
 const projectStateReferencesImagePath = (state: unknown, imagePath: string): boolean => {
   if (!isRecord(state)) return false;
+  // A Comic Studio v4 row's mirrored listing state never authorizes a storage path: v4
+  // readers get opaque published URLs from the public comic endpoint instead.
+  if (state.studioVersion === 4) return false;
 
   if (typeof state.coverImageId === 'string' && state.coverImageId === imagePath) return true;
   if (typeof state.coverTemplateImageId === 'string' && state.coverTemplateImageId === imagePath) return true;
@@ -187,6 +204,50 @@ type AccessCheckResult =
   | { allowed: true }
   | { allowed: false; status: number; message: string };
 
+const denied = (requesterId: string | null): AccessCheckResult =>
+  requesterId
+    ? { allowed: false, status: 403, message: 'Image access denied.' }
+    : { allowed: false, status: 401, message: 'Authentication required for this image.' };
+
+type ProjectAccessRow = { user_id: string; is_public: boolean; is_forced_private: boolean; isStudioV4: boolean };
+
+/** Visibility facts for one project (service role). Tolerates databases without the moderation columns. */
+const loadProjectAccessRow = async (supabaseAdmin: SupabaseClient, projectId: string): Promise<ProjectAccessRow | null> => {
+  let row: { user_id?: string; is_public?: boolean | null; is_forced_private?: boolean | null } | null = null;
+  const first = await supabaseAdmin
+    .from('projects')
+    .select('id, user_id, is_public, is_forced_private')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (first.error) {
+    if (String((first.error as { code?: string }).code || '') !== '42703') throw first.error;
+    const fallback = await supabaseAdmin.from('projects').select('id, user_id, is_public').eq('id', projectId).maybeSingle();
+    if (fallback.error) throw fallback.error;
+    row = fallback.data as typeof row;
+  } else {
+    row = first.data as typeof row;
+  }
+  if (!row) return null;
+  return {
+    user_id: String(row.user_id || ''),
+    is_public: row.is_public === true,
+    is_forced_private: row.is_forced_private === true,
+    isStudioV4: await projectHasComicDoc(supabaseAdmin, projectId)
+  };
+};
+
+/**
+ * Who may get a signed URL for a storage path. The requester id comes only from the
+ * verified bearer token (resolveRequesterId), never from the query.
+ *
+ * Project-scoped paths (`u/<owner>/p/<pid>/...`):
+ *  - the path owner always may;
+ *  - `.../ref/...` (reference uploads) are owner-only for every project;
+ *  - Comic Studio v4 projects (a comic_docs row exists) are owner-only for every path —
+ *    drafts, history and sheets all live here; published readers get opaque URLs from the
+ *    public comic endpoint instead;
+ *  - classic projects keep the public rule: readable while public (and not force-private).
+ */
 const canAccessImagePath = async (
   supabaseAdmin: SupabaseClient,
   imagePath: string,
@@ -195,21 +256,16 @@ const canAccessImagePath = async (
   const projectScoped = parseProjectScopedPath(imagePath);
   if (projectScoped) {
     if (requesterId && requesterId === projectScoped.ownerId) return { allowed: true };
+    if (projectScoped.kind === 'ref') return denied(requesterId);
 
-    const { data: project, error } = await supabaseAdmin
-      .from('projects')
-      .select('id, user_id, is_public')
-      .eq('id', projectScoped.projectId)
-      .maybeSingle();
-
-    if (error) throw error;
+    const project = await loadProjectAccessRow(supabaseAdmin, projectScoped.projectId);
     if (!project) return { allowed: false, status: 404, message: 'Image not found.' };
-    if (project.is_public) return { allowed: true };
-    if (requesterId && requesterId === project.user_id) return { allowed: true };
-    if (!requesterId) {
-      return { allowed: false, status: 401, message: 'Authentication required for this image.' };
-    }
-    return { allowed: false, status: 403, message: 'Image access denied.' };
+    // The path's namespace must belong to the project's owner, or a public project id could
+    // be paired with someone else's files.
+    if (project.user_id !== projectScoped.ownerId) return denied(requesterId);
+    if (project.isStudioV4) return denied(requesterId);
+    if (project.is_public && !project.is_forced_private) return { allowed: true };
+    return denied(requesterId);
   }
 
   const tempScoped = parseTempPath(imagePath);
@@ -265,13 +321,9 @@ const canAccessImagePath = async (
   if (asset.user_id === requesterId) return { allowed: true };
 
   if (asset.project_id) {
-    const { data: project, error: projectError } = await supabaseAdmin
-      .from('projects')
-      .select('id, user_id, is_public')
-      .eq('id', asset.project_id)
-      .maybeSingle();
-    if (projectError) throw projectError;
-    if (project?.is_public || project?.user_id === requesterId) return { allowed: true };
+    const project = await loadProjectAccessRow(supabaseAdmin, String(asset.project_id));
+    if (project?.user_id === requesterId) return { allowed: true };
+    if (project && !project.isStudioV4 && project.is_public && !project.is_forced_private) return { allowed: true };
   }
 
   return { allowed: false, status: 403, message: 'Image access denied.' };

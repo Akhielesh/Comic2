@@ -47,6 +47,11 @@ const makeDb = () => {
       this.filters.push((r) => r[col] === value);
       return this;
     }
+    not(col: string, op: string, value: unknown) {
+      if (op !== 'is') throw new Error(`unsupported not.${op}`);
+      this.filters.push((r) => (r[col] ?? null) !== value);
+      return this;
+    }
     lte(col: string, value: number) {
       this.filters.push((r) => r[col] <= value);
       return this;
@@ -179,7 +184,7 @@ describe('sanitizePublicDoc', () => {
     expect(clean.gate).toBeNull();
     expect(clean.settings).toEqual({ quality: 'pro', confirm: 'big', bigSpendUsd: 1 });
     expect(clean.style.refs).toEqual([]);
-    expect(clean.style.board?.path).toBe('u/a/board.webp');
+    expect(clean.style.board).toBeUndefined();
     expect(clean.cast[0].refs).toEqual([]);
     expect(clean.places[0].refs).toEqual([]);
     expect(doc.conversation).toHaveLength(1); // input untouched
@@ -212,12 +217,17 @@ describe('sanitizePublicDoc', () => {
     });
     const clean = sanitizePublicDoc(doc);
 
-    // Unchosen style tests are gone; the locked board stays.
+    // Unchosen style tests and the style board are gone.
     expect(clean.style.options).toEqual([]);
-    expect(clean.style.board?.path).toBe('u/a/board.webp');
+    expect(clean.style.board).toBeUndefined();
 
-    // Every render keeps only status + current asset — no history/qc/error/model.
-    for (const render of [clean.pages[0].render, clean.cover.render, clean.cast[0].sheet, clean.places[0].sheet]) {
+    // Model sheets never reach the public payload.
+    for (const sheet of [clean.cast[0].sheet, clean.places[0].sheet]) {
+      expect(sheet).toEqual({ status: 'none', history: [] });
+    }
+
+    // Every served render keeps only status + current asset — no history/qc/error/model.
+    for (const render of [clean.pages[0].render, clean.cover.render]) {
       expect(render.history).toEqual([]);
       expect(render.asset?.path).toBe('u/a/current.webp');
       expect(render.qc).toBeUndefined();
@@ -230,6 +240,75 @@ describe('sanitizePublicDoc', () => {
     // Input is untouched.
     expect(doc.pages[0].render.history).toEqual([draft]);
     expect(doc.style.options).toHaveLength(1);
+  });
+  it('strips the version archive, trash, ref inbox and blanks private planning text (P0-SEC)', () => {
+    const draft = { path: 'u/a/p/x/img/discarded.webp', source: 'generated' as const, at: 1 };
+    const current = { path: 'u/a/p/x/img/current.webp', source: 'generated' as const, at: 2 };
+    const doc = {
+      ...docWith({
+        brief: { title: 'Spice Market', logline: 'Two rivals, one recipe.', premise: 'secret premise', notes: ['private note'] },
+        style: { status: 'locked', spec: 'SECRET STYLE SPEC', refs: [], options: [], board: { path: 'u/a/p/x/img/board.webp', source: 'generated', at: 1 } },
+        cast: [
+          {
+            id: 'c1',
+            name: 'Maya',
+            tier: 'lead',
+            look: { summary: 'SECRET LOOK', hair: 'red' },
+            personality: 'SECRET PERSONALITY',
+            voice: 'SECRET VOICE',
+            refs: [],
+            sheet: { status: 'ready', history: [draft], asset: { path: 'u/a/p/x/img/sheet.webp', source: 'generated', at: 1 } }
+          }
+        ],
+        places: [{ id: 'pl1', name: 'Market', look: 'SECRET PLACE LOOK', refs: [], sheet: { status: 'ready', history: [], asset: { path: 'u/a/p/x/img/place.webp', source: 'generated', at: 1 } } }],
+        pages: [
+          {
+            id: 'pg_1',
+            n: 1,
+            summary: 'SECRET SUMMARY',
+            layout: 'one panel',
+            panels: [{ id: 'pn1', n: 1, size: 'large', shot: 'wide', action: 'SECRET ACTION', castIds: ['c1'], lines: [{ id: 'l1', kind: 'speech', speakerId: 'c1', text: 'Hello!' }] }],
+            render: { status: 'ready', asset: current, history: [draft] },
+            balloons: []
+          }
+        ]
+      }),
+      archive: [{ id: 'v1', asset: draft }],
+      trash: [{ page: { id: 'pg_old' } }],
+      refInbox: [{ path: 'u/a/p/x/ref/photo.webp' }]
+    } as unknown as ComicDoc;
+
+    const clean = sanitizePublicDoc(doc);
+    const json = JSON.stringify(clean);
+    for (const secret of ['SECRET', 'discarded.webp', 'board.webp', 'sheet.webp', 'place.webp', '/ref/', 'private note', 'secret premise']) {
+      expect(json).not.toContain(secret);
+    }
+    const loose = clean as unknown as Record<string, unknown>;
+    expect(loose.archive).toBeUndefined();
+    expect(loose.trash).toBeUndefined();
+    expect(loose.refInbox).toBeUndefined();
+    expect(clean.style.spec).toBe('');
+    expect(clean.cast[0].look).toEqual({ summary: '' });
+    expect(clean.pages[0].summary).toBe('');
+    expect(clean.pages[0].panels[0].action).toBe('');
+    // What the reader needs survives: title, logline, the current page asset and the dialogue.
+    expect(clean.brief.title).toBe('Spice Market');
+    expect(clean.brief.logline).toBe('Two rivals, one recipe.');
+    expect(clean.pages[0].render.asset?.path).toBe('u/a/p/x/img/current.webp');
+    expect(clean.pages[0].panels[0].lines[0].text).toBe('Hello!');
+    expect(clean.cast[0].name).toBe('Maya');
+    // Idempotent and non-mutating.
+    expect(sanitizePublicDoc(clean)).toEqual(clean);
+    expect(doc.style.spec).toBe('SECRET STYLE SPEC');
+  });
+
+  it('tolerates docs that predate optional fields', () => {
+    const doc = docWith();
+    delete (doc as Partial<ComicDoc>).places;
+    delete (doc.cover as Partial<ComicDoc['cover']>).render;
+    const clean = sanitizePublicDoc(doc);
+    expect(clean.places).toEqual([]);
+    expect(clean.cover.render).toEqual({ status: 'none', history: [] });
   });
 });
 
@@ -295,7 +374,9 @@ describe('createSupabaseDocStore', () => {
   it('throttles unchanged mirrors but always writes the doc', async () => {
     const { db, store, tick } = setup({ mirrorIntervalMs: 60_000 });
     await store.create({ projectId: PID, userId: USER, doc: docWith() });
-    const projectUpdates = () => db.calls.filter((c) => c.table === 'projects' && c.op === 'update').length;
+    // create() itself re-asserts is_public=false once (P0-SEC); count mirror writes after it.
+    const afterCreate = db.calls.filter((c) => c.table === 'projects' && c.op === 'update').length;
+    const projectUpdates = () => db.calls.filter((c) => c.table === 'projects' && c.op === 'update').length - afterCreate;
     await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1 }), summary: { title: 'Spice Market' } });
     await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 2 }), summary: { title: 'Spice Market' } });
     expect(projectUpdates()).toBe(0);
@@ -337,6 +418,71 @@ describe('createSupabaseDocStore', () => {
     db.failNext('projects', 'update', { code: '57014', message: 'statement timeout' });
     await expect(store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1, brief: { title: 'Z', notes: [] } }), summary: { title: 'Z' } })).resolves.toBeUndefined();
     expect(db.tables.comic_docs[0].rev).toBe(1);
+  });
+
+  it('never mirrors a live draft path into coverImageId while the row is public (P0-SEC)', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    // Private: the live cover path mirrors for the owner's dashboard.
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1, pages: [page(1, 'ready', 'u/a/p/x/img/p1.webp')] }), summary: { title: 'Spice Market' } });
+    expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p1.webp');
+
+    // Public: the live path is removed (and the style spec blanked), never re-added.
+    db.tables.projects[0].is_public = true;
+    const styled = { status: 'locked' as const, spec: 'SECRET SPEC', refs: [], options: [] };
+    await store.save({
+      projectId: PID,
+      userId: USER,
+      doc: docWith({ rev: 2, style: styled, pages: [page(1, 'ready', 'u/a/p/x/img/p2.webp')] }),
+      summary: { title: 'Spice Market', coverPath: 'u/a/p/x/img/cover.webp' }
+    });
+    const publicState = db.tables.projects[0].state;
+    expect('coverImageId' in publicState).toBe(false);
+    expect(publicState.stylePrompt).toBe('');
+    expect(JSON.stringify(publicState)).not.toContain('u/a/p/x/img/');
+    expect(publicState.studioVersion).toBe(4);
+
+    // An opaque published cover written by the publish flow is kept.
+    db.tables.projects[0].state.coverImageId = 'pub/abc/cover.webp';
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 3, pages: [page(1, 'ready', 'u/a/p/x/img/p3.webp')] }), summary: { title: 'Spice Market' } });
+    expect(db.tables.projects[0].state.coverImageId).toBe('pub/abc/cover.webp');
+
+    // Back to private: the live cover mirrors again.
+    db.tables.projects[0].is_public = false;
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 4, pages: [page(1, 'ready', 'u/a/p/x/img/p4.webp')] }), summary: { title: 'Spice Market' } });
+    expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p4.webp');
+  });
+
+  it('writes the public-safe state when the row turns public between the read and the write', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    // Flip the row public after the mirror's read, as its guarded (`is_public` not true) update is built.
+    const realFrom = db.client.from.bind(db.client);
+    let flips = 0;
+    (db.client as unknown as { from: (t: string) => unknown }).from = (table: string) => {
+      const q = realFrom(table) as unknown as { not: (...a: unknown[]) => unknown };
+      const originalNot = q.not.bind(q);
+      q.not = (...args: unknown[]) => {
+        if (table === 'projects' && args[0] === 'is_public') {
+          flips += 1;
+          db.tables.projects[0].is_public = true;
+        }
+        return originalNot(...args);
+      };
+      return q;
+    };
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1, pages: [page(1, 'ready', 'u/a/p/x/img/p1.webp')] }), summary: { title: 'Spice Market' } });
+    expect(flips).toBe(1);
+    expect(db.tables.projects[0].is_public).toBe(true);
+    expect('coverImageId' in db.tables.projects[0].state).toBe(false);
+    expect(db.tables.projects[0].state.studioVersion).toBe(4);
+  });
+
+  it('treats a NULL is_public as private for the mirror', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    db.tables.projects.push({ id: PID, user_id: USER, name: 'x', state: {}, is_public: null });
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1, pages: [page(1, 'ready', 'u/a/p/x/img/p1.webp')] }), summary: { title: 'x' } });
+    expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p1.webp');
   });
 
   it('serves public docs only when published and not force-private, sanitized', async () => {
@@ -398,5 +544,133 @@ describe('createMemoryDocStore', () => {
     expect(await store.loadLegacyState('legacy-1', USER)).toEqual({ name: 'Old comic', state: { script: 'x' } });
     expect(await store.loadLegacyState('legacy-1', OTHER)).toBeNull();
     expect(await store.load('legacy-1', USER)).toBeNull();
+  });
+});
+
+describe('createMemoryDocStore mirror (P0-SEC)', () => {
+  it('never exposes a live cover path in the listing state while public', async () => {
+    const store = createMemoryDocStore();
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1, pages: [page(1, 'ready', 'u/a/p/x/img/p1.webp')] }), summary: { title: 'x' } });
+    expect(store.rows.get(PID)?.state.coverImageId).toBe('u/a/p/x/img/p1.webp');
+    store.setVisibility(PID, { isPublic: true });
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 2, pages: [page(1, 'ready', 'u/a/p/x/img/p2.webp')] }), summary: { title: 'x', coverPath: 'u/a/p/x/img/c.webp' } });
+    expect('coverImageId' in (store.rows.get(PID)?.state || {})).toBe(false);
+  });
+});
+
+describe('buildLegacyProjectState for a public row', () => {
+  it('omits the live cover path and the style spec', () => {
+    const doc = docWith({
+      style: { status: 'locked', spec: 'SECRET', refs: [], options: [] },
+      pages: [page(1, 'ready', 'u/a/p/x/img/p1.webp')]
+    });
+    const state = buildLegacyProjectState(doc, { isPublic: true });
+    expect('coverImageId' in state).toBe(false);
+    expect(state.stylePrompt).toBe('');
+    expect(buildLegacyProjectState(doc).coverImageId).toBe('u/a/p/x/img/p1.webp');
+  });
+});
+
+describe('sanitizePublicDoc: key-path allow-list (P0-SEC verification)', () => {
+  /** A doc with every private field populated, including the newer contract fields. */
+  const fullDoc = (): ComicDoc => {
+    const asset = (path: string) => ({
+      path,
+      w: 1024,
+      h: 1536,
+      source: 'generated' as const,
+      at: 1,
+      model: 'secret-model',
+      variants: [{ path: `${path}.480.webp`, w: 480, h: 720 }],
+      safety: { status: 'flag', categories: ['violence'] },
+      libraryId: 'lib.secret',
+      derivedFrom: 'u/x/p/y/img/DRAFT-SOURCE.webp'
+    }) as any;
+    const render = (path: string) => ({
+      status: 'ready' as const,
+      asset: asset(path),
+      history: [{ ...asset(`${path}.old`), note: 'SECRET-NOTE' }],
+      model: 'secret-model',
+      qc: { ok: false, issues: ['SECRET-QC'] },
+      note: 'SECRET-NOTE',
+      parentPath: 'u/x/p/y/img/PARENT.webp',
+      refPaths: ['u/x/p/y/ref/PHOTO.webp']
+    }) as any;
+    const doc = createEmptyDoc(PID, 'Title');
+    return {
+      ...doc,
+      brief: { title: 'Title', logline: 'Logline', premise: 'SECRET-PREMISE', notes: ['SECRET-NOTE'] },
+      source: { script: 'SECRET-SCRIPT' },
+      style: { status: 'locked', name: 'Ink', spec: 'SECRET-SPEC', refs: [{ id: 'r', path: 'u/x/p/y/ref/STYLE.webp' }] as any, board: asset('u/x/p/y/img/BOARD.webp'), options: [{ id: 'o', name: 'n', spec: 'SECRET-SPEC', render: render('u/x/p/y/img/OPTION.webp') }] as any },
+      cast: [{ id: 'c', name: 'Maya', tier: 'lead', look: { summary: 'SECRET-LOOK', face: 'SECRET-LOOK' }, personality: 'SECRET-PERSONALITY', voice: 'SECRET-VOICE', refs: [{ id: 'r', path: 'u/x/p/y/ref/FACE.webp' }], sheet: render('u/x/p/y/img/SHEET.webp') }] as any,
+      places: [{ id: 'pl', name: 'Town', look: 'SECRET-LOOK', refs: [], sheet: render('u/x/p/y/img/PLACE.webp') }] as any,
+      pages: [{ id: 'pg', n: 1, summary: 'SECRET-SUMMARY', layout: 'Row 1', turnHook: 'SECRET-HOOK', panels: [{ id: 'pn', n: 1, size: 'wide', shot: 'wide', action: 'SECRET-ACTION', castIds: [], lines: [{ id: 'l', kind: 'speech', text: 'Hi' }] }], render: render('u/x/p/y/img/PAGE.webp'), balloons: [] }] as any,
+      cover: { title: 'Title', direction: 'SECRET-DIRECTION', render: render('u/x/p/y/img/COVER.webp') },
+      conversation: [{ id: 'm', role: 'user', text: 'SECRET-CHAT' }] as any,
+      memory: 'SECRET-MEMORY',
+      archive: [{ ...asset('u/x/p/y/img/ARCHIVED.webp'), targetKey: 'page:pg', label: 'Page 1', archivedAt: 1 }] as any,
+      trash: [{ page: { id: 'gone', summary: 'SECRET-SUMMARY' }, fromN: 2, deletedAt: 1 }] as any,
+      refInbox: [{ id: 'ri', path: 'u/x/p/y/ref/INBOX.webp' }] as any,
+      safety: { publish: { ok: false, rating: 'pg13', rev: 1, at: 1, blockers: [{ status: 'block', categories: ['x'], note: 'SECRET-SAFETY' }] } } as any,
+      publication: { visibility: 'unlisted', status: 'live', slug: 'SECRETSLUG0000000000', publishedRev: 1, publishedAt: 1, languages: [] } as any,
+      planInputHash: 'SECRET-HASH',
+      i18n: {
+        editions: { es: { lang: 'es', lines: { l: { text: 'Hola', status: 'machine', sourceHash: 'h', gloss: 'SECRET-GLOSS', issue: { severity: 'major', note: 'SECRET-ISSUE' }, model: 'secret-model', at: 1 } }, balloons: {}, register: 'neutral' } },
+        glossary: [{ id: 'g', term: 'Maya', kind: 'character', policy: 'keep', forms: {}, note: 'SECRET-GLOSSARY' }]
+      } as any,
+      settings: { ...doc.settings, budgetUsd: 99, imageModelOverride: 'secret-model' },
+      spend: { totalUsd: 3, byKind: {}, entries: [{ id: 's', at: 1, kind: 'page', label: 'SECRET-SPEND', usd: 1, byok: false, estimated: false }] } as any,
+      gate: { id: 'g', kind: 'spend', title: 'SECRET-GATE' } as any
+    };
+  };
+
+  it('leaves no private text, model, safety verdict or non-published path anywhere', () => {
+    const json = JSON.stringify(sanitizePublicDoc(fullDoc()));
+    expect(json).not.toMatch(/SECRET|secret-model|DRAFT-SOURCE|PARENT|PHOTO|STYLE\.webp|FACE|BOARD|OPTION|SHEET|PLACE\.webp|ARCHIVED|INBOX|\.old|lib\.secret|"safety"|"publication"|planInputHash|"glossary":\[\{/);
+  });
+
+  it('every image path left is a current page/cover image or its downscale', () => {
+    const paths: string[] = [];
+    const walk = (v: unknown) => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v)) {
+          if (typeof x === 'string' && (k === 'path' || x.startsWith('u/'))) paths.push(x);
+          walk(x);
+        }
+      }
+    };
+    walk(sanitizePublicDoc(fullDoc()));
+    expect(paths.sort()).toEqual([
+      'u/x/p/y/img/COVER.webp',
+      'u/x/p/y/img/COVER.webp.480.webp',
+      'u/x/p/y/img/PAGE.webp',
+      'u/x/p/y/img/PAGE.webp.480.webp'
+    ]);
+  });
+
+  it('keeps reader content (title, logline, dialogue, translations) and is idempotent', () => {
+    const once = sanitizePublicDoc(fullDoc());
+    expect(once.brief.title).toBe('Title');
+    expect(once.brief.logline).toBe('Logline');
+    expect(once.pages[0].panels[0].lines[0].text).toBe('Hi');
+    expect((once.i18n as any).editions.es.lines.l.text).toBe('Hola');
+    expect(sanitizePublicDoc(once)).toEqual(once);
+  });
+});
+
+describe('create re-asserts private once the comic is v4 (P0-SEC verification)', () => {
+  it('a listing row flipped public between the two inserts ends up private', async () => {
+    const db = makeDb();
+    const store = createSupabaseDocStore({ admin: () => db.client, now: () => 10_000 });
+    const realFrom = (db.client as any).from.bind(db.client);
+    // Simulate the owner's PostgREST update landing right after the projects insert.
+    (db.client as any).from = (table: string) => {
+      if (table === 'comic_docs' && db.tables.projects[0]) db.tables.projects[0].is_public = true;
+      return realFrom(table);
+    };
+    await store.create({ projectId: PID, userId: USER, doc: createEmptyDoc(PID, 'Race') });
+    expect(db.tables.projects[0].is_public).toBe(false);
   });
 });

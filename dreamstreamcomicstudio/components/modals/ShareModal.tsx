@@ -1,12 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { X, Copy, Globe, Lock, Trash2, Clock, Download, Share2 } from 'lucide-react';
 import { ModalPortal } from './ModalPortal';
-import { post, get } from '../../services/apiClient';
+import { post, get, ApiError } from '../../services/apiClient';
 
 interface ShareModalProps {
     projectId: string;
     onClose: () => void;
+    /** Comic Studio (v4) comic: classic shares are refused server-side (409 USE_STUDIO_SHARE). */
+    isStudioV4?: boolean;
 }
+
+/** The server refuses classic shares for Comic Studio comics (they publish from the studio). */
+const isUseStudioShareError = (e: unknown): boolean => {
+    if (!(e instanceof ApiError) || e.status !== 409) return false;
+    const details = e.details as { code?: unknown; error?: { code?: unknown } } | undefined;
+    return details?.code === 'USE_STUDIO_SHARE' || details?.error?.code === 'USE_STUDIO_SHARE' || /studio share sheet/i.test(e.message);
+};
 
 interface ShareRecord {
     id: string;
@@ -23,7 +32,8 @@ interface ShareRecord {
 
 type Tab = 'create' | 'active';
 
-export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose }) => {
+export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isStudioV4 = false }) => {
+    const [studioOnly, setStudioOnly] = useState(isStudioV4);
     const [tab, setTab] = useState<Tab>('create');
     const [shareType, setShareType] = useState<'public' | 'private'>('public');
     const [emails, setEmails] = useState('');
@@ -64,6 +74,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose }) =>
             await loadShares();
             setTab('active');
         } catch (e: unknown) {
+            if (isUseStudioShareError(e)) {
+                setStudioOnly(true);
+                return;
+            }
             setError(e instanceof Error ? e.message : 'Failed to create share');
         } finally {
             setIsCreating(false);
@@ -119,7 +133,21 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose }) =>
                     </div>
 
                     <div className="p-4 space-y-4">
-                        {tab === 'create' ? (
+                        {tab === 'create' && studioOnly ? (
+                            <div
+                                className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-4 text-sm text-[var(--ds-ink)]"
+                                role="status"
+                                data-testid="share-use-studio"
+                            >
+                                <div className="flex items-center gap-2 font-semibold">
+                                    <Globe size={16} aria-hidden /> Publish from the studio
+                                </div>
+                                <p className="mt-1 text-[13px] leading-snug text-[var(--ds-muted)]">
+                                    Comic Studio comics are shared and published from the studio&apos;s Share sheet, so only finished,
+                                    checked pages reach readers. Open the comic in the studio to share it.
+                                </p>
+                            </div>
+                        ) : tab === 'create' ? (
                             <>
                                 {/* Share Type */}
                                 <div>

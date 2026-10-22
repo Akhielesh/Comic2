@@ -270,6 +270,18 @@ const INITIAL_STATE: ComicState = {
   panels: [],
 };
 
+/**
+ * Comic Studio (v4) visibility is server-owned: it is published only from the studio Share
+ * sheet, and the database refuses client is_public changes on v4 rows. A client update to
+ * a v4 project therefore never carries isPublic/publishedAt (the stored values are kept).
+ */
+export const withoutStudioVisibility = (project: Project, updates: Partial<Project>): Partial<Project> => {
+  if (!isStudioV4Project(project) || !updates) return updates;
+  if (!('isPublic' in updates) && !('publishedAt' in updates)) return updates;
+  const { isPublic: _isPublic, publishedAt: _publishedAt, ...rest } = updates;
+  return rest;
+};
+
 export const useProjectManager = () => {
   const { user, loading: authLoading } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -596,7 +608,7 @@ export const useProjectManager = () => {
       const newProjects = prevProjects.map(p => {
         if (p.id === id) {
           const newValues = typeof updates === 'function' ? updates(p) : updates;
-          return { ...p, ...newValues, updatedAt: Date.now() };
+          return { ...p, ...withoutStudioVisibility(p, newValues), updatedAt: Date.now() };
         }
         return p;
       });
