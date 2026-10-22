@@ -48,6 +48,7 @@ import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
+import { authEmailRouter } from './routes/authEmail.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
 import { adminCostsRouter } from './routes/adminCosts.js';
@@ -145,6 +146,9 @@ const moderationRateLimit = createRateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: Math.max(30, Math.floor(RATE_LIMIT_SYSTEM_MAX_REQUESTS / 2))
 });
+// Auth emails (sign-up confirm / resend / reset / magic link): 10 per 10 minutes per IP. Runs
+// BEFORE optionalAuth so it always keys by IP; the route adds a durable per-recipient throttle.
+const authEmailRateLimit = createRateLimit({ scope: 'auth-email', windowMs: 600_000, maxRequests: 10 });
 
 app.get('/api/health', (_req, res) => {
   // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
@@ -165,6 +169,9 @@ app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 // Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
 // signed-in user's id is attached when present; mounted before requireAuth.
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
+// Auth emails sent by the backend instead of Supabase's ~2/hour built-in mailer (public,
+// logged-out — sign-up and password reset happen before there is a session).
+app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
 // Email open-tracking pixel (public — fetched by the recipient's mail client, no session).
 app.use('/api/email', systemRateLimit, optionalAuth, emailRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);

@@ -159,6 +159,60 @@ export const getUsage = async (): Promise<EmailUsage> => {
   return { day, month };
 };
 
+// ── Per-recipient auth-email throttle (routes/authEmail.ts) ─────────────────────
+// The backend sends confirm / reset / magic-link mail itself, so it owns the throttling GoTrue
+// used to do. email_log is the durable record (the in-memory rate limiter resets whenever the
+// container sleeps). Only mail that went out — or is going out — counts: a failed send never
+// locks the user out of retrying. Failures read as 0 / null: a log hiccup must not block sign-up.
+
+/** Templates the auth-email routes send; to_email is stored lowercased (normalizeEmail). */
+export const AUTH_EMAIL_TEMPLATES = ['auth-confirm-signup', 'auth-recovery', 'auth-magic-link'] as const;
+const AUTH_EMAIL_COUNTED_STATUSES: EmailStatus[] = ['queued', 'sent'];
+
+/** How many auth emails this address was sent since `sinceIso`. */
+export const countRecentAuthEmails = async (email: string, sinceIso: string): Promise<number> => {
+  const db = adminOrNull();
+  if (!db) return 0;
+  try {
+    const { count, error } = await db
+      .from('email_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('to_email', normalizeEmail(email))
+      .in('template', [...AUTH_EMAIL_TEMPLATES])
+      .in('status', AUTH_EMAIL_COUNTED_STATUSES)
+      .gte('created_at', sinceIso);
+    if (error) {
+      console.warn('[email] countRecentAuthEmails failed', error.message);
+      return 0;
+    }
+    return count ?? 0;
+  } catch (err) {
+    console.warn('[email] countRecentAuthEmails error', (err as Error)?.message);
+    return 0;
+  }
+};
+
+/** When this address was last sent an auth email (ISO), or null. Drives the "wait N seconds" answer. */
+export const latestAuthEmailAt = async (email: string): Promise<string | null> => {
+  const db = adminOrNull();
+  if (!db) return null;
+  try {
+    const { data, error } = await db
+      .from('email_log')
+      .select('created_at')
+      .eq('to_email', normalizeEmail(email))
+      .in('template', [...AUTH_EMAIL_TEMPLATES])
+      .in('status', AUTH_EMAIL_COUNTED_STATUSES)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    return (data as { created_at?: string }).created_at ?? null;
+  } catch {
+    return null;
+  }
+};
+
 /** Recent send-log rows for the admin Email Console (delivery + opens). Service-role only. */
 export const recentLog = async (limit = 50): Promise<Array<Record<string, unknown>>> => {
   const db = adminOrNull();

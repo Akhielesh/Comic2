@@ -302,6 +302,15 @@ export const EMAIL_HMAC_SECRET = process.env.EMAIL_HMAC_SECRET || '';
 export const EMAIL_PUBLIC_BASE_URL = (process.env.EMAIL_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 // Public app origin used for post-confirm redirects + in-email app links.
 export const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || 'https://dreamstreamstudio.ai').replace(/\/+$/, '');
+// Extra origins that auth-email links (sign-up confirm, password reset, magic link) may point
+// at, besides APP_PUBLIC_URL's origin — e.g. `http://localhost:3000,http://localhost:7000` for
+// local dev. EXACT origins only: never a wildcard or isAllowedOrigin(), whose
+// `*.dreamstreamstudio.ai` includes user-controlled Studio preview hosts (a reset link sent
+// there would hand its owner the account). See services/authEmailLinks.ts.
+export const AUTH_LINK_ORIGINS = (process.env.AUTH_LINK_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 export const EMAIL_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   process.env.EMAIL_REQUEST_TIMEOUT_MS,
   15_000,
