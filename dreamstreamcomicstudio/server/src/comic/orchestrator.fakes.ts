@@ -2,9 +2,15 @@
 // director, routes). They implement the interfaces in types.ts only, so the tests never
 // depend on the real transports, storage or billing.
 
-import { createEmptyDoc, emptyRender, type ComicDoc, type Page } from '../../../shared/comic/doc.js';
+import crypto from 'node:crypto';
+import { aspectRatioOf } from '../../../shared/comic/models.js';
+import { createEmptyDoc, emptyRender, type AspectRatio, type AssetRef, type ComicDoc, type Page, type RefAsset } from '../../../shared/comic/doc.js';
 import type { StudioEvent } from '../../../shared/comic/events.js';
+import type { StudioCaps } from '../../../shared/comic/capabilities.js';
+import { REF_LIMITS, UPLOAD_MIME } from '../../../shared/comic/refs.js';
+import type { ContentRating } from '../../../shared/comic/safety.js';
 import { StudioSession } from './session.js';
+import { buildQuarantinePath, buildRefPath } from './storagePaths.js';
 import {
   StudioError,
   type AssetStore,
@@ -79,7 +85,27 @@ export interface FakeAssetStore extends AssetStore {
   outlines: { dataUrl: string; box: { x: number; y: number; w: number; h: number } }[];
   signed: string[][];
   missing: Set<string>;
+  // ── v5 fakes (contract §12.5) ──
+  /** TTL passed with each signUrls call (undefined = default). */
+  signedTtl: (number | undefined)[];
+  /** Pixel size encodeUploadBuffer reports (tests set it to exercise min-edge / aspect paths). */
+  encodeSize: { w: number; h: number };
+  crops: { path: string; aspect?: string }[];
+  fits: { path: string; aspect: AspectRatio; mode: string }[];
+  quarantined: { path: string; reason: string; quarantinePath: string }[];
+  removed: string[];
+  copies: { src: string; dst: string }[];
+  puts: { path: string; contentType: string; cacheControl?: string; bytes: number }[];
 }
+
+const dataUrlOf = (mime: string, buffer: Buffer) => `data:${mime};base64,${buffer.toString('base64')}`;
+/** Deterministic 64-bit "dHash" stand-in (16 hex): equal bytes ⇒ equal hash. */
+const fakeHash16 = (buffer: Buffer) => crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 16);
+/** u/<user>/p/<project>/… → its owner segments (quarantine lane naming). */
+const ownerOf = (path: string) => {
+  const m = /^u\/([^/]+)\/p\/([^/]+)\//.exec(path);
+  return m ? { userId: m[1], projectId: m[2] } : { userId: 'unknown', projectId: 'unknown' };
+};
 
 export function fakeAssetStore(): FakeAssetStore {
   let n = 0;
@@ -105,13 +131,109 @@ export function fakeAssetStore(): FakeAssetStore {
       if (store.missing.has(path)) throw new StudioError('NOT_FOUND', 'missing', { status: 404 });
       return store.files.get(path) || TINY_PNG;
     },
-    async signUrls(paths) {
+    async signUrls(paths, opts) {
       store.signed.push([...paths]);
+      store.signedTtl.push(opts?.ttlSec);
       return Object.fromEntries(paths.map((p) => [p, `https://signed.test/${p}`]));
     },
     async outlineRegion(dataUrl, box) {
       store.outlines.push({ dataUrl, box });
       return 'data:image/png;base64,T1VUTElORUQ=';
+    },
+
+    // ── v5 ──
+    signedTtl: [],
+    encodeSize: { w: 1024, h: 1024 },
+    crops: [],
+    fits: [],
+    quarantined: [],
+    removed: [],
+    copies: [],
+    puts: [],
+    async encodeUploadBuffer(buffer, mime) {
+      if (!(UPLOAD_MIME as readonly string[]).includes(mime)) throw new StudioError('BAD_REQUEST', 'Upload a PNG, JPEG, WebP, GIF or AVIF image.', { status: 415 });
+      if (!buffer?.byteLength) throw new StudioError('BAD_REQUEST', "That file isn't a readable image.", { status: 400 });
+      if (buffer.byteLength > REF_LIMITS.maxUploadBytes) throw new StudioError('BAD_REQUEST', 'That image is larger than 10 MB.', { status: 413 });
+      const { w, h } = store.encodeSize;
+      if (Math.min(w, h) < REF_LIMITS.minEdgePx) throw new StudioError('BAD_REQUEST', `That image is too small (under ${REF_LIMITS.minEdgePx} px).`, { status: 422 });
+      return { buffer, mime: 'image/webp', w, h, bytes: buffer.byteLength };
+    },
+    async saveRef({ userId, projectId, encoded }) {
+      n += 1;
+      const path = buildRefPath(userId, projectId, `ref-${n}`);
+      store.files.set(path, dataUrlOf('image/webp', encoded.buffer));
+      return { path, source: 'upload', at: Date.now(), w: encoded.w, h: encoded.h };
+    },
+    async previewDataUrl(pathOrBuffer) {
+      if (Buffer.isBuffer(pathOrBuffer)) return dataUrlOf('image/webp', pathOrBuffer);
+      return store.loadDataUrl(pathOrBuffer);
+    },
+    async measureRef(buffer) {
+      return { dhash: fakeHash16(buffer) };
+    },
+    async dHash(buffer) {
+      return fakeHash16(buffer);
+    },
+    async cropRef({ userId, projectId, path, aspect }) {
+      const source = await store.loadDataUrl(path);
+      n += 1;
+      const out = buildRefPath(userId, projectId, `crop-${n}`);
+      store.files.set(out, source);
+      store.crops.push({ path, ...(aspect ? { aspect } : {}) });
+      const side = aspect === '3:4' ? { w: 768, h: 1024 } : aspect === '4:3' ? { w: 1024, h: 768 } : { w: 1024, h: 1024 };
+      return { path: out, source: 'derived', at: Date.now(), derivedFrom: path, ...side } as RefAsset;
+    },
+    async fitToAspect({ userId, projectId, path, aspect, mode }) {
+      const source = await store.loadDataUrl(path);
+      n += 1;
+      const out = `u/${userId}/p/${projectId}/img/fit-${n}.webp`;
+      store.files.set(out, source);
+      store.fits.push({ path, aspect, mode });
+      const w = 1024;
+      return { path: out, source: 'derived', at: Date.now(), derivedFrom: path, w, h: Math.round(w / aspectRatioOf(aspect)) } as AssetRef;
+    },
+    async ensureVariants(asset) {
+      const w = asset.w || 2048;
+      const h = asset.h || 2048;
+      return ([480, 1080] as const)
+        .filter((vw) => vw < w)
+        .map((vw) => ({ path: asset.path.replace(/(\.webp)?$/, `_w${vw}.webp`), w: vw, h: Math.round((h * vw) / w) }));
+    },
+    async quarantine(path, reason) {
+      const { userId, projectId } = ownerOf(path);
+      n += 1;
+      const quarantinePath = buildQuarantinePath(userId, projectId, `q-${n}`);
+      store.files.set(quarantinePath, store.files.get(path) || TINY_PNG);
+      store.files.delete(path);
+      store.missing.add(path);
+      store.quarantined.push({ path, reason, quarantinePath });
+      return { quarantinePath };
+    },
+    async remove(paths) {
+      for (const p of paths || []) {
+        store.files.delete(p);
+        store.removed.push(p);
+      }
+    },
+    async copyObject(src, dst) {
+      if (store.missing.has(src)) throw new StudioError('NOT_FOUND', 'missing', { status: 404 });
+      store.files.set(dst, store.files.get(src) || TINY_PNG);
+      store.copies.push({ src, dst });
+    },
+    async putObject(path, buffer, contentType, cacheControl) {
+      store.files.set(path, dataUrlOf(contentType, buffer));
+      store.puts.push({ path, contentType, bytes: buffer.byteLength, ...(cacheControl ? { cacheControl } : {}) });
+    },
+    async removePrefix(prefix) {
+      if (!prefix) return 0;
+      let removed = 0;
+      for (const p of [...store.files.keys()]) {
+        if (!p.startsWith(prefix)) continue;
+        store.files.delete(p);
+        store.removed.push(p);
+        removed += 1;
+      }
+      return removed;
     }
   };
   return store;
@@ -278,7 +400,17 @@ export interface TestContext extends StudioContext {
 
 export function testContext(
   session: StudioSession,
-  opts: { llm?: ScriptedLlm; images?: FakeImages; assets?: FakeAssetStore; billing?: FakeBilling; keys?: StudioKeys; signal?: AbortSignal } = {}
+  opts: {
+    llm?: ScriptedLlm;
+    images?: FakeImages;
+    assets?: FakeAssetStore;
+    billing?: FakeBilling;
+    keys?: StudioKeys;
+    signal?: AbortSignal;
+    /** v5: request caps / resolved rating (absent ⇒ DEFAULT_CAPS / computed from the doc). */
+    caps?: StudioCaps;
+    rating?: ContentRating;
+  } = {}
 ): TestContext {
   const events: StudioEvent[] = [];
   session.subscribe((e) => events.push(e));
@@ -302,6 +434,8 @@ export function testContext(
     imagesFake: images,
     llmFake: llm,
     billingFake: billing,
+    ...(opts.caps ? { caps: opts.caps } : {}),
+    ...(opts.rating ? { rating: opts.rating } : {}),
     async publishUrls(paths) {
       const urls = await assets.signUrls(paths);
       session.emit({ type: 'urls', urls });

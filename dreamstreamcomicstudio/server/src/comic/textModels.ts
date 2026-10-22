@@ -1,6 +1,6 @@
 // Text-model routing for Comic Studio (v4).
 //
-// Three roles, each pinned to models that are actually good at the job (see
+// Six roles (v5 adds safety, translator and linguist), each pinned to models that are actually good at the job (see
 // docs/features/comic-studio-v4.md §5). The old studio planned on whatever the client's
 // X-Text-Model header said — which is how page breakdowns ended up on free coding
 // models at temperature 0.1. Here the client has NO say: the chain comes from these
@@ -16,6 +16,8 @@ import type { ResolvedKey, StudioKeys, TextRole } from './types.js';
 export interface TextRoleDefaults {
   /** Env var that overrides the chain (comma-separated, first = primary). */
   envVar: string;
+  /** Consulted when `envVar` is unset (the translator follows a COMIC_WRITER_MODEL override). */
+  fallbackEnvVar?: string;
   /** OpenRouter ids, primary first. Verified live on OpenRouter 2026-10-21. */
   models: readonly string[];
   /** Wall-clock budget for one model call (streaming: idle window). */
@@ -66,6 +68,38 @@ export const TEXT_ROLE_DEFAULTS: Readonly<Record<TextRole, TextRoleDefaults>> = 
     maxTokens: 2500,
     reasoningEffort: 'low',
     label: 'page checker'
+  },
+  // ── v5 (contract §12.9) ──
+  /** Platform-paid PG-13 classifier: cheapest capable model, deterministic, short. */
+  safety: {
+    envVar: 'COMIC_SAFETY_MODEL',
+    models: ['openai/gpt-6-luna', 'google/gemini-3.8-flash'],
+    timeoutMs: 20_000,
+    temperature: 0,
+    maxTokens: 800,
+    reasoningEffort: 'low',
+    label: 'safety check'
+  },
+  /** Dialogue translation runs on the writer-class chain (quality of voice matters). */
+  translator: {
+    envVar: 'COMIC_TRANSLATOR_MODEL',
+    fallbackEnvVar: 'COMIC_WRITER_MODEL',
+    models: ['anthropic/claude-sonnet-5.5', 'google/gemini-4-argon', 'google/gemini-3.8-flash'],
+    timeoutMs: 120_000,
+    temperature: 0.3,
+    maxTokens: 16_000,
+    reasoningEffort: 'medium',
+    label: 'translator'
+  },
+  /** Automated review of every translation (meaning, register, fit). */
+  linguist: {
+    envVar: 'COMIC_LINGUIST_MODEL',
+    models: ['google/gemini-3.8-flash', 'openai/gpt-6-luna'],
+    timeoutMs: 60_000,
+    temperature: 0.1,
+    maxTokens: 6000,
+    reasoningEffort: 'low',
+    label: 'translation reviewer'
   }
 };
 
@@ -87,7 +121,7 @@ const dedupe = (ids: string[]): string[] => Array.from(new Set(ids.filter(Boolea
 /** The ordered OpenRouter-style chain for a role (env override, else defaults). */
 export const roleModelChain = (role: TextRole, env: NodeJS.ProcessEnv = process.env): string[] => {
   const defaults = TEXT_ROLE_DEFAULTS[role];
-  const raw = (env[defaults.envVar] || '').trim();
+  const raw = (env[defaults.envVar] || (defaults.fallbackEnvVar ? env[defaults.fallbackEnvVar] : '') || '').trim();
   const fromEnv = raw ? dedupe(raw.split(',').map(normalizeModelId)) : [];
   return fromEnv.length ? fromEnv : [...defaults.models];
 };

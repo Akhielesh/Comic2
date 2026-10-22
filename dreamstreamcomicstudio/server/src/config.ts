@@ -287,6 +287,22 @@ export const XAI_BASE_URL = process.env.XAI_BASE_URL || 'https://api.x.ai/v1';
 export const XAI_REQUEST_TIMEOUT_MS = providerTimeout('XAI_REQUEST_TIMEOUT_MS');
 
 export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'comic-assets';
+
+// --- Comic Studio v5 (contract §12.9) ---
+// Private bucket for reference photos, uploads and the quarantine lane (no storage policies;
+// served only through 5-minute signed URLs). Created by server/sql/comic_security_guard_2026_10.sql.
+export const COMIC_PRIVATE_BUCKET = (process.env.COMIC_PRIVATE_BUCKET || '').trim() || 'comic-private';
+// Master switch for the PG-13 safety checks (pre-filter, classifier, render verdicts, publish gate).
+export const COMIC_SAFETY_ENABLED = parseBooleanEnv(process.env.COMIC_SAFETY_ENABLED, true);
+// 'on' = pre-filter + platform-paid classifier; 'off' = deterministic pre-filter only ($0).
+export const COMIC_SAFETY_CLASSIFIER: 'on' | 'off' =
+  (process.env.COMIC_SAFETY_CLASSIFIER || '').trim().toLowerCase() === 'off' ? 'off' : 'on';
+// Structural intents answered without the director ("move page 3 to the end"): P2.
+export const COMIC_FAST_INTENTS = parseBooleanEnv(process.env.COMIC_FAST_INTENTS, false);
+// Applying a library style preset also adopts its preview as the style board.
+export const COMIC_LIBRARY_PRESET_BOARD = parseBooleanEnv(process.env.COMIC_LIBRARY_PRESET_BOARD, false);
+// Origin used for every public link the server builds (share URLs, OG tags, oEmbed). No trailing slash.
+export const PUBLIC_SITE_ORIGIN = ((process.env.PUBLIC_SITE_ORIGIN || '').trim() || 'https://dreamstreamstudio.ai').replace(/\/+$/, '');
 export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL_LEGACY || '').toLowerCase() === 'true';
 // Redis connection string (BullMQ broker) — used by the ventures queue/worker.
 export const REDIS_URL = process.env.REDIS_URL || '';

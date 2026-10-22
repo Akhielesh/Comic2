@@ -10,10 +10,12 @@
 
 import { newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg } from '../../../shared/comic/doc.js';
 import { formatUsd, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { effectiveRating } from '../../../shared/comic/safety.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
 import { billedLlm, newTextSpendTracker, noticeCard, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
-import { buildDirectorTools, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
+import { buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
+import { toolGroups } from './tools/index.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
@@ -65,8 +67,11 @@ const upper = (s?: string) => (s || '').trim().toUpperCase() || 'UNNAMED';
 
 const renderWord = (status: string, stale = false) => (stale ? 'out of date' : status === 'none' ? 'not drawn' : status);
 
-/** Compact, model-facing state of the comic (≈ ≤ 3k tokens). */
-export function summarizeDocForDirector(doc: ComicDoc, byok = false): string {
+/**
+ * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
+ * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
+ */
+export function summarizeDocForDirector(doc: ComicDoc, byok = false, extraLines: readonly string[] = []): string {
   const b = doc.brief;
   const f = doc.format;
   const lines: string[] = [`DOC SUMMARY (rev ${doc.rev})`];
@@ -114,6 +119,7 @@ export function summarizeDocForDirector(doc: ComicDoc, byok = false): string {
     lines.push('Plan: none yet');
   }
   lines.push(`Cover: ${renderWord(doc.cover.render.status)}${doc.cover.title ? ` (title “${clip(doc.cover.title, 80)}”)` : ''}`);
+  for (const extra of extraLines) if (extra) lines.push(clip(extra, 400));
 
   const set = doc.settings;
   const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
@@ -252,15 +258,23 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
   session.commit([{ op: 'message', msg: userMsg }]);
 
   const msgId = newId('msg');
-  const turn: DirectorTurn = createDirectorTurn({ attachments, userText, sourceSaved: !!input.sourceSaved });
-  const tools: DirectorTool[] = buildDirectorTools(ctx, turn);
+  const turn: DirectorTurn = createDirectorTurn({
+    attachments,
+    userText,
+    sourceSaved: !!input.sourceSaved,
+    rating: ctx.rating ?? effectiveRating(session.doc, ctx.caps?.ratingCeiling).rating
+  });
+  // Core tools + the feature groups active this turn (contract §12.1).
+  const toolset = buildTurnToolset(ctx, turn, toolGroups());
+  const tools: DirectorTool[] = toolset.tools;
   const toolByName = new Map(tools.map((t) => [t.spec.function.name, t]));
   const tracker = newTextSpendTracker();
   const llm = billedLlm(ctx, { stage: 'chat', operation: 'comic.text.director', tracker });
 
   const doc = session.doc;
   const { summary: memory } = parseMemory(doc.memory);
-  const system = [DIRECTOR_SYSTEM_PROMPT, summarizeDocForDirector(doc, spendIsByok(ctx.keys)), memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : '']
+  const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
+  const system = [prompt, summarizeDocForDirector(doc, spendIsByok(ctx.keys), toolset.summaryLines), memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : '']
     .filter(Boolean)
     .join('\n\n');
   const history = conversationForDirector(doc.conversation.filter((m) => m.id !== userMsg.id), HISTORY_WINDOW - 1);
@@ -333,10 +347,19 @@ export async function runDirectorTurn(ctx: StudioContext, input: { text: string;
         else if (malformed) output = `Error: the arguments for ${call.name} were not valid JSON. Re-issue the call with complete JSON.`;
         else {
           const actId = newId('act');
-          const label = TOOL_ACTIVITY[call.name];
+          const label = TOOL_ACTIVITY[call.name] ?? toolset.activity[call.name];
           if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start' });
-          output = await tool.execute(args);
+          let committed = 0;
+          const unsubscribe = session.subscribe((e) => {
+            if (e.type === 'ops') committed += e.ops.length;
+          });
+          try {
+            output = await tool.execute(args);
+          } finally {
+            unsubscribe();
+          }
           if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok: !output.startsWith('Error') });
+          turn.log.push({ tool: call.name, ok: !output.startsWith('Error'), cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
         if (!output.startsWith('Error')) lastToolResult = output;
         messages.push({ role: 'tool', tool_call_id: call.id, content: output.slice(0, 16_000) });

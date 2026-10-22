@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { Request } from 'express';
-import { hasAnyStudioKey, prefersGeminiDirect, studioKeysFromRequest } from './keys.js';
+import { hasAnyStudioKey, platformStudioKeys, prefersGeminiDirect, studioKeysFromRequest } from './keys.js';
 
 const reqWith = (apiKeys: Request['apiKeys']) => ({ apiKeys }) as unknown as Request;
 
@@ -117,5 +117,20 @@ describe('prefersGeminiDirect', () => {
 
   it('is false when there is no Gemini key', () => {
     expect(prefersGeminiDirect({ openrouter: { key: 'sk-or-platform', byok: false } })).toBe(false);
+  });
+});
+
+describe('platformStudioKeys', () => {
+  it('returns the platform keys as non-BYOK, OpenRouter first', () => {
+    expect(platformStudioKeys({ openrouter: 'sk-or-platform', gemini: 'AIza-platform' })).toEqual({
+      openrouter: { key: 'sk-or-platform', byok: false },
+      gemini: { key: 'AIza-platform', byok: false }
+    });
+  });
+
+  it('never uses an OpenRouter key as a Gemini key, and is null without keys', () => {
+    expect(platformStudioKeys({ gemini: 'sk-or-misfiled' })).toBeNull();
+    expect(platformStudioKeys({ openrouter: '  ', gemini: '' })).toBeNull();
+    expect(prefersGeminiDirect(platformStudioKeys({ openrouter: 'sk-or-a', gemini: 'AIza-b' })!)).toBe(false);
   });
 });
