@@ -141,13 +141,22 @@ describe('public/_headers and public/_routes.json', () => {
       "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://aistudiocdn.com",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' data: https://fonts.gstatic.com",
-      "img-src 'self' data: blob: https://*.supabase.co",
+      "img-src 'self' data: blob: https:",
       "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
       "worker-src 'self' blob:",
       "frame-ancestors 'self'",
       "base-uri 'self'",
       "object-src 'none'",
     ]) expect(csp).toContain(d);
+    // Third parties the live app really loads (seen as report-only violations in production):
+    // Cloudflare Web Analytics, Turnstile (script + frame) and the beacon endpoint.
+    for (const allowed of [
+      'https://static.cloudflareinsights.com',
+      'https://challenges.cloudflare.com',
+      'https://cloudflareinsights.com',
+      "frame-src 'self' https://challenges.cloudflare.com"
+    ]) expect(csp).toContain(allowed);
+    expect(csp).not.toMatch(/(?:^|;\s*)script-src[^;]*\shttps:(?:\s|;|$)/); // never a blanket https: for scripts
     expect(all).toContain('X-Content-Type-Options: nosniff');
     expect(all).toContain('Referrer-Policy: strict-origin-when-cross-origin');
   });
