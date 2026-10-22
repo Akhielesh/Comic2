@@ -1,4 +1,9 @@
-# Best coding models for Code Studio (2026)
+# Best coding models (2026)
+
+> **Update 2026-10-22:** Code Studio, which this was first written for, is retired
+> ([ADR 0005](../decisions/0005-retire-code-studio.md)). The shortlist still drives the coding tab
+> of the model leaderboard (picking a chip sets your text model for chat and comics) and the
+> server's coding auto-pick (`pickCodingModel`, used by the Ventures intake model call).
 
 > Research snapshot compiled from external, verified leaderboards and vendor cards
 > (swebench.com, llm-stats.com, LMArena, OpenRouter, build.nvidia.com, vendor model cards).
@@ -8,11 +13,11 @@
 > human-readable summary and the basis for the curated shortlist in
 > `services/codingRecommendations.ts`.
 
-## TL;DR — what Code Studio should default to
+## TL;DR — the coding default
 
-Code Studio builds apps **free-first** with a strong open coder, independently of the comics/chat
-model. The auto-pick order (server `CODING_MODEL_PRIORITY`) leads with the proven open agentic
-coders below; users can pin any specific model + source in **Code Studio → Settings**.
+Coding picks go **free-first** with a strong open coder. The auto-pick order (server
+`CODING_MODEL_PRIORITY`) leads with the proven open agentic coders below; on the Models page a
+user can pick any of them as their text model.
 
 ## Best free / open-source coders (OpenRouter + NVIDIA)
 
@@ -41,8 +46,8 @@ coders below; users can pin any specific model + source in **Code Studio → Set
 
 ## Frontier (BYOK / credits) for the "Quality" preference
 
-When a user sets Code Studio's spend preference to **Quality** with a funded key, the strongest
-coders are proprietary frontier models — Claude Opus/Sonnet (SWE-bench ~70–72%), Gemini 2.5 Pro,
+With a **Quality** cost preference and a funded key, the strongest coders are proprietary
+frontier models — Claude Opus/Sonnet (SWE-bench ~70–72%), Gemini 2.5 Pro,
 GPT-4.1/o-series. These are reached through the same source picker (OpenRouter) via the user's key.
 
 ## How this maps to the code
@@ -53,9 +58,9 @@ GPT-4.1/o-series. These are reached through the same source picker (OpenRouter) 
 - `services/modelDomains.ts` — derives a 0–100 **coding** strength from HumanEval + SWE-bench
   (+ a purpose-built-coder bonus). This drives the Library's coding leaderboard ranking.
 - `services/codingRecommendations.ts` — the curated shortlist above, surfaced as "Recommended"
-  chips in the leaderboard and Code Studio settings.
+  chips on the leaderboard's coding tab.
 - `server/src/ai/autoRouter.ts` — `CODING_MODEL_PRIORITY` ranks free candidates for `pickCodingModel`,
-  so Code Studio's seamless auto-pick lands on a proven coder.
+  so a coding auto-pick lands on a proven coder.
 
 ## Sources
 

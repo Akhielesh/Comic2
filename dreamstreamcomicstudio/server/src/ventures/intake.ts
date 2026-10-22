@@ -1,8 +1,8 @@
-// Autopilot intake — idea → venture spec + roadmap (Epic A3). Mirrors ai/studio/studioPlan.ts:
-// a pure prompt builder + a hardened JSON parser + a DI runner (the LLM `complete` is injected,
-// so the orchestration is unit-testable without a model key). The route feeds the same
-// `studioStageComplete` closure the studio uses; the resulting roadmap seeds venture_goals and
-// is gated behind a roadmap_approval checkpoint before the loop works it.
+// Autopilot intake — idea → venture spec + roadmap (Epic A3): a pure prompt builder + a
+// hardened JSON parser + a DI runner (the LLM `complete` is injected, so the orchestration is
+// unit-testable without a model key). The route feeds it the `intakeComplete` closure from
+// intakeModel.ts; the resulting roadmap seeds venture_goals and is gated behind a
+// roadmap_approval checkpoint.
 
 import type { GoalKind } from './controlPlane.js';
 

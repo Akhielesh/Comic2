@@ -5,6 +5,10 @@
 // can pilot it before GA). Reads are owner-isolated by RLS; writes go through the
 // service-role repository which scopes every query by user_id. No autonomous work runs here —
 // this is CRUD + the human controls (budgets, checkpoints, kill switch).
+//
+// The build stage was retired with Code Studio (ADR 0005): an approved roadmap leaves the
+// venture paused ('build_retired') and asking for status 'active' returns 410
+// VENTURES_BUILD_RETIRED. Intake, goals, budgets, checkpoints and signals keep working.
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { VENTURES_ENABLED, VENTURES_DEFAULT_USD_PER_DAY, VENTURES_DEFAULT_USD_TOTAL } from '../config.js';
@@ -26,7 +30,8 @@ import { signalToGoal, goalAlreadyOpen } from '../ventures/sense.js';
 import { createGoal, createGoals, listGoals, listConnections } from '../ventures/controlPlane.js';
 import { runIntake } from '../ventures/intake.js';
 import { runOnce } from '../ventures/idempotency.js';
-import { studioStageComplete } from './studio.js';
+import { intakeComplete, type IntakeModelPrefs } from '../ventures/intakeModel.js';
+import { BUILD_RETIRED_MESSAGE } from '../ventures/tickRunner.js';
 import { getKillSwitch, setKillSwitch } from '../ventures/killSwitch.js';
 import { snapshot } from '../observability/metrics.js';
 import { recordAudit, listAudit } from '../observability/auditLog.js';
@@ -47,6 +52,8 @@ const notFound = (res: Response) =>
   res.status(404).json({ error: { message: 'Venture not found.' } });
 const serverError = (res: Response, e: unknown) =>
   res.status(500).json({ error: { message: e instanceof Error ? e.message : String(e) } });
+const buildRetired = (res: Response) =>
+  res.status(410).json({ error: { message: BUILD_RETIRED_MESSAGE, code: 'VENTURES_BUILD_RETIRED' } });
 
 // Gate: allow when the feature flag is on, otherwise admins only (private pilot).
 const ventureGate = async (req: Request, res: Response, next: NextFunction) => {
@@ -117,7 +124,7 @@ venturesRouter.post('/intake', async (req, res) => {
   const idemKey = `intake:${req.user!.id}:${idemHeader || idea.slice(0, 200)}`;
   try {
     const result = await runOnce(idemKey, 60_000, async () => {
-      const complete = await studioStageComplete(req as never, (req.body || {}) as never, 2500);
+      const complete = await intakeComplete(req.apiKeys, (req.body || {}) as IntakeModelPrefs, 2500);
       if (!complete) {
         throw Object.assign(new Error('NO_MODEL_KEY'), {
           http: 400,
@@ -167,7 +174,9 @@ venturesRouter.post('/intake', async (req, res) => {
   }
 });
 
-// POST /:id/approve-roadmap — approve the roadmap checkpoint(s) + activate the venture (A3/A0).
+// POST /:id/approve-roadmap — approve the roadmap checkpoint(s) (A3/A0). With the build stage
+// retired there is nothing to activate, so the venture stays paused ('build_retired') and the
+// log says why instead of a silent no-op.
 venturesRouter.post('/:id/approve-roadmap', async (req, res) => {
   try {
     const venture = await getVenture(req.user!.id, req.params.id);
@@ -176,7 +185,15 @@ venturesRouter.post('/:id/approve-roadmap', async (req, res) => {
     for (const c of open) {
       await resolveCheckpointRow(req.user!.id, c.id, { to: 'approved', resolvedBy: req.user!.id });
     }
-    await setVentureStatus(req.user!.id, req.params.id, 'active');
+    await setVentureStatus(req.user!.id, req.params.id, 'paused', 'build_retired');
+    await appendEvent({
+      ventureId: req.params.id,
+      userId: req.user!.id,
+      kind: 'venture.paused',
+      level: 'warn',
+      message: `Roadmap approved. ${BUILD_RETIRED_MESSAGE}`,
+      source: 'api'
+    });
     await recordAudit({
       actorId: req.user!.id,
       action: 'ventures.roadmap.approve',
@@ -184,7 +201,7 @@ venturesRouter.post('/:id/approve-roadmap', async (req, res) => {
       targetId: req.params.id,
       detail: { approved: open.length }
     });
-    res.json({ ok: true, status: 'active', approved: open.length });
+    res.json({ ok: true, status: 'paused', pauseReason: 'build_retired', approved: open.length });
   } catch (e) {
     serverError(res, e);
   }
@@ -206,6 +223,8 @@ venturesRouter.get('/:id', async (req, res) => {
 venturesRouter.patch('/:id/status', async (req, res) => {
   const parsed = parseStatusChange(req.body);
   if (!parsed.valid) return badRequest(res, parsed.error as string);
+  // Resuming would only hand the venture back to a loop with no build stage.
+  if (parsed.value === 'active') return buildRetired(res);
   try {
     const venture = await getVenture(req.user!.id, req.params.id);
     if (!venture) return notFound(res);

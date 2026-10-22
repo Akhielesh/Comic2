@@ -1,6 +1,8 @@
-// The Code Studio design system — the instructions that push EVERY coding model to ship
-// genuinely good UI/UX, motion and visual design, on web AND mobile, regardless of which
-// model is routed.
+// The design system first built for Code Studio (retired, ADR 0005) — the instructions that push
+// EVERY coding model to ship genuinely good UI/UX, motion and visual design, on web AND mobile,
+// regardless of which model is routed. Kept because chat uses its MCP source lists
+// (ALWAYS_ON_STUDIO_MCP_SERVERS / envDesignMcpServers, via routes/chat.ts); the charter, directive
+// and presets below stay pure + unit-tested for any surface that generates UI.
 //
 // Why this exists: model quality varies, but the *ceiling* a model reaches on design is
 // largely set by how hard and how concretely we ask. A vague "make it look nice" gets
@@ -57,6 +59,7 @@ export const DESIGN_FIX_NOTE =
 // pickable design languages, and the agent applies the best-fit per the user's ask (grounding the
 // aesthetic in proven systems instead of inventing one from scratch). The full 142-system library
 // is also available by self-hosting open-design's MCP server (STUDIO_OPENDESIGN_MCP_URL).
+// Attribution: docs/chat/CREDITS-OPEN-DESIGN.md.
 // ---------------------------------------------------------------------------------------------
 
 export interface DesignPreset {

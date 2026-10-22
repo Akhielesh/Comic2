@@ -644,8 +644,8 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       ? body.mcpServers.filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
       : [];
     const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
-    // DreamStream chat gets the SAME always-on reference MCPs (Context7, DeepWiki) and any
-    // operator self-hosted design/connector MCPs as the Code Studio, plus the user's own servers.
+    // DreamStream chat gets the always-on reference MCPs (Context7, DeepWiki) and any operator
+    // self-hosted design/connector MCPs (ai/studio/designSystem.ts), plus the user's own servers.
     // Operator-set servers are trusted (may use http/internal hosts); user servers stay strict.
     const byUrl = new Map<string, McpServerConfig & { trusted?: boolean }>();
     // Inject the curated defaults only when the user is already using tools (some tool enabled, or

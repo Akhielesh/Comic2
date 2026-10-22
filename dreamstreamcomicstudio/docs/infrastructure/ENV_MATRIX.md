@@ -106,14 +106,26 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `CF_ANALYTICS_API_TOKEN` | `services/costCentre.ts` → `GET /api/admin/costs` | ⭕ 🔐 | — | **Read-only** token with *Account › Account Analytics › Read*. Queries the GraphQL Analytics API (Workers invocations per script, R2 storage). Never logged or returned to the client. Unset ⇒ Admin → Costs shows a setup card; all Supabase-based figures still work |
 | `CLOUDFLARE_ACCOUNT_ID` | `services/costCentre.ts` | ⭕ | — | The account tag for the analytics query; both vars must be set (as `dreamstream-api` Worker secrets or D1 `backend_env` rows) |
 
-## Studio / live / email workers (set on the workers, mirrored on backend)
+## Live / email workers (set on the workers, mirrored on backend)
 
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
-| `STUDIO_WORKER_URL` / `STUDIO_HMAC_SECRET` | backend → studio-worker | ⭕ 🔐 | 💸 (Containers) | **missing from .env.example** |
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
-| `VITE_LIVE_WORKER_URL` / `VITE_STUDIO_LIVE_ENABLED` / `VITE_LEGACY_STUDIO_ENABLED` | frontend feature flags | ⭕ | — | |
-| `VENTURES_ENABLED` / `VENTURES_KILL` / `VENTURES_*` | autopilot | ⭕ | 💸 (Redis) | OFF by default; **missing from .env.example** |
+| `VITE_LIVE_WORKER_URL` | frontend (Stream Studio) | ⭕ | — | |
+| `VENTURES_ENABLED` / `VENTURES_KILL` / `VENTURES_*` | autopilot | ⭕ | 💸 (Redis, only for `ventures:worker`) | `false` in `wrangler.jsonc` (admins still get in); `VENTURES_PILOT_INLINE=false`. Build stage retired (ADR 0005). `VENTURES_INTAKE_TIMEOUT_MS` (default 120000) bounds the intake model call |
+
+### Retired with Code Studio (ADR 0005, 2026-10-22) — remove wherever still set
+
+| Var | Where it may still live | Notes |
+|---|---|---|
+| `STUDIO_WORKER_URL` | was a var in `api-proxy/wrangler.jsonc` (removed) | Backend → `dreamstream-studio` Worker |
+| `STUDIO_HMAC_SECRET` | `dreamstream-studio` Worker secret + D1 `backend_env` row | Delete both |
+| `STUDIO_MAX_CONCURRENT_PER_USER` / `STUDIO_DAILY_BUILD_MINUTES` / `STUDIO_REQUEST_TIMEOUT_MS` / `STUDIO_COST_PER_AWAKE_SEC` | backend env, if ever set | No longer read |
+| `VENTURES_BUILD_COST_ESTIMATE_USD` | backend env, if ever set | No longer read (no build stage) |
+| `VITE_STUDIO_LIVE_ENABLED` / `VITE_LEGACY_STUDIO_ENABLED` | Cloudflare Pages env, if set | No longer read |
+
+The `STUDIO_*_MCP_URL`, `STUDIO_VIDEO_RENDER_URL` and `NANGO_*` vars are **not** retired: they wire
+the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 
 ## Proxy / live-worker settings (Worker-only, never reach the backend)
 
@@ -131,5 +143,5 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 
 Add to `.env.example` (read by code, were absent): `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET`, `FINNHUB_API_KEY`, `FRED_API_KEY`, `ADMIN_EMAILS`,
-`STUDIO_WORKER_URL`, `STUDIO_HMAC_SECRET`, `VENTURES_ENABLED`, `MCP_OUTBOUND_TOKEN`,
+`VENTURES_ENABLED`, `MCP_OUTBOUND_TOKEN`,
 `AMADEUS_PRODUCTION`, `OPENROUTER_SMART_TEXT_MODEL`, `NVIDIA_TEXT_MODEL`.

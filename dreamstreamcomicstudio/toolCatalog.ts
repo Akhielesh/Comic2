@@ -692,10 +692,10 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   {
     name: 'render_react', label: 'Custom React component', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (sandboxed Sandpack)',
-    description: 'Render a fully-custom interactive widget by writing a self-contained React (TSX) component, run in a sandboxed iframe. For genuinely bespoke interactions/visualizations beyond the render_ui block kit. The substrate where a 21st.dev / shadcn MCP\'s generated component lands.',
+    description: 'Render a fully-custom interactive widget by writing a self-contained React (TSX) component, run in a sandboxed iframe. For genuinely bespoke interactions/visualizations, small single-screen apps, games and prototypes beyond the render_ui block kit. The substrate where a 21st.dev / shadcn MCP\'s generated component lands.',
     auth: 'none', rateLimit: 'Unlimited (runs client-side in a sandbox)',
     dataShape: 'A self-contained React component, rendered in a sandboxed iframe (tap to run).', docsUrl: 'https://dreamstream.app',
-    keywords: ['react', 'component', 'custom widget', 'tsx', 'jsx', 'interactive', 'code widget', 'build component', 'bespoke', 'simulator', 'calculator', 'sandbox', '21st.dev', 'shadcn']
+    keywords: ['react', 'component', 'custom widget', 'tsx', 'jsx', 'interactive', 'code widget', 'build component', 'bespoke', 'simulator', 'calculator', 'sandbox', '21st.dev', 'shadcn', 'build an app', 'make an app', 'mini app', 'prototype', 'mockup']
   },
   {
     name: 'convert_data', label: 'Convert data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
@@ -873,13 +873,6 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Runs in a memory-sandboxed WASM runtime (no host filesystem/network); a single instance serializes runs with a per-run timeout.',
     dataShape: 'stdout text + produced images (shown inline) and small text/data files (echoed inline).', docsUrl: 'https://pyodide.org',
     keywords: ['run python', 'python', 'code', 'convert image', 'process file', 'compute', 'script', 'pillow', 'numpy', 'pandas']
-  },
-  {
-    name: 'generate_app', label: 'App builder', category: 'codegen', kind: 'builtin', provider: 'DreamStream Code Studio',
-    description: 'Build a complete multi-file app (React, vanilla JS, HTML/CSS) and open it in the live Code Studio panel with a real-time preview the user can edit and run.',
-    auth: 'none', rateLimit: 'Unlimited (runs in-browser, no API)',
-    dataShape: 'code_studio artifact: file tree + live Sandpack preview.', docsUrl: 'https://dreamstream.app',
-    keywords: ['build an app', 'create an app', 'make an app', 'build a game', 'create a game', 'landing page', 'todo app', 'react app', 'web app', 'webapp', 'website', 'web page', 'webpage', 'build me', 'make me', 'write code', 'generate code', 'implement', 'scaffold', 'prototype', 'mockup', 'clone', 'create a component', 'build a tool', 'game', 'dashboard', 'calculator', 'simulator', 'visualizer']
   },
   // ------------------------------------------------------------ connectors -----
   // Per-user account connectors (Gmail/Drive/Calendar/Sheets/Maps). These act on the
@@ -1153,12 +1146,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'transform_data',
   'run_python',
   'get_news',
-  'wiki_lookup',
-  // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand
-  // ways and keyword-matching alone routed it out far too often, so the model would
-  // dump a Markdown code block instead of opening the live Code Studio. Keeping it in
-  // the core set means the model can always CHOOSE to build a runnable app from intent.
-  'generate_app'
+  'wiki_lookup'
 ];
 
 /**

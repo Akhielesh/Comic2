@@ -396,22 +396,6 @@
 }
 
 /* ============================================================================
-   Code Studio — Linear/AI-studio dark aesthetic (scoped to the studio surface).
-   Composer focus glow. The aurora is filter-free static gradients (StudioAurora.tsx) —
-   NOT animated blur blobs — to avoid the GPU compositing glitch that rendered the studio
-   blank until a forced repaint.
-   ========================================================================== */
-@keyframes composerGlow {
-  0%, 100% { opacity: 0.45; }
-  50%      { opacity: 0.8; }
-}
-.studio-composer-glow { animation: composerGlow 4.5s ease-in-out infinite; }
-
-@media (prefers-reduced-motion: reduce) {
-  .studio-composer-glow { animation: none; }
-}
-
-/* ============================================================================
    Calm-studio theme tokens — the single source of truth for Chat Studio + widget
    colors. Light values on :root; `.dark` on <html> flips the whole studio (and
    every widget) to the Claude-style dark theme. Components reference these ONLY

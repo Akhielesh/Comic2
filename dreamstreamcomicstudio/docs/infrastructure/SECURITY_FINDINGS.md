@@ -89,9 +89,10 @@ repo config). **Companion:** `INFRA_MAP.md`. Re-run `get_advisors` after any DDL
 - ✅ **`live-worker` `ALLOWED_ORIGINS` tightened** from `"*"` to
   `https://dreamstreamstudio.ai,https://comic2.pages.dev` (2026-06-16, finding H4). Takes
   effect on the next live-worker deploy; append any additional production origin first.
-- Verify HMAC secrets (`STUDIO_HMAC_SECRET`, `EMAIL_HMAC_SECRET`,
-  `SUPABASE_AUTH_HOOK_SECRET`, `DATA_EGRESS_SECRET`) are set as **secrets** (not vars) on
-  each worker and rotated if ever exposed.
+- Verify HMAC secrets (`EMAIL_HMAC_SECRET`, `SUPABASE_AUTH_HOOK_SECRET`,
+  `DATA_EGRESS_SECRET`) are set as **secrets** (not vars) on each worker and rotated if ever
+  exposed. (`STUDIO_HMAC_SECRET` went with Code Studio, ADR 0005 — delete it wherever it
+  still exists.)
 
 ---
 

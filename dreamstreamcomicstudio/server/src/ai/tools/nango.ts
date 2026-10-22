@@ -3,7 +3,7 @@
 // Three deliberately SMALL meta-tools (not 800 raw tools, which would blow the model's tool
 // budget and wreck selection): discover integrations, start a per-user OAuth connect flow, and
 // proxy an authenticated request to any connected provider. They talk to a *self-hosted* Nango
-// over its REST API with the operator's secret key — see docs/studio/INTEGRATIONS-NANGO.md.
+// over its REST API with the operator's secret key — see docs/chat/INTEGRATIONS-NANGO.md.
 //
 // Nango is Elastic License v2: self-hosting it to power our product is fine; reselling Nango as a
 // service is not. Endpoints/headers verified against nango.dev/docs (proxy uses Connection-Id +

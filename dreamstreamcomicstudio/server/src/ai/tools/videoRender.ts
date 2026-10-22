@@ -2,7 +2,7 @@
 // approach: headless Chromium records frames → ffmpeg encodes MP4). That pipeline CANNOT live in the
 // main API — it needs Playwright Chromium + an ffmpeg binary and is a heavy sandboxing surface — so
 // the agent calls a separate worker at STUDIO_VIDEO_RENDER_URL. Thin + best-effort, like the Nango tools.
-// See deploy/studio-tools/ + docs/studio/INTEGRATIONS-VIDEO.md for the worker.
+// See deploy/studio-tools/ + docs/chat/INTEGRATIONS-VIDEO.md for the worker.
 
 import type { ChatTool, ToolExecResult } from './types.js';
 

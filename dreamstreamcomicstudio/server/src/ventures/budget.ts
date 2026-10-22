@@ -1,10 +1,10 @@
 // Pure venture-budget evaluation (no DB, no network) — the first "brake" of Autopilot.
-// Epic A0. See docs/studio/autopilot/00-MASTER-PLAN.md §8 and spec/41-billing-metering.md.
+// Epic A0. See docs/ventures/00-MASTER-PLAN.md §8 and spec/41-billing-metering.md.
 //
 // The autonomous loop's DECIDE gate calls evaluateBudget() BEFORE spending; the REFLECT
 // step updates the snapshot AFTER. A breach pauses the venture (pause_reason='budget') and
 // emits a budget.exceeded event. A cap of null/undefined means "no limit" for that dimension.
-// Mirrors the self-contained, unit-testable style of services/studioCaps.ts.
+// Self-contained and unit-testable: pure inputs in, a verdict out.
 
 export interface VentureBudget {
   /** Max USD spend per calendar day (null/undefined = unlimited). */
@@ -52,7 +52,7 @@ const hasCap = (cap: number | null | undefined): cap is number =>
 /**
  * Decide whether the venture may incur `proposed` additional spend without breaching any
  * cap. Checks the hardest stop first (lifetime USD) then daily USD, tokens, compute minutes.
- * Uses `>=` so reaching a cap stops the venture (matches studioCaps semantics). Omit
+ * Uses `>=` so reaching a cap stops the venture (a cap is a hard limit, not a warning). Omit
  * `proposed` to test whether the venture is ALREADY at/over budget.
  */
 export const evaluateBudget = (

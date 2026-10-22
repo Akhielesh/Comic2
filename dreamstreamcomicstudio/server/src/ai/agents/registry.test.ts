@@ -10,6 +10,24 @@ describe('agent registry integrity', () => {
       }
     }
   });
+
+  it('every prompt only names tools that exist and that the agent is given', () => {
+    // A prompt that says "call X" for a tool the agent lacks makes the model dump code
+    // instead of acting (this is how a retired tool would linger after its removal).
+    for (const agent of Object.values(AGENTS)) {
+      const named = agent.systemPrompt.match(/\b[a-z]+(?:_[a-z]+)+\b/g) || [];
+      for (const tool of named.filter((n) => KNOWN_TOOL_NAMES.includes(n) || /^(render|generate|run|get|create)_/.test(n))) {
+        expect(agent.toolNames, `${agent.id} prompt names ${tool}`).toContain(tool);
+      }
+    }
+  });
+
+  it('the Code Engineer can render a runnable component in chat', () => {
+    const code = getAgent('code')!;
+    expect(code.toolNames).toContain('render_react');
+    expect(code.systemPrompt).toMatch(/render_react/);
+    expect(code.systemPrompt).not.toMatch(/Code Studio/);
+  });
 });
 
 describe('sanitizePlan', () => {

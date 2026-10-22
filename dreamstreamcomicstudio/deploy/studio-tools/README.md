@@ -1,8 +1,11 @@
-# Code Studio agent-tool sidecars
+# Agent-tool sidecars (chat)
 
-Self-hosted services that give the Code Studio agents real tools:
+Self-hosted services that give the chat agents real tools. They were first built for Code Studio;
+Code Studio is retired (ADR 0005) but chat still uses them (the Nango tools, `render_video`, and the
+design MCPs that `routes/chat.ts` adds through `server/src/ai/studio/designSystem.ts`). The directory
+and the `STUDIO_*` env names keep their old names so existing deployments don't break.
 
-- **Nango** — OAuth + token refresh + proxy for 800+ APIs (see `docs/studio/INTEGRATIONS-NANGO.md`).
+- **Nango** — OAuth + token refresh + proxy for 800+ APIs (see `docs/chat/INTEGRATIONS-NANGO.md`).
 - **shadcn/ui MCP** — real component source/demos/blocks (React; switch `--framework react-native` for mobile).
 - **Magic UI MCP** — animated React + Tailwind components.
 

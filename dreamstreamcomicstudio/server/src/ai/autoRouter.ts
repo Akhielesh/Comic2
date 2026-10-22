@@ -289,8 +289,8 @@ export const pickTextModelChain = async (
   return Array.from(new Set(chain)).slice(0, max);
 };
 
-// Strong coding-model families, best-first — used by Code Studio (generation + the agentic build
-// loop's FIX stage), where code quality matters most. Free-first still applies (strong-open default;
+// Strong coding-model families, best-first — used wherever code quality matters most (coding
+// picks such as the Ventures intake model; Code Studio's build loop used it until its retirement). Free-first still applies (strong-open default;
 // frontier coders via BYOK), but among eligible models these are preferred AND ranked in this order.
 // Refreshed for 2026 with the proven open agentic coders (Qwen3-Coder, DeepSeek V3.1, GLM-4.6,
 // MiniMax M2, Kimi K2, Devstral, gpt-oss). Needles match catalog ids via id.includes().

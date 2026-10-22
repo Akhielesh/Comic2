@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
+import { Code2, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { initTheme } from '../../services/theme';
 import { getLockedChatModel, getShowChatModelSelector, onAppSettingsChanged } from '../../services/appSettings';
@@ -15,14 +15,13 @@ import { applyAgentStep } from './agentActivity';
 import { AllowanceBanner } from './AllowanceBanner';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
-import type { ChatArtifact, CodeStudioArtifact, MapArtifact, AgentActivityEvent, AgentActivityArtifact } from '../../apiTypes';
+import type { ChatArtifact, MapArtifact, AgentActivityEvent, AgentActivityArtifact } from '../../apiTypes';
 import { CANVAS_BG, SIDEBAR_BG, GLASS, HEADING, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { getAdminAccess } from '../../services/billing';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
-const CodeStudioPanel = lazy(() => import('./CodeStudioPanel'));
 
 // ---------------------------------------------------------------------------
 // Studio views (built in parallel — exact prop contracts, see each file).
@@ -88,7 +87,6 @@ import type { ModelSourceId } from '../../services/modelSelection';
 import { listAllMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
 import { captureError, captureEvent } from '../../services/telemetry';
-import { isLegacyStudioEnabled } from '../../services/studioFlags';
 import type { McpServerConfig } from '../../apiTypes';
 import {
   branchSession,
@@ -303,21 +301,6 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     const onChange = () => setIsDesktop(mq.matches);
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
-  }, []);
-
-  // Live viewport height (URL-bar collapse / rotation / keyboard) so any px-based
-  // sizing below follows the REAL viewport instead of a stale innerHeight snapshot —
-  // a one-render-old innerHeight is what made the fullscreen code panel jump/overflow
-  // on phones when the browser chrome collapsed.
-  const [viewportH, setViewportH] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 800));
-  useEffect(() => {
-    const onResize = () => setViewportH(window.innerHeight);
-    window.addEventListener('resize', onResize);
-    window.addEventListener('orientationchange', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('orientationchange', onResize);
-    };
   }, []);
 
   // Lock body scroll while any overlay (mobile sidebar drawer, modals, mobile/fullscreen
@@ -1020,13 +1003,6 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // chat finishing shouldn't yank a map open over the chat you're reading.
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
-      // Legacy Sandpack side-panel auto-open is quarantined behind a dead flag (Sprint 0,
-      // S0.2 / D3). Code apps now surface a single "Open in Code Studio" CTA on the card.
-      const codeArtifact = res.artifacts?.find((a) => a.type === 'code_studio');
-      if (isLegacyStudioEnabled() && codeArtifact && sessionId === activeIdRef.current) {
-        setPanel(codeArtifact);
-        setPanelFullscreen(false);
-      }
       // Learn durable facts about the user from this exchange (background, throttled).
       updateMemoryInBackground(baseTurns, res.text || '');
     } catch (err) {
@@ -1231,74 +1207,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     user?.email?.split('@')[0] ||
     undefined;
 
-  const isCodeStudio = panel?.type === 'code_studio';
+  const isPlayground = panel?.type === 'playground';
   const panelTitle = (panel?.data as { title?: string } | undefined)?.title
     || (panel?.type === 'map' ? 'Map' : 'Preview');
-
-  // Open the current code_studio app in a new browser tab. For vanilla/static
-  // apps the main HTML file is opened as a blob URL. React apps use a CDN
-  // bootstrap so the preview opens without a build step.
-  const handleOpenNewTab = () => {
-    if (!panel || panel.type !== 'code_studio') return;
-    const artifact = panel.data as CodeStudioArtifact;
-    const cssFiles = artifact.files.filter((f) => f.path.endsWith('.css'));
-    const cssContent = cssFiles.map((f) => f.content).join('\n');
-    const htmlFile = artifact.files.find((f) => f.path.endsWith('.html'));
-    const appFile = artifact.files.find((f) => /\/App\.(tsx?|jsx?)$/.test(f.path));
-
-    let html = '';
-    if (htmlFile) {
-      html = htmlFile.content;
-    } else if (appFile && (artifact.template === 'react' || artifact.template === 'react-ts')) {
-      html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><title>${artifact.title}</title>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<style>body{margin:0}${cssContent}</style>
-</head>
-<body>
-<div id="root"></div>
-<script type="text/babel" data-presets="react,typescript">
-${appFile.content}
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(typeof App !== 'undefined' ? App : () => React.createElement('p', null, 'Component not found')));
-</script>
-</body>
-</html>`;
-    } else {
-      const jsFile = artifact.files.find((f) => f.path.endsWith('.js') || f.path.endsWith('.ts'));
-      html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><title>${artifact.title}</title>
-<style>body{margin:0}${cssContent}</style>
-</head>
-<body>
-${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file found.</p>'}
-</body>
-</html>`;
-    }
-
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  };
 
   const closePanel = () => {
     setPanel(null);
     setPanelFullscreen(false);
   };
-
-  // editorHeight is responsive to fullscreen: fill more of the viewport when expanded.
-  // Derived from the tracked viewport height (not window.innerHeight read at render
-  // time) so it follows URL-bar collapse/rotation instead of jumping or overflowing.
-  const codeEditorHeight = panelFullscreen
-    ? Math.max(Math.min(480, viewportH - 96), Math.round(viewportH * 0.75))
-    : 520;
 
   const panelContent = panel && (
     <>
@@ -1306,31 +1222,23 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         className={`flex items-center justify-between px-3 py-2 border-b border-[var(--ds-hairline)] shrink-0 ${GLASS}`}
       >
         <span className={`font-semibold text-sm flex items-center gap-1.5 min-w-0 ${INK}`}>
-          {isCodeStudio
+          {isPlayground
             ? <Code2 className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
             : <MapIcon className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />}
           <span className="truncate">{panelTitle}</span>
         </span>
         <div className="flex items-center gap-1 shrink-0">
-          {isCodeStudio && (
-            <>
-              <button
-                onClick={handleOpenNewTab}
-                title="Open static preview in new tab"
-                className={`${CONTROL_BTN} p-1`}
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => setPanelFullscreen((v) => !v)}
-                title={panelFullscreen ? 'Exit full screen' : 'Full screen'}
-                className={`${CONTROL_BTN} p-1`}
-              >
-                {panelFullscreen
-                  ? <Minimize2 className="w-3.5 h-3.5" />
-                  : <Maximize2 className="w-3.5 h-3.5" />}
-              </button>
-            </>
+          {/* Phones always show the panel full screen; on desktop it can expand. */}
+          {isDesktop && (
+            <button
+              onClick={() => setPanelFullscreen((v) => !v)}
+              title={panelFullscreen ? 'Exit full screen' : 'Full screen'}
+              className={`${CONTROL_BTN} p-1`}
+            >
+              {panelFullscreen
+                ? <Minimize2 className="w-3.5 h-3.5" />
+                : <Maximize2 className="w-3.5 h-3.5" />}
+            </button>
           )}
           <button onClick={closePanel} className={`${CONTROL_BTN} p-1`}>
             <X className="w-4 h-4" />
@@ -1344,12 +1252,6 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
           <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className={`w-6 h-6 animate-spin ${ACCENT_TEXT}`} /></div>}>
             {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
             {panel.type === 'playground' && <MultiFilePlayground data={panel.data as PlaygroundData} />}
-            {panel.type === 'code_studio' && (
-              <CodeStudioPanel
-                data={panel.data as CodeStudioArtifact}
-                editorHeight={codeEditorHeight}
-              />
-            )}
           </Suspense>
         )}
       </div>

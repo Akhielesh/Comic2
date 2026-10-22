@@ -153,7 +153,7 @@ MCP_OUTBOUND_DISABLED`; bad token → `401 MCP_UNAUTHORIZED` (`:118-124`).
 Published tools are the **read-only, side-effect-free subset only**
 (`OUTBOUND_TOOL_NAMES`, `mcp.ts:95-104`): `web_search`, `get_news`, `get_weather`,
 `get_stock`, `find_places`, `show_map`, `image_search`, `video_search` — never
-`generate_app` or the swarm (`mcp.ts:92-94`).
+the swarm or the `render_*` tools (`mcp.ts:92-94`).
 
 Supported JSON-RPC methods (`:129-169`): `initialize` (protocol `2025-06-18`),
 `notifications/*` (→ `202` with no body, as the Streamable HTTP spec requires —

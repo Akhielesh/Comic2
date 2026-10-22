@@ -126,11 +126,12 @@ const RAW: Recipe[] = [
     description: 'Implement a small, self-contained app or feature as complete, runnable code.',
     instructions:
       'You are a senior engineer. Build exactly what is asked as complete, production-quality, runnable code — ' +
-      'no placeholders, no truncation. When it is a multi-file app, call generate_app with every file fully ' +
-      "written. Stack preference: {{ stack | default('React + TypeScript') }}. Use web_search only if you need " +
-      'current API/package details. Write the code first, then a short note on key decisions.',
+      'no placeholders, no truncation. When it is a small interactive app or widget, call render_react with one ' +
+      'self-contained component so it runs in the chat; otherwise give every file as its own complete code block ' +
+      "labelled with its filename. Stack preference: {{ stack | default('React + TypeScript') }}. Use web_search " +
+      'only if you need current API/package details. Write the code first, then a short note on key decisions.',
     prompt: 'Build: {{ spec }}',
-    tools: ['generate_app', 'web_search'],
+    tools: ['render_react', 'web_search'],
     parameters: [
       { key: 'spec', input_type: 'string', requirement: 'required', description: 'What to build.' },
       { key: 'stack', input_type: 'string', requirement: 'optional', default: 'React + TypeScript' }

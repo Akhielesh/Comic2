@@ -30,7 +30,6 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   stock_quote: ['get_stock'],
   stock_comparison: ['compare_stocks'],
   finance_terminal: ['build_finance_terminal'],
-  code_studio: ['generate_app'],
   quiz: ['generate_quiz'],
   flashcards: ['generate_flashcards'],
   sql_exercise: ['sql_exercise'],

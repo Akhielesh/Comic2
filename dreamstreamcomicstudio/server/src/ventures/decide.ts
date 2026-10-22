@@ -4,7 +4,7 @@
 //   2) scope guard (work must be within approved scope) → scope_change checkpoint
 //   3) action checkpoint (irreversible/sensitive actions) → the required checkpoint
 //   4) budget (the proposed spend must fit the caps)   → budget breach
-// Checks run hardest-stop-first and short-circuit. See docs/studio/autopilot/spec/24-autonomous-engine.md.
+// Checks run hardest-stop-first and short-circuit. See docs/ventures/spec/24-autonomous-engine.md.
 //
 // NOTE: the server tsconfig uses `strict: false`, so discriminated-union truthiness narrowing
 // is unreliable — we cast the budget false-variant explicitly rather than rely on narrowing.

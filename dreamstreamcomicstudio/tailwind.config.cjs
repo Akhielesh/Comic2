@@ -3,12 +3,10 @@ module.exports = {
   darkMode: 'class',
   content: [
     "./index.html",
-    "./studio.html",
     "./App.tsx",
     "./components/**/*.{ts,tsx}",
     "./hooks/**/*.{ts,tsx}",
     "./services/**/*.{ts,tsx}",
-    "./studio/**/*.{ts,tsx}",
     "./public/**/*.html"
   ],
   theme: {
@@ -24,14 +22,6 @@ module.exports = {
           blue: "#3B82F6",
           red: "#EF4444",
           black: "#18181b"
-        },
-        // Dark "studio" workspace surface (Code Studio). Mirrors components/studio/kit/theme.ts.
-        studio: {
-          bg: "#0b0e14",
-          panel: "#11151f",
-          panelAlt: "#0e1219",
-          edge: "#1c2433",
-          accent: "#38bdf8"
         }
       },
       boxShadow: {
