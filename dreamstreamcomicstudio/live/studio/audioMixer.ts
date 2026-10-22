@@ -224,6 +224,11 @@ export class ProgramAudioMixer {
     return out;
   }
 
+  /** Ids of every wired source (the host's own mic is `host`). */
+  ids(): string[] {
+    return Array.from(this.sources.keys());
+  }
+
   has(id: string): boolean {
     return this.sources.has(id);
   }

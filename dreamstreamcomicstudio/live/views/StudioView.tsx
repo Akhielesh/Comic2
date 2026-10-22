@@ -359,9 +359,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
           }
         }
         if (mixer) {
+          // Unwire every guest source without a live link — including guests re-linked after
+          // a studio reload, whose names never went through guestNamesRef.
           const liveSids = new Set(list.map((g) => g.sid));
-          for (const g of guestNamesRef.current.keys()) {
-            if (!liveSids.has(g) && mixer.has(g)) mixer.removeSource(g);
+          for (const id of mixer.ids()) {
+            if (id !== 'host' && !liveSids.has(id)) mixer.removeSource(id);
           }
         }
         comp.setRemoteTiles(tiles);
@@ -450,6 +452,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
           case 'people':
             peopleRef.current = msg.list;
             setPeople(msg.list);
+            // Guests already in the room when the studio (re)loaded never sent a join event:
+            // learn their names here so their tiles aren't labelled "Guest".
+            for (const p of msg.list) if (p.role === 'guest' && p.name) guestNamesRef.current.set(p.sid, p.name);
             break;
           case 'log':
             setLog((l) => [...l.slice(-299), msg.entry]);
