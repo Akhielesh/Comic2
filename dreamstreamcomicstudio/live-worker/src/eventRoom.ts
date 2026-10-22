@@ -19,10 +19,14 @@
  * attachments, so the room survives eviction mid-event.
  */
 
+import { iceServers, type IceEnv } from './ice';
 import { EMOJI_LIBRARY, STRIKE_LIMIT, TIMEOUT_MS, checkSpam, hasProfanity, type SpamState } from './moderation';
 
 export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
+/** How the event started: a private meeting (guests on camera, nothing broadcast until the
+ *  host goes live) or a broadcast. A meeting can still go live later — `status` says so. */
+export type EventKind = 'meeting' | 'broadcast';
 
 export interface EventMeta {
   id: string;
@@ -56,6 +60,8 @@ export interface EventMeta {
   quick?: string[];
   /** Hard concurrent-viewer cap, host-set, never above HARD_VIEWER_CAP. */
   maxViewers: number;
+  /** Meeting or broadcast (rooms created before meetings have none → broadcast). */
+  kind?: EventKind;
 }
 
 export interface ChatMsg {
@@ -103,7 +109,7 @@ interface Attach {
   role: Role;
 }
 
-interface Env {
+interface Env extends IceEnv {
   EVENT_ROOM: DurableObjectNamespace;
   LIVE_BUCKET: R2Bucket;
   ALLOWED_ORIGINS: string;
@@ -254,6 +260,7 @@ export class EventRoom {
       slowSec: 0,
       reactionsOn: true,
       maxViewers: Math.min(HARD_VIEWER_CAP, Math.max(1, Math.floor(Number(body.maxViewers)) || DEFAULT_VIEWER_CAP)),
+      kind: body.kind === 'meeting' ? 'meeting' : 'broadcast',
     };
     const hostKey = crypto.randomUUID();
     await this.state.storage.put({
@@ -276,7 +283,9 @@ export class EventRoom {
       'SYS',
       meta.scheduledAt
         ? `Event created · scheduled for ${new Date(meta.scheduledAt).toISOString()}`
-        : 'Event created',
+        : meta.kind === 'meeting'
+          ? 'Meeting started — not broadcasting'
+          : 'Event created',
     );
     return json({ hostKey });
   }
@@ -591,6 +600,8 @@ export class EventRoom {
         return this.onRtc(me, msg);
       case 'guestkey':
         return this.onGuestKey(ws, me, Boolean(msg.rotate));
+      case 'ice':
+        return this.onIce(ws, me);
       case 'state':
         return this.onState(me, String(msg.status ?? ''));
       case 'config':
@@ -755,7 +766,13 @@ export class EventRoom {
     } else if (status === 'paused') {
       await this.addLog('scene', 'SCENE', 'Cut to “Be right back” slate');
     } else if (status === 'ended') {
-      await this.addLog('live', 'END', 'Stream ended by host — replay stays up for 24 h, recordings for 7 days');
+      await this.addLog(
+        'live',
+        'END',
+        prev === 'idle' && meta.kind === 'meeting'
+          ? 'Meeting ended by host — it was never broadcast'
+          : 'Stream ended by host — replay stays up for 24 h, recordings for 7 days',
+      );
       await this.state.storage.setAlarm(meta.endedAt! + REPLAY_WINDOW_MS);
     }
   }
@@ -895,6 +912,16 @@ export class EventRoom {
       if (rotate) await this.addLog('mod', 'MOD', 'Guest invite link rotated — old links no longer work');
     }
     this.send(ws, { t: 'guestkey', key });
+  }
+
+  /**
+   * ICE servers for the host ⇄ guest links: STUN always, plus short-lived Cloudflare TURN
+   * credentials when the owner configured them (shared with the monitor and calls via
+   * ./ice). Only the crew that opens peer links may ask — viewers never touch WebRTC.
+   */
+  private async onIce(ws: WebSocket, me: Attach): Promise<void> {
+    if (me.role !== 'host' && me.role !== 'guest') return;
+    this.send(ws, { t: 'ice', servers: await iceServers(this.env) });
   }
 
   private async onPin(me: Attach, text: string | null): Promise<void> {

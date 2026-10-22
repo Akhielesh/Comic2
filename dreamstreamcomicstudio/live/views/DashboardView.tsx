@@ -13,6 +13,8 @@ import { useAccount } from '../account';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
 import { Btn, IconBtn, Pill, Sparkline, Tabs, cx, type PushToast } from '../ui/primitives';
+import { requestScheduleOnCreate, type QuickKind } from '../quickStart';
+import { QUICK_BUSY_COPY, useQuickStart } from './create/useQuickStart';
 
 const fmtWhen = (ev: MyEvent): string => {
   if (ev.status === 'live') return 'Now';
@@ -85,6 +87,7 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
   const live = ev.status === 'live' || ev.status === 'paused';
   const ended = ev.status === 'ended';
   const scheduled = !live && !ended && ev.scheduledAt != null && ev.scheduledAt > Date.now();
+  const meeting = ev.kind === 'meeting';
   return (
     <div className={cx('event-card', live && 'is-live')}>
       <button
@@ -94,7 +97,7 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
         onClick={() => (ended ? nav.summary(ev.id, ev.hostKey) : nav.studio(ev.id, ev.hostKey))}
       >
         {live && <span className="ec-livebadge"><span className="pill-dot pulse" />LIVE</span>}
-        <Icon name={ended ? 'play' : live ? 'broadcast' : 'calendar'} size={22} />
+        <Icon name={ended ? 'play' : live ? 'broadcast' : meeting ? 'users' : 'calendar'} size={22} />
       </button>
       <div className="ec-body">
         <div className="ec-title">{ev.title}</div>
@@ -112,6 +115,7 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
       <div className="ec-side">
         {live && <span className="ec-stat"><Icon name="eye" size={13} />{ev.viewers ?? 0}</span>}
         {ended && <span className="ec-stat"><Icon name="eye" size={13} />{ev.peakViewers ?? ev.viewers ?? 0} · {evDuration(ev)}</span>}
+        {meeting && <Pill tone="accent" icon="users">Meeting</Pill>}
         {scheduled && <Pill tone="neutral">Scheduled</Pill>}
         <IconBtn
           name="link"
@@ -124,7 +128,7 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
         />
         {live && <Btn variant="solid" size="sm" icon="broadcast" onClick={() => nav.studio(ev.id, ev.hostKey)}>Open Studio</Btn>}
         {ended && <Btn variant="ghost" size="sm" icon="chart" onClick={() => nav.summary(ev.id, ev.hostKey)}>Recap</Btn>}
-        {!live && !ended && <Btn variant="ghost" size="sm" onClick={() => nav.studio(ev.id, ev.hostKey)}>Open Studio</Btn>}
+        {!live && !ended && <Btn variant="ghost" size="sm" onClick={() => nav.studio(ev.id, ev.hostKey)}>{meeting ? 'Rejoin' : 'Open Studio'}</Btn>}
       </div>
     </div>
   );
@@ -142,6 +146,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const recordings = useMemo(listMyRecordings, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
   const [saving, setSaving] = useState<FinishedRecording | null>(null);
+  const quick = useQuickStart(nav);
 
   useEffect(() => {
     void listUnsavedRecordings().then(setUnsaved).catch(() => undefined);
@@ -237,6 +242,38 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
     push('Event imported — recap and logs are available now', { icon: 'check' });
   };
 
+  /** One tap from here too — the same gates as Create, with the default settings. */
+  const startQuick = (kind: QuickKind) => void quick.start(kind, { probe: backendProbe, onProbe: setBackendProbe });
+  const schedule = () => {
+    requestScheduleOnCreate();
+    nav.create();
+  };
+  const quickButtons = (where: 'head' | 'empty') => (
+    <div className="dash-quick" data-tour={where === 'head' ? 'dash-quick' : undefined}>
+      <Btn
+        variant="soft"
+        icon="users"
+        disabled={backendBlocked || quick.busy != null}
+        title={backendBlocked ? 'Streaming backend route is not reachable on this deployment' : 'People you invite join on camera — nothing is broadcast'}
+        onClick={() => startQuick('meeting')}
+      >
+        {quick.busy === 'meeting' ? QUICK_BUSY_COPY.meeting : 'Instant meeting'}
+      </Btn>
+      <Btn
+        variant="solid"
+        icon={backendBlocked ? 'alert' : 'broadcast'}
+        disabled={backendBlocked || quick.busy != null}
+        title={backendBlocked ? 'Streaming backend route is not reachable on this deployment' : 'Broadcast now — viewers join with just a name'}
+        onClick={() => startQuick('live')}
+      >
+        {backendBlocked ? 'Backend blocked' : quick.busy === 'live' ? QUICK_BUSY_COPY.live : 'Go live now'}
+      </Btn>
+      {where === 'head' && (
+        <Btn variant="ghost" icon="calendar" disabled={backendBlocked} onClick={schedule}>Schedule…</Btn>
+      )}
+    </div>
+  );
+
   const tabs = [
     { id: 'all', label: 'All' },
     { id: 'live', label: 'Live', badge: live.length },
@@ -254,7 +291,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
               ? `You're live right now${scheduled.length ? ` and have ${scheduled.length} scheduled` : ''}.`
               : scheduled.length > 0
                 ? `${scheduled.length} stream${scheduled.length > 1 ? 's' : ''} scheduled — share the invite links.`
-                : 'Create an event and go live in under a minute.'}
+                : 'Start a meeting or go live in one tap.'}
             {' '}
             <span className="faint" style={{ fontSize: 13 }}>
               {access?.signedIn
@@ -265,16 +302,16 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
         </div>
         <span className="spacer" />
         <Btn variant="ghost" icon="link" onClick={() => void importByLink()}>Import event</Btn>
-        <Btn
-          variant="solid"
-          icon={backendBlocked ? 'alert' : 'plus'}
-          disabled={backendBlocked}
-          title={backendBlocked ? 'Streaming backend route is not reachable on this deployment' : undefined}
-          onClick={() => nav.create()}
-        >
-          {backendBlocked ? 'Backend blocked' : 'New event'}
-        </Btn>
+        {quickButtons('head')}
       </div>
+
+      {quick.error && (
+        <div className="banner err" role="alert" style={{ marginBottom: 18 }}>
+          <Icon name="alert" size={15} />
+          <span style={{ flex: 1 }}>{quick.error}</span>
+          <button className="iconbtn" aria-label="Dismiss" onClick={() => quick.setError(null)}><Icon name="x" size={14} /></button>
+        </div>
+      )}
 
       {backendProbe && !backendProbe.ok && (
         <div className="banner warn" role="status" style={{ marginBottom: 18, alignItems: 'center' }}>
@@ -356,17 +393,9 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
                   ) : events.length === 0 ? (
                     <>
                       <div className="serif">No streams yet</div>
-                      Create your first event — viewers join with just a name, no account needed.
-                      <div style={{ marginTop: 14 }}>
-                        <Btn
-                          variant="solid"
-                          icon={backendBlocked ? 'alert' : 'plus'}
-                          disabled={backendBlocked}
-                          title={backendBlocked ? 'Streaming backend route is not reachable on this deployment' : undefined}
-                          onClick={() => nav.create()}
-                        >
-                          {backendBlocked ? 'Backend blocked' : 'Create an event'}
-                        </Btn>
+                      Start a meeting or go live — the people you invite join with just a name, no account needed.
+                      <div style={{ marginTop: 14, display: 'flex', justifyContent: 'center' }}>
+                        {quickButtons('empty')}
                       </div>
                     </>
                   ) : (

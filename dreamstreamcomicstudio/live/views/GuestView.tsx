@@ -1,18 +1,26 @@
-// On-air guest seat — the page behind a guest invite link (?e=ID&g=KEY).
-// Setup: name + camera check. Joined: live two-way link to the host (their
-// cam+mic comes back over the same peer connection, sub-second), with mic /
-// cam / screen-share / leave controls and the room chat. The PROGRAM viewers
-// watch is the host's composite — guests are sources, not viewers.
-import React, { useEffect, useRef, useState } from 'react';
+// On-air guest seat — the page behind a guest invite link (?e=ID#/guest?g=KEY).
+// Setup: name + camera check. Joined: live two-way link to the host — what comes back
+// is the program picture plus everyone else's voices (mix-minus), so in a meeting the
+// guests see and hear each other too — with mic / cam / screen-share / leave controls
+// and the room chat. A link carrying `m=1` (or a room whose kind is "meeting") speaks
+// "meeting": private until the host goes live, and the guest is told when that happens.
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getEvent, openRoomSocket, type GoneReason, type RoomSocket, type SocketStatus } from '../api';
 import { loadViewerName, saveViewerName } from '../events';
+import { cameraErrorMessage } from '../media';
 import type { Nav } from '../nav';
-import type { ChatMsg, EventMeta, StreamStatus } from '../protocol';
-import { GuestPeer } from '../studio/rtc';
+import { isMeetingGuestLink } from '../nav';
+import { MAX_GUESTS, type ChatMsg, type EventMeta, type StreamStatus } from '../protocol';
+import { GuestPeer, sanitizeIceServers } from '../studio/rtc';
 import { ChatRail } from '../components/rails';
 import { Icon } from '../ui/icons';
 import { StreamStudioLogo } from '../ui/logo';
 import { Btn, Pill, cx, useMediaQuery, type PushToast } from '../ui/primitives';
+
+/** How long a link may sit unconnected before we say what's going on. */
+const SLOW_LINK_MS = 15_000;
+/** Wait this long for the room's ICE list (TURN) before linking with STUN only. */
+const ICE_WAIT_MS = 1500;
 
 function Sink({ stream, mirror, muted, className }: { stream: MediaStream | null; mirror?: boolean; muted?: boolean; className?: string }) {
   const ref = useRef<HTMLVideoElement | null>(null);
@@ -41,11 +49,14 @@ type Phase = 'setup' | 'joined' | 'left';
 export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; guestKey: string; nav: Nav; push: PushToast }) {
   const [meta, setMeta] = useState<EventMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [camErr, setCamErr] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('setup');
   const [name, setName] = useState(loadViewerName);
   const [cam, setCam] = useState<MediaStream | null>(null);
   const [hostStream, setHostStream] = useState<MediaStream | null>(null);
   const [rtcState, setRtcState] = useState<RTCPeerConnectionState>('new');
+  const [linkEpoch, setLinkEpoch] = useState(0);
+  const [slow, setSlow] = useState(false);
   const [sockStatus, setSockStatus] = useState<SocketStatus>('connected');
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [micOn, setMicOn] = useState(true);
@@ -59,31 +70,84 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   const sockRef = useRef<RoomSocket | null>(null);
   const peerRef = useRef<GuestPeer | null>(null);
   const camRef = useRef<MediaStream | null>(null);
+  const iceRef = useRef<RTCIceServer[] | null>(null);
+  const iceWaitRef = useRef<number | null>(null);
+  /** Bumps on every hello — a late ICE reply or timer from an older socket is ignored. */
+  const helloSeqRef = useRef(0);
+  const statusRef = useRef<StreamStatus>('idle');
+  const aliveRef = useRef(true);
   const isPhone = useMediaQuery('(max-width: 700px)');
 
-  // Camera check runs from the moment the page opens (setup preview).
-  useEffect(() => {
-    let cancelled = false;
-    getEvent(eventId).then((m) => !cancelled && setMeta(m)).catch(() => !cancelled && setErr('This event link is not reachable.'));
+  // The link says "meeting" from the first paint; the room's own kind wins once known.
+  const meetingLink = useMemo(() => isMeetingGuestLink(location.hash), []);
+  const meeting = meta?.kind ? meta.kind === 'meeting' : meetingLink;
+  // The socket handler outlives renders — give it the current meeting/host facts.
+  const meetingRef = useRef(meeting);
+  meetingRef.current = meeting;
+  const hostNameRef = useRef('The host');
+  hostNameRef.current = meta?.host || 'The host';
+
+  const openCam = () => {
+    setCamErr(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamErr('This page can’t use the camera here — open the invite link in Safari, Chrome or Edge.');
+      return;
+    }
     navigator.mediaDevices
       .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } })
       .then((s) => {
-        if (cancelled) {
+        if (!aliveRef.current) {
           s.getTracks().forEach((t) => t.stop());
           return;
         }
+        camRef.current?.getTracks().forEach((t) => t.stop());
         camRef.current = s;
         setCam(s);
       })
-      .catch(() => !cancelled && setErr('Camera/mic unavailable — allow access to join as a guest.'));
+      .catch((e) => aliveRef.current && setCamErr(cameraErrorMessage(e)));
+  };
+
+  // Camera check runs from the moment the page opens (setup preview).
+  useEffect(() => {
+    aliveRef.current = true;
+    getEvent(eventId)
+      .then((m) => aliveRef.current && setMeta(m))
+      .catch(() => aliveRef.current && setErr('This event link is not reachable.'));
+    openCam();
     return () => {
-      cancelled = true;
+      aliveRef.current = false;
+      if (iceWaitRef.current != null) window.clearTimeout(iceWaitRef.current);
       peerRef.current?.close();
       sockRef.current?.close();
       camRef.current?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
+
+  // Say plainly when a link is slow to come up (strict networks without a relay).
+  useEffect(() => {
+    setSlow(false);
+    if (phase !== 'joined' || rtcState === 'connected') return;
+    const t = window.setTimeout(() => setSlow(true), SLOW_LINK_MS);
+    return () => window.clearTimeout(t);
+  }, [phase, rtcState, linkEpoch]);
+
+  /** (Re)build the link to the host and tell it we're ready. */
+  const buildPeer = (seq: number) => {
+    if (seq !== helloSeqRef.current || !camRef.current) return;
+    if (iceWaitRef.current != null) window.clearTimeout(iceWaitRef.current);
+    iceWaitRef.current = null;
+    peerRef.current?.close();
+    const peer = new GuestPeer((d) => sockRef.current?.send({ t: 'rtc', d }), camRef.current, iceRef.current);
+    peer.onHostStream = setHostStream;
+    peer.onState = setRtcState;
+    peerRef.current = peer;
+    setHostStream(null);
+    setRtcState('new');
+    setSharing(false);
+    setLinkEpoch((n) => n + 1);
+    sockRef.current?.send({ t: 'rtc', d: { ready: true } });
+  };
 
   const join = () => {
     const clean = name.trim().slice(0, 24);
@@ -103,21 +167,43 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
               return;
             }
             setChat(msg.chat);
+            setMeta(msg.meta);
+            statusRef.current = msg.meta.status;
             setStatus(msg.meta.status);
-            // Fresh socket = fresh seat: rebuild the peer and tell the host.
+            // Fresh socket = fresh seat: drop the old link, fetch ICE (TURN when the
+            // owner set it up), then link — or link with STUN if the room doesn't answer.
+            helloSeqRef.current += 1;
+            const seq = helloSeqRef.current;
             peerRef.current?.close();
-            const peer = new GuestPeer((d) => sockRef.current?.send({ t: 'rtc', d }), camRef.current!);
-            peer.onHostStream = setHostStream;
-            peer.onState = setRtcState;
-            peerRef.current = peer;
+            peerRef.current = null;
+            setHostStream(null);
             setSharing(false);
-            sockRef.current?.send({ t: 'rtc', d: { ready: true } });
+            sockRef.current?.send({ t: 'ice' });
+            if (iceWaitRef.current != null) window.clearTimeout(iceWaitRef.current);
+            iceWaitRef.current = window.setTimeout(() => buildPeer(seq), ICE_WAIT_MS);
+            break;
+          }
+          case 'ice': {
+            const list = sanitizeIceServers(msg.servers);
+            if (list) iceRef.current = list;
+            if (!peerRef.current) buildPeer(helloSeqRef.current);
+            else if (list) peerRef.current.setIceServers(list);
             break;
           }
           case 'rtc':
-            void peerRef.current?.handle(msg.d);
+            // The host asking us to (re)connect: its studio reloaded or its camera came up
+            // after we joined. Rebuild and answer. (Before our first link, ours is coming.)
+            if (msg.d.ready) {
+              if (peerRef.current) buildPeer(helloSeqRef.current);
+            } else {
+              void peerRef.current?.handle(msg.d);
+            }
             break;
           case 'state':
+            if (meetingRef.current && msg.status === 'live' && statusRef.current === 'idle') {
+              push(`${hostNameRef.current} started broadcasting this meeting — you’re on the stream now`, { icon: 'broadcast', duration: 5000 });
+            }
+            statusRef.current = msg.status;
             setStatus(msg.status);
             break;
           case 'chat':
@@ -144,6 +230,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
 
   const leave = () => {
     sockRef.current?.send({ t: 'rtc', d: { bye: true } });
+    if (iceWaitRef.current != null) window.clearTimeout(iceWaitRef.current);
     peerRef.current?.close();
     peerRef.current = null;
     sockRef.current?.close();
@@ -206,7 +293,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
       });
       peer.setScreen(stream);
       setSharing(true);
-      push('You are sharing your screen with the program', { icon: 'screen' });
+      push(meeting ? 'You are sharing your screen with the meeting' : 'You are sharing your screen with the program', { icon: 'screen' });
     } catch {
       /* picker dismissed */
     }
@@ -229,8 +316,8 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
 
   if (gone) {
     const text =
-      gone === 'kicked' ? 'The host removed you from the on-air guests.'
-      : gone === 'full' ? 'All guest seats are taken for this event.'
+      gone === 'kicked' ? (meeting ? 'The host removed you from the meeting.' : 'The host removed you from the on-air guests.')
+      : gone === 'full' ? (meeting ? `This meeting is full — all ${MAX_GUESTS} seats are taken.` : 'All guest seats are taken for this event.')
       : gone === 'denied' ? 'The host declined this join.'
       : 'Lost the connection to the event room.';
     return (
@@ -240,8 +327,8 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
             <StreamStudioLogo size={22} />
             <p className="muted" style={{ margin: '14px 0 16px' }}>{text}</p>
             <div className="row" style={{ gap: 8 }}>
-              <Btn variant="solid" onClick={() => nav.viewer(eventId)}>Watch the stream</Btn>
-              {gone === 'failed' && <Btn variant="subtle" onClick={() => location.reload()}>Try again</Btn>}
+              {gone === 'failed' && <Btn variant="solid" onClick={() => location.reload()}>Try again</Btn>}
+              <Btn variant={gone === 'failed' ? 'subtle' : 'solid'} onClick={() => nav.viewer(eventId)}>{meeting ? 'Watch instead' : 'Watch the stream'}</Btn>
             </div>
           </div>
         </div>
@@ -255,10 +342,12 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
         <div className="center-screen">
           <div className="gv-card">
             <StreamStudioLogo size={22} />
-            <p className="muted" style={{ margin: '14px 0 16px' }}>You left the guest seat. The stream carries on without you.</p>
+            <p className="muted" style={{ margin: '14px 0 16px' }}>
+              {meeting ? 'You left the meeting.' : 'You left the guest seat. The stream carries on without you.'}
+            </p>
             <div className="row" style={{ gap: 8 }}>
-              <Btn variant="solid" onClick={() => location.reload()}>Rejoin as guest</Btn>
-              <Btn variant="subtle" onClick={() => nav.viewer(eventId)}>Watch instead</Btn>
+              <Btn variant="solid" onClick={() => location.reload()}>{meeting ? 'Rejoin the meeting' : 'Rejoin as guest'}</Btn>
+              {(!meeting || status === 'live') && <Btn variant="subtle" onClick={() => nav.viewer(eventId)}>Watch instead</Btn>}
             </div>
           </div>
         </div>
@@ -267,18 +356,30 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   }
 
   if (phase === 'setup') {
+    const title = meta?.title ?? (meeting ? 'this meeting' : 'this stream');
     return (
       <div className="viewer-root">
         <div className="center-screen">
           <div className="gv-card gv-setup">
             <StreamStudioLogo size={22} />
-            <h2 className="serif" style={{ margin: '12px 0 2px' }}>Join “{meta?.title ?? 'this stream'}” as a guest</h2>
+            <h2 className="serif" style={{ margin: '12px 0 2px' }}>
+              {meeting ? `Join “${title}”` : `Join “${title}” as a guest`}
+            </h2>
             <p className="muted" style={{ margin: '0 0 14px', fontSize: 13.5 }}>
-              You'll appear on the program with your camera and mic. The host hears and mixes you live.
+              {meeting
+                ? `You’ll join on camera with ${meta?.host || 'the host'}. No account needed.`
+                : 'You’ll appear on the program with your camera and mic. The host hears and mixes you live.'}
             </p>
             <div className="gv-preview">
               <Sink stream={cam} mirror muted className="program-video" />
-              {!cam && <div className="gv-preview-empty">Waiting for camera…</div>}
+              {!cam && !camErr && <div className="gv-preview-empty">Waiting for camera…</div>}
+              {camErr && (
+                <div className="gv-preview-empty gv-cam-err" role="alert">
+                  <Icon name="videoOff" size={20} />
+                  <span>{camErr}</span>
+                  <Btn variant="solid" size="sm" icon="refresh" onClick={openCam}>Try again</Btn>
+                </div>
+              )}
             </div>
             <div className="row" style={{ gap: 8, marginTop: 14 }}>
               <input
@@ -286,12 +387,12 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
                 style={{ flex: 1 }}
                 value={name}
                 maxLength={24}
-                placeholder="Your name (shown on the program)"
-                aria-label="Guest name"
+                placeholder={meeting ? 'Your name' : 'Your name (shown on the program)'}
+                aria-label={meeting ? 'Your name' : 'Guest name'}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && join()}
               />
-              <Btn variant="solid" icon="broadcast" disabled={!name.trim() || !cam} onClick={join}>Join</Btn>
+              <Btn variant="solid" icon={meeting ? 'users' : 'broadcast'} disabled={!name.trim() || !cam} onClick={join}>{meeting ? 'Join meeting' : 'Join'}</Btn>
             </div>
           </div>
         </div>
@@ -300,18 +401,28 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   }
 
   const connected = rtcState === 'connected';
+  // In a meeting the return feed IS the meeting grid (you included) — no extra self tile.
+  const showSelf = !(meeting && hostStream && connected);
+  const waitingText =
+    status === 'ended'
+      ? meeting ? 'The meeting has ended — thanks for joining!' : 'The stream has ended — thanks for being on it!'
+      : rtcState === 'failed'
+        ? 'Could not reach the host directly (restrictive network). Try another network or watch the stream instead.'
+        : rtcState === 'disconnected' || rtcState === 'closed'
+          ? 'The connection dropped — reconnecting by itself…'
+          : `Waiting for ${meta?.host || 'the host'}…`;
   return (
     <div className="gv-stage">
       <div className="gv-top">
         <StreamStudioLogo size={20} wordmark={!isPhone} />
         <span className="gv-title">{meta?.title ?? ''}</span>
         <span className="spacer" />
-        {status === 'live' && <Pill tone="live" dot pulse>LIVE</Pill>}
+        {status === 'live' && <Pill tone="live" dot pulse>{meeting ? 'Live — you’re being broadcast' : 'LIVE'}</Pill>}
         {status === 'paused' && <Pill tone="warn" icon="pause">Paused</Pill>}
-        {(status === 'idle' || status === 'ended') && <Pill tone="neutral">Off air</Pill>}
+        {!meeting && (status === 'idle' || status === 'ended') && <Pill tone="neutral">Off air</Pill>}
         {sockStatus === 'reconnecting' && <Pill tone="warn" icon="refresh">Reconnecting…</Pill>}
-        <Pill tone={connected ? 'ok' : 'warn'} icon="signal">
-          {connected ? 'On air with the host' : rtcState === 'failed' ? 'Link failed' : 'Linking…'}
+        <Pill tone={connected ? 'ok' : 'warn'} icon={meeting && connected ? 'users' : 'signal'}>
+          {connected ? (meeting ? 'In the meeting' : 'On air with the host') : rtcState === 'failed' ? 'Link failed' : 'Connecting…'}
         </Pill>
       </div>
 
@@ -321,26 +432,26 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
           {(!hostStream || status === 'ended') && (
             <div className="gv-waiting">
               <div className="brb-orb"><span /></div>
-              <div className="serif" style={{ fontSize: 18, marginTop: 10 }}>
-                {status === 'ended'
-                  ? 'The stream has ended — thanks for being on it!'
-                  : rtcState === 'failed'
-                    ? 'Could not reach the host directly (restrictive network). Try another network or watch the stream instead.'
-                    : rtcState === 'disconnected' || rtcState === 'closed'
-                      ? 'The host stepped away — hang tight, you reconnect automatically.'
-                      : 'Waiting for the host…'}
-              </div>
+              <div className="serif" style={{ fontSize: 18, marginTop: 10 }}>{waitingText}</div>
+              {slow && status !== 'ended' && rtcState !== 'failed' && (
+                <p className="gv-slow" role="status">
+                  Still connecting… Some networks (mobile data, office Wi-Fi) block direct video. It keeps retrying — switching to Wi-Fi usually fixes it.
+                </p>
+              )}
               {status === 'ended' && (
                 <div style={{ marginTop: 14 }}>
-                  <Btn variant="solid" onClick={leave}>Leave the seat</Btn>
+                  <Btn variant="solid" onClick={leave}>{meeting ? 'Leave' : 'Leave the seat'}</Btn>
                 </div>
               )}
             </div>
           )}
-          <div className="gv-self">
-            <Sink stream={cam} mirror={facing === 'user'} muted className="program-video" />
-            {sharing && <span className="gv-sharing"><Icon name="screen" size={12} /> sharing</span>}
-          </div>
+          {showSelf && (
+            <div className="gv-self">
+              <Sink stream={cam} mirror={facing === 'user'} muted className="program-video" />
+              {sharing && <span className="gv-sharing"><Icon name="screen" size={12} /> sharing</span>}
+            </div>
+          )}
+          {!showSelf && sharing && <span className="gv-sharing gv-sharing-solo"><Icon name="screen" size={12} /> sharing</span>}
         </div>
         {chatOpen && (
           <aside className="gv-chat">

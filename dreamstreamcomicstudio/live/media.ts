@@ -49,6 +49,71 @@ export async function openCamera(preset: QualityPreset, deviceId?: string): Prom
   });
 }
 
+/* ------------------------------------------------- camera priming + errors */
+
+let primedCam: { promise: Promise<MediaStream>; timer: ReturnType<typeof setTimeout> } | null = null;
+const PRIMED_TTL_MS = 60_000;
+
+/**
+ * Start asking for the camera + mic inside the tap that starts a meeting or a live
+ * session, in parallel with creating the event — the studio then adopts the stream via
+ * `takePrimedCamera()` instead of prompting a second time. Unclaimed streams are
+ * released after a minute so the camera light never stays on by accident.
+ */
+export function primeCamera(preset: QualityPreset): void {
+  discardPrimedCamera();
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+  const promise = openCamera(preset);
+  promise.catch(() => undefined); // a refusal surfaces when the studio claims it
+  const timer = setTimeout(() => discardPrimedCamera(), PRIMED_TTL_MS);
+  primedCam = { promise, timer };
+}
+
+/** The primed camera request (once), or null when none is pending. */
+export function takePrimedCamera(): Promise<MediaStream> | null {
+  if (!primedCam) return null;
+  clearTimeout(primedCam.timer);
+  const { promise } = primedCam;
+  primedCam = null;
+  return promise;
+}
+
+/** Drop a primed camera nobody will use (the event could not be created). */
+export function discardPrimedCamera(): void {
+  if (!primedCam) return;
+  clearTimeout(primedCam.timer);
+  const { promise } = primedCam;
+  primedCam = null;
+  void promise.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => undefined);
+}
+
+export type CameraProblem = 'blocked' | 'missing' | 'busy' | 'other';
+
+/** Classify a getUserMedia failure by the browser's error name. */
+export function cameraProblem(e: unknown): CameraProblem {
+  const name = (e as { name?: unknown } | null)?.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') return 'blocked';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') return 'missing';
+  if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') return 'busy';
+  return 'other';
+}
+
+/** Plain-language copy for a camera failure, with the one thing to do about it. */
+export function cameraErrorMessage(e: unknown): string {
+  switch (cameraProblem(e)) {
+    case 'blocked':
+      return 'Camera and mic are blocked for this site. Allow them from the address bar (🔒), then Try again.';
+    case 'missing':
+      return 'No camera found — plug one in or switch to your phone.';
+    case 'busy':
+      return 'Your camera is busy in another app (Zoom, FaceTime…). Close it, then Try again.';
+    default: {
+      const msg = e instanceof Error && e.message ? ` (${e.message})` : '';
+      return `The camera didn’t start${msg}. Check it’s connected, then Try again.`;
+    }
+  }
+}
+
 /** Video-only stream for live camera/lens switches: the mic track from the
  *  original stream keeps feeding the program, so the encoder never restarts. */
 export async function openCameraVideo(

@@ -7,26 +7,90 @@
  * existing segment rail delivers the composite to viewers — so 4 guests cost
  * the host 4 peer links, and viewers still cost ~nothing.
  *
+ * Guests still see and hear EACH OTHER: what the host sends back on each link
+ * (the "return feed") is the program canvas plus a mix-minus of the audio —
+ * everyone except that guest, so nobody hears their own echo. The host picks
+ * the tracks per guest through a ReturnFeed; each link's video is capped so
+ * four return feeds fit a home uplink.
+ *
  * Signaling rides the EventRoom websocket as `{ t: 'rtc', to?, d }` envelopes
  * (see protocol.RtcSignal). Both ends run the "perfect negotiation" pattern:
  * the HOST is impolite, GUESTS are polite, so glare resolves deterministically.
  * Stream labeling: each side sends `meta` (MediaStream.id → 'cam' | 'screen')
  * with every signal, so tiles are labeled before the first frame arrives.
  *
- * STUN only (Cloudflare + Google). Without TURN, a guest behind a symmetric
- * NAT on BOTH ends may fail to connect — the UI surfaces that state honestly.
+ * ICE: the room hands out STUN + short-lived Cloudflare TURN credentials
+ * (`{t:'ice'}`, live-worker/src/ice.ts); until they arrive — or on a room that
+ * predates it — links use the STUN pair below. Without TURN, a guest behind a
+ * strict NAT on both ends may fail to connect — the UI says so honestly.
+ *
+ * Recovery: a link that drops to `disconnected` for a few seconds, or
+ * `failed`, restarts ICE (a few times, then gives up and says so). A `ready`
+ * from the HOST tells a guest to rebuild its link — that is how a studio that
+ * reloaded, or whose camera came up late, picks guests back up.
  */
 
 import type { RtcSignal } from '../protocol';
 
 export type TrackKind = 'cam' | 'screen';
 
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:stun.l.google.com:19302' },
-  ],
-};
+/** STUN-only fallback until (or unless) the room sends its ICE list. */
+export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.l.google.com:19302' },
+];
+
+/**
+ * Keep only well-formed STUN/TURN entries from the room's `{t:'ice'}` reply.
+ * Returns null when nothing usable came back (callers keep the fallback).
+ */
+export function sanitizeIceServers(raw: unknown): RTCIceServer[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: RTCIceServer[] = [];
+  for (const s of raw) {
+    if (!s || typeof s !== 'object') continue;
+    const { urls, username, credential } = s as { urls?: unknown; username?: unknown; credential?: unknown };
+    const list = (Array.isArray(urls) ? urls : [urls]).filter((u): u is string => typeof u === 'string' && /^(stun|turns?):/.test(u));
+    if (!list.length) continue;
+    out.push({
+      urls: list,
+      ...(typeof username === 'string' ? { username } : {}),
+      ...(typeof credential === 'string' ? { credential } : {}),
+    });
+  }
+  return out.length ? out : null;
+}
+
+/** ICE restarts per link before it stays `failed` and the UI says so. */
+export const MAX_ICE_RESTARTS = 3;
+/** A link that sits in `disconnected` this long gets an ICE restart. */
+export const DISCONNECTED_GRACE_MS = 3000;
+
+/**
+ * Video budget for one guest's return feed (the program canvas): fewer guests get more,
+ * and the picture is scaled to ≤ 540 lines — plenty for a meeting tile, and four
+ * encodes of it still fit a home uplink.
+ */
+export function returnFeedEncoding(guests: number, sourceHeight: number): { maxBitrate: number; scaleResolutionDownBy: number } {
+  const maxBitrate = guests <= 1 ? 1_200_000 : guests === 2 ? 900_000 : 700_000;
+  const scale = sourceHeight > 540 ? Math.round((sourceHeight / 540) * 100) / 100 : 1;
+  return { maxBitrate, scaleResolutionDownBy: scale };
+}
+
+/** Apply a send cap to one video sender (before negotiation it may have no encodings yet). */
+async function capSender(sender: RTCRtpSender, enc: { maxBitrate: number; scaleResolutionDownBy: number }): Promise<void> {
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) params.encodings = [{}];
+    const e = params.encodings[0];
+    if (e.maxBitrate === enc.maxBitrate && e.scaleResolutionDownBy === enc.scaleResolutionDownBy) return;
+    e.maxBitrate = enc.maxBitrate;
+    e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
+    await sender.setParameters(params);
+  } catch {
+    /* not negotiated yet / older browser — re-applied once connected; congestion control still adapts */
+  }
+}
 
 export interface RemoteStream {
   kind: TrackKind;
@@ -48,10 +112,13 @@ class PeerLink {
   onRemote: ((r: RemoteStream) => void) | null = null;
   onRemoteGone: ((streamId: string) => void) | null = null;
   onConnectionState: ((s: RTCPeerConnectionState) => void) | null = null;
+  private restarts = 0;
+  private discTimer: ReturnType<typeof setTimeout> | null = null;
+  private closed = false;
 
-  constructor(polite: boolean, private signal: SendSignal) {
+  constructor(polite: boolean, private signal: SendSignal, iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS) {
     this.polite = polite;
-    this.pc = new RTCPeerConnection(RTC_CONFIG);
+    this.pc = new RTCPeerConnection({ iceServers });
 
     this.pc.onnegotiationneeded = async () => {
       try {
@@ -65,7 +132,11 @@ class PeerLink {
       }
     };
     this.pc.onicecandidate = (e) => this.signal({ ice: e.candidate ? e.candidate.toJSON() : null, meta: this.metaRecord() });
-    this.pc.onconnectionstatechange = () => this.onConnectionState?.(this.pc.connectionState);
+    this.pc.onconnectionstatechange = () => {
+      const st = this.pc.connectionState;
+      this.recover(st);
+      this.onConnectionState?.(st);
+    };
     this.pc.ontrack = (e) => {
       const stream = e.streams[0];
       if (!stream) return;
@@ -153,12 +224,62 @@ class PeerLink {
     }
   }
 
+  /**
+   * Self-healing: `failed` restarts ICE at once; `disconnected` gets a short grace (Wi-Fi
+   * handovers often recover alone) — a little longer on the polite side, so the host's
+   * restart usually wins and the two never collide. Capped, then the failure is final.
+   */
+  private recover(st: RTCPeerConnectionState): void {
+    if (this.discTimer) {
+      clearTimeout(this.discTimer);
+      this.discTimer = null;
+    }
+    if (st === 'connected') {
+      this.restarts = 0;
+      return;
+    }
+    if (st === 'failed') this.restartIce();
+    else if (st === 'disconnected') {
+      this.discTimer = setTimeout(() => {
+        this.discTimer = null;
+        if (this.pc.connectionState === 'disconnected') this.restartIce();
+      }, DISCONNECTED_GRACE_MS + (this.polite ? 1500 : 0));
+    }
+  }
+
+  /** Ask for a fresh ICE round (perfect negotiation carries the new offer). */
+  restartIce(): boolean {
+    if (this.closed || this.restarts >= MAX_ICE_RESTARTS || typeof this.pc.restartIce !== 'function') return false;
+    this.restarts += 1;
+    try {
+      this.pc.restartIce();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** New ICE list from the room (TURN arrived): use it, and re-gather if not up yet. */
+  setIceServers(iceServers: RTCIceServer[]): void {
+    if (this.closed) return;
+    try {
+      this.pc.setConfiguration({ ...this.pc.getConfiguration(), iceServers });
+    } catch {
+      return;
+    }
+    const st = this.pc.connectionState;
+    if (this.pc.remoteDescription && st !== 'connected' && st !== 'new') this.restartIce();
+  }
+
   /** What kind a remote stream id maps to right now. */
   kindOf(streamId: string): TrackKind {
     return this.remoteMeta[streamId] ?? 'cam';
   }
 
   close(): void {
+    this.closed = true;
+    if (this.discTimer) clearTimeout(this.discTimer);
+    this.discTimer = null;
     try {
       this.pc.close();
     } catch {
@@ -178,30 +299,60 @@ export interface GuestLink {
 }
 
 /**
- * The host's side of the mesh: one PeerLink per guest, fed with the host's
- * cam+mic return feed so guests can see and hear the host with sub-second
- * latency (the segmented program is ~10 s behind — useless for conversation).
+ * What the host sends back to one guest. `video` is shared by every link (the program
+ * canvas, or the raw camera as a fallback); `audioFor` is per guest — a mix-minus of
+ * everyone else. `release` frees a guest's mix when its link goes away.
+ */
+export interface ReturnFeed {
+  video(): MediaStreamTrack | null;
+  audioFor(sid: string): MediaStreamTrack | null;
+  release?(sid: string): void;
+}
+
+interface HostEntry {
+  link: PeerLink;
+  name: string;
+  /** The return-feed stream this link carries (labelled 'cam' for the guest). */
+  out: MediaStream | null;
+  videoSender: RTCRtpSender | null;
+  state: RTCPeerConnectionState;
+  cam: MediaStream | null;
+  screen: MediaStream | null;
+}
+
+/**
+ * The host's side of the mesh: one PeerLink per guest, each fed with that guest's return
+ * feed (program video + mix-minus audio) so guests see and hear the host AND each other
+ * with sub-second latency (the segmented program is ~10 s behind — useless for talking).
  */
 export class HostPeers {
-  private links = new Map<string, { link: PeerLink; name: string; camSender: RTCRtpSender | null; state: RTCPeerConnectionState; cam: MediaStream | null; screen: MediaStream | null }>();
-  private returnStream: MediaStream | null = null;
+  private links = new Map<string, HostEntry>();
+  private feed: ReturnFeed | null = null;
+  private iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS;
   /** Any guest's media or connection state changed — re-render tiles. */
   onChange: (() => void) | null = null;
 
-  constructor(private sendTo: (sid: string, d: RtcSignal) => void) {}
-
-  /** The host's cam+mic feed guests receive (tracks, not a clone — toggles apply). */
-  setReturnFeed(camTrack: MediaStreamTrack | null, micTrack: MediaStreamTrack | null): void {
-    const tracks = [camTrack, micTrack].filter(Boolean) as MediaStreamTrack[];
-    this.returnStream = tracks.length ? new MediaStream(tracks) : null;
+  constructor(private sendTo: (sid: string, d: RtcSignal) => void, iceServers?: RTCIceServer[] | null) {
+    if (iceServers?.length) this.iceServers = iceServers;
   }
 
-  /** Camera flipped/switched mid-call — swap the outgoing video track in place. */
+  /** The room's ICE list (STUN + TURN): new links use it, links still connecting re-gather. */
+  setIceServers(list: RTCIceServer[]): void {
+    this.iceServers = list;
+    for (const e of this.links.values()) e.link.setIceServers(list);
+  }
+
+  /** How each guest's return feed is built. Set before guests connect. */
+  setReturnFeed(feed: ReturnFeed): void {
+    this.feed = feed;
+  }
+
+  /** The shared return video changed (camera fallback mode swapped cameras) — swap in place. */
   async replaceCamTrack(track: MediaStreamTrack | null): Promise<void> {
     for (const entry of this.links.values()) {
-      if (entry.camSender) {
+      if (entry.videoSender) {
         try {
-          await entry.camSender.replaceTrack(track);
+          await entry.videoSender.replaceTrack(track);
         } catch {
           /* sender mid-teardown */
         }
@@ -209,17 +360,34 @@ export class HostPeers {
     }
   }
 
+  /** Re-apply every link's video cap — the guest count changed, so the per-link budget did too. */
+  private recap(): void {
+    const n = this.links.size;
+    for (const e of this.links.values()) {
+      const track = e.videoSender?.track;
+      if (!e.videoSender || !track) continue;
+      const h = track.getSettings?.().height ?? 720;
+      void capSender(e.videoSender, returnFeedEncoding(n, h));
+    }
+  }
+
   ensure(sid: string, name: string): void {
     const existing = this.links.get(sid);
     if (existing) {
-      // A `ready` after we already have a link = the guest page reloaded.
+      // A `ready` after we already have a link = the guest rebuilt its side (page
+      // reload, or it answered our own `ready`): start this link over too.
       existing.link.close();
       this.links.delete(sid);
-      this.onChange?.();
     }
-    const link = new PeerLink(false, (d) => this.sendTo(sid, d));
-    const entry = { link, name, camSender: null as RTCRtpSender | null, state: 'new' as RTCPeerConnectionState, cam: null as MediaStream | null, screen: null as MediaStream | null };
-    if (this.returnStream) entry.camSender = link.addLocalStream(this.returnStream, 'cam');
+    const link = new PeerLink(false, (d) => this.sendTo(sid, d), this.iceServers);
+    const entry: HostEntry = { link, name, out: null, videoSender: null, state: 'new', cam: null, screen: null };
+    const video = this.feed?.video() ?? null;
+    const audio = this.feed?.audioFor(sid) ?? null;
+    const tracks = [video, audio].filter(Boolean) as MediaStreamTrack[];
+    if (tracks.length) {
+      entry.out = new MediaStream(tracks);
+      entry.videoSender = link.addLocalStream(entry.out, 'cam');
+    }
     link.onRemote = ({ kind, stream }) => {
       // Relabels move the stream between slots — never leave a stale ref.
       if (entry.cam?.id === stream.id && kind !== 'cam') entry.cam = null;
@@ -235,9 +403,12 @@ export class HostPeers {
     };
     link.onConnectionState = (s) => {
       entry.state = s;
+      if (s === 'connected') this.recap(); // encodings exist now — make the cap stick
       this.onChange?.();
     };
     this.links.set(sid, entry);
+    this.recap();
+    this.onChange?.();
   }
 
   async onSignal(sid: string, name: string, d: RtcSignal): Promise<void> {
@@ -249,13 +420,16 @@ export class HostPeers {
       this.ensure(sid, name);
       return;
     }
-    const entry = this.links.get(sid);
-    if (!entry) {
+    if (!this.links.has(sid)) {
       // Signal from a guest we haven't set up (e.g. studio reloaded) — build
       // the link first so the offer lands somewhere.
       this.ensure(sid, name);
     }
     await this.links.get(sid)?.link.handle(d);
+  }
+
+  has(sid: string): boolean {
+    return this.links.has(sid);
   }
 
   guests(): GuestLink[] {
@@ -273,12 +447,17 @@ export class HostPeers {
     if (entry) {
       entry.link.close();
       this.links.delete(sid);
+      this.feed?.release?.(sid);
+      this.recap();
       this.onChange?.();
     }
   }
 
   closeAll(): void {
-    for (const { link } of this.links.values()) link.close();
+    for (const [sid, { link }] of this.links) {
+      link.close();
+      this.feed?.release?.(sid);
+    }
     this.links.clear();
     this.onChange?.();
   }
@@ -288,7 +467,8 @@ export class HostPeers {
 
 /**
  * A guest's single link to the host: sends cam+mic (and an optional screen
- * share), receives the host's cam+mic return feed.
+ * share), receives the host's return feed — the program picture and everyone
+ * else's voices.
  */
 export class GuestPeer {
   private link: PeerLink;
@@ -297,8 +477,8 @@ export class GuestPeer {
   onHostStream: ((stream: MediaStream | null) => void) | null = null;
   onState: ((s: RTCPeerConnectionState) => void) | null = null;
 
-  constructor(send: SendSignal, cam: MediaStream) {
-    this.link = new PeerLink(true, send);
+  constructor(send: SendSignal, cam: MediaStream, iceServers?: RTCIceServer[] | null) {
+    this.link = new PeerLink(true, send, iceServers?.length ? iceServers : DEFAULT_ICE_SERVERS);
     this.camSender = this.link.addLocalStream(cam, 'cam');
     this.link.onRemote = ({ stream }) => this.onHostStream?.(stream);
     this.link.onRemoteGone = () => this.onHostStream?.(null);
@@ -329,6 +509,10 @@ export class GuestPeer {
 
   get screenActive(): boolean {
     return !!this.screenStream;
+  }
+
+  setIceServers(list: RTCIceServer[]): void {
+    this.link.setIceServers(list);
   }
 
   handle(d: RtcSignal): Promise<void> {

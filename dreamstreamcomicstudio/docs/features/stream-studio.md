@@ -459,3 +459,94 @@ wait, stall guard, abort + DELETE), `live/components/SaveSheet.test.tsx`.
 answers the browser's cross-origin `PUT`s (CORS, and an exposed `Range` header on 308s)
 for a session opened server-side with the forwarded `Origin`. If it doesn't, the save
 fails with a clear error and the fallbacks still work.
+
+---
+
+## 12. Instant meeting and Go live now (2026-10-22)
+
+The ask: *"for live meetings have an option with just some basic info for users to start
+an instant meeting or instant live if needed; have more options under Advanced."*
+
+**Create** (`live/views/CreateView.tsx`, `live/views/create/QuickStart.tsx`) now opens on
+**Start now**: an optional title (left blank → "Akhil’s meeting · Oct 22" / "Akhil’s live
+· Oct 22", or "Meeting · Oct 22" with no name) and two big cards — **Instant meeting**
+and **Go live now** — over a one-line summary of the settings a quick start uses
+("720p · Anyone with the link · up to 100 viewers · not recording — change in
+Advanced"). Everything else — host name, schedule, invite page (description + cover),
+quality, who can watch, viewer cap, auto-record — sits under a collapsible **Advanced**
+(open state remembered in `localStorage`), with its own Create / Schedule button. Quick
+starts honour whatever was changed under Advanced. The **Dashboard** has the same two
+actions plus **Schedule…** (opens Create with Advanced → Schedule ready), and labels
+meetings in the list.
+
+One tap (`live/views/create/useQuickStart.ts`): the same sign-in and backend-probe gates
+as Create → `createEvent({ kind })` → local registry + cloud history → a **one-shot
+studio intent in `sessionStorage`** (`live/quickStart.ts`; never in the URL, so a copied
+or reloaded studio link can't go live by itself) → straight into the studio, no success
+screen. The tap is the user gesture, so the camera prompt (`primeCamera`) and the audio
+unlock (`primeAudioContext`) happen right there, in parallel with creating the event —
+iOS needs both inside a tap.
+
+**In the studio** (`live/views/StudioView.tsx`, `live/studio/meetingUi.tsx`):
+
+- **Meeting:** opens on Grid with an empty "Waiting for people — share the invite" seat,
+  the pill **Meeting · not broadcasting**, and the **Invite** sheet already open (native
+  share sheet / Copy link / New link, the four seats). Actions: **Go live with this
+  meeting** (G is deliberately inert in a meeting) and **End meeting** (ends for
+  everyone, back to the dashboard — no recap for something never broadcast). The phone
+  studio got Invite and Share buttons for every event; `I` opens Invite on desktop.
+- **Go live now:** a **Ready check** (camera + device name, mic level, room, quality and
+  the upload it needs) then **Going live in 3… · Cancel**. If the browser still gates
+  audio behind a tap, it stops at **Tap to go live** instead of going live silent. After
+  going live, **Share watch link** (share sheet or copy).
+- **Camera problems are a card, not a dead end:** `NotAllowedError` / `NotFoundError` /
+  `NotReadableError` map to one plain fix each, with **Try again**. The room connection
+  now opens *before* the camera, so the invite link and guests never wait on a prompt.
+
+**Real meeting media — guests see and hear each other.** Each guest's return feed is now
+the program canvas (everyone, live) plus a **mix-minus** of the audio — everyone except
+that guest (`ProgramAudioMixer.minusTrack`, wired by the pure `mixMinusPlan`). Each
+return video is capped per link (1.2 / 0.9 / 0.7 Mbps for 1 / 2 / 3–4 guests, scaled to
+≤ 540 lines — `returnFeedEncoding`) so four fit a home uplink. In a meeting the guest's
+own picture-in-picture hides once the grid (which includes them) arrives. Still 4 seats
+(a host-centric mesh; more would need an SFU) and no knock/lobby for guests.
+
+**Connection reliability** (`live/studio/rtc.ts`, `live/views/GuestView.tsx`):
+
+- **ICE from the room:** host and guests send `{t:'ice'}` after hello; the EventRoom
+  answers `{t:'ice', servers}` from `live-worker/src/ice.ts` (STUN always, Cloudflare
+  TURN once `TURN_KEY_ID` + `TURN_KEY_API_TOKEN` are set — shared with the monitor and
+  calls). Links fall back to the hard-coded STUN pair if the room doesn't answer within
+  ~2 s; late TURN credentials are applied to links still connecting.
+- **Lost handshakes heal:** the host sends `{ready:true}` to every guest without a link
+  once its camera is up and ICE is known (studio reload, late camera, a guest who joined
+  first); a guest rebuilds its link and answers.
+- **ICE restart:** `failed` restarts at once, `disconnected` after 3 s (4.5 s on the guest
+  side so the two don't collide), at most 3 times, then the failure is shown honestly.
+  Guests see a "Still connecting…" hint after 15 s.
+- **Production has no TURN relay yet.** Owner action: create a Cloudflare Realtime TURN
+  key and set the two live-worker secrets above. Until then, guests on mobile data or
+  strict NATs may not connect.
+
+**Guest links** for meetings carry `&m=1` in the fragment (`guestUrl(id, key, {meeting})`)
+so the guest page speaks "meeting" from the first paint: **Join “{title}”** · "You’ll join
+on camera with {host}. No account needed." · **Join meeting**; pill **In the meeting**,
+then **Live — you’re being broadcast** with a one-time "{host} started broadcasting this
+meeting" when the host goes live. The worker stores `meta.kind` (`'meeting' |
+'broadcast'`, default broadcast), which wins over the flag once known.
+
+**Also fixed:** "Schedule" with an empty or past date used to create an unscheduled event
+while the success screen said "scheduled" — it now asks for a future date and won't
+submit; auto-record chosen on Create applies to that event only (the global default lives
+in Customize) instead of silently changing the default.
+
+**Tests:** `live/views/CreateView.test.tsx`, `live/views/DashboardView.test.tsx`,
+`live/views/GuestView.test.tsx`, `live/quickStart.unit.test.ts` (auto titles, one-shot
+intent, meeting links, camera error copy, share-or-copy), `live/studio/rtc.unit.test.ts`
+(fake `RTCPeerConnection`: re-ready rebuild, ICE restart/grace/cap, late TURN, per-guest
+return feed + caps, mix-minus plan), `live-worker/src/eventRoom.test.ts` (`kind` stored /
+defaulted, meeting end log, `ice` STUN-only vs STUN+TURN, never for viewers).
+
+**Real-device QA still owed:** iOS Safari (audio unlock, share sheet), Android Chrome, a
+guest on mobile data (needs TURN), a 3-person meeting where guests hear each other with
+no echo.

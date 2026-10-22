@@ -1,0 +1,149 @@
+/* ============================================================================
+   meeting.css — one-tap starts: Create's quick cards + Advanced, the Dashboard's
+   quick actions, and the studio's Invite sheet, ready check and camera card.
+   Built only on the design tokens (light/dark + accents); motion respects
+   prefers-reduced-motion.
+   ========================================================================== */
+
+/* -------------------------------------------------------- create: quick start */
+.quick-start { display: grid; gap: 16px; margin-bottom: 14px; }
+.qs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 700px) { .qs-grid { grid-template-columns: 1fr; } }
+
+.quick-card {
+  display: grid; grid-template-columns: auto 1fr; grid-template-areas: 'icon title' 'icon body' 'icon cta';
+  column-gap: 14px; row-gap: 4px; align-items: start; text-align: left; width: 100%;
+  padding: 16px 16px 14px; border-radius: var(--r-lg); border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: inherit; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.quick-card:hover:not(:disabled) { border-color: var(--accent); box-shadow: var(--shadow); transform: translateY(-1px); }
+.quick-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.quick-card:disabled { cursor: default; opacity: .6; }
+.quick-card.is-busy { opacity: 1; border-color: var(--accent); }
+.qc-icon { grid-area: icon; width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent-ink); }
+.qc-live .qc-icon { background: var(--live-wash); color: var(--live); }
+.qc-title { grid-area: title; font-weight: 700; font-size: 16px; }
+.qc-body { grid-area: body; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.qc-cta { grid-area: cta; margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13.5px; color: var(--accent-ink); }
+.qc-live .qc-cta { color: var(--live); }
+.qc-spin, .rc-spin {
+  width: 13px; height: 13px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+  display: inline-block; animation: mtSpin .8s linear infinite;
+}
+@keyframes mtSpin { to { transform: rotate(360deg); } }
+
+.quick-defaults { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.quick-defaults svg { margin-top: 3px; flex: none; }
+.quick-defaults .linkish { font-size: 12.5px; }
+
+/* --------------------------------------------------------- create: advanced */
+.adv-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%; margin: 4px 0 14px; padding: 12px 14px;
+  border-radius: var(--r-md); border: 1px dashed var(--line); background: transparent; color: var(--text);
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.adv-toggle:hover { border-color: var(--accent); background: var(--panel-2); }
+.adv-toggle.is-open { border-style: solid; background: var(--panel-2); }
+.adv-label { flex: 1; min-width: 0; }
+.adv-sub { color: var(--muted); }
+.adv-chev { color: var(--faint); transition: transform .18s; flex: none; }
+.adv-toggle.is-open .adv-chev { transform: rotate(180deg); }
+@media (max-width: 520px) { .adv-sub { display: block; font-size: 12px; margin-top: 2px; } }
+.adv-panel { animation: mtReveal .2s ease; }
+@keyframes mtReveal { from { opacity: 0; transform: translateY(-4px); } }
+
+.sched-hint { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.sched-hint.is-error { color: var(--live); }
+
+/* ------------------------------------------------------- dashboard: actions */
+.dash-quick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 700px) {
+  .page-head .dash-quick { width: 100%; }
+  .page-head .dash-quick .btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* ------------------------------------------------------- studio: invite sheet */
+.invite-sheet { max-width: 500px; }
+.invite-link {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--r-md);
+  background: var(--panel-2); border: 1px solid var(--line); font-size: 12px; overflow: hidden;
+}
+.invite-link span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.invite-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.invite-actions .btn-solid { flex: 1 1 auto; justify-content: center; }
+.invite-seats { display: flex; align-items: center; gap: 6px; margin-top: 16px; flex-wrap: wrap; }
+.seat {
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 700;
+  border: 1.5px dashed var(--line); color: var(--faint); background: transparent;
+}
+.seat.is-taken { border-style: solid; border-color: var(--amber); background: var(--amber-wash); color: var(--amber); }
+.seat.is-live { border-color: var(--green); background: var(--green-wash); color: var(--green); }
+.seat-note { margin-left: 4px; font-size: 12.5px; color: var(--muted); }
+
+/* --------------------------------------------------- studio: go-live check */
+.ready-check {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 8;
+  width: min(340px, calc(100% - 24px)); padding: 12px 14px; border-radius: var(--r-lg);
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+  animation: mtRise .22s ease;
+}
+@keyframes mtRise { from { opacity: 0; transform: translate(-50%, 8px); } }
+.rc-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--accent-ink); }
+.rc-head b { color: var(--text); }
+.rc-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.rc-row { display: grid; grid-template-columns: 20px 56px 1fr; align-items: center; gap: 6px; font-size: 12.5px; }
+.rc-row b { font-weight: 600; }
+.rc-detail { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-dot { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--panel-2); color: var(--muted); }
+.rc-dot .rc-spin { width: 10px; height: 10px; border-width: 1.5px; }
+.rc-row.is-ok .rc-dot { background: var(--green-wash); color: var(--green); }
+.rc-row.is-bad .rc-dot { background: var(--live-wash); color: var(--live); }
+.rc-meter { display: block; height: 6px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+.rc-meter span { display: block; height: 100%; width: 100%; background: var(--green); transform-origin: left; transform: scaleX(.02); transition: transform .1s linear; }
+.rc-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.rc-count { flex: 1; font-size: 14px; }
+.rc-count b { display: inline-block; min-width: 1ch; font-size: 18px; color: var(--live); animation: mtTick 1s ease; }
+@keyframes mtTick { from { transform: scale(1.5); opacity: .3; } }
+.rc-foot .btn-solid { flex: 1; justify-content: center; }
+.ms-video .ready-check { bottom: 86px; }
+
+/* ------------------------------------------------- studio: camera problem */
+.cam-issue {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 7;
+  width: min(380px, calc(100% - 24px)); padding: 16px; border-radius: var(--r-lg); text-align: center;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.cam-issue b { font-size: 15px; }
+.cam-issue p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.cam-issue small { color: var(--faint); font-size: 11.5px; line-height: 1.4; }
+.ci-icon { width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center; background: var(--accent-wash); color: var(--accent-ink); }
+.cam-issue[role='alert'] .ci-icon { background: var(--live-wash); color: var(--live); }
+.ci-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin: 6px 0 2px; }
+
+/* ------------------------------------------------------- studio: misc bits */
+.share-live .btn { flex: none; }
+.ms-banners .share-live { align-items: center; }
+.ms-banners .share-live .sl-more { display: none; }
+.ms-topbtn {
+  height: 30px; padding: 0 10px; border-radius: 99px; border: none; display: inline-flex; align-items: center; gap: 5px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); color: var(--text); font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; backdrop-filter: blur(6px); flex: none;
+}
+.ms-topbtn:hover { background: var(--panel); }
+@media (max-width: 400px) { .ms-topbtn { width: 30px; padding: 0; justify-content: center; } .ms-topbtn span { display: none; } }
+.ms-react:disabled, .ms-golive:disabled { opacity: .5; cursor: default; }
+
+/* --------------------------------------------------------------- guest page */
+.gv-cam-err { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; color: var(--text); background: var(--panel); line-height: 1.45; }
+.gv-cam-err svg { color: var(--live); }
+.gv-slow { max-width: 420px; margin: 12px auto 0; font-size: 13px; line-height: 1.5; color: var(--faint); }
+.gv-sharing-solo { z-index: 3; left: 12px; top: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-card, .adv-chev, .rc-meter span { transition: none; }
+  .quick-card:hover:not(:disabled) { transform: none; }
+  .adv-panel, .ready-check, .rc-count b { animation: none; }
+  .qc-spin, .rc-spin { animation-duration: 2.4s; }
+}

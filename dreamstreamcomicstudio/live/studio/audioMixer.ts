@@ -6,27 +6,96 @@
  * Sources connect/disconnect mid-stream without touching the MediaRecorder
  * (the destination track never changes — exactly like the canvas trick).
  *
+ * Mix-minus: each guest also gets its own output — everyone EXCEPT that guest —
+ * which rides back on the guest's peer link, so guests hear the host and each
+ * other without hearing themselves (no echo, no feedback loop).
+ *
  * Track-level toggles still work: a muted source track simply contributes
  * silence. Browsers may start an AudioContext suspended until a user gesture;
- * `unlock()` is called on go-live (a click) so the program is never silent.
+ * `primeAudioContext()` creates one inside the tap that started the session
+ * (so "Go live now" is never silent on iOS) and `unlock()` resumes it on go-live.
  */
+
+type Ctor = typeof AudioContext;
+
+const audioCtor = (): Ctor | undefined =>
+  typeof window === 'undefined'
+    ? undefined
+    : window.AudioContext || (window as { webkitAudioContext?: Ctor }).webkitAudioContext;
+
+let primed: AudioContext | null = null;
+
+/**
+ * Create (or wake) an AudioContext from inside a user gesture — call it in the click
+ * handler that starts a meeting or a live session. The studio adopts it, so audio is
+ * already running when the program starts. Safe to call repeatedly; never throws.
+ */
+export function primeAudioContext(): void {
+  try {
+    if (!primed || primed.state === 'closed') {
+      const Ctx = audioCtor();
+      if (!Ctx) return;
+      primed = new Ctx();
+    }
+    if (primed.state === 'suspended') void primed.resume().catch(() => undefined);
+  } catch {
+    primed = null;
+  }
+}
+
+/** Hand the primed context over (once). Null when none was primed or it was closed. */
+export function takePrimedAudioContext(): AudioContext | null {
+  const ctx = primed;
+  primed = null;
+  return ctx && ctx.state !== 'closed' ? ctx : null;
+}
+
+/**
+ * Which sources feed each guest's mix-minus: every source except the guest itself.
+ * Pure, so the wiring rule is testable without WebAudio.
+ */
+export function mixMinusPlan(sources: string[], guests: string[]): Map<string, string[]> {
+  const plan = new Map<string, string[]>();
+  for (const g of guests) plan.set(g, sources.filter((s) => s !== g));
+  return plan;
+}
+
+interface Source {
+  node: MediaStreamAudioSourceNode;
+  gain: GainNode;
+  analyser: AnalyserNode;
+  stream: MediaStream;
+  trackId: string;
+}
 
 export class ProgramAudioMixer {
   private ctx: AudioContext;
   private dest: MediaStreamAudioDestinationNode;
-  private sources = new Map<string, { node: MediaStreamAudioSourceNode; gain: GainNode; analyser: AnalyserNode; stream: MediaStream }>();
+  private sources = new Map<string, Source>();
+  private minus = new Map<string, MediaStreamAudioDestinationNode>();
+  /** Live gain→mix-minus connections, as `${source}>${guest}`. */
+  private wired = new Set<string>();
   private levelBuf = new Uint8Array(128);
 
-  constructor() {
-    const Ctx = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) throw new Error('WebAudio unavailable');
-    this.ctx = new Ctx();
+  constructor(ctx?: AudioContext | null) {
+    if (ctx && ctx.state !== 'closed') {
+      this.ctx = ctx;
+    } else {
+      const Ctx = audioCtor();
+      if (!Ctx) throw new Error('WebAudio unavailable');
+      this.ctx = new Ctx();
+    }
     this.dest = this.ctx.createMediaStreamDestination();
   }
 
   /** The mixed program audio track — hand this to the compositor's output. */
   get track(): MediaStreamTrack {
     return this.dest.stream.getAudioTracks()[0];
+  }
+
+  /** True once the context is actually producing audio (not gesture-suspended). */
+  get running(): boolean {
+    return this.ctx.state === 'running';
   }
 
   /** Resume a gesture-suspended context (call from a click handler). */
@@ -36,7 +105,10 @@ export class ProgramAudioMixer {
 
   /** Add (or replace) a named source. Only audio tracks are read. */
   addSource(id: string, stream: MediaStream, volume = 1): void {
-    if (stream.getAudioTracks().length === 0) return;
+    const audio = stream.getAudioTracks()[0];
+    if (!audio) return;
+    const prev = this.sources.get(id);
+    if (prev && prev.stream === stream && prev.trackId === audio.id) return; // unchanged — keep the wiring (no click)
     this.removeSource(id);
     try {
       const node = this.ctx.createMediaStreamSource(stream);
@@ -49,7 +121,8 @@ export class ProgramAudioMixer {
       analyser.smoothingTimeConstant = 0.6;
       node.connect(gain).connect(this.dest);
       gain.connect(analyser);
-      this.sources.set(id, { node, gain, analyser, stream });
+      this.sources.set(id, { node, gain, analyser, stream, trackId: audio.id });
+      this.rewire();
     } catch {
       /* stream ended between checks */
     }
@@ -66,6 +139,68 @@ export class ProgramAudioMixer {
         /* already detached */
       }
       this.sources.delete(id);
+      for (const key of Array.from(this.wired)) if (key.startsWith(`${id}>`)) this.wired.delete(key);
+    }
+  }
+
+  /**
+   * The mix-minus track for one guest — everyone but them. Created on first ask and kept
+   * in step as people join and leave; `dropMinus` frees it.
+   */
+  minusTrack(guestId: string): MediaStreamTrack {
+    let out = this.minus.get(guestId);
+    if (!out) {
+      out = this.ctx.createMediaStreamDestination();
+      this.minus.set(guestId, out);
+      this.rewire();
+    }
+    return out.stream.getAudioTracks()[0];
+  }
+
+  dropMinus(guestId: string): void {
+    const out = this.minus.get(guestId);
+    if (!out) return;
+    for (const [id, s] of this.sources) {
+      if (this.wired.delete(`${id}>${guestId}`)) {
+        try {
+          s.gain.disconnect(out);
+        } catch {
+          /* already detached */
+        }
+      }
+    }
+    this.minus.delete(guestId);
+  }
+
+  /** Bring every gain→mix-minus connection in line with `mixMinusPlan`. */
+  private rewire(): void {
+    const plan = mixMinusPlan(Array.from(this.sources.keys()), Array.from(this.minus.keys()));
+    const want = new Set<string>();
+    for (const [guest, srcs] of plan) for (const s of srcs) want.add(`${s}>${guest}`);
+    for (const key of want) {
+      if (this.wired.has(key)) continue;
+      const [src, guest] = key.split('>');
+      const s = this.sources.get(src);
+      const out = this.minus.get(guest);
+      if (!s || !out) continue;
+      try {
+        s.gain.connect(out);
+        this.wired.add(key);
+      } catch {
+        /* node torn down mid-change */
+      }
+    }
+    for (const key of Array.from(this.wired)) {
+      if (want.has(key)) continue;
+      const [src, guest] = key.split('>');
+      try {
+        const s = this.sources.get(src);
+        const out = this.minus.get(guest);
+        if (s && out) s.gain.disconnect(out);
+      } catch {
+        /* already detached */
+      }
+      this.wired.delete(key);
     }
   }
 
@@ -94,6 +229,7 @@ export class ProgramAudioMixer {
   }
 
   close(): void {
+    for (const id of Array.from(this.minus.keys())) this.dropMinus(id);
     for (const id of Array.from(this.sources.keys())) this.removeSource(id);
     void this.ctx.close().catch(() => undefined);
   }
