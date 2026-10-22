@@ -23,7 +23,7 @@ relays signaling, status numbers and events.
 | Sound level meter | `live/monitor/soundLevel.ts` | IEC 61672 A-weighting (bilinear biquads) + Fast (125 ms) time weighting in an AudioWorklet; live dB(A), per-minute LAeq / Lmax / L10 / L50 / L90 / peak; two-step calibration (quiet room ≈ 30 dB, or match a meter); never reads below the mic's floor. |
 | Vision | `live/monitor/vision.ts` | 64×48 frames at 4 fps: exposure-normalised cell differences, crib + danger zones, climb-out, visits, lights on/off, dark/covered lens, camera moved (scene signature + phone tilt). |
 | Smart vision (beta) | `live/monitor/scene.ts`, `live/monitor/sceneAi.ts`, `public/models/mediapipe/` | On the camera phone, ~1 fps: Google MediaPipe object detector (EfficientDet-Lite0 int8, 80 COCO classes, CPU) + pose landmarker (BlazePose lite, 33 points, GPU with CPU fallback), both Apache-2.0, SHA-256 verified. `SceneWatch` turns frames into held, cooled-down events: posture, stood in crib, rolled, holding, risky object within reach, soft toy near a lying baby, in/left a play area. |
-| Family calls | `live-worker/src/familyCalls.ts` (rules), `monitorRoom.ts` (switchboard), `live/calls/*` (app), `live/views/calls/*`, `live/views/CallsView.tsx` | FaceTime-style video / voice calls between a nursery's members — see “Family calls” below. |
+| Family calls | `live-worker/src/familyCalls.ts` (rules), `monitorRoom.ts` (switchboard), `directCalls.ts` + `userLine.ts` + `callRoom.ts` (direct calls), `live/calls/*` (app), `live/views/calls/*`, `live/views/CallsView.tsx` | FaceTime-style video / voice calls between a nursery's members — or with anyone on Stream Studio, found by name — see “Family calls” below. |
 | Two-way audio safety | `live/monitor/voice.ts` | Parent's mic: high-pass → compressor → soft fade-in. Camera: howl (feedback) detector mutes the speaker and switches the parent's phone to walkie-talkie; a closed-loop governor holds talk ≤ 65 dB and soothing sounds ≤ 50 dB at the crib. |
 | Screen-on | `live/wakeLock.ts`, `public/keep-awake.mp4` | Wake Lock re-acquired on release + 15 s watchdog; looping-video fallback where it's refused; state shown to the family. |
 | Alarm detector | `live/monitor/alarmTone.ts` | Smoke (T3) / CO (T4) beep patterns from the spectrum — independent of the model. |
@@ -283,6 +283,8 @@ position or face covering. Not a medical device.
 FaceTime-style video and voice calls between the people in a nursery — one
 person or a group of up to four — from the **Calls** tab (or the call buttons
 next to each person). Device to device (WebRTC, DTLS-SRTP), never recorded.
+Since 2026-10-22 Calls also reaches **anyone on Stream Studio**, found by name
+(see “Direct calls” below).
 
 **Switchboard.** Each nursery's MonitorRoom is that family's switchboard. While a
 member is signed in, the app keeps a light `line` socket to each of their
@@ -303,17 +305,65 @@ everyone asked can decline; the caller hanging up first is `cancelled`. Those wh
 never picked up (and didn't decline) get a **missed call** push that replaces the
 ring (same tag and topic), and a red entry + badge on the Calls tab.
 
-**Media.** A mesh: one RTCPeerConnection per pair, audio + video transceivers
-from the start, so mute / camera off / flip / turning the camera on in a voice
-call are `replaceTrack` or `enabled` — no renegotiation. Of any two people, the
-one who joined later makes the offer (`joinedAfter`), so there's no glare; the
-offerer restarts ICE on failure (three tries). Signaling (`call_rtc`) is relayed
-only between two devices in the same call. Peers are keyed by person, not
-socket, and a line that drops keeps its place for 20 s (`LINE_GRACE_MS`) — the
-app rejoins from its new connection and the media carries on. Video bitrate is
-shared across the uplink (1.5 / 0.9 / 0.6 Mbps for 1 / 2 / 3 others); each
-tile shows a weak-connection hint from packet loss and round-trip time, and
-"Home Wi-Fi" when everyone is on the local network.
+**Media.** A mesh: one RTCPeerConnection per pair (`max-bundle`, a one-entry
+candidate pool), audio + video transceivers from the start, so mute / camera off
+/ flip / turning the camera on in a voice call are `replaceTrack` or `enabled` —
+no renegotiation. Of any two people, the one who joined later makes the offer
+(`joinedAfter`); if their offer hasn't arrived after 4 s the other side offers
+instead. Every signal carries a connection id (`cid`, chosen by the offerer): a
+new cid is a new connection, the current cid an ICE restart of it, and two
+simultaneous new connections are settled by socket id. One person's signals are
+handled strictly in order. Signaling (`call_rtc`) is relayed only between two
+devices in the same call. Peers are keyed by person, not socket, and a line that
+drops keeps its place for 20 s (`LINE_GRACE_MS`) — longer (up to 2 min) while
+someone still in the call says its media still reaches them (`call_up`, sent only
+while a person is away) — and the app rejoins from its new connection, mute and
+camera as they were, and the media carries on. Video is shared across the uplink
+*and the phone's encoder*: 1.5 / 0.9 / 0.6 Mbps for 1 / 2 / 3 others, each copy
+at 360p with two or more others and 24 fps with three, `maintain-framerate`,
+H.264 first when the phone can encode it (the hardware encoder on iPhones), and a
+further step down when WebRTC reports the CPU as the limit ("Your phone is busy —
+sending smaller video"). Each person keeps one stable MediaStream, so the video
+element never reloads. Tiles show a weak-connection hint from packet loss and
+round-trip time, "Home Wi-Fi" when everyone is on the local network and "via
+relay" when TURN carries it. On iPhone the call declares a play-and-record audio
+session (`preferSpeaker`) so it plays on the loudspeaker, not the earpiece.
+
+**Connecting — fast, and honest when it can't** (2026-10-22). Answering sends
+`call_join` and the offer back to back (the room handles one socket's messages
+in order and saves the join before awaiting anything else), while the camera
+opens in parallel and slots in by `replaceTrack`; a connection is made ahead of
+time while the call rings, so its candidates are gathered before Accept. Locally
+(two browsers, one loaded machine) Accept → connected went from a median of
+~1.3–1.5 s to ~0.6–0.7 s. Each call gets fresh ICE servers (`call_started` /
+`call_joined` carry them; `live-worker/src/ice.ts`). Nothing spins forever: after
+8 s the screen says "Still connecting…", and after 15 s (20 s with a relay on
+offer) it says why, from the candidate types each side found
+(`classifyFailure`): your network blocks calls, theirs does, the two networks
+can't reach each other directly (no relay), the relay failed too, or their phone
+isn't responding — with **Try again** and **Audio only**. A dropped connection
+is ICE-restarted after 3 s (the offerer restarts; the other side asks it to);
+unanswered offers are resent every 2 s, at most 5 a minute, and go to the other
+phone's new room connection the moment it's back. Failed connections are rebuilt
+on "Try again", on `online` / network-type changes and when either app rejoins.
+`?relay=1` (or `ds-calls-relay=1` in local storage) forces relay-only for testing
+TURN — "Relay test" shows in the call. Each call's history keeps a small
+`call_stats` per person (time to connect, LAN / internet / relay, failure reason,
+relay on offer — no names or addresses), also logged as one line for
+`wrangler tail`. "Answer" on a call notification opens
+`#/call/<nursery>/<call>?answer=1`, which picks up as soon as the app is back in
+the room.
+
+**Line liveness.** Line sockets ping every 25 s (every 10 s while ringing or in a
+call) and treat a ping that hears nothing for 10 s as a dead socket: dropped and
+reopened at once (backoff capped at 2 s while ringing / in a call). Placing or
+answering a call first checks a line that's been quiet for 30 s. In the room,
+`{"t":"ping"}` is answered by the runtime (`setWebSocketAutoResponse`) without
+waking the Durable Object — nothing depends on pings reaching it (camera
+liveness is the camera's 2-s status, presence is the socket list, a guest's
+"last seen" is set at sign-in). While a call is up the alarm checks its lines
+every 30 s and drops one that hasn't pinged or spoken for a minute (a phone that
+died mid-call), so the call can end instead of hanging.
 
 **Screen.** Remote video full-bleed (a grid for groups), your picture in a
 draggable corner, controls that fade while you talk (mute, camera, flip, add
@@ -323,9 +373,71 @@ state ("Grandpa can’t talk right now", "Call again"). The screen stays awake
 during a call. Calls history (last 60 per nursery) shows who, which way, how long
 and missed calls; tap to call back.
 
+**Direct calls — anyone on Stream Studio** (2026-10-22). Calls opens with a
+search box (`live_search_people` via `searchPeople`, 250 ms debounce — names
+only, never emails). Each result says **In Aria’s family** (from your own
+nurseries' people) or **Stream Studio member**, with voice, video and a star;
+stars become a Favourites row of faces at the top. Recents merge family and
+direct calls. A member with no nursery gets search instead of a dead end.
+Family members are still called through their nursery (unchanged); anyone else
+through two new Durable Objects — no SQL:
+
+- `UserLine` (`userLine.ts`, one per member, `idFromName('u:'+uid)`, socket
+  `GET /api/calls/u/<uid>/ws`) — your personal line. The first frame carries
+  your own token; `live_me` must say you're a member with that very uid (else
+  4003), which **claims** the line. Only a claimed line rings; a claim nobody
+  renews for 30 days lapses, and a ring to an unclaimed line writes nothing.
+  Hello: `{you, vapid, ringing (with tickets), log, favs, blocked, prefs}` —
+  VAPID from the monitor's `KEY_HOLDER` (the **same** key pair, so nursery
+  alerts keep working). It works out your family (`monitor_list` +
+  `monitor_people` with your token, after the hello, cached 10 min). It places
+  calls (`dcall_start`, `dcall_invite`), rings you (`dcall_ring` to open apps +
+  Web Push `{direct:true}` → `#/call/d/<id>`), takes `dcall_decline {block?}`,
+  `fav`, `block`, `prefs {who}`, `call_push(_off)`, and keeps your direct-call
+  history (60, missed-call push).
+- `CallRoom` (`callRoom.ts`, one per call, 16-hex id, socket
+  `GET /api/calls/c/<id>/ws`) speaks the nursery line protocol, so the call
+  mesh and call screen are the same. It's made by the caller's line
+  (`/x/init`): the call starts with the caller *pending* (`CallBook.start(…,
+  {pending:true})` — nobody offers or relays to them; they're cancelled after
+  20 s if they never arrive), and everyone asked is rung through their line
+  (`/x/ring`). Sockets authenticate with a **ticket** (24 random bytes per
+  person, only their SHA-256 kept, handed out only through that person's
+  authenticated line) — no Supabase round trip on answer. The hello carries
+  fresh ICE. Picking up tells the person's other devices to stop ringing
+  (`/x/update`); at the end every line gets the history line (`/x/log`,
+  missed calls marked), and the room wipes itself 2 minutes later.
+- The worker routes only those two sockets (`/api/calls/u/<uuid>/ws`,
+  `/api/calls/c/<16 hex>/ws`); the objects' `/x/*` endpoints are never routed.
+  Migration `v3` adds both classes (`wrangler.jsonc`).
+
+Privacy and abuse controls (`directCalls.ts`, pure and unit-tested): the
+caller's name comes from `live_me`, never the app; "Grandma · Aria’s family"
+appears only when you share a nursery (your own family map, or the caller's
+side vouching), otherwise the ring says **Stream Studio member · not in your
+family**, answers with the camera off unless you pick video, and offers
+**Decline & block**. **Who can call you**: everyone on Stream Studio (default)
+or only people in your nurseries (`restricted` is the honest reply). A
+**blocked** caller — or one silenced for ringing a non-family member 3 times in
+an hour, or after 2 declines in a day — gets exactly the reply anyone else
+would (it rings out as "no answer") while nothing reaches you: no ring, no push,
+no history; the checks a caller can observe all come before the block. Nobody
+reachable (no app open, no push) is said at once ("Sam can’t be reached right
+now") and leaves a missed call. Caller limits: 8 calls per 10 minutes, 40 a
+day, 15 different people outside the family a day (`slow_down`). The first call
+to someone outside your family asks first ("Sam isn’t in any of your nurseries
+— they’ll see your name"), since two people can share a name. A device running
+as the nursery camera closes your line too, and the service worker shows call
+pushes silently on it (the app tells it; an open camera screen counts too).
+
 **Limits.** Four people per call (each phone uploads a copy per person). Ringing
-with the app closed needs notifications (on iPhone, the Home Screen app). Calls
-reach only members of a nursery you share.
+with the app closed needs notifications (on iPhone, the Home Screen app). Family
+calls reach members of a nursery you share; direct calls reach any Stream Studio
+member whose app has been open in the last 30 days (unless they take calls only
+from their family, or blocked you). Without a TURN relay (production has
+none until the owner sets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN`), phones behind
+carrier or symmetric NAT can't reach each other — the call now says so within
+15 s instead of spinning, but only the relay makes those calls connect.
 
 ## Sound level, sleep and history
 

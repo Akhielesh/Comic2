@@ -11,12 +11,16 @@
     "bindings": [
       { "class_name": "EventRoom", "name": "EVENT_ROOM" },
       // Baby Monitor signaling + alerts. Never stores media (P2P video).
-      { "class_name": "MonitorRoom", "name": "MONITOR_ROOM" }
+      { "class_name": "MonitorRoom", "name": "MONITOR_ROOM" },
+      // Direct calls: a personal line per member, and a short-lived room per call.
+      { "class_name": "UserLine", "name": "USER_LINE" },
+      { "class_name": "CallRoom", "name": "CALL_ROOM" }
     ]
   },
   "migrations": [
     { "new_sqlite_classes": ["EventRoom"], "tag": "v1" },
-    { "new_sqlite_classes": ["MonitorRoom"], "tag": "v2" }
+    { "new_sqlite_classes": ["MonitorRoom"], "tag": "v2" },
+    { "new_sqlite_classes": ["UserLine", "CallRoom"], "tag": "v3" }
   ],
 
   "r2_buckets": [

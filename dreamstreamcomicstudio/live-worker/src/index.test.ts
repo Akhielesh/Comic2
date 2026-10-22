@@ -203,3 +203,54 @@ describe('monitor routes', () => {
     expect(text).not.toContain('SECRET');
   });
 });
+
+describe('direct call routes', () => {
+  const UID = '11111111-2222-4333-8444-555555555555';
+  const setup = () => {
+    const hits: { ns: string; name: string; url: string }[] = [];
+    const ns = (label: string) => ({
+      idFromName: (n: string) => n,
+      get: (name: string) => ({
+        fetch: async (req: Request) => {
+          hits.push({ ns: label, name, url: req.url });
+          return jsonResponse({ ok: true });
+        },
+      }),
+    });
+    const env = { ALLOWED_ORIGINS: '*', USER_LINE: ns('line'), CALL_ROOM: ns('room') } as unknown as Env;
+    const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
+    const go = (path: string, init?: RequestInit) => liveWorker.fetch(new Request(`https://worker.example${path}`, init), env, ctx);
+    return { hits, go };
+  };
+
+  it('a member’s line socket goes to the line named after them', async () => {
+    const { hits, go } = setup();
+    expect((await go(`/live-api/api/calls/u/${UID}/ws`)).status).toBe(200);
+    expect(hits).toEqual([{ ns: 'line', name: `u:${UID}`, url: `https://line.internal/ws?uid=${UID}` }]);
+  });
+
+  it('a call’s socket goes to its room', async () => {
+    const { hits, go } = setup();
+    expect((await go('/api/calls/c/0123456789abcdef/ws')).status).toBe(200);
+    expect(hits).toEqual([{ ns: 'room', name: '0123456789abcdef', url: 'https://call.internal/ws?id=0123456789abcdef' }]);
+  });
+
+  it('never routes the internal endpoints, or anything malformed', async () => {
+    const { hits, go } = setup();
+    for (const path of [
+      `/api/calls/u/${UID}/x/ring`,
+      `/api/calls/u/${UID}/x/log`,
+      '/api/calls/c/0123456789abcdef/x/init',
+      '/api/calls/u/not-a-uuid-but-exactly-36-characters!/ws',
+      '/api/calls/u/11111111-2222-4333-8444-55555555555g/ws',
+      '/api/calls/c/0123456789ABCDEF/ws',
+      '/api/calls/c/0123456789abcde/ws',
+      '/api/calls/c/0123456789abcdef/ws/extra',
+    ]) {
+      const post = path.includes('/x/');
+      const res = await go(path, { method: post ? 'POST' : 'GET', body: post ? '{}' : undefined });
+      expect(res.status, path).toBe(404);
+    }
+    expect(hits).toEqual([]);
+  });
+});

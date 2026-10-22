@@ -26,7 +26,7 @@
  */
 
 import { iceServers } from './ice';
-import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord } from './familyCalls';
+import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord, type CallStat } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
 import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
@@ -278,6 +278,10 @@ const MAX_SOCKETS = 14;
 /** Family members' apps listening for calls (separate from the monitor's devices). */
 const MAX_LINES = 24;
 const CALL_PUSH_CAP = 40;
+/** While a call is up, the alarm checks its lines this often… */
+const LINE_CHECK_MS = 30_000;
+/** …and drops a line in the call that hasn't pinged or said anything for this long (half-open socket). */
+const LINE_STALE_MS = 60_000;
 const MAX_CAMERAS = 4;
 const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
@@ -364,6 +368,8 @@ export class MonitorRoom {
   private curBucket: { t: number; s: number; cry: number } | null = null;
   private lastBucketSave = 0;
   private vapid: VapidKeys | null = null;
+  /** Call lines: when each last sent anything (pings are answered by the runtime — see the constructor). */
+  private lineSeen = new Map<string, number>();
   readonly store: MonitorStore;
   readonly guests: GuestAccess;
   readonly tracker: TrackerStore;
@@ -374,6 +380,13 @@ export class MonitorRoom {
     this.guests = new GuestAccess(state.storage.sql);
     this.tracker = new TrackerStore(state.storage.sql);
     this.ready = state.blockConcurrencyWhile(() => this.migrate());
+    // Keepalive pings are answered by the runtime without waking the room: a ping carries no
+    // state here (camera liveness is its 2-s status, presence is the socket list, guests' last
+    // seen is set at sign-in), so this only saves wake-ups — and a pong comes back even while
+    // the room is busy. getWebSocketAutoResponseTimestamp then says when a socket last pinged.
+    try {
+      state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}'));
+    } catch { /* older runtime: the ping handlers below answer */ }
   }
 
   /** Create the tables; move the pre-database log (a KV array) into them once. */
@@ -570,6 +583,7 @@ export class MonitorRoom {
 
     // A call line only does calls (and keepalive).
     if (a.mode === 'line') {
+      this.lineSeen.set(a.sid, Date.now());
       if (msg.t === 'ping') return this.send(ws, { t: 'pong', at: Date.now() });
       return this.onCallMsg(ws, a, msg);
     }
@@ -641,7 +655,10 @@ export class MonitorRoom {
     await this.ready;
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a?.authed) return;
-    if (a.mode === 'line') return this.onLineGone(a);
+    if (a.mode === 'line') {
+      this.lineSeen.delete(a.sid);
+      return this.onLineGone(a);
+    }
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -2016,6 +2033,34 @@ export class MonitorRoom {
     await this.ensureAlarm(Math.max(1000, (book.nextDeadline() ?? now) - now + 500));
   }
 
+  /**
+   * A phone that dies mid-call can leave its socket half-open for minutes, so
+   * the room would keep it "in" the call forever. A line in an answered call
+   * that hasn't pinged (the runtime's auto-response time) or said anything for
+   * a minute is dropped — it gets the usual grace to come back. True while any
+   * call is up (the alarm keeps checking).
+   */
+  private async dropStaleLines(now: number): Promise<boolean> {
+    const book = await this.callBook();
+    const up = book.toJSON().filter((c) => !c.ended && c.answeredAt != null);
+    if (!up.length) return false;
+    const inCall = new Set(up.flatMap((c) => c.parts.filter((p) => p.gone == null).map((p) => p.sid)));
+    for (const { ws, a } of this.authed()) {
+      if (a.mode !== 'line' || !inCall.has(a.sid)) continue;
+      let pinged = 0;
+      try {
+        pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
+      } catch { /* not supported */ }
+      if (now - Math.max(a.at, pinged, this.lineSeen.get(a.sid) ?? 0) < LINE_STALE_MS) continue;
+      try {
+        ws.close(4008, 'stale');
+      } catch { /* closed */ }
+      this.lineSeen.delete(a.sid);
+      await this.onLineGone(a);
+    }
+    return true;
+  }
+
   private async onCallMsg(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (!a.uid || a.guest) return;
     const now = Date.now();
@@ -2034,12 +2079,15 @@ export class MonitorRoom {
         return;
       }
       case 'call_start': {
+        // Fresh relay credentials for this call — fetched before the book is read, so nothing
+        // can change the book between reading and saving it.
+        const ice = await this.iceServers();
         await this.expireCalls(now);
         const book = await this.callBook();
         const ref = clip(msg.ref, 20);
         const call = book.start(me, uuids(msg.to), msg.video !== false, crypto.randomUUID().replace(/-/g, '').slice(0, 16), now);
         if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, ref });
-        this.send(ws, { t: 'call_started', ref, id: call.id });
+        this.send(ws, { t: 'call_started', ref, id: call.id, ice });
         await this.commitCalls(book, [call]);
         const meta = await this.meta();
         await this.callPush(call.invited, { title: me.label || me.name, body: `${call.video ? 'Video' : 'Audio'} call · ${familyOf(meta)}`, kind: 'call', call: call.id }, Math.round(RING_MS / 1000), 'high');
@@ -2048,9 +2096,28 @@ export class MonitorRoom {
       }
       case 'call_join': {
         const book = await this.callBook();
-        const call = book.join(id, me, msg.video !== false, now);
+        const call = book.join(id, me, msg.video !== false, now, msg.mic !== false);
         if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, id });
-        return this.commitCalls(book, [call]);
+        // Saved before anything else is awaited: the joiner's offer is right behind this message.
+        await this.commitCalls(book, [call]);
+        await this.ensureAlarm(LINE_CHECK_MS);
+        return this.send(ws, { t: 'call_joined', id, ice: await this.iceServers() });
+      }
+      case 'call_up': {
+        // "Their media still reaches me": keeps a device that lost the room in the call (not broadcast).
+        const book = await this.callBook();
+        if (book.vouch(id, a.sid, uuids(msg.uids), now)) await this.state.storage.put('calls', book.toJSON());
+        return;
+      }
+      case 'call_stats': {
+        const book = await this.callBook();
+        const s = { ttc: msg.ttc as number | null, path: msg.path as CallStat['path'], fail: msg.fail as string | null, turn: msg.turn === true };
+        if (!book.stat(id, a.uid, s, now)) return;
+        await this.state.storage.put('calls', book.toJSON());
+        const st = book.get(id)?.stats?.[a.uid];
+        // One line per outcome for `wrangler tail` — no names, ids or addresses.
+        console.log(JSON.stringify({ evt: 'call_stats', ttc: st?.ttc ?? null, path: st?.path ?? null, fail: st?.fail ?? null, turn: st?.turn ?? false }));
+        return;
       }
       case 'call_decline': {
         const book = await this.callBook();
@@ -2196,7 +2263,8 @@ export class MonitorRoom {
       await this.state.storage.put('purgedAt', now);
     }
 
-    // 7. Family calls nobody picked up.
+    // 7. Lines in a call that went silent; family calls nobody picked up (or that lost everyone).
+    const callsUp = await this.dropStaleLines(now);
     const ringingUntil = await this.expireCalls(now);
 
     if (this.curBucket) await this.saveBucket(this.curBucket);
@@ -2205,6 +2273,7 @@ export class MonitorRoom {
     // a ringing call needs its "no answer".
     let want: number | null = again ? now + ALARM_MS : null;
     if (ringingUntil != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, ringingUntil + 500));
+    if (callsUp) want = Math.min(want ?? Infinity, now + LINE_CHECK_MS);
     const nextInc = this.store.nextIncidentAt();
     if (nextInc != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, nextInc));
     const open = await this.state.storage.get<SleepSm>('sleepSm');

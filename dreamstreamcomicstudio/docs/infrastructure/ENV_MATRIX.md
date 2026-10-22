@@ -135,7 +135,7 @@ the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 | `BACKEND_TARGET` | dreamstream-api | ⭕ | — | `container` (default) or `origin` (proxy to `BACKEND_ORIGIN`) |
 | `BACKEND_ORIGIN` | dreamstream-api | ⭕ | — | Dormant Railway origin, used only when `BACKEND_TARGET=origin` |
 | `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | dreamstream-live | ✅ | — | Member checks for creating events + every baby-monitor socket (RPCs run as the caller's JWT) |
-| `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN, 1 TB/mo free) | Optional relay for baby-monitor video on strict networks; STUN-only without them |
+| `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN, 1 TB/mo free) | Relay for baby-monitor video **and family calls** on strict networks (carrier / symmetric NAT, blocked UDP); STUN-only without them, and those calls fail (now with a clear reason). Check: a call's `call_started` / `call_joined` lists `turn.cloudflare.com`, and a `?relay=1` call connects |
 | `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list |
 
 ---
