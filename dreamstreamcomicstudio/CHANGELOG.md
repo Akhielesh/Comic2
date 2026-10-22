@@ -21,14 +21,18 @@ All notable user-facing changes. Format loosely follows
   (and **Invite family** in Calls) — add someone with an account by name (people from your
   other nurseries first, starting as Viewer), or share a link: one tap creates it with a QR
   code, **Send** shares the link without the passcode, a new passcode keeps the same link,
-  **+7 days** extends it. **Who has access** lists members and guests, and a guest who has
-  an account can be made a member.
+  **+7 days** extends it (for guests already watching, too). **Who has access** lists members
+  and guests, and a guest who has an account can be made a member. Changing someone's role
+  takes effect at once on screens they already have open.
 - **Real video when phones can't connect directly (2026-10-22):** when a viewer's network
   blocks the direct connection, the monitor now sends real video with sound through our
   server (about 10–15 fps) instead of a 2–5 fps silent slideshow, and shows a first
   picture within a couple of seconds while the direct connection is still being set up. This path is
-  encrypted in transit but, unlike the direct connection, not end-to-end; it is only used
-  when the direct connection fails.
+  encrypted in transit but, unlike the direct connection, not end-to-end, and nothing is stored;
+  it's used for a moment while a connection starts, when a network blocks the direct
+  connection, or when the camera already has its maximum of direct viewers. A viewer whose
+  phone stalls picks the picture back up by itself, and on iPhone the sound starts with your
+  tap on **Listen**.
 - **Comic Studio v4 is the default way to make a comic (2026-10-21):**
   - **New Comic opens the conversational studio.** Name it (or don't) and you land in
     the new Comic Studio: talk through your idea, see the page plan and the cost before
