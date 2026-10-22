@@ -27,3 +27,4 @@ Rules:
 | 0003 | Multi-key API configuration + per-key usage limits | Proposed |
 | 0005 | Retire Code Studio (and the Ventures build stage with it) | Accepted |
 | 0006 | [Native apps, watch companions, local-first, and security](0006-native-apps-watch-local-first-security.md) | Proposed |
+| 0007 | [Stream Studio cost transparency and frugality](0007-stream-studio-cost-transparency-and-frugality.md) | Proposed |
