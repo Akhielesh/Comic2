@@ -4,7 +4,7 @@ import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare, Lock } from 'lucide-reac
 import { WaitlistForm } from './WaitlistForm';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
-import { requestAuthEmail } from '../services/authEmail';
+import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 
 // New registrations are invite-only for now: existing accounts can still sign in,
 // while everyone else can leave their email to request access. Flip this to true
@@ -62,19 +62,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         return date.toISOString().slice(0, 10);
     })();
 
-    const getDuplicateSignupError = (err: unknown): string | null => {
-        const message = String((err as { message?: string } | null)?.message || '').toLowerCase();
-        if (
-            message.includes('already registered') ||
-            message.includes('already exists') ||
-            message.includes('user already') ||
-            message.includes('email address already')
-        ) {
-            return 'An account with this email already exists. Please sign in or reset your password.';
-        }
-        return null;
-    };
-
     const handleResendVerification = async () => {
         const normalizedEmail = (pendingVerificationEmail || email || '').trim().toLowerCase();
         if (!EMAIL_REGEX.test(normalizedEmail)) {
@@ -95,16 +82,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 captchaToken: captchaToken || undefined
             });
             if (viaApi.status === 'error') throw new Error(viaApi.message);
-            if (viaApi.status === 'unreachable') {
-                const { error: resendError } = await supabase.auth.resend({
-                    type: 'signup',
-                    email: normalizedEmail,
-                    options: {
-                        emailRedirectTo: authRedirectUrl
-                    }
-                });
-                if (resendError) throw resendError;
-            }
+            // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
+            if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
             setPendingVerificationEmail(normalizedEmail);
             setMessage('Verification email sent. Check inbox and spam.');
         } catch (err: any) {
@@ -193,8 +172,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     email_pref_product_updates: true,
                     email_pref_marketing: marketingConsent
                 };
-                // Our backend creates the account and sends the confirmation (Supabase's own
-                // mailer allows ~2 emails/hour project-wide). Direct signUp only if it's unreachable.
+                // Our backend creates the account and sends the confirmation from dreamstreamstudio.ai.
                 const viaApi = await requestAuthEmail('signup', {
                     app: 'main',
                     email: normalizedEmail,
@@ -215,26 +193,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     }
                     throw new Error(viaApi.message);
                 }
-                if (viaApi.status === 'unreachable') {
-                    const { data, error: signUpError } = await supabase.auth.signUp({
-                        email: normalizedEmail,
-                        password,
-                        options: {
-                            emailRedirectTo: authRedirectUrl,
-                            captchaToken: captchaToken || undefined,
-                            data: signupData
-                        }
-                    });
-                    if (signUpError) {
-                        const duplicateMessage = getDuplicateSignupError(signUpError);
-                        if (duplicateMessage) throw new Error(duplicateMessage);
-                        throw signUpError;
-                    }
-                    if (!data.user) throw new Error("Signup failed.");
-                    if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-                        throw new Error("An account with this email already exists. Please sign in or reset your password.");
-                    }
-                }
+                // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
+                if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
 
                 setMessage("Account created! Please check your email to confirm.");
                 setMode('signin');
@@ -303,16 +263,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     captchaToken: captchaToken || undefined
                 });
                 if (viaApi.status === 'error') throw new Error(viaApi.message);
-                if (viaApi.status === 'unreachable') {
-                    const { error } = await supabase.auth.signInWithOtp({
-                        email: normalizedEmail,
-                        options: {
-                            emailRedirectTo: authRedirectUrl,
-                            captchaToken: captchaToken || undefined
-                        }
-                    });
-                    if (error) throw error;
-                }
+                // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
+                if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
 
                 setMessage("Magic link sent! Check your email to continue.");
                 setMode('signin');
@@ -328,13 +280,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     captchaToken: captchaToken || undefined
                 });
                 if (viaApi.status === 'error') throw new Error(viaApi.message);
-                if (viaApi.status === 'unreachable') {
-                    const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-                        redirectTo: authRedirectUrl,
-                        captchaToken: captchaToken || undefined
-                    });
-                    if (error) throw error;
-                }
+                // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
+                if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
                 setMessage("Password reset link sent! Check your email.");
                 setMode('signin');
             }

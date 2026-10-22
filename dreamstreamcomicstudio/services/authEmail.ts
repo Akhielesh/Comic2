@@ -71,6 +71,10 @@ export const interpretAuthEmailResponse = (
   };
 };
 
+/** Shown when our email service can't be reached. We never fall back to Supabase's own
+ *  mailer: its mail isn't from dreamstreamstudio.ai and it allows ~2 emails/hour. */
+export const EMAIL_SERVICE_DOWN = 'We couldn’t reach our email service just now — please try again in a minute.';
+
 /** POST /api/auth/email/{kind}. Never throws. */
 export async function requestAuthEmail(
   kind: AuthEmailKind,

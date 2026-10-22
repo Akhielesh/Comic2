@@ -8,7 +8,7 @@ const signUp = vi.fn();
 const rpc = vi.fn();
 vi.mock('@/services/supabase', () => ({ supabase: { auth: { getSession, verifyOtp, resend, signUp }, rpc } }));
 // The backend wrapper (its own contract is covered in services/authEmail.test.ts).
-const api = vi.hoisted(() => ({ requestAuthEmail: vi.fn() }));
+const api = vi.hoisted(() => ({ requestAuthEmail: vi.fn(), EMAIL_SERVICE_DOWN: 'email service down' }));
 vi.mock('@/services/authEmail', () => api);
 
 import { confirmRedirectUrl, consumeAuthReturn, createAccount, resendConfirmation, sendPasswordReset } from './account';
@@ -105,7 +105,7 @@ describe('consumeAuthReturn — token_hash links from our backend', () => {
 describe('auth emails through the backend', () => {
   const unreachable = { status: 'unreachable' };
 
-  it('resendConfirmation: one-a-minute answers read as before; falls back to Supabase only when unreachable', async () => {
+  it('resendConfirmation: one-a-minute answers read as before; never falls back to Supabase’s mailer', async () => {
     go('/live#/monitor');
     api.requestAuthEmail.mockResolvedValueOnce({ status: 'ok', data: { ok: true } });
     expect(await resendConfirmation(' Ada@Example.com ')).toEqual({ ok: true });
@@ -119,9 +119,8 @@ describe('auth emails through the backend', () => {
     expect(resend).not.toHaveBeenCalled();
 
     api.requestAuthEmail.mockResolvedValueOnce(unreachable);
-    resend.mockResolvedValue({ error: null });
-    expect(await resendConfirmation('ada@example.com')).toEqual({ ok: true });
-    expect(resend).toHaveBeenCalledOnce();
+    expect(await resendConfirmation('ada@example.com')).toEqual({ ok: false, error: 'email service down' });
+    expect(resend).not.toHaveBeenCalled();
   });
 
   it('sendPasswordReset always asks for a main-app link', async () => {
@@ -171,12 +170,10 @@ describe('auth emails through the backend', () => {
       expect(signUp).not.toHaveBeenCalled();
     });
 
-    it('falls back to the direct sign-up only when the backend is unreachable', async () => {
+    it('never signs up through Supabase’s own mailer when the backend is unreachable', async () => {
       api.requestAuthEmail.mockResolvedValueOnce(unreachable);
-      signUp.mockResolvedValue({ data: { user: { identities: [{}] }, session: null }, error: null });
-      expect(await createAccount(input)).toEqual({ ok: true, confirmEmail: true });
-      expect(signUp).toHaveBeenCalledOnce();
-      expect(signUp.mock.calls[0][0]).toMatchObject({ email: 'ada@example.com', options: { emailRedirectTo: `${location.origin}/live?after=create` } });
+      expect(await createAccount(input)).toEqual({ ok: false, error: 'email service down' });
+      expect(signUp).not.toHaveBeenCalled();
     });
   });
 });

@@ -10,7 +10,7 @@ import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
 import { purgeLiveAccountData } from '../live/accountPurge';
-import { requestAuthEmail } from '../services/authEmail';
+import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 
 type AuthContextType = {
     user: User | null;
@@ -190,8 +190,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             return { success: false, message: 'No account email found for verification.' };
         }
 
-        // Sent by our backend (signed in + own address ⇒ no captcha needed); the direct
-        // Supabase call is only the fallback when the backend can't be reached.
+        // Sent by our backend (signed in + own address ⇒ no captcha needed).
         const viaApi = await requestAuthEmail(
             'resend',
             { email: user.email, app: 'main' },
@@ -202,16 +201,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             return { success: false, message: viaApi.message || 'Failed to resend verification email.' };
         }
 
-        const { error } = await supabase.auth.resend({
-            type: 'signup',
-            email: user.email,
-            options: {
-                emailRedirectTo: getAuthRedirectUrl()
-            }
-        });
-
-        if (error) return { success: false, message: error.message || 'Failed to resend verification email.' };
-        return { success: true, message: 'Verification email sent. Check your inbox.' };
+        // Never Supabase's own mailer: every auth email comes from dreamstreamstudio.ai.
+        return { success: false, message: EMAIL_SERVICE_DOWN };
     };
 
     const changePassword = async (newPassword: string): Promise<{ success: boolean; message: string }> => {

@@ -69,19 +69,19 @@ hosts, and a reset link sent there would hand the account to the host's owner. F
 AUTH_LINK_ORIGINS=http://localhost:3000,http://localhost:7000
 ```
 
-**Fallback.** The client falls back to its old direct Supabase call (`signUp`, `resend`,
-`resetPasswordForEmail`, `signInWithOtp`) **only** when the backend is unreachable: a network
-error, a 20 s timeout (the container may be cold), `404`/`405`, a non-JSON body, a
-`502`/`503`/`504` without a route `code`, or `503 {code:'email_unavailable', fallback:true}`.
-The backend sends that last one *before* it spends the captcha token, so the fallback call can
-still use it, whenever the service role key is missing, the mailer isn't configured
-(`EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET`) or the `EMAIL_MAX_PER_*` cap is reached. Every other
-answer, `429` included, is final: falling back would only hit Supabase's limit. Fallback mail
-still goes through Supabase and its limit (or the hook, if enabled).
+**No Supabase-mailer fallback (since 2026-10-22).** Every auth email the apps trigger comes
+from `dreamstreamstudio.ai` or not at all. When the backend is unreachable (network error, a
+20 s timeout — the container may be cold —, `404`/`405`, a non-JSON body, a gateway `5xx`, an
+older backend's `401`/`403`, or `503 {code:'email_unavailable', fallback:true}` when the service
+role key / mailer is missing or the `EMAIL_MAX_PER_*` cap is reached), the apps say "We couldn’t
+reach our email service just now — please try again in a minute" (`EMAIL_SERVICE_DOWN` in
+`services/authEmail.ts`) instead of sending Supabase's unbranded mail (from
+`noreply@mail.app.supabase.io`, ~2/hour for the whole project, links built from Supabase's Site
+URL). Every route answer, `429` included, is final.
 
-**What still goes through Supabase.** Email change, reauthentication codes, security
-notifications and every fallback-path email. The Send Email Hook (§5) is now **optional**: keep
-it on to brand those and send them from our domain.
+**What could still go through Supabase.** Only flows the apps don't offer today: email change,
+reauthentication codes, security notifications and invites sent from the Supabase dashboard.
+The Send Email Hook (§5) brands those too if they're ever turned on.
 
 **Owner checklist.** Production already has everything this needs (`SUPABASE_SERVICE_ROLE_KEY`,
 `EMAIL_WORKER_URL`, `EMAIL_HMAC_SECRET`, `TURNSTILE_SECRET_KEY`, `APP_PUBLIC_URL`).

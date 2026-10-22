@@ -48,6 +48,12 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Fixed
+- **Every account email now comes from dreamstreamstudio.ai (2026-10-22):** sign-up,
+  resend, password-reset and magic-link emails are only ever sent by our backend from
+  `no-reply@dreamstreamstudio.ai` (signed with the domain's DKIM key, SPF + DMARC aligned,
+  replies to support@). The apps no longer fall back to Supabase's own mailer
+  (`noreply@mail.app.supabase.io`, ~2 emails an hour for the whole project, links built from
+  its Site URL); if our email service can't be reached they ask you to try again in a minute.
 - **Sign-up, reset and magic-link emails no longer hit Supabase's limit (2026-10-22):**
   Supabase's built-in mailer allows about two emails an hour for the whole project, so new
   sign-ups were failing with "email rate limit exceeded". Our backend now creates the

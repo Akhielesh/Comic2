@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { requestAuthEmail } from '@/services/authEmail';
+import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '@/services/authEmail';
 import { claimDevice } from './accountPurge';
 import type { AccountNameResult } from '@/services/accountName';
 
@@ -307,8 +307,8 @@ export async function signIn(email: string, password: string): Promise<{ ok: boo
 }
 
 /**
- * Send the sign-up confirmation email again — through our backend (one a
- * minute per address), or Supabase directly when the backend can't be reached.
+ * Send the sign-up confirmation email again — through our backend (one a minute per
+ * address), always from dreamstreamstudio.ai.
  */
 export async function resendConfirmation(email: string, captchaToken?: string): Promise<{ ok: boolean; error?: string }> {
   const address = email.trim().toLowerCase();
@@ -324,18 +324,8 @@ export async function resendConfirmation(email: string, captchaToken?: string): 
     return { ok: false, error: viaApi.message };
   }
 
-  const sb = await supa();
-  if (!sb) return { ok: false, error: 'Unavailable right now.' };
-  const { error } = await sb.auth.resend({
-    type: 'signup',
-    email: address,
-    options: { emailRedirectTo: confirmRedirectUrl() },
-  });
-  if (!error) return { ok: true };
-  if (/security purposes|rate limit|seconds/i.test(error.message)) {
-    return { ok: false, error: 'Just sent one — wait a minute before asking again.' };
-  }
-  return { ok: false, error: error.message };
+  // Never Supabase's own mailer: every auth email comes from dreamstreamstudio.ai.
+  return { ok: false, error: EMAIL_SERVICE_DOWN };
 }
 
 /** The link lands on the main app's /auth/callback — that's where the new-password screen lives. */
@@ -345,12 +335,7 @@ export async function sendPasswordReset(email: string, captchaToken?: string): P
   if (viaApi.status === 'ok') return { ok: true };
   if (viaApi.status === 'error') return { ok: false, error: viaApi.message };
 
-  const sb = await supa();
-  if (!sb) return { ok: false, error: 'Unavailable right now.' };
-  const { error } = await sb.auth.resetPasswordForEmail(address, {
-    redirectTo: `${location.origin}/auth/callback`,
-  });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  return { ok: false, error: EMAIL_SERVICE_DOWN };
 }
 
 /** Verify the code server-side BEFORE creating anything. */
@@ -385,15 +370,11 @@ export async function createAccount(
     localStorage.setItem(TICKET_KEY, checked.ticket);
   } catch { /* storage unavailable — user_metadata still carries it */ }
 
-  const sb = await supa();
-  if (!sb) return { ok: false, error: 'Sign-up is unavailable right now.' };
   const [first, ...rest] = name.split(' ');
   const email = input.email.trim().toLowerCase();
   const after = new URL(confirmRedirectUrl()).searchParams.get('after') || undefined;
-  // Our backend creates the account and mails the confirmation (Supabase's own mailer
-  // allows ~2 emails/hour for the whole project); the welcome ticket stands in for a
-  // captcha there. Direct signUp only once the backend proves unreachable.
-  let direct = false;
+  // Our backend creates the account and mails the confirmation from dreamstreamstudio.ai;
+  // the welcome ticket stands in for a captcha there.
   for (let attempt = 0; attempt < 3; attempt++) {
     const username = `${USERNAME_SAFE(first)}_${Math.floor(1000 + Math.random() * 9000)}`;
     const metadata = {
@@ -409,51 +390,23 @@ export async function createAccount(
       live_ticket: checked.ticket,
       signup_source: 'stream_studio',
     };
-    if (!direct) {
-      const viaApi = await requestAuthEmail('signup', { app: 'live', after, email, password: input.password, data: metadata });
-      if (viaApi.status === 'ok') return { ok: true, confirmEmail: true };
-      if (viaApi.status === 'error') {
-        // Profile trigger collision (username taken) — retry with a new suffix.
-        if (viaApi.code === 'database_error') {
-          if (attempt < 2) continue;
-          return { ok: false, error: 'Could not create the account — try again.' };
-        }
-        if (viaApi.code === 'email_exists') return { ok: false, error: 'An account with this email already exists — sign in instead.' };
-        if (viaApi.code === 'send_failed') {
-          // The account exists; only the email failed — the "check your email" screen offers a resend.
-          return { ok: true, confirmEmail: true, note: 'Your account is ready, but the email didn’t go out — tap “Resend email”.' };
-        }
-        if (viaApi.code === 'captcha_required') {
-          return { ok: false, error: 'We couldn’t verify your welcome code — check it and try again.' };
-        }
-        return { ok: false, error: viaApi.message };
-      }
-      direct = true;
+    const viaApi = await requestAuthEmail('signup', { app: 'live', after, email, password: input.password, data: metadata });
+    if (viaApi.status === 'ok') return { ok: true, confirmEmail: true };
+    if (viaApi.status === 'unreachable') return { ok: false, error: EMAIL_SERVICE_DOWN };
+    // Profile trigger collision (username taken) — retry with a new suffix.
+    if (viaApi.code === 'database_error') {
+      if (attempt < 2) continue;
+      return { ok: false, error: 'Could not create the account — try again.' };
     }
-    const { data, error } = await sb.auth.signUp({
-      email,
-      password: input.password,
-      options: {
-        emailRedirectTo: confirmRedirectUrl(),
-        data: metadata,
-      },
-    });
-    if (error) {
-      // Profile trigger collisions (username taken) surface as a DB error — retry with a new suffix.
-      if (/database error/i.test(error.message) && attempt < 2) continue;
-      if (/already registered|already exists/i.test(error.message)) {
-        return { ok: false, error: 'An account with this email already exists — sign in instead.' };
-      }
-      return { ok: false, error: error.message };
+    if (viaApi.code === 'email_exists') return { ok: false, error: 'An account with this email already exists — sign in instead.' };
+    if (viaApi.code === 'send_failed') {
+      // The account exists; only the email failed — the "check your email" screen offers a resend.
+      return { ok: true, confirmEmail: true, note: 'Your account is ready, but the email didn’t go out — tap “Resend email”.' };
     }
-    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-      return { ok: false, error: 'An account with this email already exists — sign in instead.' };
+    if (viaApi.code === 'captcha_required') {
+      return { ok: false, error: 'We couldn’t verify your welcome code — check it and try again.' };
     }
-    if (data.session) {
-      await refreshAccount();
-      return { ok: true };
-    }
-    return { ok: true, confirmEmail: true };
+    return { ok: false, error: viaApi.message };
   }
   return { ok: false, error: 'Could not create the account — try again.' };
 }
