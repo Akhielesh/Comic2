@@ -16,10 +16,16 @@
  *   - tracks sleep from the camera's minutes (sleepTracker.ts) and sends the
  *     morning report,
  *   - watches camera heartbeats and raises "camera offline" alerts,
- *   - forwards the camera's low-bandwidth relay frames (640 px JPEGs, 2–5 a
- *     second, video only) to viewers whose network blocks P2P. They pass
- *     through this object's memory — not end-to-end encrypted like P2P, and
- *     never stored. A token bucket per camera caps them at 25 fps,
+ *   - forwards the camera's relay picture to viewers whose network blocks P2P,
+ *     who are still connecting (the instant picture), or who arrive when the
+ *     camera's direct slots are full: real video (WebCodecs H.264 / VP8 /
+ *     VP9, 10–15 fps) with its sound, or 640 px JPEGs for browsers that can't
+ *     decode it. Frames and sound pass through this object's memory — NOT
+ *     end-to-end encrypted (only P2P, direct or through TURN, is) — and are
+ *     never stored. Routed by codec, throttled per camera (token bucket,
+ *     25 messages/s), and each viewer acknowledges what it got: one that falls
+ *     behind skips to the next key frame instead of drifting seconds late,
+ *     and keeps its sound meanwhile (relayWire.ts),
  *   - is the family's switchboard for video calls between members
  *     (familyCalls.ts): rings their 'line' sockets and phones, relays the
  *     handshake between the people in a call.
@@ -28,6 +34,7 @@
  */
 
 import { iceServers } from './ice';
+import { audioOnly, bareJpeg, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDIO, readHead, seqDiff, type RelayHead } from './relayWire';
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
@@ -131,6 +138,14 @@ interface Attach {
   dn?: string;
   /** Viewer: camera device id it wants relayed snapshots from. */
   relay?: string;
+  /**
+   * Viewer on the relay: the video codecs it decodes (bit 0 H.264, 1 VP8,
+   * 2 VP9; 0 = JPEG only). Absent = a viewer from before the framed format
+   * (bare JPEGs only, no acknowledgements).
+   */
+  rc?: number;
+  /** On the relay only while its direct picture connects (not shown as "on the relay"). */
+  ri?: boolean;
   /** Joined with the share link + passcode (no account): the guest's id. */
   guest?: string;
 }
@@ -194,8 +209,10 @@ export interface EncStatus {
   w: number | null;
   /** Rungs stepped down because the phone is busy. */
   p: number;
-  /** Relay frames per second (0 = off). */
+  /** Relay pictures per second (0 = off). */
   relay: number;
+  /** What the relay sends: a video codec or JPEG (only when known). */
+  rc?: 'avc' | 'vp8' | 'vp9' | 'jpeg';
 }
 
 export interface SceneStatus {
@@ -307,11 +324,24 @@ const MAX_CAMERAS = 4;
 const PUSH_CAP = 40;
 const FRAME_MAX = 8 * 1024;
 const RTC_FRAME_MAX = 64 * 1024;
-const SNAPSHOT_MAX = 256 * 1024;
 /** Relay frames per camera: sustained rate, burst, and bytes per second. */
 const RELAY_FPS = 25;
 const RELAY_BURST = 8;
 const RELAY_BYTES_PER_S = 1536 * 1024;
+/**
+ * A viewer's relay window, in the camera's messages (≈15 a second; viewers
+ * acknowledge every 500 ms): more than RELAY_LAG (≈2 s) forwarded but not yet
+ * acknowledged and it skips video until a key frame arrives with no more than
+ * RELAY_RESUME (≈1 s) in flight — sound keeps going meanwhile. Past RELAY_DEAD
+ * with no acknowledgement for 3 s it gets nothing.
+ */
+const RELAY_LAG = 30;
+const RELAY_RESUME = 15;
+const RELAY_DEAD = 150;
+/** At most one key-frame request per camera per second (the camera also sends one every 2 s). */
+const RELAY_KEY_GAP_MS = 1000;
+/** A camera that sent no video for this long is treated as JPEG-only. */
+const RELAY_VIDEO_STALE_MS = 5000;
 const PURGE_EVERY_MS = 6 * 60 * 60_000;
 const MACHINE_DB = 50;
 const MACHINE_GAP_MS = 12 * 60 * 60_000;
@@ -374,6 +404,7 @@ export function sanitizeEnc(v: unknown): EncStatus | null {
     w: w == null ? null : Math.round(w),
     p: Math.round(num(r.p, 0, 4)),
     relay: Math.round(num(r.relay, 0, 30) * 10) / 10,
+    ...(r.rc === 'avc' || r.rc === 'vp8' || r.rc === 'vp9' || r.rc === 'jpeg' ? { rc: r.rc } : {}),
   };
 }
 
@@ -405,6 +436,43 @@ export class FrameBucket {
   }
 }
 
+/** What a viewer decodes, from its subscription's codec names (bit 0 H.264, 1 VP8, 2 VP9). */
+export function relayCodecMask(v: unknown[]): number {
+  let m = 0;
+  for (const c of v.slice(0, 8)) {
+    if (c === 'avc') m |= 1;
+    else if (c === 'vp8') m |= 2;
+    else if (c === 'vp9') m |= 4;
+  }
+  return m;
+}
+
+/**
+ * Which bytes (if any) one viewer gets of a relay message. `rc`: what it
+ * decodes (undefined = a viewer from before the framed format); `vc`: the
+ * camera's current video codec (0 = it sends none). Video goes to those who
+ * decode it, JPEG to the rest (bare for older viewers), sound-only messages
+ * with the video (or to every framed-format viewer of a JPEG-only camera).
+ */
+export function relayRoute(head: RelayHead, raw: ArrayBuffer, rc: number | undefined, vc: number): ArrayBuffer | null {
+  const decodes = (codec: number) => rc != null && codec > 0 && (rc & (1 << (codec - 1))) !== 0;
+  if (head.kind === KIND_JPEG) {
+    if (decodes(vc)) return null; // it gets the video instead
+    return rc == null ? bareJpeg(raw) : raw;
+  }
+  if (head.kind === KIND_VIDEO || head.kind === KIND_VIDEO_AUDIO) return decodes(head.codec) ? raw : null;
+  if (rc == null) return null;
+  return vc === 0 || decodes(vc) ? raw : null;
+}
+
+const freshRx = () => ({ fw: null as number | null, ack: null as number | null, ackAt: Date.now(), wait: true });
+
+function sendBin(ws: WebSocket, buf: ArrayBuffer): void {
+  try {
+    ws.send(buf);
+  } catch { /* closing */ }
+}
+
 export function sanitizeZones(v: unknown): Zone[] {
   if (!Array.isArray(v)) return [];
   const out: Zone[] = [];
@@ -432,6 +500,12 @@ export class MonitorRoom {
   private staleFlagged = new Set<string>();
   private lastStatus = new Map<string, { st: CamStatus; at: number }>();
   private relayBuckets = new Map<string, FrameBucket>();
+  /** Per camera: the video codec it last sent (and when), and its key-frame requests. */
+  private relayCams = new Map<string, { codec: number; at: number; keyAt: number; keyPending: boolean }>();
+  /** Per viewer socket: last seq forwarded / acknowledged, waiting for a key frame. */
+  private relayRx = new Map<string, { fw: number | null; ack: number | null; ackAt: number; wait: boolean }>();
+  /** Cameras paused for privacy: nothing of theirs is relayed. */
+  private relayPrivacy = new Set<string>();
   private lastStatusAt = new Map<string, number>();
   private lastSoundAt = new Map<string, number>();
   private curBucket: { t: number; s: number; cry: number } | null = null;
@@ -595,7 +669,7 @@ export class MonitorRoom {
         const ls = this.lastStatus.get(a.dev);
         cams.push({ sid: a.sid, dev: a.dev, dn: a.dn || 'Camera', by: a.name || 'Member', since: a.at, status: ls?.st ?? null, statusAt: ls?.at ?? null });
       } else if (a.mode === 'viewer') {
-        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay, ...(a.guest ? { guest: true } : {}) });
+        viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay && !a.ri, ...(a.guest ? { guest: true } : {}) });
       }
     }
     return { cams, viewers };
@@ -610,22 +684,8 @@ export class MonitorRoom {
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a) return;
 
-    // Binary = a relay frame (JPEG) from an authenticated camera.
-    if (typeof raw !== 'string') {
-      if (!a.authed || a.mode !== 'camera' || !a.dev || raw.byteLength > SNAPSHOT_MAX) return;
-      const now = Date.now();
-      let bucket = this.relayBuckets.get(a.dev);
-      if (!bucket) this.relayBuckets.set(a.dev, (bucket = new FrameBucket(now)));
-      if (!bucket.take(raw.byteLength, now)) return;
-      for (const s of this.authed()) {
-        if (s.a.mode === 'viewer' && s.a.relay === a.dev) {
-          try {
-            s.ws.send(raw);
-          } catch { /* closing */ }
-        }
-      }
-      return;
-    }
+    // Binary = a relay message (video, sound or JPEG) from an authenticated camera.
+    if (typeof raw !== 'string') return this.onRelayFrame(a, raw);
 
     if (raw.length > RTC_FRAME_MAX) return;
     let msg: Record<string, unknown>;
@@ -676,6 +736,8 @@ export class MonitorRoom {
         return this.onTell(a, msg);
       case 'relay':
         return this.onRelay(ws, a, msg);
+      case 'rx':
+        return this.onRelayAck(a, msg);
       case 'push_sub':
         return this.onPushSub(ws, a, msg);
       case 'push_unsub':
@@ -752,6 +814,7 @@ export class MonitorRoom {
     }
     if (a.mode === 'viewer') {
       this.broadcast({ t: 'peer_gone', sid: a.sid }, (x) => x.mode === 'camera');
+      this.relayRx.delete(a.sid);
       if (a.relay) this.updateRelayWant(a.relay);
     }
     this.syncPresence();
@@ -875,7 +938,11 @@ export class MonitorRoom {
 
     if (mode === 'camera') {
       this.markBeat(a.dev);
-      // A camera that (re)joins picks up viewers already waiting on its relay.
+      // A camera that (re)joins picks up viewers already waiting on its relay;
+      // its messages start a new count, so every one of them starts on a key frame.
+      this.relayCams.delete(a.dev);
+      this.relayPrivacy.delete(a.dev);
+      for (const s of this.authed()) if (s.a.mode === 'viewer' && s.a.relay === a.dev) this.relayRx.set(s.a.sid, freshRx());
       this.updateRelayWant(a.dev);
       const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
       const wasAlerted = await this.state.storage.get<boolean>(`alerted:${a.dev}`);
@@ -928,6 +995,9 @@ export class MonitorRoom {
     if (a.mode !== 'camera' || !a.dev) return;
     const now = Date.now();
     this.markBeat(a.dev);
+    // Privacy pause holds back every relay message from this camera (even a throttled status says so).
+    if ((msg.st as Record<string, unknown> | undefined)?.paused === 'privacy') this.relayPrivacy.add(a.dev);
+    else this.relayPrivacy.delete(a.dev);
     if (now - (this.lastStatusAt.get(a.dev) ?? 0) < 800) return;
     this.lastStatusAt.set(a.dev, now);
     const s = (msg.st ?? {}) as Record<string, unknown>;
@@ -1027,6 +1097,8 @@ export class MonitorRoom {
       return this.resolveHazard('paused', a.dev, 'back');
     }
     if (kind === 'privacy') {
+      if (msg.on) this.relayPrivacy.add(a.dev);
+      else this.relayPrivacy.delete(a.dev);
       await this.addLog({ kind: 'privacy', msg: msg.on ? `Video paused for privacy on ${where} — sound monitoring continues` : `Video resumed on ${where}`, dev: a.dev });
       return;
     }
@@ -1611,20 +1683,169 @@ export class MonitorRoom {
     }
   }
 
+  /**
+   * A viewer (un)subscribes to a camera's relay picture: `codecs` it can
+   * decode (absent from viewers before the framed format), `instant` while its
+   * direct picture is still connecting. A new or changed subscription starts
+   * on a key frame.
+   */
   private onRelay(ws: WebSocket, a: Attach, msg: Record<string, unknown>): void {
     if (a.mode !== 'viewer') return;
     const prev = a.relay;
+    const prevRc = a.rc;
+    const prevRi = !!a.ri;
     a.relay = msg.on ? clip(msg.dev, 40) || undefined : undefined;
+    a.rc = a.relay && Array.isArray(msg.codecs) ? relayCodecMask(msg.codecs) : undefined;
+    a.ri = a.relay && msg.instant ? true : undefined;
     ws.serializeAttachment(a);
+    if (!a.relay) this.relayRx.delete(a.sid);
+    else if (a.relay !== prev || a.rc !== prevRc || !this.relayRx.has(a.sid)) {
+      this.relayRx.set(a.sid, freshRx());
+      this.requestKey(a.relay);
+    }
     if (prev && prev !== a.relay) this.updateRelayWant(prev);
     if (a.relay) this.updateRelayWant(a.relay);
-    // Parents see who is on the low-bandwidth picture.
-    if (prev !== a.relay) this.syncPresence();
+    // Parents see who is on the relay picture (not those only waiting for their direct one).
+    if (prev !== a.relay || prevRi !== !!a.ri) this.syncPresence();
   }
 
+  /** Tell a camera how many viewers want its relay, and what they decode. */
   private updateRelayWant(dev: string): void {
-    const n = this.authed().filter((s) => s.a.mode === 'viewer' && s.a.relay === dev).length;
-    this.broadcast({ t: 'relay_want', n }, (x) => x.mode === 'camera' && x.dev === dev);
+    const want = { t: 'relay_want', n: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 };
+    for (const { a } of this.authed()) {
+      if (a.mode !== 'viewer' || a.relay !== dev) continue;
+      const m = a.rc ?? 0;
+      want.n += 1;
+      if (m & 1) want.avc += 1;
+      if (m & 2) want.vp8 += 1;
+      if (m & 4) want.vp9 += 1;
+      if (!m) want.jpeg += 1;
+    }
+    this.broadcast(want, (x) => x.mode === 'camera' && x.dev === dev);
+  }
+
+  private relayCam(dev: string): { codec: number; at: number; keyAt: number; keyPending: boolean } {
+    let c = this.relayCams.get(dev);
+    if (!c) this.relayCams.set(dev, (c = { codec: 0, at: 0, keyAt: 0, keyPending: false }));
+    return c;
+  }
+
+  /** Ask a camera for a key frame now (at most once a second; a request inside that second waits for its next message). */
+  private requestKey(dev: string): void {
+    const cam = this.relayCam(dev);
+    const now = Date.now();
+    if (now - cam.keyAt < RELAY_KEY_GAP_MS) {
+      cam.keyPending = true;
+      return;
+    }
+    cam.keyAt = now;
+    cam.keyPending = false;
+    this.broadcast({ t: 'relay_key' }, (x) => x.mode === 'camera' && x.dev === dev);
+  }
+
+  /** A viewer's acknowledgement: the last seq it got; `k` = its decoder needs a key frame. */
+  private onRelayAck(a: Attach, msg: Record<string, unknown>): void {
+    if (a.mode !== 'viewer' || !a.relay || a.rc == null) return;
+    let rx = this.relayRx.get(a.sid);
+    if (!rx) this.relayRx.set(a.sid, (rx = freshRx()));
+    const s = Number(msg.s);
+    if (Number.isInteger(s) && s >= 0 && s <= 0xffffffff) {
+      rx.ack = s;
+      rx.ackAt = Date.now();
+      rx.fw ??= s;
+    }
+    if (msg.k) {
+      rx.wait = true;
+      this.requestKey(a.relay);
+    }
+  }
+
+  /**
+   * One relay message from a camera, to the viewers relaying it: video to
+   * those who decode its codec, JPEG to the rest (bare for older viewers),
+   * sound with the video. Nothing during a privacy pause.
+   */
+  private onRelayFrame(a: Attach, raw: ArrayBuffer): void {
+    if (!a.authed || a.mode !== 'camera' || !a.dev) return;
+    const head = readHead(raw);
+    if (!head || this.relayPrivacy.has(a.dev)) return;
+    const dev = a.dev;
+    const now = Date.now();
+    const isVideo = head.kind === KIND_VIDEO || head.kind === KIND_VIDEO_AUDIO;
+    let bucket = this.relayBuckets.get(dev);
+    if (!bucket) this.relayBuckets.set(dev, (bucket = new FrameBucket(now)));
+    if (!bucket.take(raw.byteLength, now)) {
+      // A video frame that never arrives breaks every decoder after it: all resync on a key frame.
+      if (isVideo && !head.key) this.relayResync(dev);
+      return;
+    }
+    const cam = this.relayCam(dev);
+    if (isVideo) {
+      cam.codec = head.codec;
+      cam.at = now;
+    }
+    if (cam.keyPending && now - cam.keyAt >= RELAY_KEY_GAP_MS) this.requestKey(dev);
+    const vc = now - cam.at < RELAY_VIDEO_STALE_MS ? cam.codec : 0;
+    let wantKey = false;
+    for (const s of this.authed()) {
+      const v = s.a;
+      if (v.mode !== 'viewer' || v.relay !== dev) continue;
+      const out = relayRoute(head, raw, v.rc, vc);
+      if (!out) continue;
+      // Viewers from before the framed format: bare JPEGs, no window.
+      if (v.rc == null) {
+        sendBin(s.ws, out);
+        continue;
+      }
+      let rx = this.relayRx.get(v.sid);
+      if (!rx) this.relayRx.set(v.sid, (rx = freshRx()));
+      if (rx.ack == null) rx.ack = (head.seq - 1) >>> 0;
+      if (rx.fw == null) rx.fw = rx.ack;
+      let lag = seqDiff(rx.fw, rx.ack);
+      if (lag > RELAY_DEAD) {
+        // Still acknowledging but far apart: the numbers restarted — start over. Silent: it's gone.
+        if (now - rx.ackAt > 3000) continue;
+        rx.ack = (head.seq - 1) >>> 0;
+        rx.fw = rx.ack;
+        rx.wait = true;
+        lag = 0;
+      }
+      if (isVideo) {
+        if (!rx.wait && lag > RELAY_LAG) {
+          rx.wait = true;
+          wantKey = true;
+        }
+        if (rx.wait) {
+          if (head.key && lag <= RELAY_RESUME) {
+            rx.wait = false;
+          } else {
+            // The picture waits for a key frame; the sound doesn't.
+            const snd = head.kind === KIND_VIDEO_AUDIO && lag <= RELAY_LAG * 2 ? audioOnly(raw) : null;
+            if (snd) {
+              sendBin(s.ws, snd);
+              rx.fw = head.seq;
+            }
+            if (head.key) wantKey = true;
+            continue;
+          }
+        }
+      } else if (head.kind === KIND_JPEG && lag > RELAY_LAG) {
+        continue; // every JPEG stands alone: a viewer that's behind just skips some
+      }
+      sendBin(s.ws, out);
+      rx.fw = head.seq;
+    }
+    if (wantKey) this.requestKey(dev);
+  }
+
+  /** Every viewer of this camera waits for its next key frame. */
+  private relayResync(dev: string): void {
+    for (const s of this.authed()) {
+      if (s.a.mode !== 'viewer' || s.a.relay !== dev || s.a.rc == null) continue;
+      const rx = this.relayRx.get(s.a.sid);
+      if (rx) rx.wait = true;
+    }
+    this.requestKey(dev);
   }
 
   // -------------------------------------------------------------- queries

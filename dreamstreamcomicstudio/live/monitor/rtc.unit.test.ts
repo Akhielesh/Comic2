@@ -218,17 +218,30 @@ class FakePC {
   async addIceCandidate(c: unknown) {
     this.candidates.push(c);
   }
+  /** What getStats reports (the selected candidate pair decides LAN vs internet). */
+  stats: Map<string, Record<string, unknown>> | null = null;
   async getStats() {
-    return new Map();
+    return this.stats ?? new Map();
   }
   close() {
     this.connectionState = 'closed';
     this.signalingState = 'closed';
   }
-  connect() {
+  connect(path?: 'lan' | 'internet') {
+    if (path) this.stats = pathStats(path === 'lan');
     this.connectionState = 'connected';
     this.onconnectionstatechange?.();
   }
+}
+
+/** A stats report whose selected pair is on the home Wi-Fi or across the internet. */
+function pathStats(lan: boolean): Map<string, Record<string, unknown>> {
+  return new Map<string, Record<string, unknown>>([
+    ['t', { type: 'transport', id: 't', selectedCandidatePairId: 'cp' }],
+    ['cp', { type: 'candidate-pair', id: 'cp', localCandidateId: 'l', remoteCandidateId: 'r' }],
+    ['l', { type: 'local-candidate', id: 'l', candidateType: 'host', address: '192.168.1.2' }],
+    ['r', { type: 'remote-candidate', id: 'r', candidateType: lan ? 'host' : 'srflx', address: lan ? '192.168.1.9' : '93.1.2.3' }],
+  ]);
 }
 
 describe('CameraHub: one connection per viewer session', () => {
@@ -330,6 +343,75 @@ describe('CameraHub: one connection per viewer session', () => {
   });
 });
 
+describe('CameraHub: the overflow tier (four direct viewers over the internet, the rest on the relay)', () => {
+  let sent: { to: string; d: MonRtc }[];
+  let hub: CameraHub;
+  const offer = (n: number, extra: Partial<MonRtc> = { ov: 1 }): MonRtc => ({ sdp: { type: 'offer', sdp: 'o' }, pc: `p${n}`, vid: `v${n}`, ...extra });
+  const videoOf = (n: number) => FakePC.all[n].transceivers[0].sender.track;
+  const join = async (n: number, path: 'lan' | 'internet', extra?: Partial<MonRtc>) => {
+    await hub.onSignal(`s${n}`, offer(n, extra));
+    FakePC.all[FakePC.all.length - 1].connect(path);
+    await vi.advanceTimersByTimeAsync(1600); // the path check after connecting
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/VP8' }] }) });
+    FakePC.all = [];
+    sent = [];
+    hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: { kind: 'video' } as unknown as MediaStreamTrack, audio: null }));
+  });
+  afterEach(() => {
+    hub.closeAll();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('a fifth viewer over the internet gets no video and is told the camera is full', async () => {
+    for (let i = 0; i < 4; i++) await join(i, 'internet');
+    expect(hub.internetSlots()).toBe(4);
+    await hub.onSignal('s4', offer(4));
+    expect(videoOf(4)).toBeNull(); // held while its path is unknown
+    FakePC.all[4].connect('internet');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent.filter((m) => m.to === 's4' && m.d.bye)).toEqual([{ to: 's4', d: { bye: true, full: true, pc: 'p4' } }]);
+    expect(FakePC.all[4].connectionState).toBe('closed');
+    expect(hub.internetSlots()).toBe(4);
+  });
+
+  it('home Wi-Fi viewers are exempt: let in even when the slots are full, and they don’t take one', async () => {
+    for (let i = 0; i < 4; i++) await join(i, 'lan');
+    expect(hub.internetSlots()).toBe(0);
+    for (let i = 4; i < 8; i++) await join(i, 'internet');
+    expect(hub.internetSlots()).toBe(4);
+    await hub.onSignal('s8', offer(8));
+    expect(videoOf(8)).toBeNull();
+    FakePC.all[8].connect('lan');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(videoOf(8)).toEqual({ kind: 'video' }); // on the home Wi-Fi: in it goes
+    expect(sent.some((m) => m.to === 's8' && m.d.full)).toBe(false);
+  });
+
+  it('a viewer leaving frees a slot; older viewers (no ov) are never turned away', async () => {
+    for (let i = 0; i < 4; i++) await join(i, 'internet');
+    hub.close('v0');
+    await join(4, 'internet');
+    expect(videoOf(4)).toEqual({ kind: 'video' });
+    await join(5, 'internet', {});
+    expect(videoOf(5)).toEqual({ kind: 'video' });
+    expect(sent.some((m) => m.d.full)).toBe(false);
+  });
+
+  it('audio-only viewers need no video slot', async () => {
+    for (let i = 0; i < 4; i++) await join(i, 'internet');
+    await join(4, 'internet', { ov: 1, q: 'audio' });
+    expect(FakePC.all[4].connectionState).toBe('connected');
+    expect(sent.some((m) => m.d.full)).toBe(false);
+  });
+});
+
 describe('ViewerLink', () => {
   let sent: { to: string; d: MonRtc }[];
   beforeEach(() => {
@@ -389,5 +471,24 @@ describe('ViewerLink', () => {
     const pc = sent.find((m) => m.d.sdp)!.d.pc;
     await link.onSignal('cam1', { bye: true, pc });
     expect(link.state).toBe('closed');
+    expect(link.full).toBe(false);
+  });
+
+  it('says it can watch the relay; a full camera sends it there at once (failed, full)', async () => {
+    const states: string[] = [];
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    link.onState = (s) => states.push(s);
+    await link.connect('cam1');
+    const o = sent.find((m) => m.d.sdp)!.d;
+    expect(o.ov).toBe(1);
+    await link.onSignal('cam1', { bye: true, full: true, pc: o.pc });
+    expect(states).toEqual(['connecting', 'failed']);
+    expect(link.full).toBe(true);
+    // No second 'failed' from the give-up timer.
+    vi.advanceTimersByTime(20_000);
+    expect(states).toEqual(['connecting', 'failed']);
+    // The next attempt starts clean.
+    await link.connect('cam1');
+    expect(link.full).toBe(false);
   });
 });

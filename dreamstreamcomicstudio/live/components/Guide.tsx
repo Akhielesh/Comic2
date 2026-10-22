@@ -40,7 +40,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'studio-health', title: 'Health', body: 'Upload speed, auto-quality and any skipped segments. If it says “Degraded”, close other uploads or pick a lower quality.' },
   ],
   monitor: [
-    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Video and sound go device-to-device, encrypted, and nothing is ever recorded.' },
+    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Video and sound go device-to-device, encrypted (through our server, never stored, only when a network blocks that), and nothing is ever recorded.' },
     { target: 'monitor-create', title: 'Create a nursery', body: 'One per baby or room. Add the baby’s name to get personal alerts like “Aria is crying”.' },
     { target: 'monitor-new', title: 'More nurseries', body: 'Grandparents’ house? Daycare? Add up to five.' },
   ],
@@ -278,7 +278,7 @@ export const GUIDES: HowTo[] = [
   },
   {
     id: 'talk', title: 'Talk, listen & video call (like FaceTime)', icon: 'phone', mins: 1, screens: ['watch'],
-    intro: 'Everything goes device-to-device, encrypted. Nothing is recorded.',
+    intro: 'Video goes device-to-device, encrypted, wherever the network allows. Nothing is recorded.',
     steps: [
       { title: 'Listen', body: 'Tap Listen (or “Tap to hear the nursery”). Browsers start muted until you tap.' },
       { title: 'Talk', body: 'Tap Talk to open your mic; tap again to stop. Or press and hold to talk only while holding, like a walkie-talkie.' },
@@ -440,7 +440,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     icon: 'baby',
     items: [
       { q: 'Set it up', a: 'Baby monitor → create a nursery. On the phone in the nursery: sign in, open the nursery, tap “Be the camera”. On your phone/laptop: tap “Watch”.' },
-      { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC). Our server only passes small connection messages and status numbers. There is no record button.', tags: 'privacy security' },
+      { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC), whenever your networks allow it. Our server passes small connection messages and status numbers — and, only for a device the direct connection can’t reach (or for a moment while it starts), the picture and sound themselves, passed along in memory and never stored, but not end-to-end encrypted. Privacy pause stops that too. There is no record button.', tags: 'privacy security relay server' },
       { q: 'How does sound detection work?', a: 'The camera phone runs an AI sound model (Google’s YAMNet, on the phone itself) plus a pitch-and-rhythm cry analyser and a smoke/CO alarm pattern detector. It recognizes crying, fussing, coughing, alarms, bangs, babbling, laughing, voices, music/TV and dogs — the audio never leaves the phone. Parents can set sensitivity while watching.', tags: 'cry detection ai model cough alarm' },
       { q: 'Talk and video call like FaceTime', a: 'While watching: tap Talk to open your mic (or press and hold to talk while holding). Tap Video to show your face on the nursery phone. Echo cancellation keeps it clear both ways.', tags: 'two-way audio facetime call' },
       { q: 'Alerts when my phone is locked', a: 'Turn on “Alerts on this device” while watching. Android and computers work right away. iPhone: Share → Add to Home Screen, open it from the Home Screen, then turn alerts on.', tags: 'notifications push iphone' },
@@ -448,7 +448,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Roles', a: 'Parent: everything incl. managing people. Caregiver: watch, talk, soothe, run a camera, log. Viewer: watch and get alerts. Each person can also have a name like Grandma or Nanny.' },
       { q: 'Soothing sounds', a: 'Soothe plays shush, white noise, rain, ocean or a heartbeat on the camera phone for 15–60 minutes. Sound detection ignores it.' },
       { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },
-      { q: 'No video on my network', a: 'Some networks (often mobile data) block direct device-to-device video. The monitor switches to a low-bandwidth picture — 2 to 5 frames a second, no sound, passed through our server and never stored — and keeps retrying full video in the background. Alerts are unaffected.' },
+      { q: 'No video on my network', a: 'Some networks (often mobile data) block direct device-to-device video. The monitor then shows the picture through our server instead — smooth video (10–15 frames a second) with sound, or still pictures on older browsers — and keeps retrying the direct connection in the background. The same happens when the camera already sends directly to four people over the internet, and while a direct connection takes longer than a second to start, so the picture appears straight away. Through our server, video and sound are passed along in memory and never stored, but they are not end-to-end encrypted the way the direct connection is. Privacy pause stops it completely. Alerts are unaffected.', tags: 'relay server encrypted mobile data guest slow choppy sound' },
       { q: 'What can smart vision see?', a: 'With Smart vision on (camera setup → Make it smarter), the camera phone runs two Google MediaPipe models on its own video about once a second: whether your baby is lying, sitting or standing (and standing in the crib), rolling over, what they’re holding, risky things within reach (scissors, knives, cups, phones, remotes, plants, pets), soft toys near a sleeping baby, and which play area they’re in. Frames never leave the phone. It’s a beta: it can miss things, it can’t see blankets or pillows, and it does not watch breathing or sleep position. Adding the baby’s birthday in the Tracker helps — a baby too young to sit is always reported lying.', tags: 'posture rolling sitting standing objects toys safe sleep vision ai camera' },
       { q: 'Family video calls', a: 'Calls → tap the camera (video) or phone (voice) button next to anyone in your nurseries, or “Call everyone” for a group call of up to four. Calls ring wherever Stream Studio is open; turn on “Ring this device” to be rung with the app closed. During a call: mute, camera off, flip, add someone, or minimize to keep talking while you use the app. Device to device, encrypted, never recorded.', tags: 'facetime video call voice call family grandma group ring' },
       { q: 'Is it a medical device?', a: 'No. It watches and listens; it does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.' },

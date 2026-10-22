@@ -2,8 +2,10 @@
 
 A private, never-recording baby monitor inside Stream Studio (`/live#/monitor`).
 One device in the nursery is the **camera**; any device the family signs in on can
-**watch**. Video and sound go peer-to-peer (WebRTC, DTLS-SRTP); the server only
-relays signaling, status numbers and events.
+**watch**. Video and sound go peer-to-peer (WebRTC, DTLS-SRTP, end-to-end
+encrypted); the server relays signaling, status numbers and events — and, only for
+a viewer the direct picture can't reach (or while it connects), the relay picture
+and sound, passed through its memory and never stored (see *Relay picture* below).
 
 ## Pieces
 
@@ -16,7 +18,7 @@ relays signaling, status numbers and events.
 | Camera screen | `live/views/MonitorCamera.tsx` | Setup wizard (browser check, permissions, lens picker, zoom, live checks), FaceTime-style running screen, auto-dim, privacy pause, interruption recovery. |
 | Device plumbing | `live/monitor/camera.ts` | In-app browser detection, friendly lens names, constraint ladder, human error text, zoom, iOS `audioSession` for speaker playback. |
 | Peer links | `live/monitor/rtc.ts` | Viewer offers `video sendrecv` + `audio sendrecv`; outgoing tracks swapped with `replaceTrack` (talk / video call on & off with no renegotiation). One camera connection per viewer *session* (call id + viewer id), H.264 preferred, an encoding ladder by audience and phone load — see “Video with many viewers” below. |
-| Relay fallback | `live/monitor/linkFallback.ts` (viewer state machine), `live/monitor/videoBudget.ts` (pacing) | When P2P can't connect: the room's low-bandwidth picture (640 px JPEG, 2–5 fps, no sound), P2P retried in the background with back-off, dropped the moment P2P connects. |
+| Relay picture | `live/monitor/relay.ts` (WebCodecs encoder / decoder), `relayWire.ts` (wire format), `relayAudio.ts` (μ-law + AudioWorklet), `linkFallback.ts` (viewer state machine), `live-worker/src/relayWire.ts` (room's header reader) | When P2P can't connect (no TURN), while it connects (instant picture), or when the camera's direct slots are full: real video through the room (H.264 / VP8 / VP9, 640 px, 10–15 fps, with sound), JPEG for browsers without WebCodecs. Not end-to-end encrypted; never stored. |
 | Sound engine | `live/monitor/soundEngine.ts` | Mic → analyser (cry analyser 10 Hz, alarm pattern 20 Hz) and PCM tap → 16 kHz resampler → YAMNet worker every 0.48 s → `SoundBrain`. |
 | AI sound model | `live/monitor/yamnet.worker.ts`, `public/models/yamnet/` | Google YAMNet (Apache-2.0, 521 AudioSet classes) via onnxruntime-web WASM, single-threaded, SHA-256 verified, cached. |
 | Categories | `live/monitor/soundClasses.ts` | cry, fuss, cough, sneeze, snore, babble, laugh, alarm, glass, crash, loud, voices, music, dog, cat, knocking, footsteps, running water — YAMNet class weights, rival classes, thresholds, severities. |
@@ -165,24 +167,79 @@ everything below works with or without it.
   a smaller picture”** when the phone stepped down; the camera screen offers to turn
   Smart vision off.
 
-**Relay picture (P2P can't connect):**
-- Viewer (`linkFallback.ts`): gives P2P 10 s, then subscribes to the relay and retries
-  P2P after 30 s, 1, 2, 4, then every 5 min; a late connect cancels the retry instead
-  of being torn down by it. The subscription is re-sent after every room reconnect and
-  when switching cameras. Frames draw straight onto a canvas (no re-render per frame);
-  the pill shows the fps actually arriving; no frame for 5 s → “Picture paused”.
-- Camera (`setRelay` + `RelayPacer`): 640 px JPEG, 2–5 fps by the socket's
-  `bufferedAmount` (backlog over 80 KB → skip and step down; 2 s clear → step up),
-  quality 0.35–0.6 by frame size, never queued behind more than 128 KB
-  (`client.sendBinary(data, maxBuffered)`). A camera that (re)joins is told at once
-  how many viewers want its relay.
-- Room: frames from cameras only, to viewers relaying that camera only; a token
-  bucket per camera (25 fps sustained, burst 8, ~1.5 MB/s) instead of the old hard
-  250 ms gap that dropped jittery frames. Frames pass through the Durable Object's
-  memory — **not end-to-end encrypted** like P2P, never stored (the pill's tooltip
-  says so). No sound in relay mode; alerts are unaffected.
-- Cost: a 4 fps relay is ~144k incoming WebSocket messages per 10 h night (≈ $0.03 per
-  nursery per month at the 20:1 request ratio); outgoing messages are free.
+**Relay picture — real video through the room (`relay.ts`):** used when P2P can't
+connect (no TURN; often a guest on mobile data), while a viewer's P2P takes longer than
+a second to connect (the *instant picture*), and when the camera's direct slots are full
+(the *overflow tier*). The camera encodes **once** for every relay viewer.
+- *Wire* (`relayWire.ts`, mirrored by `live-worker/src/relayWire.ts`; a parity test
+  checks both): `u8 kind` (1 JPEG · 2 video · 3 video + sound · 4 sound only) · `u8 flags`
+  (bit 0 key) · `u32 seq` (wraps) · `u32 ts` ms · `u8 codec` (1 H.264 · 2 VP8 · 3 VP9) ·
+  payload (kind 3: `u16` sound length, sound, video). Older cameras' bare JPEGs still work.
+- *Camera* (`RelayEncoder`): draws the live picture into a canvas at 640 on the long side
+  (640×360, 360×640 upright, never upscaled), `new VideoFrame(canvas)`, and encodes with
+  the first codec the phone can encode (`isConfigSupported`: `avc1.42E01E` Annex B — every
+  key frame carries SPS/PPS — then `vp8`, then `vp09.00.10.08`) that most relay viewers
+  decode; `latencyMode: 'realtime'`, 450 kbit/s at 15 fps, a key frame every 2 s and on
+  `relay_key`. No encoder → JPEG (2–5 fps, `RelayPacer`); JPEG also goes alongside the
+  video for viewers that can't decode it. More than 64 KB queued on the socket → skip
+  frames (nothing queued) and restart on a key frame, stepping down to 300 / 200 kbit/s
+  and 12 / 10 fps (`RelayRate`; 20 s clear → back up); a frame that couldn't be sent
+  holds back every frame after it until a key frame; an encoder that keeps failing is
+  dropped for the next codec. Nothing at all is sent during a privacy pause (and sound
+  captured then is discarded).
+- *Sound* (`relayAudio.ts`): the sound engine's microphone tap (only while someone is on
+  the relay) → 8 kHz band-limited resample → G.711 μ-law (64 kbit/s), bundled into the
+  next video message (so no extra billed messages); alone only when no frame went out for
+  150 ms (or the camera has no encoder). Viewer: an AudioWorklet with a ~300 ms jitter
+  buffer (±3 % speed to hold it, re-buffer after a gap, skip ahead when half a second
+  behind) → a MediaStream track. Browsers without AudioWorklet get the picture without
+  sound, and say so.
+- *Viewer* (`RelayDecoder`): subscribes with the codecs it decodes
+  (`{t:'relay', on, dev, codecs, instant?}`); VideoDecoder → canvas, every frame closed;
+  waits for a key frame after joining, a codec change or an error (asking with
+  `{t:'rx', s, k:1}`); three decoder errors in 20 s → JPEG. Acknowledges `{t:'rx', s}`
+  every 500 ms. The canvas is captured (`captureStream`) together with the sound into the
+  watch screen's `<video>`, so picture-in-picture, Listen and the bedside view work on the
+  relay too; the canvas itself stays on top until the direct picture has *drawn* a frame
+  (requestVideoFrameCallback, at most 5 s), so the swap is seamless.
+- *Instant picture* (`linkFallback.ts`): P2P gets a one-second head start
+  (`INSTANT_DELAY_MS`) — on the home Wi-Fi it's usually rendering by then, so nothing
+  passes through the server — then the viewer subscribes until P2P has rendered a frame.
+  The relay picture arrives ~0.2 s after subscribing (measured), so a remote viewer sees
+  the nursery in about 1.2 s instead of after the handshake or the 10 s give-up. Also
+  bridges an ICE reconnect. Audio-only viewers skip it. If P2P fails, the same
+  subscription becomes the fallback (re-sent without `instant`; parents then see “via
+  our server”). P2P is retried after 30 s, 1, 2, 4, then every 5 min; re-subscribed after
+  every room reconnect and camera switch.
+- *Overflow tier* (`rtc.ts` `DIRECT_CAP` = 4): at most four viewers get their own
+  encoder over the internet; home Wi-Fi viewers and audio-only viewers don't count. A
+  viewer arriving when the slots are full (and that sent `ov: 1` with its offer) gets no
+  video until its path is known: on the home Wi-Fi it's let in; otherwise the camera
+  answers `{bye, full}` and it goes straight to the relay (“Camera full · via server”).
+  Older viewers are never turned away.
+- *Room*: relay messages from cameras only, validated (header, kind, codec; video ≤ 128
+  KB, JPEG ≤ 256 KB, sound ≤ 16 KB), a token bucket per camera (25 messages/s, burst 8,
+  ~1.5 MB/s). Routed by codec: video to viewers that decode it, JPEG to the rest (bare
+  for viewers from before the framed format), sound-only with the video.
+  `relay_want {n, avc, vp8, vp9, jpeg}` tells the camera who wants what. A key frame is
+  requested (≤ 1/s per camera) when someone subscribes, falls behind or reports a
+  decoder error; new subscribers start on a key frame. Per-viewer window: more than 30
+  messages unacknowledged (~2 s) → that viewer skips video until a key frame arrives
+  with ≤ 15 in flight, and keeps getting its **sound** meanwhile (the room rewrites the
+  video + sound message into sound only); a dropped frame (bucket) resyncs everyone on
+  the next key frame. A privacy pause (the camera's event or status) stops every relay
+  message. Viewers only bridging while P2P connects aren't listed as “on the relay”.
+- *Privacy*: relay video and sound pass through the Durable Object's memory — **not
+  end-to-end encrypted** (only P2P, direct or through TURN, is) and never stored. The
+  pill (“Via our server · 12 fps”, “Quick preview”) and its tooltip say so.
+- *Cost*: 15 fps with sound is ~540k incoming WebSocket messages per 10 h night (≈ $0.12
+  per nursery per month at the 20:1 request ratio) plus ~2 acks/s per relay viewer;
+  outgoing messages are free. While frames flow the object stays awake: up to ~4.6k
+  GB-s per relayed night (inside the 400k GB-s monthly allowance for a few nurseries,
+  ≈ $1.7 per nursery per month beyond it) — only while someone is on the relay.
+- *Verified* in Chromium (Playwright, fake camera, P2P blocked): VP8 decoded at 11–12 fps,
+  ~250 kbit/s with sound, picture 0.2 s after subscribing, PiP, jitter-buffered sound,
+  JPEG + “no sound” without WebCodecs, privacy pause, camera restart.
 
 ## Invite (add people or share a link)
 

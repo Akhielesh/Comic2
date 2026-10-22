@@ -5,12 +5,14 @@
  *        │                 └ smoke/CO beep-pattern detector (20 Hz)
  *        └─ ds-ears (AudioWorklet, every sample)
  *             ├─ A-weighted Fast level → LevelMeter (dB, per-minute stats) + NoiseGuard
- *             └─ PCM (once the model is ready) → resample 16 kHz → YAMNet worker (every 0.48 s)
- *                                                            │
- *                         SoundBrain (fusion, events, mood) ◄┘
+ *             ├─ PCM (once the model is ready) → resample 16 kHz → YAMNet worker (every 0.48 s)
+ *             │                                              │
+ *             │           SoundBrain (fusion, events, mood) ◄┘
+ *             └─ PCM (only while a viewer is on the relay picture) → relay sound (relay.ts)
  *
  * Everything runs on the phone. Nothing is recorded or uploaded — only the
- * resulting events and a few numbers go to the family's devices.
+ * resulting events and a few numbers go to the family's devices, plus, while
+ * someone watches through the relay, live sound that's passed along, never kept.
  */
 
 import { AlarmToneDetector } from './alarmTone';
@@ -70,7 +72,10 @@ export class NurseryEars {
   private analyser: AnalyserNode | null = null;
   private tap: AudioNode | null = null;
   private tapPort: MessagePort | null = null;
+  /** PCM flows from the tap: for the model and/or the relay's sound. */
   private pcmOn = false;
+  private modelPcm = false;
+  private relayTap: ((pcm: Float32Array, rate: number) => void) | null = null;
   private sink: GainNode | null = null;
   private meterOn = false;
   private tickers: Ticker[] = [];
@@ -234,12 +239,24 @@ export class NurseryEars {
     this.meterOn = true;
     this.src.connect(this.tap);
     this.tap.connect(this.sink);
-    if (this.model === 'ready') this.setPcm(true);
+    if (this.model === 'ready') this.modelPcm = true;
+    this.syncPcm();
   }
 
   private setPcm(on: boolean): void {
-    this.pcmOn = on;
-    this.tapPort?.postMessage({ pcm: on });
+    this.modelPcm = on;
+    this.syncPcm();
+  }
+
+  /** Microphone samples (at the context's rate) for the relay picture's sound; null stops them. */
+  setRelayTap(cb: ((pcm: Float32Array, rate: number) => void) | null): void {
+    this.relayTap = cb;
+    this.syncPcm();
+  }
+
+  private syncPcm(): void {
+    this.pcmOn = this.modelPcm || !!this.relayTap;
+    this.tapPort?.postMessage({ pcm: this.pcmOn });
   }
 
   private onLevel(blocks: LevelBlock[]): void {
@@ -250,7 +267,8 @@ export class NurseryEars {
   }
 
   private feed(chunk: Float32Array): void {
-    if (!this.resampler || !this.worker) return;
+    if (this.relayTap && this.ctx) this.relayTap(chunk, this.ctx.sampleRate);
+    if (!this.modelPcm || !this.resampler || !this.worker) return;
     this.window.push(this.resampler.push(chunk));
     if (!this.window.full || this.window.fresh < HOP || this.busy) return;
     this.busy = true;

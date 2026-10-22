@@ -47,7 +47,7 @@ export function PeopleCard({
               {v.sid === me?.sid ? ' (you)' : ''}
               {v.guest && <span className="pill-guest sm">Guest</span>}
             </span>
-            <span className="faint">{v.dn} · {ROLE_INFO[v.role].label}{v.relay ? ' · low-bandwidth' : ''}</span>
+            <span className="faint">{v.dn} · {ROLE_INFO[v.role].label}{v.relay ? ' · via our server' : ''}</span>
           </div>
         ))}
       </div>
