@@ -42,11 +42,14 @@ class FakeStream {
 
 class FakeSender {
   params: { encodings: Record<string, unknown>[] } = { encodings: [{}] };
+  /** False until negotiated, for a sender added with `FakePC.holdNew`: no encodings, and setParameters rejects (as some browsers do). */
+  ready = true;
   constructor(public track: FakeTrack) {}
   getParameters() {
-    return structuredClone(this.params);
+    return this.ready ? structuredClone(this.params) : { encodings: [] };
   }
   async setParameters(p: { encodings: Record<string, unknown>[] }) {
+    if (!this.ready) throw new DOMException('not negotiated yet', 'InvalidModificationError');
     this.params = p;
   }
   async replaceTrack(t: FakeTrack) {
@@ -69,7 +72,10 @@ class FakePC {
   onnegotiationneeded: (() => void) | null = null;
   onicecandidate: ((e: unknown) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
+  onsignalingstatechange: (() => void) | null = null;
   ontrack: ((e: unknown) => void) | null = null;
+  /** Senders added from now on aren't usable until `negotiate()`. */
+  holdNew = false;
   constructor(public config: RTCConfiguration) {
     FakePC.all.push(this);
   }
@@ -78,8 +84,17 @@ class FakePC {
   }
   addTrack(track: FakeTrack) {
     const s = new FakeSender(track);
+    s.ready = !this.holdNew;
     this.senders.push(s);
     return s;
+  }
+  /** A renegotiation round trip: offer out (have-local-offer), answer back (stable) — senders are negotiated. */
+  negotiate() {
+    this.signalingState = 'have-local-offer';
+    this.onsignalingstatechange?.();
+    for (const s of this.senders) s.ready = true;
+    this.signalingState = 'stable';
+    this.onsignalingstatechange?.();
   }
   getSenders() {
     return this.senders;
@@ -334,6 +349,31 @@ describe('relays: capped video, fresh credentials', () => {
     pc.onPath(false);
     await vi.advanceTimersByTimeAsync(PATH_RECHECK_MS);
     expect(cam.params.encodings[0]).not.toHaveProperty('maxBitrate');
+    expect(screen.params.encodings[0]).not.toHaveProperty('maxBitrate');
+    g.close();
+  });
+
+  // Regression (review of C7): a screen share started while already relayed was capped at once,
+  // before its sender was negotiated. Where a browser rejects that, the cap never came back: the
+  // path didn't change, and the link stayed 'connected' through the renegotiation.
+  it('a screen share started while already on a relay is capped once its renegotiation completes', async () => {
+    vi.useFakeTimers();
+    const g = new GuestPeer(() => undefined, new FakeStream([new FakeTrack('video'), new FakeTrack('audio')]) as unknown as MediaStream);
+    const pc = FakePC.all[0];
+    pc.onPath(true);
+    pc.go('connected');
+    await settle();
+    pc.holdNew = true;
+    g.setScreen(new FakeStream([Object.assign(new FakeTrack('video'), { stop: () => undefined })]) as unknown as MediaStream);
+    await settle();
+    const screen = pc.senders.at(-1)!;
+    expect(screen.params.encodings[0]).not.toHaveProperty('maxBitrate');
+    pc.negotiate();
+    await settle();
+    expect(screen.params.encodings[0].maxBitrate).toBe(RELAY_GUEST_SCREEN_BPS);
+    // Off the relay later: the cap lifts as before.
+    pc.onPath(false);
+    await vi.advanceTimersByTimeAsync(PATH_RECHECK_MS);
     expect(screen.params.encodings[0]).not.toHaveProperty('maxBitrate');
     g.close();
   });

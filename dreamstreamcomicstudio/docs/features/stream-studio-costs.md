@@ -723,12 +723,19 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
   studio) or `{t:'call_ice'}` (calls). They apply the fresh list with `setConfiguration`. A connection on a relay
   whose credentials changed restarts ICE now, so it never outlives them. On the monitor the camera answers, so it
   asks the viewer to restart (`MonRtc.re`). In a call the answering side asks the offerer (`{restart, renew}`).
-  An overnight relayed monitor therefore keeps its relay across the 4-hour mark.
+  An overnight relayed monitor therefore keeps its relay across the 4-hour mark. A STUN-only answer (a failed
+  mint) never replaces relay credentials a client still holds, and its 2-minute retry is kept: a call placed
+  meanwhile keeps the caller's line credentials and asks again with `call_ice`. A call line is reconnected for
+  fresh credentials only before picking up, and only when its hello carried TURN more than 3 h ago.
 - **Attributed.** Each credential carries Cloudflare's documented `customIdentifier` (sent to `credentials/generate`,
   with `generate-ice-servers` as the fallback). The value is `n-`/`a-`/`e-` plus 32 hex characters of an HMAC keyed
   by a Worker secret (`TURN_TAG_SALT`, else the TURN API token). Monitor relay counts against the **nursery**. A
   call counts against its **caller**: the line's own account at hello, the caller's for `call_started`,
-  `call_joined` and `call_ice`. Stream Studio counts against the **event**. Every credential is tagged, so 100% of
+  `call_joined` and `call_ice`. Picking up a family call offers at once, before `call_joined` arrives, so the
+  first gathering uses the line's own credentials (the person who picked up). A connection that then comes up
+  through a relay restarts ICE onto the call's own credentials, so only its first seconds count against the
+  person who picked up. Until the billed direction can be measured (below), this also happens when only the
+  other end is on TURN, which costs one extra ICE restart. Stream Studio counts against the **event**. Every credential is tagged, so 100% of
   TURN egress is attributable in `callsTurnUsageAdaptiveGroups`. `turnTag()` lets Phase A recompute a room's tag
   without storing it. `wrangler tail` shows one `turn_mint` line per credential (tag, scope, ttl, guest; no ids).
 - **Revoked.** Credentials are revoked through the TURN API when:
@@ -749,7 +756,8 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
   - the monitor's existing 650 kbps relay cap.
 
   Each client re-reads the path from stats it already polls, every 3 s in calls and every 15 s in Studio, and lifts
-  the cap when the path goes direct.
+  the cap when the path goes direct. A guest's screen share started while already relayed is capped again once
+  its renegotiation completes, because some browsers reject a cap on a sender that isn't negotiated yet.
 
   Not done yet: capping only the billed direction, meaning what the TURN client *receives* (§2.1). A pair whose relay
   is on our own side doesn't bill our sending. This is left for when Phase A can verify it.

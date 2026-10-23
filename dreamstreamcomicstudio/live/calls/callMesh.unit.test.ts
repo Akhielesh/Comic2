@@ -652,4 +652,76 @@ describe('relays: fresh credentials before the old ones lapse', () => {
     expect(FakePC.all).toEqual([warm]);
     expect(warm.config).toMatchObject({ iceServers: turn('new'), iceCandidatePoolSize: 1 });
   });
+
+  // Regression (review of C6): picking up a family call offers at once with the joiner's own line
+  // credentials (counted against the joiner); the call's own, counted against its caller, arrive
+  // ~100-300 ms later in call_joined. setConfiguration alone never moves a gathering that already
+  // happened, so the joiner's relay stayed on its own credentials for the whole call.
+  it('credentials replaced before a connection is up: once it connects through a relay, it moves onto them — once', async () => {
+    const call = callOf([part('a', 'sa', 1), part('b', 'sb', 2)]);
+    const { m, offers } = mesh('b', { ice: turn('line') });
+    m.sync(call, 'sb');
+    await flush();
+    const pc = FakePC.all[0];
+    expect(offers()).toHaveLength(1);
+    m.setIce(turn('caller'));
+    await flush();
+    expect(offers()).toHaveLength(1); // not up yet: nothing restarted mid-handshake
+    const cid = (offers()[0].d as { cid: string }).cid;
+    await m.onSignal('sa', { sdp: { type: 'answer', sdp: 'y' }, cid }, call);
+    pc.onPath(true);
+    pc.setState('connected');
+    await flush();
+    expect(offers()).toHaveLength(2);
+    const moved = offers()[1].d;
+    expect('sdp' in moved && moved.sdp.sdp).toMatch(/-restart$/);
+    expect(pc.restarts).toBe(1);
+    // Moved: later connects and path reads leave it alone.
+    pc.setState('connected');
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(offers()).toHaveLength(2);
+  });
+
+  it('a direct connection on replaced credentials is left alone — until its path turns to a relay', async () => {
+    const call = callOf([part('a', 'sa', 1), part('b', 'sb', 2)]);
+    const { m, offers } = mesh('b', { ice: turn('line') });
+    m.sync(call, 'sb');
+    await flush();
+    const pc = FakePC.all[0];
+    m.setIce(turn('caller'));
+    const cid = (offers()[0].d as { cid: string }).cid;
+    await m.onSignal('sa', { sdp: { type: 'answer', sdp: 'y' }, cid }, call);
+    pc.onPath(false);
+    pc.setState('connected');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(offers()).toHaveLength(1);
+    pc.onPath(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(offers()).toHaveLength(2);
+    const moved = offers()[1].d;
+    expect('sdp' in moved && moved.sdp.sdp).toMatch(/-restart$/);
+  });
+
+  it('the answering side asks its offerer to move a connection that came up on replaced credentials — only once', async () => {
+    const call = callOf([part('a', 'sa', 1), part('b', 'sb', 2)]);
+    const { m, sent } = mesh('a', { ice: turn('line') });
+    m.sync(call, 'sa');
+    await m.onSignal('sb', { sdp: { type: 'offer', sdp: 'x' }, cid: 'k1' }, call);
+    m.setIce(turn('caller'));
+    const pc = FakePC.all[0];
+    pc.onPath(true);
+    pc.setState('connected');
+    await flush();
+    const asks = () => sent.filter((s) => 'restart' in s.d);
+    expect(asks()).toEqual([{ to: 'sb', d: { restart: true, renew: true, cid: 'k1' } }]);
+    // The offerer (an older app) didn't act on it: we don't keep asking.
+    pc.setState('connected');
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(asks()).toHaveLength(1);
+    // It restarted after all: our answer gathers with the call's credentials, so nothing more to ask.
+    await m.onSignal('sb', { sdp: { type: 'offer', sdp: 'x2' }, cid: 'k1' }, call);
+    m.setIce(turn('caller'));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(asks()).toHaveLength(1);
+  });
 });

@@ -18,18 +18,21 @@ type FakeSock = {
   fast: boolean[];
   lastHeard: number;
   closed: boolean;
+  reconnects: number;
 };
 const h = vi.hoisted(() => ({
   sockets: [] as FakeSock[],
   nurseries: [{ id: '11111111-2222-4333-8444-555555555555', name: 'Nursery', baby_name: 'Aria' }] as { id: string; name: string; baby_name: string | null }[],
   pushSub: null as Record<string, unknown> | null,
   membersFns: [] as ((nid: string) => void)[],
+  /** What a socket's reconnect() does (a fresh hello, say); it's counted either way. */
+  onReconnect: null as ((s: FakeSock) => void) | null,
 }));
 
 vi.mock('../account', () => ({ accessToken: async () => 'tok' }));
 vi.mock('../monitor/client', () => {
   const fake = (kind: FakeSock['kind'], nid: string, onMsg: (m: unknown) => void, onStatus: (s: string) => void, ticket?: string) => {
-    const s: FakeSock = { kind, nid, ticket, onMsg, onStatus, sent: [], fast: [], lastHeard: Date.now(), closed: false };
+    const s: FakeSock = { kind, nid, ticket, onMsg, onStatus, sent: [], fast: [], lastHeard: Date.now(), closed: false, reconnects: 0 };
     h.sockets.push(s);
     // Like the real one: 'connecting' is reported before the socket object is returned.
     onStatus('connecting');
@@ -46,7 +49,10 @@ vi.mock('../monitor/client', () => {
         if (s.fast.at(-1) !== on) s.fast.push(on);
       },
       probe: () => undefined,
-      reconnect: () => undefined,
+      reconnect: () => {
+        s.reconnects += 1;
+        h.onReconnect?.(s);
+      },
     };
   };
   return {
@@ -103,7 +109,7 @@ class FakePC {
   }
   getTransceivers = () => this.transceivers;
   getSenders = () => this.transceivers.map((t) => t.sender);
-  createOffer = async () => ({ type: 'offer', sdp: 'offer' });
+  createOffer = async (o?: { iceRestart?: boolean }) => ({ type: 'offer', sdp: o?.iceRestart ? 'offer-restart' : 'offer' });
   createAnswer = async () => ({ type: 'answer', sdp: 'answer' });
   setLocalDescription = async (d: { type: string; sdp: string }) => {
     this.localDescription = { ...d, toJSON: () => ({ type: d.type, sdp: d.sdp }) };
@@ -114,8 +120,18 @@ class FakePC {
   close = () => void (this.signalingState = 'closed');
   getConfiguration = () => this.config;
   setConfiguration = (c: RTCConfiguration) => void (this.config = c);
-  getStats = async () => new Map();
+  /** What getStats reports: set by relayed() so the selected pair goes through a relay. */
+  stats = new Map<string, Record<string, unknown>>();
+  getStats = async () => this.stats;
   restartIce = () => undefined;
+  relayed() {
+    this.stats = new Map<string, Record<string, unknown>>([
+      ['t', { type: 'transport', id: 't', selectedCandidatePairId: 'cp' }],
+      ['cp', { type: 'candidate-pair', id: 'cp', localCandidateId: 'l', remoteCandidateId: 'r' }],
+      ['l', { type: 'local-candidate', id: 'l', candidateType: 'relay', address: '104.1.2.3' }],
+      ['r', { type: 'remote-candidate', id: 'r', candidateType: 'srflx', address: '81.1.2.3' }],
+    ]);
+  }
 }
 
 const ringing = (over: Partial<Call> = {}): Call => ({
@@ -144,6 +160,7 @@ async function setup() {
 
 beforeEach(() => {
   h.sockets.length = 0;
+  h.onReconnect = null;
   localStorage.clear();
   h.nurseries = [{ id: NID, name: 'Nursery', baby_name: 'Aria' }];
   h.pushSub = null;
@@ -168,6 +185,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('call center', () => {
@@ -628,6 +647,23 @@ describe('direct calls', () => {
     callCenter.stop();
   });
 
+  // Regression (review of C6): with relay credentials down to ≤ 4 h, a line hello older than 3 h
+  // made every call reconnect first — even your own line, whose hello carries no credentials.
+  it('your own line open for hours places a call without reconnecting (it carries no relay credentials)', async () => {
+    const { callCenter, me } = await setupDirect();
+    h.onReconnect = (s) => s.onMsg(meHello());
+    const real = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => real() + 4 * 3600_000);
+    me.lastHeard = Date.now();
+    const placed = callCenter.callUser([{ uid: SAM, name: 'Sam' }], false);
+    await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    expect(await placed).toBeNull();
+    expect(me.reconnects).toBe(0);
+    expect(me.sent.some((m) => m.t === 'dcall_start')).toBe(true);
+    callCenter.stop();
+  });
+
   it('a device that becomes the nursery camera closes your line too (it must never ring)', async () => {
     const { callCenter, me } = await setupDirect();
     callCenter.setSuspended(true);
@@ -635,6 +671,124 @@ describe('direct calls', () => {
     expect(callCenter.snapshot().directReady).toBe(false);
     callCenter.setSuspended(false);
     expect(sock('me')).not.toBe(me);
+    callCenter.stop();
+  });
+});
+
+describe('relay credentials (TURN is billed per GB: a call counts against its caller)', () => {
+  const turnIce = (user: string): RTCIceServer[] => [{ urls: ['stun:stun.example:3478'] }, { urls: ['turn:turn.example:3478?transport=udp'], username: user, credential: 'c' }];
+  const stunOnly: RTCIceServer[] = [{ urls: ['stun:stun.example:3478'] }];
+  const withTurn = (sid: string, user: string, calls: Call[] = []) => ({ ...hello(sid, calls), ice: turnIce(user), iceMs: 13_200_000 });
+  const settle = async (n = 6) => {
+    for (let i = 0; i < n; i++) await tick();
+  };
+  const realNow = Date.now.bind(Date);
+  /** The clock moves on by `ms` (the line's hello is that old); the socket was heard from just now. */
+  const later = (ms: number, sock: FakeSock) => {
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ms);
+    sock.lastHeard = Date.now();
+  };
+  const placedCall = (id: string) =>
+    ringing({ id, from: { uid: 'gpa', name: 'Bob', label: 'Grandpa' }, invited: ['mom'], parts: [{ uid: 'gpa', name: 'Bob', label: 'Grandpa', sid: 's-gpa', at: 1, mic: true, cam: false }], ever: { gpa: 'Bob' } });
+
+  // Regression (review of C6): picking up offers at once, gathered with the line's own credentials
+  // (counted against whoever picked up); call_joined's, counted against the caller, only reached
+  // later connections — so the callee's relay was billed to the callee for the whole call.
+  it('picking up a family call: once connected through the relay, it moves onto the call’s own credentials', async () => {
+    const { callCenter, line } = await setup();
+    line.onMsg(withTurn('s-gpa', 'gpa-own'));
+    line.onMsg({ t: 'call', call: ringing() });
+    const answered = callCenter.accept(NID, 'c1', false);
+    await settle();
+    const pc = FakePC.all.at(-1)!;
+    // Joined and offered at once, with this line's own credentials…
+    expect(line.sent.slice(-2).map((m) => m.t)).toEqual(['call_join', 'call_rtc']);
+    expect(pc.config.iceServers).toEqual(turnIce('gpa-own'));
+    // …the call's own (counted against Mom, who called) come right behind.
+    line.onMsg({ t: 'call_joined', id: 'c1', ice: turnIce('mom-pays'), iceMs: 13_200_000 });
+    expect(pc.config.iceServers).toEqual(turnIce('mom-pays'));
+    const cid = (line.sent.find((m) => m.t === 'call_rtc')!.d as { cid: string }).cid;
+    line.onMsg({ t: 'call_rtc', id: 'c1', from: 's-mom', d: { sdp: { type: 'answer', sdp: 'answer' }, cid } });
+    await settle();
+    pc.relayed();
+    pc.connectionState = 'connected';
+    pc.onconnectionstatechange?.();
+    await settle();
+    const restarts = line.sent.filter((m) => m.t === 'call_rtc' && (m.d as { sdp?: { sdp: string } }).sdp?.sdp === 'offer-restart');
+    expect(restarts).toEqual([{ t: 'call_rtc', id: 'c1', to: 's-mom', d: { sdp: { type: 'offer', sdp: 'offer-restart' }, cid } }]);
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await answered;
+    callCenter.stop();
+  });
+
+  // Regression (review of C6): a STUN-only call_started (the TURN API failing for a moment) replaced
+  // the line's working relay credentials, and its "ask again in 2 minutes" was dropped.
+  it('placing a call while the relay service is failing: keeps this line’s relay credentials and asks again when the room says', async () => {
+    const { callCenter, line } = await setup();
+    line.onMsg(withTurn('s-gpa', 'gpa-own'));
+    const placed = callCenter.call(NID, [{ uid: 'mom', name: 'Mom' }], false);
+    await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    expect(await placed).toBeNull();
+    const start = line.sent.find((m) => m.t === 'call_start')!;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    line.onMsg({ t: 'call_started', ref: start.ref, id: 'c9', ice: stunOnly, iceMs: 120_000 });
+    line.onMsg({ t: 'call', call: placedCall('c9') });
+    // The connection made while it rings still has a relay…
+    expect(FakePC.all.at(-1)!.config.iceServers).toEqual(turnIce('gpa-own'));
+    // …and the call asks for its own credentials when the room said to.
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(line.sent.some((m) => m.t === 'call_ice')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(line.sent.filter((m) => m.t === 'call_ice')).toEqual([{ t: 'call_ice', id: 'c9' }]);
+    callCenter.stop();
+  });
+
+  // Regression (review of C6): a nursery line open over 3 h reconnected before every call.
+  it('a nursery line open for hours places a call without reconnecting — and never falls back on credentials that may have lapsed', async () => {
+    const { callCenter, line } = await setup();
+    line.onMsg(withTurn('s-gpa', 'gpa-own'));
+    h.onReconnect = (s) => s.onMsg(withTurn('s-gpa-2', 'gpa-new'));
+    later(4 * 3600_000, line);
+    const placed = callCenter.call(NID, [{ uid: 'mom', name: 'Mom' }], false);
+    await tick();
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    expect(await placed).toBeNull();
+    expect(line.reconnects).toBe(0);
+    const start = line.sent.at(-1)!;
+    expect(start).toMatchObject({ t: 'call_start', to: ['mom'] });
+    line.onMsg({ t: 'call_started', ref: start.ref, id: 'c9', ice: stunOnly, iceMs: 120_000 });
+    expect(FakePC.all.at(-1)!.config.iceServers).toEqual(stunOnly);
+    callCenter.stop();
+  });
+
+  it('picking up on a nursery line whose relay credentials may have lapsed reconnects first, so the call never gathers with them', async () => {
+    const { callCenter, line } = await setup();
+    line.onMsg(withTurn('s-gpa', 'gpa-own'));
+    line.onMsg({ t: 'call', call: ringing() });
+    h.onReconnect = (s) => s.onMsg(withTurn('s-gpa-2', 'gpa-new', [ringing()]));
+    later(4 * 3600_000, line);
+    const answered = callCenter.accept(NID, 'c1', false);
+    await settle();
+    expect(line.reconnects).toBe(1);
+    expect(line.sent.find((m) => m.t === 'call_join')).toEqual({ t: 'call_join', id: 'c1', video: false, mic: true });
+    expect(FakePC.all.at(-1)!.config.iceServers).toEqual(turnIce('gpa-new'));
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await answered;
+    callCenter.stop();
+  });
+
+  it('picking up on a nursery line with no relay credentials to lapse doesn’t reconnect, however old its hello', async () => {
+    const { callCenter, line } = await setup(); // its hello: STUN only
+    h.onReconnect = (s) => s.onMsg(hello('s-gpa-2', [ringing()]));
+    line.onMsg({ t: 'call', call: ringing() });
+    later(8 * 3600_000, line);
+    const answered = callCenter.accept(NID, 'c1', false);
+    await settle();
+    expect(line.reconnects).toBe(0);
+    expect(line.sent.find((m) => m.t === 'call_join')).toEqual({ t: 'call_join', id: 'c1', video: false, mic: true });
+    gum.resolve(new FakeStream([new FakeTrack('audio')]));
+    await answered;
     callCenter.stop();
   });
 });

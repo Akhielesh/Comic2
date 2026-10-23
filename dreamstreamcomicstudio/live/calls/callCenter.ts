@@ -36,8 +36,9 @@ import { LIVE_APP_PATH } from '../host';
 import { MIC_CONSTRAINTS, preferSpeaker, type Facing } from '../monitor/camera';
 import { listNurseries, onMembersChanged, openCallRoomSocket, openMonitorSocket, openUserLineSocket, type MonitorSocket } from '../monitor/client';
 import { currentSubscription, localNotify, subscribe as pushSubscribe } from '../monitor/push';
+import { keepRelay } from '../rtcIce';
 import { ScreenWakeLock } from '../wakeLock';
-import { CallMesh, failureText, pcConfig, type FailWhy, type PeerView } from './callMesh';
+import { CallMesh, failureText, hasTurnServer, pcConfig, type FailWhy, type PeerView } from './callMesh';
 import {
   blockTarget,
   callErrorText,
@@ -87,8 +88,10 @@ interface Active {
   ended: { why: CallEndWhy | 'error'; text: string } | null;
   /** Who we asked (for "Calling Grandma…" before the room answers). */
   asked: { uid: string; name: string }[];
-  /** Fresh ICE servers for this call (call_started / call_joined), else the line's. */
+  /** Fresh ICE servers for this call (call_started / call_joined / call_ice), else the line's. */
   ice: RTCIceServer[] | null;
+  /** When the room said to ask for this call's relay credentials again (2 min after a failed mint). */
+  iceMs?: number | null;
   relayOnly: boolean;
   /** Our socket id in the call, and whether the room has confirmed it. */
   mySid: string | null;
@@ -165,7 +168,12 @@ const NAMES_CAP = 200;
 const RELAY_KEY = 'ds-calls-relay';
 /** A line this quiet may be dead (a network change can leave a socket OPEN): check it before a call. */
 const SILENT_MS = 30_000;
-/** Relay credentials from a line's hello stay good for 3 h 35 min+ (live-worker/src/ice.ts: ≤ 4 h); refresh before then. */
+/**
+ * Relay credentials from a line's hello stay good for 3 h 35 min+ (live-worker/src/ice.ts: ≤ 4 h).
+ * Older ones are never used: picking up (which gathers with them before the call's own arrive)
+ * reconnects the line first, and placing a call doesn't fall back on them. Only a line whose
+ * hello carried a relay is ever reconnected for this — your own line's carries none.
+ */
 const ICE_MAX_AGE_MS = 3 * 60 * 60_000;
 /** While connected, tell the room every 10 s whose media still reaches us. */
 const VOUCH_MS = 10_000;
@@ -879,7 +887,12 @@ class CallCenter {
         if (a && a.ref === m.ref && a.nid === line.nid && !a.ended) {
           a.id = m.id;
           a.mySid = line.me?.sid ?? null;
-          if (m.ice?.length) a.ice = m.ice;
+          // The call's own relay credentials (counted against us, its caller). STUN only while the
+          // TURN API fails, with "ask again in 2 minutes": meanwhile this line's (ours too) are kept.
+          if (m.ice?.length) {
+            a.ice = keepRelay(a.ice ?? this.lineIce(line), m.ice);
+            a.iceMs = m.iceMs ?? null;
+          }
           const c = this.calls.get(m.id)?.call;
           if (c) this.onActiveCall(line, c);
           this.prewarm();
@@ -895,7 +908,8 @@ class CallCenter {
         // Fresh relay credentials for this call: on picking up, and when a long call's are due.
         const a = this.active;
         if (a && a.id === m.id && a.nid === line.nid && m.ice?.length) {
-          a.ice = m.ice;
+          a.ice = keepRelay(a.ice ?? this.lineIce(line), m.ice);
+          a.iceMs = m.iceMs ?? null;
           a.mesh?.setIce(m.ice, m.iceMs);
         }
         return;
@@ -1077,15 +1091,23 @@ class CallCenter {
 
   /* ------------------------------------------------------- the call */
 
+  /** The relay credentials from the line's hello, unless they may have lapsed (then none). */
+  private lineIce(line: Line): RTCIceServer[] {
+    return Date.now() - line.iceAt > ICE_MAX_AGE_MS ? [] : line.ice;
+  }
+
   /**
    * Make sure the line really reaches the room before a call goes through it:
    * a socket that's been quiet may be dead (it can sit OPEN for minutes after
-   * a network change), and relay credentials from a very old hello may be
-   * near expiry. Checks with a ping and reconnects if nothing answers.
+   * a network change). Checks with a ping and reconnects if nothing answers.
+   * `gathers`: the call gathers with the line's own relay credentials before
+   * the room sends the call's (picking up does, to answer at once) — if they
+   * may have lapsed, reconnect for fresh ones first. Placing a call needn't:
+   * the room's answer brings the call's own.
    */
-  private async fresh(line: Line): Promise<boolean> {
+  private async fresh(line: Line, gathers = false): Promise<boolean> {
     const now = Date.now();
-    const stale = now - line.iceAt > ICE_MAX_AGE_MS;
+    const stale = gathers && hasTurnServer(line.ice) && now - line.iceAt > ICE_MAX_AGE_MS;
     if (line.connected && now - line.sock.lastHeard < SILENT_MS && !stale) return true;
     if (stale) line.sock.reconnect();
     else line.sock.probe(3000);
@@ -1153,7 +1175,7 @@ class CallCenter {
     // (A direct call's room may still be connecting — fresh() below waits for it.)
     if (!line || (!line.connected && !isDirect(nid)) || !this.calls.has(id)) return 'That call has ended.';
     if (this.active && !this.active.ended) this.hangup();
-    if (!(await this.fresh(line))) return 'Not connected right now — check your internet and try again.';
+    if (!(await this.fresh(line, true))) return 'Not connected right now — check your internet and try again.';
     const ring = this.calls.get(id);
     const me = line.me;
     if (!ring || !me) return 'That call has ended.';
@@ -1453,6 +1475,7 @@ class CallCenter {
       a.mesh = new CallMesh({
         me: me.uid,
         ice: a.ice ?? line.ice,
+        iceMs: a.iceMs ?? null,
         relayOnly: a.relayOnly,
         local: () => ({ audio: a.local.getAudioTracks()[0] ?? null, video: a.local.getVideoTracks()[0] ?? null }),
         signal: (to: string, d: CallSignal) => line.sock.send({ t: 'call_rtc', id, to, d }),

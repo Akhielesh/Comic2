@@ -121,7 +121,7 @@ async function limitBitrate(sender: RTCRtpSender | null, bps: number | null): Pr
     else e.maxBitrate = bps;
     await sender.setParameters(params);
   } catch {
-    /* not negotiated yet: re-applied when the path is next read */
+    /* not negotiated yet: re-applied once it is (onNegotiated), or when the path changes */
   }
 }
 
@@ -148,6 +148,11 @@ class PeerLink {
   /** The network path this link uses (null until known); a relay is billed per GB, so it's capped. */
   path: NetPath | null = null;
   onPath: ((p: NetPath) => void) | null = null;
+  /**
+   * A (re)negotiation finished — signaling is back to `stable`. A sender added since (a screen
+   * share) has its encodings only now, so a cap tried before this may not have taken.
+   */
+  onNegotiated: (() => void) | null = null;
   private restarts = 0;
   private discTimer: ReturnType<typeof setTimeout> | null = null;
   private pathTimer: ReturnType<typeof setTimeout> | null = null;
@@ -173,6 +178,9 @@ class PeerLink {
       const st = this.pc.connectionState;
       this.recover(st);
       this.onConnectionState?.(st);
+    };
+    this.pc.onsignalingstatechange = () => {
+      if (!this.closed && this.pc.signalingState === 'stable') this.onNegotiated?.();
     };
     this.pc.ontrack = (e) => {
       const stream = e.streams[0];
@@ -549,6 +557,9 @@ export class GuestPeer {
     this.link.onRemoteGone = () => this.onHostStream?.(null);
     this.link.onConnectionState = (s) => this.onState?.(s);
     this.link.onPath = () => void this.capUplink();
+    // A screen share added while relayed is renegotiated with the link still up (no path change):
+    // its cap is applied again once the new sender exists for real. Unchanged caps are skipped.
+    this.link.onNegotiated = () => void this.capUplink();
   }
 
   /** Through a relay our camera and screen send less (billed per GB); off it, no cap of ours. */

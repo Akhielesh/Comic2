@@ -31,11 +31,14 @@
  *    the stats this file already polls, and the cap lifts if the path goes direct;
  *  - relay credentials are short-lived: the room is asked for fresh ones before they lapse
  *    (`refreshIce`), and a relayed connection restarts ICE onto them (the answering side
- *    asks the offerer, `renew`), so a long call never drops when one expires.
+ *    asks the offerer, `renew`), so a long call never drops when one expires;
+ *  - the same move happens when a connection comes up through a relay on credentials other
+ *    than the call's: picking up offers at once with the line's own (counted against whoever
+ *    picked up), and the call's own (counted against its caller) arrive a moment later.
  */
 
 import { netPath, pathFromReport, type NetPath } from '../monitor/rtc';
-import { applyIce, IceClock, keepRelay, turnKey, turnRenewed } from '../rtcIce';
+import { applyIce, IceClock, keepRelay, turnKey } from '../rtcIce';
 import type { Call, CallPart, CallSignal } from './types';
 
 export type PeerState = 'connecting' | 'slow' | 'connected' | 'reconnecting' | 'failed';
@@ -94,6 +97,13 @@ interface Peer {
   path: NetPath | null;
   last: { lost: number; got: number } | null;
   ttc: number | null;
+  /**
+   * The relay credentials (turnKey) this connection last gathered with: a relay it uses is
+   * billed to whoever they were minted for, and lapses with them.
+   */
+  turn: string;
+  /** The credentials it was last asked to move onto (once per set: an older app may never act on it). */
+  renewAsked: string | null;
 }
 
 export const SLOW_MS = 8000;
@@ -382,24 +392,37 @@ export class CallMesh {
   /**
    * Fresh relay credentials for this call (`iceMs`: when to ask again). Every later connection
    * and restart uses them; a connection going through a relay on the ones they replace
-   * restarts onto them now, before those lapse.
+   * restarts onto them now, before those lapse — or as soon as it is up, if it isn't yet.
    */
   setIce(list: RTCIceServer[], iceMs?: number | null): void {
     if (!list.length) return;
     const ice = keepRelay(this.ice, list);
-    const renewed = turnRenewed(this.ice, ice);
     this.ice = ice;
     this.hasTurn = hasTurnServer(ice);
     this.iceClock.arm(iceMs ?? (this.hasTurn ? ICE_REFRESH_MS : null));
     for (const p of this.peers.values()) {
       applyIce(p.pc, ice);
-      if (renewed && p.path === 'relay' && p.state === 'connected') this.renew(p);
+      this.renewIfStale(p);
     }
+  }
+
+  /**
+   * A working connection that goes through a relay on credentials other than the call's
+   * current ones moves onto them: renewed ones in a long call, or the call's own that came
+   * after it gathered (see the top of the file). Checked when credentials arrive, when it
+   * connects and when its path changes; a connection that isn't up yet, or goes direct,
+   * has nothing on the old ones to move.
+   */
+  private renewIfStale(p: Peer): void {
+    const key = turnKey(this.ice);
+    if (key === '' || p.turn === key || p.renewAsked === key || p.state !== 'connected' || p.path !== 'relay') return;
+    this.renew(p);
   }
 
   /** Move a working relayed connection onto fresh credentials: the offerer restarts it, the other side asks it to. */
   private renew(p: Peer): void {
     if (this.closed || p.cid == null) return;
+    p.renewAsked = turnKey(this.ice);
     if (p.offerer) this.restart(p);
     else this.signal(p, { restart: true, renew: true });
   }
@@ -432,7 +455,7 @@ export class CallMesh {
     const peer: Peer = {
       uid: part.uid, sid: part.sid, part, pc, cid, offerer, stream: stream ?? new MediaStream(), pending: [], state: 'connecting', why: null,
       born, everConnected: false, downAt: null, pcFailed: false, sends: [], lastSend: 0, localTypes: new Set(), remoteTypes: new Set(),
-      quality: null, path: null, last: null, ttc: null,
+      quality: null, path: null, last: null, ttc: null, turn: turnKey(pc.getConfiguration?.().iceServers), renewAsked: null,
     };
     this.peers.set(part.uid, peer);
     if (offerer) {
@@ -491,6 +514,7 @@ export class CallMesh {
         peer.path = path;
         if (path === 'relay') this.retune(); // a relayed copy is capped from the start
         if (this.first?.ttc == null && peer.ttc != null) this.first = { ttc: peer.ttc, path, fail: this.first?.fail ?? null, turn: this.hasTurn };
+        this.renewIfStale(peer);
         this.opts.onChange();
       });
     } else if (s === 'disconnected' || s === 'failed') {
@@ -617,6 +641,8 @@ export class CallMesh {
       if (this.peers.get(p.uid) !== p || p.pc.connectionState === 'closed') return;
       try {
         p.pc.restartIce?.();
+        // A restart gathers afresh, with the credentials the connection holds now.
+        p.turn = turnKey(p.pc.getConfiguration?.().iceServers);
         await p.pc.setLocalDescription(await p.pc.createOffer({ iceRestart: true }));
         this.signal(p, { sdp: p.pc.localDescription!.toJSON() });
       } catch { /* the next nudge tries again */ }
@@ -684,6 +710,8 @@ export class CallMesh {
       return;
     }
     if (pc.signalingState === 'have-local-offer') await pc.setLocalDescription({ type: 'rollback' });
+    // A new offer (a first one, or their ICE restart): our answer gathers with the credentials we hold now.
+    peer.turn = turnKey(pc.getConfiguration?.().iceServers);
     await pc.setRemoteDescription(sdp);
     this.attach(peer);
     preferCodecs(pc);
@@ -770,6 +798,7 @@ export class CallMesh {
           p.path = path;
           relayChanged = true;
           changed = true;
+          this.renewIfStale(p); // onto a relay gathered with credentials since replaced
         }
         const dLost = p.last ? lost - p.last.lost : 0;
         const dGot = p.last ? got - p.last.got : 0;
