@@ -26,7 +26,8 @@ export interface UploadQueueProps {
   className?: string;
 }
 
-const ROW = 'flex min-h-[52px] items-center gap-3 rounded-xl border px-3 py-2';
+// Rows wrap: on a 320 px phone the actions drop under the text (basis-32) instead of squeezing it.
+const ROW = 'flex min-h-[52px] flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-2';
 const BTN =
   'inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded-full px-3 text-[12px] font-medium transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
 const QUIET = `${BTN} text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
@@ -99,7 +100,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
               data-state={item.state}
             >
               {rejected ? <ShieldAlert className="h-5 w-5 shrink-0 text-red-600 dark:text-red-400" aria-hidden /> : <Thumb item={item} />}
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-32">
                 <p className="truncate text-[13px] font-medium text-[var(--ds-ink)]" title={item.name}>
                   {item.name}
                 </p>
@@ -135,7 +136,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                   </p>
                 )}
                 {(warn || rejected) && (
-                  <p className={cx('mt-0.5 text-[12px] leading-snug', rejected ? 'text-red-700 dark:text-red-300' : 'text-[var(--ds-ink)]')}>
+                  <p className={cx('mt-0.5 text-[12px] leading-snug', rejected ? 'text-red-700 dark:text-red-300' : 'text-[var(--ds-ink)]')} role="status">
                     {warn && <AlertTriangle className="mr-1 inline h-3 w-3 align-[-1px] text-[#D97757]" aria-hidden />}
                     {item.message}
                     {rejected && (
@@ -143,7 +144,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                         {' '}
                         <button
                           type="button"
-                          className="-my-3 inline-block py-3 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                          className="-my-[14px] inline-flex min-h-[44px] items-center py-[14px] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
                           onClick={() => setPolicyOpen((v) => !v)}
                           aria-expanded={policyOpen}
                         >
@@ -154,33 +155,35 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                   </p>
                 )}
               </div>
-              {isActiveUpload(item.state) && (
-                <button type="button" className={QUIET} onClick={() => onCancel(item.id)} aria-label={`Cancel ${item.name}`}>
-                  <X className="h-4 w-4" aria-hidden />
-                </button>
-              )}
-              {item.state === 'failed' && item.retryable && (
-                <button type="button" className={QUIET} onClick={() => onRetry(item.id)}>
-                  <RotateCw className="h-3.5 w-3.5" aria-hidden /> Retry
-                </button>
-              )}
-              {item.state === 'near_duplicate' && (
-                <span className="flex shrink-0 flex-wrap justify-end">
-                  <button type="button" className={QUIET} onClick={() => onDismiss(item.id)}>
-                    Keep both
+              <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end">
+                {isActiveUpload(item.state) && (
+                  <button type="button" className={QUIET} onClick={() => onCancel(item.id)} aria-label={`Cancel ${item.name}`}>
+                    <X className="h-4 w-4" aria-hidden />
                   </button>
-                  {onRemoveNew && (
-                    <button type="button" className={QUIET} onClick={() => onRemoveNew(item)}>
-                      Remove this
+                )}
+                {item.state === 'failed' && item.retryable && (
+                  <button type="button" className={QUIET} onClick={() => onRetry(item.id)}>
+                    <RotateCw className="h-3.5 w-3.5" aria-hidden /> Retry
+                  </button>
+                )}
+                {item.state === 'near_duplicate' && (
+                  <>
+                    <button type="button" className={QUIET} onClick={() => onDismiss(item.id)}>
+                      Keep both
                     </button>
-                  )}
-                </span>
-              )}
-              {(rejected || warn) && (
-                <button type="button" className={QUIET} onClick={() => onDismiss(item.id)} aria-label={`Dismiss ${item.name}`}>
-                  <X className="h-4 w-4" aria-hidden />
-                </button>
-              )}
+                    {onRemoveNew && (
+                      <button type="button" className={QUIET} onClick={() => onRemoveNew(item)}>
+                        Remove this
+                      </button>
+                    )}
+                  </>
+                )}
+                {(rejected || warn) && (
+                  <button type="button" className={QUIET} onClick={() => onDismiss(item.id)} aria-label={`Dismiss ${item.name}`}>
+                    <X className="h-4 w-4" aria-hidden />
+                  </button>
+                )}
+              </span>
             </li>
           );
         })}

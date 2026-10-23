@@ -844,12 +844,22 @@ export async function stepRun(deps: LibraryDeps, runId: string, nRaw: unknown, a
       status = 'budget_exhausted';
       error = `The budget of ${fmtUsd(run.budget_usd)} is used up (${fmtUsd(fresh.spent_usd)} spent). Start a new build to continue.`;
     }
-    const finished = status !== 'running';
-    await deps.repo.updateRun(runId, {
-      spent_usd: fresh.spent_usd,
-      counts: view.counts,
-      ...(finished ? { status, finished_at: iso(deps.now()), error } : {})
-    });
+    let finished = status !== 'running';
+    // Real spend and progress are always recorded; the final status only lands while the run is
+    // still running (an admin's Cancel that arrived mid-step is never overwritten by "completed").
+    await deps.repo.updateRun(runId, { spent_usd: fresh.spent_usd, counts: view.counts });
+    if (finished && !(await deps.repo.updateRun(runId, { status, finished_at: iso(deps.now()), error }, { status: 'running' }))) {
+      const latest = await deps.repo.getRun(runId);
+      status = latest?.status ?? status;
+      error = latest?.error ?? null;
+      finished = status !== 'running';
+    } else if (!finished) {
+      const latest = await deps.repo.getRun(runId);
+      if (latest && latest.status !== 'running') {
+        status = latest.status;
+        finished = true;
+      }
+    }
     if (finished) {
       view = { ...view, status };
       await deps.audit?.({ actorId: adminId, action: 'comic.library.run_finish', targetType: 'library_runs', targetId: runId, detail: { status, spentUsd: fresh.spent_usd, counts: view.counts } });
@@ -861,7 +871,7 @@ export async function stepRun(deps: LibraryDeps, runId: string, nRaw: unknown, a
       reset ? `Resumed ${reset} interrupted image${reset === 1 ? '' : 's'}.` : '',
       picks.length ? `Drew ${picks.length}: ${did}.` : '',
       waiting ? 'Waiting for an interrupted step to time out (up to 10 minutes).' : '',
-      status === 'completed' ? 'Build finished.' : '',
+      status === 'completed' ? 'Build finished.' : status === 'cancelled' ? 'Build cancelled; images already drawn are kept.' : '',
       error || '',
       `${fmtUsd(fresh.spent_usd)} spent of ${fmtUsd(run.budget_usd)}.`
     ]
@@ -883,7 +893,19 @@ async function loadEditable(deps: LibraryDeps, id: string): Promise<{ row: Libra
   const row = await deps.repo.getAsset(versionOf(deps), id);
   if (!row) throw new StudioError('NOT_FOUND', "That asset hasn't been built yet.", { status: 404 });
   if (row.status === 'generating' || row.status === 'analyzing') {
-    throw new StudioError('CONFLICT', 'This asset is being drawn right now. Try again when the step finishes.', { status: 409 });
+    // A row left mid-attempt by a run that was cancelled (or died) is free once no step can still
+    // hold it (the step lease has run out); while its run is running it belongs to that run.
+    const run = row.run_id ? await deps.repo.getRun(row.run_id) : null;
+    const dead = (!run || run.status !== 'running') && deps.now() - ms(row.updated_at) > LIBRARY_LEASE_MS;
+    if (!dead) {
+      throw new StudioError(
+        'CONFLICT',
+        run?.status === 'running'
+          ? 'This asset is being drawn right now. Try again when the step finishes.'
+          : 'This asset is finishing its last attempt. Try again in a few minutes.',
+        { status: 409 }
+      );
+    }
   }
   return { row, entry };
 }
@@ -900,10 +922,21 @@ export async function publishAsset(deps: LibraryDeps, id: string, revRaw: unknow
   return entryView(deps, entry, { ...row, ...patch } as LibraryAssetRow);
 }
 
-export async function rejectAsset(deps: LibraryDeps, id: string, noteRaw: unknown, adminId: string): Promise<LibraryEntryView> {
+/**
+ * Reject the asset's current candidate. When that candidate is the live image it comes down; a
+ * weaker rebuild waiting for review is rejected while the earlier published image stays live,
+ * unless `opts.unpublish` asks to take the live image down too (e.g. a takedown).
+ */
+export async function rejectAsset(
+  deps: LibraryDeps,
+  id: string,
+  noteRaw: unknown,
+  adminId: string,
+  opts: { unpublish?: boolean } = {}
+): Promise<LibraryEntryView> {
   const { row, entry } = await loadEditable(deps, id);
   const note = typeof noteRaw === 'string' ? noteRaw.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, MAX_NOTE_CHARS) : '';
-  const unpublish = !!row.published && row.published.rev === row.rev;
+  const unpublish = !!row.published && (opts.unpublish === true || row.published.rev === row.rev);
   const patch: Partial<LibraryAssetRow> = {
     status: 'rejected',
     next_step: null,

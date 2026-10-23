@@ -100,12 +100,14 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
 
   return (
     <div className={cx('min-w-0 px-1', className)}>
-      <div role="status" aria-live="polite" className="flex min-h-[28px] min-w-0 items-center gap-2 text-[12.5px] text-[var(--ds-muted)]">
+      {/* Wraps on a narrow phone: the badges and Stop drop to a second line instead of squeezing
+          what the studio is doing down to "Dra…" (the label keeps at least 8rem). */}
+      <div role="status" aria-live="polite" className="flex min-h-[28px] min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] text-[var(--ds-muted)]">
         <span className="relative flex h-2 w-2 shrink-0" aria-hidden>
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--ds-accent)] opacity-40 motion-reduce:animate-none" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--ds-accent)]" />
         </span>
-        <span className="min-w-0 flex-1 truncate text-[var(--ds-ink)]" title={label}>
+        <span className="min-w-0 flex-1 basis-[8rem] truncate text-[var(--ds-ink)]" title={label}>
           {label}
         </span>
         {cost && <CostBadge cost={cost} />}

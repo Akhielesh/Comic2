@@ -135,9 +135,15 @@ export type LimitExceededReason =
   | 'INSUFFICIENT_CREDITS'
   | 'PAYMENT_METHOD_REQUIRED'
   | 'OVERAGE_CAP_REACHED'
-  // Monthly platform model-spend allowance used up (percent-only messaging — never
-  // USD; see server/src/services/platformAllowance.ts).
-  | 'platform_allowance_exhausted';
+  // Legacy monthly platform allowance (kept so old payloads still type-check).
+  | 'platform_allowance_exhausted'
+  // The user's platform-paid usage budget (P1-LIMITS: $10 lifetime per non-admin user across
+  // every studio, provider-cost basis) can't cover this call. PERCENT-only messaging — users
+  // never see the dollar figure; see server/src/services/platformAllowance.ts.
+  | 'usage_budget_exhausted'
+  // The budget couldn't be checked (database unreachable), so the call was refused before any
+  // spend. Governed users fail CLOSED; nothing was charged.
+  | 'usage_budget_unavailable';
 
 export type LimitExceededDetails = {
   reason: LimitExceededReason;
@@ -146,8 +152,10 @@ export type LimitExceededDetails = {
   resetAt: string;
   usage: UsageLimitState;
   options: LimitExceededResolutionOptions;
-  /** User-facing message (set for 'platform_allowance_exhausted'; PERCENT terms only). */
+  /** User-facing message (set for the allowance/budget reasons; PERCENT terms only, never USD). */
   message?: string;
+  /** Usage budget: percent of the user's usage still left (0–100). Never a dollar figure. */
+  pctLeft?: number;
   /** Whether the user has a stored BYOK key they could fall back to. */
   canFallbackToByok?: boolean;
   /** The user's configured BYOK fallback behavior once the allowance is exhausted. */
@@ -159,6 +167,16 @@ export type ReservationState = {
   byokBypass: boolean;
   estimated: TokenEstimateResponse;
   usage: UsageLimitState;
+  /**
+   * True when the per-user usage budget governs this call (non-admin, non-exempt, platform-paid).
+   * The budget RPC already wrote the RESERVED cost event; settle/release only update it.
+   */
+  governed?: boolean;
+  /**
+   * True when the token wallet was not touched at reserve (usage budgets on: governed, exempt or
+   * admin), so settle/release must not move wallet CT either. The ledger is still written.
+   */
+  walletSkipped?: boolean;
 };
 
 export type BillingSummaryResponse = {

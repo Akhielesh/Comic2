@@ -99,7 +99,7 @@ export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, o
         </span>
       )}
       {unchecked && (
-        <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-zinc-400 ring-2 ring-white/80" title="Will be checked before it's used" aria-label="Will be checked before it's used" />
+        <span role="img" className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-zinc-400 ring-2 ring-white/80" title="Will be checked before it's used" aria-label="Will be checked before it's used" />
       )}
       {onDragHandleDown && count > 1 && (
         <span
@@ -117,11 +117,11 @@ export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, o
       )}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 flex-wrap gap-1 bg-gradient-to-t from-black/60 to-transparent p-1.5 pr-10 pt-4">
         {ref.label && <span className="max-w-full truncate rounded-full bg-white/85 px-1.5 py-0.5 text-[10px] font-medium text-zinc-900">{labelText(ref.label)}</span>}
-        {usage?.sheet && <span className="rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Sheet</span>}
-        {usage?.pages && <span className="rounded-full bg-[#D97757]/85 px-1.5 py-0.5 text-[10px] font-medium text-white">Pages</span>}
-        {usage?.style && <span className="rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Style</span>}
+        {usage?.sheet && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Sheet</span>}
+        {usage?.pages && <span className="max-w-full truncate rounded-full bg-[#D97757]/85 px-1.5 py-0.5 text-[10px] font-medium text-white">Pages</span>}
+        {usage?.style && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Style</span>}
         {quality.map((q) => (
-          <span key={q} className="rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] text-white" title={`${q} — we'll prefer your other photos`}>
+          <span key={q} className="max-w-full truncate rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] text-white" title={`${q} — we'll prefer your other photos`}>
             {q}
           </span>
         ))}

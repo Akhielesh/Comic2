@@ -156,11 +156,20 @@ describe('StyleChoiceCard', () => {
   });
 
   it('a failed option reads calm: when + why, details on tap, retry the same direction', () => {
-    const studio = renderCard(card);
+    // While another option is still drawing, Retry waits (the server draws one batch at a time).
+    const busy = renderCard(card);
+    expect(screen.getByRole('button', { name: 'Retry Retro' })).toBeDisabled();
+    busy.container.remove();
+    const doc = makeSampleDoc();
+    doc.style.options = doc.style.options.map((o) => (o.id === 'opt_b' ? { ...o, render: { ...o.render, status: 'ready', asset: { path: 'u/x/p/opt_b.webp', source: 'generated', at: 1 } } } : o));
+    const studio = renderCard(card, doc);
     // no red wall of text: the provider's words are behind "Details"
     expect(screen.getAllByText(/failed .*· the model declined/).length).toBeGreaterThan(0);
-    expect(document.querySelector('[data-failed]')?.className).toMatch(/justify-\[safe_center\]/);
-    expect(document.querySelector('[data-failed]')?.className).not.toMatch(/red-/);
+    const frame = document.querySelector('[data-failed]')!;
+    expect(frame.className).toMatch(/justify-\[safe_center\]/);
+    expect(frame.className).not.toMatch(/red-/);
+    // small 4:5 tiles keep only icon + Retry in the frame (visualqa P1-5); the reason is in the caption
+    expect(Array.from(frame.querySelectorAll('span:not(.sr-only)')).map((n) => n.textContent).join('')).not.toMatch(/declined/);
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getAllByText(/The model refused this one\./).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Retry Retro' }));
@@ -388,7 +397,10 @@ describe('GateCard', () => {
     expect(copy('plan_review')).toMatch(/page plan is new/);
     expect(copy('redraw')).toMatch(/stay in history/);
     expect(copy('no_intent')).toMatch(/didn’t ask me to draw/);
-    expect(copy('policy')).toMatch(/check before spends over \$0\.50/);
+    // the threshold is only blamed when this spend is really over it (a $0.09 gate is a re-quote)
+    expect(copy('policy')).toBe('Here’s the up-to-date price first — nothing is spent until you approve.');
+    expect(gateReasonCopy({ ...gate, reason: 'policy', estimateUsd: 0.84 }, doc)).toMatch(/check before spends over \$0\.50/);
+    expect(gateReasonCopy(gate, makeSampleDoc({ settings: { ...doc.settings, confirm: 'always' } }))).toBe('You asked me to check before every spend.');
     renderCard(card, makeSampleDoc({ gate: { ...gate, reason: 'first_render' } }));
     expect(screen.getByText(/Your first pages cost real money/)).toBeInTheDocument();
   });
@@ -580,6 +592,22 @@ describe('RendersCard', () => {
     expect(expected.actions[0]).toMatchObject({ type: 'render_pages', pageIds: ['pg_2', 'pg_3'], force: true });
     expect(expected.actions[1]).toMatchObject({ type: 'render_style_options', directions: [{ name: 'Retro', spec: 'Halftone' }] });
     expect(screen.getByRole('button', { name: /Retry 3 failed images/ })).toHaveTextContent(formatUsd(expected.usd));
+  });
+
+  it('retry-all never draws (or bills) a sheet twice: the page retry already draws the missing sheets', () => {
+    const doc = makeSampleDoc();
+    // Arjun's sheet failed, and page 2 (which shows Arjun) failed with it.
+    doc.cast = doc.cast.map((c) => (c.id === 'c_arjun' ? { ...c, sheet: { status: 'failed', history: [], error: '429' } } : c));
+    doc.pages[1] = { ...doc.pages[1], render: { ...doc.pages[1].render, status: 'failed', error: '429' } };
+    const r = retryAllFailed(doc, [{ target: { kind: 'sheet', id: 'c_arjun' } }, { target: { kind: 'page', id: 'pg_2' } }], false);
+    const pages = quoteRenderPages(doc, { pageIds: ['pg_2'], force: true, byok: false, tier: 'standard' });
+    expect(pages.sheetIds).toEqual(['c_arjun']);
+    expect(r.actions).toEqual([{ type: 'render_pages', pageIds: ['pg_2'], force: true, quotedUsd: pages.usd }]);
+    expect(r.usd).toBe(Math.round(pages.usd * 10000) / 10000);
+    expect(r.count).toBe(2);
+    // a failed sheet nobody on those pages needs is still retried on its own
+    const other = retryAllFailed(doc, [{ target: { kind: 'sheet', id: 'c_arjun' } }, { target: { kind: 'page', id: 'pg_3' } }], false);
+    expect(other.actions.map((a) => a.type)).toEqual(['render_pages', 'render_sheets']);
   });
 
   it('retryAllFailed covers sheets and the cover too; failureSummary names the main reason', () => {

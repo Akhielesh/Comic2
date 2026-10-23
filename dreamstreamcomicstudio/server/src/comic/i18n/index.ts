@@ -187,7 +187,25 @@ export async function estimateTranslation(ctx: StudioContext, action: TranslateA
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 
-const cancelled = (ctx: StudioContext) => ctx.signal?.aborted || ctx.session.abort.signal.aborted;
+/**
+ * Stop is the session's abort, captured when the run starts (a later request's resetAbort must not
+ * undo a Stop the user pressed during this run). Like renders, a translation keeps going in the
+ * background when the HTTP stream drops (a phone locking mid-run): only Stop cancels it.
+ */
+const cancelled = (signal: AbortSignal) => signal.aborted;
+
+/** Languages being translated right now, per session: a double tap or a director call mid-run never pays twice. */
+const inFlight = new WeakMap<object, Set<string>>();
+const runningFor = (ctx: StudioContext): Set<string> => {
+  let set = inFlight.get(ctx.session);
+  if (!set) {
+    set = new Set();
+    inFlight.set(ctx.session, set);
+  }
+  return set;
+};
+/** True while `lang` is being translated in this session (tests + the director's honesty). */
+export const translationRunning = (ctx: StudioContext, lang: string): boolean => !!inFlight.get(ctx.session)?.has(lang);
 
 const activity = (ctx: StudioContext, label: string) => {
   const id = newId('act');
@@ -243,7 +261,7 @@ const extrasFor = (doc: ComicDoc, fields: EditionTextField[]): TranslatorItem[] 
   return out;
 };
 
-async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, onPage: (label: string) => (ok: boolean) => void): Promise<LanguageResult> {
+async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAction, signal: AbortSignal, onPage: (label: string) => (ok: boolean) => void): Promise<LanguageResult> {
   const spec = languageSpec(lang)!;
   const tracker: TextSpendTracker = newTextSpendTracker();
   const res: LanguageResult = { lang, translated: 0, free: 0, reviewed: 0, autoFixed: 0, failed: 0, unsafe: 0, tooLong: 0, reviewSkipped: 0, cancelled: false, usd: 0, byok: false };
@@ -260,7 +278,7 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
   let actualOut = 0;
   try {
     for (const [i, chunk] of chunks.entries()) {
-      if (cancelled(ctx)) {
+      if (cancelled(signal)) {
         res.cancelled = true;
         break;
       }
@@ -271,7 +289,7 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
       const first = pages[0]?.page.n;
       const end = onPage(first ? `Translating page ${first} into ${spec.endonym}…` : `Translating the title into ${spec.endonym}…`);
       try {
-        const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating, signal: ctx.session.abort.signal });
+        const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating, signal });
         const ops = chunkOps(ctx.session.doc, lang, result, Date.now(), result.model);
         if (ops.length) ctx.session.commit(ops, { origin: 'job' });
         translatedIds.push(...Object.keys(result.lines), ...Object.keys(result.extras));
@@ -300,7 +318,7 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
     const reviewIds = [...new Set([...translatedIds, ...(plan.toReview || [])])];
     if (reviewIds.length && !res.cancelled) {
       const end = onPage(`Reviewing the ${spec.english} translation…`);
-      const run = await reviewTranslations(llmL, ctx.session.doc, lang, reviewIds, ctx.session.abort.signal);
+      const run = await reviewTranslations(llmL, ctx.session.doc, lang, reviewIds, signal);
       const outcome = applyReview(ctx.session.doc, lang, run.verdicts, rating, Date.now());
       if (outcome.ops.length) ctx.session.commit(outcome.ops, { origin: 'job' });
       res.reviewed += outcome.reviewed;
@@ -423,11 +441,22 @@ const finished = (outcome: StartedAction['outcome']): StartedAction => ({ outcom
 /** Run an approved translation (background; `done` settles when every edition finished). */
 export async function runTranslation(ctx: StudioContext, action: TranslateAction, opts: RunActionOptions): Promise<StartedAction> {
   const doc = ctx.session.doc;
-  const { codes, unknown } = resolveLanguages(doc, action.languages);
-  if (!codes.length) {
+  const resolved = resolveLanguages(doc, action.languages);
+  const { unknown } = resolved;
+  if (!resolved.codes.length) {
     const text = unknown.length ? `I don't know ${joinList(unknown)} as a language. ${supportedLanguagesText(doc)}` : `${englishName(doc.format.language)} is already the comic's language. ${supportedLanguagesText(doc)}`;
     tell(ctx, opts, text, 'warn');
     return finished({ status: 'blocked', message: text, code: 'BAD_REQUEST' });
+  }
+  // A language already being translated in this session is never started twice (no double charge).
+  const running = runningFor(ctx);
+  const busy = resolved.codes.filter((c) => running.has(c));
+  const codes = resolved.codes.filter((c) => !running.has(c));
+  const busyNote = busy.length ? `${joinList(busy.map(englishName))} ${busy.length === 1 ? 'is' : 'are'} already being translated — that result arrives as a new message.` : '';
+  if (!codes.length) {
+    const text = `${busyNote} Nothing new was started or charged.`;
+    tell(ctx, opts, text, 'info');
+    return finished({ status: 'blocked', message: text, code: 'CONFLICT' });
   }
   const existing = Object.keys(i18nOf(doc).editions);
   const added = codes.filter((c) => !existing.includes(c));
@@ -461,9 +490,10 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
 
   if (!paid) {
     const upToDate = freeCount === 0;
-    const text = upToDate
+    let text = upToDate
       ? `${names} ${codes.length === 1 ? 'is' : 'are'} already up to date. Nothing to translate ($0).`
       : `Done for free: ${plural(freeCount, 'line')} copied by software into ${names} ($0 — no AI needed).`;
+    if (busyNote) text = `${text} ${busyNote}`;
     const steps: NextStep[] = [{ label: 'Review translations', client: { type: 'open_tab', tab: 'languages' } }];
     if (!opts.collectCard) ctx.session.commit([{ op: 'message', msg: message(text, [translationCard(codes)], steps) }], { origin: 'job' });
     else {
@@ -477,7 +507,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   // Duplicates of lines being translated now are copied for free once their twin is done.
   freeCount += quote.plans.reduce((n, p) => n + (p.deferred?.length || 0), 0);
   const skipped = unknown.length ? ` (I don't know ${joinList(unknown)} as a language, so I left it out.)` : '';
-  const startText = `Translating ${plural(lines, 'line')} into ${names} (≈ ${formatUsd(quote.estimate.usd)}${quote.byok ? ' on your key' : ''})${freeCount ? `; ${plural(freeCount, 'line')} reused for free` : ''}. Every line gets a linguist review.${skipped}`;
+  const startText = `Translating ${plural(lines, 'line')} into ${names} (≈ ${formatUsd(quote.estimate.usd)}${quote.byok ? ' on your key' : ''})${freeCount ? `; ${plural(freeCount, 'line')} reused for free` : ''}. Every line gets a linguist review.${skipped}${busyNote ? ` ${busyNote}` : ''}`;
   const card = translationCard(codes);
   let startMsgId: string | undefined;
   if (opts.collectCard) opts.collectCard(card);
@@ -487,14 +517,23 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     ctx.session.commit([{ op: 'message', msg }], { origin: 'job' });
   }
 
+  // Captured now: a Stop pressed during this run stays pressed even if a later request resets the session abort.
+  const signal = ctx.session.abort.signal;
+  for (const lang of codes) running.add(lang);
   const work = (async () => {
     let results: LanguageResult[] = [];
     try {
-      results = await pool(codes, TRANSLATE_CONCURRENCY, (lang) =>
-        runLanguage(ctx, lang, { ...action, languages: [lang] }, (label) => activity(ctx, label))
-      );
+      results = await pool(codes, TRANSLATE_CONCURRENCY, async (lang) => {
+        try {
+          return await runLanguage(ctx, lang, { ...action, languages: [lang] }, signal, (label) => activity(ctx, label));
+        } finally {
+          running.delete(lang);
+        }
+      });
     } catch (err) {
       logger.error('comic_translate_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    } finally {
+      for (const lang of codes) running.delete(lang);
     }
     const done = ctx.session.doc;
     const { text, nextSteps } = results.length
@@ -505,7 +544,14 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
       // A UI-started run rewrites its own progress message while it is still the last one.
       ctx.session.commit([{ op: 'message_patch', id: startMsgId, patch: { text, at: Date.now(), nextSteps, suggestions: nextSteps.map((s) => s.label) } }], { origin: 'job' });
     } else {
-      ctx.session.commit([{ op: 'message', msg: message(text, startMsgId ? [translationCard(codes)] : undefined, nextSteps) }], { origin: 'job' });
+      // Otherwise the summary is APPENDED (fresh `at`, after whatever the user said meanwhile) and a
+      // UI-started progress message points down to it instead of still saying "Translating…".
+      const ops: DocOp[] = [];
+      if (startMsgId && done.conversation.some((m) => m.id === startMsgId)) {
+        ops.push({ op: 'message_patch', id: startMsgId, patch: { text: `${startText} The result is below.` } });
+      }
+      ops.push({ op: 'message', msg: message(text, startMsgId ? [translationCard(codes)] : undefined, nextSteps) });
+      ctx.session.commit(ops, { origin: 'job' });
     }
     const usd = round4(results.reduce((s, r) => s + r.usd, 0));
     logger.info('comic_translate_done', { projectId: ctx.projectId, langs: codes, usd, translated: results.reduce((n, r) => n + r.translated, 0), free: freeCount + results.reduce((n, r) => n + r.free, 0) });

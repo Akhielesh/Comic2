@@ -205,3 +205,50 @@ describe('billingDenialMessage', () => {
     }
   });
 });
+
+describe('usage budget (P1-LIMITS)', () => {
+  it('passes the gate’s own percent-only sentence through, with honest fallbacks', () => {
+    const gate = "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or add your own API key in Settings → API keys to keep going.";
+    expect(billingDenialMessage({ reason: 'usage_budget_exhausted', message: gate })).toBe(gate);
+    expect(billingDenialMessage({ reason: 'usage_budget_exhausted' })).toMatch(/top-up.*Settings → API keys/);
+    expect(billingDenialMessage({ reason: 'usage_budget_unavailable' })).toMatch(/nothing was spent/);
+    for (const reason of ['usage_budget_exhausted', 'usage_budget_unavailable'] as const) {
+      expect(billingDenialMessage({ reason })).not.toMatch(/\$|usd|dollar/i);
+    }
+  });
+
+  it('turns an exhausted budget into a BILLING_DENIED notice (never swallowed)', async () => {
+    const message = "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or add your own API key in Settings → API keys to keep going.";
+    const reserve = vi.fn(async () => ({ allowed: false, details: { reason: 'usage_budget_exhausted', message } }));
+    const { hooks } = setup({ reserve });
+    await expect(hooks.reserve(pageArgs)).resolves.toEqual({ ok: false, code: 'BILLING_DENIED', message });
+  });
+
+  it('meters Comic Studio with BILLING_ENABLED=false while METERING_ENABLED is on (the production setup)', async () => {
+    const saved = { billing: process.env.BILLING_ENABLED, metering: process.env.METERING_ENABLED };
+    try {
+      vi.resetModules();
+      process.env.BILLING_ENABLED = 'false';
+      delete process.env.METERING_ENABLED;
+      const on = await import('./billing.js');
+      const reserve = vi.fn(async (input: { req: Request }) => allowed(input.req));
+      const res = await on.createBillingHooks(makeReq(), 'proj-1', { reserve: reserve as never }).reserve(pageArgs);
+      expect(res.ok).toBe(true);
+      expect(reserve).toHaveBeenCalledTimes(1);
+
+      // METERING_ENABLED=false is the emergency kill switch: nothing is reserved.
+      vi.resetModules();
+      process.env.METERING_ENABLED = 'false';
+      const off = await import('./billing.js');
+      const reserveOff = vi.fn();
+      await off.createBillingHooks(makeReq(), 'proj-1', { reserve: reserveOff as never }).reserve(pageArgs);
+      expect(reserveOff).not.toHaveBeenCalled();
+    } finally {
+      if (saved.billing === undefined) delete process.env.BILLING_ENABLED;
+      else process.env.BILLING_ENABLED = saved.billing;
+      if (saved.metering === undefined) delete process.env.METERING_ENABLED;
+      else process.env.METERING_ENABLED = saved.metering;
+      vi.resetModules();
+    }
+  });
+});

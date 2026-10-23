@@ -36,6 +36,25 @@ describe('addRefs: honest caps', () => {
     expect(ctx.session.doc.cast[0].refs.map((r) => r.path)).toEqual([3, 1, 2, 4, 5].map((n) => ref(n).path));
   });
 
+  it('a new main photo goes first but does not push the owner’s ranked photos behind the rest of the batch', async () => {
+    const doc = plannedDoc();
+    doc.cast[0].refs = [ref(100), ref(101), ref(102)];
+    const ctx = testContext(newSession(doc));
+    const out = await addRefs(ctx, MAYA, [1, 2, 3].map((n) => ref(n)), { mainIndex: 1 });
+    ctx.session.commit(out.ops);
+    expect(ctx.session.doc.cast[0].refs.map((r) => r.path)).toEqual([2, 100, 101, 102, 1, 3].map((n) => ref(n).path));
+  });
+
+  it('a chosen main photo that is already on the owner becomes the main one (not silently ignored)', async () => {
+    const doc = plannedDoc();
+    doc.cast[0].refs = [ref(100), ref(2)];
+    const ctx = testContext(newSession(doc));
+    const out = await addRefs(ctx, MAYA, [ref(1), ref(2)], { mainIndex: 1 });
+    expect(out).toMatchObject({ added: 1, message: 'Added 1 photo to MAYA (1 already there).' });
+    ctx.session.commit(out.ops);
+    expect(ctx.session.doc.cast[0].refs.map((r) => r.path)).toEqual([2, 100, 1].map((n) => ref(n).path));
+  });
+
   it('adds what fits, says the counts, and never exceeds the owner cap', async () => {
     const doc = plannedDoc();
     doc.cast[0].refs = Array.from({ length: 10 }, (_, i) => ref(100 + i));

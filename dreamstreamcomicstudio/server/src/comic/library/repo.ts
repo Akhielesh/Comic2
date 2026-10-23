@@ -142,7 +142,7 @@ export interface AssetWhere {
 export interface LibraryRepo {
   listAssets(version: number): Promise<LibraryAssetRow[]>;
   getAsset(version: number, id: string): Promise<LibraryAssetRow | null>;
-  /** Rows whose published snapshot is live (the public index). */
+  /** Rows whose published snapshot is live (the public index). Rejecting the live revision clears the snapshot. */
   listPublished(version: number): Promise<LibraryAssetRow[]>;
   upsertAsset(row: LibraryAssetRow): Promise<void>;
   /** Conditional update; false when no row matched (someone else moved it first). */
@@ -232,8 +232,7 @@ export function createSupabaseLibraryRepo(admin: () => SupabaseClient = getSupab
         .from(ASSETS)
         .select('id,kind,theme,preset_id,genre,aspect,published,manifest_version,status')
         .eq('manifest_version', version)
-        .not('published', 'is', null)
-        .neq('status', 'rejected');
+        .not('published', 'is', null);
       if (error) throw dbError('listPublished', error);
       return (data || []).map((r) => assetFromDb(r as Record<string, unknown>));
     },
@@ -369,7 +368,7 @@ export function createMemoryLibraryRepo(opts: { now?: () => number } = {}): Memo
     },
     async listPublished(version) {
       if (repo.missing) throw tableMissingError();
-      return [...repo.assets.values()].filter((r) => r.manifest_version === version && r.published && r.status !== 'rejected').map(clone);
+      return [...repo.assets.values()].filter((r) => r.manifest_version === version && r.published).map(clone);
     },
     async upsertAsset(row) {
       if (repo.missing) throw tableMissingError();

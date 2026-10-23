@@ -1,0 +1,129 @@
+// Layout smoke (visualqa.md §7): the per-PR regression check, 2–3 minutes on Chromium at
+// 360×740, 768×1024, 1024×768 and 1440×900 (light). Runs the stress fixture through the scenes that
+// broke in the v4 audit: conversation (top/bottom) with the gate, story, cast, pages, read, the page
+// editor (drawn + planned), composer sheets, header sheets, settings and the public reader.
+// Asserts: no page overflow / offscreen / popover / spill; no visible collisions; no clipped inputs or
+// un-re-measured textareas; balloons inside the page and not colliding; the editor aside inside its
+// dialog; the phone board ≥ 45 % of the height; one <main>. Known failures live in allowlist.json.
+
+import { test } from './helpers/harness';
+import type { CheckId } from './helpers/allowlist';
+import { markConversationScroller, openComposerOptions, openMoreMenu, openQuality, openSettings, openSpend, closeTopLayer, scrollEditorTools } from './helpers/scenes';
+
+const SMOKE_CHECKS: CheckId[] = [
+  'overflow',
+  'offscreen',
+  'popover',
+  'spill',
+  'collision',
+  'input-clip',
+  'textarea-clip',
+  'balloon-outside',
+  'balloon-collision',
+  'editor-aside',
+  'phone-content',
+  'landmarks'
+];
+
+const opts = { checks: SMOKE_CHECKS };
+
+test.describe('layout smoke @smoke', () => {
+  test('conversation: bottom, top and the open gate', async ({ qa, page }) => {
+    await qa.open({ surface: 'studio', fixture: 'stress', state: 'failed-send' });
+    await qa.check('studio', 'conversation-bottom', opts);
+    const scroller = await markConversationScroller(page);
+    if (scroller) {
+      await qa.scroll(scroller, 'top');
+      await qa.check('studio', 'conversation-top', opts);
+    }
+    const gate = page.getByText(/Draw all twenty pages/i).first();
+    if (await gate.count()) {
+      await gate.scrollIntoViewIfNeeded().catch(() => undefined);
+      await qa.settle(250);
+      await qa.check('studio', 'conversation-gate', opts);
+    }
+  });
+
+  test('streaming reply', async ({ qa }) => {
+    await qa.open({ surface: 'studio', fixture: 'stress', state: 'streaming' });
+    await qa.check('studio', 'streaming', opts);
+  });
+
+  for (const tab of ['story', 'cast', 'style', 'pages'] as const) {
+    test(`board: ${tab}`, async ({ qa }) => {
+      await qa.open({ surface: 'studio', fixture: 'stress', tab });
+      await qa.toBoard();
+      await qa.check('board', `${tab}-top`, opts);
+      await qa.scroll('#board-panel', 'bottom');
+      await qa.check('board', `${tab}-bottom`, opts);
+    });
+  }
+
+  test('board: read', async ({ qa }) => {
+    await qa.open({ surface: 'studio', fixture: 'stress', tab: 'read' });
+    await qa.toBoard();
+    await qa.check('board', 'read', opts);
+    await qa.scroll('#board-panel', 'bottom');
+    await qa.check('board', 'read-bottom', opts);
+  });
+
+  test('page editor: drawn page', async ({ qa, page }) => {
+    await qa.open({ surface: 'editor', fixture: 'stress', page: 1 });
+    await qa.check('editor', 'drawn-open', opts);
+    const balloon = page.locator('[data-testid="balloon-hit"]').first();
+    if (await balloon.isVisible().catch(() => false)) {
+      await balloon.focus();
+      await qa.settle(250);
+      await qa.check('editor', 'drawn-selected', opts);
+    }
+    await scrollEditorTools(page);
+    await qa.check('editor', 'drawn-tools-bottom', opts);
+  });
+
+  test('page editor: planned page', async ({ qa, page }) => {
+    await qa.open({ surface: 'editor', fixture: 'stress', page: 2 });
+    await qa.check('editor', 'planned-open', opts);
+    await scrollEditorTools(page);
+    await qa.check('editor', 'planned-tools-bottom', opts);
+  });
+
+  test('composer sheets', async ({ qa }) => {
+    await qa.open({ surface: 'studio', fixture: 'stress' });
+    if (await openComposerOptions(qa)) {
+      await qa.settle(400);
+      await qa.check('studio', 'composer-options', opts);
+      await closeTopLayer(qa.page);
+    }
+  });
+
+  test('header sheets and settings', async ({ qa, page }) => {
+    await qa.open({ surface: 'studio', fixture: 'stress', tab: 'pages' });
+    if (await openQuality(qa)) {
+      await qa.settle(400);
+      await qa.check('studio', 'header-quality', opts);
+      await closeTopLayer(page);
+    }
+    if (await openSpend(qa)) {
+      await qa.settle(400);
+      await qa.check('studio', 'header-spend', opts);
+      await closeTopLayer(page);
+    }
+    if (await openMoreMenu(qa)) {
+      await qa.settle(400);
+      await qa.check('studio', 'header-more', opts);
+      await closeTopLayer(page);
+    }
+    if (await openSettings(qa)) {
+      await qa.settle(600);
+      await qa.check('studio', 'settings', opts);
+    }
+  });
+
+  test('public reader', async ({ qa, page }) => {
+    await qa.open({ surface: 'public', fixture: 'stress' }, { settle: 800 });
+    await qa.check('public', 'default', opts);
+    await page.mouse.wheel(0, 20_000);
+    await qa.settle(400);
+    await qa.check('public', 'bottom', opts);
+  });
+});

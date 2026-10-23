@@ -45,16 +45,21 @@ export const retryAllFailed = (
   let usd = 0;
 
   const pageIds = failed.filter((f) => f.target.kind === 'page').map((f) => (f.target as { id: string }).id);
+  // Sheets the page retry draws first anyway (missing sheets of those pages, billed in its quote).
+  const drawnByPages = new Set<string>();
   if (pageIds.length) {
     const q = quoteRenderPages(doc, { pageIds, force: true, byok, tier, modelOverride: override });
     actions.push({ type: 'render_pages', pageIds, force: true, quotedUsd: q.usd });
     usd += q.usd;
+    for (const id of q.sheetIds) drawnByPages.add(id);
   }
 
-  const sheetIds = failed.filter((f) => f.target.kind === 'sheet' || f.target.kind === 'place').map((f) => (f.target as { id: string }).id);
+  // A failed sheet the page retry already redraws must not be force-drawn (and billed) a second time.
+  const sheetItems = failed.filter((f) => (f.target.kind === 'sheet' || f.target.kind === 'place') && !drawnByPages.has((f.target as { id: string }).id));
+  const sheetIds = sheetItems.map((f) => (f.target as { id: string }).id);
   if (sheetIds.length) {
     // One render_sheets covers characters and places (the server splits them); price each kind.
-    const places = failed.filter((f) => f.target.kind === 'place').length;
+    const places = sheetItems.filter((f) => f.target.kind === 'place').length;
     const chars = sheetIds.length - places;
     const est = estimateJobs(
       [...(chars ? [{ kind: 'sheet' as const, count: chars }] : []), ...(places ? [{ kind: 'place' as const, count: places }] : [])],

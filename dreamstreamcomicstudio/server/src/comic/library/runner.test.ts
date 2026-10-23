@@ -304,5 +304,8 @@ describe('refine and review', () => {
     expect(row.published?.rev).toBe(1);
     expect((await publicIndex(t.deps)).index.assets[0].rev).toBe(1);
     expect(row.prompt_hash).toBe(promptHash(TEST_MANIFEST[0]));
+    // Rejecting the weaker new candidate keeps the earlier published image live.
+    await rejectAsset(t.deps, 'style.test-one', undefined, ADMIN);
+    expect((await publicIndex(t.deps)).index.assets.map((a) => a.rev)).toEqual([1]);
   });
 });

@@ -99,8 +99,10 @@ export const OptionVisualArt: React.FC<{ visual: OptionVisual; doc: ComicDoc | n
       return <CastAvatar character={c} urlFor={urlFor} size={44} />;
     }
     case 'lettering': {
-      const preset = LETTERING_PRESETS[visual.presetId as LetteringPresetId];
-      if (!preset) return null;
+      // Own keys only: an id like "__proto__" from a card payload must not reach the prototype.
+      const id = String(visual.presetId);
+      const preset = Object.prototype.hasOwnProperty.call(LETTERING_PRESETS, id) ? LETTERING_PRESETS[id as LetteringPresetId] : undefined;
+      if (!preset?.base) return null;
       return <BubblePreview style={preset.base} kind="speech" size={52} />;
     }
     default:

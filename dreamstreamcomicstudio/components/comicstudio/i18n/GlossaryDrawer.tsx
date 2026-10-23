@@ -64,7 +64,7 @@ function FormInput({ doc, term, lang, onCommit }: { doc: ComicDoc; term: Glossar
         disabled={term.policy === 'keep'}
         aria-label={`${term.term} in ${spec?.english || lang}`}
         style={{ fontFamily: cssFontFamily(lang, 'legible') }}
-        className="h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25 disabled:opacity-60 coarse:h-11"
+        className="h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25 disabled:opacity-60 coarse:h-11 coarse:text-[16px]"
       />
     </label>
   );
@@ -132,7 +132,7 @@ export const GlossaryDrawer: React.FC<GlossaryDrawerProps> = ({ studio, open, on
                   onChange={(e) => patch([{ op: 'glossary_term', id: term.id, patch: { policy: e.target.value as GlossaryTerm['policy'] } }], 'Glossary rule')}
                   aria-label={`How to write ${term.term}`}
                   title={POLICIES.find((p) => p.id === term.policy)?.hint}
-                  className="h-9 max-w-[9.5rem] shrink-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 text-[12.5px] coarse:h-11"
+                  className="h-9 max-w-[9.5rem] shrink-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 text-[12.5px] coarse:h-11 coarse:text-[16px]"
                 >
                   {POLICIES.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -172,7 +172,7 @@ export const GlossaryDrawer: React.FC<GlossaryDrawerProps> = ({ studio, open, on
             maxLength={80}
             placeholder="Add a name or word…"
             aria-label="New glossary term"
-            className={cx('h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none coarse:h-11')}
+            className={cx('h-9 min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[14px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none coarse:h-11 coarse:text-[16px]')}
           />
           <PrimaryButton type="submit" size="sm" disabled={!draft.trim()} className="coarse:h-11">
             <Plus className="h-3.5 w-3.5" aria-hidden />

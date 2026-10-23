@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BookA, CheckCircle2, ChevronRight, Globe, Languages, LoaderCircle, Search, Trash2, TriangleAlert, X } from 'lucide-react';
 import type { ComicDoc, TranslationRegister } from '../../../shared/comic/doc';
 import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
-import { LANGUAGES, dirOf, languageSpec, sameLanguage, type LanguageSpec } from '../../../shared/comic/languages';
+import { LANGUAGES, dirOf, languageSpec, sameLanguage, scriptOf, type LanguageSpec } from '../../../shared/comic/languages';
 import { estimateJobs, formatUsd } from '../../../shared/comic/models';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
 import { EmptyHint, GhostButton, PrimaryButton, SectionTitle, Surface, cx } from '../board/ui';
@@ -105,7 +105,7 @@ function LanguagePicker({ doc, exclude, onPick }: { doc: ComicDoc; exclude: Set<
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search languages (Telugu, తెలుగు, Hindi…)"
           aria-label="Search languages"
-          className="h-10 w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-8 pr-3 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none coarse:h-11"
+          className="h-10 w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-8 pr-3 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none coarse:h-11 coarse:text-[16px]"
         />
       </label>
       {group('Popular in India', india)}
@@ -113,6 +113,15 @@ function LanguagePicker({ doc, exclude, onPick }: { doc: ComicDoc; exclude: Set<
       {!india.length && !world.length && <p className="text-[13px] text-[var(--ds-muted)]">No language matches “{q}”. The studio translates into the 19 languages listed here.</p>}
     </div>
   );
+}
+
+/** Share of the dialogue's letters written in `code`'s script (1 when there is too little text to tell). */
+export function shareInScript(doc: ComicDoc, code: string): number {
+  const text = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines.map((l) => l.text))).join(' ');
+  const letters = text.match(/\p{L}/gu) || [];
+  if (letters.length < 12) return 1;
+  const re = scriptOf(code).letters;
+  return letters.filter((ch) => re.test(ch)).length / letters.length;
 }
 
 /** "Written in English · Change…": relabel (free) or make a complete translation the source (free). */
@@ -127,6 +136,8 @@ function SourceLanguage({ studio, doc }: { studio: StudioController; doc: ComicD
     const p = editionProgress(doc, t!.code);
     return !p.missing && !p.stale && !p.staleEdited;
   })();
+  // Relabelling says what the lines ARE: lines plainly in another script would be mislabelled, never translated.
+  const otherScript = !!t && !hasEdition && shareInScript(doc, t.code) < 0.5;
   return (
     <div className="min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -148,7 +159,7 @@ function SourceLanguage({ studio, doc }: { studio: StudioController; doc: ComicD
             <select
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              className="h-9 min-w-0 max-w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 coarse:h-11"
+              className="h-9 min-w-0 max-w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 coarse:h-11 coarse:text-[16px]"
               aria-label="New comic language"
             >
               <option value="">Choose…</option>
@@ -163,7 +174,7 @@ function SourceLanguage({ studio, doc }: { studio: StudioController; doc: ComicD
             <div className="flex flex-col gap-2">
               <GhostButton
                 size="sm"
-                disabled={hasEdition}
+                disabled={hasEdition || otherScript}
                 title={hasEdition ? `There is a ${t.english} translation — make it the original instead.` : undefined}
                 onClick={() => {
                   void studio.patch([{ op: 'format', patch: { language: t.code } }], { label: `Comic language: ${t.english}` });
@@ -173,6 +184,11 @@ function SourceLanguage({ studio, doc }: { studio: StudioController; doc: ComicD
               >
                 The lines are already in {t.english} — just relabel (free)
               </GhostButton>
+              {otherScript && (
+                <p className="text-[12px] leading-snug text-[var(--ds-muted)]">
+                  The lines are written in {source?.english || 'another language'}, not {t.english}. Add {t.english} as a translation below, then make it the original — relabelling would only mislabel them.
+                </p>
+              )}
               <GhostButton
                 size="sm"
                 disabled={!complete}
@@ -354,7 +370,7 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
             onChange={(e) => void studio.patch([{ op: 'edition', lang, patch: { register: e.target.value as TranslationRegister } }], { label: 'Translation voice' })}
             aria-label={`${spec.english} register (applies to new translations)`}
             title="Applies to new translations"
-            className="h-8 min-w-0 max-w-[11rem] rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 text-[12px] text-[var(--ds-ink)] coarse:h-11"
+            className="h-8 min-w-0 max-w-[11rem] rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 text-[12px] text-[var(--ds-ink)] coarse:h-11 coarse:text-[16px]"
           >
             {REGISTERS.map((g) => (
               <option key={g.id} value={g.id}>

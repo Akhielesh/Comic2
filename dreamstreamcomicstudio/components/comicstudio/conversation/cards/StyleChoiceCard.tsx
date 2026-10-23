@@ -75,7 +75,12 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                     quotedUsd: quoteStyleOptions(doc, 1, studio.byok, true)
                   })
                 }
+                // The server draws one batch of options at a time: retries wait for the current one.
                 retryBusy={isPending(`retry:${o.id}`) || isPending('retry-all')}
+                retryDisabled={drawing > 0}
+                // Three 4:5 tiles side by side on a phone are ~64 px wide: icon + Retry only in the
+                // frame; when and why sit in the caption under it.
+                compact
                 badge={
                   selected ? (
                     <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-[var(--ds-accent)] text-white shadow" aria-hidden>
@@ -108,7 +113,14 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {retry && retry.actions.length > 0 && (
-          <GhostButton size="sm" className="tap-target" busy={isPending('retry-all')} onClick={() => void run('retry-all', ...retry.actions)}>
+          <GhostButton
+            size="sm"
+            className="tap-target"
+            busy={isPending('retry-all')}
+            disabled={drawing > 0}
+            title={drawing > 0 ? 'Waiting for the options that are drawing now' : undefined}
+            onClick={() => void run('retry-all', ...retry.actions)}
+          >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Retry {plural(retry.count, 'failed style', 'failed styles')}
             <span className="text-[var(--ds-muted)]">≈ {formatUsd(retry.usd)}</span>
           </GhostButton>

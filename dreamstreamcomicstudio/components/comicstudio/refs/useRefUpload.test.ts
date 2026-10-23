@@ -142,6 +142,24 @@ describe('upload queue', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('the same file added again right after it landed (before the resync) is a free duplicate too', async () => {
+    const { queue, calls } = setup();
+    await queue.add([file('a.jpg')], MAYA);
+    await flush();
+    calls[0].resolve({ ref: ref(1), ops: [], urls: {} });
+    await flush();
+    expect(stateOf(queue)).toEqual(['done']);
+    // The doc has not been refreshed yet: only the finished row knows this file.
+    await queue.add([file('a.jpg')], MAYA);
+    await flush();
+    expect(stateOf(queue)).toEqual(['done', 'duplicate']);
+    expect(calls).toHaveLength(1);
+    // Another owner may hold the same photo.
+    await queue.add([file('a.jpg')], { kind: 'style' });
+    await flush();
+    expect(calls).toHaveLength(2);
+  });
+
   it('over the cap: refused inline before anything uploads, with the limit in the copy', async () => {
     const { queue, calls } = setup((d) => {
       d.cast[0].refs = Array.from({ length: 11 }, (_, i) => ref(100 + i));

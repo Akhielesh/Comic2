@@ -164,7 +164,7 @@ alter table public.library_runs enable row level security;
 
 drop policy if exists library_assets_public_read on public.library_assets;
 create policy library_assets_public_read on public.library_assets
-  for select to anon, authenticated using (published is not null and status <> 'rejected');
+  for select to anon, authenticated using (published is not null);
 
 revoke all on public.library_assets from anon, authenticated;
 revoke all on public.library_runs from anon, authenticated;

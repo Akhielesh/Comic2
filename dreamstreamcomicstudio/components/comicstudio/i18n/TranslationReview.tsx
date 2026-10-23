@@ -72,14 +72,15 @@ interface RowProps {
   source: string;
   entry?: TextTranslation;
   status: DerivedStatus;
-  fit?: ReturnType<typeof fitOf>;
+  /** Fit of a text in this line's balloon (measured on the DRAFT while typing, not the saved text). */
+  fitFor?(text: string): ReturnType<typeof fitOf>;
   onSave(text: string): void;
   onNavigate(id: string, dir: 1 | -1): void;
   registerField(id: string, el: HTMLTextAreaElement | null): void;
   onFocusRow?(): void;
 }
 
-function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry, status, fit, onSave, onNavigate, registerField, onFocusRow }: RowProps) {
+function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry, status, fitFor, onSave, onNavigate, registerField, onFocusRow }: RowProps) {
   const [draft, setDraft] = useState(entry?.text ?? '');
   const [busy, setBusy] = useState(false);
   const saved = entry?.text ?? '';
@@ -103,6 +104,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
   };
   const issue = entry?.issue;
   const auto = !!issue?.note.startsWith(AUTO_CORRECTED_NOTE);
+  const fit = fitFor && draft.trim() ? fitFor(draft.trim()) : undefined;
   const spec = languageSpec(lang);
   return (
     <li className="min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3" data-line-id={id} onFocusCapture={onFocusRow}>
@@ -143,7 +145,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         placeholder={`Not translated yet — type the ${spec?.english || lang} line`}
         aria-label={`${spec?.english || lang} translation of: ${source}${where ? ` (${where})` : ''}`}
         style={{ fontFamily: cssFontFamily(lang, 'legible') }}
-        className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25"
+        className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] coarse:text-[16px] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25"
       />
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
         {entry?.gloss && (
@@ -151,7 +153,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
             Means: <span lang={sourceLang}>{entry.gloss}</span>
           </span>
         )}
-        {fit && draft && (
+        {fit && (
           <span className={cx('ml-auto shrink-0 tabular-nums', fit.tone === 'ok' ? 'text-[var(--ds-muted)]' : fit.tone === 'tight' ? 'text-[var(--ds-ink)]' : 'font-semibold text-[#c2643f]')}>{fit.label}</span>
         )}
       </div>
@@ -306,8 +308,9 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
                   key={p.id}
                   type="button"
                   aria-pressed={p.id === previewPage?.id}
+                  aria-label={`Preview page ${p.n}`}
                   onClick={() => setPreviewId(p.id)}
-                  className={cx('h-8 min-w-8 rounded-lg px-2 text-[12px] tabular-nums', p.id === previewPage?.id ? 'bg-[var(--ds-raised)] font-semibold shadow-sm' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]')}
+                  className={cx('h-8 min-w-8 rounded-lg px-2 text-[12px] tabular-nums coarse:h-11 coarse:min-w-11', p.id === previewPage?.id ? 'bg-[var(--ds-raised)] font-semibold shadow-sm' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]')}
                 >
                   {p.n}
                 </button>
@@ -354,7 +357,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
                   <button
                     type="button"
                     onClick={() => setPreviewId(page.id)}
-                    className="hidden items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] lg:inline-flex"
+                    className="hidden items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] lg:inline-flex coarse:min-h-[44px]"
                   >
                     <Eye className="h-3 w-3" aria-hidden />
                     Preview
@@ -374,7 +377,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
                       source={line.text}
                       entry={entry}
                       status={status}
-                      fit={fitOf(doc, page, line, lang, entry?.text ?? '')}
+                      fitFor={(text) => fitOf(doc, page, line, lang, text)}
                       onSave={(text) => saveLine(line.id, text)}
                       onNavigate={navigate}
                       registerField={registerField}

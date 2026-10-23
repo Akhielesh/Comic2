@@ -128,6 +128,8 @@ describe('ref_patch / ref_move / ref_remove / ref_transfer', () => {
     expect(() => run(doc(), [{ op: 'ref_patch', owner: MAYA, path: ref(2).path, patch: { path: 'u/x/evil.webp' } }])).toThrow(/Only the label and the note/);
     expect(() => run(doc(), [{ op: 'ref_patch', owner: MAYA, path: ref(2).path, patch: { safety: null } }])).toThrow(/Only the label and the note/);
     expect(() => run(doc(), [{ op: 'ref_patch', owner: MAYA, path: ref(2).path, patch: { label: 'banana' } }])).toThrow(/Unknown photo label/);
+    // A real label that is not a character view (style vocabulary) does not fit MAYA.
+    expect(() => run(doc(), [{ op: 'ref_patch', owner: MAYA, path: ref(2).path, patch: { label: 'linework' } }])).toThrow(/doesn't fit MAYA/);
     expect(() => run(doc(), [{ op: 'ref_patch', owner: MAYA, path: ref(9).path, patch: { label: 'side' } }])).toThrow(/no longer on MAYA/);
   });
 

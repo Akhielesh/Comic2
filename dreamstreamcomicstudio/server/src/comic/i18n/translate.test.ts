@@ -11,7 +11,7 @@ import { GOLDEN_DOCS } from '../golden/fixtures.js';
 import { JOB_TIMINGS, startAction } from '../jobs.js';
 import { newSession, scriptedLlm, testContext, type TestContext } from '../orchestrator.fakes.js';
 import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
-import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation } from './index.js';
+import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, translationRunning } from './index.js';
 import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
 import { fakeLinguist, fakeTranslator, requestedItems, sixPageKidsDoc, times } from './testing.js';
 
@@ -371,5 +371,120 @@ describe('director turns', () => {
     const last = session.doc.conversation[session.doc.conversation.length - 1];
     expect(last.text).toContain('Telugu is translated and reviewed.');
     expect(last.at).toBeGreaterThan(0);
+  });
+});
+
+describe('review fixes: no double charge, Stop semantics, honest message order', () => {
+  it('a second translate of a language already running starts nothing and charges nothing (double tap / director mid-run)', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const tr = fakeTranslator();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const llm = scriptedLlm({
+      translator: [
+        async (req) => {
+          await gate; // the first chunk is still with the model when the second request arrives
+          return tr.step(req);
+        },
+        tr.step
+      ],
+      linguist: times(2, fakeLinguist())
+    });
+    const ctx = testContext(session, { llm });
+    const first = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    expect(first.outcome.status).toBe('started');
+    expect(translationRunning(ctx, 'te')).toBe(true);
+    const second = await runTranslation(testContext(session, { llm }), T(), { confirmed: true, origin: 'user' });
+    expect(second.outcome).toMatchObject({ status: 'blocked', code: 'CONFLICT' });
+    expect(second.outcome.message).toContain('Telugu is already being translated');
+    expect(second.outcome.message).toContain('Nothing new was started or charged');
+    release();
+    await first.done;
+    await ctx.settled();
+    expect(llm.calls.filter((c) => c.role === 'translator')).toHaveLength(2); // the first run's two chunks only
+    expect(translationRunning(ctx, 'te')).toBe(false);
+    expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
+    // Once finished, the language can be asked for again (here: $0, already up to date).
+    const third = await runTranslation(testContext(session, { llm: scriptedLlm({}) }), T(), { confirmed: true, origin: 'user' });
+    expect(third.outcome.status).toBe('done');
+  });
+
+  it('a dropped stream (phone locked) does not cancel the run; only Stop does — even after a later resetAbort', async () => {
+    const dropped = new AbortController();
+    const s1 = newSession(sixPageKidsDoc());
+    const tr1 = fakeTranslator();
+    const ctx1 = testContext(s1, {
+      signal: dropped.signal,
+      llm: scriptedLlm({
+        translator: [
+          (req) => {
+            dropped.abort(); // the HTTP stream closes mid-run
+            return tr1.step(req);
+          },
+          tr1.step
+        ],
+        linguist: times(2, fakeLinguist())
+      })
+    });
+    const run1 = await runTranslation(ctx1, T(), { confirmed: true, origin: 'user' });
+    await run1.done;
+    await ctx1.settled();
+    expect(ctx1.llmFake.calls.filter((c) => c.role === 'translator')).toHaveLength(2);
+    expect(editionReadiness(s1.doc, 'te').publishable).toBe(true);
+
+    const s2 = newSession(sixPageKidsDoc());
+    const tr2 = fakeTranslator();
+    const ctx2 = testContext(s2, {
+      llm: scriptedLlm({
+        translator: [
+          (req) => {
+            s2.abort.abort(); // Stop…
+            s2.resetAbort(); // …then the next request clears it for ITS work
+            return tr2.step(req);
+          },
+          tr2.step
+        ],
+        linguist: times(2, fakeLinguist())
+      })
+    });
+    const run2 = await runTranslation(ctx2, T(), { confirmed: true, origin: 'user' });
+    await run2.done;
+    await ctx2.settled();
+    expect(ctx2.llmFake.calls.filter((c) => c.role === 'translator')).toHaveLength(1); // the Stop still holds
+    expect(s2.doc.conversation[s2.doc.conversation.length - 1].text).toContain('Stopped');
+  });
+
+  it('UI-started: when the user wrote meanwhile, the summary is APPENDED and the progress message points to it', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const tr = fakeTranslator();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const ctx = testContext(session, {
+      llm: scriptedLlm({
+        translator: [
+          async (req) => {
+            await gate;
+            return tr.step(req);
+          },
+          tr.step
+        ],
+        linguist: times(2, fakeLinguist())
+      })
+    });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    const progress = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(progress.text).toMatch(/^Translating /);
+    session.commit([{ op: 'message', msg: { id: 'm_user_mid', role: 'user', text: 'also make the cover pop', at: Date.now() } }], { origin: 'user' });
+    release();
+    await started.done;
+    await ctx.settled();
+    const conv = session.doc.conversation;
+    const last = conv[conv.length - 1];
+    expect(last.id).not.toBe(progress.id);
+    expect(last.text).toContain('Telugu is translated and reviewed.');
+    expect(conv.findIndex((m) => m.id === 'm_user_mid')).toBeLessThan(conv.length - 1);
+    expect(conv.find((m) => m.id === progress.id)?.text).toContain('The result is below.');
+    const ats = conv.map((m) => m.at);
+    expect([...ats].sort((a, b) => a - b)).toEqual(ats);
   });
 });

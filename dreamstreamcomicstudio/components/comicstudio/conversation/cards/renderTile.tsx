@@ -95,6 +95,8 @@ export interface RenderThumbProps {
   onOpen?: () => void;
   onRetry?: () => void;
   retryBusy?: boolean;
+  /** Retry can't run right now (e.g. another batch is drawing): disabled, no spinner. */
+  retryDisabled?: boolean;
   selected?: boolean;
   className?: string;
   /** Extra overlay (e.g. a lock badge). */
@@ -115,6 +117,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
   onOpen,
   onRetry,
   retryBusy,
+  retryDisabled,
   selected,
   className,
   badge,
@@ -164,7 +167,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
               e.stopPropagation();
               onRetry();
             }}
-            disabled={retryBusy}
+            disabled={retryBusy || retryDisabled}
             aria-label={`Retry ${label}`}
             className="tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50"
           >
@@ -187,7 +190,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         {body}
         {busy && (
           <span className="absolute inset-x-1.5 bottom-1.5 flex items-center justify-center gap-1 rounded-full bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10px] font-medium text-[var(--ds-ink)] shadow-sm">
-            <span className={cx('h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && 'animate-pulse')} aria-hidden />
+            <span className={cx('h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && 'animate-pulse motion-reduce:animate-none')} aria-hidden />
             <span className="min-w-0 truncate">{status === 'queued' ? 'Queued' : 'Drawing…'}</span>
           </span>
         )}

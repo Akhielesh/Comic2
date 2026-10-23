@@ -7,6 +7,7 @@ import { formatUsd, resolveImageJob } from '../../../shared/comic/models';
 import { unitPrice } from '../../../shared/comic/plan';
 import { REF_LABELS_FOR, REF_LABEL_TEXT, REF_LIMITS, capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { isPhotoLikeness, pickRefs, sheetRefs, sheetRefsChanged } from '../../../shared/comic/refRanking';
+import { canServeToOwner } from '../../../shared/comic/safety';
 
 const upper = (s?: string) => (s || '').trim().toUpperCase() || 'UNNAMED';
 
@@ -74,7 +75,20 @@ const sheetSlots = (doc: ComicDoc): number => {
   const spec = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride).spec;
   return spec.refs.characters > 0 ? spec.refs.characters : spec.refs.objects;
 };
-const pageSlots = (doc: ComicDoc): number => resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec.refs.characters;
+const pageSpec = (doc: ComicDoc) => resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec;
+const pageSlots = (doc: ComicDoc): number => pageSpec(doc).refs.characters;
+
+/**
+ * How many of the user's style photos a page actually sends (mirrors prompts.ts styleReferences):
+ * models with style slots take the style board plus up to 2 ranked photos (≤ 3 style refs in all);
+ * the others take ONE style anchor — the board when there is one, else the best photo.
+ */
+export const styleRefsUsed = (doc: ComicDoc): number => {
+  const spec = pageSpec(doc);
+  const board = !!doc.style.board?.path && canServeToOwner(doc.style.board);
+  if (spec.refs.style > 0) return Math.max(0, Math.min(2, Math.min(spec.refs.style, 3, spec.refs.total) - (board ? 1 : 0)));
+  return board || spec.refs.objects <= 0 || spec.refs.total <= 0 ? 0 : 1;
+};
 
 export interface RefUsage {
   sheet?: boolean;
@@ -85,7 +99,8 @@ export interface RefUsage {
 /**
  * Which photos the compiler would send today (refs.md §5): the sheet's ≤ 4 diverse photos; on pages
  * the best photo while there is no sheet (2 when there are several), or the likeness photo next to a
- * ready sheet for photo-based leads; a place's first-ranked photo; the style's first 3.
+ * ready sheet for photo-based leads; a place's first-ranked photo while it has no sheet; the style
+ * photos the page model really receives (styleRefsUsed — none when the board is the only anchor).
  */
 export function refUsage(doc: ComicDoc | null | undefined, owner: RefOwner): Map<string, RefUsage> {
   const out = new Map<string, RefUsage>();
@@ -96,15 +111,17 @@ export function refUsage(doc: ComicDoc | null | undefined, owner: RefOwner): Map
     if (!c || !c.refs.length) return out;
     if (c.tier !== 'extra') mark(sheetRefs(c, sheetSlots(doc)), 'sheet');
     if (pageSlots(doc) > 0) {
-      const sheetReady = c.sheet.status === 'ready' && !!c.sheet.asset;
+      const sheetReady = c.sheet.status === 'ready' && !!c.sheet.asset && canServeToOwner(c.sheet.asset);
       if (!sheetReady || c.tier === 'extra') mark(pickRefs(c.refs, c.refs.length >= 2 ? REF_LIMITS.pagePhotosPerCharacter : 1, 'page'), 'pages');
       else if (c.likeness === 'sheet_and_photo' || ((c.likeness ?? 'auto') === 'auto' && c.tier === 'lead' && isPhotoLikeness(c))) mark(pickRefs(c.refs, 1, 'page'), 'pages');
     }
   } else if (owner.kind === 'place') {
     const p = doc.places.find((x) => x.id === owner.id);
-    if (p?.refs.length) mark(pickRefs(p.refs, p.sheet.status === 'ready' ? 0 : 1, 'place_sheet'), 'pages');
+    const sheetReady = p?.sheet.status === 'ready' && !!p.sheet.asset && canServeToOwner(p.sheet.asset);
+    if (p?.refs.length && !sheetReady) mark(pickRefs(p.refs, 1, 'place_sheet'), 'pages');
   } else if (owner.kind === 'style') {
-    mark(pickRefs(doc.style.refs, 3, 'style'), 'style');
+    const n = styleRefsUsed(doc);
+    if (n > 0) mark(pickRefs(doc.style.refs, n, 'style'), 'style');
   }
   return out;
 }

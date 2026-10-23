@@ -4,7 +4,7 @@
 // and an LLM prompt rewrite only on the last attempt when the brief or style match stays weak.
 
 import { getImageModel } from '../../../../shared/comic/models.js';
-import type { LibraryRefineStrategy } from '../../../../shared/comic/library.js';
+import { LIBRARY_IP_BLOCKLIST, type LibraryRefineStrategy } from '../../../../shared/comic/library.js';
 import { completeStructured } from '../writer.js';
 import type { LlmClient } from '../types.js';
 import { NO_TEXT, isTextFree, type LibraryManifestEntry } from './manifest.js';
@@ -82,7 +82,9 @@ export function corrections(entry: LibraryManifestEntry, merged: MergedLibrarySc
   }
   for (const note of merged.notes.slice(-3)) {
     const clean = quoteSafe(note).slice(0, 120);
-    if (clean && !lines.some((l) => l.includes(clean))) lines.push(`Fix: ${clean}.`.replace(/\.\.$/, '.'));
+    // A vision note that names an artist, studio or brand ("looks like <studio>") never reaches a prompt.
+    if (!clean || LIBRARY_IP_BLOCKLIST.test(clean)) continue;
+    if (!lines.some((l) => l.includes(clean))) lines.push(`Fix: ${clean}.`.replace(/\.\.$/, '.'));
   }
   return [...new Set(lines)].slice(0, 10);
 }
@@ -137,6 +139,8 @@ export const editPrompt = (entry: LibraryManifestEntry, instruction: string): st
 /** Keep NO_TEXT and the style spec verbatim in any rewritten prompt (appended when the model dropped them). */
 export function guardRewrite(entry: LibraryManifestEntry, original: string, rewritten: string, styleSpec?: string): string {
   let out = rewritten.replace(/\s+\n/g, '\n').trim().slice(0, 1200);
+  // The manifest lint (no artist, studio or brand names) holds for model-written prompts too.
+  if (LIBRARY_IP_BLOCKLIST.test(out)) return original;
   if (styleSpec && !out.includes(styleSpec)) out = `${out}\nStyle: ${styleSpec}`;
   if (isTextFree(entry) && !out.includes(NO_TEXT)) out = `${out}\n${NO_TEXT}`;
   if (entry.expectedText?.length) {

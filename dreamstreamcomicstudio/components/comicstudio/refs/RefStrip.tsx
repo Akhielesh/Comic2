@@ -5,7 +5,9 @@
 // add and a hover-only remove that touch screens could never reach. Tapping a thumbnail or the count
 // opens the drawer. Dropping or pasting images onto the strip uploads to this owner. A character whose
 // ready sheet was drawn from older photos shows the soft hint "New photos since this sheet — redraw
-// ≈ $0.07" (a hint, never a stale mark, never an automatic redraw).
+// ≈ $0.07" (a hint, never a stale mark, never an automatic redraw). Uploads started here show their
+// queue rows under the strip (progress + cancel, and every refusal: blocked, over the cap, a failed
+// upload with [Retry], "looks the same as photo 3") — a card never swallows an upload silently.
 
 import React, { useRef, useState } from 'react';
 import { ImagePlus, Loader2, Sparkles } from 'lucide-react';
@@ -19,6 +21,7 @@ import type { StudioController } from '../types';
 import { ACCEPT_ATTR } from './downscale';
 import { RefsDrawer } from './RefsDrawer';
 import { ownerLabel, sheetHint } from './refsModel';
+import { UploadQueue } from './UploadQueue';
 import { isActiveUpload, useRefUpload, type UploadTransport } from './useRefUpload';
 
 export interface RefStripProps {
@@ -41,9 +44,11 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
   const refs = doc ? refsOf(doc, owner) || [] : [];
   const uploads = useRefUpload(studio, transport ? { transport } : {});
   const key = refOwnerKey(owner);
-  const active = uploads.items.filter((i) => refOwnerKey(i.owner) === key && isActiveUpload(i.state)).length;
+  const mine = uploads.items.filter((i) => refOwnerKey(i.owner) === key);
+  const active = mine.filter((i) => isActiveUpload(i.state)).length;
   const [open, setOpen] = useState(false);
   const [dropping, setDropping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pick = useRef<HTMLInputElement>(null);
   if (!doc || !refsOf(doc, owner)) return null;
 
@@ -120,17 +125,39 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
           accept={ACCEPT_ATTR}
           multiple
           hidden
+          data-testid="refstrip-picker"
           onChange={(e) => {
             add(imgs(e.target.files));
             e.target.value = '';
           }}
         />
         {refs.length > 0 && (
-          <button type="button" onClick={openDrawer} className="min-h-[44px] shrink-0 rounded-xl px-2 text-[12px] tabular-nums text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
+          <button type="button" onClick={openDrawer} className="min-h-[44px] min-w-[44px] shrink-0 rounded-xl px-2 text-[12px] tabular-nums text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
             {refs.length}/{cap}
           </button>
         )}
       </div>
+      {/* The drawer shows the same rows while it is open. */}
+      {!open && (
+        <UploadQueue
+          className="mt-1.5"
+          items={mine}
+          onCancel={uploads.cancel}
+          onRetry={uploads.retry}
+          onDismiss={uploads.dismiss}
+          onRemoveNew={(item) => {
+            uploads.dismiss(item.id);
+            if (!item.ref) return;
+            setError(null);
+            studio.patch([{ op: 'ref_remove', owner, path: item.ref.path }], { label: 'Remove photo' }).catch((err) => setError((err as Error)?.message || "That photo couldn't be removed — try again."));
+          }}
+        />
+      )}
+      {error && (
+        <p role="alert" className="mt-1 text-[12px] text-red-700 dark:text-red-300">
+          {error}
+        </p>
+      )}
       {hint?.changed && (
         <button
           type="button"

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "falsePositives": [
+    {
+      "id": "vqa-fp-line-clamp",
+      "check": "clip",
+      "owner": "P1-QA",
+      "reason": "visualqa §3: PageScript's li.line-clamp-2 ellipsis is intentional; any -webkit-line-clamp ancestor counts as an ellipsis.",
+      "match": { "sig": "line-clamp" }
+    },
+    {
+      "id": "vqa-fp-jump-to-latest",
+      "check": "collision",
+      "owner": "P1-QA",
+      "reason": "visualqa §3 (P2-3): the floating 'Jump to latest' pill sits over the message list by design.",
+      "match": { "label": "jump to latest|^latest$" }
+    },
+    {
+      "id": "vqa-fp-pagecard-script-mask",
+      "check": "self-clip",
+      "owner": "P1-QA",
+      "reason": "visualqa §3: the PageCard script view (PagesTab) is a scroller with a bottom mask fade by design.",
+      "match": { "sig": "mask-image|\\[mask" }
+    }
+  ],
+  "knownFailures": [],
+  "knownTestFailures": []
+}

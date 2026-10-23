@@ -115,7 +115,7 @@ export interface PlannedAdds {
 }
 
 /**
- * Plan ref_add ops for one owner against `doc` (which may be a simulated doc with an owner
+ * Plan ref_add ops (plus one ref_move when the chosen main photo is already there) for one owner against `doc` (which may be a simulated doc with an owner
  * created earlier in the same batch). Never past the owner cap or the project cap; duplicates
  * (same path, or the same original file by `hash`) are skipped and counted; the message says
  * exactly what happened.
@@ -148,11 +148,18 @@ export function planRefAdds(
   let have = existing.length;
   let duplicates = 0;
   let projectFull = false;
-  const mainFound = opts.mainIndex !== undefined && ordered.some((x) => x.i === opts.mainIndex);
-  let index = mainFound ? 0 : typeof opts.index === 'number' && Number.isFinite(opts.index) ? Math.max(0, Math.floor(opts.index)) : undefined;
+  // Only the main photo jumps to the front; the others keep the owner's order (appended, or from
+  // opts.index), so photos the user already ranked are not pushed down by a batch of new ones.
+  let index = typeof opts.index === 'number' && Number.isFinite(opts.index) ? Math.max(0, Math.floor(opts.index)) : undefined;
   for (const { ref, i } of ordered) {
+    const isMain = opts.mainIndex !== undefined && i === opts.mainIndex;
     if (seenPaths.has(ref.path) || (ref.hash && seenHashes.has(ref.hash))) {
       duplicates += 1;
+      // The chosen main photo is already here: make it the main one rather than ignoring the choice.
+      if (isMain) {
+        const there = existing.find((r) => r.path === ref.path) || existing.find((r) => !!ref.hash && r.hash === ref.hash);
+        if (there && existing[0]?.path !== there.path) ops.push({ op: 'ref_move', owner, path: there.path, to: 0 });
+      }
       continue;
     }
     if (have >= cap) continue;
@@ -170,8 +177,10 @@ export function planRefAdds(
       if (kept) next.note = kept;
       else delete next.note;
     }
-    ops.push({ op: 'ref_add', owner, ref: next, ...(index !== undefined ? { index } : {}) });
+    const at = isMain ? 0 : index;
+    ops.push({ op: 'ref_add', owner, ref: next, ...(at !== undefined ? { index: at } : {}) });
     added.push(next);
+    // Everything after an insert shifts by one.
     if (index !== undefined) index += 1;
     seenPaths.add(next.path);
     if (next.hash) seenHashes.add(next.hash);

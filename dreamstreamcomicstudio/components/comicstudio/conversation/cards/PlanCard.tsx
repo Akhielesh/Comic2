@@ -11,7 +11,7 @@
 import React, { useState } from 'react';
 import { BookOpen, Check, LayoutTemplate } from 'lucide-react';
 import { isPageStale, type Card, type Character, type ComicDoc, type Msg, type Page } from '../../../../shared/comic/doc';
-import { formatUsd, type SpendEstimate } from '../../../../shared/comic/models';
+import { formatUsd, getImageModel, type SpendEstimate } from '../../../../shared/comic/models';
 import { missingSheetsFor, pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
 import { registeredCard } from '../../features';
 import type { CardProps } from '../../extensions';
@@ -186,7 +186,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           ? `Drawing ${plural(drawing, 'page')} — they appear on the board as they finish.`
           : allDrawn
             ? 'Every page is drawn. Ask for changes any time — only what you change is redrawn.'
-            : `Nothing is drawn until you approve. ${estimate.model ? `${estimate.model}, ` : ''}${plural(estimate.imageCount, 'image')}.`}
+            : `Nothing is drawn until you approve. ${estimate.model ? `${getImageModel(estimate.model)?.nickname || estimate.model}, ` : ''}${plural(estimate.imageCount, 'image')}.`}
       </p>
     </CardShell>
   );

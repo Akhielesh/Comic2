@@ -188,7 +188,12 @@ billingRouter.post('/estimate', async (req, res, next) => {
   }
 });
 
-billingRouter.post('/reserve', async (req, res, next) => {
+// Manual reserve/settle are ADMIN-ONLY diagnostics (P1-LIMITS metering-integrity fix). Every
+// real reservation is made and settled server-side by services/usageEnforcer.ts around the
+// provider call; letting a client settle its own reservation (with its own actualEstimate and
+// byokBypass) would let anyone re-settle their spend to $0 and walk around the usage budget.
+// No client code calls these (services/billing.ts helpers are unused).
+billingRouter.post('/reserve', requireAdmin, async (req, res, next) => {
   try {
     const user = requireAuthUser(req.user);
     const estimateInput = parseTokenEstimateRequest(req.body);
@@ -224,7 +229,7 @@ billingRouter.post('/reserve', async (req, res, next) => {
   }
 });
 
-billingRouter.post('/settle', async (req, res, next) => {
+billingRouter.post('/settle', requireAdmin, async (req, res, next) => {
   try {
     const user = requireAuthUser(req.user);
 

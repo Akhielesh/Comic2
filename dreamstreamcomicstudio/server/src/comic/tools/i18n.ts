@@ -19,9 +19,11 @@ import { effectiveRating } from '../../../../shared/comic/safety.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
 import { hashString } from '../../../../shared/comic/hash.js';
 import { graphemes } from '../../../../shared/comic/textLayout.js';
-import { glossaryRenameOps, linesInOrder, translationBudget } from '../../../../shared/comic/translationPlan.js';
+import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
+import { glossaryRenameOps, linesInOrder, planIsFree, translationBudget } from '../../../../shared/comic/translationPlan.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import { languageLabel, overlayFix, quoteTranslation, resolveLanguage, resolveLanguages, runTranslation, supportedLanguagesText, textlessCoverQuote } from '../i18n/index.js';
+import { scriptShare } from '../i18n/translate.js';
 import { swapSourceOps } from '../actions/i18n.js';
 import { prefilterText } from '../safety/index.js';
 import { startAction, type RunActionOptions } from '../jobs.js';
@@ -76,7 +78,8 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Ex
     origin: 'director'
   };
   let message: string;
-  if (quote.estimate.usd <= 0) {
+  // Free only when NO plan needs the translator or the linguist (a tiny quote that rounds to $0 still asks).
+  if (quote.plans.every(planIsFree)) {
     // Nothing for a model to do: the free paths run now; there is nothing to approve.
     const started = await runTranslation(ctx, action, { ...opts, confirmed: true });
     void ctx.track(started.done);
@@ -171,6 +174,12 @@ function setComicLanguageTool(ctx: StudioContext, turn: DirectorTurn): DirectorT
       const drawnInArt = doc.format.lettering === 'in_art' && doc.pages.some((p) => p.render.asset);
       if (mode === 'relabel') {
         if (edition) return `There is a ${englishName(lang)} translation already — call set_comic_language with mode rewrite to make it the source (free when it is complete).`;
+        // Relabel only says what the lines ARE. Lines plainly written in another script would be
+        // mislabelled (and never translated): that is a rewrite (quoted), not a relabel.
+        const written = linesInOrder(doc).map(({ line }) => normalizeSource(line.text)).filter(Boolean).join(' ');
+        if ((written.match(/\p{L}/gu) || []).length >= 12 && scriptShare(written, lang) < 0.5) {
+          return `The lines are written in ${languageLabel(doc.format.language)}, not ${englishName(lang)}, so relabelling would mislabel them. Call set_comic_language with mode rewrite to translate them into ${englishName(lang)} (quoted first), or translate_comic to add ${englishName(lang)} for readers.`;
+        }
         ctx.session.commit([{ op: 'format', patch: { language: lang } }], { origin: 'director' });
         const spec = languageSpec(lang)!;
         const warn = spec.script !== 'Latn' && doc.format.lettering === 'in_art' ? ' Image models often misspell non-Latin lettering painted into the art; overlay lettering keeps every word exact (set_format lettering overlay).' : '';
@@ -234,7 +243,10 @@ function editTranslationTool(ctx: StudioContext): DirectorTool {
       const safety = prefilterText(text, ratingOf(ctx));
       if (safety.decision === 'block') throw toolArgError("That wording doesn't fit DreamStream's content rules — try different words.");
       const ops: DocOp[] = [];
-      if (!i18nOf(doc).editions[lang]) ops.push({ op: 'edition', lang, patch: {} });
+      if (!i18nOf(doc).editions[lang]) {
+        if (Object.keys(i18nOf(doc).editions).length >= DOC_LIMITS.editions) throw toolArgError(`A comic can have up to ${DOC_LIMITS.editions} translations; remove one in Languages first.`);
+        ops.push({ op: 'edition', lang, patch: {} });
+      }
       ops.push({ op: 'translation', lang, lineId: line.id, patch: { text, status: 'edited', at: Date.now(), sourceHash: lineSourceHash(line), gloss: undefined, issue: undefined, model: undefined } });
       ctx.session.commit(ops, { origin: 'director', label: 'Edit translation' });
       const budget = translationBudget(doc, page, line, lang);
@@ -331,7 +343,18 @@ function setGlossaryTool(ctx: StudioContext): DirectorTool {
         if (!isObj(raw) || typeof raw.term !== 'string' || !normalizeSource(raw.term)) throw toolArgError('Each entry needs a term.');
         const doc = ctx.session.doc;
         const term = normalizeSource(raw.term).slice(0, 80);
+        const rating = ratingOf(ctx);
+        // Forms are copied into every translated line by the rename below, so they pass the same $0
+        // content pre-filter a typed translation does (a director op never meets the client patch screen).
+        if (prefilterText(term, rating).decision === 'block') {
+          results.push(`${term.slice(0, 40)} (skipped: that wording doesn't fit the content rules)`);
+          continue;
+        }
         const existing = i18nOf(doc).glossary.find((g) => g.term.toLowerCase() === term.toLowerCase());
+        if (!existing && i18nOf(doc).glossary.length >= DOC_LIMITS.glossaryTerms) {
+          results.push(`${term} (skipped: the glossary holds up to ${DOC_LIMITS.glossaryTerms} terms)`);
+          continue;
+        }
         const id = existing?.id ?? `gl_t_${hashString(term.toLowerCase()).slice(0, 12)}`;
         const ops: DocOp[] = [];
         const patch: Record<string, unknown> = {};
@@ -348,6 +371,10 @@ function setGlossaryTool(ctx: StudioContext): DirectorTool {
             const cur = ctx.session.doc;
             const old = i18nOf(cur).glossary.find((g) => g.id === id)?.forms[lang];
             const form = normalizeSource(v).slice(0, 80);
+            if (prefilterText(form, rating).decision === 'block') {
+              renamed.push(`${englishName(lang)}: skipped — that wording doesn't fit the content rules`);
+              continue;
+            }
             const rename = glossaryRenameOps(cur, lang, id, old || '', form);
             if (!rename.length) continue;
             ctx.session.commit(rename, { origin: 'director', label: 'Rename in translations' });

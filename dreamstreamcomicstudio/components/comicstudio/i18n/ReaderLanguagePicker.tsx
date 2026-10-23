@@ -32,6 +32,8 @@ const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean)
 export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ current, options, onChange, source, compact, className }) => {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  /** px from the trigger's left edge to the list's left edge (null = right-aligned fallback). */
+  const [offset, setOffset] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -68,6 +70,22 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
   }, [active, open]);
 
   if (options.length < 2) return null;
+
+  /**
+   * Open the list where it fits: it prefers to hang from the trigger's right edge, but is shifted so
+   * it always stays ≥ 16 px inside the viewport — a picker near the LEFT edge of a 320 px screen
+   * would otherwise push a right-aligned 288 px list off-screen.
+   */
+  const openList = () => {
+    const r = rootRef.current?.getBoundingClientRect();
+    const vw = typeof window !== 'undefined' ? window.innerWidth || document.documentElement.clientWidth : 0;
+    if (r && vw > 0) {
+      const listW = Math.min(288, vw - 32);
+      const left = Math.min(Math.max(r.right - listW, 16), Math.max(16, vw - 16 - listW));
+      setOffset(Math.round(left - r.left));
+    } else setOffset(null);
+    setOpen(true);
+  };
 
   const pick = (i: number) => {
     const opt = options[i];
@@ -115,7 +133,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
   const onButtonKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      setOpen(true);
+      openList();
     }
   };
 
@@ -130,7 +148,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
         aria-controls={open ? listId : undefined}
         aria-label={`${strings.language}: ${currentOpt?.label || current}`}
         title={strings.choose}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? close(false) : openList())}
         onKeyDown={onButtonKey}
         className="inline-flex min-h-[44px] min-w-[44px] max-w-[12rem] items-center justify-center gap-1.5 rounded-xl px-2.5 text-[13px] font-medium text-inherit transition-colors duration-150 hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60 motion-reduce:transition-none"
       >
@@ -151,7 +169,8 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
           aria-label={strings.choose}
           aria-activedescendant={`${listId}-${active}`}
           onKeyDown={onListKey}
-          className="absolute right-0 top-full z-50 mt-1.5 max-h-[min(22rem,60vh)] w-[min(18rem,calc(100vw-32px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1.5 text-[var(--ds-ink)] shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none"
+          style={offset === null ? undefined : { left: offset }}
+          className={cx(offset === null && 'right-0', 'absolute top-full z-50 mt-1.5 max-h-[min(22rem,60vh)] w-[min(18rem,calc(100vw-32px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1.5 text-[var(--ds-ink)] shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none')}
         >
           {options.map((o, i) => {
             const selected = sameLanguage(o.code, current);

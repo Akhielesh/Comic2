@@ -90,11 +90,19 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
       <div className="divide-y divide-[var(--ds-hairline-soft)]">
         {rows.map((row) => (
           <div key={row.key} className="py-2 first:pt-0">
+            {/* Phones: the label sits above its value so the value gets the row's full width. */}
             <div className="flex min-w-0 items-start gap-3">
-              <span className="w-[4.25rem] shrink-0 pt-px text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{row.label}</span>
-              <span className={cx('min-w-0 flex-1 text-[13px] leading-snug [overflow-wrap:anywhere]', row.open ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]')}>
-                {row.value}
-              </span>
+              <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-3">
+                <span className="block pt-px text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] sm:w-[4.25rem] sm:shrink-0">{row.label}</span>
+                <span
+                  className={cx(
+                    'mt-0.5 block min-w-0 text-[13px] leading-snug [overflow-wrap:anywhere] sm:mt-0 sm:flex-1',
+                    row.open ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]'
+                  )}
+                >
+                  {row.value}
+                </span>
+              </div>
               {changeButton(row.key)}
             </div>
             {panel === row.key && row.key === 'format' && (
@@ -119,35 +127,37 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
         {doc.cast.length > 0 && (
           <div className="py-2">
             <div className="flex min-w-0 items-start gap-3">
-              <span className="w-[4.25rem] shrink-0 pt-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Cast</span>
-              <div className="min-w-0 flex-1">
-                <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Cast">
-                  {cast.map((c: Character) => {
-                    const n = groupCount(c);
-                    return (
-                      <li key={c.id} className="min-w-0 max-w-full" title={c.look?.summary || c.name}>
-                        <span className="flex max-w-[13rem] items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-0.5 pl-0.5 pr-2 text-[12px] text-[var(--ds-ink)]">
-                          <CastAvatar character={c} urlFor={studio.urlFor} size={22} showCount={false} />
-                          <span className="sr-only">{castAriaLabel(c)}</span>
-                          <span className="min-w-0 truncate font-medium" aria-hidden>
-                            {c.name}
+              <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-3">
+                <span className="block pt-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] sm:w-[4.25rem] sm:shrink-0">Cast</span>
+                <div className="mt-1 min-w-0 sm:mt-0 sm:flex-1">
+                  <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Cast">
+                    {cast.map((c: Character) => {
+                      const n = groupCount(c);
+                      return (
+                        <li key={c.id} className="min-w-0 max-w-full" title={c.look?.summary || c.name}>
+                          <span className="flex max-w-[13rem] items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-0.5 pl-0.5 pr-2 text-[12px] text-[var(--ds-ink)]">
+                            <CastAvatar character={c} urlFor={studio.urlFor} size={22} showCount={false} />
+                            <span className="sr-only">{castAriaLabel(c)}</span>
+                            <span className="min-w-0 truncate font-medium" aria-hidden>
+                              {c.name}
+                            </span>
+                            {n && (
+                              <span className="shrink-0 text-[11px] font-semibold tabular-nums text-[var(--ds-accent)]" aria-hidden>
+                                ×{n}
+                              </span>
+                            )}
+                            {castRoleLabel(c) === 'Companion' && (
+                              <span className="shrink-0 text-[10.5px] text-[var(--ds-muted)]" aria-hidden>
+                                companion
+                              </span>
+                            )}
                           </span>
-                          {n && (
-                            <span className="shrink-0 text-[11px] font-semibold tabular-nums text-[var(--ds-accent)]" aria-hidden>
-                              ×{n}
-                            </span>
-                          )}
-                          {castRoleLabel(c) === 'Companion' && (
-                            <span className="shrink-0 text-[10.5px] text-[var(--ds-muted)]" aria-hidden>
-                              companion
-                            </span>
-                          )}
-                        </span>
-                      </li>
-                    );
-                  })}
-                  {moreCast > 0 && <li className="self-center text-[11.5px] text-[var(--ds-muted)]">+{moreCast} more</li>}
-                </ul>
+                        </li>
+                      );
+                    })}
+                    {moreCast > 0 && <li className="self-center text-[11.5px] text-[var(--ds-muted)]">+{moreCast} more</li>}
+                  </ul>
+                </div>
               </div>
               {changeButton('cast')}
             </div>

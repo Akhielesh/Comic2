@@ -53,6 +53,8 @@ export interface UploadItem {
   attempts: number;
   label?: RefLabel;
   index?: number;
+  /** sha256(original bytes) first 16 hex, once prepared (catches the same file added twice). */
+  hash?: string;
 }
 
 export interface UploadParams {
@@ -390,16 +392,20 @@ export function createUploadQueue(options: UploadQueueOptions): UploadQueueStore
       const doc = handlers.getDoc();
       const list = doc ? refsOf(doc, item.owner) || [] : [];
       const key = refOwnerKey(item.owner);
+      // (A finished row keeps its hash, so the same file added again right after it landed — before
+      // the studio resync shows it — is still caught here instead of costing another upload.)
       if (
         img.hash &&
         (list.some((r) => r.hash === img.hash) ||
-          items.some((o) => o.id !== id && refOwnerKey(o.owner) === key && (o.state === 'done' || ACTIVE.has(o.state)) && prepared.get(o.id)?.hash === img.hash))
+          items.some(
+            (o) => o.id !== id && refOwnerKey(o.owner) === key && (o.state === 'done' || o.state === 'near_duplicate' || ACTIVE.has(o.state)) && o.hash === img.hash
+          ))
       ) {
         finish(id, { state: 'duplicate', message: 'Already added' });
         return;
       }
       prepared.set(id, img);
-      patch(id, { state: 'queued', previewUrl: objectUrl(img.blob) });
+      patch(id, { state: 'queued', previewUrl: objectUrl(img.blob), ...(img.hash ? { hash: img.hash } : {}) });
     } catch (err) {
       const message = err instanceof PrepareError ? err.message : "That file couldn't be opened as an image.";
       finish(id, { state: 'failed', message, retryable: false });

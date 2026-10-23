@@ -113,6 +113,21 @@ describe('LanguagesTab', () => {
     expect(studio.act).toHaveBeenCalledWith({ type: 'swap_source_language', lang: 'te' });
   });
 
+  it('relabel is offered only when it is honest: same-script languages yes, English lines → Hindi no (translate instead)', () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc() });
+    render(<LanguagesTab studio={studio} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change…' }));
+    const select = screen.getByRole('combobox', { name: 'New comic language' });
+    fireEvent.change(select, { target: { value: 'hi' } });
+    expect((screen.getByRole('button', { name: /just relabel/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/relabelling would only mislabel them/)).toBeTruthy();
+    fireEvent.change(select, { target: { value: 'es' } });
+    const relabel = screen.getByRole('button', { name: /just relabel/ }) as HTMLButtonElement;
+    expect(relabel.disabled).toBe(false);
+    fireEvent.click(relabel);
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'format', patch: { language: 'es' } }], expect.anything());
+  });
+
   it('remove asks first, then patches the edition away', () => {
     const studio = makeFakeStudio({ doc: withTelugu() });
     render(<LanguagesTab studio={studio} />);
@@ -136,6 +151,11 @@ describe('TranslationReview', () => {
     fireEvent.change(field, { target: { value: 'కొత్త అనువాదం' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'translation', lang: 'te', lineId: first.id, patch: { text: 'కొత్త అనువాదం' } }], { label: 'Edit translation' });
+    // The fit meter follows the DRAFT while typing (not the saved text).
+    const row = field.closest('li') as HTMLElement;
+    expect(within(row).getByText('Fits')).toBeTruthy();
+    fireEvent.change(field, { target: { value: 'చాలా '.repeat(60).trim() } });
+    expect(within(row).getByText(/too long$/)).toBeTruthy();
     // Esc reverts without saving
     studio.patch.mockClear();
     fireEvent.change(field, { target: { value: 'పొరపాటు' } });

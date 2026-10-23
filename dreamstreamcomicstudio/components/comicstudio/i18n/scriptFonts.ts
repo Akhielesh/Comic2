@@ -56,12 +56,32 @@ export const googleFontsHref = (faces: readonly FontFaceMeta[]): string | null =
 };
 
 const injected = new Set<string>();
+/** href → settles when the stylesheet has loaded (true) or failed (false). */
+const sheets = new Map<string, Promise<boolean>>();
+
+/** A promise for a <link> that settles on its load/error event (immediately when it already has a sheet). */
+const whenLinkLoads = (link: HTMLLinkElement): Promise<boolean> =>
+  link.sheet
+    ? Promise.resolve(true)
+    : new Promise<boolean>((resolve) => {
+        link.addEventListener('load', () => resolve(true), { once: true });
+        link.addEventListener('error', () => resolve(false), { once: true });
+      });
+
+/**
+ * Settles once the injected stylesheet has loaded. document.fonts.load() before the CSS is parsed
+ * finds no @font-face rule and resolves EMPTY, which would report a fresh language as "degraded"
+ * the first time it is shown. A sheet already in the page (index.html) counts as loaded.
+ */
+export const stylesheetReady = (href: string): Promise<boolean> => sheets.get(href) ?? Promise.resolve(true);
 
 /** Insert the stylesheet once (and a gstatic preconnect). Returns false when there is no DOM. */
 export function injectStylesheet(href: string): boolean {
   if (typeof document === 'undefined' || !document.head) return false;
-  const present = Array.from(document.head.querySelectorAll('link[rel="stylesheet"]')).some((l) => l.getAttribute('href') === href);
+  const present = Array.from(document.head.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).find((l) => l.getAttribute('href') === href);
   if (injected.has(href) || present) {
+    // Loaded already (index.html, an earlier visit) ⇒ resolves at once; still loading ⇒ waits; failed ⇒ the timeout decides.
+    if (present && !sheets.has(href)) sheets.set(href, whenLinkLoads(present));
     injected.add(href);
     return true;
   }
@@ -76,13 +96,17 @@ export function injectStylesheet(href: string): boolean {
   link.rel = 'stylesheet';
   link.href = href;
   link.dataset.dsScriptFonts = '1';
+  sheets.set(href, whenLinkLoads(link));
   document.head.appendChild(link);
   injected.add(href);
   return true;
 }
 
 /** Test hook: forget what was injected. */
-export const resetScriptFonts = () => injected.clear();
+export const resetScriptFonts = () => {
+  injected.clear();
+  sheets.clear();
+};
 
 const sample = (text: string) => {
   const t = (text || '').replace(/\s+/g, ' ').trim();
@@ -102,19 +126,24 @@ export const ensureFontsFor = async (langs: string[], roles: FontRole[], sampleT
   const fonts = typeof document !== 'undefined' ? (document as Document & { fonts?: FontFaceSet }).fonts : undefined;
   if (!fonts || typeof fonts.load !== 'function') return { degraded: false };
   const text = sample(sampleText) || SAMPLE_TEXT[langs[0]] || ' ';
-  const loads = faces.flatMap((m) =>
-    weightsFor(m).map((w) =>
-      fonts
-        .load(`${w} 16px "${m.family}"`, text)
-        .then((list) => list.length > 0)
-        .catch(() => false)
+  // Wait for the @font-face rules first (see stylesheetReady), then load each face with real text.
+  const loads = stylesheetReady(href).then((sheetOk) =>
+    Promise.all(
+      faces.flatMap((m) =>
+        weightsFor(m).map((w) =>
+          fonts
+            .load(`${w} 16px "${m.family}"`, text)
+            .then((list) => sheetOk && list.length > 0)
+            .catch(() => false)
+        )
+      )
     )
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), Math.max(0, timeoutMs));
   });
-  const result = await Promise.race([Promise.all(loads), timeout]);
+  const result = await Promise.race([loads, timeout]);
   if (timer) clearTimeout(timer);
   if (result === 'timeout') return { degraded: true };
   return { degraded: result.some((ok) => !ok) };

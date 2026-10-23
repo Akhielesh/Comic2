@@ -9,8 +9,9 @@ import { makeSampleDoc, makeStudio } from '../board/__fixtures__/sampleDoc';
 import { RefsCard } from './RefsCard';
 import { RefsDrawer } from './RefsDrawer';
 import { RefStrip } from './RefStrip';
+import { refUsage, styleRefsUsed } from './refsModel';
 import { feature } from './index';
-import { __resetUploadQueues, type UploadResponse, type UploadTransport } from './useRefUpload';
+import { __resetUploadQueues, RefUploadError, type UploadResponse, type UploadTransport } from './useRefUpload';
 
 const MAYA = { kind: 'character', id: 'ch_maya' } as const;
 const ref = (n: number, extra: Partial<RefAsset> = {}): RefAsset => ({ path: `u/u1/p/p1/ref/r${n}.webp`, source: 'upload', at: n, safety: { assessed: 'G', at: 1 }, ...extra });
@@ -161,9 +162,46 @@ describe('RefStrip', () => {
     expect(screen.getByRole('dialog', { name: 'Maya — photos' })).toBeInTheDocument();
   });
 
+  it('an upload started from the strip is never swallowed: a blocked photo shows its red row right there', async () => {
+    const studio = makeStudio(docWith([ref(1)]));
+    const transport: UploadTransport = async () => {
+      throw new RefUploadError(422, "This image doesn't fit DreamStream's content rules, so it wasn't added.", 'CONTENT_POLICY');
+    };
+    render(<RefStrip studio={studio} owner={MAYA} transport={transport} />);
+    const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, ...new Array(200).fill(1)])], 'beach.png', { type: 'image/png' });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 800, height: 600, close: vi.fn() })));
+    fireEvent.change(screen.getByTestId('refstrip-picker'), { target: { files: [png] } });
+    await waitFor(() => expect(screen.getByText("Not added — this image doesn't fit DreamStream's content rules.")).toBeInTheDocument());
+    const row = screen.getByText('beach.png').closest('li')!;
+    expect(row).toHaveAttribute('data-state', 'rejected');
+    expect(within(row).queryByRole('button', { name: /Retry/ })).toBeNull();
+    expect(row.querySelector('img')).toBeNull();
+    fireEvent.click(within(row).getByRole('button', { name: 'Dismiss beach.png' }));
+    expect(screen.queryByText('beach.png')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
   it('renders nothing for an owner that no longer exists', () => {
     const { container } = render(<RefStrip studio={makeStudio(docWith([]))} owner={{ kind: 'character', id: 'gone' }} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('honest usage badges (the compiler’s own picks)', () => {
+  const style = (refs: RefAsset[], override: string | undefined, board: boolean) =>
+    makeSampleDoc((d) => {
+      d.style.refs = refs;
+      d.settings.imageModelOverride = override;
+      if (!board) delete d.style.board;
+    });
+  it('style photos: none while the board is the only anchor; 1 without a board; up to 2 beside the board on Pro', () => {
+    const four = [ref(1), ref(2), ref(3), ref(4)];
+    const used = (d: ComicDoc) => [...refUsage(d, { kind: 'style' }).values()].filter((u) => u.style).length;
+    expect(styleRefsUsed(style(four, 'nano-banana-2.1', true))).toBe(0);
+    expect(used(style(four, 'nano-banana-2.1', true))).toBe(0);
+    expect(used(style(four, 'nano-banana-2.1', false))).toBe(1);
+    expect(used(style(four, 'nano-banana-pro', true))).toBe(2);
+    expect(used(style(four, 'nano-banana-pro', false))).toBe(2);
   });
 });
 

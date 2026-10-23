@@ -18,6 +18,31 @@ describe('ReaderLanguagePicker', () => {
     expect(screen.getAllByRole('option')[0].textContent).not.toContain('translated');
   });
 
+  it('the list always stays inside a 320 px viewport, wherever the trigger sits', () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 320, configurable: true });
+    try {
+      for (const [left, right] of [
+        [8, 52], // trigger at the LEFT edge (a right-aligned 288 px list would start at -236 px)
+        [140, 184], // in the middle
+        [268, 312] // at the right edge
+      ]) {
+        const { unmount } = render(<ReaderLanguagePicker current="en" options={options} onChange={vi.fn()} />);
+        const button = screen.getByRole('button', { name: /English/ });
+        const root = button.parentElement as HTMLElement;
+        root.getBoundingClientRect = () => ({ left, right, top: 0, bottom: 44, width: right - left, height: 44, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+        fireEvent.click(button);
+        const offset = parseFloat((screen.getByRole('listbox') as HTMLElement).style.left);
+        const listLeft = left + offset;
+        expect(listLeft, `trigger ${left}-${right}`).toBeGreaterThanOrEqual(16);
+        expect(listLeft + 288, `trigger ${left}-${right}`).toBeLessThanOrEqual(320 - 16);
+        unmount();
+      }
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+    }
+  });
+
   it('renders nothing for a single language', () => {
     const { container } = render(<ReaderLanguagePicker current="en" options={[options[0]]} onChange={vi.fn()} />);
     expect(container.innerHTML).toBe('');

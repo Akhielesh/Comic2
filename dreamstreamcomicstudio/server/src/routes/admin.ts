@@ -11,7 +11,17 @@ import {
 } from '../services/telemetryAnalytics.js';
 import { generateInvites, listInvites, revokeInvite } from '../services/invites.js';
 import { getAdminUserUsage } from '../services/usageAnalytics.js';
-import { startOfCurrentUtcMonthIso } from '../services/platformAllowance.js';
+import {
+  defaultBudgetUsd,
+  listUsageBudgets,
+  MAX_BUDGET_USD,
+  startOfCurrentUtcMonthIso,
+  upsertUsageBudget,
+  validateUsageBudgetPatch,
+  type UsageBudgetPatch
+} from '../services/platformAllowance.js';
+import { isBootstrapAdminEmail } from '../services/rbac.js';
+import { recordAudit } from '../observability/auditLog.js';
 import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
 
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
@@ -520,6 +530,82 @@ adminRouter.get('/usage/users', requireAdmin, async (req, res, next) => {
   try {
     const limit = parseLimit(req.query.limit, 50);
     res.json({ month: startOfCurrentUtcMonthIso(), users: await getAdminUserUsage(limit) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Usage budgets (P1-LIMITS, admin-only) ─────────────────────────────────────
+// Per-user platform usage budgets: % used AND dollars (admins see dollars; users never do).
+// Admins are exempt in code and listed with `admin: true`. Every change is audited.
+adminRouter.get('/usage/budgets', requireAdmin, async (req, res, next) => {
+  try {
+    const limit = parseLimit(req.query.limit, 200);
+    const rows = await listUsageBudgets(limit);
+    const roleAdmins = new Set<string>();
+    try {
+      const { data } = await getSupabaseAdmin().from('user_roles').select('user_id').eq('role', 'admin').eq('is_active', true);
+      for (const row of (data || []) as Array<Record<string, unknown>>) {
+        if (typeof row.user_id === 'string') roleAdmins.add(row.user_id);
+      }
+    } catch {
+      /* role hint only */
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      defaultBudgetUsd: defaultBudgetUsd(),
+      defaultPeriod: 'lifetime',
+      maxBudgetUsd: MAX_BUDGET_USD,
+      users: rows.map((row) => ({ ...row, admin: roleAdmins.has(row.userId) || isBootstrapAdminEmail(row.email) }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const BUDGET_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// :userId is a user id, or an email (resolved through profiles) so an admin can add a tester
+// before they have spent anything. Body: { budgetUsd?, exempt?, allowPro?, period?, resetPeriod?, note? }
+adminRouter.put('/usage/budgets/:userId', requireAdmin, async (req, res, next) => {
+  try {
+    const actorId = req.user!.id;
+    const target = String(req.params.userId || '').trim();
+    let userId = target;
+    if (!BUDGET_UUID_RE.test(target)) {
+      if (!target.includes('@')) return res.status(400).json({ error: { message: 'Give a user id or an email address.' } });
+      const { data: profile, error: profileError } = await getSupabaseAdmin()
+        .from('profiles')
+        .select('id')
+        .ilike('email', target.toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`))
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile?.id) return res.status(404).json({ error: { message: 'No account with this email yet — they need to sign up first.' } });
+      userId = String(profile.id);
+    }
+    const body = (req.body || {}) as Record<string, unknown>;
+    const patch: UsageBudgetPatch = {
+      ...(body.budgetUsd !== undefined ? { budgetUsd: body.budgetUsd as number } : {}),
+      ...(body.exempt !== undefined ? { exempt: body.exempt as boolean } : {}),
+      ...(body.allowPro !== undefined ? { allowPro: body.allowPro as boolean } : {}),
+      ...(body.period !== undefined ? { period: body.period as UsageBudgetPatch['period'] } : {}),
+      ...(body.resetPeriod !== undefined ? { resetPeriod: body.resetPeriod as boolean } : {}),
+      ...(body.note !== undefined ? { note: body.note as string | null } : {})
+    };
+    const invalid = validateUsageBudgetPatch(patch);
+    if (invalid) return res.status(400).json({ error: { message: invalid } });
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: { message: 'Nothing to change.' } });
+
+    const { before, after } = await upsertUsageBudget({ userId, actorId, patch });
+    await recordAudit({
+      actorId,
+      action: 'usage_budget.update',
+      targetType: 'user',
+      targetId: userId,
+      detail: { patch, before, after }
+    });
+    console.info('[ADMIN_ACTION] usage_budget_update', { actorId, userId, fields: Object.keys(patch) });
+    res.json({ success: true, userId, budget: after });
   } catch (error) {
     next(error);
   }

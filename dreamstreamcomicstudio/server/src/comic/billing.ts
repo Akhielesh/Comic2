@@ -13,15 +13,21 @@
 // X-Gemini-Model header must not re-price it), and BYOK flags that match the key the
 // studio actually routes with.
 //
-// Bookkeeping never breaks a render: ledger errors are logged and swallowed (fail open).
-// The one thing that is never swallowed is a real denial (allowance/credits exhausted),
-// which the caller turns into an honest notice card.
+// Metering runs on METERING_ENABLED (default on), NOT on Stripe's BILLING_ENABLED (which stays
+// "false" in production): every Comic Studio image and text call reserves against the user's
+// usage budget before it runs (P1-LIMITS). Platform-paid safety checks never pass through here —
+// they are platform overhead and don't count against anyone's usage.
+//
+// Bookkeeping never breaks a render for an UNGOVERNED caller (admin/exempt/own key): ledger errors
+// are logged and swallowed (fail open). A governed user's budget check never throws — when it
+// can't run, usageEnforcer returns an honest refusal (fail closed) — and a real denial is never
+// swallowed: the caller turns it into an honest notice card.
 
 import type { Request } from 'express';
 import type { LimitExceededDetails } from '../../../shared/types/billing.js';
 import type { Resolution } from '../../../shared/comic/doc.js';
 import { getImageModel, imagePriceUsd, type ImageRoute } from '../../../shared/comic/models.js';
-import { BILLING_ENABLED } from '../config.js';
+import { METERING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { releaseReservedOperation, reserveForOperation, settleReservedOperation } from '../services/usageEnforcer.js';
 import type { UsagePayload } from '../services/costEstimator.js';
@@ -34,7 +40,7 @@ export interface BillingDeps {
   reserve?: typeof reserveForOperation;
   settle?: typeof settleReservedOperation;
   release?: typeof releaseReservedOperation;
-  /** Override BILLING_ENABLED (tests). */
+  /** Override METERING_ENABLED (tests). */
   enabled?: boolean;
 }
 
@@ -59,6 +65,17 @@ const ADD_KEY_HINT = 'add your own key in Settings → API keys';
 /** A friendly, actionable sentence for a ledger denial. */
 export const billingDenialMessage = (details?: Partial<LimitExceededDetails> | null): string => {
   switch (details?.reason) {
+    case 'usage_budget_exhausted':
+      // The gate's own percent-only sentence (top-up / own-key path); never a dollar figure.
+      return (
+        details.message ||
+        "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or add your own API key in Settings → API keys to keep going."
+      );
+    case 'usage_budget_unavailable':
+      return (
+        details.message ||
+        `We couldn't check your usage just now, so nothing was spent. Please try again in a moment — or ${ADD_KEY_HINT}.`
+      );
     case 'platform_allowance_exhausted':
       return "You've used this month's included generation allowance. Add your own key in Settings → API keys, or upgrade.";
     case 'MONTHLY_INCLUDED_EXHAUSTED':
@@ -110,7 +127,7 @@ const cloneRequestForCall = (req: Request, args: ReserveArgs, byok: boolean): Re
 };
 
 export function createBillingHooks(req: Request, projectId: string, deps: BillingDeps = {}): BillingHooks {
-  const enabled = deps.enabled ?? BILLING_ENABLED;
+  const enabled = deps.enabled ?? METERING_ENABLED;
   if (!enabled || !req?.user?.id) return noopBillingHooks;
 
   const reserveFn = deps.reserve || reserveForOperation;

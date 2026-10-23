@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { Request } from 'express';
 import type { BillingProvider, LimitExceededDetails, ReservationState, TokenEstimateRequest, TokenEstimateResponse } from '../../../shared/types/billing.js';
 import { isTextProvider, type ProviderId } from '../../../shared/providers.js';
@@ -17,18 +18,21 @@ import {
 import {
   allowanceCrossingNotices,
   buildAllowanceExhaustedDetails,
-  bumpAllowanceCache,
-  getAllowanceStatus,
   getBillingPrefs,
-  isPlatformFundedProvider
+  invalidateAllowanceStatus,
+  isUsageExemptAdmin,
+  meteringEnabled,
+  tryReserveAllowance,
+  type BudgetReserveOutcome
 } from './platformAllowance.js';
 import { hasAccountKeyFor } from '../middleware/accountKeys.js';
+import { logger } from '../lib/logger.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
     usageReservation?: ReservationState;
     usageLimitDetails?: LimitExceededDetails;
-    /** Allowance threshold notices produced at settlement (drained by consumeAllowanceNotices). */
+    /** Usage threshold notices (30/70/90%) raised by the budget reserve (drained by consumeAllowanceNotices). */
     allowanceNotices?: CapabilityNotice[];
   }
 }
@@ -135,51 +139,71 @@ export const reserveForOperation = async (input: {
     };
   }
 
+  const userId = input.req.user.id;
   const provider = input.provider || resolveProviderFromOperation(input.operation);
   const byok = hasByokForProvider(input.req, provider);
   const model = resolveModelFromRequest(input.req, input.fallbackModel);
 
-  // Platform-allowance gate (services/platformAllowance.ts): a platform-funded request
-  // stops once the user's monthly allowance is exhausted. Runs BEFORE the wallet
-  // reservation so the existing wallet/credit semantics stay untouched, and fails
-  // OPEN — when metering is unavailable the status reports enabled:false. BYOK
-  // requests (header or auto-fallback account key) never hit this gate.
-  if (!byok && isPlatformFundedProvider(provider)) {
-    try {
-      const prefs = await getBillingPrefs(input.req.user.id);
-      if (prefs.usePlatformAllowance) {
-        const status = await getAllowanceStatus(input.req.user.id);
-        if (status.enabled && status.exhausted) {
-          const canFallbackToByok = await hasAccountKeyFor(input.req.user.id, provider);
-          const details = buildAllowanceExhaustedDetails({
-            status,
-            canFallbackToByok,
-            byokFallbackMode: prefs.byokFallbackMode
-          });
-          input.req.usageLimitDetails = details;
-          return { allowed: false as const, details };
-        }
+  // Usage budget (P1-LIMITS, services/platformAllowance.ts): ONE meter for platform-paid usage
+  // across every studio. BYOK never counts; admins are exempt; everyone else is checked by the
+  // atomic database reservation below — after the estimate, before the provider call — and
+  // fails CLOSED: if the budget can't be checked, nothing is spent.
+  const budgetsOn = meteringEnabled() && !byok;
+  const isAdmin = budgetsOn ? await isUsageExemptAdmin(input.req) : false;
+  const budgetChecked = budgetsOn && !isAdmin;
+
+  let seed: ReturnType<typeof buildEstimateFromRequestBody>;
+  let estimate: Awaited<ReturnType<typeof estimateCharge>>;
+  try {
+    seed = buildEstimateFromRequestBody(provider, model, input.operation, input.req.body, {
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      imageUnits: input.imageUnits,
+      resolution: input.resolution,
+      projectId: input.projectId,
+      comicId: input.comicId,
+      stage: input.stage,
+      byok,
+      metadata: input.metadata
+    });
+    estimate = await estimateCharge(seed);
+  } catch (err) {
+    if (!budgetChecked) throw err;
+    return budgetRefusal(input.req, userId, provider, { kind: 'unavailable' }, err);
+  }
+
+  let reservationId: string | undefined;
+  let governed = false;
+  if (budgetChecked) {
+    reservationId = crypto.randomUUID();
+    const outcome = await tryReserveAllowance({
+      userId,
+      reservationId,
+      estimateUsd: estimate.estimatedProviderCostUsd,
+      event: {
+        projectId: input.projectId,
+        comicId: input.comicId,
+        operation: input.operation,
+        stage: input.stage,
+        provider,
+        model,
+        estimatedCt: estimate.estimatedCt,
+        billableUsd: estimate.estimatedBillableUsd,
+        metadata: input.metadata
       }
-    } catch {
-      // Allowance checks are best-effort; never block generation on a metering failure.
+    });
+    if (outcome.kind === 'denied' || outcome.kind === 'unavailable') {
+      return budgetRefusal(input.req, userId, provider, outcome);
+    }
+    governed = outcome.kind === 'reserved';
+    if (outcome.kind === 'reserved' && outcome.crossedNow.length) {
+      const notices = allowanceCrossingNotices(outcome.crossedNow);
+      if (notices.length) input.req.allowanceNotices = [...(input.req.allowanceNotices || []), ...notices];
     }
   }
 
-  const seed = buildEstimateFromRequestBody(provider, model, input.operation, input.req.body, {
-    inputTokens: input.inputTokens,
-    outputTokens: input.outputTokens,
-    imageUnits: input.imageUnits,
-    resolution: input.resolution,
-    projectId: input.projectId,
-    comicId: input.comicId,
-    stage: input.stage,
-    byok,
-    metadata: input.metadata
-  });
-
-  const estimate = await estimateCharge(seed);
-  const reserved = await reserveUsageTokens({
-    userId: input.req.user.id,
+  const reserveInput = {
+    userId,
     estimate,
     provider,
     model,
@@ -188,8 +212,25 @@ export const reserveForOperation = async (input: {
     comicId: input.comicId,
     stage: input.stage,
     byok,
-    metadata: input.metadata
-  });
+    metadata: input.metadata,
+    // Budgets on: the budget (or the admin/exempt rule) is the one meter, so the token wallet's
+    // limits are skipped; governed reservations reuse the RPC's id and RESERVED row.
+    ...(budgetsOn ? { skipWalletLimits: true, governed, reservationId, costEventRecorded: governed } : {})
+  };
+
+  let reserved: Awaited<ReturnType<typeof reserveUsageTokens>>;
+  if (governed) {
+    try {
+      reserved = await reserveUsageTokens(reserveInput);
+    } catch (err) {
+      // The budget row is held; without a ledger we can't settle honestly — free the hold and
+      // refuse (fail closed), so nothing unmetered is ever spent.
+      await releaseUsageReservation(userId, reservationId!, estimate.estimatedCt, input, 'ledger_unavailable');
+      return budgetRefusal(input.req, userId, provider, { kind: 'unavailable' }, err);
+    }
+  } else {
+    reserved = await reserveUsageTokens(reserveInput);
+  }
 
   if ('details' in reserved) {
     input.req.usageLimitDetails = reserved.details;
@@ -204,6 +245,61 @@ export const reserveForOperation = async (input: {
     provider,
     model
   };
+};
+
+/** Best-effort release of a budget hold the ledger never picked up. */
+const releaseUsageReservation = async (
+  userId: string,
+  reservationId: string,
+  estimatedCt: number,
+  input: { operation: string; projectId?: string; metadata?: Record<string, unknown> },
+  reason: string
+) => {
+  try {
+    await releaseReservation({
+      userId,
+      reservationId,
+      estimatedCt,
+      reason,
+      operation: input.operation,
+      projectId: input.projectId,
+      metadata: input.metadata,
+      walletSkipped: true
+    });
+  } catch {
+    // The RESERVED row stops counting after 20 minutes on its own.
+  } finally {
+    invalidateAllowanceStatus(userId);
+  }
+};
+
+/** Turn a budget denial/outage into the honest, percent-only refusal every route already handles. */
+const budgetRefusal = async (
+  req: Request,
+  userId: string,
+  provider: BillingProvider,
+  outcome: Extract<BudgetReserveOutcome, { kind: 'denied' } | { kind: 'unavailable' }>,
+  err?: unknown
+): Promise<{ allowed: false; details: LimitExceededDetails }> => {
+  if (err) logger.error('usage_budget_reserve_error', { message: (err as Error)?.message });
+  let canFallbackToByok = false;
+  let byokFallbackMode: 'ask' | 'auto' | 'never' = 'ask';
+  try {
+    const [prefs, hasKey] = await Promise.all([getBillingPrefs(userId), hasAccountKeyFor(userId, provider)]);
+    byokFallbackMode = prefs.byokFallbackMode;
+    canFallbackToByok = hasKey;
+  } catch {
+    // Hints only.
+  }
+  const details = buildAllowanceExhaustedDetails({
+    pctLeft: outcome.kind === 'denied' ? outcome.pctLeft : 100,
+    resetsAt: null,
+    canFallbackToByok,
+    byokFallbackMode,
+    unavailable: outcome.kind === 'unavailable'
+  });
+  req.usageLimitDetails = details;
+  return { allowed: false as const, details };
 };
 
 export const settleReservedOperation = async (input: {
@@ -250,31 +346,13 @@ export const settleReservedOperation = async (input: {
     model: input.model,
     projectId: input.seed.projectId,
     metadata: input.metadata,
-    byokBypass: reservation.byokBypass
+    byokBypass: reservation.byokBypass,
+    walletSkipped: reservation.walletSkipped
   });
 
-  // Platform-allowance metering: optimistically bump the cached month-to-date spend
-  // with the ACTUAL settled platform cost so rapid-fire requests can't overshoot the
-  // cap between 60s cache refreshes. Newly crossed 30/70/90 thresholds become
-  // percent-only response notices, drained by consumeAllowanceNotices. Best-effort —
-  // settlement above already persisted the authoritative spend.
-  if (settled && !reservation.byokBypass && isPlatformFundedProvider(input.seed.provider)) {
-    try {
-      const actualPlatformUsd = settled.billableUsd || settled.providerCostUsd || 0;
-      if (actualPlatformUsd > 0) {
-        const status = await getAllowanceStatus(input.req.user.id);
-        if (status.enabled) {
-          const bump = bumpAllowanceCache(input.req.user.id, actualPlatformUsd);
-          const notices = bump ? allowanceCrossingNotices(bump.crossedNow, status.resetsAt) : [];
-          if (notices.length) {
-            input.req.allowanceNotices = [...(input.req.allowanceNotices || []), ...notices];
-          }
-        }
-      }
-    } catch {
-      // Never fail a settled request over allowance cache accounting.
-    }
-  }
+  // The settled row now carries the real provider cost; the next status read sees it. The
+  // 30/70/90% notices were raised atomically at reserve time (percent-only).
+  if (reservation.governed) invalidateAllowanceStatus(input.req.user.id);
 
   return settled;
 };
@@ -309,12 +387,15 @@ export const releaseReservedOperation = async (input: {
     provider: input.provider,
     model: input.model,
     projectId: input.projectId,
-    metadata: input.metadata
+    metadata: input.metadata,
+    walletSkipped: reservation.walletSkipped
   });
+  if (reservation.governed) invalidateAllowanceStatus(input.req.user.id);
 };
 
 export const formatLimitErrorResponse = (details: LimitExceededDetails) => ({
-  message: `Usage limit reached (${details.reason}).`,
+  // The honest, human sentence when the gate wrote one (usage budget: percent-only).
+  message: details.message || `Usage limit reached (${details.reason}).`,
   code: 'BILLING_LIMIT_EXCEEDED',
   details
 });

@@ -289,6 +289,8 @@ function attachRefsTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
       if (mainIndex >= 0 && planned.refs.some((r) => r.path === refs[mainIndex].path)) {
         const l = labels[mainIndex]?.label;
         details.push(`main: #${numbers[mainIndex]}${l ? ` ${labelWord(l)}` : ''}`);
+      } else if (mainIndex >= 0 && planned.ops.some((o) => o.op === 'ref_move')) {
+        details.push(`#${numbers[mainIndex]}, already there, is now the main photo`);
       }
       if (labelNotes.length) details.push(`labels: ${labelNotes.join(', ')}`);
       const message = planned.message.replace(/\.$/, details.length ? ` (${details.join('; ')}).` : '.');

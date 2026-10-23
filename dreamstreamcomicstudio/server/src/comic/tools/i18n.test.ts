@@ -10,7 +10,14 @@ import { resetTranslationCalibration } from '../i18n/index.js';
 import { fakeLinguist, fakeTranslator, sixPageKidsDoc, times } from '../i18n/testing.js';
 import { I18N_PROMPT_RULES, i18nToolGroup, languagesSummary } from './i18n.js';
 
+vi.mock('../safety/index.js', async (orig) => {
+  const real = await orig<typeof import('../safety/index.js')>();
+  return { ...real, prefilterText: vi.fn(real.prefilterText) };
+});
+const safety = await import('../safety/index.js');
+
 beforeEach(() => {
+  vi.mocked(safety.prefilterText).mockClear();
   JOB_TIMINGS.retryBackoffMs = 0;
   resetTranslationCalibration();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -114,10 +121,22 @@ describe('translate_comic', () => {
 });
 
 describe('set_comic_language', () => {
-  it('relabel before planning is free and refuses when a translation of that language exists', async () => {
-    const { tools, session } = setup(sixPageKidsDoc(), 'make it a Telugu comic');
+  it('relabel is free when the lines are already in that language (or none exist); English lines are never mislabelled', async () => {
+    // Lines already typed in Telugu but labelled English → relabel fixes the label for free.
+    const native = sixPageKidsDoc();
+    for (const p of native.pages) for (const pn of p.panels) for (const l of pn.lines) l.text = 'మనం ఆలస్యం అయ్యాం!';
+    const { tools, session } = setup(native, 'make it a Telugu comic');
     expect(await tools.set_comic_language.execute({ language: 'Telugu', mode: 'relabel' })).toContain('The comic is now written in తెలుగు (Telugu) (free).');
     expect(session.doc.format.language).toBe('te');
+    // English lines: relabelling to Telugu would only mislabel them — the tool says to translate instead.
+    const en = setup(sixPageKidsDoc(), 'make it a Telugu comic');
+    const refused = await en.tools.set_comic_language.execute({ language: 'Telugu', mode: 'relabel' });
+    expect(refused).toContain('relabelling would mislabel them');
+    expect(refused).toContain('mode rewrite');
+    expect(en.session.doc.format.language).toBe('en');
+    // Same script (English → Spanish) can't be told apart by software: the director's call stands.
+    const es = setup(sixPageKidsDoc(), 'these lines are Spanish');
+    expect(await es.tools.set_comic_language.execute({ language: 'es', mode: 'relabel' })).toContain('(free)');
     const t = setup(translated(), 'make it Telugu');
     expect(await t.tools.set_comic_language.execute({ language: 'te', mode: 'relabel' })).toContain('mode rewrite');
   });
@@ -177,5 +196,20 @@ describe('edit_translation / read_translation / set_glossary', () => {
     expect(out).toBe('Glossary saved ($0): Milo (మైలో → మిలో in 1 Telugu line), Moon Lake (added).');
     expect(i18nOf(session.doc).editions.te.lines.l12.text).toBe('శుభరాత్రి, మిలో.');
     expect(i18nOf(session.doc).glossary.find((g) => g.term === 'Moon Lake')).toMatchObject({ policy: 'translate', kind: 'term' });
+  });
+
+  it('set_glossary never copies a blocked form into the translated lines (the same $0 pre-filter as typed text)', async () => {
+    let doc = translated();
+    doc = applyOps(doc, [{ op: 'translations', lang: 'te', lines: { l12: { text: 'శుభరాత్రి, మైలో.', status: 'reviewed', sourceHash: lineSourceHash(lineOf(doc, 'l12')), at: 1 } } }]);
+    doc = applyOps(doc, [{ op: 'glossary_term', id: 'gl_c_c_milo', patch: { term: 'Milo', kind: 'character', forms: { te: 'మైలో' } } }]);
+    const real = vi.mocked(safety.prefilterText).getMockImplementation()!;
+    vi.mocked(safety.prefilterText).mockImplementation((text, rating) => (text === 'BADWORD' ? { decision: 'block', categories: [], ip: [] } : real(text, rating)));
+    const { tools, session } = setup(doc, 'rename Milo in Telugu');
+    const out = await tools.set_glossary.execute({ entries: [{ term: 'Milo', forms: { te: 'BADWORD' } }, { term: 'BADWORD' }] });
+    expect(out).toContain("Telugu: skipped — that wording doesn't fit the content rules");
+    expect(out).toContain('BADWORD (skipped');
+    expect(i18nOf(session.doc).editions.te.lines.l12.text).toBe('శుభరాత్రి, మైలో.');
+    expect(i18nOf(session.doc).glossary.some((g) => g.term === 'BADWORD' || g.forms.te === 'BADWORD')).toBe(false);
+    vi.mocked(safety.prefilterText).mockImplementation(real);
   });
 });

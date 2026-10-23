@@ -202,7 +202,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                     Explore Comic Studio <ArrowRight size={16} />
                   </a>
                   {user && (
-                    <button onClick={onEnterStudio} className="text-xs font-bold text-slate-500 underline-offset-2 hover:underline">
+                    <button onClick={onEnterStudio} className="inline-flex min-h-[44px] items-center text-xs font-bold text-slate-500 underline-offset-2 hover:underline">
                       or open my comics here
                     </button>
                   )}

@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { isPageStale, isValidNextStep, type ComicDoc, type Msg, type NextStep, type StudioTab } from '../../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../../shared/comic/limits';
+import { SPEND_ACTION_TYPES } from '../../../../shared/comic/ops';
 import { formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
 import { ChipButton, cx } from '../ui';
@@ -77,18 +78,41 @@ export const priceBadge = (usd: number | undefined): string | undefined => {
   return usd === 0 ? 'Free' : `≈${formatUsd(usd)}`;
 };
 
-/** The chip's price: its own `usd`, else the quote its spend action carries. */
+const priceOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+
+/** The chip runs a paid action (the server bills it without another gate: the tap is the OK). */
+export const isSpendStep = (step: NextStep): boolean => !!step.action && SPEND_ACTION_TYPES.has(step.action.type);
+
+/**
+ * The chip's price: its own `usd`, else the quote its spend action carries. A paid action is
+ * never shown cheaper than the quote it will be billed against (a "Free" badge on a $0.14
+ * action would be a lie), so for spend actions the higher of the two wins.
+ */
 export const chipUsd = (step: NextStep): number | undefined => {
-  if (typeof step.usd === 'number') return step.usd;
-  const q = (step.action as { quotedUsd?: unknown } | undefined)?.quotedUsd;
-  return typeof q === 'number' && Number.isFinite(q) && q >= 0 ? q : undefined;
+  const own = priceOf(step.usd);
+  const quoted = isSpendStep(step) ? priceOf((step.action as { quotedUsd?: unknown }).quotedUsd) : undefined;
+  if (own !== undefined && quoted !== undefined) return Math.max(own, quoted);
+  return own ?? quoted;
+};
+
+/**
+ * The step as it is run. A spend action always carries the quote the user saw: an unpriced one
+ * gets quotedUsd 0, so anything that costs money comes back as a priced approval card instead of
+ * being billed on a tap that showed no price (the server re-gates a quote it would exceed).
+ */
+export const stepToRun = (step: NextStep): NextStep => {
+  if (!isSpendStep(step) || priceOf((step.action as { quotedUsd?: unknown }).quotedUsd) !== undefined) return step;
+  return { ...step, action: { ...step.action!, quotedUsd: priceOf(step.usd) ?? 0 } as NextStep['action'] };
 };
 
 /** Text chips go to the director, so they wait while a turn is streaming. */
 const sendsText = (c: ChipModel) => c.legacy || (!c.step.action && !c.step.client);
 
 export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioController; className?: string }> = ({ chips, studio, className }) => {
-  const [pending, setPending] = useState<string | null>(null);
+  // Per chip: a long-running action (a render streams until it lands) must not freeze the
+  // other chips — "Read it" stays tappable while "Make the cover" draws.
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  const pendingRef = useRef(new Set<string>());
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -98,30 +122,34 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
   }, []);
   if (!chips.length) return null;
 
-  const tap = async (chip: ChipModel) => {
-    if (pending) return;
-    setPending(chip.step.label);
+  const tap = async (chip: ChipModel, key: string) => {
+    if (pendingRef.current.has(key)) return;
+    pendingRef.current.add(key);
+    setPending(new Set(pendingRef.current));
     try {
       if (chip.legacy) await studio.send(chip.step.label);
-      else await studio.runNextStep(chip.step);
+      else await studio.runNextStep(stepToRun(chip.step));
     } catch (err) {
       console.warn('[comicstudio] next step failed', err);
     } finally {
-      if (mounted.current) setPending(null);
+      pendingRef.current.delete(key);
+      if (mounted.current) setPending(new Set(pendingRef.current));
     }
   };
 
   return (
     <div className={cx('flex flex-wrap gap-2 pt-0.5', className)} role="group" aria-label="Next steps">
       {chips.map((chip, i) => {
+        const key = `${chip.step.label}:${i}`;
         const usd = chipUsd(chip.step);
         const badge = priceBadge(usd);
-        const busy = pending === chip.step.label;
-        const disabled = !!pending || (sendsText(chip) && studio.messageBusy);
+        const busy = pending.has(key);
+        // Text chips wait for the director; a second text chip waits for the first one's turn.
+        const disabled = busy || (sendsText(chip) && (studio.messageBusy || chips.some((c, j) => sendsText(c) && pending.has(`${c.step.label}:${j}`))));
         return (
           <ChipButton
-            key={`${chip.step.label}:${i}`}
-            onClick={() => void tap(chip)}
+            key={key}
+            onClick={() => void tap(chip, key)}
             disabled={disabled}
             aria-busy={busy || undefined}
             aria-label={badge ? `${chip.step.label}, ${badge === 'Free' ? 'free' : `about ${formatUsd(usd!)}`}` : undefined}

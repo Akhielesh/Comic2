@@ -46,10 +46,16 @@ export const gateReasonCopy = (gate: Gate, doc: ComicDoc): string => {
     case 'no_intent':
       return 'You didn’t ask me to draw yet, so I’m quoting it first. Nothing is spent unless you approve.';
     case 'policy':
-    default:
-      return doc.settings.confirm === 'always'
-        ? 'You asked me to check before every spend.'
-        : `You asked me to check before spends over ${formatUsd(doc.settings.bigSpendUsd)}.`;
+    default: {
+      const s = doc.settings;
+      if (s.confirm === 'always') return 'You asked me to check before every spend.';
+      // Only claim the threshold when this spend really is over it. A smaller "policy" gate is a
+      // re-quote (the price moved since a button showed it, or a chip carried no price) or a turn
+      // whose spends add up — say what is true instead of blaming a setting.
+      if (s.confirm !== 'never' && Number.isFinite(s.bigSpendUsd) && gate.estimateUsd > s.bigSpendUsd)
+        return `You asked me to check before spends over ${formatUsd(s.bigSpendUsd)}.`;
+      return 'Here’s the up-to-date price first — nothing is spent until you approve.';
+    }
   }
 };
 

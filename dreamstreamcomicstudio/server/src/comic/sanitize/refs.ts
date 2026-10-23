@@ -19,7 +19,7 @@
 import { collectAssetPaths, mapAssetRefs, type AssetRef, type ComicDoc, type RefAsset, type RefOwner } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { SAFE_ID_RE } from '../../../../shared/comic/ops.js';
-import { REF_LIMITS, capFor, findRefOwners, isRefLabel, refOwnerKey, refsOf, totalRefs } from '../../../../shared/comic/refs.js';
+import { REF_LABELS_FOR, REF_LIMITS, capFor, findRefOwners, isRefLabel, refOwnerKey, refsOf, totalRefs } from '../../../../shared/comic/refs.js';
 import { canServeToOwner } from '../../../../shared/comic/safety.js';
 import type { OpSanitizer, SanitizeCtx } from '../extensions.js';
 import { StudioError } from '../types.js';
@@ -55,6 +55,10 @@ const pathArg = (v: unknown): string => {
   if (typeof v !== 'string' || !v || v.length > 512 || v.includes('..') || /[\u0000-\u001f\\]/.test(v)) throw bad('Invalid photo path.');
   return v;
 };
+
+/** A label this owner can carry (character views for a character, place views for a place, …). */
+const labelFits = (owner: RefOwner, v: unknown): v is NonNullable<RefAsset['label']> =>
+  isRefLabel(v) && (owner.kind === 'inbox' || REF_LABELS_FOR[owner.kind].includes(v));
 
 const indexArg = (v: unknown): number | undefined => {
   if (v === undefined || v === null) return undefined;
@@ -158,7 +162,8 @@ const refAdd: OpSanitizer<Op<'ref_add'>> = {
       ref.at = now;
     }
     // The client may name the view and add a note; everything else it sent is ignored.
-    if (isRefLabel(op.ref.label)) ref.label = op.ref.label;
+    if (labelFits(owner, op.ref.label)) ref.label = op.ref.label;
+    else if (ref.label && !labelFits(owner, ref.label)) delete ref.label; // a view copied from another owner that does not fit here
     const note = cleanNote(op.ref.note);
     if (note) ref.note = note;
     if (!ref.addedBy || ref.addedBy === 'director') ref.addedBy = 'user';
@@ -184,8 +189,8 @@ const refPatch: OpSanitizer<Op<'ref_patch'>> = {
     if ('label' in op.patch) {
       const v = op.patch.label as unknown;
       if (v === null || v === '') (patch as Record<string, unknown>).label = null;
-      else if (isRefLabel(v)) patch.label = v;
-      else throw bad('Unknown photo label.');
+      else if (labelFits(owner, v)) patch.label = v;
+      else throw bad(isRefLabel(v) ? `That label doesn't fit ${ownerName(doc, owner) || 'this owner'}.` : 'Unknown photo label.');
     }
     if ('note' in op.patch) {
       const v = op.patch.note as unknown;
