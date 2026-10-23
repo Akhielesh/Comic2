@@ -90,9 +90,10 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
   }, [visible, looked, look]);
 
   // Back on the tab (or back online): one look if the last is getting old and the
-  // hourly budget allows; otherwise the scheduled look comes soon enough.
+  // hourly budget allows; otherwise the scheduled look comes soon enough. An ended
+  // event is never asked again, on return or on a timer.
   useOnPageReturn(() => {
-    if (canLookNow(looks.current, Date.now())) void look();
+    if (canLookNow(looks.current, Date.now(), metaRef.current)) void look();
   });
 
   // The countdown ("Live in 12m") only needs a nudge every few seconds, and none while hidden.

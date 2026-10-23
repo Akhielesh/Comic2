@@ -94,6 +94,20 @@ describe('EventPage — push, not poll (ADR 0007 C2)', () => {
     expect(screen.getByText('This event has ended')).toBeTruthy();
   });
 
+  it('an ended event is never asked again — not even when you switch back to the tab', async () => {
+    vi.mocked(getEvent).mockResolvedValue(meta({ status: 'ended', endedAt: T0 - MIN }));
+    renderPage();
+    await act(async () => undefined);
+    // Away and back every 10 minutes for an hour.
+    for (let i = 0; i < 6; i++) {
+      setVisible(false);
+      await advance(10 * MIN);
+      setVisible(true);
+      await act(async () => undefined);
+    }
+    expect(getEvent).toHaveBeenCalledTimes(1);
+  });
+
   it('a network blip after the page loaded doesn’t turn it into “Event not found”', async () => {
     vi.mocked(getEvent).mockResolvedValueOnce(meta({ scheduledAt: null })).mockRejectedValue(new TypeError('Failed to fetch'));
     renderPage();

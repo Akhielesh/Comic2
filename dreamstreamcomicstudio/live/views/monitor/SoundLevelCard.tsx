@@ -43,10 +43,12 @@ export function SoundLevelCard({
 }) {
   const [range, setRange] = useState<Range>('6h');
   const [data, setData] = useState<{ from: number; to: number; res: number; pts: HistoryPoint[] } | null>(null);
-  const [loading, setLoading] = useState(false);
+  /** The view a history request is out for; "Loading…" shows only while it's the one on screen. */
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [nudge, setNudge] = useState(0);
   const visible = usePageVisible();
   const want = `${dev ?? ''}|${range}`;
+  const loading = pendingKey === want;
   const wantRef = useRef(want);
   wantRef.current = want;
   /** What's on screen: which view of the history, and when it was fetched. */
@@ -78,17 +80,20 @@ export function SoundLevelCard({
     if (inflight.current && inflight.current.key === key && inflight.current.q === query) return;
     const mine = { key, q: query };
     inflight.current = mine;
-    setLoading(true);
+    setPendingKey(key);
     const to = Date.now();
     void query.ask<{ from: number; to: number; res: number; pts: HistoryPoint[] }>('history', { from: to - RANGES[range], to, dev: dev ?? undefined }).then((r) => {
       if (inflight.current === mine) inflight.current = null;
-      if (!mounted.current || wantRef.current !== key) return;
+      if (!mounted.current) return;
+      // Whatever happens next, this request is no longer pending — even when the
+      // view has moved on (a quick switch away and back must not leave "Loading…").
+      setPendingKey((k) => (k === key ? null : k));
+      if (wantRef.current !== key) return;
       // Only a real answer counts as loaded — a timeout asks again on the next nudge.
       if (r) {
         loaded.current = { key, at: Date.now() };
         setData({ from: r.from, to: r.to, res: r.res, pts: r.pts });
       }
-      setLoading(false);
     });
   }, [query, want, dev, range, visible, nudge]);
 

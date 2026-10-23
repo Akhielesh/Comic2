@@ -107,4 +107,13 @@ describe('invite page: ≤ 12 requests per waiting tab-hour (ADR 0007 C2)', () =
     expect(planInviteCheck({ status: 'live', scheduledAt: null }, T0, 0).inMs).toBeNull();
     expect(planInviteCheck({ status: 'paused', scheduledAt: null }, T0, 0).inMs).toBeNull();
   });
+
+  it('coming back to the tab never asks about an ended event either (same rule as the schedule)', () => {
+    const longAgo = [T0 - 2 * HOUR];
+    expect(canLookNow(longAgo, T0, { status: 'ended' })).toBe(false);
+    expect(canLookNow(longAgo, T0, { status: 'live' })).toBe(false);
+    expect(canLookNow(longAgo, T0, { status: 'idle' })).toBe(true);
+    // The first look hasn't answered yet: still worth a look.
+    expect(canLookNow(longAgo, T0, null)).toBe(true);
+  });
 });

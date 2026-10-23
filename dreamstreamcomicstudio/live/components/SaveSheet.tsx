@@ -208,11 +208,12 @@ export function SaveSheet({
       return;
     }
     let alive = true;
-    void fetchCloudCopyQuota(rec.eventId, hostKey).then((q) => alive && setQuota(q));
+    // With this recording's size: an unfinished earlier try of it isn't counted twice.
+    void fetchCloudCopyQuota(rec.eventId, hostKey, copyBytes).then((q) => alive && setQuota(q));
     return () => {
       alive = false;
     };
-  }, [hostKey, rec.eventId, account.status]);
+  }, [hostKey, rec.eventId, account.status, copyBytes]);
 
   // Nothing uploads to our servers unless the host chose it. Hosts who turned on "Also
   // keep a 7-day cloud copy" get it right away — unless it can't fit, which is said instead.
@@ -382,8 +383,13 @@ export function SaveSheet({
     })
       .then((res) => {
         setCloud({ state: 'done' });
-        // The server counted this copy when it started; fall back to adding it locally.
-        setQuota((q) => res?.quota ?? (q ? { ...q, usedBytes: q.usedBytes + copyBytes, copies: q.copies + 1 } : q));
+        // The server counted this copy when it started (in place of any unfinished earlier
+        // try of it); fall back to doing the same locally.
+        setQuota(
+          (q) =>
+            res?.quota ??
+            (q ? { ...q, usedBytes: q.usedBytes - (q.retryBytes ?? 0) + copyBytes, copies: q.copies + (q.retryBytes ? 0 : 1), retryBytes: undefined } : q),
+        );
         push('7-day copy stored — download it from the recap on any device', { icon: 'check' });
       })
       .catch((e) => {
@@ -391,6 +397,7 @@ export function SaveSheet({
           setCloud({ state: 'full', message: e.message, freesAt: e.freesAt });
           const { usedBytes, limitBytes } = e;
           if (usedBytes != null && limitBytes != null) {
+            // The server's "used" already leaves out an unfinished try this one would replace.
             setQuota((q) => ({ copies: q?.copies ?? 0, nextFreeAt: q?.nextFreeAt ?? null, usedBytes, limitBytes }));
           }
         } else if (e instanceof CloudCopyError) {
@@ -682,6 +689,11 @@ export function SaveSheet({
                 </div>
               )}
               {cloud.state === 'up' && <div style={{ marginTop: 8 }}><Meter value={cloud.frac * 100} tone="accent" height={5} /></div>}
+              {(cloud.state === 'idle' || cloud.state === 'err') && cloudFits && !!quota?.retryBytes && (
+                <div className="save-hint">
+                  {fmtBytes(quota.retryBytes)} of that is an unfinished try of this recording. Starting it again replaces that try, so it isn’t counted twice.
+                </div>
+              )}
               {cloud.state !== 'full' && cloud.state !== 'done' && cloud.state !== 'up' && !cloudFits && (
                 <div className="save-hint" role="status">
                   Your {limitGb} GB of 7-day copies doesn’t have room for this one. Google Drive and this device are free, and the file is yours to keep

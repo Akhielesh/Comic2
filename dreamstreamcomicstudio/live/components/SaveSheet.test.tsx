@@ -7,7 +7,7 @@ import type { FinishedRecording } from '../recorder';
 const h = vi.hoisted(() => ({
   account: { status: 'member', userId: 'u1', email: 'me@example.com' } as { status: string; userId?: string },
   drive: null as null | Record<string, unknown>,
-  quota: null as null | { usedBytes: number; limitBytes: number; copies: number; nextFreeAt: number | null },
+  quota: null as null | { usedBytes: number; limitBytes: number; copies: number; nextFreeAt: number | null; retryBytes?: number },
 }));
 
 vi.mock('../account', () => ({
@@ -221,7 +221,7 @@ describe('SaveSheet — free first, the 7-day copy only when chosen (ADR 0007 C1
     const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
     await waitFor(() => expect(keep).not.toBeDisabled());
     expect(uploadRecording).not.toHaveBeenCalled();
-    expect(fetchCloudCopyQuota).toHaveBeenCalledWith('ev1', 'hk');
+    expect(fetchCloudCopyQuota).toHaveBeenCalledWith('ev1', 'hk', 4096);
 
     fireEvent.click(keep);
     await waitFor(() => expect(cloudRow()).toHaveTextContent('Stored'));
@@ -254,6 +254,23 @@ describe('SaveSheet — free first, the 7-day copy only when chosen (ADR 0007 C1
     expect(cloudRow()).toHaveTextContent(new Date(at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }));
     expect(uploadRecording).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /Keep a 7-day copy/ })).toBeNull();
+  });
+
+  it('reopened after an unfinished try: offers the retry the server would accept, and says why', async () => {
+    // 10 GB counted, of which 4 KB is this recording's unfinished try — starting again replaces it.
+    h.quota = { ...quotaOf(10), usedBytes: 10 * GB, retryBytes: 4096 };
+    renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    expect(cloudRow()).not.toHaveTextContent(/doesn’t have room/);
+    expect(cloudRow()).toHaveTextContent(/unfinished try of this recording.*isn’t counted twice/);
+  });
+
+  it('opted in and reopened after an unfinished try: the copy still starts', async () => {
+    savePrefs({ ...loadPrefs(), cloudRecordings: true });
+    h.quota = { ...quotaOf(10), usedBytes: 10 * GB, retryBytes: 4096 };
+    renderSheet({ hostKey: 'hk' });
+    await waitFor(() => expect(uploadRecording).toHaveBeenCalledTimes(1));
   });
 
   it('the server’s “full” answer is shown as-is, with the day space frees up — no pointless retry', async () => {

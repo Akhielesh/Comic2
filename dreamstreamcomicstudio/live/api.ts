@@ -236,6 +236,7 @@ export function sendHostExitBeacon(id: string, hostKey: string): void {
 /* ------------------------- server-side recordings ------------------------- */
 /* Multi-GB masters go up as R2 multipart parts so they fit Worker limits.    */
 
+/** Used when the server doesn't say (it returns `partBytes` at init, and holds every part to it). */
 const REC_PART_BYTES = 16 * 1024 * 1024; // ≥5 MB (R2 minimum), small enough for flaky uplinks
 
 export interface ServerRecordings {
@@ -273,12 +274,14 @@ export async function uploadRecording(
     body: JSON.stringify({ file: opts.file, mime: blob.type || 'video/webm', bytes: blob.size }),
   });
   if (!init.ok) throw await cloudCopyErrorFrom(init);
-  const { key, uploadId, quota } = (await init.json()) as { key: string; uploadId: string; quota?: unknown };
+  const { key, uploadId, quota, partBytes } = (await init.json()) as { key: string; uploadId: string; quota?: unknown; partBytes?: unknown };
+  // The server holds every part to the size reserved at init, at its own part size.
+  const partSize = typeof partBytes === 'number' && Number.isInteger(partBytes) && partBytes >= 5 * 1024 * 1024 ? partBytes : REC_PART_BYTES;
 
   const parts: { partNumber: number; etag: string }[] = [];
-  const total = Math.max(1, Math.ceil(blob.size / REC_PART_BYTES));
+  const total = Math.max(1, Math.ceil(blob.size / partSize));
   for (let n = 1; n <= total; n++) {
-    const slice = blob.slice((n - 1) * REC_PART_BYTES, Math.min(n * REC_PART_BYTES, blob.size));
+    const slice = blob.slice((n - 1) * partSize, Math.min(n * partSize, blob.size));
     let lastErr: unknown;
     let done = false;
     for (let attempt = 0; attempt < 3 && !done; attempt++) {

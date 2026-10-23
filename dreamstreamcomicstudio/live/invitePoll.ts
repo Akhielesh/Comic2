@@ -52,13 +52,21 @@ export function budgetOpensAt(recent: readonly number[], now: number): number {
  * @param nearLooks looks already made in the around-the-start backoff (0 = none yet).
  * @param recent    when this tab looked (the last hour is enough).
  */
+/**
+ * Is there anything left to look for? Not once the event has ended (never again), and
+ * not while it's live or paused (the page has moved to the watch page). Both the
+ * schedule and the tab-return look go through this, so neither can ask again.
+ */
+export const stillWaiting = (meta: Pick<EventMeta, 'status'> | null | undefined): boolean =>
+  !meta || (meta.status !== 'ended' && meta.status !== 'live' && meta.status !== 'paused');
+
 export function planInviteCheck(
   meta: Pick<EventMeta, 'status' | 'scheduledAt'>,
   now: number,
   nearLooks: number,
   recent: readonly number[] = [],
 ): InviteCheckPlan {
-  if (meta.status === 'ended' || meta.status === 'live' || meta.status === 'paused') return { inMs: null, near: false };
+  if (!stillWaiting(meta)) return { inMs: null, near: false };
   const { farMs, leadMs, backoffMs } = INVITE_POLL;
   const start = meta.scheduledAt;
   let at: number;
@@ -74,8 +82,13 @@ export function planInviteCheck(
   return { inMs: Math.max(1000, at - now), near };
 }
 
-/** May a look happen right now (coming back to the tab)? */
-export function canLookNow(recent: readonly number[], now: number): boolean {
+/**
+ * May a look happen right now (coming back to the tab)? Never for an event that has
+ * ended (or gone live: the page has moved on). `meta` null = the first look hasn't
+ * answered yet, so a look is still worth it.
+ */
+export function canLookNow(recent: readonly number[], now: number, meta?: Pick<EventMeta, 'status'> | null): boolean {
+  if (!stillWaiting(meta)) return false;
   const last = recent.length ? Math.max(...recent) : -Infinity;
   return now - last >= INVITE_POLL.returnGapMs && budgetOpensAt(recent, now) <= now;
 }

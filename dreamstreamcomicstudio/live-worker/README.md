@@ -29,8 +29,14 @@ pointing at both ports, with `VITE_LIVE_WORKER_URL` set to the worker tunnel URL
 
 ```sh
 npx wrangler r2 bucket create dreamstream-live   # once
+# once: the 7-day copy ledger (quota/rec/<account>/…, cloudCopyQuota.ts) expires on its own,
+# so no per-copy record outlives its copy, even for an account that never checks again
+npx wrangler r2 bucket lifecycle add dreamstream-live quota-rec-expiry quota/rec/ --expire-days 8
 cd live-worker && npx wrangler deploy
 ```
+
+The lifecycle rule must stay **longer than 7 days**: a marker counts for 7 days from its
+upload, and deleting one sooner would let copies past the 10 GB allowance.
 
 The worker is also exposed on workers.dev (used by the old Pages launch domain):
 

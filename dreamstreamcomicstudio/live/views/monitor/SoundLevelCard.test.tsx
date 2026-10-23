@@ -115,6 +115,32 @@ describe('SoundLevelCard — push, not poll (ADR 0007 C2)', () => {
     expect(ask).toHaveBeenCalledTimes(2);
   });
 
+  it('a quick switch away and back doesn’t leave “Loading…” on screen', async () => {
+    type Hist = { from: number; to: number; res: number; pts: [] };
+    const pending: ((v: Hist) => void)[] = [];
+    let firstDone = false;
+    const ask = vi.fn((_q: string, args: Record<string, unknown>) => {
+      const answer: Hist = { from: Number(args.from), to: Number(args.to), res: 5 * MIN, pts: [] };
+      if (!firstDone) {
+        firstDone = true;
+        return Promise.resolve(answer);
+      }
+      return new Promise<Hist>((resolve) => pending.push(() => resolve(answer)));
+    });
+    render(<SoundLevelCard query={{ ask } as unknown as MonQuery} dev="cam1" spl={null} online liveMinutes={[]} machineCheck />);
+    await flush();
+    expect(screen.queryByText('Loading…')).toBeNull(); // 6 h is on screen
+    fireEvent.click(screen.getByRole('radio', { name: '1 h' }));
+    await flush();
+    expect(screen.getByText('Loading…')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: '6 h' })); // still fresh: no new query
+    await flush();
+    expect(ask).toHaveBeenCalledTimes(2);
+    await act(async () => pending.shift()!({} as Hist)); // the 1 h answer arrives late
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('changing the range asks for that range right away', async () => {
     const { ask } = setup();
     await flush();

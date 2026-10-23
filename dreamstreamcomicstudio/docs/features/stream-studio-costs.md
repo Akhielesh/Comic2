@@ -724,39 +724,65 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
   through our servers": its exact size, "Uses our storage and N of your upload", and **"kept 7 days · X of 10 GB used"** with a
   meter. Nothing uploads until the host taps "Keep a 7-day copy". A host who turned on "Also keep a 7-day cloud copy" in
   Customize still gets it right away, and the sheet says why. The word "free" is never on the copy.
-- Server quota: **10 GB rolling per account**, checked once at `op=init` (`live-worker/src/cloudCopyQuota.ts`; a 4-line hunk
-  in `index.ts`). The ledger is one empty R2 marker per copy, `quota/rec/<accountId>/<eventId>-<bytes>`, aged out after 7 days
-  and cleaned up on the account's next check. Cost: 1 R2 list + 1 marker write per cloud copy, nothing per part. A retry of
-  the same recording rewrites its own marker, so it never counts twice. The init needs the host's own Supabase token (the
-  Worker still holds no secrets) and the declared size. Sizes are what the app declares: a fair-use guard, not billing-grade
-  (D1). It refuses with an honest reason the sheet shows as-is: `cloud_copy_full` (with the GB used and the day space frees
-  up), `cloud_copy_too_big`, `sign_in_required`, `quota_unavailable` (fails closed: nothing is stored). `GET …/recordings?op=quota`
-  feeds the meter; it returns numbers only, never keys or the account id.
+- Server quota: **10 GB rolling per account**, on server truth (§4.7 rules), in `live-worker/src/cloudCopyQuota.ts` (a small
+  hunk per route in `index.ts`):
+  - **At `op=init`:** one R2 list of the account's ledger. If the copy fits, its size is reserved and the multipart upload is
+    created at `events/<eventId>/rec/<startedAt>-<bytes>/<file>`. R2 ties the uploadId to that key, so the reservation can't be
+    raised by the app.
+  - **Every `op=part`:** must fit inside the reservation. Every part but the last is the server's part size (16 MiB, returned
+    as `partBytes`), so part *n* may hold at most `min(16 MiB, reserved − (n − 1) × 16 MiB)` bytes. That costs no R2 call, and
+    an upload can never hold more than the ledger counts for it, finished or not.
+  - **At `op=complete`:** R2's own size of the finished object is checked against the reservation again (an over-size object
+    is deleted, `cloud_copy_mismatch`) and is the size registered with the event, not the app's number.
+  - The ledger is one empty R2 marker per upload, `quota/rec/<accountId>/<eventId>-<startedAt>-<bytes>`, with the copy's key
+    and uploadId in its metadata. It is aged out after 7 days and cleaned up on the account's next check. Two uploads never
+    share an entry: a second copy of the same recording is a second object, and counts. Starting the same recording again
+    (same event, same size) replaces an earlier try that never finished: that upload is aborted first, so its parts can't be
+    finished later, and then it stops counting. A retry never counts twice. If the abort can't be confirmed, the old try
+    keeps counting (over, never under).
+  - Cost: 1 R2 list + 1 marker write per cloud copy (+ 1 head for each unfinished earlier try of the same recording). Nothing
+    extra per part.
+  - The init needs the host's own Supabase token (the Worker still holds no secrets). It refuses with an honest reason the
+    sheet shows as-is: `cloud_copy_full` (with the GB used and the day space frees up), `cloud_copy_too_big`,
+    `sign_in_required` (no token, or Supabase says the token is invalid / not a member), or `quota_unavailable`. That last one
+    fails closed (nothing is stored) when the ledger can't be read in full, *or Supabase doesn't answer*. A Supabase outage
+    says "try again in a moment", never "sign in again".
+  - `GET …/recordings?op=quota&bytes=N` feeds the meter: numbers only, never keys or the account id. With the recording's
+    size it also returns `retryBytes`, the part of "used" held by an unfinished try of this recording, so the sheet decides
+    "fits" the same way `op=init` will. The sheet says so ("… of that is an unfinished try of this recording. Starting it
+    again replaces that try, so it isn't counted twice.").
+  - An upload that is started, abandoned and never retried still counts for its 7 days. That is accurate: R2 keeps its parts
+    until it aborts unfinished uploads (7 days by default).
+  - **Deploy step (owner, once):** markers of an account that never checks again are removed by an R2 lifecycle rule, so no
+    per-copy record (account UUID + event + size) outlives its copy:
+    `npx wrangler r2 bucket lifecycle add dreamstream-live quota-rec-expiry quota/rec/ --expire-days 8`
+    (also in `live-worker/README.md`). It must stay longer than 7 days, or copies past the allowance would get through.
 - Copy: `live/config.ts` `LIMITS` ("Saved to this device or your Google Drive — free, and yours to keep. Nothing is kept on our
   servers unless you choose a 7-day copy…") and the two Help entries in `live/components/Guide.tsx`.
 - Tests: `live/prefs.unit.test.ts` (default off, every migration path, cloud sync, notice once), `SaveSheet.test.tsx` (free
-  labels, no upload by default, explicit opt-in, no room, server "full", retry, notice), `live/cloudCopy.unit.test.ts`,
-  `live-worker/src/cloudCopyQuota.test.ts` (fits, full, retry, ageing out, too big, sign-in, host-key gate first, fail closed).
+  labels, no upload by default, explicit opt-in, no room, server "full", retry, reopened after an unfinished try, notice),
+  `live/cloudCopy.unit.test.ts` (including the server's part size), `live-worker/src/cloudCopyQuota.test.ts` (fits, full,
+  retry replaces an unfinished try and aborts it, two finished copies both count, a declared 1 byte can't upload more,
+  parts past the reservation, pre-quota keys, R2's size registered, over-size deleted, ageing out, too big, sign-in vs
+  Supabase outage, host-key gate first, fail closed on an unreadable or overlong ledger).
 - Not done here: Settings → Recording's toggle copy (`SettingsView.tsx:383`, WS-5) still says "Uploads in the background after
   each recording" without the cost line from §4.2; `SummaryView.tsx:200` still points to "Customize → Quality & encoding".
   The "What this costs DreamStream (est.)" expander waits for `STREAM_UNIT_PRICES` (A1), so prices live in one table.
-  The marker is written at `op=init`, so an upload that is started and then abandoned (never completed or retried) still
-  counts for its 7 days; dropping the marker when an upload is aborted, or confirming it at `op=complete` with the real
-  object size (WS-7), would close that gap.
 
 **C2 — push, not poll. Done.**
 - Invite page (`live/views/EventPage.tsx` + `live/invitePoll.ts`): a sliding-window cap of **6 looks per tab-hour (12
   requests: each look is a Worker + a Durable Object request)**, from 120 looks (240 requests). Inside it: every 30 min far from
   the start, a look 1 min before the start, then 2, 6 and 12 min later and every 20 min after. No start time: the same backoff.
-  Ended: never again. Hidden tab: no timer at all; coming back looks once if the last look is a minute old and the budget
-  allows. A failed look after the page has loaded no longer replaces it with "Event not found". The countdown re-renders every
+  Ended: never again, on a timer or on coming back to the tab (`stillWaiting`, shared by both). Hidden tab: no timer at all;
+  coming back looks once if the last look is a minute old and the budget allows. A failed look after the page has loaded no longer replaces it with "Event not found". The countdown re-renders every
   5 s while visible, never while hidden.
 - `SoundLevelCard.tsx` and `WeekCard.tsx`: no timers. History is asked for when the card is shown, when the range changes, and
   when it is stale (one chart bucket: 5/5/15 min for 1 h/6 h/24 h; 10 min for the week) and something new happens: the room's
   pushed `minutes`, the page coming back into view or focus, or a socket reconnect. **0 history queries while hidden.**
 - Tests: `live/invitePoll.unit.test.ts` (budget over 6-hour waits for 8 schedules, with and without tab-switching),
-  `live/views/EventPage.test.tsx` (≤ 6 looks an hour, flips within 2 min, hidden = 0 requests and 0 timers, ended, blips),
-  `SoundLevelCard.test.tsx` and `WeekCard.test.tsx` (0 queries and 0 timers while hidden, refresh rules).
+  `live/views/EventPage.test.tsx` (≤ 6 looks an hour, flips within 2 min, hidden = 0 requests and 0 timers, ended — including
+  an hour of tab-switching: 1 request —, blips), `SoundLevelCard.test.tsx` (also: a quick range switch away and back never
+  leaves "Loading…" on screen) and `WeekCard.test.tsx` (0 queries and 0 timers while hidden, refresh rules).
 
 **C11 — container asleep. Done.** `live/driveUpload.ts`: a good Drive status is reused for 10 min (`STATUS_TTL_MS`); a
 failed check is never cached; the cache is dropped when Google refuses the grant mid-upload or the backend says signed out.

@@ -33,7 +33,7 @@
  */
 
 import { CallRoom } from './callRoom';
-import { cloudCopyUsageFor, reserveCloudCopy, usageBody } from './cloudCopyQuota';
+import { CLOUD_COPY_PART_BYTES, cloudCopyUsageFor, copyCompleteRoom, copyPartRoom, oversizeCopy, startCloudCopy, usageBody } from './cloudCopyQuota';
 import { userLineName } from './directCalls';
 import { EventRoom } from './eventRoom';
 import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
@@ -57,7 +57,6 @@ export interface Env {
 }
 
 const MAX_SEGMENT_BYTES = 32 * 1024 * 1024; // hard cap; ~6.8 Mbps * 10 s is well under this
-const MAX_REC_PART_BYTES = 64 * 1024 * 1024; // multipart recording upload part ceiling
 
 /** Host-key gate shared by the recording routes (the DO owns the key). */
 async function authHost(env: Env, id: string, key: string | null): Promise<boolean> {
@@ -242,10 +241,10 @@ export default {
 
       // /api/events/:id/recordings — host's server-side recording store.
       // Multipart upload (R2) so multi-GB masters fit through Worker limits:
-      //   POST ?op=init {file,mime,bytes}      → { key, uploadId, quota } (Bearer; 10 GB/account fair use)
-      //   GET  ?op=quota&k=hostKey             → { usedBytes, limitBytes, copies, nextFreeAt } (Bearer)
-      //   PUT  ?op=part&key&uploadId&n=…       → { partNumber, etag }
-      //   POST ?op=complete {key,uploadId,parts,file,bytes,mime,durMs}
+      //   POST ?op=init {file,mime,bytes}      → { key, uploadId, partBytes, quota } (Bearer; 10 GB/account fair use)
+      //   GET  ?op=quota&k=hostKey[&bytes=N]   → { usedBytes, limitBytes, copies, nextFreeAt, retryBytes } (Bearer)
+      //   PUT  ?op=part&key&uploadId&n=…       → { partNumber, etag }  (must fit the size reserved at init)
+      //   POST ?op=complete {key,uploadId,parts,file,mime,durMs} (R2's real size is checked and registered)
       //   GET  ?k=hostKey                      → { recordings, expiresAt }
       //   GET  ?k=hostKey&download=<key>       → the file (attachment)
       if (sub === 'recordings') {
@@ -255,8 +254,8 @@ export default {
         if (req.method === 'GET') {
           if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
           if (op === 'quota') {
-            const q = await cloudCopyUsageFor(env, req, Date.now(), (p) => ctx.waitUntil(p));
-            return withCors(q.ok ? json(usageBody(q.usage), 200, { 'cache-control': 'no-store' }) : json(q.body, q.status), cors);
+            const q = await cloudCopyUsageFor(env, req, { eventId: id, bytes: url.searchParams.get('bytes') }, Date.now(), (p) => ctx.waitUntil(p));
+            return withCors(q.ok ? json(usageBody(q.usage, q.retryBytes), 200, { 'cache-control': 'no-store' }) : json(q.body, q.status), cors);
           }
           const download = url.searchParams.get('download');
           if (download) {
@@ -282,26 +281,32 @@ export default {
 
         if (req.method === 'POST' && op === 'init') {
           const { file, mime, bytes } = (await req.json().catch(() => ({}))) as { file?: string; mime?: string; bytes?: number };
-          // Fair use (ADR 0007 D5): 10 GB of 7-day copies per account, rolling. Honest error, nothing stored.
-          const quota = await reserveCloudCopy(env, req, { eventId: id, bytes }, Date.now(), (p) => ctx.waitUntil(p));
-          if (!quota.ok) return withCors(json(quota.body, quota.status), cors);
-          const safe = String(file ?? 'recording.webm').replace(/[^\w.-]/g, '_').slice(0, 80);
-          const key = `events/${id}/rec/${Date.now()}-${safe}`;
-          const upload = await env.LIVE_BUCKET.createMultipartUpload(key, {
-            httpMetadata: { contentType: String(mime ?? 'video/webm') },
-          });
-          return withCors(json({ key, uploadId: upload.uploadId, quota: usageBody(quota.usage) }), cors);
+          // Fair use (ADR 0007 D5): 10 GB of 7-day copies per account, rolling, on server truth
+          // (cloudCopyQuota.ts). Honest error, nothing stored; on yes the size is reserved and
+          // the upload's key carries it, so every part and the final object are held to it.
+          const started = await startCloudCopy(env, req, { eventId: id, bytes, file, mime }, Date.now(), (p) => ctx.waitUntil(p));
+          if (!started.ok) return withCors(json(started.body, started.status), cors);
+          return withCors(
+            json({ key: started.key, uploadId: started.uploadId, partBytes: CLOUD_COPY_PART_BYTES, quota: usageBody(started.usage) }),
+            cors,
+          );
         }
 
         if (req.method === 'PUT' && op === 'part') {
           const key = url.searchParams.get('key') ?? '';
           const uploadId = url.searchParams.get('uploadId') ?? '';
           const n = Number(url.searchParams.get('n'));
-          if (!key.startsWith(`events/${id}/rec/`) || !uploadId || !Number.isFinite(n) || n < 1) {
+          if (!key.startsWith(`events/${id}/rec/`) || !uploadId || !Number.isInteger(n) || n < 1) {
             return withCors(json({ error: 'bad part request' }, 400), cors);
           }
+          // Server truth: the parts together can never hold more than the size reserved at init.
+          const room = copyPartRoom(id, key, n);
+          if (!room.ok) return withCors(json(room.body, room.status), cors);
+          if (Number(req.headers.get('content-length')) > room.maxBytes) {
+            return withCors(json({ error: 'part size out of bounds' }, 413), cors);
+          }
           const body = await req.arrayBuffer();
-          if (body.byteLength === 0 || body.byteLength > MAX_REC_PART_BYTES) {
+          if (body.byteLength === 0 || body.byteLength > room.maxBytes) {
             return withCors(json({ error: 'part size out of bounds' }, 413), cors);
           }
           const upload = env.LIVE_BUCKET.resumeMultipartUpload(key, uploadId);
@@ -323,11 +328,28 @@ export default {
           if (!key.startsWith(`events/${id}/rec/`) || !body.uploadId || !Array.isArray(body.parts)) {
             return withCors(json({ error: 'bad complete request' }, 400), cors);
           }
+          const room = copyCompleteRoom(id, key);
+          if (!room.ok) return withCors(json(room.body, room.status), cors);
           const upload = env.LIVE_BUCKET.resumeMultipartUpload(key, body.uploadId);
-          await upload.complete(body.parts);
+          let stored: R2Object;
+          try {
+            stored = await upload.complete(body.parts);
+          } catch {
+            // Replaced by a newer try of the same recording, expired, or parts missing.
+            return withCors(
+              json({ error: 'upload_gone', message: 'This 7-day copy couldn’t be finished — start it again. Your recording is still on this device.' }, 409),
+              cors,
+            );
+          }
+          // R2's own size, not the app's: over the reservation → not kept.
+          if (stored.size > room.reserved) {
+            await env.LIVE_BUCKET.delete(key);
+            const over = oversizeCopy(stored.size, room.reserved);
+            return withCors(json(over.body, over.status), cors);
+          }
           const res = await roomCall(env, id, '/rec/register', {
             method: 'POST',
-            body: JSON.stringify({ key, file: body.file, bytes: body.bytes, mime: body.mime, durMs: body.durMs }),
+            body: JSON.stringify({ key, file: body.file, bytes: stored.size, mime: body.mime, durMs: body.durMs }),
             headers: { 'content-type': 'application/json', 'x-host-key': hostKey ?? '' },
           });
           if (!res.ok) return withCors(res, cors);
