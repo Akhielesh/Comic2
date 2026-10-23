@@ -11,6 +11,7 @@
 // usage counts provider cost, so the markup is taken back out first.
 
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
+import type { Card } from '../../../shared/comic/doc.js';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP, formatUsd, tierPagePrice } from '../../../shared/comic/models.js';
 
 export interface CostView {
@@ -73,8 +74,9 @@ export function costFormatter(view: CostView = DOLLAR_VIEW): CostFormatter {
 /** The formatter for a studio context (its caps). */
 export const costFormatterFor = (ctx: { caps?: StudioCaps | null }): CostFormatter => costFormatter(costViewFor(ctx.caps));
 
-// "≈ $1.23", "~$0.70", "<$0.01", "$0.00", "$0", "($0.05)" — any dollar amount a template or a model wrote.
-const DOLLARS_RE = /(?:[≈~]\s?)?(<)?\$(\d+(?:[.,]\d+)?)/g;
+// "≈ $1.23", "~$0.70", "<$0.01", "$0.00", "$0", "($0.05)", "$1,250.50" — any dollar amount a template
+// or a model wrote. Thousands separators are commas (formatUsd and the models write en-US amounts).
+const DOLLARS_RE = /(?:[≈~]\s?)?(<)?\$(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)/g;
 
 /**
  * The safety net under every governed text the server commits (director replies, job
@@ -85,7 +87,31 @@ export function governDollars(text: string, view: CostView): string {
   if (!view.governed || !text || !text.includes('$')) return text;
   return text.replace(DOLLARS_RE, (_m, lt: string | undefined, num: string) => {
     // "<$0.01" is a sub-cent amount: word it as half a cent (never "free").
-    const usd = lt ? 0.005 : Number(num.replace(',', '.'));
+    const usd = lt ? 0.005 : Number(num.replace(/,/g, ''));
     return usageWords(Number.isFinite(usd) ? usd : 0, view) ?? _m;
   });
+}
+
+/**
+ * The same safety net for the words ON a card: a notice's text and an options card's question,
+ * labels, descriptions and replies (the director writes those itself and is asked to put prices in
+ * them). Other cards carry no free text. A dollar view (or a card without dollars) is returned as is.
+ */
+export function governCard(card: Card, view: CostView): Card {
+  if (!view.governed) return card;
+  const g = (s: string | undefined) => (typeof s === 'string' ? governDollars(s, view) : s);
+  if (card.type === 'notice') return { ...card, text: governDollars(card.text, view) };
+  if (card.type === 'options') {
+    return {
+      ...card,
+      question: governDollars(card.question, view),
+      choices: card.choices.map((c) => ({
+        ...c,
+        label: governDollars(c.label, view),
+        ...(c.description !== undefined ? { description: g(c.description) } : {}),
+        ...(c.reply !== undefined ? { reply: g(c.reply) } : {})
+      }))
+    };
+  }
+  return card;
 }

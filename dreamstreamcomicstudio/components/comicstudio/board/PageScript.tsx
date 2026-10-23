@@ -1,10 +1,17 @@
 // A page's script at a glance — the plan the user approves before any pixels are paid
-// for: summary, then each panel's size/shot, cast, place, visible action and lettering.
+// for: chapter, summary, then each panel's size/shot, cast (groups read "three Ducklings"),
+// place, visible action and lettering. Long words wrap instead of overflowing a narrow card.
 
 import React from 'react';
-import type { ComicDoc, Line, Page } from '../../../shared/comic/doc';
+import { castNoun, findCharacter, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
 import { LINE_KIND_LABEL, SHOT_LABEL, SIZE_LABEL, castName, placeName } from './boardModel';
 import { cx } from './ui';
+
+/** Who is in a panel, groups by their count ("three Ducklings"). */
+const castLabel = (doc: ComicDoc, id: string): string => {
+  const c = findCharacter(doc, id);
+  return c ? castNoun(c) : castName(doc, id);
+};
 
 export const lineSpeakerLabel = (doc: ComicDoc, line: Line): string => {
   if (line.kind === 'caption') return 'Caption';
@@ -14,7 +21,8 @@ export const lineSpeakerLabel = (doc: ComicDoc, line: Line): string => {
 };
 
 export const PageScript: React.FC<{ doc: ComicDoc; page: Page; className?: string; dense?: boolean }> = ({ doc, page, className, dense }) => (
-  <div className={cx('space-y-2.5 text-[12.5px] leading-relaxed text-[var(--ds-ink)]', className)}>
+  <div className={cx('min-w-0 space-y-2.5 text-[12.5px] leading-relaxed text-[var(--ds-ink)] [overflow-wrap:anywhere]', className)}>
+    {page.chapterTitle && <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{page.chapterTitle}</p>}
     {page.summary && <p className="text-[13px] font-medium leading-snug">{page.summary}</p>}
     {!page.panels.length && <p className="text-[var(--ds-muted)]">No panels yet.</p>}
     <ol className="space-y-2">
@@ -31,7 +39,7 @@ export const PageScript: React.FC<{ doc: ComicDoc; page: Page; className?: strin
                 {SIZE_LABEL[panel.size] || panel.size} · {SHOT_LABEL[panel.shot] || panel.shot}
                 {panel.angle ? ` · ${panel.angle}` : ''}
                 {where ? ` · ${where}` : ''}
-                {panel.castIds.length > 0 && ` · ${panel.castIds.map((id) => castName(doc, id)).join(', ')}`}
+                {panel.castIds.length > 0 && ` · ${panel.castIds.map((id) => castLabel(doc, id)).join(', ')}`}
               </p>
               {panel.action && <p className={cx(dense && 'line-clamp-3')}>{panel.action}</p>}
               {lines.length > 0 && (

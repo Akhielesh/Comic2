@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { emptyRender, type Card, type Character, type ComicDoc, type Gate } from '../../../../shared/comic/doc';
 import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
@@ -15,7 +15,11 @@ import { quoteStyleOptions } from '../panels/StylePanel';
 import { castStatusLine } from './CastCard';
 import { castRoleLabel } from './castVisual';
 import { recapRows } from './recap';
-import { makeFakeStudio, makeSampleDoc } from '../testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from '../testing/fixtures';
+
+// Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
+beforeEach(showDollarPrices);
+afterEach(resetUsageStatus);
 
 const renderCard = (card: Card, doc: ComicDoc = makeSampleDoc(), extra: Parameters<typeof makeFakeStudio>[0] = {}) => {
   const studio = makeFakeStudio({ doc, ...extra });

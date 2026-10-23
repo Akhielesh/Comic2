@@ -1,9 +1,13 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ActivityLine, activityCost, savedSince } from './ActivityLine';
-import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
 import type { ActivityItem } from '../types';
+
+// Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
+beforeEach(showDollarPrices);
+afterEach(resetUsageStatus);
 
 const item = (id: string, label: string, cost?: 'free' | 'text' | 'image'): ActivityItem =>
   ({ id, label, phase: 'start', at: 1, ...(cost ? { cost } : {}) }) as ActivityItem;

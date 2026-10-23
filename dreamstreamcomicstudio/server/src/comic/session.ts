@@ -22,9 +22,11 @@ import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
 import { DOC_LIMITS as SHARED_DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
-import { archiveOf, collectAssetPaths, newId, refInboxOf, type ComicDoc, type RenderState, type RenderTarget } from '../../../shared/comic/doc.js';
+import { archiveOf, collectAssetPaths, mapAssetRefs, newId, refInboxOf, type AssetRef, type ComicDoc, type RenderState, type RenderTarget } from '../../../shared/comic/doc.js';
+import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
-import { StudioError, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
+import { isLibraryPath, isPublicationPath, isQuarantinePath } from './storagePaths.js';
+import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
 
 /**
  * Hard size limits on a document. Every source of new entities (client patches, director
@@ -605,6 +607,84 @@ export async function getStudioSession(
   } finally {
     loading.delete(projectId);
   }
+}
+
+// ── Size-variant backfill (contract §12.4) ───────────────────────────────────
+
+/** Images per session load that get their missing 480w/1080w variants (one at a time, in the background). */
+const SMALLEST_VARIANT_W = 480;
+export const VARIANT_BACKFILL_MAX = 40;
+const backfilled = new WeakSet<StudioSession>();
+
+/**
+ * Images on screen first that still have no size variants: current pages, the cover, sheets, style
+ * options and the style board, then refs, then older versions. Never a blocked/quarantined image,
+ * never a pub/, library/ or q/ object (ensureVariants would skip those anyway), each path once.
+ */
+export const variantBackfillTargets = (doc: ComicDoc, max = VARIANT_BACKFILL_MAX): AssetRef[] => {
+  const seen = new Set<string>();
+  const out: AssetRef[] = [];
+  const want = (a?: AssetRef) => {
+    if (out.length >= max || !a?.path || seen.has(a.path)) return;
+    seen.add(a.path);
+    if (a.variants?.length || !canServeToOwner(a) || a.safety?.pending) return;
+    // Already small (≤ assets.ts VARIANT_WIDTHS[0] = 480; not imported — assets.ts pulls in sharp):
+    // ensureVariants would answer [] without work, so don't spend one of the 40 slots on it.
+    if (typeof a.w === 'number' && a.w > 0 && a.w <= SMALLEST_VARIANT_W) return;
+    if (isPublicationPath(a.path) || isLibraryPath(a.path) || isQuarantinePath(a.path) || /_w\d{2,4}\.webp$/.test(a.path)) return;
+    out.push(a);
+  };
+  const current = (r?: RenderState) => want(r?.asset);
+  [...doc.pages].sort((a, b) => a.n - b.n).forEach((p) => current(p.render));
+  current(doc.cover.render);
+  doc.cast.forEach((c) => current(c.sheet));
+  doc.places.forEach((p) => current(p.sheet));
+  doc.style.options.forEach((o) => current(o.render));
+  want(doc.style.board);
+  [...doc.style.refs, ...doc.cast.flatMap((c) => c.refs), ...doc.places.flatMap((p) => p.refs)].forEach(want);
+  // Everything else the doc holds (history, archive, trash): mapAssetRefs walks every lane.
+  mapAssetRefs(doc, (a) => {
+    want(a);
+    return a;
+  });
+  return out;
+};
+
+/**
+ * On session load: create the missing size variants of up to VARIANT_BACKFILL_MAX images, ONE at a time
+ * (sharp shares the 3-slot gate with uploads and renders), then record them with `asset_meta {variants}`
+ * so grids and filmstrips stop loading full-size originals. Idempotent and once per session; a failure
+ * only logs. `onUrls` signs the new variant paths for the open tabs. Never on a timer.
+ */
+export function scheduleVariantBackfill(
+  session: StudioSession,
+  assets: Pick<AssetStore, 'ensureVariants'>,
+  opts: { max?: number; onUrls?: (paths: string[]) => Promise<unknown> } = {}
+): Promise<number> | null {
+  if (backfilled.has(session) || session.isGone) return null;
+  backfilled.add(session);
+  const targets = variantBackfillTargets(session.doc, opts.max ?? VARIANT_BACKFILL_MAX);
+  if (!targets.length) return null;
+  const done = session.retain();
+  return (async () => {
+    let made = 0;
+    for (const asset of targets) {
+      if (session.isGone) break;
+      try {
+        const variants = await assets.ensureVariants(asset);
+        // The image may have been removed or replaced while we worked: only record what is still there.
+        const still = collectAssetPaths(session.doc).includes(asset.path);
+        if (!variants?.length || !still) continue;
+        session.commit([{ op: 'asset_meta', path: asset.path, patch: { variants } }], { origin: 'job' });
+        made += 1;
+        if (opts.onUrls) await opts.onUrls(variants.map((v) => v.path)).catch(() => undefined);
+      } catch (err) {
+        logger.warn('comic_variant_backfill_failed', { projectId: session.projectId, message: (err as Error)?.message });
+      }
+    }
+    if (made) logger.info('comic_variant_backfill', { projectId: session.projectId, count: made, checked: targets.length });
+    return made;
+  })().finally(done);
 }
 
 /** Cached session for a project if one exists (no load, no ownership check). */

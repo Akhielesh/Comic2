@@ -9,10 +9,12 @@
 // parseIntent: phase-2 structural edits (flag COMIC_FAST_INTENTS, wired by the route in wave 2):
 // "swap pages 2 and 3", "delete page 4", "make the shouts red" → one FREE tool call with its args.
 
-import { isPageStale, isTargetStale, newId, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
+import { isPageStale, isTargetStale, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
 import { estimateJobs, formatUsd } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, pageTargets, quoteRenderPages } from '../../../shared/comic/plan.js';
+import { costFormatter, type CostFormatter } from './costText.js';
 import { drawnBookLine, nothingNextSteps } from './replies.js';
+import { breakdownCardFor } from './tools/breakdown.js';
 
 export interface RoutedIntent {
   kind: 'show_pages' | 'nothing_to_draw';
@@ -92,11 +94,23 @@ export function bookStatusLine(doc: ComicDoc): string {
   if (busy.length) parts.push(`${busy.length} drawing`);
   if (failed.length) parts.push(`${failed.length} failed`);
   const cover = doc.cover.render;
-  parts.push(cover.status === 'ready' ? (isTargetStale(doc, { kind: 'cover' }) ? 'cover out of date' : 'cover drawn') : cover.status === 'queued' || cover.status === 'rendering' ? 'cover drawing' : 'cover not drawn yet');
+  // Same cover wording as the breakdown tool (tools/breakdown.ts): out of date / failed / drawing / not drawn.
+  parts.push(
+    cover.status === 'ready'
+      ? isTargetStale(doc, { kind: 'cover' })
+        ? 'cover out of date'
+        : 'cover drawn'
+      : cover.status === 'queued' || cover.status === 'rendering'
+        ? 'cover drawing'
+        : cover.status === 'failed'
+          ? 'cover failed'
+          : 'cover not drawn yet'
+  );
   return `${parts.join(' · ')}.`;
 }
 
-const breakdownCard = (view: 'plan' | 'status' | 'cost'): Card => ({ type: 'breakdown', id: newId('card'), cover: true, view });
+/** The breakdown card the show_pages tool would show (one builder: cover tile only when it leads). */
+const breakdownCard = (doc: ComicDoc, view: 'plan' | 'status' | 'cost'): Card => breakdownCardFor(doc, { view });
 
 /** Chips for a breakdown answer: draw what is missing (quoted), the cover, read it. */
 function breakdownNextSteps(doc: ComicDoc, byok: boolean): NextStep[] {
@@ -122,10 +136,12 @@ function breakdownNextSteps(doc: ComicDoc, byok: boolean): NextStep[] {
  * Answer a read-only request for $0 (no model call), or null to let the director handle it.
  * Callers skip this when the message has attachments.
  */
-export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean } = {}): RoutedIntent | null {
+export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean; cost?: CostFormatter } = {}): RoutedIntent | null {
   const t = normalizeIntentText(text);
   if (!t || t.length > 90 || !doc?.pages?.length) return null;
   const byok = !!opts.byok;
+  // Prices in the user's terms (governed users: "≈2% of your usage").
+  const cost = opts.cost ?? costFormatter();
 
   if (anyMatch(DRAW_ALL_PAGES_RE, t) || anyMatch(DRAW_ALL_BOOK_RE, t)) {
     const wantsBook = anyMatch(DRAW_ALL_BOOK_RE, t);
@@ -134,7 +150,7 @@ export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean 
     const busy = doc.pages.some((p) => p.render.status === 'queued' || p.render.status === 'rendering');
     // Never "Everything is drawn" while the cover is missing or out of date (drawnBookLine says which).
     const reply = (!busy && drawnBookLine(doc, { offerCover: true })) || 'Everything is either drawn or already drawing — nothing new to start, and nothing was spent.';
-    return { kind: 'nothing_to_draw', reply, cards: [breakdownCard('status')], nextSteps: nothingNextSteps(doc, byok) };
+    return { kind: 'nothing_to_draw', reply, cards: [breakdownCard(doc, 'status')], nextSteps: nothingNextSteps(doc, byok) };
   }
 
   if (anyMatch(COST_RE, t)) {
@@ -142,18 +158,19 @@ export function routeIntent(doc: ComicDoc, text: string, opts: { byok?: boolean 
     const what = [quote.pageIds.length ? plural(quote.pageIds.length, 'page') : '', quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : '']
       .filter(Boolean)
       .join(' + ');
+    const spent = cost.governed ? '' : ` Spent so far: ${formatUsd(doc.spend.totalUsd)}.`;
     const reply = quote.nothing
-      ? `Nothing is left to draw — it's all done, so it costs $0. Spent so far: ${formatUsd(doc.spend.totalUsd)}.`
-      : `Drawing what's left (${what}) is about ${formatUsd(quote.usd)}. Spent so far: ${formatUsd(doc.spend.totalUsd)}. Text edits, balloons and page order are free.`;
-    return { kind: 'show_pages', reply, cards: [breakdownCard('cost')], nextSteps: breakdownNextSteps(doc, byok) };
+      ? `Nothing is left to draw — it's all done, so it costs ${cost.governed ? 'nothing' : '$0'}.${spent}`
+      : `Drawing what's left (${what}) is about ${cost.governed ? cost(quote.usd).replace(/^≈/, '') : formatUsd(quote.usd)}.${spent} Text edits, balloons and page order are free.`;
+    return { kind: 'show_pages', reply, cards: [breakdownCard(doc, 'cost')], nextSteps: breakdownNextSteps(doc, byok) };
   }
 
   if (anyMatch(STATUS_RE, t)) {
-    return { kind: 'show_pages', reply: bookStatusLine(doc), cards: [breakdownCard('status')], nextSteps: breakdownNextSteps(doc, byok) };
+    return { kind: 'show_pages', reply: bookStatusLine(doc), cards: [breakdownCard(doc, 'status')], nextSteps: breakdownNextSteps(doc, byok) };
   }
 
   if (anyMatch(SHOW_RE, t)) {
-    return { kind: 'show_pages', reply: `Here are the pages: ${bookStatusLine(doc)}`, cards: [breakdownCard('plan')], nextSteps: breakdownNextSteps(doc, byok) };
+    return { kind: 'show_pages', reply: `Here are the pages: ${bookStatusLine(doc)}`, cards: [breakdownCard(doc, 'plan')], nextSteps: breakdownNextSteps(doc, byok) };
   }
   return null;
 }

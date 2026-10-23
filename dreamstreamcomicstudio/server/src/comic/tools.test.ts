@@ -69,8 +69,16 @@ describe('tool specs', () => {
 describe('story tools', () => {
   it('update_brief + add_notes', async () => {
     expect(await call('update_brief', {})).toMatch(/^Error: /);
-    expect(await call('update_brief', { title: '  Night  Market ', genre: 'noir', themes: ['trust', ''] })).toBe('Brief updated: title, genre, themes.');
+    // An automatic lettering preset follows the comic for free (noir genre → the noir preset), said in the result.
+    expect(await call('update_brief', { title: '  Night  Market ', genre: 'noir', themes: ['trust', ''] })).toBe(
+      'Brief updated: title, genre, themes. Lettering now uses the noir preset to fit (free; it was on automatic).'
+    );
     expect(ctx.session.doc.brief).toMatchObject({ title: 'Night Market', genre: 'noir', themes: ['trust'] });
+    expect(ctx.session.doc.letterStyle).toMatchObject({ presetId: 'noir', auto: true });
+    // A preset the user picked (auto off) is never switched.
+    ctx.session.commit([{ op: 'letter_style', patch: { presetId: 'classic', auto: null } }]);
+    expect(await call('update_brief', { genre: 'noir detective' })).toBe('Brief updated: genre.');
+    expect(ctx.session.doc.letterStyle?.presetId).toBe('classic');
     expect(await call('add_notes', { notes: ['no gore', 'ends on a cliffhanger'] })).toBe('Noted (2 notes total).');
   });
 
@@ -588,7 +596,8 @@ describe('lettering edits keep ids, pins and translations', () => {
     const panel = ctx.session.doc.pages[0].panels[2];
     expect(panel.lines.map((l) => l.kind)).toEqual(['caption', 'speech']);
     expect(panel.lines[1].id).not.toBe('ln_l3'); // position 2 had no old line → new id
-    expect(panel.lines[1].style).toMatchObject({ textColor: expect.stringMatching(/^#/), sizeScale: 1.25, shape: 'cloud' });
+    // Parsed by the lettering engine (same words as restyle_balloons): "larger" = ×1.2 of the line's current size.
+    expect(panel.lines[1].style).toMatchObject({ textColor: expect.stringMatching(/^#/), sizeScale: 1.2, shape: 'cloud' });
     const caption = ctx.session.doc.pages[0].balloons.find((b) => b.lineId === panel.lines[0].id);
     expect(caption).toMatchObject({ pinned: true });
     expect(caption!.x).toBeGreaterThanOrEqual(0);

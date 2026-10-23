@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
+import { DEFAULT_CAPS, sanitizeStudioUsage, type StudioCaps, type StudioUsage } from '../../../shared/comic/capabilities.js';
 import {
   CAST_KINDS,
   collectAssetPaths,
@@ -42,12 +42,14 @@ import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
 import { STYLE_PRESETS } from '../../../shared/comic/stylePresets.js';
 import { logger } from '../lib/logger.js';
+import { getAllowanceStatus } from '../services/platformAllowance.js';
 import { consumeAllowanceNotices } from '../services/usageEnforcer.js';
 import { checkQualityAccess, studioCapsFor, type StudioCapsDeps } from '../comic/access.js';
 import { createSupabaseAssetStore, isOwnedAssetPath } from '../comic/assets.js';
 import { createStudioContext, signAssetPaths, type OrchestratorContext, type StudioContextDeps } from '../comic/context.js';
+import { costFormatterFor, governCard, governDollars, standardPageProviderUsd } from '../comic/costText.js';
 import { runDirectorTurn } from '../comic/director.js';
-import { routeIntent } from '../comic/intents.js';
+import { canFastPath, parseIntent, routeIntent } from '../comic/intents.js';
 import { ASPECT_RATIOS, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
 import { loadPublicByProjectId } from '../comic/publication/index.js';
@@ -60,9 +62,11 @@ import {
   screenTurnInput,
   type ScreenResult
 } from '../comic/safety/index.js';
-import { getStudioSession, peekStudioSession, type StudioSession } from '../comic/session.js';
+import { composeTurnReply } from '../comic/replies.js';
+import { getStudioSession, peekStudioSession, scheduleVariantBackfill, type StudioSession } from '../comic/session.js';
 import { createSupabaseDocStore, sanitizePublicDoc } from '../comic/store.js';
-import { ANALYZE_SOURCE_MIN_CHARS } from '../comic/tools.js';
+import { ANALYZE_SOURCE_MIN_CHARS, buildTurnToolset, createDirectorTurn } from '../comic/tools.js';
+import { toolGroups } from '../comic/tools/index.js';
 import { StudioError, type AssetStore, type DocStore } from '../comic/types.js';
 
 // ── Limits ───────────────────────────────────────────────────────────────────
@@ -129,7 +133,31 @@ export interface ComicRouterDeps {
   /** Free intent router (default: intents.routeIntent; no model call). */
   routeIntent?: typeof routeIntent;
   heartbeatMs?: number;
+  /**
+   * The user's usage snapshot for caps.usage (percentages only — never dollars). Default: the cached
+   * usage status (platformAllowance), skipped when tests inject capsDeps; undefined = unknown.
+   */
+  usageFor?: (userId: string, caps: StudioCaps) => Promise<StudioUsage | undefined>;
+  /** Phase-2 structural free edits without a model call (COMIC_FAST_INTENTS). Default: env flag, off. */
+  fastIntents?: boolean;
+  /** Session-load size-variant backfill (default on; tests switch it off). */
+  backfillVariants?: boolean;
 }
+
+/** COMIC_FAST_INTENTS=true: "swap pages 2 and 3", "make the shouts red"… run their one free tool directly. */
+const FAST_INTENTS_ENV = /^(1|true|on|yes)$/i.test(String(process.env.COMIC_FAST_INTENTS || ''));
+
+/** caps.usage from the cached usage status (P1-LIMITS): governed share facts only, no dollars. */
+const defaultUsageFor = async (userId: string, caps: StudioCaps): Promise<StudioUsage | undefined> => {
+  if (!userId || caps.admin || caps.byok) return undefined;
+  const status = await getAllowanceStatus(userId, { isAdmin: caps.admin });
+  // Positively ungoverned (metering off, exempt row): prices in dollars, like the client's costDisplay.
+  if (status.governed === false) return { governed: false, pctLeft: 100, exhausted: false, pctPerStandardPage: null };
+  // The status couldn't be read: unknown (a governed user still never sees dollars).
+  if (!status.enabled) return undefined;
+  const pctPerStandardPage = status.governed && status.capUsd > 0 ? Math.round((standardPageProviderUsd() / status.capUsd) * 100 * 100) / 100 : null;
+  return sanitizeStudioUsage({ governed: status.governed, pctLeft: status.pctLeft, exhausted: status.exhausted, pctPerStandardPage });
+};
 
 const lazy = <T>(make: () => T) => {
   let value: T | undefined;
@@ -490,7 +518,15 @@ async function prepareMessage(req: MessageRequest, ctx: OrchestratorContext): Pr
   for (let i = 0; i < planned.length; i += 1) {
     const p = planned[i];
     if (p.kind === 'inbox') attachments.push(p.ref);
-    else if (p.kind === 'image') attachments.push(await ctx.assets.saveRef({ userId: ctx.userId, projectId: ctx.projectId, encoded: encoded[i]! }));
+    else if (p.kind === 'image') {
+      const ref = await ctx.assets.saveRef({ userId: ctx.userId, projectId: ctx.projectId, encoded: encoded[i]! });
+      // Free: the dHash (near-duplicate detection) and the quality flags (blur/dark) that ref ranking reads.
+      const measured = await ctx.assets.measureRef(encoded[i]!.buffer).catch((err) => {
+        logger.warn('comic_legacy_ref_measure_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+        return null;
+      });
+      attachments.push(measured ? { ...ref, ...(measured.dhash ? { dhash: measured.dhash } : {}), ...(measured.quality ? { quality: measured.quality } : {}) } : ref);
+    }
     else if (p.content) {
       if (p.content.length >= ANALYZE_SOURCE_MIN_CHARS) {
         const words = (p.content.match(/\S+/g) || []).length;
@@ -528,6 +564,8 @@ export const restrictedRefusal = (request: StreamRequest): string | null => {
   if (request.kind === 'message') return hasLegacyImageUpload(request) ? RESTRICTED_UPLOAD_MESSAGE : null;
   const action = request.action;
   if (isSpendAction(action) || action.type === 'approve_gate') return RESTRICTED_SPEND_MESSAGE;
+  // The legacy paid re-check alias (it becomes a recheck_page spend) is a spend too.
+  if (action.type === 'relayout_balloons' && action.useVision) return RESTRICTED_SPEND_MESSAGE;
   // regenerate_link re-publishes under a new slug (POST /publication/regenerate is refused too).
   if (action.type === 'publish' || action.type === 'update_publication' || action.type === 'regenerate_link') return RESTRICTED_PUBLISH_MESSAGE;
   return null;
@@ -747,15 +785,22 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     return { contextDeps, keys, byok: spendIsByok(keys) };
   };
 
+  const usageFor = deps.usageFor ?? (deps.capsDeps ? undefined : defaultUsageFor);
   const capsFor = async (req: Request, byok: boolean): Promise<StudioCaps> => {
+    let caps: StudioCaps;
     try {
-      return await studioCapsFor(req, { byok }, deps.capsDeps);
+      caps = await studioCapsFor(req, { byok }, deps.capsDeps);
     } catch (err) {
       // studioCapsFor never throws by design; this is the belt to its braces.
       logger.warn('comic_caps_failed', { userId: req.user?.id, message: (err as Error)?.message });
-      return { ...DEFAULT_CAPS, byok };
+      caps = { ...DEFAULT_CAPS, byok };
     }
+    // Usage left (percentages only): the header meter and every price the server words for this user.
+    const usage = usageFor && req.user?.id ? await usageFor(req.user.id, caps).catch(() => undefined) : undefined;
+    return usage ? { ...caps, usage } : caps;
   };
+  const fastIntents = deps.fastIntents ?? FAST_INTENTS_ENV;
+  const backfill = deps.backfillVariants ?? true;
 
   /** Sign what the studio shows right away: displayAssetPaths, minus anything blocked. */
   const signDisplay = (doc: ComicDoc) => signAssetPaths(assets(), servablePaths(doc, displayAssetPaths(doc)), { projectId: doc.id, via: 'display' });
@@ -804,6 +849,15 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const session = await sessionFor(req);
       const { byok } = keysFor(req);
       const [caps, urls] = await Promise.all([capsFor(req, byok), signDisplay(session.doc)]);
+      // Older images get their 480w/1080w variants in the background (≤ 40, one at a time; once per session).
+      if (backfill) {
+        void scheduleVariantBackfill(session, assets(), {
+          onUrls: async (paths) => {
+            const signed = await signAssetPaths(assets(), servablePaths(session.doc, paths), { projectId: session.projectId, via: 'variants' });
+            if (Object.keys(signed).length) session.emit({ type: 'urls', urls: signed });
+          }
+        });
+      }
       res.set('Cache-Control', 'private, no-store');
       res.json({ doc: session.doc, urls, caps });
     })
@@ -939,6 +993,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     else sessionSignal.addEventListener('abort', onSessionAbort, { once: true });
 
     const startSpend = session.doc.spend.totalUsd;
+    const startEntries = new Set(session.doc.spend.entries.map((e) => e.id));
     try {
       if (refusal || !ctx) {
         logRefusal(req, 'stream', { code: refusal?.code || 'INTERNAL', ...shape });
@@ -952,7 +1007,13 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         } else {
           const action = request.action;
           // A click on a spend button IS the confirmation; the budget cap still applies.
-          const run = () => runAction(turnCtx, action, { confirmed: isSpendAction(action) || action.type === 'approve_gate', ...(turnCtx.caps ? { caps: turnCtx.caps } : {}) });
+          const run = () =>
+            runAction(turnCtx, action, {
+              confirmed: isSpendAction(action) || action.type === 'approve_gate',
+              ...(turnCtx.caps ? { caps: turnCtx.caps } : {}),
+              // A UI click: its edits undo as the user's own (contract §7 ops origin).
+              origin: 'user'
+            });
           if (action.type === 'plan_pages') await session.runExclusive(run);
           else await run();
         }
@@ -961,7 +1022,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         if (!error) logger.error('comic_stream_failed', { requestId: req.requestId, projectId: session.projectId, message: (err as Error)?.message });
         else if (error.code !== 'CANCELLED') logger.info('comic_stream_error', { requestId: req.requestId, projectId: session.projectId, userId, code: error.code, status: error.status, ...shape });
         if (error?.code !== 'CANCELLED') {
-          send({ type: 'error', message: error?.userMessage || 'Something went wrong. Please try again.', ...(error ? { code: error.code } : {}) });
+          // Every error event carries a code (the client tailors its copy: COOLDOWN, CONTENT_POLICY, LIMIT…).
+          send({ type: 'error', message: error?.userMessage || 'Something went wrong. Please try again.', code: error?.code ?? 'INTERNAL' });
         }
       }
       // Keep the stream open until every render this request started has settled.
@@ -975,7 +1037,9 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     } finally {
       sessionSignal.removeEventListener('abort', onSessionAbort);
       await session.flush();
-      send({ type: 'done', rev: session.doc.rev, spentUsd: round4(Math.max(0, session.doc.spend.totalUsd - startSpend)) });
+      // What software saved this request (free reuse instead of a paid redraw): the "Saved by software" toast.
+      const savedUsd = round4(session.doc.spend.entries.reduce((sum, e) => (startEntries.has(e.id) ? sum : sum + (e.savedUsd || 0)), 0));
+      send({ type: 'done', rev: session.doc.rev, spentUsd: round4(Math.max(0, session.doc.spend.totalUsd - startSpend)), ...(savedUsd > 0 ? { savedUsd } : {}) });
       unsubscribe();
       clearInterval(heartbeat);
       if (!res.writableEnded) res.end();
@@ -1034,9 +1098,10 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     // Free, read-only answers ("show me the pages", "what's left?") — no model call, $0.
     // Skipped when the screen left a note for the director (adapt / IP steering).
     if (!attachments.length && screened.decision === 'allow' && !screened.note && text) {
+      const cost = costFormatterFor(ctx);
       let routed: ReturnType<typeof routeIntent> = null;
       try {
-        routed = intentFor(session.doc, text, { byok: spendIsByok(ctx.keys) });
+        routed = intentFor(session.doc, text, { byok: spendIsByok(ctx.keys), cost });
       } catch (err) {
         logger.warn('comic_intent_failed', { requestId: req.requestId, projectId: ctx.projectId, message: (err as Error)?.message });
       }
@@ -1047,7 +1112,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         const reply: Msg = {
           id: newId('msg'),
           role: 'assistant',
-          text: routed.reply,
+          text: governDollars(routed.reply, cost.view),
           at: at + 1,
           ...(routed.cards.length ? { cards: routed.cards } : {}),
           ...(routed.nextSteps.length ? { nextSteps: routed.nextSteps } : {})
@@ -1059,6 +1124,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         logger.info('comic_intent_routed', { requestId: req.requestId, projectId: ctx.projectId, kind: routed.kind });
         return;
       }
+      // Phase 2 (COMIC_FAST_INTENTS): an unambiguous structural edit runs its one FREE tool, no model call.
+      if (fastIntents && (await runFastIntent(req, ctx, text))) return;
     }
 
     await runDirectorTurn(ctx, {
@@ -1068,6 +1135,60 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       ...(prepared.focus ? { focus: prepared.focus } : {}),
       ...(screened.note ? { safetyNote: screened.note } : {})
     });
+  }
+
+  /**
+   * "swap pages 2 and 3", "make the shouts red", "delete page 4"… (intents.parseIntent, confidence ≥ 0.95,
+   * no open gate): the matching free tool from this turn's toolset runs directly, the reply is composed by
+   * software (composeTurnReply) and carries an Undo chip. Any doubt — no such tool, a tool error, a paid
+   * tool — returns false BEFORE anything is committed, and the director answers instead.
+   */
+  async function runFastIntent(req: Request, ctx: OrchestratorContext, text: string): Promise<boolean> {
+    const session = ctx.session;
+    const before = session.doc;
+    const parsed = parseIntent(text, before);
+    if (!canFastPath(parsed, { enabled: true, attachments: 0, gateOpen: before.gate?.status === 'open' })) return false;
+    const rating = ctx.rating ?? effectiveRating(before, ctx.caps?.ratingCeiling).rating;
+    const turn = createDirectorTurn({ userText: text, rating, startedAt: Date.now(), runs: [], bgErrors: [] });
+    const tool = buildTurnToolset(ctx, turn, toolGroups()).tools.find((t) => t.spec.function.name === parsed.tool);
+    if (!tool || tool.cost !== 'free') return false;
+    let output: string;
+    let committed = 0;
+    const unsubscribe = session.subscribe((e) => {
+      if (e.type === 'ops') committed += e.ops.length;
+    });
+    try {
+      output = await tool.execute(parsed.args);
+    } catch (err) {
+      logger.warn('comic_fast_intent_failed', { requestId: req.requestId, projectId: ctx.projectId, tool: parsed.tool, message: (err as Error)?.message });
+      return false;
+    } finally {
+      unsubscribe();
+    }
+    const ok = !/^(Error|Refused)\b/.test(output);
+    if (!ok && !committed) return false; // the director explains it better
+    turn.log.push({ tool: parsed.tool, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
+    const after = session.doc;
+    const at = Date.now();
+    const view = costFormatterFor(ctx).view;
+    const replyText = governDollars(composeTurnReply({ before, after, turn, userText: text }), view);
+    const steps = [...(committed ? [{ label: 'Undo', client: { type: 'undo' as const } }] : []), ...turn.nextSteps].slice(0, DOC_LIMITS.nextSteps);
+    session.commit([
+      { op: 'message', msg: { id: newId('msg'), role: 'user', text, at } },
+      {
+        op: 'message',
+        msg: {
+          id: newId('msg'),
+          role: 'assistant',
+          text: replyText,
+          at: at + 1,
+          ...(turn.cards.length ? { cards: turn.cards.map((c) => governCard(c, view)) } : {}),
+          ...(steps.length ? { nextSteps: steps } : {})
+        }
+      }
+    ]);
+    logger.info('comic_fast_intent', { requestId: req.requestId, projectId: ctx.projectId, tool: parsed.tool, ops: committed });
+    return true;
   }
 
   return router;

@@ -8,7 +8,7 @@
 // Every row is 44 px on touch; long names truncate; the panel never overflows a 320 px phone.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, MapPin, Palette, Sparkles, UserPlus, UserRound } from 'lucide-react';
+import { ArrowLeft, Check, MapPin, Palette, Sparkles, UserPlus, UserRound } from 'lucide-react';
 import type { CastTier, ComicDoc, RefOwner } from '../../../shared/comic/doc';
 import type { AttachmentTarget } from '../../../shared/comic/events';
 import { REF_LIMITS, capFor, refsOf } from '../../../shared/comic/refs';
@@ -122,18 +122,13 @@ export const AssignMenu: React.FC<AssignMenuProps> = ({ doc, count, value, onPic
     setName('');
   };
 
-  return (
-    <div role="menu" aria-label={`Who's in ${photos}?`} className={cx('flex min-w-0 flex-col gap-0.5 p-1.5', className)}>
-      <p className="px-2.5 pb-1 pt-0.5 text-[12px] text-[var(--ds-muted)]">Who’s in {photos}? Filing photos is free.</p>
-      {cast.map((c) => {
-        const owner: RefOwner = { kind: 'character', id: c.id };
-        const isFull = full(owner);
-        return row(c.id, <UserRound className="h-3.5 w-3.5" />, c.name.toUpperCase(), owner, {
-          disabled: isFull,
-          detail: isFull ? `Has ${capFor(owner)} photos — remove one first` : c.role || (c.tier === 'lead' ? 'Lead' : c.tier === 'support' ? 'Support' : undefined)
-        });
-      })}
-      {naming ? (
+  // Naming a new character is its own small step: a text field and a button are not menu items, so
+  // they never sit inside role="menu" (axe aria-required-children), and on a phone the field is at
+  // the top of the sheet, right above the keyboard it opens.
+  if (naming) {
+    return (
+      <div className={cx('flex min-w-0 flex-col gap-0.5 p-1.5', className)}>
+        <p className="px-2.5 pb-1 pt-0.5 text-[12px] text-[var(--ds-muted)]">Who’s the new character in {photos}?</p>
         <form
           className="flex min-w-0 items-center gap-1.5 px-1 py-1"
           onSubmit={(e) => {
@@ -158,7 +153,48 @@ export const AssignMenu: React.FC<AssignMenuProps> = ({ doc, count, value, onPic
             Add
           </button>
         </form>
-      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setNaming(false);
+            setName('');
+          }}
+          className={ROW}
+        >
+          <span className={ICON} aria-hidden>
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </span>
+          <span className="min-w-0 flex-1 truncate">Back to the cast</span>
+        </button>
+      </div>
+    );
+  }
+
+  /** Arrow keys / Home / End move between the enabled rows, like a native menu. */
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
+    if (!keys.includes(e.key)) return;
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)'));
+    if (!items.length) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
+    items[next]?.focus();
+  };
+
+  return (
+    <div className={cx('flex min-w-0 flex-col gap-0.5 p-1.5', className)}>
+      <p className="px-2.5 pb-1 pt-0.5 text-[12px] text-[var(--ds-muted)]">Who’s in {photos}? Filing photos is free.</p>
+      <div role="menu" aria-label={`Who's in ${photos}?`} onKeyDown={onMenuKeyDown} className="flex min-w-0 flex-col gap-0.5">
+        {cast.map((c) => {
+          const owner: RefOwner = { kind: 'character', id: c.id };
+          const isFull = full(owner);
+          return row(c.id, <UserRound className="h-3.5 w-3.5" />, c.name.toUpperCase(), owner, {
+            disabled: isFull,
+            detail: isFull ? `Has ${capFor(owner)} photos — remove one first` : c.role || (c.tier === 'lead' ? 'Lead' : c.tier === 'support' ? 'Support' : undefined)
+          });
+        })}
         <button type="button" role="menuitem" onClick={() => setNaming(true)} className={ROW}>
           <span className={ICON} aria-hidden>
             <UserPlus className="h-3.5 w-3.5" />
@@ -168,24 +204,24 @@ export const AssignMenu: React.FC<AssignMenuProps> = ({ doc, count, value, onPic
             <span className="max-w-[40%] shrink-0 truncate text-[12px] text-[var(--ds-muted)]">{value.name.toUpperCase()}</span>
           )}
         </button>
-      )}
-      {places.map((p) => {
-        const owner: RefOwner = { kind: 'place', id: p.id };
-        return row(p.id, <MapPin className="h-3.5 w-3.5" />, p.name || 'Place', owner, {
-          disabled: full(owner),
-          detail: full(owner) ? `Has ${capFor(owner)} photos — remove one first` : 'A place in the story'
-        });
-      })}
-      {row('style', <Palette className="h-3.5 w-3.5" />, 'Art style reference', { kind: 'style' }, {
-        disabled: full({ kind: 'style' }),
-        detail: full({ kind: 'style' }) ? `Holds ${REF_LIMITS.style} photos — remove one first` : 'We borrow the look, never the content'
-      })}
-      {allowClear && (
-        <>
-          <div className="mx-2.5 my-1 border-t border-[var(--ds-hairline-soft)]" aria-hidden />
-          {row('none', <Sparkles className="h-3.5 w-3.5" />, 'Let the director decide', null, { detail: 'It asks if it can’t tell' })}
-        </>
-      )}
+        {places.map((p) => {
+          const owner: RefOwner = { kind: 'place', id: p.id };
+          return row(p.id, <MapPin className="h-3.5 w-3.5" />, p.name || 'Place', owner, {
+            disabled: full(owner),
+            detail: full(owner) ? `Has ${capFor(owner)} photos — remove one first` : 'A place in the story'
+          });
+        })}
+        {row('style', <Palette className="h-3.5 w-3.5" />, 'Art style reference', { kind: 'style' }, {
+          disabled: full({ kind: 'style' }),
+          detail: full({ kind: 'style' }) ? `Holds ${REF_LIMITS.style} photos — remove one first` : 'We borrow the look, never the content'
+        })}
+        {allowClear && (
+          <>
+            <div className="mx-2.5 my-1 border-t border-[var(--ds-hairline-soft)]" aria-hidden />
+            {row('none', <Sparkles className="h-3.5 w-3.5" />, 'Let the director decide', null, { detail: 'It asks if it can’t tell' })}
+          </>
+        )}
+      </div>
     </div>
   );
 };

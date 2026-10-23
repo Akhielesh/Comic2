@@ -73,6 +73,13 @@ describe('ref_add', () => {
     expect((op as { ref: RefAsset }).ref.safety).toBeUndefined();
     expect(() => run(plannedDoc(), [{ op: 'ref_add', owner: MAYA, ref: { path: 'u/user-1/p/other/ref/abc.webp' } }])).toThrow(/isn't part of this comic/);
     expect(() => run(plannedDoc(), [{ op: 'ref_add', owner: MAYA, ref: { path: 'u/user-2/p/proj-1/ref/abc.webp' } }])).toThrow(/isn't part of this comic/);
+    // Contract §5.4 restore paths (P2-SERVER): the project's image lane too (a legacy upload or a sheet used as a
+    // reference, removed with its character), rebuilt without any client verdict — never a variant, q/ or pub/ copy.
+    const [img] = run(plannedDoc(), [{ op: 'ref_add', owner: MAYA, ref: { path: 'u/user-1/p/proj-1/img/up-3.webp', safety: { assessed: 'G', at: 1 } } }]);
+    expect((img as { ref: RefAsset }).ref).toEqual({ path: 'u/user-1/p/proj-1/img/up-3.webp', source: 'upload', at: 1234, addedBy: 'user' });
+    for (const bad of ['u/user-1/p/proj-1/img/gen-1_w480.webp', 'q/user-1/proj-1/q-1.webp', 'pub/AAAAAAAAAAAAAAAAAAAAAA/p1-0123456789ab.webp', 'u/user-1/p/proj-1/img/x.svg']) {
+      expect(() => run(plannedDoc(), [{ op: 'ref_add', owner: MAYA, ref: { path: bad } }])).toThrow(/isn't part of this comic/);
+    }
   });
 
   it('refuses blocked images and the inbox as a destination', () => {

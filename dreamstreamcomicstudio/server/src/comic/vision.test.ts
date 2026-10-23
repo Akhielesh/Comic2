@@ -14,8 +14,10 @@ import {
   fallbackBalloons,
   normalizeLettering,
   normalizeMarks,
+  placeStoredBalloons,
   visionSpecText
 } from './vision.js';
+import { outlineBounds } from '../../../shared/comic/lettering/place.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult } from './types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -345,10 +347,13 @@ describe('analyzePageRender', () => {
     const { llm } = fakeLlm([{ json: reply }]);
     const out = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm });
     expect(out.qc.panelBoxes).toEqual([visionPanels[1].box, visionPanels[0].box]);
+    // The model's (converted) rectangle is the placement engine's hint: the balloon lands near it,
+    // inside panel 1 and the safe area, with its tail toward the speaker.
     const b1 = out.balloons.find((b) => b.lineId === 'l1')!;
-    expect(b1.x).toBeCloseTo(0.6, 4);
-    expect(b1.y).toBeCloseTo(0.06, 4);
-    expect(b1.tailX).toBeCloseTo(0.7, 4);
+    expect(Math.abs(b1.x - 0.6)).toBeLessThan(0.1);
+    expect(Math.abs(b1.y - 0.06)).toBeLessThan(0.05);
+    expect(b1.y + 0.03).toBeLessThan(0.49);
+    expect(b1.tailX).toBeDefined();
   });
 
   it('coordinateScale: fractions, 0–1000 grid, pixels with a known size, else unreadable', () => {
@@ -400,11 +405,13 @@ describe('analyzePageRender', () => {
   it('degrades to the layout fallback with an honest note when the reply is unusable twice', async () => {
     const { llm, calls } = fakeLlm([{ text: 'I cannot see the image.' }, { text: '???' }]);
     const pg = twoPanel();
-    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm });
+    const d = doc();
+    const out = await analyzePageRender({ doc: d, page: pg, dataUrl: 'data:x', llm });
     expect(calls).toHaveLength(2);
     expect(out.qc.score).toBe(0.5);
     expect(out.qc.issues[0]).toContain('Automatic page check returned no usable result');
-    expect(out.balloons).toEqual(fallbackBalloons(pg, estimatePanelBoxes(pg), { readingDirection: 'ltr', kind: 'comic', pageAspect: ASPECT }));
+    // The fallback is the shared engine sized with this comic's real lettering metrics.
+    expect(out.balloons).toEqual(fallbackBalloons(pg, estimatePanelBoxes(pg), { doc: d, readingDirection: 'ltr', kind: 'comic', pageAspect: ASPECT }));
   });
 
   it('propagates transport errors', async () => {
@@ -584,3 +591,62 @@ describe('review: coordinate scale tolerance', () => {
     expect(marks.keepOut).toEqual([{ panel: 1, kind: 'action', box: { x: 0.1, y: 0, w: 0.3, h: 1 } }]);
   });
 });
+
+describe('shared placement engine (P2-SERVER: lettering.md §6.6 / §9)', () => {
+  const lakePage = (): Page =>
+    page(
+      [
+        panel(1, ['maya', 'arjun'], [line('s1', 'speech', 'You are late, courier.', 'arjun'), line('s2', 'speech', 'The monsoon is early.', 'maya')]),
+        panel(2, ['maya'], [line('c2', 'caption', 'Later that night.')])
+      ],
+      { layout: 'Row 1: one wide panel. Row 2: one wide panel.' }
+    );
+
+  it('free re-layout from the stored QC keeps balloons off the faces the page check marked', () => {
+    const d = doc();
+    const pg = lakePage();
+    const boxes = estimatePanelBoxes(pg);
+    // Faces across the whole top half of panel 1 except a strip at the bottom.
+    const face = { x: boxes[0].x, y: boxes[0].y, w: boxes[0].w, h: boxes[0].h * 0.55 };
+    const qc = { score: 0.9, issues: [], checkedAt: 1, panelBoxes: boxes, keepOut: [{ panel: 1, kind: 'face' as const, box: face }] };
+    const out = placeStoredBalloons(d, pg, qc);
+    expect(out.map((b) => b.lineId)).toEqual(['s1', 's2', 'c2']);
+    for (const b of out.filter((x) => x.lineId !== 'c2')) {
+      // The balloon's top edge sits below the marked faces (the text box never covers a face).
+      expect(b.y).toBeGreaterThanOrEqual(face.y + face.h - 0.02);
+    }
+    // Without the keep-out, the engine prefers the top band the page prompt reserves.
+    const free = placeStoredBalloons(d, pg, { ...qc, keepOut: [] });
+    expect(free.find((b) => b.lineId === 's1')!.y).toBeLessThan(face.y + face.h);
+  });
+
+  it('locked balloons never move; a re-laid balloon keeps its z and its link', () => {
+    const d = doc();
+    const pg = lakePage();
+    pg.balloons = [
+      { lineId: 's1', x: 0.7, y: 0.3, w: 0.2, locked: true, pinned: true },
+      { lineId: 's2', x: 0.05, y: 0.05, w: 0.2, z: 4, linkTo: 's1' }
+    ];
+    const out = placeStoredBalloons(d, pg);
+    expect(out.find((b) => b.lineId === 's1')).toEqual({ lineId: 's1', x: 0.7, y: 0.3, w: 0.2, locked: true, pinned: true });
+    expect(out.find((b) => b.lineId === 's2')).toMatchObject({ z: 4, linkTo: 's1' });
+  });
+
+  it('language-aware metrics: Telugu/Hindi lines are sized by their script and stay inside the safe area', () => {
+    const d = doc((x) => {
+      x.format = { ...x.format, language: 'te' };
+    });
+    const pg = page([panel(1, ['maya'], [line('t1', 'speech', 'వర్షం ముందే వచ్చింది, నువ్వు ఆలస్యం!', 'maya'), line('h1', 'caption', 'रात हो गई।')])]);
+    const out = placeStoredBalloons(d, pg);
+    expect(out).toHaveLength(2);
+    for (const b of out) {
+      const kind = b.lineId === 't1' ? 'speech' : 'caption';
+      const o = outlineBounds({ x: b.x, y: b.y, w: b.w, h: estimateBalloonHeight(kind === 'speech' ? 'వర్షం ముందే వచ్చింది, నువ్వు ఆలస్యం!' : 'रात हो गई।', b.w, 1000 / 1500, kind === 'speech' ? 'te' : 'hi') }, kind, kind === 'speech' ? 'oval' : 'rect');
+      expect(o.x).toBeGreaterThanOrEqual(0);
+      expect(o.x + o.w).toBeLessThanOrEqual(1);
+      expect(o.y).toBeGreaterThanOrEqual(0);
+    }
+    expect(balloonWidth('వర్షం ముందే వచ్చింది', 'te')).toBeGreaterThan(0);
+  });
+});
+

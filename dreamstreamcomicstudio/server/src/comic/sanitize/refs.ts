@@ -156,7 +156,10 @@ const refAdd: OpSanitizer<Op<'ref_add'>> = {
     const known = new Set(collectAssetPaths(doc));
     const source = refElsewhere(doc, path) ?? assetAt(doc, path);
     if (!known.has(path) && !isOwnRefLane(path, ctx, doc)) throw bad("That image isn't part of this comic.");
-    if (source && (!canServeToOwner(source) || source.safety?.quarantined)) {
+    // The doc's copy decides; for a restore (the doc no longer holds it) the client's own copy saying
+    // "blocked" is honoured too — that claim can only keep an image out, never let one in.
+    const reported = !source && isObject(op.ref.safety) ? { safety: op.ref.safety as RefAsset['safety'] } : undefined;
+    if ((source && (!canServeToOwner(source) || source.safety?.quarantined)) || (reported && !canServeToOwner(reported))) {
       throw new StudioError('CONTENT_POLICY', "That image didn't pass the content check, so it can't be used as a reference.", { status: 422 });
     }
     const batch = batchFor(doc, ctx);

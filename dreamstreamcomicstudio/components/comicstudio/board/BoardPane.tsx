@@ -10,11 +10,17 @@
 // scrolls sideways with snap, fades the clipped edge so it reads as "more", and keeps the active
 // tab in view; inactive badges step aside below 380 px. The spend gate stays pinned above the
 // scroller as ONE compact line in a narrow board (details on demand) so the content keeps ≥ 45 %
-// of a phone screen. The book timeline docks at the foot (its own summary bar; hidden in Read).
+// of a phone screen. The book timeline docks at the foot (its own summary bar; collapsed below
+// `lg`, remembered per device; hidden in Read, where the reader owns the whole pane).
+//
+// Feature tabs show only while their `visible(doc, caps)` holds (Media once the comic has an image,
+// Languages once there is dialogue). A tab the user is ON stays listed and rendered even if its
+// check flips (a card or the director can open Languages early): never a blank panel.
+// Prices print through formatCostForUser — governed users see a share of their usage, never dollars.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronDown, FileText, LayoutGrid, Palette, Users } from 'lucide-react';
-import { formatUsd, getImageModel } from '../../../shared/comic/models';
+import { getImageModel } from '../../../shared/comic/models';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
@@ -29,6 +35,7 @@ import { ReaderTab } from './ReaderTab';
 import { StoryTab } from './StoryTab';
 import { StyleTab } from './StyleTab';
 import { pageProgress } from './boardModel';
+import { useCostFormat } from './costFormat';
 import { GhostButton, PrimaryButton, cx, useClickGuard, useElementSize } from './ui';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { useBackLayer } from '../mobile/backStack';
@@ -36,6 +43,8 @@ import { BookTimeline } from '../timeline/BookTimeline';
 
 /** Below this board width the spend gate collapses to one line (details on demand). */
 export const GATE_COMPACT_BELOW_PX = 520;
+/** …and below this board HEIGHT (a landscape phone: the full banner would cover the Pages grid). */
+export const GATE_COMPACT_BELOW_H_PX = 480;
 /** Below this window width only the active tab keeps its badge (so the strip fits a 360 phone better). */
 export const TAB_BADGES_MIN_WIDTH = 380;
 
@@ -65,11 +74,14 @@ const isVisible = (reg: BoardTabRegistration, doc: ComicDoc, caps: StudioCaps): 
   }
 };
 
-/** Built-in tabs plus the registered tabs visible for this doc, sorted by `order` (stable). */
-export const boardTabsFor = (doc: ComicDoc, caps: StudioCaps): ShownTab[] => {
+/**
+ * Built-in tabs plus the registered tabs visible for this doc, sorted by `order` (stable). The
+ * `active` registered tab is always included, so the strip never loses the tab whose panel is shown.
+ */
+export const boardTabsFor = (doc: ComicDoc, caps: StudioCaps, active?: StudioTab): ShownTab[] => {
   const builtIns = BOARD_TABS.map((t, i) => ({ tab: t as ShownTab, order: BUILTIN_TAB_ORDER[t.id] ?? (i + 1) * 100, i }));
   const extra = registeredTabs()
-    .filter((reg) => isVisible(reg, doc, caps))
+    .filter((reg) => reg.id === active || isVisible(reg, doc, caps))
     .map((reg, i) => ({ tab: { id: reg.id, label: reg.label, icon: reg.icon, registration: reg }, order: reg.order, i: BOARD_TABS.length + i }));
   return [...builtIns, ...extra].sort((a, b) => a.order - b.order || a.i - b.i).map((x) => x.tab);
 };
@@ -79,7 +91,9 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
   const gate = studio.doc?.gate;
   const { busyKey, fire } = useClickGuard(4000);
   const [details, setDetails] = useState(false);
+  const cost = useCostFormat(studio.caps);
   if (!gate || gate.status !== 'open') return null;
+  const price = cost.quote(gate.estimateUsd);
   // People read the model's nickname ("Nano Banana 2.1"), not a long raw id (visualqa P0-1 / P1-6).
   const modelName = getImageModel((gate.model || '').trim())?.nickname || gate.model;
   const images = `${gate.imageCount} ${gate.imageCount === 1 ? 'image' : 'images'} on ${modelName}`;
@@ -109,11 +123,11 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
             type="button"
             onClick={() => setDetails((d) => !d)}
             aria-expanded={details}
-            title={`${gate.title} · ≈ ${formatUsd(gate.estimateUsd)} · ${images}${overBudget}`}
+            title={`${gate.title} · ${price} · ${images}${overBudget}`}
             className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-[44px]"
           >
             <span className="min-w-0 truncate font-semibold">{gate.title}</span>
-            <span className="shrink-0 tabular-nums text-[var(--ds-muted)]">· ≈ {formatUsd(gate.estimateUsd)}</span>
+            <span className="min-w-0 max-w-[45%] shrink-0 truncate tabular-nums text-[var(--ds-muted)]">· {price}</span>
             <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'rotate-180')} aria-hidden />
             <span className="sr-only">{details ? 'Hide details' : 'Show details'}</span>
           </button>
@@ -140,7 +154,7 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
         <span className="font-semibold">{gate.title}</span>
         <span className="text-[var(--ds-muted)]">
           {' '}
-          · ≈ {formatUsd(gate.estimateUsd)} · {images}
+          · {price} · {images}
           {overBudget}
         </span>
       </div>
@@ -226,7 +240,7 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
   }, [tab]);
 
   const caps = studio.caps || DEFAULT_CAPS;
-  const tabs = useMemo(() => (doc ? boardTabsFor(doc, caps) : []), [doc, caps]);
+  const tabs = useMemo(() => (doc ? boardTabsFor(doc, caps, tab) : []), [doc, caps, tab]);
   const tabKey = tabs.map((t) => t.id).join('|');
   const { clip, measure } = useEdgeClip(stripRef, [tabKey, ff.width]);
 
@@ -297,7 +311,9 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
     return null;
   };
 
-  const gateCompact = rootSize.width > 0 ? rootSize.width < GATE_COMPACT_BELOW_PX : ff.widthClass === 'compact';
+  const gateCompact =
+    (rootSize.width > 0 ? rootSize.width < GATE_COMPACT_BELOW_PX : ff.widthClass === 'compact') ||
+    (rootSize.height > 0 ? rootSize.height < GATE_COMPACT_BELOW_H_PX : ff.heightClass === 'compact');
   const hideInactiveBadges = ff.width < TAB_BADGES_MIN_WIDTH;
   const mask = clip.start && clip.end ? FADE_MASK.both : clip.end ? FADE_MASK.end : clip.start ? FADE_MASK.start : '';
 
@@ -370,11 +386,13 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
           return reg ? <reg.Component studio={studio} /> : null;
         })()}
       </div>
-      {/* Timeline dock slot: the book timeline's own summary bar / strip (it hides itself in Read). */}
+      {/* Timeline dock slot: the book timeline's own summary bar / strip (collapsed below lg; not in Read). */}
       <div data-board-dock className="min-w-0 shrink-0 empty:hidden">
-        <DockBoundary>
-          <BookTimeline studio={studio} />
-        </DockBoundary>
+        {tab !== 'read' && (
+          <DockBoundary>
+            <BookTimeline studio={studio} />
+          </DockBoundary>
+        )}
       </div>
       {focused && <PageEditor studio={studio} doc={doc} pageId={focused} />}
     </div>

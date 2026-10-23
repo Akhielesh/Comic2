@@ -1,12 +1,16 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { pageSpecHash, type ComicDoc } from '../../../../shared/comic/doc';
 import { STYLE_PRESETS } from '../../../../shared/comic/stylePresets';
 import { FormatPanel, drawnCurrentPages, isStalingChange, redrawQuoteUsd } from './FormatPanel';
 import { StylePanel, presetOps } from './StylePanel';
 import { QualityPanel } from './QualityPanel';
-import { makeSampleDoc } from '../testing/fixtures';
+import { makeSampleDoc, resetUsageStatus, showDollarPrices } from '../testing/fixtures';
+
+// Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
+beforeEach(showDollarPrices);
+afterEach(resetUsageStatus);
 
 /** Sample doc where page 1 is drawn and current (its specHash matches). */
 const drawnDoc = (): ComicDoc => {

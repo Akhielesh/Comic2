@@ -119,17 +119,25 @@ export const usageSafeSpendText = (text: string, fmt: CostFormat): string => {
     .replace(/\.\.$/, '.');
 };
 
+/** This page already asked once (a failing endpoint must not be re-asked by every new card). */
+let askedForStatus = false;
+
 /** The live display context for the studio's user (subscribes to the shared usage status). */
 export const useCostContext = (studio: { byok?: boolean; caps?: Pick<StudioCaps, 'byok' | 'admin' | 'usage'> | null }): CostDisplayContext => {
   const [status, setStatus] = useState<AllowanceStatus | null>(() => getLastAllowanceStatus());
-  const own = !!(studio.byok || studio.caps?.byok);
+  // Own-key comics and admins never need the status: their prices are real dollars.
+  const skip = !!(studio.byok || studio.caps?.byok || studio.caps?.admin);
   useEffect(() => {
     const off = subscribeAllowanceStatus(setStatus);
-    // Event-driven, coalesced and skipped when fresh (the header meter usually read it already).
-    // Own-key comics never need it: their prices are real dollars.
-    if (!own) void refreshAllowanceStatus().catch(() => null);
+    setStatus(getLastAllowanceStatus()); // a status published between render and subscribe
+    // Read once when nobody has yet (coalesced; the header meter usually did). After that the shared
+    // store keeps it current — on focus and after a spend — so nothing here polls.
+    if (!skip && !askedForStatus && !getLastAllowanceStatus()) {
+      askedForStatus = true;
+      void refreshAllowanceStatus().catch(() => null);
+    }
     return off;
-  }, [own]);
+  }, [skip]);
   const caps = studio.caps;
   return useMemo(
     () => costContextFor(status, caps, studio.byok),

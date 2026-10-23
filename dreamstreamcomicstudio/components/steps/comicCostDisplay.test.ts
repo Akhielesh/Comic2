@@ -3,6 +3,8 @@ import type { ComicCostReport } from '../../shared/types/billing';
 import { DOLLAR_CONTEXT, costContextFromAllowance } from '../../services/costDisplay';
 import type { AllowanceStatus } from '../../services/usageAllowance';
 import {
+  aiUsageForExport,
+  artifactsForExport,
   comicCostView,
   costSummaryForExport,
   formatUsageShare,
@@ -124,5 +126,41 @@ describe('local estimate + export', () => {
     const governed = costSummaryForExport(summary, GOVERNED_CTX) as Record<string, unknown>;
     expect(JSON.stringify(governed)).not.toMatch(/cost"|usd|currency/i);
     expect(governed).toMatchObject({ estimatedArtifactCount: 3, byModel: { m: { tokens: 100 } }, byType: { image: { tokens: 150 } } });
+  });
+
+  const aiUsage = {
+    totalArtifacts: 1,
+    totalTokens: 150,
+    byModel: { m: { tokens: 150, cost: 0.25 } },
+    byStage: { s: { tokens: 150, cost: 0.25 } },
+    byType: { image: { tokens: 150, cost: 0.25 } },
+    artifacts: [
+      {
+        id: 'a1',
+        stage: 's',
+        type: 'image',
+        model: 'm',
+        promptChars: 40,
+        promptTokens: 100,
+        candidatesTokens: 50,
+        totalTokens: 150,
+        cost: { currency: 'USD', value: 0.25, isEstimated: true }
+      }
+    ]
+  };
+
+  it('aiUsageForExport keeps the report for admins and drops every dollar field for governed users', () => {
+    expect(aiUsageForExport(aiUsage, DOLLAR_CONTEXT)).toBe(aiUsage);
+    const governed = aiUsageForExport(aiUsage, GOVERNED_CTX) as typeof aiUsage;
+    expect(JSON.stringify(governed)).not.toMatch(/cost|usd|currency/i);
+    expect(governed).toMatchObject({ totalArtifacts: 1, totalTokens: 150, byModel: { m: { tokens: 150 } } });
+    expect(governed.artifacts[0]).toMatchObject({ id: 'a1', model: 'm', totalTokens: 150 });
+  });
+
+  it('artifactsForExport strips each record’s cost for governed users only', () => {
+    const records = [{ id: 'r1', model: 'm', cost: { currency: 'USD', value: 0.1, isEstimated: true } }, { id: 'r2', model: 'm' }];
+    expect(artifactsForExport(records, DOLLAR_CONTEXT)).toBe(records);
+    expect(artifactsForExport(records, GOVERNED_CTX)).toEqual([{ id: 'r1', model: 'm' }, { id: 'r2', model: 'm' }]);
+    expect(artifactsForExport(undefined, GOVERNED_CTX)).toBeUndefined();
   });
 });

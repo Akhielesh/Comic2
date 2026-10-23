@@ -15,7 +15,9 @@
 //    photo is in (the server only takes inbox paths that exist). An exact duplicate reuses the
 //    earlier upload (free); a photo the content rules refuse, or one that doesn't fit, gets an
 //    honest row (refs/UploadQueue) instead of a silent drop; an upload that keeps failing goes
-//    inline with the message as before — never lost. Removing a photo deletes its inbox copy.
+//    inline with the message as before — never lost. Removing a photo deletes the inbox copy it
+//    uploaded (a reused copy stays: it may belong to the other composer or to a failed message's
+//    "Try again").
 //    Up to 12 photos per message (REF_LIMITS.perMessageImages).
 //  - Quick-assign ("Who's this?"): tap a photo to say who it is — a cast member, a new
 //    character, a place or the art style — or "Assign all…" for several; the message sends
@@ -115,6 +117,8 @@ interface ComposerAttachment extends PendingAttachment {
   near?: boolean;
   /** Quick-assign: who/what this photo is (undefined = the director decides). */
   target?: AttachmentTarget;
+  /** Its row (failed / looks-the-same) was dismissed; the photo stays in the message. */
+  quiet?: boolean;
 }
 
 /** Photos still on their way in (Send waits for them). */
@@ -195,43 +199,6 @@ const readAs = (file: File, mode: 'dataUrl' | 'text'): Promise<string> =>
     if (mode === 'dataUrl') reader.readAsDataURL(file);
     else reader.readAsText(file);
   });
-
-/** Longest edge sent to the server (it stores uploads at ≤ 2048 px anyway). */
-const MAX_IMAGE_EDGE = 2048;
-/** Images under this size and edge go up untouched. */
-const SHRINK_ABOVE_BYTES = 1.5 * 1024 * 1024;
-
-/**
- * Downscale big photos before they travel in the message body (a 12 MB phone photo
- * becomes a ~1 MB WebP at 2048 px). Falls back to the original when the browser can't
- * decode/encode here, or when the result isn't smaller.
- */
-export const shrinkImage = async (file: File, original: string): Promise<{ dataUrl: string; mimeType: string } | null> => {
-  if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return null;
-  let bitmap: ImageBitmap | null = null;
-  try {
-    bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
-    if (scale >= 1 && file.size <= SHRINK_ABOVE_BYTES) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    let dataUrl = canvas.toDataURL('image/webp', 0.9);
-    let mimeType = 'image/webp';
-    if (!dataUrl.startsWith('data:image/webp')) {
-      dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-      mimeType = 'image/jpeg';
-    }
-    return dataUrl.length < original.length ? { dataUrl, mimeType } : null;
-  } catch {
-    return null;
-  } finally {
-    bitmap?.close?.();
-  }
-};
 
 /** Anything that claims to be a picture goes to the photo pipeline (which refuses SVG and friends honestly). */
 const isImageFile = (f: File) => f.type.toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '');
@@ -327,6 +294,45 @@ const errorInfo = (err: unknown): { kind: string; code: string; message: string;
     retryable: e.retryable === true || kind === 'network' || kind === 'server' || kind === 'rate_limit' || kind === 'connection_lost',
     aborted: e.name === 'AbortError' || kind === 'aborted'
   };
+};
+
+/** The progress ring over a photo chip: preparing / waiting (spinning), uploading (real %), checking. */
+const UploadRing: React.FC<{ name: string; state?: ComposerUploadState; progress?: number }> = ({ name, state, progress }) => {
+  const pct = Math.round(Math.max(0, Math.min(1, progress || 0)) * 100);
+  const determinate = state === 'uploading';
+  const checking = determinate && pct >= 95;
+  const label =
+    state === 'preparing' ? `Preparing ${name}` : state === 'queued' ? `Waiting to upload ${name}` : checking ? `Checking ${name}` : `Uploading ${name}`;
+  const r = 19;
+  const c = 2 * Math.PI * r;
+  const spin = !determinate || checking;
+  return (
+    <span
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      {...(determinate ? { 'aria-valuenow': pct } : {})}
+      className="absolute inset-0 grid place-items-center bg-black/25"
+    >
+      <svg viewBox="0 0 48 48" className={cx('h-9 w-9', spin && 'animate-spin motion-reduce:animate-none')} aria-hidden focusable="false">
+        <circle cx="24" cy="24" r={r} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="4" />
+        <circle
+          cx="24"
+          cy="24"
+          r={r}
+          fill="none"
+          stroke="#fff"
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={spin ? c * 0.72 : c * (1 - Math.max(0.06, pct / 100))}
+          transform="rotate(-90 24 24)"
+          className="transition-[stroke-dashoffset] duration-200 motion-reduce:transition-none"
+        />
+      </svg>
+    </span>
+  );
 };
 
 export interface StudioComposerProps {
@@ -497,7 +503,25 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
    * the inbox path once stored, and the abort handle. A photo is "alive" while it has an entry.
    */
   const runtime = useRef(
-    new Map<string, { file: File; name: string; blob?: Blob; hash?: string; inboxPath?: string; ctrl?: AbortController; attempts: number; preview?: string }>()
+    new Map<
+      string,
+      {
+        file: File;
+        name: string;
+        blob?: Blob;
+        hash?: string;
+        inboxPath?: string;
+        /**
+         * This composer stored that inbox copy itself. A REUSED copy (already waiting in the inbox, or
+         * the server's `duplicateOf`) may belong to the other composer or to a failed message's
+         * "Try again", so taking the photo out of this message must not delete it.
+         */
+        owned?: boolean;
+        ctrl?: AbortController;
+        attempts: number;
+        preview?: string;
+      }
+    >()
   );
   const prepQueue = useRef<string[]>([]);
   const preparingNow = useRef(false);
@@ -514,7 +538,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const addRow = useCallback((row: Omit<UploadItem, 'owner' | 'progress' | 'attempts'>) => {
     if (!mountedRef.current) return;
-    setRows((prev) => [...prev.filter((r) => r.id !== row.id), { owner: { kind: 'inbox' }, progress: 0, attempts: 0, ...row }].slice(-MAX_IMAGES));
+    const item: UploadItem = { owner: { kind: 'inbox' }, progress: 0, attempts: 0, ...row };
+    setRows((prev) => [...prev.filter((r) => r.id !== row.id), item].slice(-MAX_IMAGES));
   }, []);
 
   /** Drop the comic's inbox copy of a photo the user took out (the inbox also prunes itself after 24 h). */
@@ -626,6 +651,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           return;
         }
         rt.inboxPath = path;
+        rt.owned = !!stored && !res?.duplicateOf;
         patchAtt(id, { upload: 'done', inboxPath: path, progress: 1, near: !!stored && res?.notice?.kind === 'near_duplicate' });
       } catch (err) {
         if (!runtime.current.has(id)) return;
@@ -684,7 +710,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           }
           rt.preview = preview;
           // Already in this comic's inbox (added earlier, not sent yet): reuse that copy — free.
-          const known = img.hash ? refInboxOf(docRef.current || ({ refInbox: [] } as never)).find((r) => r.hash === img.hash) : undefined;
+          const inboxDoc = docRef.current;
+          const known = img.hash && inboxDoc ? refInboxOf(inboxDoc).find((r) => r.hash === img.hash) : undefined;
           if (known && !pathTaken(known.path, id)) {
             rt.inboxPath = known.path;
             patchAtt(id, { upload: 'done', inboxPath: known.path, progress: 1, previewUrl: preview, mimeType: img.mimeType });
@@ -804,7 +831,10 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const removeAttachment = (id: string) => {
     const rt = forget(id);
-    dropInboxCopy(rt?.inboxPath);
+    // Only the copy this composer uploaded: a reused inbox copy is someone else's to keep.
+    if (rt?.owned) dropInboxCopy(rt.inboxPath);
+    // Its "Who's this?" menu (or "Assign all" over fewer than two photos) has nothing left to point at.
+    setAssigning((cur) => (cur === id || (cur === 'all' && attachmentsRef.current.filter((a) => a.kind === 'image' && a.id !== id).length < 2) ? null : cur));
   };
 
   /** Retry a photo whose upload failed (it was going to go inline). */
@@ -812,7 +842,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     const rt = runtime.current.get(id);
     if (!rt?.blob) return;
     rt.attempts = 0;
-    patchAtt(id, { upload: 'queued', error: undefined, progress: 0 });
+    patchAtt(id, { upload: 'queued', error: undefined, progress: 0, quiet: false });
     uploadQueue.current.push(id);
     pumpUploads();
   };
@@ -831,6 +861,42 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     setAssigning(null);
   };
 
+  /** Rows under the photos: refused / didn't fit / couldn't read, plus failed or look-alike photos. */
+  const queueItems: UploadItem[] = [
+    ...rows,
+    ...attachments
+      .filter((a) => a.kind === 'image' && !a.quiet && (a.upload === 'failed' || a.near))
+      .map(
+        (a): UploadItem => ({
+          id: a.id,
+          name: a.name,
+          owner: { kind: 'inbox' },
+          progress: 0,
+          attempts: 0,
+          state: a.upload === 'failed' ? 'failed' : 'near_duplicate',
+          message: a.upload === 'failed' ? a.error || NETWORK_COPY : 'Looks the same as a photo you added earlier',
+          retryable: a.upload === 'failed' && !!runtime.current.get(a.id)?.blob && typeof studio.uploadRef === 'function',
+          ...(a.previewUrl ? { previewUrl: a.previewUrl } : {})
+        })
+      )
+  ];
+
+  /** The ✕ on a chip. The corner position lives on a wrapper: on touch, index.css's
+   *  `.tap-target { position: relative }` (unlayered, after the utilities) would override `absolute`
+   *  on the button itself and drop the ✕ into the flow under the thumbnail. */
+  const removeButton = (a: ComposerAttachment) => (
+    <span className="absolute -right-1.5 -top-1.5 flex" data-attachment-remove>
+      <button
+        type="button"
+        onClick={() => removeAttachment(a.id)}
+        aria-label={`Remove ${a.name}`}
+        className={`tap-target grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${SHADOW_SOFT} ${TRANSITION} hover:scale-105 coarse:h-6 coarse:w-6`}
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
+  );
+
   // ── Send ───────────────────────────────────────────────────────────────────
 
   const busyCount = attachments.filter((a) => a.kind === 'image' && isUploadBusy(a.upload)).length;
@@ -843,8 +909,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       // Photos in the comic's inbox travel by path; the rest (no uploader, failed) go inline.
       const uploaded = list.filter((a) => a.kind === 'image' && a.upload === 'done' && a.inboxPath);
       const inline = list.filter((a) => !uploaded.includes(a) && (a.kind === 'text' || !!a.dataUrl));
-      if (inline.length > MAX_ATTACHMENTS) {
-        showNotice(`Only ${MAX_ATTACHMENTS} files can go inside one message — retry the photos that didn’t upload, or remove some.`);
+      if (inline.length > MAX_ATTACHMENTS || inline.reduce((n, a) => n + a.dataUrl.length, 0) > MAX_PAYLOAD_CHARS) {
+        showNotice('That’s too much to carry inside one message — retry the photos that didn’t upload, or remove some.');
         return false;
       }
       const inboxPaths = uploaded.map((a) => a.inboxPath as string);
@@ -1020,12 +1086,13 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const showVoiceToggleInline = voiceOk && roomy;
   const iconBtn = 'grid h-8 w-8 shrink-0 place-items-center rounded-full coarse:h-11 coarse:w-11';
 
-  const chip = (id: ComposerPanel, label: React.ReactNode, title: string, extra?: string) => (
+  // The chip's accessible name is its visible text with a spoken prefix ("Format: 2:3 · 6p"), so
+  // voice-control users can say what they see; the title keeps the longer description.
+  const chip = (id: ComposerPanel, label: React.ReactNode, title: string, extra?: string, spoken?: string) => (
     <button
       type="button"
       aria-haspopup="dialog"
       aria-expanded={panel === id}
-      aria-label={title}
       title={title}
       disabled={!ready}
       onClick={() => setPanel((p) => (p === id ? null : id))}
@@ -1037,6 +1104,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         extra
       )}
     >
+      {spoken && <span className="sr-only">{spoken}: </span>}
       {label}
     </button>
   );
@@ -1077,13 +1145,14 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           presentation={inSheet ? 'bottom' : 'auto'}
           strategy="absolute"
         >
-          {panel === 'format' && <FormatPanel doc={doc} patch={studio.patch} byok={studio.byok} />}
+          {panel === 'format' && <FormatPanel doc={doc} patch={studio.patch} byok={studio.byok} caps={studio.caps} />}
           {panel === 'style' && (
             <StylePanel
               doc={doc}
               patch={studio.patch}
               act={studio.act}
               byok={studio.byok}
+              caps={studio.caps}
               onDone={() => setPanel(null)}
               onDescribeOwn={() => {
                 setText((prev) => (prev.trim() ? prev : 'Art style: '));
@@ -1092,7 +1161,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               }}
             />
           )}
-          {panel === 'quality' && <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} onDone={() => setPanel(null)} />}
+          {panel === 'quality' && <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} caps={studio.caps} onDone={() => setPanel(null)} />}
         </AdaptiveSheet>
       )}
 
@@ -1129,6 +1198,36 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         </div>
       </AdaptiveSheet>
 
+      {doc && (
+        <AdaptiveSheet
+          open={assigning !== null}
+          onClose={() => setAssigning(null)}
+          label={assigning === 'all' ? 'Who’s in these photos?' : 'Who’s in this photo?'}
+          title={assigning === 'all' ? 'Who’s in these photos?' : 'Who’s in this photo?'}
+          anchorRef={assigning === 'all' ? assignAllRef : assignAnchorRef}
+          placement="above"
+          align="start"
+          presentation={inSheet ? 'bottom' : 'auto'}
+          className="w-[min(18rem,calc(100vw-24px))] py-1"
+        >
+          {assigning !== null && (
+            <AssignMenu
+              doc={doc}
+              count={assigning === 'all' ? imageAttachments.length : 1}
+              value={
+                assigning === 'all'
+                  ? imageAttachments.every((a) => JSON.stringify(a.target ?? null) === JSON.stringify(imageAttachments[0]?.target ?? null))
+                    ? imageAttachments[0]?.target
+                    : undefined
+                  : attachments.find((a) => a.id === assigning)?.target
+              }
+              onPick={assignTo}
+              allowClear
+            />
+          )}
+        </AdaptiveSheet>
+      )}
+
       <div
         className={cx(
           `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`,
@@ -1164,58 +1263,109 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           </div>
         )}
 
+        {queueItems.length > 0 && (
+          <UploadQueue
+            className="mb-2"
+            items={queueItems}
+            onCancel={(id) => removeAttachment(id)}
+            onRetry={(id) => retryAttachment(id)}
+            onDismiss={(id) => {
+              // A row of a photo that is still in the message only hides (the photo stays);
+              // a row of a photo that never made it in simply goes.
+              if (runtime.current.has(id)) patchAtt(id, { near: false, error: undefined, quiet: true });
+              else setRows((prev) => prev.filter((r) => r.id !== id));
+            }}
+            onRemoveNew={(item) => removeAttachment(item.id)}
+          />
+        )}
+
         {attachments.length > 0 && (
-          <ul className="mb-2 flex flex-wrap gap-2 pt-1" aria-label="Attachments">
-            {attachments.map((a) => {
-              const uploading = a.kind === 'image' && a.upload === 'pending';
-              const pct = Math.round((a.progress || 0) * 100);
-              return (
-                <li key={a.id} className="relative">
-                  {a.kind === 'image' ? (
-                    <span className="relative block">
-                      <img src={a.dataUrl} alt={a.name} className={cx(`h-14 w-14 rounded-xl object-cover ${HAIRLINE}`, uploading && 'opacity-80')} />
-                      {uploading && (
-                        <span
-                          role="progressbar"
-                          aria-label={`Uploading ${a.name}`}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-valuenow={pct}
-                          className="absolute inset-x-1.5 bottom-1.5 h-1 overflow-hidden rounded-full bg-black/30"
-                        >
-                          <span className="block h-full rounded-full bg-white transition-[width] duration-200 motion-reduce:transition-none" style={{ width: `${Math.max(8, pct)}%` }} />
+          <div className="mb-2 min-w-0 pt-1">
+            <ul className="flex flex-wrap gap-2" aria-label="Attachments">
+              {attachments.map((a) => {
+                if (a.kind !== 'image') {
+                  return (
+                    <li key={a.id} className="relative">
+                      <div className={`flex h-14 max-w-[200px] items-center gap-2 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] pl-2.5 pr-3`}>
+                        <FileText className="h-5 w-5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[11px] font-medium text-[var(--ds-ink)]">{a.name}</span>
+                          <span className={`block text-[10px] ${MUTED}`}>
+                            {charCount(a.chars || 0)}
+                            {a.truncated ? ' · trimmed' : ''}
+                          </span>
                         </span>
-                      )}
-                    </span>
-                  ) : (
-                    <div className={`flex h-14 max-w-[200px] items-center gap-2 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] pl-2.5 pr-3`}>
-                      <FileText className="h-5 w-5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
-                      <span className="min-w-0">
-                        <span className="block truncate text-[11px] font-medium text-[var(--ds-ink)]">{a.name}</span>
-                        <span className={`block text-[10px] ${MUTED}`}>
-                          {charCount(a.chars || 0)}
-                          {a.truncated ? ' · trimmed' : ''}
-                        </span>
-                      </span>
-                    </div>
-                  )}
-                  {/* The corner position lives on a wrapper: on touch, index.css's `.tap-target { position: relative }`
-                      (unlayered, after the utilities) would override `absolute` on the button itself and drop the ✕
-                      into the flow under the thumbnail. */}
-                  <span className="absolute -right-1.5 -top-1.5 flex" data-attachment-remove>
+                      </div>
+                      {removeButton(a)}
+                    </li>
+                  );
+                }
+                const busy = isUploadBusy(a.upload);
+                const who = doc ? targetLabel(doc, a.target) : null;
+                return (
+                  <li key={a.id} className="relative w-14" data-upload={a.upload || 'inline'}>
+                    {/* Tapping the photo asks who it is (quick-assign, free). */}
                     <button
                       type="button"
-                      onClick={() => removeAttachment(a.id)}
-                      aria-label={`Remove ${a.name}`}
-                      className={`tap-target grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${SHADOW_SOFT} ${TRANSITION} hover:scale-105 coarse:h-6 coarse:w-6`}
+                      onClick={(e) => {
+                        assignAnchorRef.current = e.currentTarget;
+                        setAssigning((cur) => (cur === a.id ? null : a.id));
+                      }}
+                      disabled={!doc}
+                      aria-haspopup="menu"
+                      aria-expanded={assigning === a.id}
+                      aria-label={who ? `${a.name}: ${who}. Change who this is` : `${a.name}: who's this?`}
+                      title={who ? `${who} — tap to change` : 'Who’s this? Tap to say'}
+                      className={cx(
+                        `relative block h-14 w-14 overflow-hidden rounded-xl ${HAIRLINE} bg-[var(--ds-well)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50`,
+                        who && 'ring-2 ring-[#D97757]/45'
+                      )}
                     >
-                      <X className="h-3 w-3" />
+                      {a.previewUrl || a.dataUrl ? (
+                        <img src={a.previewUrl || a.dataUrl} alt={a.name} className={cx('h-full w-full object-cover', busy && 'opacity-75')} draggable={false} />
+                      ) : (
+                        <span className="studio-shimmer block h-full w-full" aria-hidden />
+                      )}
+                      {busy && <UploadRing name={a.name} state={a.upload} progress={a.progress} />}
+                      {a.upload === 'failed' && (
+                        <span className="absolute bottom-1 left-1 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-white shadow" title={a.error} aria-hidden>
+                          <AlertTriangle className="h-3 w-3" />
+                        </span>
+                      )}
                     </button>
+                    <span
+                      className={cx('mt-0.5 block w-14 truncate text-center text-[10px] leading-tight', who ? 'font-semibold text-[var(--ds-ink)]' : MUTED)}
+                      aria-hidden
+                    >
+                      {who || 'Who’s this?'}
+                    </span>
+                    {removeButton(a)}
+                  </li>
+                );
+              })}
+            </ul>
+            {(busyCount > 0 || imageAttachments.length >= 2) && (
+              <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                {busyCount > 0 && (
+                  <span role="status" aria-live="polite" className={`min-w-0 text-[11.5px] ${MUTED}`}>
+                    {busyCount === 1 ? 'Uploading 1 photo' : `Uploading ${busyCount} photos`} — Send waits until {busyCount === 1 ? 'it’s' : 'they’re'} in.
                   </span>
-                </li>
-              );
-            })}
-          </ul>
+                )}
+                {imageAttachments.length >= 2 && doc && (
+                  <button
+                    ref={assignAllRef}
+                    type="button"
+                    onClick={() => setAssigning((cur) => (cur === 'all' ? null : 'all'))}
+                    aria-haspopup="menu"
+                    aria-expanded={assigning === 'all'}
+                    className={`inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium text-[var(--ds-accent)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:px-3`}
+                  >
+                    <Users className="h-3.5 w-3.5" aria-hidden /> Assign all {imageAttachments.length} to…
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         <textarea
@@ -1284,8 +1434,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           </button>
           {voiceOk && (
             <>
-              {/* The shared dictation control keeps its desktop look; on touch its buttons get a 44 px height. */}
-              <span className="contents coarse:[&_button]:min-h-[44px]">
+              {/* The shared dictation control keeps its desktop look; on touch the mic and its settings caret are real 44 px targets. */}
+              <span className="contents coarse:[&_button]:min-h-[44px] coarse:[&_button]:min-w-[44px]">
                 <DictationButton
                   disabled={!ready || messageBusy}
                   onStart={() => {
@@ -1341,7 +1491,9 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                   {format?.pageCount ?? 6}p
                 </span>
               </>,
-              'Format: page shape, pages, panels, lettering'
+              'Format: page shape, pages, panels, lettering',
+              undefined,
+              'Format'
             )}
             {chip(
               'style',
@@ -1349,6 +1501,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 <Palette className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 <span className={cx('truncate', roomy ? 'max-w-[9rem]' : 'max-w-[5.5rem]')}>{styleName || 'Style'}</span>
               </>,
+              'Art style',
+              undefined,
               'Art style'
             )}
             {chip(
@@ -1358,7 +1512,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 {tierLabel}
               </>,
               'Quality and price per page',
-              roomy || panel === 'quality' ? undefined : 'hidden'
+              roomy || panel === 'quality' ? undefined : 'hidden',
+              'Quality'
             )}
           </div>
 
@@ -1379,7 +1534,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               onClick={submit}
               disabled={!canSend}
               aria-label="Send"
-              title={coarse ? 'Send' : 'Send (Enter)'}
+              title={uploadsBusy ? 'Waiting for your photos to finish uploading' : coarse ? 'Send' : 'Send (Enter)'}
               className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
             >
               <ArrowUp className="h-4 w-4" />

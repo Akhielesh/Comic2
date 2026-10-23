@@ -171,7 +171,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                 {docEntries.map(({ msg, draft }, i) => {
                   const item =
                     msg.role === 'user' ? (
-                      <UserBubble text={msg.text} attachments={msg.attachments} urlFor={studio.urlFor} />
+                      <UserBubble text={msg.text} attachments={msg.attachments} urlFor={studio.urlFor} studio={studio} />
                     ) : (
                       <AssistantMessage
                         msg={msg}

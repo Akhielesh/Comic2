@@ -10,15 +10,15 @@
 
 import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
-import { aspectFromSize, aspectMatches, estimateJobs, formatUsd, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { aspectFromSize, aspectMatches, estimateJobs, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { costFormatter, costFormatterFor, governCard, governDollars, type CostFormatter } from './costText.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
 import { billedLlm, newTextSpendTracker, noticeCard, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
 import { isProviderRefusal, looksLikeRefusal } from './llm.js';
-import { carriedImages, refIntentHint } from './refs/index.js';
+import { carriedImages, refIntentHint, unassignedImages, whoIsInTheseCard } from './refs/index.js';
 import {
-  REFUSAL_REPLY,
   composeTurnReply,
   detectNamedIp,
   drawIntentInContext,
@@ -26,7 +26,6 @@ import {
   openQuestionsLine,
   recapLine,
   reconcileReply,
-  refusalCard,
   retryNextSteps,
   runFailureLine,
   runOutcome,
@@ -34,7 +33,7 @@ import {
   userTurnCount,
   wantsRecap
 } from './replies.js';
-import { prefilterText } from './safety/index.js';
+import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { toolGroups } from './tools/index.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
@@ -62,8 +61,8 @@ RULES
 1. Capture first. Every concrete idea goes into the doc this turn through tools: brief, notes, cast (every look detail given), places, format, style. Never ask for what the user already said. Recurring animals, pets, sea creatures, toys, LEGO-style figures, vehicles, robots and key props are CAST too: upsert_character with kind (and count for a group). Vague group ("other animals")? Pick 2–3 that fit (lake + toddlers → three Ducklings, a Frog, a Bunny), name them, and let the user change them. Give everyone a drawable look.summary.
 2. Understand out loud. On early turns open with one line of what you understood ("Got it — a one-page watercolor storybook for toddlers: the baby by a lake with three ducklings, a frog and a bunny.").
 3. One question at a time (ask_user, 2–5 options, default first), only when something material is open (OPEN QUESTIONS). Put the price in options that spend.
-4. Plan before pixels: idea → style → plan_pages → pages → cover. Draw only after the user saw the plan, never in the turn you planned it (unless they said to skip review).
-5. FREE first. FREE tools cost nothing: use them for every edit they can do (text, line kinds, fonts, colors, balloons, page order, versions). When FREE or PAID could do it, do the FREE one and offer the PAID one with its price. Lettering is never fixed with a redraw.
+4. Plan before pixels: idea → style → plan_pages → pages → cover. Draw only after the user saw the plan, never in the turn you planned it (unless they said to skip review). A look: a FREE preset (set_style presetId, or suggest_presets/use_preset when offered) before paid style tests.
+5. FREE first. FREE tools cost nothing: use them for every edit they can do (text, line kinds, fonts, colors, balloons, page order, versions). When FREE or PAID could do it, do the FREE one and offer the PAID one with its price. Lettering is never fixed with a redraw — except in_art comics, where the words are painted in: say a text change there needs a PAID redraw.
 6. Money. Never call a PAID tool on a question, complaint or feedback — ask which fix, with prices. "Draw everything" = render_pages without pages (+ include_cover); it only draws what is missing and costs $0 when nothing is. redraw:true only when the user asked for another take. A spend may answer "Waiting for the user to approve ~$X": say the estimate in one line and stop — you cannot approve for them. Never claim something was drawn, saved, published or shared unless a tool result says so; drawing runs in the background ("on its way").
 7. Named characters and brands (Shin-chan, Baahubali, LEGO, Disney, Marvel…): warmly make an original homage — new name, distinct design, same spirit — say so once; never refuse silently.
 8. Brevity: at most 80 words, plain sentences, no headings or lists. Always at least one sentence, in the SAME message as your tool calls.
@@ -77,7 +76,7 @@ HOW TO USE TOOLS
 - Dialogue: read_pages, then edit_panel_text or set_line. A drawn page's art: edit_page; its script: revise_pages.
 
 ATTACHMENTS
-Images are numbered "Attached image 1, 2, …" (earlier unassigned images continue the numbering) and you can see them. Do what the user says they are for: a person or drawing for a character (upsert_character attachmentRefs — keep every photo of them), a look to follow (set_style), or a location (upsert_place). If unclear, ask ("Is this Maya, or a style to follow?"). Also write what you see into the look fields.
+Images are numbered "Attached image 1, 2, …" (earlier unassigned images continue the numbering) and you can see them. Do what the user says they are for: a person or drawing for a character (attach_refs — keep every photo of them), a look to follow (set_style), or a location (upsert_place). If unclear, ask ("Is this Maya, or a style to follow?"). Also write what you see into the look fields. A SAFETY, IP or CARE NOTE after the message is from the studio: follow it.
 
 The DOC SUMMARY below is the current truth — older messages may be out of date. Reply in the user's language.`;
 
@@ -120,8 +119,10 @@ export function summarizeDocForDirector(
   doc: ComicDoc,
   byok = false,
   extraLines: readonly string[] = [],
-  opts: { userText?: string; focus?: StudioFocus } = {}
+  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter } = {}
 ): string {
+  // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
+  const c = opts.cost ?? costFormatter();
   const b = doc.brief;
   const f = doc.format;
   const lines: string[] = [`DOC SUMMARY (rev ${doc.rev})`];
@@ -181,10 +182,10 @@ export function summarizeDocForDirector(
   const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
   const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
   lines.push(
-    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ≈ ${formatUsd(tierPagePrice(set.quality, byok))}/page, cover ≈ ${formatUsd(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${formatUsd(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? formatUsd(set.budgetUsd) : 'none'}`
+    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ${c.approx(tierPagePrice(set.quality, byok))}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
   );
-  lines.push(`Spend so far: ${formatUsd(doc.spend.totalUsd)}`);
-  if (doc.gate?.status === 'open') lines.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ≈ ${formatUsd(doc.gate.estimateUsd)} (${doc.gate.reason})`);
+  lines.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
+  if (doc.gate?.status === 'open') lines.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
   const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
   if (open) lines.push(open);
   const out = lines.join('\n');
@@ -193,7 +194,8 @@ export function summarizeDocForDirector(
 
 // ── Conversation window ──────────────────────────────────────────────────────
 
-const cardText = (card: Card): string => {
+/** One card as words for the model. Breakdown cards are live views: `doc` (when given) counts their pages. */
+const cardText = (card: Card, cardDoc?: ComicDoc): string => {
   switch (card.type) {
     case 'options':
       return `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}${card.answered?.length ? `; answered: ${card.answered.join(', ')}` : ''}]`;
@@ -203,6 +205,12 @@ const cardText = (card: Card): string => {
       return '[showed the cast]';
     case 'plan':
       return '[showed the page plan]';
+    case 'breakdown': {
+      const ids = card.pageIds?.length ? new Set(card.pageIds) : null;
+      const pages = cardDoc ? cardDoc.pages.filter((p) => !ids || ids.has(p.id)) : [];
+      const panels = pages.reduce((n, p) => n + p.panels.length, 0);
+      return cardDoc ? `[showed the page breakdown: ${pages.length} page${pages.length === 1 ? '' : 's'}, ${panels} panel${panels === 1 ? '' : 's'}]` : '[showed the page breakdown]';
+    }
     case 'gate':
       return '[asked the user to approve a spend]';
     case 'renders':
@@ -214,18 +222,18 @@ const cardText = (card: Card): string => {
   }
 };
 
-const messageText = (m: Msg): string => {
+const messageText = (m: Msg, doc?: ComicDoc): string => {
   const parts = [clip(m.text, 3000)];
   if (m.attachments?.length) parts.push(`[${m.attachments.length} image(s) attached]`);
-  for (const card of m.cards || []) parts.push(cardText(card));
+  for (const card of m.cards || []) parts.push(cardText(card, doc));
   return parts.filter(Boolean).join(' ');
 };
 
 /** The last messages as provider turns (consecutive same-role turns merged; starts with the user). */
-export function conversationForDirector(conversation: Msg[], window = HISTORY_WINDOW): ChatMessage[] {
+export function conversationForDirector(conversation: Msg[], window = HISTORY_WINDOW, doc?: ComicDoc): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const m of conversation.slice(-window)) {
-    const content = messageText(m);
+    const content = messageText(m, doc);
     if (!content) continue;
     const last = out[out.length - 1];
     if (last && last.role === m.role && typeof last.content === 'string') last.content = `${last.content}\n\n${content}`;
@@ -433,22 +441,24 @@ async function directorTurnBody(
   const tracker = newTextSpendTracker();
   const llm = billedLlm(ctx, { stage: 'chat', operation: 'comic.text.director', tracker });
   const byok = spendIsByok(ctx.keys);
+  const cost = costFormatterFor(ctx);
 
   const doc = session.doc;
   const { summary: memory } = parseMemory(doc.memory);
   const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   const system = [
     prompt,
-    summarizeDocForDirector(doc, byok, toolset.summaryLines, { userText, focus: input.focus }),
+    summarizeDocForDirector(doc, byok, toolset.summaryLines, { userText, focus: input.focus, cost }),
     memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : ''
   ]
     .filter(Boolean)
     .join('\n\n');
-  const history = conversationForDirector(doc.conversation.filter((m) => m.id !== userMsg.id), HISTORY_WINDOW - 1);
+  const history = conversationForDirector(doc.conversation.filter((m) => m.id !== userMsg.id), HISTORY_WINDOW - 1, doc);
   const imageParts = await loadTurnImages(ctx, images, attachments.length);
   let hint: string | undefined;
   try {
-    hint = images.length ? refIntentHint(userText, images.length) : undefined;
+    // With the doc: lower-case names and fuzzy cast matches resolve ("mya" → MAYA, "existing, 2 refs").
+    hint = images.length ? refIntentHint(userText, images.length, before) : undefined;
   } catch {
     hint = undefined;
   }
@@ -538,7 +548,9 @@ async function directorTurnBody(
         else {
           const actId = newId('act');
           const label = TOOL_ACTIVITY[call.name] ?? toolset.activity[call.name];
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: tool.cost === 'paid' ? 'image' : tool.cost });
+          // The badge follows THIS call: insert_page is free, but with write:true it runs the (paid) writer.
+          const badge = call.name === 'insert_page' && args.write === true ? 'text' : tool.cost === 'paid' ? 'image' : tool.cost;
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: badge });
           let committed = 0;
           const unsubscribe = session.subscribe((e) => {
             if (e.type === 'ops') committed += e.ops.length;
@@ -549,7 +561,7 @@ async function directorTurnBody(
             unsubscribe();
           }
           const ok = !/^(Error|Refused)\b/.test(output);
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok });
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok, cost: badge });
           turn.log.push({ tool: call.name, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
         if (!tool || malformed) turn.log.push({ tool: call.name, ok: false, cost: tool?.cost ?? 'free', result: output.slice(0, 400), ops: 0 });
@@ -579,8 +591,16 @@ async function directorTurnBody(
   if (refused) {
     if (failure) logger.info('comic_director_provider_refusal', { projectId: ctx.projectId, code: failure.code });
     failure = null;
-    text = REFUSAL_REPLY;
-    cards.push(refusalCard(newId('card'), () => newId('opt')));
+    // The safety module's one copy (safety.md §3.5): warm text + options, never a strike.
+    const redirect = REDIRECT_COPY.provider;
+    text = redirect.text;
+    cards.push({
+      type: 'options',
+      id: newId('card'),
+      question: 'How should we go on?',
+      choices: redirect.options.map((o) => ({ id: newId('opt'), label: o.label, reply: o.reply })),
+      allowCustom: true
+    });
   }
   if (failure) cards.push(noticeCard('error', failure.userMessage));
   if (!cancelled && !refused) {
@@ -603,6 +623,23 @@ async function directorTurnBody(
   if (cancelled && !text) text = 'Stopped.';
   // Early turns: a live recap card of what the studio understood (director.md §3.2).
   if (!cancelled && !failure && !refused && wantsRecap(before, after)) cards.unshift({ type: 'recap', id: newId('card') } as Card);
+  // refs.md §6.6: photos nobody was assigned are never left hanging — "Who's in these photos?" (free taps).
+  if (!cancelled && !refused && !turn.askedUser && images.length && !cards.some((c) => c.type === 'options')) {
+    try {
+      if (unassignedImages(after, images).length) {
+        const who = whoIsInTheseCard(after, images);
+        if (who) cards.push(who);
+      }
+    } catch (err) {
+      logger.warn('comic_director_refs_guard_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    }
+  }
+  // Governed users never read dollars, whoever wrote them (a template, or the model) — in the reply
+  // and on its cards (ask_user options carry prices the model writes; hosted job notices too).
+  if (cost.governed) {
+    if (text) text = governDollars(text, cost.view);
+    for (let i = 0; i < cards.length; i += 1) cards[i] = governCard(cards[i], cost.view);
+  }
   // Honest retry chips for renders this turn started that already failed.
   const run = runOutcome(after, turn);
   if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));

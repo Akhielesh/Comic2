@@ -15,9 +15,12 @@ import React, { useMemo, useState } from 'react';
 import { Layers } from 'lucide-react';
 import { renderTargetKey, variantFor, type AssetRef, type ComicDoc, type RenderState, type RenderTarget } from '../../../shared/comic/doc';
 import { versionList } from '../../../shared/comic/book';
-import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety';
+import { canServeToOwner, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import { ImageDevelop } from '../../studio/kit/streamMotion';
 import type { StudioController } from '../types';
+import { LibraryImage } from '../library/LibraryImage';
+import { EmptyArt, type EmptyArtVariant } from '../library/procedural/EmptyArt';
+import { useComicLibrary } from '../library/useComicLibrary';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { VersionStack } from '../timeline/VersionStack';
 import { TimelineDialog } from '../timeline/ui';
@@ -182,7 +185,9 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
   const corner = badges ? (
     <span className="pointer-events-none absolute left-1.5 top-1.5 z-[4] flex max-w-[calc(100%-0.75rem)] flex-wrap items-center gap-1 [&>*]:pointer-events-auto">{badges}</span>
   ) : null;
-  if (onClick && showImage) {
+  // A veiled image shows its own buttons (Show, Redraw safer…): the frame is never a button around them.
+  const veilStatus = asset ? safetyStatusOf(asset.safety, safety?.rating ?? 'PG-13') : 'unchecked';
+  if (onClick && showImage && veilStatus !== 'over_rating' && veilStatus !== 'blocked') {
     return (
       <button
         type="button"
@@ -218,6 +223,28 @@ export const FrameBadge: React.FC<{ children: React.ReactNode; tone?: 'warn' | '
     {children}
   </span>
 );
+
+// ── Empty states ─────────────────────────────────────────────────────────────
+
+/**
+ * Empty-state art (assets.md §12): the platform library's illustration for this variant and theme
+ * when one is published, over the free procedural line art (never blank, no layout shift).
+ */
+export const EmptyIllustration: React.FC<{ variant: EmptyArtVariant }> = ({ variant }) => {
+  const library = useComicLibrary();
+  const theme: 'light' | 'dark' = typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  const asset = library.empty(variant, theme);
+  const art = (
+    <span className="flex h-full w-full items-center justify-center text-[var(--ds-muted)]">
+      <EmptyArt variant={variant} />
+    </span>
+  );
+  return (
+    <span className="mx-auto block h-24 w-28" data-empty-illustration={variant}>
+      {asset ? <LibraryImage id={asset.id} alt="" sizes="112px" className="h-full w-full object-contain" fallback={art} /> : art}
+    </span>
+  );
+};
 
 // ── Versions ─────────────────────────────────────────────────────────────────
 

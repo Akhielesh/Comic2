@@ -1,20 +1,37 @@
 // Motion comic export — a "guided view" video of the comic for TikTok / Reels / Shorts.
 //
-// The camera opens on the cover, then for every drawn page shows the whole page for a
-// beat and glides panel to panel (using the vision pass's measured panel boxes when
-// available), popping each balloon in at reading speed, with a slow Ken Burns push on
-// every shot, and ends on a "Made with DreamStream" card. Everything runs in the
-// browser at no cost. Frames are a pure function of time (`drawFrame(ms)`), encoded
-// frame-by-frame with WebCodecs + mediabunny (MPL-2.0, unmodified) into MP4/H.264 —
-// faster than real time, identical on every run, fine in a background tab. Browsers
-// without WebCodecs fall back to recording the canvas in real time with MediaRecorder.
-// The timeline and camera math are pure (unit-tested); only the exporter touches the DOM.
+// The camera opens on the cover (with its overlay title when the cover is textless), shows the book's
+// plates as title cards (title page, "The End", back cover), and for every drawn page shows the whole
+// page for a beat and glides panel to panel (using the vision pass's measured panel boxes when
+// available), popping each balloon in at reading speed, with a slow Ken Burns push on every shot, and
+// ends on a "Made with DreamStream" card. Everything runs in the browser at no cost.
+//
+// Lettering is the shared engine's LetterPlans drawn by canvasDraw.ts (the board's own drawing), after
+// the exact faces loaded; the title card wraps with the script-aware wrapper (textLayout) and sets
+// ctx.direction, so a Telugu or Urdu edition reads right. Frames are a pure function of time
+// (`drawFrame(ms)`), encoded frame-by-frame with WebCodecs + mediabunny (MPL-2.0, unmodified) into
+// MP4/H.264 — faster than real time, identical on every run, fine in a background tab. Browsers without
+// WebCodecs fall back to recording the canvas in real time with MediaRecorder. The timeline and camera
+// math are pure (unit-tested); only the exporter touches the DOM.
 
-import type { Box, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
+import type { Box, ComicDoc, Page } from '../../../shared/comic/doc';
+import { bookSequence } from '../../../shared/comic/book';
+import { canServeToOwner } from '../../../shared/comic/safety';
+import { dirOf, sameLanguage } from '../../../shared/comic/languages';
+import { planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
+import { wrapLines } from '../../../shared/comic/textLayout';
 import { downloadBlob } from '../../../services/download';
 import { panelBoxesFor } from '../board/pageLayout';
-import { drawCanvasBalloons, ensureLetteringFonts, ExportError, fontFor, loadExportImage, planCanvasBalloons, type LoadedImage } from './rasterize';
-import { exportFileStem, type ExportProgress, type UrlFor } from './zipExport';
+import { plateLayout, type PlateKind } from '../timeline/plates';
+import { defaultLayerFactory, drawLetteringOnPage, drawSvgNodes } from './canvasDraw';
+import { coverTitleNodes } from './coverTitle';
+import { CANCELLED, ExportError } from './errors';
+import { exportFileStem } from './filenames';
+import { prepareExportFonts, titleFaceFor } from './fonts';
+import { drawPlate } from './plateDraw';
+import { loadExportImage, pageAspectFor, type LoadedImage } from './rasterize';
+import { localizedFor } from './sequence';
+import type { ExportProgress, UrlFor } from './zipExport';
 
 export type MotionAspect = '9:16' | '1:1' | '16:9';
 
@@ -25,7 +42,9 @@ export const MOTION_SIZES: Record<MotionAspect, { width: number; height: number 
 };
 
 export interface MotionShot {
-  kind: 'cover' | 'page' | 'panel' | 'outro';
+  kind: 'cover' | 'plate' | 'page' | 'panel' | 'outro';
+  /** Title page / "The End" / back cover card (kind 'plate'). */
+  plate?: PlateKind;
   pageId?: string;
   panelN?: number;
   /** Page-normalized region the camera frames (whole page for cover/page shots). */
@@ -51,7 +70,11 @@ export interface TimelineOptions {
   wordsPerMinute?: number;
   pageOverviewMs?: number;
   coverMs?: number;
+  /** Time on a title / end / back-cover card. */
+  plateMs?: number;
   outroMs?: number;
+  /** Include the book's plates as title cards (default true). */
+  plates?: boolean;
 }
 
 const FULL: Box = { x: 0, y: 0, w: 1, h: 1 };
@@ -61,8 +84,9 @@ const words = (text: string) => (text.match(/\S+/g) || []).length;
 export const readMs = (text: string, wpm = 210): number => Math.max(650, Math.round((words(text) * 60_000) / wpm));
 
 /**
- * The shot list. Overlay-lettered pages reveal their balloons panel by panel; in-art
- * pages (text is part of the drawing) simply hold each panel long enough to read.
+ * The shot list, in book order (cover → title card → pages → "The End" → back cover → outro).
+ * Overlay-lettered pages reveal their balloons panel by panel; in-art pages (text is part of the
+ * drawing) simply hold each panel long enough to read. Withheld (safety-blocked) art never appears.
  */
 export function buildMotionTimeline(doc: ComicDoc, opts: TimelineOptions = {}): MotionTimeline {
   const minPanel = opts.minPanelMs ?? 1800;
@@ -75,12 +99,20 @@ export function buildMotionTimeline(doc: ComicDoc, opts: TimelineOptions = {}): 
     shots.push({ ...shot, startMs: t });
     t += shot.durationMs;
   };
-
-  if (doc.cover.render.asset?.path) push({ kind: 'cover', box: FULL, durationMs: opts.coverMs ?? 2600, reveals: [], carried: [] });
-
   const overlay = doc.format.lettering === 'overlay';
-  for (const page of [...doc.pages].sort((a, b) => a.n - b.n)) {
-    if (page.render.status !== 'ready' || !page.render.asset?.path) continue;
+
+  for (const slot of bookSequence(doc, { audience: 'studio' })) {
+    if (slot.kind === 'cover') {
+      const a = doc.cover.render.asset;
+      if (a?.path && canServeToOwner(a)) push({ kind: 'cover', box: FULL, durationMs: opts.coverMs ?? 2600, reveals: [], carried: [] });
+      continue;
+    }
+    if (slot.kind === 'title' || slot.kind === 'end' || slot.kind === 'back_cover') {
+      if (opts.plates !== false) push({ kind: 'plate', plate: slot.kind, box: FULL, durationMs: opts.plateMs ?? 2400, reveals: [], carried: [] });
+      continue;
+    }
+    const page = slot.page;
+    if (!page || page.render.status !== 'ready' || !page.render.asset?.path || !canServeToOwner(page.render.asset)) continue;
     push({ kind: 'page', pageId: page.id, box: FULL, durationMs: overview, reveals: [], carried: [] });
     const boxes = panelBoxesFor(doc, page);
     const carried: string[] = [];
@@ -175,6 +207,8 @@ export const pickRecorderMime = (isSupported: (mime: string) => boolean): { mime
 
 export interface MotionExportOptions {
   aspect?: MotionAspect;
+  /** Export this edition of `doc` (localized here; the file name gets "-te"). Default: the doc as given. */
+  lang?: string;
   onProgress?: (progress: ExportProgress) => void;
   signal?: AbortSignal;
   download?: (blob: Blob, fileName: string) => void;
@@ -188,6 +222,8 @@ export interface MotionExportResult {
   skipped: string[];
   /** webcodecs = deterministic offline encode; realtime = MediaRecorder fallback. */
   engine: 'webcodecs' | 'realtime';
+  /** Set when a lettering face didn't load (the video may use a fallback face). */
+  notice?: string;
 }
 
 export const MOTION_FPS = 30;
@@ -195,32 +231,32 @@ export const MOTION_FPS = 30;
 const BG = '#0f0e0c';
 const ACCENT = '#D97757';
 
-/** Draw `text` centred, wrapped to `maxW`, starting at `y`; returns the y after the block. */
-const centeredText = (ctx: CanvasRenderingContext2D, text: string, cx: number, y: number, maxW: number, lineH: number): number => {
-  const out: string[] = [];
-  let line = '';
-  for (const word of text.split(/\s+/).filter(Boolean)) {
-    const next = line ? `${line} ${word}` : word;
-    if (ctx.measureText(next).width > maxW && line) {
-      out.push(line);
-      line = word;
-    } else line = next;
-  }
-  if (line) out.push(line);
-  out.forEach((l, i) => ctx.fillText(l, cx, y + i * lineH));
-  return y + out.length * lineH;
+/**
+ * Draw `text` centred, wrapped to `maxW` with the script-aware wrapper (graphemes, kinsoku, never a
+ * broken syllable), in the language's direction, starting at `y`; returns the y after the block.
+ */
+export const centeredText = (ctx: CanvasRenderingContext2D, text: string, lang: string, cx: number, y: number, maxW: number, lineH: number): number => {
+  if ('direction' in ctx) (ctx as CanvasRenderingContext2D & { direction: CanvasDirection }).direction = dirOf(lang);
+  ctx.textAlign = 'center';
+  const lines = wrapLines(text, lang, maxW, (s) => ctx.measureText(s).width);
+  lines.forEach((l, i) => ctx.fillText(l, cx, y + i * lineH));
+  return y + lines.length * lineH;
 };
 
 export async function exportMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: MotionExportOptions = {}): Promise<MotionExportResult> {
   if (typeof document === 'undefined') throw new ExportError('Video export runs in the browser.');
+  const book = localizedFor(doc, opts.lang);
   const size = MOTION_SIZES[opts.aspect || '9:16'];
   const canvas = document.createElement('canvas');
   canvas.width = size.width;
   canvas.height = size.height;
+  const lang = book.format.language || 'en';
+  canvas.setAttribute('lang', lang);
+  canvas.setAttribute('dir', dirOf(lang));
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new ExportError('This browser can’t draw video frames.');
 
-  const timeline = buildMotionTimeline(doc, opts.timeline);
+  const timeline = buildMotionTimeline(book, opts.timeline);
   const pageShots = timeline.shots.filter((s) => s.kind === 'page');
   if (!pageShots.length) throw new ExportError('Nothing to animate yet — draw at least one page first.');
 
@@ -228,31 +264,36 @@ export async function exportMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: Mot
   const skipped: string[] = [];
   const images = new Map<string, LoadedImage>();
   const load = async (key: string, url?: string) => {
-    if (!url) return;
+    if (!url || images.has(key)) return;
     try {
       images.set(key, await loadExportImage(url, opts.signal));
     } catch (err) {
-      if (opts.signal?.aborted) throw new ExportError('Export cancelled.');
-      skipped.push(`${key === 'cover' ? 'Cover' : `Page ${doc.pages.find((p) => p.id === key)?.n ?? '?'}`} (${(err as Error).message})`);
+      if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+      skipped.push(`${key === 'cover' ? 'Cover' : `Page ${book.pages.find((p) => p.id === key)?.n ?? '?'}`} (${(err as Error).message})`);
     }
   };
   try {
     opts.onProgress?.({ done: 0, total: 1, label: 'Loading pages…' });
-    await load('cover', doc.cover.render.asset ? urlFor(doc.cover.render.asset) : undefined);
+    const coverAsset = book.cover.render.asset;
+    const wantsCover = timeline.shots.some((s) => s.kind === 'cover' || s.plate === 'back_cover');
+    if (wantsCover && coverAsset && canServeToOwner(coverAsset)) await load('cover', urlFor(coverAsset));
     for (const shot of pageShots) {
-      const page = doc.pages.find((p) => p.id === shot.pageId)!;
+      const page = book.pages.find((p) => p.id === shot.pageId)!;
       await load(page.id, urlFor(page.render.asset));
     }
-    await ensureLetteringFonts();
-    const drawFrame = createFrameDrawer(doc, timeline, images, ctx, size);
-    const stem = `${exportFileStem(doc)}-motion-${(opts.aspect || '9:16').replace(':', 'x')}`;
+    const title = book.cover.title || book.brief.title || 'Untitled comic';
+    const face = titleFaceFor(lang);
+    const fonts = await prepareExportFonts([book], { extra: [{ id: face.id, weight: face.weight, text: title }] });
+    const drawFrame = createFrameDrawer(book, timeline, images, ctx, size, fonts.measure);
+    const suffix = opts.lang && !sameLanguage(opts.lang, doc.format?.language || 'en') ? opts.lang : undefined;
+    const stem = `${exportFileStem(book, suffix)}-motion-${(opts.aspect || '9:16').replace(':', 'x')}`;
 
     const encoded = (await encodeWithWebCodecs(canvas, drawFrame, timeline.totalMs, opts)) || (await recordRealtime(canvas, drawFrame, timeline.totalMs, opts));
     if (!encoded.blob.size) throw new ExportError('The video came out empty. Try again.');
     const fileName = `${stem}.${encoded.ext}`;
     (opts.download || downloadBlob)(encoded.blob, fileName);
     opts.onProgress?.({ done: timeline.totalMs, total: timeline.totalMs, label: 'Done' });
-    return { fileName, durationMs: timeline.totalMs, mimeType: encoded.blob.type, skipped, engine: encoded.engine };
+    return { fileName, durationMs: timeline.totalMs, mimeType: encoded.blob.type, skipped, engine: encoded.engine, ...(fonts.notice ? { notice: fonts.notice } : {}) };
   } finally {
     images.forEach((img) => img.release());
   }
@@ -264,34 +305,87 @@ interface Encoded {
   engine: MotionExportResult['engine'];
 }
 
+const newCanvas = (w: number, h: number): HTMLCanvasElement => {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  return c;
+};
+
 /** Frame renderer: a pure function of time over the loaded art. */
 function createFrameDrawer(
   doc: ComicDoc,
   timeline: MotionTimeline,
   images: Map<string, LoadedImage>,
   ctx: CanvasRenderingContext2D,
-  size: { width: number; height: number }
+  size: { width: number; height: number },
+  measure: Measure
 ): (ms: number) => void {
+  const lang = doc.format.language || 'en';
+  // Plans per page (planned once at the art's own aspect; frames only filter what is revealed).
+  const plansByPage = new Map<string, LetterPlan[]>();
+  const plansFor = (page: Page, art: LoadedImage): LetterPlan[] => {
+    let plans = plansByPage.get(page.id);
+    if (!plans) {
+      plans = doc.format.lettering === 'overlay' ? planLettering(doc, page, pageAspectFor(doc, page, art.width, art.height), measure) : [];
+      plansByPage.set(page.id, plans);
+    }
+    return plans;
+  };
   // A lettered copy of each page per revealed-balloon set (only rebuilt when it changes).
   const lettered = new Map<string, { key: string; canvas: HTMLCanvasElement }>();
   const letteredPage = (page: Page, visible: Set<string>): CanvasImageSource | undefined => {
     const art = images.get(page.id);
     if (!art) return undefined;
-    if (doc.format.lettering !== 'overlay' || !visible.size) return art.source;
-    const key = [...visible].sort().join('|');
+    const plans = plansFor(page, art).filter((p) => visible.has(p.lineId));
+    if (!plans.length) return art.source;
+    const key = plans.map((p) => p.lineId).sort().join('|');
     const cached = lettered.get(page.id);
     if (cached?.key === key) return cached.canvas;
-    const c = cached?.canvas || document.createElement('canvas');
-    c.width = art.width;
-    c.height = art.height;
-    const cx = c.getContext('2d')!;
-    cx.drawImage(art.source, 0, 0);
-    const measure = (text: string, fontPx: number, kind: LineKind) => {
-      cx.font = fontFor(kind, fontPx);
-      return cx.measureText(text).width;
-    };
-    drawCanvasBalloons(cx, planCanvasBalloons(doc, page, art.width, art.height, measure).filter((p) => visible.has(p.lineId)));
+    const c = cached?.canvas || newCanvas(art.width, art.height);
+    const cx = c.getContext('2d');
+    if (!cx) return art.source;
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.clearRect(0, 0, c.width, c.height);
+    cx.drawImage(art.source, 0, 0, c.width, c.height);
+    drawLetteringOnPage(cx, plans, { x: 0, y: 0, width: c.width, height: c.height }, { createLayer: defaultLayerFactory });
     lettered.set(page.id, { key, canvas: c });
+    return c;
+  };
+  // The cover, with its overlay title when the cover is textless (drawn once).
+  let coverSource: CanvasImageSource | undefined;
+  const cover = (): CanvasImageSource | undefined => {
+    if (coverSource) return coverSource;
+    const art = images.get('cover');
+    if (!art) return undefined;
+    const nodes = coverTitleNodes(doc, art.width / art.height, measure);
+    if (!nodes.length) return (coverSource = art.source);
+    const c = newCanvas(art.width, art.height);
+    const cx = c.getContext('2d');
+    if (!cx) return (coverSource = art.source);
+    cx.drawImage(art.source, 0, 0, c.width, c.height);
+    cx.save();
+    cx.scale(c.width / 1000, c.width / 1000);
+    drawSvgNodes(cx, nodes);
+    cx.restore();
+    return (coverSource = c);
+  };
+  // Plates as title cards, drawn once at a size that fits the frame.
+  const plates = new Map<PlateKind, HTMLCanvasElement | null>();
+  const plateSource = (kind: PlateKind): HTMLCanvasElement | null => {
+    if (plates.has(kind)) return plates.get(kind)!;
+    const layout = plateLayout(doc, kind);
+    const scale = Math.min(size.width / layout.width, size.height / layout.height);
+    const c = newCanvas(layout.width * scale, layout.height * scale);
+    const cx = c.getContext('2d');
+    if (!cx) {
+      plates.set(kind, null);
+      return null;
+    }
+    cx.scale(c.width / layout.width, c.width / layout.width);
+    const art = layout.art ? images.get('cover') : undefined;
+    drawPlate(cx, layout, art ? { source: art.source, width: art.width, height: art.height } : null);
+    plates.set(kind, c);
     return c;
   };
 
@@ -302,6 +396,7 @@ function createFrameDrawer(
     if (!img) return null;
     return cameraRect(shot.box, img.width, img.height, outAspect, shot.kind === 'panel' ? 0.06 : 0.02);
   };
+  const face = titleFaceFor(lang);
 
   return (ms: number) => {
     ctx.fillStyle = BG;
@@ -313,10 +408,10 @@ function createFrameDrawer(
     const progress = local / shot.durationMs;
 
     if (shot.kind === 'outro') {
-      ctx.textAlign = 'center';
       ctx.fillStyle = '#f4f1ea';
-      ctx.font = `700 ${Math.round(size.width * 0.07)}px "Bangers", Impact, sans-serif`;
-      const end = centeredText(ctx, doc.brief.title || 'Untitled comic', size.width / 2, size.height * 0.42, size.width * 0.84, size.width * 0.08);
+      ctx.font = face.font(Math.round(size.width * 0.07));
+      const end = centeredText(ctx, doc.cover.title || doc.brief.title || 'Untitled comic', lang, size.width / 2, size.height * 0.42, size.width * 0.84, size.width * 0.08);
+      if ('direction' in ctx) (ctx as CanvasRenderingContext2D & { direction: CanvasDirection }).direction = 'ltr';
       ctx.fillStyle = ACCENT;
       ctx.font = `600 ${Math.round(size.width * 0.032)}px Inter, system-ui, sans-serif`;
       ctx.fillText('Made with DreamStream Comic Studio', size.width / 2, end + size.width * 0.05);
@@ -326,18 +421,33 @@ function createFrameDrawer(
       return;
     }
 
+    if (shot.kind === 'plate' && shot.plate) {
+      const plate = plateSource(shot.plate);
+      if (!plate) return;
+      // A slow push-in on the card, centred, with a fade in.
+      const s = 1 + 0.03 * Math.min(1, Math.max(0, progress));
+      const w = plate.width * s;
+      const h = plate.height * s;
+      ctx.drawImage(plate, (size.width - w) / 2, (size.height - h) / 2, w, h);
+      if (local < 350) {
+        ctx.fillStyle = `rgba(15,14,12,${1 - local / 350})`;
+        ctx.fillRect(0, 0, size.width, size.height);
+      }
+      return;
+    }
+
     const key = shot.kind === 'cover' ? 'cover' : shot.pageId!;
     const page = shot.pageId ? doc.pages.find((p) => p.id === shot.pageId) : undefined;
     const visible = new Set<string>(shot.carried);
     shot.reveals.forEach((r) => local >= r.atMs && visible.add(r.lineId));
-    const source = shot.kind === 'cover' ? images.get('cover')?.source : page ? letteredPage(page, visible) : undefined;
+    const source = shot.kind === 'cover' ? cover() : page ? letteredPage(page, visible) : undefined;
     const target = rectFor(shot);
     if (!source || !target) return;
 
     // Glide from the previous shot's frame on the same image, then push in slowly.
     const prev = timeline.shots[index - 1];
     const prevKey = prev ? (prev.kind === 'cover' ? 'cover' : prev.pageId) : undefined;
-    const prevRect = prev && prevKey === key ? rectFor(prev) : null;
+    const prevRect = prev && prevKey === key && prev.kind !== 'plate' ? rectFor(prev) : null;
     const glide = Math.min(1, local / 450);
     let rect = prevRect ? lerpRect(kenBurns(prevRect, 1, 0.04), target, easeInOut(glide)) : target;
     rect = kenBurns(rect, progress, shot.kind === 'panel' ? 0.04 : 0.025);
@@ -371,7 +481,7 @@ async function encodeWithWebCodecs(
   const frames = Math.max(1, Math.ceil((totalMs / 1000) * MOTION_FPS));
   try {
     for (let f = 0; f < frames; f += 1) {
-      if (opts.signal?.aborted) throw new ExportError('Export cancelled.');
+      if (opts.signal?.aborted) throw new ExportError(CANCELLED);
       drawFrame((f * 1000) / MOTION_FPS);
       await source.add(f / MOTION_FPS, 1 / MOTION_FPS);
       if (f % 15 === 0) opts.onProgress?.({ done: f, total: frames, label: `Rendering video… ${Math.round((f / frames) * 100)}%` });
@@ -409,7 +519,7 @@ async function recordRealtime(
   try {
     await new Promise<void>((resolve, reject) => {
       const tick = () => {
-        if (opts.signal?.aborted) return reject(new ExportError('Export cancelled.'));
+        if (opts.signal?.aborted) return reject(new ExportError(CANCELLED));
         const ms = performance.now() - startedAt;
         drawFrame(Math.min(ms, totalMs - 1));
         opts.onProgress?.({ done: Math.min(ms, totalMs), total: totalMs, label: `Recording… ${Math.round((ms / totalMs) * 100)}% (keep this tab open)` });

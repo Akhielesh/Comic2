@@ -75,7 +75,7 @@ export function editorLayoutFor(ff: LayoutInput): EditorLayout {
   }
   const portrait = ff.orientation === 'portrait' || h > w;
   if (portrait && (w < EDITOR_INSET_MIN_WIDTH || ff.coarse)) {
-    return { kind: 'tablet-portrait', tools: 'sheet', toolbar: 'top', toolsWidth: 0, fullBleed: w < EDITOR_INSET_MIN_WIDTH || ff.coarse, compactInspector: false, filmstrip: 'stage' };
+    return { kind: 'tablet-portrait', tools: 'sheet', toolbar: 'top', toolsWidth: 0, fullBleed: w < EDITOR_INSET_MIN_WIDTH || ff.coarse, compactInspector: false, filmstrip: 'tools' };
   }
   return { kind: 'desktop', tools: 'aside', toolbar: 'top', toolsWidth: w >= 1200 ? ASIDE_W_LARGE : ASIDE_W, fullBleed: w < EDITOR_INSET_MIN_WIDTH, compactInspector: false, filmstrip: 'stage' };
 }
@@ -269,9 +269,16 @@ export function swipeTurn(dx: number, dy: number, rtl = false): -1 | 0 | 1 {
 export const coveredByBottomSheet = (stageBottom: number, sheetTop: number): number =>
   Number.isFinite(stageBottom) && Number.isFinite(sheetTop) ? Math.max(0, Math.round(stageBottom - sheetTop)) : 0;
 
-/** Is a selection rect (viewport px) outside the visible stage rect? (then the zoom resets to fit). */
-export const selectionOutOfView = (sel: { top: number; bottom: number; left: number; right: number } | null, view: { top: number; bottom: number; left: number; right: number } | null): boolean =>
-  !!sel && !!view && (sel.bottom > view.bottom + 1 || sel.top < view.top - 1 || sel.right > view.right + 1 || sel.left < view.left - 1);
+/**
+ * Is a selection (viewport px) out of the visible stage? Judged by its centre, so a big balloon that
+ * merely overhangs a zoomed view (the user zoomed in on it) is not "lost".
+ */
+export const selectionOutOfView = (sel: { top: number; bottom: number; left: number; right: number } | null, view: { top: number; bottom: number; left: number; right: number } | null): boolean => {
+  if (!sel || !view) return false;
+  const cx = (sel.left + sel.right) / 2;
+  const cy = (sel.top + sel.bottom) / 2;
+  return cx < view.left || cx > view.right || cy < view.top || cy > view.bottom;
+};
 
 /** localStorage: the one-time touch coach mark was dismissed ('1'). */
 export const COACH_KEY = 'cs.coach.editor';

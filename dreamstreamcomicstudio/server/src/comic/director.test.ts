@@ -12,6 +12,8 @@ import { lakeBriefDoc, lakeDrawnDoc } from './golden/fixtures.js';
 import { JOB_TIMINGS } from './jobs.js';
 import { fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { StudioError } from './types.js';
+import { costFormatter, costViewFor } from './costText.js';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 
 beforeEach(() => {
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -173,8 +175,9 @@ describe('runDirectorTurn', () => {
     await runDirectorTurn(ctx, { text: 'This is Maya', attachments: [attachment] });
     const userTurn = llm.calls[0].messages[llm.calls[0].messages.length - 1];
     expect(userTurn.role).toBe('user');
+    // The refs package's software hint rides the user turn (refIntentHint WITH the doc: Maya isn't cast yet → "new").
     expect(userTurn.content).toEqual([
-      { type: 'text', text: 'This is Maya' },
+      { type: 'text', text: 'This is Maya\n\nREF HINT: (software, may be wrong) image 1 → MAYA (new).' },
       { type: 'text', text: 'Attached image 1:' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,UEhPVE8=' } }
     ]);
@@ -630,3 +633,45 @@ describe('never silent across 30 fake turns', () => {
     expect(empty).toEqual([]);
   });
 });
+
+describe('P2-SERVER director wiring', () => {
+  it('photos the turn left unassigned get "Who is in this photo?" (free taps), never silence', async () => {
+    const session = newSession(plannedDoc());
+    const attachment = { path: 'u/user-1/p/proj-1/ref/up-9.webp', source: 'upload' as const, at: 1 };
+    const llm = scriptedLlm({ director: [{ text: 'Nice photo!' }] });
+    const ctx = testContext(session, { llm });
+    ctx.assetsFake.files.set(attachment.path, 'data:image/png;base64,UEhPVE8=');
+    await runDirectorTurn(ctx, { text: 'look at this', attachments: [attachment] });
+    const reply = session.doc.conversation.at(-1)!;
+    expect(reply.text).toBe('Nice photo!');
+    const who = reply.cards?.find((c) => c.type === 'options');
+    expect(who).toMatchObject({ type: 'options', question: 'Who or what is in this photo?' });
+    expect((who as { choices: { label: string }[] }).choices.map((c) => c.label)).toEqual(expect.arrayContaining(['MAYA', 'ARJUN', 'Someone new']));
+  });
+
+  it('a breakdown card in the history reads as its page and panel count; the summary words prices as usage for governed users', () => {
+    const doc = plannedDoc();
+    const history: Msg[] = [
+      { id: 'u1', role: 'user', text: 'show me', at: 1 },
+      { id: 'a1', role: 'assistant', text: 'Here.', at: 2, cards: [{ type: 'breakdown', id: 'b1', view: 'plan', cover: true }] }
+    ];
+    expect(JSON.stringify(conversationForDirector(history, HISTORY_WINDOW, doc))).toContain('[showed the page breakdown: 3 pages, 9 panels]');
+    const governed = summarizeDocForDirector(doc, false, [], { cost: costFormatter(costViewFor({ ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } })) });
+    expect(governed).not.toMatch(/\$/);
+    expect(governed).toMatch(/% of your usage\/page/);
+    expect(governed).toContain("never in dollars");
+    // Admins (or no caps at all) read prices.
+    expect(summarizeDocForDirector(doc, false)).toMatch(/≈ \$\d+\.\d\d\/page/);
+  });
+
+  it('a governed user never reads a dollar amount in the reply, even when the model writes one', async () => {
+    const session = newSession(plannedDoc());
+    const llm = scriptedLlm({ director: [{ text: 'A new page costs about $0.08.' }] });
+    const caps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } };
+    await runDirectorTurn(testContext(session, { llm, caps }), { text: 'how much is a page?', attachments: [] });
+    const reply = session.doc.conversation.at(-1)!;
+    expect(reply.text).not.toMatch(/\$/);
+    expect(reply.text).toMatch(/^A new page costs about ≈?<?[\d.]+% of your usage\.$/);
+  });
+});
+

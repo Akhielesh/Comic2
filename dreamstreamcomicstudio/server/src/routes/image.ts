@@ -271,6 +271,20 @@ export const assertImageModelAllowed = (access: ImageModelAccess, requestedModel
 export const freeDailyCapApplies = (reservation: Pick<ReservationState, 'byokBypass' | 'governed' | 'walletSkipped'>): boolean =>
   !reservation.byokBypass && !reservation.governed && !reservation.walletSkipped;
 
+/**
+ * The `usage` block a legacy image response carries. Governed users never see dollars for their
+ * usage (P1-LIMITS), so the provider-reported cost is left out of THEIR response (settle still
+ * records it); admins, exempt accounts and own-key calls keep the full block.
+ */
+export const publicImageUsage = <T extends { providerCostUsd?: number }>(
+  usage: T,
+  reservation: Pick<ReservationState, 'governed'>
+): T | Omit<T, 'providerCostUsd'> => {
+  if (!reservation.governed) return usage;
+  const { providerCostUsd: _cost, ...rest } = usage;
+  return rest;
+};
+
 // ── Metering around a provider image call ───────────────────────────────────────────────────────
 // The provider call IS the spend. When it fails, the hold is released (nothing was spent). Once it
 // succeeded the spend is real and is SETTLED — even when storing the image afterwards fails —
@@ -893,7 +907,7 @@ imageRouter.post('/openrouter', async (req, res, next) => {
         mimeType,
         prompt,
         model: generated.model,
-        usage,
+        usage: publicImageUsage(usage, reserve.reservation),
         timings: buildTimings(apiMs),
         ...(downgradedFrom ? { modelDowngrade: { from: downgradedFrom, to: effectiveModel, reason: downgradeReason } } : {})
       };
@@ -1074,7 +1088,7 @@ imageRouter.post('/nvidia', async (req, res, next) => {
         mimeType,
         prompt,
         model: generated.model,
-        usage,
+        usage: publicImageUsage(usage, reserve.reservation),
         timings: buildTimings(apiMs)
       };
 

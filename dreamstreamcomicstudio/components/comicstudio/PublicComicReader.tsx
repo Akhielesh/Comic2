@@ -26,9 +26,10 @@ import { Skeleton } from '../studio/kit/Shimmer';
 import { GhostButton, IconButton, cx } from './board/ui';
 import { aspectNumber } from './board/balloonGeometry';
 import { ReaderLanguagePicker } from './i18n/ReaderLanguagePicker';
-import { nextLanguage, useReaderLanguage } from './i18n/readerLanguage';
+import { nextLanguage, readStoredReaderLang, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
 import { readerString } from './i18n/readerStrings';
 import { ImmersiveReader } from './immersive/ImmersiveReader';
+import { EmptyArt } from './library/procedural/EmptyArt';
 import { useFormFactor } from './mobile/useFormFactor';
 import { ComicReaderView, ReaderMenu, type ReaderMenuItem } from './reader/ComicReaderView';
 import { ReaderCoverCard } from './reader/ReaderCoverCard';
@@ -135,7 +136,13 @@ const ReaderShell: React.FC<ShellProps> = ({
   const ff = useFormFactor();
   const urlFor = useMemo(() => urlForMap(urls), [urls]);
   const published = mode === 'slug' ? publication?.languages : undefined;
-  const L = useReaderLanguage({ doc, published, persist: mode === 'slug' });
+  // A share link without ?lang= means the author's default edition (buildShareUrl drops lang when it
+  // equals the default) — for a first-time reader; a returning reader keeps their own choice.
+  const [linkHasLang] = useState(() => !!readUrlLang());
+  const [hasStoredLang] = useState(() => !!readStoredReaderLang());
+  const authorDefault = mode === 'slug' && !linkHasLang && !hasStoredLang ? publication?.defaultLang || boot?.lang : undefined;
+  const langEnv = useMemo(() => (authorDefault ? { search: `?lang=${encodeURIComponent(authorDefault)}` } : undefined), [authorDefault]);
+  const L = useReaderLanguage({ doc, published, persist: mode === 'slug', env: langEnv });
   const lang = L.lang;
   const t = useCallback((key: Parameters<typeof readerString>[1]) => readerString(lang, key), [lang]);
   const localized = L.localized;
@@ -171,10 +178,14 @@ const ReaderShell: React.FC<ShellProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canTrack, status]);
   const lastPageN = useMemo(() => (doc ? Math.max(0, ...readerItems(doc).map((i) => i.page?.n ?? 0)) : 0), [doc]);
+  // "Complete" means read through to the end: a link that opens on the last page (?p=, the author's
+  // start page) only counts once the reader has been on an earlier page too.
+  const readEarlier = useRef(false);
   const onPageChange = useCallback(
     (n: number) => {
       setPage(n);
-      if (canTrack && lastPageN > 0 && n >= lastPageN) track!('complete', lang);
+      if (n < lastPageN) readEarlier.current = true;
+      else if (canTrack && lastPageN > 0 && readEarlier.current) track!('complete', lang);
     },
     [canTrack, lastPageN, track, lang]
   );
@@ -182,23 +193,28 @@ const ReaderShell: React.FC<ShellProps> = ({
   // ── The `L` key switches language (not while typing or inside the immersive reader) ──
   useEffect(() => {
     const slot = L.slot;
-    if (!slot || immersive) return;
+    if (!slot) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'l' && e.key !== 'L') return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      // Works in the immersive reader too, but never inside another dialog (the report form) or an open list.
+      const dialog = el?.closest?.('[role="dialog"]');
+      if (dialog && dialog.getAttribute('data-testid') !== 'immersive-reader') return;
+      if (el?.closest?.('[role="listbox"],[role="menu"]')) return;
       const next = nextLanguage(slot.options, slot.current);
       if (next) slot.onChange(next);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [L.slot, immersive]);
+  }, [L.slot]);
 
   // ── Share link (canonical, read-only; carries the reader's language) ──
   const shareUrl = useMemo(() => {
     if (mode !== 'slug' || !slug || !SLUG_RE.test(slug)) return undefined;
-    return buildShareUrl(COMICS_ORIGIN, slug, sameLanguage(lang, source) ? {} : { lang }, { defaultLang: publication?.defaultLang, startPage: publication?.startPage ?? null });
+    const linkDefault = publication?.defaultLang || source;
+    return buildShareUrl(COMICS_ORIGIN, slug, sameLanguage(lang, linkDefault) ? {} : { lang }, { defaultLang: publication?.defaultLang, startPage: publication?.startPage ?? null });
   }, [mode, slug, lang, source, publication?.defaultLang, publication?.startPage]);
   const embedOpenHref = slug && SLUG_RE.test(slug) ? `${COMICS_ORIGIN}${SHARE_PATH(slug)}` : COMICS_ORIGIN;
 
@@ -320,7 +336,12 @@ const ReaderShell: React.FC<ShellProps> = ({
           {rating && !compact && <RatingBadge rating={rating} />}
           {L.slot && <ReaderLanguagePicker {...L.slot} source={source} compact={compact} />}
           {shareUrl && (
-            <div onClickCapture={onShareClick}>
+            <div
+              onClickCapture={(e) => {
+                // One share event per share: the trigger, not each item of its fallback menu.
+                if ((e.target as HTMLElement).closest?.('button[aria-haspopup]')) onShareClick();
+              }}
+            >
               <ShareButton compact target={{ url: shareUrl, title, text: logline || undefined, coverUrl: boot?.card.coverUrl }} />
             </div>
           )}
@@ -337,6 +358,10 @@ const ReaderShell: React.FC<ShellProps> = ({
       mode === 'slug' ? (
         <div className="flex h-full items-center justify-center p-6">
           <div role="alert" className="max-w-md rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6 text-center shadow-sm">
+            {/* Procedural art only: a dead link must never wake the backend for decoration. */}
+            <div className="mb-2 flex justify-center">
+              <EmptyArt variant="reader" />
+            </div>
             <p className="text-[15px] font-semibold text-[var(--ds-ink)]">This link isn’t active</p>
             <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--ds-muted)]">The creator may have turned this link off.</p>
             {!embed && (
@@ -352,6 +377,9 @@ const ReaderShell: React.FC<ShellProps> = ({
       ) : (
         <div className="flex h-full items-center justify-center p-6">
           <div role="alert" className="max-w-md rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6 text-center shadow-sm">
+            <div className="mb-2 flex justify-center">
+              <EmptyArt variant="reader" />
+            </div>
             <p className="text-[15px] font-semibold text-[var(--ds-ink)]">This comic isn’t available</p>
             <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--ds-muted)]">{errorMessage}</p>
             {onClose && (
@@ -368,6 +396,9 @@ const ReaderShell: React.FC<ShellProps> = ({
     main = (
       <div className="flex h-full items-center justify-center p-6">
         <div role="alert" className="max-w-md rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6 text-center shadow-sm">
+          <div className="mb-2 flex justify-center">
+            <EmptyArt variant="reader" />
+          </div>
           <p className="text-[15px] font-semibold text-[var(--ds-ink)]">Couldn’t open this comic</p>
           <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--ds-muted)]">{errorMessage || 'Check your connection and try again.'}</p>
           <div className="mt-4 flex justify-center gap-2">
@@ -428,7 +459,8 @@ const ReaderShell: React.FC<ShellProps> = ({
               }
             : undefined
         }
-        rating={embed ? rating : undefined}
+        // The header carries the badge from tablet width up; phones and embeds show it in the toolbar.
+        rating={embed || compact ? rating : undefined}
         onImageError={onImageError}
         toolbarExtra={
           embed ? (
@@ -436,9 +468,11 @@ const ReaderShell: React.FC<ShellProps> = ({
               href={embedOpenHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-xl px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-xl px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-[44px]"
             >
-              <ExternalLink className="h-3.5 w-3.5" aria-hidden /> <span className="max-[360px]:sr-only">Open on DreamStream</span>
+              {/* Icon-only in a narrow frame (the name stays for screen readers). Measured in JS: this
+                  app's raw `screens` disable Tailwind's max-[…] variants (they emit nothing). */}
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden /> <span className={cx(ff.width > 0 && ff.width <= 400 && 'sr-only')}>Open on DreamStream</span>
             </a>
           ) : undefined
         }
@@ -464,7 +498,18 @@ const ReaderShell: React.FC<ShellProps> = ({
       data-embed={embed ? 'true' : undefined}
     >
       {header}
-      <main className="relative min-h-0 flex-1" style={embed ? { paddingTop: 'var(--sa-top)' } : undefined}>
+      <main
+        className="relative min-h-0 flex-1"
+        style={
+          embed
+            ? { paddingTop: 'var(--sa-top)' }
+            : // The inline reader's toolbar and page edges stay clear of a landscape notch (the cover
+              // card's room runs edge to edge and centres its own content).
+              view === 'inline' && status === 'ready'
+              ? { paddingLeft: 'var(--sa-left)', paddingRight: 'var(--sa-right)' }
+              : undefined
+        }
+      >
         {main}
         {notice && (
           <p role="status" className="absolute inset-x-3 bottom-3 z-30 mx-auto flex w-fit max-w-[calc(100%-24px)] items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] py-1 pl-3 pr-1 text-[12px] text-[var(--ds-ink)] shadow-sm backdrop-blur-md">

@@ -57,6 +57,13 @@ describe('drawIntentOf', () => {
     ['how much would it cost to draw all pages?', 'none'],
     ["don't draw anything yet", 'none'],
     ['make it in watercolor storybook style', 'explicit'],
+    // Golden set (P2-SERVER): "make" + a free lettering/script edit is not a draw request.
+    ['make the shouts red', 'none'],
+    ['make the text a bit bigger', 'none'],
+    ['make it funnier', 'none'],
+    ['make the ending happier', 'none'],
+    ['make the text bigger and redraw page 2', 'redraw'],
+    ['make the captions bold and draw the cover', 'explicit'],
     ['who is in the story?', 'none'],
     ['', 'none']
   ])('%s → %s', (text, want) => {

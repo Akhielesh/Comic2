@@ -87,6 +87,12 @@ export const COMPLAINT_RE =
 
 export type DrawIntent = 'explicit' | 'redraw' | 'none';
 
+/** "make <the lettering / the words / the story> <different>" — edits the FREE tools do. */
+const FREE_EDIT_MAKE_RE =
+  /\bmake (?:all |every |each )?(?:the |my |our |his |her |their )?(?:text|fonts?|letters?|lettering|balloons?|bubbles?|captions?|shouts?|whispers?|thoughts?|sfx|sound effects?|dialogue|dialog|lines?|words?|title|speech|story|script|plot|ending|tone)\b|\bmake (?:it|this|that|them|him|her) (?:a (?:bit|little) )?(?:funnier|sillier|shorter|longer|scarier|spookier|sadder|happier|cuter|darker|lighter|calmer|simpler|clearer|bigger|smaller|bolder|louder|quieter|rhyme)\b/i;
+/** A real draw verb next to it keeps the request a draw ("make the text bigger and redraw page 2"). */
+const EXPLICIT_DRAW_VERB_RE = /\b(draw|drawing|render|re-?draw|generate|re-?generate|paint|illustrate)\b/i;
+
 /** 'redraw' = another take asked for; 'explicit' = asked to draw; 'none' = a question, feedback or chat. */
 export function drawIntentOf(text: string): DrawIntent {
   const t = clean(text);
@@ -99,6 +105,9 @@ export function drawIntentOf(text: string): DrawIntent {
     return 'redraw';
   }
   if (!asks) return 'none';
+  // "make the shouts red", "make the text bigger", "make it funnier": free lettering/script edits that only
+  // share the word "make" with a draw request (golden set, P2-SERVER) — never a reason to spend without asking.
+  if (FREE_EDIT_MAKE_RE.test(t) && !EXPLICIT_DRAW_VERB_RE.test(t)) return 'none';
   // A complaint that happens to contain "make" ("make it look less weird?") without a clear verb stays explicit:
   // the gate (one tap) is the safety net for anything ambiguous, never a silent spend.
   return 'explicit';
@@ -511,8 +520,13 @@ const firstErrorLine = (turn: DirectorTurn): string => {
   return clip(msg, 160);
 };
 
-const STARTED_RE = /^Started drawing (.+?) \(≈ (\$[\d.]+)/;
-const GATED_RE = /(?:approve|approval)[^$]*?(\$[\d.]+)\s*\(([^)]+?)(?: on [^)]+)?\)/i;
+// The job runner words prices in the user's terms (P2-SERVER costText.ts): "≈ $0.12" for admins and
+// own-key users, "≈2% of your usage" for governed users — both forms are read here.
+const PRICE = String.raw`(?:≈ ?<?\$[\d.]+|~?<?\$[\d.]+|[≈<][\d.]+% of your usage|a little of your usage)`;
+const STARTED_RE = new RegExp(String.raw`^Started drawing (.+?) \((${PRICE})`);
+const GATED_RE = new RegExp(String.raw`(?:approve|approval)\D*?(${PRICE})\s*\(([^)]+?)(?: on [^)]+)?\)`, 'i');
+/** "≈ $0.12" / "$0.12" / "~$0.12" → "≈ $0.12"; usage words stay as they are. */
+const approxPrice = (p: string): string => (/\$/.test(p) ? `≈ ${p.replace(/^[≈~]\s?/, '')}` : p);
 
 /**
  * One to three plain sentences built from what the turn changed (≤ 60 words). Never claims a
@@ -561,12 +575,12 @@ export function composeTurnReply(i: ComposeInput): string {
   if (failure) add(failure);
   else {
     const started = turn.log.map((l) => STARTED_RE.exec(l.result)).find(Boolean);
-    if (started) add(`Drawing ${started[1]} now (≈ ${started[2]}) — it appears on the board as it finishes.`);
+    if (started) add(`Drawing ${started[1]} now (${approxPrice(started[2])}) — it appears on the board as it finishes.`);
     const gate = after.gate?.status === 'open' && before.gate?.id !== after.gate.id ? after.gate : null;
     if (gate) add(`That's ≈ ${formatUsd(gate.estimateUsd)} for ${clean(gate.title).replace(/^Draw |\?$/g, '') || 'the drawing'} — tap Approve when you're ready.`);
     else if (!started) {
       const gatedLog = turn.log.map((l) => GATED_RE.exec(l.result)).find(Boolean);
-      if (gatedLog) add(`That's ≈ ${gatedLog[1]} for ${gatedLog[2]} — tap Approve when you're ready.`);
+      if (gatedLog) add(`That's ${approxPrice(gatedLog[1])} for ${gatedLog[2]} — tap Approve when you're ready.`);
     }
     if (turn.outcome === 'nothing' && !started) add(nothingLine(after, turn));
   }

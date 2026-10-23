@@ -199,7 +199,8 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
             {busy && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />}
             <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
             {/* The name a screen reader announces is the visible text: "Make the cover, ≈2% of your usage". */}
-            {badge && <span className="sr-only">, </span>}
+            {badge && <span className="sr-only">,</span>}
+            {badge && ' '}
             {badge && (
               <span
                 className={cx(

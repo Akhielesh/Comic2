@@ -108,7 +108,7 @@ vi.mock('../services/platformAllowance.js', async (importOriginal) => ({
   getAllowanceStatus: vi.fn(async () => usage.status)
 }));
 
-const { imageRouter, resolveImageModelAccess, freeDailyCapApplies, IMAGE_MODEL_USAGE_MESSAGE } = await import('./image.js');
+const { imageRouter, resolveImageModelAccess, freeDailyCapApplies, publicImageUsage, IMAGE_MODEL_USAGE_MESSAGE } = await import('./image.js');
 const { errorHandler } = await import('../middleware/errors.js');
 
 const app = express();
@@ -265,6 +265,31 @@ describe('never erase real spend', () => {
     expect((await post('/openrouter', { model: 'google/gemini-nano-banana-2.1' })).status).toBe(500);
     expect(meter.releaseReservedOperation).toHaveBeenCalledTimes(1);
     expect(meter.settleReservedOperation).not.toHaveBeenCalled();
+  });
+});
+
+describe('no dollars in a governed user’s image response', () => {
+  it('OpenRouter, governed: the response usage drops providerCostUsd (settle still gets it)', async () => {
+    const res = await post('/openrouter', { model: 'google/gemini-nano-banana-2.1' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.usage).toEqual({ promptTokens: 1, candidatesTokens: 1, totalTokens: 2 });
+    expect(JSON.stringify(body)).not.toMatch(/usd|cost/i);
+    const settleInput = meter.settleReservedOperation.mock.calls[0][0] as { usage?: { providerCostUsd?: number } };
+    expect(settleInput.usage?.providerCostUsd).toBe(0.04);
+  });
+
+  it('OpenRouter, admin / exempt / own key (not governed): the provider cost stays in the response', async () => {
+    meter.reservation = { ...governedReservation(), governed: false, walletSkipped: true };
+    const body = await (await post('/openrouter', { model: 'google/gemini-nano-banana-2.1' })).json();
+    expect(body.usage).toMatchObject({ providerCostUsd: 0.04 });
+  });
+
+  it('publicImageUsage keeps the block intact for ungoverned reservations', () => {
+    const usage = { promptTokens: 3, providerCostUsd: 0.01 };
+    expect(publicImageUsage(usage, { governed: false })).toBe(usage);
+    expect(publicImageUsage(usage, { governed: undefined })).toBe(usage);
+    expect(publicImageUsage(usage, { governed: true })).toEqual({ promptTokens: 3 });
   });
 });
 

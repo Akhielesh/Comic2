@@ -126,7 +126,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <GhostButton
             size="sm"
-            className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
+            className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
             busy={isPending('sheets')}
             onClick={() =>
               void run('sheets', {

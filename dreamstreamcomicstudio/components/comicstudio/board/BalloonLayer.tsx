@@ -393,6 +393,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         select(id);
         haptic(8);
         menuAt.current = Date.now();
+        // The finger is still down: the click its release makes must not land on the menu's scrim.
+        swallowNextClick();
         onBalloonMenu(id, at);
       }, longPressMs);
     }
@@ -401,7 +403,10 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const targets = snapTargets({ panels: boxes, others, safe });
     let latest: Map<string, Balloon> | null = null;
 
+    const pid = e.pointerId;
     const move = (ev: PointerEvent) => {
+      // Only the finger that started the drag moves it (another finger is a pinch, handled above).
+      if (ev.pointerId !== pid) return;
       const dxPx = ev.clientX - st.origin.x;
       const dyPx = ev.clientY - st.origin.y;
       if (!st.moved && Math.hypot(dxPx, dyPx) < slop) return;
@@ -485,8 +490,13 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       }
       commitMany(changes, mode === 'move' ? (changes.length > 1 ? 'Move balloons' : 'Move balloon') : mode === 'tail' ? 'Aim tail' : 'Resize balloon');
     };
-    const up = () => finish(true);
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId === pid) finish(true);
+    };
     const cancel = () => finish(false);
+    const onWindowCancel = (ev: PointerEvent) => {
+      if (ev.pointerId === pid) cancel();
+    };
     const stop = () => {
       if (liftTimer) clearTimeout(liftTimer);
       if (menuTimer) clearTimeout(menuTimer);
@@ -504,11 +514,11 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     cancelActive.current = cancel;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('pointercancel', onWindowCancel);
     cleanup.current = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('pointercancel', onWindowCancel);
       cleanup.current = null;
     };
   };
@@ -869,6 +879,27 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       )}
     </div>
   );
+};
+
+/**
+ * Swallow the click that the lifting finger makes after a long-press opened a menu (it would land on the
+ * menu's scrim and close it at once). A new press (pointerdown) ends the swallowing, so real taps pass.
+ */
+const swallowNextClick = (): void => {
+  if (typeof window === 'undefined') return;
+  const off = () => {
+    window.removeEventListener('click', onClick, true);
+    window.removeEventListener('pointerdown', off, true);
+    clearTimeout(timer);
+  };
+  const onClick = (ev: MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    off();
+  };
+  window.addEventListener('click', onClick, true);
+  window.addEventListener('pointerdown', off, true);
+  const timer = setTimeout(off, 5000);
 };
 
 const isCoarsePointer = (): boolean => {

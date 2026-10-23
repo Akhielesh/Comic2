@@ -1363,10 +1363,60 @@ describe('QC once and free relayout', () => {
       await llm.complete({ role: 'vision', messages: [{ role: 'user', content: 'check' }] });
       return { qc: { score: 0.7, issues: [], checkedAt: 2 }, balloons: page.panels.flatMap((p) => p.lines.map((l) => ({ lineId: l.id, x: 0.2, y: 0.2, w: 0.3 }))), model: 'v' };
     });
-    await runAction(ctx, { type: 'relayout_balloons', pageId: 'pg_1', useVision: true }, { confirmed: false });
+    // The paid re-check is a gated spend of its own (lettering.md §9): useVision never calls vision by itself.
+    const gated = await startAction(ctx, { type: 'relayout_balloons', pageId: 'pg_1', useVision: true }, { confirmed: false });
+    expect(gated.outcome.status).toBe('gated');
+    expect(session.doc.gate).toMatchObject({ status: 'open', action: { type: 'recheck_page', pageId: 'pg_1' }, model: 'Page check', imageCount: 0 });
+    expect(session.doc.gate!.estimateUsd).toBeGreaterThan(0);
+    expect(vi.mocked(analyzePageRender)).not.toHaveBeenCalled();
+    // Approving it runs exactly one vision call, recorded on the ledger as QC text.
+    await runAction(ctx, { type: 'approve_gate', gateId: session.doc.gate!.id }, { confirmed: true });
     expect(vi.mocked(analyzePageRender)).toHaveBeenCalledTimes(1);
     expect(ctx.llmFake.calls.filter((c) => c.role === 'vision')).toHaveLength(1);
     expect(session.doc.pages[0].render.qc?.score).toBe(0.7);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'qc')).toHaveLength(1);
+    expect(session.doc.conversation.at(-1)!.text).toMatch(/^Re-checked page 1 \(\$0\.\d+|^Re-checked page 1 \(<\$0\.01\)/);
+  });
+
+  it('recheck_page: a click runs one priced vision call; never on an undrawn, busy or blocked page or without a key', async () => {
+    const drawn = () => {
+      const doc = onePage(plannedDoc());
+      doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 }, qc: { score: 0.9, issues: [], checkedAt: 1 } };
+      return doc;
+    };
+    vi.mocked(analyzePageRender).mockImplementation(async ({ llm, page }) => {
+      await llm.complete({ role: 'vision', messages: [{ role: 'user', content: 'check' }] });
+      return {
+        qc: { score: 0.8, issues: [], checkedAt: 3, keepOut: [{ panel: 1, kind: 'face', box: { x: 0.4, y: 0.05, w: 0.2, h: 0.1 } }] },
+        balloons: page.panels.flatMap((p) => p.lines.map((l) => ({ lineId: l.id, x: 0.1, y: 0.1, w: 0.3 }))),
+        model: 'v'
+      };
+    });
+    // Undrawn: nothing to re-check ($0, no call).
+    const undrawn = newSession(onePage(plannedDoc()));
+    const u = await startAction(testContext(undrawn), { type: 'recheck_page', pageId: 'pg_1' }, { confirmed: true });
+    expect(u.outcome).toMatchObject({ status: 'blocked' });
+    expect(u.outcome.message).toMatch(/isn't drawn yet/);
+    // No key: honest, nothing called.
+    const nokey = newSession(drawn());
+    const k = await startAction(testContext(nokey, { keys: {} }), { type: 'recheck_page', pageId: 'pg_1' }, { confirmed: true });
+    expect(k.outcome.message).toMatch(/Connect a Gemini or OpenRouter key/);
+    // A blocked current take is never sent anywhere.
+    const blockedDoc = drawn();
+    blockedDoc.pages[0].render.asset = { ...blockedDoc.pages[0].render.asset!, safety: { assessed: 'X', at: 1 } };
+    const b = await startAction(testContext(newSession(blockedDoc)), { type: 'recheck_page', pageId: 'pg_1' }, { confirmed: true });
+    expect(b.outcome.message).toMatch(/didn't pass the content check/);
+    expect(vi.mocked(analyzePageRender)).not.toHaveBeenCalled();
+    // The click (with its quote) is the confirmation: one call, the faces keep-out is stored, the message is honest.
+    const session = newSession(drawn());
+    const ctx = testContext(session);
+    const quotedUsd = estimateSpendAction(session.doc, { type: 'recheck_page', pageId: 'pg_1' }, false).usd;
+    const ran = await startAction(ctx, { type: 'recheck_page', pageId: 'pg_1', quotedUsd }, { confirmed: true });
+    expect(ran.outcome.status).toBe('done');
+    expect(vi.mocked(analyzePageRender)).toHaveBeenCalledTimes(1);
+    expect(session.doc.pages[0].render.qc?.keepOut?.[0].kind).toBe('face');
+    expect(ran.outcome.message).toMatch(/Re-checked page 1 .*keeping faces clear/);
+    expect(session.doc.conversation.at(-1)!.cards?.[0]).toMatchObject({ type: 'notice', tone: 'success' });
   });
 });
 

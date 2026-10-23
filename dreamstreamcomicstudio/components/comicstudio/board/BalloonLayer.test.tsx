@@ -1,7 +1,9 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { BalloonLayer, dragSlopPx } from './BalloonLayer';
+import { BalloonLayer, dragSlopPx, planTip } from './BalloonLayer';
+import { GestureArbiterProvider, createGestureArbiter } from '../mobile/touch/GestureArbiter';
+import { planLettering, estimateMeasure } from '../../../shared/comic/lettering/layout';
 import { makeSampleDoc } from './__fixtures__/sampleDoc';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { applyOps } from '../../../shared/comic/ops';
@@ -29,6 +31,21 @@ const drag = (el: Element, from: [number, number], to: [number, number], opts: {
   fireEvent.pointerMove(window, { clientX: to[0], clientY: to[1], altKey: opts.altKey });
   fireEvent.pointerUp(window, { clientX: to[0], clientY: to[1] });
 };
+
+describe('planTip', () => {
+  it('uses the stored tail, else the tip the engine drew (plan.tip), never a re-derived one', () => {
+    const doc = makeSampleDoc();
+    const page = doc.pages[0];
+    const H = 1000 / (2 / 3);
+    const plans = planLettering(doc, page, 2 / 3, estimateMeasure);
+    const l2 = plans.find((p) => p.lineId === 'pg_1_l2')!;
+    expect(planTip(l2, H, page.balloons.find((b) => b.lineId === 'pg_1_l2'))).toEqual({ x: 0.2, y: 0.7 });
+    const l4 = plans.find((p) => p.lineId === 'pg_1_l4')!;
+    if (l4.tip) expect(planTip(l4, H)).toEqual({ x: l4.tip.x / 1000, y: l4.tip.y / H });
+    const caption = plans.find((p) => p.kind === 'caption');
+    if (caption && !caption.tip) expect(planTip(caption, H)).toBeNull();
+  });
+});
 
 describe('BalloonLayer — drawing (shared plans → one SVG)', () => {
   it('letters every line, uppercase, as one SVG over the art', () => {
@@ -494,10 +511,121 @@ describe('BalloonLayer — touch (mobile.md §5.4)', () => {
     const o = hit('pg_1_l1');
     const left = (parseFloat(o.style.left) / 100) * 600;
     const top = (parseFloat(o.style.top) / 100) * 900;
-    fireEvent.pointerDown(layer, { clientX: left - 15, clientY: top + 5, pointerType: 'touch' });
+    fireEvent.pointerDown(layer, { clientX: left - 15, clientY: top + 5, pointerType: 'touch', pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: left - 15, clientY: top + 5, pointerId: 1 });
     expect(onSelectLine).toHaveBeenLastCalledWith('pg_1_l1');
-    fireEvent.pointerDown(layer, { clientX: 590, clientY: 450, pointerType: 'touch' });
+    fireEvent.pointerDown(layer, { clientX: 590, clientY: 450, pointerType: 'touch', pointerId: 2 });
+    fireEvent.pointerUp(window, { clientX: 590, clientY: 450, pointerId: 2 });
     expect(onSelectLine).toHaveBeenLastCalledWith(null);
+  });
+
+  it('a one-finger pan that starts on empty art keeps the selection (decided on release, not on touch)', () => {
+    const onSelectLine = vi.fn();
+    const { container } = setup({ editable: true, onSelectLine, selectedLineId: 'pg_1_l2' });
+    const layer = layerRect(container);
+    fireEvent.pointerDown(layer, { clientX: 590, clientY: 450, pointerType: 'touch', pointerId: 3 });
+    expect(onSelectLine).not.toHaveBeenCalled();
+    fireEvent.pointerMove(window, { clientX: 520, clientY: 400, pointerId: 3 });
+    fireEvent.pointerUp(window, { clientX: 520, clientY: 400, pointerId: 3 });
+    expect(onSelectLine).not.toHaveBeenCalled();
+  });
+
+  it('a second finger cancels a balloon drag: the draft reverts and nothing is committed', () => {
+    const { hit, container, onBalloonChange } = setup({ editable: true, selectedLineId: 'pg_1_l2' });
+    const layer = layerRect(container);
+    fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 1, isPrimary: true });
+    fireEvent.pointerMove(window, { clientX: 160, clientY: 130, pointerId: 1 });
+    expect(container.querySelector('[data-testid="balloon"][data-line-id="pg_1_l2"]')).toBeTruthy();
+    // The second finger lands anywhere on the page: a pinch, never a second drag.
+    fireEvent.pointerDown(layer, { clientX: 400, clientY: 500, pointerType: 'touch', pointerId: 2, isPrimary: false });
+    fireEvent.pointerMove(window, { clientX: 190, clientY: 160, pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 190, clientY: 160, pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 400, clientY: 500, pointerId: 2 });
+    expect(onBalloonChange).not.toHaveBeenCalled();
+  });
+
+  it('the drag owns the canvas arbiter while it lasts; a pinch preempting it commits nothing', () => {
+    const arbiter = createGestureArbiter();
+    const doc = makeSampleDoc();
+    const onBalloonChange = vi.fn();
+    render(
+      <GestureArbiterProvider arbiter={arbiter}>
+        <div style={{ position: 'relative', width: 600, height: 900 }}>
+          <BalloonLayer doc={doc} page={doc.pages[0]} pageWidth={600} pageHeight={900} editable selectedLineId="pg_1_l2" onBalloonChange={onBalloonChange} />
+        </div>
+      </GestureArbiterProvider>
+    );
+    const el = document.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l2"]')!;
+    expect(el).toHaveAttribute('data-no-canvas-gesture'); // a selected balloon: the canvas neither pans nor zooms on it
+    fireEvent.pointerDown(el, { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 1 });
+    expect(arbiter.current()).toBe('balloon');
+    fireEvent.pointerMove(window, { clientX: 150, clientY: 100, pointerId: 1 });
+    act(() => {
+      expect(arbiter.preempt('pinch')).toBe(true);
+    });
+    fireEvent.pointerUp(window, { clientX: 150, clientY: 100, pointerId: 1 });
+    expect(onBalloonChange).not.toHaveBeenCalled();
+    expect(arbiter.current()).toBeNull();
+    // A normal drag releases the arbiter when it ends.
+    fireEvent.pointerDown(el, { clientX: 100, clientY: 100, pointerType: 'mouse', button: 0, pointerId: 4 });
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 100, pointerId: 4, altKey: true });
+    fireEvent.pointerUp(window, { clientX: 130, clientY: 100, pointerId: 4 });
+    expect(onBalloonChange).toHaveBeenCalledTimes(1);
+    expect(arbiter.current()).toBeNull();
+  });
+
+  it('a 450 ms still long-press opens the balloon menu and never edits; moving first cancels it', () => {
+    vi.useFakeTimers();
+    try {
+      const onBalloonMenu = vi.fn();
+      const { hit, onBalloonChange } = setup({ editable: true, onBalloonMenu });
+      fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 1 });
+      act(() => {
+        vi.advanceTimersByTime(460);
+      });
+      expect(onBalloonMenu).toHaveBeenCalledWith('pg_1_l2', { x: 100, y: 100 });
+      expect(hit('pg_1_l2')).toHaveAttribute('aria-pressed', 'true');
+      // The click the lifting finger makes is swallowed (it would close the menu's scrim at once)…
+      const scrimClick = vi.fn();
+      document.body.addEventListener('click', scrimClick);
+      fireEvent.click(document.body);
+      expect(scrimClick).not.toHaveBeenCalled();
+      // …but the next real tap goes through.
+      fireEvent.pointerDown(document.body, { pointerId: 9 });
+      fireEvent.click(document.body);
+      expect(scrimClick).toHaveBeenCalledTimes(1);
+      document.body.removeEventListener('click', scrimClick);
+      fireEvent.pointerMove(window, { clientX: 160, clientY: 160, pointerId: 1 });
+      fireEvent.pointerUp(window, { clientX: 160, clientY: 160, pointerId: 1 });
+      expect(onBalloonChange).not.toHaveBeenCalled();
+      // A lifted balloon that is dragged before 450 ms is a move, not a menu.
+      onBalloonMenu.mockClear();
+      fireEvent.pointerDown(hit('pg_1_l3'), { clientX: 300, clientY: 300, pointerType: 'touch', pointerId: 2 });
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      fireEvent.pointerMove(window, { clientX: 340, clientY: 300, pointerId: 2, altKey: true });
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      fireEvent.pointerUp(window, { clientX: 340, clientY: 300, pointerId: 2 });
+      expect(onBalloonMenu).not.toHaveBeenCalled();
+      expect(onBalloonChange).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('right-click and the Menu key open the same menu (Android contextmenu after our long-press opens it once)', () => {
+    const onBalloonMenu = vi.fn();
+    const { hit } = setup({ editable: true, onBalloonMenu });
+    fireEvent.contextMenu(hit('pg_1_l4'), { clientX: 320, clientY: 610 });
+    expect(onBalloonMenu).toHaveBeenLastCalledWith('pg_1_l4', { x: 320, y: 610 });
+    fireEvent.contextMenu(hit('pg_1_l4'), { clientX: 320, clientY: 610 });
+    expect(onBalloonMenu).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(hit('pg_1_l2'), { key: 'F10', shiftKey: true });
+    expect(onBalloonMenu).toHaveBeenCalledTimes(2);
+    expect(onBalloonMenu.mock.calls[1][0]).toBe('pg_1_l2');
   });
 });
 
@@ -554,6 +682,19 @@ describe('BalloonLayer — languages (i18n.md)', () => {
     );
     const marker = drawn('pg_1_l1').querySelector('[data-fallback-marker]')!;
     expect(marker.textContent).toBe('Shown in English: not translated yet');
+  });
+
+  it('in an edition the inline editor edits the TRANSLATION through onEditionTextChange (never a source line op)', () => {
+    const onOps = vi.fn();
+    const onEditionTextChange = vi.fn();
+    const onEditingChange = vi.fn();
+    setup({ editable: true, onOps, onEditionTextChange, onEditingChange, editionLang: 'te', editingLineId: 'pg_1_l4' });
+    const ta = screen.getByTestId('balloon-text-editor') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'కొత్త వాక్యం' } });
+    fireEvent.keyDown(ta, { key: 'Enter' });
+    expect(onEditionTextChange).toHaveBeenCalledWith('pg_1_l4', 'కొత్త వాక్యం');
+    expect(onOps).not.toHaveBeenCalled();
+    expect(onEditingChange).toHaveBeenLastCalledWith(null);
   });
 
   it('drags in an edition call back with { lang }', () => {

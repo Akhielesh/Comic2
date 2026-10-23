@@ -26,7 +26,7 @@ import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLan
 import { readerString } from '../i18n/readerStrings';
 import { EndCard } from '../immersive/EndCard';
 import { ImmersiveReader, trimAspect, type ImmersiveReaderEndCard } from '../immersive/ImmersiveReader';
-import { connectionHints, pageImageCache, useCacheVersion } from '../immersive/pageImageCache';
+import { connectionHints, pageImageCache } from '../immersive/pageImageCache';
 import { SlotContentView, slotImageSource, type SlotImage } from '../immersive/ReaderSlot';
 import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookView, type LayoutPref } from '../immersive/readerLayout';
 import { effectiveReader, readLayoutPref, readPosition, readPrefs, shouldOfferResume, writeLayoutPref, writePosition } from '../immersive/readerPrefs';
@@ -266,19 +266,16 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const trim = useMemo(() => trimAspect(items, aspectNumber(localized.format.pageAspect)), [items, localized.format.pageAspect]);
   const firstPageRight = bookOf(localized).firstPageRight;
   const creator = readerOf(localized);
-  const cacheVersion = useCacheVersion();
+  // Stable per doc (never keyed on cache events: geometry and preloading must not churn as images land).
   const aspectOf = useCallback(
     (i: number): number => {
       const it = items[i];
       if (!it) return trim;
       const a = it.asset;
       if (a.w && a.h) return a.w / a.h;
-      const cached = pageImageCache.get(a.path);
-      if (cached && cached.w > 0 && cached.h > 0) return cached.w / cached.h;
       return it.page ? pageAspectOf(localized, it.page) : trim;
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items, trim, localized, cacheVersion]
+    [items, trim, localized]
   );
 
   // ── Device, prefs ─────────────────────────────────────────────────────────
@@ -383,6 +380,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
+  // Swipes and taps pause while zoomed (a drag pans the page instead; the stage handlers check
+  // zoomRef). An explicit control — a toolbar arrow, a key, a side zone — always turns, and
+  // TouchCanvas snaps back to fit on the new page (resetKey), so no button is ever dead.
   const go = useCallback(
     (delta: number) => {
       if (!delta) return;
@@ -396,7 +396,6 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         target?.scrollIntoView?.({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
         return;
       }
-      if (zoomRef.current > 1.05) return; // turns pause while zoomed (pan instead)
       setNote(null);
       goToView(viewIdx + delta);
       hideChromeNow();
@@ -412,6 +411,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // The immersive reader portals out of this box, but React still bubbles its keys here: it owns them.
+    if (immersive) return;
     if (e.altKey || e.metaKey || e.ctrlKey) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -421,7 +422,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       if (layout === 'scroll') {
         const c = scrollRef.current;
         if (c) c.scrollTop = e.key === 'Home' ? 0 : c.scrollHeight;
-      } else if (zoomRef.current <= 1.05) {
+      } else {
         setNote(null);
         goToView(e.key === 'Home' ? 0 : views.length - 1);
       }
@@ -505,7 +506,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     [doc.id, urlSync, immersiveOn, lang, doc.format.language]
   );
   useEffect(() => {
-    if (settledN === null || !items.length) return;
+    if (settledN === null) {
+      settled.current = true; // Scroll reports from its scroll position; opening is not a move
+      return;
+    }
+    if (!items.length) return;
     reportPage(settledN, pos.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settledKey]);
@@ -747,7 +752,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   );
 
   const notices = (note || resume) && (
-    <div className={cx('flex shrink-0 flex-wrap items-center gap-2 px-3 py-1.5', autoHide && 'absolute inset-x-0 bottom-3 z-20 justify-center')}>
+    // Overlaid (auto-hide): the strip itself lets taps through to the page; only its chips catch them.
+    <div className={cx('flex shrink-0 flex-wrap items-center gap-2 px-3 py-1.5', autoHide && 'pointer-events-none absolute inset-x-0 bottom-3 z-20 justify-center [&>*]:pointer-events-auto')}>
       {note && (
         <p role="status" className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] py-1 pl-3 pr-1 text-[12px] text-[var(--ds-ink)] backdrop-blur-md">
           <span className="min-w-0 [overflow-wrap:anywhere]">{note}</span>
@@ -911,22 +917,29 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           ) : (
             book
           )}
-          <button
-            type="button"
-            aria-label={prevLabel}
-            data-zone="prev"
-            tabIndex={-1}
-            onClick={() => go(rtl ? 1 : -1)}
-            className="absolute inset-y-0 left-0 z-[6] hidden w-[12%] cursor-w-resize opacity-0 md:block"
-          />
-          <button
-            type="button"
-            aria-label={nextLabel}
-            data-zone="next"
-            tabIndex={-1}
-            onClick={() => go(rtl ? -1 : 1)}
-            className="absolute inset-y-0 right-0 z-[6] hidden w-[12%] cursor-e-resize opacity-0 md:block"
-          />
+          {/* Mouse-only click zones on the page edges (the resize cursor is their affordance). Touch
+              devices never get invisible buttons: there the outer thirds turn through the stage's
+              own tap handler, and the toolbar arrows are always visible. */}
+          {!ff.coarse && (
+            <>
+              <button
+                type="button"
+                aria-label={prevLabel}
+                data-zone="prev"
+                tabIndex={-1}
+                onClick={() => go(rtl ? 1 : -1)}
+                className="absolute inset-y-0 left-0 z-[6] hidden w-[12%] cursor-w-resize opacity-0 md:block coarse:hidden"
+              />
+              <button
+                type="button"
+                aria-label={nextLabel}
+                data-zone="next"
+                tabIndex={-1}
+                onClick={() => go(rtl ? -1 : 1)}
+                className="absolute inset-y-0 right-0 z-[6] hidden w-[12%] cursor-e-resize opacity-0 md:block coarse:hidden"
+              />
+            </>
+          )}
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[7] h-0.5 bg-[var(--ds-well-strong)]" aria-hidden>
             <div
               className={cx('h-full bg-[var(--ds-accent)]', !reduced && 'transition-[width] duration-300')}

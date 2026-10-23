@@ -4,6 +4,8 @@ import { emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
 import { lakeDrawnDoc, lakePlannedDoc, sixPageDrawnDoc } from './golden/fixtures.js';
 import { canFastPath, normalizeIntentText, parseIntent, routeIntent } from './intents.js';
 import { drawIntentOf } from './replies.js';
+import { costFormatter, costViewFor } from './costText.js';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 
 /** Six pages drawn, page 2 with an earlier version in history. */
 const sixWithHistory = (): ComicDoc => {
@@ -173,3 +175,23 @@ describe('parseIntent phrase table (COMIC_FAST_INTENTS)', () => {
     expect(canFastPath(null, { enabled: true, attachments: 0, gateOpen: false })).toBe(false);
   });
 });
+
+describe('P2-SERVER: one breakdown builder, honest cover wording, prices in the user\'s terms', () => {
+  it('a failed cover says "cover failed" (never "not drawn yet"); cards come from breakdownCardFor', () => {
+    const doc = lakeDrawnDoc();
+    doc.cover.render = { ...emptyRender(), status: 'failed', error: 'boom' };
+    const r = routeIntent(doc, 'status')!;
+    expect(r.reply).toContain('cover failed');
+    // The failed cover gets its tile (with a retry); a one-page book with no cover yet leads with the page.
+    expect(r.cards[0]).toMatchObject({ type: 'breakdown', view: 'status', cover: true });
+    expect(routeIntent(lakePlannedDoc(), 'show me the pages')!.cards[0]).toMatchObject({ type: 'breakdown', view: 'plan', cover: false });
+  });
+
+  it('a governed user\'s cost answer is in usage, never dollars', () => {
+    const cost = costFormatter(costViewFor({ ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 90, exhausted: false, pctPerStandardPage: 1.2 } }));
+    const r = routeIntent(lakePlannedDoc(), 'how much will it cost', { cost })!;
+    expect(r.reply).not.toMatch(/\$/);
+    expect(r.reply).toMatch(/^Drawing what's left \(.+\) is about [\d.<]+% of your usage\. Text edits/);
+  });
+});
+

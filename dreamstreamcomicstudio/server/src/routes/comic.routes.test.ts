@@ -6,6 +6,7 @@ import type { StudioEvent } from '../../../shared/comic/events.js';
 import { emptyRender, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
 import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
+import type { StudioUsage } from '../../../shared/comic/capabilities.js';
 import type { ContentRating, SafetyVerdict } from '../../../shared/comic/safety.js';
 import { __resetSessionsForTests, peekStudioSession } from '../comic/session.js';
 import { __resetAccessCacheForTests } from '../comic/access.js';
@@ -63,6 +64,10 @@ let intent: ((text: string) => RoutedIntent | null) | null;
 let plans: Map<string, string>;
 let publications: Map<string, PublicComicPayload>;
 let publicLoads: string[];
+/** caps.usage the router reports (P2-SERVER); undefined = the usage lookup is off. */
+let usage: StudioUsage | undefined;
+/** COMIC_FAST_INTENTS for the router under test. */
+let fast: boolean;
 
 const ALLOW: ScreenResult = { decision: 'allow', categories: [], strike: 0, blockedAttachmentPaths: [] };
 
@@ -115,6 +120,8 @@ app.use('/api/comic', (req, res, next) =>
       }
     },
     ...(intent ? { routeIntent: (_doc, text) => intent!(text) } : {}),
+    usageFor: async () => usage,
+    fastIntents: fast,
     heartbeatMs: 20
   })(req, res, next)
 );
@@ -141,6 +148,8 @@ beforeEach(() => {
   plans = new Map();
   publications = new Map();
   publicLoads = [];
+  usage = undefined;
+  fast = false;
   __resetAccessCacheForTests();
   vi.mocked(runDirectorTurn).mockClear();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -388,6 +397,8 @@ describe('POST /projects/:id/stream', () => {
     expect(userMsg.attachments).toHaveLength(1);
     // Legacy data URLs are stored as PRIVATE refs (saveRef → u/<user>/p/<project>/ref/…), never the public lane.
     expect(userMsg.attachments![0].path).toMatch(/^u\/user-1\/p\/proj-1\/ref\/.+\.webp$/);
+    // …and measured for free (dHash for near-duplicates, quality flags) like an inbox upload.
+    expect(userMsg.attachments![0].dhash).toMatch(/^[0-9a-f]{16}$/);
     expect(userMsg.text).toContain('[Attached “script.txt” —');
     const lastTurn = llm.calls[0].messages[llm.calls[0].messages.length - 1].content;
     expect(JSON.stringify(lastTurn)).toContain('image_url');
@@ -901,6 +912,11 @@ describe('refusals before anything is persisted', () => {
     // A new link re-publishes the comic: refused like publish (the REST route refuses it too).
     expect(restrictedRefusal({ kind: 'action', action: { type: 'regenerate_link' } })).toContain('publishing is paused');
     expect(restrictedRefusal({ kind: 'action', action: { type: 'translate', languages: ['te'] } })).toBe(RESTRICTED_SPEND_MESSAGE);
+    // The paid page re-check (lettering.md §9) and its legacy alias are spends; the free re-layout is not.
+    expect(restrictedRefusal({ kind: 'action', action: { type: 'recheck_page', pageId: 'p' } })).toBe(RESTRICTED_SPEND_MESSAGE);
+    expect(restrictedRefusal({ kind: 'action', action: { type: 'relayout_balloons', pageId: 'p', useVision: true } })).toBe(RESTRICTED_SPEND_MESSAGE);
+    expect(restrictedRefusal({ kind: 'action', action: { type: 'relayout_balloons', pageId: 'p' } })).toBeNull();
+    expect(isCostlyRequest({ kind: 'action', action: { type: 'recheck_page', pageId: 'p' } })).toBe(true);
   });
 });
 
@@ -1078,5 +1094,60 @@ describe('allowance notices', () => {
     const last = convo[convo.length - 1];
     expect(last).toMatchObject({ role: 'assistant', text: expect.stringContaining('80% of your monthly') });
     expect(convo.every((m) => m.text.trim().length > 0)).toBe(true);
+  });
+});
+
+describe('P2-SERVER route integration', () => {
+  it('UI actions commit with origin "user" (their own undo); caps carry usage (percentages only) and governed text has no dollars', async () => {
+    usage = { governed: true, pctLeft: 64, exhausted: false, pctPerStandardPage: 1.5 };
+    const doc = seed();
+    doc.settings.confirm = 'always';
+    doc.planStatus = 'approved';
+    const body = await (await api('/api/comic/projects/proj-1', { user: 'user-1' })).json();
+    expect(body.caps.usage).toEqual(usage);
+    expect(JSON.stringify(body.caps)).not.toMatch(/usd|\$/i);
+    const edit = await stream('proj-1', { kind: 'action', action: { type: 'patch', ops: [{ op: 'brief', patch: { title: 'Renamed' } }] } });
+    expect(edit.events.find((e) => e.type === 'ops')).toMatchObject({ origin: 'user' });
+    // A click on "Draw the cover": the progress and completion messages word the price as usage.
+    const drawn = await stream('proj-1', { kind: 'action', action: { type: 'render_cover' } });
+    expect(drawn.events.at(-1)).toMatchObject({ type: 'done', spentUsd: expect.any(Number) });
+    const saved = store.docs.get('proj-1')!.doc;
+    const said = saved.conversation.filter((m) => m.role === 'assistant').map((m) => m.text);
+    expect(said.length).toBeGreaterThan(0);
+    for (const t of said) expect(t).not.toMatch(/\$/);
+    expect(said.join(' ')).toMatch(/% of your usage/);
+  });
+
+  it('COMIC_FAST_INTENTS: "swap pages 2 and 3" runs its one free tool — no model call, an Undo chip, one user + one reply', async () => {
+    fast = true;
+    seed();
+    const { events } = await stream('proj-1', { kind: 'message', text: 'swap pages 2 and 3' });
+    expect(events.at(-1)!.type).toBe('done');
+    expect(vi.mocked(runDirectorTurn)).not.toHaveBeenCalled();
+    expect(llm.calls).toHaveLength(0);
+    const doc = store.docs.get('proj-1')!.doc;
+    expect(doc.pages.find((p) => p.id === 'pg_3')!.n).toBe(2);
+    const [user, reply] = doc.conversation.slice(-2);
+    expect(user).toMatchObject({ role: 'user', text: 'swap pages 2 and 3' });
+    expect(reply.role).toBe('assistant');
+    expect(reply.text).toMatch(/\S/);
+    expect(reply.nextSteps?.[0]).toEqual({ label: 'Undo', client: { type: 'undo' } });
+    // Off (the default): the same words go to the director.
+    fast = false;
+    llm.script.director = [{ text: 'Done.' }];
+    await stream('proj-1', { kind: 'message', text: 'swap pages 2 and 3' });
+    expect(vi.mocked(runDirectorTurn)).toHaveBeenCalledTimes(1);
+  });
+
+  it('opening a project backfills missing size variants in the background (≤ 40, once per session) and publishes their urls', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/p1.webp', source: 'generated', at: 2, w: 2048, h: 3072 } };
+    seed(doc);
+    await api('/api/comic/projects/proj-1', { user: 'user-1' });
+    await vi.waitFor(() => expect(peekStudioSession('proj-1')!.doc.pages[0].render.asset!.variants?.map((v) => v.w)).toEqual([480, 1080]));
+    // Once per session: a second open does not re-run it.
+    const signedBefore = assets.signed.length;
+    await api('/api/comic/projects/proj-1', { user: 'user-1' });
+    expect(assets.signed.length).toBe(signedBefore + 1); // only the display signing
   });
 });

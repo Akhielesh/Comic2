@@ -5,7 +5,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, STUCK_FACTOR, Segmented, isStuck, registerStudioRefresh } from './ui';
+import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, STUCK_FACTOR, Segmented, SwitchRow, isStuck, registerStudioRefresh } from './ui';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -80,14 +80,83 @@ describe('touch sizes (token-level, mobile.md §2.4)', () => {
   });
 });
 
+describe('Segmented', () => {
+  it('a mixed multi-selection (no option checked) keeps the first enabled option in the tab order', () => {
+    render(
+      <Segmented
+        label="Weight"
+        value={'' as 'a' | 'b' | 'c' | ''}
+        onChange={vi.fn()}
+        options={[
+          { value: 'a', label: 'Regular', disabled: true },
+          { value: 'b', label: 'Bold' },
+          { value: 'c', label: 'Black' }
+        ]}
+      />
+    );
+    const radios = screen.getAllByRole('radio');
+    expect(radios.map((r) => r.getAttribute('tabindex'))).toEqual(['-1', '0', '-1']);
+    expect(radios.every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
+  });
+
+  it('arrow keys from the mixed state move to and select an option', () => {
+    const onChange = vi.fn();
+    render(<Segmented label="Align" value={'' as 'l' | 'c' | ''} onChange={onChange} options={[{ value: 'l', label: 'Left' }, { value: 'c', label: 'Center' }]} />);
+    fireEvent.keyDown(screen.getByRole('radio', { name: 'Left' }), { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenCalledWith('c');
+  });
+
+  it('text labels truncate inside their segment instead of overlapping a neighbour', () => {
+    render(<Segmented label="Kind" value="a" onChange={vi.fn()} options={[{ value: 'a', label: 'A very long segment label' }]} />);
+    const label = screen.getByText('A very long segment label');
+    expect(label.className).toContain('truncate');
+    expect(label.className).toContain('min-w-0');
+  });
+});
+
+describe('SwitchRow', () => {
+  it('is a labelled switch with a 44 px row on touch', () => {
+    const onChange = vi.fn();
+    render(<SwitchRow label="Title page" description="The cover title on a page of its own" checked={false} onChange={onChange} />);
+    const sw = screen.getByRole('switch', { name: 'Title page' });
+    expect(sw).toHaveAttribute('aria-checked', 'false');
+    expect(sw).toHaveAccessibleDescription('The cover title on a page of its own');
+    expect(sw.className).toContain('coarse:min-h-[44px]');
+    fireEvent.click(sw);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
+
 describe('RenderOverlay', () => {
-  it('a failed overlay over a placeholder is opaque (the "Not drawn yet" copy never shows through)', () => {
+  it('a failed overlay is CALM: opaque over placeholders, when + why, Details on demand, no alert role', () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const onRetry = vi.fn();
     render(
       <div className="relative">
-        <RenderOverlay status="failed" error="The model refused" onRetry={vi.fn()} />
+        <RenderOverlay status="failed" error="The model refused" since={now - 60_000} label="Page 2" onRetry={onRetry} />
       </div>
     );
-    expect(screen.getByRole('alert').className).toContain('bg-[var(--ds-surface)]');
+    expect(screen.queryByRole('alert')).toBeNull();
+    const group = screen.getByRole('group', { name: /^Page 2: failed \d\d:\d\d · the model declined$/ });
+    expect(group.className).toContain('bg-[var(--ds-surface)]');
+    expect(group).not.toHaveTextContent('The model refused');
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(group).toHaveTextContent('The model refused');
+    expect(screen.getByRole('button', { name: 'Hide details' })).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it('a failure from an earlier day says which day (a stale outage is recognisable)', () => {
+    const now = new Date(2026, 9, 22, 18, 0).getTime();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    render(
+      <div className="relative">
+        <RenderOverlay status="failed" render={{ error: 'Provider error 503', updatedAt: new Date(2026, 9, 20, 16, 52).getTime() }} />
+      </div>
+    );
+    expect(screen.getByRole('group', { name: 'failed Oct 20, 16:52 · provider busy' })).toBeInTheDocument();
   });
 
   it('far past the usual time the clock stops and offers a free re-check (no "378d")', () => {

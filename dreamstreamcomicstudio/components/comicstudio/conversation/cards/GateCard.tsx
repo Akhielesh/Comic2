@@ -188,7 +188,7 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
         <div className="mt-3.5 flex flex-wrap gap-2">
           <PrimaryButton
             // Grows (never clips) when a usage-terms price makes the label longer on a phone.
-            className="tap-target !h-auto min-h-9 py-1.5 coarse:min-h-11"
+            className="tap-target !h-auto min-h-9 max-w-full py-1.5 text-center coarse:min-h-11"
             busy={isPending('approve')}
             disabled={deciding}
             onClick={() => void run('approve', { type: 'approve_gate', gateId: gate.id })}

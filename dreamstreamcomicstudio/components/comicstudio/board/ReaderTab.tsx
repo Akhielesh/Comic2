@@ -1,25 +1,45 @@
-// Read tab: the finished comic in the reader, with the export actions and honest progress
-// and failure reporting for each —
+// Read tab: the finished comic in the inline reader, the immersive full-screen reader, the
+// language switch, the creator's "reader look", and one "Share & export" sheet with honest
+// progress and failure reporting for every export —
 //   • Print   — the browser print view (crisp vector lettering, choose "Save as PDF")
 //   • PDF      — a print-ready PDF downloaded directly, no dialog (@cantoo/pdf-lib)
 //   • PNG      — a ZIP of lettered PNG pages
 //   • Motion   — an animated "motion comic" video (9:16 / 1:1 / 16:9) for social/sharing
+// Exports use the language picked in the switch (i18n.md §10.2), so "Download the Telugu PDF"
+// is one tap. Sharing: the full Share sheet, "Copy link" once published, and "Preview as reader"
+// (the live /c/ link in a new tab when published — a full navigation, as the enforced reader CSP
+// requires — otherwise the owner preview with the cover intro).
+//
+// Wave 2 (P2-BOARD): "Read full screen" opens <ImmersiveReader> straight from the click (the
+// Fullscreen API needs that user gesture); a chip, card or the director opening the reader
+// (studio.readerRequest) opens it too, in Guided View when asked. The root fills the board
+// (`h-full min-h-0`, no 520 px floor), so a landscape phone never scrolls the reader inside the board.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Clapperboard, FileArchive, FileDown, Printer, X } from 'lucide-react';
-import type { ComicDoc } from '../../../shared/comic/doc';
-import type { StudioController } from '../types';
+import { BookOpen, Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
+import { readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
+import { DOC_LIMITS } from '../../../shared/comic/limits';
+import { SHARE_PATH } from '../../../shared/comic/publication';
+import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
+import type { ReaderRequest, StudioController } from '../types';
 import { openPrintView } from '../export/printView';
 import { exportPngZip } from '../export/zipExport';
 import { exportComicPdf } from '../export/pdfExport';
 import { exportMotionComic, MOTION_SIZES, type MotionAspect } from '../export/motionComic';
+import { ImmersiveReader } from '../immersive/ImmersiveReader';
+import { LanguageSwitch, languageSwitchOptions } from '../i18n/LanguageSwitch';
+import { useReaderLanguage } from '../i18n/readerLanguage';
+import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { ComicReaderView } from '../reader/ComicReaderView';
-import { GhostButton, cx } from './ui';
+import { ShareSheet } from '../share/ShareSheet';
+import { useShareCapabilities } from '../share/useShareCapabilities';
+import { CLEAR } from './boardModel';
+import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
 
 const MOTION_ASPECTS: { aspect: MotionAspect; label: string }[] = [
   { aspect: '9:16', label: 'Portrait' },
   { aspect: '1:1', label: 'Square' },
-  { aspect: '16:9', label: 'Wide' },
+  { aspect: '16:9', label: 'Wide' }
 ];
 
 type ExportState =
@@ -28,26 +48,146 @@ type ExportState =
   | { kind: 'done'; text: string; tone: 'success' | 'warn' }
   | { kind: 'error'; text: string };
 
+const STUDIO_LANGUAGE_ENV = { search: '', stored: null, navigatorLanguages: [] as string[] };
+
+/** Reader requests already answered (a request object opens the reader once, even across remounts). */
+const answeredRequests = new WeakSet<ReaderRequest>();
+
+/** The live share link for a published comic, else undefined. */
+export const liveShareUrl = (studio: Pick<StudioController, 'doc' | 'publication'>): string | undefined => {
+  const m = studio.doc?.publication;
+  if (!m || m.status !== 'live' || !m.slug) return undefined;
+  // Only an http(s) link is ever opened or copied (never a javascript:/data: URL, whatever the payload says).
+  const given = studio.publication?.url;
+  if (given && /^https?:\/\//i.test(given)) return given;
+  const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : '';
+  return `${origin}${SHARE_PATH(m.slug)}`;
+};
+
+const SHEET_ROW =
+  'flex min-h-[44px] w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+
+const SheetRow: React.FC<{ icon: React.ReactNode; label: React.ReactNode; hint?: React.ReactNode; onClick: () => void; disabled?: boolean }> = ({ icon, label, hint, onClick, disabled }) => (
+  <button type="button" className={SHEET_ROW} onClick={onClick} disabled={disabled}>
+    <span className="shrink-0 text-[var(--ds-muted)]" aria-hidden>
+      {icon}
+    </span>
+    <span className="min-w-0 flex-1">
+      <span className="block truncate font-medium">{label}</span>
+      {hint && <span className="block text-[11.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{hint}</span>}
+    </span>
+  </button>
+);
+
+/** The creator's reader defaults (doc.reader): viewers can still override them locally. Free. */
+export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
+  const r = readerOf(doc);
+  const set = (patch: Partial<ReaderSettings>, label = 'Change reader look') => void studio.patch([{ op: 'reader', patch }], { label });
+  const text = (v: string) => (v.trim() ? v.trim() : CLEAR);
+  return (
+    // Capped and scrollable: on a short board (a landscape phone) the panel never pushes the reader
+    // out of view or gets clipped by the pane (the Read tab has no outer scroller).
+    <Surface className="mx-3 mt-2 max-h-[55%] shrink-0 overflow-y-auto overscroll-contain p-3" aria-label="Reader look">
+      <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Reader look</p>
+        <span className="text-[11px] text-[var(--ds-muted)]">Free · readers can still change it for themselves</span>
+      </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
+        <span className="text-[12px] text-[var(--ds-muted)]" id="reader-turn-label">
+          Page turn
+        </span>
+        <Segmented<PageTurnStyle>
+          label="Page turn"
+          size="xs"
+          value={r.turn}
+          onChange={(turn) => set({ turn })}
+          options={[
+            { value: 'paper', label: 'Paper', title: 'A real page flip' },
+            { value: 'slide', label: 'Slide', title: 'Pages slide across' },
+            { value: 'fade', label: 'Fade', title: 'A soft crossfade' }
+          ]}
+        />
+      </div>
+      <div className="mt-1 grid gap-0.5 md:grid-cols-3">
+        <SwitchRow label="Guided overview" description="Guided View shows the whole page before zooming into panels" checked={r.guidedOverview} onChange={(on) => set({ guidedOverview: on })} />
+        <SwitchRow label="Paper texture" description="A subtle paper grain under the art" checked={r.paperTexture} onChange={(on) => set({ paperTexture: on })} />
+        <SwitchRow label="Ambient room" description="The room glows with each page’s colors" checked={r.ambient} onChange={(on) => set({ ambient: on })} />
+      </div>
+      <div className="mt-1 grid gap-x-2 md:grid-cols-2">
+        <InlineField
+          label="Dedication (inside the cover)"
+          showLabel
+          multiline
+          rows={1}
+          submitOnEnter
+          maxLength={DOC_LIMITS.readerTextChars}
+          value={r.dedication || ''}
+          placeholder="For Amma, who read me every comic twice"
+          onCommit={(v) => set({ dedication: text(v) })}
+        />
+        <InlineField
+          label="End card line"
+          showLabel
+          multiline
+          rows={1}
+          submitOnEnter
+          maxLength={DOC_LIMITS.readerTextChars}
+          value={r.credits || ''}
+          placeholder="Story and pictures by the Rao family"
+          onCommit={(v) => set({ credits: text(v) })}
+        />
+      </div>
+    </Surface>
+  );
+};
+
 export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
   const [state, setState] = useState<ExportState>({ kind: 'idle' });
-  const [motionOpen, setMotionOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [lookOpen, setLookOpen] = useState(false);
+  const [immersive, setImmersive] = useState<{ intro: boolean; guided: boolean } | null>(null);
+  const sheetAnchor = useRef<HTMLSpanElement>(null);
   const abort = useRef<AbortController | null>(null);
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  const shareCaps = useShareCapabilities();
+  // The studio preview offers draft editions too (marked by their percentage), always opens in the
+  // comic's own language (never the browser's or a reader's stored choice) and never touches the URL.
+  const L = useReaderLanguage({ doc, includeDrafts: true, persist: false, env: STUDIO_LANGUAGE_ENV });
+  const localized = L.localized ?? doc;
+  const source = doc.format.language || 'en';
+  const editionName = sameLanguage(L.lang, source) ? '' : languageSpec(L.lang)?.english || L.lang;
+  const switchOptions = languageSwitchOptions(doc);
+  const shareUrl = liveShareUrl(studio);
+
+  useEffect(() => {
+    // Set on every mount: StrictMode's dev re-mount runs the cleanup once, and a ref left false
+    // would silently drop every export status after it.
+    mounted.current = true;
+    return () => {
       mounted.current = false;
       abort.current?.abort();
-    },
-    []
-  );
+    };
+  }, []);
+
+  // A chip / card / the director asked to open the reader (immersive, or straight into Guided View).
+  const request = studio.readerRequest;
+  useEffect(() => {
+    if (!request || answeredRequests.has(request)) return;
+    answeredRequests.add(request);
+    if (request.immersive || request.guided) setImmersive({ intro: false, guided: !!request.guided });
+  }, [request]);
+
   const set = (s: ExportState) => mounted.current && setState(s);
   const working = state.kind === 'working';
   const drawn = !!doc.cover.render.asset?.path || doc.pages.some((p) => !!p.render.asset?.path);
+  const exportLabel = editionName ? ` (${editionName})` : '';
 
   const print = () => {
+    setSheetOpen(false);
     set({ kind: 'working', label: 'Opening the print view…' });
     // Opened synchronously inside the click so pop-up blockers allow it.
-    openPrintView(doc, studio.urlFor, { onStatus: (label) => set({ kind: 'working', label }) })
+    openPrintView(localized, studio.urlFor, { onStatus: (label) => set({ kind: 'working', label }) })
       .then((r) => {
         const notes = [...r.skipped, ...r.failedImages.map((f) => `${f} (didn’t load)`)];
         set(
@@ -60,10 +200,11 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   };
 
   const zip = () => {
+    setSheetOpen(false);
     const controller = new AbortController();
     abort.current = controller;
-    set({ kind: 'working', label: 'Preparing pages…' });
-    exportPngZip(doc, studio.urlFor, {
+    set({ kind: 'working', label: `Preparing pages${exportLabel}…` });
+    exportPngZip(localized, studio.urlFor, {
       signal: controller.signal,
       onProgress: (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total })
     })
@@ -82,10 +223,11 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   };
 
   const pdf = () => {
+    setSheetOpen(false);
     const controller = new AbortController();
     abort.current = controller;
-    set({ kind: 'working', label: 'Preparing the PDF…' });
-    exportComicPdf(doc, studio.urlFor, {
+    set({ kind: 'working', label: `Preparing the PDF${exportLabel}…` });
+    exportComicPdf(localized, studio.urlFor, {
       signal: controller.signal,
       onProgress: (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total })
     })
@@ -104,12 +246,12 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   };
 
   const motion = (aspect: MotionAspect) => {
-    setMotionOpen(false);
+    setSheetOpen(false);
     const controller = new AbortController();
     abort.current = controller;
     const { width, height } = MOTION_SIZES[aspect];
-    set({ kind: 'working', label: `Building a ${aspect} motion comic (${width}×${height})…` });
-    exportMotionComic(doc, studio.urlFor, {
+    set({ kind: 'working', label: `Building a ${aspect} motion comic (${width}×${height})${exportLabel}…` });
+    exportMotionComic(localized, studio.urlFor, {
       aspect,
       signal: controller.signal,
       onProgress: (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total })
@@ -125,62 +267,66 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
       });
   };
 
-  const tools = (
-    <>
-      <GhostButton size="xs" disabled={!drawn || working} onClick={print} title="Open the print view (crisp vector lettering); choose “Save as PDF” there">
-        <Printer className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Print</span>
-      </GhostButton>
-      <GhostButton size="xs" disabled={!drawn || working} onClick={pdf} title="Download a print-ready PDF directly (no dialog)">
-        <FileDown className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">PDF</span>
-      </GhostButton>
-      <GhostButton size="xs" disabled={!drawn || working} onClick={zip} title="Download every page as a lettered PNG (ZIP)">
-        <FileArchive className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">PNG</span>
-      </GhostButton>
-      <div className="relative">
-        <GhostButton
-          size="xs"
-          disabled={!drawn || working}
-          onClick={() => setMotionOpen((v) => !v)}
-          title="Export an animated motion comic (video) for social/sharing"
-          aria-haspopup="menu"
-          aria-expanded={motionOpen}
-        >
-          <Clapperboard className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Motion</span>
-        </GhostButton>
-        {motionOpen && !working && (
-          <>
-            <div className="fixed inset-0 z-10" aria-hidden onClick={() => setMotionOpen(false)} />
-            <div
-              role="menu"
-              aria-label="Motion comic format"
-              className="absolute right-0 z-20 mt-1.5 w-40 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-1 shadow-lg"
-            >
-              {MOTION_ASPECTS.map(({ aspect, label }) => (
-                <button
-                  key={aspect}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => motion(aspect)}
-                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
-                >
-                  <span>{label}</span>
-                  <span className="tabular-nums text-[11px] text-[var(--ds-muted)]">{aspect}</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    </>
-  );
+  const openFullScreen = (intro = false) => {
+    setSheetOpen(false);
+    setImmersive({ intro, guided: false });
+  };
+  const preview = () => {
+    setSheetOpen(false);
+    if (shareUrl) {
+      // A full navigation in a new tab: the public reader runs under its own enforced CSP.
+      window.open(shareUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    openFullScreen(true);
+  };
+  const copyLink = async () => {
+    if (!shareUrl) return;
+    setSheetOpen(false);
+    const ok = await shareCaps.copy(shareUrl);
+    set(ok ? { kind: 'done', tone: 'success', text: 'Link copied — anyone with it can read (never edit) this comic.' } : { kind: 'error', text: `Couldn’t copy the link. Here it is: ${shareUrl}` });
+  };
 
   return (
-    <div className="flex h-full min-h-[520px] flex-col">
+    <div className="flex h-full min-h-0 flex-col" data-reader-tab>
+      {drawn && (
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 px-3 pt-2" role="toolbar" aria-label="Reader actions">
+          <PrimaryButton size="sm" onClick={() => openFullScreen(false)} aria-label="Read full screen" title="Read full screen (page turns, Guided View, your languages)">
+            <Expand className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Read full screen</span>
+          </PrimaryButton>
+          <span ref={sheetAnchor} className="inline-flex shrink-0">
+            <GhostButton size="sm" onClick={() => setSheetOpen((v) => !v)} aria-haspopup="dialog" aria-expanded={sheetOpen} aria-label="Share & export" disabled={working}>
+              <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Share &amp; export</span>
+            </GhostButton>
+          </span>
+          <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic (free)">
+            <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden /> <span className="hidden md:inline">Reader look</span>
+          </GhostButton>
+          {switchOptions.length > 1 && (
+            <LanguageSwitch className="ml-auto min-w-0 max-w-[60%]" options={switchOptions} value={L.lang} onChange={L.setLang} label="Reading language" />
+          )}
+        </div>
+      )}
+      {L.fallback.length > 0 && (
+        <p className="mx-3 mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-amber-500/[0.08] px-3 py-1.5 text-[12px] text-[var(--ds-ink)]" role="status">
+          <span className="min-w-0">
+            {L.fallback.length} {L.fallback.length === 1 ? 'line is' : 'lines are'} still shown in {languageSpec(source)?.english || source} — not translated yet.
+          </span>
+          <button
+            type="button"
+            onClick={() => studio.setTab('languages')}
+            className="tap-target rounded-lg px-1.5 font-medium text-[var(--ds-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+          >
+            Open Languages
+          </button>
+        </p>
+      )}
+      {lookOpen && <ReaderLookPanel studio={studio} doc={doc} />}
       {state.kind !== 'idle' && (
         <div
           role={state.kind === 'error' ? 'alert' : 'status'}
           className={cx(
-            'mx-3 mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]',
+            'mx-3 mt-2 flex shrink-0 items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]',
             state.kind === 'error'
               ? 'border-red-500/25 bg-red-500/[0.06]'
               : state.kind === 'done' && state.tone === 'warn'
@@ -189,10 +335,10 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           )}
         >
           <div className="min-w-0 flex-1">
-            <p>{state.kind === 'working' ? state.label : state.text}</p>
+            <p className="[overflow-wrap:anywhere]">{state.kind === 'working' ? state.label : state.text}</p>
             {state.kind === 'working' && state.total ? (
               <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--ds-well-strong)]" aria-hidden>
-                <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-300" style={{ width: `${((state.done || 0) / state.total) * 100}%` }} />
+                <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-300 motion-reduce:transition-none" style={{ width: `${((state.done || 0) / state.total) * 100}%` }} />
               </div>
             ) : null}
           </div>
@@ -201,15 +347,85 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
               Cancel
             </GhostButton>
           ) : state.kind !== 'working' ? (
-            <button type="button" aria-label="Dismiss" onClick={() => set({ kind: 'idle' })} className="grid h-6 w-6 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => set({ kind: 'idle' })}
+              className="tap-target grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            >
               <X className="h-3.5 w-3.5" aria-hidden />
             </button>
           ) : null}
         </div>
       )}
       <div className="min-h-0 flex-1">
-        <ComicReaderView doc={doc} urlFor={studio.urlFor} toolbarExtra={tools} autoFocus={false} />
+        <ComicReaderView doc={localized} urlFor={studio.urlFor} autoFocus={false} />
       </div>
+
+      <AdaptiveSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        label="Share & export"
+        title="Share & export"
+        anchorRef={sheetAnchor}
+        placement="below"
+        align="start"
+        strategy="fixed"
+        detents={['content']}
+        className="w-[min(340px,calc(100vw-24px))]"
+      >
+        <div className="p-1.5" data-testid="share-export-sheet">
+          <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Share</p>
+          <SheetRow
+            icon={<Share2 className="h-4 w-4" />}
+            label="Share…"
+            hint={shareUrl ? 'Link, QR code, languages, start page and stats' : 'Publish a read-only link people can open and download'}
+            onClick={() => {
+              setSheetOpen(false);
+              setShareOpen(true);
+            }}
+          />
+          {shareUrl && <SheetRow icon={<Copy className="h-4 w-4" />} label="Copy link" hint="Read-only: nobody can edit through it" onClick={() => void copyLink()} />}
+          <SheetRow
+            icon={<Eye className="h-4 w-4" />}
+            label="Preview as reader"
+            hint={shareUrl ? 'Opens your published link in a new tab' : 'Full screen with the cover intro, as readers will see it'}
+            onClick={preview}
+          />
+          <SheetRow icon={<BookOpen className="h-4 w-4" />} label="Read full screen" onClick={() => openFullScreen(false)} />
+          <p className="px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+            Download{editionName ? ` · ${editionName} edition` : ''}
+          </p>
+          <SheetRow icon={<Printer className="h-4 w-4" />} label="Print" hint="Crisp vector lettering — choose “Save as PDF” there" onClick={print} disabled={working} />
+          <SheetRow icon={<FileDown className="h-4 w-4" />} label="PDF" hint="A print-ready PDF, downloaded directly" onClick={pdf} disabled={working} />
+          <SheetRow icon={<FileArchive className="h-4 w-4" />} label="PNG pages (ZIP)" hint="Every page as a lettered image" onClick={zip} disabled={working} />
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 px-2.5 py-2">
+            <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--ds-ink)]">
+              <Clapperboard className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" aria-hidden /> Motion comic
+            </span>
+            <span className="flex flex-wrap gap-1.5" role="group" aria-label="Motion comic format">
+              {MOTION_ASPECTS.map(({ aspect, label }) => (
+                <GhostButton key={aspect} size="xs" disabled={working} onClick={() => motion(aspect)} aria-label={`Motion comic, ${label} ${aspect}`}>
+                  {label} <span className="tabular-nums text-[var(--ds-muted)]">{aspect}</span>
+                </GhostButton>
+              ))}
+            </span>
+          </div>
+          <p className="px-2.5 pb-1.5 text-[11px] leading-snug text-[var(--ds-muted)]">Made on your device — free, no AI cost.</p>
+        </div>
+      </AdaptiveSheet>
+      <ShareSheet studio={studio} open={shareOpen} onClose={() => setShareOpen(false)} />
+      {immersive && (
+        <ImmersiveReader
+          doc={doc}
+          urlFor={studio.urlFor}
+          intro={immersive.intro}
+          initialGuided={immersive.guided || undefined}
+          language={L.slot}
+          endCard={shareUrl ? { shareUrl } : undefined}
+          onExit={() => setImmersive(null)}
+        />
+      )}
     </div>
   );
 };

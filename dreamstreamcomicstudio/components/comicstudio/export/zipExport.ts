@@ -1,51 +1,52 @@
-// PNG pages ZIP: the cover and every drawn page, flattened with their lettering, zipped
-// and downloaded. Pages render one at a time (bounded memory on phones) with progress;
-// a page that fails is reported, not silently dropped, and the rest still export.
+// PNG ZIP: the book in reading order — cover, plates, every drawn page — flattened with its
+// lettering, zipped and downloaded. Files are named in slot order (`00-cover.png`, `01-title.png`,
+// `02-page-01.png`…), so any file browser lists them as the book reads.
+//
+// Two shapes:
+//   exportPngZip        one language (the doc as given, or the `lang` edition of it);
+//   exportLanguagesZip  "All languages": one folder per published language (`te-telugu/…`). Each art
+//                       image is fetched ONCE and re-lettered for every language (the art is shared;
+//                       only the overlay lettering, the cover title and the plates change).
+// Pages render one at a time (bounded memory on phones) with progress; a page that fails is reported,
+// not silently dropped, and the rest still export.
 
-import type { AssetRef, ComicDoc, Page } from '../../../shared/comic/doc';
+import type { ComicDoc } from '../../../shared/comic/doc';
+import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
 import { downloadBlob } from '../../../services/download';
-import { ExportError, renderImageToBlob, renderPageToBlob, type RasterOptions } from './rasterize';
+import { forEachReported, plateWidthFor, renderSlotWith, checkCancelled, type ExportProgress, type FailedSlot, type SlotRenderers } from './batch';
+import { CANCELLED, ExportError } from './errors';
+import { exportFileStem, languageFolderName } from './filenames';
+import { prepareExportFonts } from './fonts';
+import { loadExportImage, renderSlotToBlob, type LoadedImage, type RasterOptions } from './rasterize';
+import { collectExportSlots, exportLanguages, localizedFor, type ExportSlot, type UrlFor } from './sequence';
 
-export type UrlFor = (asset?: AssetRef | string | null) => string | undefined;
-
-export interface ExportProgress {
-  done: number;
-  total: number;
-  label: string;
-}
+export type { UrlFor } from './sequence';
+export type { ExportProgress } from './batch';
+export { exportFileStem, sanitizeFilename } from './filenames';
 
 export interface ZipExportResult {
   fileName: string;
   files: number;
   failed: { label: string; message: string }[];
   skipped: string[];
+  /** Set when a lettering face didn't load (the file may use a fallback face). */
+  notice?: string;
+  /** Languages in the ZIP (all-languages export). */
+  languages?: string[];
 }
 
-export interface ZipExportOptions {
+export interface ZipExportOptions extends SlotRenderers {
   onProgress?: (progress: ExportProgress) => void;
   signal?: AbortSignal;
   /** Long edge of each PNG (default: the art's own resolution). */
   longEdge?: number;
+  /** Export this edition of `doc` (localized here; the file name gets "-te"). Default: the doc as given. */
+  lang?: string;
+  /** Include the book's title / end / back-cover plates (default true). */
+  plates?: boolean;
   /** Override the download (tests). */
   download?: (blob: Blob, fileName: string) => void;
-  /** Override the renderers (tests). */
-  renderPage?: (doc: ComicDoc, page: Page, url: string, opts: RasterOptions) => Promise<Blob>;
-  renderImage?: (url: string, opts: RasterOptions) => Promise<Blob>;
 }
-
-/** File-name stem from the title ("The Saffron Thief!" → "the-saffron-thief"). */
-export const exportFileStem = (doc: ComicDoc): string => {
-  const slug = (doc.brief.title || '')
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return slug || 'comic';
-};
-
-const pad2 = (n: number) => String(n).padStart(2, '0');
 
 /** Blob → bytes (FileReader fallback for engines without Blob.arrayBuffer). */
 export const blobBytes = async (blob: Blob): Promise<Uint8Array> => {
@@ -58,71 +59,127 @@ export const blobBytes = async (blob: Blob): Promise<Uint8Array> => {
   });
 };
 
-const friendly = (err: unknown): string =>
-  err instanceof ExportError ? err.message : (err as Error)?.message ? `Something went wrong: ${(err as Error).message}` : 'Something went wrong.';
+const NOTHING = 'Nothing to export yet — draw at least one page first.';
+const hasArt = (slots: readonly ExportSlot[]) => slots.some((s) => !s.plate);
+const usesOverrides = (o: SlotRenderers) => !!(o.renderPage || o.renderImage || o.renderCover || o.renderPlate);
+/** "-te" only for an edition that isn't the comic's source language. */
+const suffixLang = (doc: ComicDoc, lang?: string) => (lang && !sameLanguage(lang, doc.format?.language || 'en') ? lang : undefined);
 
-interface Target {
-  label: string;
-  fileName: string;
-  url: string;
-  page?: Page;
-}
-
-export async function exportPngZip(doc: ComicDoc, urlFor: UrlFor, opts: ZipExportOptions = {}): Promise<ZipExportResult> {
-  const targets: Target[] = [];
-  const skipped: string[] = [];
-  const coverAsset = doc.cover.render.asset;
-  if (coverAsset?.path) {
-    const url = urlFor(coverAsset);
-    if (url) targets.push({ label: 'Cover', fileName: '00-cover.png', url });
-    else skipped.push('Cover (image link not ready yet)');
-  }
-  [...doc.pages]
-    .sort((a, b) => a.n - b.n)
-    .forEach((page) => {
-      const label = `Page ${page.n}`;
-      if (!page.render.asset?.path) {
-        skipped.push(`${label} (not drawn yet)`);
-        return;
-      }
-      const url = urlFor(page.render.asset);
-      if (!url) skipped.push(`${label} (image link not ready yet)`);
-      else targets.push({ label, fileName: `page-${pad2(page.n)}.png`, url, page });
-    });
-  if (!targets.length) throw new ExportError('Nothing to export yet — draw at least one page first.');
-
-  const renderPage = opts.renderPage || renderPageToBlob;
-  const renderImage = opts.renderImage || renderImageToBlob;
-  const stem = exportFileStem(doc);
-  const { default: JSZip } = await import('jszip');
-  const zip = new JSZip();
-  const folder = zip.folder(stem) || zip;
-  const failed: ZipExportResult['failed'] = [];
-  let files = 0;
-  const total = targets.length;
-
-  for (let i = 0; i < targets.length; i += 1) {
-    if (opts.signal?.aborted) throw new ExportError('Export cancelled.');
-    const t = targets[i];
-    opts.onProgress?.({ done: i, total, label: `Rendering ${t.label.toLowerCase()} (${i + 1} of ${total})…` });
-    try {
-      const raster = { longEdge: opts.longEdge, signal: opts.signal };
-      const blob = t.page ? await renderPage(doc, t.page, t.url, raster) : await renderImage(t.url, raster);
-      folder.file(t.fileName, await blobBytes(blob), { binary: true });
-      files += 1;
-    } catch (err) {
-      if (opts.signal?.aborted) throw new ExportError('Export cancelled.');
-      failed.push({ label: t.label, message: friendly(err) });
-    }
-  }
-  if (!files) throw new ExportError(`Couldn’t export any pages. ${failed[0]?.message || ''}`.trim());
-
+const zipAndDownload = async (zip: { generateAsync(o: { type: 'uint8array'; compression: 'STORE' }): Promise<Uint8Array> }, fileName: string, opts: ZipExportOptions, total: number) => {
   opts.onProgress?.({ done: total, total, label: 'Zipping…' });
   // PNGs are already compressed — store them as-is (fast, same size).
   const data = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
-  const fileName = `${stem}-pages.zip`;
-  const blob = new Blob([data as BlobPart], { type: 'application/zip' });
-  (opts.download || downloadBlob)(blob, fileName);
+  checkCancelled(opts.signal);
+  (opts.download || downloadBlob)(new Blob([data as BlobPart], { type: 'application/zip' }), fileName);
   opts.onProgress?.({ done: total, total, label: 'Done' });
-  return { fileName, files, failed, skipped };
+};
+
+export async function exportPngZip(doc: ComicDoc, urlFor: UrlFor, opts: ZipExportOptions = {}): Promise<ZipExportResult> {
+  const book = localizedFor(doc, opts.lang);
+  const { slots, skipped } = collectExportSlots(book, urlFor, { plates: opts.plates });
+  if (!hasArt(slots)) throw new ExportError(NOTHING);
+  checkCancelled(opts.signal);
+
+  const fonts = usesOverrides(opts) ? null : await prepareExportFonts([book]);
+  const stem = exportFileStem(book, suffixLang(doc, opts.lang));
+  const { default: JSZip } = await import('jszip');
+  const zip = new JSZip();
+  const folder = zip.folder(stem) || zip;
+  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth: plateWidthFor(slots, opts.longEdge) };
+  const coverUrl = slots.find((s) => s.kind === 'cover')?.url;
+  let files = 0;
+
+  const failed = await forEachReported(
+    slots,
+    (s) => s.label,
+    async (slot) => {
+      const blob = await renderSlotWith(book, slot, raster, { ...opts, coverUrl });
+      checkCancelled(opts.signal);
+      folder.file(`${slot.fileBase}.png`, await blobBytes(blob), { binary: true });
+      files += 1;
+    },
+    opts
+  );
+  if (!files) throw new ExportError(`Couldn’t export any pages. ${failed[0]?.message || ''}`.trim());
+
+  const fileName = `${stem}-pages.zip`;
+  await zipAndDownload(zip, fileName, opts, slots.length);
+  return { fileName, files, failed, skipped, ...(fonts?.notice ? { notice: fonts.notice } : {}) };
+}
+
+export interface LanguagesZipOptions extends Omit<ZipExportOptions, 'lang'> {
+  /** Languages to include (default: the published editions in doc.publication, else the source). */
+  languages?: readonly string[];
+}
+
+/**
+ * "All languages (ZIP)": one folder per language, every art image fetched once and re-lettered per
+ * language. `doc` must be the SOURCE doc (with its editions), not a localized copy.
+ */
+export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: LanguagesZipOptions = {}): Promise<ZipExportResult> {
+  const langs = exportLanguages(doc, opts.languages);
+  const books = langs.map((lang) => ({ lang, doc: localizedFor(doc, lang), name: languageSpec(lang)?.english ?? lang, folder: languageFolderName(lang) }));
+  const { slots, skipped } = collectExportSlots(doc, urlFor, { plates: opts.plates });
+  if (!hasArt(slots)) throw new ExportError(NOTHING);
+  checkCancelled(opts.signal);
+
+  const overrides = usesOverrides(opts);
+  const fonts = overrides ? null : await prepareExportFonts(books.map((b) => b.doc));
+  const stem = exportFileStem(doc);
+  const { default: JSZip } = await import('jszip');
+  const zip = new JSZip();
+  const root = zip.folder(stem) || zip;
+  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth: plateWidthFor(slots, opts.longEdge) };
+  const coverSlot = slots.find((s) => s.kind === 'cover');
+  const coverUrl = coverSlot?.url;
+  const multi = books.length > 1;
+  let files = 0;
+  const failed: FailedSlot[] = [];
+  const total = slots.length * books.length;
+  let done = 0;
+
+  for (const slot of slots) {
+    checkCancelled(opts.signal);
+    // The art is the same in every language: fetch it once.
+    let image: LoadedImage | null = null;
+    if (!overrides && slot.url && !slot.plate) {
+      try {
+        image = await loadExportImage(slot.url, opts.signal);
+      } catch (err) {
+        checkCancelled(opts.signal);
+        const message = err instanceof ExportError ? err.message : 'The image couldn’t be loaded.';
+        for (const b of books) failed.push({ label: multi ? `${slot.label} · ${b.name}` : slot.label, message });
+        done += books.length;
+        continue;
+      }
+    }
+    try {
+      const results = await forEachReported(
+        books,
+        (b) => (multi ? `${slot.label} · ${b.name}` : slot.label),
+        async (b) => {
+          const blob = overrides
+            ? await renderSlotWith(b.doc, slot, raster, { ...opts, coverUrl })
+            : await renderSlotToBlob(b.doc, slot, { ...raster, ...(image ? { image } : {}), coverUrl });
+          checkCancelled(opts.signal);
+          (root.folder(b.folder) || root).file(`${slot.fileBase}.png`, await blobBytes(blob), { binary: true });
+          files += 1;
+        },
+        {
+          signal: opts.signal,
+          onProgress: (p) => opts.onProgress?.({ done: done + p.done, total, label: p.label.replace(/\(\d+ of \d+\)/, `(${done + p.done + 1} of ${total})`) })
+        }
+      );
+      failed.push(...results);
+    } finally {
+      image?.release();
+    }
+    done += books.length;
+  }
+  if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+  if (!files) throw new ExportError(`Couldn’t export any pages. ${failed[0]?.message || ''}`.trim());
+
+  const fileName = `${stem}-${multi ? 'all-languages' : 'pages'}.zip`;
+  await zipAndDownload(zip, fileName, opts, total);
+  return { fileName, files, failed, skipped, languages: langs, ...(fonts?.notice ? { notice: fonts.notice } : {}) };
 }

@@ -27,7 +27,7 @@ import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { getComicCost } from '../../services/billing';
 import { costContextFromAllowance } from '../../services/costDisplay';
 import { useUsageAllowance } from '../usage/useUsageAllowance';
-import { comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, type ComicCostResponse } from './comicCostDisplay';
+import { aiUsageForExport, artifactsForExport, comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, type ComicCostResponse } from './comicCostDisplay';
 import { normalizeComicAgentSettings, outputTargetLabel } from '../../services/comicAgentSettings';
 import { transitionAgentRun } from '../../services/comicAgentRun';
 import { AgentStageShell } from '../AgentStageShell';
@@ -539,12 +539,12 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
       const artifactsFolder = zip.folder('artifacts');
       if (artifactsFolder) {
-        artifactsFolder.file('artifacts.json', JSON.stringify(exportData.artifacts, null, 2));
+        artifactsFolder.file('artifacts.json', JSON.stringify(artifactsForExport(exportData.artifacts, costCtx), null, 2));
       }
 
       const reportFolder = zip.folder('report');
       if (reportFolder && exportData.report) {
-        reportFolder.file('ai_usage.json', JSON.stringify(exportData.report.ai_usage, null, 2));
+        reportFolder.file('ai_usage.json', JSON.stringify(aiUsageForExport(exportData.report.ai_usage, costCtx), null, 2));
         reportFolder.file('cost_summary.json', JSON.stringify(costSummaryForExport(exportData.report.cost_summary, costCtx), null, 2));
         reportFolder.file('storage.json', JSON.stringify(exportData.report.storage, null, 2));
       }

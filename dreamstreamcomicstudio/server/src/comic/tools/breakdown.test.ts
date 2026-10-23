@@ -1,6 +1,6 @@
 // Director tool group "breakdown" (show_pages, quote) and the show_breakdown action.
 // Free reads of the doc: no ops (except the message carrying a card), no spend, no model calls.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pageSpecHash, type Card, type ComicDoc } from '../../../../shared/comic/doc.js';
 import { formatUsd } from '../../../../shared/comic/models.js';
 import { quoteRenderPages, unitPrice } from '../../../../shared/comic/plan.js';
@@ -11,6 +11,25 @@ import { BREAKDOWN_ACTIONS, showBreakdownAction } from '../actions/breakdown.js'
 import { ACTION_HANDLERS } from '../actions/index.js';
 import { toolGroupById } from './index.js';
 import { breakdownCardFor, breakdownToolGroup, pageRanges, resolvePageNumbers, sanitizeBreakdownPageIds } from './breakdown.js';
+import { StudioError } from '../types.js';
+import { estimateTranslation } from '../i18n/index.js';
+
+// The translation estimate is REAL (P1-I18N); a test can make it fail to check the honest wording.
+const i18nFailure = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock('../i18n/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../i18n/index.js')>();
+  return {
+    ...actual,
+    estimateTranslation: (...args: Parameters<typeof actual.estimateTranslation>) => {
+      const err = i18nFailure.next;
+      i18nFailure.next = null;
+      return err ? Promise.reject(err) : actual.estimateTranslation(...args);
+    }
+  };
+});
+afterEach(() => {
+  i18nFailure.next = null;
+});
 
 const setup = (doc: ComicDoc = plannedDoc()) => {
   const session = newSession(doc);
@@ -163,10 +182,17 @@ describe('quote', () => {
     expect(await drawn.tools.quote.execute({ action: 'render_sheets' })).toMatch(/^\$0 — every lead and support character already has a sheet/);
   });
 
-  it('translation: honest when the estimate is unavailable; validates languages and actions', async () => {
-    const { tools } = setup();
+  it('translation: the real quote; honest when the estimate is unavailable; validates languages and actions', async () => {
+    const { tools, ctx } = setup();
+    // The real estimate: priced lines by the translator + the linguist review, quote only.
+    const est = await estimateTranslation(ctx, { type: 'translate', languages: ['te', 'hi'] });
     const t = await tools.quote.execute({ action: 'translate', languages: ['Telugu', 'hi'] });
-    expect(t).toMatch(/^I can't price a translation right now: /);
+    expect(t.startsWith(est.usd > 0 ? `≈${formatUsd(est.usd)} to translate into Telugu, Hindi: ` : '$0 to translate into Telugu, Hindi: ')).toBe(true);
+    expect(t).toMatch(/by the translator with a linguist review/);
+    expect(ctx.session.doc.spend.entries).toHaveLength(0); // a quote never spends
+    // Unavailable (e.g. no translator model): an honest sentence, never a made-up price.
+    i18nFailure.next = new StudioError('NOT_AVAILABLE', 'Translation is unavailable right now.', { status: 503 });
+    expect(await tools.quote.execute({ action: 'translate', languages: ['te'] })).toMatch(/^I can't price a translation right now: Translation is unavailable right now\./);
     expect(await tools.quote.execute({ action: 'translate', languages: ['Klingon'] })).toMatch(/I don't know Klingon as a language/);
     expect(await tools.quote.execute({ action: 'nope' })).toMatch(/^Error: action must be one of/);
     expect(await tools.quote.execute({ action: 'render_pages', pages: [12] })).toContain('There is no page 12. This book has pages 1–3.');

@@ -48,12 +48,16 @@ const COST_BADGE: Record<ActivityCost, { text: string; title: string; cls: strin
   }
 };
 
-export const CostBadge: React.FC<{ cost: ActivityCost; className?: string }> = ({ cost, className }) => {
+/** A governed user's words for the AI-writer step: no money words at all (P1-LIMITS rule). */
+export const GOVERNED_TEXT_COST_TITLE = 'Uses the AI writer — barely touches your usage';
+
+export const CostBadge: React.FC<{ cost: ActivityCost; className?: string; governed?: boolean }> = ({ cost, className, governed }) => {
   const b = COST_BADGE[cost];
+  const title = governed && cost === 'text' ? GOVERNED_TEXT_COST_TITLE : b.title;
   return (
-    <span title={b.title} className={cx('inline-flex shrink-0 items-center rounded-full px-1.5 py-px text-[10px] font-semibold leading-4', b.cls, className)}>
+    <span title={title} className={cx('inline-flex shrink-0 items-center rounded-full px-1.5 py-px text-[10px] font-semibold leading-4', b.cls, className)}>
       {b.text}
-      <span className="sr-only">{` — ${b.title}`}</span>
+      <span className="sr-only">{` — ${title}`}</span>
     </span>
   );
 };
@@ -75,7 +79,7 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
   const detached = !studio.busy && studio.renderingTotal > 0;
   const visible = active.length > 0 || studio.busy || detached;
   const savedUsd = studio.doc?.spend.savedUsd;
-  const cost = useCostFormat(studio);
+  const fmt = useCostFormat(studio);
 
   // Baseline of "saved by software" while idle; the delta during a run is what this run saved.
   const baseline = useRef<number | undefined>(savedUsd);
@@ -112,13 +116,13 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
         <span className="min-w-0 flex-1 basis-[8rem] truncate text-[var(--ds-ink)]" title={label}>
           {label}
         </span>
-        {cost && <CostBadge cost={cost} />}
+        {cost && <CostBadge cost={cost} governed={fmt.governed} />}
         {saved > 0 && (
           <span
             className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-px text-[10.5px] font-medium leading-4 text-emerald-700 dark:text-emerald-300"
             title="Free — done by the editor, no AI cost"
           >
-            {cost.saved(saved)}
+            {fmt.saved(saved)}
             <span className="sr-only"> — done by software, no AI cost</span>
           </span>
         )}
@@ -156,7 +160,7 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
               return (
                 <li key={a.id} className="flex min-w-0 items-center gap-1.5">
                   <span className="min-w-0 truncate">{ellipsize(a.label)}</span>
-                  {c && <CostBadge cost={c} />}
+                  {c && <CostBadge cost={c} governed={fmt.governed} />}
                 </li>
               );
             })}

@@ -20,12 +20,9 @@ import { Bot, Box, Car, ChevronDown, ChevronUp, Ghost, MapPin, PawPrint, Plus, S
 import { castKindOf, castNoun, isCompanion, newId, type CastKind, type Character, type CharacterLook, type ComicDoc, type Place } from '../../../shared/comic/doc';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety';
 import type { StudioController } from '../types';
-import { EmptyArt } from '../library/procedural/EmptyArt';
-import { LibraryImage } from '../library/LibraryImage';
-import { useComicLibrary } from '../library/useComicLibrary';
 import { RefStrip } from '../refs/RefStrip';
 import { sheetHint } from '../refs/refsModel';
-import { FrameBadge, ImageFrame, VersionsButton, frameSources } from './ImageFrame';
+import { EmptyIllustration, FrameBadge, ImageFrame, VersionsButton, frameSources } from './ImageFrame';
 import { byokFromDoc, estimateOne, hasImage, initials, isBusy, jobModel, nameHue, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
 import { ConfirmStrip, EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, Surface, cx, useClickGuard } from './ui';
@@ -112,19 +109,6 @@ export const CastKindLine: React.FC<{ character: Character }> = ({ character: c 
       {c.look.species && <span className="min-w-0 truncate" title={c.look.species}>· {c.look.species}</span>}
     </p>
   );
-};
-
-/** Platform library empty-state art with the free procedural line art underneath (never blank). */
-export const EmptyIllustration: React.FC<{ variant: 'cast' | 'style' | 'pages' | 'reader' | 'media' }> = ({ variant }) => {
-  const library = useComicLibrary();
-  const theme: 'light' | 'dark' = typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-  const asset = library.empty(variant, theme);
-  const art = (
-    <span className="flex h-full w-full items-center justify-center text-[var(--ds-muted)]">
-      <EmptyArt variant={variant} />
-    </span>
-  );
-  return <span className="mx-auto block h-24 w-28">{asset ? <LibraryImage id={asset.id} alt="" sizes="112px" className="h-full w-full object-contain" fallback={art} /> : art}</span>;
 };
 
 const photoPhrase = (n: number) => (n ? `, and ${n === 1 ? 'their reference photo goes' : `their ${n} reference photos go`} with them` : '');
@@ -424,31 +408,28 @@ export const CastTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({
           id="cast-title"
           icon={<Users className="h-3.5 w-3.5" />}
           right={
-            <>
-              {missing.length > 0 && (
-                <>
-                  <span id="cast-missing-price" className="hidden text-[11px] tabular-nums text-[var(--ds-muted)] medium:inline">
-                    {cost.quote(missingPrice)}
-                  </span>
-                  <PrimaryButton
-                    size="xs"
-                    busy={busyKey === 'all'}
-                    aria-describedby="cast-missing-price"
-                    title={cost.quote(missingPrice)}
-                    onClick={() => fire('all', () => studio.act({ type: 'render_sheets', characterIds: missing.map((c) => c.id) }))}
-                  >
-                    <Sparkles className="h-3 w-3" aria-hidden /> Render {plural(missing.length, 'sheet')}
-                  </PrimaryButton>
-                </>
-              )}
-              <GhostButton size="xs" onClick={addCharacter} aria-label="Add a character">
-                <Plus className="h-3 w-3" aria-hidden /> Add
-              </GhostButton>
-            </>
+            <GhostButton size="xs" onClick={addCharacter} aria-label="Add a character">
+              <Plus className="h-3 w-3" aria-hidden /> Add
+            </GhostButton>
           }
         >
           Cast · {doc.cast.length}
         </SectionTitle>
+        {missing.length > 0 && (
+          <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <PrimaryButton
+              size="xs"
+              busy={busyKey === 'all'}
+              aria-describedby="cast-missing-price"
+              onClick={() => fire('all', () => studio.act({ type: 'render_sheets', characterIds: missing.map((c) => c.id) }))}
+            >
+              <Sparkles className="h-3 w-3" aria-hidden /> Render {plural(missing.length, 'sheet')}
+            </PrimaryButton>
+            <span id="cast-missing-price" className="text-[11px] tabular-nums text-[var(--ds-muted)]">
+              {cost.quote(missingPrice)} · {missing.map((c) => c.name).join(', ')}
+            </span>
+          </div>
+        )}
         {cast.length ? (
           <div className={GRID}>
             {cast.map((c) => (

@@ -117,7 +117,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
         {retry && retry.actions.length > 0 && (
           <GhostButton
             size="sm"
-            className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
+            className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
             busy={isPending('retry-all')}
             disabled={drawing > 0}
             title={drawing > 0 ? 'Waiting for the options that are drawing now' : undefined}
@@ -129,7 +129,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
         )}
         <GhostButton
           size="sm"
-          className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
+          className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
           busy={isPending('more')}
           disabled={drawing > 0}
           onClick={() => void run('more', { type: 'render_style_options', quotedUsd: moreUsd })}

@@ -114,7 +114,12 @@ const ownerOf = (path: string) => {
   return m ? { userId: m[1], projectId: m[2] } : { userId: 'unknown', projectId: 'unknown' };
 };
 
-export function fakeAssetStore(): FakeAssetStore {
+/**
+ * opts.restoreQuarantined: give the fake the optional AssetStore.restoreQuarantined (off by
+ * default — the production store doesn't have it yet, so callers exercise their copyObject
+ * fallback and its honest failure; tests of the dedicated move-back path switch it on).
+ */
+export function fakeAssetStore(opts: { restoreQuarantined?: boolean } = {}): FakeAssetStore {
   let n = 0;
   const store: FakeAssetStore = {
     files: new Map(),
@@ -256,6 +261,7 @@ export function fakeAssetStore(): FakeAssetStore {
       return removed;
     }
   };
+  if (!opts.restoreQuarantined) delete store.restoreQuarantined;
   return store;
 }
 

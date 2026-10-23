@@ -42,18 +42,29 @@ import {
   type StyleBible
 } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
-import type { ContentRating } from '../../../shared/comic/safety.js';
-import type { DocOp, SpendAction } from '../../../shared/comic/ops.js';
+import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety.js';
+import { applyOps, type DocOp, type SpendAction } from '../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { lineLengthRule } from '../../../shared/comic/languages.js';
-import { BUBBLE_SHAPES, FONT_IDS, normalizeColor, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
-import { estimateJobs, formatUsd, resolveImageJob } from '../../../shared/comic/models.js';
+import {
+  BUBBLE_SHAPES,
+  DEFAULT_LETTERING,
+  FONT_IDS,
+  normalizeColor,
+  presetForComic,
+  resolveLetterStyle,
+  sanitizeLetterStylePatch,
+  type LetterStylePatch
+} from '../../../shared/comic/lettering/style.js';
+import { estimateJobs, resolveImageJob } from '../../../shared/comic/models.js';
+import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
 import { coverNeedsDraw, pageTargets as drawablePages } from '../../../shared/comic/plan.js';
 import { sheetRefsChanged } from '../../../shared/comic/refRanking.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, describeUncast, findUncastBeings } from './castScan.js';
+import { costFormatterFor } from './costText.js';
 import {
   ASPECT_RATIOS,
   COLOR_MODES,
@@ -82,6 +93,7 @@ import {
   type ToolGroup
 } from './extensions.js';
 import { addRefs } from './refs/index.js';
+import { LETTERING_STYLE_ARGS_SCHEMA, balloonAtPosition, styleArgsToPatch } from './tools/lettering.js';
 import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
@@ -287,7 +299,7 @@ const attachmentRefs = (turn: DirectorTurn, raw: unknown): RefAsset[] => {
 async function attachRefs(ctx: StudioContext, owner: RefOwner, refs: RefAsset[]): Promise<string> {
   if (!refs.length) return '';
   const added = await addRefs(ctx, owner, refs.map((r) => ({ ...r, addedBy: r.addedBy ?? 'user' })));
-  if (added.ops.length) ctx.session.commit(added.ops);
+  if (added.ops.length) ctx.session.commit(added.ops, { origin: 'director', label: 'Attach photos' });
   return added.message;
 }
 
@@ -337,7 +349,7 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   if (fromStore) script = stored;
   if (!script) throw argError('No source text: pass text, set useMessage:true to save the user’s message, or ask the user to paste their script.');
   script = script.slice(0, MAX_SOURCE_CHARS);
-  if (!fromStore) ctx.session.commit([{ op: 'source', patch: { script, updatedAt: Date.now() } }]);
+  if (!fromStore) ctx.session.commit([{ op: 'source', patch: { script, updatedAt: Date.now() } }], { origin: 'director', label: 'Save the script' });
 
   const words = (script.match(/\S+/g) || []).length;
   const analyze = args.analyze === true || (args.analyze !== false && script.length >= ANALYZE_SOURCE_MIN_CHARS);
@@ -436,7 +448,7 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   } else if (analysis.suggestedPageCount) {
     pagesNote = `; suggested ${analysis.suggestedPageCount} pages`;
   }
-  if (ops.length) ctx.session.commit(ops);
+  if (ops.length) ctx.session.commit(ops, { origin: 'director', label: 'Read the script' });
 
   const after = ctx.session.doc;
   return [
@@ -499,6 +511,7 @@ async function spend(ctx: StudioContext, turn: DirectorTurn, action: SpendAction
     collectCard: (card) => turn.cards.push(card),
     collectNextSteps: (steps) => pushNextSteps(turn, steps),
     ...(forceGate ? { forceGate } : {}),
+    ...(ctx.caps ? { caps: ctx.caps } : {}),
     origin: 'director'
   });
   const outcome = started.outcome;
@@ -541,28 +554,27 @@ function castUncastBeings(ctx: StudioContext): string {
   if (!beings.length) return '';
   const ops = castOpsForUncast(ctx.session.doc, beings);
   if (!ops.length) return '';
-  ctx.session.commit(ops);
+  ctx.session.commit(ops, { origin: 'director', label: 'Add cast' });
   // Companions (tier support) get a model sheet with the next drawing: say what that costs.
   const companions = ops.flatMap((o) => (o.op === 'character' && o.patch.tier === 'support' && o.patch.name ? [o.patch.name] : []));
   const sheetNote = companions.length
-    ? ` ${joinList(companions)} ${companions.length === 1 ? 'gets' : 'get'} a model sheet with the next drawing (≈ ${formatUsd(priceOf(ctx, 'sheet', companions.length))}); make ${companions.length === 1 ? 'it' : 'them'} text-only (tier extra) to skip that.`
+    ? ` ${joinList(companions)} ${companions.length === 1 ? 'gets' : 'get'} a model sheet with the next drawing (${costFormatterFor(ctx).approx(priceOf(ctx, 'sheet', companions.length))}); make ${companions.length === 1 ? 'it' : 'them'} text-only (tier extra) to skip that.`
     : '';
   return ` Also added to the cast so they stay consistent: ${describeUncast(beings)} (free; the user can change or remove them).${sheetNote}`;
 }
 
 // ── Lettering helpers for edit_panel_text ────────────────────────────────────
 
-const STYLE_SCHEMA = {
+/**
+ * The lettering engine's style args (tools/lettering.ts), trimmed to the six keys a dialogue edit
+ * needs so the core prompt stays small; the engine parses them (plain words, relative sizes).
+ */
+const LETTERING_STYLE_ARGS_COMPACT = {
   type: 'object',
   description: 'Optional lettering (free).',
-  properties: {
-    font: S('Font id (bangers, andika…).'),
-    size: S('smaller, larger or a scale.'),
-    bold: { type: 'boolean' },
-    text_color: S('Color.'),
-    fill_color: S('Balloon fill.'),
-    shape: S('cloud, burst, oval, rect…')
-  }
+  properties: Object.fromEntries(
+    ['font', 'size', 'bold', 'text_color', 'fill_color', 'shape'].map((k) => [k, (LETTERING_STYLE_ARGS_SCHEMA.properties as Record<string, unknown>)[k]])
+  )
 };
 
 /** The compact styleArgs subset → a sanitized LetterStylePatch (undefined when nothing valid). */
@@ -583,6 +595,23 @@ export function styleFromArgs(raw: unknown): LetterStylePatch | undefined {
   if (typeof raw.shape === 'string' && (BUBBLE_SHAPES as readonly string[]).includes(raw.shape.trim().toLowerCase())) out.shape = raw.shape.trim().toLowerCase();
   return sanitizeLetterStylePatch(out);
 }
+
+/**
+ * The sheet's photo slots, exactly as compileCharacterSheet counts them: the shared cap, the model's
+ * character (else object) slots, and the total minus the style board when one is attached.
+ */
+const sheetRefSlots = (doc: ComicDoc): number => {
+  const { spec } = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride);
+  const board = doc.style.board && canServeToOwner(doc.style.board) ? 1 : 0;
+  return Math.max(0, Math.min(REF_LIMITS.sheetAuthorRefs, spec.refs.characters > 0 ? spec.refs.characters : spec.refs.objects, spec.refs.total - board));
+};
+
+/** A line's lettering patch from the compact style args, parsed by the lettering engine itself (same words as restyle_balloons). */
+const lineStyleFromArgs = (doc: ComicDoc, line: Line, raw: unknown): LetterStylePatch | undefined => {
+  if (!isObject(raw) || !Object.keys(raw).length) return undefined;
+  const patch = styleArgsToPatch(raw, resolveLetterStyle(doc, line));
+  return Object.keys(patch).length ? patch : undefined;
+};
 
 /** A 9-grid position inside the line's panel → a pinned balloon (page-normalized, clamped). */
 function balloonAt(doc: ComicDoc, page: Page, panel: Panel, lineId: string, position: Position): DocOp {
@@ -615,8 +644,21 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       userText: latestUserMessage(ctx.session.doc)?.text || ''
     });
   const doc = () => ctx.session.doc;
-  const commit = (ops: DocOp[]) => ctx.session.commit(ops);
+  // Every director edit is one undoable step with a short human label (origin 'director', contract §7).
+  const commit = (ops: DocOp[], label?: string) => ctx.session.commit(ops, { origin: 'director', ...(label ? { label } : {}) });
   const byok = () => spendIsByok(ctx.keys);
+  // Prices in the user's terms (governed users: "≈2% of your usage", never dollars).
+  const cost = costFormatterFor(ctx);
+  /** letterStyle.auto: the preset follows the comic (kids → storybook, manga, webtoon, noir) — free, never over a manual pick. */
+  const followLetteringPreset = (): string => {
+    const d = doc();
+    const ls = d.letterStyle ?? DEFAULT_LETTERING;
+    if (!ls.auto || d.format.lettering === 'in_art') return '';
+    const fit = presetForComic(d.format, d.brief);
+    if (fit === ls.presetId) return '';
+    commit([{ op: 'letter_style', patch: { presetId: fit, auto: true, keepOverrides: true } }], 'Lettering preset');
+    return ` Lettering now uses the ${fit.replace(/_/g, ' ')} preset to fit (free; it was on automatic).`;
+  };
   const captured = (fact: string) => {
     if (fact && !state.captured.includes(fact) && state.captured.length < 12) state.captured.push(fact);
   };
@@ -644,13 +686,14 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         }
         if (args.themes !== undefined) patch.themes = strList(args.themes, 12, 120);
         if (!Object.keys(patch).length) throw argError('Pass at least one brief field.');
-        commit([{ op: 'brief', patch }]);
+        commit([{ op: 'brief', patch }], 'Story details');
         if (typeof patch.title === 'string') captured(`the title “${patch.title}”`);
         if (typeof patch.audience === 'string') captured(`for ${patch.audience}`);
         if (typeof patch.setting === 'string') captured(`set at ${String(patch.setting).slice(0, 60)}`);
         if (typeof patch.genre === 'string') captured(String(patch.genre));
         if (!state.captured.length) captured('the story notes');
-        return `Brief updated: ${Object.keys(patch).join(', ')}.`;
+        const lettering = patch.audience !== undefined || patch.genre !== undefined || patch.tone !== undefined ? followLetteringPreset() : '';
+        return `Brief updated: ${Object.keys(patch).join(', ')}.${lettering}`;
       }
     ),
 
@@ -662,7 +705,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       (args) => {
         const notes = strList(args.notes, 12, 500);
         if (!notes.length) throw argError('Pass notes as a list of short strings.');
-        commit(notes.map((n): DocOp => ({ op: 'note_add', text: n })));
+        commit(notes.map((n): DocOp => ({ op: 'note_add', text: n })), notes.length === 1 ? 'Note' : 'Notes');
         captured(notes.length === 1 ? 'your note' : 'your notes');
         return `Noted (${doc().brief.notes.length} notes total).`;
       }
@@ -703,15 +746,16 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if ((staled.length || coverStaled) && args.confirm !== true) {
           const usd = priceOf(ctx, 'page', staled.length) + (coverStaled ? priceOf(ctx, 'cover') : 0);
           const what = [staled.length ? `${staled.length} drawn page${staled.length === 1 ? '' : 's'}` : '', coverStaled ? 'the cover' : ''].filter(Boolean).join(' and ');
-          return `Not changed yet: this makes ${what} out of date (redrawing ≈ ${formatUsd(usd)}). Tell the user and ask; call again with confirm:true to apply (they can also keep the drawings as they are).`;
+          return `Not changed yet: this makes ${what} out of date (redrawing ${cost.approx(usd)}). Tell the user and ask; call again with confirm:true to apply (they can also keep the drawings as they are).`;
         }
-        commit([{ op: 'format', patch }]);
+        commit([{ op: 'format', patch }], 'Format');
         const f = doc().format;
         logger.info('comic_format_changed', { projectId: ctx.projectId, by: 'director', keys: Object.keys(patch) });
         if (patch.pageCount !== undefined || patch.pageAspect) captured(`${f.pageCount} page${f.pageCount === 1 ? '' : 's'}, ${f.pageAspect}`);
         else captured('the format');
-        const stale = staled.length ? ` ${staled.length} drawn page${staled.length === 1 ? ' is' : 's are'} now out of date (redraw ≈ ${formatUsd(priceOf(ctx, 'page', staled.length))}, or keep them).` : '';
-        return `Format: ${f.kind}, ${f.pageCount} pages, ${f.pageAspect}, panels ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, ${f.language}.${stale}`;
+        const stale = staled.length ? ` ${staled.length} drawn page${staled.length === 1 ? ' is' : 's are'} now out of date (redraw ${cost.approx(priceOf(ctx, 'page', staled.length))}, or keep them).` : '';
+        const lettering = patch.kind !== undefined || patch.lettering !== undefined ? followLetteringPreset() : '';
+        return `Format: ${f.kind}, ${f.pageCount} pages, ${f.pageAspect}, panels ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, ${f.language}.${stale}${lettering}`;
       }
     ),
 
@@ -781,25 +825,26 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           const changedLook = patch.look && lookChanged(existing.look, patch.look);
           if ((changedLook || patch.count !== undefined || patch.kind) && existing.sheet.status === 'ready') {
             ops.push({ op: 'render', target: { kind: 'sheet', id }, patch: { status: 'stale' } });
-            note = ` ${upper(finalName)}'s sheet is now out of date (redraw ≈ ${formatUsd(priceOf(ctx, 'sheet'))} when the user wants it).`;
+            note = ` ${upper(finalName)}'s sheet is now out of date (redraw ${cost.approx(priceOf(ctx, 'sheet'))} when the user wants it).`;
           }
-          if (ops.length) commit(ops);
+          if (ops.length) commit(ops, `Cast: ${upper(finalName)}`);
         } else {
           const nonHuman = !!kind && kind !== 'person';
           patch.tier = tier || (nonHuman ? 'support' : d.cast.some((c) => c.tier === 'lead') ? 'support' : 'lead');
           patch.look = { ...look, summary: look.summary || summaryFromLook(look) } as CharacterLook;
           id = newId('c');
-          commit([{ op: 'character', id, patch }]);
+          commit([{ op: 'character', id, patch }], `Add ${upper(finalName)}`);
         }
         // Every attached photo is kept (honest caps from the refs package) — never a silent slice.
         const refNote = refs.length ? ` ${await attachRefs(ctx, { kind: 'character', id }, refs)}` : '';
         const saved = doc().cast.find((c) => c.id === id);
         if (refs.length && saved) {
-          const slots = resolveImageJob('sheet', doc().settings.quality, doc().settings.imageModelOverride).spec.refs.characters || 4;
+          // The compiler's own photo cap (models differ in character slots; a style board takes one).
+          const slots = sheetRefSlots(doc());
           if (saved.tier !== 'extra' && saved.sheet.status === 'ready' && sheetRefsChanged(saved, slots)) {
-            note += ` The sheet was drawn from older photos — offer a redraw (≈ ${formatUsd(priceOf(ctx, 'sheet'))}); do not redraw without asking.`;
+            note += ` The sheet was drawn from older photos — offer a redraw (${cost.approx(priceOf(ctx, 'sheet'))}); do not redraw without asking.`;
           } else if (saved.tier !== 'extra' && !saved.sheet.asset) {
-            note += ` No sheet yet — offer to make ${upper(finalName)}'s model sheet from these photos (≈ ${formatUsd(priceOf(ctx, 'sheet'))}).`;
+            note += ` No sheet yet — offer to make ${upper(finalName)}'s model sheet from these photos (${cost.approx(priceOf(ctx, 'sheet'))}).`;
           }
         }
         const missing = saved && !saved.look.summary ? ' No look yet — ask for or propose one.' : '';
@@ -817,7 +862,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       (args) => {
         const c = findCharacterArg(doc(), args);
         if (!c) throw argError(`No such character. Cast: ${castList(doc())}.`);
-        commit([{ op: 'character_remove', id: c.id }]);
+        commit([{ op: 'character_remove', id: c.id }], `Remove ${upper(c.name)}`);
         captured(`removed ${c.name}`);
         return `Removed ${upper(c.name)}. Cast: ${castList(doc())}.`;
       }
@@ -853,7 +898,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const id = existing?.id || newId('pl');
         const ops: DocOp[] = Object.keys(patch).length || !existing ? [{ op: 'place', id, patch }] : [];
         if (existing && look && existing.sheet.status === 'ready') ops.push({ op: 'render', target: { kind: 'place', id }, patch: { status: 'stale' } });
-        if (ops.length) commit(ops);
+        if (ops.length) commit(ops, `${existing ? 'Place' : 'Add place'}: ${upper(finalName)}`);
         const refNote = refs.length ? ` ${await attachRefs(ctx, { kind: 'place', id }, refs)}` : '';
         captured(finalName);
         return `Saved place ${upper(finalName)}.${refNote} Places: ${placeList(doc())}.`;
@@ -868,7 +913,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       (args) => {
         const p = findPlaceArg(doc(), args);
         if (!p) throw argError(`No such place. Places: ${placeList(doc())}.`);
-        commit([{ op: 'place_remove', id: p.id }]);
+        commit([{ op: 'place_remove', id: p.id }], `Remove ${upper(p.name)}`);
         captured(`removed ${p.name}`);
         return `Removed ${upper(p.name)}. Places: ${placeList(doc())}.`;
       }
@@ -931,7 +976,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         }
         if (!Object.keys(patch).length && !refs.length) throw argError('Pass presetId, or name + spec, or lock:true.');
         if (Object.keys(patch).length) ops.unshift({ op: 'style', patch });
-        if (ops.length) commit(ops);
+        if (ops.length) commit(ops, 'Style');
         const refNote = refs.length ? ` ${await attachRefs(ctx, { kind: 'style' }, refs)}` : '';
         const s = doc().style;
         const short = !presetId && patch.spec && (patch.spec.match(/\S+/g) || []).length < 15 ? ' The spec is short — a fuller description (medium, linework, color, shading) draws more consistently.' : '';
@@ -1070,7 +1115,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
                 kind: S('Line kind.', { enum: LINE_KINDS }),
                 speaker: S('Speaker name (speech/thought/whisper/shout).'),
                 text: S('Exact text.'),
-                style: STYLE_SCHEMA,
+                style: LETTERING_STYLE_ARGS_COMPACT,
                 position: S('Balloon spot.', { enum: POSITIONS })
               },
               required: ['kind', 'text']
@@ -1102,7 +1147,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             line.speakerId = speaker.id;
             if (!panel.castIds.includes(speaker.id)) addCast.add(speaker.id);
           }
-          const style = styleFromArgs(raw.style);
+          const style = lineStyleFromArgs(d, { id: '', kind, text: lineText, ...(line.speakerId ? { speakerId: line.speakerId } : {}) } as Line, raw.style);
           if (style) line.style = style;
           if (typeof raw.position === 'string' && (POSITIONS as readonly string[]).includes(raw.position)) line.position = raw.position as Position;
           wanted.push(line);
@@ -1114,6 +1159,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const keep = new Set(reused.filter((l): l is Line => !!l).map((l) => l.id));
         const ops: DocOp[] = old.filter((l) => !keep.has(l.id)).map((l): DocOp => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: null }));
         const finalIds: string[] = [];
+        const positioned: { id: string; position: Position }[] = [];
         wanted.forEach((w, i) => {
           const prev = reused[i];
           const { position, ...line } = w;
@@ -1128,10 +1174,24 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             ops.push({ op: 'line', pageId: page.id, panelId: panel.id, id, patch: { ...line, id }, index: i });
             finalIds.push(id);
           }
-          if (position && d.format.lettering === 'overlay') ops.push(balloonAt(d, page, panel, finalIds[i], position));
+          if (position && d.format.lettering === 'overlay') positioned.push({ id: finalIds[i], position });
         });
         if (addCast.size) ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, ...addCast] } });
-        if (ops.length) commit(ops);
+        if (positioned.length) {
+          // Placed on the page as it will be after this edit (new lines exist), by the lettering engine:
+          // the balloon's real outline stays inside its panel and the safe area. A 9-grid box is the fallback.
+          const preview = applyOps(d, ops);
+          const previewPage = preview.pages.find((p) => p.id === page.id);
+          for (const { id, position } of positioned) {
+            const b = previewPage ? balloonAtPosition(preview, previewPage, id, position) : undefined;
+            ops.push(
+              b
+                ? { op: 'balloon', pageId: page.id, lineId: id, patch: { x: b.x, y: b.y, w: b.w, ...(typeof b.tailX === 'number' && typeof b.tailY === 'number' ? { tailX: b.tailX, tailY: b.tailY } : {}), pinned: true } }
+                : balloonAt(d, page, panel, id, position)
+            );
+          }
+        }
+        if (ops.length) commit(ops, `Page ${page.n} panel ${panel.n} text`);
         const kept = reused.filter(Boolean).length;
         const long = tooLong(d, wanted);
         captured(`page ${page.n} panel ${panel.n}'s text`);
@@ -1184,7 +1244,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!Object.keys(patch).length) throw argError('Nothing to change on that line.');
         const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: panel.id, id: line.id, patch }];
         if (patch.speakerId && !panel.castIds.includes(patch.speakerId)) ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, patch.speakerId] } });
-        commit(ops);
+        commit(ops, `Page ${page.n} panel ${panel.n} line ${n}`);
         captured(`page ${page.n} panel ${panel.n} line ${n}`);
         const inArt = d.format.lettering === 'in_art' && page.render.status === 'ready';
         return `Updated page ${page.n} panel ${panel.n} line ${n}${patch.kind ? ` (now ${patch.kind})` : ''}.${inArt ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ' Free — no redraw needed.'}`;
@@ -1219,7 +1279,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const current = scope.filter((p) => p.render.status === 'ready' && !isPageStale(d, p));
         if (wantsRedraw && !redraw && current.length) {
           const first = current[0];
-          return `Not redrawn: ${pageWord(current)} ${current.length === 1 ? 'is' : 'are'} already drawn and current, and the user didn't ask for a new take. Offer: read it, ${coverNeedsDraw(d) ? 'make the cover, ' : ''}or a new take of page ${first.n} (≈ ${formatUsd(priceOf(ctx, 'page'))}).`;
+          return `Not redrawn: ${pageWord(current)} ${current.length === 1 ? 'is' : 'are'} already drawn and current, and the user didn't ask for a new take. Offer: read it, ${coverNeedsDraw(d) ? 'make the cover, ' : ''}or a new take of page ${first.n} (${cost.approx(priceOf(ctx, 'page'))}).`;
         }
         // A safer take re-draws only the pages named (flagged ones), never the whole book.
         const saferRedraw = safe && ids.length > 0;
@@ -1232,7 +1292,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           pushNextSteps(state, nothingNextSteps(d, byok()));
           const busy = scope.filter((p) => p.render.status === 'queued' || p.render.status === 'rendering');
           if (busy.length) return `Nothing new to start: ${pageWord(busy)} ${busy.length === 1 ? 'is' : 'are'} already drawing. Nothing was spent.`;
-          return `Nothing to draw: ${pages.length ? pageWord(current.length ? current : scope) : 'every page'} ${pages.length === 1 ? 'is' : 'are'} already drawn and up to date — nothing was spent.${coverNeedsDraw(d) ? ` The cover isn't drawn yet (≈ ${formatUsd(priceOf(ctx, 'cover'))}).` : ''} Offer: read it, add a page, or a new take only if the user asks.`;
+          return `Nothing to draw: ${pages.length ? pageWord(current.length ? current : scope) : 'every page'} ${pages.length === 1 ? 'is' : 'are'} already drawn and up to date — nothing was spent.${coverNeedsDraw(d) ? ` The cover isn't drawn yet (${cost.approx(priceOf(ctx, 'cover'))}).` : ''} Offer: read it, add a page, or a new take only if the user asks.`;
         }
         if (!targets.length && coverToo) return spend(ctx, state, { type: 'render_cover', ...(safe ? { safe: true } : {}) }, forcedGateReason(d, state, 'cover'));
         return spend(
@@ -1299,7 +1359,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const overlay = (cover.lettering ?? 'in_art') === 'overlay';
         const drawn = cover.render.status === 'ready' && !!cover.render.asset;
         const textOnly = (!!patch.title || !!patch.tagline) && !patch.direction;
-        if (Object.keys(patch).length) commit([{ op: 'cover', patch }]);
+        if (Object.keys(patch).length) commit([{ op: 'cover', patch }], 'Cover text');
         if (drawn && overlay && textOnly && args.textless !== true) {
           captured('the cover title');
           return 'Updated the cover text — free, it is lettered on top of the art (no redraw).';
@@ -1312,7 +1372,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const current = drawn && !isTargetStale(doc(), { kind: 'cover' });
         if (current && !Object.keys(patch).length && !args.safe && state.drawIntent !== 'redraw') {
           state.outcome = 'nothing';
-          return `Nothing to draw: the cover is already drawn and up to date — nothing was spent. A new take (≈ ${formatUsd(priceOf(ctx, 'cover'))}) only if the user asks.`;
+          return `Nothing to draw: the cover is already drawn and up to date — nothing was spent. A new take (${cost.approx(priceOf(ctx, 'cover'))}) only if the user asks.`;
         }
         const redraw = current && !Object.keys(patch).length && state.drawIntent === 'redraw';
         return spend(ctx, state, { type: 'render_cover', ...safe }, forcedGateReason(d, state, 'cover', { redraw }));
@@ -1367,10 +1427,10 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             `Locked comic: its images are drawn on ${from}${from !== to ? ` and ${patch.quality} would switch to ${to}` : ` at ${current.quality} quality`}, which can change how the characters look. Quality changes are the user's call — tell them to tap the quality chip (it shows the consistency warning and the real redraw cost). Do not retry this call.`
           );
         }
-        commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }]);
+        commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }], 'Money settings');
         const s = doc().settings;
         captured('your money settings');
-        return `Settings: ${s.quality} quality; confirm ${s.confirm}${s.confirm === 'big' ? ` (above ${formatUsd(s.bigSpendUsd)})` : ''}; budget ${s.budgetUsd ? formatUsd(s.budgetUsd) : 'none'}.`;
+        return `Settings: ${s.quality} quality; confirm ${s.confirm}${s.confirm === 'big' ? ` (above ${cost(s.bigSpendUsd)})` : ''}; budget ${s.budgetUsd ? cost(s.budgetUsd) : 'none'}.`;
       }
     ),
 
@@ -1456,9 +1516,9 @@ export interface TurnToolset {
  * lettering tools to an unrelated group. Tuned on the golden set (golden/scenarios/*.json).
  */
 export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
-  lettering: /\b(fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|colou?rs?|shouts?|whispers?|thoughts?|sfx)\b/i,
+  lettering: /\b(fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|colou?rs?|shouts?|whispers?|thoughts?|sfx|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?)\b/i,
   timeline: /\b(move|swap|switch|insert|add (?:a|one|another) page|delete|remove (?:page|it)|duplicate|copy|versions?|undo|restore|earlier|previous|original|fit|square|book|back cover|title page)\b/i,
-  publish: /\b(publish|share|link|unpublish|public|unlisted|readers?)\b/i,
+  publish: /\b(publish|share|link|unpublish|public|unlisted|readers?|post it|send (?:it|the link)|whats ?app|instagram)\b/i,
   i18n: /\b(translat\w*|languages?|telugu|hindi|tamil|kannada|malayalam|bengali|marathi|gujarati|punjabi|urdu|arabic|spanish|french|german|japanese|korean|chinese|portuguese|edition)\b|[\u0900-\u0DFF]/i,
   refs: /\b(photos?|pictures?|images?|pics?|references?|refs?|selfie)\b/i,
   safety: /\b(rating|pg-?13|pg\b|safe|safety|gore|violent|violence|scary|horror|blood)\b/i,

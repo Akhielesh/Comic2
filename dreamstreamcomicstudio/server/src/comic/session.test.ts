@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEmptyDoc, emptyRender, type ArchivedVersion, type ComicDoc } from '../../../shared/comic/doc.js';
 import { DOC_LIMITS as SHARED_LIMITS, MAX_ARCHIVE, MAX_RENDER_HISTORY } from '../../../shared/comic/limits.js';
 import type { StudioEvent } from '../../../shared/comic/events.js';
-import { fakeDocStore, plannedDoc } from './orchestrator.fakes.js';
+import { fakeAssetStore, fakeDocStore, plannedDoc } from './orchestrator.fakes.js';
 import {
   REF_INBOX_TTL_MS,
   archiveEvictionNotice,
@@ -19,7 +19,9 @@ import {
   peekStudioSession,
   projectSummary,
   recoveryOps,
-  sweepIdleSessions
+  scheduleVariantBackfill,
+  sweepIdleSessions,
+  variantBackfillTargets
 } from './session.js';
 import { StudioError } from './types.js';
 
@@ -466,3 +468,50 @@ describe('commit origin/label, archive eviction notice, inbox prune, size guard'
     session.dispose();
   });
 });
+
+describe('size-variant backfill on session load (contract §12.4)', () => {
+  const img = (name: string, extra: Record<string, unknown> = {}) => ({ path: `u/user-1/p/proj-1/img/${name}.webp`, source: 'generated' as const, at: 1, w: 2048, h: 3072, ...extra });
+
+  it('targets on-screen images first, skips blocked, already-sized, too-small, pub/, library/ and variant paths, capped', () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: img('p1'), history: [img('p1-old'), img('tiny', { w: 400, h: 600 })] };
+    doc.pages[1].render = { ...emptyRender(), status: 'ready', asset: img('p2', { variants: [{ path: 'u/user-1/p/proj-1/img/p2_w480.webp', w: 480, h: 720 }] }) };
+    doc.pages[2].render = { ...emptyRender(), status: 'ready', asset: img('p3', { safety: { assessed: 'X', at: 1 } }) };
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { ...img('c'), path: 'pub/AAAAAAAAAAAAAAAAAAAAAA/cover-0123456789ab.webp' } };
+    doc.cast[0].sheet = { ...emptyRender(), status: 'ready', asset: img('maya') };
+    doc.style.refs = [{ ...img('lib'), path: 'library/style/x.webp' }];
+    expect(variantBackfillTargets(doc).map((a) => a.path.split('/').pop())).toEqual(['p1.webp', 'maya.webp', 'p1-old.webp']);
+    expect(variantBackfillTargets(doc, 1)).toHaveLength(1);
+  });
+
+  it('records variants one image at a time with asset_meta (origin job), once per session', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: img('p1') };
+    doc.pages[1].render = { ...emptyRender(), status: 'ready', asset: img('p2') };
+    const session = new StudioSession({ projectId: doc.id, userId: 'user-1', doc, store: fakeDocStore(), saveDebounceMs: 5 });
+    const events: StudioEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    const assets = fakeAssetStore();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const ensure = assets.ensureVariants.bind(assets);
+    assets.ensureVariants = async (a) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return ensure(a);
+    };
+    const urls: string[][] = [];
+    expect(await scheduleVariantBackfill(session, assets, { onUrls: async (p) => void urls.push(p) })).toBe(2);
+    expect(maxInFlight).toBe(1);
+    expect(session.doc.pages[0].render.asset!.variants!.map((v) => v.w)).toEqual([480, 1080]);
+    const metaOps = events.filter((e) => e.type === 'ops' && e.ops[0].op === 'asset_meta');
+    expect(metaOps).toHaveLength(2);
+    expect(metaOps.every((e) => e.type === 'ops' && e.origin === 'job')).toBe(true);
+    expect(urls.flat()).toContain('u/user-1/p/proj-1/img/p1_w480.webp');
+    expect(scheduleVariantBackfill(session, assets)).toBeNull(); // once per session
+    session.dispose();
+  });
+});
+

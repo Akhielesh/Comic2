@@ -108,6 +108,25 @@ describe('ComicReader → v4 delegation', () => {
     expect(await screen.findByTestId('v4-reader')).toHaveAttribute('data-owner', 'false');
   });
 
+  it('lays the FX halftone over the art with the seamless library tile (no legacy CSS class)', () => {
+    const { container } = render(
+      <ComicReader
+        project={project('classic-3', { pipelineMode: 'classic', panels: [{ id: 'p1', imageUrl: 'https://cdn.test/a.png', description: 'A street' }] })}
+        onClose={() => undefined}
+        onUpdateProject={() => undefined}
+        onOpenPrivacy={() => undefined}
+        onOpenTerms={() => undefined}
+        onOpenFaq={() => undefined}
+      />
+    );
+    expect(screen.queryAllByTestId('reader-halftone')).toHaveLength(0);
+    fireEvent.click(screen.getByTitle('Halftone comic texture'));
+    const overlays = screen.getAllByTestId('reader-halftone');
+    expect(overlays.length).toBeGreaterThan(0);
+    expect(overlays[0].style.backgroundImage).toMatch(/^url\("data:image\/svg\+xml,/);
+    expect(container.querySelector('.comic-halftone')).toBeNull();
+  });
+
   it('keeps the classic reader out of the notch and the home indicator', () => {
     const { container } = render(
       <ComicReader project={project('classic-2', { pipelineMode: 'classic' })} onClose={() => undefined} onUpdateProject={() => undefined} onOpenPrivacy={() => undefined} onOpenTerms={() => undefined} onOpenFaq={() => undefined} />

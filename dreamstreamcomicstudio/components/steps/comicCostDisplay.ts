@@ -145,3 +145,32 @@ export const costSummaryForExport = (summary: ProjectReport['cost_summary'], ctx
     byType: tokensOnly(summary?.byType)
   };
 };
+
+/**
+ * The export ZIP's report/ai_usage.json. It carries the same local dollar estimates as the cost
+ * summary (per model/stage/type, and a `cost` on every artifact row), so governed users get it
+ * without them: token counts and artifact details stay, every dollar field is left out.
+ */
+export const aiUsageForExport = (usage: ProjectReport['ai_usage'], ctx: CostDisplayContext): unknown => {
+  if (!ctx.governed || !usage) return usage;
+  const tokensOnly = (bucket: Record<string, { tokens: number; cost: number }> | undefined) =>
+    Object.fromEntries(Object.entries(bucket || {}).map(([key, v]) => [key, { tokens: Number(v?.tokens) || 0 }]));
+  return {
+    totalArtifacts: usage.totalArtifacts ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+    byModel: tokensOnly(usage.byModel),
+    byStage: tokensOnly(usage.byStage),
+    byType: tokensOnly(usage.byType),
+    artifacts: (usage.artifacts || []).map(({ cost: _cost, ...artifact }) => artifact)
+  };
+};
+
+/** The export ZIP's artifacts/artifacts.json: governed users get every record without its `cost`. */
+export const artifactsForExport = <T extends { cost?: unknown }>(artifacts: T[] | undefined, ctx: CostDisplayContext): unknown => {
+  if (!ctx.governed || !Array.isArray(artifacts)) return artifacts;
+  return artifacts.map((artifact) => {
+    if (!artifact || typeof artifact !== 'object') return artifact;
+    const { cost: _cost, ...rest } = artifact;
+    return rest;
+  });
+};

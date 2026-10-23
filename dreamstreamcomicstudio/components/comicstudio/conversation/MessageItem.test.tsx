@@ -1,11 +1,15 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { ClientAction, Msg, NextStep } from '../../../shared/comic/doc';
 import { AssistantMessage } from './MessageItem';
 import { chipLabel, chipUsd, chipsFor, fallbackNextSteps, freeTitle, priceBadge, stepToRun } from './cards/NextStepChips';
-import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
+
+// Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
+beforeEach(showDollarPrices);
+afterEach(resetUsageStatus);
 
 const msg = (text: string, extra: Partial<Msg> = {}): Msg => ({ id: 'a1', role: 'assistant', text, at: 1, ...extra });
 
@@ -75,11 +79,11 @@ describe('AssistantMessage — next-step chips', () => {
     const group = screen.getByRole('group', { name: 'Next steps' });
     expect(group).toHaveTextContent('≈$0.07');
     expect(group).toHaveTextContent('Free');
-    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, about $0.07' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' }));
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'render_cover', quotedUsd: 0.07 }));
     expect(studio.runNextStep).toHaveBeenCalledWith(steps[0]);
     expect(studio.send).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Read it, free' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Read it, Free' }));
     await waitFor(() => expect(studio.setTab).toHaveBeenCalledWith('read'));
   });
 
@@ -107,7 +111,7 @@ describe('AssistantMessage — next-step chips', () => {
     const studio = dispatchingStudio({ messageBusy: true });
     render(<AssistantMessage msg={msg('Ok.', { nextSteps: steps })} showSuggestions studio={studio} />);
     expect(screen.getByRole('button', { name: 'Make it funnier' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Read it, free' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Read it, Free' })).toBeEnabled();
   });
 
   it('chips only show on the latest reply', () => {
@@ -118,7 +122,7 @@ describe('AssistantMessage — next-step chips', () => {
   it('a reply with no chips still offers a free next move', () => {
     const doc = makeSampleDoc(); // pages 2 and 3 not drawn
     render(<AssistantMessage msg={msg('Planned.')} showSuggestions studio={makeFakeStudio({ doc })} />);
-    expect(screen.getByRole('button', { name: 'See the pages, free' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'See the pages, Free' })).toBeInTheDocument();
   });
 
   it('never silent: an empty committed reply still says something', () => {
@@ -193,8 +197,8 @@ describe('AssistantMessage — next-step chips', () => {
       { label: 'Fit to 4:5 (Free)', action: { type: 'fit_render', target: { kind: 'cover' }, mode: 'auto' }, usd: 0 }
     ];
     render(<AssistantMessage msg={msg('Ok.', { nextSteps: server })} showSuggestions studio={studio} />);
-    expect(screen.getByRole('button', { name: 'Read it, free' })).toBeInTheDocument();
-    const fit = screen.getByRole('button', { name: 'Fit to 4:5, free' });
+    expect(screen.getByRole('button', { name: 'Read it, Free' })).toBeInTheDocument();
+    const fit = screen.getByRole('button', { name: 'Fit to 4:5, Free' });
     expect(fit.textContent?.match(/Free/g)).toHaveLength(1);
   });
 
@@ -203,14 +207,14 @@ describe('AssistantMessage — next-step chips', () => {
     const studio = dispatchingStudio();
     studio.act.mockImplementation(() => new Promise<void>((r) => (finish = r)));
     render(<AssistantMessage msg={msg('Page 1 is ready.', { nextSteps: steps })} showSuggestions studio={studio} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, about $0.07' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the cover, about $0.07' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' })).toBeDisabled());
     // a second tap on the same chip is ignored while it runs
-    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, about $0.07' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' }));
     expect(studio.act).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Read it, free' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Read it, Free' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Make it funnier' })).toBeEnabled();
     finish();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the cover, about $0.07' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the cover, ≈$0.07' })).toBeEnabled());
   });
 });

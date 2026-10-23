@@ -196,7 +196,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
         <div className="mt-2.5">
           <GhostButton
             size="sm"
-            className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
+            className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
             busy={isPending('retry-all')}
             onClick={() => void run('retry-all', ...retry.actions)}
           >

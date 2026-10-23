@@ -83,4 +83,18 @@ describe('fakeAssetStore v5 methods work', () => {
     await store.signUrls(['a'], { ttlSec: 300 });
     expect(store.signedTtl.at(-1)).toBe(300);
   });
+
+  it('restoreQuarantined is opt-in and only moves a held q/ object back to the path it left', async () => {
+    expect(fakeAssetStore().restoreQuarantined).toBeUndefined(); // like production today: callers fall back to copyObject
+    const store = fakeAssetStore({ restoreQuarantined: true });
+    const src = 'u/user-1/p/proj-1/img/page.webp';
+    store.files.set(src, 'data:image/webp;base64,AAAA');
+    const { quarantinePath } = await store.quarantine(src, 'blocked');
+    await expect(store.restoreQuarantined!(quarantinePath, 'u/user-1/p/proj-1/img/other.webp')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await store.restoreQuarantined!(quarantinePath, src);
+    expect(await store.loadDataUrl(src)).toBe('data:image/webp;base64,AAAA');
+    expect(store.files.has(quarantinePath)).toBe(false);
+    expect(store.restored).toEqual([{ quarantinePath, originalPath: src }]);
+    await expect(store.restoreQuarantined!(quarantinePath, src)).rejects.toMatchObject({ code: 'NOT_FOUND' }); // once
+  });
 });

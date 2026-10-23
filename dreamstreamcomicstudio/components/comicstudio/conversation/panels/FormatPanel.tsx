@@ -316,7 +316,9 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
 
       <div>
         <SectionLabel>Lettering</SectionLabel>
-        <div role="radiogroup" aria-label="Lettering" className="grid gap-2 sm:grid-cols-2">
+        {/* Columns follow the PANEL's width (it also opens inside the narrow recap card), not the
+            viewport: two side by side only when each gets ≥ 11rem — "Editable balloons" never spills. */}
+        <div role="radiogroup" aria-label="Lettering" className="grid grid-cols-[repeat(auto-fit,minmax(min(11rem,100%),1fr))] gap-2">
           {LETTERING_OPTIONS.map((o) => {
             const on = format.lettering === o.value;
             return (
@@ -327,11 +329,11 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 aria-checked={on}
                 onClick={() => set({ lettering: o.value })}
                 className={cx(
-                  'rounded-xl border px-3 py-2.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
+                  'min-w-0 rounded-xl border px-3 py-2.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
                   on ? 'border-[#D97757]/50 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
                 )}
               >
-                <span className="block text-[13px] font-semibold text-[var(--ds-ink)]">{o.title}</span>
+                <span className="block text-[13px] font-semibold text-[var(--ds-ink)] [overflow-wrap:anywhere]">{o.title}</span>
                 <span className="mt-0.5 block text-[11px] leading-snug text-[var(--ds-muted)]">{o.blurb}</span>
               </button>
             );

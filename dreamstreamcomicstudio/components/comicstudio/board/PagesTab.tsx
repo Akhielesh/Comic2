@@ -16,17 +16,14 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookImage, BookOpen, ChevronDown, ChevronUp, Crop, Image as ImageIcon, MoreHorizontal, RotateCcw, ScrollText, Sparkles } from 'lucide-react';
-import { newId, totalPanels, type BookSettings, type ComicDoc, type Page, type RenderTarget } from '../../../shared/comic/doc';
-import { aspectMismatch, bookOf } from '../../../shared/comic/book';
+import { bookOf, newId, totalPanels, type BookSettings, type ComicDoc, type Page, type RenderTarget } from '../../../shared/comic/doc';
+import { aspectMismatch } from '../../../shared/comic/book';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { coverNeedsDraw, quoteRenderPages } from '../../../shared/comic/plan';
 import { canServeToOwner, effectiveRating, type ContentRating } from '../../../shared/comic/safety';
 import type { StudioController } from '../types';
-import { EmptyArt } from '../library/procedural/EmptyArt';
-import { LibraryImage } from '../library/LibraryImage';
-import { useComicLibrary } from '../library/useComicLibrary';
-import { useLongPress } from '../mobile/touch/useLongPress';
+import { useLongPress, type LongPressHandlers } from '../mobile/touch/useLongPress';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { ClipMenu, clipMenuItems, type ClipAction, type ClipMenuItem } from '../timeline/ClipMenu';
@@ -37,7 +34,7 @@ import { VersionStack } from '../timeline/VersionStack';
 import { TimelineDialog } from '../timeline/ui';
 import { bookClips, canAddPage, deleteOps, duplicateOps, insertOps, moveOps, redrawPrice, sortedPages, type ClipVM } from '../timeline/bookModel';
 import { ComicPageView } from './ComicPageView';
-import { FrameBadge, ImageFrame, THUMB_MAX_W, VersionsButton, frameSources, variantCssWidth } from './ImageFrame';
+import { EmptyIllustration, FrameBadge, ImageFrame, THUMB_MAX_W, VersionsButton, frameSources, variantCssWidth } from './ImageFrame';
 import { PageScript } from './PageScript';
 import { aspectNumber, pageAspectOf } from './balloonGeometry';
 import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
@@ -81,6 +78,36 @@ const cardOf = (el: EventTarget | null): Element | null => {
   return (typeof node?.closest === 'function' ? node.closest('article') : null) ?? node ?? null;
 };
 
+/** A text field (typing, selecting, pasting): its own long-press / right-click menu must win. */
+const TEXT_TARGET = 'textarea, select, [contenteditable]:not([contenteditable="false"]), input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"])';
+
+/**
+ * The card's long-press / right-click / Shift+F10 handlers, limited to the card's OWN DOM: React
+ * bubbles events out of portals (the versions dialog opened from a card), and a press-and-hold or a
+ * right-click in a text field (the cover title) must keep the platform's text menu.
+ */
+const cardPress = (press: LongPressHandlers): LongPressHandlers => {
+  const ours = (e: React.SyntheticEvent) => {
+    const t = e.target as Node | null;
+    const host = e.currentTarget as Node | null;
+    if (!t || !host || typeof host.contains !== 'function' || !host.contains(t)) return false;
+    const el = t as Element;
+    return !(typeof el.closest === 'function' && el.closest(TEXT_TARGET));
+  };
+  return {
+    ...press,
+    onPointerDown: (e) => {
+      if (ours(e)) press.onPointerDown(e);
+    },
+    onContextMenu: (e) => {
+      if (ours(e)) press.onContextMenu(e);
+    },
+    onKeyDown: (e) => {
+      if (ours(e)) press.onKeyDown(e);
+    }
+  };
+};
+
 /** A price shown NEXT TO its button (so long usage wording never squeezes the label). */
 const PriceNote: React.FC<{ id: string; children: React.ReactNode; className?: string }> = ({ id, children, className }) => (
   <span id={id} className={cx('min-w-0 text-[11px] leading-snug tabular-nums text-[var(--ds-muted)] [overflow-wrap:anywhere]', className)}>
@@ -89,7 +116,7 @@ const PriceNote: React.FC<{ id: string; children: React.ReactNode; className?: s
 );
 
 /** A free re-shape of art drawn at the wrong aspect (software, never billed). */
-const FitButton: React.FC<{ studio: StudioController; target: RenderTarget; want: string; disabled?: boolean }> = ({ studio, target, want, disabled }) => {
+const FitButton: React.FC<{ studio: StudioController; target: RenderTarget; want: string; disabled?: boolean; short?: boolean }> = ({ studio, target, want, disabled, short }) => {
   const { busyKey, fire } = useClickGuard(3000);
   return (
     <GhostButton
@@ -98,25 +125,12 @@ const FitButton: React.FC<{ studio: StudioController; target: RenderTarget; want
       disabled={disabled}
       onClick={() => fire('fit', () => studio.act({ type: 'fit_render', target, mode: 'auto' }))}
       title={`Re-fit the art to ${want} by padding or cropping — free, done by the editor`}
+      // Compact cards (two columns on a 320 px phone) get the short label; the name stays complete.
+      aria-label={short ? `Fit to ${want} · Free` : undefined}
+      className="max-w-full"
     >
-      <Crop className="h-3 w-3" aria-hidden /> Fit to {want} <span className="font-normal text-[var(--ds-muted)]">· Free</span>
+      <Crop className="h-3 w-3 shrink-0" aria-hidden /> {short ? 'Fit' : `Fit to ${want}`} <span className="font-normal text-[var(--ds-muted)]">· Free</span>
     </GhostButton>
-  );
-};
-
-const PlannedArt: React.FC<{ variant: 'pages' }> = ({ variant }) => {
-  const library = useComicLibrary();
-  const theme: 'light' | 'dark' = typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-  const asset = library.empty(variant, theme);
-  const art = (
-    <span className="flex h-full w-full items-center justify-center text-[var(--ds-muted)]">
-      <EmptyArt variant={variant} />
-    </span>
-  );
-  return (
-    <span className="mx-auto block h-24 w-28">
-      {asset ? <LibraryImage id={asset.id} alt="" sizes="112px" className="h-full w-full object-contain" fallback={art} /> : art}
-    </span>
   );
 };
 
@@ -156,7 +170,7 @@ export const PageCard: React.FC<{
   const scriptView = !compact && (status === 'planned' || status === 'empty' || (drawn && showScript));
   const mismatch = drawn && !blocked ? aspectMismatch(doc, asset) : null;
   const priceId = `price-${page.id}`;
-  const press = useLongPress({ onLongPress: (info) => onMenu?.(cardOf(info.target)), disabled: !onMenu });
+  const press = cardPress(useLongPress({ onLongPress: (info) => onMenu?.(cardOf(info.target)), disabled: !onMenu }));
 
   const art = (
     <ComicPageView
@@ -294,7 +308,7 @@ export const PageCard: React.FC<{
           </GhostButton>
         ) : null}
         {(status === 'failed' || status === 'stale' || status === 'planned' || (status === 'ready' && !compact)) && <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>}
-        {mismatch && <FitButton studio={studio} target={target} want={mismatch.want} disabled={busy} />}
+        {mismatch && <FitButton studio={studio} target={target} want={mismatch.want} disabled={busy} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={target} label={`Page ${page.n}`} />}
         <GhostButton size="xs" onClick={open} aria-label={`${drawn ? 'Edit' : 'Open'} page ${page.n}`} className={compact ? '' : 'ml-auto'}>
           {drawn ? 'Edit' : 'Open'}
@@ -337,7 +351,7 @@ export const CoverCard: React.FC<{
   const title = doc.cover.title || doc.brief.title;
   const mismatch = drawn && a && canServeToOwner(a) ? aspectMismatch(doc, a) : null;
   const priceId = 'price-cover';
-  const press = useLongPress({ onLongPress: (info) => onMenu?.(cardOf(info.target)), disabled: !onMenu });
+  const press = cardPress(useLongPress({ onLongPress: (info) => onMenu?.(cardOf(info.target)), disabled: !onMenu }));
 
   return (
     <Surface
@@ -407,7 +421,7 @@ export const CoverCard: React.FC<{
           <Sparkles className={cx('h-3 w-3', !drawn && 'text-[var(--ds-accent)]')} aria-hidden /> {drawn ? 'Redesign' : 'Design cover'}
         </GhostButton>
         <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>
-        {mismatch && <FitButton studio={studio} target={{ kind: 'cover' }} want={mismatch.want} disabled={isBusy(render)} />}
+        {mismatch && <FitButton studio={studio} target={{ kind: 'cover' }} want={mismatch.want} disabled={isBusy(render)} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={{ kind: 'cover' }} label="Cover" />}
         {!compact && (
           <GhostButton size="xs" onClick={() => setDetails(!details)} aria-expanded={details}>
@@ -783,7 +797,7 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
     return (
       <div className="p-4 sm:p-5">
         <EmptyHint
-          icon={<PlannedArt variant="pages" />}
+          icon={<EmptyIllustration variant="pages" />}
           title="No pages planned yet"
           action={
             <PrimaryButton size="sm" busy={busyKey === 'plan'} onClick={() => fire('plan', () => studio.act({ type: 'plan_pages' }))}>

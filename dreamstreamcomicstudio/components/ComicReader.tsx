@@ -13,11 +13,24 @@ import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
+import { halftone } from './comicstudio/library/procedural/textures';
 
 // Comic Studio v4 comics (state.studioVersion === 4) keep their pages in a server-side
 // ComicDoc, not in the legacy panels this reader draws — they read in the v4 reader.
 const PublicComicReader = lazyImportWithRetry(() =>
   import('./comicstudio/PublicComicReader').then((module) => ({ default: module.PublicComicReader }))
+);
+
+// The FX toggle's halftone screen: the library's seamless dot tile (no seams on any screen size), laid
+// over the art like the old .comic-halftone (multiply at 16%), never catching taps.
+const HALFTONE_TILE = halftone({ cell: 4, angle: 45, color: '#000000', opacity: 0.55, radius: 0.3 });
+const HalftoneOverlay: React.FC = () => (
+  <span
+    aria-hidden
+    data-testid="reader-halftone"
+    className="pointer-events-none absolute inset-0 mix-blend-multiply"
+    style={{ backgroundImage: HALFTONE_TILE.css, backgroundSize: `${HALFTONE_TILE.size}px ${HALFTONE_TILE.size}px`, opacity: 0.16 }}
+  />
 );
 
 // Reveals its children with a comic "pop-in" the first time they scroll into view.
@@ -531,7 +544,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                  )}
                   {project.state.panels.map((panel, idx) => (
                     <RevealOnScroll key={idx} className={getPanelClass(idx)}>
-                      <div className={`border-2 border-black shadow-sm relative ${fxOn ? 'comic-halftone' : ''}`}>
+                      <div className="border-2 border-black shadow-sm relative">
                         {panel.imageUrl ? (
                           <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
                         ) : (
@@ -545,6 +558,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                           </div>
                         )}
                         <PanelDialogue panel={panel} layout={textLayout} />
+                        {fxOn && <HalftoneOverlay />}
 	                      </div>
 	                    </RevealOnScroll>
 	                  ))}
@@ -589,7 +603,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   >
                     <div
                       key={pageIndex}
-                      className={`relative inline-flex max-h-full max-w-full ${fxOn ? 'comic-halftone' : ''} ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
+                      className={`relative inline-flex max-h-full max-w-full ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
                     >
 	                      {pages[pageIndex]?.imageUrl ? (
 	                        <img
@@ -603,6 +617,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                         </div>
                       )}
                       {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} />}
+                      {fxOn && <HalftoneOverlay />}
                     </div>
                   </div>
                 ) : (

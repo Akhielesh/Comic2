@@ -157,7 +157,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           approved ? (
             <PrimaryButton
               size="sm"
-              className="tap-target !h-auto min-h-8 py-1 coarse:min-h-11"
+              className="tap-target !h-auto min-h-8 max-w-full py-1 text-center coarse:min-h-11"
               busy={isPending('render')}
               disabled={starting}
               onClick={() => void run('render', { type: 'render_pages', quotedUsd: estimate.usd })}
@@ -167,7 +167,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           ) : (
             <PrimaryButton
               size="sm"
-              className="tap-target !h-auto min-h-8 py-1 coarse:min-h-11"
+              className="tap-target !h-auto min-h-8 max-w-full py-1 text-center coarse:min-h-11"
               busy={isPending('approve')}
               disabled={starting}
               onClick={() => void run('approve', { type: 'approve_plan' }, { type: 'render_pages', quotedUsd: estimate.usd })}

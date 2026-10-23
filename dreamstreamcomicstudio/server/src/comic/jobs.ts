@@ -74,6 +74,7 @@ import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
+import { REF_LABELS } from '../../../shared/comic/refs.js';
 import {
   LOW_QC_SCORE as PLAN_LOW_QC_SCORE,
   coverNeedsDraw,
@@ -95,6 +96,7 @@ import {
   formatUsd,
   imagePriceUsd,
   resolveImageJob,
+  styleDirectionsUsd,
   type ImageJobKind,
   type ImageModelSpec,
   type ImageRoute,
@@ -108,7 +110,7 @@ import { PRO_QUALITY_USAGE_MESSAGE } from './access.js';
 import { actionHandlerFor } from './actions/index.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
-import { costFormatterFor, governDollars, costViewFor, type CostFormatter } from './costText.js';
+import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
 import { imageFailureDetail, imageFailureInfo } from './imageClient.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
@@ -166,16 +168,19 @@ const REQUEUE_MAX_MS = 120_000;
 const RATE_LIMIT_BACKOFF_FACTOR = 5;
 const MAX_STYLE_DIRECTIONS = 4;
 const DEFAULT_STYLE_DIRECTIONS = 3;
-/** Writer text spend for proposing style directions (one strong-model call, occasional repair). */
-const STYLE_DIRECTIONS_USD = 0.015;
 const MAX_PATCH_OPS = 200;
 /**
  * Undoing a removed edition sends one `translation` op per line; an all-translation batch may be
  * this long (DOC_LIMITS.lines-sized editions undo in one tap instead of failing at 200).
  */
 const MAX_TRANSLATION_PATCH_OPS = 2000;
-/** User reference photos lazily safety-checked before one render (safety.md §3.2; platform-paid, tiny). */
-const MAX_LAZY_REF_CHECKS = 6;
+/**
+ * User reference photos lazily safety-checked before one render (safety.md §3.2; platform-paid,
+ * ≈ $0.0012 each, once per photo — the verdict is stored). ≥ the largest model's reference total
+ * (models.ts refs.total ≤ 16), so no attached unchecked upload ever skips the check; only an
+ * unavailable classifier fails open (decisions-final #10).
+ */
+const MAX_LAZY_REF_CHECKS = 16;
 /** Chips on one message (shared cap). */
 const MAX_NEXT_STEPS = DOC_LIMITS.nextSteps;
 /** Chips nextStepsFor() offers from doc state alone (a completion may prepend its own). */
@@ -285,7 +290,7 @@ const costOf = (ctx: StudioContext): CostFormatter => costFormatterFor(ctx);
 const governMsg = (ctx: StudioContext, msg: Msg): Msg => {
   const view = costViewFor(ctx.caps);
   if (!view.governed) return msg;
-  const cards = msg.cards?.map((c) => (c.type === 'notice' ? { ...c, text: governDollars(c.text, view) } : c));
+  const cards = msg.cards?.map((c) => governCard(c, view));
   return { ...msg, text: governDollars(msg.text, view), ...(cards ? { cards } : {}) };
 };
 
@@ -588,7 +593,8 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
   // When no directions are passed the runner also makes a writer call to propose them; the
   // image-only estimate would understate the quote and the budget gate. Add that text line.
   if (action.type === 'render_style_options' && !styleDirections(action).length) {
-    const usd = round4(STYLE_DIRECTIONS_USD * (byok ? 1 : PLATFORM_MARKUP));
+    // Writer text spend for proposing style directions (shared with the client's StylePanel quote).
+    const usd = styleDirectionsUsd(byok);
     return { ...est, usd: round4(est.usd + usd), lines: [...est.lines, { label: 'style directions', count: 1, usd }] };
   }
   return est;
@@ -1280,7 +1286,10 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   const faces = qc?.keepOut?.some((k) => k.kind === 'face');
   const message = out.visionRan
     ? `Re-checked page ${page.n} (${cost(spent || estimate.usd)}) and re-laid its balloons around the art${faces ? ', keeping faces clear' : ''}.${typeof qc?.score === 'number' ? ` Page check score: ${qc.score.toFixed(2)}.` : ''}`
-    : `The re-check of page ${page.n} couldn't run just now, so its balloons were re-laid from the stored layout instead${spent ? ` (${cost(spent)} was spent on the attempt)` : ' — nothing was spent'}.`;
+    : out.visionError?.code === 'BILLING_DENIED'
+      ? // Usage left / a spending limit said no: say THAT (its message is already in the user's terms), not "try later".
+        `${out.visionError.userMessage.replace(/[.!]?\s*$/, '.')} Page ${page.n}'s balloons were re-laid from the stored layout instead — nothing was spent.`
+      : `The re-check of page ${page.n} couldn't run just now, so its balloons were re-laid from the stored layout instead${spent ? ` (${cost(spent)} was spent on the attempt)` : ' — nothing was spent'}.`;
   deliver(ctx, opts, message, notices.length ? notices : [noticeCard(out.visionRan ? 'success' : 'warn', message)]);
   return finished({ status: 'done', message });
 }
@@ -1520,6 +1529,14 @@ class RenderRun {
 
   private commit(ops: DocOp[], label?: string) {
     return commitAs(this.ctx, ops, 'job', label);
+  }
+
+  /** A spend chip always carries its quote (a tap is the confirmation; a stale quote re-gates instead of overspending). */
+  private priced(step: NextStep): NextStep {
+    const action = step.action;
+    if (!action || !isSpendAction(action) || typeof action.quotedUsd === 'number' || actionHandlerFor(action.type)) return step;
+    const usd = estimateSpendAction(this.session.doc, action, this.byok).usd;
+    return { ...step, action: { ...action, quotedUsd: usd }, usd };
   }
 
   /** A job message in the user's terms (the governed-dollars safety net). */
@@ -1938,7 +1955,7 @@ class RenderRun {
     // over-the-rating notice ride on THIS summary, so the run stays one message.
     const safety = takeRenderSafetyFollowups(this.session);
     if (safety.notices.length) this.notices.push(...safety.notices);
-    const steps = dedupeSteps([...safety.steps, ...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
+    const steps = dedupeSteps([...safety.steps.map((s) => this.priced(s)), ...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, [...lead, ...this.notices], steps)) }]));
@@ -2804,6 +2821,8 @@ export interface LetterResult {
   safety?: SafetyVerdict;
   /** A (billed) vision call ran. */
   visionRan: boolean;
+  /** Why the vision call didn't run or failed (not on cancel): the paid re-check says so honestly. */
+  visionError?: StudioError;
 }
 
 /**
@@ -2830,6 +2849,7 @@ export async function letterPage(
   let balloons: Balloon[] | undefined;
   let safety: SafetyVerdict | undefined;
   let visionRan = false;
+  let visionError: StudioError | undefined;
   if (dataUrl && !signal.aborted && (!stored || opts.forceVision)) {
     const end = activity(ctx, `Checking page ${page.n}`, 'text');
     const tracker = newTextSpendTracker();
@@ -2850,7 +2870,10 @@ export async function letterPage(
     } catch (err) {
       end(false);
       const error = asStudioError(err);
-      if (error.code !== 'CANCELLED') logger.warn('comic_page_qc_failed', { projectId: ctx.projectId, pageId, code: error.code, message: error.message });
+      if (error.code !== 'CANCELLED') {
+        visionError = error;
+        logger.warn('comic_page_qc_failed', { projectId: ctx.projectId, pageId, code: error.code, message: error.message });
+      }
     } finally {
       if (tracker.calls && !tracker.usd && tracker.estimated) tracker.usd = chargedUsd(QC_USD_PER_PAGE, tracker.byok);
       recordTextSpend(ctx, tracker, 'qc', `Check page ${page.n}`);
@@ -2858,7 +2881,7 @@ export async function letterPage(
   }
   // Re-read: lines may have been edited while the check ran.
   const current = findPage(ctx.session.doc, pageId);
-  if (!current) return { ...(safety ? { safety } : {}), visionRan };
+  if (!current) return { ...(safety ? { safety } : {}), visionRan, ...(visionError ? { visionError } : {}) };
   // A shape mismatch is a QC fact too (the board and the timeline show it).
   const r = current.render;
   if (qc && r.asset && r.aspect && !aspectMatches(r.aspect, r.asset.w, r.asset.h)) {
@@ -2880,7 +2903,7 @@ export async function letterPage(
       )
     );
   }
-  return { ...(safety ? { safety } : {}), visionRan };
+  return { ...(safety ? { safety } : {}), visionRan, ...(visionError ? { visionError } : {}) };
 }
 
 // ── Doc-only actions ─────────────────────────────────────────────────────────
@@ -2975,7 +2998,7 @@ export async function planPages(
 
   if (!pageIds && !instructions && before.pages.length && before.planStatus !== 'none' && knownPlanHash(ctx.session) === planInputHashOf(before)) {
     const steps = nextStepsFor(before, { byok });
-    const text = `Nothing changed since the plan was written, so here it is again — ${plural(before.pages.length, 'page')}, no writer call (free).`;
+    const text = `Nothing changed since the plan was written, so here it is again — ${plural(before.pages.length, 'page')}, no writer call (${costOf(ctx).governed ? 'free' : '$0'}).`;
     deliver(ctx, runOpts, text, [breakdownCardFor(before, { view: 'plan' })], steps);
     return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
   }
@@ -3278,17 +3301,21 @@ export const isOwnProjectAssetPath = (path: unknown, userId: string | undefined,
   return !!m && m[1] === userId && m[2] === projectId && !/_w\d{2,4}$/.test(m[3]);
 };
 
-/** A restored ref rebuilt by the server: client-sent safety/hash/meta are dropped (an unchecked upload is checked before its first use). */
-const restoredRef = (item: unknown, path: string, now: number): AssetRef => {
+/**
+ * A restored ref rebuilt by the server: client-sent safety/hash/meta are dropped. In a ref list it is
+ * always an UPLOAD (its provenance can't be proven), so the job runner's lazy check reads it before
+ * its first use as a reference (safety.md §3.2); a sheet render keeps generated/upload.
+ */
+const restoredRef = (item: unknown, path: string, now: number, kind: 'ref' | 'render' = 'ref'): AssetRef => {
   const raw = isObject(item) ? item : {};
   const dim = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 20_000 ? Math.round(v) : undefined);
   const w = dim(raw.w);
   const h = dim(raw.h);
-  const label = typeof raw.label === 'string' && /^[a-z_]{1,24}$/.test(raw.label) ? raw.label : undefined;
+  const label = typeof raw.label === 'string' && (REF_LABELS as readonly string[]).includes(raw.label) ? raw.label : undefined;
   const note = typeof raw.note === 'string' ? raw.note.replace(/\s+/g, ' ').trim().slice(0, 140) : '';
   return {
     path,
-    source: raw.source === 'generated' ? 'generated' : 'upload',
+    source: kind === 'render' && raw.source === 'generated' ? 'generated' : 'upload',
     at: now,
     ...(w && h ? { w, h } : {}),
     ...(label ? { label } : {}),
@@ -3296,7 +3323,20 @@ const restoredRef = (item: unknown, path: string, now: number): AssetRef => {
   } as AssetRef;
 };
 
-const assetList = (known: Map<string, AssetRef>, restore?: { userId?: string; projectId: string; now: number }) => (v: unknown): AssetRef[] | undefined => {
+/**
+ * The client's own copy says this image didn't pass the content check (blocked or quarantined): it
+ * never comes back through a restore. Trusting that claim can only keep an image OUT, never let one in.
+ */
+const reportedBlocked = (item: unknown): boolean =>
+  isObject(item) && isObject(item.safety) && !canServeToOwner({ safety: item.safety as unknown as SafetyVerdict });
+
+type RestoreScope = { userId?: string; projectId: string; now: number; blocked: Set<string> };
+
+/** An own-project path that may come back: never one the doc knows as blocked or quarantined. */
+const restorable = (path: unknown, restore?: RestoreScope): path is string =>
+  !!restore && isOwnProjectAssetPath(path, restore.userId, restore.projectId) && !restore.blocked.has(path);
+
+const assetList = (known: Map<string, AssetRef>, restore?: RestoreScope) => (v: unknown): AssetRef[] | undefined => {
   if (!Array.isArray(v) || v.length > 12) return undefined;
   const out: AssetRef[] = [];
   for (const item of v) {
@@ -3307,8 +3347,9 @@ const assetList = (known: Map<string, AssetRef>, restore?: { userId?: string; pr
       continue;
     }
     // Not in the doc any more: only this project's own objects come back (Undo of a removal), rebuilt.
-    if (restore && isOwnProjectAssetPath(path, restore.userId, restore.projectId)) {
-      out.push(restoredRef(item, path, restore.now));
+    if (restorable(path, restore)) {
+      // A photo the client itself knew as blocked stays out; the rest of the undo still applies.
+      if (!reportedBlocked(item)) out.push(restoredRef(item, path, restore.now));
       continue;
     }
     return undefined;
@@ -3328,7 +3369,9 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
   if (ops.length > (translationOnly ? MAX_TRANSLATION_PATCH_OPS : MAX_PATCH_OPS)) throw badRequest('Too many changes at once.');
   const known = knownAssets(doc);
   // Photos of a removed character/place/style come back only from this project's own storage lanes.
-  const restore = sanitizeCtx?.userId ? { userId: sanitizeCtx.userId, projectId: doc.id, now: sanitizeCtx.now ?? Date.now() } : undefined;
+  const restore: RestoreScope | undefined = sanitizeCtx?.userId
+    ? { userId: sanitizeCtx.userId, projectId: doc.id, now: sanitizeCtx.now ?? Date.now(), blocked: blockedPaths(doc) }
+    : undefined;
   const castIds = new Set(doc.cast.map((c) => c.id));
   const placeIds = new Set(doc.places.map((p) => p.id));
   // Characters/places created earlier in the same batch count as existing.
@@ -3518,7 +3561,28 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         const p = page(raw.pageId);
         if (!Array.isArray(raw.balloons) || raw.balloons.length > 80) throw badRequest('Invalid balloons.');
         const lineIds = new Set(p.panels.flatMap((x) => x.lines.map((l) => l.id)));
-        const balloons = raw.balloons.map((b) => sanitizeBalloon(b, lineIds, p));
+        // The array REPLACES the page's balloons, so links are checked against the new array (in order):
+        // a link that would close a cycle with an earlier balloon of the same array is dropped.
+        const linked = new Map<string, string>();
+        const balloons = raw.balloons.map((item) => {
+          const balloon = sanitizeBalloon(item, lineIds, { ...p, balloons: [] });
+          if (!balloon.linkTo) return balloon;
+          const seen = new Set<string>([balloon.lineId]);
+          let cycle = false;
+          for (let at: string | undefined = balloon.linkTo; at; at = linked.get(at)) {
+            if (seen.has(at)) {
+              cycle = true;
+              break;
+            }
+            seen.add(at);
+          }
+          if (cycle) {
+            const { linkTo: _drop, ...rest } = balloon;
+            return rest;
+          }
+          linked.set(balloon.lineId, balloon.linkTo);
+          return balloon;
+        });
         out.push({ op: 'balloons', pageId: p.id, balloons });
         break;
       }
@@ -3624,14 +3688,14 @@ const sanitizeBalloon = (raw: unknown, lineIds: Set<string>, page?: Page): Ballo
  * must be images this comic holds (or this project's own objects); everything else is rebuilt. A
  * render that can't be trusted comes back empty ("not drawn") rather than failing the whole undo.
  */
-const restoredSheet = (v: unknown, known: Map<string, AssetRef>, restore?: { userId?: string; projectId: string; now: number }): RenderState | undefined => {
+const restoredSheet = (v: unknown, known: Map<string, AssetRef>, restore?: RestoreScope): RenderState | undefined => {
   if (!isObject(v)) return undefined;
   const one = (a: unknown): AssetRef | undefined => {
     const path = isObject(a) ? a.path : undefined;
     if (typeof path !== 'string') return undefined;
     const hit = known.get(path);
     if (hit) return hit;
-    return restore && isOwnProjectAssetPath(path, restore.userId, restore.projectId) ? restoredRef(a, path, restore.now) : undefined;
+    return restorable(path, restore) && !reportedBlocked(a) ? restoredRef(a, path, restore!.now, 'render') : undefined;
   };
   const asset = one(v.asset);
   const history = (Array.isArray(v.history) ? v.history : []).slice(0, 12).map(one).filter((a): a is AssetRef => !!a);

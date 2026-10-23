@@ -3,9 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { BoardTab } from '../types';
 // Built-in tabs only: feature tabs (Media, Languages) have their own registry tests (features.test.tsx).
-vi.mock('../features', async (importOriginal) => ({ ...(await importOriginal<typeof import('../features')>()), registeredTabs: () => [] }));
+// Feature tabs are injected per test through `mocks.tabs` (empty by default).
+const mocks = vi.hoisted(() => ({ tabs: [] as unknown[] }));
+vi.mock('../features', async (importOriginal) => ({ ...(await importOriginal<typeof import('../features')>()), registeredTabs: () => mocks.tabs }));
 
-import { BoardPane } from './BoardPane';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import { BoardPane, boardTabsFor } from './BoardPane';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { openLayers, resetBackStack } from '../mobile/backStack';
@@ -46,7 +49,8 @@ describe('BoardPane', () => {
     ['cast', /Cast · 3/],
     ['style', 'Your style'],
     ['pages', 'Plan draft — review the scripts, then render'],
-    ['read', /Page 1 · 1\/2/]
+    // The Read tab's own toolbar (the inline reader's counter text belongs to ComicReaderView).
+    ['read', 'Read full screen']
   ])('renders the %s tab', (tab, marker) => {
     render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab })} />);
     const panel = screen.getByRole('tabpanel');
@@ -68,13 +72,23 @@ describe('BoardPane', () => {
         reason: 'policy'
       };
     });
-    const studio = makeStudio(doc);
+    const studio = makeStudio(doc, { caps: { ...DEFAULT_CAPS, byok: true } });
     render(<BoardPane studio={studio} />);
     const banner = screen.getByRole('region', { name: 'Waiting for your approval' });
     expect(banner).toHaveTextContent('Draw 3 pages');
     expect(banner).toHaveTextContent('≈ $0.20');
     fireEvent.click(within(banner).getByRole('button', { name: 'Approve' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'approve_gate', gateId: 'gate_1' });
+  });
+
+  it('a governed user reads the gate as a share of their usage, never dollars', () => {
+    const doc = makeSampleDoc((d) => {
+      d.gate = { id: 'gate_g', action: { type: 'render_pages' }, title: 'Draw 3 pages', summary: '', estimateUsd: 0.2, imageCount: 3, model: 'x', createdAt: SAMPLE_NOW, status: 'open', reason: 'policy' };
+    });
+    render(<BoardPane studio={makeStudio(doc, { caps: { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } } })} />);
+    const banner = screen.getByRole('region', { name: 'Waiting for your approval' });
+    expect(banner).toHaveTextContent(/% of your usage/);
+    expect(banner).not.toHaveTextContent('$');
   });
 
   it('names the model by its nickname, never the raw provider route (visualqa P0-1)', () => {
@@ -223,5 +237,57 @@ describe('BoardPane on a phone (visualqa P1-6, P1-7; mobile.md §3.1)', () => {
   it('the back gesture closes the page editor before it leaves the studio', () => {
     atPhone(makeStudio(makeSampleDoc(), { focusedPageId: 'pg_5' }));
     expect(openLayers()).toContain('page-editor');
+  });
+});
+
+describe('BoardPane feature tabs and dock (wave 2)', () => {
+  afterEach(() => {
+    mocks.tabs = [];
+    resetBackStack();
+  });
+
+  const languages = {
+    id: 'languages',
+    label: 'Languages',
+    order: 800,
+    icon: null,
+    Component: () => <p>Languages panel</p>,
+    visible: () => false
+  };
+
+  it('a feature tab shows only while visible — but the tab the user is ON stays listed and rendered', () => {
+    mocks.tabs = [languages];
+    const doc = makeSampleDoc();
+    expect(boardTabsFor(doc, DEFAULT_CAPS).map((t) => t.id)).not.toContain('languages');
+    expect(boardTabsFor(doc, DEFAULT_CAPS, 'languages').map((t) => t.id)).toContain('languages');
+    render(<BoardPane studio={makeStudio(doc, { tab: 'languages' })} />);
+    expect(screen.getByRole('tab', { name: 'Languages' })).toHaveAttribute('aria-selected', 'true');
+    expect(within(screen.getByRole('tabpanel')).getByText('Languages panel')).toBeInTheDocument();
+  });
+
+  it('a visibility check that throws never breaks the board', () => {
+    mocks.tabs = [{ ...languages, visible: () => { throw new Error('boom'); } }];
+    render(<BoardPane studio={makeStudio()} />);
+    expect(screen.queryByRole('tab', { name: 'Languages' })).toBeNull();
+  });
+
+  it('the book timeline docks at the foot, but not in Read (the reader owns the pane)', () => {
+    const { unmount } = render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'pages' })} />);
+    expect(document.querySelector('[data-board-dock] [aria-label="Book timeline"]')).not.toBeNull();
+    unmount();
+    render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'read' })} />);
+    expect(document.querySelector('[data-board-dock] [aria-label="Book timeline"]')).toBeNull();
+  });
+
+  it('a landscape phone (short board) gets the one-line gate so it never covers the Pages grid', () => {
+    const doc = makeSampleDoc((d) => {
+      d.gate = { id: 'g_l', action: { type: 'render_pages' }, title: 'Draw 2 pages', summary: '', estimateUsd: 0.1, imageCount: 2, model: 'x', createdAt: SAMPLE_NOW, status: 'open', reason: 'policy' };
+    });
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <BoardPane studio={makeStudio(doc)} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('region', { name: 'Waiting for your approval' })).toHaveAttribute('data-gate-banner', 'compact');
   });
 });
