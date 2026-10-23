@@ -18,7 +18,7 @@ import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
 import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
 import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
-import { ViewGate } from '../monitor/viewGate';
+import { pageShown, ViewGate } from '../monitor/viewGate';
 import { RelayMeter } from '../monitor/videoBudget';
 import { probeDecoders, RelayDecoder, soundControls } from '../monitor/relay';
 import type { RelayCodec } from '../monitor/relayWire';
@@ -187,7 +187,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
    * room takes; `nearRef`: cameras on this device's network (their direct picture comes first);
    * `shownAtRef`: when the screen was last shown (a status from before then isn't "offline" yet).
    */
-  const gateRef = useRef(new ViewGate(typeof document === 'undefined' || document.visibilityState === 'visible'));
+  const gateRef = useRef(new ViewGate(typeof document === 'undefined' || pageShown(document)));
   const capsRef = useRef<string[]>([]);
   const nearRef = useRef<string[]>([]);
   const shownAtRef = useRef(Date.now());
@@ -891,9 +891,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   };
   // Hidden (locked, another app or tab in front, no picture-in-picture): said at once to the room and
   // the camera, who take the picture away after the grace and keep the sound. Shown: back at once.
+  // A browser that can't tell us about its own picture-in-picture (Firefox) always counts as shown.
   useEffect(() => {
     const apply = () => {
-      const shown = document.visibilityState === 'visible' || !!document.pictureInPictureElement;
+      const shown = pageShown(document, videoRef.current as (HTMLVideoElement & { webkitPresentationMode?: string }) | null);
       if (shown && !gateRef.current.isShown) shownAtRef.current = Date.now();
       gateRef.current.setShown(shown);
       linkRef.current?.setShown(shown);
@@ -1006,11 +1007,15 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     if (!v) return;
     const on = () => setPip(true);
     const off = () => setPip(false);
+    // Safari's own pop-out (presentation mode) says so with an event of its own.
+    const mode = () => setPip((v as HTMLVideoElement & { webkitPresentationMode?: string }).webkitPresentationMode === 'picture-in-picture');
     v.addEventListener('enterpictureinpicture', on);
     v.addEventListener('leavepictureinpicture', off);
+    v.addEventListener('webkitpresentationmodechanged', mode);
     return () => {
       v.removeEventListener('enterpictureinpicture', on);
       v.removeEventListener('leavepictureinpicture', off);
+      v.removeEventListener('webkitpresentationmodechanged', mode);
     };
   }, [hasVideo]);
 

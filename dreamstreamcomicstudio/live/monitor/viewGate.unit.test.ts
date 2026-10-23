@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { DC_STALE_MS, HIDDEN_GRACE_MS, pictureOff, ViewGate } from './viewGate';
+import { DC_STALE_MS, HIDDEN_GRACE_MS, pageShown, pictureOff, ViewGate } from './viewGate';
 
 describe('viewGate: tell the room when the screen is hidden, at once and only on change', () => {
   it('hidden and shown are said at once — the receivers apply the grace', () => {
@@ -38,5 +38,25 @@ describe('viewGate: tell the room when the screen is hidden, at once and only on
     expect(pictureOff(null, 1e9)).toBe(false);
     expect(pictureOff(0, HIDDEN_GRACE_MS - 1)).toBe(false);
     expect(pictureOff(0, HIDDEN_GRACE_MS)).toBe(true);
+  });
+});
+
+describe('pageShown: a picture someone may be watching is never taken away', () => {
+  const pipEl = {} as Element;
+  it('visible, or popped out with the Picture-in-Picture API (Chrome, Edge, Safari)', () => {
+    expect(pageShown({ visibilityState: 'visible', pictureInPictureElement: null })).toBe(true);
+    expect(pageShown({ visibilityState: 'hidden', pictureInPictureElement: pipEl })).toBe(true);
+    expect(pageShown({ visibilityState: 'hidden', pictureInPictureElement: null })).toBe(false);
+  });
+
+  it('Safari’s own pop-out (presentation mode) counts', () => {
+    expect(pageShown({ visibilityState: 'hidden' }, { webkitPresentationMode: 'picture-in-picture' })).toBe(true);
+    expect(pageShown({ visibilityState: 'hidden' }, { webkitPresentationMode: 'inline' })).toBe(false);
+  });
+
+  it('a browser that can’t say whether its own picture-in-picture shows the video (Firefox) keeps the picture while hidden', () => {
+    // Firefox: a pop-out toggle on every video, no document.pictureInPictureElement at all.
+    expect(pageShown({ visibilityState: 'hidden' }, {})).toBe(true);
+    expect(pageShown({ visibilityState: 'hidden' }, null)).toBe(true);
   });
 });

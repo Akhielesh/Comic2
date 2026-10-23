@@ -196,6 +196,12 @@ interface Attach {
   nt?: string;
   /** Camera: said goodbye (stopped on purpose) at this time — its socket closing next is expected. */
   bye?: number;
+  /**
+   * Closed by the room at this time (ms): signed out, counted nowhere, heard no more. The runtime
+   * can keep listing a socket the room closed for minutes (a phone that's gone never answers the
+   * close), so a closed socket must never still count — as a camera, a line, or a sign-in due.
+   */
+  cl?: number;
 }
 
 export interface SplStatus {
@@ -418,10 +424,14 @@ const MAX_SOCKETS = 14;
 /** Family members' apps listening for calls (separate from the monitor's devices). */
 const MAX_LINES = 24;
 const CALL_PUSH_CAP = 40;
-/** While a call is up, the alarm checks its lines this often… */
-const LINE_CHECK_MS = 30_000;
-/** …and drops a line in the call that hasn't pinged or said anything for this long (half-open socket). */
+/**
+ * While a call is up, a line in it that hasn't pinged or said anything for this long is dropped
+ * (half-open socket). The alarm is set for the moment each line would be this stale — a fixed
+ * time, so a chatty camera's re-plans can't keep moving it later (dropStaleLines).
+ */
 const LINE_STALE_MS = 60_000;
+/** An answered ("I'm on it") incident still counts this long after the answer. */
+const ACKED_STALE_MS = 30 * 60_000;
 /** All an 'admin' socket (the Invite sheet off the watch screen) may send. */
 const ADMIN_MSGS = new Set(['members_changed', 'share_set', 'share_off', 'share_pass', 'share_extend', 'guest_remove', 'request_dismiss', 'ping']);
 const MAX_CAMERAS = 4;
@@ -924,6 +934,8 @@ export class MonitorRoom {
     }
     const big = msg.t === 'rtc' || msg.t === 'call_rtc' || msg.t === 'auth' || msg.t === 'push_sub' || msg.t === 'call_push' || msg.t === 'stats' || msg.t === 'settings';
     if (!big && raw.length > FRAME_MAX) return;
+    // A socket the room closed (replaced, timed out, refused) is heard no more — not even a new sign-in.
+    if (a.cl) return;
 
     if (!a.authed) {
       if (msg.t === 'auth') await this.onAuth(ws, a, msg);
@@ -1043,13 +1055,29 @@ export class MonitorRoom {
       this.lineSeen.delete(a.sid);
       return this.onLineGone(a);
     }
-    // The room can still list a socket while it closes: take it out of every
-    // count below (presence, relay viewers), and finish the closing handshake.
-    const closing: Attach = { ...a, authed: false };
+    // Finish the closing handshake.
+    return this.retire(ws, a, 1000, 'bye');
+  }
+
+  /**
+   * The room is done with this socket: out of every count at once (signed out, `cl`) — presence,
+   * relay viewers, the camera cap, the watchdog — its goodbye handled (a camera's waiting minutes
+   * written, the usage it carried handed on, "went offline" unless the device is still here),
+   * then closed. The runtime can keep listing a socket the room closed for minutes when its phone
+   * is gone (it never answers the close): such a leftover must never raise a false "not
+   * responding", hide a real one, or take a camera's place.
+   */
+  private async retire(ws: WebSocket, a: Attach, code: number, reason: string): Promise<void> {
+    const closing: Attach = { ...a, authed: false, cl: Date.now() };
     try {
       ws.serializeAttachment(closing);
-      ws.close(1000, 'bye');
+      ws.close(code, reason);
     } catch { /* already closed */ }
+    if (!a.authed) return;
+    if (a.mode === 'line') {
+      this.lineSeen.delete(a.sid);
+      return this.onLineGone(a);
+    }
     if (a.mode === 'admin') return; // never in presence
     this.live.set(ws, closing);
     try {
@@ -1101,6 +1129,11 @@ export class MonitorRoom {
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
+    await this.ready;
+    const a = ws.deserializeAttachment() as Attach | null;
+    // Closed here, so retired here: a camera whose socket errored is handled like one that
+    // dropped (back within the grace, or "went offline"), not left counting as connected.
+    if (a && !a.cl) return this.retire(ws, a, 1011, 'error');
     try {
       ws.close(1011, 'error');
     } catch { /* closed */ }
@@ -1182,14 +1215,14 @@ export class MonitorRoom {
       return;
     }
 
-    // A device re-joining as the same camera replaces its stale socket.
+    // A device re-joining as the same camera replaces its stale socket — retired now, not when the
+    // runtime finally drops it: a phone that changed networks leaves its old connection half-open
+    // for minutes, and that leftover must not go "not responding" (a false alarm that would hide
+    // a real one), count against the camera cap, or show twice in presence. Its waiting minutes
+    // are written; the device is still here, so it is no "went offline".
     if (mode === 'camera') {
       for (const s of this.authed()) {
-        if (s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev) {
-          try {
-            s.ws.close(4005, 'replaced');
-          } catch { /* closed */ }
-        }
+        if (s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev) await this.retire(s.ws, s.a, 4005, 'replaced');
       }
     }
 
@@ -1253,6 +1286,8 @@ export class MonitorRoom {
       // The watchdog: a dead man's switch its messages and keepalives keep pushing back.
       await this.ensureAlarm(WATCH_MS);
       await this.markActive(now);
+      // Its hello put it back to full rate, whatever a retired socket's goodbye told it before: say it again.
+      delete a.lw;
     }
     // Whether each camera must send its status at full rate (a camera starts at full rate and is told at once).
     this.updateLiveWant();
@@ -1272,6 +1307,15 @@ export class MonitorRoom {
 
   private reject(ws: WebSocket, code: string, msg: string): void {
     this.send(ws, { t: 'error', code, msg });
+    // A sign-in refused: closed, and never again a sign-in due (an alarm) while the runtime lists it.
+    // (A signed-in socket refused a new role closes the usual way: its goodbye comes with the close.)
+    const a = this.live.get(ws) ?? (ws.deserializeAttachment() as Attach | null);
+    if (a && !a.authed && !a.cl) {
+      a.cl = Date.now();
+      try {
+        ws.serializeAttachment(a);
+      } catch { /* closed */ }
+    }
     try {
       ws.close(code === 'auth' ? 4001 : code === 'full' ? 4003 : 4004, code);
     } catch { /* closed */ }
@@ -1313,12 +1357,15 @@ export class MonitorRoom {
     a.lb = now;
     delete a.sf;
     ws.serializeAttachment(a);
-    if (wasStale && a.dev) {
-      await this.state.storage.delete(`alerted:${a.dev}`);
-      await this.addLog({ kind: 'online', msg: `${a.dn || 'Camera'} is responding again`, dev: a.dev });
-      await this.resolveHazard('offline', a.dev, 'responding again');
-    }
+    if (wasStale && a.dev) await this.cameraBack(a.dev, a.dn);
     await this.keepWatch(now);
+  }
+
+  /** A camera reported not responding is alive after all: its alert ends ("responding again"). */
+  private async cameraBack(dev: string, dn: string | undefined): Promise<void> {
+    await this.state.storage.delete(`alerted:${dev}`);
+    await this.addLog({ kind: 'online', msg: `${dn || 'Camera'} is responding again`, dev });
+    await this.resolveHazard('offline', dev, 'responding again');
   }
 
   /**
@@ -1336,8 +1383,11 @@ export class MonitorRoom {
 
   /**
    * When the room next needs to wake, from what is really pending: sign-ins that may time out, the
-   * cameras' watchdog, cameras that dropped without a goodbye, incidents to escalate, a sleep
-   * session whose camera went away, family calls ringing or up. Null = nothing (it sleeps).
+   * cameras' watchdog, cameras that dropped without a goodbye, incidents to escalate or that go
+   * stale, a sleep session whose camera went away, family calls ringing or up. Null = nothing (it
+   * sleeps). Every time here is a fixed moment, never "so long from now": a camera's messages
+   * re-plan the alarm every 10 s or so, and a relative time would be moved later each time and
+   * never come.
    */
   private async nextAlarmAt(now: number): Promise<number | null> {
     let at = Infinity;
@@ -1345,8 +1395,10 @@ export class MonitorRoom {
       if (t != null && Number.isFinite(t)) at = Math.min(at, Math.max(now + 1000, t));
     };
     for (const { ws, a } of this.sockets()) {
-      if (!a.authed) want(a.at + AUTH_TIMEOUT_MS);
-      else if (a.mode === 'camera' && a.dev && !a.sf) {
+      // A sign-in still due (a socket the room already closed is due nothing).
+      if (!a.authed) {
+        if (!a.cl) want(a.at + AUTH_TIMEOUT_MS);
+      } else if (a.mode === 'camera' && a.dev && !a.sf) {
         const seen = this.seenAt(ws, a);
         // Missed a keepalive already: look again exactly when it would count as not responding.
         want(seen + (now - seen >= WATCH_SUSPECT_MS ? BEAT_STALE_MS : WATCH_MS));
@@ -1355,11 +1407,18 @@ export class MonitorRoom {
     const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
     for (const p of Object.values(pending)) want(p.at + OFFLINE_GRACE_MS);
     want(this.store.nextIncidentAt());
+    // An incident nobody resolved is tidied when it goes stale (escalate()), so a stuck one can't
+    // linger on everyone's screen or soak up the next real alert of its kind.
+    for (const inc of this.store.activeIncidents()) want(incidentStaleAt(inc) + 1);
     const sm = await this.state.storage.get<SleepSm>('sleepSm');
     if (sm?.session && sm.lastM != null) want(sm.lastM + SLEEP_GONE_MS + 60_000);
     const book = await this.callBook();
     want(book.nextDeadline() == null ? null : book.nextDeadline()! + 500);
-    if (book.toJSON().some((c) => !c.ended && c.answeredAt != null)) want(now + LINE_CHECK_MS);
+    // Each line in a call that's up: looked at when it would count as gone silent (dropStaleLines).
+    const inCall = callingSids(book);
+    if (inCall.size) {
+      for (const { ws, a } of this.authed()) if (a.mode === 'line' && inCall.has(a.sid)) want(this.lineSeenAt(ws, a) + LINE_STALE_MS);
+    }
     return at === Infinity ? null : at;
   }
 
@@ -1968,10 +2027,11 @@ export class MonitorRoom {
     const now = Date.now();
     const settings = await this.settings();
     let inc = this.store.openIncident(kind, dev);
-    if (inc && inc.status === 'acked' && now - (inc.ack_at ?? 0) > 10 * 60_000) {
-      // Answered a while ago and happening again: that's a new incident.
-      this.store.updateIncident(inc.id, { status: 'resolved', resolved_at: now });
-      this.broadcast({ t: 'incident', inc: { ...inc, status: 'resolved', resolved_at: now } });
+    // Answered a while ago and happening again — or so old it no longer counts (the tidy-up may not
+    // have run yet): that's a new incident, and people are alerted. A stuck one never swallows it.
+    if (inc && ((inc.status === 'acked' && now - (inc.ack_at ?? 0) > 10 * 60_000) || now > incidentStaleAt(inc))) {
+      this.store.updateIncident(inc.id, { status: 'resolved', resolved_at: now, next_at: null });
+      this.broadcast({ t: 'incident', inc: { ...inc, status: 'resolved', resolved_at: now, next_at: null } });
       inc = null;
     }
     if (inc) {
@@ -2022,9 +2082,8 @@ export class MonitorRoom {
       this.broadcast({ t: 'incident', inc: { ...inc, pushes, next_at: next } });
     }
     for (const inc of this.store.activeIncidents()) {
-      const h = HAZARD[inc.kind as HazardKind];
-      const stale = inc.status === 'acked' ? now - (inc.ack_at ?? inc.at) > 30 * 60_000 : now - inc.at > (h?.staleMs ?? 60 * 60_000);
-      if (stale) {
+      // Due at a fixed time of its own (nextAlarmAt), not only when something else wakes the room.
+      if (now > incidentStaleAt(inc)) {
         this.store.updateIncident(inc.id, { status: 'resolved', resolved_at: now, next_at: null });
         this.broadcast({ t: 'incident', inc: { ...inc, status: 'resolved', resolved_at: now, next_at: null } });
       }
@@ -3134,28 +3193,29 @@ export class MonitorRoom {
    * A phone that dies mid-call can leave its socket half-open for minutes, so
    * the room would keep it "in" the call forever. A line in an answered call
    * that hasn't pinged (the runtime's auto-response time) or said anything for
-   * a minute is dropped — it gets the usual grace to come back. True while any
-   * call is up (the alarm keeps checking).
+   * a minute is dropped — it gets the usual grace to come back. The alarm is
+   * set for when each line would be that stale (nextAlarmAt). True while any
+   * call is up.
    */
   private async dropStaleLines(now: number): Promise<boolean> {
-    const book = await this.callBook();
-    const up = book.toJSON().filter((c) => !c.ended && c.answeredAt != null);
-    if (!up.length) return false;
-    const inCall = new Set(up.flatMap((c) => c.parts.filter((p) => p.gone == null).map((p) => p.sid)));
+    const inCall = callingSids(await this.callBook());
+    if (!inCall.size) return false;
     for (const { ws, a } of this.authed()) {
       if (a.mode !== 'line' || !inCall.has(a.sid)) continue;
-      let pinged = 0;
-      try {
-        pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
-      } catch { /* not supported */ }
-      if (now - Math.max(a.at, pinged, this.lineSeen.get(a.sid) ?? 0) < LINE_STALE_MS) continue;
-      try {
-        ws.close(4008, 'stale');
-      } catch { /* closed */ }
-      this.lineSeen.delete(a.sid);
-      await this.onLineGone(a);
+      if (now - this.lineSeenAt(ws, a) < LINE_STALE_MS) continue;
+      // Retired, not just closed: a half-open leftover never counts as a line again.
+      await this.retire(ws, a, 4008, 'stale');
     }
     return true;
+  }
+
+  /** A call line's last sign of life: its last message (memory), its last keepalive ping, or when it connected. */
+  private lineSeenAt(ws: WebSocket, a: Attach): number {
+    let pinged = 0;
+    try {
+      pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
+    } catch { /* not supported */ }
+    return Math.max(a.at, pinged, this.lineSeen.get(a.sid) ?? 0);
   }
 
   private async onCallMsg(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
@@ -3197,7 +3257,8 @@ export class MonitorRoom {
         if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, id });
         // Saved before anything else is awaited: the joiner's offer is right behind this message.
         await this.commitCalls(book, [call]);
-        await this.ensureAlarm(LINE_CHECK_MS);
+        // The call is up: its lines are watched from now on (each at the moment it would go stale).
+        await this.planAlarm(now);
         return this.send(ws, { t: 'call_joined', id, ...iceFields(await this.ice(a, { scope: 'account', id: call.from.uid })) });
       }
       case 'call_ice': {
@@ -3415,20 +3476,26 @@ export class MonitorRoom {
     await this.ready;
     const now = Date.now();
 
-    // 1. Sockets that never authenticated are dropped.
+    // 1. Sockets that never authenticated are dropped (once: a closed one the runtime still lists is left be).
     for (const { ws, a } of this.sockets()) {
-      if (!a.authed && now - a.at > AUTH_TIMEOUT_MS) {
-        try {
-          ws.close(4001, 'auth timeout');
-        } catch { /* closed */ }
-      }
+      if (!a.authed && !a.cl && now - a.at > AUTH_TIMEOUT_MS) await this.retire(ws, a, 4001, 'auth timeout');
     }
 
     // 2. The watchdog: connected cameras with no proof of life — no message, no keepalive ping —
     //    for BEAT_STALE_MS (phone locked, app frozen, off Wi-Fi with the socket half-open).
+    //    Proof of life is the device's: a quiet socket of a camera that is alive on another one
+    //    (it reconnected; the old connection never closed) is a leftover — retired, never an alarm.
     const meta = await this.meta();
-    for (const { ws, a } of this.authed()) {
-      if (a.mode !== 'camera' || !a.dev || a.sf || now - this.seenAt(ws, a) < BEAT_STALE_MS) continue;
+    const cams = this.authed().filter((s) => s.a.mode === 'camera' && !!s.a.dev);
+    const alive = new Set(cams.filter((s) => now - this.seenAt(s.ws, s.a) < BEAT_STALE_MS).map((s) => s.a.dev));
+    for (const { ws, a } of cams) {
+      if (!a.dev || now - this.seenAt(ws, a) < BEAT_STALE_MS) continue;
+      if (alive.has(a.dev)) {
+        await this.retire(ws, a, 4005, 'replaced');
+        if (a.sf) await this.cameraBack(a.dev, a.dn);
+        continue;
+      }
+      if (a.sf) continue;
       a.sf = true;
       ws.serializeAttachment(a);
       await this.state.storage.put(`alerted:${a.dev}`, true);
@@ -3481,6 +3548,26 @@ export class MonitorRoom {
 
 /** A minute row as the sleep tracker reads it. */
 const sleepMinute = (r: MinuteRow) => ({ m: r.m, state: r.state, motion: r.motion, crib: r.crib, sounds: r.sounds, visit: r.visit });
+
+/**
+ * When an incident stops being current — escalate() resolves it then, and a new alert of its kind
+ * on that camera opens a new incident (and alerts people) rather than joining it: answered ones
+ * ACKED_STALE_MS after the answer, the others their kind's staleMs after they began.
+ */
+function incidentStaleAt(inc: IncidentRow): number {
+  if (inc.status === 'acked') return (inc.ack_at ?? inc.at) + ACKED_STALE_MS;
+  return inc.at + (HAZARD[inc.kind as HazardKind]?.staleMs ?? 60 * 60_000);
+}
+
+/** The sockets (call lines) still in a call that's up — answered, not ended, not dropped from it. */
+function callingSids(book: CallBook): Set<string> {
+  const out = new Set<string>();
+  for (const c of book.toJSON()) {
+    if (c.ended || c.answeredAt == null) continue;
+    for (const p of c.parts) if (p.gone == null) out.add(p.sid);
+  }
+  return out;
+}
 
 function toLog(e: StoredEvent): MonLog {
   const out: MonLog = { id: e.id, at: e.at, kind: e.kind, sev: e.sev, msg: e.msg };

@@ -16,7 +16,7 @@ vi.mock('./webpush', () => ({
 }));
 
 import { BEAT_STALE_MS, HIDDEN_GRACE_MS, relaySound, relaySoundOnly, WATCH_MS } from './monitorRoom';
-import { monitorWorld, rowsWritten, WSPair, type KitWS, type MonitorWorld } from './monitorTestKit';
+import { KitWS, monitorWorld, rowsWritten, WSPair, type MonitorWorld } from './monitorTestKit';
 import { MONITOR_TURN_BPS, networkOf, relayDataState } from './monitorFair';
 import { readHead } from './relayWire';
 import { HIDDEN_GRACE_MS as CLIENT_GRACE } from '../../live/monitor/viewGate';
@@ -434,5 +434,142 @@ describe('fewer writes for the same things', () => {
     await w.deliver(cam, pack({ kind: 'video', key: true, seq: 1, ts: 1, codec: 'vp8', body: new Uint8Array(100) }));
     expect(mom.bin).toHaveLength(0);
     expect(rowsWritten(w.counts)).toBeLessThan(40);
+  });
+});
+
+// Review fixes on this diet (wave 2): sockets the room closed that the runtime still lists, and
+// alarms that must come at a fixed time however often a camera re-plans them.
+describe('a socket the room closed never counts again (the runtime can list it for minutes)', () => {
+  const sub = { t: 'push_sub', sub: { endpoint: 'https://push.test/mom', keys: { p256dh: 'p', auth: 'a' } }, prefs: {} };
+
+  it('a camera that reconnects while its old socket stays half-open: no false "not responding", and a real drop still alerts', async () => {
+    const w = world();
+    const old = await w.join('tok-parent', 'camera', 'crib');
+    const mom = await w.join('tok-parent', 'viewer', 'phone');
+    await w.deliver(mom, sub);
+    T += MIN;
+    await w.deliver(old, { t: 'stats', rows: [row(minute() - MIN)] });
+    T += 30_000;
+    // The phone changed networks: a new socket; the old one never answers the room's close.
+    const cam = await w.join('tok-parent', 'camera', 'crib');
+    expect(old.closed).toBe(4005);
+    expect(w.sockets).toContain(old);
+    // Its waiting minute is written; viewers see one camera, the new one.
+    expect(w.room.store.minutes(0, T + MIN, 'crib')).toHaveLength(1);
+    const cams = (mom.last('presence') as { cams: { sid: string }[] }).cams;
+    expect(cams).toHaveLength(1);
+    expect(cams[0].sid).not.toBe((old.deserializeAttachment() as { sid: string }).sid);
+    // 20 minutes of a healthy camera on the new socket (pings every 25 s, a message a minute), hibernating now and then.
+    await wait(w, 20 * MIN, async (t) => {
+      const s = Math.floor(t / 1000);
+      if (s % 25 === 0) w.ping(cam);
+      if (s % 60 === 0) await w.deliver(cam, { t: 'beat' });
+      if (s % 300 === 0) w.hibernate();
+    });
+    expect(w.room.store.events({ kinds: ['offline'] })).toHaveLength(0);
+    expect(pushes).toHaveLength(0);
+    expect(w.room.store.activeIncidents()).toHaveLength(0);
+    // Whatever the old socket still says is not heard (not even a new sign-in).
+    await w.deliver(old, { t: 'auth', token: 'tok-parent', mode: 'camera', dev: 'crib', dn: 'Crib iPhone' });
+    expect(old.msgs('hello')).toHaveLength(1);
+    // The edge finally drops it: still no "went offline" — the camera is here.
+    await w.close(old);
+    await wait(w, 2 * MIN, (t) => {
+      if (Math.floor(t / 1000) % 25 === 0) w.ping(cam);
+    });
+    expect(w.room.store.events({ kinds: ['offline'] })).toHaveLength(0);
+    // The camera phone really dies: alerted within the grace, and pushed (nothing open to swallow it).
+    await w.close(cam);
+    await wait(w, 25_000);
+    expect(w.room.store.events({ kinds: ['offline'] }).map((e) => e.msg)).toEqual(['Crib iPhone went offline']);
+    expect(pushes.map((p) => p.payload.title)).toEqual(['Baby camera went offline']);
+  });
+
+  it('a quiet leftover of a camera that is alive on another socket is retired, never an alarm', async () => {
+    const w = world();
+    // Two signed-in sockets of one device (sign-ins that crossed): the older goes quiet.
+    const a = await w.join('tok-parent', 'camera', 'crib');
+    const b = new KitWS();
+    b.serializeAttachment({ ...(a.deserializeAttachment() as object), sid: 'second', authed: true, at: T });
+    w.state.acceptWebSocket(b);
+    await wait(w, 3 * MIN, async (t) => {
+      if (Math.floor(t / 1000) % 25 === 0) w.ping(b);
+    });
+    expect(w.room.store.events({ kinds: ['offline'] })).toHaveLength(0);
+    expect(a.closed).toBe(4005);
+    expect(b.closed).toBeNull();
+  });
+
+  it('a phone that keeps reconnecting gets back in every time: its lingering old sockets never fill the camera cap', async () => {
+    const w = world();
+    for (let i = 0; i < 6; i++) {
+      const cam = await w.join('tok-parent', 'camera', 'crib');
+      expect(cam.closed).toBeNull();
+      expect(cam.msgs('error')).toHaveLength(0);
+      T += 5000;
+    }
+  });
+
+  it('a timed-out or refused sign-in is closed once: no alarm every second while the runtime still lists it', async () => {
+    const w = world();
+    const cam = await w.join('tok-parent', 'camera', 'crib');
+    const ghost = new KitWS();
+    ghost.serializeAttachment({ sid: 'ghost', at: T, authed: false });
+    w.state.acceptWebSocket(ghost);
+    await w.join('tok-nobody', 'viewer', 'stranger'); // refused: not a member (closed 4004)
+    const a0 = w.counts.alarms;
+    const s0 = w.counts.setAlarms;
+    await wait(w, 2 * MIN, (t) => {
+      if (Math.floor(t / 1000) % 25 === 0) w.ping(cam);
+    });
+    expect(ghost.closed).toBe(4001);
+    expect(w.sockets.at(-1)!.closed).toBe(4004);
+    // The sign-in deadline, then the watchdog's own look or two — not one a second.
+    expect(w.counts.alarms - a0).toBeLessThanOrEqual(3);
+    expect(w.counts.setAlarms - s0).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('alarms at fixed times, however often a chatty camera re-plans them', () => {
+  /** A camera sending its status every 2 s (someone watching live, or an older camera app). */
+  const chatty = (w: MonitorWorld, cam: KitWS) => async (t: number) => {
+    if (Math.floor(t / 1000) % 2 === 0) await w.deliver(cam, { t: 'status', st: { state: 'calm' } });
+  };
+
+  it('a family call’s silent line is dropped a minute after its last sign of life', async () => {
+    const w = world();
+    const cam = await w.join('tok-parent', 'camera', 'crib');
+    const mom = await w.join('tok-parent', 'line', 'mom');
+    const gpa = await w.join('tok-care', 'line', 'gpa');
+    await w.deliver(mom, { t: 'call_start', to: [ROLES['tok-care'].user_id], video: true, ref: 'r1' });
+    const id = mom.msgs('call_started')[0].id as string;
+    await w.deliver(gpa, { t: 'call_join', id, video: true });
+    const quietFrom = T; // Grandpa's phone dies here (half-open: no close); Mom's keeps pinging.
+    const tick = chatty(w, cam);
+    let droppedAt: number | null = null;
+    await wait(w, 3 * MIN, async (t) => {
+      await tick(t);
+      if (Math.floor(t / 1000) % 25 === 0) w.ping(mom);
+      if (droppedAt == null && gpa.closed != null) droppedAt = t;
+    });
+    expect(gpa.closed).toBe(4008);
+    expect(droppedAt! - quietFrom).toBeLessThanOrEqual(60_000 + 2000);
+    expect(mom.closed).toBeNull();
+  });
+
+  it('an incident nobody closed goes stale on time, so the next real alert of its kind still alerts', async () => {
+    const w = world();
+    const cam = await w.join('tok-parent', 'camera', 'crib');
+    const mom = await w.join('tok-parent', 'viewer', 'phone');
+    await w.deliver(mom, { t: 'push_sub', sub: { endpoint: 'https://push.test/mom', keys: { p256dh: 'p', auth: 'a' } }, prefs: {} });
+    // Very loud — and its "quiet again" never arrives (the camera app restarted mid-episode).
+    await w.deliver(cam, { t: 'event', kind: 'noise', type: 'very_loud', db: 95 });
+    expect(w.room.store.activeIncidents()).toHaveLength(1);
+    await wait(w, 31 * MIN, chatty(w, cam));
+    expect(w.room.store.activeIncidents()).toHaveLength(0);
+    await wait(w, 2 * 60 * MIN, chatty(w, cam));
+    await w.deliver(cam, { t: 'event', kind: 'noise', type: 'very_loud', db: 96 });
+    expect(pushes.map((p) => p.payload.title)).toEqual(['Very loud noise in the nursery (≈95 dB)', 'Very loud noise in the nursery (≈96 dB)']);
+    expect(w.room.store.activeIncidents()).toHaveLength(1);
   });
 });

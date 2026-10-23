@@ -931,6 +931,16 @@ median (ADR 0006 acceptance) is still to be read from the Cost centre once deplo
   15 s alarm, no `tl` blob, no `trackBucket`/`saveBucket`.
 - **Safety trade, stated:** a camera whose socket stays half-open is reported 75–105 s after its last sign of life (it was
   45–60 s). A socket that closes is still reported 20 s later; viewers on screen notice a frozen picture in 6 s on their own.
+- **Review fixes (wave 2).** Proof of life is the *device's*. A socket the room closes — a camera socket replaced when the
+  phone reconnects, a sign-in that timed out or was refused, a stale call line, a socket that errored — is retired at once
+  (`retire()`: signed out, `cl` on its attachment, its goodbye handled), because the runtime can keep listing a half-open
+  socket for minutes. So a phone that changed networks no longer raises a false "not responding" from its old connection
+  (an open incident that would have swallowed the real "went offline" push), never fills the 4-camera cap with its own
+  leftovers, and a closed sign-in no longer re-arms the alarm every second. Every alarm time is a fixed moment: call lines
+  are looked at when each would be 60 s quiet (the relative "30 s from now" moved later on every camera message and never
+  came), and incidents nobody closed are tidied at their stale time — a stuck one could otherwise sit open while a chatty
+  camera kept the alarm from firing and soak up the next real alert of its kind (`raiseHazard` also opens a new incident,
+  with a push, when the one it would join is stale).
 - **Minute rows in hour blocks** (`mon_blocks(dev, h, d) WITHOUT ROWID`, one row per camera-hour, upserted per batch: 1 row
   written, not 3 a minute plus 3 more when each ages out). The old table is turned into blocks once, a day at a time, and
   dropped (no 31 days of double reads, no 66k-row deletes). Retention deletes whole blocks (minutes are kept up to an hour
@@ -963,7 +973,9 @@ median (ADR 0006 acceptance) is still to be read from the Cost centre once deplo
   timeline from minutes, the one-off migration; `live_want` on/off and for old apps), the existing `monitorRoom*.test.ts`.
 
 **C5 — hidden viewers get sound only; relay cap 400 kbps. Done.**
-- The viewer says at once whether its screen is shown (`live/monitor/viewGate.ts`; picture-in-picture counts as shown):
+- The viewer says at once whether its screen is shown (`live/monitor/viewGate.ts` `pageShown`; picture-in-picture counts as
+  shown — the standard API or Safari's presentation mode; a browser that can't tell us about its own picture-in-picture,
+  Firefox, always counts as shown, so its hidden tabs keep the picture rather than risk blanking a popped-out monitor):
   `{t:'view', vis, dc, dev?}` to the room on change, `{t:'vis'}` to the camera on the data channel. A phone that locks may be
   frozen a moment later, so the *receivers* apply the 20 s grace: a glance away keeps the picture.
 - Direct picture: the camera (`CameraHub`) takes the picture away from a viewer hidden for 20 s and brings it back at once;

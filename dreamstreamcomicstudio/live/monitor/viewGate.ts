@@ -7,7 +7,8 @@
  * alerts never stop.
  *
  *  - Shown = the page is visible, OR its picture is popped out (picture-in-picture is a picture
- *    someone is watching while the page itself is hidden).
+ *    someone is watching while the page itself is hidden) — `pageShown`. A browser that can't
+ *    tell us whether its own picture-in-picture is showing the video counts as shown.
  *  - The viewer says so AT ONCE, both ways — a phone that locks may be frozen a moment later, so
  *    it can't be trusted to say "hidden" 20 s from now. The receivers (the room for the relay,
  *    the camera for the direct picture) wait HIDDEN_GRACE_MS before taking the picture away, so
@@ -30,6 +31,24 @@ export const DC_STALE_MS = 6000;
 export interface ViewState {
   vis: boolean;
   dc: boolean;
+}
+
+/**
+ * Is this page's picture on a screen? The page is visible, or its video is popped out in
+ * picture-in-picture — the standard API (`document.pictureInPictureElement`) or Safari's
+ * presentation mode. A browser with neither can't say whether ITS OWN picture-in-picture is
+ * showing the video (Firefox puts a pop-out toggle on every video but has no Picture-in-Picture
+ * API), so it always counts as shown: a picture a parent may be watching is never taken away —
+ * that browser's hidden tabs just keep the picture, as before sound-only-when-hidden.
+ */
+export function pageShown(
+  doc: { visibilityState: string; pictureInPictureElement?: Element | null },
+  video?: { webkitPresentationMode?: string } | null,
+): boolean {
+  if (doc.visibilityState === 'visible' || doc.pictureInPictureElement) return true;
+  if (video?.webkitPresentationMode === 'picture-in-picture') return true;
+  const canTell = 'pictureInPictureElement' in doc || typeof video?.webkitPresentationMode === 'string';
+  return !canTell;
 }
 
 /** Hidden long enough that the picture can go (`hiddenAt`: when it was hidden; null = shown). */
