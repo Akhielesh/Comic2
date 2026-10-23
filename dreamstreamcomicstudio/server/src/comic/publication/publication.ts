@@ -14,7 +14,11 @@
 //    is what readers, the gallery mirror (projects.content_rating) and the preview card show;
 //  - regenerate and unpublish kill the old slug the moment the row commits (the edge does no
 //    caching) and delete the old pub/ objects; publishing again after an unpublish mints a NEW slug;
-//  - projects.is_public is mirrored by the service role only.
+//  - projects.is_public is mirrored by the service role only;
+//  - only art the SERVER wrote to a lane clients can't rewrite is ever copied to pub/ (isServerArt,
+//    S6): pages or a cover using an outside image are refused before any safety check is paid for;
+//  - a moderation hold takes the pub/ copies down (removePublicationObjects, L11); republishing a
+//    suspended row after the hold is lifted copies everything again under a fresh asset key.
 
 import crypto from 'node:crypto';
 import { newId, type AssetRef, type Card, type ComicDoc, type Msg, type SafetyBlocker } from '../../../../shared/comic/doc.js';
@@ -38,7 +42,7 @@ import { comicShareUrl } from '../../../../services/productHost.js';
 import { logger } from '../../lib/logger.js';
 import { runPublishGate, type PublishGateResult } from '../safety/index.js';
 import { PUBLIC_BUCKET } from '../storagePaths.js';
-import { StudioError, type StudioContext, type StudioErrorCode } from '../types.js';
+import { StudioError, type AssetStore, type StudioContext, type StudioErrorCode } from '../types.js';
 import type { PublicationRow, SnapshotPlan, StatsRow } from './index.js';
 import { newAssetKey, newSlug } from './ids.js';
 import { ogHash, renderOgCard, dominantColor, type OgRenderInput } from './ogImage.js';
@@ -50,6 +54,7 @@ import {
   coverUrlOf,
   drawnPages,
   hasPublishableArt,
+  isServerArt,
   kindLabelOf,
   languagesLabel,
   localizedText,
@@ -71,7 +76,21 @@ export interface PublicationDeps {
   renderOg: (input: OgRenderInput) => Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }>;
   newSlug: () => string;
   newAssetKey: () => string;
+  /**
+   * Asset store for maintenance without a StudioContext (moderation takedowns, the orphan sweep's
+   * callers). Only `removePrefix` is used, and it refuses anything but a whole pub/<key>/ folder.
+   */
+  assets: () => Promise<Pick<AssetStore, 'removePrefix'>>;
 }
+
+let lazyAssets: Pick<AssetStore, 'removePrefix'> | null = null;
+const defaultAssets = async (): Promise<Pick<AssetStore, 'removePrefix'>> => {
+  if (!lazyAssets) {
+    const { createSupabaseAssetStore } = await import('../assets.js');
+    lazyAssets = createSupabaseAssetStore();
+  }
+  return lazyAssets;
+};
 
 const supabaseOrigin = (): string => (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 
@@ -89,7 +108,8 @@ const deps = (): PublicationDeps => ({
   publicUrl: overrides.publicUrl || ((p) => publicObjectUrl(p)),
   renderOg: overrides.renderOg || renderOgCard,
   newSlug: overrides.newSlug || newSlug,
-  newAssetKey: overrides.newAssetKey || newAssetKey
+  newAssetKey: overrides.newAssetKey || newAssetKey,
+  assets: overrides.assets || defaultAssets
 });
 
 /** Test hook: swap dependencies; returns a restore function. */
@@ -330,6 +350,19 @@ const ogUrlOf = (card: ShareCard | Record<string, never>, lang?: string): string
 
 const STATUS_WORD: Record<string, string> = { none: 'not drawn yet', queued: 'waiting to draw', rendering: 'drawing now', failed: "didn't draw", stale: 'out of date' };
 
+/** Readiness word for drawn art that isn't server-made (isServerArt): it can't be published as it is. */
+export const OUTSIDE_IMAGE_STATUS = 'uses an image from outside the studio — redraw it or upload the image again';
+
+/** The honest refusal when drawn pages or the cover use an image the server didn't make (S6). */
+function outsideImageError(pages: number[], cover: boolean): PublishError {
+  const list = pages.sort((a, b) => a - b).join(', ');
+  const one = pages.length === 1;
+  const message = pages.length
+    ? `Page ${list} ${one ? 'uses an image' : 'use images'} brought in from outside the studio, so ${one ? 'it' : 'they'} can't be published as ${one ? 'it is' : 'they are'}. Publish without ${one ? 'it' : 'them'}, or redraw ${one ? 'it' : 'them'} (or upload the image again in Media) first.`
+    : "The cover uses an image brought in from outside the studio, so it can't be published as it is. Redraw the cover (or upload the image again in Media and use it as the cover) first.";
+  return new PublishError('NOT_READY', message, { status: 422, code: 'NOT_READY', details: { outsideImages: { pages, cover } } });
+}
+
 /** Live readiness from the doc (no network, no spend): drives the sheet and the publish card. */
 export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: PublishRequest): Promise<PublishReadiness> {
   const rating = ratingOf(ctx, doc);
@@ -337,10 +370,13 @@ export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: Publ
   const pages = (doc.pages || []).filter((p) => !exclude.has(p.id));
   const missing: PublishReadiness['missing'] = [];
   if (!hasPublishableArt(doc.cover?.render)) missing.push({ kind: 'cover', status: STATUS_WORD[doc.cover?.render?.status || 'none'] || 'not drawn yet' });
+  else if (!isServerArt(doc.cover.render.asset)) missing.push({ kind: 'cover', status: OUTSIDE_IMAGE_STATUS });
   for (const p of pages) if (!hasPublishableArt(p.render) || p.render.status !== 'ready') {
     if (p.render.status === 'stale' && hasPublishableArt(p.render)) continue;
     missing.push({ kind: 'page', n: p.n, status: STATUS_WORD[p.render.status] || p.render.status });
   }
+  // Drawn art the publish would refuse (S6): never ok:true while publishing says no.
+  for (const p of pages) if (hasPublishableArt(p.render) && !isServerArt(p.render.asset)) missing.push({ kind: 'page', n: p.n, status: OUTSIDE_IMAGE_STATUS });
   const stalePages = pages.filter((p) => p.render.status === 'stale').map((p) => p.n);
   const drawn = pages.filter((p) => hasPublishableArt(p.render));
 
@@ -417,7 +453,8 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
   if (live) {
     view.slug = row.slug;
     view.url = comicShareUrl(row.slug);
-    const og = ogUrlOf(row.card, row.defaultLang || row.languages[0]);
+    // A suspended link's copies are taken down (removePublicationObjects): no broken preview image.
+    const og = row.status === 'live' ? ogUrlOf(row.card, row.defaultLang || row.languages[0]) : undefined;
     if (og) view.ogImageUrl = og;
     if (row.publishedAt) view.publishedAt = row.publishedAt;
     if (row.startPage !== undefined) view.startPage = row.startPage ?? null;
@@ -628,6 +665,9 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     }
     const existing = await d.store.get(ctx.projectId, ctx.userId);
     const live = isLiveish(existing) ? existing : null;
+    // A row suspended by a moderation hold (now lifted) keeps its link, but its pub/ copies may have
+    // been taken down (removePublicationObjects): everything is copied again under a fresh key.
+    const fresh = !live || live.status === 'suspended';
 
     // Languages: each the source or a publishable edition.
     const source = doc.format?.language || 'en';
@@ -656,6 +696,12 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     if (!candidates.length) throw new PublishError('NOT_READY', 'Draw at least one page before publishing.', { status: 422, code: 'NOT_READY' });
     const wantCover = hasPublishableArt(doc.cover?.render);
 
+    // The publication boundary (S6), before any platform-paid check: only art the server wrote to
+    // a lane no client can rewrite is ever copied to pub/. Excluded pages are already left out.
+    const outsidePages = candidates.filter((p) => !isServerArt(p.render.asset)).map((p) => p.n);
+    const outsideCover = wantCover && !isServerArt(doc.cover.render.asset);
+    if (outsidePages.length || outsideCover) throw outsideImageError(outsidePages, outsideCover);
+
     // Safety gate (both visibilities; platform-paid). It reads the doc itself: its text check is
     // shared publishableText(), which covers every author text the snapshot publishes (titles,
     // logline, tagline, cast names, lines, chapter titles, blurb, credits, dedication, style name
@@ -667,18 +713,18 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
 
     // Identity: keep the live link on an update; a NEW slug + key after an unpublish.
     const now = d.now();
-    const assetKey = live ? live.assetKey : d.newAssetKey();
+    const assetKey = fresh ? d.newAssetKey() : live!.assetKey;
     const publicationId = existing?.id || crypto.randomUUID();
     const prepared = await withVariants(ctx, doc, decision.pageIds, decision.includeCover);
     const basePlan = planSnapshot(prepared, { assetKey, pageIds: decision.pageIds, includeCover: decision.includeCover, languages, defaultLang });
     const prevSnapshotPaths = live?.snapshot ? snapshotPaths(live.snapshot) : [];
     const prevOg = live ? pubPathsOfCard(live.card) : [];
-    const have = new Set(prevSnapshotPaths);
+    const have = new Set(fresh ? [] : prevSnapshotPaths);
     const { plan: copiedPlan, copied } = await copyPlanned(ctx, basePlan, have);
     const plan: SnapshotPlan = { ...copiedPlan, publicationId, publishedAt: now, rev: doc.rev };
     const snapshot = buildSnapshot(prepared, plan);
 
-    const previousCard = live && isRecord(live.card) && (live.card as unknown as ShareCard).v === 1 ? (live.card as unknown as ShareCard) : null;
+    const previousCard = !fresh && isRecord(live!.card) && (live!.card as unknown as ShareCard).v === 1 ? (live!.card as unknown as ShareCard) : null;
     const { og, themeColor, written } = await buildOg(ctx, prepared, snapshot, plan, languages, previousCard, rating);
     const showCreator = req.showCreator ?? existing?.showCreator ?? PUBLISH_DEFAULTS.showCreator;
     const creator = showCreator ? await d.store.publicUsername(ctx.userId) : undefined;
@@ -702,11 +748,12 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
       snapshot,
       card,
       publishedRev: doc.rev,
+      // The owner can read this row: no dollars in it (S5). The gate's platform cost is recorded
+      // server-only (comic_safety_events / generation_cost_events).
       safety: {
         status: gate.status,
         ...(rating ? { rating } : {}),
         checkedHash: gate.checkedHash,
-        costUsd: gate.costUsd,
         excludedPageIds: [...exclude].filter((id) => doc.pages.some((p) => p.id === id)),
         contentHash: contentFingerprint(doc, languages)
       },
@@ -742,10 +789,13 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     }
 
     // Objects the new snapshot no longer references (same key only).
-    if (live) {
+    if (live && !fresh) {
       const keep = new Set([...snapshotPaths(snapshot), ...pubPathsOfCard(card)]);
       const stale = [...prevSnapshotPaths, ...prevOg].filter((p) => p.startsWith(`pub/${assetKey}/`) && !keep.has(p));
       if (stale.length) await ctx.assets.remove(stale).catch((err) => logger.warn('comic_publish_cleanup_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
+    } else if (live && live.assetKey !== assetKey) {
+      // A republished suspension: whatever is left under the old key goes (the takedown may have run already).
+      await ctx.assets.removePrefix(`pub/${live.assetKey}/`).catch((err) => logger.warn('comic_publish_cleanup_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
     }
 
     const ops = mirrorOps(ctx.session.doc, row);
@@ -977,15 +1027,55 @@ export async function loadPublicByProjectId(projectId: string): Promise<PublicCo
 
 // ── Maintenance ──────────────────────────────────────────────────────────────
 
-/** Weekly sweep: delete pub/<key>/ prefixes that no live/suspended publication owns. Returns objects removed. */
+/** How long a pub/ prefix is left alone before a sweep may remove it (same day-long grace as the orphan scan). */
+export const SWEEP_GRACE_MS = 24 * 3_600_000;
+
+/**
+ * Takedown (L11): remove the pub/<key>/ copies of a publication that is no longer live. A moderation
+ * hold suspends the row (DB trigger) so the slug stops resolving at once, but the opaque copies stayed
+ * reachable by direct bucket URL; this deletes them. Called by the safety module after a hold or
+ * suspension; best effort and logged — it never throws. A LIVE row's copies are never touched unless
+ * the project is under a moderation hold (a publish that raced the hold): that row is suspended first,
+ * so it can never point at deleted copies. Re-publishing after the hold is lifted copies everything
+ * again under a fresh key (publishWithOutcome).
+ */
+export async function removePublicationObjects(projectId: string): Promise<void> {
+  if (typeof projectId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(projectId)) return;
+  const d = deps();
+  try {
+    const row = d.store.getByProject ? await d.store.getByProject(projectId) : null;
+    if (!row?.assetKey || !ASSET_KEY_RE.test(row.assetKey)) return;
+    if (row.status === 'live') {
+      const flags = await d.store.projectFlags(projectId, row.userId);
+      if (!flags.forcedPrivate) {
+        logger.warn('comic_publication_takedown_skipped_live', { projectId });
+        return;
+      }
+      await d.store.upsert({ ...row, status: 'suspended', updatedAt: d.now() });
+    }
+    const removed = await (await d.assets()).removePrefix(`pub/${row.assetKey}/`);
+    logger.info('comic_publication_objects_removed', { projectId, removed, status: row.status === 'live' ? 'suspended' : row.status });
+  } catch (err) {
+    logger.warn('comic_publication_takedown_failed', { projectId, message: (err as Error)?.message });
+  }
+}
+
+/**
+ * Weekly sweep: delete pub/<key>/ prefixes that no live/suspended publication owns, and the copies
+ * of publications suspended for longer than the grace period (a takedown that failed or never ran).
+ * Returns objects removed.
+ */
 export async function sweepOrphanPublications(assets: { removePrefix(prefix: string): Promise<number> }, limit = 100): Promise<number> {
-  const keys = await deps().store.orphanKeys(limit);
+  const d = deps();
+  const orphans = await d.store.orphanKeys(limit);
+  const suspended = d.store.suspendedKeys ? await d.store.suspendedKeys(limit, d.now() - SWEEP_GRACE_MS).catch(() => [] as string[]) : [];
+  const keys = [...new Set([...orphans, ...suspended])];
   let removed = 0;
   for (const key of keys) {
     if (!ASSET_KEY_RE.test(key)) continue;
     removed += await assets.removePrefix(`pub/${key}/`).catch(() => 0);
   }
-  if (keys.length) logger.info('comic_publication_orphans_swept', { keys: keys.length, removed });
+  if (keys.length) logger.info('comic_publication_orphans_swept', { keys: keys.length, suspended: suspended.length, removed });
   return removed;
 }
 

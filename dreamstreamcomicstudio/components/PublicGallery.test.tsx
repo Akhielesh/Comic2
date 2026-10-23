@@ -28,10 +28,16 @@ vi.mock('../services/db', () => ({
   toggleProjectLike: vi.fn(async () => ({ liked: true }))
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: null }) }));
-// The first candidate SmartImage would try (it preloads before painting).
-vi.mock('./common/SmartImage', () => ({ SmartImage: ({ src, alt }: { src?: string; alt?: string }) => <img src={src} alt={alt} /> }));
+// The first candidate SmartImage would try (it preloads before painting), plus the fallbacks it
+// would walk to when that fails.
+vi.mock('./common/SmartImage', () => ({
+  SmartImage: ({ src, alt, fallbackSources }: { src?: string; alt?: string; fallbackSources?: string[] }) => (
+    <img src={src} alt={alt} data-fallbacks={(fallbackSources || []).join(' ')} />
+  )
+}));
 
 const { PublicGallery, shareSlugOf, publicCoverUrl, isKidsFriendly } = await import('./PublicGallery');
+const db = await import('../services/db');
 
 const row = (id: string, name: string, state: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
   id,
@@ -102,6 +108,53 @@ describe('PublicGallery', () => {
     expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Read Night Raid' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Read Old Classic' })).toBeNull();
+  });
+
+  it('never lists a comic held by moderation', async () => {
+    rows.value = [...rows.value, row('held', 'Held Comic', { studioVersion: 4, shareSlug: 'CbCdEfGhIjKlMnOpQ', publicCover: `pub/${KEY}/cover.webp` }, { content_rating: 'G', is_forced_private: true })];
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    expect(screen.queryByRole('link', { name: 'Read Held Comic' })).toBeNull();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(3);
+  });
+
+  it('a rated row that is not a published v4 listing shows no rating and is not kids-friendly', async () => {
+    // An owner flipped the studio marker and swapped the classic cover fields on a rated row.
+    rows.value = [
+      row('evil', 'Evil', { studioVersion: 3, shareSlug: SLUG, panels: [{ id: 'p', imageUrl: 'https://evil.test/p.jpg' }] }, { content_rating: 'G', cover_image_url: 'https://evil.test/x.jpg' }),
+      rows.value[0]
+    ];
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    const evil = await screen.findByRole('link', { name: 'Read Evil' });
+    // Treated like any classic comic: the in-app reader, never the share page, never a badge.
+    expect(evil).toHaveAttribute('href', '/?view=read&id=evil');
+    expect(evil.querySelector('[aria-label^="Rated"]')).toBeNull();
+    expect(screen.getAllByRole('img', { name: /^Rated / }).map((el) => el.getAttribute('aria-label'))).toEqual(['Rated PG']);
+    fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
+    expect(screen.queryByRole('link', { name: 'Read Evil' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+  });
+
+  it('a v4 listing never shows an owner-written cover (first or fallback), and signs no draft', async () => {
+    const owner = { coverImageUrl: 'https://evil.test/c.jpg', coverImageId: 'u/u1/p/v4/img/draft.webp', panels: [{ id: 'p', imageUrl: 'https://evil.test/p.jpg' }, { id: 'q', imageId: 'u/u1/p/v4/img/q.webp' }], styleVariants: [{ id: 's', imageUrl: 'https://evil.test/s.jpg' }] };
+    rows.value = [
+      row('v4-a', 'No Cover Yet', { studioVersion: 4, shareSlug: 'BbCdEfGhIjKlMnOpQ', ...owner }, { content_rating: 'G', cover_image_url: 'https://evil.test/x.jpg' }),
+      row('v4-b', 'With Cover', { studioVersion: 4, shareSlug: SLUG, publicCover: `pub/${KEY}/cover-1080.webp`, ...owner }, { content_rating: 'PG', cover_image_url: 'https://evil.test/x.jpg' })
+    ];
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    const noCover = await screen.findByRole('link', { name: 'Read No Cover Yet' });
+    const withCover = screen.getByRole('link', { name: 'Read With Cover' });
+    const seen = [noCover, withCover].map((a) => {
+      const img = a.querySelector('img');
+      return `${img?.getAttribute('src') ?? ''} ${img?.getAttribute('data-fallbacks') ?? ''}`;
+    });
+    expect(seen.join(' ')).not.toContain('evil.test');
+    expect(withCover.querySelector('img')?.getAttribute('src')).toBe(`https://sb.test/storage/v1/object/public/comic-assets/pub/${KEY}/cover-1080.webp`);
+    expect(noCover.querySelector('img')?.getAttribute('src')).toBeNull();
+    expect(db.getImageUrl).not.toHaveBeenCalled();
+    // Both are real publications: their badges stay.
+    expect(screen.getByRole('img', { name: 'Rated G' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Rated PG' })).toBeInTheDocument();
   });
 
   it('says so when no comic is kids-friendly yet', async () => {

@@ -8,6 +8,8 @@
  * slug is a capability and must never land in logs). Always 204; bodies over 16 KB are ignored.
  */
 import type { RateLimiter } from './publicComic';
+import { readCappedText } from './readCapped';
+import { loggablePath } from '../../shared/capabilityPath';
 
 export interface CspReportEnv {
   CSP_REPORT_RL?: RateLimiter;
@@ -27,18 +29,16 @@ const originOnly = (v: unknown): string => {
   try {
     return new URL(s).origin;
   } catch {
-    return s.split(/[?#]/)[0].slice(0, 60);
+    return loggablePath(s).slice(0, 60);
   }
 };
 
-/** Document path with capability segments masked (/c/<slug>, classic /share/<token>) and no query string. */
+/** Document path with capability segments masked (/c/<slug>, classic /share/<token>, … — the one
+ *  shared list in shared/capabilityPath.ts) and no query string. Full URLs only; anything else → ''. */
 export const maskedPath = (v: unknown): string => {
   const s = typeof v === 'string' ? v.slice(0, 500) : '';
   try {
-    return new URL(s).pathname
-      .replace(/^\/c\/[^/]+/, '/c/:slug')
-      .replace(/^\/share\/[^/]+/, '/share/:token')
-      .slice(0, 120);
+    return loggablePath(new URL(s).pathname).slice(0, 120);
   } catch {
     return '';
   }
@@ -75,10 +75,9 @@ export async function handleCspReport(req: Request, env: CspReportEnv, random: (
       /* limiter outage: keep going */
     }
   }
-  const length = Number(req.headers.get('content-length') || '0');
-  if (length > MAX_BYTES) return done;
-  const text = await req.text().catch(() => '');
-  if (!text || text.length > MAX_BYTES) return done;
+  // Capped read: an unsized (chunked / HTTP-2) body is cancelled past 16 KB, never buffered whole.
+  const text = await readCappedText(req, MAX_BYTES);
+  if (!text) return done;
   const sample = Math.max(0, Math.min(1, Number(env.CSP_REPORT_SAMPLE ?? '0.1') || 0));
   if (random() >= sample) return done;
   try {

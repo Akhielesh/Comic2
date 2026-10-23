@@ -7,7 +7,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import React from 'react';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { ImmersiveReader } from './ImmersiveReader';
+import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOptions } from './ImmersiveReader';
+import { ExportError } from '../export/errors';
 import { pageImageCache } from './pageImageCache';
 
 const pdfMock = vi.hoisted(() => ({ exportComicPdf: vi.fn() }));
@@ -30,6 +31,7 @@ const setViewport = (w: number, h: number) => {
 
 beforeEach(() => {
   reduce = false;
+  pdfMock.exportComicPdf.mockReset();
   window.matchMedia = ((query: string) => ({
     matches: query.includes('prefers-reduced-motion') ? reduce : query.includes('hover: hover') || query.includes('any-pointer: fine'),
     media: query,
@@ -228,6 +230,69 @@ describe('ImmersiveReader', () => {
     expect(seen[1]).toBeUndefined();
     expect(seen[0]).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/Downloaded 5 pages — 2 couldn’t be included/)).toBeInTheDocument());
+  });
+
+  it('a host download (share links: the gated public one) replaces the built-in PDF; its line shows here', async () => {
+    reduce = true;
+    setViewport(1280, 800);
+    let finish!: (note: string) => void;
+    const onDownload = vi.fn(() => new Promise<string>((r) => (finish = r)));
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} allowDownload={false} onDownload={onDownload} onExit={() => undefined} />);
+    const button = screen.getByRole('button', { name: 'Download' });
+    await act(async () => {
+      fireEvent.click(button);
+      fireEvent.click(button); // a double tap never starts two downloads
+    });
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Preparing the PDF…')).toBeInTheDocument();
+    await act(async () => finish('Downloaded the PDF (Telugu).'));
+    expect(await screen.findByText('Downloaded the PDF (Telugu).')).toBeInTheDocument();
+    // The display URLs never feed a download on a share link.
+    expect(pdfMock.exportComicPdf).not.toHaveBeenCalled();
+  });
+
+  it('the built-in PDF exports the edition being read by name and shows the export notice', async () => {
+    reduce = true;
+    setViewport(1280, 800);
+    const spy = pdfMock.exportComicPdf.mockResolvedValue({ fileName: 'x.pdf', pages: 7, failed: [], skipped: [], notice: 'Some lettering used a fallback font.' });
+    const doc = drawnDoc();
+    render(<ImmersiveReader doc={doc} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    });
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(spy.mock.calls[0][0]).toBe(doc);
+    expect(spy.mock.calls[0][2]).toEqual({});
+    expect(await screen.findByText('Downloaded the PDF. Some lettering used a fallback font.')).toBeInTheDocument();
+  });
+
+  it('readerExportOptions names an existing edition only (the source and a missing edition export the doc as is)', () => {
+    const doc = drawnDoc();
+    doc.i18n = { glossary: [], editions: { te: { lang: 'te', register: 'everyday', lines: {}, balloons: {} } } };
+    expect(readerExportOptions(doc, 'te')).toEqual({ lang: 'te' });
+    expect(readerExportOptions(doc, 'TE')).toEqual({ lang: 'TE' });
+    expect(readerExportOptions(doc, doc.format.language)).toEqual({});
+    expect(readerExportOptions(doc, 'hi')).toEqual({});
+    expect(readerExportOptions(doc, undefined)).toEqual({});
+  });
+
+  it('a failed PDF reads calmly, never as a raw error string', async () => {
+    reduce = true;
+    setViewport(1280, 800);
+    pdfMock.exportComicPdf.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'width')"));
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    });
+    expect(await screen.findByText('Couldn’t make the PDF. Please try again.')).toBeInTheDocument();
+    expect(screen.queryByText(/Cannot read properties/)).toBeNull();
+  });
+
+  it('pdfDownloadNote / pdfDownloadFailedNote', () => {
+    expect(pdfDownloadNote({ pages: 1, failed: [], skipped: ['Page 2'] })).toBe('Downloaded 1 page — 1 couldn’t be included (not drawn, withheld or didn’t load).');
+    expect(pdfDownloadNote({ pages: 3, failed: [], skipped: [], notice: '  Smaller images were used.  ' })).toBe('Downloaded the PDF. Smaller images were used.');
+    expect(pdfDownloadFailedNote(new ExportError('This comic is too big for one PDF on this device.', 'too_big'))).toBe('Couldn’t make the PDF. This comic is too big for one PDF on this device.');
+    expect(pdfDownloadFailedNote(new Error('boom'))).toBe('Couldn’t make the PDF. Please try again.');
   });
 
   it('wide screens read in spreads with the cover alone on the right', () => {

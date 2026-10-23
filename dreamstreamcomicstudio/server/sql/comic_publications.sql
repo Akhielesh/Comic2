@@ -22,9 +22,14 @@
 --   * projects.is_public stays server-written for v4 (P0-SEC guard). This file adds:
 --       - projects_suspend_publication: moderation (is_forced_private → true) suspends the
 --         live publication at once (the RPCs also refuse forced-private projects);
---       - projects_guard_publication_state: a client re-save of a v4 listing row can never
---         change the server-mirrored state.shareSlug / state.publicCover (the gallery reads
---         them from public rows).
+--       - projects_guard_publication_state: a client write to a v4 listing row can never
+--         change the server-mirrored state.shareSlug / state.publicCover / state.studioVersion
+--         or the classic cover_image_url column (the gallery reads them from public rows), and
+--         while the row is PUBLIC its whole listing (name, state, cover_image_url) is the
+--         server's mirror of what passed the publish gate (gate F4/S4, 2026-10: an owner could
+--         otherwise flip studioVersion and show unscanned covers/panels under the gate's
+--         G/PG badge in the Kids-friendly gallery). A one-off service-side heal re-asserts
+--         studioVersion 4 and clears cover_image_url on v4 rows written before the guard.
 --   * Content rating (P2-PUBLIC-PAYLOAD): the publish gate's rating (G / PG / PG-13) is frozen in
 --     safety.rating at publish time. comic_share_card and comic_public_payload expose it as
 --     `rating` only when it is one of those three values; older rows simply have no `rating` key
@@ -324,11 +329,20 @@ begin
   end if;
 end $$;
 
--- A client re-save of a v4 listing row keeps the server-mirrored share keys (the gallery
--- reads state.shareSlug / state.publicCover of public rows). While a v4 row is PUBLIC, the
--- gallery shows only what passed the publish gate: the server wrote the published title
--- (name), blurb (state.overview) and opaque cover (state.coverImageId), and a direct client
--- update can't swap them for unreviewed text or another image (anyone can read public rows).
+-- A client write to a v4 listing row (comic_docs exists) never changes what the server owns:
+--   * cover_image_url — v4 never uses the classic cover column; the gallery would show it.
+--   * PUBLIC row — the whole listing (name, state, cover_image_url) is the server's mirror of
+--     what passed the publish gate: published title, blurb, opaque pub/ cover, share slug and
+--     the v4 marker. Anyone can read public rows, so a direct client update can't swap any of it
+--     for unreviewed text or images (including a studioVersion flip that would make readers
+--     treat the row as a classic comic and show its owner-written cover/panels under the gate's
+--     G/PG badge).
+--   * PRIVATE row — the share keys and studioVersion stay as the server wrote them (a flip made
+--     while private would ride into the public row on the next publish mirror); a non-object
+--     state, which would slip past every key pin, is refused by keeping the old state. Owner
+--     edits of other keys (rename, overview) still land.
+-- likes/views and other column-only writes return early untouched; the service role (server
+-- mirror, migrations) is never pinned.
 create or replace function public.projects_guard_publication_state()
 returns trigger
 language plpgsql
@@ -339,15 +353,26 @@ declare
   v_old jsonb := coalesce(old.state, '{}'::jsonb);
 begin
   if coalesce(auth.role(), 'service_role') = 'service_role' then return new; end if;
-  if new.state is not distinct from old.state and new.name is not distinct from old.name then return new; end if;
+  if new.state is not distinct from old.state
+     and new.name is not distinct from old.name
+     and new.cover_image_url is not distinct from old.cover_image_url then
+    return new;
+  end if;
   if not exists (select 1 from public.comic_docs d where d.project_id = old.id) then return new; end if;
-  new.state := (coalesce(new.state, '{}'::jsonb) - 'shareSlug' - 'publicCover')
-    || jsonb_strip_nulls(jsonb_build_object('shareSlug', v_old -> 'shareSlug', 'publicCover', v_old -> 'publicCover'));
+  new.cover_image_url := old.cover_image_url;
   if coalesce(old.is_public, false) then
     new.name := old.name;
-    new.state := (new.state - 'overview' - 'coverImageId')
-      || jsonb_strip_nulls(jsonb_build_object('overview', v_old -> 'overview', 'coverImageId', v_old -> 'coverImageId'));
+    new.state := old.state;
+    return new;
   end if;
+  if new.state is null or jsonb_typeof(new.state) <> 'object' then
+    new.state := case when jsonb_typeof(old.state) = 'object' then old.state else '{}'::jsonb end;
+  end if;
+  new.state := (new.state - 'shareSlug' - 'publicCover' - 'studioVersion')
+    || jsonb_strip_nulls(jsonb_build_object(
+         'shareSlug', v_old -> 'shareSlug',
+         'publicCover', v_old -> 'publicCover',
+         'studioVersion', v_old -> 'studioVersion'));
   return new;
 end;
 $$;
@@ -357,6 +382,21 @@ drop trigger if exists projects_guard_publication_state on public.projects;
 create trigger projects_guard_publication_state
   before update on public.projects
   for each row execute function public.projects_guard_publication_state();
+
+-- One-off heal (idempotent; runs as the migration role, so every guard lets it through): v4 rows
+-- written before the guard above get their v4 marker back and lose any classic cover URL. Expect
+-- 0 rows — the server never writes cover_image_url and always mirrors studioVersion 4.
+do $$
+begin
+  if to_regclass('public.comic_docs') is not null then
+    update public.projects p
+       set state = jsonb_set(p.state, '{studioVersion}', '4'::jsonb),
+           cover_image_url = null
+     where exists (select 1 from public.comic_docs d where d.project_id = p.id)
+       and jsonb_typeof(p.state) = 'object'
+       and (p.state -> 'studioVersion' is distinct from '4'::jsonb or p.cover_image_url is not null);
+  end if;
+end $$;
 
 -- ── Orphan pub/ sweep (weekly; the server deletes through the Storage API) ──────────────────
 
@@ -398,5 +438,11 @@ begin
   if has_table_privilege('anon', 'public.comic_publication_config', 'select')
      or has_table_privilege('authenticated', 'public.comic_publication_config', 'select') then
     raise exception 'comic_publication_config must be server-only';
+  end if;
+  -- projects_guard_publication_state reads new.cover_image_url on every client update: without the
+  -- column every client save would fail, so the migration must fail instead.
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'projects' and column_name = 'cover_image_url') then
+    raise exception 'public.projects.cover_image_url is missing (projects_guard_publication_state needs it)';
   end if;
 end $$;

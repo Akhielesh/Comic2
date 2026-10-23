@@ -123,21 +123,45 @@ export function planCoverTitle(doc: ComicDoc, aspect: number, measure: Measure):
   return { title, tagline };
 }
 
-const blockNodes = (blk: CoverTextBlock): SvgNode[] => {
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const FONT_RE = /^(italic\s+)?(\d{3})\s+([\d.]+)px\s+(.*)$/;
+
+/**
+ * Drawing nodes for one title/tagline block, in plan units: a shadow copy, then the fill with its outline
+ * (stroke colour, opacity and width; `paint-order: stroke`). The ONE implementation the screen draws and the
+ * exports reuse (export/coverTitle.ts can call this instead of keeping a copy), so a translucent outline or a
+ * shadow offset reads the same on the board, in the reader and in the PNG/PDF.
+ */
+export const blockNodes = (blk: CoverTextBlock): SvgNode[] => {
   const fill = paintOf(blk.style.textColor) ?? { color: '#ffffff', opacity: 1 };
   const stroke = blk.style.textStroke ? paintOf(blk.style.textStroke.color) : null;
   const shadow = blk.style.shadow ? paintOf(blk.style.shadow.color) : null;
-  const m = /^(italic\s+)?(\d{3})\s+([\d.]+)px\s+(.*)$/.exec(blk.font);
-  const base = { 'font-family': m?.[4] ?? 'sans-serif', 'font-size': blk.fontSize, 'font-weight': m ? Number(m[2]) : 400, 'font-style': m?.[1] ? 'italic' : undefined, 'text-anchor': blk.anchor, direction: blk.dir === 'rtl' ? 'rtl' : undefined };
+  const m = FONT_RE.exec(blk.font);
+  const base: SvgNode['attrs'] = {
+    'font-family': m?.[4] ?? 'sans-serif',
+    'font-size': blk.fontSize,
+    'font-weight': m ? Number(m[2]) : 400,
+    'font-style': m?.[1] ? 'italic' : undefined,
+    'text-anchor': blk.anchor,
+    direction: blk.dir === 'rtl' ? 'rtl' : undefined
+  };
   const texts = (attrs: SvgNode['attrs']): SvgNode[] => blk.lines.map((line, i) => ({ tag: 'text', attrs: { ...base, ...attrs, x: blk.x, y: blk.ys[i] }, text: line }));
   const out: SvgNode[] = [];
-  if (shadow && blk.style.shadow) out.push({ tag: 'g', attrs: { transform: `translate(${blk.style.shadow.dx * blk.fontSize} ${blk.style.shadow.dy * blk.fontSize})`, opacity: shadow.opacity < 1 ? shadow.opacity : undefined }, children: texts({ fill: shadow.color }) });
+  if (shadow && blk.style.shadow) {
+    out.push({
+      tag: 'g',
+      attrs: { transform: `translate(${r2(blk.style.shadow.dx * blk.fontSize)} ${r2(blk.style.shadow.dy * blk.fontSize)})`, opacity: shadow.opacity < 1 ? shadow.opacity : undefined },
+      children: texts({ fill: shadow.color })
+    });
+  }
   out.push({
     tag: 'g',
     attrs: { 'fill-opacity': fill.opacity < 1 ? fill.opacity : undefined, lang: blk.lang },
     children: texts({
       fill: fill.color,
-      ...(stroke && blk.style.textStroke ? { stroke: stroke.color, 'stroke-width': Math.round(blk.style.textStroke.width * blk.fontSize * 100) / 100, 'stroke-linejoin': 'round', 'paint-order': 'stroke' } : {})
+      ...(stroke && blk.style.textStroke
+        ? { stroke: stroke.color, 'stroke-opacity': stroke.opacity < 1 ? stroke.opacity : undefined, 'stroke-width': r2(blk.style.textStroke.width * blk.fontSize), 'stroke-linejoin': 'round', 'paint-order': 'stroke' }
+        : {})
     })
   });
   return out;

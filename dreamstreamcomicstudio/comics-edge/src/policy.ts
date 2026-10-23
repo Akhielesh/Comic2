@@ -56,9 +56,10 @@ export const isApiPath = (pathname: string): boolean => pathname === '/api' || p
  *  <head>, CSP and framing, so the edge neither rebrands nor re-frames them. */
 export const isSharePath = (pathname: string): boolean => pathname === '/c' || pathname.startsWith('/c/');
 
-/** Routes that other sites may frame: the reader embed. */
-export const isEmbedPath = (pathname: string): boolean =>
-  pathname === '/embed' || pathname.startsWith('/embed/') || /^\/c\/[^/]+\/embed\/?$/.test(pathname);
+/** The ONLY route other sites may frame: the reader embed `/c/<slug>/embed` (its share Function
+ *  decides per publication). There is no `/embed/*` route: such paths are the studio SPA and get
+ *  the default DENY like every other page (S17). */
+export const isEmbedPath = (pathname: string): boolean => /^\/c\/[^/]+\/embed\/?$/.test(pathname);
 
 /** The other DreamStream products (Stream Studio, Chat's model catalog and chat shares, the retired
  *  Code Studio entry) — they live on the main site, with its own session. */
@@ -157,12 +158,9 @@ export const applySecurityHeaders = (headers: Headers, pathname: string): void =
   headers.set('x-content-type-options', 'nosniff');
   headers.set('referrer-policy', REFERRER_POLICY);
   if (!headers.has('permissions-policy')) headers.set('permissions-policy', PERMISSIONS_POLICY);
-  // Share pages set their own framing (embed allowed, page same-origin) in the Pages Function.
+  // Share pages — the embed included (isEmbedPath ⊂ isSharePath) — set their own framing in the
+  // Pages Function (embed allowed when the author says so, the page same-origin only).
   if (isSharePath(pathname)) return;
-  if (isEmbedPath(pathname)) {
-    headers.delete('x-frame-options');
-    return;
-  }
   headers.set('x-frame-options', 'DENY');
   headers.set('content-security-policy', withFrameAncestorsNone(headers.get('content-security-policy')));
 };

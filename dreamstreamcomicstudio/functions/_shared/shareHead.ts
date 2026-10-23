@@ -55,6 +55,11 @@ export const clampText = (value: unknown, max: number): string => {
 
 // ── RPC shape validation (defense in depth: the edge never trusts stored JSON blindly) ──
 
+/** The frozen publish-time content rating (= shared/comic/safety.ts ContentRating; kept local so
+ *  the Pages/Worker bundles don't pull the i18n module in). */
+export type ShareRating = 'G' | 'PG' | 'PG-13';
+const SHARE_RATINGS: ReadonlySet<string> = new Set(['G', 'PG', 'PG-13']);
+
 export interface ShareCardRpc {
   slug: string;
   visibility: 'unlisted' | 'public';
@@ -67,6 +72,8 @@ export interface ShareCardRpc {
   card: ShareCard;
   publishedAt?: number;
   updatedAt?: number;
+  /** Present only when the RPC sent a known rating; older publications have none (never shown as kids-friendly). */
+  rating?: ShareRating;
 }
 
 const LANG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
@@ -149,9 +156,14 @@ export function validateShareCardRpc(raw: unknown): ShareCardRpc | null {
     assetKey,
     card,
     ...(typeof raw.publishedAt === 'number' ? { publishedAt: raw.publishedAt } : {}),
-    ...(typeof raw.updatedAt === 'number' ? { updatedAt: raw.updatedAt } : {})
+    ...(typeof raw.updatedAt === 'number' ? { updatedAt: raw.updatedAt } : {}),
+    ...(typeof raw.rating === 'string' && SHARE_RATINGS.has(raw.rating) ? { rating: raw.rating as ShareRating } : {})
   };
 }
+
+/** The preview text with the rating appended ("… · Rated PG-13"), so a parent sees it before tapping. */
+export const ratedDescription = (description: string, rating?: ShareRating): string =>
+  rating ? (description ? `${description} · Rated ${rating}` : `Rated ${rating}`) : description;
 
 // ── Head ─────────────────────────────────────────────────────────────────────
 
@@ -212,6 +224,7 @@ export function renderShareHead(rpc: ShareCardRpc, ctx: ShareHeadContext): strin
   const text = rpc.card.i18n[lang] || { title: rpc.card.title, description: rpc.card.description };
   const title = clampText(text.title || rpc.card.title, 90) || 'Untitled comic';
   const description = clampText(text.description || rpc.card.description, 200);
+  const previewDescription = ratedDescription(description, rpc.rating);
   const canonical = canonicalUrl(rpc, lang);
   const image = ogImageUrl(rpc, lang, ctx.origin);
   const isPublic = rpc.visibility === 'public';
@@ -227,7 +240,7 @@ export function renderShareHead(rpc: ShareCardRpc, ctx: ShareHeadContext): strin
   meta('property', 'og:type', 'article');
   meta('property', 'og:site_name', SITE_NAME);
   meta('property', 'og:title', title);
-  meta('property', 'og:description', description);
+  meta('property', 'og:description', previewDescription);
   meta('property', 'og:url', canonical);
   meta('property', 'og:locale', ogLocale(lang));
   for (const other of rpc.languages) if (other !== lang) meta('property', 'og:locale:alternate', ogLocale(other));
@@ -243,7 +256,7 @@ export function renderShareHead(rpc: ShareCardRpc, ctx: ShareHeadContext): strin
   }
   meta('name', 'twitter:card', image?.w ? 'summary_large_image' : 'summary');
   meta('name', 'twitter:title', title);
-  meta('name', 'twitter:description', description);
+  meta('name', 'twitter:description', previewDescription);
   if (image) {
     meta('name', 'twitter:image', image.url);
     meta('name', 'twitter:image:alt', image.alt);
@@ -290,6 +303,8 @@ export function renderShareHead(rpc: ShareCardRpc, ctx: ShareHeadContext): strin
       url: canonical,
       inLanguage: rpc.languages,
       numberOfPages: pages,
+      // schema.org CreativeWork.contentRating: the publish gate's frozen G / PG / PG-13.
+      ...(rpc.rating ? { contentRating: rpc.rating } : {}),
       ...(rpc.card.creator ? { author: { '@type': 'Person', name: rpc.card.creator } } : {}),
       publisher: { '@type': 'Organization', name: SITE_NAME }
     };

@@ -80,6 +80,8 @@ export interface ImageFrameSafety {
   /** The comic's effective rating (what the art is checked against). */
   rating: ContentRating;
   onRedrawSafer?(): void;
+  /** What "Redraw safer" costs, formatted for THIS user (board costFormat `cost.quote`; usage terms when governed). */
+  redrawPrice?: string;
   onCheckAgain?(): void;
   onChangeRating?(): void;
 }
@@ -167,6 +169,7 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
           asset={asset}
           rating={safety?.rating ?? 'PG-13'}
           onRedrawSafer={safety?.onRedrawSafer}
+          redrawPrice={safety?.redrawPrice}
           onCheckAgain={safety?.onCheckAgain}
           onChangeRating={safety?.onChangeRating}
         >

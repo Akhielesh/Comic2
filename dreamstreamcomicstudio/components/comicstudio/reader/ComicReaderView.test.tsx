@@ -4,13 +4,13 @@
 // language slot, the withheld tile (never an <img>), the rating badge, Report only when offered, the
 // End card, auto-hiding chrome, zoom, and the immersive entry.
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { pageImageCache } from '../immersive/pageImageCache';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
-import { ComicReaderView } from './ComicReaderView';
+import { ComicReaderView, ReaderMenu } from './ComicReaderView';
 
 const pdfMock = vi.hoisted(() => ({ exportComicPdf: vi.fn() }));
 vi.mock('../export/pdfExport', () => pdfMock);
@@ -259,6 +259,69 @@ describe('ComicReaderView', () => {
     const urlFor = pdfMock.exportComicPdf.mock.calls[0][1] as (a: unknown) => string | undefined;
     expect(urlFor({ path: 'u/bad.png', source: 'generated', at: 0, safety: { assessed: 'X', at: 1 } })).toBeUndefined();
     expect(urlFor({ path: 'u/p1.png', source: 'generated', at: 0 })).toBe('https://cdn.test/u/p1.png');
+  });
+
+  it('shows the export notice with the done line, and a failure calmly (never a raw error)', async () => {
+    pdfMock.exportComicPdf.mockResolvedValueOnce({ fileName: 'x.pdf', pages: 7, failed: [], skipped: [], notice: 'Some lettering used a fallback font.' });
+    const doc = drawnDoc();
+    const { unmount } = render(<ComicReaderView doc={doc} urlFor={fakeUrlFor} initialMode="page" allowDownload />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download (PDF)' }));
+    await waitFor(() => expect(screen.getByText('Downloaded the PDF. Some lettering used a fallback font.')).toBeInTheDocument());
+    // The source doc goes to the export (it localizes the edition itself and names the file by language).
+    expect(pdfMock.exportComicPdf.mock.calls[0][0]).toBe(doc);
+    unmount();
+    pdfMock.exportComicPdf.mockRejectedValueOnce(new TypeError("Cannot read properties of undefined (reading 'w')"));
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" allowDownload />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download (PDF)' }));
+    await waitFor(() => expect(screen.getByText('Couldn’t make the PDF. Please try again.')).toBeInTheDocument());
+    expect(screen.queryByText(/Cannot read properties/)).toBeNull();
+  });
+
+  it('a host download (the share-link embed) also replaces the immersive reader’s built-in PDF', async () => {
+    vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+    const onDownload = vi.fn(async () => 'Downloaded the PDF (Hindi).');
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" immersiveEntry onDownload={onDownload} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+    const dialog = screen.getByTestId('immersive-reader');
+    await act(async () => {
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Download' })[0]);
+    });
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(pdfMock.exportComicPdf).not.toHaveBeenCalled();
+    expect(await within(dialog).findByText('Downloaded the PDF (Hindi).')).toBeInTheDocument();
+  });
+
+  it('inline, a host download runs once per tap; its own notice is the one on screen, a throw reads calmly', async () => {
+    let finish!: (v: string) => void;
+    const onDownload = vi.fn(() => new Promise<string>((r) => (finish = r)));
+    const { unmount } = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" onDownload={onDownload} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download (PDF)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Preparing…' }));
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    await act(async () => finish('Downloaded the PDF (Hindi).'));
+    expect(screen.queryByText('Downloaded the PDF (Hindi).')).toBeNull();
+    expect(pdfMock.exportComicPdf).not.toHaveBeenCalled();
+    unmount();
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" onDownload={() => Promise.reject(new Error('NetworkError when attempting to fetch resource.'))} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download (PDF)' }));
+    await waitFor(() => expect(screen.getByText('Couldn’t make the PDF. Please try again.')).toBeInTheDocument());
+    expect(screen.queryByText(/NetworkError/)).toBeNull();
+  });
+
+  it('the reader menu lets a long download label wrap (the edition stays readable at 320 px)', () => {
+    const label = 'Download page images (.zip) (Telugu)';
+    render(<ReaderMenu label="More" items={[{ id: 'zip', label, icon: <span aria-hidden>z</span>, onSelect: () => undefined }]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const text = screen.getByText(label);
+    expect(text.className).not.toMatch(/\btruncate\b/);
+    expect(text.className).toMatch(/whitespace-normal/);
+    expect(text.className).toMatch(/\[overflow-wrap:anywhere\]/);
+    expect(screen.getByRole('menuitem', { name: label })).toBeInTheDocument();
   });
 
   it('closes with the End card when the host gives one', () => {

@@ -48,6 +48,8 @@ import type {
   RefUploadOptions,
   RefUploadResult,
   SendOptions,
+  StreamOutcome,
+  StudioActOutcome,
   StudioController,
   StudioNotice,
   StudioSelection
@@ -190,29 +192,10 @@ interface QueuedPatch {
   onFailed?: (retryable: boolean) => void;
 }
 
-/** What a finished stream reported. */
-export interface StreamOutcome {
-  ok: boolean;
-  error?: string;
-  code?: string;
-  aborted: boolean;
-  /** Trying the same request again could succeed (network, busy, rate limit, server hiccup). */
-  retryable: boolean;
-}
-
-/**
- * What `act()` resolves to: the stream's outcome plus `gated` — this action's stream committed an
- * OPEN approval gate (the spend waits for the user). Card sequences (conversation/cards/useAction
- * `stopsSequence`) stop on `ok: false`, `aborted` or `gated`, so a second spend never runs behind a
- * refusal and a second gate never replaces the first. Call sites that ignore the value keep working
- * (`void studio.act(…)`); the shared StudioController type still says `Promise<void>` (types.ts), so
- * typed readers use `actOutcomeOf(result)`.
- */
-export interface StudioActOutcome extends StreamOutcome {
-  gated: boolean;
-  /** The action never reached the server (a duplicate click, an invalid action, no comic loaded). */
-  skipped?: boolean;
-}
+// What a finished stream reported (StreamOutcome) and what `act()` resolves to (StudioActOutcome: the
+// stream's outcome plus `gated`). Both live in types.ts with the StudioController contract
+// (`act(): Promise<StudioActOutcome | void>`) and are re-exported here under their original names.
+export type { StreamOutcome, StudioActOutcome } from './types';
 
 const skippedOutcome = (error?: string): StudioActOutcome => ({
   ok: false,
@@ -1149,8 +1132,7 @@ export function useStudio(projectId: string): ComicStudioController {
       clearError,
       urlFor,
       send,
-      // Resolves a StudioActOutcome; the shared type says Promise<void> (see actOutcomeOf).
-      act: act as unknown as StudioController['act'],
+      act,
       patch,
       cancel,
       refresh,

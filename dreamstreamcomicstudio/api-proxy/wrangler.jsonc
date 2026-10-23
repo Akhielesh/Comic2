@@ -12,7 +12,13 @@
   "name": "dreamstream-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
-  "observability": { "enabled": true },
+  // Invocation logs are OFF (S19): Cloudflare stores each invocation as "<METHOD> <URL>" for 7
+  // days, and an unlisted share slug in that URL is a READ CAPABILITY — that includes
+  // the share-comic edge routes (/api/comic/public/s/<slug>, oEmbed ?url=…/c/<slug>, the agent
+  // gate ?from=/c/<slug>). Custom console logs (slug-masked) and the backend container's stdout
+  // (masked http_request lines) stay on; request counts come from Workers analytics, not from
+  // logs. Debug a single request with `wrangler tail` (live, not stored).
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Also served at dreamstream-api.akhieleshsrirangam.workers.dev — CI and the smoke
   // checks probe that URL because the custom domain challenges datacenter IPs.
   "workers_dev": true,

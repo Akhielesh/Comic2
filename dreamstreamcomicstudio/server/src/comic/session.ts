@@ -573,10 +573,14 @@ export async function getStudioSession(
     cached.dispose();
   }
 
-  const pending = loading.get(projectId);
+  // Keyed by caller too: store.load is owner-scoped, so a non-owner's load always fails — and that
+  // failure (NOT_FOUND, or a transient store error) must never become the owner's answer. Concurrent
+  // loads by the same caller still share one promise (one session).
+  const loadKey = `${projectId}\u0000${userId}`;
+  const pending = loading.get(loadKey);
   if (pending) {
     const session = await pending;
-    if (session.userId !== userId) throw notFound();
+    if (session.userId !== userId) throw notFound(); // defensive: cannot trigger with the per-caller key
     return session;
   }
 
@@ -601,11 +605,11 @@ export async function getStudioSession(
     ensureSweeper();
     return session;
   })();
-  loading.set(projectId, load);
+  loading.set(loadKey, load);
   try {
     return await load;
   } finally {
-    loading.delete(projectId);
+    if (loading.get(loadKey) === load) loading.delete(loadKey);
   }
 }
 

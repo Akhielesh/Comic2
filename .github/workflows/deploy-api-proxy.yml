@@ -17,6 +17,10 @@ on:
     branches: [Dreamstrream-v1]
     paths:
       - 'dreamstreamcomicstudio/api-proxy/**'
+      # Bundled into the Worker by api-proxy/src/publicComic.ts (the edge share read path), and
+      # productHost also into the container. tests/config/deployPaths.test.ts enforces this list.
+      - 'dreamstreamcomicstudio/functions/_shared/**'
+      - 'dreamstreamcomicstudio/services/productHost.ts'
       # Everything bundled into the backend image:
       - 'dreamstreamcomicstudio/server/**'
       - 'dreamstreamcomicstudio/shared/**'

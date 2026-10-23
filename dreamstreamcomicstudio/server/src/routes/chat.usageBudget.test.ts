@@ -7,6 +7,10 @@
 //  2. An exhausted governed user's chat re-plans onto FREE models only (no paid retry, no paid web
 //     plugin) and still answers — zero paid model calls; with no free model it says so calmly.
 //  3. Admins and BYOK run exactly as before; /api/recipes prices the whole chain.
+//  4. (gate S9) The REAL chat engine runs — only the provider behind the gateway is fake — so the
+//     settle is driven by the provider-reported usage the engine sums, holds scale with the
+//     context, a turn that fails after spending settles that spend, and governed responses never
+//     carry the dollar figure.
 // The REAL usage enforcer runs against an in-memory budget database (same rules as
 // server/sql/user_usage_budgets.sql); no provider, database or network is ever reached.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,73 +40,114 @@ vi.mock('../services/modelAccessPolicy.js', async (importOriginal) => ({
 const memory = vi.hoisted(() => ({ remembered: [] as unknown[] }));
 vi.mock('../services/userMemory.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/userMemory.js')>()),
+  buildUserMemoryBlock: async () => null,
   rememberUserMemories: async (...args: unknown[]) => {
     memory.remembered.push(args);
   }
 }));
+vi.mock('../connectors/retrieval.js', () => ({ buildConnectorContextBlock: async () => null }));
 
-// The model catalog: two free text models (the free chain) and no network refresh.
+// The model catalog: two free text models (the free chain), one pricey paid chat model with its
+// live per-token price, and no network refresh.
 const catalog = vi.hoisted(() => ({ free: true }));
 vi.mock('../services/modelCatalog.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/modelCatalog.js')>();
-  const freeModel = (id: string) => ({
+  const textModel = (id: string, promptPerToken = 0, completionPerToken = 0) => ({
     id,
     name: id,
     supportsImageOutput: false,
     outputModalities: ['text'],
     inputModalities: ['text'],
     supportedParameters: ['tools', 'temperature'],
-    costClass: 'free_verified',
-    pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 }
+    costClass: promptPerToken || completionPerToken ? 'paid' : 'free_verified',
+    pricing: { promptPerToken, completionPerToken, imagePerImage: 0, requestFlat: 0 }
   });
   return {
     ...actual,
     getCatalog: async () => ({
-      models: catalog.free ? [freeModel('meta-llama/llama-3.3-70b-instruct:free'), freeModel('qwen/qwen3-32b:free')] : [],
+      models: [
+        ...(catalog.free ? [textModel('meta-llama/llama-3.3-70b-instruct:free'), textModel('qwen/qwen3-32b:free')] : []),
+        // $15 / $75 per million tokens (Opus-class) — the local pricing table doesn't know it.
+        textModel('vendor/pricey', 0.000015, 0.000075)
+      ],
       fetchedAt: Date.now(),
       degraded: false
     })
   };
 });
 
-// The chat engine: records every model call (this is where money would be spent).
+// The chat engine is REAL (gate S9: it is what sums every provider call's reported usage into the
+// settle). `engine.calls` records each route-level runChat call (what the route asked for);
+// `engine.providerCalls` records every model call the engine makes — where money would be spent.
 type Call = { model: string; fallbackModel?: string; fallbackModels?: string[]; webSearch?: boolean; systemOverride?: string; tools?: { name: string }[] };
+type ProviderCall = { model: string; fallbackModel?: string; models?: string[]; webSearch?: boolean; freeOnly?: boolean };
+type Scripted = { toolCall?: string; costUsd?: number; fail?: boolean; empty?: boolean };
 const engine = vi.hoisted(() => ({
   calls: [] as Call[],
+  providerCalls: [] as ProviderCall[],
   fail: false,
   costUsd: undefined as number | undefined,
+  /** Per-call script, consumed in order (else the default answer). */
+  script: [] as Scripted[],
   swarm: vi.fn()
 }));
-vi.mock('../ai/chat.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../ai/chat.js')>()),
-  runChat: async (params: Call & { onDelta?: (d: { content?: string }) => void }) => {
-    engine.calls.push({
-      model: params.model,
-      fallbackModel: params.fallbackModel,
-      fallbackModels: params.fallbackModels,
-      webSearch: params.webSearch,
-      systemOverride: params.systemOverride,
-      tools: params.tools
-    });
-    if (engine.fail) throw new Error('provider down');
-    const text = params.systemOverride?.includes('short, specific title')
+vi.mock('../ai/chat.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/chat.js')>();
+  return {
+    ...actual,
+    runChat: async (params: Parameters<typeof actual.runChat>[0]) => {
+      engine.calls.push({
+        model: params.model,
+        fallbackModel: params.fallbackModel,
+        fallbackModels: params.fallbackModels,
+        webSearch: params.webSearch,
+        systemOverride: params.systemOverride,
+        tools: params.tools
+      });
+      return actual.runChat(params);
+    }
+  };
+});
+vi.mock('../ai/gateway.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/gateway.js')>();
+  type Req = { model: string; fallbackModel?: string; models?: string[]; webSearch?: boolean; freeOnly?: boolean; messages: { role: string; content: unknown }[] };
+  const reply = (req: Req) => {
+    engine.providerCalls.push({ model: req.model, fallbackModel: req.fallbackModel, models: req.models, webSearch: req.webSearch, freeOnly: req.freeOnly });
+    const step = engine.script.shift();
+    if (engine.fail || step?.fail) throw new Error('provider down');
+    const free = /:free$/.test(req.model);
+    const usage = { promptTokens: 10, completionTokens: 10, totalTokens: 20, costUsd: step?.costUsd ?? engine.costUsd ?? (free ? 0 : 0.002) };
+    if (step?.toolCall) {
+      return { text: '', model: req.model, usage, toolCalls: [{ id: 'call-1', name: step.toolCall, arguments: '{}' }] };
+    }
+    if (step?.empty) return { text: '', model: req.model, usage };
+    const system = String(req.messages[0]?.role === 'system' ? req.messages[0].content : '');
+    const text = system.includes('short, specific title')
       ? 'Lisbon Trip Planning'
-      : params.systemOverride?.includes('follow-up suggestions')
+      : system.includes('follow-up suggestions')
         ? '["Show me a map", "Plan day two"]'
-        : params.systemOverride?.includes('long-term memory')
+        : system.includes('long-term memory')
           ? '- Lives in Lisbon'
-          : params.systemOverride?.includes('prompt-improvement')
+          : system.includes('prompt-improvement')
             ? 'A clearer prompt'
             : 'Here is your answer.';
-    params.onDelta?.({ content: text });
-    const free = /:free$/.test(params.model);
-    return {
-      text,
-      model: params.model,
-      usage: { promptTokens: 10, completionTokens: 10, totalTokens: 20, providerCostUsd: engine.costUsd ?? (free ? 0 : 0.002) }
-    };
-  }
-}));
+    return { text, model: req.model, usage };
+  };
+  const provider = {
+    id: 'openrouter',
+    generateText: async (req: Req) => reply(req),
+    generateTextStream: async (req: Req, _ctx: unknown, onDelta: (d: { content?: string }) => void) => {
+      const r = reply(req);
+      if (r.text) onDelta({ content: r.text });
+      return r;
+    },
+    generateImage: async () => {
+      throw new Error('no image calls in this test');
+    },
+    listModels: async () => []
+  };
+  return { ...actual, getProvider: () => provider };
+});
 vi.mock('../ai/agents/orchestrator.js', () => ({ runSwarm: engine.swarm }));
 // The chat image tool's Gemini call (platform money when it runs on the platform key).
 const images = vi.hoisted(() => ({ gemini: vi.fn(async () => ({ dataUrl: 'data:image/png;base64,AAAA' })) }));
@@ -115,7 +160,7 @@ vi.mock('../ai/recipes/runRecipe.js', () => ({
 }));
 
 // ── The budget database (mirrors usage_budget_try_reserve) + ledger ─────────────────────────
-type Ev = { userId: string; reservationId: string; costUsd: number; status: 'RESERVED' | 'SETTLED' | 'RELEASED'; operation: string; model: string };
+type Ev = { userId: string; reservationId: string; costUsd: number; status: 'RESERVED' | 'SETTLED' | 'RELEASED'; operation: string; model: string; holdUsd?: number };
 const db = vi.hoisted(() => ({ events: [] as Ev[], budgets: new Map<string, number>(), rpcCalls: 0 }));
 const ledger = vi.hoisted(() => ({
   reserveUsageTokens: vi.fn(),
@@ -124,6 +169,7 @@ const ledger = vi.hoisted(() => ({
   getBillingSummary: vi.fn()
 }));
 vi.mock('../services/billingLedger.js', () => ledger);
+const seeds = vi.hoisted(() => ({ list: [] as { operation: string; model: string; inputTokens?: number; outputTokens?: number }[] }));
 vi.mock('../services/costEstimator.js', () => {
   // Like the real estimator: `:free` models are $0 on their own catalog row; everything else
   // in these tests is a small paid call.
@@ -139,12 +185,10 @@ vi.mock('../services/costEstimator.js', () => {
     modelPricing: { model }
   });
   return {
-    buildEstimateFromRequestBody: (provider: string, model: string, operation: string, _body: unknown, explicit: Record<string, unknown> = {}) => ({
-      provider,
-      model,
-      operation,
-      ...explicit
-    }),
+    buildEstimateFromRequestBody: (provider: string, model: string, operation: string, _body: unknown, explicit: Record<string, unknown> = {}) => {
+      seeds.list.push({ operation, model, inputTokens: explicit.inputTokens as number | undefined, outputTokens: explicit.outputTokens as number | undefined });
+      return { provider, model, operation, ...explicit };
+    },
     estimateCharge: async (seed: { model?: string }) => est(price(seed.model), seed.model),
     buildSettleEstimateFromUsage: async (seed: { model?: string }, usage?: { providerCostUsd?: number }) =>
       est(usage?.providerCostUsd ?? price(seed.model), seed.model)
@@ -172,7 +216,7 @@ const installFakeRpc = () =>
       if (estimateUsd > 0 && u + estimateUsd > budget) {
         return { governed: true, allowed: false, period: 'lifetime', pct_used: pct(u), pct_left: 100 - pct(u) };
       }
-      db.events.push({ userId, reservationId, costUsd: estimateUsd, status: 'RESERVED', operation: String(event.operation), model: String(event.model) });
+      db.events.push({ userId, reservationId, costUsd: estimateUsd, holdUsd: estimateUsd, status: 'RESERVED', operation: String(event.operation), model: String(event.model) });
       return { governed: true, allowed: true, pct_used: pct(u + estimateUsd), pct_left: 100 - pct(u + estimateUsd) };
     },
     status: async () => ({ governed: true, budget_usd: 10, spent_usd: 0, inflight_usd: 0 }),
@@ -187,7 +231,7 @@ const exhaust = (userId: string) => {
 
 // ── The app: test headers stand in for auth + key resolution ─────────────────────────────────
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use((req, _res, next) => {
   const r = req as unknown as Record<string, unknown>;
   r.user = { id: String(req.header('x-test-user') || 'user-1'), email: 'tester@example.com' };
@@ -262,9 +306,12 @@ beforeEach(() => {
   db.budgets.clear();
   db.rpcCalls = 0;
   engine.calls = [];
+  engine.providerCalls = [];
+  engine.script = [];
   engine.fail = false;
   engine.costUsd = undefined;
   engine.swarm.mockReset();
+  seeds.list = [];
   images.gemini.mockClear();
   catalog.free = true;
   memory.remembered = [];
@@ -686,5 +733,121 @@ describe('helpers', () => {
   it('noFreeModelDetails keeps the percent-only message and adds the calm reason', () => {
     const d = noFreeModelDetails({ reason: 'usage_budget_exhausted', message: 'You have used it all.' } as never);
     expect(d.message).toBe('You have used it all. Free models are busy right now too, so nothing was spent — try again in a few minutes.');
+  });
+});
+
+describe('gate S9 — the real engine’s provider usage drives the settle', () => {
+  const ask = (content: string, extra: Record<string, unknown> = {}) => ({ messages: [{ role: 'user', content }], ...extra });
+  const turnEvents = (user: string) => db.events.filter((e) => e.userId === user && e.operation === 'chat.completion');
+
+  it('settles the SUM the provider reported across every call of the turn (tool round + answer)', async () => {
+    const user = freshUser();
+    // Round 1 asks for a tool (an unknown one: nothing external runs), round 2 answers.
+    engine.script = [{ toolCall: 'no_such_tool', costUsd: 0.3 }, { costUsd: 0.07 }];
+    const r = await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    expect(engine.providerCalls.length).toBeGreaterThanOrEqual(2);
+    const ev = turnEvents(user);
+    expect(ev).toHaveLength(1);
+    expect(ev[0].status).toBe('SETTLED');
+    expect(ev[0].costUsd).toBeCloseTo(0.37, 9);
+  });
+
+  it('a turn that fails AFTER a paid round settles that spend instead of releasing it (POST / and /stream)', async () => {
+    for (const path of ['/api/chat', '/api/chat/stream']) {
+      const user = freshUser();
+      engine.script = [{ toolCall: 'no_such_tool', costUsd: 0.3 }, { fail: true }];
+      const r = await post(path, ask('Explain how tides work'), { 'x-test-user': user });
+      if (path === '/api/chat') expect(r.status).toBeGreaterThanOrEqual(500);
+      else expect(sseEvents(r.text).map((e) => e.event)).toContain('error');
+      const ev = turnEvents(user);
+      expect(ev).toHaveLength(1);
+      expect(ev[0]).toMatchObject({ status: 'SETTLED' });
+      expect(ev[0].costUsd).toBeCloseTo(0.3, 9);
+    }
+  });
+
+  it('a failure that spent nothing still releases the hold', async () => {
+    const user = freshUser();
+    engine.fail = true;
+    const r = await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': user });
+    expect(r.status).toBeGreaterThanOrEqual(500);
+    expect(turnEvents(user).map((e) => e.status)).toEqual(['RELEASED']);
+  });
+
+  it('governed responses never carry the dollar figure; admins keep it', async () => {
+    const governed = await post('/api/chat', ask('hi'), { 'x-test-user': freshUser() });
+    expect(governed.status).toBe(200);
+    expect(governed.json.usage).toMatchObject({ totalTokens: expect.any(Number) });
+    expect(governed.json.usage.providerCostUsd).toBeUndefined();
+    expect(governed.text).not.toMatch(/providerCostUsd|usd/i);
+    const admin = await post('/api/chat', ask('hi'), { 'x-test-user': freshUser(), 'x-test-admin': '1' });
+    expect(admin.json.usage.providerCostUsd).toBeCloseTo(0.002, 9);
+  });
+
+  it('holds scale with the prepared context (chat and recipes), not the first 8,000 body characters', async () => {
+    const history = Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'word '.repeat(4_800) }));
+    history.push({ role: 'user', content: 'Summarize all of that' });
+    const big = await post('/api/chat', { messages: history }, { 'x-test-user': freshUser() });
+    expect(big.status).toBe(200);
+    const bigSeed = seeds.list.find((x) => x.operation === 'chat.completion');
+    expect(bigSeed?.inputTokens).toBeGreaterThanOrEqual(170_000);
+
+    seeds.list = [];
+    await post('/api/chat', ask('hi'), { 'x-test-user': freshUser() });
+    const small = seeds.list.find((x) => x.operation === 'chat.completion');
+    expect(small?.inputTokens).toBeLessThan(bigSeed!.inputTokens! / 10);
+
+    seeds.list = [];
+    const run = await post(
+      '/api/recipes/run',
+      { recipe: { title: 'Summarizer', instructions: 'Summarize the conversation.' }, values: {}, messages: history },
+      { 'x-test-user': freshUser() }
+    );
+    expect(run.status).toBe(200);
+    expect(seeds.list.find((x) => x.operation === 'chat.completion')?.inputTokens).toBeGreaterThanOrEqual(170_000);
+  });
+
+  it('a pinned model the pricing table does not know is held at its live catalog price', async () => {
+    const user = freshUser();
+    const r = await post('/api/chat', ask('Explain recursion with an example', { model: 'vendor/pricey' }), { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    // ≥ 2,048 answer tokens at $75/M alone is $0.15 — the pricing table's guess was $0.01.
+    expect(turnEvents(user)[0].holdUsd).toBeGreaterThan(0.15);
+  });
+
+  it('a governed user whose usage can’t cover a pricey pin gets a free model instead — never the unpriced pin', async () => {
+    const user = freshUser();
+    db.budgets.set(user, 0.1);
+    const r = await post('/api/chat', ask('Explain recursion with an example', { model: 'vendor/pricey' }), { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    expect(engine.providerCalls.some((c) => c.model === 'vendor/pricey')).toBe(false);
+    const notice = r.json.notices.find((n: { tool?: string }) => n.tool === 'usage_budget');
+    expect(notice.message).toContain('instead of vendor/pricey');
+  });
+
+  it('a pinned :free model on a real question gets no paid web plugin; a paid pin keeps it', async () => {
+    await post('/api/chat', ask('Explain how tides work in detail', { model: 'z-ai/glm-4.5-air:free' }), { 'x-test-user': freshUser() });
+    expect(engine.calls[0].webSearch).toBe(false);
+    expect(engine.providerCalls[0].webSearch).toBeFalsy();
+    engine.calls = [];
+    await post('/api/chat', ask('Explain how tides work in detail', { model: 'vendor/pricey' }), { 'x-test-user': freshUser() });
+    expect(engine.calls[0].webSearch).toBe(true);
+  });
+
+  it('L2: a free-models-only turn never reaches a paid model at the provider, even after an empty answer', async () => {
+    const user = freshUser();
+    exhaust(user);
+    engine.script = [{ empty: true }];
+    const r = await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    expect(r.json.text).toBe('Here is your answer.');
+    expect(engine.providerCalls.length).toBe(2);
+    for (const c of engine.providerCalls) {
+      expect(isPaid(c.model)).toBe(false);
+      expect((c.models || []).every((m) => !isPaid(m))).toBe(true);
+      expect(c.fallbackModel).toBeUndefined();
+      expect(c.freeOnly).toBe(true);
+    }
   });
 });

@@ -21,6 +21,12 @@ export interface SafetyDeps {
   assets(): Promise<AssetStore>;
   /** The live session of a project (owner-scoped), for moderator verdicts. null when it can't load. */
   liveSession(projectId: string, ownerUserId: string): Promise<StudioSessionApi | null>;
+  /**
+   * Take a held (suspended) comic's published copies down: the pub/<key>/ pages, cover and share
+   * images stop answering direct bucket URLs. Best effort — callers catch and log; a failure never
+   * undoes or blocks the hold. Production: publication/index.ts removePublicationObjects.
+   */
+  removePublicationObjects(projectId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   now(): number;
   enabled(): boolean;
@@ -69,6 +75,11 @@ const defaults = (): SafetyDeps => ({
       return null;
     }
   },
+  async removePublicationObjects(projectId) {
+    // Lazy: the publication module pulls in sharp/Pango and imports this module's gate.
+    const { removePublicationObjects } = await import('../publication/index.js');
+    await removePublicationObjects(projectId);
+  },
   audit: recordAudit,
   now: () => Date.now(),
   enabled: () => COMIC_SAFETY_ENABLED,
@@ -77,12 +88,23 @@ const defaults = (): SafetyDeps => ({
 
 let current: SafetyDeps = defaults();
 
-/** Replace dependencies (tests, wiring). Caches are cleared so nothing leaks between setups. */
+const DEP_KEYS = ['store', 'platformLlm', 'assets', 'liveSession', 'removePublicationObjects', 'audit', 'now', 'enabled', 'classifierOn'] as const;
+
+/** Stands in for real Storage deletes whenever the store is swapped (see configureSafety). */
+const keepPublicationObjects = async (): Promise<void> => undefined;
+
+/**
+ * Replace dependencies (tests, wiring). Caches are cleared so nothing leaks between setups.
+ * Swapping the store without also passing `removePublicationObjects` makes the remover a no-op:
+ * a fake (or foreign) store's holds must never drive deletes in the real public bucket.
+ */
 export function configureSafety(patch: Partial<SafetyDeps>): SafetyDeps {
   const base = current;
   const next = Object.create(null) as SafetyDeps;
-  for (const key of ['store', 'platformLlm', 'assets', 'liveSession', 'audit', 'now', 'enabled', 'classifierOn'] as const) {
+  const swapsStoreOnly = patch.store !== undefined && patch.removePublicationObjects === undefined;
+  for (const key of DEP_KEYS) {
     if (key in patch && patch[key] !== undefined) Object.defineProperty(next, key, { value: patch[key], enumerable: true });
+    else if (key === 'removePublicationObjects' && swapsStoreOnly) Object.defineProperty(next, key, { value: keepPublicationObjects, enumerable: true });
     else Object.defineProperty(next, key, { get: () => base[key], enumerable: true });
   }
   current = next;
@@ -328,14 +350,19 @@ export async function quarantineAsset(
   }
 }
 
-/** An AssetStore that can move a quarantined object back (P1-STORAGE/P2 adds it; see wave-2 notes). */
+/**
+ * An AssetStore that can move a quarantined object back. The production store has it
+ * (assets.ts restoreQuarantined: q/ source only, back to its own original path, copy then delete,
+ * idempotent); it stays optional on the AssetStore type, so test fakes may leave it out.
+ */
 type RestoreCapable = AssetStore & { restoreQuarantined?(quarantinePath: string, originalPath: string): Promise<void> };
 
 /**
  * Put a quarantined object back at its original path (an appeal cleared it, or a moderator
- * restored it). Uses AssetStore.restoreQuarantined when the store has it; otherwise copyObject
- * (which the production store refuses for q/ sources). false = the object is still held — the
- * caller must say so honestly and never mark the image as servable.
+ * restored it) through AssetStore.restoreQuarantined. Only a store without it (a test fake) falls
+ * back to copyObject — production never takes that branch, and its copyObject refuses q/ sources
+ * anyway. false = the object is still held — the caller must say so honestly and never mark the
+ * image as servable.
  */
 export async function restoreFromQuarantine(assets: AssetStore, quarantinePath: string, originalPath: string, projectId?: string | null): Promise<boolean> {
   try {

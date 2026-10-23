@@ -497,6 +497,43 @@ describe('v5: size variants (480/1080, inline, best-effort)', () => {
     expect(await store.ensureVariants({ path: `q/${USER}/${PROJECT}/x.webp`, source: 'generated', at: 1, w: 2000 })).toEqual([]);
     expect(await store.ensureVariants({ path: `u/${USER}/p/${PROJECT}/img/old_w1080.webp`, source: 'generated', at: 1, w: 1080 })).toEqual([]);
   });
+
+  it('S6: an object already sitting at a variant path is replaced by bytes derived from the original, never adopted', async () => {
+    const { fake, store } = v5Store();
+    const lanes = [`u/${USER}/p/${PROJECT}/img/a.webp`, `u/${USER}/tmp/a.png`];
+    for (const path of lanes) {
+      const base = path.replace(/\.[a-z]+$/, '');
+      fake.bucket(PUB).set(path, { data: await sharp(await solidPng(1600, 1600, '#ffffff')).webp().toBuffer(), type: 'image/webp' });
+      // Planted (or stale) objects at the deterministic variant paths: black squares.
+      const planted = await sharp(await solidPng(480, 480, '#000000')).webp().toBuffer();
+      fake.bucket(PUB).set(`${base}_w480.webp`, { data: planted, type: 'image/webp' });
+      fake.bucket(PUB).set(`${base}_w1080.webp`, { data: planted, type: 'image/webp' });
+
+      const variants = await store.ensureVariants({ path, source: 'generated', at: 1, w: 1600, h: 1600 });
+      expect(variants.map((v) => [v.path, v.w])).toEqual([
+        [`${base}_w480.webp`, 480],
+        [`${base}_w1080.webp`, 1080]
+      ]);
+      for (const v of variants) {
+        const stored = fake.bucket(PUB).get(v.path)!.data;
+        expect(stored.equals(planted)).toBe(false);
+        const { data, info } = await sharp(stored).raw().toBuffer({ resolveWithObject: true });
+        expect(info.width).toBe(v.w);
+        expect(data[0]).toBeGreaterThan(200); // white, derived from the original
+        expect(fake.calls.upload.filter((u) => u.path === v.path).map((u) => u.opts.upsert)).toEqual([false, true]);
+      }
+    }
+  });
+
+  it('S6: a variant path that cannot be overwritten is left out (the planted object is never returned)', async () => {
+    const { fake, store } = v5Store();
+    const path = `u/${USER}/p/${PROJECT}/img/b.webp`;
+    fake.bucket(PUB).set(path, { data: await sharp(await solidPng(1600, 1600)).webp().toBuffer(), type: 'image/webp' });
+    fake.bucket(PUB).set(`u/${USER}/p/${PROJECT}/img/b_w480.webp`, { data: Buffer.from('planted'), type: 'image/webp' });
+    fake.fail.upload = (p) => p.endsWith('_w480.webp') && fake.calls.upload.filter((u) => u.path === p).length > 1;
+    const variants = await store.ensureVariants({ path, source: 'generated', at: 1, w: 1600, h: 1600 });
+    expect(variants.map((v) => v.w)).toEqual([1080]);
+  });
 });
 
 describe('v5: reference uploads (encodeUploadBuffer + saveRef)', () => {
@@ -894,6 +931,23 @@ describe('v5: restoreQuarantined (appeal cleared / moderator restore)', () => {
     expect(fake.bucket(PUB).get(art)?.data.toString()).toBe('art');
   });
 
+  it('S6: bytes put at the original path while it was held are replaced by the held bytes (the restored verdict describes what is served)', async () => {
+    const { fake, store } = v5Store();
+    const held = await realWebp();
+    fake.bucket(PUB).set(art, { data: held, type: 'image/webp' });
+    const { quarantinePath } = await store.quarantine(art, 'blocked:violence');
+    const planted = await sharp(await solidPng(1200, 900, '#000000')).webp().toBuffer();
+    fake.bucket(PUB).set(art, { data: planted, type: 'image/webp' });
+    await store.restoreQuarantined!(quarantinePath, art);
+    expect(fake.bucket(PUB).get(art)!.data.equals(held)).toBe(true);
+    expect(fake.calls.upload.filter((u) => u.path === art).at(-1)).toMatchObject({ bucket: PUB, opts: { upsert: true } });
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(false);
+    // The rebuilt variants come from the held bytes, not the planted ones.
+    const v480 = fake.bucket(PUB).get(art.replace('.webp', '_w480.webp'))!.data;
+    const { data } = await sharp(v480).raw().toBuffer({ resolveWithObject: true });
+    expect(data.some((b) => b > 40)).toBe(true); // noise, not the planted black square
+  });
+
   it('the memory store has the same guard and semantics', async () => {
     const store = createMemoryAssetStore();
     const path = 'u/user-1/p/proj-1/img/page.webp';
@@ -909,6 +963,12 @@ describe('v5: restoreQuarantined (appeal cleared / moderator restore)', () => {
     await expect(store.restoreQuarantined!(quarantinePath, path)).resolves.toBeUndefined(); // idempotent
     expect(store.restored).toHaveLength(1);
     await expect(store.restoreQuarantined!(quarantinePathFor('u/user-1/p/proj-1/img/gone.webp'), 'u/user-1/p/proj-1/img/gone.webp')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    // Bytes put at the original while it was held lose to the held bytes (same rule as Supabase).
+    const again = await store.quarantine(path, 'blocked');
+    const original = store.files.get(again.quarantinePath)!;
+    store.put(path, 'data:image/webp;base64,UExBTlRFRA==');
+    await store.restoreQuarantined!(again.quarantinePath, path);
+    expect(store.files.get(path)).toBe(original);
   });
 });
 

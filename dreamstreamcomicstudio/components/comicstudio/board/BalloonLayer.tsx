@@ -139,6 +139,19 @@ interface DragState {
   alt: boolean;
 }
 
+/** Sentence-final punctuation (Latin, ellipsis, CJK, Devanagari danda), optionally followed by closing quotes / brackets. */
+const SENTENCE_END = /[.!?\u2026\u3002\uFF01\uFF1F\u0964\u0965]["'\u2019\u201D\u00BB)\]]*$/;
+
+/**
+ * A spoken label as one sentence: "Speech — Arjun: You owe me an explanation, Maya." keeps its own full stop
+ * (a screen reader never hears "Maya.. Drag…"); a line without one ("Old Delhi") gets a period.
+ */
+export const asSentence = (text: string): string => {
+  const t = text.trim();
+  if (!t) return '';
+  return SENTENCE_END.test(t) ? t : `${t}.`;
+};
+
 /** All balloons of a page over its art (overlay lettering). */
 export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   doc,
@@ -803,7 +816,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               role="button"
               tabIndex={0}
               aria-roledescription="movable balloon"
-              aria-label={`${labels.get(id) ?? planText(p)}. ${p.locked ? 'Locked.' : `Drag or use the arrow keys to move${planTip(p, H, resolvedOf(id)) ? '; Alt+arrows move the tail' : ''}.${canEditText && onEditingChange ? ' Enter edits the text.' : ''}`}`}
+              aria-label={`${asSentence(labels.get(id) ?? planText(p))} ${p.locked ? 'Locked.' : `Drag or use the arrow keys to move${planTip(p, H, resolvedOf(id)) ? '; Alt+arrows move the tail' : ''}.${canEditText && onEditingChange ? ' Enter edits the text.' : ''}`}`}
               aria-describedby={`bd-${page.id}-${id}`}
               aria-pressed={sel}
               onPointerDown={(e) => beginDrag(e, p, 'move')}

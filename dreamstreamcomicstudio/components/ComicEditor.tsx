@@ -26,7 +26,9 @@ import { confirmGateNeeded } from '../services/comicAgentSettings';
 import { estimateComicCostUsd, planBeats } from '../services/beatPlanner';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
-import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { getSelectedImageModel, getSelectedImageSource, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { API_KEYS_CHANGED, getActiveKeyForUse } from '../services/apiKeys';
+import { isProviderEnabled, SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { getComicCost, BILLING_SUMMARY_REFRESH_EVENT } from '../services/billing';
 import { DollarSign, Gauge, Loader2, MessageSquare, X } from 'lucide-react';
 import { costContextFromAllowance } from '../services/costDisplay';
@@ -34,6 +36,37 @@ import { useUsageAllowance } from './usage/useUsageAllowance';
 import { comicCostView, isGovernedComicCost, type ComicCostResponse } from './steps/comicCostDisplay';
 import { createStudioProject } from './comicstudio/studioApi';
 import { ACCENT_TEXT, GLASS, PRIMARY_BTN, RADIUS_PILL } from './chat/studioDesign';
+
+/**
+ * Will the classic pipeline's image calls run on the user's OWN provider key (they pay the provider; their
+ * included usage is untouched)? Mirrors services/geminiService routing: NVIDIA when it is the picked image
+ * source and has a key, else OpenRouter when it has an active key, else Gemini. Only a key the request itself
+ * carries counts — a provider switched off in source governance sends none (that call runs on the platform
+ * key), and an account-stored key can stay suppressed while the included usage applies. The Gemini fallback is
+ * treated as the platform's: when in doubt the price stays in usage terms, never dollars for a governed user.
+ */
+export const legacyRunUsesOwnKey = (): boolean => {
+  try {
+    if (getSelectedImageSource() === 'nvidia' && getActiveKeyForUse('nvidia').key) return isProviderEnabled('nvidia');
+    if (getActiveKeyForUse('openrouter').key) return isProviderEnabled('openrouter');
+  } catch {
+    /* storage unavailable: no own key can be sent either */
+  }
+  return false;
+};
+
+/** legacyRunUsesOwnKey, kept current when keys, the image source or source governance change (events, never polled). */
+export const useLegacyOwnKey = (): boolean => {
+  const [own, setOwn] = useState(legacyRunUsesOwnKey);
+  useEffect(() => {
+    const sync = () => setOwn(legacyRunUsesOwnKey());
+    const events = [API_KEYS_CHANGED, MODEL_SELECTION_CHANGED, SOURCE_GOVERNANCE_CHANGED, 'focus'];
+    events.forEach((e) => window.addEventListener(e, sync));
+    sync();
+    return () => events.forEach((e) => window.removeEventListener(e, sync));
+  }, []);
+  return own;
+};
 
 const NEW_STUDIO_BANNER_DISMISS_KEY = 'ds.comicstudio.banner.dismissed';
 
@@ -259,6 +292,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [streamAnalyzing, setStreamAnalyzing] = useState(false);
   const [pendingGate, setPendingGate] = useState<{ estimateUsd: number } | null>(null);
+  // Own-key runs show real prices in the stream (ComicStreamView); everyone else reads usage shares.
+  const streamByok = useLegacyOwnKey();
 
   // Approving the plan requests a build, but per the confirm policy we may pause with a
   // spend gate first (the spec's trust feature). This only gates the *start* — it never
@@ -763,6 +798,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             projectTitle={project.name}
             analyzing={streamAnalyzing}
             pendingGate={pendingGate}
+            byok={streamByok}
             onConfirmGate={() => { setPendingGate(null); onStartGeneration(project.id); }}
             onCancelGate={() => setPendingGate(null)}
             onBack={onBack}

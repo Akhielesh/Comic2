@@ -9,7 +9,7 @@ import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { getStylePreset } from '../../../shared/comic/stylePresets';
 import { formatUsd } from '../../../shared/comic/models';
 import type { ReaderRequest } from '../types';
-import { CastTab } from './CastTab';
+import { CastTab, castDetailPatch } from './CastTab';
 import { ReaderTab, liveShareUrl } from './ReaderTab';
 import { StoryTab, languageChipText } from './StoryTab';
 import { StyleTab } from './StyleTab';
@@ -239,6 +239,58 @@ describe('CastTab', () => {
     const arjun = screen.getByRole('article', { name: 'Arjun' });
     fireEvent.click(within(arjun).getByRole('button', { name: /Look details/ }));
     expect(within(arjun).queryByLabelText('Species')).toBeNull();
+  });
+
+  it('cast details are editable: what they are, how many, and how pages use their photo (undoable ops)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.cast.push({ id: 'ch_duck', name: 'Ducklings', tier: 'support', kind: 'animal', count: 3, look: { summary: 'Fluffy yellow ducklings' }, refs: [], sheet: { status: 'none', history: [] } });
+    });
+    const studio = makeStudio(doc);
+    render(<CastTab studio={studio} doc={doc} />);
+
+    // A person becomes an animal.
+    const arjun = screen.getByRole('article', { name: 'Arjun' });
+    fireEvent.click(within(arjun).getByRole('button', { name: /Look details/ }));
+    const arjunKind = within(arjun).getByLabelText('What they are');
+    expect(arjunKind).toHaveValue('person');
+    fireEvent.change(arjunKind, { target: { value: 'robot' } });
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'character', id: 'ch_arjun', patch: { kind: 'robot' } }]);
+    // No photos yet: likeness has nothing to choose between.
+    expect(within(arjun).queryByLabelText('Their photo on pages')).toBeNull();
+
+    // A group of three ducklings: back to one clears the key (null), a new size is stored.
+    const duck = screen.getByRole('article', { name: 'Ducklings' });
+    fireEvent.click(within(duck).getByRole('button', { name: /Look details/ }));
+    const count = within(duck).getByLabelText('How many');
+    expect(count).toHaveValue('3');
+    expect(within(duck).getByText('Drawn as one group: three Ducklings.')).toBeInTheDocument();
+    fireEvent.change(count, { target: { value: '5' } });
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'character', id: 'ch_duck', patch: { count: 5 } }]);
+    fireEvent.change(count, { target: { value: '1' } });
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'character', id: 'ch_duck', patch: { count: null } }]);
+    fireEvent.change(within(duck).getByLabelText('What they are'), { target: { value: 'person' } });
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'character', id: 'ch_duck', patch: { kind: null } }]);
+
+    // Maya has a photo: likeness is offered; 'automatic' is the default and clears the key.
+    const maya = screen.getByRole('article', { name: 'Maya' });
+    fireEvent.click(within(maya).getByRole('button', { name: /Look details/ }));
+    const likeness = within(maya).getByLabelText('Their photo on pages');
+    expect(likeness).toHaveValue('auto');
+    fireEvent.change(likeness, { target: { value: 'sheet_only' } });
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'character', id: 'ch_maya', patch: { likeness: 'sheet_only' } }]);
+  });
+
+  it('castDetailPatch: same value sends nothing, defaults clear, out-of-range values are refused', () => {
+    const c = { id: 'c', name: 'Bots', tier: 'support' as const, kind: 'robot' as const, count: 2, likeness: 'sheet_only' as const, look: { summary: '' }, refs: [], sheet: { status: 'none' as const, history: [] } };
+    expect(castDetailPatch(c, 'kind', 'robot')).toBeNull();
+    expect(castDetailPatch(c, 'kind', 'dragon')).toBeNull();
+    expect(castDetailPatch(c, 'kind', 'person')).toEqual({ kind: null });
+    expect(castDetailPatch(c, 'count', '2')).toBeNull();
+    expect(castDetailPatch(c, 'count', '13')).toBeNull();
+    expect(castDetailPatch(c, 'count', '1')).toEqual({ count: null });
+    expect(castDetailPatch(c, 'likeness', 'auto')).toEqual({ likeness: null });
+    expect(castDetailPatch(c, 'likeness', 'sheet_and_photo')).toEqual({ likeness: 'sheet_and_photo' });
+    expect(castDetailPatch({ ...c, likeness: undefined }, 'likeness', 'auto')).toBeNull();
   });
 
   it('renders and re-rolls sheets (the price is printed for this user)', () => {

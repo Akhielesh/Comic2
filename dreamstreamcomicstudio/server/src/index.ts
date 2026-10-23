@@ -200,7 +200,7 @@ app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
 app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
 // Email open-tracking pixel (public — fetched by the recipient's mail client, no session).
 app.use('/api/email', systemRateLimit, optionalAuth, emailRouter);
-app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
+app.use('/api/assistant', optionalAuth, createRateLimit({ scope: 'assistant', windowMs: 60_000, maxRequests: 20 }), assistantLimits, assistantRouter);
 app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 
 // Share token validation needs optionalAuth (returns loginRequired hint if not authenticated)

@@ -14,16 +14,21 @@
 //   • sheet versions open the shared VersionStack (v1 = oldest; free swap with undo; a swap that would
 //     put drawn pages out of date asks first and lists them);
 //   • calm failed sheets, the content-check veil, ≤ 480w thumbnails, 44 px controls, no hover-only UI.
+//
+// Gate (L15): what a character IS (person, animal, robot…), how many are drawn as one group (×2–×12) and how
+// pages use their photo (likeness) are editable in the look details. Every change is an undoable `character`
+// op; going back to the default (person / just one / automatic) CLEARS the key (null), so the doc and every
+// page's spec hash read exactly as if it had never been set.
 
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { Bot, Box, Car, ChevronDown, ChevronUp, Ghost, MapPin, PawPrint, Plus, Sparkles, ToyBrick, Trash2, User, Users } from 'lucide-react';
-import { castKindOf, castNoun, isCompanion, newId, type CastKind, type Character, type CharacterLook, type ComicDoc, type Place } from '../../../shared/comic/doc';
+import { CAST_KINDS, castKindOf, castNoun, isCompanion, newId, type CastKind, type Character, type CharacterLook, type ComicDoc, type Place } from '../../../shared/comic/doc';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety';
 import type { StudioController } from '../types';
 import { RefStrip } from '../refs/RefStrip';
 import { sheetHint } from '../refs/refsModel';
 import { EmptyIllustration, FrameBadge, ImageFrame, VersionsButton, frameSources } from './ImageFrame';
-import { byokFromDoc, estimateOne, hasImage, initials, isBusy, jobModel, nameHue, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
+import { CLEAR, byokFromDoc, estimateOne, hasImage, initials, isBusy, jobModel, nameHue, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
 import { ConfirmStrip, EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, Surface, cx, useClickGuard } from './ui';
 
@@ -68,6 +73,81 @@ export const KIND_TEXT: Record<CastKind, string> = {
 const SHEET_ASPECT = '3 / 2';
 
 const GRID = 'grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]';
+
+/** Largest group drawn as one identity (the server's cap; castNoun spells out two–twelve). */
+export const CAST_GROUP_MAX = 12;
+
+const LIKENESS: { value: NonNullable<Character['likeness']>; label: string }[] = [
+  { value: 'auto', label: 'Automatic — sheet, plus the main photo when there’s room' },
+  { value: 'sheet_only', label: 'Model sheet only' },
+  { value: 'sheet_and_photo', label: 'Sheet and main photo on every page' }
+];
+
+const groupLabel = (n: number) => (n <= 1 ? 'Just one' : `A group of ${n}`);
+
+const SELECT =
+  'h-8 w-full min-w-0 truncate rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12.5px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none coarse:h-11';
+
+/** A labelled native select (the platform picker on phones; 44 px on touch), laid out like an InlineField. */
+const DetailSelect = <T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  hint,
+  className
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  hint?: string;
+  className?: string;
+}) => {
+  const id = useId();
+  return (
+    <div className={cx('min-w-0 px-0.5 py-0.5', className)}>
+      <label htmlFor={id} className="mb-0.5 block px-1.5 text-[11px] font-medium text-[var(--ds-muted)]">
+        {label}
+      </label>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value as T)} className={SELECT} aria-describedby={hint ? `${id}-hint` : undefined}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {hint && (
+        <p id={`${id}-hint`} className="mt-0.5 px-1.5 text-[11px] leading-snug text-[var(--ds-muted)]">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+};
+
+/**
+ * The cast details a person can change (kind, group size, photo likeness) as `character` patches. Choosing the
+ * default (person / just one / automatic) clears the key (null) instead of storing it; choosing what is
+ * already there sends nothing.
+ */
+export const castDetailPatch = (c: Character, field: 'kind' | 'count' | 'likeness', raw: string): Partial<Character> | null => {
+  if (field === 'kind') {
+    const kind = (CAST_KINDS as readonly string[]).includes(raw) ? (raw as CastKind) : null;
+    if (!kind || kind === castKindOf(c)) return null;
+    return { kind: kind === 'person' ? CLEAR : kind };
+  }
+  if (field === 'count') {
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 1 || n > CAST_GROUP_MAX) return null;
+    const current = typeof c.count === 'number' && c.count > 1 ? Math.floor(c.count) : 1;
+    if (n === current) return null;
+    return { count: n === 1 ? CLEAR : n };
+  }
+  const likeness = LIKENESS.find((l) => l.value === raw)?.value;
+  if (!likeness || likeness === (c.likeness ?? 'auto')) return null;
+  return { likeness: likeness === 'auto' ? CLEAR : likeness };
+};
 
 const InitialsPlaceholder: React.FC<{ name: string; note?: string; kind: CastKind }> = ({ name, note, kind }) => {
   const hue = nameHue(name);
@@ -136,6 +216,13 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
   const spec = jobModel(doc, 'sheet');
   const set = (patch: Partial<Character>) => void studio.patch([{ op: 'character', id: c.id, patch }]);
   const setLook = (key: keyof CharacterLook, value: string) => set({ look: { [key]: value } as unknown as CharacterLook });
+  const setDetail = (field: 'kind' | 'count' | 'likeness', value: string) => {
+    const patch = castDetailPatch(c, field, value);
+    if (patch) set(patch);
+  };
+  const groupSize = typeof c.count === 'number' && c.count > 1 ? Math.min(CAST_GROUP_MAX, Math.floor(c.count)) : 1;
+  // Likeness only matters once there is a photo to use (or someone already chose one).
+  const showLikeness = c.refs.length > 0 || !!c.likeness;
   const renderSheet = () => fire('sheet', () => studio.act({ type: 'render_sheets', characterIds: [c.id], force: true }));
   const appearances = doc.pages.reduce((n, p) => n + p.panels.filter((panel) => panel.castIds.includes(c.id)).length, 0);
   // "Drawn from older photos": the ready sheet's photos differ from today's pick (a SET compare).
@@ -223,6 +310,30 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
       </button>
       {expanded && (
         <div className="space-y-1 rounded-xl bg-[var(--ds-well)] p-1.5">
+          <div className="grid gap-x-1 gap-y-0.5 sm:grid-cols-2" data-testid="cast-details">
+            <DetailSelect
+              label="What they are"
+              value={kind}
+              options={CAST_KINDS.map((k) => ({ value: k, label: KIND_TEXT[k] }))}
+              onChange={(v) => setDetail('kind', v)}
+            />
+            <DetailSelect
+              label="How many"
+              value={String(groupSize)}
+              options={Array.from({ length: CAST_GROUP_MAX }, (_, i) => ({ value: String(i + 1), label: groupLabel(i + 1) }))}
+              onChange={(v) => setDetail('count', v)}
+              hint={groupSize > 1 ? `Drawn as one group: ${castNoun(c)}.` : undefined}
+            />
+            {showLikeness && (
+              <DetailSelect
+                label="Their photo on pages"
+                value={c.likeness ?? 'auto'}
+                options={LIKENESS}
+                onChange={(v) => setDetail('likeness', v)}
+                className="sm:col-span-2"
+              />
+            )}
+          </div>
           <div className="grid gap-x-1 gap-y-0.5 sm:grid-cols-2">
             {lookFields.map((f) => (
               <InlineField

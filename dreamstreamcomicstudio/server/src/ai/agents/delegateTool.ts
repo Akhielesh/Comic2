@@ -9,6 +9,7 @@ import type { ChatTool } from '../tools/registry.js';
 import type { AIProviderId, ChatMessage } from '../providers/types.js';
 import type { ChatClientContext } from '../../../../apiTypes.js';
 import { runDelegation } from './delegate.js';
+import { spentUsageOf } from '../usage.js';
 
 export interface DelegateToolContext {
   provider: AIProviderId;
@@ -65,11 +66,20 @@ export const makeDelegateTool = (ctx: DelegateToolContext): ChatTool => ({
       const content =
         `Delegated to ${result.trace.agents.length} helper agent(s) (${done} succeeded), cross-verified the findings, and aggregated them. ` +
         `PRESENT THE SYNTHESIZED ANSWER BELOW to the user, keeping its citations:\n\n${result.text || '(no answer)'}`;
-      return { content, citations: result.citations, artifacts: result.artifacts, ...(result.notices?.length ? { notice: result.notices[0] } : {}) };
+      return {
+        content,
+        citations: result.citations,
+        artifacts: result.artifacts,
+        // The helpers' and aggregator's own model calls bill to the chat turn that ran them.
+        usage: result.usage,
+        ...(result.notices?.length ? { notice: result.notices[0] } : {})
+      };
     } catch (err) {
       return {
         content: `Task delegation failed: ${(err as Error)?.message || 'unknown error'}.`,
-        notice: { level: 'error', message: 'Task delegation is unavailable right now.' }
+        notice: { level: 'error', message: 'Task delegation is unavailable right now.' },
+        // What the failed run had already spent still bills to the turn.
+        usage: spentUsageOf(err)
       };
     }
   }

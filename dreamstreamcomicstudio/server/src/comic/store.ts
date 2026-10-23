@@ -11,7 +11,9 @@
 // Safety properties:
 //  - every read/write is owner-scoped; a save can never re-home another user's row,
 //  - a stale writer (lower rev than stored) never clobbers a newer document,
-//  - the projects mirror is best-effort and throttled — the doc row is the truth.
+//  - the projects mirror is best-effort and throttled — the doc row is the truth,
+//  - every write is jsonb-safe (jsonbSafe): one \u0000 or half an emoji anywhere in the doc can
+//    never make this and every later save of the project fail.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
@@ -26,6 +28,68 @@ const MIRROR_CACHE_MAX = 1000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// ── jsonb safety ─────────────────────────────────────────────────────────────
+
+/** A NUL or a UTF-16 surrogate: the only characters that need a second look. */
+const JSONB_SUSPECT = /[\u0000\uD800-\uDFFF]/;
+/** A high surrogate with no low one after it, or a low surrogate with no high one before it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** One string as Postgres text/jsonb accepts it: NULs removed, lone surrogates → U+FFFD (pairs kept). */
+export const jsonbSafeText = (s: string): string =>
+  JSONB_SUSPECT.test(s) ? s.replace(/\u0000/g, '').replace(LONE_SURROGATE, '\uFFFD') : s;
+
+/**
+ * A value as Postgres jsonb accepts it (P2-GATE L5). jsonb rejects `\u0000` (22P05) and an unpaired
+ * surrogate (22P02) anywhere — in a string or an object key — and a rejected doc write fails EVERY
+ * later save of that project too (the bad character stays in the live doc), so edits are lost when
+ * the session is evicted. Every comic_docs / projects write goes through this: NULs are removed and
+ * lone surrogates become U+FFFD (whole emoji and other valid pairs are kept).
+ *
+ * Copy-on-write: a value with nothing to fix is returned as is (same reference, nothing copied), so
+ * the common save pays one regex test per string; only the branches holding a bad character are
+ * copied, and the caller's doc is never mutated. Non-plain objects (a Date, a Buffer) and values JSON
+ * drops (functions, undefined) are left exactly as they were.
+ */
+export function jsonbSafe<T>(value: T): T {
+  return cleanJsonb(value, 0) as T;
+}
+
+/** Deeper than any real doc; a pathological structure is left for the database to judge. */
+const MAX_JSONB_DEPTH = 200;
+
+function cleanJsonb(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') return jsonbSafeText(value);
+  if (!value || typeof value !== 'object' || depth > MAX_JSONB_DEPTH) return value;
+  if (Array.isArray(value)) {
+    let out: unknown[] | undefined;
+    for (let i = 0; i < value.length; i += 1) {
+      const next = cleanJsonb(value[i], depth + 1);
+      if (next !== value[i]) {
+        out ??= value.slice();
+        out[i] = next;
+      }
+    }
+    return out ?? value;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const entries = Object.entries(value as Record<string, unknown>);
+  let out: Record<string, unknown> | undefined;
+  for (let i = 0; i < entries.length; i += 1) {
+    const [key, v] = entries[i];
+    const k = jsonbSafeText(key);
+    const next = cleanJsonb(v, depth + 1);
+    if (!out && (k !== key || next !== v)) {
+      // First change: copy the untouched entries before it (original key order kept).
+      out = {};
+      for (let j = 0; j < i; j += 1) out[entries[j][0]] = entries[j][1];
+    }
+    if (out) out[k] = next;
+  }
+  return out ?? value;
+}
 
 const projectName = (title?: string): string => {
   const name = (title || '').replace(/\s+/g, ' ').trim();
@@ -305,12 +369,13 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
    * row that turns public between the read and the write never receives one.
    */
   const mirrorProject = async (projectId: string, userId: string, doc: ComicDoc, summary?: ProjectRowSummary) => {
-    const name = projectName(summary?.title || doc.brief.title);
-    const legacy = buildLegacyProjectState(doc);
-    const coverPath = summary?.coverPath || (legacy.coverImageId as string | undefined);
-    if (coverPath) legacy.coverImageId = coverPath;
-    else delete legacy.coverImageId;
-    if (summary?.logline !== undefined) legacy.overview = summary.logline || '';
+    const name = jsonbSafeText(projectName(summary?.title || doc.brief.title));
+    const built = buildLegacyProjectState(doc);
+    const coverPath = summary?.coverPath || (built.coverImageId as string | undefined);
+    if (coverPath) built.coverImageId = coverPath;
+    else delete built.coverImageId;
+    if (summary?.logline !== undefined) built.overview = summary.logline || '';
+    const legacy = jsonbSafe(built);
     const fingerprint = hashString(JSON.stringify([name, legacy]));
     const last = mirrored.get(projectId);
     if (last && last.fingerprint === fingerprint && now() - last.at < mirrorIntervalMs) return;
@@ -329,7 +394,8 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
         return;
       }
       const stored = row as { state?: unknown; is_public?: boolean | null };
-      const existing = isRecord(stored.state) ? stored.state : {};
+      // Keys other flows wrote are kept; a bad character already stored there can't fail this write either.
+      const existing = isRecord(stored.state) ? jsonbSafe(stored.state) : {};
       const updatedAt = new Date(now()).toISOString();
 
       if (stored.is_public !== true) {
@@ -385,8 +451,8 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
   const create: DocStore['create'] = async ({ projectId, userId, doc }) => {
     const db = admin();
     const stamp = new Date(now()).toISOString();
-    const name = projectName(doc.brief?.title);
-    const state = buildLegacyProjectState(doc);
+    const name = jsonbSafeText(projectName(doc.brief?.title));
+    const state = jsonbSafe(buildLegacyProjectState(doc));
     const { error: projectError } = await db.from('projects').insert({
       id: projectId,
       user_id: userId,
@@ -405,7 +471,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     const { error: docError } = await db.from('comic_docs').insert({
       project_id: projectId,
       user_id: userId,
-      doc: { ...doc, id: projectId },
+      doc: jsonbSafe({ ...doc, id: projectId }),
       rev: doc.rev || 0,
       created_at: stamp,
       updated_at: stamp
@@ -440,7 +506,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     const db = admin();
     const rev = typeof doc.rev === 'number' ? doc.rev : 0;
     const stamp = new Date(now()).toISOString();
-    const payload = { doc: { ...doc, id: projectId }, rev, updated_at: stamp };
+    const payload = { doc: jsonbSafe({ ...doc, id: projectId }), rev, updated_at: stamp };
 
     // Owner-scoped, never-backwards update. Zero rows → missing, stale, or not ours.
     const { data: updated, error } = await db
@@ -583,11 +649,11 @@ export function createMemoryDocStore(): MemoryDocStore {
       if (rows.has(projectId)) throw new StudioError('BAD_REQUEST', 'A project with this id already exists.', { status: 409 });
       rows.set(projectId, {
         userId,
-        name: projectName(doc.brief?.title),
-        state: buildLegacyProjectState(doc),
+        name: jsonbSafeText(projectName(doc.brief?.title)),
+        state: jsonbSafe(buildLegacyProjectState(doc)),
         isPublic: false,
         forcedPrivate: false,
-        doc: clone({ ...doc, id: projectId }),
+        doc: clone(jsonbSafe({ ...doc, id: projectId })),
         rev: doc.rev || 0
       });
     },
@@ -597,13 +663,14 @@ export function createMemoryDocStore(): MemoryDocStore {
       if (row.userId !== userId) throw new StudioError('FORBIDDEN', "You don't have access to this comic.", { status: 403 });
       const rev = doc.rev || 0;
       if (row.doc && row.rev > rev) return; // stale writer never clobbers a newer doc
-      row.doc = clone({ ...doc, id: projectId });
+      // The same jsonb-safe write as the Supabase store, so tests read back what production stores.
+      row.doc = clone(jsonbSafe({ ...doc, id: projectId }));
       row.rev = rev;
-      row.name = projectName(summary?.title || doc.brief.title);
+      row.name = jsonbSafeText(projectName(summary?.title || doc.brief.title));
       const legacy = buildLegacyProjectState(doc);
       if (summary?.coverPath) legacy.coverImageId = summary.coverPath;
       if (summary?.logline !== undefined) legacy.overview = summary.logline || '';
-      row.state = mergeLegacyProjectState(row.state, legacy, row.isPublic);
+      row.state = mergeLegacyProjectState(row.state, jsonbSafe(legacy), row.isPublic);
       saveCount += 1;
     },
     async loadPublic(projectId) {

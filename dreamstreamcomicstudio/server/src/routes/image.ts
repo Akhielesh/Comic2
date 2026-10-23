@@ -25,6 +25,7 @@ import {
   tryConsumeFreeNanoBananaUsage
 } from '../services/modelAccessPolicy.js';
 import { getAllowanceStatus, isUsageExemptAdmin, meteringEnabled } from '../services/platformAllowance.js';
+import { IMAGE_MODELS } from '../../../shared/comic/models.js';
 import type { BillingPlanTier, ReservationState } from '../../../shared/types/billing.js';
 
 export const imageRouter = Router();
@@ -260,6 +261,37 @@ export const assertImageModelAllowed = (access: ImageModelAccess, requestedModel
     };
     throw error;
   }
+};
+
+/**
+ * The id an OpenRouter image model is judged by on the access lists. A registry model that also has
+ * a direct Gemini route is judged by that Gemini twin, so both routes agree on the same model (the
+ * route's default, Nano Banana legacy `google/gemini-2.5-flash-image`, stays included like
+ * `gemini-2.5-flash-image` on /gemini). Everything else is judged by its own id.
+ */
+const openRouterImageGateId = (modelId: string): string =>
+  IMAGE_MODELS.find((spec) => spec.routes.openrouter === modelId)?.routes.gemini ?? modelId;
+
+/**
+ * OpenRouter's $0 `:free` variant, spelled exactly as OpenRouter publishes it. Deliberately
+ * case-sensitive (unlike the pricing helper `hasFreeSuffix`, which also prices `:FREE` at $0): a
+ * spelling OpenRouter does not publish is not a variant it is known to serve for free, so it goes
+ * through the gate instead of skipping it (fails closed).
+ */
+const isOpenRouterFreeVariant = (modelId: string): boolean => modelId.endsWith(':free');
+
+/**
+ * The model gate for a platform-funded OpenRouter image call (S12): the same rule as /gemini and
+ * Comic Studio. The caller's own OpenRouter key is never gated (the platform pays nothing; BYOK
+ * never counts), and an OpenRouter `:free` variant costs nothing to anyone. Everything else is
+ * checked against the caller's access BEFORE any hold or provider call, on the model that will
+ * actually run (after any capability downgrade), so a governed user gets the honest refusal.
+ */
+const assertOpenRouterImageModelAllowed = async (req: Request, effectiveModel: string): Promise<void> => {
+  if (hasByokForProvider(req, 'openrouter')) return;
+  if (isOpenRouterFreeVariant(effectiveModel)) return;
+  const access = await resolveImageModelAccess(req, { byok: false });
+  assertImageModelAllowed(access, openRouterImageGateId(effectiveModel));
 };
 
 /**
@@ -800,7 +832,8 @@ imageRouter.post('/ideogram', checkLimits('ideogram'), async (req, res, next) =>
 
 // Unified OpenRouter image generation. Works regardless of the AI_PROVIDER flag
 // so the new source can be exercised directly. BYOK (X-OpenRouter-Key) bypasses
-// platform billing; otherwise the platform key funds the call and credits are metered.
+// platform billing; otherwise the platform key funds the call, credits are metered and the
+// model must be one the caller's access includes (the same gate as /gemini).
 imageRouter.post('/openrouter', async (req, res, next) => {
   try {
     const apiKey = requireOpenRouterKey(req, res);
@@ -842,6 +875,8 @@ imageRouter.post('/openrouter', async (req, res, next) => {
       if (downgradedFrom) {
         console.warn('[IMAGE] model downgraded', { route: '/api/image/openrouter', downgradedFrom, to: effectiveModel, reason: downgradeReason });
       }
+      // Platform-funded calls may only run a model the caller's access includes (refused before any spend).
+      await assertOpenRouterImageModelAllowed(req, effectiveModel);
       const effectiveResolution = resolution || '1024x1024';
 
       const reserve = await reserveForOperation({

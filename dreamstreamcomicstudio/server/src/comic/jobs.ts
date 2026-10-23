@@ -1430,16 +1430,22 @@ const nearestReadyBefore = (doc: ComicDoc, page: Page): Page | undefined =>
 const userRefPaths = (doc: ComicDoc): Set<string> =>
   new Set([...doc.style.refs, ...doc.cast.flatMap((c) => c.refs), ...doc.places.flatMap((p) => p.refs)].map((r) => r.path).filter(Boolean));
 
-/** Unchecked user uploads among these paths: uploaded refs with no safety verdict (safety.md §3.2 lazy check). */
+/**
+ * Unchecked user uploads among these paths (safety.md §3.2 lazy check): uploaded refs with no safety
+ * verdict, AND model sheets with source 'upload' and no verdict — a sheet brought back by Undo of a
+ * character / place removal (restoredRef: its provenance can't be proven, so it comes back as an
+ * upload with no verdict). A sheet the runner drew itself keeps source 'generated' and its own check.
+ */
 const uncheckedRefs = (doc: ComicDoc, paths: string[]): RefAssetLike[] => {
   const wanted = new Set(paths);
   const out: RefAssetLike[] = [];
   const seen = new Set<string>();
-  for (const r of [...doc.style.refs, ...doc.cast.flatMap((c) => c.refs), ...doc.places.flatMap((p) => p.refs)]) {
+  const sheets = [...doc.cast.map((c) => c.sheet?.asset), ...doc.places.map((p) => p.sheet?.asset)];
+  for (const r of [...doc.style.refs, ...doc.cast.flatMap((c) => c.refs), ...doc.places.flatMap((p) => p.refs), ...sheets]) {
     if (!r?.path || seen.has(r.path) || !wanted.has(r.path)) continue;
     seen.add(r.path);
     if (r.source !== 'upload' || r.safety) continue;
-    out.push(r);
+    out.push(r as RefAssetLike);
   }
   return out;
 };
@@ -3372,11 +3378,13 @@ export const isOwnProjectAssetPath = (path: unknown, userId: string | undefined,
 };
 
 /**
- * A restored ref rebuilt by the server: client-sent safety/hash/meta are dropped. In a ref list it is
- * always an UPLOAD (its provenance can't be proven), so the job runner's lazy check reads it before
- * its first use as a reference (safety.md §3.2); a sheet render keeps generated/upload.
+ * A restored ref rebuilt by the server: client-sent safety/hash/meta are dropped. It is always an
+ * UPLOAD — in a ref list and as a sheet render alike: the client's "generated" can't be proven for a
+ * path the doc no longer holds (an attachment in img/ would otherwise come back as a trusted sheet) —
+ * so the job runner's lazy check (uncheckedRefs walks refs AND sheets) reads it before its first use
+ * as a reference (safety.md §3.2).
  */
-const restoredRef = (item: unknown, path: string, now: number, kind: 'ref' | 'render' = 'ref'): AssetRef => {
+const restoredRef = (item: unknown, path: string, now: number): AssetRef => {
   const raw = isObject(item) ? item : {};
   const dim = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 20_000 ? Math.round(v) : undefined);
   const w = dim(raw.w);
@@ -3385,7 +3393,7 @@ const restoredRef = (item: unknown, path: string, now: number, kind: 'ref' | 're
   const note = typeof raw.note === 'string' ? raw.note.replace(/\s+/g, ' ').trim().slice(0, 140) : '';
   return {
     path,
-    source: kind === 'render' && raw.source === 'generated' ? 'generated' : 'upload',
+    source: 'upload',
     at: now,
     ...(w && h ? { w, h } : {}),
     ...(label ? { label } : {}),
@@ -3772,7 +3780,7 @@ const restoredSheet = (v: unknown, known: Map<string, AssetRef>, restore?: Resto
     if (typeof path !== 'string') return undefined;
     const hit = known.get(path);
     if (hit) return hit;
-    return restorable(path, restore) && !reportedBlocked(a) ? restoredRef(a, path, restore!.now, 'render') : undefined;
+    return restorable(path, restore) && !reportedBlocked(a) ? restoredRef(a, path, restore!.now) : undefined;
   };
   const asset = one(v.asset);
   const history = (Array.isArray(v.history) ? v.history : []).slice(0, 12).map(one).filter((a): a is AssetRef => !!a);

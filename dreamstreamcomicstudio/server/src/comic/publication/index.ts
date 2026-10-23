@@ -145,6 +145,19 @@ export async function loadPublicByProjectId(projectId: string): Promise<PublicCo
   return ops.loadPublicByProjectId(projectId);
 }
 
+// ── Moderation ───────────────────────────────────────────────────────────────
+
+/**
+ * Takedown after a moderation hold or suspension (L11): deletes the pub/<key>/ copies (pages, cover,
+ * share images) of a publication that is no longer live, so direct bucket URLs stop answering too.
+ * Best effort and logged; never throws. Re-publishing after the hold is lifted copies everything
+ * again under a fresh key. The weekly orphan sweep also removes the copies of publications suspended
+ * longer than its grace period, in case this call failed.
+ */
+export async function removePublicationObjects(projectId: string): Promise<void> {
+  return ops.removePublicationObjects(projectId);
+}
+
 /** 1200×630 OG card (sharp + Pango, $0). */
 export async function renderOgImage(input: OgInput): Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }> {
   return renderOgCard(input);
@@ -167,11 +180,12 @@ export {
   publicObjectUrl,
   publishWithOutcome,
   PublishError,
+  OUTSIDE_IMAGE_STATUS,
   sweepOrphanPublications,
   type PublicationDeps,
   type PublishErrorReason,
   type PublishOutcome
 } from './publication.js';
-export { contentFingerprint, planSnapshot, snapshotPaths } from './snapshot.js';
+export { contentFingerprint, isServerArt, planSnapshot, snapshotPaths } from './snapshot.js';
 export { escPango, ogHash, ratingMeta, scriptsCovered } from './ogImage.js';
 export { createMemoryPublicationStore, createSupabasePublicationStore, type MemoryPublicationStore, type PublicationBackend } from './store.js';

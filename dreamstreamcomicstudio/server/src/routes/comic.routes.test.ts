@@ -1,17 +1,19 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
+import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioEvent } from '../../../shared/comic/events.js';
 import { emptyRender, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
 import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
 import type { StudioUsage } from '../../../shared/comic/capabilities.js';
-import type { ContentRating, SafetyVerdict } from '../../../shared/comic/safety.js';
+import { SAFE_TAKE_LINE, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { __resetSessionsForTests, peekStudioSession } from '../comic/session.js';
 import { __resetAccessCacheForTests } from '../comic/access.js';
 import { runDirectorTurn } from '../comic/director.js';
-import { respondBlocked, type ScreenResult } from '../comic/safety/index.js';
+import { respondBlocked, screenTurnInput as realScreenTurnInput, type ScreenResult } from '../comic/safety/index.js';
+import { expand, installSafetyFakes, resetSafety, type SafetyFakes } from '../comic/safety/testkit.js';
 import type { RoutedIntent } from '../comic/intents.js';
 import {
   KEYS,
@@ -28,10 +30,12 @@ import {
 } from '../comic/orchestrator.fakes.js';
 import { JOB_TIMINGS, noticeCard } from '../comic/jobs.js';
 import { StudioError } from '../comic/types.js';
+import { encodeUploadBuffer as realEncodeUploadBuffer } from '../comic/assets.js';
 import {
   HIDDEN_MESSAGE_TEXT,
   RESTRICTED_SPEND_MESSAGE,
   STREAM_ACTION_TYPES,
+  actionInputText,
   blockedAssetPaths,
   createComicPublicRouter,
   createComicRouter,
@@ -39,6 +43,7 @@ import {
   legacyImportOps,
   parseFocus,
   parseStreamRequest,
+  rehomeLegacyRefs,
   restrictedRefusal
 } from './comic.js';
 
@@ -57,7 +62,7 @@ let base: string;
 /** Moderation state the fake requireActiveUser() reports for every request. */
 let moderation: 'active' | 'restricted' | 'suspended';
 let cooldown: { until: number } | null;
-let screen: (input: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }) => Promise<ScreenResult>;
+let screen: (input: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }, ctx?: Parameters<typeof realScreenTurnInput>[0]) => Promise<ScreenResult>;
 let screenCalls: { text: string; attachments: RefAsset[]; sourceText?: string; rating: ContentRating }[];
 let blockedResponses: string[];
 let intent: ((text: string) => RoutedIntent | null) | null;
@@ -110,9 +115,9 @@ app.use('/api/comic', (req, res, next) =>
     },
     safety: {
       cooldownFor: async () => cooldown,
-      screenTurnInput: async (_ctx, input) => {
+      screenTurnInput: async (ctx, input) => {
         screenCalls.push(input);
-        return screen(input);
+        return screen(input, ctx);
       },
       respondBlocked: async (ctx, prepared, result) => {
         blockedResponses.push(prepared.userMsgId);
@@ -460,7 +465,10 @@ describe('legacy import', () => {
       ['Arjun', 'extra']
     ]);
     expect(doc.cast[0].look).toMatchObject({ summary: 'Young courier. wiry', age: 'teen', gender: 'girl', outfit: 'red scarf', marks: 'scar on chin' });
-    expect(doc.cast[0].refs.map((r: { path: string }) => r.path)).toEqual(['u/user-1/p/old-1/img/maya.webp']);
+    // S6: the classic photo is re-encoded into this comic's private ref lane; the foreign one is never read.
+    const importedId = doc.id as string;
+    expect(doc.cast[0].refs.map((r: { path: string }) => r.path)).toEqual([expect.stringMatching(new RegExp(`^u/user-1/p/${importedId}/ref/[^/]+\\.webp$`))]);
+    expect(JSON.stringify(doc)).not.toContain('stolen.webp');
     expect(doc.places[0]).toMatchObject({ name: 'Market', look: 'Busy lanes. noon sun' });
     expect(doc.style).toMatchObject({ status: 'drafted', name: 'Pop', spec: 'Bold inks and flat colors' });
     expect(doc.format.pageAspect).toBe('3:4');
@@ -1149,5 +1157,291 @@ describe('P2-SERVER route integration', () => {
     const signedBefore = assets.signed.length;
     await api('/api/comic/projects/proj-1', { user: 'user-1' });
     expect(assets.signed.length).toBe(signedBefore + 1); // only the display signing
+  });
+});
+
+// ── S15: free text in actions goes through the same screen as a chat message ──────────────────────
+describe('free-text actions are screened like messages (S15)', () => {
+  let fakes: SafetyFakes | null = null;
+  afterEach(() => {
+    if (fakes) resetSafety();
+    fakes = null;
+  });
+  /** The REAL message screen (prefilter → capped classifier → recordDecision/strikes) on fake stores. */
+  const useRealScreen = (): SafetyFakes => {
+    fakes = installSafetyFakes();
+    screen = (input, ctx) => realScreenTurnInput(ctx!, input);
+    return fakes;
+  };
+  const drawnDoc = () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/p1.webp', source: 'generated', at: 1, w: 1024, h: 1536 } };
+    return seed(doc);
+  };
+
+  it('a blocked edit_page instruction is refused before anything is drawn or spent, and strikes like a message', async () => {
+    const f = useRealScreen();
+    const doc = drawnDoc();
+    const before = { spend: doc.spend.totalUsd, history: doc.pages[0].render.history.length };
+    const instruction = expand('make the <MINOR_TERM> <SEXUAL_TERM>');
+    const { events } = await stream('proj-1', { kind: 'action', action: { type: 'edit_page', pageId: 'pg_1', instruction } });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'CONTENT_POLICY' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+    // Never echoed back, never kept.
+    expect(JSON.stringify(events)).not.toContain(instruction);
+    expect(images.calls).toHaveLength(0);
+    const saved = store.docs.get('proj-1')!.doc;
+    expect(saved.spend.totalUsd).toBe(before.spend);
+    expect(saved.pages[0].render.history).toHaveLength(before.history);
+    expect(JSON.stringify(saved)).not.toContain(instruction);
+    // Same consequences as the words typed in chat: a severe strike restricts the account.
+    expect(f.store.events).toEqual(expect.arrayContaining([expect.objectContaining({ surface: 'message', decision: 'block', severity: 3 })]));
+    expect(f.store.statuses.get('user-1')).toBe('restricted');
+    const line = refusals().find((l) => l.code === 'CONTENT_POLICY');
+    expect(line).toMatchObject({ kind: 'action', action: 'edit_page', status: 422, strike: 3 });
+    expect(JSON.stringify(line)).not.toContain(instruction);
+  });
+
+  it('blocked plan instructions never reach the writer', async () => {
+    const f = useRealScreen();
+    seed();
+    const { events } = await stream('proj-1', { kind: 'action', action: { type: 'plan_pages', instructions: expand('page two is a <SEXUAL_TERM> scene') } });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'CONTENT_POLICY' });
+    expect(llm.calls).toHaveLength(0);
+    expect(f.store.events.some((e) => e.decision === 'block' && e.severity >= 1)).toBe(true);
+  });
+
+  it('a blocked style direction is refused even behind invalid padding entries; nothing is drawn', async () => {
+    useRealScreen();
+    seed();
+    const directions = [{ name: '   ', spec: 'ignored' }, { name: 'Empty', spec: '' }, 'junk', { name: 'Noir', spec: expand('a <SEXUAL_TERM> pinup look') }];
+    const { events } = await stream('proj-1', { kind: 'action', action: { type: 'render_style_options', directions } });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'CONTENT_POLICY' });
+    expect(images.calls).toHaveLength(0);
+    expect(llm.calls).toHaveLength(0);
+  });
+
+  it('clean action text is screened once (as the job would use it) and runs; an adapt verdict draws the safer take', async () => {
+    drawnDoc();
+    const ok = await stream('proj-1', { kind: 'action', action: { type: 'edit_page', pageId: 'pg_1', instruction: '  make   it\nnight ' } });
+    expect(ok.events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(screenCalls.map((c) => c.text)).toEqual(['make it night']);
+    expect(screenCalls[0].attachments).toEqual([]);
+    expect(images.calls).toHaveLength(1);
+    expect(images.calls[0].prompt).not.toContain(SAFE_TAKE_LINE);
+
+    screen = async () => ({ decision: 'adapt', categories: ['violence'], note: 'keep it spooky', strike: 0, blockedAttachmentPaths: [] });
+    await stream('proj-1', { kind: 'action', action: { type: 'edit_page', pageId: 'pg_1', instruction: 'add a scary zombie' } });
+    expect(images.calls).toHaveLength(2);
+    expect(images.calls[1].prompt).toContain(SAFE_TAKE_LINE);
+  });
+
+  it('actions without user text are never screened; a retry of a known style option is not re-screened', async () => {
+    const doc = plannedDoc();
+    doc.style = { ...doc.style, options: [{ id: 'so_1', name: 'Noir', spec: 'Heavy blacks and rain.', render: emptyRender() }] };
+    seed(doc);
+    await stream('proj-1', { kind: 'action', action: { type: 'render_cover' } });
+    await stream('proj-1', { kind: 'action', action: { type: 'render_style_options', directions: [{ name: 'Noir', spec: 'Heavy  blacks and rain.' }] } });
+    expect(screenCalls).toHaveLength(0);
+  });
+
+  it('a crashing action screen fails open (logged), like the message screen', async () => {
+    drawnDoc();
+    screen = async () => {
+      throw new Error('classifier exploded');
+    };
+    const { events } = await stream('proj-1', { kind: 'action', action: { type: 'edit_page', pageId: 'pg_1', instruction: 'make it night' } });
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(images.calls).toHaveLength(1);
+    expect(vi.mocked(console.warn).mock.calls.some((c) => String(c[0]).includes('comic_screen_failed_open'))).toBe(true);
+  });
+});
+
+describe('actionInputText (S15)', () => {
+  it('mirrors the job bounds: whitespace-collapsed, 2000/8000 chars, valid directions only, known options skipped', () => {
+    const doc = plannedDoc();
+    doc.style = { ...doc.style, options: [{ id: 'so_1', name: 'Noir', spec: 'Heavy blacks.', render: emptyRender() }] };
+    expect(actionInputText(doc, { type: 'edit_page', pageId: 'pg_1', instruction: ` a\n\tb ${'x'.repeat(3000)}` })).toHaveLength(2000);
+    expect(actionInputText(doc, { type: 'plan_pages', instructions: 'y'.repeat(9000) })).toHaveLength(8000);
+    expect(actionInputText(doc, { type: 'plan_pages' })).toBe('');
+    expect(
+      actionInputText(doc, {
+        type: 'render_style_options',
+        directions: [{ name: ' ', spec: 's' }, { name: 'Noir', spec: 'Heavy blacks.' }, { name: 'Pop', spec: ' Bright\ndots ' }, null as never]
+      })
+    ).toBe('Pop: Bright dots');
+    expect(actionInputText(doc, { type: 'render_style_options' })).toBe('');
+    for (const action of [{ type: 'render_pages' }, { type: 'approve_gate', gateId: 'g' }, { type: 'safety_recheck', target: { kind: 'cover' }, note: 'x' }] as const) {
+      expect(actionInputText(doc, action as never)).toBe('');
+    }
+  });
+});
+
+// ── S6: legacy import never keeps a client-writable storage path ───────────────────────────────────
+describe('legacy import re-encodes classic photos into the private ref lane (S6)', () => {
+  const frame = (v: number) => sharp({ create: { width: 256, height: 256, channels: 3, background: { r: v, g: v, b: v } } }).png().toBuffer();
+  const dataUrl = (mime: string, buf: Buffer) => `data:${mime};base64,${buf.toString('base64')}`;
+
+  it('each legacy photo is re-encoded once to a static WebP in this comic’s private lane; failures are dropped and named honestly', async () => {
+    assets.encodeUploadBuffer = realEncodeUploadBuffer;
+    const gif = await sharp([await frame(255), await frame(0)], { join: { animated: true } }).gif().toBuffer();
+    expect((await sharp(gif, { pages: -1 }).metadata()).pages).toBe(2);
+    assets.files.set('user-1/maya.gif', dataUrl('image/gif', gif));
+    assets.files.set('u/user-1/tmp/style.png', dataUrl('image/png', await frame(128)));
+    assets.missing.add('user-1/gone.png');
+    store.legacy.set('old-2', {
+      userId: 'user-1',
+      name: 'Classic',
+      state: {
+        stylePrompt: 'Bold inks',
+        styleImageId: 'u/user-1/tmp/style.png',
+        characters: [{ name: 'Maya', imageId: 'user-1/maya.gif', referenceImageIds: ['user-1/gone.png', 'user-1/maya.gif'] }],
+        locations: [{ name: 'Dock', imageId: 'user-1/maya.gif' }]
+      }
+    });
+    const res = await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-2' } });
+    expect(res.status).toBe(201);
+    const { projectId, doc } = await res.json();
+    const lane = new RegExp(`^u/user-1/p/${projectId}/ref/[^/]+\\.webp$`);
+    const castRefs = doc.cast[0].refs as RefAsset[];
+    expect(castRefs).toHaveLength(1);
+    expect(castRefs[0]).toMatchObject({ path: expect.stringMatching(lane), source: 'upload', w: 256, h: 256 });
+    // The same legacy photo is stored once and shared.
+    expect(doc.places[0].refs.map((r: RefAsset) => r.path)).toEqual([castRefs[0].path]);
+    expect(doc.style.refs).toHaveLength(1);
+    expect(doc.style.refs[0].path).toMatch(lane);
+    // No client-writable path survives anywhere in the doc (or the stored copy).
+    for (const json of [JSON.stringify(doc), JSON.stringify(store.docs.get(projectId)!.doc)]) {
+      expect(json).not.toContain('user-1/maya.gif');
+      expect(json).not.toContain('tmp/style.png');
+      expect(json).not.toContain('gone.png');
+    }
+    // The stored bytes are a single-frame WebP (the animation is gone).
+    const bytes = Buffer.from(assets.files.get(castRefs[0].path)!.split(',')[1], 'base64');
+    const meta = await sharp(bytes, { pages: -1 }).metadata();
+    expect(meta.format).toBe('webp');
+    expect(meta.pages ?? 1).toBe(1);
+    // Honest welcome: what didn't come over is said, calmly.
+    expect(doc.conversation[0].text).toMatch(/1 reference photo couldn’t be brought over/);
+  });
+
+  it('rehomeLegacyRefs never reads another user\'s object and drops what is not done within the time budget (late copies are removed)', async () => {
+    const loads: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const base = fakeAssetStore();
+    const slow = {
+      ...base,
+      async loadDataUrl(path: string) {
+        loads.push(path);
+        if (path === 'user-1/slow.png') await held;
+        return base.loadDataUrl(path);
+      }
+    } as typeof base;
+    const ops = [
+      { op: 'character', id: 'c_1', patch: { name: 'A', refs: [ref('u/someone-else/p/x/img/a.webp'), ref('user-1/slow.png')] } },
+      { op: 'style', patch: { refs: [ref('u/user-1/tmp/s.png')] } }
+    ] as never[];
+    const out = await rehomeLegacyRefs(ops, { userId: 'user-1', projectId: 'proj-new', assets: slow, budgetMs: 40 });
+    expect(loads).not.toContain('u/someone-else/p/x/img/a.webp');
+    expect(out.dropped).toBe(2);
+    expect(out.kept).toBe(1);
+    expect((out.ops[0] as { patch: { refs: unknown[] } }).patch.refs).toEqual([]);
+    expect((out.ops[1] as { patch: { refs: { path: string }[] } }).patch.refs.map((r) => r.path)).toEqual([expect.stringMatching(/^u\/user-1\/p\/proj-new\/ref\//)]);
+    // The slow photo finishes after the import moved on: its private copy is removed, never orphaned.
+    release();
+    await vi.waitFor(() => expect(base.removed.flat().some((p) => /^u\/user-1\/p\/proj-new\/ref\//.test(p))).toBe(true));
+  });
+
+  it('an import whose photos all fail still creates the comic (nothing fails the import)', async () => {
+    assets.encodeUploadBuffer = async () => {
+      throw new StudioError('BAD_REQUEST', 'nope', { status: 415 });
+    };
+    store.legacy.set('old-3', { userId: 'user-1', name: 'Broken', state: { characters: [{ name: 'Ann', imageId: 'user-1/a.png' }] } });
+    const res = await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-3' } });
+    expect(res.status).toBe(201);
+    const { doc } = await res.json();
+    expect(doc.cast[0]).toMatchObject({ name: 'Ann', refs: [] });
+    expect(doc.conversation[0].text).toMatch(/1 reference photo couldn’t be brought over/);
+  });
+
+  /** saveRef as the real store does it for a wide photo: the original plus its _w480/_w1080 variants. */
+  const withVariants = (base: ReturnType<typeof fakeAssetStore>) => {
+    const save = base.saveRef.bind(base);
+    base.saveRef = async (args) => {
+      const saved = await save(args);
+      const stem = saved.path.replace(/\.webp$/, '');
+      return { ...saved, variants: [480, 1080].map((w) => ({ path: `${stem}_w${w}.webp`, w, h: w })) };
+    };
+    return base;
+  };
+
+  it('a late copy is removed with its size variants, and so is every copy of an import whose comic is never created', async () => {
+    // 1. Late copy (finished after the time budget): original AND variants go.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const base = withVariants(fakeAssetStore());
+    const load = base.loadDataUrl.bind(base);
+    base.loadDataUrl = async (path: string) => {
+      await held;
+      return load(path);
+    };
+    const out = await rehomeLegacyRefs([{ op: 'style', patch: { refs: [ref('user-1/late.png')] } }] as never[], {
+      userId: 'user-1',
+      projectId: 'proj-late',
+      assets: base,
+      budgetMs: 20
+    });
+    expect(out).toMatchObject({ kept: 0, dropped: 1, stored: [] });
+    release();
+    await vi.waitFor(() => expect(base.removed.filter((p) => p.startsWith('u/user-1/p/proj-late/ref/'))).toHaveLength(3));
+    expect(base.removed.filter((p) => /_w(480|1080)\.webp$/.test(p))).toHaveLength(2);
+
+    // 2. store.create fails after the photos were re-encoded: no private copy (or variant) is left behind.
+    withVariants(assets);
+    store.create = async () => {
+      throw new StudioError('NOT_AVAILABLE', 'db down', { status: 503 });
+    };
+    store.legacy.set('old-4', { userId: 'user-1', name: 'Doomed', state: { characters: [{ name: 'Ann', imageId: 'user-1/a.png' }] } });
+    const res = await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-4' } });
+    expect(res.status).toBe(503);
+    await vi.waitFor(() => expect(assets.removed.filter((p) => /\/ref\/[^/]+\.webp$/.test(p))).toHaveLength(3));
+    expect(assets.removed.filter((p) => /_w(480|1080)\.webp$/.test(p))).toHaveLength(2);
+  });
+
+  it('one classic import per user at a time: a parallel import is refused calmly, other users are never held up', async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((r) => (entered = r));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const load = assets.loadDataUrl.bind(assets);
+    assets.loadDataUrl = async (path: string) => {
+      if (path === 'user-1/slow.png') {
+        entered();
+        await held;
+      }
+      return load(path);
+    };
+    store.legacy.set('old-5', { userId: 'user-1', name: 'First', state: { characters: [{ name: 'Ann', imageId: 'user-1/slow.png' }] } });
+    store.legacy.set('old-6', { userId: 'user-1', name: 'Second', state: { characters: [{ name: 'Bo', imageId: 'user-1/b.png' }] } });
+    store.legacy.set('old-7', { userId: 'user-2', name: 'Other', state: { characters: [{ name: 'Cy', imageId: 'user-2/c.png' }] } });
+
+    const first = api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-5' } });
+    await started;
+    const parallel = await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-6' } });
+    expect(parallel.status).toBe(409);
+    const body = await parallel.json();
+    expect(body.error).toMatchObject({ code: 'CONFLICT' });
+    expect(body.error.message).toMatch(/try again in a moment/);
+    // Another user imports meanwhile; a plain new comic (no import) is never held up either.
+    expect((await api('/api/comic/projects', { user: 'user-2', body: { importFromProjectId: 'old-7' } })).status).toBe(201);
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { title: 'Fresh' } })).status).toBe(201);
+
+    release();
+    expect((await first).status).toBe(201);
+    // Released once done (also after a failure): the next import runs.
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-6' } })).status).toBe(201);
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'missing-1' } })).status).toBe(404);
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-6' } })).status).toBe(201);
   });
 });

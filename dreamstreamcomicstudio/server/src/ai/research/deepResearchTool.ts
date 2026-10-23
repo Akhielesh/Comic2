@@ -10,6 +10,7 @@ import type { ChatTool } from '../tools/types.js';
 import type { AIProviderId, ChatMessage } from '../providers/types.js';
 import type { ChatClientContext } from '../../../../apiTypes.js';
 import { runDeepResearch, type ResearchDepth } from './deepResearch.js';
+import { spentUsageOf } from '../usage.js';
 
 export interface DeepResearchToolContext {
   provider: AIProviderId;
@@ -72,12 +73,16 @@ export const makeDeepResearchTool = (ctx: DeepResearchToolContext): ChatTool => 
           { type: 'research_report', data: res.report },
           { type: 'swarm_trace', data: res.trace }
         ],
+        // The research engine's own plan/synthesis calls bill to the chat turn that ran it.
+        usage: res.usage,
         ...(res.notices?.length ? { notice: res.notices[0] } : {})
       };
     } catch (err) {
       return {
         content: `Deep research failed: ${(err as Error)?.message || 'unknown error'}.`,
-        notice: { level: 'error', message: 'Deep research is unavailable right now.' }
+        notice: { level: 'error', message: 'Deep research is unavailable right now.' },
+        // What the failed run had already spent still bills to the turn.
+        usage: spentUsageOf(err)
       };
     }
   }

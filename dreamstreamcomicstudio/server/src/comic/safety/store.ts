@@ -115,6 +115,11 @@ export interface SafetyStore {
   publicationBySlug(slug: string): Promise<PublicationRef | null>;
   publicationByProject(projectId: string): Promise<PublicationRef | null>;
   projectInfo(projectId: string): Promise<{ ownerUserId: string; name?: string; isForcedPrivate: boolean } | null>;
+  /**
+   * Hold a comic: it leaves every public listing (is_public = false, like the admin route) and gets
+   * the forced-private flags; the projects trigger suspends its live publication. A lifted hold does
+   * not list it again — the owner republishes (the publication stays suspended until then).
+   */
   forcePrivate(projectId: string, reason: string, actorId: string | null): Promise<void>;
   /** Lift an AUTOMATIC hold (forced_private_reason 'auto: …'); a moderator's own pause stays. true = lifted. */
   liftAutoHold(projectId: string): Promise<boolean>;
@@ -436,9 +441,18 @@ export function createSupabaseSafetyStore(opts: { db?: () => SupabaseClient } = 
     async forcePrivate(projectId, reason, actorId) {
       const db = admin();
       if (!db) return;
+      // is_public:false unlists the row for everyone but the owner (gallery, profile, stats, the image
+      // proxy and direct REST reads all go through projects RLS); the P0-SEC guard then refuses any
+      // false→true flip while the hold lasts, so a racing publish mirror can't list it again.
       const { error } = await db
         .from('projects')
-        .update({ is_forced_private: true, forced_private_reason: reason.slice(0, 200), forced_private_by: uuidOrNull(actorId), forced_private_at: iso(Date.now()) })
+        .update({
+          is_public: false,
+          is_forced_private: true,
+          forced_private_reason: reason.slice(0, 200),
+          forced_private_by: uuidOrNull(actorId),
+          forced_private_at: iso(Date.now())
+        })
         .eq('id', projectId);
       if (error) throw error;
     },

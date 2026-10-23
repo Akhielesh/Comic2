@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { COMICS_ALIAS_HOSTS, COMICS_HOST, MAIN_ORIGIN } from '../../services/productHost';
 import { BRAND } from './brand';
 import { createEdge, type Env } from './index';
-import { ALIAS_HOSTS, DEFAULT_CONFIG, HSTS_VALUE, resolveConfig, rewriteLocation } from './policy';
+import { ALIAS_HOSTS, DEFAULT_CONFIG, HSTS_VALUE, isEmbedPath, resolveConfig, rewriteLocation } from './policy';
 import { FakeHtmlRewriter } from './testing/fakeHtmlRewriter';
 
 const PUBLIC = 'https://comics.dreamstreamstudio.ai';
@@ -228,13 +228,34 @@ describe('Pages proxy', () => {
     expectSecurityHeaders(res);
   });
 
-  it('lets embeds be framed', async () => {
-    const { call } = setup(() => html('<html><head></head><body></body></html>', { headers: { 'content-type': 'text/html', 'x-frame-options': 'DENY' } }));
-    for (const path of ['/embed/Ab3dEf6hIj9kLm2nP', '/c/Ab3dEf6hIj9kLm2nP/embed']) {
+  it('lets the reader embed (/c/<slug>/embed) keep the framing its share Function chose', async () => {
+    const csp = "default-src 'self'; frame-ancestors *";
+    const { call } = setup(() => html('<html><head></head><body></body></html>', { headers: { 'content-type': 'text/html', 'content-security-policy': csp } }));
+    const res = await call(`${PUBLIC}/c/Ab3dEf6hIj9kLm2nP/embed`);
+    expect(res.headers.has('x-frame-options')).toBe(false);
+    expect(res.headers.get('content-security-policy')).toBe(csp);
+    expectSecurityHeaders(res);
+  });
+
+  it('denies framing of the studio SPA under /embed (there is no such route) — S17', async () => {
+    const { call } = setup(() =>
+      html(INDEX_HTML, { headers: { 'content-type': 'text/html', 'content-security-policy-report-only': "frame-ancestors 'self'" } })
+    );
+    for (const path of [
+      '/embed',
+      '/embed/',
+      '/embed/Ab3dEf6hIj9kLm2nP',
+      '/embed/x?view=settings',
+      '/embed/x/y?view=comicstudio&id=11111111-2222-3333-4444-555555555555'
+    ]) {
       const res = await call(`${PUBLIC}${path}`);
-      if (path.startsWith('/embed')) expect(res.headers.has('x-frame-options')).toBe(false);
-      expect(res.headers.get('content-security-policy') || '').not.toContain("frame-ancestors 'none'");
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get('x-frame-options'), path).toBe('DENY');
+      expect(res.headers.get('content-security-policy') || '', path).toContain("frame-ancestors 'none'");
     }
+    expect(isEmbedPath('/c/Ab3dEf6hIj9kLm2nP/embed')).toBe(true);
+    expect(isEmbedPath('/c/Ab3dEf6hIj9kLm2nP/embed/')).toBe(true);
+    for (const path of ['/embed', '/embed/', '/embed/Ab3dEf6hIj9kLm2nP', '/c/Ab3dEf6hIj9kLm2nP/title-tail']) expect(isEmbedPath(path), path).toBe(false);
   });
 
   it('does not overwrite the preview head of a legacy reader link', async () => {
@@ -292,6 +313,63 @@ describe('Pages proxy', () => {
     const res = await call(`${PUBLIC}/`, { method: 'HEAD' });
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache');
+  });
+});
+
+describe('page methods (S16: no unbounded body buffering)', () => {
+  /** An unsized (chunked) upload: counts how many bytes the edge pulls from it. */
+  const streamed = (total = 1024 * 1024) => {
+    const state = { pulled: 0 };
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          if (state.pulled >= total) return c.close();
+          state.pulled += 16384;
+          c.enqueue(new Uint8Array(16384));
+        }
+      },
+      { highWaterMark: 0 }
+    );
+    return { state, init: { body, duplex: 'half' } as RequestInit };
+  };
+
+  it('answers 405 to POST/PUT/PATCH/DELETE on page paths without reading the body or calling Pages', async () => {
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      for (const path of ['/anything', '/', '/c/Ab3dEf6hIj9kLm2nP']) {
+        const { call, pagesFetch } = setup();
+        const { state, init } = streamed();
+        const res = await call(`${PUBLIC}${path}`, { method, ...init });
+        expect(res.status, `${method} ${path}`).toBe(405);
+        expect(res.headers.get('allow')).toBe('GET, HEAD, OPTIONS');
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expectSecurityHeaders(res);
+        expect(pagesFetch).not.toHaveBeenCalled();
+        expect(state.pulled, `${method} ${path}`).toBe(0);
+      }
+    }
+  });
+
+  it('forwards OPTIONS to Pages without a body (even when one was sent)', async () => {
+    const { call, pagesCalls } = setup(() => new Response(null, { status: 204 }));
+    const { state, init } = streamed();
+    const res = await call(`${PUBLIC}/anything`, { method: 'OPTIONS', ...init, headers: { 'content-length': String(1024 * 1024), 'content-type': 'text/plain' } });
+    expect(res.status).toBe(204);
+    expect(pagesCalls).toHaveLength(1);
+    expect(pagesCalls[0].init.method).toBe('OPTIONS');
+    expect(pagesCalls[0].init.body).toBeUndefined();
+    // …and no stale Content-Length either (the origin would wait for a body that never comes).
+    expect(new Headers(pagesCalls[0].init.headers).has('content-length')).toBe(false);
+    expect(state.pulled).toBe(0);
+  });
+
+  it('still proxies GET pages with no body, and still hands POST /api (with its body) to the API Worker', async () => {
+    const { call, pagesCalls, apiCalls } = setup();
+    expect((await call(`${PUBLIC}/`)).status).toBe(200);
+    expect(pagesCalls[0].init.body).toBeUndefined();
+    const res = await call(`${PUBLIC}/api/comic/public/s/Ab3dEf6hIj9kLm2nP/report`, { method: 'POST', body: '{"reason":"other"}', headers: { 'content-type': 'application/json' } });
+    expect(res.status).toBe(201);
+    expect(apiCalls).toHaveLength(1);
+    expect((await res.json()).echo).toBe('{"reason":"other"}');
   });
 });
 

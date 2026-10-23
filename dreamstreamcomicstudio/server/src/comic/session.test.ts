@@ -291,6 +291,47 @@ describe('getStudioSession', () => {
     expect(a).toBe(b);
   });
 
+  // S8: the in-flight load map is keyed by caller too — a stranger's failed (owner-filtered) load
+  // must never become the owner's answer while no session is cached.
+  it("a stranger's in-flight failed load never answers the owner", async () => {
+    const store = fakeDocStore();
+    store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    const intruder = getStudioSession('p1', 'u2', store).catch((e) => e);
+    const owner = getStudioSession('p1', 'u1', store);
+    const session = await owner;
+    expect(session.userId).toBe('u1');
+    expect(await intruder).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    expect(peekStudioSession('p1')).toBe(session);
+  });
+
+  it("a stranger's transient store error never reaches the owner's concurrent load", async () => {
+    const base = fakeDocStore();
+    base.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const store = {
+      ...base,
+      async load(projectId: string, userId: string) {
+        if (userId === 'u2') {
+          await gate;
+          throw new StudioError('NOT_AVAILABLE', 'db', { status: 503 });
+        }
+        return base.load(projectId, userId);
+      }
+    } as typeof base;
+    const intruder = getStudioSession('p1', 'u2', store).catch((e) => e);
+    const owner = getStudioSession('p1', 'u1', store).catch((e) => e);
+    release();
+    const got = await owner;
+    expect(got).not.toBeInstanceOf(Error);
+    expect(got.userId).toBe('u1');
+    expect(await intruder).toMatchObject({ code: 'NOT_AVAILABLE', status: 503 });
+    // Concurrent owner loads still share one session after the stranger's attempt.
+    const [a, b] = await Promise.all([getStudioSession('p1', 'u1', store), getStudioSession('p1', 'u1', store)]);
+    expect(a).toBe(got);
+    expect(b).toBe(got);
+  });
+
   it('evicts idle sessions only (no subscribers, no work) after flushing', async () => {
     const store = fakeDocStore();
     store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });

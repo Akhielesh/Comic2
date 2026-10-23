@@ -110,6 +110,7 @@ vi.mock('../services/platformAllowance.js', async (importOriginal) => ({
 
 const { imageRouter, resolveImageModelAccess, freeDailyCapApplies, publicImageUsage, IMAGE_MODEL_USAGE_MESSAGE } = await import('./image.js');
 const { errorHandler } = await import('../middleware/errors.js');
+const { resolveStageModel } = await import('../ai/stageModels.js');
 
 const app = express();
 app.use(express.json());
@@ -216,6 +217,87 @@ describe('governed testers on the legacy Gemini route (billing off, metering on)
     expect(providers.gemini).not.toHaveBeenCalled();
     expect(meter.releaseReservedOperation).toHaveBeenCalledTimes(1);
     expect(meter.settleReservedOperation).not.toHaveBeenCalled();
+  });
+});
+
+describe('S12: the legacy OpenRouter route gates platform-funded image models like /gemini', () => {
+  const ownKey = () => {
+    meter.byok = true;
+    meter.reservation = { ...governedReservation(), byokBypass: true, governed: false, walletSkipped: false };
+  };
+
+  it.each([
+    'google/gemini-3-pro-image',
+    'google/gemini-3-pro-image-preview',
+    'google/gemini-3.1-flash-image',
+    'openai/gpt-image-2.5-sunburst',
+    'black-forest-labs/flux-3-image',
+    'bytedance-seed/seedream-5-0-pro',
+    'openai/some-unlisted-image-model',
+    // Only OpenRouter's own `:free` spelling skips the gate; any other casing is judged like any id.
+    'google/gemini-3-pro-image:FREE',
+    'google/gemini-3-pro-image:Free'
+  ])('governed tester on the platform key: %s is refused honestly, before any hold or provider call', async (model) => {
+    const res = await post('/openrouter', { model });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('MODEL_NOT_ALLOWED_FOR_PLAN');
+    expect(body.error.message).toBe(IMAGE_MODEL_USAGE_MESSAGE);
+    expect(meter.reserveForOperation).not.toHaveBeenCalled();
+    expect(providers.openrouter).not.toHaveBeenCalled();
+    expect(meter.settleReservedOperation).not.toHaveBeenCalled();
+    expect(meter.releaseReservedOperation).not.toHaveBeenCalled();
+  });
+
+  it('the gate judges the model that actually runs: a capability downgrade onto a Pro model is refused too', async () => {
+    vi.mocked(resolveStageModel).mockResolvedValueOnce({
+      model: 'google/gemini-3-pro-image',
+      downgradedFrom: 'google/gemini-nano-banana-2.1',
+      reason: 'test downgrade'
+    });
+    const res = await post('/openrouter', { model: 'google/gemini-nano-banana-2.1' });
+    expect(res.status).toBe(403);
+    expect(meter.reserveForOperation).not.toHaveBeenCalled();
+    expect(providers.openrouter).not.toHaveBeenCalled();
+  });
+
+  it('governed: the everyday models, the route default (Nano Banana legacy) and $0 `:free` variants still run', async () => {
+    for (const model of ['google/gemini-nano-banana-2.1', 'google/gemini-2.5-flash-image', 'some-lab/image-model:free']) {
+      expect((await post('/openrouter', { model })).status, model).toBe(200);
+    }
+    // No model sent → the configured default (google/gemini-2.5-flash-image), judged by its Gemini twin.
+    expect((await post('/openrouter', {})).status).toBe(200);
+    expect(providers.openrouter).toHaveBeenCalledTimes(4);
+    expect(meter.reserveForOperation).toHaveBeenCalledTimes(4);
+  });
+
+  it('allow_pro rows, exempt rows and admins may run every registry model on the platform key', async () => {
+    usage.status = { enabled: true, governed: true, allowPro: true };
+    expect((await post('/openrouter', { model: 'google/gemini-3-pro-image' })).status).toBe(200);
+    usage.status = { enabled: true, governed: false, allowPro: false };
+    expect((await post('/openrouter', { model: 'openai/gpt-image-2.5-sunburst' })).status).toBe(200);
+    usage.status = { enabled: true, governed: true, allowPro: false };
+    usage.admin = true;
+    expect((await post('/openrouter', { model: 'bytedance-seed/seedream-5-0-pro' })).status).toBe(200);
+  });
+
+  it('the caller’s own OpenRouter key is never gated (any catalog model, metering on or off)', async () => {
+    ownKey();
+    expect((await post('/openrouter', { model: 'openai/some-catalog-image-model' })).status).toBe(200);
+    expect((await post('/openrouter', { model: 'google/gemini-3-pro-image' })).status).toBe(200);
+    usage.metering = false;
+    expect((await post('/openrouter', { model: 'openai/some-catalog-image-model' })).status).toBe(200);
+    expect(providers.openrouter).toHaveBeenCalledTimes(3);
+  });
+
+  it('metering off (legacy plan gate): a free plan on the platform key cannot run a Pro model', async () => {
+    usage.metering = false;
+    const res = await post('/openrouter', { model: 'google/gemini-3-pro-image' });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('MODEL_NOT_ALLOWED_FOR_PLAN');
+    expect(providers.openrouter).not.toHaveBeenCalled();
+    policy.plan = 'pro';
+    expect((await post('/openrouter', { model: 'google/gemini-3-pro-image' })).status).toBe(200);
   });
 });
 

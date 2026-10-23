@@ -28,7 +28,8 @@ import { hashString } from '../../../../shared/comic/hash.js';
 import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import type { ShareCard } from '../../../../shared/comic/publication.js';
-import { pubPath } from '../storagePaths.js';
+import { isSafeStoragePath, variantPathFor } from '../assets.js';
+import { isLibraryPath, pubPath } from '../storagePaths.js';
 import type { SnapshotPlan } from './index.js';
 
 // ── Text hygiene ─────────────────────────────────────────────────────────────
@@ -62,6 +63,38 @@ export const hasPublishableArt = (render: { status: string; asset?: AssetRef } |
 /** Pages with art, in reading order. */
 export const drawnPages = (doc: ComicDoc): Page[] => (doc.pages || []).filter((p) => hasPublishableArt(p.render));
 
+// ── The publication boundary (S6) ────────────────────────────────────────────
+
+const IMG_LANE_RE = /^u\/[^/]+\/p\/[^/]+\/img\/[^/]+$/;
+const REF_LANE_RE = /^u\/[^/]+\/p\/[^/]+\/ref\/[^/]+$/;
+
+/**
+ * Only bytes the SERVER wrote, in a lane no client can rewrite, are ever published:
+ *  - `u/<user>/p/<project>/ref/…` — the private bucket (no storage policies): uploads, crops and
+ *    fits, always re-encoded server-side to static WebP (saveRef / cropRef / fitToAspect);
+ *  - `u/<user>/p/<project>/img/…` the server made (generated, derived, library picks) — random
+ *    UUID names, re-encoded static WebP (saveGenerated / storeEncoded);
+ *  - `library/…` — the platform library.
+ * Refused: the classic `<uid>/<file>` lane and `u/<uid>/tmp/…` (both client-writable), anything
+ * else, and an `upload` in the public img lane (a legacy import can point a ref at any owned path
+ * there). So a client-placed object, an animated GIF/APNG that only had its first frame checked,
+ * or bytes swapped after their check can never reach pub/: every allowed object is a server
+ * re-encode at a path the client can't write.
+ */
+export const isServerArt = (asset: AssetRef | undefined): boolean => {
+  const path = asset?.path;
+  if (!path || !isSafeStoragePath(path)) return false;
+  if (isLibraryPath(path) || REF_LANE_RE.test(path)) return true;
+  return IMG_LANE_RE.test(path) && asset!.source !== 'upload';
+};
+
+/**
+ * A size variant is published only from its deterministic sibling path (`<base>_w480.webp`), which
+ * the server derives from the original and overwrites (assets.ts writeVariants) — or the library.
+ */
+const isServerVariant = (asset: AssetRef, v: AssetVariant): boolean =>
+  isSafeStoragePath(v.path) && (v.path === variantPathFor(asset.path, v.w) || (isLibraryPath(asset.path) && isLibraryPath(v.path)));
+
 // ── Paths ────────────────────────────────────────────────────────────────────
 
 /** 12 hex of sha256(live path): the copy's name is stable for the same source (republish skips it). */
@@ -81,6 +114,10 @@ export function copiesFor(assetKey: string, slot: 'cover' | 'page', asset: Asset
   return out;
 }
 
+/** The asset with only the variants the server derived at their deterministic paths (see isServerVariant). */
+const withServerVariants = (asset: AssetRef): AssetRef =>
+  asset.variants?.length ? { ...asset, variants: asset.variants.filter((v) => !!v && typeof v.path === 'string' && isServerVariant(asset, v)) } : asset;
+
 /** The publish plan: which pages/cover go out and where every live path is copied. */
 export function planSnapshot(
   doc: ComicDoc,
@@ -92,10 +129,10 @@ export function planSnapshot(
   for (const page of doc.pages || []) {
     if (!wanted.has(page.id) || !hasPublishableArt(page.render)) continue;
     pageIds.push(page.id);
-    Object.assign(paths, copiesFor(opts.assetKey, 'page', page.render.asset!));
+    Object.assign(paths, copiesFor(opts.assetKey, 'page', withServerVariants(page.render.asset!)));
   }
   const includeCover = opts.includeCover && hasPublishableArt(doc.cover?.render);
-  if (includeCover) Object.assign(paths, copiesFor(opts.assetKey, 'cover', doc.cover.render.asset!));
+  if (includeCover) Object.assign(paths, copiesFor(opts.assetKey, 'cover', withServerVariants(doc.cover.render.asset!)));
   return {
     assetKey: opts.assetKey,
     pageIds,

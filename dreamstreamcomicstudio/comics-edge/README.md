@@ -26,8 +26,12 @@ On top of that:
 - **Security headers on every response:** `Strict-Transport-Security: max-age=31536000` (never
   `includeSubDomains` — other subdomains are separate products), `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin`, a minimal `Permissions-Policy`, and
-  `X-Frame-Options: DENY` + `frame-ancestors 'none'` everywhere except embeds (`/embed/*`,
-  `/c/<slug>/embed`) and share pages (whose Function sets its own framing).
+  `X-Frame-Options: DENY` + `frame-ancestors 'none'` everywhere except share pages (`/c/*`), whose
+  Function sets its own framing: `/c/<slug>/embed` may be framed when the author allows embedding,
+  other share pages same-origin only. There is no `/embed/*` route — those paths are the studio SPA
+  and are never frameable.
+- **Methods:** pages answer `GET`, `HEAD` and `OPTIONS` only; any other method gets `405` without
+  the body being read (nothing on Pages accepts a body here — every write goes to `/api`).
 - **Caching:** `/assets/*` → `public, max-age=31536000, immutable`; HTML → `no-cache`. A missing hashed
   chunk returns a real `404` instead of the SPA's `index.html`.
 - **Honest failure:** if Pages is unreachable the edge answers a calm `502` page ("Your comics are

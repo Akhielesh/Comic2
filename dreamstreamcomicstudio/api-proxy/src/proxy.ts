@@ -38,6 +38,7 @@ import { AGENT_HEADERS, AGENT_POLICY, AGENT_QUESTIONS, AGENT_TIER_LABELS, buildD
 import { logVisit, parseAnswers, storeCheckin, type D1Like } from './agent-log';
 import { handleCspReport, type CspReportEnv } from './cspReport';
 import { handlePublicComic, type PublicComicEnv } from './publicComic';
+import { readCappedText } from './readCapped';
 
 /** The slice of a Durable Object namespace the proxy needs to reach the Backend container. */
 export interface BackendNamespace {
@@ -72,8 +73,9 @@ function json(body: unknown, status = 200): Response {
 
 async function readBody(req: Request): Promise<Record<string, unknown>> {
   const type = req.headers.get('content-type') ?? '';
-  const text = await req.text();
-  if (text.length > 120_000) throw new Error('too large');
+  // Capped read (anonymous route, no limiter before it): never buffers more than 120 KB.
+  const text = await readCappedText(req, 120_000);
+  if (text === null) throw new Error('too large');
   if (type.includes('application/x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(text));
   const parsed = JSON.parse(text || '{}') as unknown;
   return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};

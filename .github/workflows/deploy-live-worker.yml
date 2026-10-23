@@ -14,6 +14,9 @@ on:
     branches: [Dreamstrream-v1]
     paths:
       - 'dreamstreamcomicstudio/live-worker/**'
+      # Bundled into the worker (usage metering / fair use). tests/config/deployPaths.test.ts
+      # enforces that every bundled file is listed here.
+      - 'dreamstreamcomicstudio/shared/stream/usage.ts'
       - '.github/workflows/deploy-live-worker.yml'
   workflow_dispatch:
 

@@ -23,7 +23,11 @@
   "name": "dreamstream-comics",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
-  "observability": { "enabled": true },
+  // Invocation logs are OFF (S19): Cloudflare stores each invocation as "<METHOD> <URL>" for 7
+  // days, and an unlisted share slug in that URL is a READ CAPABILITY — that includes
+  // every /c/<slug> page on this host. Custom console logs stay on; request counts come from
+  // Workers analytics, not from logs. Debug a single request with `wrangler tail` (live, not stored).
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Also served at dreamstream-comics.akhieleshsrirangam.workers.dev: health answers there, every
   // other path redirects to PUBLIC_HOST. CI probes it because the custom host may challenge
   // datacenter IPs.

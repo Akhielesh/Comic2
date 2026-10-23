@@ -223,9 +223,12 @@ export const buildSettleEstimateFromUsage = async (
 
   // When the provider reports a real cost (e.g. OpenRouter usage.cost), trust it
   // over the token-derived estimate so the settled (and comic) cost is exact.
-  // A `:free` model is exempt: it must settle to $0 even if a cost is reported.
+  // This holds even when the seed (the final served model) is `:free`: a chat turn's usage sums
+  // every call it made, and a paid tool round, a paid retry or the per-request web plugin can sit
+  // in front of a free final answer. A genuinely free call reports $0, and with no positive
+  // reported cost the token path above still charges a `:free` model nothing.
   const realProviderCostUsd = resolveNumber(usage?.providerCostUsd, 0);
-  if (realProviderCostUsd > 0 && !hasFreeSuffix(seed.model)) {
+  if (realProviderCostUsd > 0) {
     const billableUsd = Number((realProviderCostUsd * estimate.markup).toFixed(6));
     return {
       ...estimate,

@@ -17,9 +17,7 @@ const ROOT = join(__dirname, '..', '..'); // components/comicstudio
 const REPO = join(ROOT, '..', '..');
 
 /** path (relative to components/comicstudio) + a substring of the offending class string → owner. */
-const ALLOW: { file: string; includes: string; owner: string }[] = [
-  { file: 'timeline/ui.tsx', includes: 'inline-flex max-w-full items-center gap-1 truncate rounded-full', owner: 'P1-TIMELINE' }
-];
+const ALLOW: { file: string; includes: string; owner: string }[] = [];
 
 const DISPLAY_FLEX = /^(?:[\w-]+:)*!?(?:inline-)?flex$/;
 const TRUNCATE = /^(?:[\w-]+:)*!?truncate$/;

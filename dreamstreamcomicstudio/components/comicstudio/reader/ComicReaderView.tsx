@@ -25,7 +25,7 @@ import { EmptyHint, IconButton, Segmented, cx, useElementSize } from '../board/u
 import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import { readerString } from '../i18n/readerStrings';
 import { EndCard } from '../immersive/EndCard';
-import { ImmersiveReader, trimAspect, type ImmersiveReaderEndCard } from '../immersive/ImmersiveReader';
+import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOptions, trimAspect, type ImmersiveReaderEndCard } from '../immersive/ImmersiveReader';
 import { connectionHints, pageImageCache } from '../immersive/pageImageCache';
 import { SlotContentView, slotImageSource, type SlotImage } from '../immersive/ReaderSlot';
 import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookView, type LayoutPref } from '../immersive/readerLayout';
@@ -87,8 +87,12 @@ export interface ComicReaderViewProps {
   ratingReason?: string;
   /** Show "Report" (never pass it for the owner). Called with the current page (1-based; 0 = cover). */
   onReport?(page: number): void;
-  /** Host-provided download (replaces the built-in PDF). */
-  onDownload?(): void;
+  /**
+   * Host-provided download (replaces the built-in PDF here AND in the immersive reader it opens — a share
+   * link's gated public download). It may resolve to its done line: the immersive reader shows it over its
+   * full-screen room; inline, the host's own notice is the one on screen.
+   */
+  onDownload?(): Promise<string | void> | string | void;
 }
 
 /** Reader ink on paper (same in both themes, like the immersive reading room). */
@@ -216,10 +220,14 @@ export const ReaderMenu: React.FC<{ label: string; items: ReaderMenuItem[]; icon
                 setOpen(false);
                 it.onSelect();
               }}
-              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-50"
+              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-50 [&>svg]:shrink-0"
             >
               {it.icon}
-              <span className="min-w-0 truncate">{it.label}</span>
+              {/* Long labels wrap instead of hiding their end: at 320 px "Download page images (.zip) (Telugu)"
+                  still names the edition it downloads. */}
+              <span data-menu-label="" className="min-w-0 flex-1 whitespace-normal leading-snug [overflow-wrap:anywhere]">
+                {it.label}
+              </span>
             </button>
           ))}
         </div>
@@ -604,25 +612,41 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   // ── Download (client-side PDF from the images already served; withheld pages never included) ──
   const [downloading, setDownloading] = useState(false);
+  const downloadingRef = useRef(false);
   const download = useCallback(async () => {
+    // Synchronous guard: a double tap never starts two exports.
+    if (downloadingRef.current) return;
     if (onDownload) {
-      onDownload();
+      // The host's download (a share link's gated one). Inline, the host's own notice is on screen, so its
+      // returned line is not repeated here (the full-screen reader, which covers that notice, shows it).
+      downloadingRef.current = true;
+      setDownloading(true);
+      try {
+        await onDownload();
+      } catch (err) {
+        setNote(pdfDownloadFailedNote(err));
+      } finally {
+        downloadingRef.current = false;
+        setDownloading(false);
+      }
       return;
     }
-    if (downloading) return;
+    downloadingRef.current = true;
     setDownloading(true);
     setNote('Preparing the PDF…');
     try {
       const { exportComicPdf } = await import('../export/pdfExport');
-      const res = await exportComicPdf(localized, (a) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a)));
-      const left = res.skipped.length + res.failed.length;
-      setNote(left ? `Downloaded ${res.pages} page${res.pages === 1 ? '' : 's'} — ${left} couldn’t be included (not drawn, withheld or didn’t load).` : 'Downloaded the PDF.');
+      const safeUrlFor = (a?: AssetRef | string | null) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a));
+      // The edition being read, by name: the export localizes it and names the file "-te" (fonts per language).
+      const res = await exportComicPdf(doc, safeUrlFor, readerExportOptions(doc, lang));
+      setNote(pdfDownloadNote(res));
     } catch (err) {
-      setNote(`Couldn’t make the PDF: ${(err as Error)?.message || 'please try again.'}`);
+      setNote(pdfDownloadFailedNote(err));
     } finally {
+      downloadingRef.current = false;
       setDownloading(false);
     }
-  }, [onDownload, downloading, localized, urlFor]);
+  }, [onDownload, doc, lang, urlFor]);
 
   if (!items.length) {
     return (
@@ -958,7 +982,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           endCard={endCard}
           intro={immersive.intro}
           initialPage={immersive.page}
-          allowDownload={allowDownload || !!onDownload}
+          allowDownload={allowDownload}
+          onDownload={onDownload}
           syncUrl={syncUrl}
           onImageError={onImageError}
           onPageChange={(n) => {

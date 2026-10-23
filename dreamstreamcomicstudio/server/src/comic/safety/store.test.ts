@@ -113,6 +113,21 @@ describe('createSupabaseSafetyStore', () => {
     expect(await createSupabaseSafetyStore({ db: () => none.db }).liftAutoHold(PROJECT)).toBe(false);
   });
 
+  it('forcePrivate unlists the comic with the hold (is_public=false), like the admin route', async () => {
+    const { db, calls } = fakeDb(() => ({ error: null }));
+    await createSupabaseSafetyStore({ db: () => db }).forcePrivate(PROJECT, 'auto: reader reports', null);
+    const upd = calls.find((c) => c.table === 'projects' && c.method === 'update')!;
+    expect(upd.args[0]).toMatchObject({ is_public: false, is_forced_private: true, forced_private_reason: 'auto: reader reports', forced_private_by: null });
+    expect(calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['id', PROJECT]]);
+    // The moderator paths (withhold, force_private) share the function and unlist the same way.
+    const mod = fakeDb(() => ({ error: null }));
+    await createSupabaseSafetyStore({ db: () => mod.db }).forcePrivate(PROJECT, 'moderator decision', USER);
+    expect(mod.calls.find((c) => c.method === 'update')!.args[0]).toMatchObject({ is_public: false, is_forced_private: true, forced_private_by: USER });
+    // A failed hold is never swallowed (the caller must not tell anyone the comic is hidden).
+    const broken = fakeDb(() => ({ error: { code: '42501' } }));
+    await expect(createSupabaseSafetyStore({ db: () => broken.db }).forcePrivate(PROJECT, 'x', null)).rejects.toMatchObject({ code: '42501' });
+  });
+
   it('notifications fall back to a bare system row on an older table (no title/message columns)', async () => {
     let n = 0;
     const { db, calls } = fakeDb((table) => (table === 'notifications' && (n += 1) === 1 ? { error: { code: '42703' } } : { error: null }));

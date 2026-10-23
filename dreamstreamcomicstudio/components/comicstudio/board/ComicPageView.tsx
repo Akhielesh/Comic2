@@ -90,6 +90,11 @@ export interface ComicPageViewProps {
 export interface PageSafety {
   rating: ContentRating;
   onRedrawSafer?(): void;
+  /**
+   * What "Redraw safer" costs, already formatted for THIS user (board costFormat `cost.quote`: "≈ $0.07" on
+   * their own key / admins, "≈2% of your usage" for governed users — never dollars for them).
+   */
+  redrawPrice?: string;
   onCheckAgain?(): void;
   onChangeRating?(): void;
 }
@@ -333,7 +338,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
       {safety ? (
         // The veil wraps the art AND its lettering (a blurred page must not keep crisp balloons on top).
         <div className="absolute inset-0" data-testid="page-veil">
-          <SafetyVeil asset={page.render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
+          <SafetyVeil asset={page.render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} redrawPrice={safety.redrawPrice} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
             {art}
           </SafetyVeil>
         </div>
@@ -432,7 +437,7 @@ export const ComicCoverView: React.FC<ComicCoverViewProps> = ({ doc, imageUrl, s
         <WithheldArt label={withheld ? 'The cover isn’t available right now' : 'Image withheld'} detail={withheld ? undefined : 'This take didn’t fit the content rules.'} />
       ) : safety ? (
         <div className="absolute inset-0">
-          <SafetyVeil asset={render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
+          <SafetyVeil asset={render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} redrawPrice={safety.redrawPrice} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
             {art}
           </SafetyVeil>
         </div>

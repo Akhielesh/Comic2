@@ -147,6 +147,16 @@ describe('ComicPageView', () => {
     expect(onCheckAgain).toHaveBeenCalled();
   });
 
+  it('safety: Redraw safer carries the host’s price for this user (usage terms for governed users)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].render.asset = { ...d.pages[0].render.asset!, safety: { assessed: 'X', at: 1 } };
+    });
+    const onRedrawSafer = vi.fn();
+    render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl="https://cdn.test/p1.png" safety={{ rating: 'PG-13', onRedrawSafer, redrawPrice: '≈2% of your usage' }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Redraw safer · ≈2% of your usage' }));
+    expect(onRedrawSafer).toHaveBeenCalled();
+  });
+
   it('safety: over the comic’s rating, the art AND its lettering are blurred together until Show', () => {
     const doc = makeSampleDoc((d) => {
       d.pages[0].render.asset = { ...d.pages[0].render.asset!, safety: { assessed: 'PG-13', at: 1 } };

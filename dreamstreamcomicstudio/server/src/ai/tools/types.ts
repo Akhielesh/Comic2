@@ -3,7 +3,7 @@
 // Kept separate from registry.ts so the many free-API tool modules can import the
 // contract without importing the registry itself (which imports them).
 
-import type { ChatArtifact } from '../../../../apiTypes.js';
+import type { ApiUsage, ChatArtifact } from '../../../../apiTypes.js';
 
 /**
  * Per-request situational context made available to tools that benefit from it
@@ -31,6 +31,12 @@ export interface ToolExecResult {
   artifacts?: ChatArtifact[];
   /** A capability gap to surface (degraded mode, missing key, empty result). */
   notice?: { level: 'info' | 'warn' | 'error'; message: string; fix?: string };
+  /**
+   * Provider usage of the model calls this tool made itself (the agent meta-tools: swarm,
+   * delegate, deep research). runChat adds it into the turn's usage so the route settles it;
+   * it is never shown to the model.
+   */
+  usage?: ApiUsage;
 }
 
 export interface ChatTool {

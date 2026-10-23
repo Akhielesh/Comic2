@@ -6,7 +6,7 @@
 // the chat route, so a recipe run is metered and gated exactly like a normal chat.
 
 import { Router } from 'express';
-import { chatPricedModels, prepareChat } from './chat.js';
+import { catalogHoldFloorUsd, chatPricedModels, preparedInputTokens, prepareChat, settleSpentOrRelease } from './chat.js';
 import { safeClientMessage } from '../ai/providers/errors.js';
 import { TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
@@ -18,7 +18,6 @@ import { listRecipes, getRecipe, saveRecipe, deleteRecipe } from '../services/re
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
-  releaseReservedOperation,
   reserveForOperation,
   settleReservedOperation
 } from '../services/usageEnforcer.js';
@@ -98,46 +97,86 @@ const resolveTargetRecipe = async (req: any) => {
   return sanitizeRecipe(body.recipe);
 };
 
+/**
+ * `req` as prepareChat should see it when a recipe pins its own model: the pin becomes the
+ * requested model (body.model). Everything else (headers, user, keys, path) reads through to the
+ * real request; prepareChat writes nothing back.
+ */
+const withPinnedModel = (req: any, model: string): any => {
+  const view = Object.create(req);
+  view.body = { ...(req.body || {}), model };
+  return view;
+};
+
+/** The answer size a recipe hold assumes (runRecipe's single-agent maxTokens). */
+const RECIPE_HOLD_OUTPUT_TOKENS = 3_072;
+
 // POST /api/recipes/run — run a recipe and stream the answer (SSE), exactly like the
 // swarm route. Body: { recipeId | recipe, values, model?, source?, messages?, ... }.
-recipesRouter.post('/run', async (req, res) => {
-  const prep = await prepareChat(req);
-  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
-  const p = prep.prepared;
+recipesRouter.post('/run', async (req, res, next) => {
+  let recipe: NonNullable<Awaited<ReturnType<typeof resolveTargetRecipe>>>;
+  let values: Record<string, unknown>;
+  let p: Extract<Awaited<ReturnType<typeof prepareChat>>, { prepared: unknown }>['prepared'];
+  let reserve: Awaited<ReturnType<typeof reserveForOperation>> | null;
+  try {
+    // The recipe first (S11): a recipe that pins a model (settings.model) makes that pin the
+    // REQUESTED model, so prepareChat applies exactly what a model picked in chat gets — the
+    // chat-capability check, the plan policy and the [pin, paid net] chain — and the hold below
+    // prices it. runRecipe then runs p.model and nothing else: never a model the route did not
+    // resolve, check and price.
+    const target = await resolveTargetRecipe(req);
+    if (!target) {
+      return res.status(400).json({ error: { message: 'Provide a valid recipeId or recipe.', code: 'RECIPE_NOT_FOUND' } });
+    }
+    recipe = target;
+    const pinned = typeof recipe.settings?.model === 'string' ? recipe.settings.model.trim() : '';
 
-  if (p.resolved.provider !== 'openrouter') {
-    return res.status(400).json({
-      error: { message: 'Recipes run on OpenRouter (agents + tools need function calling).', code: 'RECIPE_REQUIRES_OPENROUTER' }
-    });
-  }
+    const prep = await prepareChat(pinned ? withPinnedModel(req, pinned) : req);
+    if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+    p = prep.prepared;
 
-  const recipe = await resolveTargetRecipe(req);
-  if (!recipe) {
-    return res.status(400).json({ error: { message: 'Provide a valid recipeId or recipe.', code: 'RECIPE_NOT_FOUND' } });
-  }
-  const values = ((req.body || {}).values as Record<string, unknown>) || {};
+    if (p.resolved.provider !== 'openrouter') {
+      return res.status(400).json({
+        error: { message: 'Recipes run on OpenRouter (agents + tools need function calling).', code: 'RECIPE_REQUIRES_OPENROUTER' }
+      });
+    }
 
-  // Fail fast on missing required params so the client can prompt for them.
-  const probe = resolveRecipe(recipe, values);
-  if (probe.missing.length) {
-    return res.status(422).json({ error: { message: `Missing required parameters: ${probe.missing.join(', ')}`, code: 'RECIPE_MISSING_PARAMS', missing: probe.missing } });
-  }
+    values = ((req.body || {}).values as Record<string, unknown>) || {};
 
-  const reserve = req.user?.id
-    ? await reserveForOperation({
-        req,
-        operation: 'chat.completion',
-        fallbackModel: p.model,
-        // Price the hold at every model the run may be billed for (a `:free` primary keeps the
-        // paid TEXT_FALLBACK retry): an exhausted governed user must never pass at $0.
-        pricedModels: chatPricedModels(p),
-        provider: p.resolved.provider,
-        stage: 'chat',
-        metadata: { route: req.path, model: p.model, recipe: recipe.id }
-      })
-    : null;
-  if (reserve && 'details' in reserve) {
-    return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+    // Fail fast on missing required params so the client can prompt for them.
+    const probe = resolveRecipe(recipe, values);
+    if (probe.missing.length) {
+      return res.status(422).json({ error: { message: `Missing required parameters: ${probe.missing.join(', ')}`, code: 'RECIPE_MISSING_PARAMS', missing: probe.missing } });
+    }
+
+    // Sized from what the run sends (history + the recipe's own text; the recipe brings its own
+    // tools) and floored at the live catalog price of every model it may be billed for (S9).
+    const recipeChars = (recipe.instructions?.length || 0) + (recipe.prompt?.length || 0) + JSON.stringify(values).length;
+    const inputTokens = preparedInputTokens({ ...p, tools: [] }, recipeChars);
+    const priced = chatPricedModels(p);
+    const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], inputTokens, RECIPE_HOLD_OUTPUT_TOKENS);
+    reserve = req.user?.id
+      ? await reserveForOperation({
+          req,
+          operation: 'chat.completion',
+          fallbackModel: p.model,
+          // Price the hold at every model the run may be billed for (a `:free` primary keeps the
+          // paid TEXT_FALLBACK retry): an exhausted governed user must never pass at $0.
+          pricedModels: chatPricedModels(p),
+          inputTokens,
+          outputTokens: RECIPE_HOLD_OUTPUT_TOKENS,
+          ...(floorUsd ? { estimateFloorUsd: floorUsd } : {}),
+          provider: p.resolved.provider,
+          stage: 'chat',
+          metadata: { route: req.path, model: p.model, recipe: recipe.id }
+        })
+      : null;
+    if (reserve && 'details' in reserve) {
+      return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+    }
+  } catch (err) {
+    // Nothing streamed or spent yet. Express 4 doesn't catch an async throw — answer instead of hanging.
+    return next(err);
   }
 
   res.writeHead(200, {
@@ -201,14 +240,16 @@ recipesRouter.post('/run', async (req, res) => {
     res.end();
   } catch (error) {
     if (reserve && reserve.allowed) {
-      await releaseReservedOperation({
+      await settleSpentOrRelease({
         req,
+        error,
         operation: 'chat.completion',
         provider: p.resolved.provider,
         model: p.model,
-        reason: (error as Error)?.message || 'recipe_run_failed',
+        byok: reserve.reservation.byokBypass,
+        reason: 'recipe_run_failed',
         metadata: { route: req.path, recipe: recipe.id }
-      });
+      }).catch(() => undefined);
     }
     send('error', { message: safeClientMessage(error, 'The recipe failed. Please try again.') });
     res.end();
@@ -217,34 +258,50 @@ recipesRouter.post('/run', async (req, res) => {
 
 // POST /api/recipes/distill — reflect on a completed run and distill a score +
 // learnings + an optional reusable recipe. Body: { goal, transcript, messages?, ... }.
-recipesRouter.post('/distill', async (req, res) => {
-  const prep = await prepareChat(req);
-  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
-  const p = prep.prepared;
-  if (p.resolved.provider !== 'openrouter') {
-    return res.status(400).json({ error: { message: 'Distillation runs on OpenRouter.', code: 'RECIPE_REQUIRES_OPENROUTER' } });
-  }
+recipesRouter.post('/distill', async (req, res, next) => {
+  let p: Extract<Awaited<ReturnType<typeof prepareChat>>, { prepared: unknown }>['prepared'];
+  let goal: string;
+  let transcript: string;
+  let reserve: Awaited<ReturnType<typeof reserveForOperation>> | null;
+  try {
+    const prep = await prepareChat(req);
+    if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+    p = prep.prepared;
+    if (p.resolved.provider !== 'openrouter') {
+      return res.status(400).json({ error: { message: 'Distillation runs on OpenRouter.', code: 'RECIPE_REQUIRES_OPENROUTER' } });
+    }
 
-  const body = (req.body || {}) as Record<string, unknown>;
-  const goal = typeof body.goal === 'string' ? body.goal : '';
-  const transcript = typeof body.transcript === 'string' ? body.transcript : '';
-  if (!goal || !transcript) {
-    return res.status(400).json({ error: { message: 'distill needs a goal and a transcript.', code: 'DISTILL_INVALID' } });
-  }
+    const body = (req.body || {}) as Record<string, unknown>;
+    goal = typeof body.goal === 'string' ? body.goal : '';
+    transcript = typeof body.transcript === 'string' ? body.transcript : '';
+    if (!goal || !transcript) {
+      return res.status(400).json({ error: { message: 'distill needs a goal and a transcript.', code: 'DISTILL_INVALID' } });
+    }
 
-  const reserve = req.user?.id
-    ? await reserveForOperation({
-        req,
-        operation: 'chat.completion',
-        fallbackModel: p.model,
-        pricedModels: chatPricedModels(p),
-        provider: p.resolved.provider,
-        stage: 'chat',
-        metadata: { route: req.path, model: p.model, distill: true }
-      })
-    : null;
-  if (reserve && 'details' in reserve) {
-    return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+    // Sized from what the reflection sends (the goal + the transcript, which distillRecipe caps
+    // at 12,000 characters) and floored at the live catalog price (S9).
+    const inputTokens = preparedInputTokens({ ...p, tools: [] }, goal.length + Math.min(transcript.length, 12_000));
+    const priced = chatPricedModels(p);
+    const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], inputTokens, RECIPE_HOLD_OUTPUT_TOKENS);
+    reserve = req.user?.id
+      ? await reserveForOperation({
+          req,
+          operation: 'chat.completion',
+          fallbackModel: p.model,
+          pricedModels: chatPricedModels(p),
+          inputTokens,
+          outputTokens: RECIPE_HOLD_OUTPUT_TOKENS,
+          ...(floorUsd ? { estimateFloorUsd: floorUsd } : {}),
+          provider: p.resolved.provider,
+          stage: 'chat',
+          metadata: { route: req.path, model: p.model, distill: true }
+        })
+      : null;
+    if (reserve && 'details' in reserve) {
+      return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+    }
+  } catch (err) {
+    return next(err);
   }
 
   try {
@@ -279,14 +336,16 @@ recipesRouter.post('/distill', async (req, res) => {
     });
   } catch (error) {
     if (reserve && reserve.allowed) {
-      await releaseReservedOperation({
+      await settleSpentOrRelease({
         req,
+        error,
         operation: 'chat.completion',
         provider: p.resolved.provider,
         model: p.model,
-        reason: (error as Error)?.message || 'distill_failed',
+        byok: reserve.reservation.byokBypass,
+        reason: 'distill_failed',
         metadata: { route: req.path, distill: true }
-      });
+      }).catch(() => undefined);
     }
     res.status(500).json({ error: { message: safeClientMessage(error, 'Distillation failed. Please try again.') } });
   }

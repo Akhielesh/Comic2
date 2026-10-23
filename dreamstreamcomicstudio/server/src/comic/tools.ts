@@ -323,16 +323,6 @@ const countArg = (v: unknown): number | undefined => {
   const n = int(v);
   return n !== undefined && n >= 2 ? Math.min(12, n) : undefined;
 };
-/** species / markings (sanitizeLook predates them). */
-const nonHumanLook = (raw: unknown): Partial<CharacterLook> => {
-  if (!isObject(raw)) return {};
-  const out: Partial<CharacterLook> = {};
-  const species = text(raw.species, 120);
-  const markings = text(raw.markings, 120);
-  if (species) out.species = species;
-  if (markings) out.markings = markings;
-  return out;
-};
 
 // ── Source analysis ──────────────────────────────────────────────────────────
 
@@ -418,7 +408,8 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
         tier,
         ...(kind && kind !== 'person' ? { kind } : {}),
         ...(count ? { count } : {}),
-        look: { summary: look.summary || summaryFromLook(look), ...look, ...nonHumanLook((c as { look?: unknown }).look) } as CharacterLook,
+        // sanitizeLook already carries species / markings, cleaned (NUL, C1 controls, split surrogates).
+        look: { summary: look.summary || summaryFromLook(look), ...look } as CharacterLook,
         ...(c.role ? { role: text(c.role, 200) } : {}),
         ...(c.personality ? { personality: text(c.personality, 1000) } : {}),
         ...(c.voice ? { voice: text(c.voice, 600) } : {})
@@ -800,7 +791,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const finalName = newName || existing?.name || name;
         const clash = d.cast.find((c) => c.id !== existing?.id && c.name.trim().toLowerCase() === finalName.toLowerCase());
         if (clash) throw argError(`There is already a character named ${upper(clash.name)} (id ${clash.id}).`);
-        const look: Record<string, string> = { ...(sanitizeLook(args.look) || {}), ...(nonHumanLook(args.look) as Record<string, string>) };
+        // sanitizeLook covers every look line incl. species / markings (cleaned; never re-read raw).
+        const look: Record<string, string> = { ...(sanitizeLook(args.look) || {}) };
         for (const k of Object.keys(look)) if (!look[k]) delete look[k];
         const refs = attachmentRefs(state, args.attachmentRefs);
         const tier = args.tier === 'lead' || args.tier === 'support' || args.tier === 'extra' ? args.tier : undefined;

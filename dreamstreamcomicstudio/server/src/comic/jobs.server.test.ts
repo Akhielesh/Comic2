@@ -50,6 +50,9 @@ describe('patch sanitizer (P2-SERVER)', () => {
     // The photo comes back WITHOUT the client's verdict or hash: the job runner checks it before its first use.
     expect(op.patch.refs).toEqual([{ path: own, source: 'upload', at: expect.any(Number) }]);
     expect(op.patch.sheet).toMatchObject({ status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/sheet-1.webp' } });
+    // P2-GATE L4: the client's "generated" can't be proven for a path the doc no longer holds — the sheet
+    // comes back as an UPLOAD with no verdict, so the lazy check reads it before its first use.
+    expect(op.patch.sheet?.asset).toEqual({ path: 'u/user-1/p/proj-1/img/sheet-1.webp', source: 'upload', at: expect.any(Number) });
     // Another user's, another project's, a size variant and a quarantine path are refused.
     for (const path of ['u/someone/p/proj-1/ref/x.webp', 'u/user-1/p/other/ref/x.webp', 'u/user-1/p/proj-1/img/gen-1_w480.webp', 'q/user-1/proj-1/q-1.webp', 'pub/AAAAAAAAAAAAAAAAAAAAAA/p1.webp']) {
       expect(() => sanitizePatchOps(removed, [{ op: 'character', id: 'c_new', patch: { name: 'X', refs: [{ path }] } }], sctx)).toThrow(/Invalid character: refs/);
@@ -380,6 +383,51 @@ describe('the real safety module in a render run (fake platform classifier)', ()
     expect(session.doc.cast[0].refs[0].safety?.assessed).toBe('X');
     expect(ctx.imagesFake.calls[0].references.some((r) => r.label.includes('AUTHOR REFERENCE'))).toBe(false);
     expect(session.doc.cast[0].sheet.refPaths).toEqual([]);
+    const done = [...session.doc.conversation].reverse().find((m) => m.role === 'assistant')!;
+    expect(done.cards?.some((c) => c.type === 'notice' && /reference photos? didn't pass the content check/.test(c.text))).toBe(true);
+  });
+
+  // P2-GATE L4: a model sheet restored by Undo (character / place removal) is a reference like a photo —
+  // provenance unproven, no verdict — so it gets the same lazy check before it is attached to a drawing.
+  it('a sheet restored by Undo is checked before its first use as a page reference; a blocked one is left out', async () => {
+    const safety = installSafetyFakes();
+    const blockedX = { rating: 'X', categories: ['nudity'], notes: [], photo: true, minorLikely: false, subject: 'person', view: 'none', caption: '', multipleSubjects: false };
+    safety.llm.script.vision = [blockedX];
+    const sheetPath = 'u/user-1/p/proj-1/img/attachment-7.webp';
+    const placeSheet = 'u/user-1/p/proj-1/img/market-sheet.webp';
+    const doc = plannedDoc();
+    doc.planStatus = 'approved';
+    doc.places[0] = { ...doc.places[0], sheet: { status: 'ready', history: [], asset: { path: placeSheet, source: 'generated', at: 1 } } };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    // Undo of Maya's removal: the inverse claims a clean, GENERATED sheet for an own-project path the doc
+    // no longer holds (here: an old chat attachment in img/).
+    const removed = applyOps(session.doc, [{ op: 'character_remove', id: 'c_maya' }]);
+    const back = sanitizePatchOps(
+      removed,
+      [{ op: 'character', id: 'c_maya', patch: { ...doc.cast[0], sheet: { status: 'ready', history: [], asset: { path: sheetPath, source: 'generated', at: 1, safety: { assessed: 'G', at: 1 } } } } }],
+      sanitizeCtxFor(ctx)
+    ) as Extract<DocOp, { op: 'character' }>[];
+    expect(back[0].patch.sheet?.asset).toMatchObject({ path: sheetPath, source: 'upload' });
+    expect(back[0].patch.sheet?.asset?.safety).toBeUndefined();
+    // The restored sheet as the doc now holds it (the live session keeps Maya cast on page 1).
+    session.commit([{ op: 'character', id: 'c_maya', patch: { sheet: back[0].patch.sheet } }], { origin: 'job' });
+    expect(session.doc.cast[0].sheet.asset).toMatchObject({ path: sheetPath, source: 'upload' });
+    ctx.assetsFake.files.set(sheetPath, TINY_PNG);
+    ctx.assetsFake.files.set(placeSheet, TINY_PNG);
+
+    const run = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], quotedUsd: 99 }, { confirmed: true, origin: 'user' });
+    await run.done;
+    await ctx.settled();
+    // Checked once, the verdict stored on the sheet; blocked → never attached to the drawing.
+    expect(session.doc.cast[0].sheet.asset?.safety?.assessed).toBe('X');
+    expect(canServeToOwner(session.doc.cast[0].sheet.asset)).toBe(false);
+    const call = ctx.imagesFake.calls[0];
+    expect(call).toBeDefined();
+    expect(call.references.some((r) => r.label.startsWith('CHARACTER SHEET'))).toBe(false);
+    // The runner's own (generated) place sheet is not re-checked: it is attached as before, no verdict added.
+    expect(call.references.some((r) => r.label.startsWith('LOCATION'))).toBe(true);
+    expect(session.doc.places[0].sheet.asset?.safety).toBeUndefined();
     const done = [...session.doc.conversation].reverse().find((m) => m.role === 'assistant')!;
     expect(done.cards?.some((c) => c.type === 'notice' && /reference photos? didn't pass the content check/.test(c.text))).toBe(true);
   });

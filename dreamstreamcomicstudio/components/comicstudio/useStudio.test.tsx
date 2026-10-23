@@ -19,6 +19,12 @@ vi.mock('./studioApi', async (importOriginal) => {
 import { StudioApiError } from './studioApi';
 import { actOutcomeOf, useStudio } from './useStudio';
 import { stopsSequence } from './conversation/cards/useAction';
+import type { StudioActOutcome, StudioController } from './types';
+
+// Compile-time (npm run typecheck): the shared StudioController contract says what act() resolves to —
+// the live controller needs no `as unknown as` cast and typed callers read the outcome directly.
+type ActResolves = Awaited<ReturnType<StudioController['act']>>;
+const actContractCarriesOutcome: StudioActOutcome extends ActResolves ? true : false = true;
 
 interface FakeStream {
   id: string;
@@ -212,6 +218,19 @@ describe('useStudio — act() resolves its outcome (P2-STUDIO-CORE)', () => {
     await finish(lastStream(), 6);
     await expect(p).resolves.toMatchObject({ ok: true, gated: false, aborted: false });
     expect(stopsSequence(await p)).toBe(false);
+  });
+
+  it('act() is typed by the shared contract as resolving its outcome', async () => {
+    expect(actContractCarriesOutcome).toBe(true);
+    const { result } = await setup();
+    const controller: StudioController = result.current;
+    let p!: Promise<StudioActOutcome | void>;
+    act(() => {
+      p = controller.act({ type: 'render_cover' });
+    });
+    await finish(lastStream(), 6);
+    const out: StudioActOutcome | void = await p;
+    expect(out).toMatchObject({ ok: true, gated: false, aborted: false, retryable: false });
   });
 
   it('a stream that commits an open gate resolves gated (sequences stop)', async () => {

@@ -172,7 +172,12 @@ export const TimelineDialog: React.FC<{
   );
 };
 
-/** A tiny pill badge (status, version, price). */
+/**
+ * A tiny pill badge (status, version, price). The pill is the flex box; the text sits in its own
+ * `min-w-0 truncate` span — text directly inside a flex container is an anonymous flex item, so
+ * `text-overflow` never applies to it and a long badge ("4:5, not 3:2") on a narrow card would be clipped
+ * mid-word with no ellipsis (layoutLint `flex-truncate`).
+ */
 export const Badge: React.FC<{ children: React.ReactNode; tone?: 'default' | 'accent' | 'warn' | 'danger' | 'ok'; className?: string; title?: string }> = ({
   children,
   tone = 'default',
@@ -181,8 +186,9 @@ export const Badge: React.FC<{ children: React.ReactNode; tone?: 'default' | 'ac
 }) => (
   <span
     title={title}
+    data-badge=""
     className={cx(
-      'inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-px text-[10.5px] font-semibold leading-4',
+      'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 py-px text-[10.5px] font-semibold leading-4',
       tone === 'accent' && 'bg-[#D97757]/15 text-[var(--ds-ink)]',
       tone === 'warn' && 'bg-amber-500/15 text-amber-800 dark:text-amber-200',
       tone === 'danger' && 'bg-red-500/15 text-red-700 dark:text-red-300',
@@ -191,7 +197,7 @@ export const Badge: React.FC<{ children: React.ReactNode; tone?: 'default' | 'ac
       className
     )}
   >
-    {children}
+    <span className="min-w-0 truncate">{children}</span>
   </span>
 );
 

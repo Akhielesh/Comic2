@@ -991,7 +991,12 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
 
   const ops: StorageOps = { bucketOf, readBytes, copy, removeObjects, register };
 
-  /** Best-effort 480/1080 variants of a stored image (uploaded + registered); [] on any failure. */
+  /**
+   * Best-effort 480/1080 variants of a stored image (uploaded + registered); [] on any failure.
+   * Variant paths are deterministic (<base>_w480.webp), so an object already sitting there is never
+   * adopted: the bytes derived from THIS original replace it (S6 — a planted or stale object at a
+   * predictable path must never ride along into a publication). A failed overwrite drops the variant.
+   */
   const writeVariants = async (path: string, buffer: Buffer, width?: number): Promise<AssetVariant[]> => {
     if (!canHaveVariants(path)) return [];
     try {
@@ -1002,7 +1007,11 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
         made.map(async (v) => {
           const vPath = variantPathFor(path, v.width);
           try {
-            const outcome = await upload(vPath, v.buffer);
+            let outcome = await upload(vPath, v.buffer);
+            if (outcome === 'exists') {
+              await upload(vPath, v.buffer, { upsert: true });
+              outcome = 'stored';
+            }
             if (outcome === 'stored' && owner) {
               await register({ userId: owner.userId, projectId: owner.projectId, path: vPath, bytes: v.buffer.byteLength, width: v.w, height: v.h, source: 'variant' });
             }
@@ -1363,6 +1372,13 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
       if (!back) throw new StudioError('NOT_FOUND', HOLD_GONE_MESSAGE, { status: 404, cause: err });
       outcome = 'already';
     }
+    if (outcome === 'exists') {
+      // Something already sits at the original path (a half-finished earlier restore — or bytes
+      // put there while the image was held): the held bytes win, so the verdict being restored
+      // always describes the bytes that are served (S6). A repeat writes the same bytes again.
+      const held = await downloadBytes(quarantinePath);
+      await upload(originalPath, held.buffer, { contentType: held.type, upsert: true });
+    }
     evictPath(bucket, originalPath);
     if (outcome !== 'already') {
       // The original is back, so the hold ends. A failed delete leaves a private, never-signed copy
@@ -1667,7 +1683,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
         if (files.has(originalPath)) return; // an earlier restore already brought it back
         throw new StudioError('NOT_FOUND', HOLD_GONE_MESSAGE, { status: 404 });
       }
-      if (!files.has(originalPath)) files.set(originalPath, held);
+      files.set(originalPath, held); // the held bytes win over anything put there meanwhile
       files.delete(quarantinePath);
       restored.push({ quarantinePath, originalPath });
       if (!canHaveVariants(originalPath)) return;

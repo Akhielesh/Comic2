@@ -31,16 +31,28 @@ export const publicCoverUrl = (project: Project): string | undefined => {
 export const isKidsFriendly = (rating: ContentRating | undefined): boolean => rating === 'G' || rating === 'PG';
 
 /**
+ * The publish gate's rating of a listing row, honoured only for a real publication: a v4 row
+ * carrying its server-mirrored share slug. The column is server-set, but the rest of a row is the
+ * owner's, and a row that no longer reads as a publication (say, its studio marker was flipped)
+ * shows its art outside the gate — it gets no badge and never counts as kids-friendly.
+ */
+const gateRatingOf = (row: { content_rating?: unknown; state?: unknown }): ContentRating | undefined =>
+    isContentRating(row.content_rating) && shareSlugOf({ state: row.state } as Project) ? row.content_rating : undefined;
+
+/**
  * Ordered cover candidates for a comic: the stored cover first, then the first
  * rendered page, then the first style board. SmartImage walks this list so a
  * missing OR broken cover URL falls back to the first page rather than a
  * "no image" icon — the icon only appears when a comic truly has no art yet.
- * A published v4 comic leads with its public cover (the frozen, safety-cleared copy).
+ * A Comic Studio (v4) comic shows ONLY its public cover (the frozen, safety-cleared pub/ copy):
+ * its classic cover fields are owner-writable and never went through the publish gate, so
+ * without a public cover the card shows the book icon rather than one of them.
  */
 const coverCandidates = (project: Project): string[] => {
     const out: string[] = [];
     const push = (url?: string | null) => { if (typeof url === 'string' && url.trim()) out.push(url); };
     push(publicCoverUrl(project));
+    if (isStudioV4Project(project)) return out;
     push(project.coverImage);
     push(project.state?.coverImageUrl);
     push(project.state?.panels?.find((p) => p.imageUrl)?.imageUrl);
@@ -92,8 +104,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     }, [filter, user?.id]);
 
     const hydratePreview = async (project: PublicProject): Promise<PublicProject> => {
-        // Published v4 comics carry a public cover URL already: nothing to sign.
-        if (publicCoverUrl(project)) return project;
+        // Comic Studio (v4) comics show only their public cover URL: nothing to sign (their other
+        // image ids are drafts, which a public card must never reach).
+        if (isStudioV4Project(project)) return project;
         const nextProject = structuredClone(project);
         let coverImage = nextProject.coverImage;
 
@@ -163,7 +176,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 typeof p.name === 'string' &&
                 typeof p.created_at === 'string' &&
                 typeof p.updated_at === 'string' &&
-                typeof p.state === 'object'
+                typeof p.state === 'object' &&
+                // A comic held by moderation is never listed (the server also unlists it; this
+                // covers a row written before that fix reached the database).
+                p.is_forced_private !== true
             );
             const userIds = Array.from(
                 new Set(
@@ -203,6 +219,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 const viewsCount = typeof row.views_count === 'number'
                     ? row.views_count
                     : (typeof row.views === 'number' ? row.views : 0);
+                const contentRating = gateRatingOf(row);
 
                 return {
                     id: row.id,
@@ -219,7 +236,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                     viewsCount,
                     average_rating: 0,
                     review_count: 0,
-                    ...(isContentRating(row.content_rating) ? { contentRating: row.content_rating } : {})
+                    ...(contentRating ? { contentRating } : {})
                 };
             });
             const hydrated = await Promise.all(mapped.map((project: PublicProject) => hydratePreview(project)));

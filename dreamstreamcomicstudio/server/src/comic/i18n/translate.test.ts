@@ -9,7 +9,10 @@ import { AUTO_CORRECTED_NOTE, planTranslation } from '../../../../shared/comic/t
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { GOLDEN_DOCS } from '../golden/fixtures.js';
 import { JOB_TIMINGS, startAction } from '../jobs.js';
-import { newSession, scriptedLlm, testContext, type TestContext } from '../orchestrator.fakes.js';
+import { newSession, opsOf, scriptedLlm, testContext, type TestContext } from '../orchestrator.fakes.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
+import type { Card, Msg } from '../../../../shared/comic/doc.js';
+import { costViewFor } from '../costText.js';
 import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
 import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, translationRunning } from './index.js';
 import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
@@ -492,5 +495,110 @@ describe('review fixes: no double charge, Stop semantics, honest message order',
     expect(conv.find((m) => m.id === progress.id)?.text).toContain('The result is below.');
     const ats = conv.map((m) => m.at);
     expect([...ats].sort((a, b) => a - b)).toEqual(ats);
+  });
+});
+
+// P2-GATE L1: runTranslation commits its own messages (start, completion, notices) outside jobs.ts
+// governMsg, so it words every price itself: a governed user (not admin, not own key) never reads a
+// dollar amount — "≈2% of your usage" instead; admins and own keys keep real prices.
+describe('governed users never read dollars in translation messages (P2-GATE L1)', () => {
+  const GOVERNED: StudioCaps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 80, exhausted: false, pctPerStandardPage: 5 } };
+  const ADMIN: StudioCaps = { ...DEFAULT_CAPS, admin: true, plan: 'admin' };
+  const DOLLAR = /\$\s?\d|\$0\b/;
+
+  /** Every text this run put in front of the user: committed messages, patches, their cards, collected cards. */
+  const shownTexts = (ctx: TestContext, extra: Card[] = []): string[] => {
+    const out: string[] = [];
+    const card = (c: Card) => {
+      if (c.type === 'notice') out.push(c.text);
+    };
+    for (const op of opsOf(ctx.events)) {
+      if (op.op === 'message') {
+        out.push((op.msg as Msg).text);
+        (op.msg as Msg).cards?.forEach(card);
+      } else if (op.op === 'message_patch' && typeof op.patch.text === 'string') out.push(op.patch.text);
+    }
+    extra.forEach(card);
+    return out;
+  };
+
+  it('a UI-started run: the start line, the completion and the outcome are in usage terms', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const ctx = testContext(session, { caps: GOVERNED, llm: scriptedLlm({ translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }) });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'user', caps: GOVERNED });
+    expect(started.outcome.status).toBe('started');
+    expect(started.outcome.message).toMatch(/^Translating \d+ lines into Telugu \(≈[\d.]+% of your usage\)/);
+    expect(started.outcome.message).not.toMatch(DOLLAR);
+    await started.done;
+    await ctx.settled();
+    const texts = shownTexts(ctx);
+    expect(texts.length).toBeGreaterThanOrEqual(2);
+    for (const t of texts) expect(t).not.toMatch(DOLLAR);
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.text).toContain('Telugu is translated and reviewed.');
+    expect(last.text).toMatch(/Used (?:≈[\d.]+%|<0\.1%) of your usage\.$/);
+    // The ledger still records real dollars (server-side truth); only the words change.
+    expect(session.doc.spend.entries.some((e) => e.kind === 'translate' && e.usd > 0)).toBe(true);
+  });
+
+  it('the request caps decide even when the context has none (opts.caps ?? ctx.caps), director turn included', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const cards: Card[] = [];
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }) });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'director', caps: GOVERNED, collectCard: (c) => cards.push(c) });
+    expect(started.outcome.message).toContain('% of your usage');
+    expect(started.outcome.message).not.toMatch(DOLLAR);
+    await started.done;
+    await ctx.settled();
+    for (const t of shownTexts(ctx, cards)) expect(t).not.toMatch(DOLLAR);
+  });
+
+  it('in-art lettering + a painted cover: the overlay and textless-cover quotes are usage words too', async () => {
+    const doc = GOLDEN_DOCS['six-drawn']();
+    doc.format = { ...doc.format, lettering: 'in_art' };
+    doc.cover = { ...doc.cover, lettering: 'in_art', render: { status: 'ready', history: [], asset: { path: 'u/user-1/p/proj-1/img/cover.webp', source: 'generated', at: 1 } } };
+    const session = newSession(doc);
+    const ctx = testContext(session, { caps: GOVERNED, llm: scriptedLlm({ translator: times(2, fakeTranslator().step), linguist: times(2, fakeLinguist()) }) });
+    const started = await runTranslation(ctx, T({ languages: ['hi'] }), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    const last = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(last.text).toMatch(/redrawing 6 pages without text uses ≈[\d.]+% of your usage/);
+    expect(last.text).toMatch(/A textless cover with an editable title is a one-time ≈[\d.]+% of your usage/);
+    expect(last.text).not.toMatch(DOLLAR);
+    // The chips keep their quoted amounts (structured data the client words for the user).
+    expect(last.nextSteps?.find((st) => st.label === 'Textless cover')?.usd).toBeGreaterThan(0);
+  });
+
+  it('free paths: "already up to date" reads free, never "$0"', async () => {
+    const { session } = await run(sixPageKidsDoc(), { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
+    const ctx = testContext(session, { caps: GOVERNED, llm: scriptedLlm({}) });
+    const again = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    expect(again.outcome.status).toBe('done');
+    expect(again.outcome.message).toContain('Nothing to translate (free).');
+    for (const t of [again.outcome.message, ...shownTexts(ctx)]) expect(t).not.toMatch(DOLLAR);
+  });
+
+  it('admins (and own keys) keep real prices', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const ctx = testContext(session, { caps: ADMIN, llm: scriptedLlm({ translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }) });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    expect(started.outcome.message).toMatch(/\(≈ \$\d+\.\d{2}\)/);
+    await started.done;
+    await ctx.settled();
+    expect(session.doc.conversation[session.doc.conversation.length - 1].text).toMatch(/ Cost <?\$\d+\.\d{2}\.$/);
+  });
+
+  it('completionMessage(view): usage words, a free run, and the net under an error text that carries dollars', () => {
+    const doc = sixPageKidsDoc();
+    const base = { lang: 'te', translated: 0, free: 0, reviewed: 0, autoFixed: 0, failed: 0, unsafe: 0, tooLong: 0, reviewSkipped: 0, cancelled: false, byok: false };
+    const view = costViewFor(GOVERNED);
+    expect(completionMessage(doc, [{ ...base, usd: 0.0421 }], {}, view).text).toMatch(/ Used ≈[\d.]+% of your usage\.$/);
+    expect(completionMessage(doc, [{ ...base, usd: 0 }], {}, view).text).toMatch(/ Free — done by the editor, no AI needed\.$/);
+    const err = completionMessage(doc, [{ ...base, usd: 0.01, error: 'That would go over your $5.00 monthly budget' }], {}, view).text;
+    expect(err).not.toMatch(DOLLAR);
+    expect(err).toContain('% of your usage monthly budget');
+    // Without a view (no caps: tests, legacy callers) the dollar wording is unchanged.
+    expect(completionMessage(doc, [{ ...base, usd: 0 }], {}).text).toMatch(/ Cost \$0 — done by the editor, no AI cost\.$/);
   });
 });

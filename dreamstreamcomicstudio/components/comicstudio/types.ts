@@ -18,6 +18,29 @@ export type { StudioTab };
 /** Alias kept for existing imports (contract §1: `BoardTab = StudioTab`). */
 export type BoardTab = StudioTab;
 
+/** What a finished stream reported (re-exported by useStudio.ts, where it is produced). */
+export interface StreamOutcome {
+  ok: boolean;
+  error?: string;
+  code?: string;
+  aborted: boolean;
+  /** Trying the same request again could succeed (network, busy, rate limit, server hiccup). */
+  retryable: boolean;
+}
+
+/**
+ * What `act()` resolves to: the stream's outcome plus `gated` — this action's stream committed an
+ * OPEN approval gate (the spend waits for the user). Card sequences (conversation/cards/useAction
+ * `stopsSequence`) stop on `ok: false`, `aborted` or `gated`, so a second spend never runs behind a
+ * refusal and a second gate never replaces the first. Call sites that ignore the value keep working
+ * (`void studio.act(…)`).
+ */
+export interface StudioActOutcome extends StreamOutcome {
+  gated: boolean;
+  /** The action never reached the server (a duplicate click, an invalid action, no comic loaded). */
+  skipped?: boolean;
+}
+
 export interface ActivityItem {
   id: string;
   label: string;
@@ -124,8 +147,12 @@ export interface StudioController {
 
   /** Send a user message to the Comic Director. Overloaded: (text, PendingAttachment[]) stays valid. */
   send(text: string, opts?: SendOptions | PendingAttachment[]): Promise<void>;
-  /** Run a direct action (button clicks): renders, gates, picks, patches. */
-  act(action: StudioAction): Promise<void>;
+  /**
+   * Run a direct action (button clicks): renders, gates, picks, patches. The live controller resolves the
+   * action's StudioActOutcome (`ok`, `aborted`, `gated`, …) so card sequences can stop on a refusal or an
+   * open gate; `void` stays allowed for test fakes and older controllers (read it with `actOutcomeOf`).
+   */
+  act(action: StudioAction): Promise<StudioActOutcome | void>;
   /** Instant local+server content edit (dialogue text, names, settings). Undo defaults to true for user edits. */
   patch(ops: DocOp[], opts?: PatchOptions): Promise<void>;
   cancel(): Promise<void>;

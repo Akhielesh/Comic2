@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ComicDoc } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
 import { applyOps } from '../../../../shared/comic/ops';
-import { lineSourceHash } from '../../../../shared/comic/i18n';
+import { lineSourceHash, localizeDoc } from '../../../../shared/comic/i18n';
 import { formFactorFor } from '../useFormFactor';
 import { makeSampleDoc } from '../../board/__fixtures__/sampleDoc';
 import {
@@ -144,6 +144,18 @@ describe('editing a translated edition', () => {
     // The source doc is untouched.
     expect(doc.pages[0].balloons.find((b) => b.lineId === 'pg_1_l4')).toBeUndefined();
     expect(editionViewDoc(doc, doc.format.language)).toBe(doc);
+  });
+
+  it('the edition view IS the reader’s localized doc (one implementation: clamps, fontScale, reading order)', () => {
+    const doc = withTelugu((d) => {
+      // Out-of-range geometry and a font scale on a software-placed line: the reader clamps both.
+      d.i18n!.editions.te.balloons.pg_1_l4 = { x: 1.4, y: -0.2, w: 1.6, fontScale: 2, tailX: 0.5, tailY: 1.2, pinned: true };
+    });
+    const view = editionViewDoc(doc, 'te');
+    expect(view).toEqual(localizeDoc(doc, 'te'));
+    expect(view.pages[0].balloons.find((b) => b.lineId === 'pg_1_l4')).toMatchObject({ x: 1, y: 0, w: 1, tailX: 0.5, tailY: 1, pinned: true });
+    // No edition for this language: the doc itself.
+    expect(editionViewDoc(doc, 'hi')).toBe(doc);
   });
 
   it('balloon geometry becomes edition_balloon; stacking/lock stay on a stored source balloon only', () => {

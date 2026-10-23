@@ -62,6 +62,7 @@ import {
   screenTurnInput,
   type ScreenResult
 } from '../comic/safety/index.js';
+import { CRISIS_LINE } from '../comic/safety/contentPolicy.js';
 import { composeTurnReply } from '../comic/replies.js';
 import { getStudioSession, peekStudioSession, scheduleVariantBackfill, type StudioSession } from '../comic/session.js';
 import { createSupabaseDocStore, sanitizePublicDoc } from '../comic/store.js';
@@ -574,6 +575,47 @@ export const restrictedRefusal = (request: StreamRequest): string | null => {
 /** The screen is fail-open for the owner's private turn (decisions-final #10); a crash is logged, never silent. */
 const ALLOW: ScreenResult = { decision: 'allow', categories: [], strike: 0, blockedAttachmentPaths: [] };
 
+// ── Free text inside actions (S15) ──────────────────────────────────────────
+
+/** jobs.ts `clean`: whitespace collapsed, trimmed, bounded — exactly what the job hands its prompt. */
+const flatText = (v: unknown, max: number): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+/** jobs.ts bounds for user text in actions (edit instruction, plan instructions, style directions). */
+const ACTION_TEXT_LIMITS = { instruction: 2000, instructions: 8000, directionName: 60, directionSpec: 1500 } as const;
+/**
+ * Style directions screened per request. jobs.ts draws the first 4 valid ones; every valid entry up to
+ * this (larger) bound is screened, so a raised job limit or padding can never slip one past the screen.
+ */
+const MAX_SCREENED_DIRECTIONS = 8;
+
+/**
+ * The user-authored free text an action would hand to a writer or image prompt — with the same bounds
+ * and validity rules the job uses — or '' when it carries none. Style directions that repeat an option
+ * the doc already holds (server-written text: the writer's, or an earlier screened request) are skipped,
+ * so a retry is never screened (or struck) for our own words. Pure.
+ */
+export function actionInputText(doc: ComicDoc, action: StudioAction): string {
+  if (!isObject(action)) return '';
+  const a = action as Record<string, unknown>;
+  if (a.type === 'edit_page') return flatText(a.instruction, ACTION_TEXT_LIMITS.instruction);
+  if (a.type === 'plan_pages') return flatText(a.instructions, ACTION_TEXT_LIMITS.instructions);
+  if (a.type === 'render_style_options') {
+    const known = new Set(
+      (doc?.style?.options || []).map((o) => `${flatText(o?.name, ACTION_TEXT_LIMITS.directionName)}\u0000${flatText(o?.spec, ACTION_TEXT_LIMITS.directionSpec)}`)
+    );
+    return (Array.isArray(a.directions) ? a.directions : [])
+      .filter(isObject)
+      .map((d) => ({ name: flatText(d.name, ACTION_TEXT_LIMITS.directionName), spec: flatText(d.spec, ACTION_TEXT_LIMITS.directionSpec) }))
+      .filter((d) => d.name && d.spec)
+      .slice(0, MAX_SCREENED_DIRECTIONS)
+      .filter((d) => !known.has(`${d.name}\u0000${d.spec}`))
+      .map((d) => `${d.name}: ${d.spec}`)
+      .join('\n\n');
+  }
+  return '';
+}
+
+export const ACTION_BLOCKED_MESSAGE = "That change doesn't fit DreamStream's content rules — nothing was drawn or spent. Try different wording.";
+
 // ── Legacy import ────────────────────────────────────────────────────────────
 
 const str = (v: unknown, max = 2000) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
@@ -672,7 +714,91 @@ export function legacyImportOps(
   return { ops, summary: { title, words: (script.match(/\S+/g) || []).length, cast, places, style: !!stylePrompt } };
 }
 
-const importWelcome = (summary: ReturnType<typeof legacyImportOps>['summary'], doc: ComicDoc): Msg => {
+/** Re-encodes at once (sharp work is also slot-limited inside the asset store). */
+const IMPORT_REF_CONCURRENCY = 3;
+/** Users with a classic import running in this process (one at a time each; see POST /projects). */
+const importingUsers = new Set<string>();
+/** Total time the import may spend re-encoding classic photos; anything not done by then is dropped. */
+export const IMPORT_REF_BUDGET_MS = 20_000;
+const IMPORTABLE_MIME = /^image\/(png|jpe?g|webp|gif|avif)$/i;
+
+/**
+ * Classic photos live in client-writable storage (the legacy <uid>/<file> lane, u/<uid>/tmp/…, or
+ * another project's lane), so their bytes can be swapped, or be animated, after any check. Bring each
+ * one over through the server upload pipeline instead — magic bytes, pixel limits, first frame only,
+ * EXIF-upright static WebP — into THIS comic's private ref lane (no client storage policies), and point
+ * the ops at the new copy (S6). Each unique path is re-encoded once and shared; a photo that can't be
+ * read or re-encoded in time is dropped, never failing the import. Returns the rewritten ops, the new
+ * private copies and how many photos were kept/dropped (counts only are logged — never paths or names).
+ */
+export async function rehomeLegacyRefs(
+  ops: DocOp[],
+  args: { userId: string; projectId: string; assets: AssetStore; budgetMs?: number; now?: () => number }
+): Promise<{ ops: DocOp[]; kept: number; dropped: number; stored: string[] }> {
+  const listOf = (op: DocOp): AssetRef[] | null => {
+    if (op.op !== 'character' && op.op !== 'place' && op.op !== 'style') return null;
+    const refs = (op.patch as { refs?: unknown } | undefined)?.refs;
+    return Array.isArray(refs) ? (refs as AssetRef[]) : null;
+  };
+  const paths = [...new Set(ops.flatMap((op) => (listOf(op) || []).map((r) => r?.path).filter((p): p is string => typeof p === 'string' && !!p)))];
+  if (!paths.length) return { ops, kept: 0, dropped: 0, stored: [] };
+
+  const now = args.now || (() => Date.now());
+  const deadline = now() + (args.budgetMs ?? IMPORT_REF_BUDGET_MS);
+  const moved = new Map<string, RefAsset>();
+  // Every object a saved copy wrote: the original and its size variants (saveRef may write _w480/_w1080).
+  const objectsOf = (r: RefAsset): string[] => [
+    r.path,
+    ...(Array.isArray(r.variants) ? r.variants.map((v) => v?.path).filter((p): p is string => typeof p === 'string' && !!p) : [])
+  ];
+  let expired = false;
+  const rehome = async (path: string): Promise<void> => {
+    // Only the caller's own objects are ever read with the server key (legacyRefs filters too).
+    if (!isOwnedAssetPath(path, args.userId)) return;
+    try {
+      const { mime, buffer } = decodeImageDataUrl(await args.assets.loadDataUrl(path), 'image/png');
+      // The declared type is only storage metadata; the encoder sniffs the real bytes either way.
+      const encoded = await args.assets.encodeUploadBuffer(buffer, IMPORTABLE_MIME.test(mime) ? mime : 'image/png');
+      const saved = await args.assets.saveRef({ userId: args.userId, projectId: args.projectId, encoded });
+      if (expired) {
+        // Finished after the import moved on: nothing will point at it (its variants neither).
+        void args.assets.remove(objectsOf(saved)).catch(() => undefined);
+        return;
+      }
+      moved.set(path, { ...saved, source: 'upload', at: saved.at || now() });
+    } catch {
+      /* unreadable, too small, not an image, storage down: dropped (counted below) */
+    }
+  };
+  const queue = paths.slice();
+  const worker = async () => {
+    while (queue.length && !expired && now() < deadline) await rehome(queue.shift()!);
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all(Array.from({ length: Math.min(IMPORT_REF_CONCURRENCY, paths.length) }, worker)),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, deadline - now()));
+      timer.unref?.();
+    })
+  ]);
+  if (timer) clearTimeout(timer);
+  expired = true;
+
+  const rewritten = ops.map((op) => {
+    const refs = listOf(op);
+    if (!refs) return op;
+    const next: RefAsset[] = [];
+    for (const r of refs) {
+      const copy = typeof r?.path === 'string' ? moved.get(r.path) : undefined;
+      if (copy && !next.some((n) => n.path === copy.path)) next.push({ ...copy });
+    }
+    return { ...op, patch: { ...((op as { patch?: object }).patch || {}), refs: next } } as DocOp;
+  });
+  return { ops: rewritten, kept: moved.size, dropped: paths.length - moved.size, stored: [...moved.values()].flatMap(objectsOf) };
+}
+
+const importWelcome = (summary: ReturnType<typeof legacyImportOps>['summary'], doc: ComicDoc, droppedPhotos = 0): Msg => {
   const parts: string[] = [];
   if (summary.words) parts.push(`the script (${summary.words.toLocaleString('en-US')} words)`);
   if (summary.cast.length) {
@@ -682,11 +808,16 @@ const importWelcome = (summary: ReturnType<typeof legacyImportOps>['summary'], d
   if (summary.places) parts.push(`${summary.places} location${summary.places === 1 ? '' : 's'}`);
   if (summary.style) parts.push('your style');
   const what = parts.length ? parts.join(', ').replace(/, ([^,]*)$/, ' and $1') : 'the title';
+  const dropped =
+    droppedPhotos > 0
+      ? `${droppedPhotos} reference photo${droppedPhotos === 1 ? '' : 's'} couldn’t be brought over — you can add ${droppedPhotos === 1 ? 'it' : 'them'} again in Media. `
+      : '';
   return {
     id: newId('msg'),
     role: 'assistant',
     text:
       `I brought “${summary.title}” into the new studio: ${what}. The new studio draws each page as one image with your characters on model. ` +
+      dropped +
       (summary.words ? 'Want me to read the script and plan the pages, or change anything first?' : 'Tell me what the comic is about and I’ll plan it with you.'),
     at: Date.now(),
     suggestions: summary.words ? ['Read the script and plan the pages', ...suggestNextSteps(doc).slice(0, 2)] : suggestNextSteps(doc)
@@ -817,16 +948,34 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const body = isObject(req.body) ? req.body : {};
       const projectId = randomUUID();
       let doc = createEmptyDoc(projectId, str(body.title, 200) || 'Untitled comic');
+      /** Private copies made for an import: removed again if the comic is never created. */
+      let importedPaths: string[] = [];
       const importFrom = typeof body.importFromProjectId === 'string' ? body.importFromProjectId.trim() : '';
       if (importFrom) {
         if (!PROJECT_ID.test(importFrom)) throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
-        const legacy = await store().loadLegacyState(importFrom, userId);
-        if (!legacy) throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
-        if (legacy.state?.studioVersion === 4) throw new StudioError('BAD_REQUEST', 'That comic is already in the new studio.', { status: 400 });
-        const { ops, summary } = legacyImportOps(legacy, userId);
-        if (str(body.title, 200)) ops.push({ op: 'brief', patch: { title: str(body.title, 200) } });
-        doc = applyOps(doc, ops);
-        doc = applyOps(doc, [{ op: 'message', msg: importWelcome({ ...summary, title: doc.brief.title }, doc) }]);
+        // One classic import per user at a time: each can re-encode up to ~105 photos through the
+        // process-wide image slots, so parallel imports must never multiply that work (the UI already
+        // sends one at a time; this holds for forged or multi-tab requests too).
+        if (importingUsers.has(userId)) {
+          throw new StudioError('CONFLICT', 'Another story is still being brought into the new studio — try again in a moment.', { status: 409 });
+        }
+        importingUsers.add(userId);
+        try {
+          const legacy = await store().loadLegacyState(importFrom, userId);
+          if (!legacy) throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
+          if (legacy.state?.studioVersion === 4) throw new StudioError('BAD_REQUEST', 'That comic is already in the new studio.', { status: 400 });
+          const { ops: mapped, summary } = legacyImportOps(legacy, userId);
+          // Classic photos are client-writable objects: re-encode each into this comic's private ref lane (S6).
+          const rehomed = await rehomeLegacyRefs(mapped, { userId, projectId, assets: assets() });
+          if (rehomed.kept || rehomed.dropped) logger.info('comic_import_refs', { projectId, kept: rehomed.kept, dropped: rehomed.dropped });
+          const ops = rehomed.ops;
+          importedPaths = rehomed.stored;
+          if (str(body.title, 200)) ops.push({ op: 'brief', patch: { title: str(body.title, 200) } });
+          doc = applyOps(doc, ops);
+          doc = applyOps(doc, [{ op: 'message', msg: importWelcome({ ...summary, title: doc.brief.title }, doc, rehomed.dropped) }]);
+        } finally {
+          importingUsers.delete(userId);
+        }
       }
       // A storybook starts with its free title and "The End" plates (timeline §2: create only).
       const kind = typeof body.kind === 'string' && (COMIC_KINDS as readonly string[]).includes(body.kind) ? (body.kind as ComicKind) : undefined;
@@ -836,7 +985,13 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         doc = applyOps(doc, kindOps);
       }
       const { byok } = keysFor(req);
-      const [caps] = await Promise.all([capsFor(req, byok), store().create({ projectId, userId, doc })]);
+      const created = store()
+        .create({ projectId, userId, doc })
+        .catch((err: unknown) => {
+          if (importedPaths.length) void assets().remove(importedPaths).catch(() => undefined);
+          throw err;
+        });
+      const [caps] = await Promise.all([capsFor(req, byok), created]);
       logger.info('comic_project_created', { projectId, imported: !!importFrom, ...(kind ? { kind } : {}) });
       res.set('Cache-Control', 'private, no-store');
       res.status(201).json({ projectId, doc, urls: await signDisplay(doc), caps });
@@ -1005,16 +1160,43 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         if (request.kind === 'message') {
           await session.runExclusive(() => runMessage(req, turnCtx, prepared!, shape));
         } else {
-          const action = request.action;
+          let action = request.action;
+          // Free text a user typed into an action (edit instruction, plan notes, style directions) goes
+          // through the SAME screen as a chat message — prefilter, capped classifier, strikes, cooldown,
+          // restriction — before anything is gated, queued or spent (S15). Director-issued actions come
+          // from already-screened messages and never pass through here.
+          const inputText = actionInputText(session.doc, action);
+          if (inputText) {
+            let screened: ScreenResult;
+            try {
+              screened = await safety.screenTurnInput(turnCtx, {
+                text: inputText,
+                attachments: [],
+                rating: turnCtx.rating ?? effectiveRating(session.doc, turnCtx.caps?.ratingCeiling).rating
+              });
+            } catch (err) {
+              if (err instanceof StudioError && err.code === 'CANCELLED') throw err;
+              logger.warn('comic_screen_failed_open', { requestId: req.requestId, projectId: session.projectId, action: action.type, message: (err as Error)?.message });
+              screened = ALLOW;
+            }
+            if (screened.decision === 'block') {
+              logRefusal(req, 'stream', { code: 'CONTENT_POLICY', status: 422, ...shape, categories: screened.categories, strike: screened.strike });
+              const crisis = typeof screened.note === 'string' && screened.note.includes(CRISIS_LINE) ? ` ${CRISIS_LINE}` : '';
+              throw new StudioError('CONTENT_POLICY', `${ACTION_BLOCKED_MESSAGE}${crisis}`, { status: 422 });
+            }
+            // An adapt verdict draws the edit as the safer take (softened wording + the safe-take line).
+            if (screened.decision === 'adapt' && action.type === 'edit_page') action = { ...action, safe: true };
+          }
+          const runnable = action;
           // A click on a spend button IS the confirmation; the budget cap still applies.
           const run = () =>
-            runAction(turnCtx, action, {
-              confirmed: isSpendAction(action) || action.type === 'approve_gate',
+            runAction(turnCtx, runnable, {
+              confirmed: isSpendAction(runnable) || runnable.type === 'approve_gate',
               ...(turnCtx.caps ? { caps: turnCtx.caps } : {}),
               // A UI click: its edits undo as the user's own (contract §7 ops origin).
               origin: 'user'
             });
-          if (action.type === 'plan_pages') await session.runExclusive(run);
+          if (runnable.type === 'plan_pages') await session.runExclusive(run);
           else await run();
         }
       } catch (err) {

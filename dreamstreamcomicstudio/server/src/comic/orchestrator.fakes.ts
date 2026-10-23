@@ -93,7 +93,7 @@ export interface FakeAssetStore extends AssetStore {
   crops: { path: string; aspect?: string }[];
   fits: { path: string; aspect: AspectRatio; mode: string }[];
   quarantined: { path: string; reason: string; quarantinePath: string }[];
-  /** restoreQuarantined calls that brought an object back (appeal cleared / moderator restore). */
+  /** restoreQuarantined calls that brought an object back (appeal cleared / moderator restore); a no-op repeat is not logged. */
   restored: { quarantinePath: string; originalPath: string }[];
   removed: string[];
   copies: { src: string; dst: string }[];
@@ -114,10 +114,16 @@ const ownerOf = (path: string) => {
   return m ? { userId: m[1], projectId: m[2] } : { userId: 'unknown', projectId: 'unknown' };
 };
 
+/** The production store's answer when nothing is held any more (assets.ts HOLD_GONE_MESSAGE). */
+const HOLD_GONE = "That image is no longer in the safety hold, so it can't be restored.";
+
 /**
- * opts.restoreQuarantined: give the fake the optional AssetStore.restoreQuarantined (off by
- * default — the production store doesn't have it yet, so callers exercise their copyObject
- * fallback and its honest failure; tests of the dedicated move-back path switch it on).
+ * opts.restoreQuarantined: the AssetStore.restoreQuarantined the production store has (P2-SERVER-FOLLOWUP),
+ * ON by default so restore paths are tested the way they run. It mirrors the production guard and
+ * answers: only a q/ object this store quarantined comes back, and only to the path it left (anything
+ * else is a 400 BAD_REQUEST); the held bytes win over anything put at that path meanwhile; a repeat
+ * after a finished restore resolves (idempotent); nothing held → 404 NOT_FOUND. `false` removes the
+ * method — only for a test of a store without it (the copyObject fallback).
  */
 export function fakeAssetStore(opts: { restoreQuarantined?: boolean } = {}): FakeAssetStore {
   let n = 0;
@@ -225,13 +231,29 @@ export function fakeAssetStore(opts: { restoreQuarantined?: boolean } = {}): Fak
       return { quarantinePath };
     },
     async restoreQuarantined(quarantinePath, originalPath) {
-      // Mirrors the real store's guard: only a q/ object of this store comes back, to the path it left.
-      const entry = store.quarantined.find((q) => q.quarantinePath === quarantinePath && q.path === originalPath);
-      if (!entry || !store.files.has(quarantinePath)) throw new StudioError('NOT_FOUND', 'That image is no longer held.', { status: 404 });
+      // The production guard (assets.ts assertRestorePair): a q/ source, sent back only to the path it was
+      // taken from. Production proves the pairing by its deterministic q/ name; the fake by its own log.
+      if (typeof quarantinePath !== 'string' || !quarantinePath.startsWith('q/')) {
+        throw new StudioError('BAD_REQUEST', 'Only an image in the safety hold can be restored.', { status: 400 });
+      }
+      const held = store.quarantined.find((q) => q.quarantinePath === quarantinePath);
+      const done = store.restored.find((r) => r.quarantinePath === quarantinePath);
+      const from = held?.path ?? done?.originalPath;
+      if (from !== undefined && from !== originalPath) {
+        throw new StudioError('BAD_REQUEST', 'A held image can only go back to the place it was taken from.', { status: 400 });
+      }
+      if (!held || !store.files.has(quarantinePath)) {
+        // Idempotent like production: a repeat after a finished restore (the original is back) resolves.
+        if (from !== undefined && store.files.has(originalPath)) return;
+        throw new StudioError('NOT_FOUND', HOLD_GONE, { status: 404 });
+      }
+      // Copy then delete. Bytes that landed at the original path while it was held LOSE to the held
+      // bytes (production 'exists' → upsert of the held copy): the verdict being restored must describe
+      // the bytes that are served again (S6), never something swapped in after the check.
       store.files.set(originalPath, store.files.get(quarantinePath)!);
       store.files.delete(quarantinePath);
       store.missing.delete(originalPath);
-      store.quarantined = store.quarantined.filter((q) => q !== entry);
+      store.quarantined = store.quarantined.filter((q) => q !== held);
       store.restored.push({ quarantinePath, originalPath });
     },
     async remove(paths) {
@@ -261,7 +283,7 @@ export function fakeAssetStore(opts: { restoreQuarantined?: boolean } = {}): Fak
       return removed;
     }
   };
-  if (!opts.restoreQuarantined) delete store.restoreQuarantined;
+  if (opts.restoreQuarantined === false) delete store.restoreQuarantined;
   return store;
 }
 

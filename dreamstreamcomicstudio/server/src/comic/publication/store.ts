@@ -35,6 +35,16 @@ export interface PublicationBackend extends PublicationStore {
   publicUsername(userId: string): Promise<string | undefined>;
   /** pub/<key>/ prefixes older than a day with no live/suspended row (weekly sweep). */
   orphanKeys(limit: number): Promise<string[]>;
+  /**
+   * The publication row of a project, whoever owns it (service role). Moderation maintenance only
+   * (removePublicationObjects) — never reachable from a client request. Optional for test doubles.
+   */
+  getByProject?(projectId: string): Promise<PublicationRow | null>;
+  /**
+   * Asset keys of publications suspended before `olderThanMs` (most recent first, ≤ limit): the sweep
+   * takes their pub/ copies down if the takedown at hold time did not. Optional for test doubles.
+   */
+  suspendedKeys?(limit: number, olderThanMs: number): Promise<string[]>;
 }
 
 /** The published listing text (source language) a public gallery row shows. */
@@ -294,6 +304,32 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
         return [];
       }
       return (Array.isArray(data) ? data : []).map((k) => (typeof k === 'string' ? k : String((k as Record<string, unknown>)?.comic_publication_orphan_keys ?? ''))).filter((k) => /^[A-Za-z0-9]{22}$/.test(k));
+    },
+
+    async getByProject(projectId) {
+      if (!projectId) return null;
+      const { data, error } = await admin().from('comic_publications').select(COLUMNS).eq('project_id', projectId).maybeSingle();
+      if (error) {
+        if (isInvalidId(error) || isMissingTable(error)) return null;
+        throw unavailable(error, 'load');
+      }
+      return data ? rowFromDb(data as Record<string, unknown>) : null;
+    },
+
+    async suspendedKeys(limit, olderThanMs) {
+      const { data, error } = await admin()
+        .from('comic_publications')
+        .select('asset_key')
+        .eq('status', 'suspended')
+        .not('asset_key', 'is', null)
+        .lt('updated_at', iso(olderThanMs))
+        .order('updated_at', { ascending: false })
+        .limit(Math.max(1, Math.min(limit, 1000)));
+      if (error) {
+        logger.warn('comic_publication_suspended_scan_failed', { code: pgCode(error) });
+        return [];
+      }
+      return (Array.isArray(data) ? data : []).map((r) => String((r as Record<string, unknown>)?.asset_key ?? '')).filter((k) => /^[A-Za-z0-9]{22}$/.test(k));
     }
   };
 }
@@ -418,6 +454,17 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
     },
     async orphanKeys() {
       return [];
+    },
+    async getByProject(projectId) {
+      const row = rows.get(projectId);
+      return row ? cloneJson(row) : null;
+    },
+    async suspendedKeys(limit, olderThanMs) {
+      return [...rows.values()]
+        .filter((r) => r.status === 'suspended' && r.assetKey && (r.updatedAt ?? 0) < olderThanMs)
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+        .slice(0, Math.max(1, limit))
+        .map((r) => r.assetKey!);
     },
     rpcPayload(slug) {
       if (!SLUG_RE.test(slug)) return null;

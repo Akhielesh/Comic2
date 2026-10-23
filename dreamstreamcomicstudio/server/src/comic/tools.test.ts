@@ -528,6 +528,41 @@ describe('cast: non-humans and every photo kept', () => {
     expect(ctx.session.doc.cast[0].kind).toBeUndefined();
   });
 
+  // P2-GATE L6: species / markings from the director go through sanitizeLook's cleaning (NUL, C1 controls,
+  // split surrogates — all of which Postgres jsonb or a reader would choke on), never a raw re-read.
+  it('upsert_character stores CLEANED species / markings (no NUL, no C1 control, no lone surrogate)', async () => {
+    setup(createEmptyDoc('proj-1'));
+    const dirty = { summary: 'A small fox', species: 'red\u0000 fox\u0085 \uD83E', markings: '\uDC00white\u0007 tail tip' };
+    await call('upsert_character', { name: 'Fox', kind: 'animal', look: dirty });
+    const fox = ctx.session.doc.cast.find((c) => c.name === 'Fox')!;
+    expect(fox.look.species).toBe('red fox');
+    expect(fox.look.markings).toBe('white tail tip');
+    // An edit of the existing character takes the same path.
+    await call('upsert_character', { name: 'Fox', look: { species: 'arctic\u0000 fox 🦊', markings: 'none\u009F' } });
+    const after = ctx.session.doc.cast.find((c) => c.name === 'Fox')!;
+    expect(after.look.species).toBe('arctic fox 🦊'); // a whole emoji (a valid pair) stays
+    expect(after.look.markings).toBe('none');
+    expect(JSON.stringify(after.look)).not.toMatch(/\\u0000|\\u0085|\\u009f|\\ud83e(?!\\udd8a)/i);
+  });
+
+  it('source analysis stores cleaned species / markings for a new cast member', async () => {
+    const doc = createEmptyDoc('proj-1');
+    setup(doc);
+    turn.userText = 'PAGE 1\n' + 'A fox runs through the snow. '.repeat(80);
+    vi.mocked(analyzeSource).mockImplementation(async ({ llm }) => {
+      await llm.complete({ role: 'writer', messages: [{ role: 'user', content: 'analyze' }] });
+      return {
+        brief: {},
+        cast: [{ name: 'Fox', tier: 'lead', look: { summary: 'A small fox', species: 'red\u0000 fox\u0085', markings: 'white\u0000 tail \uD83E' } }],
+        places: [],
+        model: 'writer-x'
+      } as unknown as Awaited<ReturnType<typeof analyzeSource>>;
+    });
+    await call('save_source', { useMessage: true });
+    const fox = ctx.session.doc.cast.find((c) => c.name === 'Fox')!;
+    expect(fox.look).toMatchObject({ summary: 'A small fox', species: 'red fox', markings: 'white tail' });
+  });
+
   it('"these 5 photos are Maya" → 5 refs, main = #1, an honest message (no silent slice(-4))', async () => {
     const photos = [1, 2, 3, 4, 5].map(attachment);
     setup(plannedDoc(), photos, { userText: 'these 5 photos are Maya' });

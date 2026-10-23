@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
-import { runChat, isStudyIntent, isTripIntent, isTrivialChat, isFastLaneChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
+import { runChat, isStudyIntent, isTripIntent, isTrivialChat, isFastLaneChat, CHAT_SYSTEM_PROMPT, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
+import { spentUsageOf } from '../ai/usage.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool, DELEGATE_TOOL_NAME } from '../ai/agents/delegateTool.js';
@@ -206,6 +207,9 @@ type PreparedChat = {
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
 
+/** Models whose advisory plan-policy miss was already logged (see prepareChat). */
+const policyAdvisoryLogged = new Set<string>();
+
 // Shared request validation + resolution for both the JSON and streaming handlers.
 // Exported so sibling routes (e.g. /api/recipes) resolve provider, model, billing
 // context and user memory identically instead of duplicating that logic.
@@ -341,8 +345,23 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       if (access?.effectiveModel && access.effectiveModel.includes('/')) {
         model = access.effectiveModel;
       }
-    } catch {
-      /* keep requested model */
+    } catch (err) {
+      // Decision (gate S9): the legacy plan list is ADVISORY for chat. It only knows bare Gemini
+      // ids, so enforcing it would refuse every OpenRouter model, Auto included. What actually
+      // governs a non-admin, non-BYOK user's pick is the usage budget: reserveChat prices the
+      // hold at the model they pinned (its live catalog price — see catalogHoldFloorUsd), the
+      // turn settles at the provider's real cost, and an exhausted budget re-plans onto free
+      // models. So a pin outside the plan list is metered in full — never free and never silent.
+      // Logged once per model per process (the legacy list refuses nearly every id, so a line per
+      // turn would only be noise).
+      if (!policyAdvisoryLogged.has(model) && policyAdvisoryLogged.size < 500) {
+        policyAdvisoryLogged.add(model);
+        logger.info('chat_model_policy_advisory', {
+          model,
+          pinned: Boolean(requestedModel),
+          code: (err as { publicCode?: string })?.publicCode || 'POLICY_CHECK_FAILED'
+        });
+      }
     }
   }
 
@@ -422,12 +441,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // The web_search TOOL stays on the table, so any real question still grounds live on demand.
   // Fast-lane knowledge questions also skip the reflexive plugin (they answer from training; the
   // model can still call web_search if it decides it needs live data).
-  const webSearch = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText) && !fastLane;
+  // A FREE primary never gets the always-on plugin: OpenRouter bills the web plugin per request
+  // even on `:free` models, so a "free" turn would quietly cost money (and settlement now counts
+  // every reported cost). The keyless web_search TOOL stays available to free models.
+  const groundedTurn = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText) && !fastLane;
+  const webSearch = groundedTurn && !hasFreeSuffix(model);
   // Lower the sampling temperature on non-trivial turns (the same set that gets the strong
   // model + live grounding): factual/agentic answers want precision, not the 0.7 creative
   // default that added hallucination noise to tool selection and synthesis. Trivial/small-talk
   // turns keep the model's own default (undefined) so casual replies stay natural.
-  const chatTemperature = webSearch ? 0.3 : undefined;
+  const chatTemperature = groundedTurn ? 0.3 : undefined;
   const systemPrompt =
     typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
 
@@ -787,9 +810,130 @@ const runChatParams = (p: PreparedChat) => ({
   attachments: p.attachments,
   // The provider-level paid retry is never sent on a free-models-only plan (nothing reserved for it).
   fallbackModel: p.resolved.provider === 'openrouter' && !p.freeModelsOnly ? TEXT_FALLBACK : undefined,
+  // …and the engine's own timeout / empty-answer retry never switches to a paid model either.
+  noPaidRetry: Boolean(p.freeModelsOnly),
   fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
 });
+
+// ── Hold sizing (S9) ────────────────────────────────────────────────────────────────────────────
+// A hold estimated from the first 8,000 characters of the body (the old default) stayed a few
+// cents however large the context was, so many huge-context turns fit under the remaining usage
+// at once. The hold is now sized from what a call actually sends, and priced at the live catalog
+// price of every model the call may be billed for.
+
+/** The answer size a chat hold assumes (one long answer); settlement records the real size. */
+export const CHAT_HOLD_OUTPUT_TOKENS = 2_048;
+
+const IMAGE_PART_CHARS = 4_000;
+const ATTACHMENT_INLINE_CHARS = 8_000;
+const ATTACHMENTS_INLINE_TOTAL_CHARS = 24_000;
+
+const isTextLikeFile = (mimeType: string, name: string) =>
+  /^text\//i.test(mimeType) || /^application\/(json|xml|csv|x-ndjson|x-yaml|yaml)/i.test(mimeType) || /\.(csv|tsv|json|ndjson|txt|md|markdown|log|xml|ya?ml|ini|toml|tex)$/i.test(name);
+
+/**
+ * Prompt tokens one model call of this turn sends (≈ chars / 4): the persona and custom system
+ * prompt, the DreamStream context, the whole kept history (an image part ≈ 1k tokens), the tool
+ * specs and the inlined text of attached files. `extraChars` adds caller text (a recipe's
+ * instructions, a distill transcript).
+ */
+export const preparedInputTokens = (
+  p: {
+    messages: ChatMessage[];
+    systemPrompt?: string;
+    dreamstreamContextJson?: string;
+    tools?: { name: string; description?: string; parameters?: unknown }[];
+    attachments?: { name: string; mimeType: string; dataUri: string }[];
+  },
+  extraChars = 0
+): number => {
+  let chars = CHAT_SYSTEM_PROMPT.length + (p.systemPrompt?.length || 0) + (p.dreamstreamContextJson?.length || 0) + Math.max(0, extraChars);
+  for (const m of p.messages) {
+    if (typeof m.content === 'string') chars += m.content.length;
+    else if (Array.isArray(m.content)) for (const part of m.content) chars += part.type === 'text' ? part.text.length : IMAGE_PART_CHARS;
+  }
+  if (p.tools?.length) {
+    chars += JSON.stringify(p.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length;
+  }
+  let inlineBudget = ATTACHMENTS_INLINE_TOTAL_CHARS;
+  for (const a of p.attachments || []) {
+    if (!isTextLikeFile(a.mimeType || '', a.name || '') || inlineBudget <= 0) continue;
+    const approx = Math.floor((a.dataUri.length * 3) / 4);
+    const take = Math.min(ATTACHMENT_INLINE_CHARS, inlineBudget, approx);
+    chars += take;
+    inlineBudget -= take;
+  }
+  return Math.ceil(chars / 4);
+};
+
+/**
+ * The provider cost of one call at the live catalog price of the most expensive of `models`
+ * (OpenRouter publishes a per-token price for every model). The usage budget takes it as a floor
+ * for the hold, so a pinned model the pricing table doesn't know is never held at a cheap
+ * neighbour's price. Undefined when no model is priced (free, unknown, or the catalog is down).
+ */
+export const catalogHoldFloorUsd = async (
+  models: (string | undefined)[],
+  inputTokens: number,
+  outputTokens: number
+): Promise<number | undefined> => {
+  const ids = Array.from(new Set(models.map((m) => String(m || '').trim()).filter(Boolean)));
+  if (!ids.length) return undefined;
+  try {
+    const { models: catalogModels } = await getCatalog();
+    let best = 0;
+    for (const id of ids) {
+      const pricing = catalogModels.find((m) => m.id === id)?.pricing;
+      if (!pricing) continue;
+      const price = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+      const usd = inputTokens * price(pricing.promptPerToken) + outputTokens * price(pricing.completionPerToken) + price(pricing.requestFlat);
+      if (usd > best) best = usd;
+    }
+    return best > 0 ? Number(best.toFixed(6)) : undefined;
+  } catch {
+    return undefined; // the catalog is metadata: never block a turn on it
+  }
+};
+
+/**
+ * A turn that failed AFTER spending (a later tool round errored, a stream broke mid-answer)
+ * settles what it spent instead of releasing the hold — a release would erase real platform spend
+ * from the user's usage. A failure that spent nothing releases exactly as before.
+ */
+export const settleSpentOrRelease = async (input: {
+  req: any;
+  error: unknown;
+  operation: string;
+  provider: AIProviderId;
+  model: string;
+  byok?: boolean;
+  seed?: Parameters<typeof settleReservedOperation>[0]['seed'];
+  metadata?: Record<string, unknown>;
+  reason: string;
+}): Promise<void> => {
+  const spent = spentUsageOf(input.error);
+  if (spent) {
+    await settleReservedOperation({
+      req: input.req,
+      operation: input.operation,
+      provider: input.provider,
+      model: input.model,
+      seed: input.seed || { provider: input.provider, model: input.model, operation: input.operation, stage: 'chat', byok: input.byok },
+      usage: spent,
+      metadata: { ...(input.metadata || {}), failed: true }
+    }).catch((err) => logger.error('chat_spent_settle_failed', { operation: input.operation, message: (err as Error)?.message }));
+    return;
+  }
+  await releaseReservedOperation({
+    req: input.req,
+    operation: input.operation,
+    provider: input.provider,
+    model: input.model,
+    reason: (input.error as Error)?.message || input.reason,
+    metadata: input.metadata
+  });
+};
 
 // ── Usage budget: the chat gate (P2-PLATFORM-FOLLOWUP) ──────────────────────────────────────────
 // Every non-admin user has one lifetime platform-paid budget across all studios; BYOK never
@@ -876,6 +1020,11 @@ const copyHoldBack = (req: any, view: any) => {
 
 const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<string, unknown>) => {
   const view = p.freeModelsOnly ? pricedAs(req, p.model) : req;
+  const priced = chatPricedModels(p);
+  // Sized from the prepared context (not the first 8,000 body characters) and floored at the live
+  // catalog price of every model the call may be billed for.
+  const inputTokens = preparedInputTokens(p);
+  const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], inputTokens, CHAT_HOLD_OUTPUT_TOKENS);
   const reserve = await reserveForOperation({
     req: view,
     operation: 'chat.completion',
@@ -883,6 +1032,9 @@ const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<strin
     // Price the hold at the most expensive model OpenRouter may route to (free primary, paid
     // fallback): an exhausted governed user must never pass at $0.
     pricedModels: chatPricedModels(p),
+    inputTokens,
+    outputTokens: CHAT_HOLD_OUTPUT_TOKENS,
+    ...(floorUsd ? { estimateFloorUsd: floorUsd } : {}),
     provider: p.resolved.provider,
     stage: 'chat',
     metadata: { ...metadata, model: p.model, ...(p.freeModelsOnly ? { freeModelsOnly: true } : {}) }
@@ -1018,12 +1170,15 @@ export const runHeldHelper = async (
     result = await call();
   } catch (err) {
     if (hold.reserve) {
-      await releaseReservedOperation({
+      // What the call had already spent is settled; a call that spent nothing is released.
+      await settleSpentOrRelease({
         req: hold.req,
+        error: err,
         operation: input.operation,
         provider: input.provider,
         model: input.model,
-        reason: (err as Error)?.message || 'chat_helper_failed'
+        seed: { ...hold.reserve.seed, model: input.model },
+        reason: 'chat_helper_failed'
       }).catch(() => undefined);
     }
     throw err;
@@ -1688,12 +1843,14 @@ chatRouter.post('/', async (req, res, next) => {
       res.json(reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
     } catch (error) {
       if (reserve) {
-        await releaseReservedOperation({
+        await settleSpentOrRelease({
           req,
+          error,
           operation: 'chat.completion',
           provider: p.resolved.provider,
           model: p.model,
-          reason: (error as Error)?.message || 'chat_request_failed',
+          byok: reserve.reservation.byokBypass,
+          reason: 'chat_request_failed',
           metadata: { route: req.path, historyLength: p.messages.length }
         });
       }
@@ -1792,14 +1949,16 @@ const streamChatTurn = async (
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
     if (reserve) {
-      await releaseReservedOperation({
+      await settleSpentOrRelease({
         req,
+        error,
         operation: 'chat.completion',
         provider: p.resolved.provider,
         model: p.model,
-        reason: (error as Error)?.message || 'chat_request_failed',
+        byok: reserve.reservation.byokBypass,
+        reason: 'chat_request_failed',
         metadata
-      });
+      }).catch((err) => logger.error('chat_hold_cleanup_failed', { message: (err as Error)?.message }));
     }
     send('error', { message: safeClientMessage(error, 'The request failed. Please try again.') });
   } finally {
@@ -1912,14 +2071,16 @@ chatRouter.post('/swarm', async (req, res, next) => {
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
     if (reserve) {
-      await releaseReservedOperation({
+      await settleSpentOrRelease({
         req,
+        error,
         operation: 'chat.completion',
         provider: p.resolved.provider,
         model: p.model,
-        reason: (error as Error)?.message || 'swarm_request_failed',
+        byok: reserve.reservation.byokBypass,
+        reason: 'swarm_request_failed',
         metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
-      });
+      }).catch((err) => logger.error('chat_hold_cleanup_failed', { message: (err as Error)?.message }));
     }
     send('error', { message: safeClientMessage(error, 'The swarm failed. Please try again.') });
   } finally {

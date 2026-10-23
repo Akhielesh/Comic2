@@ -6,6 +6,7 @@
  * to every site show up in one place (akhielesh.com/adminak → AI visitors).
  * Everything here runs at the edge — agents never wake the backend container.
  */
+import { loggablePath } from '../../shared/capabilityPath';
 import { AGENT_QUESTIONS, type AgentMatch } from './agent-gate';
 
 export const SITE = 'dreamstreamstudio.ai';
@@ -52,6 +53,8 @@ async function ensureSchema(db: D1Like) {
 }
 
 const LOGGED_HEADERS = ['accept', 'accept-language', 'from', 'referer', 'signature-agent', 'signature-input', 'via', 'sec-ch-ua', 'sec-ch-ua-platform'];
+/** Headers that carry a URL: stored capability-masked (an agent that followed /c/<slug> sends it). */
+const URL_HEADERS = new Set(['referer']);
 
 function clean(value: unknown, max: number): string {
   return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
@@ -77,7 +80,7 @@ export async function logVisit(db: D1Like | undefined, request: Request, agent: 
     const headers: Record<string, string> = {};
     for (const name of LOGGED_HEADERS) {
       const value = request.headers.get(name);
-      if (value) headers[name] = value.slice(0, 300);
+      if (value) headers[name] = (URL_HEADERS.has(name) ? loggablePath(value) : value).slice(0, 300);
     }
     const cf = ((request as Request & { cf?: Record<string, unknown> }).cf ?? {}) as Record<string, unknown>;
     await db
@@ -87,7 +90,8 @@ export async function logVisit(db: D1Like | undefined, request: Request, agent: 
       .bind(
         visitId,
         new Date().toISOString(),
-        clean(path, 300) || '/',
+        // `path` is the visited page (or the gate's ?from=): a share slug is a read capability (S19).
+        clean(loggablePath(path), 300) || '/',
         agent?.name ?? 'self-identified',
         agent?.kind ?? 'unknown',
         agent?.reason ?? 'visited the check-in page',

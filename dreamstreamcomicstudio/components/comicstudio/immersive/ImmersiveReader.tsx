@@ -10,9 +10,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ScanEye } from 'lucide-react';
-import { bookOf, readerOf, type ComicDoc } from '../../../shared/comic/doc';
-import { localizeDoc } from '../../../shared/comic/i18n';
+import { bookOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/comic/doc';
+import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
+import { sameLanguage } from '../../../shared/comic/languages';
 import { canServeToOwner } from '../../../shared/comic/safety';
+import { ExportError } from '../export/errors';
+import type { PdfExportResult } from '../export/pdfExport';
 import type { StudioController } from '../types';
 import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import { ensureFontsFor } from '../i18n/scriptFonts';
@@ -73,6 +76,13 @@ export interface ImmersiveReaderProps {
   intro: boolean;
   onExit(): void;
   allowDownload?: boolean;
+  /**
+   * The host's own download — on a share link, the gated public one (export/publicDownload
+   * downloadPublicComic: `pub/` images only, published languages only, the author's switch). It REPLACES the
+   * built-in PDF, which draws from `urlFor` and so belongs to the owner's surfaces. It may resolve to the
+   * line the reader shows when it is done (the host's own notice sits behind this full-screen reader).
+   */
+  onDownload?(): Promise<string | void> | string | void;
   /** Open in Guided View (deep link ?guided=1), optionally at a 1-based panel (?panel=). */
   initialGuided?: boolean;
   initialPanel?: number;
@@ -99,6 +109,30 @@ const HUD_IDLE_MS = 2500;
 const words = (t: string) => (t.match(/\S+/g) || []).length;
 const readMs = (text: string, wpm: number) => Math.max(650, Math.round((words(text) * 60_000) / wpm));
 
+/** What a finished PDF says: what came out, what was left out, and the export's own notice (fonts…). */
+export const pdfDownloadNote = (res: Pick<PdfExportResult, 'pages' | 'failed' | 'skipped' | 'notice'>): string => {
+  const left = res.skipped.length + res.failed.length;
+  const text = left
+    ? `Downloaded ${res.pages} page${res.pages === 1 ? '' : 's'} — ${left} couldn’t be included (not drawn, withheld or didn’t load).`
+    : 'Downloaded the PDF.';
+  return res.notice?.trim() ? `${text} ${res.notice.trim()}` : text;
+};
+
+/** A calm failure line: an export's own message is written for the reader; anything else never shows raw. */
+export const pdfDownloadFailedNote = (err: unknown): string =>
+  err instanceof ExportError && err.message.trim() ? `Couldn’t make the PDF. ${err.message.trim()}` : 'Couldn’t make the PDF. Please try again.';
+
+/**
+ * Export options for a reader's built-in PDF: the edition on screen BY NAME (the export localizes it, names the
+ * file "-te" and loads that script's fonts), or the doc as it is when the language has no edition (the reader
+ * then shows the source text too). Never asks the export for an edition that doesn't exist.
+ */
+export const readerExportOptions = (doc: ComicDoc, lang?: string): { lang?: string } =>
+  lang && Object.keys(i18nOf(doc).editions || {}).some((l) => sameLanguage(l, lang)) ? { lang } : {};
+
+/** Long notes stay up long enough to read (≈ 15 characters a second), short ones the usual 3.6 s. */
+const toastMs = (text: string) => Math.min(9000, Math.max(3600, Math.round(text.length * 65)));
+
 /** The book's trim: the most common page shape among drawn pages, else the format's aspect. */
 export const trimAspect = (items: ReaderItem[], fallback: number): number => {
   const counts = new Map<number, number>();
@@ -120,7 +154,7 @@ const pageNOfView = (views: BookView[], items: ReaderItem[], view: number): numb
 };
 
 export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
-  const { doc, urlFor, language, endCard, onExit, allowDownload = true } = props;
+  const { doc, urlFor, language, endCard, onExit, allowDownload = true, onDownload } = props;
   // ── Document ──────────────────────────────────────────────────────────────
   // Keyed on the language CODE: hosts pass the slot as an inline object, and a new object on every host
   // render must not re-localize the book (new items → new views → every page re-rendered mid-turn).
@@ -365,7 +399,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const [toast, setToast] = useState<string | null>(initial.note ?? null);
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3600);
+    const t = setTimeout(() => setToast(null), toastMs(toast));
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -610,25 +644,39 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   }, [endCard?.shareUrl, localized]);
 
   const [downloading, setDownloading] = useState(false);
+  const downloadingRef = useRef(false);
+  const onDownloadRef = useRef(onDownload);
+  onDownloadRef.current = onDownload;
+  const hostDownload = !!onDownload;
   const download = useMemo(() => {
-    if (!allowDownload || !items.length) return undefined;
+    if (!hostDownload && (!allowDownload || !items.length)) return undefined;
     return async () => {
-      if (downloading) return;
+      // Synchronous guard: a double tap never starts two exports.
+      if (downloadingRef.current) return;
+      downloadingRef.current = true;
       setDownloading(true);
       setToast('Preparing the PDF…');
       try {
+        if (hostDownload) {
+          // The host's gated download (share links). Its own notice sits behind this reader, so show its line here.
+          const note = await onDownloadRef.current?.();
+          setToast(typeof note === 'string' && note.trim() ? note.trim() : null);
+          return;
+        }
         const { exportComicPdf } = await import('../export/pdfExport');
         // A withheld (safety-blocked) image is never shown, so it never goes into a download either.
-        const res = await exportComicPdf(localized, (a) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a)));
-        const left = res.skipped.length + res.failed.length;
-        setToast(left ? `Downloaded ${res.pages} page${res.pages === 1 ? '' : 's'} — ${left} couldn’t be included (not drawn, withheld or didn’t load).` : 'Downloaded the PDF.');
+        const safeUrlFor = (a?: AssetRef | string | null) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a));
+        // The edition being read, by name: the export localizes it and names the file "-te" (fonts per language).
+        const res = await exportComicPdf(doc, safeUrlFor, readerExportOptions(doc, lang));
+        setToast(pdfDownloadNote(res));
       } catch (err) {
-        setToast(`Couldn’t make the PDF: ${(err as Error)?.message || 'please try again.'}`);
+        setToast(pdfDownloadFailedNote(err));
       } finally {
+        downloadingRef.current = false;
         setDownloading(false);
       }
     };
-  }, [allowDownload, items.length, localized, urlFor, downloading]);
+  }, [hostDownload, allowDownload, items.length, doc, lang, urlFor]);
 
   // ── Ambient room (two layers crossfade on change) ─────────────────────────
   const bg = roomBackground(palette);

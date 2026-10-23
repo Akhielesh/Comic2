@@ -134,37 +134,13 @@ export const isEditionLang = (doc: ComicDoc, lang?: string | null): lang is stri
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 
 /**
- * The doc as the `lang` edition draws: localizeDoc, plus the edition's own positions for lines that have
- * no stored source balloon (a software-placed line moved in this language only), which localizeDoc
- * cannot apply because there is no source balloon to overlay.
+ * The doc as the `lang` edition draws — exactly what a reader and the export of that edition draw:
+ * `localizeDoc` (shared/comic/i18n), which applies the edition's balloon overrides over stored source
+ * balloons AND appends the edition's own positions for software-placed lines (no stored source balloon).
+ * The source language (or a language with no edition) is the doc itself.
  */
 export function editionViewDoc(doc: ComicDoc, lang: string): ComicDoc {
-  if (!isEditionLang(doc, lang)) return doc;
-  const edition = i18nOf(doc).editions[lang];
-  const loc = localizeDoc(doc, lang);
-  const overrides = edition?.balloons || {};
-  if (!Object.keys(overrides).length) return loc;
-  let changed = false;
-  const pages = loc.pages.map((page) => {
-    const have = new Set(page.balloons.map((b) => b.lineId));
-    const extra: Balloon[] = [];
-    for (const panel of page.panels)
-      for (const line of panel.lines) {
-        const o = overrides[line.id];
-        if (have.has(line.id) || !o || !finite(o.x) || !finite(o.y) || !finite(o.w) || o.w <= 0) continue;
-        const b: Balloon = { lineId: line.id, x: o.x, y: o.y, w: o.w };
-        if (finite(o.tailX) && finite(o.tailY)) {
-          b.tailX = o.tailX;
-          b.tailY = o.tailY;
-        }
-        if (o.pinned) b.pinned = true;
-        extra.push(b);
-      }
-    if (!extra.length) return page;
-    changed = true;
-    return { ...page, balloons: [...page.balloons, ...extra] };
-  });
-  return changed ? { ...loc, pages } : loc;
+  return isEditionLang(doc, lang) ? localizeDoc(doc, lang) : doc;
 }
 
 const GEOMETRY_KEYS = ['x', 'y', 'w', 'tailX', 'tailY'] as const;

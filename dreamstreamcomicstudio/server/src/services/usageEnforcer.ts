@@ -501,6 +501,14 @@ export const formatLimitErrorResponse = (details: LimitExceededDetails) => ({
   details
 });
 
+/** The payload with `usage.providerCostUsd` removed (a dollar figure), everything else untouched. */
+const withoutProviderCost = <T extends Record<string, unknown>>(payload: T): T => {
+  const usage = payload.usage;
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage) || !('providerCostUsd' in usage)) return payload;
+  const { providerCostUsd: _dollars, ...rest } = usage as Record<string, unknown>;
+  return { ...payload, usage: rest };
+};
+
 export const attachBillingToPayload = <T extends Record<string, unknown>>(
   payload: T,
   reservation: ReservationState | undefined,
@@ -510,9 +518,11 @@ export const attachBillingToPayload = <T extends Record<string, unknown>>(
 
   // Governed users never see dollars for their usage (P1-LIMITS): their responses carry no
   // estimate/settlement amounts — the usage meter (GET /api/usage/allowance) shows percent left.
+  // That includes the provider's real cost inside the response's own `usage` record (chat,
+  // swarm and recipe turns now carry it so settlement is exact); token counts stay.
   if (reservation.governed) {
     return {
-      ...payload,
+      ...withoutProviderCost(payload),
       billing: {
         reservationId: reservation.reservationId,
         byokBypass: false,

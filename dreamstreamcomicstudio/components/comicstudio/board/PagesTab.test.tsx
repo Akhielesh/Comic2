@@ -239,10 +239,32 @@ describe('PagesTab', () => {
     expect(within(card(1)).queryByRole('img', { name: /Page 1/ })).toBeNull();
     expect(within(card(1)).getByRole('img', { name: 'Image withheld' })).toBeInTheDocument();
     expect(studio.urlFor).not.toHaveBeenCalledWith(expect.objectContaining({ path: 'u/proj/pages/p1.png' }), expect.anything());
-    fireEvent.click(within(card(1)).getByRole('button', { name: 'Redraw safer' }));
+    fireEvent.click(within(card(1)).getByRole('button', { name: /^Redraw safer/ }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_1'], force: true, safe: true });
     fireEvent.click(within(card(1)).getByRole('button', { name: 'Check again' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'safety_recheck', target: { kind: 'page', id: 'pg_1' } });
+  });
+
+  it('"Redraw safer" carries its price for THIS user: usage terms when governed, dollars on their own key', () => {
+    const blocked = () =>
+      makeSampleDoc((d) => {
+        d.pages[0].render.asset = asset('u/proj/pages/p1.png', { w: 1000, h: 1500, safety: { assessed: 'X', by: 'check', at: SAMPLE_NOW } });
+        d.cover.render = { status: 'ready', history: [], asset: asset('u/proj/cover.png', { w: 1000, h: 1500, safety: { assessed: 'X', by: 'check', at: SAMPLE_NOW } }) };
+      });
+    const governed = governedStudio(blocked());
+    const { unmount } = render(<PagesTab studio={governed} doc={governed.doc!} />);
+    const pageSafer = within(card(1)).getByRole('button', { name: /^Redraw safer/ });
+    expect(pageSafer).toHaveTextContent(/^Redraw safer · .*% of your usage$/);
+    expect(pageSafer).not.toHaveTextContent('$');
+    const coverSafer = within(screen.getByTestId('cover-card')).getByRole('button', { name: /^Redraw safer/ });
+    expect(coverSafer).toHaveTextContent(/% of your usage$/);
+    expect(coverSafer).not.toHaveTextContent('$');
+    unmount();
+
+    const own = dollarStudio(blocked());
+    render(<PagesTab studio={own} doc={own.doc!} />);
+    expect(within(card(1)).getByRole('button', { name: /^Redraw safer/ })).toHaveTextContent(/^Redraw safer · ≈ \$\d/);
+    expect(within(screen.getByTestId('cover-card')).getByRole('button', { name: /^Redraw safer/ })).toHaveTextContent(/^Redraw safer · ≈ \$\d/);
   });
 
   it('an over-rating page is blurred behind the veil with a way to change the rating', () => {

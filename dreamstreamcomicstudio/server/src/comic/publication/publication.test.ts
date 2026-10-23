@@ -10,7 +10,7 @@ import { __resetSharpSlotPeakForTests, sharpSlotStats, withSharpSlot } from '../
 import { fakeAssetStore, newSession, plannedDoc, testContext, type FakeAssetStore, type TestContext } from '../orchestrator.fakes.js';
 import { runPublishGate, type PublishGateResult } from '../safety/index.js';
 import { installSafetyFakes, resetSafety, TERMS } from '../safety/testkit.js';
-import { buildPublicSnapshot, getReadiness, loadPublicByProjectId, newAssetKey, newSlug, publish, regenerateLink, unpublish, updatePublication } from './index.js';
+import { buildPublicSnapshot, getReadiness, loadPublicByProjectId, newAssetKey, newSlug, publish, regenerateLink, removePublicationObjects, unpublish, updatePublication } from './index.js';
 import { escPango, ogHash, ratingMeta, renderOgCard, scriptsCovered, vendoredFontFiles, type OgRenderInput } from './ogImage.js';
 import {
   __resetOrphanSweep,
@@ -18,6 +18,8 @@ import {
   cardPatchOps,
   maybeSweepOrphans,
   ORPHAN_SWEEP_EVERY_MS,
+  OUTSIDE_IMAGE_STATUS,
+  SWEEP_GRACE_MS,
   configurePublication,
   parsePublishRequest,
   payloadOf,
@@ -703,6 +705,203 @@ describe('content rating (G / PG / PG-13), frozen at publish time, end to end', 
     expect(view.rating).toBeUndefined();
     expect(store.projects.get('proj-1')!.contentRating).toBeNull();
     expect('rating' in store.rpcPayload(view.slug!)!.publication).toBe(false);
+  });
+});
+
+describe('S6: only art the server wrote to a lane clients cannot rewrite is published', () => {
+  const spyGate = () => {
+    const calls: unknown[] = [];
+    restore();
+    restore = configurePublication({
+      store,
+      gate: (async (c: unknown, d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => (calls.push(o), gateFor()(c, d, o))) as never,
+      now: () => clock,
+      renderOg: fakeOg,
+      publicUrl: (p) => `https://cdn.test/${p}`
+    });
+    return calls;
+  };
+  const withArt = (pageArt: Record<number, Partial<AssetRef>>, coverArt?: Partial<AssetRef>) => {
+    const doc = richDoc();
+    for (const p of doc.pages) if (pageArt[p.n]) p.render = { ...p.render, asset: { ...asset(`p${p.n}`), variants: undefined, ...pageArt[p.n] } as AssetRef };
+    if (coverArt) doc.cover.render = { ...doc.cover.render, asset: { ...asset('cover'), variants: undefined, ...coverArt } as AssetRef };
+    setup(doc);
+    return spyGate();
+  };
+
+  it('a page using a classic-lane, tmp-lane or planted public upload is refused (422) before any check is paid for, nothing is copied', async () => {
+    for (const outside of [
+      { path: `${USER}/x.png`, source: 'upload' as const },
+      { path: `u/${USER}/tmp/a.gif`, source: 'upload' as const },
+      { path: `u/${USER}/p/proj-1/img/planted.webp`, source: 'upload' as const },
+      { path: `u/${USER}/p/proj-1/img/../img/x.webp`, source: 'generated' as const },
+      { path: 'somewhere/else/x.webp', source: 'generated' as const }
+    ]) {
+      const gateCalls = withArt({ 2: outside });
+      const err = await publish(ctx, { visibility: 'unlisted' }).catch((e) => e);
+      expect(err).toBeInstanceOf(PublishError);
+      expect(err).toMatchObject({ status: 422, reason: 'NOT_READY', details: { outsideImages: { pages: [2], cover: false } } });
+      expect(err.message).toMatch(/^Page 2 uses an image brought in from outside the studio/);
+      expect(gateCalls).toHaveLength(0); // no platform-paid check spent
+      expect(assets.copies).toHaveLength(0);
+      expect(store.rows.size).toBe(0);
+    }
+  });
+
+  it('a cover using an outside image is refused honestly too', async () => {
+    const gateCalls = withArt({}, { path: `${USER}/cover.png`, source: 'upload' });
+    await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 422, reason: 'NOT_READY', details: { outsideImages: { pages: [], cover: true } } });
+    expect(gateCalls).toHaveLength(0);
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('excluding the outside page publishes the rest', async () => {
+    withArt({ 2: { path: `${USER}/x.png`, source: 'upload' } });
+    await publish(ctx, { visibility: 'unlisted', excludePageIds: ['pg_2'] });
+    const row = store.rows.get('proj-1')!;
+    expect(row.snapshot!.pages).toHaveLength(2);
+    expect(assets.copies.some((c) => c.src === `${USER}/x.png`)).toBe(false);
+  });
+
+  it('server-made art publishes: an uploaded photo in the private ref lane, a derived crop, a library image (regression guard)', async () => {
+    withArt({
+      1: { path: `u/${USER}/p/proj-1/ref/photo.webp`, source: 'upload' },
+      2: { path: `u/${USER}/p/proj-1/img/fit-1.webp`, source: 'derived' },
+      3: { path: 'library/v1/style.noir-ink/3.webp', source: 'library' }
+    });
+    const view = await publish(ctx, { visibility: 'unlisted' });
+    expect(view.status).toBe('live');
+    expect(store.rows.get('proj-1')!.snapshot!.pages).toHaveLength(3);
+  });
+
+  it('readiness says so: never ok while publishing would refuse', async () => {
+    const doc = richDoc();
+    doc.pages[2].render = { ...doc.pages[2].render, asset: { ...asset('p3'), path: `u/${USER}/tmp/a.gif`, source: 'upload' } };
+    doc.cover.render = { ...doc.cover.render, asset: { ...asset('cover'), path: `${USER}/c.png`, source: 'upload' } };
+    const r = await getReadiness(ctx, doc);
+    expect(r.ok).toBe(false);
+    expect(r.missing).toEqual([
+      { kind: 'cover', status: OUTSIDE_IMAGE_STATUS },
+      { kind: 'page', n: 3, status: OUTSIDE_IMAGE_STATUS }
+    ]);
+    expect((await getReadiness(ctx, richDoc())).ok).toBe(true);
+  });
+
+  it('a size variant is copied only from its deterministic server path (anything else is left out)', async () => {
+    withArt({
+      1: {
+        variants: [
+          { path: `u/${USER}/tmp/evil_w480.webp`, w: 480, h: 720 },
+          { path: `u/${USER}/p/proj-1/img/p1_w1080.webp`, w: 1080, h: 1620 }
+        ]
+      }
+    });
+    await publish(ctx, { visibility: 'unlisted' });
+    expect(assets.copies.some((c) => c.src.includes('evil'))).toBe(false);
+    expect(assets.copies.some((c) => c.src === `u/${USER}/p/proj-1/img/p1_w1080.webp`)).toBe(true);
+    const page1 = store.rows.get('proj-1')!.snapshot!.pages[0].render.asset!;
+    expect(page1.variants!.map((v) => v.w)).toEqual([1080]);
+  });
+});
+
+describe('S5: the owner-readable publication row carries no dollars', () => {
+  it('safety keeps the rating and hash but never the platform cost', async () => {
+    restore();
+    restore = configurePublication({
+      store,
+      gate: (async (c: unknown, d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => ({ ...(await gateFor()(c, d, o)), costUsd: 0.0042 })) as never,
+      now: () => clock,
+      renderOg: fakeOg,
+      publicUrl: (p) => `https://cdn.test/${p}`
+    });
+    await publish(ctx, { visibility: 'unlisted' });
+    const safety = store.rows.get('proj-1')!.safety;
+    expect(safety).not.toHaveProperty('costUsd');
+    expect(safety).toMatchObject({ rating: 'PG', checkedHash: 'h1' });
+    expect(JSON.stringify(safety)).not.toContain('0.0042');
+  });
+});
+
+describe('L11: a moderation hold takes the pub/ copies down', () => {
+  const useAssets = () => {
+    restore();
+    restore = configurePublication({ store, gate: gateFor() as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}`, assets: async () => assets });
+  };
+  const pubFiles = (key: string) => [...assets.files.keys()].filter((p) => p.startsWith(`pub/${key}/`));
+
+  it('after a hold suspends the row, removePublicationObjects deletes every pub/<key>/ object; the owner view shows no broken preview', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'public' });
+    const key = store.rows.get('proj-1')!.assetKey!;
+    expect(pubFiles(key).length).toBeGreaterThan(10);
+    store.forcePrivate('proj-1');
+    await removePublicationObjects('proj-1');
+    expect(pubFiles(key)).toEqual([]);
+    expect(store.rows.get('proj-1')!.status).toBe('suspended');
+    const { getPublicationView } = await import('./index.js');
+    const view = await getPublicationView(ctx);
+    expect(view.status).toBe('suspended');
+    expect(view.ogImageUrl).toBeUndefined();
+  });
+
+  it('never touches a live publication that is not held; never throws', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'public' });
+    const key = store.rows.get('proj-1')!.assetKey!;
+    const before = pubFiles(key).length;
+    await removePublicationObjects('proj-1');
+    expect(pubFiles(key)).toHaveLength(before);
+    await expect(removePublicationObjects('missing-project')).resolves.toBeUndefined();
+    await expect(removePublicationObjects('../etc')).resolves.toBeUndefined();
+    store.forcePrivate('proj-1');
+    assets.removePrefix = async () => {
+      throw new Error('storage down');
+    };
+    await expect(removePublicationObjects('proj-1')).resolves.toBeUndefined();
+  });
+
+  it('a publish that raced the hold (row still live, project held) is suspended first, then taken down', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'public' });
+    const key = store.rows.get('proj-1')!.assetKey!;
+    store.projects.get('proj-1')!.forcedPrivate = true; // held, but the row was written live after the trigger ran
+    await removePublicationObjects('proj-1');
+    expect(store.rows.get('proj-1')!.status).toBe('suspended');
+    expect(pubFiles(key)).toEqual([]);
+  });
+
+  it('republishing after the hold is lifted copies everything again under a fresh key and keeps the link', async () => {
+    useAssets();
+    const first = await publish(ctx, { visibility: 'public' });
+    const oldKey = store.rows.get('proj-1')!.assetKey!;
+    store.forcePrivate('proj-1');
+    await removePublicationObjects('proj-1');
+    store.projects.get('proj-1')!.forcedPrivate = false; // a moderator lifted the hold
+    clock += 1000;
+    const again = await publish(ctx, { visibility: 'public' });
+    const row = store.rows.get('proj-1')!;
+    expect(again.slug).toBe(first.slug);
+    expect(row.status).toBe('live');
+    expect(row.assetKey).not.toBe(oldKey);
+    // Every object the reader payload points at exists again.
+    const payload = payloadOf(row)!;
+    expect(Object.keys(payload.urls).length).toBeGreaterThan(10);
+    for (const p of Object.keys(payload.urls)) expect(assets.files.has(p)).toBe(true);
+    expect(pubFiles(oldKey)).toEqual([]);
+  });
+
+  it('the sweep also removes copies of publications suspended longer than the grace period', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'public' });
+    const key = store.rows.get('proj-1')!.assetKey!;
+    store.rows.set('proj-1', { ...store.rows.get('proj-1')!, status: 'suspended', updatedAt: clock });
+    const removed: string[] = [];
+    const sweeper = { removePrefix: async (p: string) => (removed.push(p), 1) };
+    await sweepOrphanPublications(sweeper);
+    expect(removed).toEqual([]); // inside the grace period: left alone
+    clock += SWEEP_GRACE_MS + 1;
+    await sweepOrphanPublications(sweeper);
+    expect(removed).toEqual([`pub/${key}/`]);
   });
 });
 

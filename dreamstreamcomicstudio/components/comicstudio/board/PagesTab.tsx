@@ -164,6 +164,8 @@ export const PageCard: React.FC<{
   const busy = isBusy(page.render);
   const spec = jobModel(doc, 'page');
   const price = estimateDraw(doc, pagesForIds(doc, [page.id]), byok).estimate.usd;
+  // "Redraw safer" is one forced page render, priced for THIS user (governed users read usage, never dollars).
+  const saferPrice = cost.quote(redrawPrice(doc, 'page', byok));
   const target: RenderTarget = { kind: 'page', id: page.id };
   const render = (safe = false) => fire('render', () => studio.act({ type: 'render_pages', pageIds: [page.id], force: true, ...(safe ? { safe: true } : {}) }));
   const open = () => studio.openPage(page.id);
@@ -257,6 +259,7 @@ export const PageCard: React.FC<{
                   asset={asset}
                   rating={rating}
                   onRedrawSafer={() => render(true)}
+                  redrawPrice={saferPrice}
                   onCheckAgain={() => void studio.act({ type: 'safety_recheck', target })}
                 >
                   {null}
@@ -268,6 +271,7 @@ export const PageCard: React.FC<{
               asset={asset}
               rating={rating}
               onRedrawSafer={() => render(true)}
+              redrawPrice={saferPrice}
               onCheckAgain={() => void studio.act({ type: 'safety_recheck', target })}
               onChangeRating={() => studio.setTab('story')}
             >
@@ -384,6 +388,7 @@ export const CoverCard: React.FC<{
         safety={{
           rating,
           onRedrawSafer: () => design(true),
+          redrawPrice: cost.quote(redrawPrice(doc, 'cover', byok)),
           onCheckAgain: () => void studio.act({ type: 'safety_recheck', target: { kind: 'cover' } }),
           onChangeRating: () => studio.setTab('story')
         }}

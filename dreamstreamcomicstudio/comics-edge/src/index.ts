@@ -15,11 +15,15 @@
  *   /live*, /models, /share/*, /studio.html → 302 to the main site (other products, own session)
  *   AI agents asking a page   → 302 /api/agent-gate (the page half of the gate; the Pages
  *                               middleware cannot see request.cf through this proxy)
- *   everything else           → the Pages origin, same path + query, X-Forwarded-Host set (the
+ *   everything else (GET, HEAD, OPTIONS)
+ *                             → the Pages origin, same path + query, X-Forwarded-Host set (the
  *                               Pages middleware serves instead of redirecting to the apex),
  *                               Location mapped back here, Comic Studio <head> on HTML except /c/*
+ *   any other method          → 405, body never read (Pages has no write endpoints here; a future
+ *                               Pages Function that needs POST on this host must be added here)
  * Every response gets HSTS (no includeSubDomains), nosniff, Referrer-Policy, a minimal
- * Permissions-Policy and frame-ancestors 'none' (except embeds and share pages).
+ * Permissions-Policy and frame-ancestors 'none' (except share pages, whose Function sets its own
+ * framing — /c/<slug>/embed may be framed when the author allows embedding).
  */
 import { detectAgent } from '../../api-proxy/src/agent-gate';
 import { brandHtml, type RewriterCtor } from './brand';
@@ -73,6 +77,9 @@ const DROP_REQUEST_HEADERS = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+  // No body is ever forwarded to Pages (proxyToPages), so a client's length must not be either:
+  // a Content-Length with no body makes the origin wait for bytes that never come.
+  'content-length',
   'forwarded',
   'x-real-ip',
   'x-forwarded-for',
@@ -149,15 +156,27 @@ const forwardHeaders = (request: Request, cfg: EdgeConfig): Headers => {
   return headers;
 };
 
+/** Methods the Pages origin answers on this host. Nothing there accepts a body (/c and /og are
+ *  GET/HEAD-only Functions; the SPA posts only to /api, which never reaches this path). */
+const PAGE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const PAGE_ALLOW = 'GET, HEAD, OPTIONS';
+
+/** Any other method → 405 WITHOUT reading the body (an unsized upload is never buffered). */
+const methodNotAllowed = (pathname: string): Response => {
+  const headers = new Headers({ allow: PAGE_ALLOW, 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' });
+  applySecurityHeaders(headers, pathname);
+  return new Response('Method not allowed', { status: 405, headers });
+};
+
 const proxyToPages = async (request: Request, url: URL, cfg: EdgeConfig, deps: EdgeDeps): Promise<Response> => {
   const method = request.method.toUpperCase();
-  const hasBody = method !== 'GET' && method !== 'HEAD';
+  if (!PAGE_METHODS.has(method)) return methodNotAllowed(url.pathname);
   let upstream: Response;
   try {
+    // Never a body: page requests carry none, and a body sent anyway is not read or forwarded.
     upstream = await deps.fetch(`${cfg.pagesOrigin}${pathAndQuery(url)}`, {
       method,
       headers: forwardHeaders(request, cfg),
-      body: hasBody ? await request.arrayBuffer() : undefined,
       redirect: 'manual'
     });
   } catch {

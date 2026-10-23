@@ -281,6 +281,26 @@ const book: OpSanitizer<Op<'book'>> = {
   }
 };
 
+const laneSegment = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '-');
+const escapeRe = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * An image the SERVER wrote for THIS comic: its generated/derived art lane (u/<owner>/p/<doc>/img/…),
+ * its private reference lane (…/ref/…, server re-encoded, no client storage policies) or the platform
+ * library. Legacy-imported refs live in client-writable lanes (<uid>/<file>, u/<uid>/tmp/…) or in
+ * another project's lane, so they can never become page or cover art (S6: the publish gate checks a
+ * verdict by path; a client-writable path can be swapped or hold animated bytes after the check).
+ */
+export const isServerArtForComic = (path: string, doc: Pick<ComicDoc, 'id'>, userId: string): boolean => {
+  if (typeof path !== 'string' || !path) return false;
+  if (/^library\/[^/]+(?:\/[^/]+)+$/.test(path) && !path.includes('..')) return true;
+  if (!userId || !doc?.id) return false;
+  const lane = new RegExp(`^u/${escapeRe(laneSegment(userId))}/p/${escapeRe(laneSegment(doc.id))}/(?:img|ref)/[A-Za-z0-9_@.-]+$`);
+  return lane.test(path) && !path.includes('..');
+};
+
+const OUTSIDE_IMAGE_MESSAGE = 'That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.';
+
 const renderUse: OpSanitizer<Op<'render_use'>> = {
   op: 'render_use',
   sanitize(doc, op, ctx) {
@@ -299,6 +319,8 @@ const renderUse: OpSanitizer<Op<'render_use'>> = {
     if (target.kind === 'page' || target.kind === 'cover') {
       const key = target.kind === 'cover' ? 'cover' : `page:${target.id}`;
       const ownVersion = render.asset?.path === op.path || render.history.some((v) => v.path === op.path) || archiveOf(doc).some((a) => a.path === op.path && a.targetKey === key);
+      // Anything new to this page/cover must be an image the server made for this comic (S6).
+      if (!ownVersion && !isServerArtForComic(op.path, doc, ctx?.userId)) throw bad(OUTSIDE_IMAGE_MESSAGE);
       // A photo, attachment, sheet or style option becoming page/cover art must be an explicit "Use as page".
       if (!ownVersion && !entry.roles.has('art') && (op as { adopt?: unknown }).adopt !== true) {
         throw bad('Use “Use for page” in Media to put that image on a page.');

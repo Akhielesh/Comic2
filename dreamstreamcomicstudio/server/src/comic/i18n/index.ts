@@ -7,6 +7,10 @@
 //   3. the linguist review with a gloss — ALWAYS
 //   4. duplicates of the fresh lines copied for free, spend recorded, an APPENDED completion message
 // A rerun over unchanged text makes no model call at all (caching by sourceHash in planTranslation).
+//
+// Prices in every text this run commits or returns are worded for the user (costText.ts): dollars for
+// admins and own keys, "≈2% of your usage" for everyone on the included usage (P2-GATE L1). jobs.ts
+// governMsg is not on this path, so runTranslation words them itself and runs the governDollars net.
 
 import { newId, type Card, type ComicDoc, type EditionTextField, type Msg, type NextStep } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, i18nOf, textSourceHash } from '../../../../shared/comic/i18n.js';
@@ -29,6 +33,7 @@ import {
 import { graphemes } from '../../../../shared/comic/textLayout.js';
 import { logger } from '../../lib/logger.js';
 import { billedLlm, newTextSpendTracker, recordTextSpend, spendIsByok, type RunActionOptions, type StartedAction, type TextSpendTracker } from '../jobs.js';
+import { costFormatter, costViewFor, DOLLAR_VIEW, governCard, governDollars, type CostView } from '../costText.js';
 import { estimateTextCostUsd, resolveTextRoute, TEXT_ROLE_DEFAULTS } from '../textModels.js';
 import { StudioError, type StudioContext, type StudioKeys } from '../types.js';
 import { applyReview, reviewTranslations } from './linguist.js';
@@ -361,9 +366,13 @@ export function textlessCoverQuote(doc: ComicDoc, byok: boolean): number | null 
   return estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd;
 }
 
-/** The appended completion message (honest per-language summary + the next steps). */
-export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys: StudioKeys): { text: string; nextSteps: NextStep[] } {
+/**
+ * The appended completion message (honest per-language summary + the next steps). `view` words every
+ * price for the user (costViewFor(caps)): a governed user reads "≈1% of your usage", never dollars.
+ */
+export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys: StudioKeys, view: CostView = DOLLAR_VIEW): { text: string; nextSteps: NextStep[] } {
   const byok = spendIsByok(keys);
+  const fmt = costFormatter(view);
   const parts: string[] = [];
   const ready: string[] = [];
   const steps: NextStep[] = [];
@@ -392,19 +401,25 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
   if (anyCancelled) head = 'Stopped — the finished pages are kept.';
   else if (ready.length === results.length) head = `${joinList(results.map((r) => englishName(r.lang)))} ${results.length === 1 ? 'is' : 'are'} translated and reviewed.`;
   else head = `Translation finished for ${joinList(results.map((r) => englishName(r.lang)))}.`;
-  const cost = usd > 0 ? ` Cost ${formatUsd(usd)}${byok ? ' on your key' : ''}.` : ' Cost $0 — done by the editor, no AI cost.';
+  const cost = fmt.governed
+    ? usd > 0
+      ? ` Used ${fmt(usd)}.`
+      : ' Free — done by the editor, no AI needed.'
+    : usd > 0
+      ? ` Cost ${formatUsd(usd)}${byok ? ' on your key' : ''}.`
+      : ' Cost $0 — done by the editor, no AI cost.';
   const lines = [head, ...parts];
   if (errors.length) lines.push(`${errors[0]}${/[.!?]$/.test(errors[0]) ? '' : '.'} Translate again to retry — only the missing lines are charged.`);
   const fix = overlayFix(doc, byok);
   if (fix && fix.pages.length) {
-    lines.push(`Your pages have the lettering painted into the art, so readers would still see the original words. Translated editions need overlay lettering: redrawing ${plural(fix.pages.length, 'page')} without text costs ≈ ${formatUsd(fix.usd)}, and after that every language is free.`);
+    lines.push(`Your pages have the lettering painted into the art, so readers would still see the original words. Translated editions need overlay lettering: redrawing ${plural(fix.pages.length, 'page')} without text ${fmt.governed ? `uses ${fmt.approx(fix.usd)}` : `costs ≈ ${formatUsd(fix.usd)}`}, and after that every language is free.`);
     steps.push({ label: 'Set up lettering for translations', client: { type: 'open_tab', tab: 'languages' } });
   } else if (ready.length) {
     lines.push(`Ready to publish in ${joinList(ready)} — readers pick their language in the reader.`);
   }
   const cover = textlessCoverQuote(doc, byok);
   if (cover !== null && results.length) {
-    lines.push(`The cover title is painted in ${englishName(doc.format.language)}. A textless cover with an editable title is a one-time ≈ ${formatUsd(cover)}; every language's title is free after that.`);
+    lines.push(`The cover title is painted in ${englishName(doc.format.language)}. A textless cover with an editable title is a one-time ${fmt.approx(cover)}; every language's title is free after that.`);
     steps.push({ label: 'Textless cover', action: { type: 'render_cover', textless: true, quotedUsd: cover }, usd: cover });
   }
   steps.unshift({ label: 'Review translations', client: { type: 'open_tab', tab: 'languages' } });
@@ -414,7 +429,8 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
     const again = quoteTranslation(doc, keys, { languages: missingLangs }).estimate.usd;
     steps.push({ label: 'Translate missing lines', action: { type: 'translate', languages: missingLangs, quotedUsd: again }, usd: again });
   }
-  return { text: `${lines.join(' ')}${cost}`.trim(), nextSteps: steps.slice(0, DOC_LIMITS.nextSteps) };
+  // The net under the template: an error text or a later line that still carries a dollar figure.
+  return { text: governDollars(`${lines.join(' ')}${cost}`.trim(), view), nextSteps: steps.slice(0, DOC_LIMITS.nextSteps) };
 }
 
 const translationCard = (languages: string[]): Card => ({ type: 'translation', id: newId('card'), languages });
@@ -428,14 +444,24 @@ const message = (text: string, cards?: Card[], nextSteps?: NextStep[]): Msg => (
   ...(nextSteps?.length ? { nextSteps, suggestions: nextSteps.map((s) => s.label) } : {})
 });
 
-/** Tell the user (director turn: a card in its message; UI tap: a new assistant message). */
-const tell = (ctx: StudioContext, opts: RunActionOptions, text: string, tone: 'info' | 'warn' | 'success' = 'info', steps?: NextStep[]) => {
+/** The price view for this run's user (the request's caps; absent ⇒ the context's). */
+const viewFor = (ctx: StudioContext, opts: RunActionOptions): CostView => costViewFor(opts.caps ?? ctx.caps);
+
+/**
+ * Tell the user (director turn: a card in its message; UI tap: a new assistant message). The words are
+ * priced for the user first; returns them so the outcome the caller reads says exactly the same.
+ */
+const tell = (ctx: StudioContext, opts: RunActionOptions, words: string, tone: 'info' | 'warn' | 'success' = 'info', steps?: NextStep[]): string => {
+  const view = viewFor(ctx, opts);
+  const text = governDollars(words, view);
+  const card = governCard({ type: 'notice', id: newId('card'), tone, text }, view);
   if (opts.collectCard) {
-    opts.collectCard({ type: 'notice', id: newId('card'), tone, text });
+    opts.collectCard(card);
     if (steps?.length) opts.collectNextSteps?.(steps);
-    return;
+    return text;
   }
-  ctx.session.commit([{ op: 'message', msg: message(text, [{ type: 'notice', id: newId('card'), tone, text }], steps) }], { origin: 'job' });
+  ctx.session.commit([{ op: 'message', msg: message(text, [card], steps) }], { origin: 'job' });
+  return text;
 };
 
 const finished = (outcome: StartedAction['outcome']): StartedAction => ({ outcome, done: Promise.resolve() });
@@ -443,11 +469,14 @@ const finished = (outcome: StartedAction['outcome']): StartedAction => ({ outcom
 /** Run an approved translation (background; `done` settles when every edition finished). */
 export async function runTranslation(ctx: StudioContext, action: TranslateAction, opts: RunActionOptions): Promise<StartedAction> {
   const doc = ctx.session.doc;
+  // Every price this run words — start, completion, notices, the outcome — is worded for this user.
+  const view = viewFor(ctx, opts);
+  const fmt = costFormatter(view);
   const resolved = resolveLanguages(doc, action.languages);
   const { unknown } = resolved;
   if (!resolved.codes.length) {
-    const text = unknown.length ? `I don't know ${joinList(unknown)} as a language. ${supportedLanguagesText(doc)}` : `${englishName(doc.format.language)} is already the comic's language. ${supportedLanguagesText(doc)}`;
-    tell(ctx, opts, text, 'warn');
+    const words = unknown.length ? `I don't know ${joinList(unknown)} as a language. ${supportedLanguagesText(doc)}` : `${englishName(doc.format.language)} is already the comic's language. ${supportedLanguagesText(doc)}`;
+    const text = tell(ctx, opts, words, 'warn');
     return finished({ status: 'blocked', message: text, code: 'BAD_REQUEST' });
   }
   // A language already being translated in this session is never started twice (no double charge).
@@ -456,22 +485,19 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   const codes = resolved.codes.filter((c) => !running.has(c));
   const busyNote = busy.length ? `${joinList(busy.map(englishName))} ${busy.length === 1 ? 'is' : 'are'} already being translated — that result arrives as a new message.` : '';
   if (!codes.length) {
-    const text = `${busyNote} Nothing new was started or charged.`;
-    tell(ctx, opts, text, 'info');
+    const text = tell(ctx, opts, `${busyNote} Nothing new was started or charged.`, 'info');
     return finished({ status: 'blocked', message: text, code: 'CONFLICT' });
   }
   const existing = Object.keys(i18nOf(doc).editions);
   const added = codes.filter((c) => !existing.includes(c));
   if (existing.length + added.length > DOC_LIMITS.editions) {
-    const text = `A comic can have up to ${DOC_LIMITS.editions} translations; remove one in Languages first.`;
-    tell(ctx, opts, text, 'warn');
+    const text = tell(ctx, opts, `A comic can have up to ${DOC_LIMITS.editions} translations; remove one in Languages first.`, 'warn');
     return finished({ status: 'blocked', message: text, code: 'LIMIT' });
   }
   const quote = quoteTranslation(doc, ctx.keys, { ...action, languages: codes });
   const paid = quote.plans.some((p) => !planIsFree(p));
   if (paid && !resolveTextRoute('translator', ctx.keys)) {
-    const text = 'Translation needs an AI key: connect a Gemini or OpenRouter key in Settings → API keys.';
-    tell(ctx, opts, text, 'warn');
+    const text = tell(ctx, opts, 'Translation needs an AI key: connect a Gemini or OpenRouter key in Settings → API keys.', 'warn');
     return finished({ status: 'blocked', message: text, code: 'NO_TEXT_KEY' });
   }
 
@@ -493,9 +519,10 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   if (!paid) {
     const upToDate = freeCount === 0;
     let text = upToDate
-      ? `${names} ${codes.length === 1 ? 'is' : 'are'} already up to date. Nothing to translate ($0).`
-      : `Done for free: ${plural(freeCount, 'line')} copied by software into ${names} ($0 — no AI needed).`;
+      ? `${names} ${codes.length === 1 ? 'is' : 'are'} already up to date. Nothing to translate (${fmt.governed ? 'free' : '$0'}).`
+      : `Done for free: ${plural(freeCount, 'line')} copied by software into ${names} (${fmt.governed ? 'no AI needed' : '$0 — no AI needed'}).`;
     if (busyNote) text = `${text} ${busyNote}`;
+    text = governDollars(text, view);
     const steps: NextStep[] = [{ label: 'Review translations', client: { type: 'open_tab', tab: 'languages' } }];
     if (!opts.collectCard) ctx.session.commit([{ op: 'message', msg: message(text, [translationCard(codes)], steps) }], { origin: 'job' });
     else {
@@ -509,7 +536,11 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
   // Duplicates of lines being translated now are copied for free once their twin is done.
   freeCount += quote.plans.reduce((n, p) => n + (p.deferred?.length || 0), 0);
   const skipped = unknown.length ? ` (I don't know ${joinList(unknown)} as a language, so I left it out.)` : '';
-  const startText = `Translating ${plural(lines, 'line')} into ${names} (≈ ${formatUsd(quote.estimate.usd)}${quote.byok ? ' on your key' : ''})${freeCount ? `; ${plural(freeCount, 'line')} reused for free` : ''}. Every line gets a linguist review.${skipped}${busyNote ? ` ${busyNote}` : ''}`;
+  const price = fmt.governed ? fmt.approx(quote.estimate.usd) : `≈ ${formatUsd(quote.estimate.usd)}${quote.byok ? ' on your key' : ''}`;
+  const startText = governDollars(
+    `Translating ${plural(lines, 'line')} into ${names} (${price})${freeCount ? `; ${plural(freeCount, 'line')} reused for free` : ''}. Every line gets a linguist review.${skipped}${busyNote ? ` ${busyNote}` : ''}`,
+    view
+  );
   const card = translationCard(codes);
   let startMsgId: string | undefined;
   if (opts.collectCard) opts.collectCard(card);
@@ -539,7 +570,7 @@ export async function runTranslation(ctx: StudioContext, action: TranslateAction
     }
     const done = ctx.session.doc;
     const { text, nextSteps } = results.length
-      ? completionMessage(done, results, ctx.keys)
+      ? completionMessage(done, results, ctx.keys, view)
       : { text: "The translation couldn't run. Nothing was charged for unfinished lines — try again in a moment.", nextSteps: [] as NextStep[] };
     const last = done.conversation[done.conversation.length - 1];
     if (startMsgId && last?.id === startMsgId) {

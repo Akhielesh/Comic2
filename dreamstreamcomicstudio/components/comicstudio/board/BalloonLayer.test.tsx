@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { BalloonLayer, dragSlopPx, planTip } from './BalloonLayer';
+import { BalloonLayer, asSentence, dragSlopPx, planTip } from './BalloonLayer';
 import { GestureArbiterProvider, createGestureArbiter } from '../mobile/touch/GestureArbiter';
 import { planLettering, estimateMeasure } from '../../../shared/comic/lettering/layout';
 import { makeSampleDoc } from './__fixtures__/sampleDoc';
@@ -118,6 +118,31 @@ describe('BalloonLayer — drawing (shared plans → one SVG)', () => {
 });
 
 describe('BalloonLayer — editing', () => {
+  it('hit targets read the line as one sentence: never a double period after its own punctuation', () => {
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].panels[0].lines[0].text = 'Old Delhi';
+    });
+    const { hit } = setup({ editable: true }, doc);
+    const l4 = hit('pg_1_l4').getAttribute('aria-label')!;
+    expect(l4.startsWith('Speech — Arjun: You owe me an explanation, Maya. Drag or use the arrow keys to move')).toBe(true);
+    expect(l4).not.toMatch(/\.\./);
+    // "Just one more…" keeps its ellipsis; nothing is appended to it.
+    expect(hit('pg_1_l2').getAttribute('aria-label')).toMatch(/^Whisper — Maya: Just one more… Drag/);
+    // A line without its own full stop gets one.
+    expect(hit('pg_1_l1').getAttribute('aria-label')).toMatch(/^Caption: Old Delhi\. Drag/);
+  });
+
+  it('asSentence: Latin, CJK, Devanagari and quoted endings', () => {
+    expect(asSentence('Hello')).toBe('Hello.');
+    expect(asSentence('Hello.')).toBe('Hello.');
+    expect(asSentence('Wait!')).toBe('Wait!');
+    expect(asSentence('Really?')).toBe('Really?');
+    expect(asSentence('“Run.”')).toBe('“Run.”');
+    expect(asSentence('नमस्ते।')).toBe('नमस्ते।');
+    expect(asSentence('こんにちは。')).toBe('こんにちは。');
+    expect(asSentence('  spaced  ')).toBe('spaced.');
+  });
+
   it('places lines that have no balloon (fallback) so no text is lost', () => {
     const { hit, drawn } = setup({ editable: true });
     expect(drawn('pg_1_l4')).toBeTruthy();

@@ -5,8 +5,8 @@
 // jsdom can't measure, so these check the structure that makes the ellipsis possible.
 
 import React from 'react';
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { FrameBadge, ImageFrame } from './ImageFrame';
 
 const DISPLAY_FLEX = /^(?:[\w-]+:)*!?(?:inline-)?flex$/;
@@ -77,5 +77,22 @@ describe('ImageFrame badges', () => {
     const corner = long.closest('[data-frame-badge]')!.parentElement!;
     expect(tokens(corner)).toEqual(expect.arrayContaining(['absolute', 'left-1.5', 'top-1.5', 'flex-wrap', 'max-w-[calc(100%-0.75rem)]']));
     expect(flexTruncating(frame)).toEqual([]);
+  });
+});
+
+describe('ImageFrame safety', () => {
+  it('a blocked image offers Redraw safer with the price the host formatted for this user', () => {
+    const onRedrawSafer = vi.fn();
+    render(
+      <ImageFrame
+        aspect="3 / 2"
+        alt="Cover"
+        asset={{ path: 'u/proj/cover.png', source: 'generated', at: 1, safety: { assessed: 'X', at: 1 } }}
+        safety={{ rating: 'PG-13', onRedrawSafer, redrawPrice: '≈3% of your usage' }}
+      />
+    );
+    expect(screen.queryByRole('img', { name: 'Cover' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Redraw safer · ≈3% of your usage' }));
+    expect(onRedrawSafer).toHaveBeenCalled();
   });
 });

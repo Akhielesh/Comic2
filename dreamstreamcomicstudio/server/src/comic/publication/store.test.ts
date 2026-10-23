@@ -79,3 +79,43 @@ describe('mirrorProject → projects.content_rating', () => {
     expect(updates).toHaveLength(1);
   });
 });
+
+/** A chainable PostgREST stand-in that records every call and answers `result` at the end of the chain. */
+function recordingAdmin(result: { data: unknown; error: unknown }) {
+  const calls: [string, unknown[]][] = [];
+  const chain: Record<string, unknown> = {};
+  for (const m of ['select', 'eq', 'not', 'lt', 'order', 'limit']) chain[m] = (...args: unknown[]) => (calls.push([m, args]), chain);
+  chain.maybeSingle = async () => (calls.push(['maybeSingle', []]), result);
+  chain.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => Promise.resolve(result).then(ok, bad);
+  const client = { from: (table: string) => (calls.push(['from', [table]]), chain) };
+  return { admin: () => client as unknown as SupabaseClient, calls };
+}
+
+describe('moderation maintenance reads (L11)', () => {
+  it('suspendedKeys: suspended rows past the grace period, newest first, well-formed keys only', async () => {
+    const { admin, calls } = recordingAdmin({ data: [{ asset_key: 'Ab3dEf6hIj9kLm2nOp5qRs' }, { asset_key: '../etc' }, { asset_key: null }], error: null });
+    const keys = await createSupabasePublicationStore({ admin }).suspendedKeys!(50, Date.UTC(2026, 9, 22));
+    expect(keys).toEqual(['Ab3dEf6hIj9kLm2nOp5qRs']);
+    expect(calls).toEqual([
+      ['from', ['comic_publications']],
+      ['select', ['asset_key']],
+      ['eq', ['status', 'suspended']],
+      ['not', ['asset_key', 'is', null]],
+      ['lt', ['updated_at', '2026-10-22T00:00:00.000Z']],
+      ['order', ['updated_at', { ascending: false }]],
+      ['limit', [50]]
+    ]);
+    const failing = recordingAdmin({ data: null, error: { code: '08006' } });
+    await expect(createSupabasePublicationStore({ admin: failing.admin }).suspendedKeys!(50, 1)).resolves.toEqual([]);
+  });
+
+  it('getByProject reads one row by project id (service role), missing table → null', async () => {
+    const row = { id: 'x', project_id: 'p-1', user_id: 'u-1', status: 'suspended', visibility: 'public', slug: 'Ab3dEf6hIj9kLm2nP', asset_key: 'Ab3dEf6hIj9kLm2nOp5qRs', languages: ['en'], snapshot: null, card: {}, safety: {} };
+    const { admin, calls } = recordingAdmin({ data: row, error: null });
+    const got = await createSupabasePublicationStore({ admin }).getByProject!('p-1');
+    expect(got).toMatchObject({ projectId: 'p-1', userId: 'u-1', status: 'suspended', assetKey: 'Ab3dEf6hIj9kLm2nOp5qRs' });
+    expect(calls.filter(([m]) => m === 'eq')).toEqual([['eq', ['project_id', 'p-1']]]);
+    const missing = recordingAdmin({ data: null, error: { code: '42P01' } });
+    await expect(createSupabasePublicationStore({ admin: missing.admin }).getByProject!('p-1')).resolves.toBeNull();
+  });
+});

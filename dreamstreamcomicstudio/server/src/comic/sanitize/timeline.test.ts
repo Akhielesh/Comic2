@@ -200,6 +200,36 @@ describe('render_use allow-list', () => {
       expect('adopt' in ok).toBe(false);
     }
   });
+  // S6: only images the server made for THIS comic (its img/ref lanes, or the platform library) can
+  // become page or cover art. Legacy-imported refs live in client-writable lanes (<uid>/file,
+  // u/<uid>/tmp/…) or another project's lane, so adopting them is refused — even for docs imported
+  // before the import re-encode existed.
+  it('adopt refuses refs that are not server-made for this comic (legacy, tmp, another project), on pages and the cover', () => {
+    const doc = fixture();
+    const foreign = ['4dd985b1-0000-4000-8000-000000000000/x.png', 'user-1/x.png', 'u/user-1/tmp/a.png', 'u/user-1/p/old-proj/img/x.webp', 'u/user-1/p/old-proj/ref/x.webp', 'u/someone-else/p/proj-1/ref/x.webp'];
+    doc.cast = doc.cast.map((c) => (c.id === 'c_maya' ? { ...c, refs: [...(c.refs || []), ...foreign.map((path) => ({ path, source: 'upload' as const, at: 2 }))] } : c));
+    doc.style = { ...doc.style, refs: [{ path: 'u/user-1/tmp/style.png', source: 'upload', at: 2 }] };
+    for (const path of [...foreign, 'u/user-1/tmp/style.png']) {
+      expect(assetIndex(doc).has(path)).toBe(true);
+      const err = rejects(() => run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: 1, adopt: true }), 400, 'BAD_REQUEST');
+      expect(err.message).toMatch(/upload it again/i);
+      rejects(() => run(doc, { op: 'render_use', target: { kind: 'cover' }, path, at: 1, adopt: true }), 400, 'BAD_REQUEST');
+    }
+    // This comic's own lanes and the platform library still adopt.
+    doc.style = { ...doc.style, refs: [{ path: 'library/v1/hero/2.webp', source: 'upload', at: 2 }] };
+    for (const path of ['u/user-1/p/proj-1/ref/maya.webp', 'u/user-1/p/proj-1/img/attach.webp', 'library/v1/hero/2.webp']) {
+      expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: 1, adopt: true })).toMatchObject({ path });
+    }
+  });
+  it('a foreign path that already sits in the doc as other art still cannot move onto a page; own versions are untouched', () => {
+    const doc = fixture();
+    // e.g. a beta-era doc whose deleted page held an adopted legacy image.
+    doc.trash = [{ ...doc.trash![0], page: { ...doc.trash![0].page, render: { status: 'ready', asset: asset('u/user-1/tmp/old.png', { source: 'upload' }), history: [] } } }];
+    rejects(() => run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path: 'u/user-1/tmp/old.png', at: 1 }), 400, 'BAD_REQUEST');
+    rejects(() => run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path: 'u/user-1/tmp/old.png', at: 1, adopt: true }), 400, 'BAD_REQUEST');
+    // Switching between a page's own versions is never affected by the provenance rule.
+    expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path: 'u/user-1/p/proj-1/img/p1-v1.webp', at: 1 })).toMatchObject({ at: NOW });
+  });
   it('rejects foreign paths, size variants, unknown targets and malformed targets', () => {
     const doc = fixture();
     doc.pages[0].render.asset = { ...doc.pages[0].render.asset!, variants: [{ path: 'u/user-1/p/proj-1/img/p1-v2_w480.webp', w: 480, h: 600 }] };

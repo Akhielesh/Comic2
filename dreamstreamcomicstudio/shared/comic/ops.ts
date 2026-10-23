@@ -46,6 +46,7 @@ import {
   type Box,
   type Brief,
   type Character,
+  type CharacterLook,
   type ComicDoc,
   type Cover,
   type DocSafety,
@@ -427,13 +428,48 @@ const applyRenderPatch = (doc: ComicDoc, target: RenderTarget, patch: Partial<Re
   return archiveOverflow(next, target, overflow, patch.updatedAt ?? patch.asset?.at ?? 0);
 };
 
+/** Optional Character fields a patch may clear (contract R4: null — or undefined after the server's sanitizer — means unset). */
+const CLEARABLE_CHARACTER_KEYS = ['role', 'personality', 'voice', 'kind', 'count', 'likeness'] as const;
+
+/**
+ * A character with its cleared optional fields REMOVED, not stored as null/undefined. The Undo inverse of a
+ * first kind / count / likeness / role sends null for the key; the server's sanitizer turns that into
+ * undefined. Both mirrors drop the key, so the client's doc (and every pageSpecHash built from it) equals
+ * the server's after the echo — no stale page until the next refresh.
+ */
+const clearedCharacter = (c: Character): Character => {
+  let out = c;
+  for (const key of CLEARABLE_CHARACTER_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(out, key) && (out[key] === null || out[key] === undefined)) {
+      if (out === c) out = { ...c };
+      delete out[key];
+    }
+  }
+  return out;
+};
+
+/**
+ * A look patch merged over the current look. A null / undefined value clears that detail (the Undo inverse
+ * of a first species / markings / hair… line sends null for it), so the key is removed rather than kept as
+ * null. `summary` is required: a cleared summary keeps the current one.
+ */
+const mergedLook = (look: CharacterLook, patch: Partial<CharacterLook>): CharacterLook => {
+  const merged = { ...look, ...patch } as Record<string, unknown>;
+  for (const key of Object.keys(merged)) {
+    if (merged[key] !== null && merged[key] !== undefined) continue;
+    if (key === 'summary') merged.summary = typeof look.summary === 'string' ? look.summary : '';
+    else delete merged[key];
+  }
+  return merged as unknown as CharacterLook;
+};
+
 const newCharacter = (id: string, patch: Partial<Character>): Character => {
   const c: Character = {
     ...patch,
     id,
     name: patch.name || 'Unnamed',
     tier: patch.tier || 'support',
-    look: { summary: '', ...(patch.look || {}) },
+    look: mergedLook({ summary: '' }, patch.look || {}),
     refs: patch.refs || [],
     sheet: patch.sheet || emptyRender()
   };
@@ -1119,7 +1155,7 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
       const next: ComicDoc = {
         ...doc,
         cast: doc.cast.map((c) =>
-          c.id === op.id ? { ...c, ...rest, look: op.patch.look ? { ...c.look, ...op.patch.look } : c.look, sheet: c.sheet } : c
+          c.id === op.id ? clearedCharacter({ ...c, ...rest, look: op.patch.look ? mergedLook(c.look, op.patch.look) : c.look, sheet: c.sheet }) : c
         )
       };
       return sheetPatch ? applyRenderPatch(next, { kind: 'sheet', id: op.id }, sheetPatch) : next;

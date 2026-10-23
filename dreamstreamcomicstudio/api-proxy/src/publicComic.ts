@@ -21,6 +21,7 @@ import { comicShareUrl, COMICS_ORIGIN } from '../../services/productHost';
 import { SLUG_RE } from '../../shared/comic/publication';
 import { escAttr, validateShareCardRpc, type ShareCardRpc } from '../../functions/_shared/shareHead';
 import { rpc, supabaseOrigin, type SupabaseEnv } from '../../functions/_shared/supabaseRpc';
+import { readCappedText } from './readCapped';
 
 export interface RateLimiter {
   limit(opts: { key: string }): Promise<{ success: boolean }>;
@@ -194,9 +195,9 @@ async function handleEvent(req: Request, env: PublicComicEnv, ctx: Ctx, slug: st
   // Analytics never hold readers up and never answer differently for live vs dead links.
   if (!SLUG_RE.test(slug) || !env.SHARE_VIEW_SALT || env.SHARE_VIEW_SALT.length < 32) return accepted;
   if (!(await allow(env.PUBLIC_EVENT_RL, `event:${clientIp(req)}`))) return accepted;
-  if (Number(req.headers.get('content-length') || '0') > 1024) return accepted;
-  const text = await req.text().catch(() => '');
-  if (!text || text.length > 1024) return accepted;
+  // Capped read: an unsized (chunked / HTTP-2) body is cancelled past 1 KB, never buffered whole.
+  const text = await readCappedText(req, 1024);
+  if (!text) return accepted;
   let body: Record<string, unknown>;
   try {
     const parsed = JSON.parse(text) as unknown;

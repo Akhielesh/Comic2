@@ -342,3 +342,45 @@ describe('shareHead units', () => {
     expect(parseSharePath(`/c/${SLUG}/Title-Caps`)).toBeNull();
   });
 });
+
+describe('content rating in the share head (L10)', () => {
+  const ld = (html: string) => JSON.parse(/<script type="application\/ld\+json">([^<]*)<\/script>/.exec(html)![1]);
+
+  it('a rated public comic shows "Rated PG-13" in the preview text and contentRating in JSON-LD', async () => {
+    const html = await (await handleShare(get(`/c/${SLUG}`), env(card({ visibility: 'public', rating: 'PG-13' })))).text();
+    expect(meta(html, 'og:description')).toBe('A baby plays. · Rated PG-13');
+    expect(meta(html, 'twitter:description')).toBe('A baby plays. · Rated PG-13');
+    // The search snippet stays the author's own words.
+    expect(meta(html, 'description')).toBe('A baby plays.');
+    expect(ld(html).contentRating).toBe('PG-13');
+  });
+
+  it('every known rating, in every language edition; an unlisted link gets the preview text (no JSON-LD)', async () => {
+    for (const rating of ['G', 'PG', 'PG-13']) {
+      const hi = await (await handleShare(get(`/c/${SLUG}?lang=hi`), env(card({ rating })))).text();
+      expect(meta(hi, 'og:description')).toBe(`एक बच्चा खेलता है। · Rated ${rating}`);
+      expect(hi).not.toContain('application/ld+json');
+    }
+    const noText = await (await handleShare(get(`/c/${SLUG}`), env(card({ rating: 'G' }, { description: '', i18n: {} })))).text();
+    expect(meta(noText, 'og:description')).toBe('Rated G');
+  });
+
+  it('no rating, or an unknown one, changes nothing (never shown, never kids-friendly)', async () => {
+    for (const rating of [undefined, 'R', 'X', 'pg', 42, '<script>']) {
+      const html = await (await handleShare(get(`/c/${SLUG}`), env(card({ visibility: 'public', rating })))).text();
+      expect(meta(html, 'og:description')).toBe('A baby plays.');
+      expect(ld(html).contentRating).toBeUndefined();
+      expect(html).not.toContain('Rated');
+      expect(validateShareCardRpc(card({ rating }))!.rating).toBeUndefined();
+    }
+    expect(validateShareCardRpc(card({ rating: 'PG' }))!.rating).toBe('PG');
+  });
+
+  it('the legacy /?view=read&id= head of a public comic carries the rating too', async () => {
+    const next = async () => new Response(SHELL, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    env(card({ visibility: 'public', rating: 'PG' }));
+    const html = await (await middleware({ request: get('/?view=read&id=11111111-1111-4111-8111-111111111111'), next })).text();
+    expect(meta(html, 'og:description')).toBe('A baby plays. · Rated PG');
+    expect(ld(html).contentRating).toBe('PG');
+  });
+});

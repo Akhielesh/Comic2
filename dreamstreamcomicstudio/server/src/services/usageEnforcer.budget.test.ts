@@ -377,4 +377,17 @@ describe('attachBillingToPayload', () => {
     const admin = attachBillingToPayload({ ok: true }, { reservationId: 'r', byokBypass: false, estimated, usage: {} as never }, settled);
     expect(admin.billing?.settled).toMatchObject({ providerCostUsd: 0.05 });
   });
+
+  it('gate S9: strips the real provider cost from a governed response’s own usage record (tokens stay)', async () => {
+    const { attachBillingToPayload } = await import('./usageEnforcer.js');
+    const estimated = { estimatedProviderCostUsd: 0.05, estimatedBillableUsd: 0.065, estimatedCt: 650 } as never;
+    const payload = { text: 'answer', usage: { promptTokens: 9, candidatesTokens: 1, totalTokens: 10, providerCostUsd: 1.2 } };
+    const governed = attachBillingToPayload(payload, { reservationId: 'r', byokBypass: false, estimated, usage: {} as never, governed: true }, null);
+    expect(governed.usage).toEqual({ promptTokens: 9, candidatesTokens: 1, totalTokens: 10 });
+    expect(JSON.stringify(governed)).not.toMatch(/usd|cost/i);
+    expect(payload.usage.providerCostUsd).toBe(1.2); // the caller's object is not mutated
+    // Admins and own-key (ungoverned) responses keep the real figure.
+    const admin = attachBillingToPayload(payload, { reservationId: 'r', byokBypass: false, estimated, usage: {} as never }, null);
+    expect((admin.usage as { providerCostUsd?: number }).providerCostUsd).toBe(1.2);
+  });
 });

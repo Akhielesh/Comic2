@@ -7,6 +7,7 @@
 // open studio updates at once. Every moderator action is audited.
 
 import {
+  collectAssetPaths,
   getRender,
   newId,
   renderTargetKey,
@@ -30,6 +31,8 @@ import {
   type SafetyVerdict
 } from '../../../../shared/comic/safety.js';
 import { logger } from '../../lib/logger.js';
+import { sha12 } from '../publication/snapshot.js';
+import { isLibraryPath, isPublicationPath } from '../storagePaths.js';
 import { StudioError, type AssetStore, type StudioContext, type StudioSessionApi } from '../types.js';
 import { SAFETY_CHECK_USD, SECOND_OPINION_TIMEOUT_MS, SECOND_OPINION_USD, checkImage } from './check.js';
 import { categoryWords } from './contentPolicy.js';
@@ -76,12 +79,26 @@ const cleanNote = (note: unknown): string | undefined => {
   return t || undefined;
 };
 
+/**
+ * A held comic's publication is suspended (projects trigger): its pub/<key>/ copies (pages, cover,
+ * share images) come down too, so a direct bucket URL stops answering. Best effort: a failure is
+ * logged and never undoes or blocks the hold. Republishing after a lifted hold copies them again.
+ */
+async function takeDownPublishedCopies(projectId: string): Promise<void> {
+  try {
+    await safetyDeps().removePublicationObjects(projectId);
+  } catch (err) {
+    logger.warn('comic_hold_pub_remove_failed', { projectId, ...errorFacts(err) });
+  }
+}
+
 /** Pause a comic while moderators look (publication suspends via the projects trigger). */
 async function autoHold(projectId: string, ownerUserId: string, reason: string, metadata: Record<string, unknown>): Promise<void> {
   const deps = safetyDeps();
   const info = await deps.store.projectInfo(projectId).catch(() => null);
   if (info?.isForcedPrivate) return;
   await deps.store.forcePrivate(projectId, reason, null);
+  await takeDownPublishedCopies(projectId);
   await deps.store.moderationAction({ projectId, ownerUserId, action: 'auto_hold', reason, actedBy: null, metadata });
   await deps.store.notify({
     userId: ownerUserId,
@@ -200,7 +217,9 @@ export const flaggedSteps = (target: RenderTarget, opts: { checkAgain?: boolean;
 /**
  * "This looks fine — check again": a free second look on a different model (platform key),
  * auto-clearing only when it rates the image within the comic's rating AND the first verdict
- * was not zero-tolerance; otherwise a human reviews it. 5 per day per owner.
+ * was neither zero-tolerance nor a moderator's own; otherwise a human reviews it. 5 per day per
+ * owner. The second look sees the IMAGE only: the owner's note goes to the human reviewer (case
+ * note), never into a classifier prompt it could argue with or break out of.
  */
 export async function runAppeal(ctx: AppealCtx, target: RenderTarget, note?: string): Promise<AppealResult> {
   const deps = safetyDeps();
@@ -223,10 +242,13 @@ export async function runAppeal(ctx: AppealCtx, target: RenderTarget, note?: str
   const quarantinePath = first?.quarantined ? await deps.store.quarantineFor(asset.path).catch(() => null) : null;
   const source = quarantinePath || asset.path;
   const zeroTolerance = (first?.categories || []).some((c) => ZERO_TOLERANCE.has(c));
+  // A moderator's verdict is final for the robots: only another human can overturn it.
+  const byModerator = first?.by === 'admin';
+  const humanOnly = zeroTolerance || byModerator;
   const cleanNoteText = cleanNote(note);
 
   let second: Awaited<ReturnType<typeof checkImage>> = null;
-  if (llm && deps.classifierOn() && !zeroTolerance) {
+  if (llm && deps.classifierOn() && !humanOnly) {
     const dataUrl = await ctx.assets.previewDataUrl(source, 768).catch(() => ctx.assets.loadDataUrl(source).catch(() => ''));
     if (dataUrl) {
       second = await checkImage(llm, {
@@ -234,13 +256,12 @@ export async function runAppeal(ctx: AppealCtx, target: RenderTarget, note?: str
         rating,
         by: 'second_opinion',
         role: 'writer',
-        ...(cleanNoteText ? { note: cleanNoteText } : {}),
         timeoutMs: SECOND_OPINION_TIMEOUT_MS,
         now
       });
     }
   }
-  const secondOk = !!second?.verdict.assessed && ratingRank(second.verdict.assessed) <= ratingRank(rating) && !zeroTolerance;
+  const secondOk = !!second?.verdict.assessed && ratingRank(second.verdict.assessed) <= ratingRank(rating) && !humanOnly;
   const caseTarget: CaseTarget = {
     target,
     path: asset.path,
@@ -310,7 +331,7 @@ export async function runAppeal(ctx: AppealCtx, target: RenderTarget, note?: str
     projectId: ctx.projectId,
     ownerUserId: ctx.userId,
     target: { ...caseTarget, ...(second ? { check: { ...caseTarget.check, assessed: second.verdict.assessed, categories: second.verdict.categories || [], by: 'second_opinion' } } : {}) },
-    reason: second ? 'second opinion agreed' : 'second opinion unavailable',
+    reason: second ? 'second opinion agreed' : byModerator ? 'moderator verdict appealed' : 'second opinion unavailable',
     note: cleanNoteText ?? null
   });
   await deps.store.moderationAction({ projectId: ctx.projectId, ownerUserId: ctx.userId, action: 'appeal', reason: renderTargetKey(target), actedBy: ctx.userId, metadata: { source: 'owner_appeal' } });
@@ -331,12 +352,15 @@ export async function runAppeal(ctx: AppealCtx, target: RenderTarget, note?: str
     });
   }
   const ceiling = ctx.caps?.ratingCeiling ?? PLATFORM_CEILING;
-  const assessed = second?.verdict.assessed;
+  // A moderator's own rating stands; it can still be met by raising the comic's rating.
+  const assessed = second?.verdict.assessed ?? (byModerator ? first?.assessed : undefined);
   const canRaise = status === 'over_rating' && assessed && assessed !== 'X' && ratingRank(assessed) <= ratingRank(ceiling) ? (assessed as ContentRating) : undefined;
   const steps = flaggedSteps(target, { checkAgain: false, ...(canRaise ? { changeRating: canRaise } : {}) });
   const message = second
     ? `Second look agrees ${label} goes past ${rating}, so I've sent it to a human reviewer (usually within a day).${canRaise ? ` Or set the comic to ${canRaise}.` : ''}`
-    : `I couldn't run a second look right now, so I've sent ${label} to a human reviewer (usually within a day).`;
+    : byModerator
+      ? `A moderator already reviewed ${label}, so I've sent your request to a human reviewer (usually within a day).${canRaise ? ` Or set the comic to ${canRaise}.` : ' Or redraw it safer now.'}`
+      : `I couldn't run a second look right now, so I've sent ${label} to a human reviewer (usually within a day).`;
   return { status: 'queued', message, ...(assessed ? { rating: assessed } : {}), nextSteps: steps };
 }
 
@@ -422,11 +446,31 @@ const OWNER_COPY: Record<ResolveAction | 'hold_lifted', { title: string; message
 
 type LiveOutcome = 'ok' | 'no_target' | 'no_session' | 'restore_failed';
 
-async function liveVerdict(c: SafetyCase, verdict: SafetyVerdict, assets: AssetStore, opts: { restoreObject?: boolean } = {}): Promise<LiveOutcome> {
+/** The source hash a publication copy carries in its name (copiesFor: <slot>-<sha12>[-w480|-w1080].webp). */
+const PUB_SOURCE_HASH_RE = /-([0-9a-f]{12})(?:-w(?:480|1080))?\.webp$/;
+
+/**
+ * The owner's own image a published copy was made from: the doc path whose sha12 the pub/ name
+ * carries — wherever it sits now (current render, history, archive, trash). Never a guess by page:
+ * a page the owner has since redrawn keeps its new, different image untouched.
+ */
+export const liveSourceOfPubPath = (doc: ComicDoc, pubPath: string | undefined): string | undefined => {
+  const hash = pubPath && isPublicationPath(pubPath) ? PUB_SOURCE_HASH_RE.exec(pubPath)?.[1] : undefined;
+  return hash ? collectAssetPaths(doc).find((p) => !p.startsWith('pub/') && sha12(p) === hash) : undefined;
+};
+
+async function liveVerdict(
+  c: SafetyCase,
+  verdict: SafetyVerdict,
+  assets: AssetStore,
+  opts: { restoreObject?: boolean; path?: string; ownerUserId?: string | null; session?: StudioSessionApi } = {}
+): Promise<LiveOutcome> {
   const deps = safetyDeps();
-  const path = c.target?.path;
-  if (!path || !c.target?.target || !c.ownerUserId) return 'no_target';
-  const session = await deps.liveSession(c.projectId, c.ownerUserId);
+  // `opts.path` is a live path the caller resolved (a reader report names only the pub/ copy).
+  const path = opts.path ?? c.target?.path;
+  const owner = opts.ownerUserId ?? c.ownerUserId;
+  if (!path || (!opts.path && !c.target?.target) || !owner) return 'no_target';
+  const session = opts.session ?? (await deps.liveSession(c.projectId, owner));
   if (!session) return 'no_session';
   if (opts.restoreObject) {
     const q = c.target.quarantinePath || (await deps.store.quarantineFor(path).catch(() => null));
@@ -454,11 +498,12 @@ async function removePublishedCopy(c: SafetyCase, assets: AssetStore): Promise<n
 }
 
 /**
- * Resolve a case: dismiss | withhold (X by admin + quarantine; a published copy is removed and
- * the comic paused) | restore (admin verdict, object moved back) | force_private. Audited,
- * logged in project_moderation_actions, and the owner is told only what really happened.
- * When the last open case of an automatically held comic is dismissed or restored, the hold is
- * lifted (the owner can publish again).
+ * Resolve a case: dismiss | withhold (X by admin + quarantine on the owner's own image — for a
+ * reader report, the source the published copy was made from — so no later publish can ship it;
+ * a published copy is removed and the comic paused) | restore (admin verdict, object moved back)
+ * | force_private. Audited, logged in project_moderation_actions, and the owner is told only what
+ * really happened. When the last open case of an automatically held comic is dismissed or
+ * restored, the hold is lifted (the owner can publish again).
  */
 export async function resolveCase(
   actorId: string,
@@ -487,9 +532,40 @@ export async function resolveCase(
       break;
     case 'withhold': {
       action = 'withhold_page';
-      if (c.target?.path && c.target.target) {
-        const q = c.target.path.startsWith('pub/') ? null : await quarantineAsset(assets, { path: c.target.path, projectId: c.projectId, userId: ownerUserId, categories });
-        const live = await liveVerdict(c, { assessed: 'X', categories, by: 'admin', at: now, ...(q || c.target.quarantinePath ? { quarantined: true } : {}) }, assets);
+      const casePath = c.target?.path;
+      let livePath: string | undefined;
+      let session: StudioSessionApi | undefined;
+      if (casePath && c.target.target) {
+        livePath = casePath;
+      } else if (casePath && isPublicationPath(casePath) && ownerUserId) {
+        // A reader report names only the published copy. Withholding just that copy would not
+        // last: the owner's source keeps its old 'pass' and the next publish copies it out again.
+        // Mark the source itself — or, when the comic can't be opened, change nothing yet.
+        session = (await deps.liveSession(c.projectId, ownerUserId)) ?? undefined;
+        // Only a comic that is really gone (its row no longer exists) has no source left to mark.
+        // A lookup that failed (info null from an error) is not proof of that: it waits too.
+        const gone = !session && !info && (await deps.store.projectInfo(c.projectId).then((p) => !p, () => false));
+        if (!session && !gone) {
+          throw new StudioError(
+            'NOT_AVAILABLE',
+            "The comic couldn't be opened to withhold the image right now — the case stays open. Try again later, or pause the comic now.",
+            { status: 503, retryable: true }
+          );
+        }
+        if (session) livePath = liveSourceOfPubPath(session.doc, casePath);
+      }
+      if (livePath) {
+        // Only the owner's own object goes to the vault. A platform-library image is shared by
+        // other comics (and a restore can never send it back there), so it is marked X in this
+        // comic only — the verdict alone keeps it out of every later publish.
+        const vaultable = !livePath.startsWith('pub/') && !isLibraryPath(livePath);
+        const q = vaultable ? await quarantineAsset(assets, { path: livePath, projectId: c.projectId, userId: ownerUserId, categories }) : null;
+        const held = !!q || (livePath === casePath && !!c.target.quarantinePath);
+        const live = await liveVerdict(c, { assessed: 'X', categories, by: 'admin', at: now, ...(held ? { quarantined: true } : {}) }, assets, {
+          path: livePath,
+          ownerUserId,
+          ...(session ? { session } : {})
+        });
         if (live === 'ok') effects.push('verdict_x');
         if (q) effects.push('quarantined');
       }
@@ -500,6 +576,8 @@ export async function resolveCase(
           await deps.store.forcePrivate(c.projectId, 'moderator: a published page was withheld', actorId);
           effects.push('paused');
         }
+        // The comic is paused either way (now or by an earlier hold): its publication is suspended.
+        await takeDownPublishedCopies(c.projectId);
       }
       break;
     }
@@ -521,6 +599,7 @@ export async function resolveCase(
       action = 'force_private';
       await deps.store.forcePrivate(c.projectId, reason || 'moderator decision', actorId);
       effects.push('paused');
+      await takeDownPublishedCopies(c.projectId);
       break;
     default:
       throw new StudioError('BAD_REQUEST', 'Unknown action.', { status: 400 });
