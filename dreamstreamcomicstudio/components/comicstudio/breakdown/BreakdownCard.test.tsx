@@ -398,6 +398,11 @@ describe('governed users never see dollars (P1-LIMITS rule)', () => {
     const { container } = renderCard(bd(), makeFakeStudio({ mode: 'pro' }));
     expect(container.textContent).not.toMatch(NO_DOLLARS);
     expect(screen.getByRole('button', { name: /^Approve & render all · uses a little of your usage$/ })).toBeInTheDocument();
+    // Inside sentences the unknown share reads as words, not a broken verb phrase.
+    expect(container.textContent).toMatch(/a little of your usage to draw/);
+    expect(container.textContent).not.toMatch(/uses a little of your usage (to draw|spent)/);
+    const tiles = within(screen.getByRole('list', { name: /Pages in this book/ })).getAllByRole('button');
+    expect(tiles.some((t) => /, a little of your usage to draw,/.test(t.textContent || ''))).toBe(true);
   });
 
   it('admins (caps.admin) and own-key comics keep dollars', () => {

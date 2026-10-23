@@ -191,11 +191,13 @@ export const STUDIO_ERROR_COPY: Readonly<Record<string, CodeCopy>> = {
     message: "That isn't available yet.",
     retryable: false
   },
-  // Restricted accounts (contract §7, P1-ROUTES): spends, uploads and publishing are paused while a
-  // review is open; reading and free edits still work.
+  // Restricted accounts (contract §7, P1-ROUTES) — the server always sends its own calm text for those
+  // ("Your account is limited right now, so …"), which wins. This is only the fallback for a FORBIDDEN
+  // with no usable text, and FORBIDDEN also covers other 403s (not your comic, admins only, an origin
+  // check), so it claims nothing about a review or moderation.
   FORBIDDEN: {
     kind: 'forbidden',
-    message: "Your account can't do that right now — new drawings, uploads and publishing are paused while a review is open. You can keep reading and editing.",
+    message: "Your account can't do that right now. You can keep reading and editing your comic.",
     retryable: false
   }
 };

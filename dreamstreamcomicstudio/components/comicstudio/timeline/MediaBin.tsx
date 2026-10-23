@@ -27,6 +27,7 @@ import { MediaPreview } from './MediaPreview';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, TimelineDialog, useInView } from './ui';
 import { useCostFormat } from '../conversation/cost';
+import { amountInSentence } from '../../../services/costDisplay';
 
 export interface MediaBinProps {
   studio: StudioController;
@@ -260,7 +261,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
           </span>{' '}
           · Starred images are never removed. Once the archive is full, the oldest unstarred versions that nothing uses are removed — the studio tells you when.
         </p>
-        {spentOnImages > 0 && <p className="tabular-nums">Recorded image cost of everything here: {cost.exact(spentOnImages)}.</p>}
+        {spentOnImages > 0 && <p className="tabular-nums">Recorded image cost of everything here: {amountInSentence(cost.exact(spentOnImages), 'some of your usage')}.</p>}
       </footer>
 
       <TimelineDialog open={preview !== null && !!flat[preview]} onClose={() => setPreview(null)} title={preview !== null && flat[preview] ? flat[preview].owner.label : 'Image'} wide>

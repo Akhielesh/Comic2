@@ -200,7 +200,7 @@ describe('ComicStudio shell', () => {
     resetUsageStatus();
     const doc = makeSampleDoc({ spend: { totalUsd: 0.42, byKind: { page: 0.42 }, entries: [] } });
     mount(makeFakeStudio({ doc }));
-    expect(screen.getByRole('button', { name: /^Spent .* on this comic$/ }).textContent).not.toMatch(/\$/);
+    expect(screen.getByRole('button', { name: 'Spent some of your usage on this comic' }).textContent).not.toMatch(/\$/);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Settings/ }));
     const sheet = screen.getByRole('dialog', { name: 'Comic settings' });

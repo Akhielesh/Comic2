@@ -12,7 +12,8 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import type { CostFormat } from '../conversation/cost';
 import { LayoutGlyph } from '../library/procedural/LayoutGlyph';
 import type { StudioController } from '../types';
-import { STATUS_TEXT, failClosedMoney, plural, type ClipVM } from './bookModel';
+import { STATUS_TEXT, plural, type ClipVM } from './bookModel';
+import { amountInSentence } from '../../../services/costDisplay';
 import { PlateView } from './PlateView';
 import type { PlateKind } from './plates';
 import { BlockedTile, cx, FOCUS_RING } from './ui';
@@ -55,7 +56,7 @@ export const clipAriaLabel = (clip: ClipVM, money?: (usd: number) => string): st
   if (clip.plate) parts.push('made by software, free');
   else parts.push(STATUS_TEXT[clip.status].toLowerCase());
   if (clip.versions > 1) parts.push(plural(clip.versions, 'version'));
-  if (clip.spentUsd > 0 && money) parts.push(`${money(clip.spentUsd)} spent`);
+  if (clip.spentUsd > 0 && money) parts.push(`${amountInSentence(money(clip.spentUsd))} spent`);
   if (clip.mismatch) parts.push(`shape ${clip.mismatch.got}, book is ${clip.mismatch.want}`);
   if (clip.continuity) parts.push('neighbouring page changed');
   return parts.join(', ');
@@ -115,7 +116,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   const money = cost?.exact;
   // The tiny label under the thumb only fits a dollar amount; a governed share lives in the title and name.
   const spentTiny = clip.spentUsd > 0 && cost && !cost.governed ? cost.exact(clip.spentUsd) : '';
-  const title = [clip.label, clip.plate ? 'Free — made by software' : STATUS_TEXT[clip.status], clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 && money ? `${money(clip.spentUsd)} spent` : '', nextPrice || '']
+  const title = [clip.label, clip.plate ? 'Free — made by software' : STATUS_TEXT[clip.status], clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 && money ? `${amountInSentence(money(clip.spentUsd))} spent` : '', nextPrice || '']
     .filter(Boolean)
     .join(' · ');
 

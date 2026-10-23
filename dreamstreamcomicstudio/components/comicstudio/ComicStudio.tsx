@@ -50,7 +50,7 @@ import { StudioComposer, type StudioComposerHandle } from './conversation/Studio
 import { COMPOSE_EVENT } from './conversation/composerBus';
 import { QualityPanel } from './conversation/panels/QualityPanel';
 import { costFormat, useCostContext, useCostFormat, type CostDisplayContext, type CostFormat } from './conversation/cost';
-import { compactUsageShare } from '../../services/costDisplay';
+import { amountInSentence, compactUsageShare } from '../../services/costDisplay';
 import { LETTERING_OPTIONS } from './conversation/panels/FormatPanel';
 import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from './conversation/ui';
 import { renderingPageCount } from './studioReducer';
@@ -162,9 +162,15 @@ export const shortSpend = (cost: CostFormat, usd: number): string | undefined =>
   return s === 'Free' ? '0%' : compactUsageShare(s);
 };
 
-/** "Spent $0.42 on this comic" / "Spent ≈4% of your usage on this comic" (governed users never read dollars). */
+/**
+ * "Spent $0.42 on this comic" / "Spent ≈4% of your usage on this comic" / "Spent some of your usage on
+ * this comic" while a governed user's share isn't known yet (governed users never read dollars).
+ */
 export const spentLabel = (cost: CostFormat, usd: number): string =>
-  usd > 0 || !cost.governed ? `Spent ${cost.exact(usd)} on this comic` : 'Spent none of your usage on this comic yet';
+  usd > 0 || !cost.governed ? `Spent ${spentAmount(cost, usd)} on this comic` : 'Spent none of your usage on this comic yet';
+
+/** A spent total that reads inside a sentence: "$0.42", "≈4% of your usage", or "some of your usage". */
+const spentAmount = (cost: CostFormat, usd: number): string => amountInSentence(cost.exact(usd), 'some of your usage');
 
 export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({ doc, cost: costProp }) => {
   // Hosts pass the studio's formatter; standalone (tests, galleries) it falls back to the shared
@@ -183,7 +189,7 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
       <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Spent on this comic</div>
       <div className={cx('mt-1 font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]', cost.governed ? 'text-[20px]' : 'text-[24px]')}>
-        {spend.totalUsd > 0 || !cost.governed ? cost.exact(spend.totalUsd) : 'Nothing yet'}
+        {spend.totalUsd > 0 || !cost.governed ? amountInSentence(cost.exact(spend.totalUsd), 'Some of your usage') : 'Nothing yet'}
       </div>
       {cost.governed && <div className="mt-0.5 text-[11.5px] text-[var(--ds-muted)]">Shown as a share of your usage.</div>}
       {budget && (
@@ -736,7 +742,7 @@ export const SettingsPanel: React.FC<{
             allowEmpty
             onCommit={(v) => setSettings({ budgetUsd: v === null || v === 0 ? null : v })}
           />
-          <span className="text-[12px] text-[var(--ds-muted)]">Spent so far: {doc.spend.totalUsd > 0 ? cost.exact(doc.spend.totalUsd) : cost.governed ? 'nothing yet' : cost.exact(0)}</span>
+          <span className="text-[12px] text-[var(--ds-muted)]">Spent so far: {doc.spend.totalUsd > 0 ? spentAmount(cost, doc.spend.totalUsd) : cost.governed ? 'nothing yet' : cost.exact(0)}</span>
         </div>
         <p className="mt-1.5 text-[11.5px] text-[var(--ds-muted)]">Nothing runs past this without your explicit OK. Leave empty for no cap.</p>
       </section>

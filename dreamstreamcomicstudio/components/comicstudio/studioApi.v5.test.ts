@@ -187,8 +187,16 @@ describe('public edge endpoints', () => {
     const e = toStudioApiError({ status: 403, message: 'FORBIDDEN', details: { error: { code: 'FORBIDDEN', message: 'FORBIDDEN' } } }, 'project');
     expect(e.kind).toBe('forbidden');
     expect(e.code).toBe('FORBIDDEN');
-    expect(e.message).toMatch(/paused while a review is open/);
-    expect(e.message).not.toMatch(/FORBIDDEN/);
+    expect(e.message).toBe("Your account can't do that right now. You can keep reading and editing your comic.");
+    expect(e.message).not.toMatch(/FORBIDDEN|review|moderat/i);
+  });
+
+  it("a FORBIDDEN with the server's own calm text keeps it (restricted accounts, someone else's comic)", () => {
+    const limited = 'Your account is limited right now, so publishing is paused. You can still read and edit your comic.';
+    const e = toStudioApiError({ status: 403, message: limited, details: { error: { code: 'FORBIDDEN', message: limited } } }, 'project');
+    expect(e.message).toBe(limited);
+    const other = toStudioApiError({ status: 403, message: "You don't have access to this comic.", details: { error: { code: 'FORBIDDEN', message: "You don't have access to this comic." } } }, 'project');
+    expect(other.message).toBe("You don't have access to this comic.");
   });
 
   it('reports return on 202; the library never fails the UI', async () => {

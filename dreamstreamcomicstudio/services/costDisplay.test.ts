@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PLATFORM_MARKUP } from '../shared/comic/models';
-import { DOLLAR_CONTEXT, compactUsageShare, costContextFromAllowance, formatCostForUser, standardPageProviderUsd } from './costDisplay';
+import { DOLLAR_CONTEXT, UNKNOWN_USAGE_SHARE, amountInSentence, compactUsageShare, costContextFromAllowance, formatCostForUser, standardPageProviderUsd } from './costDisplay';
 import { normalizeAllowanceStatus } from './usageAllowance';
 
 const governedStatus = (pctPerStandardPage: number | null) =>
@@ -63,5 +63,16 @@ describe('compactUsageShare (narrow spots)', () => {
     expect(compactUsageShare('Free')).toBe('Free');
     expect(compactUsageShare('uses a little of your usage')).toBeUndefined();
     expect(compactUsageShare('$0.07')).toBeUndefined();
+  });
+});
+
+describe('amountInSentence (an amount inside a sentence)', () => {
+  it('turns only the unknown-share phrase into a noun phrase', () => {
+    expect(formatCostForUser(0.2, { governed: true, pctPerUsd: null })).toBe(UNKNOWN_USAGE_SHARE);
+    expect(amountInSentence(UNKNOWN_USAGE_SHARE)).toBe('a little of your usage');
+    expect(amountInSentence(UNKNOWN_USAGE_SHARE, 'some of your usage')).toBe('some of your usage');
+    expect(amountInSentence('≈2% of your usage')).toBe('≈2% of your usage');
+    expect(amountInSentence('$0.07')).toBe('$0.07');
+    expect(amountInSentence('Free')).toBe('Free');
   });
 });

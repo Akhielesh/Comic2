@@ -18,6 +18,7 @@ import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic
 import { LANGUAGES, dirOf, languageSpec, sameLanguage, scriptOf, type LanguageSpec } from '../../../shared/comic/languages';
 import { estimateJobs } from '../../../shared/comic/models';
 import { useCostFormat } from '../conversation/cost';
+import { amountInSentence } from '../../../services/costDisplay';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
 import { EmptyHint, GhostButton, PrimaryButton, SectionTitle, Surface, cx } from '../board/ui';
 import type { StudioController } from '../types';
@@ -234,7 +235,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
       notices.push(
         <div key="pages" className="space-y-2">
           <p>
-            <strong>Translated editions need overlay lettering.</strong> {pages.length === 1 ? 'Page' : `${pages.length} pages`} {pages.length === 1 ? 'has' : 'have'} the words painted into the art, so readers of a translation would still see the original words. Redrawing {pages.length === 1 ? 'it' : 'them'} without text costs {cost.approx(usd)} once; after that every language — including this one — gets exact, editable balloons for free.
+            <strong>Translated editions need overlay lettering.</strong> {pages.length === 1 ? 'Page' : `${pages.length} pages`} {pages.length === 1 ? 'has' : 'have'} the words painted into the art, so readers of a translation would still see the original words. Redrawing {pages.length === 1 ? 'it' : 'them'} without text costs {amountInSentence(cost.approx(usd))} once; after that every language — including this one — gets exact, editable balloons for free.
           </p>
           {confirming === 'pages' ? (
             <div className="flex flex-wrap gap-2" role="group" aria-label="Confirm the redraw">
@@ -267,7 +268,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
     notices.push(
       <div key="cover" className="space-y-2">
         <p>
-          The cover title is painted in {languageSpec(doc.format.language)?.english || 'the original language'}. A textless cover with an editable title is a one-time {cost.approx(usd)}; every language's title is free after that. (Optional — the reader shows the translated title either way.)
+          The cover title is painted in {languageSpec(doc.format.language)?.english || 'the original language'}. A textless cover with an editable title costs {amountInSentence(cost.approx(usd))} once; every language's title is free after that. (Optional — the reader shows the translated title either way.)
         </p>
         {confirming === 'cover' ? (
           <div className="flex flex-wrap gap-2" role="group" aria-label="Confirm the cover redraw">
@@ -478,7 +479,10 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
           }
         >
           {hasLines
-            ? 'Make this comic readable in Hindi, Telugu, Tamil and 16 more languages. Each character keeps their voice, a native-level review checks every line, and a 6-page comic costs about $0.05 per language — anything already translated is free.'
+            ? `Make this comic readable in Hindi, Telugu, Tamil and 16 more languages. Each character keeps their voice, a native-level review checks every line, and ${
+                // Governed users never see dollars (P1-LIMITS) — not even in a fixed estimate.
+                cost.governed ? 'each language of a 6-page comic takes only a small share of your usage' : 'a 6-page comic costs about $0.05 per language'
+              } — anything already translated is free.`
             : 'Plan the pages first — once there is dialogue, it can be translated into Hindi, Telugu, Tamil and 16 more languages. To write the comic natively in another language, change its language above before planning.'}
         </EmptyHint>
       )}

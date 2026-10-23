@@ -37,6 +37,7 @@ import { spendByTarget, unitPrice } from '../../../shared/comic/plan';
 import { describeOps, inverseOps, isUndoable } from '../../../shared/comic/undo';
 import { canServeToOwner } from '../../../shared/comic/safety';
 import { DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits';
+import { amountInSentence } from '../../../services/costDisplay';
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -304,8 +305,9 @@ export function dockSummary(doc: ComicDoc, money: (usd: number) => string = fail
   parts.push(cover?.drawn ? 'Cover ✓' : 'No cover yet');
   parts.push(pages.length ? `${drawn}/${pages.length} ${pages.length === 1 ? 'page' : 'pages'} drawn` : 'no pages yet');
   if (versions) parts.push(plural(versions, 'version'));
-  if (doc.spend.totalUsd > 0) parts.push(`${money(doc.spend.totalUsd)} spent`);
-  if ((doc.spend.savedUsd ?? 0) > 0) parts.push(`${money(doc.spend.savedUsd ?? 0)} saved by software`);
+  // Inside a phrase, the unknown-share wording reads as a noun ("some of your usage spent").
+  if (doc.spend.totalUsd > 0) parts.push(`${amountInSentence(money(doc.spend.totalUsd), 'some of your usage')} spent`);
+  if ((doc.spend.savedUsd ?? 0) > 0) parts.push(`${amountInSentence(money(doc.spend.savedUsd ?? 0))} saved by software`);
   return parts.join(' · ');
 }
 

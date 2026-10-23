@@ -112,6 +112,8 @@ describe('clips and the dock summary', () => {
   it('summary uses real totals only', () => {
     expect(dockSummary(richDoc(), formatUsd)).toBe('Book · Cover ✓ · 1/3 pages drawn · 4 versions · $0.55 spent · $0.06 saved by software');
     expect(dockSummary(richDoc())).not.toMatch(/\$/);
+    // Fail closed in readable words (no "uses a little of your usage spent").
+    expect(dockSummary(richDoc())).toBe('Book · Cover ✓ · 1/3 pages drawn · 4 versions · some of your usage spent · a little of your usage saved by software');
     const fresh = makeSampleDoc({ pages: [], spend: { totalUsd: 0, byKind: {}, entries: [] } });
     expect(dockSummary(fresh)).toBe('Book · No cover yet · no pages yet');
   });

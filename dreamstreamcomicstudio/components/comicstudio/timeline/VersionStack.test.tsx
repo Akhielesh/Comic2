@@ -114,8 +114,18 @@ describe('VersionStack', () => {
     const sheet = setup(richDoc(), { target: { kind: 'sheet', id: 'c_maya' } });
     fireEvent.click(screen.getByRole('radio', { name: /^v1/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Use v1 · Free' }));
-    expect(screen.getByRole('alert').textContent).toMatch(/would be (≈[\d.]+%|<0\.1%) of your usage/);
+    expect(screen.getByRole('alert').textContent).toMatch(/would cost (≈[\d.]+%|<0\.1%) of your usage/);
     expect(sheet.container.textContent).not.toMatch(/\$/);
+  });
+
+  it('fails closed in readable words: before the usage status loads, the sheet confirm has no dollars and no broken phrase', () => {
+    resetUsageStatus();
+    setup(richDoc(), { target: { kind: 'sheet', id: 'c_maya' } });
+    fireEvent.click(screen.getByRole('radio', { name: /^v1/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use v1 · Free' }));
+    const text = screen.getByRole('alert').textContent || '';
+    expect(text).toMatch(/would cost a little of your usage\./);
+    expect(text).not.toMatch(/\$|cost uses a little/);
   });
 
   it('an undrawn image says so instead of showing an empty stack', () => {

@@ -26,6 +26,7 @@ import { CompareView } from './CompareView';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
+import { amountInSentence } from '../../../services/costDisplay';
 
 export interface VersionStackProps {
   studio: StudioController;
@@ -177,8 +178,8 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
     <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-[var(--ds-ink)]">
       <p>
         Using v{confirm.v.n} of {label} marks {[confirm.pages.length ? pagesPhrase(confirm.pages) : '', confirm.cover ? 'the cover' : ''].filter(Boolean).join(' and ')} out of date — they were drawn
-        from the current version. Their art stays as it is; redrawing them later would be{' '}
-        {cost.approx(redrawPrice(doc, 'page', byok) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok) : 0))}.
+        from the current version. Their art stays as it is; redrawing them later would cost{' '}
+        {amountInSentence(cost.approx(redrawPrice(doc, 'page', byok) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok) : 0)))}.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" onClick={() => commitUse(confirm.v)} className={cx('tap-target h-8 rounded-xl bg-[var(--ds-accent)] px-3 text-[12.5px] font-semibold text-white hover:bg-[var(--ds-accent-hover)]', FOCUS_RING)}>

@@ -81,6 +81,28 @@ describe('LanguagesTab', () => {
     expect(container.textContent).not.toMatch(/\$/);
   });
 
+  it('governed users: the empty-state estimate has no dollar figure either (and admins keep it)', () => {
+    showUsagePrices(1);
+    const { container, unmount } = render(<LanguagesTab studio={makeFakeStudio()} />);
+    expect(screen.getByText(/Make this comic readable in Hindi, Telugu, Tamil/).textContent).toMatch(/small share of your usage/);
+    expect(container.textContent).not.toMatch(/\$/);
+    unmount();
+    showDollarPrices();
+    render(<LanguagesTab studio={makeFakeStudio()} />);
+    expect(screen.getByText(/Make this comic readable in Hindi, Telugu, Tamil/).textContent).toMatch(/about \$0\.05 per language/);
+  });
+
+  it('fails closed with readable sentences: before the usage status loads, the in-art notice has no dollars and no broken phrase', () => {
+    resetUsageStatus();
+    const doc = withTelugu(makeSampleDoc());
+    doc.format = { ...doc.format, lettering: 'in_art' };
+    const { container } = render(<LanguagesTab studio={makeFakeStudio({ doc })} />);
+    const text = container.textContent || '';
+    expect(text).not.toMatch(/\$/);
+    expect(text).toMatch(/without text costs a little of your usage once/);
+    expect(text).not.toMatch(/costs uses a little/);
+  });
+
   it('a reviewed edition reads "Ready to publish"; a draft offers "Translate missing" with its price', async () => {
     let doc = withTelugu();
     const studio = makeFakeStudio({ doc });

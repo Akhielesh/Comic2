@@ -75,7 +75,7 @@ import { composeInStudio } from '../conversation/composerBus';
 import { CardShell, GhostButton, PrimaryButton, Segmented, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
-import { compactUsageShare } from '../../../services/costDisplay';
+import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
 import type { CardProps } from '../extensions';
 import { PageWireframe } from './PageWireframe';
 
@@ -192,9 +192,9 @@ const tileCost = (
 ): { text?: string; spoken: string } | undefined => {
   const spent = s.spentUsd ?? s.costUsd;
   if (isDrawnStatus(s.status) && typeof spent === 'number' && spent > 0) {
-    return { text: shortCost(cost, spent, 'spent'), spoken: `${cost.governed ? cost.spoken(spent) : cost.exact(spent)} spent` };
+    return { text: shortCost(cost, spent, 'spent'), spoken: `${amountInSentence(cost.governed ? cost.spoken(spent) : cost.exact(spent))} spent` };
   }
-  if (typeof s.quoteUsd === 'number' && s.quoteUsd > 0) return { text: shortCost(cost, s.quoteUsd, 'quote'), spoken: `${cost.spoken(s.quoteUsd)} to draw` };
+  if (typeof s.quoteUsd === 'number' && s.quoteUsd > 0) return { text: shortCost(cost, s.quoteUsd, 'quote'), spoken: `${amountInSentence(cost.spoken(s.quoteUsd))} to draw` };
   return undefined;
 };
 
@@ -308,7 +308,7 @@ const Thumb: React.FC<{
 
 /** "3 pages $0.21" / "1 character sheet ≈1% of your usage" from an estimate line. */
 const lineText = (l: { label: string; count: number; usd: number }, cost: CostFormat) =>
-  `${l.count} ${l.count === 1 ? l.label.replace(/s$/, '') : l.label} ${cost.exact(l.usd)}`;
+  `${l.count} ${l.count === 1 ? l.label.replace(/s$/, '') : l.label} ${amountInSentence(cost.exact(l.usd))}`;
 
 const CostRow: React.FC<{ label: React.ReactNode; value: React.ReactNode; note?: React.ReactNode }> = ({ label, value, note }) => (
   <div className="flex min-w-0 items-baseline justify-between gap-3 py-1">
@@ -356,7 +356,7 @@ const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<
       <div className="divide-y divide-[var(--ds-hairline-soft)]">
         <CostRow
           label="Spent on this comic"
-          value={doc.spend.totalUsd > 0 ? cost.exact(doc.spend.totalUsd) : 'Nothing yet'}
+          value={doc.spend.totalUsd > 0 ? amountInSentence(cost.exact(doc.spend.totalUsd), 'Some of your usage') : 'Nothing yet'}
           note={byok ? 'Images on your own key — tracked so you see the real cost.' : cost.governed ? 'Shown as a share of your usage.' : undefined}
         />
         {book.totals.savedUsd > 0 && (
@@ -579,7 +579,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
       {quote.nothing ? (
         <span>{allDrawn ? 'all drawn' : drawing ? `${drawing} drawing` : 'nothing to draw'}</span>
       ) : pro || view === 'cost' ? (
-        <span>{cost.badge(quote.usd)} to draw</span>
+        <span>{amountInSentence(cost.badge(quote.usd))} to draw</span>
       ) : (
         // A real 44 px target on touch (not a 16 px inline link whose ::after hit area overlapped the
         // rows around it — P1-QA breakdown-inline-links). Its name is its visible words, then the hint.
@@ -589,7 +589,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
           title="Show the cost breakdown"
           className="inline-flex items-center rounded underline decoration-dotted underline-offset-2 hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-11 coarse:px-1"
         >
-          {cost.badge(quote.usd)} to draw
+          {amountInSentence(cost.badge(quote.usd))} to draw
           <span className="sr-only">. Show the cost breakdown</span>
         </button>
       )}
@@ -999,7 +999,7 @@ const PageDetail: React.FC<{
             <p className="mt-1.5 break-words text-[11px] tabular-nums text-[var(--ds-muted)]">
               {[
                 s.model ? `Drawn with ${s.model}` : '',
-                typeof spent === 'number' && spent > 0 ? `${cost.exact(spent)} spent on this page` : '',
+                typeof spent === 'number' && spent > 0 ? `${amountInSentence(cost.exact(spent))} spent on this page` : '',
                 typeof s.qcScore === 'number' ? `QC ${Math.round(s.qcScore * 100)}/100` : ''
               ]
                 .filter(Boolean)
@@ -1079,7 +1079,7 @@ const CoverDetail: React.FC<{
       <p className="mt-0.5 text-[11.5px] text-[var(--ds-muted)]">
         {c.lettering === 'overlay' ? 'Title as editable text — changing it later is free.' : 'Title painted into the art.'}
         {pro && c.model ? ` Drawn with ${c.model}.` : ''}
-        {pro && c.spentUsd ? ` ${cost.exact(c.spentUsd)} spent.` : ''}
+        {pro && c.spentUsd ? ` ${amountInSentence(cost.exact(c.spentUsd))} spent.` : ''}
       </p>
       {open && (
         <div id={id} className="mt-2.5 flex min-w-0 flex-wrap items-center gap-1.5">
