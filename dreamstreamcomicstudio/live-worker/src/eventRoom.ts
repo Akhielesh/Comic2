@@ -21,6 +21,8 @@
 
 import { iceFor, revokeIce, type IceEnv } from './ice';
 import { EMOJI_LIBRARY, STRIKE_LIMIT, TIMEOUT_MS, checkSpam, hasProfanity, type SpamState } from './moderation';
+import { UsageMeter, type Collected, type UsageSink } from './usageMeter';
+import { addUsage, compactUsage, emptyCounters, sanitizeUsage, STREAM_ESTIMATES, subUsage, type UsageDelta } from '../../shared/stream/usage';
 
 export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
@@ -62,6 +64,8 @@ export interface EventMeta {
   maxViewers: number;
   /** Meeting or broadcast (rooms created before meetings have none → broadcast). */
   kind?: EventKind;
+  /** Private: cumulative broadcast usage (segments), riding the putMeta that already runs per segment. Never public. */
+  use?: UsageDelta;
 }
 
 export interface ChatMsg {
@@ -101,6 +105,8 @@ interface Stats {
   chatCurve: { at: number; n: number }[];
   /** Host-reported network health: upload bps, encoded bps, upload failures. */
   healthCurve: { at: number; up: number; enc: number; fail: number }[];
+  /** Cumulative viewer-minutes and alarm upkeep, riding the alarm's existing stats write (usageMeter.ts). */
+  use?: UsageDelta;
 }
 
 interface Attach {
@@ -113,6 +119,8 @@ interface Env extends IceEnv {
   EVENT_ROOM: DurableObjectNamespace;
   LIVE_BUCKET: R2Bucket;
   ALLOWED_ORIGINS: string;
+  /** Workers Analytics Engine (optional): Stream Studio usage points. */
+  STREAM_USAGE?: UsageSink;
 }
 
 const CHAT_CAP = 200; // ring buffer — chat is logged, never rendered into video
@@ -162,8 +170,12 @@ export class EventRoom {
   private lastChatAt = new Map<string, number>(); // best-effort rate limit; resets on hibernation, which is fine
   private spam = new Map<string, SpamState>(); // best-effort repeat detector; same trade-off
   private lastHealthAt = 0;
+  /** Stream Studio usage: durable totals (meta/stats) → ≤ 1 `use:YYYY-MM` row an hour + 1 point. */
+  private readonly usage: UsageMeter;
 
-  constructor(private state: DurableObjectState, private env: Env) {}
+  constructor(private state: DurableObjectState, private env: Env) {
+    this.usage = new UsageMeter({ storage: state.storage, sink: env.STREAM_USAGE, scope: 'event' });
+  }
 
   // ---------------------------------------------------------------- storage
 
@@ -181,7 +193,8 @@ export class EventRoom {
     return s;
   }
 
-  private async publicMeta(m: EventMeta) {
+  private async publicMeta(full: EventMeta) {
+    const { use: _private, ...m } = full;
     const rsvps = (await this.state.storage.get<string[]>('rsvps')) ?? [];
     return {
       ...m,
@@ -322,6 +335,7 @@ export class EventRoom {
       this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
       await this.addLog('live', 'END', 'Host closed the studio — stream ended. Reopen your studio link to go live again.');
       await this.state.storage.setAlarm(meta.endedAt + REPLAY_WINDOW_MS);
+      await this.meterTick();
     }
     return new Response(null, { status: 204 });
   }
@@ -334,7 +348,8 @@ export class EventRoom {
     const rec: RecordingEntry = {
       key: String(body.key ?? ''),
       file: String(body.file ?? 'recording').slice(0, 120),
-      bytes: Math.max(0, Number(body.bytes) || 0),
+      // What R2 actually stored (the worker passes it), else what the host said.
+      bytes: Math.max(0, Number((body as { stored?: unknown }).stored) || Number(body.bytes) || 0),
       mime: String(body.mime ?? 'video/webm').slice(0, 80),
       durMs: Math.max(0, Number(body.durMs) || 0),
       at: Date.now(),
@@ -347,6 +362,7 @@ export class EventRoom {
     // Make sure the janitor is armed even if the host never hits "end stream".
     const alarm = await this.state.storage.getAlarm();
     if (alarm == null) await this.state.storage.setAlarm(Date.now() + RECORDING_RETENTION_MS);
+    await this.meterTick();
     return json({ ok: true, count: recordings.length });
   }
 
@@ -411,7 +427,7 @@ export class EventRoom {
     const hostKey = await this.state.storage.get<string>('hostKey');
     if (req.headers.get('x-host-key') !== hostKey) return json({ error: 'forbidden' }, 403);
 
-    const { seq, ms, at, mime } = (await req.json()) as { seq: number; ms: number; at: number; mime?: string };
+    const { seq, ms, at, mime, bytes } = (await req.json()) as { seq: number; ms: number; at: number; mime?: string; bytes?: number };
     if (!Number.isFinite(seq) || seq <= 0) return json({ error: 'bad seq' }, 400);
     const now = Date.now();
     if (meta.status === 'live' && meta.lastIngestAt && now - meta.lastIngestAt > meta.segMs * 3) {
@@ -420,6 +436,8 @@ export class EventRoom {
     meta.firstSeq = meta.firstSeq || seq;
     meta.latestSeq = Math.max(meta.latestSeq, seq);
     meta.lastIngestAt = now;
+    // Usage rides this putMeta (no extra write): the segment stored, its upload, auth + ingest, this row.
+    meta.use = compactUsage(addUsage(sanitizeUsage(meta.use), { segBytes: Number(bytes) > 0 ? Number(bytes) : 0, segCount: 1, workerRequestsEst: 1, doRequestsEst: 2, rowsWrittenEst: 1 }));
     if (mime && !meta.mime) {
       meta.mime = mime; // host's recorder decides the codec once
       await this.addLog('sys', 'SYS', `First segment received · ${mime.split(';')[0]}`);
@@ -450,6 +468,7 @@ export class EventRoom {
         this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
         await this.addLog('live', 'END', 'Auto-ended — the host did not return. Replay stays up for 24 h.');
         await this.state.storage.setAlarm(meta.endedAt + REPLAY_WINDOW_MS);
+        await this.meterTick();
       }
       return;
     }
@@ -464,17 +483,24 @@ export class EventRoom {
         this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
         await this.addLog('warn', 'WARN', 'Stream auto-ended after 2 h without segments');
         await this.state.storage.setAlarm(meta.endedAt + REPLAY_WINDOW_MS);
+        await this.meterTick();
         return;
       }
       const stats = await this.getStats();
-      stats.curve.push({ at: Date.now(), n: this.viewerCount() });
+      const n = this.viewerCount();
+      stats.curve.push({ at: Date.now(), n });
       if (stats.curve.length > CURVE_CAP) stats.curve.splice(0, stats.curve.length - CURVE_CAP);
+      // Viewer-minutes from the curve, plus this alarm's own upkeep (1 request; stats + setAlarm rows) — same write.
+      stats.use = compactUsage(addUsage(sanitizeUsage(stats.use), { viewerMinutes: (n * CURVE_SAMPLE_MS) / 60_000, doRequestsEst: 1, rowsWrittenEst: 2 }));
       await this.state.storage.put('stats', stats);
       await this.state.storage.setAlarm(Date.now() + CURVE_SAMPLE_MS);
+      await this.meterTick();
       return;
     }
 
     if (meta.status !== 'ended' || !meta.endedAt) return;
+    // A usage flush put off at the end (inside the hour) happens here at the latest — before any purge.
+    await this.meterTick();
     const now = Date.now();
     const segPurgeAt = meta.endedAt + REPLAY_WINDOW_MS;
     const recPurgeAt = meta.endedAt + RECORDING_RETENTION_MS;
@@ -493,6 +519,25 @@ export class EventRoom {
       return;
     }
     await this.state.storage.setAlarm(segPurgeAt);
+  }
+
+  // ---------------------------------------------------------------- usage
+
+  /**
+   * Write the event's usage (≤ 1 row an hour): what its durable totals gained since the watermark
+   * kept in the usage row. A flush put off now loses nothing — the next one (at the latest the
+   * replay janitor) counts it. Broadcast counts against the event and its owner's account.
+   */
+  private async meterTick(now = Date.now()): Promise<void> {
+    if (!this.usage.due(now)) return;
+    const meta = await this.getMeta();
+    if (!meta) return;
+    const [stats, recordings, ownerId] = await Promise.all([
+      this.getStats(),
+      this.state.storage.get<RecordingEntry[]>('recordings'),
+      this.state.storage.get<string>('ownerId'),
+    ]);
+    await this.usage.flush(now, { scopeId: meta.id, account: ownerId || '', collect: eventUsage(meta, stats, recordings ?? []) });
   }
 
   private async deletePrefix(prefix: string): Promise<void> {
@@ -774,6 +819,7 @@ export class EventRoom {
           : 'Stream ended by host — replay stays up for 24 h, recordings for 7 days',
       );
       await this.state.storage.setAlarm(meta.endedAt! + REPLAY_WINDOW_MS);
+      await this.meterTick();
     }
   }
 
@@ -1075,4 +1121,26 @@ export class EventRoom {
       ws.send(JSON.stringify(obj));
     } catch { /* socket on its way out */ }
   }
+}
+
+/**
+ * The event's usage since a watermark: broadcast totals (meta.use + stats.use are cumulative) and
+ * recordings registered after the last one counted (the 7-day cloud copies). Pure.
+ */
+export function eventUsage(meta: Pick<EventMeta, 'use'>, stats: { use?: UsageDelta }, recordings: RecordingEntry[]): (prev: unknown) => Collected {
+  return (prev) => {
+    const p = (prev && typeof prev === 'object' ? prev : {}) as { seg?: UsageDelta; live?: UsageDelta; recAt?: number };
+    const broadcast = addUsage(subUsage(sanitizeUsage(meta.use), sanitizeUsage(p.seg)), subUsage(sanitizeUsage(stats.use), sanitizeUsage(p.live)));
+    let cloud = emptyCounters();
+    const since = Number(p.recAt) || 0;
+    let recAt = since;
+    for (const r of recordings) {
+      if (!(r.at > since)) continue;
+      const parts = Math.ceil(r.bytes / STREAM_ESTIMATES.cloudCopyPartBytes);
+      // Per recording: init + parts + complete through the Worker (each host-key checked here), and its row writes.
+      cloud = addUsage(cloud, { cloudCopyBytes: r.bytes, workerRequestsEst: parts + 2, doRequestsEst: parts + 3, rowsWrittenEst: 2 });
+      recAt = Math.max(recAt, r.at);
+    }
+    return { delta: { broadcast: compactUsage(broadcast), cloud_copy: compactUsage(cloud) }, src: { seg: meta.use ?? {}, live: stats.use ?? {}, recAt } };
+  };
 }

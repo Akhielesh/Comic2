@@ -41,6 +41,9 @@ import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
 import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
 import { bearerFrom, callRpc, verifyMember, type LiveIdentity, type SupabaseEnv } from './supabaseAuth';
+import { callUsage, carriersOf, clampClientReport, relayClock, UsageMeter, type SocketUsage, type UsageSink } from './usageMeter';
+import { compactUsage, FAIR_USE, isEmptyUsage, type UsageMonth } from '../../shared/stream/usage';
+import { userLineName } from './directCalls';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
 
 export const KEY_HOLDER = '__vapid_keys__';
@@ -123,7 +126,16 @@ export interface MonEnv extends SupabaseEnv {
   MONITOR_ROOM: DurableObjectNamespace;
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
+  /** Workers Analytics Engine (optional): Stream Studio usage points (usageMeter.ts). */
+  STREAM_USAGE?: UsageSink;
+  /** Members' call lines: a family call's usage counts against the caller's account. */
+  USER_LINE?: DurableObjectNamespace;
 }
+
+/** Parents' read of the nursery's month (`{t:'q', q:'usage', id}`; Phase B's Usage card). Others get `error: 'forbidden'`. */
+export type NurseryUsageReply =
+  | { t: 'r'; id: string; q: 'usage'; usage: UsageMonth; allowances: { relayDataGb: number; serverPictureHoursPerDay: number } }
+  | { t: 'r'; id: string; q: 'usage'; error: 'forbidden' };
 
 interface Attach {
   sid: string;
@@ -148,6 +160,12 @@ interface Attach {
   ri?: boolean;
   /** Joined with the share link + passcode (no account): the guest's id. */
   guest?: string;
+  /** Usage this socket carries (survives hibernation; usageMeter.ts) and its relay clock. */
+  u?: SocketUsage;
+  /** Viewer: "picture through our server" clock start (ms) — runs only while its camera's frames can flow. */
+  rs?: number;
+  /** Camera: the UTC day this nursery's daily activity mark was last written (so a wake doesn't repeat it). */
+  am?: string;
 }
 
 export interface SplStatus {
@@ -546,6 +564,8 @@ export class MonitorRoom {
   private relayRx = new Map<string, RelayRx>();
   /** Cameras paused for privacy: nothing of theirs is relayed. */
   private relayPrivacy = new Set<string>();
+  /** The UTC day the activity mark was written (memory; the camera's attachment `am` is the durable copy). */
+  private activeDay: string | null = null;
   private lastStatusAt = new Map<string, number>();
   private lastSoundAt = new Map<string, number>();
   private curBucket: { t: number; s: number; cry: number } | null = null;
@@ -557,11 +577,14 @@ export class MonitorRoom {
   readonly guests: GuestAccess;
   readonly tracker: TrackerStore;
   readonly ready: Promise<void>;
+  /** Stream Studio usage (relay frames and minutes): memory + attachments, ≤ 1 row an hour. */
+  readonly usage: UsageMeter;
 
   constructor(private state: DurableObjectState, private env: MonEnv) {
     this.store = new MonitorStore(state.storage.sql);
     this.guests = new GuestAccess(state.storage.sql);
     this.tracker = new TrackerStore(state.storage.sql);
+    this.usage = new UsageMeter({ storage: state.storage, sink: env.STREAM_USAGE, scope: 'nursery' });
     this.ready = state.blockConcurrencyWhile(() => this.migrate());
     // Keepalive pings are answered by the runtime without waking the room: a ping carries no
     // state here (camera liveness is its 2-s status, presence is the socket list, guests' last
@@ -816,7 +839,11 @@ export class MonitorRoom {
       case 'settings':
         return this.onSettings(a, msg);
       case 'q':
-        return this.onQuery(ws, msg);
+        return msg.q === 'usage' ? this.onUsageQuery(ws, a, msg) : this.onQuery(ws, msg);
+      case 'use':
+        if (a.mode !== 'viewer') return;
+        this.usage.report(a, 'monitor', clampClientReport(msg, Date.now() - a.at));
+        return ws.serializeAttachment(a);
       case 'track_put':
         return this.onTrackPut(ws, a, msg);
       case 'track_del':
@@ -870,6 +897,9 @@ export class MonitorRoom {
       ws.close(1000, 'bye');
     } catch { /* already closed */ }
     if (a.mode === 'admin') return; // never in presence
+    // What this socket carried (relay minutes, stashed frames) goes back to memory; written below or parked.
+    relayClock(this.usage, a, 'monitor', false, Date.now());
+    this.usage.release(a);
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
@@ -885,6 +915,8 @@ export class MonitorRoom {
         }
         this.beats.delete(a.dev);
         this.lastStatus.delete(a.dev);
+        // Viewers stay subscribed while the camera is away (linkFallback.ts), but nothing flows: stop their clocks.
+        this.syncRelayClocks(a.dev, Date.now(), ws);
       }
       // Viewers relaying this camera no longer need to; tell the camera's peers.
       this.broadcast({ t: 'cam_gone', sid: a.sid, dev: a.dev });
@@ -895,6 +927,9 @@ export class MonitorRoom {
       if (a.relay) this.updateRelayWant(a.relay);
     }
     this.syncPresence();
+    // The last camera left: write the night's usage now if the hour allows, else keep it on a socket that stays.
+    if (a.mode === 'camera' && !this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera')) await this.meterTick(Date.now(), ws);
+    else this.parkUsage(ws);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
@@ -1020,6 +1055,7 @@ export class MonitorRoom {
       this.relayCams.delete(a.dev);
       this.relayPrivacy.delete(a.dev);
       for (const s of this.authed()) if (s.a.mode === 'viewer' && s.a.relay === a.dev) this.relayRx.set(s.a.sid, freshRx());
+      this.syncRelayClocks(a.dev, Date.now()); // viewers still subscribed get frames again
       this.updateRelayWant(a.dev);
       const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
       const wasAlerted = await this.state.storage.get<boolean>(`alerted:${a.dev}`);
@@ -1073,8 +1109,11 @@ export class MonitorRoom {
     const now = Date.now();
     this.markBeat(a.dev);
     // Privacy pause holds back every relay message from this camera (even a throttled status says so).
+    const wasPrivate = this.relayPrivacy.has(a.dev);
     if ((msg.st as Record<string, unknown> | undefined)?.paused === 'privacy') this.relayPrivacy.add(a.dev);
     else this.relayPrivacy.delete(a.dev);
+    // Nothing is relayed while paused: its viewers' "through our server" clocks stop, and restart on resume.
+    if (wasPrivate !== this.relayPrivacy.has(a.dev)) this.syncRelayClocks(a.dev, now);
     if (now - (this.lastStatusAt.get(a.dev) ?? 0) < 800) return;
     this.lastStatusAt.set(a.dev, now);
     const s = (msg.st ?? {}) as Record<string, unknown>;
@@ -1176,6 +1215,7 @@ export class MonitorRoom {
     if (kind === 'privacy') {
       if (msg.on) this.relayPrivacy.add(a.dev);
       else this.relayPrivacy.delete(a.dev);
+      this.syncRelayClocks(a.dev, Date.now());
       await this.addLog({ kind: 'privacy', msg: msg.on ? `Video paused for privacy on ${where} — sound monitoring continues` : `Video resumed on ${where}`, dev: a.dev });
       return;
     }
@@ -1774,6 +1814,8 @@ export class MonitorRoom {
     a.relay = msg.on ? clip(msg.dev, 40) || undefined : undefined;
     a.rc = a.relay && Array.isArray(msg.codecs) ? relayCodecMask(msg.codecs) : undefined;
     a.ri = a.relay && msg.instant ? true : undefined;
+    // The clock runs only while frames can flow: its camera is here and not paused for privacy.
+    relayClock(this.usage, a, 'monitor', !!a.relay && this.relayFlowing(a.relay), Date.now());
     ws.serializeAttachment(a);
     const rx = this.relayRx.get(a.sid);
     if (!a.relay) this.relayRx.delete(a.sid);
@@ -1806,6 +1848,24 @@ export class MonitorRoom {
       if (!m) want.jpeg += 1;
     }
     this.broadcast(want, (x) => x.mode === 'camera' && x.dev === dev);
+  }
+
+  /** Can this camera's relay frames reach viewers now: connected, and not paused for privacy? */
+  private relayFlowing(dev: string, except?: WebSocket): boolean {
+    return !this.relayPrivacy.has(dev) && this.authed().some((s) => s.ws !== except && s.a.mode === 'camera' && s.a.dev === dev);
+  }
+
+  /**
+   * Run each subscribed viewer's "through our server" clock only while its camera's frames can flow
+   * (a viewer stays subscribed while the camera is away or paused). Attachments only — no storage.
+   */
+  private syncRelayClocks(dev: string, now: number, except?: WebSocket): void {
+    const on = this.relayFlowing(dev, except);
+    for (const { ws, a } of this.authed()) {
+      if (ws === except || a.mode !== 'viewer' || a.relay !== dev || on === (a.rs != null)) continue;
+      relayClock(this.usage, a, 'monitor', on, now);
+      ws.serializeAttachment(a);
+    }
   }
 
   private relayCam(dev: string): { codec: number; at: number; keyAt: number; keyPending: boolean } {
@@ -1872,6 +1932,8 @@ export class MonitorRoom {
    */
   private onRelayFrame(a: Attach, raw: ArrayBuffer): void {
     if (!a.authed || a.mode !== 'camera' || !a.dev) return;
+    // Every camera message is a billed DO request (20:1): counted in memory only — no await, no storage.
+    this.usage.bump('monitor', 'relayFrames');
     const head = readHead(raw);
     if (!head || this.relayPrivacy.has(a.dev)) return;
     const dev = a.dev;
@@ -2563,6 +2625,7 @@ export class MonitorRoom {
       const rec = toRecord(c);
       log.push(rec);
       this.toCallers(c, { t: 'call_log', rec });
+      this.callUsageOut(rec);
       const missed = missedBy(c);
       if (missed.length) {
         await this.callPush(missed, { title: `Missed ${c.video ? 'video' : 'audio'} call`, body: `${c.from.label || c.from.name} · ${familyOf(meta)}`, kind: 'call_missed', call: c.id }, 6 * 3600, 'normal');
@@ -2772,6 +2835,78 @@ export class MonitorRoom {
     if (cur == null || cur > want) await this.state.storage.setAlarm(want);
   }
 
+  // ---------------------------------------------------------------- usage
+  /** Sockets carrying usage, relay clocks brought up to now (saved only when the flush writes). */
+  private usageCarriers(now: number, except?: WebSocket) {
+    const socks = this.authed().filter((s) => s.ws !== except);
+    return carriersOf(this.usage, socks.map((s) => ({ a: s.a, save: (a: Attach) => s.ws.serializeAttachment(a) })), 'monitor', now);
+  }
+
+  /** Write the nursery's usage if an hour has passed (rides the existing alarm; ≤ 1 row an hour). */
+  private async meterTick(now: number, except?: WebSocket): Promise<void> {
+    if (this.usage.due(now) && (this.usage.pendingTotals().size || this.authed().some((s) => s.ws !== except && (s.a.u || s.a.rs != null)))) {
+      await this.usage.flush(now, { scopeId: await this.state.storage.get<string>('nid'), carriers: this.usageCarriers(now, except) });
+    }
+    this.parkUsage(except);
+  }
+
+  /**
+   * Once per UTC day while a camera is connected: the nursery's activity mark (one Analytics Engine
+   * point, no storage) — the denominator of Admin → Costs' per-active-nursery-day figures. The day
+   * rides a camera's attachment, so neither a wake nor hibernation repeats it.
+   */
+  private async markActive(now: number): Promise<void> {
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (this.activeDay === day) return;
+    const cams = () => this.authed().filter((s) => s.a.mode === 'camera');
+    if (!cams().length) return;
+    if (!cams().some((s) => s.a.am === day)) {
+      const nid = await this.state.storage.get<string>('nid');
+      const cam = cams()[0];
+      if (!nid || !cam) return;
+      this.usage.mark('nursery', nid);
+      cam.a.am = day;
+      cam.ws.serializeAttachment(cam.a);
+    }
+    this.activeDay = day;
+  }
+
+  /** What memory still holds rides a connected socket's attachment, so hibernation can't lose it. */
+  private parkUsage(except?: WebSocket): void {
+    if (!this.usage.pendingTotals().size) return;
+    // A camera or monitor viewer (their close hands it back); never a call line or an admin socket.
+    const host = this.authed().find((s) => s.ws !== except && s.a.mode === 'camera') ?? this.authed().find((s) => s.ws !== except && s.a.mode === 'viewer');
+    if (host && this.usage.stash(host.a)) host.ws.serializeAttachment(host.a);
+  }
+
+  /** Parents only: this month's usage of the nursery (Phase B's Usage card). A read — never a write. */
+  private async onUsageQuery(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    const id = clip(msg.id, 20);
+    if (a.role !== 'parent' || a.guest) return this.send(ws, { t: 'r', id, q: 'usage', error: 'forbidden' } satisfies NurseryUsageReply);
+    const now = Date.now();
+    const usage = await this.usage.month(now, this.usageCarriers(now));
+    this.send(ws, {
+      t: 'r', id, q: 'usage', usage,
+      allowances: { relayDataGb: FAIR_USE.relayDataGbPerNurseryMonth, serverPictureHoursPerDay: FAIR_USE.serverPictureHoursPerNurseryDay },
+    } satisfies NurseryUsageReply);
+  }
+
+  /** A family call ended: its usage counts against the caller's account (a point now; their line's month row). */
+  private callUsageOut(rec: CallRecord): void {
+    const use = callUsage(rec);
+    if (isEmptyUsage(use) || !UUID_RE.test(rec.from.uid)) return;
+    this.usage.point('call', 'account', rec.from.uid, rec.from.uid, use);
+    const lines = this.env.USER_LINE;
+    if (!lines) return;
+    const p = lines
+      .get(lines.idFromName(userLineName(rec.from.uid)))
+      .fetch(new Request('https://line.internal/x/use', { method: 'POST', body: JSON.stringify({ kind: 'call', id: rec.id, use: compactUsage(use) }), headers: { 'content-type': 'application/json' } }))
+      .catch(() => undefined);
+    try {
+      (this.state as DurableObjectState & { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(p);
+    } catch { /* not supported */ }
+  }
+
   async alarm(): Promise<void> {
     await this.ready;
     const now = Date.now();
@@ -2841,6 +2976,7 @@ export class MonitorRoom {
       this.store.purge(now);
       this.guests.purge(now);
       this.tracker.purge(now);
+      await this.usage.prune(now);
       await this.state.storage.put('purgedAt', now);
     }
 
@@ -2849,6 +2985,10 @@ export class MonitorRoom {
     const ringingUntil = await this.expireCalls(now);
 
     if (this.curBucket) await this.saveBucket(this.curBucket);
+    // Relay clocks follow their cameras (self-heals one a wake left wrong), then the day's mark and the hourly write.
+    for (const dev of new Set(this.authed().flatMap((x) => (x.a.mode === 'viewer' && x.a.relay ? [x.a.relay] : [])))) this.syncRelayClocks(dev, now);
+    await this.markActive(now);
+    await this.meterTick(now);
     // Next wake-up: cameras need heartbeat checks, incidents need escalation,
     // an open sleep session needs closing if its camera never comes back,
     // a ringing call needs its "no answer".

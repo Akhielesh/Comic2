@@ -54,6 +54,8 @@ export interface Env {
   SUPABASE_PUBLISHABLE_KEY?: string;
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
+  /** Workers Analytics Engine dataset `stream_usage` (optional): Stream Studio usage points (usageMeter.ts). */
+  STREAM_USAGE?: AnalyticsEngineDataset;
 }
 
 const MAX_SEGMENT_BYTES = 32 * 1024 * 1024; // hard cap; ~6.8 Mbps * 10 s is well under this
@@ -349,7 +351,8 @@ export default {
           }
           const res = await roomCall(env, id, '/rec/register', {
             method: 'POST',
-            body: JSON.stringify({ key, file: body.file, bytes: stored.size, mime: body.mime, durMs: body.durMs }),
+            // `stored`: what R2 really holds (usage + the host's list), not what the client said.
+            body: JSON.stringify({ key, file: body.file, bytes: stored.size, stored: stored.size, mime: body.mime, durMs: body.durMs }),
             headers: { 'content-type': 'application/json', 'x-host-key': hostKey ?? '' },
           });
           if (!res.ok) return withCors(res, cors);
@@ -384,7 +387,7 @@ export default {
 
         const res = await roomCall(env, id, '/ingest', {
           method: 'POST',
-          body: JSON.stringify({ seq, ms, at: Date.now(), mime: contentType }),
+          body: JSON.stringify({ seq, ms, at: Date.now(), mime: contentType, bytes: bytes.byteLength }),
           headers: { 'content-type': 'application/json', 'x-host-key': hostKey },
         });
         if (!res.ok) {

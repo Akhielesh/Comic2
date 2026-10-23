@@ -34,9 +34,13 @@
 import { CALL_ID_RE, cleanPerson, hashTicket, MAX_DIRECT_TO, mintTicket, overallStatus, userLineName, UUID_RE, type RingStatus } from './directCalls';
 import { CallBook, missedBy, toRecord, type Call, type CallStat } from './familyCalls';
 import { iceFields, iceFor, revokeIce, type IceEnv } from './ice';
+import { callUsage, UsageMeter, type UsageSink } from './usageMeter';
+import { compactUsage, isEmptyUsage } from '../../shared/stream/usage';
 
 export interface CallRoomEnv extends IceEnv {
   USER_LINE: DurableObjectNamespace;
+  /** Workers Analytics Engine (optional): Stream Studio usage points. */
+  STREAM_USAGE?: UsageSink;
 }
 
 interface Attach {
@@ -529,7 +533,11 @@ export class CallRoom {
     await this.state.storage.put('endedAt', now);
     const rec = toRecord(call);
     const missed = new Set(missedBy(call));
-    await Promise.all([call.from.uid, ...call.invited].map((uid) => this.post(uid, '/x/log', { rec, missed: missed.has(uid) })));
+    // Usage counts against the CALLER's account: one point now, and their line's month row (rides /x/log — no extra request).
+    const use = callUsage(rec);
+    if (!isEmptyUsage(use)) new UsageMeter({ storage: this.state.storage, sink: this.env.STREAM_USAGE, scope: 'account' }).point('call', 'account', call.from.uid, call.from.uid, use);
+    const callerUse = isEmptyUsage(use) ? {} : { use: compactUsage(use) };
+    await Promise.all([call.from.uid, ...call.invited].map((uid) => this.post(uid, '/x/log', { rec, missed: missed.has(uid), ...(uid === call.from.uid ? callerUse : {}) })));
     // Nobody needs this call's relay any more: its credentials stop working now, not hours later.
     await revokeIce(this.env, `c:${call.id}`).catch(() => 0);
     await this.ensureAlarm(CLEANUP_MS);

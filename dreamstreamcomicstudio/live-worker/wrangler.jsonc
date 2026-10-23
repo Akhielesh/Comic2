@@ -29,6 +29,12 @@
     { "binding": "LIVE_BUCKET", "bucket_name": "dreamstream-live" }
   ],
 
+  // Stream Studio usage metering (ADR 0007; src/usageMeter.ts): ≤ 1 data point per room per hour,
+  // non-blocking, no storage rows. The table is created on the first write. Optional in code — a
+  // missing binding just means no points (the rooms' monthly rows still count). Read by the backend's
+  // Admin → Costs and the daily cost watch with the read-only Account Analytics token.
+  "analytics_engine_datasets": [{ "binding": "STREAM_USAGE", "dataset": "stream_usage" }],
+
   "vars": {
     // Comma-separated list of origins allowed to call the API (was "*" while testing).
     // Tightened to the known production frontends (security finding H4). If you add a

@@ -28,6 +28,10 @@ paid provider changes.
 | **Cloudflare Pages** | — | **$0** | Free |
 | **Cloudflare Workers** | Requests (10M/mo included on Paid) | **$0** beyond the plan | — |
 | **Cloudflare R2 (dreamstream-live)** | Storage + ops (10 GB free) | **~$0** | Janitor purges segments @24h, recordings @7d |
+| **Durable Objects — Stream Studio rooms** (`MonitorRoom`, `EventRoom`, `UserLine`, `CallRoom`) | Requests (incoming WebSocket messages 20:1, alarms), **rows written** (every KV put/delete and every `setAlarm`), duration only while busy (hibernation-eligible rooms aren't billed) | **$0** inside 1M requests · 50M rows · 400k GB-s a month (**account-wide**, shared with every Worker). At list price a monitored nursery is ≈ $0.32/month today, 93% of it `MonitorRoom` rows (≈ $0.044 after ADR 0006 Phase 0) | ADR 0006 Phase 0 write diet; never a timer or held-open fetch in a DO; Admin → Costs → Stream Studio per-nursery-day KPIs |
+| **Baby monitor server relay** (picture through our server) | DO requests (each camera frame = 1/20 request) + room duration while frames flow — no bandwidth charge | **≈ $0.0055 per all-night relay viewer-night** (≈ $0.16/month), $0 inside the free tiers | Direct / Home Wi-Fi first; hidden viewers → sound only; counted per nursery (`usageMeter.ts`) |
+| **Cloudflare Realtime TURN** (switched on 2026-10-22) | Edge → client egress bytes only | **$0** inside the first 1,000 GB a month (account-wide), then $0.05/GB. One all-night TURN viewer ≈ $4.66/month at list price | Per-socket, short-TTL credentials (P2 guardrails); TURN for the side that receives less; **alert at $10/month** (daily `stream-cost-watch` + Cloudflare budget alert) |
+| **Stream Studio metering** | Workers Analytics Engine points (≤ 1 per room per hour) | **$0** (10M points/month included; not billed yet) | Optional binding `STREAM_USAGE`; fails open |
 | **Supabase** | Free plan | **$0** | Stay under 500 MB DB / 1 GB storage / 2 active projects |
 | **LLM / AI providers** | Per-token; platform-funded capped at **$5/user/mo** | **variable, capped** | Platform allowance + per-provider budgets (well-architected) |
 | **CoinGecko Basic** | Only if `COINGECKO_API_PLAN` = paid | **$35** if enabled | Keep on free/demo unless commercial crypto display is needed |
@@ -35,7 +39,10 @@ paid provider changes.
 
 **Net (since 2026-10-19):** **$5 Workers Paid + ~$0–1 container usage + $0 Supabase + $0
 Railway** ≈ **$5–6/mo**, with a hard worst case around $12/mo even if something kept the
-backend awake all month.
+backend awake all month. Stream Studio (rooms, relay, TURN, R2) adds **$0** while the account
+stays inside the free allowances — see Admin → Costs → Stream Studio for the marginal $ next to
+the list-price value, the headroom left in each allowance and the month-end projection
+(design: `docs/features/stream-studio-costs.md`, ADR 0007).
 
 ---
 
@@ -167,6 +174,16 @@ Then run this once a month (or when a bill looks off):
 - [ ] Railway: still dormant (no surprise plan upgrade); no services in `RUNNING` state.
 - [ ] Cloudflare: no `dreamstream-studio` Worker left (Code Studio retired; delete it if it reappears).
 - [ ] Cloudflare: R2 `dreamstream-live` size near zero (janitor working).
+- [ ] Admin → Costs → **Stream Studio**: no alerts; every headroom meter projects < 80% of its
+      allowance (they are account-wide); per-nursery-day DO GB-s ≤ 40 (hibernation working);
+      our-server share of monitor minutes ≤ 10% (shown once viewers report their paths, Phase B).
+      The GitHub issue labelled `stream-cost-watch` is closed (the daily job opens it when an alert
+      starts and closes it only when every dataset answered and nothing fires) and its last run is
+      green. A red run or an open issue saying **"Couldn't measure"** means a Cloudflare dataset
+      didn't answer (token revoked or out of scope, wrong account id, renamed field): the alerts it
+      feeds kept their last state — fix the read, don't assume all clear.
+- [ ] Cloudflare: an account budget alert (Billing → budget alerts) is set at **$10** — the
+      backstop that still fires if metering breaks. TURN is on in production since 2026-10-22.
 - [ ] Supabase: still on free plan; DB < 500 MB; storage < 1 GB.
 - [ ] AI: `GET /api/usage/providers` shows spend within the $5 allowance; no provider
       pinned at its budget cap (which would mean a degraded/looping caller).
@@ -191,4 +208,5 @@ Then run this once a month (or when a bill looks off):
 | 2026-06-16 | Runbook created. App-Sleeping enabled on Comic2 + SearXNG; dead projects identified; Container cost landmine flagged. |
 | 2026-10-19 | Backend moved to a Cloudflare Container (`basic`, sleeps after 15 min). Railway dormant (trial expired). Cost model rewritten. |
 | 2026-10-21 | Admin Cost centre (real data, measured / estimated / fixed, cost-benefit per product, optional live Cloudflare analytics). |
+| 2026-10-22 | Stream Studio cost metering (ADR 0007 Phase A): rooms count usage in memory + WebSocket attachments and write ≤ 1 `use:YYYY-MM` row + 1 Analytics Engine point per room per hour; Admin → Costs gets a Stream Studio tab (measured DO / R2 / TURN month to date + estimated per-feature, per-path, top consumers, headroom, alerts); daily `stream-cost-watch` GitHub job (needs the read-only `CF_ANALYTICS_API_TOKEN` secret). §1 gains the DO rows, server relay and TURN lines. |
 | 2026-10-22 | Code Studio retired (ADR 0005): the `studio-worker` sandbox Containers (`standard-3`) — the old cost landmine — removed from the repo; Workers Paid stays for the backend container. Cost centre labels the sandbox line "(retired)" and keeps reading `studio_runs` as history. |

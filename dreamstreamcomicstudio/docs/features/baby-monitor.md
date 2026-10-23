@@ -263,11 +263,18 @@ a second to connect (the *instant picture*), and when the camera's direct slots 
 - *Privacy*: relay video and sound pass through the Durable Object's memory — **not
   end-to-end encrypted** (only P2P, direct or through TURN, is) and never stored. The
   pill (“Via our server · 12 fps”, “Quick preview”) and its tooltip say so.
-- *Cost*: 15 fps with sound is ~540k incoming WebSocket messages per 10 h night (≈ $0.12
-  per nursery per month at the 20:1 request ratio) plus ~2 acks/s per relay viewer;
-  outgoing messages are free. While frames flow the object stays awake: up to ~4.6k
-  GB-s per relayed night (inside the 400k GB-s monthly allowance for a few nurseries,
-  ≈ $1.7 per nursery per month beyond it) — only while someone is on the relay.
+- *Cost*: 15 fps with sound is ~540k incoming WebSocket messages per 10 h night — 27k
+  billed requests at the 20:1 ratio, ≈ $0.004 a night — plus ~2 acks/s per relay viewer;
+  outgoing messages are free. Durable Objects that are idle and eligible for hibernation
+  aren't billed for duration (Cloudflare pricing, re-read 2026-10-22), so the relay only adds
+  the time the room is actually busy with frames: ≈ 69 GB-s per relayed night (≈ $0.0009 at
+  $12.50/M GB-s past the free 400k). All in ≈ **$0.0055 per all-night relay viewer-night,
+  ≈ $0.16 per month** at list price — inside the free allowances today, and only while
+  someone is on the relay. (An earlier note here said "~4.6k GB-s ≈ $1.7 a month"; that
+  assumed wall-clock billing.) The room counts its own relay frames and relay minutes
+  (`live-worker/src/usageMeter.ts`, at most one row an hour) and Admin → Costs → Stream
+  Studio checks the GB-s per nursery-day against Cloudflare's `durableObjectsPeriodicGroups`
+  (alert if > 40 for two days running). Limits never cut the monitor's sound or alerts.
 - *Verified* in Chromium (Playwright, fake camera, P2P blocked): VP8 decoded at 11–12 fps,
   ~250 kbit/s with sound, picture 0.2 s after subscribing, PiP, jitter-buffered sound,
   JPEG + “no sound” without WebCodecs, privacy pause, camera restart.
