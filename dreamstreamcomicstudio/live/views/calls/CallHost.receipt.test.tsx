@@ -47,8 +47,8 @@ describe('CallHost — the call’s receipt', () => {
       sent.push(m);
       queueMicrotask(() => acceptAccountUsage({
         t: 'usage',
-        // What the server really keeps for calls: relayed minutes, no bytes (≈ 11.25 MB a minute).
-        usage: { month: new Date().toISOString().slice(0, 7), scope: 'account', counters: { call: { ...emptyCounters(), minutes: { lan: 0, direct: 0, turn: 765, server: 0 } } }, updatedAt: 0 },
+        // What the server really keeps for calls: relayed minutes, no bytes (≈ 6.15 MB a minute at the relay cap).
+        usage: { month: new Date().toISOString().slice(0, 7), scope: 'account', counters: { call: { ...emptyCounters(), minutes: { lan: 0, direct: 0, turn: 1400, server: 0 } } }, updatedAt: 0 },
         allowances: { relayDataGb: 10, cloudCopyGb: 10 },
       }));
       return true;

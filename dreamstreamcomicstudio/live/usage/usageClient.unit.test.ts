@@ -113,10 +113,10 @@ describe('a nursery’s month and its notices', () => {
   });
 
   it('a month estimated from minutes (no bytes reported) says ≈; a measured one doesn’t', () => {
-    // 30 relayed minutes × 1.5 Mbps ≈ 0.34 GB of a 0.4 GB allowance: 84%.
-    const est = dueRelayNotice('account', 'u2', month(0), 0.4);
+    // 30 relayed call minutes × ≈ 0.82 Mbps (the relay cap) ≈ 0.18 GB of a 0.22 GB allowance: 84%.
+    const est = dueRelayNotice('account', 'u2', month(0), 0.22);
     expect(est?.level).toBe('warn');
-    expect(est?.text).toMatch(/You’ve used ≈ 0\.34 GB of your 0\.4 GB of relay data this month \(estimated from minutes\)/);
+    expect(est?.text).toMatch(/You’ve used ≈ 0\.18 GB of your 0\.22 GB of relay data this month \(estimated from minutes\)/);
     expect(dueRelayNotice('account', 'u3', month(8.4e9), 10)?.text).toMatch(/^You’ve used 8\.4 GB of your 10 GB/);
   });
 

@@ -168,7 +168,7 @@ describe('Settings → Usage (the account)', () => {
   });
 
   it('relay data estimated from minutes says ≈; at 80% and 100% the card says so, with the reset day', async () => {
-    line(month({ call: counters({ minutes: { turn: 900 } }) })); // no bytes reported: ≈ from minutes (≈ 10.1 GB)
+    line(month({ call: counters({ minutes: { turn: 1650 } }) })); // no bytes reported: ≈ from minutes (≈ 10.1 GB)
     const { unmount } = render(<AccountUsageCard signedIn now={NOW} />);
     const relay = (await screen.findByText('Relay data · calls you placed')).closest('.usage-row')!;
     expect(relay.textContent).toMatch(/≈ /);

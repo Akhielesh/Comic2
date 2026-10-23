@@ -6,6 +6,16 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **See what's free — and what goes through our servers (2026-10-23):** Stream Studio now shows
+  how each thing travels. Before you start: "Direct between you and your guests — free" on
+  Instant meeting, and a ready check with the path before any Go live. While live: a small
+  pill — **Home Wi-Fi · free**, **Direct · free**, **Through our relay · encrypted** or
+  **Through our server** (in memory only, never stored, not end-to-end encrypted). Afterwards:
+  receipts ("Last night: 10 h · 98% direct · free", a Delivery block in the event recap, a
+  line when a call ends). **Settings → Usage** is a calm monthly card: what stayed on your
+  devices, what went through our servers, your allowances, one tip to stay free, and —
+  clearly labelled, never a charge — what it costs DreamStream. Only a nursery's parents see
+  its usage.
 - **Stream Studio costs, for the owner (2026-10-23, ADR 0007):** DreamStream → Account → Admin →
   **Costs → Stream Studio** shows what Stream Studio really costs instead of a fixed $0: cost per
   feature (baby monitor, calls, live streams, recordings), minutes by connection path, the
@@ -82,6 +92,17 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Changed
+- **The baby monitor is lighter on our servers and your battery (2026-10-23):** a phone
+  whose screen is off or hidden keeps the sound and alerts but stops receiving the picture
+  until it's looked at again (picture-in-picture counts as looking); a picture sent through
+  our relay or server is capped at a sensible quality; phones on the same Wi-Fi go direct and
+  are no longer mislabelled "Home Wi-Fi" on mobile data; and the nursery's room writes about
+  a tenth as often overnight, with every minute of history kept. If a nursery uses up its
+  monthly relay data, pictures that need the relay become sound only — direct and Home Wi-Fi
+  pictures, sound and alerts carry on, and nobody is moved onto the server path.
+- **Live streams cost less to run (2026-10-23):** fewer server calls per stream hour, chat and
+  counters saved in batches (and kept if the room pauses), and an ended event's video is
+  cleaned up after a week while its invite page, RSVPs and studio link keep working.
 - **Recordings save to Google Drive or your device first (2026-10-23):** the save sheet now
   leads with **Google Drive · free, yours to keep** and **This device · free**. The 7-day copy
   on our servers is something you choose (it shows its size and how much of your 10 GB it

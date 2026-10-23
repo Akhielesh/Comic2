@@ -108,10 +108,10 @@ describe('stream usage — list value (est., never a charge)', () => {
     const measured = listValueUsd(addUsage(emptyCounters(), { turnBytes: 3.1e9, minutes: { turn: 600 } }), 'monitor');
     expect(measured.lines[0]).toMatchObject({ id: 'turn', label: 'TURN relay' });
     expect(measured.usd).toBeCloseTo(3.1 * STREAM_UNIT_PRICES.turnPerGb, 6);
-    // 30 min 1:1 call on TURN ≈ 0.34 GB ≈ $0.017 (feature doc §2.2 row 7)
+    // 30 min 1:1 call on TURN at the 700 kbps relay cap (+ sound) ≈ 0.18 GB ≈ $0.009 (feature doc C7)
     const call = listValueUsd(addUsage(emptyCounters(), { minutes: { turn: 30 } }), 'call');
     expect(call.lines[0].label).toBe('TURN relay (from minutes)');
-    expect(call.usd).toBeCloseTo(0.016875, 6);
+    expect(call.usd).toBeCloseTo(0.009225, 6);
   });
 
   it('prices a broadcast hour (segments, viewers, Worker GETs) within the doc’s range', () => {
@@ -142,7 +142,7 @@ describe('stream usage — list value (est., never a charge)', () => {
       monitor: addUsage(emptyCounters(), { relayFrames: 20_000 }),
       call: addUsage(emptyCounters(), { minutes: { turn: 10 } })
     });
-    expect(m.usd).toBeCloseTo(listValueUsd(addUsage(emptyCounters(), { relayFrames: 20_000 }), 'monitor').usd + 10 * 11.25e6 / 1e9 * 0.05, 6);
+    expect(m.usd).toBeCloseTo(listValueUsd(addUsage(emptyCounters(), { relayFrames: 20_000 }), 'monitor').usd + 10 * 6.15e6 / 1e9 * 0.05, 6);
     expect(listValueOfMonth({}).usd).toBe(0);
   });
 });

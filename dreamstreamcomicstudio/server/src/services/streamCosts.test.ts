@@ -288,7 +288,7 @@ describe('Stream costs — the section (pure)', () => {
     expect(s.top.nurseries[0]).toMatchObject({ scope: 'nursery', id: N1, label: 'Aria’s room', owner: 'mom@example.com', serverMinutes: 660 });
     expect(s.top.nurseries[1].label).toBe('Nursery 22222222…');
     expect(s.top.accounts[0]).toMatchObject({ label: 'caller@example.com', turnGb: expect.any(Number) });
-    expect(s.top.accounts[0].turnGb).toBeCloseTo((30 * 11.25e6) / 1e9, 2);
+    expect(s.top.accounts[0].turnGb).toBeCloseTo((30 * 6.15e6) / 1e9, 2);
     expect(s.top.events[0]).toMatchObject({ label: 'Event ev123abc', owner: 'caller@example.com' });
     expect(topNurseryIds(analytics(), range30().fromMs, range30().toMs)).toEqual([N1, N2]);
   });

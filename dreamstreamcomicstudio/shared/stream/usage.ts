@@ -361,13 +361,15 @@ export const STREAM_ESTIMATES = {
   /** A flowing relay keeps the room active: ≈ 69 GB-s per 540k frames (10 h at 15 fps). */
   gbSecPerRelayFrame: 69 / 540_000,
   /**
-   * TURN bytes per path-minute when only minutes are known (client getStats arrives in Phase B):
-   * monitor relay cap 0.69 Mbps (rtc.ts:119); 1:1 call 1.5 Mbps (callMesh.ts:111); meeting guest ≈ 0.9 Mbps.
+   * TURN bytes per path-minute when only minutes are known (devices report measured bytes where they can):
+   * monitor relay picture capped at 400 kbps + sound ≈ 0.45 Mbps (C5); 1:1 call video capped at 700 kbps on a
+   * relay + sound and overhead ≈ 0.82 Mbps (C7, ≈ 0.37 GB per relayed call-hour); meeting guest receiving the
+   * 700 kbps return feed + sound ≈ 0.75 Mbps (C7).
    */
   turnBytesPerMinute: {
-    monitor: (0.69e6 / 8) * 60,
-    call: (1.5e6 / 8) * 60,
-    meeting: (0.9e6 / 8) * 60,
+    monitor: (0.45e6 / 8) * 60,
+    call: (0.82e6 / 8) * 60,
+    meeting: (0.75e6 / 8) * 60,
     broadcast: 0,
     cloud_copy: 0,
     drive_save: 0
