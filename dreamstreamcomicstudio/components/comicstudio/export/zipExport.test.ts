@@ -206,11 +206,13 @@ describe('ZIP memory guard (every PNG is held in memory until the archive is wri
       const err = await exportLanguagesZip(longBook(60), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 96 * MB }).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(ExportError);
       expect((err as ExportError).code).toBe('too_big');
-      expect((err as Error).message).toMatch(/too big to zip in all 2 languages at once on this device .*Download one language at a time instead\./);
+      // Here even one language would not fit, so the advice is the PDF — never "one language at a
+      // time", which would only be refused again.
+      expect((err as Error).message).toMatch(/too big to zip on this device, even one language at a time .*Download each language’s PDF instead/);
+      expect((err as Error).message).not.toMatch(/Download one language at a time instead/);
       expect(renderPage).not.toHaveBeenCalled();
       expect(download).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
-      // One language at a time may still fit (smaller) — the advice is real.
       const one = await exportPngZip(longBook(60), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 96 * MB, lang: 'te' }).catch((e: unknown) => e);
       expect(one).toBeInstanceOf(ExportError);
       expect((one as ExportError).code).toBe('too_big');
@@ -218,6 +220,21 @@ describe('ZIP memory guard (every PNG is held in memory until the archive is wri
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('"one language at a time" is advised only when one language really fits — and then it does', async () => {
+    const renderPage = vi.fn(async (_d: ComicDoc, p: Page) => png(p.id));
+    const download = vi.fn();
+    // 30 pages: both languages are too big even at the smallest size, one language fits (smaller).
+    const err = await exportLanguagesZip(longBook(30), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 120 * MB }).catch((e: unknown) => e);
+    expect((err as ExportError).code).toBe('too_big');
+    expect((err as Error).message).toMatch(/too big to zip in all 2 languages at once on this device .*Download one language at a time instead\./);
+    expect(renderPage).not.toHaveBeenCalled();
+    // Following the advice works.
+    const one = await exportPngZip(longBook(30), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 120 * MB, lang: 'te' });
+    expect(one.files).toBe(30);
+    expect(one.maxEdge).toBeGreaterThanOrEqual(1280);
+    expect(download).toHaveBeenCalledTimes(1);
   });
 
   it('one language over budget is drawn smaller with an honest notice (no "one language" advice)', async () => {

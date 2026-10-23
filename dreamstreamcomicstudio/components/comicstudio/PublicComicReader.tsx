@@ -251,13 +251,15 @@ const ReaderShell: React.FC<ShellProps> = ({
 
   // ── Downloads: made here, from the public images; withheld pages are never included ──
   // Share link: only the published languages (never an unpublished source), through downloadPublicComic.
+  // No publication info (yet) on a share link ⇒ nothing is exportable: never fall back to "the language
+  // on screen", which could be an unpublished source (and would arm the readers' built-in PDF).
   const exportable = useMemo(
-    () => (mode === 'slug' && doc && publication ? publicExportLanguages({ publication, doc }) : doc ? [lang] : []),
+    () => (mode === 'slug' ? (doc && publication ? publicExportLanguages({ publication, doc }) : []) : doc ? [lang] : []),
     [mode, doc, publication, lang]
   );
   // The edition a single-language download produces: the reader's own when it is published, else the
   // author's default / first published one — and the menu names it, so nobody gets a surprise language.
-  const downloadLang = mode === 'slug' && doc && publication ? publicExportLanguage({ publication, doc }, lang) : lang;
+  const downloadLang = mode === 'slug' ? (doc && publication ? publicExportLanguage({ publication, doc }, lang) : undefined) : lang;
   const readingExportable = !!downloadLang && sameLanguage(downloadLang, lang);
   const nameDownloadLang = exportable.length > 1 || !readingExportable;
   const [downloading, setDownloading] = useState<DownloadKind | null>(null);

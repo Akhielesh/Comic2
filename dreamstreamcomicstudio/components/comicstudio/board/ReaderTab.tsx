@@ -29,7 +29,8 @@ import type { ReaderRequest, StudioController } from '../types';
 import { openPrintView } from '../export/printView';
 import { exportLanguagesZip, exportPngZip } from '../export/zipExport';
 import { collectExportSlots, exportLanguages } from '../export/sequence';
-import { planZipMemory } from '../export/zipMemory';
+import { oneLanguageZipFits, planZipMemory } from '../export/zipMemory';
+import { plateWidthFor } from '../export/batch';
 import { exportComicPdf } from '../export/pdfExport';
 import { exportMotionComic, MOTION_SIZES, type MotionAspect } from '../export/motionComic';
 import { ImmersiveReader } from '../immersive/ImmersiveReader';
@@ -219,11 +220,16 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
     // switchOptions is derived from doc.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, live?.languages?.join(',')]);
-  // Sized to this device before anything is drawn (only while the sheet is open).
+  // Sized to this device before anything is drawn (only while the sheet is open), exactly as the
+  // exporter will size it (same slots, same plate width), so the row never promises what it refuses.
   const allZipPlan = useMemo(() => {
     if (!sheetOpen || allLanguages.length < 2) return null;
     try {
-      return planZipMemory(collectExportSlots(doc, studio.urlFor).slots, allLanguages.length);
+      const { slots } = collectExportSlots(doc, studio.urlFor);
+      const plateWidth = plateWidthFor(slots);
+      const plan = planZipMemory(slots, allLanguages.length, { plateWidth });
+      // When it can't fit, is one language at a time a real way out (or only the PDF)?
+      return { ...plan, oneFits: plan.fits || oneLanguageZipFits(slots, { plateWidth, budget: plan.budget }) };
     } catch {
       return null;
     }
@@ -439,7 +445,9 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
               label="All languages (ZIP)"
               hint={
                 allZipPlan && !allZipPlan.fits
-                  ? 'Too big for one ZIP on this device — pick a language above and download it on its own'
+                  ? allZipPlan.oneFits
+                    ? 'Too big for one ZIP on this device — pick one language with the language switch and download its PNG pages'
+                    : 'Too big to zip on this device, even one language at a time — download each language’s PDF instead'
                   : allZipPlan?.maxEdge
                     ? `${languageList(allLanguages)} · saved smaller to fit this device (up to ${allZipPlan.maxEdge.toLocaleString('en-US')} px)`
                     : `${languageList(allLanguages)} — a folder each`

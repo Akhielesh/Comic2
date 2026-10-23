@@ -8,11 +8,12 @@
 //                       image is fetched ONCE and re-lettered for every language (the art is shared;
 //                       only the overlay lettering, the cover title and the plates change).
 // Pages render one at a time (bounded memory on phones) with progress; a page that fails is reported,
-// not silently dropped, and the rest still export. The finished PNGs stay Blobs (browser blob storage,
-// not the page's JS heap) and the archive is written in Blob slices (zipToBlob). The whole archive
-// still has to exist before it is saved, so a memory guard (zipMemory.ts) sizes the export to the
-// device BEFORE any work: full size when it fits, smaller images with an honest `notice` when not, or
-// a clear refusal ('too_big': "download one language at a time" / "use the PDF") — never a crashed tab.
+// not silently dropped, and the rest still export. The archive is written in Blob slices (zipToBlob),
+// never as one big output buffer, but every PNG is still held once until the archive is saved (JSZip
+// reads each added Blob into memory), so a memory guard (zipMemory.ts) sizes the export to the device
+// BEFORE any work: full size when it fits, smaller images with an honest `notice` when not, or a clear
+// refusal ('too_big': "download one language at a time" when one fits, else "use the PDF") — never a
+// crashed tab.
 
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
@@ -23,7 +24,7 @@ import { exportFileStem, languageFolderName } from './filenames';
 import { prepareExportFonts } from './fonts';
 import { loadExportImage, renderSlotToBlob, type LoadedImage, type RasterOptions } from './rasterize';
 import { collectExportSlots, exportLanguages, localizedFor, type ExportSlot, type UrlFor } from './sequence';
-import { planZipMemory, zipReducedNotice, zipTooBigMessage, type ZipMemoryPlan } from './zipMemory';
+import { oneLanguageZipFits, planZipMemory, zipReducedNotice, zipTooBigMessage, type ZipMemoryPlan } from './zipMemory';
 
 export type { UrlFor } from './sequence';
 export type { ExportProgress } from './batch';
@@ -77,7 +78,11 @@ const suffixLang = (doc: ComicDoc, lang?: string) => (lang && !sameLanguage(lang
 /** Size the ZIP to the device before any work: throws 'too_big' when it can't fit even smaller. */
 const guardMemory = (slots: readonly ExportSlot[], languages: number, opts: ZipExportOptions, plateWidth: number): { plan: ZipMemoryPlan; oneFits: boolean } => {
   const plan = planZipMemory(slots, languages, { longEdge: opts.longEdge, plateWidth, budget: opts.memoryBudget });
-  if (!plan.fits) throw new ExportError(zipTooBigMessage(plan, { languages, pages: slots.length }), 'too_big');
+  if (!plan.fits) {
+    // "One language at a time" only when one language really fits; otherwise the PDF is the way.
+    const oneLanguageFits = languages > 1 ? oneLanguageZipFits(slots, { longEdge: opts.longEdge, plateWidth, budget: plan.budget }) : false;
+    throw new ExportError(zipTooBigMessage(plan, { languages, pages: slots.length, oneLanguageFits }), 'too_big');
+  }
   const oneFits = languages > 1 && !!plan.maxEdge && !planZipMemory(slots, 1, { longEdge: opts.longEdge, plateWidth, budget: plan.budget }).maxEdge;
   return { plan, oneFits };
 };
@@ -102,9 +107,10 @@ interface ZipStreamSource {
 }
 
 /**
- * Write the archive straight into Blob slices: JSZip reads each PNG Blob when it gets to it, and every
- * 8 MB of output becomes a Blob part, so the page's JS heap holds about one image at a time instead of
- * every PNG twice (the old Uint8Array input + output buffer). Cancelling stops the writer.
+ * Write the archive straight into Blob slices: every 8 MB of output becomes a Blob part, so the written
+ * archive never sits in one big Uint8Array (the old generateAsync('uint8array') buffer, then copied
+ * once more into the download Blob). The added PNGs are still held by JSZip until it is done — the
+ * memory guard budgets for both. Cancelling stops the writer.
  */
 export const zipToBlob = (zip: ZipStreamSource, signal?: AbortSignal): Promise<Blob> =>
   new Promise<Blob>((resolve, reject) => {

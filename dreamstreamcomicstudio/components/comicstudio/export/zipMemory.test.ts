@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ExportSlot } from './sequence';
-import { MIN_ZIP_EDGE, PNG_BYTES_PER_PIXEL, ZIP_BUDGET, planZipMemory, zipMemoryBudget, zipReducedNotice, zipTooBigMessage } from './zipMemory';
+import { MIN_ZIP_EDGE, PNG_BYTES_PER_PIXEL, ZIP_BUDGET, oneLanguageZipFits, planZipMemory, zipMemoryBudget, zipReducedNotice, zipTooBigMessage } from './zipMemory';
 
 const MB = 1024 * 1024;
 
@@ -59,7 +59,8 @@ describe('planZipMemory', () => {
     // … a phone refuses before any work and asks for one language at a time (which fits in full).
     const onPhone = planZipMemory(book(30), 6, { budget: phone });
     expect(onPhone.fits).toBe(false);
-    expect(zipTooBigMessage(onPhone, { languages: 6, pages: 30 })).toMatch(/Download one language at a time instead\./);
+    expect(oneLanguageZipFits(book(30), { budget: phone })).toBe(true);
+    expect(zipTooBigMessage(onPhone, { languages: 6, pages: 30, oneLanguageFits: true })).toMatch(/Download one language at a time instead\./);
   });
 
   it('picks the largest cap that fits (one step bigger would not)', () => {
@@ -79,6 +80,11 @@ describe('planZipMemory', () => {
     expect(plan.maxEdge).toBe(MIN_ZIP_EDGE);
     expect(zipTooBigMessage(plan, { languages: 8, pages: 200 })).toMatch(/too big to zip in all 8 languages at once on this device .*Download one language at a time/);
     expect(zipTooBigMessage(plan, { languages: 1, pages: 200 })).toMatch(/Download the PDF instead/);
+    // 200 pages do not fit even in one language: the advice is the PDF, never a refusal loop.
+    expect(oneLanguageZipFits(book(200), { budget: 96 * MB })).toBe(false);
+    const honest = zipTooBigMessage(plan, { languages: 8, pages: 200, oneLanguageFits: false });
+    expect(honest).toMatch(/even one language at a time .*Download each language’s PDF instead/);
+    expect(honest).not.toMatch(/Download one language at a time/);
   });
 
   it('a caller’s long edge is what gets estimated (upscaling counts too)', () => {

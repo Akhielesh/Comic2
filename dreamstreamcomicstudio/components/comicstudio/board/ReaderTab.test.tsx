@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { FONT_NOTICE } from '../export/fonts';
+import { plateWidthFor } from '../export/batch';
+import { collectExportSlots } from '../export/sequence';
 
 const ex = vi.hoisted(() => ({
   pdf: vi.fn(),
@@ -13,7 +15,9 @@ const ex = vi.hoisted(() => ({
   zipAll: vi.fn(),
   print: vi.fn(),
   motion: vi.fn(),
-  plan: null as null | { fits: boolean; maxEdge?: number }
+  plan: null as null | { fits: boolean; maxEdge?: number },
+  oneFits: null as null | boolean,
+  planCalls: [] as unknown[][]
 }));
 vi.mock('../export/pdfExport', () => ({ exportComicPdf: ex.pdf }));
 vi.mock('../export/zipExport', () => ({ exportPngZip: ex.zip, exportLanguagesZip: ex.zipAll }));
@@ -21,7 +25,14 @@ vi.mock('../export/printView', () => ({ openPrintView: ex.print }));
 vi.mock('../export/motionComic', async (importOriginal) => ({ ...(await importOriginal<typeof import('../export/motionComic')>()), exportMotionComic: ex.motion }));
 vi.mock('../export/zipMemory', async (importOriginal) => {
   const real = await importOriginal<typeof import('../export/zipMemory')>();
-  return { ...real, planZipMemory: (...args: Parameters<typeof real.planZipMemory>) => (ex.plan ? { fullBytes: 0, bytes: 0, budget: 1, fullEdge: 2048, ...ex.plan } : real.planZipMemory(...args)) };
+  return {
+    ...real,
+    planZipMemory: (...args: Parameters<typeof real.planZipMemory>) => {
+      ex.planCalls.push(args);
+      return ex.plan ? { fullBytes: 0, bytes: 0, budget: 1, fullEdge: 2048, ...ex.plan } : real.planZipMemory(...args);
+    },
+    oneLanguageZipFits: (...args: Parameters<typeof real.oneLanguageZipFits>) => (ex.oneFits ?? real.oneLanguageZipFits(...args))
+  };
 });
 
 import { ReaderTab } from './ReaderTab';
@@ -37,6 +48,8 @@ beforeEach(() => {
     })
   );
   ex.plan = null;
+  ex.oneFits = null;
+  ex.planCalls = [];
   for (const f of [ex.pdf, ex.zip, ex.zipAll, ex.print, ex.motion]) f.mockReset();
 });
 afterEach(() => {
@@ -144,13 +157,37 @@ describe('ReaderTab exports', () => {
 
   it('too big for this device: the row says so up front and is not offered (no crashed tab)', () => {
     ex.plan = { fits: false, maxEdge: 1280 };
+    ex.oneFits = true;
     const doc = withTelugu(['en', 'te']);
     render(<ReaderTab studio={makeStudio(doc)} doc={doc} />);
     const row = within(openSheet()).getByRole('button', { name: /^All languages \(ZIP\)/ });
     expect(row).toBeDisabled();
-    expect(row).toHaveTextContent('Too big for one ZIP on this device — pick a language above and download it on its own');
+    expect(row).toHaveTextContent('Too big for one ZIP on this device — pick one language with the language switch and download its PNG pages');
     fireEvent.click(row);
     expect(ex.zipAll).not.toHaveBeenCalled();
+  });
+
+  it('too big even one language at a time: the row points to the PDF, never to a ZIP that would be refused too', () => {
+    ex.plan = { fits: false, maxEdge: 1280 };
+    ex.oneFits = false;
+    const doc = withTelugu(['en', 'te']);
+    render(<ReaderTab studio={makeStudio(doc)} doc={doc} />);
+    const row = within(openSheet()).getByRole('button', { name: /^All languages \(ZIP\)/ });
+    expect(row).toBeDisabled();
+    expect(row).toHaveTextContent('Too big to zip on this device, even one language at a time — download each language’s PDF instead');
+    expect(row).not.toHaveTextContent(/pick one language/);
+  });
+
+  it('the row is sized exactly as the exporter sizes it (same plate width)', () => {
+    const doc = withTelugu(['en', 'te']);
+    const studio = makeStudio(doc);
+    render(<ReaderTab studio={studio} doc={doc} />);
+    openSheet();
+    const call = ex.planCalls.find((c) => c[1] === 2);
+    expect(call).toBeDefined();
+    const { slots } = collectExportSlots(doc, studio.urlFor);
+    expect(call![0]).toEqual(slots);
+    expect((call![2] as { plateWidth?: number }).plateWidth).toBe(plateWidthFor(slots));
   });
 
   it('a ZIP that has to be smaller says so before the click', () => {

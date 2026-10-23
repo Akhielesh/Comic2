@@ -4,16 +4,18 @@
 // phone tab, losing the reader's place and the export.
 //
 // Two defences:
-//   1. zipExport keeps every PNG and every written chunk of the archive as a Blob (browser blob
-//      storage, outside the page's JS heap, paged to disk where the browser can), never as a second
-//      copy in JS memory — the old code held every PNG twice in the heap (input + output buffer).
+//   1. zipExport writes the archive into Blob slices (zipToBlob) instead of one big output buffer plus
+//      a Blob copy of it. The PNGs themselves are still held once each (JSZip reads every PNG Blob into
+//      an ArrayBuffer when it is added), so the browser holds about twice the PNG bytes at the end:
+//      the PNGs and the written archive.
 //   2. This guard, before anything is fetched or drawn: estimate the PNG bytes the archive will hold
 //      (images × languages × long edge²) against a budget for THIS device:
 //        fits               → full size, as before;
 //        too big            → every image is drawn smaller (never below MIN_ZIP_EDGE) and the result
 //                             says so honestly (`notice`), e.g. "saved at up to 1,472 px (full size is 2,048 px)";
 //        too big even then  → an honest ExportError (code 'too_big') before any work: for every
-//                             language, "download one language at a time"; for one language, "use the PDF".
+//                             language, "download one language at a time" — only when one language
+//                             really fits; otherwise (and for one language) "use the PDF".
 // The estimate is pessimistic (painted art compresses poorly as PNG) and the budget is a fraction of the
 // device's memory. Numbers are judgement calls (no owner decision yet); they live here, in one place.
 
@@ -152,11 +154,22 @@ export function zipReducedNotice(plan: ZipMemoryPlan, opts: { languages: number;
   return base;
 }
 
-/** The refusal for a ZIP that would not fit even at MIN_ZIP_EDGE (said before any work starts). */
-export function zipTooBigMessage(plan: ZipMemoryPlan, opts: { languages: number; pages: number }): string {
+/**
+ * The refusal for a ZIP that would not fit even at MIN_ZIP_EDGE (said before any work starts).
+ * "One language at a time" is advised only when one language really fits (`oneLanguageFits` false ⇒
+ * even a single language is too big, so the honest next step is the PDF).
+ */
+export function zipTooBigMessage(plan: ZipMemoryPlan, opts: { languages: number; pages: number; oneLanguageFits?: boolean }): string {
   const need = `about ${fmtMb(plan.bytes)} of memory`;
-  if (opts.languages > 1) {
+  if (opts.languages > 1 && opts.oneLanguageFits !== false) {
     return `This book is too big to zip in all ${opts.languages} languages at once on this device (${opts.pages} images × ${opts.languages} languages would need ${need}). Download one language at a time instead.`;
+  }
+  if (opts.languages > 1) {
+    return `This book is too big to zip on this device, even one language at a time (${opts.pages} images × ${opts.languages} languages would need ${need}). Download each language’s PDF instead — it keeps every page in one smaller file — or use a computer.`;
   }
   return `This book has too many pages to zip on this device (it would need ${need}). Download the PDF instead — it keeps every page in one smaller file — or use a computer.`;
 }
+
+/** Can one language of these slots be zipped on this device (at any size ≥ MIN_ZIP_EDGE)? */
+export const oneLanguageZipFits = (slots: readonly ExportSlot[], opts: { longEdge?: number; plateWidth?: number; budget?: number } = {}): boolean =>
+  planZipMemory(slots, 1, opts).fits;
