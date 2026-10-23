@@ -566,6 +566,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const [panelN, setPanelN] = useState<number | undefined>(undefined);
   const [lettering, setLettering] = useState(true);
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
+  /** The stage's fit box with no sheet over it (the image variant is chosen from this, never the shrunk stage). */
+  const [restingStageRef, restingStage] = useElementSize<HTMLDivElement>();
   const [bodyRef, body] = useElementSize<HTMLDivElement>();
   const pageBoxRef = useRef<HTMLDivElement>(null);
   const stageBoxRef = useRef<HTMLDivElement>(null);
@@ -697,7 +699,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
   const crowdedIds = [...placements.crowded];
   const overflowIds = plans.filter((p) => p.overflow).map((p) => p.lineId);
-  const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId;
+  // The balloon menu is the one surface while it is open: the inspector (a second sheet on phones, which
+  // would also re-fit the page under the menu) waits until it closes ("Style…" then shows it).
+  const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && !menu;
   const compactInspectorOpen = inspectorOpen && layout.compactInspector;
 
   const chooseAddKind = (kind: LineKind | null) => {
@@ -929,7 +933,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const stageInset = Math.max(sheetInset, coverInset);
   // The image variant follows the page's size with NO sheet over the stage: opening the lettering
   // inspector or moving the tools sheet between detents never swaps in (and downloads) a smaller file.
-  const restingPageWidth = fitPageToStage({ w: stage.width, h: stage.height + stageInset }, aspect, 0);
+  const restingPageWidth = fitPageToStage({ w: restingStage.width, h: restingStage.height }, aspect, 0);
   const imgWidth = editorImageWidth(ff, zoom, restingPageWidth, devicePixelRatioNow());
   const imageUrl = imgWidth ? studio.urlFor(sourcePage.render.asset, { width: imgWidth }) : studio.urlFor(sourcePage.render.asset);
   const trayAvailable = letteringEditable && phone;
@@ -1103,6 +1107,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   const stageEl = (
     <div ref={stageBoxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" data-testid="editor-canvas-box">
+      <div ref={restingStageRef} aria-hidden className="pointer-events-none absolute inset-3 sm:inset-6" data-testid="editor-resting-stage" />
       <div ref={canvasAreaRef} className="absolute inset-x-0 top-0" style={{ bottom: stageInset }} data-testid="editor-canvas-area">
         {/* Measured, never transformed: the fit box for the page. */}
         <div ref={stageRef} aria-hidden className="pointer-events-none absolute inset-3 sm:inset-6" data-testid="editor-stage-content" />

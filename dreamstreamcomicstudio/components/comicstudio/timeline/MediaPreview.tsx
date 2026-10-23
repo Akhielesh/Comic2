@@ -26,6 +26,7 @@ import {
 import { CompareView } from './CompareView';
 import type { TimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
+import { useCostFormat } from '../conversation/cost';
 
 const ROLE_LABEL: Record<MediaItem['role'], string> = {
   page: 'Page art',
@@ -75,6 +76,8 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
   const [note, setNote] = useState('');
   const pageSelId = useId();
   const refSelId = useId();
+  // Prices in the viewer's terms (governed users never see dollars).
+  const cost = useCostFormat(studio);
   if (!item) return null;
   const url = item.blocked ? undefined : studio.urlFor(item.asset, { width: 1080 });
   const ratio = assetRatio(doc, item.asset);
@@ -143,7 +146,7 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
     ['Version', item.versionLabel ?? '—'],
     ['Model', item.modelLabel ?? (item.source === 'upload' ? 'Uploaded' : 'Not recorded')],
     ['Size', item.w && item.h ? `${item.w}×${item.h}` : 'Not recorded'],
-    ['Cost', item.source === 'upload' && typeof item.costUsd !== 'number' ? 'No AI cost (uploaded)' : versionCostLabel(item)],
+    ['Cost', item.source === 'upload' && typeof item.costUsd !== 'number' ? 'No AI cost (uploaded)' : versionCostLabel(item, cost.exact)],
     ['QC', typeof item.qcScore === 'number' ? item.qcScore.toFixed(2) : 'Not checked'],
     ['Made by', item.origin ? ORIGIN_LABEL[item.origin] : item.source === 'upload' ? 'Uploaded' : 'Not recorded'],
     ['Added', shortDate(item.at)]

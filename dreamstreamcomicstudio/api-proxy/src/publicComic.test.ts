@@ -4,8 +4,11 @@ import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from './proxy';
 import { maskedPath, summarize } from './cspReport';
-import { oembedFor, slugFromShareUrl, trackProof, viewerHash } from './publicComic';
+import { oembedFor, PUBLIC_RATINGS, publicRatingOf, slugFromShareUrl, trackProof, viewerHash } from './publicComic';
 import { validateShareCardRpc } from '../../functions/_shared/shareHead';
+import { handleShare } from '../../functions/c/[[path]]';
+import { handleOg } from '../../functions/og/[[path]]';
+import { CONTENT_RATINGS } from '../../shared/comic/safety';
 
 const SLUG = 'Ab3dEf6hIj9kLm2nP';
 const KEY = 'K1234567890abcdefghijk';
@@ -228,6 +231,116 @@ describe('GET /api/comic/oembed', () => {
     stubFetch(() => null);
     const res = await call(`/api/comic/oembed?url=${encodeURIComponent(`https://comics.dreamstreamstudio.ai/c/${SLUG}`)}`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('content rating on the public payload (P2-PUBLIC-PAYLOAD)', () => {
+  it('passes a known rating through the allow-list; the edge list matches the shared CONTENT_RATINGS', async () => {
+    expect([...PUBLIC_RATINGS].sort()).toEqual([...CONTENT_RATINGS].sort());
+    for (const rating of CONTENT_RATINGS) {
+      stubFetch((name) => (name === 'comic_public_payload' ? { publication: publication({ rating }), doc: snapshot() } : null));
+      const body = await (await call(`/api/comic/public/s/${SLUG}`)).json();
+      expect(body.publication.rating).toBe(rating);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('an old publication without a rating still loads (no rating key, everything else intact)', async () => {
+    stubFetch((name) => (name === 'comic_public_payload' ? { publication: publication(), doc: snapshot() } : null));
+    const res = await call(`/api/comic/public/s/${SLUG}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect('rating' in body.publication).toBe(false);
+    expect(body.publication).toMatchObject({ slug: SLUG, allowDownload: true, languages: ['en'] });
+    expect(Object.keys(body.urls)).toHaveLength(4);
+  });
+
+  it('an unknown or malformed rating is dropped (never shown, never "kids-friendly"); row internals never pass', async () => {
+    for (const rating of ['R', 'X', 'NC-17', 'pg', ' PG', 13, null, ['PG'], { v: 'PG' }]) {
+      stubFetch(() => ({ publication: publication({ rating, safety: { rating: 'PG', checkedHash: 'h' }, user_id: 'u-1', project_id: 'p-1', views_count: 9, snapshot: {} }), doc: snapshot() }));
+      const res = await call(`/api/comic/public/s/${SLUG}`);
+      expect(res.status).toBe(200);
+      const pub = (await res.json()).publication;
+      expect('rating' in pub).toBe(false);
+      expect(Object.keys(pub).sort()).toEqual(['allowDownload', 'allowEmbed', 'card', 'defaultLang', 'languages', 'publishedAt', 'slug', 'startPage', 'updatedAt', 'visibility']);
+      vi.unstubAllGlobals();
+    }
+    expect([publicRatingOf('PG-13'), publicRatingOf('R'), publicRatingOf(undefined)]).toEqual(['PG-13', undefined, undefined]);
+  });
+
+  it('oEmbed carries the rating as content_rating when the card RPC has one (and only a known one)', async () => {
+    stubFetch((name) => (name === 'comic_share_card' ? publication({ rating: 'PG' }) : null));
+    const rated = await (await call(`/api/comic/oembed?url=${encodeURIComponent(`https://comics.dreamstreamstudio.ai/c/${SLUG}`)}`)).json();
+    expect(rated.content_rating).toBe('PG');
+    vi.unstubAllGlobals();
+    for (const rating of [undefined, 'R']) {
+      stubFetch(() => publication(rating ? { rating } : {}));
+      const body = await (await call(`/api/comic/oembed?url=${encodeURIComponent(`https://comics.dreamstreamstudio.ai/c/${SLUG}`)}`)).json();
+      expect(body.content_rating).toBeUndefined();
+      expect(body.title).toBe('Spice Run');
+      vi.unstubAllGlobals();
+    }
+    expect(oembedFor(validateShareCardRpc(publication())!, 'https://dreamstreamstudio.ai', undefined, undefined, 'G').content_rating).toBe('G');
+  });
+});
+
+describe('share links are read-only end to end (/c/*, /og/*, the edge API)', () => {
+  const WRITES = ['POST', 'PUT', 'PATCH', 'DELETE'];
+  const shareEnv = () => ({ VITE_SUPABASE_URL: SUPA, ASSETS: { fetch: vi.fn(async () => new Response('<!doctype html><html><head><!--ds:head--></head><body></body></html>')) } });
+
+  it('/c/<slug>, /c/<slug>/<tail> and /c/<slug>/embed answer 405 to every write, before any lookup', async () => {
+    const b = stubFetch(() => publication());
+    for (const path of [`/c/${SLUG}`, `/c/${SLUG}/spice-run`, `/c/${SLUG}/embed`]) {
+      for (const method of WRITES) {
+        const env = shareEnv();
+        const res = await handleShare(new Request(`https://comics.dreamstreamstudio.ai${path}`, { method, body: method === 'DELETE' ? undefined : '{}' }), env as never);
+        expect(res.status).toBe(405);
+        expect(res.headers.get('allow')).toBe('GET, HEAD');
+        expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+      }
+    }
+    expect(b.calls).toHaveLength(0);
+  });
+
+  it('/og/<key>/<file>.jpg answers 405 to every write and never fetches upstream', async () => {
+    const upstream = vi.fn(async () => new Response('jpeg', { status: 200 }));
+    for (const method of WRITES) {
+      const res = await handleOg(new Request(`https://comics.dreamstreamstudio.ai/og/${KEY}/og-en-0123456789ab.jpg`, { method }), { VITE_SUPABASE_URL: SUPA } as never, upstream as never);
+      expect(res.status).toBe(405);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('the edge API: payload and oEmbed refuse writes, the event route refuses reads; none reaches the container', async () => {
+    const b = stubFetch(() => ({ publication: publication(), doc: snapshot() }));
+    for (const method of WRITES) {
+      expect((await call(`/api/comic/public/s/${SLUG}`, { method })).status).toBe(405);
+      expect((await call(`/api/comic/oembed?url=${encodeURIComponent(`https://comics.dreamstreamstudio.ai/c/${SLUG}`)}`, { method })).status).toBe(405);
+    }
+    expect((await call(`/api/comic/public/s/${SLUG}/event`)).status).toBe(405);
+    // Refused before anything: no RPC, no table, no container request.
+    expect(b.calls).toHaveLength(0);
+  });
+
+  it('slug probing is rate-limited BEFORE the shape check: malformed and well-formed slugs share one limiter and one 404', async () => {
+    const b = stubFetch(() => null);
+    const rl = limiter(false);
+    for (const slug of ['short', SLUG, `${SLUG.slice(0, 16)}!`]) expect((await call(`/api/comic/public/s/${encodeURIComponent(slug)}`, {}, baseEnv({ PUBLIC_COMIC_RL: rl }))).status).toBe(429);
+    expect(rl.limit).toHaveBeenCalledTimes(3);
+    expect(b.calls).toHaveLength(0);
+    // With the limiter open, a well-formed unknown slug costs exactly one RPC and answers the canonical 404.
+    const open = limiter(true);
+    const res = await call(`/api/comic/public/s/${SLUG}`, {}, baseEnv({ PUBLIC_COMIC_RL: open }));
+    expect([res.status, b.calls.length]).toEqual([404, 1]);
+    expect(b.calls[0].url).toBe(`${SUPA}/rest/v1/rpc/comic_public_payload`);
+  });
+
+  it('allowDownload is passed through exactly as published (the reader shows downloads only when true)', async () => {
+    for (const allowDownload of [true, false]) {
+      stubFetch(() => ({ publication: publication({ allowDownload }), doc: snapshot() }));
+      expect((await (await call(`/api/comic/public/s/${SLUG}`)).json()).publication.allowDownload).toBe(allowDownload);
+      vi.unstubAllGlobals();
+    }
   });
 });
 

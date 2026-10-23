@@ -15,7 +15,7 @@ import { SAVINGS_COPY, SavingsChip, savedEntries, savedTotal } from './SavingsCh
 import { FormFactorProvider, formFactorFor } from './useFormFactor';
 import { HEADER_BANNER_MIN_ORDER, HEADER_SLOT_ORDER } from './headerSlots';
 import { feature } from './index';
-import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 
 const PHONE = formFactorFor({ w: 390, h: 844, coarse: true });
 const DESKTOP = formFactorFor({ w: 1440, h: 900 });
@@ -200,6 +200,10 @@ describe('ModeToggle (decisions-final #1: a view, never a permission)', () => {
 });
 
 describe('SavingsChip (decisions-final #6)', () => {
+  // Admin / own-key wording (dollars) unless a test says otherwise; governed users never see dollars.
+  beforeEach(() => showDollarPrices());
+  afterEach(() => resetUsageStatus());
+
   const docWithSavings = (saved: number): ComicDoc => {
     const doc = makeSampleDoc();
     return {
@@ -233,6 +237,27 @@ describe('SavingsChip (decisions-final #6)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Saved \$0\.30 by software/ }));
     expect(screen.getByRole('dialog', { name: 'Saved by software' })).toHaveTextContent(SAVINGS_COPY);
     expect(screen.getByText('Moved 3 balloons')).toBeInTheDocument();
+  });
+
+  it('governed users read the saving as a share of their usage — never dollars, also before the status loads', () => {
+    showUsagePrices(1);
+    const { unmount } = render(
+      <FormFactorProvider value={DESKTOP}>
+        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
+      </FormFactorProvider>
+    );
+    const chip = screen.getByRole('button', { name: /^Saved (≈[\d.]+%|<0\.1%) of your usage by software/ });
+    expect(chip.textContent).not.toMatch(/\$/);
+    fireEvent.click(chip);
+    expect(screen.getByRole('dialog', { name: 'Saved by software' }).textContent).not.toMatch(/\$/);
+    unmount();
+    resetUsageStatus();
+    render(
+      <FormFactorProvider value={DESKTOP}>
+        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('button', { name: /^Saved some of your usage by software/ }).textContent).toBe('Saved');
   });
 
   it('phones: no header chip; a new saving shows the copy as a calm toast', async () => {

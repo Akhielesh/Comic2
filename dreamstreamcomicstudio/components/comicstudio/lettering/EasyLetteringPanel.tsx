@@ -30,8 +30,10 @@ import { cx } from '../board/ui';
 
 const ROW = 'space-y-1.5';
 const ROW_LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
+// Touch (coarse pointers): every control is a REAL 44 px box (not a 32 px box with an ::after hit area —
+// neighbouring ::after areas overlapped and stole each other's taps; P1-QA easy-lettering-small-targets).
 const SMALL_BTN =
-  'tap-target inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-40';
+  'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]';
 
 type SeeThrough = 'solid' | 'soft' | 'see' | 'clear';
 const SEE_ALPHA: Record<Exclude<SeeThrough, 'clear'>, number> = { solid: 1, soft: 0.85, see: 0.6 };
@@ -95,9 +97,9 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
       )}
 
       <section className={ROW} aria-label="Text">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <p className={ROW_LABEL}>Text</p>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <button type="button" className={SMALL_BTN} aria-label="Smaller text" onClick={() => run(sizeStepOps(doc, page, ids, -0.1), 'Smaller text')}>
               <Minus className="h-3.5 w-3.5" aria-hidden />
             </button>
@@ -223,7 +225,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
             onChange={(e) => setAsk(e.target.value)}
             onKeyDown={(e) => e.stopPropagation()}
             placeholder={lines.length > 1 ? 'Ask AI about these balloons…' : 'Ask AI about this balloon…'}
-            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] coarse:text-[16px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none"
+            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] coarse:h-11 coarse:text-[16px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none"
           />
           <button type="submit" disabled={!ask.trim()} aria-label="Send to the director" className={SMALL_BTN}>
             <Send className="h-3.5 w-3.5" aria-hidden />

@@ -57,9 +57,18 @@ export interface ReaderHudProps {
   onFocusWithin(): void;
 }
 
+/**
+ * While hidden, nothing in a HUD row takes a tap: the rows are pointer-events-none AND so is every
+ * descendant (the bars, the language picker and the host's scrubber set pointer-events-auto on
+ * themselves, which would otherwise win). A tap on an invisible "Close reader" must never close the
+ * reader — it falls through to the stage, which brings the HUD back. Keyboard focus still reaches the
+ * controls (no `inert`): focusing one shows the HUD again (onFocusWithin).
+ */
+export const HUD_HIDDEN_ROW = 'pointer-events-none [&_*]:!pointer-events-none';
+
 export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
   const hidden = !p.visible;
-  const bar = 'pointer-events-auto flex items-center gap-1 rounded-full p-1 shadow-[0_8px_30px_rgba(0,0,0,0.35)]';
+  const bar = `${hidden ? 'pointer-events-none' : 'pointer-events-auto'} flex items-center gap-1 rounded-full p-1 shadow-[0_8px_30px_rgba(0,0,0,0.35)]`;
   return (
     <div
       className="pointer-events-none absolute inset-0 z-[40]"
@@ -71,7 +80,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
         className={[
           'absolute inset-x-0 top-0 flex items-start justify-between gap-2 px-[max(12px,var(--sa-left))] pr-[max(12px,var(--sa-right))] pt-[max(10px,var(--sa-top))]',
           'transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0.7,0.2,1)] motion-reduce:transition-opacity',
-          hidden ? 'pointer-events-none -translate-y-1.5 opacity-0' : 'opacity-100'
+          hidden ? `${HUD_HIDDEN_ROW} -translate-y-1.5 opacity-0` : 'opacity-100'
         ].join(' ')}
       >
         {/* The title chip gives way (truncates) so the controls never wrap or overflow, even at 320 px. */}
@@ -89,7 +98,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
         </div>
         <div className={`${bar} ${glass} shrink-0 justify-end`}>
           {p.language && p.language.options.length > 1 && (
-            <div className="pointer-events-auto min-w-0" data-no-turn>
+            <div className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} min-w-0`} data-no-turn>
               {/* Phones: globe-only trigger, so close + language + guided + settings + full screen fit at 320 px. */}
               <ReaderLanguagePicker {...p.language} compact={p.compact} />
             </div>
@@ -133,7 +142,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
         className={[
           'absolute inset-x-0 bottom-0 flex justify-center px-[max(12px,var(--sa-left))] pr-[max(12px,var(--sa-right))] pb-[max(10px,var(--sa-bottom))]',
           'transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0.7,0.2,1)] motion-reduce:transition-opacity',
-          hidden ? 'pointer-events-none translate-y-1.5 opacity-0' : 'opacity-100'
+          hidden ? `${HUD_HIDDEN_ROW} translate-y-1.5 opacity-0` : 'opacity-100'
         ].join(' ')}
       >
         {p.guided.on ? (

@@ -13,7 +13,6 @@
 import type { ComicDoc, Line, Page } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, i18nOf, lineSourceHash, normalizeSource, translationStatus } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
-import { formatUsd } from '../../../../shared/comic/models.js';
 import type { DocOp, SpendAction } from '../../../../shared/comic/ops.js';
 import { effectiveRating } from '../../../../shared/comic/safety.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
@@ -27,6 +26,7 @@ import { scriptShare } from '../i18n/translate.js';
 import { swapSourceOps } from '../actions/i18n.js';
 import { prefilterText } from '../safety/index.js';
 import { startAction, type RunActionOptions } from '../jobs.js';
+import { costFormatterFor } from '../costText.js';
 import { pushNextSteps, type DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 
@@ -70,13 +70,17 @@ const ratingOf = (ctx: StudioContext) => ctx.rating ?? effectiveRating(ctx.sessi
 async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Extract<SpendAction, { type: 'translate' }>): Promise<string> {
   const doc = ctx.session.doc;
   const quote = quoteTranslation(doc, ctx.keys, action);
+  // caps and origin are explicit on every action this tool starts (RunActionOptions may require them).
   const opts: Omit<RunActionOptions, 'confirmed'> = {
     collectCard: (card) => {
       turn.cards.push(card);
     },
     collectNextSteps: (steps) => pushNextSteps(turn, steps),
+    caps: ctx.caps,
     origin: 'director'
   };
+  // Prices the director reads are worded for this user: "≈ $0.05" (admin, own key) or "≈2% of your usage".
+  const cost = costFormatterFor(ctx);
   let message: string;
   // Free only when NO plan needs the translator or the linguist (a tiny quote that rounds to $0 still asks).
   if (quote.plans.every(planIsFree)) {
@@ -101,11 +105,11 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Ex
   const fix = overlayFix(ctx.session.doc, quote.byok);
   if (fix?.pages.length) {
     notes.push(
-      `Note: the pages have the lettering painted into the art, so translated editions need overlay lettering (owner rule): redrawing ${plural(fix.pages.length, 'page')} without text costs ≈ ${formatUsd(fix.usd)} (ask before doing it; the Languages tab has the button).`
+      `Note: the pages have the lettering painted into the art, so translated editions need overlay lettering (owner rule): redrawing ${plural(fix.pages.length, 'page')} without text costs ${cost.approx(fix.usd)} (ask before doing it; the Languages tab has the button).`
     );
   }
   const cover = textlessCoverQuote(ctx.session.doc, quote.byok);
-  if (cover !== null) notes.push(`The cover title is painted; a textless cover with an editable per-language title is a one-time ≈ ${formatUsd(cover)} (render_cover textless, ask first).`);
+  if (cover !== null) notes.push(`The cover title is painted; a textless cover with an editable per-language title is a one-time ${cost.approx(cover)} (render_cover textless, ask first).`);
   return [message, ...notes].join(' ');
 }
 
@@ -277,7 +281,7 @@ function readTranslationTool(ctx: StudioContext): DirectorTool {
       const edition = i18nOf(doc).editions[lang];
       if (!edition) {
         const usd = quoteTranslation(doc, ctx.keys, { languages: [lang] }).estimate.usd;
-        return `There is no ${englishName(lang)} translation yet. translate_comic would cost ≈ ${formatUsd(usd)}.`;
+        return `There is no ${englishName(lang)} translation yet. translate_comic would cost ${costFormatterFor(ctx).approx(usd)}.`;
       }
       const pages = pagesArg(doc, args.pages);
       const want = pages ? new Set(pages.map((p) => p.id)) : null;

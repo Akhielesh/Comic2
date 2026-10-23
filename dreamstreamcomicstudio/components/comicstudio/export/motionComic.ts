@@ -184,6 +184,20 @@ export const kenBurns = (r: Rect, progress: number, amount = 0.05): Rect => {
 
 export const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 
+/**
+ * The timeline without the shots `keep` rejects, re-timed back to back — used to drop the shots whose
+ * art could not be loaded, so the video never holds a blank frame where a page should be.
+ */
+export function keepShots(timeline: MotionTimeline, keep: (shot: MotionShot) => boolean): MotionTimeline {
+  let t = 0;
+  const shots = timeline.shots.filter(keep).map((shot) => {
+    const out = { ...shot, startMs: t };
+    t += shot.durationMs;
+    return out;
+  });
+  return { shots, totalMs: t };
+}
+
 /** Best recording container this browser supports (MP4 first: it plays everywhere social). */
 export const pickRecorderMime = (isSupported: (mime: string) => boolean): { mime: string; ext: 'mp4' | 'webm' } | null => {
   const candidates: { mime: string; ext: 'mp4' | 'webm' }[] = [
@@ -256,30 +270,42 @@ export async function exportMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: Mot
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new ExportError('This browser can’t draw video frames.');
 
-  const timeline = buildMotionTimeline(book, opts.timeline);
-  const pageShots = timeline.shots.filter((s) => s.kind === 'page');
+  const planned = buildMotionTimeline(book, opts.timeline);
+  const pageShots = planned.shots.filter((s) => s.kind === 'page');
   if (!pageShots.length) throw new ExportError('Nothing to animate yet — draw at least one page first.');
 
   // Load art up front (bounded by the comic's size; pages are reused across shots).
   const skipped: string[] = [];
   const images = new Map<string, LoadedImage>();
-  const load = async (key: string, url?: string) => {
-    if (!url || images.has(key)) return;
+  const labelOf = (key: string) => (key === 'cover' ? 'Cover' : `Page ${book.pages.find((p) => p.id === key)?.n ?? '?'}`);
+  const load = async (key: string, url: string | undefined, report: boolean) => {
+    if (images.has(key)) return;
+    if (!url) {
+      // Honest, never a silent blank: the shot is dropped and the reason reported.
+      if (report) skipped.push(`${labelOf(key)} (image link not ready yet)`);
+      return;
+    }
     try {
       images.set(key, await loadExportImage(url, opts.signal));
     } catch (err) {
       if (opts.signal?.aborted) throw new ExportError(CANCELLED);
-      skipped.push(`${key === 'cover' ? 'Cover' : `Page ${book.pages.find((p) => p.id === key)?.n ?? '?'}`} (${(err as Error).message})`);
+      skipped.push(`${labelOf(key)} (${(err as Error).message})`);
     }
   };
   try {
     opts.onProgress?.({ done: 0, total: 1, label: 'Loading pages…' });
     const coverAsset = book.cover.render.asset;
-    const wantsCover = timeline.shots.some((s) => s.kind === 'cover' || s.plate === 'back_cover');
-    if (wantsCover && coverAsset && canServeToOwner(coverAsset)) await load('cover', urlFor(coverAsset));
+    const coverShot = planned.shots.some((s) => s.kind === 'cover');
+    const wantsCover = coverShot || planned.shots.some((s) => s.plate === 'back_cover');
+    if (wantsCover && coverAsset && canServeToOwner(coverAsset)) await load('cover', urlFor(coverAsset), coverShot);
     for (const shot of pageShots) {
       const page = book.pages.find((p) => p.id === shot.pageId)!;
-      await load(page.id, urlFor(page.render.asset));
+      await load(page.id, urlFor(page.render.asset), true);
+    }
+    // Drop the shots whose art didn't arrive (the back cover keeps its placeholder vignette).
+    const timeline = keepShots(planned, (s) => (s.kind === 'cover' ? images.has('cover') : s.kind === 'page' || s.kind === 'panel' ? images.has(s.pageId || '') : true));
+    if (!timeline.shots.some((s) => s.kind === 'page')) {
+      throw new ExportError(`Couldn’t load any pages for the video.${skipped.length ? ` ${skipped.join('; ')}.` : ''}`);
     }
     const title = book.cover.title || book.brief.title || 'Untitled comic';
     const face = titleFaceFor(lang);

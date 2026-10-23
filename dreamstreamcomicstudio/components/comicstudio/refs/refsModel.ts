@@ -3,7 +3,7 @@
 // so "Used for the sheet" / "Used on pages" never lie about which photos reach the model.
 
 import type { Character, ComicDoc, RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
-import { formatUsd, resolveImageJob } from '../../../shared/comic/models';
+import { resolveImageJob } from '../../../shared/comic/models';
 import { unitPrice } from '../../../shared/comic/plan';
 import { REF_LABELS_FOR, REF_LABEL_TEXT, REF_LIMITS, capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { isPhotoLikeness, pickRefs, sheetRefs, sheetRefsChanged } from '../../../shared/comic/refRanking';
@@ -131,23 +131,38 @@ export interface SheetHint {
   changed: boolean;
   /** No sheet yet but photos exist (lead/support). */
   missing: boolean;
+  /** The registry quote for one sheet (markup included unless BYOK); 0 when it couldn't be priced. */
+  usd: number;
+  /**
+   * The quote printed for THIS user by the caller's formatter ("≈ $0.07" for admins / own key,
+   * "≈2% of your usage" for governed users). Empty when no formatter was passed: this pure helper
+   * never prints dollars on its own (governed users never see them).
+   */
   price: string;
 }
 
-/** "New photos since this sheet — redraw ≈ $0.07" / "Make the model sheet from these photos ≈ $0.07". */
-export function sheetHint(doc: ComicDoc | null | undefined, owner: RefOwner, byok = false): SheetHint | null {
+/**
+ * "New photos since this sheet — redraw ≈ $0.07" / "Make the model sheet from these photos ≈ $0.07".
+ * `price` formats the quote for the viewer — pass conversation/cost useCostFormat(studio).approx.
+ */
+export function sheetHint(
+  doc: ComicDoc | null | undefined,
+  owner: RefOwner,
+  byok = false,
+  price?: (usd: number) => string
+): SheetHint | null {
   if (!doc || owner.kind !== 'character') return null;
   const c = doc.cast.find((x) => x.id === owner.id);
   if (!c || c.tier === 'extra' || !c.refs.length) return null;
-  let price = '';
+  let usd = 0;
   try {
-    price = formatUsd(unitPrice(doc, 'sheet', { byok }).usd);
+    usd = unitPrice(doc, 'sheet', { byok }).usd;
   } catch {
-    price = '';
+    usd = 0;
   }
   const ready = c.sheet.status === 'ready' && !!c.sheet.asset;
   const busy = c.sheet.status === 'queued' || c.sheet.status === 'rendering';
-  return { changed: ready && sheetRefsChanged(c, sheetSlots(doc)), missing: !ready && !busy, price };
+  return { changed: ready && sheetRefsChanged(c, sheetSlots(doc)), missing: !ready && !busy, usd, price: usd > 0 && price ? price(usd) : '' };
 }
 
 export const LIKENESS_OPTIONS: { value: NonNullable<Character['likeness']>; label: string; hint: string }[] = [

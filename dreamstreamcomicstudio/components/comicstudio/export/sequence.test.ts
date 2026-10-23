@@ -48,6 +48,14 @@ describe('collectExportSlots (the one book order for every export)', () => {
     expect(skipped.some((s) => s.startsWith('Cover'))).toBe(false);
   });
 
+  it('never lets a malformed page number into a file name (no path pieces in ZIP entries)', () => {
+    const doc = makeBook((d) => {
+      (d.pages[0] as unknown as { n: unknown }).n = '../../evil';
+    });
+    const { slots } = collectExportSlots(doc, fakeUrlFor);
+    for (const s of slots) expect(s.fileBase).toMatch(/^[0-9]{2,}-[a-z0-9-]+$/);
+  });
+
   it('uses the book trim and its uniform-trim switch', () => {
     const doc = makeBook();
     expect(trimAspectOf(doc)).toBeCloseTo(2 / 3, 6);

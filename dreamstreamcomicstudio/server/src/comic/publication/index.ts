@@ -46,7 +46,11 @@ export interface PublicationRow {
   snapshot: ComicDoc | null;
   card: ShareCard | Record<string, never>;
   publishedRev: number;
-  /** PublishGateResult summary + `contentHash` (the "changes since publishing" fingerprint). */
+  /**
+   * PublishGateResult summary + `contentHash` (the "changes since publishing" fingerprint).
+   * `rating` (G / PG / PG-13) is the rating the gate verified the snapshot under, frozen at publish
+   * time; the anon RPCs and payloadOf expose it as PublicPublicationInfo.rating.
+   */
   safety: Record<string, unknown>;
   viewsCount?: number;
   firstPublishedAt?: number | null;
@@ -155,9 +159,11 @@ export { newAssetKey, newSlug } from './ids.js';
 export {
   cardPatchOps,
   configurePublication,
+  maybeSweepOrphans,
   parsePublishRequest,
   parseSettingsPatch,
   payloadOf,
+  publicationRatingOf,
   publicObjectUrl,
   publishWithOutcome,
   PublishError,
@@ -167,5 +173,5 @@ export {
   type PublishOutcome
 } from './publication.js';
 export { contentFingerprint, planSnapshot, snapshotPaths } from './snapshot.js';
-export { escPango, ogHash, scriptsCovered } from './ogImage.js';
+export { escPango, ogHash, ratingMeta, scriptsCovered } from './ogImage.js';
 export { createMemoryPublicationStore, createSupabasePublicationStore, type MemoryPublicationStore, type PublicationBackend } from './store.js';

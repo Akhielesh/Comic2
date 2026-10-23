@@ -50,7 +50,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 const LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
 const BTN =
-  'tap-target inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-40';
+  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
 const CASES: { value: TextCase; label: string }[] = [
   { value: 'upper', label: 'UPPER' },
   { value: 'as_typed', label: 'As typed' },

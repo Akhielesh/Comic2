@@ -7,6 +7,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioController } from '../types';
 import { ORIGIN_LABEL, versionCostLabel, type VersionItem } from './bookModel';
 import { Badge, BlockedTile, cx, shortDate } from './ui';
+import { useCostFormat } from '../conversation/cost';
 
 export interface CompareViewProps {
   studio: StudioController;
@@ -22,11 +23,11 @@ export interface CompareViewProps {
 const sizeLabel = (v: VersionItem) => (v.asset.w && v.asset.h ? `${v.asset.w}×${v.asset.h}${v.shape ? ` (${v.shape})` : ''}` : 'Not recorded');
 
 /** Recorded facts per version (pure; tested through CompareView). */
-export const compareRows = (a: VersionItem, b: VersionItem): { label: string; a: string; b: string; differs: boolean }[] => {
+export const compareRows = (a: VersionItem, b: VersionItem, money?: (usd: number) => string): { label: string; a: string; b: string; differs: boolean }[] => {
   const rows: [string, (v: VersionItem) => string][] = [
     ['Model', (v) => v.modelLabel ?? 'Not recorded'],
     ['Size', sizeLabel],
-    ['Cost', (v) => versionCostLabel(v)],
+    ['Cost', (v) => versionCostLabel(v, money)],
     ['QC score', (v) => (typeof v.qcScore === 'number' ? v.qcScore.toFixed(2) : 'Not checked')],
     ['Made by', (v) => (v.origin ? ORIGIN_LABEL[v.origin] : 'Not recorded')],
     ['Note', (v) => v.note ?? '—'],
@@ -58,7 +59,8 @@ export const CompareView: React.FC<CompareViewProps> = ({ studio, doc, a, b, rat
   const sliderId = useId();
   const urlA = a.blocked ? undefined : studio.urlFor(a.asset, { width: 720 });
   const urlB = b.blocked ? undefined : studio.urlFor(b.asset, { width: 720 });
-  const rows = compareRows(a, b);
+  const cost = useCostFormat(studio);
+  const rows = compareRows(a, b, cost.exact);
   return (
     <div className="min-w-0 space-y-3" aria-label={`Compare v${a.n} and v${b.n}`}>
       {/* Wide screens: side by side. */}

@@ -4,6 +4,7 @@ import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, i18nOf, lineSourceHash, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps } from '../../../../shared/comic/ops.js';
 import { AUTO_CORRECTED_NOTE } from '../../../../shared/comic/translationPlan.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { startAction } from '../jobs.js';
 import { newSession, testContext } from '../orchestrator.fakes.js';
 import { sixPageKidsDoc } from '../i18n/testing.js';
@@ -112,5 +113,44 @@ describe('accept_translation_issue', () => {
     const session = newSession(doc);
     await startAction(testContext(session), { type: 'accept_translation_issue', lang: 'te', lineId: 'brief.title', useSuggestion: true }, { confirmed: true, origin: 'user' });
     expect(i18nOf(session.doc).editions.te.brief?.title).toMatchObject({ text: 'మైలో చంద్రుడు', status: 'reviewed' });
+  });
+});
+
+describe('prices are worded for the user (governed users never read dollars)', () => {
+  const governed: StudioCaps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 90, exhausted: false, pctPerStandardPage: 5 } };
+  const noEdition = () => sixPageKidsDoc();
+  const lastMsg = (doc: ComicDoc) => doc.conversation[doc.conversation.length - 1];
+
+  it('"Translate it first" quotes a share of the usage in the message, its card and the outcome', async () => {
+    const session = newSession(noEdition());
+    const out = await startAction(testContext(session, { caps: governed }), { type: 'swap_source_language', lang: 'te' }, { confirmed: true, origin: 'user' });
+    expect(out.outcome).toMatchObject({ status: 'blocked', code: 'NOT_READY', message: expect.stringMatching(/Translate it first \((?:≈[\d.]+|<0\.1)% of your usage\)/) });
+    const msg = lastMsg(session.doc);
+    expect(msg.text).toMatch(/Translate it first \((?:≈[\d.]+|<0\.1)% of your usage\)/);
+    expect(JSON.stringify(msg)).not.toMatch(/\$\d/);
+    expect(msg.nextSteps?.[0]).toMatchObject({ label: 'Translate into Telugu', action: { type: 'translate', languages: ['te'] } });
+  });
+
+  it('caps on the action options win over the context (a director turn passes them explicitly)', async () => {
+    const session = newSession(noEdition());
+    const collected: string[] = [];
+    const out = await startAction(testContext(session), { type: 'swap_source_language', lang: 'te' }, {
+      confirmed: false,
+      caps: governed,
+      origin: 'director',
+      collectCard: (c) => collected.push(c.type === 'notice' ? c.text : '')
+    });
+    expect(out.outcome.message).toMatch(/% of your usage/);
+    expect(collected.join(' ')).toMatch(/% of your usage/);
+    expect(collected.join(' ')).not.toMatch(/\$/);
+  });
+
+  it('an admin (or own key) still reads dollars; a free swap reads "free" for a governed user', async () => {
+    const admin = newSession(noEdition());
+    await startAction(testContext(admin, { caps: { ...governed, admin: true } }), { type: 'swap_source_language', lang: 'te' }, { confirmed: true, origin: 'user' });
+    expect(lastMsg(admin.doc).text).toMatch(/Translate it first \(≈ \$\d/);
+    const session = newSession(translated());
+    await startAction(testContext(session, { caps: governed }), { type: 'swap_source_language', lang: 'te' }, { confirmed: true, origin: 'user' });
+    expect(lastMsg(session.doc).text).toContain('Every other translation stays current (free).');
   });
 });

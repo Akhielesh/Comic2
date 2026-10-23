@@ -2,10 +2,10 @@
 // decisions-final #3). Owner: P1-BOOKMODEL.
 //
 //   ┌ Your book ─────────────────────────────── [Plan | Status | Cost] ┐
-//   │ 3 pages · 9 panels · ≈$0.21 to draw                             │
+//   │ 3 pages · 9 panels · ≈$0.21 to draw (≈2% of your usage, governed) │
 //   │ [cover] [p1 ▦] [p2 ▦] [p3 ▦]  ← filmstrip (scroll-snap, ←/→)     │
 //   │ Page 2 · summary · panels (shot, cast, 💬, ▭) · warnings · acts │
-//   │ [Approve & draw all · ≈$0.21]                                   │
+//   │ [Approve & render all · ≈$0.21]                                 │
 //   └─────────────────────────────────────────────────────────────────┘
 //
 // LIVE like every card: it re-reads `studio.doc`; the payload only scopes it (pageIds, cover,
@@ -15,6 +15,9 @@
 // Money is honest: quotes come from shared/comic/plan.ts (the server gate's own targeting and
 // registry estimate), spent amounts from the doc's ledger. A drawn, current page is never quoted
 // as "to draw". Inside a gate (`gateId`) every spend button is hidden — the gate owns approval.
+// Every amount is printed for THIS user (conversation/cost.ts useCostFormat): governed users read a
+// share of their usage ("≈2% of your usage") and never a dollar figure — also before their usage
+// status has loaded; admins and comics on the user's own key read dollars.
 // Easy shows the filmstrip and ONE primary action (details one tap away); Pro adds the view
 // switcher, expanded details, word counts and QC.
 
@@ -46,7 +49,7 @@ import {
   type QualityTier
 } from '../../../shared/comic/doc';
 import { MAX_SPEND_ENTRIES } from '../../../shared/comic/limits';
-import { formatUsd, getImageModel } from '../../../shared/comic/models';
+import { getImageModel } from '../../../shared/comic/models';
 import {
   LOW_QC_SCORE,
   coverNeedsDraw,
@@ -64,7 +67,6 @@ import {
   SPEND_KIND_LABEL,
   byokFromDoc,
   cssAspect,
-  formatSpend,
   initials,
   nameHue,
   plural
@@ -72,6 +74,7 @@ import {
 import { composeInStudio } from '../conversation/composerBus';
 import { CardShell, GhostButton, PrimaryButton, Segmented, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
+import { useCostFormat, type CostFormat } from '../conversation/cost';
 import type { CardProps } from '../extensions';
 import { PageWireframe } from './PageWireframe';
 
@@ -171,15 +174,37 @@ const StatusPill: React.FC<{ status: Status; className?: string }> = ({ status, 
 const isDrawnStatus = (s: Status) => s === 'ready' || s === 'custom';
 const isBusyStatus = (s: Status) => s === 'queued' || s === 'rendering';
 
-/** "$0.06" (spent) or "≈$0.07" (to draw); undefined when there is no real number to show. */
-const tileCost = (s: { status: Status; spentUsd?: number; costUsd?: number; quoteUsd?: number }): { text: string; spoken: string } | undefined => {
+/**
+ * A share for a narrow cell: "≈2%" / "<0.1%" for governed users (the panel says "of your usage"
+ * once), the dollar string otherwise. Undefined when a governed user's share isn't known yet — a
+ * narrow cell then shows nothing rather than a vague phrase (and never dollars).
+ */
+export const shortCost = (cost: CostFormat, usd: number, kind: 'spent' | 'quote'): string | undefined => {
+  if (!cost.governed) return kind === 'quote' ? cost.badge(usd) : cost.exact(usd);
+  const s = cost.exact(usd);
+  if (s === 'Free') return s;
+  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(s);
+  return m ? m[1] : undefined;
+};
+
+/** Spent (drawn) or to-draw cost of a tile, printed for this user; undefined when there is no real number. */
+const tileCost = (
+  s: { status: Status; spentUsd?: number; costUsd?: number; quoteUsd?: number },
+  cost: CostFormat
+): { text?: string; spoken: string } | undefined => {
   const spent = s.spentUsd ?? s.costUsd;
-  if (isDrawnStatus(s.status) && typeof spent === 'number' && spent > 0) return { text: formatSpend(spent), spoken: `${formatSpend(spent)} spent` };
-  if (typeof s.quoteUsd === 'number' && s.quoteUsd > 0) return { text: `≈${formatUsd(s.quoteUsd)}`, spoken: `about ${formatUsd(s.quoteUsd)} to draw` };
+  if (isDrawnStatus(s.status) && typeof spent === 'number' && spent > 0) {
+    return { text: shortCost(cost, spent, 'spent'), spoken: `${cost.governed ? cost.spoken(spent) : cost.exact(spent)} spent` };
+  }
+  if (typeof s.quoteUsd === 'number' && s.quoteUsd > 0) return { text: shortCost(cost, s.quoteUsd, 'quote'), spoken: `${cost.spoken(s.quoteUsd)} to draw` };
   return undefined;
 };
 
 const TIER_LABEL: Record<QualityTier, string> = { draft: 'Draft', standard: 'Standard', pro: 'Pro' };
+
+/** What a screen reader hears after the tile's visible label: ", about $0.07 to draw, not drawn, 2 panels". */
+const tileSpoken = (t: { status: Status; summary?: PageSummary; cost?: { spoken: string }; extra: string[] }): string =>
+  `, ${[t.cost?.spoken, STATUS_LABEL[t.status].toLowerCase(), t.summary ? plural(t.summary.panels.length, 'panel') : '', ...t.extra].filter(Boolean).join(', ')}`;
 
 // ── Avatars ──────────────────────────────────────────────────────────────────
 
@@ -227,8 +252,9 @@ interface Tile {
   status: Status;
   page?: Page;
   summary?: PageSummary;
-  aria: string;
-  cost?: { text: string; spoken: string };
+  /** Extra words for screen readers after the visible ones (panel count, flags). */
+  extra: string[];
+  cost?: { text?: string; spoken: string };
   flag?: string;
 }
 
@@ -254,7 +280,7 @@ const Thumb: React.FC<{
       {art ? (
         <img src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(src!)} className="h-full w-full object-cover" />
       ) : tile.kind === 'cover' ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--ds-well)] p-2 text-center">
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--ds-well)] p-2 text-center" aria-hidden>
           <span className="text-[9px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Cover</span>
           <span className="line-clamp-3 break-words text-[12px] font-semibold leading-tight text-[var(--ds-ink)]">{book.cover.title || 'Untitled'}</span>
         </div>
@@ -262,7 +288,7 @@ const Thumb: React.FC<{
         <PageWireframe panels={tile.summary?.panels ?? []} aspect={doc.format.pageAspect} detail={width >= TILE_W} />
       )}
       {held && (
-        <span className="absolute inset-x-1 bottom-1 inline-flex items-center justify-center gap-1 rounded-md bg-[var(--ds-surface-strong)] px-1 py-0.5 text-[9.5px] text-[var(--ds-ink)]">
+        <span className="absolute inset-x-1 bottom-1 inline-flex items-center justify-center gap-1 rounded-md bg-[var(--ds-surface-strong)] px-1 py-0.5 text-[9.5px] text-[var(--ds-ink)]" aria-hidden>
           <ShieldAlert className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">{safety === 'blocked' ? 'Held for review' : 'Above rating'}</span>
         </span>
       )}
@@ -270,7 +296,7 @@ const Thumb: React.FC<{
         <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-[var(--ds-surface)]" title={tile.flag} aria-hidden />
       )}
       {isBusyStatus(tile.status) && (
-        <span className="absolute inset-0 grid place-items-center">
+        <span className="absolute inset-0 grid place-items-center" aria-hidden>
           <span className="rounded-full bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10px] font-medium text-[var(--ds-ink)] shadow-sm">
             {tile.status === 'queued' ? 'Queued' : 'Drawing…'}
           </span>
@@ -282,9 +308,9 @@ const Thumb: React.FC<{
 
 // ── Cost panel (view === 'cost'): real numbers only ──────────────────────────
 
-/** "3 pages $0.21" / "1 character sheet $0.06" from an estimate line. */
-const lineText = (l: { label: string; count: number; usd: number }) =>
-  `${l.count} ${l.count === 1 ? l.label.replace(/s$/, '') : l.label} ${formatUsd(l.usd)}`;
+/** "3 pages $0.21" / "1 character sheet ≈1% of your usage" from an estimate line. */
+const lineText = (l: { label: string; count: number; usd: number }, cost: CostFormat) =>
+  `${l.count} ${l.count === 1 ? l.label.replace(/s$/, '') : l.label} ${cost.exact(l.usd)}`;
 
 const CostRow: React.FC<{ label: React.ReactNode; value: React.ReactNode; note?: React.ReactNode }> = ({ label, value, note }) => (
   <div className="flex min-w-0 items-baseline justify-between gap-3 py-1">
@@ -296,13 +322,16 @@ const CostRow: React.FC<{ label: React.ReactNode; value: React.ReactNode; note?:
   </div>
 );
 
-const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<typeof quoteRenderPages>; byok: boolean; pro: boolean }> = ({
+const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<typeof quoteRenderPages>; byok: boolean; pro: boolean; cost: CostFormat }> = ({
   doc,
   book,
   quote,
   byok,
-  pro
+  pro,
+  cost
 }) => {
+  /** A narrow cell (bars, per-model rows): "$0.12" or "≈1%"; "—" when a governed share isn't known yet. */
+  const cell = (usd: number) => shortCost(cost, usd, 'spent') ?? '—';
   const kinds = Object.entries(doc.spend.byKind || {})
     .filter(([, usd]) => typeof usd === 'number' && usd > 0)
     .sort((a, b) => (b[1] as number) - (a[1] as number)) as [keyof typeof SPEND_KIND_LABEL, number][];
@@ -323,18 +352,22 @@ const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<
   const pricing = book.pricing;
   const coverSpent = book.cover.spentUsd;
   const coverLine =
-    isDrawnStatus(book.cover.status) ? (coverSpent ? formatSpend(coverSpent) : 'Drawn') : book.cover.quoteUsd ? `≈${formatUsd(book.cover.quoteUsd)}` : STATUS_LABEL[book.cover.status];
+    isDrawnStatus(book.cover.status) ? (coverSpent ? cost.exact(coverSpent) : 'Drawn') : book.cover.quoteUsd ? cost.badge(book.cover.quoteUsd) : STATUS_LABEL[book.cover.status];
   return (
     <section aria-label="Cost breakdown" className="mt-3 min-w-0 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)] px-3 py-2">
       <div className="divide-y divide-[var(--ds-hairline-soft)]">
-        <CostRow label="Spent on this comic" value={formatSpend(doc.spend.totalUsd)} note={byok ? 'Images on your own key — tracked so you see the real cost.' : undefined} />
+        <CostRow
+          label="Spent on this comic"
+          value={doc.spend.totalUsd > 0 ? cost.exact(doc.spend.totalUsd) : 'Nothing yet'}
+          note={byok ? 'Images on your own key — tracked so you see the real cost.' : cost.governed ? 'Shown as a share of your usage.' : undefined}
+        />
         {book.totals.savedUsd > 0 && (
-          <CostRow label="Saved by software" value={formatSpend(book.totals.savedUsd)} note="Free — done by the editor, no AI cost." />
+          <CostRow label="Saved by software" value={cost.exact(book.totals.savedUsd)} note="Free — done by the editor, no AI cost." />
         )}
         <CostRow
           label="To draw now"
-          value={quote.nothing ? '$0' : `≈${formatUsd(quote.usd)}`}
-          note={quote.nothing ? 'Every page here is drawn and up to date.' : quote.lines.map(lineText).join(' · ')}
+          value={quote.nothing ? 'Nothing' : cost.badge(quote.usd)}
+          note={quote.nothing ? 'Every page here is drawn and up to date.' : quote.lines.map((l) => lineText(l, cost)).join(' · ')}
         />
         <CostRow label="Cover" value={coverLine} />
         {pricing && (
@@ -347,14 +380,14 @@ const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<
                 )}
               </span>
             }
-            value={`≈${formatUsd(pricing.pageUsd)}/page`}
-            note={`${pricing.locked ? 'Your pick for this comic' : `${TIER_LABEL[pricing.tier] ?? pricing.tier} quality`} · cover ≈${formatUsd(pricing.coverUsd)} · prices from the model price list${pricing.byok ? ', no markup on your key' : ''}`}
+            value={`${shortCost(cost, pricing.pageUsd, 'quote') ?? 'a little'}/page`}
+            note={`${pricing.locked ? 'Your pick for this comic' : `${TIER_LABEL[pricing.tier] ?? pricing.tier} quality`} · a page ${cost.badge(pricing.pageUsd)} · cover ${cost.badge(pricing.coverUsd)} · prices from the model price list${pricing.byok ? ', no markup on your key' : ''}`}
           />
         )}
       </div>
       {kinds.length > 0 && (
         <div className="mt-2">
-          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Where it went</div>
+          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Where it went{cost.governed ? ' · share of your usage' : ''}</div>
           <ul className="space-y-1">
             {kinds.map(([kind, usd]) => (
               <li key={kind} className="flex min-w-0 items-center gap-2 text-[11.5px]">
@@ -362,7 +395,7 @@ const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<
                 <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--ds-well)]" aria-hidden>
                   <span className="block h-full rounded-full bg-[#D97757]/60" style={{ width: `${Math.max(4, Math.round((usd / (maxKind || 1)) * 100))}%` }} />
                 </span>
-                <span className="w-14 shrink-0 text-right tabular-nums text-[var(--ds-ink)]">{formatSpend(usd)}</span>
+                <span className="w-14 shrink-0 text-right tabular-nums text-[var(--ds-ink)]">{cell(usd)}</span>
               </li>
             ))}
           </ul>
@@ -376,7 +409,7 @@ const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<
               <li key={name} className="flex min-w-0 items-baseline justify-between gap-2 text-[11.5px]">
                 <span className="min-w-0 truncate text-[var(--ds-ink)]">{name}</span>
                 <span className="shrink-0 tabular-nums text-[var(--ds-muted)]">
-                  {plural(v.count, 'call')} · {formatSpend(v.usd)}
+                  {plural(v.count, 'call')} · {cell(v.usd)}
                 </span>
               </li>
             ))}
@@ -396,6 +429,8 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
   const inGate = !!spec.gateId;
   const byok = typeof (studio as { byok?: unknown }).byok === 'boolean' ? !!(studio as { byok?: boolean }).byok : doc ? byokFromDoc(doc) : false;
   const { run, isPending, anyPending } = useAction(studio.act);
+  // Prices in the viewer's terms (governed users never see dollars, even before their status loads).
+  const cost = useCostFormat({ byok, caps: studio.caps });
 
   const [wholeBook, setWholeBook] = useState(false);
   const pageKey = doc ? doc.pages.map((p) => `${p.id}:${p.n}`).join(',') : '';
@@ -432,23 +467,25 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
     if (showCover) {
       const c = book.cover;
       const rc = doc.cover.render.costUsd;
-      const cost = tileCost({ status: c.status, spentUsd: c.spentUsd, costUsd: typeof rc === 'number' ? rc : undefined, quoteUsd: c.quoteUsd });
+      const tc = tileCost({ status: c.status, spentUsd: c.spentUsd, costUsd: typeof rc === 'number' ? rc : undefined, quoteUsd: c.quoteUsd }, cost);
+      const held = c.safety === 'blocked' ? 'held for review' : c.safety === 'over_rating' ? 'above rating' : '';
       out.push({
         key: 'cover',
         kind: 'cover',
         label: 'Cover',
         status: c.status,
-        cost,
-        aria: ['Cover', STATUS_LABEL[c.status].toLowerCase(), cost?.spoken].filter(Boolean).join(', ')
+        cost: tc,
+        extra: [held].filter(Boolean)
       });
     }
     for (const s of book.pages) {
       const page = doc.pages.find((p) => p.id === s.id);
       if (!page) continue;
-      const cost = tileCost(s);
+      const tc = tileCost(s, cost);
       const flags: string[] = [];
       if (s.aspectOk === false) flags.push(`Not ${doc.format.pageAspect}`);
       if (typeof s.qcScore === 'number' && s.qcScore < LOW_QC_SCORE) flags.push('Quality check flagged it');
+      const held = s.safety === 'blocked' ? 'held for review' : s.safety === 'over_rating' ? 'above rating' : '';
       out.push({
         key: s.id,
         kind: 'page',
@@ -456,13 +493,13 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         status: s.status,
         page,
         summary: s,
-        cost,
+        cost: tc,
         flag: flags.length ? flags.join(' · ') : undefined,
-        aria: [`Page ${s.n}`, plural(s.panels.length, 'panel'), STATUS_LABEL[s.status].toLowerCase(), cost?.spoken, ...flags].filter(Boolean).join(', ')
+        extra: [held, ...flags].filter(Boolean)
       });
     }
     return out;
-  }, [doc, book, showCover]);
+  }, [doc, book, showCover, cost]);
 
   const firstPageKey = tiles.find((t) => t.kind === 'page')?.key ?? tiles[0]?.key ?? '';
   const [selectedKey, setSelectedKey] = useState<string>('');
@@ -544,15 +581,18 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
       {quote.nothing ? (
         <span>{allDrawn ? 'all drawn' : drawing ? `${drawing} drawing` : 'nothing to draw'}</span>
       ) : pro || view === 'cost' ? (
-        <span>≈{formatUsd(quote.usd)} to draw</span>
+        <span>{cost.badge(quote.usd)} to draw</span>
       ) : (
+        // A real 44 px target on touch (not a 16 px inline link whose ::after hit area overlapped the
+        // rows around it — P1-QA breakdown-inline-links). Its name is its visible words, then the hint.
         <button
           type="button"
           onClick={() => setView('cost')}
-          className="tap-target rounded underline decoration-dotted underline-offset-2 hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
-          aria-label={`About ${formatUsd(quote.usd)} to draw. Show the cost breakdown`}
+          title="Show the cost breakdown"
+          className="inline-flex items-center rounded underline decoration-dotted underline-offset-2 hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-11 coarse:px-1"
         >
-          ≈{formatUsd(quote.usd)} to draw
+          {cost.badge(quote.usd)} to draw
+          <span className="sr-only">. Show the cost breakdown</span>
         </button>
       )}
       {approved && !subset && (
@@ -584,7 +624,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
           type="button"
           aria-pressed={showArt}
           onClick={() => setView(showArt ? 'plan' : 'status')}
-          className="tap-target inline-flex h-7 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className="inline-flex h-7 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3.5"
         >
           {showArt ? <PanelsTopLeft className="h-3.5 w-3.5" aria-hidden /> : <ImageIcon className="h-3.5 w-3.5" aria-hidden />}
           {showArt ? 'Show layouts' : 'Show art'}
@@ -594,7 +634,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         <button
           type="button"
           onClick={() => setView(anyDrawn ? 'status' : 'plan')}
-          className="tap-target inline-flex h-7 items-center rounded-full px-2 text-[11.5px] text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className="inline-flex h-7 items-center rounded-full px-2 text-[11.5px] text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3"
         >
           Hide costs
         </button>
@@ -623,7 +663,10 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
                 }}
                 tabIndex={on ? 0 : -1}
                 aria-current={on ? 'true' : undefined}
-                aria-label={t.aria}
+                // No aria-label: the name IS the visible label row ("Page 2", the cost, the status), with
+                // spoken words added after it — it always starts with what is on screen (WCAG 2.5.3, P1-QA
+                // breakdown-tile-names). The thumbnail's own text (wireframe numbers, overlays) is hidden.
+                title={t.cost?.text && cost.governed ? `${t.label}: ${t.cost.spoken}` : undefined}
                 onClick={() => select(t.key)}
                 className={cx(
                   'block w-full rounded-xl p-1 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50',
@@ -633,15 +676,16 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
                 <Thumb tile={t} doc={doc} book={book} showArt={showArt} width={tileW} urlFor={studio.urlFor} />
                 <span className="mt-1 flex min-w-0 items-baseline justify-between gap-1 px-0.5">
                   <span className="min-w-0 truncate text-[11.5px] font-medium text-[var(--ds-ink)]">{t.label}</span>
-                  {t.cost && <span className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]">{t.cost.text}</span>}
-                </span>
-                <span className="mt-0.5 flex min-w-0 items-center gap-1 px-0.5">
-                  <StatusPill status={t.status} />
-                  {t.summary && !compact && (
+                  {t.cost?.text && (
                     <span className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]" aria-hidden>
-                      · {plural(t.summary.panels.length, 'panel')}
+                      {t.cost.text}
                     </span>
                   )}
+                  <span className="sr-only">{tileSpoken(t)}</span>
+                </span>
+                <span className="mt-0.5 flex min-w-0 items-center gap-1 px-0.5" aria-hidden>
+                  <StatusPill status={t.status} />
+                  {t.summary && !compact && <span className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]">· {plural(t.summary.panels.length, 'panel')}</span>}
                 </span>
               </button>
             </li>
@@ -662,6 +706,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         open={detailsOpen}
         pro={pro}
         onToggle={() => setDetailsOpen((v) => !v)}
+        cost={cost}
         busy={coverBusy}
         pending={isPending('cover-one')}
         disabled={anyPending}
@@ -678,6 +723,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         pro={pro}
         rating={rating}
         urlFor={studio.urlFor}
+        cost={cost}
         onToggle={() => setDetailsOpen((v) => !v)}
         pending={isPending(`page:${selected.page.id}`)}
         disabled={anyPending}
@@ -704,7 +750,8 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
             disabled={starting}
             onClick={() => void run('approve', { type: 'approve_plan' }, { type: 'render_pages', quotedUsd: quote.usd })}
           >
-            Approve &amp; draw all · ≈{formatUsd(quote.usd)}
+            {/* decisions-final #3: the kept button's words. */}
+            Approve &amp; render all · {cost.badge(quote.usd)}
           </PrimaryButton>
         ) : (
           <PrimaryButton
@@ -714,14 +761,14 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
             disabled={starting}
             onClick={() => void run('draw', { type: 'render_pages', ...(subset ? { pageIds: quote.pageIds } : {}), quotedUsd: quote.usd })}
           >
-            Draw {drawLabel} · ≈{formatUsd(quote.usd)}
+            Draw {drawLabel} · {cost.badge(quote.usd)}
           </PrimaryButton>
         );
     } else if (allDrawn && coverNeeds && !coverBusy && book.cover.quoteUsd) {
       const usd = book.cover.quoteUsd;
       primary = (
         <PrimaryButton size="sm" className="tap-target" busy={isPending('cover')} disabled={anyPending} onClick={() => void run('cover', { type: 'render_cover', quotedUsd: usd })}>
-          <Sparkles className="h-3.5 w-3.5" aria-hidden /> {book.cover.status === 'stale' ? 'Redraw the cover' : book.cover.status === 'failed' ? 'Try the cover again' : 'Make the cover'} · ≈{formatUsd(usd)}
+          <Sparkles className="h-3.5 w-3.5" aria-hidden /> {book.cover.status === 'stale' ? 'Redraw the cover' : book.cover.status === 'failed' ? 'Try the cover again' : 'Make the cover'} · {cost.badge(usd)}
         </PrimaryButton>
       );
     } else if (allDrawn) {
@@ -758,7 +805,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         <p className="mb-2 text-[12px] text-[var(--ds-muted)]">The pages this card showed are no longer in the book — here is the whole book.</p>
       )}
       {strip}
-      {view === 'cost' && <CostPanel doc={doc} book={book} quote={quote} byok={byok} pro={pro} />}
+      {view === 'cost' && <CostPanel doc={doc} book={book} quote={quote} byok={byok} pro={pro} cost={cost} />}
       {detail}
       {(primary || (!inGate && pro)) && (
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
@@ -780,7 +827,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         <button
           type="button"
           onClick={() => setWholeBook(true)}
-          className="tap-target mt-1.5 text-[12px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className="mt-1.5 inline-flex items-center rounded text-[12px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-11 coarse:px-1"
         >
           Show the whole book
         </button>
@@ -808,7 +855,7 @@ const DetailToggle: React.FC<{ open: boolean; onToggle(): void; controls: string
     aria-expanded={open}
     aria-controls={controls}
     onClick={onToggle}
-    className="tap-target inline-flex items-center gap-1 rounded text-[12px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+    className="inline-flex items-center gap-1 rounded text-[12px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-11 coarse:px-1"
   >
     <ChevronDown className={cx('h-3.5 w-3.5 transition-transform motion-reduce:transition-none', open && 'rotate-180')} aria-hidden />
     {open ? 'Fewer details' : 'Panels & actions'}
@@ -825,13 +872,14 @@ const PageDetail: React.FC<{
   pro: boolean;
   rating: ContentRating;
   urlFor: BreakdownCardProps['studio']['urlFor'];
+  cost: CostFormat;
   onToggle(): void;
   pending: boolean;
   disabled: boolean;
   onDraw(force: boolean, usd: number): void;
   onEdit(): void;
   onBoard(): void;
-}> = ({ doc, page, s, byok, inGate, open, pro, rating, urlFor, onToggle, pending, disabled, onDraw, onEdit, onBoard }) => {
+}> = ({ doc, page, s, byok, inGate, open, pro, rating, urlFor, cost, onToggle, pending, disabled, onDraw, onEdit, onBoard }) => {
   const id = `bd-${useId().replace(/:/g, '')}`;
   const tier = doc.settings.quality;
   const override = doc.settings.imageModelOverride;
@@ -865,16 +913,20 @@ const PageDetail: React.FC<{
       {(missing.length > 0 || mismatch || lowQc || neighbors || s.status === 'stale' || s.safety === 'blocked') && (
         <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
           {missing.length > 0 && (
-            <Chip icon={<TriangleAlert className="h-3 w-3" aria-hidden />}>
-              {listNames(missing.map((c) => c.name.toUpperCase()))} {missing.length === 1 ? 'has' : 'have'} no reference — may vary between pages{' '}
+            <>
+              <Chip icon={<TriangleAlert className="h-3 w-3" aria-hidden />}>
+                {listNames(missing.map((c) => c.name.toUpperCase()))} {missing.length === 1 ? 'has' : 'have'} no reference — may vary between pages
+              </Chip>
+              {/* Its own control beside the chip: a real 44 px target on touch (an inline 16 px link inside
+                  the chip overlapped the rows around it — P1-QA breakdown-inline-links). */}
               <button
                 type="button"
                 onClick={() => composeInStudio({ text: `This is ${missing[0].name.toUpperCase()}: `, pickFiles: true, focus: true })}
-                className="font-medium text-[var(--ds-accent)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+                className="inline-flex items-center rounded-lg px-1.5 py-1 text-[11.5px] font-medium text-[var(--ds-accent)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-11 coarse:px-2.5"
               >
                 Add a photo (free)
               </button>
-            </Chip>
+            </>
           )}
           {s.status === 'stale' && <Chip icon={<RotateCcw className="h-3 w-3" aria-hidden />}>The script changed since this was drawn</Chip>}
           {mismatch && (
@@ -949,7 +1001,7 @@ const PageDetail: React.FC<{
             <p className="mt-1.5 break-words text-[11px] tabular-nums text-[var(--ds-muted)]">
               {[
                 s.model ? `Drawn with ${s.model}` : '',
-                typeof spent === 'number' && spent > 0 ? `${formatSpend(spent)} spent on this page` : '',
+                typeof spent === 'number' && spent > 0 ? `${cost.exact(spent)} spent on this page` : '',
                 typeof s.qcScore === 'number' ? `QC ${Math.round(s.qcScore * 100)}/100` : ''
               ]
                 .filter(Boolean)
@@ -959,12 +1011,12 @@ const PageDetail: React.FC<{
           <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-1.5">
             {!inGate && q && !q.nothing && (
               <GhostButton size="sm" className="tap-target" busy={pending} disabled={disabled} onClick={() => onDraw(false, q.usd)}>
-                Draw this page · ≈{formatUsd(q.usd)}
+                Draw this page · {cost.badge(q.usd)}
               </GhostButton>
             )}
             {!inGate && redrawUsd !== undefined && (
               <GhostButton size="sm" className="tap-target" busy={pending} disabled={disabled} onClick={() => onDraw(true, redrawUsd)}>
-                <RotateCcw className="h-3.5 w-3.5" aria-hidden /> New take · ≈{formatUsd(redrawUsd)}
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden /> New take · {cost.badge(redrawUsd)}
               </GhostButton>
             )}
             {!inGate && busy && (
@@ -1008,9 +1060,10 @@ const CoverDetail: React.FC<{
   busy: boolean;
   pending: boolean;
   disabled: boolean;
+  cost: CostFormat;
   onToggle(): void;
   onDraw(usd: number): void;
-}> = ({ doc, book, byok, inGate, open, pro, busy, pending, disabled, onToggle, onDraw }) => {
+}> = ({ doc, book, byok, inGate, open, pro, busy, pending, disabled, cost, onToggle, onDraw }) => {
   const id = `bd-${useId().replace(/:/g, '')}`;
   const c = book.cover;
   const usd = c.quoteUsd ?? unitPrice(doc, 'cover', { byok }).usd;
@@ -1028,13 +1081,13 @@ const CoverDetail: React.FC<{
       <p className="mt-0.5 text-[11.5px] text-[var(--ds-muted)]">
         {c.lettering === 'overlay' ? 'Title as editable text — changing it later is free.' : 'Title painted into the art.'}
         {pro && c.model ? ` Drawn with ${c.model}.` : ''}
-        {pro && c.spentUsd ? ` ${formatSpend(c.spentUsd)} spent.` : ''}
+        {pro && c.spentUsd ? ` ${cost.exact(c.spentUsd)} spent.` : ''}
       </p>
       {open && (
         <div id={id} className="mt-2.5 flex min-w-0 flex-wrap items-center gap-1.5">
           {!inGate && !busy && (
             <GhostButton size="sm" className="tap-target" busy={pending} disabled={disabled} onClick={() => onDraw(usd)}>
-              <Sparkles className="h-3.5 w-3.5" aria-hidden /> {drawn ? 'New cover' : c.status === 'stale' ? 'Redraw the cover' : c.status === 'failed' ? 'Try the cover again' : 'Make the cover'} · ≈{formatUsd(usd)}
+              <Sparkles className="h-3.5 w-3.5" aria-hidden /> {drawn ? 'New cover' : c.status === 'stale' ? 'Redraw the cover' : c.status === 'failed' ? 'Try the cover again' : 'Make the cover'} · {cost.badge(usd)}
             </GhostButton>
           )}
           {!inGate && busy && (

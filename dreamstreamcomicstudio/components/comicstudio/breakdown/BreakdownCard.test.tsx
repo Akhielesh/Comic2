@@ -1,13 +1,13 @@
 // BreakdownCard: the book at a glance in the chat (softwarefirst.md §2.6).
 import React from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { pageSpecHash, type Card, type ComicDoc } from '../../../shared/comic/doc';
 import { formatUsd } from '../../../shared/comic/models';
 import { quoteRenderPages, unitPrice } from '../../../shared/comic/plan';
 import { CardRenderer } from '../conversation/cards/CardRenderer';
 import { COMPOSE_EVENT } from '../conversation/composerBus';
-import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { registeredCard } from '../features';
 import { BREAKDOWN_VIEW_KEY, BreakdownCard, type BreakdownCardProps } from './BreakdownCard';
 import { feature } from './index';
@@ -32,7 +32,13 @@ const drawnDoc = (): ComicDoc => {
   return doc;
 };
 
+beforeEach(() => {
+  // Admin / own-key wording (dollars); governed users have their own describe below.
+  showDollarPrices();
+});
+
 afterEach(() => {
+  resetUsageStatus();
   try {
     window.localStorage.clear();
   } catch {
@@ -54,7 +60,7 @@ describe('registration', () => {
 });
 
 describe('filmstrip', () => {
-  it('cover first, then every page, each tile labelled with panels, status and real cost', () => {
+  it('cover first, then every page; each name starts with the visible words, then cost, status and panels', () => {
     const studio = makeFakeStudio();
     const doc = studio.doc!;
     renderCard(bd(), studio);
@@ -62,10 +68,12 @@ describe('filmstrip', () => {
     const tiles = within(list).getAllByRole('button');
     expect(tiles).toHaveLength(4);
     const per = formatUsd(unitPrice(doc, 'page', { byok: false }).usd);
-    expect(tiles[0]).toHaveAccessibleName(`Cover, not drawn, about ${formatUsd(unitPrice(doc, 'cover', { byok: false }).usd)} to draw`);
-    expect(tiles[1]).toHaveAccessibleName('Page 1, 2 panels, drawn');
-    expect(tiles[2]).toHaveAccessibleName(`Page 2, 2 panels, not drawn, about ${per} to draw`);
-    expect(tiles[3]).toHaveAccessibleName(`Page 3, 2 panels, failed, about ${per} to draw`);
+    expect(tiles[0]).toHaveAccessibleName(`Cover, about ${formatUsd(unitPrice(doc, 'cover', { byok: false }).usd)} to draw, not drawn`);
+    expect(tiles[1]).toHaveAccessibleName('Page 1, drawn, 2 panels');
+    expect(tiles[2]).toHaveAccessibleName(`Page 2, about ${per} to draw, not drawn, 2 panels`);
+    expect(tiles[3]).toHaveAccessibleName(`Page 3, about ${per} to draw, failed, 2 panels`);
+    // P1-QA breakdown-tile-names: no aria-label that could drift from the visible text.
+    for (const t of tiles) expect(t).not.toHaveAttribute('aria-label');
     // page 1 is selected by default (roving tabindex)
     expect(tiles[1]).toHaveAttribute('aria-current', 'true');
     expect(tiles[1]).toHaveAttribute('tabindex', '0');
@@ -115,7 +123,9 @@ describe('filmstrip', () => {
   it('a subset shows only those pages and no cover; vanished pages fall back to the whole book', () => {
     renderCard(bd({ pageIds: ['pg_2'] }));
     const list = screen.getByRole('list', { name: /Pages in this book/ });
-    expect(within(list).getAllByRole('button').map((b) => b.getAttribute('aria-label')?.split(',')[0])).toEqual(['Page 2']);
+    const only = within(list).getAllByRole('button');
+    expect(only).toHaveLength(1);
+    expect(only[0]).toHaveAccessibleName(/^Page 2,/);
     expect(screen.getByText(/1 page of 3/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show the whole book' }));
     expect(within(list).getAllByRole('button')).toHaveLength(4);
@@ -137,12 +147,12 @@ describe('legacy plan payload', () => {
 });
 
 describe('actions and money', () => {
-  it('Easy: one primary action — Approve & draw all with the gate-equal quote', () => {
+  it('Easy: one primary action — Approve & render all (decisions-final #3) with the gate-equal quote', () => {
     const studio = makeFakeStudio();
     const doc = studio.doc!;
     renderCard(bd(), studio);
     const q = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
-    const btn = screen.getByRole('button', { name: `Approve & draw all · ≈${formatUsd(q.usd)}` });
+    const btn = screen.getByRole('button', { name: `Approve & render all · ≈${formatUsd(q.usd)}` });
     expect(screen.queryByRole('radiogroup', { name: 'Breakdown view' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Approve only/ })).toBeNull();
     // per-page spend is one tap away, not on screen
@@ -223,7 +233,7 @@ describe('actions and money', () => {
     const usd = unitPrice(doc, 'cover', { byok: false }).usd;
     expect(screen.getByRole('button', { name: `Redraw the cover · ≈${formatUsd(usd)}` })).toBeInTheDocument();
     expect(screen.getByText(/The cover is out of date/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Cover, out of date/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Cover,.*out of date/ })).toBeInTheDocument();
   });
 
   it('nothing to draw because a page has no panels: an honest note instead of silence', () => {
@@ -298,7 +308,7 @@ describe('views', () => {
     expect(within(panel).getByText(new RegExp(`Next pages draw on ${per.model}`))).toBeInTheDocument();
     expect(within(panel).getByText(`≈${formatUsd(per.usd)}/page`)).toBeInTheDocument();
     // the drawn page's tile shows what was really spent on it
-    expect(screen.getByRole('button', { name: /^Page 1, 2 panels, drawn, \$0\.30 spent/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Page 1, \$0\.30 spent, drawn, 2 panels/ })).toBeInTheDocument();
   });
 
   it('Easy: the art/layout toggle swaps thumbnails for wireframes; the cost link opens costs', () => {
@@ -348,5 +358,54 @@ describe('views', () => {
     fireEvent.click(within(details).getByRole('button', { name: 'Add a photo (free)' }));
     window.removeEventListener(COMPOSE_EVENT, onCompose);
     expect(composed).toEqual({ text: 'This is ARJUN: ', pickFiles: true, focus: true });
+  });
+});
+
+describe('governed users never see dollars (P1-LIMITS rule)', () => {
+  const NO_DOLLARS = /\$\s?\d|\$0\b|<\$/;
+
+  it('plan, status and cost views speak in shares of the usage; the kept button keeps its words', () => {
+    showUsagePrices(1);
+    const doc = makeSampleDoc();
+    doc.spend = {
+      totalUsd: 0.42,
+      byKind: { page: 0.3, sheet: 0.12 },
+      savedUsd: 0.06,
+      entries: [
+        { id: 's1', at: 2, kind: 'page', label: 'Page 1', usd: 0.3, model: 'nano-banana-2.1', byok: false, estimated: false, target: 'page:pg_1' },
+        { id: 's2', at: 1, kind: 'sheet', label: 'Maya', usd: 0.12, model: 'nano-banana-2.1', byok: false, estimated: false, target: 'sheet:c_maya' }
+      ]
+    };
+    const studio = makeFakeStudio({ doc, mode: 'pro' });
+    const { container } = renderCard(bd(), studio);
+    expect(screen.getByRole('button', { name: /^Approve & render all · (≈[\d.]+%|<0\.1%) of your usage$/ })).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(NO_DOLLARS);
+    for (const view of ['Status', 'Cost']) {
+      fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Breakdown view' })).getByRole('radio', { name: new RegExp(view) }));
+      expect(container.textContent).not.toMatch(NO_DOLLARS);
+    }
+    const panel = screen.getByRole('region', { name: 'Cost breakdown' });
+    expect(within(panel).getByText('Spent on this comic').parentElement!.parentElement).toHaveTextContent(/of your usage/);
+    // Tile names carry the share too, and still start with the visible label.
+    for (const t of within(screen.getByRole('list', { name: /Pages in this book/ })).getAllByRole('button')) {
+      expect(t.textContent).not.toMatch(NO_DOLLARS);
+      expect(t).toHaveAccessibleName(/^(Cover|Page \d+),/);
+    }
+  });
+
+  it('fails closed: before the usage status loads, a non-admin sees no dollar figure', () => {
+    resetUsageStatus();
+    const { container } = renderCard(bd(), makeFakeStudio({ mode: 'pro' }));
+    expect(container.textContent).not.toMatch(NO_DOLLARS);
+    expect(screen.getByRole('button', { name: /^Approve & render all · uses a little of your usage$/ })).toBeInTheDocument();
+  });
+
+  it('admins (caps.admin) and own-key comics keep dollars', () => {
+    resetUsageStatus();
+    const { unmount } = renderCard(bd(), makeFakeStudio({ caps: { ...makeFakeStudio().caps, admin: true } }));
+    expect(screen.getByRole('button', { name: /^Approve & render all · ≈\$\d/ })).toBeInTheDocument();
+    unmount();
+    renderCard(bd(), makeFakeStudio({ byok: true }));
+    expect(screen.getByRole('button', { name: /^Approve & render all · ≈\$\d/ })).toBeInTheDocument();
   });
 });

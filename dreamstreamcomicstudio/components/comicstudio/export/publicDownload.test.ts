@@ -8,7 +8,7 @@ const zipAll = vi.fn(async (..._a: unknown[]) => ({ fileName: 'x.zip', files: 2,
 vi.mock('./pdfExport', () => ({ exportComicPdf: (...a: unknown[]) => pdf(...a) }));
 vi.mock('./zipExport', () => ({ exportPngZip: (...a: unknown[]) => zip(...a), exportLanguagesZip: (...a: unknown[]) => zipAll(...a) }));
 
-const { DOWNLOADS_OFF, PUBLIC_ASSET_PATH_RE, downloadPublicComic, publicDownloadsAllowed, publicExportLanguage, publicExportUrlFor } = await import('./publicDownload');
+const { DOWNLOADS_OFF, NO_PUBLISHED_LANGUAGE, PUBLIC_ASSET_PATH_RE, downloadPublicComic, publicDownloadsAllowed, publicExportLanguage, publicExportLanguages, publicExportUrlFor } = await import('./publicDownload');
 
 const KEY = 'AbCdEfGhIjKlMnOpQrStUv'; // 22 chars
 const P = (file: string) => `pub/${KEY}/${file}`;
@@ -86,6 +86,21 @@ describe('downloadPublicComic', () => {
     expect(publicExportLanguage(src, 'te')).toBe('en');
     await downloadPublicComic(src, 'zip', { lang: 'te' });
     expect((zip.mock.calls[0] as unknown[])[2]).toMatchObject({ lang: 'en' });
+  });
+
+  it('never falls back to an unpublished source language', async () => {
+    const src = { publication: { allowDownload: true, languages: ['te'], defaultLang: 'te' }, doc: doc(), urls };
+    expect(publicExportLanguages(src)).toEqual(['te']);
+    expect(publicExportLanguage(src, 'en')).toBe('te');
+    await downloadPublicComic(src, 'zip_all');
+    expect((zipAll.mock.calls[0] as unknown[])[2]).toMatchObject({ languages: ['te'] });
+    // Published languages the snapshot does not carry: nothing to download, said honestly.
+    const none = { publication: { allowDownload: true, languages: ['hi'] }, doc: doc(), urls };
+    expect(publicExportLanguages(none)).toEqual([]);
+    await expect(downloadPublicComic(none, 'pdf')).rejects.toThrow(NO_PUBLISHED_LANGUAGE);
+    expect(pdf).not.toHaveBeenCalled();
+    // An old publication without a language list publishes its source.
+    expect(publicExportLanguages({ publication: { allowDownload: true, languages: [] }, doc: doc(), urls })).toEqual(['en']);
   });
 
   it('“all languages” contains exactly the published editions', async () => {

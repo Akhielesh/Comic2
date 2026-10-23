@@ -42,13 +42,28 @@ export interface RefTileProps {
   onDragHandleDown?(e: React.PointerEvent): void;
 }
 
+/** "Front Sheet, Photo 1 (main)" — the visible chip words first, then the position. */
+export const refTileName = (index: number, visibleWords: string[]): string => {
+  const position = `Photo ${index + 1}${index === 0 ? ' (main)' : ''}`;
+  return visibleWords.length ? `${visibleWords.join(' ')}, ${position}` : position;
+};
+
 export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, owner, src, rating, usage, selected, dropTarget, onSelect, onMove, onRemove, onDragHandleDown }) => {
   const quality = Object.entries(ref.quality || {})
     .filter(([, v]) => v)
     .map(([k]) => QUALITY_COPY[k])
     .filter(Boolean);
   const unchecked = !ref.safety && ref.source === 'upload';
-  const name = `Photo ${index + 1}${index === 0 ? ' (main)' : ''}${ref.label ? `, ${labelText(ref.label)}` : ''}`;
+  // The words printed on the tile, in DOM order. The accessible name STARTS with them (axe
+  // label-content-name-mismatch / WCAG 2.5.3, P1-QA ref-tile-names), then says which photo it is.
+  const chips = [
+    ref.label ? labelText(ref.label) : '',
+    usage?.sheet ? 'Sheet' : '',
+    usage?.pages ? 'Pages' : '',
+    usage?.style ? 'Style' : '',
+    ...quality
+  ].filter(Boolean);
+  const name = refTileName(index, chips);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.altKey && e.key === 'ArrowLeft' && index > 0) {
@@ -90,12 +105,14 @@ export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, o
         {src ? (
           <img src={src} alt="" draggable={false} loading="lazy" decoding="async" className="h-full w-full select-none object-cover" />
         ) : (
-          <span className="flex h-full w-full items-center justify-center text-[11px] text-[var(--ds-muted)]">Loading…</span>
+          <span className="studio-shimmer block h-full w-full" aria-hidden />
         )}
       </SafetyVeil>
+      {/* The main photo: a compact ★ (its meaning is in the name and the title) — a worded "Main" badge
+          collided with the label chip on small grid tiles (P1-QA ref-tile-badges-overlap). */}
       {index === 0 && (
-        <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-0.5 rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] font-semibold text-white" title="Main photo">
-          <Star className="h-3 w-3 fill-current" aria-hidden /> Main
+        <span className="absolute left-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full bg-black/55 text-white" title="Main photo" aria-hidden>
+          <Star className="h-3 w-3 fill-current" />
         </span>
       )}
       {unchecked && (
@@ -115,15 +132,19 @@ export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, o
           <GripVertical className="h-4 w-4 drop-shadow" aria-hidden />
         </span>
       )}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 flex-wrap gap-1 bg-gradient-to-t from-black/60 to-transparent p-1.5 pr-10 pt-4">
-        {ref.label && <span className="max-w-full truncate rounded-full bg-white/85 px-1.5 py-0.5 text-[10px] font-medium text-zinc-900">{labelText(ref.label)}</span>}
-        {usage?.sheet && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Sheet</span>}
-        {usage?.pages && <span className="max-w-full truncate rounded-full bg-[#D97757]/85 px-1.5 py-0.5 text-[10px] font-medium text-white">Pages</span>}
-        {usage?.style && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Style</span>}
+      {/* Chips stay in the bottom half (never reaching the ★ or the check dot), separated by real spaces
+          so the visible words read as words. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[60%] min-w-0 flex-wrap content-end gap-1 overflow-hidden bg-gradient-to-t from-black/60 to-transparent p-1.5 pr-10 pt-4">
+        {ref.label && <span className="max-w-full truncate rounded-full bg-white/85 px-1.5 py-0.5 text-[10px] font-medium text-zinc-900">{labelText(ref.label)}</span>}{' '}
+        {usage?.sheet && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Sheet</span>}{' '}
+        {usage?.pages && <span className="max-w-full truncate rounded-full bg-[#D97757]/85 px-1.5 py-0.5 text-[10px] font-medium text-white">Pages</span>}{' '}
+        {usage?.style && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Style</span>}{' '}
         {quality.map((q) => (
-          <span key={q} className="max-w-full truncate rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] text-white" title={`${q} — we'll prefer your other photos`}>
-            {q}
-          </span>
+          <React.Fragment key={q}>
+            <span className="max-w-full truncate rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] text-white" title={`${q} — we'll prefer your other photos`}>
+              {q}
+            </span>{' '}
+          </React.Fragment>
         ))}
       </div>
     </div>

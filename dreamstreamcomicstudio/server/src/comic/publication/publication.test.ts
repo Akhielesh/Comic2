@@ -4,12 +4,27 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { DEFAULT_SETTINGS, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
 import { ASSET_KEY_RE, SLUG_RE, type ShareCard } from '../../../../shared/comic/publication.js';
-import { publishableText, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { effectiveRating, publishableText, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { __resetSharpSlotPeakForTests, sharpSlotStats, withSharpSlot } from '../imageMeasure.js';
 import { fakeAssetStore, newSession, plannedDoc, testContext, type FakeAssetStore, type TestContext } from '../orchestrator.fakes.js';
-import type { PublishGateResult } from '../safety/index.js';
+import { runPublishGate, type PublishGateResult } from '../safety/index.js';
+import { installSafetyFakes, resetSafety, TERMS } from '../safety/testkit.js';
 import { buildPublicSnapshot, getReadiness, loadPublicByProjectId, newAssetKey, newSlug, publish, regenerateLink, unpublish, updatePublication } from './index.js';
-import { escPango, ogHash, renderOgCard, scriptsCovered, vendoredFontFiles } from './ogImage.js';
-import { __resetPublishBudget, cardPatchOps, configurePublication, parsePublishRequest, PublishError, publishWithOutcome, sweepOrphanPublications } from './publication.js';
+import { escPango, ogHash, ratingMeta, renderOgCard, scriptsCovered, vendoredFontFiles, type OgRenderInput } from './ogImage.js';
+import {
+  __resetOrphanSweep,
+  __resetPublishBudget,
+  cardPatchOps,
+  maybeSweepOrphans,
+  ORPHAN_SWEEP_EVERY_MS,
+  configurePublication,
+  parsePublishRequest,
+  payloadOf,
+  publicationRatingOf,
+  PublishError,
+  publishWithOutcome,
+  sweepOrphanPublications
+} from './publication.js';
 import { planSnapshot } from './snapshot.js';
 import { createMemoryPublicationStore, type MemoryPublicationStore } from './store.js';
 
@@ -88,14 +103,14 @@ function richDoc(): ComicDoc {
 }
 
 const gateFor =
-  (statuses: Record<string, SafetyStatus> = {}, overall?: PublishGateResult['status']) =>
+  (statuses: Record<string, SafetyStatus> = {}, overall?: PublishGateResult['status'], rating: PublishGateResult['rating'] = 'PG') =>
   async (_ctx: unknown, _doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
     const pages = Object.fromEntries(opts.pageIds.map((id) => [id, { status: statuses[id] ?? 'pass', reasons: statuses[id] === 'blocked' ? ['violence'] : [] }]));
     const anyBad = Object.values(pages).some((p) => p.status === 'blocked');
     const anyUnsure = Object.values(pages).some((p) => p.status === 'unchecked');
     return {
       status: overall ?? (anyBad ? 'blocked' : anyUnsure ? 'needs_check' : 'cleared'),
-      rating: 'PG',
+      rating,
       pages,
       cover: opts.includeCover ? { status: statuses.cover ?? 'pass', reasons: [] } : null,
       text: { status: statuses.text ?? 'pass', reasons: [] },
@@ -296,7 +311,8 @@ describe('publish', () => {
 
   it('unchecked content is never published (503, fail closed)', async () => {
     setup(richDoc(), { pg_1: 'unchecked' });
-    await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 503, reason: 'SAFETY_UNAVAILABLE' });
+    // Contract §12.6: needs_check → 503 NOT_AVAILABLE (the route sends `reason` as the wire code; the client retries it).
+    await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 503, reason: 'NOT_AVAILABLE', code: 'NOT_AVAILABLE' });
     expect(store.rows.size).toBe(0);
     setup(richDoc(), { text: 'blocked' });
     await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
@@ -310,22 +326,92 @@ describe('publish', () => {
     expect((row.card as ShareCard).coverUrl).toMatch(/page-[0-9a-f]{12}-w1080\.webp$/);
   });
 
-  it('the safety gate reads EVERY published author text (chapter titles, blurb, credits, dedication), not just lines', async () => {
+  it('the gate reads the live doc itself (no helper doc): every published author text is in its publishableText', async () => {
     const doc = richDoc();
     doc.pages[0].chapterTitle = 'CHAPTER-TEXT';
     doc.book = { titlePage: true, endPage: true, backCover: 'auto', blurb: 'BLURB-TEXT', credits: ['CREDIT-TEXT'], firstPageRight: true, uniformTrim: true };
     doc.reader = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true, credits: 'ENDCARD-TEXT', dedication: 'DEDICATION-TEXT' };
+    doc.style = { ...doc.style, name: 'STYLE-NAME-TEXT' };
     setup(doc);
     let seen: ComicDoc | null = null;
     const inner = gateFor();
     restore();
     restore = configurePublication({ store, gate: (async (c: unknown, d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => ((seen = d), inner(c, d, o))) as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    const before = ctx.session.doc;
     await publish(ctx, { visibility: 'unlisted' });
+    // The gate got the session's own doc — no extra "cast" entries smuggling text in.
+    expect(seen).toBe(before);
+    expect(seen!.cast.map((c) => c.id)).toEqual(doc.cast.map((c) => c.id));
     const words = publishableText(seen!, []);
-    for (const t of ['CHAPTER-TEXT', 'BLURB-TEXT', 'CREDIT-TEXT', 'ENDCARD-TEXT', 'DEDICATION-TEXT']) expect(words).toContain(t);
-    // The live doc and the snapshot never gain the helper entries.
+    for (const t of ['CHAPTER-TEXT', 'BLURB-TEXT', 'CREDIT-TEXT', 'ENDCARD-TEXT', 'DEDICATION-TEXT', 'STYLE-NAME-TEXT']) expect(words).toContain(t);
     expect(ctx.session.doc.cast.some((c) => c.id.startsWith('_published_text_'))).toBe(false);
     expect(store.rows.get('proj-1')!.snapshot!.cast.some((c) => c.id.startsWith('_published_text_'))).toBe(false);
+  });
+
+  describe('with the REAL publish gate (P1-SAFETY; platform classifier faked, $0)', () => {
+    afterEach(() => resetSafety());
+    const authorTexts = (doc: ComicDoc) => {
+      doc.pages[0].chapterTitle = 'CHAPTER-TEXT';
+      doc.book = { titlePage: true, endPage: true, backCover: 'auto', blurb: 'BLURB-TEXT', credits: ['CREDIT-TEXT'], firstPageRight: true, uniformTrim: true };
+      doc.reader = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true, credits: 'ENDCARD-TEXT', dedication: 'DEDICATION-TEXT' };
+      doc.style = { ...doc.style, name: 'STYLE-NAME-TEXT' };
+      return doc;
+    };
+    const useRealGate = () => {
+      restore();
+      restore = configurePublication({ store, gate: runPublishGate, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    };
+
+    it('its one text check carries every author text the snapshot publishes, and it freezes the effective rating', async () => {
+      const doc = authorTexts(richDoc());
+      setup(doc);
+      const fakes = installSafetyFakes();
+      useRealGate();
+      const view = await publish(ctx, { visibility: 'public' });
+      const textCalls = fakes.llm.calls.filter((c) => c.jsonSchema?.name === 'comic_safety_text');
+      expect(textCalls).toHaveLength(1);
+      const sent = JSON.stringify(textCalls[0].messages);
+      for (const t of ['CHAPTER-TEXT', 'BLURB-TEXT', 'CREDIT-TEXT', 'ENDCARD-TEXT', 'DEDICATION-TEXT', 'STYLE-NAME-TEXT', 'Spice Run', 'Line on page 2']) expect(sent).toContain(t);
+      const rating = effectiveRating(doc).rating;
+      expect(store.rows.get('proj-1')!.safety.rating).toBe(rating);
+      expect(view.rating).toBe(rating);
+      expect(store.projects.get('proj-1')!.contentRating).toBe(rating);
+      expect(store.rpcPayload(view.slug!)!.publication.rating).toBe(rating);
+    });
+
+    it('a blocked word in a CHAPTER TITLE (not a line) still stops the publish: 422 SAFETY_BLOCKED, nothing goes live', async () => {
+      const doc = richDoc();
+      doc.pages[1].chapterTitle = `Chapter of ${TERMS['<SEXUAL_TERM>']}`;
+      setup(doc);
+      installSafetyFakes({ classifier: false }); // pre-filter only: the lexicon decides, no model call
+      useRealGate();
+      const err = await publish(ctx, { visibility: 'unlisted' }).catch((e) => e);
+      expect(err).toBeInstanceOf(PublishError);
+      expect(err).toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED', details: { text: true } });
+      expect(store.rows.size).toBe(0);
+      expect(assets.copies).toHaveLength(0);
+    });
+  });
+
+  it('only pages the gate PASSED go out: pending, unknown or missing verdicts fail closed (503), even if the gate says "cleared"', async () => {
+    for (const statuses of [{ pg_2: 'pending' }, { pg_2: 'mystery' }, { cover: 'pending' }, { text: 'pending' }, { text: 'mystery' }] as Record<string, SafetyStatus>[]) {
+      setup(richDoc());
+      restore();
+      restore = configurePublication({ store, gate: gateFor(statuses, 'cleared') as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+      await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 503, reason: 'NOT_AVAILABLE' });
+      expect(store.rows.size).toBe(0);
+      expect(assets.copies).toHaveLength(0);
+    }
+    // A verdict missing for a page entirely is "could not check" too.
+    setup(richDoc());
+    restore();
+    const partial = async (c: unknown, d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => {
+      const r = await gateFor()(c, d, o);
+      delete r.pages.pg_3;
+      return r;
+    };
+    restore = configurePublication({ store, gate: partial as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 503 });
   });
 
   it('refuses unfinished languages (422 LANG_INCOMPLETE), unknown fields (400) and moderation holds (403)', async () => {
@@ -433,6 +519,22 @@ describe('publish', () => {
     await expect(updatePublication(ctx, { languages: ['en'] } as never)).rejects.toMatchObject({ status: 400 });
   });
 
+  it('going public when the published pages are gone from the live doc: blocked words say so (422), an outage is 503', async () => {
+    await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    store.rows.set('proj-1', { ...row, snapshot: { ...row.snapshot!, pages: row.snapshot!.pages.map((p) => ({ ...p, id: `${p.id}_old` })) } });
+    for (const [text, expected] of [
+      ['blocked', { status: 422, reason: 'SAFETY_BLOCKED' }],
+      ['unchecked', { status: 503, reason: 'NOT_AVAILABLE' }]
+    ] as const) {
+      restore();
+      restore = configurePublication({ store, gate: gateFor({ text }, text === 'blocked' ? 'blocked' : 'needs_check') as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+      await expect(updatePublication(ctx, { visibility: 'public' })).rejects.toMatchObject(expected);
+      expect(store.rows.get('proj-1')!.visibility).toBe('unlisted');
+      expect(store.projects.get('proj-1')!.isPublic).toBe(false);
+    }
+  });
+
   it('rate-limits publishing writes per user (10/min)', async () => {
     for (let i = 0; i < 10; i += 1) await publish(ctx, { visibility: 'unlisted' });
     await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 429 });
@@ -468,11 +570,168 @@ describe('publish', () => {
     expect(removed).toEqual([`pub/${'A'.repeat(22)}/`]);
   });
 
+  it('the sweep is scheduled without a timer: it piggybacks on publication writes, at most once a day, never twice at once', async () => {
+    __resetOrphanSweep();
+    let scans = 0;
+    store.orphanKeys = async () => (scans += 1, ['B'.repeat(22)]);
+    const orphan = `pub/${'B'.repeat(22)}/page-0123456789ab.webp`;
+    assets.files.set(orphan, 'data:image/webp;base64,AA==');
+    await publish(ctx, { visibility: 'unlisted' }); // first write of the day starts one sweep
+    await new Promise((r) => setTimeout(r, 0));
+    expect(scans).toBe(1);
+    expect(assets.files.has(orphan)).toBe(false);
+    expect(assets.removed).toContain(orphan);
+    clock += 1000;
+    await unpublish(ctx); // same day: not again
+    expect(scans).toBe(1);
+    // Due again a day later; a second caller while it runs gets null (no overlap); failures never throw.
+    const removePrefix = async () => {
+      throw new Error('storage down');
+    };
+    const first = maybeSweepOrphans({ removePrefix }, clock + ORPHAN_SWEEP_EVERY_MS + 1);
+    expect(first).not.toBeNull();
+    expect(maybeSweepOrphans({ removePrefix }, clock + 2 * ORPHAN_SWEEP_EVERY_MS)).toBeNull();
+    await expect(first).resolves.toBe(0);
+    expect(scans).toBe(2);
+  });
+
   it('a failed copy publishes nothing and cleans up', async () => {
     assets.missing.add(`u/${USER}/p/proj-1/img/p2.webp`);
     await expect(publishWithOutcome(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 503 });
     expect(store.rows.size).toBe(0);
     expect([...assets.files.keys()].some((p) => p.startsWith('pub/'))).toBe(false);
+  });
+});
+
+describe('content rating (G / PG / PG-13), frozen at publish time, end to end', () => {
+  const withGate = (gate: ReturnType<typeof gateFor>, renderOg: (i: OgRenderInput) => ReturnType<typeof fakeOg> = fakeOg) => {
+    restore();
+    restore = configurePublication({ store, gate: gate as never, now: () => clock, renderOg, publicUrl: (p) => `https://cdn.test/${p}` });
+  };
+
+  it('publish records the gate rating once: row, owner view, anon RPC, legacy /public/:id payload, gallery mirror', async () => {
+    const view = await publish(ctx, { visibility: 'public' });
+    const row = store.rows.get('proj-1')!;
+    expect(row.safety.rating).toBe('PG');
+    expect(view.rating).toBe('PG');
+    expect(publicationRatingOf(row)).toBe('PG');
+    expect(store.rpcPayload(view.slug!)!.publication.rating).toBe('PG');
+    expect(payloadOf(row)!.publication.rating).toBe('PG');
+    expect((await loadPublicByProjectId('proj-1'))!.publication.rating).toBe('PG');
+    expect(store.projects.get('proj-1')!.contentRating).toBe('PG');
+    // The snapshot itself stays the exact allow-list (the rating lives beside it, not in the doc).
+    expect(row.snapshot!.settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('the preview card is drawn with the rating ("Rated PG") under a rating-specific URL', async () => {
+    const inputs: OgRenderInput[] = [];
+    withGate(gateFor(), async (i) => (inputs.push(i), fakeOg()));
+    await publish(ctx, { visibility: 'unlisted' });
+    expect(inputs.map((i) => i.rating)).toEqual(['PG']);
+    const { coverBuf: _c, fallbackPageBuf: _f, themeColor: _t, ...hashInput } = inputs[0];
+    const row = store.rows.get('proj-1')!;
+    const coverPath = `u/${USER}/p/proj-1/img/cover_w1080.webp`; // the 1080 variant the renderer read
+    expect((row.card as ShareCard).og.en.path).toBe(`pub/${row.assetKey}/og-en-${ogHash({ ...hashInput, coverPath })}.jpg`);
+    expect(ogHash({ ...hashInput, coverPath, rating: 'G' })).not.toBe(ogHash({ ...hashInput, coverPath }));
+    expect([ratingMeta('PG'), ratingMeta('PG-13'), ratingMeta('G'), ratingMeta(undefined), ratingMeta('R'), ratingMeta('X')]).toEqual(['Rated PG', 'Rated PG-13', 'Rated G', '', '', '']);
+  });
+
+  it('stays frozen: a settings change re-runs the gate but keeps the published rating; only a republish changes it', async () => {
+    await publish(ctx, { visibility: 'unlisted' });
+    withGate(gateFor({}, undefined, 'G'));
+    clock += 1000;
+    await updatePublication(ctx, { visibility: 'public' });
+    expect(store.rows.get('proj-1')!.safety.rating).toBe('PG');
+    expect(store.projects.get('proj-1')!.contentRating).toBe('PG');
+    const regenerated = await regenerateLink(ctx);
+    expect(store.rpcPayload(regenerated.slug!)!.publication.rating).toBe('PG');
+    clock += 1000;
+    const republished = await publish(ctx, { visibility: 'public' });
+    expect(republished.rating).toBe('G');
+    expect(store.projects.get('proj-1')!.contentRating).toBe('G');
+  });
+
+  it('unpublish clears the gallery rating mirror and the owner view', async () => {
+    await publish(ctx, { visibility: 'public' });
+    const view = await unpublish(ctx);
+    expect(store.projects.get('proj-1')!.contentRating).toBeNull();
+    expect(view.rating).toBeUndefined();
+  });
+
+  it('a publication from before ratings still loads, with no rating key; a malformed stored rating is dropped', async () => {
+    const view = await publish(ctx, { visibility: 'public' });
+    const row = store.rows.get('proj-1')!;
+    const { rating: _gone, ...legacySafety } = row.safety;
+    store.rows.set('proj-1', { ...row, safety: legacySafety });
+    const legacy = store.rpcPayload(view.slug!)!;
+    expect(legacy.doc?.pages).toHaveLength(3);
+    expect('rating' in legacy.publication).toBe(false);
+    const fromId = await loadPublicByProjectId('proj-1');
+    expect(fromId!.doc.pages).toHaveLength(3);
+    expect('rating' in fromId!.publication).toBe(false);
+    for (const bad of ['R', 'X', 'pg', 13, null, { r: 'PG' }]) {
+      store.rows.set('proj-1', { ...row, safety: { ...legacySafety, rating: bad } });
+      expect('rating' in store.rpcPayload(view.slug!)!.publication).toBe(false);
+      expect('rating' in payloadOf(store.rows.get('proj-1')!)!.publication).toBe(false);
+    }
+  });
+
+  it('a gate answer without a known rating publishes unlabelled (never guessed kids-friendly) and clears the mirror', async () => {
+    withGate(gateFor({}, undefined, 'X' as never));
+    const view = await publish(ctx, { visibility: 'public' });
+    expect(store.rows.get('proj-1')!.safety.rating).toBeUndefined();
+    expect(view.rating).toBeUndefined();
+    expect(store.projects.get('proj-1')!.contentRating).toBeNull();
+    expect('rating' in store.rpcPayload(view.slug!)!.publication).toBe(false);
+  });
+});
+
+describe('withheld content never reaches the public payload', () => {
+  it('an excluded page: no art, no text, no translation of its lines, no balloons override; only pub/<key>/ images', () => {
+    const doc = richDoc();
+    doc.pages[1].panels = doc.pages[1].panels.map((pn) => ({ ...pn, lines: pn.lines.map((l) => ({ ...l, text: 'WITHHELD-SOURCE-LINE' })) }));
+    doc.i18n = {
+      editions: {
+        hi: {
+          lang: 'hi',
+          lines: {
+            ln_1_2: { text: 'पहला', status: 'machine', sourceHash: 'x', at: 1 },
+            ln_2_2: { text: 'WITHHELD-HI-LINE', status: 'machine', sourceHash: 'x', at: 1 },
+            ln_gone: { text: 'ORPHAN-HI-LINE', status: 'machine', sourceHash: 'x', at: 1 }
+          },
+          cover: { title: { text: 'मसाला दौड़', status: 'machine', sourceHash: 'x', at: 1 } },
+          balloons: { ln_1_2: { x: 0.2 }, ln_2_2: { x: 0.3 }, ln_gone: { x: 0.4 } } as never,
+          register: 'everyday'
+        }
+      },
+      glossary: []
+    };
+    const keep = ['pg_1', 'pg_3'];
+    const plan = { ...planSnapshot(doc, { assetKey: 'K'.repeat(22), pageIds: keep, includeCover: true, languages: ['en', 'hi'] }), publicationId: 'pub-uuid', publishedAt: 1, rev: 1 };
+    const snapshot = buildPublicSnapshot(doc, plan);
+    const json = JSON.stringify(snapshot);
+    for (const leaked of ['WITHHELD-SOURCE-LINE', 'WITHHELD-HI-LINE', 'ORPHAN-HI-LINE', 'p2.webp', 'p2_w480', 'pg_2']) expect(json).not.toContain(leaked);
+    const hi = snapshot.i18n!.editions.hi;
+    expect(Object.keys(hi.lines)).toEqual(['ln_1_2']);
+    expect(Object.keys(hi.balloons)).toEqual(['ln_1_2']);
+    expect(hi.cover?.title?.text).toBe('मसाला दौड़');
+    expect(snapshot.pages.map((p) => p.id)).toEqual(keep);
+    expect(Object.keys(plan.paths).some((p) => p.includes('/p2'))).toBe(false);
+  });
+
+  it('a blocked cover and an excluded page are absent from the anon RPC payload; every url is a pub/<key>/ path', async () => {
+    setup(richDoc(), { pg_2: 'blocked', cover: 'blocked' });
+    const view = await publish(ctx, { visibility: 'unlisted', excludePageIds: ['pg_2'] });
+    const row = store.rows.get('proj-1')!;
+    const payload = payloadOf(row)!;
+    expect(payload.doc.cover.render.status).toBe('none');
+    expect(payload.doc.pages.map((p) => p.id)).toEqual(['pg_1', 'pg_3']);
+    expect(Object.keys(payload.urls).every((p) => p.startsWith(`pub/${row.assetKey}/`) && !p.includes('cover'))).toBe(true);
+    expect(JSON.stringify(store.rpcPayload(view.slug!))).not.toMatch(/u\/user-1|proj-1|\/ref\//);
+    // The anon RPC never hands out the owner, the project or the safety summary.
+    expect(Object.keys(store.rpcPayload(view.slug!)!.publication).sort()).toEqual(
+      ['allowDownload', 'allowEmbed', 'assetKey', 'card', 'defaultLang', 'languages', 'publishedAt', 'rating', 'slug', 'startPage', 'updatedAt', 'visibility'].sort()
+    );
   });
 });
 
@@ -493,7 +752,31 @@ describe('OG image (sharp + Pango, $0)', () => {
     expect(ogHash(base)).toBe(ogHash({ ...base }));
     expect(ogHash(base)).toMatch(/^[0-9a-f]{12}$/);
     for (const change of [{ title: 'Z' }, { coverPath: 'y' }, { lang: 'hi' }]) expect(ogHash({ ...base, ...change })).not.toBe(ogHash(base));
+    // The rating joins the hash only when set: an unrated card keeps its earlier URL; rated cards differ by rating.
+    expect(ogHash({ ...base, rating: undefined })).toBe(ogHash(base));
+    expect(ogHash({ ...base, rating: 'PG' })).not.toBe(ogHash(base));
+    expect(ogHash({ ...base, rating: 'PG' })).not.toBe(ogHash({ ...base, rating: 'PG-13' }));
+    expect(ogHash({ ...base, rating: 'R' as never })).toBe(ogHash(base));
   });
+
+  it('renders inside the shared 3-slot sharp gate: waits while every slot is busy, then completes', async () => {
+    await renderOgCard({ title: 'Warm-up', subtitle: '', kindLabel: 'Comic', pageCount: 1, lang: 'en', coverBuf: null, fallbackPageBuf: null, showMark: true, themeColor: '#336699' });
+    __resetSharpSlotPeakForTests();
+    let release!: () => void;
+    const latch = new Promise<void>((r) => (release = r));
+    const holders = [0, 1, 2].map(() => withSharpSlot(() => latch));
+    let done = false;
+    const card = renderOgCard({ title: 'Queued', subtitle: 'Rated card', kindLabel: 'Comic', pageCount: 2, lang: 'en', coverBuf: await cover(), fallbackPageBuf: null, showMark: true, rating: 'PG' }).then((o) => ((done = true), o));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(done).toBe(false);
+    expect(sharpSlotStats().queued).toBeGreaterThanOrEqual(1);
+    release();
+    await Promise.all(holders);
+    const out = await card;
+    expect(done).toBe(true);
+    expect((await sharp(out.jpeg).metadata()).width).toBe(1200);
+    expect(sharpSlotStats().peak).toBeLessThanOrEqual(3);
+  }, 30_000);
 
   it('renders a 1200×630 JPEG ≤ 300 KB with a markup-injection title rendered literally, and a no-art gradient', async () => {
     const out = await renderOgCard({ title: '"><script>alert(1)</script><span foreground="red">x</span>&', subtitle: 'Logline with   control', kindLabel: 'Comic', pageCount: 3, lang: 'en', coverBuf: await cover(), fallbackPageBuf: null, showMark: true });

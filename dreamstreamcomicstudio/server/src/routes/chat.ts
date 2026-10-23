@@ -4,8 +4,8 @@ import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
 import { runChat, isStudyIntent, isTripIntent, isTrivialChat, isFastLaneChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
-import { makeDelegateTool } from '../ai/agents/delegateTool.js';
-import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
+import { makeDelegateTool, DELEGATE_TOOL_NAME } from '../ai/agents/delegateTool.js';
+import { makeDeepResearchTool, DEEP_RESEARCH_TOOL_NAME } from '../ai/research/deepResearchTool.js';
 import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
@@ -46,10 +46,20 @@ import {
   attachBillingToPayload,
   consumeAllowanceNotices,
   formatLimitErrorResponse,
+  hasByokForProvider,
   releaseReservedOperation,
   reserveForOperation,
   settleReservedOperation
 } from '../services/usageEnforcer.js';
+import {
+  allowanceExhaustedMessage,
+  isUsageExemptAdmin,
+  meteringEnabled,
+  USAGE_UNAVAILABLE_MESSAGE
+} from '../services/platformAllowance.js';
+import { hasFreeSuffix } from '../../../shared/pricing.js';
+import type { LimitExceededDetails } from '../../../shared/types/billing.js';
+import { logger } from '../lib/logger.js';
 
 export const chatRouter = Router();
 
@@ -186,6 +196,12 @@ type PreparedChat = {
   attachments: ChatAttachmentInput[];
   /** Authenticated user — enables cross-product memory retrieval/write-back. */
   userId?: string;
+  /**
+   * Usage budget (P2-PLATFORM-FOLLOWUP): the governed user's usage can't cover the paid chain,
+   * so this turn runs on FREE models only — no paid `fallbackModel` retry, no paid web plugin,
+   * no paid agent meta-tools. Set only by freeModelsOnlyPlan().
+   */
+  freeModelsOnly?: boolean;
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -713,15 +729,17 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
  * runChatParams and the swarm always send on OpenRouter — even after a free-only chain).
  * reserveForOperation prices the hold at the most expensive of them, so a `:free` primary with a
  * paid fallback can never slip past an exhausted budget at $0. Exported for sibling routes that
- * reuse prepareChat (e.g. /api/recipes).
+ * reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid retry, so none is
+ * priced.
  */
 export const chatPricedModels = (p: {
   resolved: { provider: string };
   model: string;
   fallbackModels?: string[];
+  freeModelsOnly?: boolean;
 }): string[] | undefined => {
   if (p.resolved.provider !== 'openrouter') return p.fallbackModels?.length ? [...p.fallbackModels] : undefined;
-  const chain = [...(p.fallbackModels || []), p.model, TEXT_FALLBACK]
+  const chain = [...(p.fallbackModels || []), p.model, ...(p.freeModelsOnly ? [] : [TEXT_FALLBACK])]
     .map((m) => (typeof m === 'string' ? m.trim() : ''))
     .filter(Boolean);
   return Array.from(new Set(chain));
@@ -747,10 +765,293 @@ const runChatParams = (p: PreparedChat) => ({
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,
-  fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+  // The provider-level paid retry is never sent on a free-models-only plan (nothing reserved for it).
+  fallbackModel: p.resolved.provider === 'openrouter' && !p.freeModelsOnly ? TEXT_FALLBACK : undefined,
   fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
 });
+
+// ── Usage budget: the chat gate (P2-PLATFORM-FOLLOWUP) ──────────────────────────────────────────
+// Every non-admin user has one lifetime platform-paid budget across all studios; BYOK never
+// counts; once it's used up NOTHING more is spent. Free models cost $0, so free chat keeps
+// working: when the budget refuses the paid chain, the turn is re-planned on free models only
+// (no paid retry, no paid web plugin, no paid agent tools) and reserved again at $0 — the second
+// reserve is the real gate, so a free request can never fall through to a paid model unreserved.
+
+type ChatReservation = Extract<Awaited<ReturnType<typeof reserveForOperation>>, { allowed: true }>;
+
+export type ChatGate =
+  | {
+      ok: true;
+      /** The plan to run: the original, or its free-models-only re-plan. */
+      p: PreparedChat;
+      reserve: ChatReservation | null;
+      /** Set when the paid plan was refused and `p` is the free-models-only re-plan. */
+      degradedFrom?: { details: LimitExceededDetails; requestedModel: string };
+    }
+  | { ok: false; details: LimitExceededDetails };
+
+/** Agent meta-tools that run their own paid model calls (planner/agents/research on TEXT_FALLBACK). */
+const PAID_META_TOOLS = new Set([SWARM_TOOL_NAME, DELEGATE_TOOL_NAME, DEEP_RESEARCH_TOOL_NAME]);
+
+const MAX_FREE_CHAIN = 3;
+
+const messagesHaveImages = (messages: ChatMessage[]): boolean =>
+  messages.some((m) => Array.isArray(m.content) && m.content.some((part) => part.type === 'image_url'));
+
+/**
+ * The same turn on FREE models only (OpenRouter): the free members of the planned chain, or a
+ * fresh cooldown-aware free chain when the plan had none (the Auto defaults are all paid).
+ * Only `:free` ids qualify. Null when no free model is available — the caller says so calmly.
+ */
+export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat | null> => {
+  if (p.resolved.provider !== 'openrouter') return null;
+  let chain = Array.from(new Set([p.model, ...(p.fallbackModels || [])].map((m) => String(m || '').trim()))).filter(hasFreeSuffix);
+  if (!chain.length) {
+    const wantsVision = messagesHaveImages(p.messages);
+    chain = (
+      await pickTextModelChain({
+        preferFree: true,
+        prefer: (m) =>
+          wantsVision ? (m.inputModalities || []).includes('image') : (m.supportedParameters || []).includes('tools'),
+        freeOnly: true,
+        max: MAX_FREE_CHAIN
+      }).catch(() => [] as string[])
+    ).filter(hasFreeSuffix);
+  }
+  chain = chain.slice(0, MAX_FREE_CHAIN);
+  if (!chain.length) return null;
+  return {
+    ...p,
+    model: chain[0],
+    fallbackModels: chain,
+    // OpenRouter's web plugin is billed per request even on free models; the web_search TOOL
+    // (keyless) stays available.
+    webSearch: false,
+    tools: p.tools.filter((t) => !PAID_META_TOOLS.has(t.name)),
+    freeModelsOnly: true
+  };
+};
+
+/**
+ * A view of `req` whose priced model (body.model) is `model`. usageEnforcer prices the hold at the
+ * model in body.model too, so a pinned PAID model in the body would refuse the free re-plan. The
+ * view also gives the hold its own `usageReservation` slot (see copyHoldBack).
+ */
+const pricedAs = (req: any, model: string): any => {
+  const view = Object.create(req);
+  view.body = { ...(req.body || {}), model };
+  return view;
+};
+
+const hasOwn = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
+
+/** Copy what reserveForOperation wrote on a request view back onto the real request. */
+const copyHoldBack = (req: any, view: any) => {
+  if (view === req) return;
+  for (const key of ['usageReservation', 'usageLimitDetails', 'allowanceNotices']) {
+    if (hasOwn(view, key)) req[key] = view[key];
+  }
+};
+
+const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<string, unknown>) => {
+  const view = p.freeModelsOnly ? pricedAs(req, p.model) : req;
+  const reserve = await reserveForOperation({
+    req: view,
+    operation: 'chat.completion',
+    fallbackModel: p.model,
+    // Price the hold at the most expensive model OpenRouter may route to (free primary, paid
+    // fallback): an exhausted governed user must never pass at $0.
+    pricedModels: chatPricedModels(p),
+    provider: p.resolved.provider,
+    stage: 'chat',
+    metadata: { ...metadata, model: p.model, ...(p.freeModelsOnly ? { freeModelsOnly: true } : {}) }
+  });
+  copyHoldBack(req, view);
+  return reserve;
+};
+
+/** The budget refused the paid plan and no free model is available: say so calmly (percent-only). */
+export const noFreeModelDetails = (details: LimitExceededDetails): LimitExceededDetails => ({
+  ...details,
+  message: `${details.message || allowanceExhaustedMessage(null)} Free models are busy right now too, so nothing was spent — try again in a few minutes.`
+});
+
+/**
+ * Reserve a chat turn. Signed-out requests reserve nothing (as before). A budget refusal of the
+ * paid plan becomes a free-models-only re-plan reserved again at $0; every other refusal (budget
+ * unavailable, wallet limits, BYOK wallet) stands — nothing is spent.
+ */
+export const reserveChat = async (req: any, p: PreparedChat, metadata: Record<string, unknown>): Promise<ChatGate> => {
+  if (!req.user?.id) return { ok: true, p, reserve: null };
+  const first = await reserveChatPlan(req, p, metadata);
+  if (first.allowed) return { ok: true, p, reserve: first };
+  if (first.details.reason !== 'usage_budget_exhausted' || p.freeModelsOnly) return { ok: false, details: first.details };
+  const free = await freeModelsOnlyPlan(p);
+  if (!free) return { ok: false, details: noFreeModelDetails(first.details) };
+  const second = await reserveChatPlan(req, free, metadata);
+  if (!second.allowed) {
+    return { ok: false, details: second.details.reason === 'usage_budget_exhausted' ? noFreeModelDetails(first.details) : second.details };
+  }
+  // The refused attempt left its details on the request; this turn is going ahead.
+  req.usageLimitDetails = undefined;
+  return { ok: true, p: free, reserve: second, degradedFrom: { details: first.details, requestedModel: p.requestedModel } };
+};
+
+/**
+ * The calm note on a free-models-only reply (percent-free, never dollars). When the free model
+ * didn't answer and the chat engine's own quick retry did, the engine's notice already says so —
+ * the reply is still recorded honestly against the usage, so this note isn't added.
+ */
+export const freeModelsNotice = (gate: ChatGate, servedModel: string | undefined, opts: { swarm?: boolean } = {}): CapabilityNotice | null => {
+  if (!gate.ok || !gate.degradedFrom) return null;
+  if (servedModel && !hasFreeSuffix(servedModel)) return null;
+  const exhausted = (gate.degradedFrom.details.pctLeft ?? 0) < 0.5;
+  const lead = exhausted
+    ? "You've used all of your DreamStream usage"
+    : "There isn't enough DreamStream usage left for the full models";
+  const requested = gate.degradedFrom.requestedModel;
+  const instead = opts.swarm
+    ? ' instead of the agent team'
+    : requested && !hasFreeSuffix(requested)
+      ? ` instead of ${requested}`
+      : '';
+  return {
+    tool: 'usage_budget',
+    level: 'info',
+    message: `${lead}, so this reply came from a free model${instead} — nothing was taken from your usage. Free models can be slower, and live web search is paused.`,
+    fix: 'Add your own API key in Settings → API keys to use every model again.',
+    at: new Date().toISOString()
+  };
+};
+
+const withFreeModelsNotice = <T extends { notices?: CapabilityNotice[] }>(
+  payload: T,
+  gate: ChatGate,
+  servedModel: string | undefined,
+  opts: { swarm?: boolean } = {}
+): T => {
+  const notice = freeModelsNotice(gate, servedModel, opts);
+  return notice ? { ...payload, notices: [...(payload.notices || []), notice] } : payload;
+};
+
+// ── Usage budget: background chat helpers ───────────────────────────────────────────────────────
+// Enhance / title / memory / follow-ups (and the server's auto-memory) run paid models on the
+// platform key. For governed users they're metered like any other paid call — a small estimate
+// reserved before the call, the actual cost settled after, the hold released on failure. When the
+// budget refuses (or can't be checked), the helper degrades at $0 instead of failing: a local
+// title, the user's own text, no follow-ups, no memory update — never an error for a background
+// nicety. Admins, BYOK and metering-off run exactly as before (no hold).
+
+export type HelperHold =
+  | { run: true; reserve: ChatReservation | null; req: any }
+  | { run: false; details?: LimitExceededDetails };
+
+export const holdForChatHelper = async (
+  req: any,
+  input: {
+    operation: string;
+    provider: AIProviderId;
+    model: string;
+    /** Every model the call may be billed for (its OpenRouter chain + paid retry). */
+    models?: string[];
+    inputChars: number;
+    maxTokens: number;
+  }
+): Promise<HelperHold> => {
+  if (!req.user?.id || !meteringEnabled() || hasByokForProvider(req, input.provider)) return { run: true, reserve: null, req };
+  if (await isUsageExemptAdmin(req)) return { run: true, reserve: null, req };
+  // Its own request view: a helper's hold never replaces a chat turn's (auto-memory runs on the
+  // chat's request), and the priced model is the one actually called.
+  const view = pricedAs(req, input.model);
+  try {
+    const reserve = await reserveForOperation({
+      req: view,
+      operation: input.operation,
+      fallbackModel: input.model,
+      pricedModels: input.models,
+      provider: input.provider,
+      stage: 'chat',
+      inputTokens: Math.ceil(Math.max(0, input.inputChars) / 4),
+      outputTokens: input.maxTokens,
+      metadata: { route: input.operation, helper: true }
+    });
+    if (!reserve.allowed) return { run: false, details: reserve.details };
+    return { run: true, reserve, req: view };
+  } catch (err) {
+    // Fail closed at $0: the helper is skipped rather than run unmetered.
+    logger.warn('chat_helper_reserve_failed', { operation: input.operation, message: (err as Error)?.message });
+    return { run: false };
+  }
+};
+
+type RunChatResult = Awaited<ReturnType<typeof runChat>>;
+
+/** Run a helper's model call under its hold: settle the actual cost, release on failure. */
+export const runHeldHelper = async (
+  hold: Extract<HelperHold, { run: true }>,
+  input: { operation: string; provider: AIProviderId; model: string },
+  call: () => Promise<RunChatResult>
+): Promise<RunChatResult> => {
+  let result: RunChatResult;
+  try {
+    result = await call();
+  } catch (err) {
+    if (hold.reserve) {
+      await releaseReservedOperation({
+        req: hold.req,
+        operation: input.operation,
+        provider: input.provider,
+        model: input.model,
+        reason: (err as Error)?.message || 'chat_helper_failed'
+      }).catch(() => undefined);
+    }
+    throw err;
+  }
+  if (hold.reserve) {
+    // The provider call happened: settle it. A settle error is logged, never turned into a release.
+    await settleReservedOperation({
+      req: hold.req,
+      operation: input.operation,
+      provider: input.provider,
+      model: result.model || input.model,
+      seed: { ...hold.reserve.seed, model: result.model || input.model },
+      usage: result.usage
+    }).catch((err) => logger.error('chat_helper_settle_failed', { operation: input.operation, message: (err as Error)?.message }));
+  }
+  return result;
+};
+
+/** OpenRouter helpers call the fast default with the paid net — both may be billed. */
+const helperModels = (provider: AIProviderId, model: string): string[] | undefined =>
+  provider === 'openrouter' ? Array.from(new Set([model, OPENROUTER_TEXT_MODEL, TEXT_FALLBACK])) : undefined;
+
+const VAGUE_TITLE = /^(hi|hii+|hello|hey|heya|yo|sup|test|testing|asdf|ok|okay|thanks|thank you|new chat)$/i;
+
+/**
+ * A $0 title from the user's own first words (used when the AI title is skipped): up to six
+ * words, capitalized, no trailing punctuation. Small talk / tests stay "New chat" (empty).
+ */
+export const localChatTitle = (text: string): string => {
+  const words = String(text || '')
+    .replace(/[`*#>_~[\]()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+  if (!words.length) return '';
+  let title = words.slice(0, 6).join(' ').replace(/[\s.,;:!?…"'“”-]+$/u, '').trim();
+  if (title.length > 60) title = `${title.slice(0, 60).trim()}…`;
+  if (!title || VAGUE_TITLE.test(title)) return '';
+  return title.charAt(0).toUpperCase() + title.slice(1);
+};
+
+const textOf = (m: ChatMessage): string =>
+  typeof m.content === 'string'
+    ? m.content
+    : Array.isArray(m.content)
+      ? m.content.map((part) => ('text' in part ? part.text : '')).join(' ')
+      : '';
 
 // Prompt enhancer: rewrite a user's rough draft into a clearer, more specific
 // prompt WITHOUT changing their intent. Returns the improved text for the user to
@@ -779,19 +1080,31 @@ chatRouter.post('/enhance', async (req, res, next) => {
     // Utility calls (enhance/memory) must be RELIABLE, not free-but-flaky — use the fast
     // default model with the paid net so they don't silently fail when free models 429.
     const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
-
-    const result = await runChat({
-      provider: resolved.provider,
-      apiKey: resolved.apiKey,
-      model,
-      messages: [{ role: 'user', content: `Improve this prompt:\n\n${text}` }],
-      systemOverride: ENHANCE_SYSTEM_PROMPT,
-      temperature: 0.4,
-      maxTokens: 600,
-      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    const content = `Improve this prompt:\n\n${text}`;
+    const meter = { operation: 'chat.enhance', provider: resolved.provider, model };
+    const hold = await holdForChatHelper(req, {
+      ...meter,
+      models: helperModels(resolved.provider, model),
+      inputChars: ENHANCE_SYSTEM_PROMPT.length + content.length,
+      maxTokens: 600
     });
+    // Usage used up (or not checkable): keep the user's own words — $0, no error.
+    if (!hold.run) return res.json({ enhanced: text, skipped: 'usage' });
+
+    const result = await runHeldHelper(hold, meter, () =>
+      runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content }],
+        systemOverride: ENHANCE_SYSTEM_PROMPT,
+        temperature: 0.4,
+        maxTokens: 600,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
     const enhanced = (result.text || '').trim();
     res.json({ enhanced: enhanced || text, model: result.model });
   } catch (err) {
@@ -840,31 +1153,39 @@ chatRouter.post('/title', async (req, res, next) => {
     if (!resolved) return res.json({ title: '' }); // silent no-op without a key
 
     const transcript = turns
-      .map((t) => {
-        const text =
-          typeof t.content === 'string'
-            ? t.content
-            : Array.isArray(t.content)
-              ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-              : '';
-        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
-      })
+      .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
       .join('\n')
       .slice(0, 4000);
 
     const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
-    const result = await runChat({
-      provider: resolved.provider,
-      apiKey: resolved.apiKey,
-      model,
-      messages: [{ role: 'user', content: `Conversation:\n${transcript}\n\nWrite the title.` }],
-      systemOverride: TITLE_SYSTEM_PROMPT,
-      temperature: 0.3,
-      maxTokens: 24,
-      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    const content = `Conversation:\n${transcript}\n\nWrite the title.`;
+    const meter = { operation: 'chat.title', provider: resolved.provider, model };
+    const hold = await holdForChatHelper(req, {
+      ...meter,
+      models: helperModels(resolved.provider, model),
+      inputChars: TITLE_SYSTEM_PROMPT.length + content.length,
+      maxTokens: 24
     });
+    if (!hold.run) {
+      // Usage used up (or not checkable): a $0 title from the user's own first words.
+      const firstUser = turns.find((t) => t.role === 'user');
+      return res.json({ title: firstUser ? localChatTitle(textOf(firstUser)) : '', skipped: 'usage' });
+    }
+
+    const result = await runHeldHelper(hold, meter, () =>
+      runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content }],
+        systemOverride: TITLE_SYSTEM_PROMPT,
+        temperature: 0.3,
+        maxTokens: 24,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
     const title = sanitizeTitle(result.text || '');
     res.json({ title: /^new chat$/i.test(title) ? '' : title, model: result.model });
   } catch (err) {
@@ -903,32 +1224,38 @@ chatRouter.post('/memory', async (req, res, next) => {
     if (!resolved) return res.json({ memory: existing }); // silent no-op without a key
 
     const transcript = turns
-      .map((t) => {
-        const text = typeof t.content === 'string'
-          ? t.content
-          : Array.isArray(t.content)
-            ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-            : '';
-        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
-      })
+      .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
       .join('\n')
       .slice(0, 6000);
 
     // Reliable model for memory distillation — a flaky free model that 429s or returns
     // garbage is exactly why memory "felt terrible".
     const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
-    const result = await runChat({
-      provider: resolved.provider,
-      apiKey: resolved.apiKey,
-      model,
-      messages: [{ role: 'user', content: `EXISTING MEMORY:\n${existing || '(none)'}\n\nRECENT CONVERSATION:\n${transcript}` }],
-      systemOverride: MEMORY_SYSTEM_PROMPT,
-      temperature: 0.2,
-      maxTokens: 500,
-      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    const content = `EXISTING MEMORY:\n${existing || '(none)'}\n\nRECENT CONVERSATION:\n${transcript}`;
+    const meter = { operation: 'chat.memory', provider: resolved.provider, model };
+    const hold = await holdForChatHelper(req, {
+      ...meter,
+      models: helperModels(resolved.provider, model),
+      inputChars: MEMORY_SYSTEM_PROMPT.length + content.length,
+      maxTokens: 500
     });
+    // Usage used up (or not checkable): memory stays as it is — $0, no error.
+    if (!hold.run) return res.json({ memory: existing, skipped: 'usage' });
+
+    const result = await runHeldHelper(hold, meter, () =>
+      runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content }],
+        systemOverride: MEMORY_SYSTEM_PROMPT,
+        temperature: 0.2,
+        maxTokens: 500,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
     const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);
     // Canonical store: distilled bullets also land in the server-side cross-product
     // memory (pgvector), so they follow the user to every device, studio and model —
@@ -996,9 +1323,11 @@ chatRouter.delete('/memory/:id', async (req, res, next) => {
 // every few minutes. Fire-and-forget — never delays or fails the chat response.
 const AUTO_MEMORY_THROTTLE_MS = 5 * 60_000;
 const lastAutoMemoryAt = new Map<string, number>();
-const maybeAutoRemember = (p: PreparedChat, answerText: string): void => {
+const maybeAutoRemember = (req: any, p: PreparedChat, answerText: string): void => {
   const userId = p.userId;
   if (!userId || !answerText) return;
+  // A free-models-only turn means the user's usage can't cover paid calls: no paid write-back.
+  if (p.freeModelsOnly) return;
   const last = lastAutoMemoryAt.get(userId) || 0;
   if (Date.now() - last < AUTO_MEMORY_THROTTLE_MS) return;
   lastAutoMemoryAt.set(userId, Date.now());
@@ -1006,29 +1335,34 @@ const maybeAutoRemember = (p: PreparedChat, answerText: string): void => {
     try {
       const transcript = p.messages
         .slice(-6)
-        .map((t) => {
-          const text = typeof t.content === 'string'
-            ? t.content
-            : Array.isArray(t.content)
-              ? t.content.map((part) => ('text' in part ? part.text : '')).join(' ')
-              : '';
-          return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
-        })
+        .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
         .concat(`Assistant: ${answerText.slice(0, 1_500)}`)
         .join('\n')
         .slice(0, 6_000);
       const model = p.resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
-      const result = await runChat({
-        provider: p.resolved.provider,
-        apiKey: p.resolved.apiKey,
-        model,
-        messages: [{ role: 'user', content: `EXISTING MEMORY:\n(none)\n\nRECENT CONVERSATION:\n${transcript}` }],
-        systemOverride: MEMORY_SYSTEM_PROMPT,
-        temperature: 0.2,
-        maxTokens: 400,
-        fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      const content = `EXISTING MEMORY:\n(none)\n\nRECENT CONVERSATION:\n${transcript}`;
+      const meter = { operation: 'chat.memory.auto', provider: p.resolved.provider, model };
+      // Metered like the other helpers, on its own hold (never the chat turn's).
+      const hold = await holdForChatHelper(req, {
+        ...meter,
+        models: p.resolved.provider === 'openrouter' ? Array.from(new Set([model, TEXT_FALLBACK])) : undefined,
+        inputChars: MEMORY_SYSTEM_PROMPT.length + content.length,
+        maxTokens: 400
       });
+      if (!hold.run) return;
+      const result = await runHeldHelper(hold, meter, () =>
+        runChat({
+          provider: p.resolved.provider,
+          apiKey: p.resolved.apiKey,
+          model,
+          messages: [{ role: 'user', content }],
+          systemOverride: MEMORY_SYSTEM_PROMPT,
+          temperature: 0.2,
+          maxTokens: 400,
+          fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+          timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        })
+      );
       const bullets = (result.text || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
       if (bullets.length) {
         await rememberUserMemories(userId, 'chat_studio', null, bullets.map((content) => ({ content })));
@@ -1077,23 +1411,34 @@ chatRouter.post('/memory/import', async (req, res, next) => {
     // Reliable model, like /memory — a flaky free model silently corrupting an import
     // would destroy the user's trust in the whole feature.
     const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
-    const result = await runChat({
-      provider: resolved.provider,
-      apiKey: resolved.apiKey,
-      model,
-      messages: [{
-        role: 'user',
-        content:
-          `EXISTING MEMORY:\n${existing || '(none)'}\n\n` +
-          `IMPORTED CONTENT (from ${importSource}):\n${content}`
-      }],
-      systemOverride: MEMORY_IMPORT_SYSTEM_PROMPT,
-      temperature: 0.2,
-      maxTokens: 900,
-      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    const prompt = `EXISTING MEMORY:\n${existing || '(none)'}\n\nIMPORTED CONTENT (from ${importSource}):\n${content}`;
+    const meter = { operation: 'chat.memory.import', provider: resolved.provider, model };
+    const hold = await holdForChatHelper(req, {
+      ...meter,
+      models: helperModels(resolved.provider, model),
+      inputChars: MEMORY_IMPORT_SYSTEM_PROMPT.length + prompt.length,
+      maxTokens: 900
     });
+    // A user-started import (not a background helper): an honest, percent-only refusal.
+    if (!hold.run) {
+      return hold.details
+        ? res.status(402).json({ error: formatLimitErrorResponse(hold.details) })
+        : res.status(503).json({ error: { message: USAGE_UNAVAILABLE_MESSAGE, code: 'USAGE_UNAVAILABLE' } });
+    }
+    const result = await runHeldHelper(hold, meter, () =>
+      runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        systemOverride: MEMORY_IMPORT_SYSTEM_PROMPT,
+        temperature: 0.2,
+        maxTokens: 900,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
     const updated = (result.text || '').trim().slice(0, MAX_IMPORTED_MEMORY_CHARS);
     if (!updated) return res.status(502).json({ error: { message: 'The import model returned nothing — try again.' } });
     res.json({ memory: updated, model: result.model });
@@ -1169,32 +1514,37 @@ chatRouter.post('/followups', async (req, res, next) => {
     if (!resolved) return res.json({ suggestions: [] }); // silent no-op without a key
 
     const transcript = turns
-      .map((t) => {
-        const text =
-          typeof t.content === 'string'
-            ? t.content
-            : Array.isArray(t.content)
-              ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-              : '';
-        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
-      })
+      .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
       .join('\n')
       .slice(0, 6000);
 
     // Fast, reliable model + no tools — this runs after every answer, so it must be cheap.
     const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
-    const result = await runChat({
-      provider: resolved.provider,
-      apiKey: resolved.apiKey,
-      model,
-      messages: [{ role: 'user', content: `Conversation so far:\n${transcript}\n\nSuggest the follow-ups.` }],
-      systemOverride: FOLLOWUPS_SYSTEM_PROMPT,
-      temperature: 0.5,
-      maxTokens: 200,
-      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    const content = `Conversation so far:\n${transcript}\n\nSuggest the follow-ups.`;
+    const meter = { operation: 'chat.followups', provider: resolved.provider, model };
+    const hold = await holdForChatHelper(req, {
+      ...meter,
+      models: helperModels(resolved.provider, model),
+      inputChars: FOLLOWUPS_SYSTEM_PROMPT.length + content.length,
+      maxTokens: 200
     });
+    // Usage used up (or not checkable): no suggestions this time — $0, no error.
+    if (!hold.run) return res.json({ suggestions: [], skipped: 'usage' });
+
+    const result = await runHeldHelper(hold, meter, () =>
+      runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content }],
+        systemOverride: FOLLOWUPS_SYSTEM_PROMPT,
+        temperature: 0.5,
+        maxTokens: 200,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
     res.json({ suggestions: parseFollowUps(result.text || ''), model: result.model });
   } catch (err) {
     next(err);
@@ -1288,53 +1638,35 @@ chatRouter.post('/', async (req, res, next) => {
   try {
     const prep = await prepareChat(req);
     if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
-    const p = prep.prepared;
 
-    const reserve = req.user?.id
-      ? await reserveForOperation({
-          req,
-          operation: 'chat.completion',
-          fallbackModel: p.model,
-          // Price the hold at the most expensive model OpenRouter may route to (free primary,
-          // paid fallback): an exhausted governed user must never pass at $0.
-          pricedModels: chatPricedModels(p),
-          provider: p.resolved.provider,
-          stage: 'chat',
-          metadata: { route: req.path, historyLength: p.messages.length, model: p.model }
-        })
-      : null;
-    if (reserve && 'details' in reserve) {
-      return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
-    }
+    // Usage budget: reserve the turn (a refused paid plan re-plans onto free models at $0).
+    const gate = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length });
+    if (!gate.ok) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
+    const { p, reserve } = gate;
 
     try {
       const result = await runChat(runChatParams(p));
       if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
         markModelDown(p.model);
       }
-      const settled =
-        reserve && reserve.allowed
-          ? await settleReservedOperation({
-              req,
-              operation: 'chat.completion',
-              provider: p.resolved.provider,
-              model: result.model,
-              seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
-              usage: result.usage,
-              metadata: { route: req.path, historyLength: p.messages.length }
-            })
-          : null;
+      const settled = reserve
+        ? await settleReservedOperation({
+            req,
+            operation: 'chat.completion',
+            provider: p.resolved.provider,
+            model: result.model,
+            seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
+            usage: result.usage,
+            metadata: { route: req.path, historyLength: p.messages.length }
+          })
+        : null;
 
-      const payload = withAllowanceNotices(req, buildPayload(p, result));
-      maybeAutoRemember(p, result.text || '');
+      const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result), gate, result.model));
+      maybeAutoRemember(req, p, result.text || '');
       recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
-      res.json(
-        reserve && reserve.allowed
-          ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
-          : payload
-      );
+      res.json(reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
     } catch (error) {
-      if (reserve && reserve.allowed) {
+      if (reserve) {
         await releaseReservedOperation({
           req,
           operation: 'chat.completion',
@@ -1351,52 +1683,52 @@ chatRouter.post('/', async (req, res, next) => {
   }
 });
 
-// Streaming variant — Server-Sent Events. Emits `meta`, `delta`/`reasoning`,
-// then a `final` event carrying the full ChatResponse (with billing), or `error`.
-chatRouter.post('/stream', async (req, res) => {
-  const prep = await prepareChat(req);
-  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
-  const p = prep.prepared;
-
-  const reserve = req.user?.id
-    ? await reserveForOperation({
-        req,
-        operation: 'chat.completion',
-        fallbackModel: p.model,
-        pricedModels: chatPricedModels(p),
-        provider: p.resolved.provider,
-        stage: 'chat',
-        metadata: { route: req.path, historyLength: p.messages.length, model: p.model }
-      })
-    : null;
-  if (reserve && 'details' in reserve) {
-    return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
-  }
-
+/** Open an SSE response; `send` writes one event. */
+const openEventStream = (res: any) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no'
   });
-  const send = (event: string, data: unknown) => {
+  return (event: string, data: unknown) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+};
 
-  // SSE keep-alive. A tool-grounded turn (web search → weather/places → synthesis) can run
-  // 20–60s before the first token, during which the stream sends NO bytes. Mobile carriers,
-  // the Cloudflare edge and other proxies drop an idle streaming connection after
-  // ~30s — the browser then surfaces the cut as a bare "network error" and the whole turn
-  // fails. A periodic comment line (ignored by the SSE parser) keeps the connection hot
-  // until real output flows. Cleared in `finally` so it never outlives the response.
-  const heartbeat = setInterval(() => {
+/**
+ * SSE keep-alive. A tool-grounded turn (web search → weather/places → synthesis) or the swarm's
+ * plan + parallel-agent phase can run 20–60s before the first token, during which the stream
+ * sends NO bytes. Mobile carriers, the Cloudflare edge and other proxies drop an idle streaming
+ * connection after ~30s — the browser then surfaces the cut as a bare "network error" and the
+ * whole turn fails. A periodic comment line (ignored by the SSE parser) keeps the connection hot
+ * until real output flows. The caller clears it in `finally` so it never outlives the response.
+ */
+const startHeartbeat = (res: any) =>
+  setInterval(() => {
     try {
       res.write(': keep-alive\n\n');
     } catch {
       /* socket already closed */
     }
   }, 15_000);
+
+/**
+ * One streamed chat turn on an already-reserved gate: `delta`/`reasoning`/`reset`/`agent_step`
+ * events, then `final` (with billing) or `error`. Shared by /stream and by /swarm when the
+ * usage budget re-planned the turn onto free models (the agent team needs paid models).
+ */
+const streamChatTurn = async (
+  req: any,
+  res: any,
+  gate: Extract<ChatGate, { ok: true }>,
+  opts: { swarm?: boolean } = {}
+): Promise<void> => {
+  const { p, reserve } = gate;
+  const send = openEventStream(res);
+  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+  const heartbeat = startHeartbeat(res);
+  const metadata = { route: req.path, historyLength: p.messages.length, ...(opts.swarm ? { swarm: true } : {}) };
 
   try {
     const result = await runChat({
@@ -1421,36 +1753,31 @@ chatRouter.post('/stream', async (req, res) => {
       markModelDown(p.model);
     }
 
-    const settled =
-      reserve && reserve.allowed
-        ? await settleReservedOperation({
-            req,
-            operation: 'chat.completion',
-            provider: p.resolved.provider,
-            model: result.model,
-            seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
-            usage: result.usage,
-            metadata: { route: req.path, historyLength: p.messages.length }
-          })
-        : null;
+    const settled = reserve
+      ? await settleReservedOperation({
+          req,
+          operation: 'chat.completion',
+          provider: p.resolved.provider,
+          model: result.model,
+          seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
+          usage: result.usage,
+          metadata
+        })
+      : null;
 
-    const payload = withAllowanceNotices(req, buildPayload(p, result));
-    maybeAutoRemember(p, result.text || '');
+    const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result), gate, result.model, opts));
+    maybeAutoRemember(req, p, result.text || '');
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
-    const finalPayload =
-      reserve && reserve.allowed
-        ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
-        : payload;
-    send('final', finalPayload);
+    send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
-    if (reserve && reserve.allowed) {
+    if (reserve) {
       await releaseReservedOperation({
         req,
         operation: 'chat.completion',
         provider: p.resolved.provider,
         model: p.model,
         reason: (error as Error)?.message || 'chat_request_failed',
-        metadata: { route: req.path, historyLength: p.messages.length }
+        metadata
       });
     }
     send('error', { message: safeClientMessage(error, 'The request failed. Please try again.') });
@@ -1458,6 +1785,18 @@ chatRouter.post('/stream', async (req, res) => {
     clearInterval(heartbeat);
     res.end();
   }
+};
+
+// Streaming variant — Server-Sent Events. Emits `meta`, `delta`/`reasoning`,
+// then a `final` event carrying the full ChatResponse (with billing), or `error`.
+chatRouter.post('/stream', async (req, res) => {
+  const prep = await prepareChat(req);
+  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+
+  const gate = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length });
+  if (!gate.ok) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
+
+  await streamChatTurn(req, res, gate);
 });
 
 // Agent swarm (SSE). Plans → runs specialized agents in parallel → synthesizes.
@@ -1466,50 +1805,26 @@ chatRouter.post('/stream', async (req, res) => {
 chatRouter.post('/swarm', async (req, res) => {
   const prep = await prepareChat(req);
   if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
-  const p = prep.prepared;
 
-  if (p.resolved.provider !== 'openrouter') {
+  if (prep.prepared.resolved.provider !== 'openrouter') {
     return res.status(400).json({
       error: { message: 'The agent swarm requires an OpenRouter key (agents use tool calling).', code: 'SWARM_REQUIRES_OPENROUTER' }
     });
   }
 
-  const reserve = req.user?.id
-    ? await reserveForOperation({
-        req,
-        operation: 'chat.completion',
-        fallbackModel: p.model,
-        // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry; synthesis on p.model.
-        pricedModels: chatPricedModels(p),
-        provider: p.resolved.provider,
-        stage: 'chat',
-        metadata: { route: req.path, historyLength: p.messages.length, model: p.model, swarm: true }
-      })
-    : null;
-  if (reserve && 'details' in reserve) {
-    return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
-  }
+  // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry; synthesis on p.model —
+  // the hold is priced at the whole chain.
+  const gate = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length, swarm: true });
+  if (!gate.ok) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no'
-  });
-  const send = (event: string, data: unknown) => {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  };
+  // The agent team always keeps a paid retry, so a free-models-only turn is answered by one free
+  // model instead (same SSE events; the client renders a final without traces).
+  if (gate.p.freeModelsOnly) return streamChatTurn(req, res, gate, { swarm: true });
+
+  const { p, reserve } = gate;
+  const send = openEventStream(res);
   send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
-
-  // Keep-alive: the swarm's plan + parallel-agent phase can be quiet for a while before the
-  // first trace/token; without periodic bytes an idle proxy drops the stream (see /stream).
-  const heartbeat = setInterval(() => {
-    try {
-      res.write(': keep-alive\n\n');
-    } catch {
-      /* socket already closed */
-    }
-  }, 15_000);
+  const heartbeat = startHeartbeat(res);
 
   try {
     const result = await runSwarm({
@@ -1529,18 +1844,17 @@ chatRouter.post('/swarm', async (req, res) => {
       onProgress: (trace) => send('trace', trace)
     });
 
-    const settled =
-      reserve && reserve.allowed
-        ? await settleReservedOperation({
-            req,
-            operation: 'chat.completion',
-            provider: p.resolved.provider,
-            model: result.model,
-            seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
-            usage: result.usage,
-            metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
-          })
-        : null;
+    const settled = reserve
+      ? await settleReservedOperation({
+          req,
+          operation: 'chat.completion',
+          provider: p.resolved.provider,
+          model: result.model,
+          seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
+          usage: result.usage,
+          metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
+        })
+      : null;
 
     const payload: ChatResponse = withAllowanceNotices(req, {
       text: result.text,
@@ -1557,15 +1871,11 @@ chatRouter.post('/swarm', async (req, res) => {
       notices: withGuardrailNotices(result),
       usage: result.usage
     });
-    maybeAutoRemember(p, result.text || '');
+    maybeAutoRemember(req, p, result.text || '');
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
-    const finalPayload =
-      reserve && reserve.allowed
-        ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
-        : payload;
-    send('final', finalPayload);
+    send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
-    if (reserve && reserve.allowed) {
+    if (reserve) {
       await releaseReservedOperation({
         req,
         operation: 'chat.completion',

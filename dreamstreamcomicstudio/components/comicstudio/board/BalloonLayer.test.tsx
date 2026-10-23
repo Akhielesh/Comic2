@@ -594,10 +594,21 @@ describe('BalloonLayer — touch (mobile.md §5.4)', () => {
       fireEvent.pointerDown(document.body, { pointerId: 9 });
       fireEvent.click(document.body);
       expect(scrimClick).toHaveBeenCalledTimes(1);
-      document.body.removeEventListener('click', scrimClick);
       fireEvent.pointerMove(window, { clientX: 160, clientY: 160, pointerId: 1 });
       fireEvent.pointerUp(window, { clientX: 160, clientY: 160, pointerId: 1 });
       expect(onBalloonChange).not.toHaveBeenCalled();
+      // A keyboard / switch user picking a menu item (Enter → click, no pointer) is never swallowed either.
+      onBalloonMenu.mockClear();
+      fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 5 });
+      act(() => {
+        vi.advanceTimersByTime(460);
+      });
+      expect(onBalloonMenu).toHaveBeenCalledTimes(1);
+      fireEvent.pointerUp(window, { clientX: 100, clientY: 100, pointerId: 5 });
+      fireEvent.keyDown(document.body, { key: 'Enter' });
+      fireEvent.click(document.body);
+      expect(scrimClick).toHaveBeenCalledTimes(2);
+      document.body.removeEventListener('click', scrimClick);
       // A lifted balloon that is dragged before 450 ms is a move, not a menu.
       onBalloonMenu.mockClear();
       fireEvent.pointerDown(hit('pg_1_l3'), { clientX: 300, clientY: 300, pointerType: 'touch', pointerId: 2 });

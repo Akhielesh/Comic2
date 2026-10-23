@@ -33,7 +33,7 @@ import {
   type VersionOrigin
 } from '../../../shared/comic/doc';
 import { applyOp, assetPartOf, type DocOp } from '../../../shared/comic/ops';
-import { aspectFromSize, aspectMatches, aspectRatioOf, formatUsd, getImageModel, IMAGE_MODELS } from '../../../shared/comic/models';
+import { aspectFromSize, aspectMatches, aspectRatioOf, getImageModel, IMAGE_MODELS } from '../../../shared/comic/models';
 import { spendByTarget, unitPrice } from '../../../shared/comic/plan';
 import { describeOps, inverseOps, isUndoable } from '../../../shared/comic/undo';
 import { canServeToOwner } from '../../../shared/comic/safety';
@@ -145,9 +145,17 @@ export function versionList(doc: ComicDoc, target: RenderTarget): VersionItem[] 
 
 export const versionCount = (doc: ComicDoc, target: RenderTarget): number => versionList(doc, target).length;
 
-/** "Free — fitted by software" / "$0.06" / "not recorded". */
-export const versionCostLabel = (v: Pick<VersionItem, 'costUsd' | 'origin'>): string => {
-  if (typeof v.costUsd === 'number') return v.costUsd > 0 ? formatUsd(v.costUsd) : v.origin === 'derived' ? 'Free — done by software' : 'Free';
+/**
+ * How a pure helper prints money when its caller passed no formatter: governed-unknown usage terms
+ * ("uses a little of your usage" — the same words services/costDisplay formatCostForUser uses). Never dollars by default — UI callers pass the viewer's formatter
+ * (conversation/cost useCostFormat(studio).exact): admins / own key read "$0.06", governed users
+ * "≈2% of your usage" (P1-LIMITS: governed users never see dollars).
+ */
+export const failClosedMoney = (usd: number): string => (Number.isFinite(usd) && usd > 0 ? 'uses a little of your usage' : 'Free');
+
+/** "Free — fitted by software" / "$0.06" (or "≈2% of your usage") / "not recorded". */
+export const versionCostLabel = (v: Pick<VersionItem, 'costUsd' | 'origin'>, money: (usd: number) => string = failClosedMoney): string => {
+  if (typeof v.costUsd === 'number') return v.costUsd > 0 ? money(v.costUsd) : v.origin === 'derived' ? 'Free — done by software' : 'Free';
   if (v.origin === 'adopted' || v.origin === 'upload') return 'No AI cost';
   return 'Not recorded';
 };
@@ -297,8 +305,8 @@ export const STATUS_TEXT: Record<BookSlot['status'], string> = {
   custom: 'Custom art'
 };
 
-/** "Book · Cover ✓ · 3 pages · 7 versions · $0.55 spent · $0.06 saved by software". Real totals only. */
-export function dockSummary(doc: ComicDoc): string {
+/** "Book · Cover ✓ · 3 pages · 7 versions · $0.55 spent · $0.06 saved by software". Real totals only; `money` prints for the viewer. */
+export function dockSummary(doc: ComicDoc, money: (usd: number) => string = failClosedMoney): string {
   const clips = bookClips(doc);
   const pages = clips.filter((c) => c.kind === 'page');
   const drawn = pages.filter((c) => c.drawn).length;
@@ -308,8 +316,8 @@ export function dockSummary(doc: ComicDoc): string {
   parts.push(cover?.drawn ? 'Cover ✓' : 'No cover yet');
   parts.push(pages.length ? `${drawn}/${pages.length} ${pages.length === 1 ? 'page' : 'pages'} drawn` : 'no pages yet');
   if (versions) parts.push(plural(versions, 'version'));
-  if (doc.spend.totalUsd > 0) parts.push(`${formatUsd(doc.spend.totalUsd)} spent`);
-  if ((doc.spend.savedUsd ?? 0) > 0) parts.push(`${formatUsd(doc.spend.savedUsd ?? 0)} saved by software`);
+  if (doc.spend.totalUsd > 0) parts.push(`${money(doc.spend.totalUsd)} spent`);
+  if ((doc.spend.savedUsd ?? 0) > 0) parts.push(`${money(doc.spend.savedUsd ?? 0)} saved by software`);
   return parts.join(' · ');
 }
 

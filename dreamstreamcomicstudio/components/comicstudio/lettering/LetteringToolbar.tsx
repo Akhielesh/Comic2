@@ -32,11 +32,13 @@ const ADD: { kind: LineKind; label: string; icon: React.ReactNode }[] = [
   { kind: 'speech', label: 'Speech', icon: <MessageCircle className="h-3.5 w-3.5" aria-hidden /> },
   { kind: 'thought', label: 'Thought', icon: <Cloud className="h-3.5 w-3.5" aria-hidden /> },
   { kind: 'caption', label: 'Caption', icon: <Square className="h-3.5 w-3.5" aria-hidden /> },
-  { kind: 'sfx', label: 'SFX', icon: <Zap className="h-3.5 w-3.5" aria-hidden /> }
+  { kind: 'sfx', label: 'Sound effect', icon: <Zap className="h-3.5 w-3.5" aria-hidden /> }
 ];
 
+// Touch: real 44 px buttons (a 30x28 button's ::after hit area overlapped its neighbours' — P1-QA
+// lettering-toolbar-small-add); fine pointers keep the compact 28 px row.
 const BTN =
-  'tap-target inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11.5px] font-medium text-[var(--ds-muted)] transition-colors duration-150 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none';
+  'inline-flex h-7 items-center justify-center gap-1 rounded-lg px-2 text-[11.5px] font-medium text-[var(--ds-muted)] transition-colors duration-150 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none coarse:h-11 coarse:min-w-11 coarse:px-2.5 coarse:text-[12.5px]';
 
 export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
   addKind,
@@ -62,8 +64,9 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
           type="button"
           disabled={disabled}
           aria-pressed={addKind === a.kind}
-          title={addKind === a.kind ? 'Click on the page to place it (Esc to cancel)' : `Add a ${a.label.toLowerCase()} balloon`}
-          aria-label={`Add ${a.label === 'SFX' ? 'a sound effect' : `${a.label.toLowerCase()} balloon`}`}
+          title={addKind === a.kind ? 'Click on the page to place it (Esc to cancel)' : a.kind === 'sfx' ? 'Add a sound effect (SFX)' : `Add a ${a.label.toLowerCase()} balloon`}
+          // The name contains the visible words ("+ Sound effect" → "Add a sound effect"; WCAG 2.5.3).
+          aria-label={a.kind === 'sfx' ? 'Add a sound effect' : `Add ${a.label.toLowerCase()} balloon`}
           onClick={() => onAddKind(addKind === a.kind ? null : a.kind)}
           className={cx(BTN, addKind === a.kind && 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]')}
         >

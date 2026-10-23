@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { editionProgress, i18nOf, lineSourceHash, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps } from '../../../../shared/comic/ops.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { JOB_TIMINGS } from '../jobs.js';
 import { newSession, scriptedLlm, testContext } from '../orchestrator.fakes.js';
 import { createDirectorTurn, type DirectorTurn } from '../tools.js';
@@ -26,9 +27,9 @@ beforeEach(() => {
 
 const lineOf = (doc: ComicDoc, id: string) => doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).find((l) => l.id === id)!;
 
-function setup(doc: ComicDoc = sixPageKidsDoc(), userText = 'translate it into Telugu', llmScript: Parameters<typeof scriptedLlm>[0] = {}) {
+function setup(doc: ComicDoc = sixPageKidsDoc(), userText = 'translate it into Telugu', llmScript: Parameters<typeof scriptedLlm>[0] = {}, caps?: StudioCaps) {
   const session = newSession(doc);
-  const ctx = testContext(session, { llm: scriptedLlm(llmScript) });
+  const ctx = testContext(session, { llm: scriptedLlm(llmScript), ...(caps ? { caps } : {}) });
   const turn: DirectorTurn = createDirectorTurn({ userText });
   const tools = Object.fromEntries(i18nToolGroup.tools(ctx, turn).map((t) => [t.spec.function.name, t]));
   return { session, ctx, turn, tools };
@@ -211,5 +212,29 @@ describe('edit_translation / read_translation / set_glossary', () => {
     expect(i18nOf(session.doc).editions.te.lines.l12.text).toBe('శుభరాత్రి, మైలో.');
     expect(i18nOf(session.doc).glossary.some((g) => g.term === 'BADWORD' || g.forms.te === 'BADWORD')).toBe(false);
     vi.mocked(safety.prefilterText).mockImplementation(real);
+  });
+});
+
+describe('prices the director reads are worded for the user', () => {
+  const governed: StudioCaps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 80, exhausted: false, pctPerStandardPage: 5 } };
+  const usage = /(?:≈[\d.]+|<0\.1)% of your usage/;
+
+  it('a governed user: the overlay note and the "no translation yet" quote are a share of the usage, never dollars', async () => {
+    const doc = sixPageKidsDoc();
+    doc.format = { ...doc.format, lettering: 'in_art' };
+    doc.pages = doc.pages.map((p) => ({ ...p, render: { ...p.render, status: 'ready', asset: { path: `u/x/p/${p.id}.webp`, source: 'generated', at: 1 } } }));
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    const { tools } = setup(doc, 'translate into Hindi', {}, governed);
+    const out = await tools.translate_comic.execute({ languages: ['hi'] });
+    expect(out).toMatch(new RegExp(`redrawing 6 pages without text costs ${usage.source}`));
+    expect(out).not.toMatch(/\$\d/);
+    const none = setup(sixPageKidsDoc(), 'how is the Hindi?', {}, governed).tools;
+    const quote = await none.read_translation.execute({ language: 'hi' });
+    expect(quote).toMatch(new RegExp(`^There is no Hindi translation yet\\. translate_comic would cost ${usage.source}\\.$`));
+  });
+
+  it('an admin still reads the same dollar quote as before', async () => {
+    const none = setup(sixPageKidsDoc(), 'how is the Hindi?', {}, { ...governed, admin: true }).tools;
+    expect(await none.read_translation.execute({ language: 'hi' })).toMatch(/^There is no Hindi translation yet\. translate_comic would cost ≈ \$\d/);
   });
 });

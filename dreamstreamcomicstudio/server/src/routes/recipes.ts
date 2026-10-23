@@ -6,7 +6,8 @@
 // the chat route, so a recipe run is metered and gated exactly like a normal chat.
 
 import { Router } from 'express';
-import { prepareChat } from './chat.js';
+import { chatPricedModels, prepareChat } from './chat.js';
+import { safeClientMessage } from '../ai/providers/errors.js';
 import { TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import { BUILTIN_RECIPES, getBuiltinRecipe } from '../ai/recipes/library.js';
@@ -127,6 +128,9 @@ recipesRouter.post('/run', async (req, res) => {
         req,
         operation: 'chat.completion',
         fallbackModel: p.model,
+        // Price the hold at every model the run may be billed for (a `:free` primary keeps the
+        // paid TEXT_FALLBACK retry): an exhausted governed user must never pass at $0.
+        pricedModels: chatPricedModels(p),
         provider: p.resolved.provider,
         stage: 'chat',
         metadata: { route: req.path, model: p.model, recipe: recipe.id }
@@ -206,7 +210,7 @@ recipesRouter.post('/run', async (req, res) => {
         metadata: { route: req.path, recipe: recipe.id }
       });
     }
-    send('error', { message: (error as Error)?.message || 'The recipe failed.' });
+    send('error', { message: safeClientMessage(error, 'The recipe failed. Please try again.') });
     res.end();
   }
 });
@@ -233,6 +237,7 @@ recipesRouter.post('/distill', async (req, res) => {
         req,
         operation: 'chat.completion',
         fallbackModel: p.model,
+        pricedModels: chatPricedModels(p),
         provider: p.resolved.provider,
         stage: 'chat',
         metadata: { route: req.path, model: p.model, distill: true }
@@ -283,6 +288,6 @@ recipesRouter.post('/distill', async (req, res) => {
         metadata: { route: req.path, distill: true }
       });
     }
-    res.status(500).json({ error: { message: (error as Error)?.message || 'Distillation failed.' } });
+    res.status(500).json({ error: { message: safeClientMessage(error, 'Distillation failed. Please try again.') } });
   }
 });

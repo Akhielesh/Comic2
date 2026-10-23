@@ -43,7 +43,8 @@ export interface CollectOptions {
 
 /** The book's trim aspect (width / height) from `format.pageAspect`. */
 export const trimAspectOf = (doc: Pick<ComicDoc, 'format'>): number => {
-  const a = aspectRatioOf(doc.format?.pageAspect);
+  // aspectRatioOf reads a missing/garbled value as square; a book without one is a comic page (2:3).
+  const a = doc.format?.pageAspect ? aspectRatioOf(doc.format.pageAspect) : NaN;
   return a > 0 && Number.isFinite(a) ? a : 2 / 3;
 };
 
@@ -90,7 +91,11 @@ export function collectExportSlots(doc: ComicDoc, urlFor: UrlFor, opts: CollectO
   }
   const total = picked.length;
   const slots = picked.map((p, i): ExportSlot => {
-    const what = p.plate ? plateFile[p.plate] : p.kind === 'cover' ? 'cover' : `page-${String(p.page?.n ?? i).padStart(2, '0')}`;
+    // Entry names never carry raw doc data: a page number that is not a plain integer (a hand-made
+    // or foreign snapshot) falls back to the slot index, so no "../" can reach a ZIP entry.
+    const n = p.page?.n;
+    const pageNo = typeof n === 'number' && Number.isInteger(n) && n >= 0 && n < 100_000 ? n : i;
+    const what = p.plate ? plateFile[p.plate] : p.kind === 'cover' ? 'cover' : `page-${String(pageNo).padStart(2, '0')}`;
     return { ...p, fileBase: `${padIndex(i, total)}-${what}` };
   });
   return { slots, skipped };

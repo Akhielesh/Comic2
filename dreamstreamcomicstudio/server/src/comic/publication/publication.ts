@@ -745,6 +745,7 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     const ops = mirrorOps(ctx.session.doc, row);
     if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'Publish' });
     logger.info('comic_published', { projectId: ctx.projectId, visibility: row.visibility, pages: snapshot.pages.length, languages: languages.length, update: !!live });
+    void maybeSweepOrphans(ctx.assets);
     return { view: await buildView(ctx, ctx.session.doc, row, { stats: false }), blockers: decision.blockers, firstTime: !live };
   });
 }
@@ -792,7 +793,14 @@ export async function updatePublication(ctx: StudioContext, rawPatch: Publicatio
         const pageIds = (row.snapshot?.pages || []).map((p) => p.id).filter((id) => doc.pages.some((p) => p.id === id));
         const gate = await d.gate(ctx, doc, { pageIds, includeCover: !!row.snapshot?.cover?.render?.asset, languages: row.languages });
         if (pageIds.length) interpretGate(doc, gate, pageIds, false, new Set());
-        else if (gate.status !== 'cleared') throw new PublishError('NOT_AVAILABLE', 'Safety checks are unavailable right now. Try again in a few minutes.', { status: 503, code: 'NOT_AVAILABLE' });
+        else if (BAD.has(gate.text?.status)) {
+          // Same honest refusal as a publish: the words, not an outage, are the problem.
+          throw new PublishError('SAFETY_BLOCKED', "Some of the comic's words don't fit the content rules, so it can't go public yet. Edit the flagged text and try again.", {
+            status: 422,
+            code: 'SAFETY_BLOCKED',
+            details: { text: true, reasons: gate.text.reasons || [] }
+          });
+        } else if (gate.status !== 'cleared') throw new PublishError('NOT_AVAILABLE', 'Safety checks are unavailable right now. Try again in a few minutes.', { status: 503, code: 'NOT_AVAILABLE' });
       }
       next.visibility = patch.visibility;
     }
@@ -893,6 +901,7 @@ export async function regenerateLink(ctx: StudioContext): Promise<PublicationOwn
     const ops = mirrorOps(ctx.session.doc, next);
     if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'New share link' });
     logger.info('comic_publication_regenerated', { projectId: ctx.projectId });
+    void maybeSweepOrphans(ctx.assets);
     return buildView(ctx, ctx.session.doc, next, { stats: false });
   });
 }
@@ -917,6 +926,7 @@ export async function unpublish(ctx: StudioContext): Promise<PublicationOwnerVie
         await ctx.assets.removePrefix(`pub/${oldKey}/`).catch((err) => logger.warn('comic_unpublish_cleanup_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
       }
       logger.info('comic_unpublished', { projectId: ctx.projectId });
+      void maybeSweepOrphans(ctx.assets);
     }
     const ops = mirrorOps(ctx.session.doc, null);
     if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'Unpublish' });
@@ -971,6 +981,38 @@ export async function sweepOrphanPublications(assets: { removePrefix(prefix: str
   }
   if (keys.length) logger.info('comic_publication_orphans_swept', { keys: keys.length, removed });
   return removed;
+}
+
+/** How often the opportunistic sweep may run per process. */
+export const ORPHAN_SWEEP_EVERY_MS = 24 * 3_600_000;
+let lastSweepAt = 0;
+let sweeping: Promise<number> | null = null;
+
+/**
+ * Schedules the orphan sweep WITHOUT a timer (CLAUDE.md: nothing may keep the container awake): it
+ * piggybacks on an owner's publication write — publish, new link, unpublish — at most once per
+ * ORPHAN_SWEEP_EVERY_MS per process and never two at once. Fire-and-forget: it never delays or
+ * fails the owner's request. Returns the running sweep, or null when it was not due.
+ */
+export function maybeSweepOrphans(assets: { removePrefix(prefix: string): Promise<number> }, now = deps().now()): Promise<number> | null {
+  if (sweeping || (lastSweepAt && now - lastSweepAt < ORPHAN_SWEEP_EVERY_MS)) return null;
+  lastSweepAt = now;
+  const run = sweepOrphanPublications(assets)
+    .catch((err) => {
+      logger.warn('comic_publication_orphan_sweep_failed', { message: (err as Error)?.message });
+      return 0;
+    })
+    .finally(() => {
+      sweeping = null;
+    });
+  sweeping = run;
+  return run;
+}
+
+/** Test hook: forget when the last opportunistic sweep ran. */
+export function __resetOrphanSweep(): void {
+  lastSweepAt = 0;
+  sweeping = null;
 }
 
 // ── Conversation helpers (the publish card) ──────────────────────────────────

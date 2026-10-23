@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { DocOp } from '../../../shared/comic/ops';
 import { PageEditor, editActionFor, fitPageToStage, lineKindOps } from './PageEditor';
-import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
+import { SAMPLE_NOW, fakeUrlFor, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { lineSourceHash } from '../../../shared/comic/i18n';
 import type { ComicDoc } from '../../../shared/comic/doc';
@@ -579,6 +579,48 @@ describe('PageEditor — phones, tablets and foldables (mobile.md §5.6)', () =>
     expect(screen.getByTestId('lettering-inspector')).toHaveAttribute('data-presentation', 'sheet');
     expect(screen.queryByRole('region', { name: 'Page tools sheet' })).toBeNull();
     expect(within(screen.getByTestId('editor-canvas-area')).getByRole('group', { name: 'Undo and redo' })).toBeInTheDocument();
+  });
+
+  it('phone: the image variant follows the page with no sheet over it — opening the inspector never swaps in a smaller file', () => {
+    // The resting fit box is 340 × 600; the stage under the tools sheet / inspector is only 340 × 240.
+    const proto = HTMLElement.prototype.getBoundingClientRect;
+    const box = (w: number, h: number) => ({ left: 0, top: 0, width: w, height: h, right: w, bottom: h, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const id = this.getAttribute('data-testid');
+      if (id === 'editor-resting-stage') return box(340, 600);
+      if (id === 'editor-stage-content') return box(340, 240);
+      return proto.call(this);
+    });
+    try {
+      const urlFor = vi.fn((a?: Parameters<StudioController['urlFor']>[0], o?: { width?: number }) => {
+        const u = fakeUrlFor(a);
+        return u && o?.width ? `${u}?w=${o.width}` : u;
+      });
+      openAt(PHONE, makeSampleDoc(), { urlFor });
+      const stageImg = () => screen.getByTestId('editor-canvas-area').querySelector<HTMLImageElement>('[data-testid="comic-page"] img')!;
+      // 2:3 page in 340 × 600 → 340 css px wide (the shrunk stage would give 160).
+      expect(stageImg().getAttribute('src')).toMatch(/\?w=340$/);
+      fireEvent.focus(hitOf('pg_1_l4'));
+      expect(screen.getByTestId('lettering-inspector')).toBeInTheDocument();
+      expect(stageImg().getAttribute('src')).toMatch(/\?w=340$/);
+      // The page itself still fits the shrunk stage (160 px), so the selection stays above the sheet.
+      expect(stageImg().closest<HTMLElement>('[data-testid="comic-page"]')!.parentElement!.style.width).toBe('160px');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('phone: the balloon menu is the only sheet while it is open; “Style…” then brings up the inspector', () => {
+    openAt(PHONE);
+    fireEvent.contextMenu(hitOf('pg_1_l4'), { clientX: 200, clientY: 400 });
+    const menu = screen.getByRole('menu');
+    // Selected, but no second (inspector) sheet stacked under the menu, and the tools sheet stays put.
+    expect(hitOf('pg_1_l4')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('lettering-inspector')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Page tools sheet' })).toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Style…/ }));
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.getByTestId('lettering-inspector')).toHaveAttribute('data-presentation', 'sheet');
   });
 
   it('phone: zoomed in, picking a line whose balloon is off screen eases back to fit (pinch-zoom itself never does)', () => {

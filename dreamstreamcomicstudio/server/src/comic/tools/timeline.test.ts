@@ -2,6 +2,8 @@
 // book extras and the free shape fit. Every edit goes through the shared sanitizer.
 import { describe, expect, it } from 'vitest';
 import { applyOp } from '../../../../shared/comic/ops.js';
+import { versionList as sharedVersionList } from '../../../../shared/comic/book.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { emptyRender, isPageStale, pageSpecHash, trashOf, type AssetRef, type ComicDoc } from '../../../../shared/comic/doc.js';
 import { newSession, opsOf, plannedDoc, testContext } from '../orchestrator.fakes.js';
 import { createDirectorTurn } from '../tools.js';
@@ -41,9 +43,9 @@ const drawnDoc = (): ComicDoc => {
   return doc;
 };
 
-const setup = (doc: ComicDoc = drawnDoc()) => {
+const setup = (doc: ComicDoc = drawnDoc(), caps?: StudioCaps) => {
   const session = newSession(doc);
-  const ctx = testContext(session);
+  const ctx = testContext(session, caps ? { caps } : {});
   const turn = createDirectorTurn();
   const tools = () => Object.fromEntries(timelineToolGroup.tools(ctx, turn).map((t) => [t.spec.function.name, t]));
   return { session, ctx, turn, tools };
@@ -252,5 +254,46 @@ describe('fit_render tool', () => {
     expect(ctx.assetsFake.fits).toEqual([{ path: 'u/x/p3.webp', aspect: '4:5', mode: 'pad' }]);
     expect(turn.cards).toEqual([]); // the director speaks for itself on success
     expect(offShape(session.doc)).toEqual([]);
+  });
+});
+
+describe('one version numbering (shared/comic/book.ts) and governed prices', () => {
+  /** A user on the included usage: one Standard page is 5% of it. */
+  const governed: StudioCaps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 80, exhausted: false, pctPerStandardPage: 5 } };
+
+  it('versionList IS the shared implementation: same order, numbers and flags as the client timeline', () => {
+    expect(versionList).toBe(sharedVersionList);
+    const doc = drawnDoc();
+    for (const target of [{ kind: 'page', id: 'pg_1' }, { kind: 'sheet', id: 'c_maya' }, { kind: 'page', id: 'pg_3' }, { kind: 'page', id: 'nope' }] as const) {
+      expect(versionList(doc, target)).toEqual(sharedVersionList(doc, target));
+    }
+    expect(versionList(doc, { kind: 'sheet', id: 'c_maya' }).map((e) => [e.n, e.path, e.current])).toEqual([
+      [1, 'u/x/maya-v1.webp', false],
+      [2, 'u/x/maya-v2.webp', true]
+    ]);
+  });
+
+  it('a governed user never reads dollars in version and redraw quotes; an admin still does', async () => {
+    const g = setup(drawnDoc(), governed);
+    const listed = await g.tools().list_versions.execute({ target: 'page 1' });
+    const single = await g.tools().use_version.execute({ target: 'page 3', version: 1 });
+    const sheet = await g.tools().use_version.execute({ target: 'sheet', name: 'Maya', version: 1 });
+    for (const text of [listed, single, sheet]) {
+      expect(text).not.toMatch(/\$/);
+      expect(text).toMatch(/% of your usage/);
+    }
+    expect(sheet).toMatch(/^Not switched yet: .*redrawing them later ≈[\d.]+% of your usage\)/);
+    const admin = setup(drawnDoc(), { ...governed, admin: true });
+    expect(await admin.tools().use_version.execute({ target: 'page 3', version: 1 })).toMatch(/A new take is ≈\$\d/);
+  });
+
+  it('fit_render from the director passes caps: its refusal quotes the redraw in usage terms', async () => {
+    const doc = drawnDoc();
+    const { tools, turn } = setup(doc, governed);
+    const out = await tools().fit_render.execute({ target: 'page', page: 3, mode: 'crop' });
+    expect(out).toMatch(/would cut 20% of the art/);
+    expect(out).toMatch(/redraw it at 4:5 \(≈[\d.]+% of your usage\)/);
+    expect(out).not.toMatch(/\$/);
+    expect(JSON.stringify(turn.cards)).not.toMatch(/\$/);
   });
 });

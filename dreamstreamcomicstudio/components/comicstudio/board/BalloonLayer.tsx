@@ -883,13 +883,15 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
 
 /**
  * Swallow the click that the lifting finger makes after a long-press opened a menu (it would land on the
- * menu's scrim and close it at once). A new press (pointerdown) ends the swallowing, so real taps pass.
+ * menu's scrim and close it at once). A new press (pointerdown) or a key (a keyboard / switch user picking
+ * a menu item with Enter) ends the swallowing, so real activations pass.
  */
 const swallowNextClick = (): void => {
   if (typeof window === 'undefined') return;
   const off = () => {
     window.removeEventListener('click', onClick, true);
     window.removeEventListener('pointerdown', off, true);
+    window.removeEventListener('keydown', off, true);
     clearTimeout(timer);
   };
   const onClick = (ev: MouseEvent) => {
@@ -899,6 +901,7 @@ const swallowNextClick = (): void => {
   };
   window.addEventListener('click', onClick, true);
   window.addEventListener('pointerdown', off, true);
+  window.addEventListener('keydown', off, true);
   const timer = setTimeout(off, 5000);
 };
 

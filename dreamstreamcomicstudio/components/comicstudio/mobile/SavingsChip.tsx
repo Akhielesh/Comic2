@@ -7,12 +7,14 @@
 //    lands (aria-live), and opens a small breakdown.
 //  - Phones: no header chip (the ⋯ menu and the spend sheet show the total); a new saving shows the
 //    same line as a calm transient toast under the header.
+//  - Money is printed for THIS user (conversation/cost.ts): governed users read a share of their usage
+//    ("Saved ≈0.5% of your usage") or just the copy — never dollars, also before their status loads.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Leaf } from 'lucide-react';
 import type { ComicDoc, SpendEntry } from '../../../shared/comic/doc';
-import { formatUsd } from '../../../shared/comic/models';
+import { useCostFormat, type CostFormat } from '../conversation/cost';
 import type { StudioController } from '../types';
 import { AdaptiveSheet } from './sheets/AdaptiveSheet';
 import { isPhoneLayout } from './formFactor';
@@ -50,16 +52,26 @@ const useSavingsFlash = (total: number): boolean => {
   return flash;
 };
 
+/** "Saved ≈0.5% of your usage" → "≈0.5%" for a narrow spot; undefined when it isn't a readable share. */
+const shortShare = (cost: CostFormat, usd: number): string | undefined => {
+  if (!cost.governed) return cost.exact(usd);
+  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(cost.exact(usd));
+  return m ? m[1] : undefined;
+};
+
 /** The breakdown shown from the chip (also used by the phone ⋯ menu's spend sheet). */
-export const SavingsBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
+export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({ doc, cost: costProp }) => {
+  const fallback = useCostFormat({ caps: null });
+  const cost = costProp ?? fallback;
   const total = savedTotal(doc);
   const list = savedEntries(doc);
+  const headline = cost.governed ? cost.saved(total) : cost.exact(total);
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
         <Leaf className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden /> Saved by software
       </div>
-      <div className="mt-1 text-[22px] font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]">{formatUsd(total)}</div>
+      <div className={cx('mt-1 font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]', cost.governed ? 'text-[18px]' : 'text-[22px]')}>{headline}</div>
       <p className="mt-1 text-[12.5px] leading-snug text-[var(--ds-muted)]">
         {SAVINGS_COPY}. The studio’s own tools made these changes instead of paid redraws.
       </p>
@@ -70,7 +82,10 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
               <span className="min-w-0 truncate text-[var(--ds-ink)]" title={e.label}>
                 {e.label}
               </span>
-              <span className="shrink-0 tabular-nums text-emerald-700 dark:text-emerald-300">−{formatUsd(e.savedUsd || 0)}</span>
+              {(() => {
+                const v = shortShare(cost, e.savedUsd || 0);
+                return v ? <span className="shrink-0 tabular-nums text-emerald-700 dark:text-emerald-300">−{v}</span> : null;
+              })()}
             </li>
           ))}
         </ul>
@@ -79,8 +94,12 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
   );
 };
 
-export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'>; compact?: boolean }> = ({ studio, compact = false }) => {
+export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { caps?: StudioController['caps']; byok?: boolean }; compact?: boolean }> = ({
+  studio,
+  compact = false
+}) => {
   const ff = useFormFactor();
+  const cost = useCostFormat(studio);
   const total = savedTotal(studio.doc);
   const flash = useSavingsFlash(total);
   const [open, setOpen] = useState(false);
@@ -105,6 +124,9 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'>; comp
     );
   }
 
+  // Dollars for admins / own key; a share of the usage for governed users (just "Saved" while unknown).
+  const amount = shortShare(cost, total);
+  const spoken = cost.governed ? (/^Saved /.test(cost.saved(total)) ? cost.saved(total) : 'Saved some of your usage') : `Saved ${cost.exact(total)}`;
   return (
     <span ref={anchorRef} className="relative inline-flex shrink-0">
       <button
@@ -112,7 +134,7 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'>; comp
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Saved ${formatUsd(total)} by software — ${SAVINGS_COPY}`}
+        aria-label={`${spoken} by software — ${SAVINGS_COPY}`}
         title={SAVINGS_COPY}
         className={cx(
           'inline-flex h-8 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/[0.07] px-2.5 text-[12px] font-medium tabular-nums text-emerald-800 transition-colors hover:bg-emerald-500/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 dark:text-emerald-200 coarse:h-11 coarse:px-3',
@@ -120,11 +142,11 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'>; comp
         )}
       >
         <Leaf className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        {compact ? formatUsd(total) : `Saved ${formatUsd(total)}`}
+        {compact ? amount ?? 'Saved' : amount ? `Saved ${amount}` : 'Saved'}
       </button>
       {/* The copy, briefly, when a new saving lands — under the chip, never widening the header. */}
       <span aria-live="polite" className="sr-only">
-        {flash ? `${SAVINGS_COPY}. Saved ${formatUsd(total)} so far.` : ''}
+        {flash ? `${SAVINGS_COPY}. ${spoken} so far.` : ''}
       </span>
       {flash && !open && (
         <span
@@ -135,7 +157,7 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'>; comp
         </span>
       )}
       <AdaptiveSheet open={open} onClose={() => setOpen(false)} label="Saved by software" title="Saved by software" anchorRef={anchorRef} placement="below" align="end">
-        <SavingsBreakdown doc={doc} />
+        <SavingsBreakdown doc={doc} cost={cost} />
       </AdaptiveSheet>
     </span>
   );

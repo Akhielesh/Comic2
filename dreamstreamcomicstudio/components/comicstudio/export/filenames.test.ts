@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { exportFileStem, languageFolderName, padIndex, safeLangCode, sanitizeFilename } from './filenames';
+import { MAX_STEM_BYTES, exportFileStem, languageFolderName, padIndex, safeLangCode, sanitizeFilename } from './filenames';
 
 describe('sanitizeFilename', () => {
   it('keeps the classic ASCII slug for Latin titles', () => {
@@ -41,6 +41,17 @@ describe('sanitizeFilename', () => {
     expect(out.length).toBeLessThan(long.length);
     expect(out.endsWith('్')).toBe(false); // never half a conjunct (a dangling virama)
     expect(sanitizeFilename('a'.repeat(200)).length).toBe(60);
+  });
+
+  it('keeps a long non-Latin name within a file-system-safe byte budget, cut at a grapheme', () => {
+    const long = 'క్షత్రియ '.repeat(40);
+    const out = sanitizeFilename(long);
+    expect(new TextEncoder().encode(out).length).toBeLessThanOrEqual(MAX_STEM_BYTES);
+    expect(long.replace(/ /g, '-').startsWith(out)).toBe(true);
+    expect(out.endsWith('్')).toBe(false);
+    expect(out.endsWith('-')).toBe(false);
+    // A single cluster stacked with marks is no name: the fallback is used.
+    expect(sanitizeFilename(`ఆ${'ి'.repeat(400)}`)).toBe('comic');
   });
 });
 

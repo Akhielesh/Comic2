@@ -315,13 +315,18 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   );
   // One AbortController per in-flight session, so stopping one chat doesn't cancel another.
   const abortMap = useRef<Map<string, AbortController>>(new Map());
-  const markBusy = (id: string, on: boolean) =>
+  // Bumped when a generation ends, so the header usage meter re-reads usage left once, shortly
+  // after something may have been spent (event-driven — never a timer).
+  const [usageRefreshKey, setUsageRefreshKey] = useState(0);
+  const markBusy = (id: string, on: boolean) => {
     setBusyIds((prev) => {
       const next = new Set(prev);
       if (on) next.add(id);
       else next.delete(id);
       return next;
     });
+    if (!on) setUsageRefreshKey((k) => k + 1);
+  };
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)');
@@ -1383,6 +1388,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onRenameTitle={(title) => activeId && handleRename(activeId, title)}
         suggestModels={suggestModels}
         onStartWithModel={handleStartWithModel}
+        // Usage left (P1-LIMITS) in the chat header too: the compact 44 px gauge on phones and
+        // tablets, the pill on desktop; nothing for admins / exempt accounts / an unavailable backend.
+        headerAccessory={<UsageMeter compact={!isDesktop} refreshKey={usageRefreshKey} />}
       />
       ) : (
       <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>

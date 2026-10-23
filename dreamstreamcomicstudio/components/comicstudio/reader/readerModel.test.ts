@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { clampIndex, defaultReaderMode, keyDelta, readerItems, readerViews, swipeDelta, tapDelta, viewOfItem } from './readerModel';
+import { clampIndex, defaultReaderMode, isWithheld, keyDelta, readerItems, swipeDelta, tapDelta, viewOfItem } from './readerModel';
 
 const withCover = () =>
   makeSampleDoc((d) => {
@@ -16,18 +16,26 @@ describe('reading order', () => {
     expect(readerItems(withCover()).map((i) => i.key)).toEqual(['cover', 'pg_1', 'pg_2', 'pg_3', 'pg_4', 'pg_5', 'pg_6']);
   });
 
-  it('groups spreads: the cover alone, then facing pairs', () => {
-    const items = readerItems(withCover());
-    expect(readerViews(items, 'spread')).toEqual([[0], [1, 2], [3, 4], [5, 6]]);
-    expect(readerViews(items, 'page')).toHaveLength(7);
-    const noCover = readerItems(makeSampleDoc());
-    expect(readerViews(noCover, 'spread')).toEqual([[0, 1]]);
-  });
-
   it('keeps the same page when switching modes', () => {
-    const spreads = readerViews(readerItems(withCover()), 'spread');
+    const spreads = [[0], [1, 2], [3, 4], [5, 6]];
     expect(viewOfItem(spreads, 4)).toBe(2);
     expect(viewOfItem(spreads, 99)).toBe(0);
+  });
+
+  it('a page withheld by the safety check (owner preview) stays in the order as a withheld item', () => {
+    const doc = makeSampleDoc((d) => {
+      d.cover.render = { status: 'ready', history: [], withheld: 'safety' };
+      d.pages.forEach((p, i) => {
+        p.render = i === 1 ? { status: 'ready', history: [], withheld: 'safety' } : { ...p.render, asset: { path: `u/p${i + 1}.png`, source: 'generated', at: 0 } };
+      });
+    });
+    const items = readerItems(doc);
+    expect(items.map((i) => i.key)).toEqual(['cover', 'pg_1', 'pg_2', 'pg_3', 'pg_4', 'pg_5', 'pg_6']);
+    const held = items.filter((i) => isWithheld(i)).map((i) => i.key);
+    expect(held).toEqual(['cover', 'pg_2']);
+    // Nothing to fetch, sign or preload for a withheld item.
+    for (const it of items.filter((i) => i.withheld)) expect(it.asset.path).toBe('');
+    expect(items[2].label).toBe('Page 2');
   });
 });
 

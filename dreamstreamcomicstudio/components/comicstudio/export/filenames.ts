@@ -17,6 +17,12 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 
 /** Longest stem (graphemes) a download name keeps. */
 export const MAX_STEM_GRAPHEMES = 60;
+/**
+ * Longest stem in UTF-8 bytes. File systems cap a NAME at 255 bytes (ext4, APFS) and a Telugu or
+ * Devanagari grapheme is 3–12 bytes, so 60 graphemes alone could overflow once "-te-motion-9x16.mp4"
+ * is appended. ASCII titles are never affected (60 graphemes = 60 bytes).
+ */
+export const MAX_STEM_BYTES = 150;
 
 // Control characters, bidi embeddings/overrides/isolates, LRM/RLM/ALM, zero-width space, word joiner, BOM.
 // ZWNJ (U+200C) and ZWJ (U+200D) are kept: Indic and Arabic spellings need them.
@@ -24,6 +30,7 @@ const INVISIBLE = /[\u0000-\u001f\u007f-\u009f؜​‎‏‪-‮⁠-⁤⁦-⁩�
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
 
 const hasNonLatinLetters = (s: string): boolean => /(?!\p{Script=Latin})\p{L}/u.test(s);
+const utf8Length = (s: string): number => new TextEncoder().encode(s).length;
 
 /**
  * A filesystem- and header-safe name. `fallback` is used when nothing usable is left.
@@ -50,14 +57,16 @@ export function sanitizeFilename(name: unknown, opts: { fallback?: string; maxGr
   } else {
     out = s
       .normalize('NFC')
-      .toLocaleLowerCase()
+      .toLowerCase()
       // Keep letters, combining marks, digits and the joiners Indic/Arabic spellings need.
       .replace(/[^\p{L}\p{M}\p{N}‌‍]+/gu, '-');
   }
   out = out.replace(/-+/g, '-').replace(/^[-.]+|[-. ]+$/g, '');
-  const gs = graphemes(out);
-  if (gs.length > max) out = gs.slice(0, max).join('').replace(/[-. ]+$/g, '');
-  if (!out) return fallback;
+  const gs = graphemes(out).slice(0, max);
+  while (gs.length > 1 && utf8Length(gs.join('')) > MAX_STEM_BYTES) gs.pop();
+  if (gs.join('') !== out) out = gs.join('').replace(/[-. ]+$/g, '');
+  // One "grapheme" stacked with hundreds of combining marks is no name at all.
+  if (!out || utf8Length(out) > MAX_STEM_BYTES) return fallback;
   if (WINDOWS_RESERVED.test(out)) out = `${out}-comic`;
   return out;
 }

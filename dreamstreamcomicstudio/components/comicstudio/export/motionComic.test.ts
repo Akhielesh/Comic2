@@ -3,7 +3,7 @@ import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { fakeContext } from './__fixtures__/fakeCanvas';
 import { makeBook } from './__fixtures__/books';
-import { buildMotionTimeline, cameraRect, centeredText, kenBurns, pickRecorderMime, readMs } from './motionComic';
+import { buildMotionTimeline, cameraRect, centeredText, keepShots, kenBurns, pickRecorderMime, readMs } from './motionComic';
 
 const drawn = (mutate?: (d: ComicDoc) => void): ComicDoc =>
   makeSampleDoc((d) => {
@@ -64,6 +64,18 @@ describe('motion comic timeline', () => {
     const { shots } = buildMotionTimeline(doc);
     expect(shots.some((s) => s.kind === 'cover')).toBe(false);
     expect(shots.some((s) => s.pageId === doc.pages[0].id)).toBe(false);
+  });
+
+  it('drops the shots of art that did not load and re-times the rest back to back', () => {
+    const doc = drawn();
+    const full = buildMotionTimeline(doc);
+    const gone = doc.pages[0].id;
+    const kept = keepShots(full, (s) => s.pageId !== gone && s.kind !== 'cover');
+    expect(kept.shots.some((s) => s.pageId === gone || s.kind === 'cover')).toBe(false);
+    expect(kept.shots[0].startMs).toBe(0);
+    for (let i = 1; i < kept.shots.length; i += 1) expect(kept.shots[i].startMs).toBe(kept.shots[i - 1].startMs + kept.shots[i - 1].durationMs);
+    const dropped = full.shots.filter((s) => s.pageId === gone || s.kind === 'cover').reduce((ms, s) => ms + s.durationMs, 0);
+    expect(kept.totalMs).toBe(full.totalMs - dropped);
   });
 
   it('reading time grows with words but never drops under a beat', () => {

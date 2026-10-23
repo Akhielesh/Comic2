@@ -210,10 +210,13 @@ export const decoratePrintDocument = (root: Document, doc: ComicDoc, measure: Me
     const planned = num(pageEl.dataset.aspect) ?? real;
     if (Math.abs(Math.log(real / planned)) <= 0.01) return;
     const rect = sheet.getBoundingClientRect();
+    // The page box's own width (the lettering's outline floor scales with it), not the sheet's.
+    let boxWidthPx = 0;
     if (rect.width > 0 && rect.height > 0) {
       const box = fitBox(rect.width, rect.height, real);
       pageEl.style.width = `${box.w}px`;
       pageEl.style.height = `${box.h}px`;
+      boxWidthPx = box.w;
     }
     pageEl.dataset.aspect = String(round3(real));
     pageEl.querySelector(':scope > svg')?.remove();
@@ -222,7 +225,7 @@ export const decoratePrintDocument = (root: Document, doc: ComicDoc, measure: Me
     let markup = '';
     if (kind === 'page' && page) {
       const plans = pagePlans(doc, page, real, measure);
-      if (plans.length) markup = letteringSvgMarkup(plans, { aspect: real, widthPx: (rect.width || 672), idPrefix: `pgd${i}`, docLang: doc.format.language, ariaHidden: false });
+      if (plans.length) markup = letteringSvgMarkup(plans, { aspect: real, widthPx: boxWidthPx || 672, idPrefix: `pgd${i}`, docLang: doc.format.language, ariaHidden: false });
     } else if (kind === 'cover') markup = coverTitleSvgMarkup(doc, real, measure);
     if (markup) pageEl.insertAdjacentHTML('beforeend', markup);
   });
@@ -255,9 +258,10 @@ const waitForImages = (root: Document, timeoutMs: number): Promise<string[]> => 
 const fontsReady = async (root: Document, doc: ComicDoc, timeoutMs: number) => {
   const fonts = (root as Document & { fonts?: FontFaceSet }).fonts;
   if (!fonts?.load) return;
-  const loads = exportFaces([doc]).faces.flatMap((f) =>
-    f.weights.map((w) => fonts.load(`${f.italic ? 'italic ' : ''}${w} 24px "${FONT_REGISTRY[f.id].family}"`, f.sample || undefined).catch(() => []))
-  );
+  const loads = exportFaces([doc]).faces.flatMap((f) => {
+    const family = FONT_REGISTRY[f.id]?.family;
+    return family ? f.weights.map((w) => fonts.load(`${f.italic ? 'italic ' : ''}${w} 24px "${family}"`, f.sample || undefined).catch(() => [])) : [];
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([Promise.all(loads).then(() => fonts.ready), new Promise((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);

@@ -17,6 +17,7 @@ import { formatUsd } from '../../../../shared/comic/models.js';
 import { editionTextEntry, editionTextSource, linesInOrder } from '../../../../shared/comic/translationPlan.js';
 import type { ActionHandler } from '../extensions.js';
 import { estimateTranslation, languageLabel, quoteTranslation, runTranslation } from '../i18n/index.js';
+import { costViewFor, governCard, governDollars } from '../costText.js';
 import { prefilterText } from '../safety/index.js';
 import type { RunActionOptions, StartedAction } from '../jobs.js';
 import type { StudioContext } from '../types.js';
@@ -29,9 +30,17 @@ const isField = (v: string): v is EditionTextField => (EDITION_FIELDS as readonl
 const finished = (outcome: StartedAction['outcome']): StartedAction => ({ outcome, done: Promise.resolve() });
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/**
+ * Prices worded for this user (costText.ts): dollars for admins and own keys, "≈2% of your usage" for
+ * everyone on the included usage. Used for every committed text AND the outcome the director reads.
+ */
+const priced = (ctx: StudioContext, opts: RunActionOptions, text: string): string => governDollars(text, costViewFor(opts.caps ?? ctx.caps));
+
 /** Deliver a short result: a notice in the director's message, or a new assistant message for a UI tap. */
-const say = (ctx: StudioContext, opts: RunActionOptions, text: string, tone: 'info' | 'warn' | 'success', steps?: NextStep[]) => {
-  const card = { type: 'notice' as const, id: newId('card'), tone, text };
+const say = (ctx: StudioContext, opts: RunActionOptions, words: string, tone: 'info' | 'warn' | 'success', steps?: NextStep[]) => {
+  const view = costViewFor(opts.caps ?? ctx.caps);
+  const text = governDollars(words, view);
+  const card = governCard({ type: 'notice', id: newId('card'), tone, text }, view);
   if (opts.collectCard) {
     opts.collectCard(card);
     if (steps?.length) opts.collectNextSteps?.(steps);
@@ -41,7 +50,8 @@ const say = (ctx: StudioContext, opts: RunActionOptions, text: string, tone: 'in
   ctx.session.commit([{ op: 'message', msg }], { origin: opts.origin ?? 'job' });
 };
 
-const refuse = (ctx: StudioContext, opts: RunActionOptions, text: string, code: 'BAD_REQUEST' | 'NOT_READY' | 'NOT_FOUND' | 'CONFLICT', steps?: NextStep[]): StartedAction => {
+const refuse = (ctx: StudioContext, opts: RunActionOptions, words: string, code: 'BAD_REQUEST' | 'NOT_READY' | 'NOT_FOUND' | 'CONFLICT', steps?: NextStep[]): StartedAction => {
+  const text = priced(ctx, opts, words);
   say(ctx, opts, text, 'warn', steps);
   return finished({ status: 'blocked', message: text, code });
 };
@@ -141,7 +151,11 @@ async function swapSource(ctx: StudioContext, action: Swap, opts: RunActionOptio
   const ops = swapSourceOps(doc, lang);
   ctx.session.commit(ops, { origin: opts.origin ?? 'user', label: `Make ${spec.english} the source` });
   const inArt = doc.format.lettering === 'in_art' && doc.pages.some((pg) => pg.render.asset);
-  const text = `${languageLabel(lang)} is now the comic's language; ${languageLabel(oldSource)} became a reviewed translation. Every other translation stays current ($0).${inArt ? ' The pages have the old lettering painted into the art, so they are now marked out of date.' : ''}`;
+  const text = priced(
+    ctx,
+    opts,
+    `${languageLabel(lang)} is now the comic's language; ${languageLabel(oldSource)} became a reviewed translation. Every other translation stays current ($0).${inArt ? ' The pages have the old lettering painted into the art, so they are now marked out of date.' : ''}`
+  );
   say(ctx, opts, text, 'success');
   return finished({ status: 'done', message: text });
 }

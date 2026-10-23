@@ -98,7 +98,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
             title={`${labelOf(f)} — ${ROLE[f as LatinFontId]}${note(f) ? ` (${note(f)})` : ''}`}
             onClick={() => onChange(f)}
             className={cx(
-              'tap-target rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50',
+              'rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
               value === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
             )}
             style={{ fontFamily: fontFamilyStack(f) }}

@@ -128,7 +128,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
           type="button"
           aria-label="Close the lettering panel"
           onClick={onClose}
-          className="tap-target grid h-7 w-7 place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+          className="grid h-7 w-7 place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>

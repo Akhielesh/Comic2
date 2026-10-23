@@ -65,9 +65,22 @@ export interface PublicDownloadOptions extends Pick<PdfExportOptions, 'onProgres
   lang?: string;
 }
 
-/** The published language to export for a reader's choice. */
-export function publicExportLanguage(src: PublicDownloadSource, lang?: string): string {
-  const published = exportLanguages(src.doc, src.publication.languages?.length ? src.publication.languages : undefined);
+export const NO_PUBLISHED_LANGUAGE = 'This comic has no published language to download yet.';
+
+/**
+ * The languages a share-link reader may download: the published editions the snapshot really carries.
+ * Never the source language when the author did not publish it (`exportLanguages` alone would fall
+ * back to it). An old publication without a language list publishes its source (the publish default).
+ */
+export function publicExportLanguages(src: PublicDownloadSource): string[] {
+  const listed = src.publication.languages?.filter((l) => typeof l === 'string' && l) ?? [];
+  if (!listed.length) return exportLanguages(src.doc, [src.doc.format?.language || 'en']);
+  return exportLanguages(src.doc, listed).filter((l) => listed.some((p) => sameLanguage(p, l)));
+}
+
+/** The published language to export for a reader's choice (undefined when nothing is published). */
+export function publicExportLanguage(src: PublicDownloadSource, lang?: string): string | undefined {
+  const published = publicExportLanguages(src);
   return published.find((l) => lang && sameLanguage(l, lang)) ?? published.find((l) => src.publication.defaultLang && sameLanguage(l, src.publication.defaultLang)) ?? published[0];
 }
 
@@ -81,9 +94,9 @@ export async function downloadPublicComic(src: PublicDownloadSource, kind: Publi
   if (!publicDownloadsAllowed(src.publication)) throw new ExportError(DOWNLOADS_OFF);
   const urlFor = publicExportUrlFor(src.urls);
   const lang = publicExportLanguage(src, opts.lang);
+  if (!lang) throw new ExportError(NO_PUBLISHED_LANGUAGE);
   const common = { onProgress: opts.onProgress, signal: opts.signal, download: opts.download };
   if (kind === 'pdf') return exportComicPdf(src.doc, urlFor, { ...common, lang });
   if (kind === 'zip') return exportPngZip(src.doc, urlFor, { ...common, lang, longEdge: opts.longEdge });
-  const languages = exportLanguages(src.doc, src.publication.languages?.length ? src.publication.languages : undefined);
-  return exportLanguagesZip(src.doc, urlFor, { ...common, languages, longEdge: opts.longEdge });
+  return exportLanguagesZip(src.doc, urlFor, { ...common, languages: publicExportLanguages(src), longEdge: opts.longEdge });
 }

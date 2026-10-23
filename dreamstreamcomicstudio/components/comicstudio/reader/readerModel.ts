@@ -3,9 +3,13 @@
 // The reader shows what is actually drawn: the cover (when it has art), then every page
 // with an image, in page order. Navigation is reading-direction aware — in a right-to-left
 // comic (manga) "next" is ← and a rightward swipe, and a two-page spread puts the earlier
-// page on the right.
+// page on the right. Spreads come from immersive/readerLayout `bookViews` (both readers use it).
+//
+// Withheld art: the owner's preview from GET /api/comic/public/:id strips a blocked page's asset
+// and sets `render.withheld = 'safety'`. Such a page stays in the reading order as a WITHHELD item
+// (a neutral tile, never fetched) instead of vanishing — the page count and numbering stay true.
 
-import type { AssetRef, ComicDoc, Page } from '../../../shared/comic/doc';
+import type { AssetRef, ComicDoc, Page, RenderState } from '../../../shared/comic/doc';
 import { canServeToOwner } from '../../../shared/comic/safety';
 
 export type ReaderMode = 'scroll' | 'page' | 'spread';
@@ -14,35 +18,33 @@ export interface ReaderItem {
   key: string;
   kind: 'cover' | 'page';
   label: string;
+  /** For a withheld item: a path-less placeholder that no reader ever fetches (see isWithheld). */
   asset: AssetRef;
   page?: Page;
+  /** The art is withheld by the safety check (public-snapshot `render.withheld`). */
+  withheld?: true;
 }
+
+/** The placeholder a withheld item carries: no path (nothing to fetch, sign or preload) and a blocked verdict. */
+const withheldAsset = (): AssetRef => ({ path: '', source: 'generated', at: 0, safety: { quarantined: true, by: 'check', at: 0 } });
+
+/** The item's art: the drawn asset, a withheld placeholder, or nothing (undrawn — not in the reading order). */
+const artOf = (render: RenderState): { asset: AssetRef; withheld?: true } | null => {
+  if (render.withheld === 'safety') return { asset: withheldAsset(), withheld: true };
+  return render.asset?.path ? { asset: render.asset } : null;
+};
 
 export const readerItems = (doc: ComicDoc): ReaderItem[] => {
   const items: ReaderItem[] = [];
-  if (doc.cover.render.asset?.path) items.push({ key: 'cover', kind: 'cover', label: 'Cover', asset: doc.cover.render.asset });
+  const cover = artOf(doc.cover.render);
+  if (cover) items.push({ key: 'cover', kind: 'cover', label: 'Cover', ...cover });
   [...doc.pages]
     .sort((a, b) => a.n - b.n)
     .forEach((page) => {
-      if (page.render.asset?.path) items.push({ key: page.id, kind: 'page', label: `Page ${page.n}`, asset: page.render.asset, page });
+      const art = artOf(page.render);
+      if (art) items.push({ key: page.id, kind: 'page', label: `Page ${page.n}`, page, ...art });
     });
   return items;
-};
-
-/**
- * Item indexes per view. Single-page modes: one item per view. Spreads: the cover alone
- * (it is a right-hand page in print), then facing pairs.
- */
-export const readerViews = (items: ReaderItem[], mode: ReaderMode): number[][] => {
-  if (mode !== 'spread') return items.map((_, i) => [i]);
-  const views: number[][] = [];
-  let i = 0;
-  if (items[0]?.kind === 'cover') {
-    views.push([0]);
-    i = 1;
-  }
-  for (; i < items.length; i += 2) views.push(i + 1 < items.length ? [i, i + 1] : [i]);
-  return views;
 };
 
 /** The view that contains an item (when switching modes, stay on the same page). */
@@ -134,5 +136,5 @@ export const chapterStarts = (items: ReaderItem[]): { index: number; title: stri
     return typeof title === 'string' && title.trim() && item.page ? [{ index, title: title.trim(), n: item.page.n }] : [];
   });
 
-/** A blocked image is never shown or fetched: the reader draws a neutral "withheld" tile instead. */
-export const isWithheld = (item: ReaderItem): boolean => !canServeToOwner(item.asset);
+/** A blocked or withheld image is never shown or fetched: the reader draws a neutral "withheld" tile instead. */
+export const isWithheld = (item: ReaderItem): boolean => !!item.withheld || !item.asset.path || !canServeToOwner(item.asset);

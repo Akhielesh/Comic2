@@ -1,8 +1,8 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicStudioController } from './useStudio';
-import { makeFakeStudio, makeSampleDoc, type FakeStudio } from './conversation/testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices, type FakeStudio } from './conversation/testing/fixtures';
 
 const state = vi.hoisted(() => ({ studio: null as unknown as ComicStudioController, wide: true }));
 
@@ -61,6 +61,10 @@ beforeEach(() => {
   window.localStorage.clear();
   resetBackStack();
 });
+
+// Admin / own-key wording (dollars) by default; the governed wording has its own tests.
+beforeEach(() => showDollarPrices());
+afterEach(() => resetUsageStatus());
 
 describe('ComicStudio shell', () => {
   it('shows a skeleton while loading, then the studio once the doc arrives', () => {
@@ -152,6 +156,64 @@ describe('ComicStudio shell', () => {
     expect(screen.getByText('Translations')).toBeInTheDocument();
     expect(screen.getByText('$0.05')).toBeInTheDocument();
     expect(screen.getByText('future kind')).toBeInTheDocument();
+  });
+
+  it('governed users never see dollars: the pill, the spending sheet and the settings speak in usage', () => {
+    showUsagePrices(1);
+    const doc = makeSampleDoc({
+      spend: {
+        totalUsd: 0.42,
+        byKind: { page: 0.3, chat: 0.12 },
+        entries: [
+          { id: 's1', at: 1, kind: 'page', label: 'Page 1', usd: 0.3, byok: true, estimated: false },
+          { id: 's2', at: 2, kind: 'chat', label: 'Director', usd: 0.12, byok: false, estimated: true }
+        ]
+      },
+      settings: { quality: 'standard', confirm: 'big', bigSpendUsd: 0.5, budgetUsd: 5 }
+    });
+    const studio = makeFakeStudio({ doc });
+    mount(studio);
+    const pill = screen.getByRole('button', { name: /^Spent (≈[\d.]+%|<0\.1%) of your usage on this comic$/ });
+    expect(pill.textContent).not.toMatch(/\$/);
+    fireEvent.click(pill);
+    const panel = screen.getByRole('dialog', { name: 'Spending' });
+    expect(panel.textContent).not.toMatch(/\$/);
+    expect(within(panel).getByText(/Shown as a share of your usage/)).toBeInTheDocument();
+    expect(within(panel).getByText(/of this comic's spending cap/)).toBeInTheDocument();
+    expect(within(panel).getByText(/ran on your own API key/)).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Settings/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Comic settings' });
+    expect(sheet.textContent).not.toMatch(/\$/);
+    // The threshold is a share of the usage, converted back to the stored (charged) amount.
+    const threshold = within(sheet).getByLabelText('Big spend threshold (% of your usage)');
+    fireEvent.change(threshold, { target: { value: '2' } });
+    fireEvent.blur(threshold);
+    const sent = studio.patch.mock.calls.at(-1)?.[0]?.[0] as { op: string; patch: { bigSpendUsd: number } };
+    expect(sent.op).toBe('settings');
+    expect(sent.patch.bigSpendUsd).toBeGreaterThan(0);
+  });
+
+  it('fails closed: before the usage status loads, a non-admin sees no dollar figure in the header or settings', () => {
+    resetUsageStatus();
+    const doc = makeSampleDoc({ spend: { totalUsd: 0.42, byKind: { page: 0.42 }, entries: [] } });
+    mount(makeFakeStudio({ doc }));
+    expect(screen.getByRole('button', { name: /^Spent .* on this comic$/ }).textContent).not.toMatch(/\$/);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Settings/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Comic settings' });
+    expect(sheet.textContent).not.toMatch(/\$/);
+    expect(within(sheet).getAllByText('Available once your usage has loaded.').length).toBeGreaterThan(0);
+  });
+
+  it('the quality sheet gets the caps (admins see dollars at once)', () => {
+    resetUsageStatus();
+    const studio = makeFakeStudio({ caps: { ...makeFakeStudio().caps, admin: true } });
+    mount(studio);
+    fireEvent.click(within(document.querySelector('header')!).getByRole('button', { name: /^Quality:/ }));
+    expect(screen.getByRole('dialog', { name: 'Quality' }).textContent).toMatch(/\$\d/);
   });
 
   it('settings: confirm policy, threshold, budget cap, lettering and direction all patch the doc', () => {

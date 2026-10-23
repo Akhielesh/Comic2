@@ -9,8 +9,11 @@
  *   POST     /api/comic/public/s/:slug/report   → NOT handled here (proxied: Turnstile + safety store)
  *
  * READ-ONLY by construction: these handlers only call the anon read RPCs (and the HMAC-proofed
- * tracking RPC); no route here can change a comic. Every miss — unknown, revoked, unpublished,
- * suspended, malformed — returns ONE canonical 404 body. Payloads are re-verified: every image
+ * tracking RPC); no route here can change a comic. The `publication` object is rebuilt from an
+ * allow-list (never forwarded as the RPC returned it: no assetKey, no row internals); it carries
+ * the frozen content rating (G / PG / PG-13) only when the RPC sends a known one, and older
+ * publications without a rating still load. The snapshot `doc` is the server-built allow-list.
+ * Every miss — unknown, revoked, unpublished, suspended, malformed — returns ONE canonical 404 body. Payloads are re-verified: every image
  * path must sit under this publication's opaque pub/<assetKey>/ prefix, or nothing is served.
  * Rate limits use Workers Rate Limiting bindings (no secrets in wrangler.jsonc).
  */
@@ -45,6 +48,14 @@ const SITE_HOSTS = new Set(['comics.dreamstreamstudio.ai', 'comic.dreamstreamstu
 const EVENT_TYPES = new Set(['view', 'complete', 'share']);
 const CHANNELS = new Set(['copy', 'native', 'qr', 'whatsapp', 'x', 'facebook', 'telegram', 'email', 'embed', 'direct']);
 const LANG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
+/**
+ * The content ratings a publication can carry (= shared/comic/safety.ts CONTENT_RATINGS; kept local
+ * so the Worker bundle doesn't pull the i18n module in — a test pins the two together).
+ */
+export const PUBLIC_RATINGS: ReadonlySet<string> = new Set(['G', 'PG', 'PG-13']);
+export type PublicRating = 'G' | 'PG' | 'PG-13';
+/** A known rating from an RPC answer, else undefined (unknown is never shown, never kids-friendly). */
+export const publicRatingOf = (v: unknown): PublicRating | undefined => (typeof v === 'string' && PUBLIC_RATINGS.has(v) ? (v as PublicRating) : undefined);
 
 // ── Responses ────────────────────────────────────────────────────────────────
 
@@ -147,6 +158,7 @@ async function handlePayload(req: Request, env: PublicComicEnv, slug: string): P
   }
   const urls: Record<string, string> = {};
   for (const p of images) urls[p] = publicObjectUrl(env, p);
+  const rating = publicRatingOf(pub.rating);
   const publication = {
     slug: card.slug,
     visibility: card.visibility,
@@ -157,7 +169,8 @@ async function handlePayload(req: Request, env: PublicComicEnv, slug: string): P
     allowEmbed: card.allowEmbed,
     publishedAt: typeof pub.publishedAt === 'number' ? pub.publishedAt : 0,
     updatedAt: typeof pub.updatedAt === 'number' ? pub.updatedAt : 0,
-    card: card.card
+    card: card.card,
+    ...(rating ? { rating } : {})
   };
   return json(req, env, JSON.stringify({ publication, doc: raw.doc, urls }), 200);
 }
@@ -223,7 +236,7 @@ const ASPECT_RATIO = (aspect: string): number => {
   return w > 0 && h > 0 ? h / w : 1.5;
 };
 
-export function oembedFor(card: ShareCardRpc, origin: string, maxwidth?: number, maxheight?: number): Record<string, unknown> {
+export function oembedFor(card: ShareCardRpc, origin: string, maxwidth?: number, maxheight?: number, rating?: PublicRating): Record<string, unknown> {
   const title = card.card.title;
   const canonical = comicShareUrl(card.slug);
   const og = card.card.og[card.defaultLang || ''] || Object.values(card.card.og)[0];
@@ -239,7 +252,9 @@ export function oembedFor(card: ShareCardRpc, origin: string, maxwidth?: number,
     provider_name: 'DreamStream Studio',
     provider_url: COMICS_ORIGIN,
     title,
-    ...(card.card.creator ? { author_name: card.card.creator } : {})
+    ...(card.card.creator ? { author_name: card.card.creator } : {}),
+    // Provider-specific field (oEmbed 1.0 §2.3.4 allows extras): the frozen publish-time rating.
+    ...(rating && PUBLIC_RATINGS.has(rating) ? { content_rating: rating } : {})
   };
   if (og) Object.assign(out, { thumbnail_url: `${origin}/og/${og.path.slice('pub/'.length)}`, thumbnail_width: 1200, thumbnail_height: 630 });
   if (card.allowEmbed) {
@@ -267,7 +282,8 @@ async function handleOembed(req: Request, env: PublicComicEnv, url: URL): Promis
   };
   // no-store (the shared default) and no oEmbed cache_age: a revoked or regenerated link must stop
   // describing the comic at once (addendum: "revoked slugs stop working immediately").
-  return json(req, env, JSON.stringify(oembedFor(card, url.origin, num('maxwidth'), num('maxheight'))), 200);
+  const rating = isRecord(result.data) ? publicRatingOf(result.data.rating) : undefined;
+  return json(req, env, JSON.stringify(oembedFor(card, url.origin, num('maxwidth'), num('maxheight'), rating)), 200);
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────

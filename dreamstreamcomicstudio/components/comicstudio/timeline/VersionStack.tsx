@@ -8,7 +8,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, SplitSquareHorizontal, Star } from 'lucide-react';
 import { getRender, targetLabel, type RenderTarget } from '../../../shared/comic/doc';
-import { formatUsd } from '../../../shared/comic/models';
 import type { StudioController } from '../types';
 import { byokFromDoc } from '../board/boardModel';
 import {
@@ -26,6 +25,7 @@ import {
 import { CompareView } from './CompareView';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
+import { useCostFormat } from '../conversation/cost';
 
 export interface VersionStackProps {
   studio: StudioController;
@@ -45,6 +45,8 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
   const [compare, setCompare] = useState(initialCompare && list.length > 1);
   const [confirm, setConfirm] = useState<{ v: VersionItem; pages: number[]; cover: boolean } | null>(null);
   const edit = useTimelineEdit(studio);
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  const cost = useCostFormat(studio);
 
   // A selection that vanished (archive eviction, page deleted) falls back to the current version.
   const selected = list.find((v) => v.path === selectedPath) ?? current ?? list[list.length - 1];
@@ -175,8 +177,8 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
     <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-[var(--ds-ink)]">
       <p>
         Using v{confirm.v.n} of {label} marks {[confirm.pages.length ? pagesPhrase(confirm.pages) : '', confirm.cover ? 'the cover' : ''].filter(Boolean).join(' and ')} out of date — they were drawn
-        from the current version. Their art stays as it is; redrawing them later would be ≈{' '}
-        {formatUsd(redrawPrice(doc, 'page', byok) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok) : 0))}.
+        from the current version. Their art stays as it is; redrawing them later would be{' '}
+        {cost.approx(redrawPrice(doc, 'page', byok) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok) : 0))}.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" onClick={() => commitUse(confirm.v)} className={cx('tap-target h-8 rounded-xl bg-[var(--ds-accent)] px-3 text-[12.5px] font-semibold text-white hover:bg-[var(--ds-accent-hover)]', FOCUS_RING)}>
@@ -192,7 +194,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
   const toast = <UndoToast entry={edit.toast} onUndo={edit.undo} onDismiss={edit.dismiss} />;
 
   if (compact) {
-    const meta = [selected.modelLabel, versionCostLabel(selected), typeof selected.qcScore === 'number' ? `QC ${selected.qcScore.toFixed(2)}` : ''].filter(Boolean).join(' · ');
+    const meta = [selected.modelLabel, versionCostLabel(selected, cost.exact), typeof selected.qcScore === 'number' ? `QC ${selected.qcScore.toFixed(2)}` : ''].filter(Boolean).join(' · ');
     return (
       <div className="min-w-0 space-y-2">
         <div className="flex min-w-0 items-start gap-3">
@@ -215,7 +217,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
   const facts: [string, string][] = [
     ['Model', selected.modelLabel ?? 'Not recorded'],
     ['Size', selected.asset.w && selected.asset.h ? `${selected.asset.w}×${selected.asset.h}${selected.shape ? ` · ${selected.shape}` : ''}` : 'Not recorded'],
-    ['Cost', versionCostLabel(selected)],
+    ['Cost', versionCostLabel(selected, cost.exact)],
     ['QC', typeof selected.qcScore === 'number' ? `${selected.qcScore.toFixed(2)}${selected.qcIssues?.length ? ` · ${plural(selected.qcIssues.length, 'note')}` : ''}` : 'Not checked'],
     ['Made by', selected.origin ? ORIGIN_LABEL[selected.origin] : 'Not recorded'],
     ['Made', shortDate(selected.at)]
@@ -289,9 +291,25 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
       {confirmBox}
       {selected.current && selected.stale && staleKind && (
         <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-[12.5px] text-[var(--ds-ink)]">
-          This version was drawn before the latest script or style changes, so it shows as out of date. Pick another version (free) or redraw it (≈{' '}
-          {formatUsd(redrawPrice(doc, staleKind, byok))}) from the page menu.
+          This version was drawn before the latest script or style changes, so it shows as out of date. Pick another version (free) or redraw it (
+          {cost.approx(redrawPrice(doc, staleKind, byok))}) from the page menu.
         </p>
+      )}
+      {/* "Use this version" is an instant render_use patch, so the version UI says what the old
+          round-trip did (P1-CLIENTSTATE): a shape that doesn't match the book gets a free fit. */}
+      {selected.current && selected.mismatch && staleKind && !busy && (
+        <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-[12.5px] text-[var(--ds-ink)]">
+          <p className="min-w-0 flex-1">
+            This version is {selected.shape}; the book is {doc.format.pageAspect}. Fit it to the page for free, or pick another version.
+          </p>
+          <button
+            type="button"
+            onClick={() => void studio.act({ type: 'fit_render', target })}
+            className={cx('inline-flex h-9 shrink-0 items-center rounded-xl border border-[var(--ds-hairline)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11', FOCUS_RING)}
+          >
+            Fit to {doc.format.pageAspect} · Free
+          </button>
+        </div>
       )}
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12.5px]">
         {facts.map(([k, v]) => (

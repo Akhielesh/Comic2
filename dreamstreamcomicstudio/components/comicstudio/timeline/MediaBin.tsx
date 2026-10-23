@@ -8,7 +8,6 @@
 import React, { useId, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search, Star } from 'lucide-react';
 import type { LibraryAssetPublic } from '../../../shared/comic/library';
-import { formatUsd } from '../../../shared/comic/models';
 import type { StudioController } from '../types';
 import { EmptyArt } from '../library/procedural/EmptyArt';
 import { LibraryImage } from '../library/LibraryImage';
@@ -27,6 +26,7 @@ import {
 import { MediaPreview } from './MediaPreview';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, TimelineDialog, useInView } from './ui';
+import { useCostFormat } from '../conversation/cost';
 
 export interface MediaBinProps {
   studio: StudioController;
@@ -116,6 +116,8 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
     lastPreviewIdx.current = preview;
   }
   const setPreview = (i: number | null) => setPreviewPath(i === null ? null : flat[i]?.path ?? null);
+  // Recorded costs in the viewer's terms (governed users never see dollars).
+  const cost = useCostFormat(studio);
 
   if (!doc) return null;
   const examples = library.status === 'ready' ? [...library.byKind('cover_example'), ...library.byKind('genre_example')].slice(0, 12) : [];
@@ -258,7 +260,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
           </span>{' '}
           · Starred images are never removed. Once the archive is full, the oldest unstarred versions that nothing uses are removed — the studio tells you when.
         </p>
-        {spentOnImages > 0 && <p className="tabular-nums">Recorded image cost of everything here: {formatUsd(spentOnImages)}.</p>}
+        {spentOnImages > 0 && <p className="tabular-nums">Recorded image cost of everything here: {cost.exact(spentOnImages)}.</p>}
       </footer>
 
       <TimelineDialog open={preview !== null && !!flat[preview]} onClose={() => setPreview(null)} title={preview !== null && flat[preview] ? flat[preview].owner.label : 'Image'} wide>

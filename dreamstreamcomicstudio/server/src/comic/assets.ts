@@ -1,6 +1,7 @@
 // Asset storage for Comic Studio (v4/v5): generated renders, user uploads and reference photos,
 // reference loading for image jobs, signed display URLs, size variants, derived images
-// (fit/crop), quarantine and the publication copy primitives. Contract §12.5; owned by P1-STORAGE.
+// (fit/crop), quarantine and its restore, and the publication copy primitives. Contract §12.5; owned by
+// P1-STORAGE (restoreQuarantined: P2-SERVER-FOLLOWUP).
 //
 // Rules learned the hard way:
 //  - generated images are stored exactly as the model drew them — NO cropping (the old
@@ -31,7 +32,8 @@ import {
   buildRefPath,
   isLibraryPath,
   isPrivatePath,
-  isPublicationPath
+  isPublicationPath,
+  isQuarantinePath
 } from './storagePaths.js';
 import { MAX_INPUT_PIXELS, MAX_SOURCE_EDGE, SHARP_INPUT, withSharpSlot } from './imageMeasure.js';
 import { fitToAspect as deriveFitToAspect } from './derive.js';
@@ -145,6 +147,44 @@ export const pathOwner = (path: string): { userId: string; projectId?: string } 
   const legacy = /^([0-9a-f-]{36})\/[^/]+$/i.exec(path);
   return legacy ? { userId: legacy[1] } : null;
 };
+
+/**
+ * The quarantine object for a path: `q/<user>/<project>/<name>-<sha8>.webp` in the private bucket.
+ * Deterministic, so a retried quarantine finds its own copy — and a restore can prove that a q/
+ * object was taken from exactly the path it is being sent back to (restoreQuarantined accepts
+ * only this pairing, never a destination of the caller's choosing).
+ */
+export const quarantinePathFor = (path: string): string => {
+  const owner = pathOwner(path);
+  const userId = owner?.userId || (isPublicationPath(path) ? 'pub' : 'platform');
+  const lane = owner?.projectId || (owner ? 'tmp' : path.split('/')[1] || 'misc');
+  const base = sanitizeSegment(path.split('/').pop()!.replace(/\.[A-Za-z0-9]{1,5}$/, '')).slice(0, 80) || 'image';
+  const digest = crypto.createHash('sha256').update(path).digest('hex').slice(0, 8);
+  return buildQuarantinePath(userId, lane, `${base}-${digest}`);
+};
+
+/**
+ * Where a held object may go back to: an owner lane (u/<user>/… or a legacy <uuid>/file) — never
+ * the quarantine lane itself, a publication copy or the platform library.
+ */
+const isRestorableOriginal = (path: string): boolean =>
+  isSafeStoragePath(path) && !isQuarantinePath(path) && !isPublicationPath(path) && !isLibraryPath(path) && !!pathOwner(path);
+
+/**
+ * The restore guard shared by both stores: the source must be a q/ object and the destination the
+ * owner path it was quarantined from (quarantinePathFor(original) === source). A caller can never
+ * move held bytes to another user's, project's or lane's path, nor un-hold an arbitrary object.
+ */
+const assertRestorePair = (quarantinePath: unknown, originalPath: unknown): void => {
+  if (typeof quarantinePath !== 'string' || !isSafeStoragePath(quarantinePath) || !isQuarantinePath(quarantinePath)) {
+    throw new StudioError('BAD_REQUEST', 'Only an image in the safety hold can be restored.', { status: 400 });
+  }
+  if (typeof originalPath !== 'string' || !isRestorableOriginal(originalPath) || quarantinePathFor(originalPath) !== quarantinePath) {
+    throw new StudioError('BAD_REQUEST', 'A held image can only go back to the place it was taken from.', { status: 400 });
+  }
+};
+
+const HOLD_GONE_MESSAGE = "That image is no longer in the safety hold, so it can't be restored.";
 
 /** Size-variant path for an asset path: `<base>_w480.webp` (any source extension is dropped). */
 export const variantPathFor = (path: string, width: number): string => `${path.replace(/\.[A-Za-z0-9]{1,5}$/, '')}_w${width}.webp`;
@@ -1218,12 +1258,8 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
     if (path.startsWith('q/')) return { quarantinePath: path };
     const owner = pathOwner(path);
-    const userId = owner?.userId || (isPublicationPath(path) ? 'pub' : 'platform');
-    const lane = owner?.projectId || (owner ? 'tmp' : path.split('/')[1] || 'misc');
-    const base = sanitizeSegment(path.split('/').pop()!.replace(/\.[A-Za-z0-9]{1,5}$/, '')).slice(0, 80) || 'image';
-    const digest = crypto.createHash('sha256').update(path).digest('hex').slice(0, 8);
     // Deterministic: a retried quarantine finds its own copy instead of making another.
-    const quarantinePath = buildQuarantinePath(userId, lane, `${base}-${digest}`);
+    const quarantinePath = quarantinePathFor(path);
     let outcome: 'copied' | 'exists';
     try {
       outcome = await copy(path, quarantinePath);
@@ -1256,6 +1292,85 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     if (held.length) logger.warn('comic_asset_remove_quarantine_refused', { count: held.length });
     const doomed = list.filter((p) => !p.startsWith('q/'));
     if (doomed.length) await removeObjects(doomed);
+  };
+
+  /** HEAD on the object (service role, either bucket): true / false, or throws when Storage can't say. */
+  const objectExists = async (path: string): Promise<boolean> => {
+    const { data, error } = await withTimeout(admin().storage.from(bucketOf(path)).exists(path), STORAGE_OP_TIMEOUT_MS, 'Storage exists');
+    if (data === true) return true;
+    if (!error || isNotFoundErr(error)) return false;
+    throw error;
+  };
+
+  /**
+   * Quarantine marked these image_assets rows deleted with their objects; once the objects are back the
+   * rows live again, so the retention job tracks them like any other image. Best-effort (never fails a restore).
+   */
+  const reinstateRows = async (paths: string[]) => {
+    if (!paths.length) return;
+    try {
+      const { error } = await admin()
+        .from('image_assets')
+        .update({ deleted_at: null, expires_at: null, last_referenced_at: new Date().toISOString() })
+        .in('path', paths);
+      if (error) throw error;
+    } catch (err) {
+      logger.warn('comic_asset_reinstate_failed', { count: paths.length, message: errMessage(err) });
+    }
+  };
+
+  /**
+   * Bring a held object back (contract §12.5, optional method): an appeal the second opinion cleared,
+   * or a moderator's restore. safety/deps.ts restoreFromQuarantine is the ONLY caller (pinned by
+   * assets.test.ts) and passes the paths it recorded itself — the doc's asset path and the q/ path
+   * the quarantine map holds — never anything a client sent.
+   *
+   *  - guard: the source is a q/ object and the destination is exactly the owner path it was taken
+   *    from (quarantinePathFor); anything else is a 400 and nothing moves,
+   *  - copy, then delete: the bytes go back to the original path in that path's own bucket (a
+   *    reference photo returns to the PRIVATE bucket, art to the public one — no ACL ever changes, no
+   *    URL is minted here); only after the copy landed is the q/ object deleted, which also marks its
+   *    hold row deleted,
+   *  - idempotent: a repeat after a finished restore (the hold already gone, the original back)
+   *    resolves; a repeat after a half-finished one (copied, delete failed) finishes the delete,
+   *  - honest: nothing held and nothing back → 404 NOT_FOUND; Storage down → 503, retryable. The caller
+   *    then keeps the image hidden and says a human must finish it.
+   * The original's image_assets row comes back to life and its 480/1080 variants (removed with it) are
+   * rebuilt best-effort, so the doc's variant paths resolve again.
+   */
+  const restoreQuarantined = async (quarantinePath: string, originalPath: string): Promise<void> => {
+    assertRestorePair(quarantinePath, originalPath);
+    const bucket = bucketOf(originalPath);
+    let outcome: 'copied' | 'exists' | 'already';
+    try {
+      outcome = await copy(quarantinePath, originalPath);
+    } catch (err) {
+      if (!(err instanceof StudioError && err.code === 'NOT_FOUND')) throw err;
+      let back: boolean;
+      try {
+        back = await objectExists(originalPath);
+      } catch (probeErr) {
+        throw new StudioError('INTERNAL', "The image couldn't be restored right now. Please try again.", { status: 503, retryable: true, cause: probeErr });
+      }
+      if (!back) throw new StudioError('NOT_FOUND', HOLD_GONE_MESSAGE, { status: 404, cause: err });
+      outcome = 'already';
+    }
+    evictPath(bucket, originalPath);
+    if (outcome !== 'already') {
+      // The original is back, so the hold ends. A failed delete leaves a private, never-signed copy
+      // under its 90-day expiry (and a repeat finishes it) — never a reason to report the restore as failed.
+      await removeObjects([quarantinePath]).catch((err) => logger.warn('comic_asset_restore_cleanup_failed', { message: errMessage(err) }));
+    }
+    await reinstateRows([originalPath]);
+    if (outcome !== 'already' && canHaveVariants(originalPath)) {
+      const rebuild = downloadBytes(originalPath)
+        .then(({ buffer }) => writeVariants(originalPath, buffer))
+        .catch(() => [] as AssetVariant[]);
+      const variants = await withinBudget(rebuild, VARIANT_BUDGET_MS, [] as AssetVariant[]);
+      await reinstateRows(variants.map((v) => v.path));
+    }
+    // Bucket and outcome only — never a path or content (safety D10).
+    logger.info('comic_asset_restored', { bucket, outcome });
   };
 
   const copyObject: AssetStore['copyObject'] = async (srcPath, dstPath) => {
@@ -1326,6 +1441,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     fitToAspect,
     ensureVariants,
     quarantine,
+    restoreQuarantined,
     remove,
     copyObject,
     putObject,
@@ -1382,6 +1498,8 @@ export interface MemoryAssetStore extends AssetStore {
   readonly outlines: { dataUrl: string; box: { x: number; y: number; w: number; h: number } }[];
   /** Every quarantine call, in order. */
   readonly quarantined: { path: string; reason: string; quarantinePath: string }[];
+  /** Every restoreQuarantined call that moved an object back, in order. */
+  readonly restored: { quarantinePath: string; originalPath: string }[];
   /** Every signUrls TTL actually used per path (private lanes ≤ 300 s). */
   readonly signedTtl: Record<string, number>;
   /** Seed an existing asset (e.g. a previous render) under a path. */
@@ -1392,6 +1510,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
   const files = new Map<string, string>();
   const outlines: MemoryAssetStore['outlines'] = [];
   const quarantined: MemoryAssetStore['quarantined'] = [];
+  const restored: MemoryAssetStore['restored'] = [];
   const signedTtl: Record<string, number> = {};
   let counter = 0;
 
@@ -1424,6 +1543,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
     files,
     outlines,
     quarantined,
+    restored,
     signedTtl,
     put(path, dataUrl) {
       files.set(path, dataUrl);
@@ -1517,10 +1637,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
     async quarantine(path, reason) {
       if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
       if (path.startsWith('q/')) return { quarantinePath: path };
-      const owner = pathOwner(path);
-      const base = sanitizeSegment(path.split('/').pop()!.replace(/\.[A-Za-z0-9]{1,5}$/, '')) || 'image';
-      const digest = crypto.createHash('sha256').update(path).digest('hex').slice(0, 8);
-      const quarantinePath = buildQuarantinePath(owner?.userId || 'platform', owner?.projectId || 'tmp', `${base}-${digest}`);
+      const quarantinePath = quarantinePathFor(path);
       const data = files.get(path);
       if (!data && !files.has(quarantinePath)) throw new StudioError('NOT_FOUND', 'That image is missing from storage.', { status: 404 });
       if (data) files.set(quarantinePath, data);
@@ -1528,6 +1645,24 @@ export function createMemoryAssetStore(): MemoryAssetStore {
       for (const w of VARIANT_WIDTHS) files.delete(variantPathFor(path, w));
       quarantined.push({ path, reason, quarantinePath });
       return { quarantinePath };
+    },
+    async restoreQuarantined(quarantinePath, originalPath) {
+      // Same guard and semantics as the Supabase store: q/ source, its own original path, copy then delete, idempotent.
+      assertRestorePair(quarantinePath, originalPath);
+      const held = files.get(quarantinePath);
+      if (!held) {
+        if (files.has(originalPath)) return; // an earlier restore already brought it back
+        throw new StudioError('NOT_FOUND', HOLD_GONE_MESSAGE, { status: 404 });
+      }
+      if (!files.has(originalPath)) files.set(originalPath, held);
+      files.delete(quarantinePath);
+      restored.push({ quarantinePath, originalPath });
+      if (!canHaveVariants(originalPath)) return;
+      try {
+        for (const v of await variantBuffers(decodeImageDataUrl(held).buffer)) files.set(variantPathFor(originalPath, v.width), toDataUrl('image/webp', v.buffer));
+      } catch {
+        /* variants are a speed-up: the original size is shown instead */
+      }
     },
     async remove(paths) {
       for (const p of paths || []) if (isSafeStoragePath(p) && !p.startsWith('q/')) files.delete(p);

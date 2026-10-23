@@ -98,6 +98,18 @@ describe('PDF export', () => {
     expect(parsed.getTitle()).toBe('కుంకుమపువ్వు దొంగ');
   });
 
+  it('writes only a well-formed language tag into /Lang (pdf-lib does not escape it)', async () => {
+    const download = vi.fn();
+    const doc = drawnDoc();
+    doc.format.language = 'en) /OpenAction << /S /JavaScript /JS (app.alert(1)) >> (';
+    await exportComicPdf(doc, urlFor, { download, renderPage: async () => blob(JPEG_1x1, 'image/jpeg'), renderImage: async () => blob(PNG_1x1, 'image/png') });
+    const bytes = await blobBytes(download.mock.calls[0][0] as Blob);
+    const text = new TextDecoder('latin1').decode(bytes);
+    expect(text).not.toContain('/JavaScript');
+    expect(text).not.toContain('/OpenAction');
+    expect((await PDFDocument.load(bytes)).getLanguage()).toBe('en');
+  });
+
   it('never includes a withheld image', async () => {
     const download = vi.fn();
     const doc = drawnDoc();

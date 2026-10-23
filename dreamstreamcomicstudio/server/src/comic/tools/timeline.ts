@@ -13,7 +13,6 @@
 import {
   archiveOf,
   bookOf,
-  currentVersion,
   findPage,
   getRender,
   isPageStale,
@@ -35,7 +34,7 @@ import {
 } from '../../../../shared/comic/doc.js';
 import { applyOp, type DocOp } from '../../../../shared/comic/ops.js';
 import { aspectFromSize, aspectMatches, formatUsd, getImageModel, IMAGE_MODELS, PLAN_USD_PER_PAGE } from '../../../../shared/comic/models.js';
-import { reorderIds, continuityHint } from '../../../../shared/comic/book.js';
+import { reorderIds, continuityHint, versionList, type VersionEntry } from '../../../../shared/comic/book.js';
 import { unitPrice } from '../../../../shared/comic/plan.js';
 import { DOC_LIMITS, MAX_ARCHIVE } from '../../../../shared/comic/limits.js';
 import { canServeToOwner } from '../../../../shared/comic/safety.js';
@@ -44,6 +43,7 @@ import { planPages, sanitizeCtxFor, sanitizePatchOps, spendIsByok } from '../job
 import { MAX_PAID_TEXT_PER_TURN, pushNextSteps, type DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 import { runFitRender } from '../actions/timeline.js';
+import { costViewFor, governDollars } from '../costText.js';
 
 // ── Pure helpers (exported for tests and summaries) ──────────────────────────
 
@@ -69,6 +69,9 @@ const ranges = (ns: number[]): string => {
 };
 const pagesWord = (ns: number[]) => `${ns.length === 1 ? 'page' : 'pages'} ${ranges(ns)}`;
 
+/** A tool result with prices worded for this user (costText.ts): dollars for admins and own keys, a share of the usage otherwise. */
+const priced = (ctx: StudioContext, text: string): string => governDollars(text, costViewFor(ctx.caps));
+
 /** Friendly model name for a stored model id (registry id or a provider route id); unknown ids pass through. */
 export const modelName = (id?: string): string | undefined => {
   if (!id) return undefined;
@@ -76,37 +79,12 @@ export const modelName = (id?: string): string | undefined => {
   return spec?.nickname ?? id;
 };
 
-/** One version of a render target, numbered v1 = oldest (by creation time, then path) — the UI's numbering. */
-export interface VersionEntry {
-  n: number;
-  path: string;
-  version: RenderVersion | ArchivedVersion;
-  current: boolean;
-  archived: boolean;
-}
-
 /**
- * Every version of a target — current, history and its archived versions — numbered v1 = oldest.
- * Numbers are stable across swaps (they follow creation time, not position). Mirrors the client's
- * timeline/bookModel.ts versionList (same order, same numbers).
+ * Every version of a target — current, history and its archived versions — numbered v1 = oldest
+ * (creation time, then path), stable across swaps. ONE implementation for the director and the
+ * client timeline (shared/comic/book.ts); re-exported here for this group's callers and tests.
  */
-export function versionList(doc: ComicDoc, target: RenderTarget): VersionEntry[] {
-  const r = getRender(doc, target);
-  if (!r) return [];
-  const key = renderTargetKey(target);
-  const seen = new Set<string>();
-  const items: Omit<VersionEntry, 'n'>[] = [];
-  const push = (v: RenderVersion | ArchivedVersion | undefined, current: boolean, archived: boolean) => {
-    if (!v?.path || seen.has(v.path)) return;
-    seen.add(v.path);
-    items.push({ path: v.path, version: v, current, archived });
-  };
-  push(currentVersion(r), true, false);
-  for (const v of r.history) push(v, false, false);
-  for (const a of archiveOf(doc)) if (a.targetKey === key) push(a, false, true);
-  items.sort((a, b) => (a.version.at || 0) - (b.version.at || 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return items.map((it, i) => ({ ...it, n: i + 1 }));
-}
+export { versionList, type VersionEntry };
 
 /** Targets that have more than one version (pages by n, cover, sheets, places, style options). */
 export function versionedTargets(doc: ComicDoc): { target: RenderTarget; count: number }[] {
@@ -335,7 +313,10 @@ function insertPageTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
       const committed = commit(ctx, [{ op: 'page_insert', id, after, ...(summary ? { patch: { summary } } : {}) }], 'Add a page');
       const n = findPage(committed, id)?.n ?? after + 1;
       if (!write) {
-        return `Added a blank page ${n} after ${after === 0 ? 'the cover' : `page ${after}`} ($0). Order: ${orderLine(committed)}. It has no panels yet — when the user says what happens, write it with revise_pages (TEXT ≈${formatUsd(PLAN_USD_PER_PAGE)}), or they can type it in the Pages tab.`;
+        return priced(
+          ctx,
+          `Added a blank page ${n} after ${after === 0 ? 'the cover' : `page ${after}`} ($0). Order: ${orderLine(committed)}. It has no panels yet — when the user says what happens, write it with revise_pages (TEXT ≈${formatUsd(PLAN_USD_PER_PAGE)}), or they can type it in the Pages tab.`
+        );
       }
       turn.paidText += 1;
       const prevBeat = sortedPages(committed).find((p) => p.n === n - 1)?.summary;
@@ -457,7 +438,10 @@ function listVersionsTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool 
       const shown = [...list].reverse().slice(0, 10);
       const more = list.length > shown.length ? `; … ${list.length - shown.length} older` : '';
       const stale = isTargetStale(doc, target) ? ' The current version is out of date with the script.' : '';
-      return `${label} — ${plural(list.length, 'version')}: ${shown.map((e) => describeVersion(doc, e)).join('; ')}${more}.${stale} The version card is visible to the user; switching with use_version is free and instant.`;
+      return priced(
+        ctx,
+        `${label} — ${plural(list.length, 'version')}: ${shown.map((e) => describeVersion(doc, e)).join('; ')}${more}.${stale} The version card is visible to the user; switching with use_version is free and instant.`
+      );
     }
   );
 }
@@ -487,7 +471,7 @@ function useVersionTool(ctx: StudioContext): DirectorTool {
       if (list.length < 2) {
         const kind = target.kind === 'cover' ? 'cover' : target.kind === 'page' ? 'page' : 'sheet';
         const price = unitPrice(doc, kind, { byok: spendIsByok(ctx.keys) }).usd;
-        return `${label} has ${list.length ? 'only one version' : 'no drawing yet'} — nothing to switch to. A new take is ≈${formatUsd(price)}, only if the user asks for one.`;
+        return priced(ctx, `${label} has ${list.length ? 'only one version' : 'no drawing yet'} — nothing to switch to. A new take is ≈${formatUsd(price)}, only if the user asks for one.`);
       }
       if (r.status === 'queued' || r.status === 'rendering') throw toolArgError(`${label} is still drawing — switch versions when it's done.`);
       const pick = pickVersion(list, args.version, r.history);
@@ -501,7 +485,10 @@ function useVersionTool(ctx: StudioContext): DirectorTool {
         const byok = spendIsByok(ctx.keys);
         const cost = unitPrice(doc, 'page', { byok }).usd * stalePages.length + (coverStale ? unitPrice(doc, 'cover', { byok }).usd : 0);
         const what = [stalePages.length ? pagesWord(stalePages) : '', coverStale ? 'the cover' : ''].filter(Boolean).join(' and ');
-        return `Not switched yet: using v${pick.n} of ${label} would mark ${what} out of date (they were drawn from the current version; redrawing them later ≈${formatUsd(cost)}). Ask the user; if they agree, call use_version again with confirm:true. Their art stays as it is either way.`;
+        return priced(
+          ctx,
+          `Not switched yet: using v${pick.n} of ${label} would mark ${what} out of date (they were drawn from the current version; redrawing them later ≈${formatUsd(cost)}). Ask the user; if they agree, call use_version again with confirm:true. Their art stays as it is either way.`
+        );
       }
       const after = commit(ctx, [op], `Use ${label} v${pick.n}`);
       const notes: string[] = [];
@@ -578,6 +565,7 @@ function fitRenderTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
         confirmed: false,
         collectCard: (c) => turn.cards.push(c),
         collectNextSteps: (steps) => pushNextSteps(turn, steps),
+        caps: ctx.caps,
         origin: 'director'
       });
       return started.outcome.message;

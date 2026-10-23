@@ -23,6 +23,7 @@ import { RefsDrawer } from './RefsDrawer';
 import { ownerLabel, sheetHint } from './refsModel';
 import { UploadQueue } from './UploadQueue';
 import { isActiveUpload, useRefUpload, type UploadTransport } from './useRefUpload';
+import { useCostFormat } from '../conversation/cost';
 
 export interface RefStripProps {
   studio: StudioController;
@@ -47,6 +48,8 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
   const mine = uploads.items.filter((i) => refOwnerKey(i.owner) === key);
   const active = mine.filter((i) => isActiveUpload(i.state)).length;
   const [open, setOpen] = useState(false);
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  const cost = useCostFormat(studio);
   const [dropping, setDropping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pick = useRef<HTMLInputElement>(null);
@@ -55,7 +58,7 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
   const cap = capFor(owner);
   const name = ownerLabel(doc, owner);
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
-  const hint = hideSheetHint ? null : sheetHint(doc, owner, byokFromDoc(doc));
+  const hint = hideSheetHint ? null : sheetHint(doc, owner, byokFromDoc(doc), cost.approx);
   const shown = refs.slice(0, max);
   const more = refs.length - shown.length;
   const openDrawer = () => (onOpen ? onOpen() : setOpen(true));
@@ -165,7 +168,7 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
           className="mt-1 inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded-xl px-2 text-left text-[12px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
         >
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
-          <span className="min-w-0">New photos since this sheet — redraw{hint.price ? ` ≈ ${hint.price}` : ''}</span>
+          <span className="min-w-0">New photos since this sheet — redraw{hint.price ? ` ${hint.price}` : ''}</span>
         </button>
       )}
       {!onOpen && <RefsDrawer studio={studio} owner={owner} open={open} onClose={() => setOpen(false)} transport={transport} />}

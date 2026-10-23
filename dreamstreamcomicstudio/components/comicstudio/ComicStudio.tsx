@@ -36,7 +36,8 @@ import {
 } from 'lucide-react';
 import type { ComicDoc, ConfirmPolicy, SpendKind } from '../../shared/comic/doc';
 import type { DocOp } from '../../shared/comic/ops';
-import { TIER_PRESETS, formatUsd } from '../../shared/comic/models';
+import { PLATFORM_MARKUP, TIER_PRESETS } from '../../shared/comic/models';
+import type { StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { CANVAS_BG, HAIRLINE, TRANSITION } from '../chat/studioDesign';
@@ -48,6 +49,7 @@ import { ConversationPane } from './conversation/ConversationPane';
 import { StudioComposer, type StudioComposerHandle } from './conversation/StudioComposer';
 import { COMPOSE_EVENT } from './conversation/composerBus';
 import { QualityPanel } from './conversation/panels/QualityPanel';
+import { costFormat, useCostContext, useCostFormat, type CostDisplayContext, type CostFormat } from './conversation/cost';
 import { LETTERING_OPTIONS } from './conversation/panels/FormatPanel';
 import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from './conversation/ui';
 import { renderingPageCount } from './studioReducer';
@@ -148,7 +150,28 @@ export const spendKindsShown = (byKind: Partial<Record<string, number>>): string
   return [...known, ...other];
 };
 
-export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
+/**
+ * A share for a narrow spot (the header pill, a breakdown row): "≈4%" / "<0.1%" for governed users,
+ * dollars for admins and own keys. Undefined when a governed user's share isn't known yet — the
+ * spot shows no figure then, never dollars.
+ */
+export const shortSpend = (cost: CostFormat, usd: number): string | undefined => {
+  const s = cost.exact(usd);
+  if (!cost.governed) return s;
+  if (s === 'Free') return '0%';
+  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(s);
+  return m ? m[1] : undefined;
+};
+
+/** "Spent $0.42 on this comic" / "Spent ≈4% of your usage on this comic" (governed users never read dollars). */
+export const spentLabel = (cost: CostFormat, usd: number): string =>
+  usd > 0 || !cost.governed ? `Spent ${cost.exact(usd)} on this comic` : 'Spent none of your usage on this comic yet';
+
+export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({ doc, cost: costProp }) => {
+  // Hosts pass the studio's formatter; standalone (tests, galleries) it falls back to the shared
+  // usage status — and, until that loads, usage terms (fail closed: never a dollar figure by default).
+  const fallback = useCostFormat({ caps: null });
+  const cost = costProp ?? fallback;
   const spend = doc.spend;
   const byKind = spend.byKind as Partial<Record<string, number>>;
   const kinds = spendKindsShown(byKind);
@@ -156,17 +179,21 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
   const anyEstimated = spend.entries.some((e) => e.estimated);
   const budget = typeof doc.settings.budgetUsd === 'number' && doc.settings.budgetUsd > 0 ? doc.settings.budgetUsd : null;
   const pct = budget ? Math.min(100, (spend.totalUsd / budget) * 100) : 0;
+  const row = (usd: number) => shortSpend(cost, usd) ?? '—';
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
       <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Spent on this comic</div>
-      <div className="mt-1 text-[24px] font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]">{formatUsd(spend.totalUsd)}</div>
+      <div className={cx('mt-1 font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]', cost.governed ? 'text-[20px]' : 'text-[24px]')}>
+        {spend.totalUsd > 0 || !cost.governed ? cost.exact(spend.totalUsd) : 'Nothing yet'}
+      </div>
+      {cost.governed && <div className="mt-0.5 text-[11.5px] text-[var(--ds-muted)]">Shown as a share of your usage.</div>}
       {budget && (
         <div className="mt-2">
           <div className="h-1.5 overflow-hidden rounded-full bg-[var(--ds-well-strong)]">
             <div className={cx('h-full rounded-full', pct >= 90 ? 'bg-amber-500' : 'bg-[var(--ds-accent)]')} style={{ width: `${pct}%` }} />
           </div>
           <div className="mt-1 text-[11.5px] text-[var(--ds-muted)]">
-            {formatUsd(spend.totalUsd)} of your {formatUsd(budget)} budget
+            {cost.governed ? `${Math.round(pct)}% of this comic's spending cap` : `${cost.exact(spend.totalUsd)} of your ${cost.exact(budget)} budget`}
           </div>
         </div>
       )}
@@ -175,16 +202,20 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
           {kinds.map((k) => (
             <div key={k} className="flex items-center justify-between gap-3 text-[13px]">
               <dt className="min-w-0 truncate text-[var(--ds-muted)]">{SPEND_KIND_LABELS[k as SpendKind] || k.replace(/_/g, ' ')}</dt>
-              <dd className="shrink-0 font-medium tabular-nums text-[var(--ds-ink)]">{formatUsd(byKind[k] || 0)}</dd>
+              <dd className="shrink-0 font-medium tabular-nums text-[var(--ds-ink)]">{row(byKind[k] || 0)}</dd>
             </div>
           ))}
         </dl>
       ) : (
-        <p className="mt-3 text-[12.5px] text-[var(--ds-muted)]">Nothing spent yet. Planning and chatting cost cents; you approve every image spend.</p>
+        <p className="mt-3 text-[12.5px] text-[var(--ds-muted)]">
+          {cost.governed ? 'Nothing spent yet. Planning and chatting use very little; you approve every image spend.' : 'Nothing spent yet. Planning and chatting cost cents; you approve every image spend.'}
+        </p>
       )}
       {byokUsd > 0 && (
         <p className="mt-3 rounded-lg bg-[var(--ds-well)] px-2.5 py-2 text-[11.5px] leading-snug text-[var(--ds-muted)]">
-          {formatUsd(byokUsd)} of this was paid with your own API key — tracked here so you see the real cost, but not billed by DreamStream.
+          {cost.governed
+            ? 'Some of this ran on your own API key — tracked here so you see it, but not taken from your usage.'
+            : `${cost.exact(byokUsd)} of this was paid with your own API key — tracked here so you see the real cost, but not billed by DreamStream.`}
         </p>
       )}
       {anyEstimated && (
@@ -276,6 +307,9 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const tierLabel = TIER_PRESETS[tier]?.label || 'Standard';
   const install = useInstallPrompt();
   const saved = savedTotal(doc);
+  // Governed users never see dollars (P1-LIMITS): the pill, the menu row and the sheet speak in usage.
+  const cost = useCostFormat(studio);
+  const pillShare = shortSpend(cost, doc.spend.totalUsd);
   const showSpendChip = !phone || ff.width >= SPEND_CHIP_MIN_WIDTH;
   const showBack = ff.layout !== 'single-rail'; // the rail carries Back in phone landscape
 
@@ -316,7 +350,11 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
       id: 'spend',
       label: 'Spending',
       icon: <Wallet className="h-4 w-4" />,
-      detail: saved > 0 ? `${formatUsd(doc.spend.totalUsd)} · saved ${formatUsd(saved)}` : formatUsd(doc.spend.totalUsd),
+      detail: cost.governed
+        ? [pillShare ? `${pillShare} of your usage` : 'Your usage', saved > 0 ? 'some saved by software' : ''].filter(Boolean).join(' · ')
+        : saved > 0
+          ? `${cost.exact(doc.spend.totalUsd)} · saved ${cost.exact(saved)}`
+          : cost.exact(doc.spend.totalUsd),
       opensSheet: true,
       onSelect: () => setOpen('spend')
     });
@@ -335,10 +373,10 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
 
   const spendSheet = (
     <div className="mx-auto w-fit max-w-full">
-      <SpendBreakdown doc={doc} />
+      <SpendBreakdown doc={doc} cost={cost} />
       {phone && saved > 0 && (
         <div className="border-t border-[var(--ds-hairline-soft)]">
-          <SavingsBreakdown doc={doc} />
+          <SavingsBreakdown doc={doc} cost={cost} />
         </div>
       )}
     </div>
@@ -409,10 +447,18 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
               onClick={() => toggle('spend')}
               aria-haspopup="dialog"
               aria-expanded={open === 'spend'}
-              aria-label={`Spent ${formatUsd(doc.spend.totalUsd)} on this comic`}
+              aria-label={spentLabel(cost, doc.spend.totalUsd)}
+              title={cost.governed ? 'What this comic has used of your usage' : undefined}
               className={cx(headerBtn, 'tabular-nums', phone && 'px-2.5')}
             >
-              <CountUp value={doc.spend.totalUsd} prefix="$" decimals={2} />
+              {cost.governed ? (
+                <>
+                  <Wallet className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  {pillShare && doc.spend.totalUsd > 0 && <span>{pillShare}</span>}
+                </>
+              ) : (
+                <CountUp value={doc.spend.totalUsd} prefix="$" decimals={2} />
+              )}
             </button>
           </div>
         )}
@@ -444,7 +490,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
         align="end"
         className="w-[min(25rem,calc(100vw-1.5rem))]"
       >
-        <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} onDone={close} />
+        <QualityPanel doc={doc} patch={studio.patch} byok={studio.byok} caps={studio.caps} onDone={close} />
       </AdaptiveSheet>
       <AdaptiveSheet open={open === 'spend'} onClose={close} label="Spending" title="Spending" anchorRef={showSpendChip ? spendRef : menuRef} placement="below" align="end">
         {spendSheet}
@@ -533,8 +579,101 @@ const UsdField: React.FC<{
   );
 };
 
-export const SettingsPanel: React.FC<{ doc: ComicDoc; patch: (ops: DocOp[]) => Promise<void> | void }> = ({ doc, patch }) => {
+/**
+ * A money setting in the viewer's terms. Admins / own key: the dollar field. Governed users: the same
+ * amount as a share of their usage ("5 % of your usage"), converted with the known rate — or, while the
+ * rate is unknown, a calm note instead of a dollar field (fail closed).
+ */
+const MoneySetting: React.FC<{
+  id: string;
+  label: string;
+  value: number | undefined | null;
+  usdPlaceholder: string;
+  ctx: CostDisplayContext;
+  allowEmpty?: boolean;
+  onCommit: (usd: number | null) => void;
+}> = ({ id, label, value, usdPlaceholder, ctx, allowEmpty, onCommit }) => {
+  if (!ctx.governed) return <UsdField id={id} label={label} value={value} placeholder={usdPlaceholder} allowEmpty={allowEmpty} onCommit={onCommit} />;
+  const per = ctx.pctPerUsd;
+  if (!(typeof per === 'number' && per > 0)) {
+    return <span className="text-[12px] text-[var(--ds-muted)]">Available once your usage has loaded.</span>;
+  }
+  // Settings hold charged amounts (markup included); usage counts provider cost.
+  const toPct = (usd: number) => Math.round(((usd / PLATFORM_MARKUP) * per) * 10) / 10;
+  const toUsd = (pctValue: number) => Math.round(((pctValue / per) * PLATFORM_MARKUP) * 10000) / 10000;
+  return (
+    <PctField
+      id={id}
+      label={label}
+      value={typeof value === 'number' && value > 0 ? toPct(value) : null}
+      placeholder={allowEmpty ? 'No cap' : '5'}
+      allowEmpty={allowEmpty}
+      onCommit={(v) => onCommit(v === null ? null : toUsd(v))}
+    />
+  );
+};
+
+/** Percent-of-usage field with a local draft; commits a number (or null to clear) on blur/Enter. */
+const PctField: React.FC<{
+  id: string;
+  value: number | null;
+  placeholder: string;
+  onCommit: (value: number | null) => void;
+  allowEmpty?: boolean;
+  label: string;
+}> = ({ id, value, placeholder, onCommit, allowEmpty, label }) => {
+  const shown = typeof value === 'number' && value > 0 ? String(value) : '';
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = () => {
+    const raw = draft.trim().replace(/%$/, '').trim();
+    if (!raw) {
+      if (allowEmpty) {
+        if (shown) onCommit(null);
+      } else setDraft(shown);
+      return;
+    }
+    const n = Math.round(Number(raw) * 10) / 10;
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      setDraft(shown);
+      return;
+    }
+    if (String(n) !== shown) onCommit(n > 0 ? n : allowEmpty ? null : n);
+    setDraft(n > 0 ? String(n) : '');
+  };
+  return (
+    <span className="inline-flex items-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pr-2 focus-within:border-[#D97757]/45">
+      <input
+        id={id}
+        aria-label={`${label} (% of your usage)`}
+        inputMode="decimal"
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          }
+        }}
+        className="h-8 w-16 bg-transparent px-2 text-right text-[13px] tabular-nums coarse:h-11 coarse:text-base text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)]"
+      />
+      <span className="text-[12px] text-[var(--ds-muted)]">% of your usage</span>
+    </span>
+  );
+};
+
+export const SettingsPanel: React.FC<{
+  doc: ComicDoc;
+  patch: (ops: DocOp[]) => Promise<void> | void;
+  /** The viewer (caps.admin / caps.byok / caps.usage) — money settings follow their terms. */
+  caps?: Pick<StudioCaps, 'byok' | 'admin' | 'usage'> | null;
+  byok?: boolean;
+}> = ({ doc, patch, caps, byok }) => {
   const settings = doc.settings;
+  const ctx = useCostContext({ byok, caps });
+  const cost = useMemo(() => costFormat(ctx), [ctx]);
   const setSettings = (p: Record<string, unknown>) => void patch([{ op: 'settings', patch: p as unknown as ComicDoc['settings'] }]);
   return (
     <div className="space-y-7">
@@ -568,13 +707,14 @@ export const SettingsPanel: React.FC<{ doc: ComicDoc; patch: (ops: DocOp[]) => P
                   </span>
                 </button>
                 {o.value === 'big' && on && (
-                  <label htmlFor="comicstudio-big-spend" className="ml-6 mt-2 flex items-center gap-2 text-[12px] text-[var(--ds-muted)]">
+                  <label htmlFor="comicstudio-big-spend" className="ml-6 mt-2 flex flex-wrap items-center gap-2 text-[12px] text-[var(--ds-muted)]">
                     Ask when a job costs more than
-                    <UsdField
+                    <MoneySetting
                       id="comicstudio-big-spend"
                       label="Big spend threshold"
                       value={settings.bigSpendUsd}
-                      placeholder="0.50"
+                      usdPlaceholder="0.50"
+                      ctx={ctx}
                       onCommit={(v) => v !== null && setSettings({ bigSpendUsd: v })}
                     />
                   </label>
@@ -587,16 +727,17 @@ export const SettingsPanel: React.FC<{ doc: ComicDoc; patch: (ops: DocOp[]) => P
 
       <section>
         <SectionLabel htmlFor="comicstudio-budget">Budget cap for this comic</SectionLabel>
-        <div className="flex items-center gap-3">
-          <UsdField
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <MoneySetting
             id="comicstudio-budget"
             label="Budget cap"
             value={settings.budgetUsd}
-            placeholder="No cap"
+            usdPlaceholder="No cap"
+            ctx={ctx}
             allowEmpty
             onCommit={(v) => setSettings({ budgetUsd: v === null || v === 0 ? null : v })}
           />
-          <span className="text-[12px] text-[var(--ds-muted)]">Spent so far: {formatUsd(doc.spend.totalUsd)}</span>
+          <span className="text-[12px] text-[var(--ds-muted)]">Spent so far: {doc.spend.totalUsd > 0 ? cost.exact(doc.spend.totalUsd) : cost.governed ? 'nothing yet' : cost.exact(0)}</span>
         </div>
         <p className="mt-1.5 text-[11.5px] text-[var(--ds-muted)]">Nothing runs past this without your explicit OK. Leave empty for no cap.</p>
       </section>
@@ -989,7 +1130,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
         sideWidth={420}
       >
         <div className="px-5 py-5">
-          <SettingsPanel doc={doc} patch={studio.patch} />
+          <SettingsPanel doc={doc} patch={studio.patch} caps={studio.caps} byok={studio.byok} />
         </div>
       </AdaptiveSheet>
 

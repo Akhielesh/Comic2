@@ -35,8 +35,9 @@ export const withAlpha = (hex: string, alpha: number): Color => {
   return a >= 255 ? base : `${base}${a.toString(16).padStart(2, '0')}`;
 };
 
+// Touch: real 44 px swatches (a 28 px swatch's 44 px ::after overlapped its neighbours' and stole taps).
 const SWATCH_CLS =
-  'tap-target relative h-7 w-7 shrink-0 rounded-full border border-[var(--ds-hairline)] shadow-sm transition-transform duration-150 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60 motion-reduce:transition-none motion-reduce:hover:scale-100';
+  'relative h-7 w-7 shrink-0 rounded-full border border-[var(--ds-hairline)] shadow-sm transition-transform duration-150 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60 motion-reduce:transition-none motion-reduce:hover:scale-100 coarse:h-11 coarse:w-11 coarse:hover:scale-100';
 
 /** Checkerboard behind translucent swatches (so 50 % white is visibly see-through). */
 const CHECKER: React.CSSProperties = {
@@ -108,7 +109,11 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
           </button>
         )}
         {simple && !more && (
-          <button type="button" onClick={() => setMore(true)} className="rounded-full px-2 py-1 text-[11.5px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
+          <button
+            type="button"
+            onClick={() => setMore(true)}
+            className="rounded-full px-2 py-1 text-[11.5px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]"
+          >
             More…
           </button>
         )}
@@ -123,7 +128,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
             type="color"
             value={hex}
             onChange={(e) => pickHex(e.target.value)}
-            className="h-7 w-9 shrink-0 cursor-pointer rounded-md border border-[var(--ds-hairline)] bg-transparent p-0.5"
+            className="h-7 w-9 shrink-0 cursor-pointer rounded-md border border-[var(--ds-hairline)] bg-transparent p-0.5 coarse:h-11 coarse:w-11"
           />
           <label className="sr-only" htmlFor={`${id}-hex`}>
             {label}: hex value
@@ -139,7 +144,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
               if (e.key === 'Enter') commitDraft();
             }}
             spellCheck={false}
-            className="h-7 w-[5.5rem] min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 font-mono text-[12px] text-[var(--ds-ink)] coarse:h-9 coarse:w-[7rem] coarse:text-[16px] focus:border-[#D97757]/50 focus:outline-none"
+            className="h-7 w-[5.5rem] min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 font-mono text-[12px] text-[var(--ds-ink)] coarse:h-11 coarse:w-[7rem] coarse:text-[16px] focus:border-[#D97757]/50 focus:outline-none"
           />
           {eyeDropper && (
             <button
@@ -154,7 +159,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
                   /* the user dismissed the eyedropper */
                 }
               }}
-              className="grid h-7 w-7 place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+              className="grid h-7 w-7 place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
             >
               <Pipette className="h-3.5 w-3.5" aria-hidden />
             </button>

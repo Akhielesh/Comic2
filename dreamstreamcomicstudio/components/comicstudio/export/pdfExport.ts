@@ -15,7 +15,7 @@ import { sameLanguage } from '../../../shared/comic/languages';
 import { downloadBlob } from '../../../services/download';
 import { forEachReported, plateWidthFor, renderSlotWith, checkCancelled, type SlotRenderers } from './batch';
 import { ExportError } from './errors';
-import { exportFileStem } from './filenames';
+import { exportFileStem, safeLangCode } from './filenames';
 import { prepareExportFonts } from './fonts';
 import type { RasterOptions } from './rasterize';
 import { collectExportSlots, localizedFor, trimAspectOf, uniformTrimOf, type ExportSlot } from './sequence';
@@ -92,7 +92,8 @@ export async function exportComicPdf(doc: ComicDoc, urlFor: UrlFor, opts: PdfExp
   if (book.brief.logline) pdf.setSubject(book.brief.logline);
   pdf.setCreator('DreamStream Comic Studio');
   pdf.setProducer('DreamStream Comic Studio (@cantoo/pdf-lib)');
-  pdf.setLanguage(book.format.language || 'en');
+  // pdf-lib writes /Lang as a raw literal string (no escaping): only a well-formed tag ever reaches it.
+  pdf.setLanguage(safeLangCode(book.format.language) ?? 'en');
 
   const uniform = opts.uniformTrim ?? uniformTrimOf(book);
   const trim = trimPageSize(trimAspectOf(book));

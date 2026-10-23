@@ -1,5 +1,6 @@
 // timeline/bookModel: clip view-models, versions (v1 = oldest), the media index and the op builders.
 // Every number asserted here is recorded data from the doc (ledger, version meta) — never invented.
+import { formatUsd } from '../../../shared/comic/models';
 import { describe, expect, it } from 'vitest';
 import { applyOps, applyOp } from '../../../shared/comic/ops';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
@@ -48,7 +49,10 @@ describe('versionList (v1 = oldest, stable across swaps)', () => {
   });
 
   it('cost labels never invent a number', () => {
-    expect(versionCostLabel({ costUsd: 0.06 })).toBe('$0.06');
+    expect(versionCostLabel({ costUsd: 0.06 }, formatUsd)).toBe('$0.06');
+    expect(versionCostLabel({ costUsd: 0.06 }, () => '≈2% of your usage')).toBe('≈2% of your usage');
+    // No formatter: never dollars (governed users never see them; the caller passes the viewer's).
+    expect(versionCostLabel({ costUsd: 0.06 })).toBe('uses a little of your usage');
     expect(versionCostLabel({ costUsd: 0, origin: 'derived' })).toBe('Free — done by software');
     expect(versionCostLabel({ origin: 'adopted' })).toBe('No AI cost');
     expect(versionCostLabel({})).toBe('Not recorded');
@@ -106,7 +110,8 @@ describe('clips and the dock summary', () => {
   });
 
   it('summary uses real totals only', () => {
-    expect(dockSummary(richDoc())).toBe('Book · Cover ✓ · 1/3 pages drawn · 4 versions · $0.55 spent · $0.06 saved by software');
+    expect(dockSummary(richDoc(), formatUsd)).toBe('Book · Cover ✓ · 1/3 pages drawn · 4 versions · $0.55 spent · $0.06 saved by software');
+    expect(dockSummary(richDoc())).not.toMatch(/\$/);
     const fresh = makeSampleDoc({ pages: [], spend: { totalUsd: 0, byKind: {}, entries: [] } });
     expect(dockSummary(fresh)).toBe('Book · No cover yet · no pages yet');
   });

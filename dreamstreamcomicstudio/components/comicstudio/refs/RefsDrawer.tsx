@@ -22,6 +22,7 @@ import { RefActions, RefTile } from './RefTile';
 import { LIKENESS_OPTIONS, moveTargets, ownerLabel, ownerTitle, refUsage, sheetHint } from './refsModel';
 import { UploadQueue } from './UploadQueue';
 import { overCapCopy, useRefUpload, type UploadTransport } from './useRefUpload';
+import { useCostFormat } from '../conversation/cost';
 
 export interface RefsDrawerProps {
   studio: StudioController;
@@ -91,6 +92,8 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
   const refs = useMemo(() => (doc ? refsOf(doc, owner) || [] : []), [doc, owner]);
   const exists = !!doc && !!refsOf(doc, owner);
   const uploads = useRefUpload(studio, transport ? { transport } : {});
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  const cost = useCostFormat(studio);
   const mine = uploads.items.filter((i) => refOwnerKey(i.owner) === key);
   const [selected, setSelected] = useState<string | null>(null);
   const [pending, setPending] = useState<{ ref: RefAsset; index: number } | null>(null);
@@ -111,7 +114,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
   const usage = useMemo(() => refUsage(doc, owner), [doc, owner]);
   const targets = useMemo(() => moveTargets(doc, owner), [doc, owner]);
   const byok = doc ? byokFromDoc(doc) : false;
-  const hint = sheetHint(doc, owner, byok);
+  const hint = sheetHint(doc, owner, byok, cost.approx);
   const character = owner.kind === 'character' ? doc?.cast.find((c) => c.id === owner.id) : undefined;
 
   const patch = useCallback(
@@ -353,7 +356,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
           >
             <Sparkles className="h-4 w-4" aria-hidden />
             {hint.changed ? 'Redraw sheet' : 'Make the sheet'}
-            {hint.price && <span className="font-normal opacity-90"> ≈ {hint.price}</span>}
+            {hint.price && <span className="font-normal opacity-90"> {hint.price}</span>}
           </button>
         </div>
       )}

@@ -8,6 +8,12 @@
 //   text column x=560…1130: title (Bangers + per-script Noto, auto-fit 64→40 px, ≤ 3 lines,
 //   dark outline), description (Noto Sans SemiBold 26 px, ≤ 3 lines), meta row;
 //   mark: "DreamStream Studio", bottom right.
+//   The meta row carries the publish-time content rating ("Rated PG") when there is one, so a
+//   parent sees it in the WhatsApp/iMessage preview before opening the link.
+//
+// Memory: every decode here runs inside the studio's shared 3-slot sharp gate (withSharpSlot in
+// imageMeasure.ts), so an OG render never stacks on top of uploads, variants and derives. One
+// card is ONE slot (leaf pipelines only; nothing in here takes a second slot while holding one).
 //
 // Every user string reaches Pango only through escPango (markup injection), and scripts the
 // vendored fonts cannot draw (CJK, phase 2) fall back to the caller's source-language title,
@@ -19,7 +25,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp, { type OverlayOptions, type Sharp } from 'sharp';
 import { OG_TEMPLATE_VERSION } from '../../../../shared/comic/publication.js';
+import { isContentRating, type ContentRating } from '../../../../shared/comic/safety.js';
 import { logger } from '../../lib/logger.js';
+import { SHARP_INPUT, withSharpSlot } from '../imageMeasure.js';
 
 export const OG_W = 1200;
 export const OG_H = 630;
@@ -40,6 +48,8 @@ export interface OgRenderInput {
   languagesLabel?: string;
   /** Title to draw when `title` uses a script the vendored fonts do not cover. */
   fallbackTitle?: string;
+  /** The publish-time content rating, shown in the meta row ("Rated PG"). */
+  rating?: ContentRating;
 }
 
 // ── Escaping ─────────────────────────────────────────────────────────────────
@@ -120,7 +130,7 @@ export function ensureOgFonts(): Promise<void> {
     fontsRegistered = (async () => {
       for (const file of vendoredFontFiles()) {
         try {
-          await sharp({ text: { text: 'a', fontfile: file, rgba: true } }).png().toBuffer();
+          await withSharpSlot(() => sharp({ text: { text: 'a', fontfile: file, rgba: true } }).png().toBuffer());
         } catch (err) {
           logger.warn('comic_og_font_register_failed', { file: path.basename(file), message: (err as Error)?.message });
         }
@@ -148,7 +158,9 @@ export function ogHash(input: Omit<OgRenderInput, 'coverBuf' | 'fallbackPageBuf'
     input.themeColor || '',
     input.languagesLabel || '',
     input.fallbackTitle || '',
-    input.coverPath || ''
+    input.coverPath || '',
+    // Appended only when set, so a card without a rating keeps its exact earlier hash (and URL).
+    ...(isContentRating(input.rating) ? [input.rating] : [])
   ]);
   return crypto.createHash('sha1').update(material).digest('hex').slice(0, 12);
 }
@@ -158,11 +170,16 @@ export function ogHash(input: Omit<OgRenderInput, 'coverBuf' | 'fallbackPageBuf'
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const safeHex = (c: string | undefined, fallback = DEFAULT_THEME): string => (c && HEX_RE.test(c) ? c : fallback);
 
-/** Dominant colour of an image, darkened enough to sit behind white text. */
+/** Dominant colour of an image, darkened enough to sit behind white text (one gated sharp slot). */
 export async function dominantColor(buf: Buffer | null): Promise<string | undefined> {
   if (!buf) return undefined;
+  return withSharpSlot(() => dominantColorUngated(buf));
+}
+
+/** dominantColor without the gate: only for code that already holds a slot (renderOgCard). */
+async function dominantColorUngated(buf: Buffer): Promise<string | undefined> {
   try {
-    const { dominant } = await sharp(buf, { limitInputPixels: 64_000_000 }).stats();
+    const { dominant } = await sharp(buf, SHARP_INPUT).stats();
     const k = 0.72;
     const hex = (n: number) => Math.max(0, Math.min(255, Math.round(n * k))).toString(16).padStart(2, '0');
     return `#${hex(dominant.r)}${hex(dominant.g)}${hex(dominant.b)}`;
@@ -254,17 +271,27 @@ const clampText = (s: string, max: number) => {
 
 // ── Render ───────────────────────────────────────────────────────────────────
 
-/** 1200×630 progressive JPEG ≤ 300 KB (retries at a lower quality when larger). */
+/** "Rated PG" for the meta row (empty when the publication has no recorded rating). */
+export const ratingMeta = (rating: unknown): string => (isContentRating(rating) ? `Rated ${rating}` : '');
+
+/**
+ * 1200×630 progressive JPEG ≤ 300 KB (retries at a lower quality when larger). Fonts register
+ * first (their own short slots); the whole card then renders while holding ONE slot of the gate.
+ */
 export async function renderOgCard(input: OgRenderInput): Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }> {
   await ensureOgFonts();
+  return withSharpSlot(() => renderOgCardUngated(input));
+}
+
+async function renderOgCardUngated(input: OgRenderInput): Promise<{ jpeg: Buffer; w: 1200; h: 630; themeColor: string }> {
   const art = input.coverBuf || input.fallbackPageBuf;
-  const themeColor = safeHex(input.themeColor || (await dominantColor(art)));
+  const themeColor = safeHex(input.themeColor || (art ? await dominantColorUngated(art) : undefined));
   const layers: OverlayOptions[] = [];
 
   // 1. Backdrop.
   let base: Sharp;
   if (art) {
-    const backdrop = await sharp(art, { limitInputPixels: 64_000_000 })
+    const backdrop = await sharp(art, SHARP_INPUT)
       .resize(OG_W, OG_H, { fit: 'cover', position: 'attention' })
       .blur(28)
       .modulate({ brightness: 0.55, saturation: 1.1 })
@@ -295,7 +322,7 @@ export async function renderOgCard(input: OgRenderInput): Promise<{ jpeg: Buffer
   let textLeft = 120;
   let textWidth = 960;
   if (art) {
-    const card = await sharp(art, { limitInputPixels: 64_000_000 }).resize({ height: 530, width: 440, fit: 'inside' }).png().toBuffer({ resolveWithObject: true });
+    const card = await sharp(art, SHARP_INPUT).resize({ height: 530, width: 440, fit: 'inside' }).png().toBuffer({ resolveWithObject: true });
     const cw = card.info.width;
     const ch = card.info.height;
     const rounded = await sharp(card.data).composite([{ input: roundedMask(cw, ch, 18), blend: 'dest-in' }]).png().toBuffer();
@@ -333,7 +360,7 @@ export async function renderOgCard(input: OgRenderInput): Promise<{ jpeg: Buffer
     y += desc.h + 18;
   }
   const pages = `${input.pageCount} ${input.pageCount === 1 ? 'page' : 'pages'}`;
-  const meta = [input.kindLabel, pages, input.languagesLabel && scriptsCovered(input.languagesLabel) ? input.languagesLabel : ''].filter(Boolean).join(' · ');
+  const meta = [input.kindLabel, pages, ratingMeta(input.rating), input.languagesLabel && scriptsCovered(input.languagesLabel) ? input.languagesLabel : ''].filter(Boolean).join(' · ');
   const metaLayer = await renderClamped(clampText(meta, 90), { size: 20, alpha: 0.72, width: textWidth, maxLines: 1 });
   if (metaLayer && y + metaLayer.h < 560) layers.push({ input: metaLayer.buf, left: textLeft, top: Math.max(y, 470) });
 

@@ -36,6 +36,7 @@ import type { ActionHandler } from '../extensions.js';
 import { spendIsByok, type ActionOutcome, type RunActionOptions, type StartedAction } from '../jobs.js';
 import { parseRenderTarget } from '../sanitize/timeline.js';
 import { StudioError, type StudioContext } from '../types.js';
+import { costViewFor, governCard, governDollars, type CostView } from '../costText.js';
 import { logger } from '../../lib/logger.js';
 
 type FitAction = Extract<StudioAction, { type: 'fit_render' }>;
@@ -126,9 +127,17 @@ export const remapBalloons = (balloons: Balloon[], f: FitFrame): Balloon[] =>
 const labelOf = (doc: ComicDoc, target: RenderTarget) => (target.kind === 'cover' ? 'the cover' : targetLabel(doc, target).replace(/^Page/, 'page'));
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** A notice (and chips) into the director's message, or a new assistant message for a UI tap. */
-function say(ctx: StudioContext, opts: RunActionOptions | undefined, tone: 'info' | 'warn' | 'error' | 'success', text: string, steps: NextStep[] = []): void {
-  const card: Card = { type: 'notice', id: newId('card'), tone, text };
+/** How this user reads prices: dollars for admins and own keys, a share of their usage for everyone else (costText.ts). */
+const costView = (ctx: StudioContext, opts?: RunActionOptions): CostView => costViewFor(opts?.caps ?? ctx.caps);
+
+/**
+ * A notice (and chips) into the director's message, or a new assistant message for a UI tap. Every
+ * price in it is worded for this user — a governed user reads "≈2% of your usage", never dollars.
+ */
+function say(ctx: StudioContext, opts: RunActionOptions | undefined, tone: 'info' | 'warn' | 'error' | 'success', words: string, steps: NextStep[] = []): void {
+  const view = costView(ctx, opts);
+  const text = governDollars(words, view);
+  const card: Card = governCard({ type: 'notice', id: newId('card'), tone, text }, view);
   if (opts?.collectCard) {
     // The director speaks for itself; only problems ride along as a card.
     if (tone !== 'success') opts.collectCard(card);
@@ -153,6 +162,8 @@ const redrawStep = (doc: ComicDoc, target: RenderTarget, byok: boolean): NextSte
 export async function runFitRender(ctx: StudioContext, action: FitAction, opts: RunActionOptions): Promise<StartedAction> {
   const target = parseRenderTarget(action?.target);
   const before = ctx.session.doc;
+  // Outcome messages reach the director (and through it the user): priced words follow the same view as say().
+  const priced = (text: string) => governDollars(text, costView(ctx, opts));
   if (target.kind !== 'page' && target.kind !== 'cover') {
     const message = 'Only pages and the cover have a book shape to fit.';
     say(ctx, opts, 'info', message);
@@ -177,7 +188,7 @@ export async function runFitRender(ctx: StudioContext, action: FitAction, opts: 
     return done({ status: 'blocked', message, code: 'NOT_READY' });
   }
   if (aspectMatches(want, w, h)) {
-    const message = `${capital(label)} already fits ${want} — nothing to change ($0).`;
+    const message = priced(`${capital(label)} already fits ${want} — nothing to change ($0).`);
     say(ctx, opts, 'info', message);
     return done({ status: 'done', message });
   }
@@ -189,7 +200,7 @@ export async function runFitRender(ctx: StudioContext, action: FitAction, opts: 
   if (mode === 'crop' && cut > MAX_FIT_CROP) {
     const pct = Math.round(cut * 100);
     const redraw = redrawStep(before, target, byok);
-    const message = `Cropping ${label} from ${got} to ${want} would cut ${pct}% of the art, so I didn't. Padding the edges keeps everything (free), or redraw it at ${want} (≈${formatUsd(redraw.usd ?? 0)}).`;
+    const message = priced(`Cropping ${label} from ${got} to ${want} would cut ${pct}% of the art, so I didn't. Padding the edges keeps everything (free), or redraw it at ${want} (≈${formatUsd(redraw.usd ?? 0)}).`);
     say(ctx, opts, 'warn', message, [{ label: `Fit to ${want} with padding`, action: { type: 'fit_render', target, mode: 'pad' }, usd: 0 }, redraw]);
     return done({ status: 'blocked', message, code: 'BAD_REQUEST' });
   }
@@ -201,7 +212,7 @@ export async function runFitRender(ctx: StudioContext, action: FitAction, opts: 
     const why = err instanceof StudioError ? err.userMessage : 'the image could not be processed';
     if (!(err instanceof StudioError)) logger.warn('comic_fit_render_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
     const redraw = redrawStep(before, target, byok);
-    const message = `I couldn't fit ${label} to ${want}: ${why.replace(/[.!]+$/, '')}. Nothing was changed${redraw.usd ? ` — a redraw at ${want} is ≈${formatUsd(redraw.usd)}` : ''}.`;
+    const message = priced(`I couldn't fit ${label} to ${want}: ${why.replace(/[.!]+$/, '')}. Nothing was changed${redraw.usd ? ` — a redraw at ${want} is ≈${formatUsd(redraw.usd)}` : ''}.`);
     say(ctx, opts, 'warn', message, [redraw]);
     return done({ status: 'blocked', message, code: err instanceof StudioError ? err.code : 'INTERNAL' });
   }

@@ -2,6 +2,7 @@
 // Never a redraw, never automatic; honest outcomes when software can't do it.
 import { describe, expect, it } from 'vitest';
 import { emptyRender, pageSpecHash, type AssetRef, type ComicDoc } from '../../../../shared/comic/doc.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
 import { startAction } from '../jobs.js';
 import { ACTION_HANDLERS } from './index.js';
@@ -27,9 +28,9 @@ const squarePageDoc = (w = 1024, h = 1024): ComicDoc => {
   return doc;
 };
 
-const ui = (doc: ComicDoc) => {
+const ui = (doc: ComicDoc, caps?: StudioCaps) => {
   const session = newSession(doc);
-  const ctx = testContext(session);
+  const ctx = testContext(session, caps ? { caps } : {});
   return { session, ctx, fit: (action: Record<string, unknown>) => startAction(ctx, { type: 'fit_render', ...action } as never, { confirmed: true }) };
 };
 
@@ -156,5 +157,43 @@ describe('fit_render action (UI tap)', () => {
     const started = await fit({ target: { kind: 'page', id: 'pg_1' } });
     expect(started.outcome).toMatchObject({ status: 'blocked', code: 'CONFLICT' });
     expect(session.doc.pages[0].render.asset?.path).toBe('u/user-1/p/proj-1/img/p1-redraw.webp');
+  });
+});
+
+describe('fit_render prices are worded for the user', () => {
+  /** On the included usage: one Standard page is 5% of it. */
+  const governed: StudioCaps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 80, exhausted: false, pctPerStandardPage: 5 } };
+  const usage = /(?:≈[\d.]+|<0\.1)% of your usage/;
+
+  it('a governed user reads the redraw quote as a share of the usage — message, card and outcome; never dollars', async () => {
+    const { session, fit } = ui(squarePageDoc(), governed);
+    const started = await fit({ target: { kind: 'page', id: 'pg_1' }, mode: 'crop' });
+    expect(started.outcome.message).toMatch(usage);
+    expect(started.outcome.message).not.toMatch(/\$/);
+    const msg = session.doc.conversation.at(-1)!;
+    expect(msg.text).toMatch(new RegExp(`redraw it at 4:5 \\(${usage.source}\\)`));
+    expect(JSON.stringify(msg.cards)).not.toMatch(/\$/);
+    // The chip keeps its machine price (the client words it); the action is unchanged.
+    expect(msg.nextSteps?.[1]).toMatchObject({ label: 'Redraw at 4:5', action: { type: 'render_pages', force: true } });
+  });
+
+  it('a page that already fits is "free" for a governed user; storage failures quote the redraw in usage terms', async () => {
+    const fits = ui(squarePageDoc(800, 1000), governed);
+    expect((await fits.fit({ target: { kind: 'page', id: 'pg_1' } })).outcome.message).toBe('Page 1 already fits 4:5 — nothing to change (free).');
+    const down = ui(squarePageDoc(), governed);
+    down.ctx.assetsFake.fitToAspect = async () => {
+      throw new StudioError('NOT_AVAILABLE', 'Storage is down.', { status: 503 });
+    };
+    const out = await down.fit({ target: { kind: 'page', id: 'pg_1' } });
+    expect(out.outcome.message).toMatch(new RegExp(`a redraw at 4:5 is ${usage.source}\\.$`));
+    expect(down.session.doc.conversation.at(-1)!.text).not.toMatch(/\$/);
+  });
+
+  it('admins and own keys still read dollars', async () => {
+    const { fit } = ui(squarePageDoc(), { ...governed, admin: true });
+    const started = await fit({ target: { kind: 'page', id: 'pg_1' }, mode: 'crop' });
+    expect(started.outcome.message).toMatch(/redraw it at 4:5 \(≈\$\d/);
+    const byok = ui(squarePageDoc(), { ...governed, byok: true });
+    expect((await byok.fit({ target: { kind: 'page', id: 'pg_1' }, mode: 'crop' })).outcome.message).toMatch(/≈\$\d/);
   });
 });

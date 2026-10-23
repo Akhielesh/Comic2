@@ -3,7 +3,7 @@
 // the strip (Add tile, "+N", the "new photos since this sheet" hint) and the live refs card.
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Card, ComicDoc, RefAsset } from '../../../shared/comic/doc';
 import { makeSampleDoc, makeStudio } from '../board/__fixtures__/sampleDoc';
 import { RefsCard } from './RefsCard';
@@ -11,6 +11,8 @@ import { RefsDrawer } from './RefsDrawer';
 import { RefStrip } from './RefStrip';
 import { refUsage, styleRefsUsed } from './refsModel';
 import { feature } from './index';
+import { resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
+import { refTileName } from './RefTile';
 import { __resetUploadQueues, RefUploadError, type UploadResponse, type UploadTransport } from './useRefUpload';
 
 const MAYA = { kind: 'character', id: 'ch_maya' } as const;
@@ -22,9 +24,15 @@ const docWith = (refs: RefAsset[], mutate?: (d: ComicDoc) => void) =>
     mutate?.(d);
   });
 
+beforeEach(() => {
+  // Admin / own-key wording (dollars); the governed wording has its own test below.
+  showDollarPrices();
+});
+
 afterEach(() => {
   __resetUploadQueues();
   vi.useRealTimers();
+  resetUsageStatus();
 });
 
 describe('feature registration', () => {
@@ -39,8 +47,9 @@ describe('RefsDrawer', () => {
     render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
     const dialog = screen.getByRole('dialog', { name: 'Maya — photos' });
     expect(within(dialog).getByText('3 / 12')).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Photo 1 (main), Front' })).toBeInTheDocument();
-    expect(within(dialog).getByText('Main')).toBeInTheDocument();
+    // The name starts with the tile's visible words (WCAG 2.5.3), then says which photo it is.
+    const main = within(dialog).getByRole('button', { name: /^Front\b.*, Photo 1 \(main\)$/ });
+    expect(within(main).getByTitle('Main photo')).toBeInTheDocument();
     const picker = screen.getByTestId('refs-picker') as HTMLInputElement;
     expect(picker.multiple).toBe(true);
     expect(picker.accept).toBe('image/jpeg,image/png,image/webp,image/gif,image/avif');
@@ -51,23 +60,23 @@ describe('RefsDrawer', () => {
   it('keyboard reorder emits ref_move; Home makes the photo main', () => {
     const studio = makeStudio(docWith([ref(1), ref(2), ref(3)]));
     render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Photo 1 (main)' }), { key: 'ArrowRight', altKey: true });
+    fireEvent.keyDown(screen.getByRole('button', { name: /(^|, )Photo 1 \(main\)$/ }), { key: 'ArrowRight', altKey: true });
     expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'ref_move', owner: MAYA, path: ref(1).path, to: 1 }], { label: 'Reorder photos' });
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Photo 3' }), { key: 'Home' });
+    fireEvent.keyDown(screen.getByRole('button', { name: /(^|, )Photo 3$/ }), { key: 'Home' });
     expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'ref_move', owner: MAYA, path: ref(3).path, to: 0 }], { label: 'Make main photo' });
   });
 
   it('remove hides the photo with an Undo window; Undo sends nothing, otherwise ref_remove goes out', async () => {
     const studio = makeStudio(docWith([ref(1), ref(2)]));
     render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Photo 2' }), { key: 'Delete' });
-    expect(screen.queryByRole('button', { name: 'Photo 2' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('button', { name: /(^|, )Photo 2$/ }), { key: 'Delete' });
+    expect(screen.queryByRole('button', { name: /(^|, )Photo 2$/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-    expect(screen.getByRole('button', { name: 'Photo 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /(^|, )Photo 2$/ })).toBeInTheDocument();
     expect(studio.patch).not.toHaveBeenCalled();
 
     vi.useFakeTimers();
-    fireEvent.click(screen.getByRole('button', { name: 'Photo 2' }));
+    fireEvent.click(screen.getByRole('button', { name: /(^|, )Photo 2$/ }));
     fireEvent.click(screen.getByRole('button', { name: /Remove/ }));
     expect(studio.patch).not.toHaveBeenCalled();
     act(() => {
@@ -79,7 +88,7 @@ describe('RefsDrawer', () => {
   it('closing the drawer sends a pending removal right away (never lost)', () => {
     const studio = makeStudio(docWith([ref(1), ref(2)]));
     const { unmount } = render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Photo 2' }), { key: 'Delete' });
+    fireEvent.keyDown(screen.getByRole('button', { name: /(^|, )Photo 2$/ }), { key: 'Delete' });
     unmount();
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'ref_remove', owner: MAYA, path: ref(2).path }], { label: 'Remove photo' });
   });
@@ -87,7 +96,7 @@ describe('RefsDrawer', () => {
   it('the selected photo: label, note, free crop, move to someone else', () => {
     const studio = makeStudio(docWith([ref(1), ref(2)]));
     render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Photo 2' }));
+    fireEvent.click(screen.getByRole('button', { name: /(^|, )Photo 2$/ }));
     const actions = screen.getByRole('region', { name: 'Photo 2 actions' });
     fireEvent.change(within(actions).getByLabelText('View'), { target: { value: 'side' } });
     expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'ref_patch', owner: MAYA, path: ref(2).path, patch: { label: 'side' } }], { label: 'Label photo' });
@@ -145,7 +154,7 @@ describe('RefsDrawer', () => {
   it('a blocked photo never becomes an <img>', () => {
     const studio = makeStudio(docWith([ref(1), ref(2, { safety: { assessed: 'X', at: 1 } })]));
     render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
-    const tile = screen.getByRole('button', { name: 'Photo 2' });
+    const tile = screen.getByRole('button', { name: /(^|, )Photo 2$/ });
     expect(tile.querySelector('img')).toBeNull();
   });
 });
@@ -184,6 +193,32 @@ describe('RefStrip', () => {
   it('renders nothing for an owner that no longer exists', () => {
     const { container } = render(<RefStrip studio={makeStudio(docWith([]))} owner={{ kind: 'character', id: 'gone' }} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('RefTile names (P1-QA ref-tile-names)', () => {
+  it('start with the visible chip words, then the position', () => {
+    expect(refTileName(0, ['Front', 'Sheet'])).toBe('Front Sheet, Photo 1 (main)');
+    expect(refTileName(2, [])).toBe('Photo 3');
+    expect(refTileName(1, ['Blurry'])).toBe('Blurry, Photo 2');
+  });
+});
+
+describe('governed users never see dollars (P2-STUDIO-CORE)', () => {
+  it('the sheet offer reads as a share of the usage', () => {
+    showUsagePrices(1);
+    const studio = makeStudio(docWith([ref(1), ref(2)], (d) => (d.cast[0].sheet = { status: 'none', history: [] })));
+    render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
+    const cta = screen.getByRole('button', { name: /Make the sheet/ });
+    expect(cta.textContent).toMatch(/Make the sheet (≈[\d.]+%|<0\.1%) of your usage$/);
+    expect(document.body.textContent).not.toMatch(/\$\d/);
+  });
+
+  it('before the usage status loads, a non-admin sees no dollar figure (fail closed)', () => {
+    resetUsageStatus();
+    const studio = makeStudio(docWith([ref(1), ref(2)], (d) => (d.cast[0].sheet = { status: 'none', history: [] })));
+    render(<RefsDrawer studio={studio} owner={MAYA} open onClose={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Make the sheet/ }).textContent).not.toMatch(/\$/);
   });
 });
 

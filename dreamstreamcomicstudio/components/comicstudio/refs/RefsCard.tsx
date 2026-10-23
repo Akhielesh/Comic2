@@ -14,11 +14,14 @@ import { CardShell, GhostButton, PrimaryButton, plural } from '../conversation/u
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { RefsDrawer } from './RefsDrawer';
 import { ownerLabel, sheetHint } from './refsModel';
+import { useCostFormat } from '../conversation/cost';
 
 type RefsCardType = Extract<Card, { type: 'refs' }>;
 
 export const RefsCard: React.FC<CardProps<RefsCardType>> = ({ card, studio }) => {
   const [open, setOpen] = useState(false);
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  const cost = useCostFormat(studio);
   const doc = studio.doc;
   const list = doc ? refsOf(doc, card.owner) : undefined;
   const name = ownerLabel(doc, card.owner);
@@ -33,7 +36,7 @@ export const RefsCard: React.FC<CardProps<RefsCardType>> = ({ card, studio }) =>
   const wanted = new Set(card.paths || []);
   const here = list.filter((r) => wanted.has(r.path));
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
-  const hint = sheetHint(doc, card.owner, byokFromDoc(doc));
+  const hint = sheetHint(doc, card.owner, byokFromDoc(doc), cost.approx);
   const character = card.owner.kind === 'character' ? doc.cast.find((c) => c.id === (card.owner as { id: string }).id) : undefined;
   const target = card.owner.kind === 'style' ? 'the style' : name;
   const title = here.length ? `${plural(here.length, 'photo')} on ${target}` : `Photos for ${target}`;
@@ -71,7 +74,7 @@ export const RefsCard: React.FC<CardProps<RefsCardType>> = ({ card, studio }) =>
           >
             <Sparkles className="h-3.5 w-3.5" aria-hidden />
             {hint.changed ? `Redraw ${name}'s sheet` : `Draw ${name}'s sheet`}
-            {hint.price && <span className="font-normal opacity-90"> ≈ {hint.price}</span>}
+            {hint.price && <span className="font-normal opacity-90"> {hint.price}</span>}
           </PrimaryButton>
         )}
       </div>

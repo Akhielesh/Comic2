@@ -1,5 +1,8 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -10,9 +13,16 @@ import {
   createSupabaseAssetStore,
   DataUrlLru,
   isOwnedAssetPath,
-  isSafeStoragePath
+  isSafeStoragePath,
+  quarantinePathFor
 } from './assets.js';
 import { StudioError } from './types.js';
+import { emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
+import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
+import { resolveCase, runAppeal } from './safety/cases.js';
+import { quarantineAsset, restoreFromQuarantine } from './safety/deps.js';
+import { cleanAnswer } from './safety/fakes.js';
+import { installSafetyFakes, resetSafety } from './safety/testkit.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const PROJECT = '22222222-2222-4222-8222-222222222222';
@@ -316,7 +326,14 @@ const makeBuckets = () => {
     remove: [] as { bucket: string; paths: string[] }[],
     download: [] as { bucket: string; path: string }[]
   };
-  const fail = { upload: null as null | ((path: string) => boolean) };
+  const fail = {
+    upload: null as null | ((path: string) => boolean),
+    /** An older Storage server that refuses cross-bucket copies (the store then moves the bytes itself). */
+    crossBucketCopy: false,
+    remove: null as null | ((bucket: string, paths: string[]) => boolean),
+    /** Storage can't answer an existence check (network / 5xx: storage-js throws). */
+    exists: false
+  };
   const err = (message: string, statusCode: string) => Object.assign(new Error(message), { statusCode });
   const api = (name: string) => ({
     upload: async (path: string, data: Buffer, opts: Record<string, unknown>) => {
@@ -345,6 +362,7 @@ const makeBuckets = () => {
     copy: async (from: string, to: string, opts?: { destinationBucket?: string }) => {
       const dst = opts?.destinationBucket || name;
       calls.copy.push({ bucket: name, from, to, dst });
+      if (fail.crossBucketCopy && dst !== name) return { data: null, error: err('Cross-bucket copy is not supported', '400') };
       const hit = bucket(name).get(from);
       if (!hit) return { data: null, error: err('Object not found', '404') };
       if (bucket(dst).has(to)) return { data: null, error: err('The resource already exists', '409') };
@@ -353,8 +371,13 @@ const makeBuckets = () => {
     },
     remove: async (paths: string[]) => {
       calls.remove.push({ bucket: name, paths });
+      if (fail.remove?.(name, paths)) return { data: null, error: err('storage down', '500') };
       for (const p of paths) bucket(name).delete(p);
       return { data: [], error: null };
+    },
+    exists: async (path: string) => {
+      if (fail.exists) throw err('storage down', '500');
+      return bucket(name).has(path) ? { data: true, error: null } : { data: false, error: err('Object not found', '404') };
     },
     list: async (folder: string, opts: { limit: number; offset: number }) => {
       const prefix = `${folder}/`;
@@ -749,6 +772,241 @@ describe('v5: quarantine, remove and the publication primitives', () => {
     expect(fake.bucket(PUB).has('pub/Zb3dEf6hIj9kLm2nOp5qRs/keep.webp')).toBe(true);
     await expect(store.removePrefix(`u/${USER}/`)).rejects.toMatchObject({ status: 400 });
     await expect(store.removePrefix('pub/')).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('v5: restoreQuarantined (appeal cleared / moderator restore)', () => {
+  const art = `u/${USER}/p/${PROJECT}/img/page-1.webp`;
+  const ref = `u/${USER}/p/${PROJECT}/ref/face-1.webp`;
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+  const realWebp = async () => sharp(await noisePng(1200, 900)).webp().toBuffer();
+
+  it('moves held art back to its own path in the public bucket: copy, then delete the hold; rows live again; variants rebuilt', async () => {
+    const { fake, store } = v5Store();
+    const bytes = await realWebp();
+    fake.bucket(PUB).set(art, { data: bytes, type: 'image/webp' });
+    fake.rows.push({ path: art, deleted_at: null, expires_at: null }, { path: art.replace('.webp', '_w480.webp'), deleted_at: null });
+    const { quarantinePath } = await store.quarantine(art, 'blocked:violence');
+    expect(quarantinePath).toBe(quarantinePathFor(art));
+    expect(fake.rows.find((r) => r.path === art)?.deleted_at).toBeTruthy();
+
+    await store.restoreQuarantined!(quarantinePath, art);
+    expect(fake.bucket(PUB).get(art)?.data.equals(bytes)).toBe(true);
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(false);
+    // Copy first, delete after (the delete only ever touches the q/ object in the private bucket).
+    const copyAt = fake.calls.copy.findIndex((c) => c.from === quarantinePath);
+    expect(fake.calls.copy[copyAt]).toMatchObject({ bucket: PRIV, to: art, dst: PUB });
+    expect(fake.calls.remove.at(-1)).toEqual({ bucket: PRIV, paths: [quarantinePath] });
+    // The original's row tracks it again; the hold row is closed.
+    expect(fake.rows.find((r) => r.path === art)).toMatchObject({ deleted_at: null, expires_at: null });
+    expect(fake.rows.find((r) => r.path === quarantinePath)?.deleted_at).toBeTruthy();
+    // The variants that left with it are back at the paths the doc still lists (and their rows live).
+    expect(fake.bucket(PUB).has(art.replace('.webp', '_w480.webp'))).toBe(true);
+    expect(fake.bucket(PUB).has(art.replace('.webp', '_w1080.webp'))).toBe(true);
+    expect(fake.rows.find((r) => r.path === art.replace('.webp', '_w480.webp'))?.deleted_at).toBeNull();
+    // Nothing is signed or made public by a restore.
+    expect(fake.calls.sign).toEqual([]);
+    // It reads like a fresh object (no stale "missing" cache).
+    await expect(store.loadDataUrl(art)).resolves.toMatch(/^data:image\/webp;base64,/);
+  });
+
+  it('is idempotent: a repeat after a finished restore resolves and moves nothing', async () => {
+    const { fake, store } = v5Store();
+    fake.bucket(PUB).set(art, { data: Buffer.from('art') });
+    const { quarantinePath } = await store.quarantine(art, 'blocked');
+    await store.restoreQuarantined!(quarantinePath, art);
+    const removes = fake.calls.remove.length;
+    await expect(store.restoreQuarantined!(quarantinePath, art)).resolves.toBeUndefined();
+    expect(fake.calls.remove.length).toBe(removes);
+    expect(fake.bucket(PUB).get(art)?.data.toString()).toBe('art');
+  });
+
+  it('a reference photo goes back to the PRIVATE bucket only (the private ACL is kept, nothing is signed)', async () => {
+    const { fake, store } = v5Store();
+    fake.bucket(PRIV).set(ref, { data: Buffer.from('face') });
+    const { quarantinePath } = await store.quarantine(ref, 'blocked:sexual');
+    expect(fake.bucket(PRIV).has(ref)).toBe(false);
+    await store.restoreQuarantined!(quarantinePath, ref);
+    expect(fake.bucket(PRIV).get(ref)?.data.toString()).toBe('face');
+    expect(fake.bucket(PUB).has(ref)).toBe(false);
+    expect([...fake.bucket(PUB).keys()]).toEqual([]);
+    expect(fake.calls.copy.at(-1)).toMatchObject({ bucket: PRIV, from: quarantinePath, to: ref, dst: PRIV });
+    expect(fake.calls.sign).toEqual([]);
+  });
+
+  it('only the q/ object of that very path, back to that path — anything else is a 400 and nothing moves', async () => {
+    const { fake, store } = v5Store();
+    fake.bucket(PUB).set(art, { data: Buffer.from('art') });
+    const { quarantinePath } = await store.quarantine(art, 'blocked');
+    const copies = fake.calls.copy.length;
+    const refused = [
+      [quarantinePath, `u/${USER}/p/${PROJECT}/img/page-2.webp`], // another path of the same project
+      [quarantinePath, `u/${OTHER}/p/${PROJECT}/img/page-1.webp`], // another user's lane
+      [quarantinePath, `pub/${KEY22}/p1-0123456789ab.webp`], // the public publication lane
+      [quarantinePath, quarantinePath], // back into the vault
+      [quarantinePath, `u/${USER}/p/${PROJECT}/img/../img/page-1.webp`], // traversal
+      [art, art], // the source must be a held object
+      [`q/${USER}/${PROJECT}/../../x.webp`, art],
+      [`library/v1/a/b.webp`, art],
+      [quarantinePath, ''],
+      [undefined, art]
+    ] as const;
+    for (const [q, dst] of refused) {
+      await expect(store.restoreQuarantined!(q as string, dst as string)).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 400 });
+    }
+    expect(fake.calls.copy.length).toBe(copies);
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(true);
+    expect(fake.bucket(PUB).has(`u/${USER}/p/${PROJECT}/img/page-2.webp`)).toBe(false);
+  });
+
+  it('honest failures: nothing held and nothing back → 404; Storage unable to say → 503 (retryable)', async () => {
+    const { fake, store } = v5Store();
+    const q = quarantinePathFor(art);
+    await expect(store.restoreQuarantined!(q, art)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404, userMessage: expect.stringMatching(/no longer in the safety hold/) });
+    fake.fail.exists = true;
+    await expect(store.restoreQuarantined!(q, art)).rejects.toMatchObject({ status: 503, retryable: true });
+    expect(fake.bucket(PUB).has(art)).toBe(false);
+  });
+
+  it('an older Storage server without cross-bucket copies: the bytes move through the server once, into the original bucket', async () => {
+    const { fake, store } = v5Store();
+    fake.bucket(PUB).set(art, { data: Buffer.from('art-bytes'), type: 'image/webp' });
+    const { quarantinePath } = await store.quarantine(art, 'blocked');
+    fake.fail.crossBucketCopy = true;
+    await store.restoreQuarantined!(quarantinePath, art);
+    expect(fake.bucket(PUB).get(art)?.data.toString()).toBe('art-bytes');
+    expect(fake.calls.upload.at(-1)).toMatchObject({ bucket: PUB, path: art, opts: { upsert: false } });
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(false);
+  });
+
+  it('a failed hold cleanup never reports a restored image as failed; the next call finishes it', async () => {
+    const { fake, store } = v5Store();
+    fake.bucket(PUB).set(art, { data: Buffer.from('art') });
+    const { quarantinePath } = await store.quarantine(art, 'blocked');
+    fake.fail.remove = (bucket) => bucket === PRIV;
+    await expect(store.restoreQuarantined!(quarantinePath, art)).resolves.toBeUndefined();
+    expect(fake.bucket(PUB).has(art)).toBe(true);
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(true); // still private, never signed, under its 90-day expiry
+    fake.fail.remove = null;
+    await store.restoreQuarantined!(quarantinePath, art); // copy answers 'exists'; the delete completes
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(false);
+    expect(fake.bucket(PUB).get(art)?.data.toString()).toBe('art');
+  });
+
+  it('the memory store has the same guard and semantics', async () => {
+    const store = createMemoryAssetStore();
+    const path = 'u/user-1/p/proj-1/img/page.webp';
+    store.put(path, `data:image/png;base64,${(await solidPng(1200, 900)).toString('base64')}`);
+    const { quarantinePath } = await store.quarantine(path, 'blocked');
+    expect(quarantinePath).toBe(quarantinePathFor(path));
+    await expect(store.restoreQuarantined!(quarantinePath, 'u/user-1/p/proj-1/img/other.webp')).rejects.toMatchObject({ status: 400 });
+    await store.restoreQuarantined!(quarantinePath, path);
+    expect(store.files.has(path)).toBe(true);
+    expect(store.files.has(quarantinePath)).toBe(false);
+    expect(store.files.has('u/user-1/p/proj-1/img/page_w480.webp')).toBe(true);
+    expect(store.restored).toEqual([{ quarantinePath, originalPath: path }]);
+    await expect(store.restoreQuarantined!(quarantinePath, path)).resolves.toBeUndefined(); // idempotent
+    expect(store.restored).toHaveLength(1);
+    await expect(store.restoreQuarantined!(quarantinePathFor('u/user-1/p/proj-1/img/gone.webp'), 'u/user-1/p/proj-1/img/gone.webp')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('restoreQuarantined through the safety restore paths (production store)', () => {
+  const OWNER = USER;
+  const page = `u/${USER}/p/${PROJECT}/img/p1.webp`;
+  afterEach(() => {
+    resetSafety();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  const heldPageDoc = (): ComicDoc => {
+    const doc = plannedDoc(PROJECT);
+    doc.settings.rating = 'PG';
+    doc.pages[0].render = {
+      ...emptyRender(),
+      status: 'ready',
+      asset: { path: page, source: 'generated', at: 1, safety: { assessed: 'X', categories: ['graphic_gore'], at: 1, by: 'qc', quarantined: true } }
+    };
+    return doc;
+  };
+
+  const heldPage = async () => {
+    const { fake, store } = v5Store();
+    fake.bucket(PUB).set(page, { data: await sharp(await noisePng(640, 800)).webp().toBuffer(), type: 'image/webp' });
+    const fakes = installSafetyFakes({ assets: store });
+    fakes.store.projects.set(PROJECT, { ownerUserId: OWNER, name: 'Spice Run', isForcedPrivate: false });
+    const quarantinePath = await quarantineAsset(store, { path: page, projectId: PROJECT, userId: OWNER, categories: ['graphic_gore'] });
+    expect(quarantinePath).toBe(quarantinePathFor(page));
+    expect(fake.bucket(PUB).has(page)).toBe(false);
+    return { fake, store, fakes, quarantinePath: quarantinePath! };
+  };
+
+  it('a moderator restore moves the object back, clears the hold and tells the owner the truth', async () => {
+    const { fake, fakes, quarantinePath } = await heldPage();
+    const session = newSession(heldPageDoc(), undefined, OWNER);
+    fakes.sessions.set(PROJECT, session);
+    const opened = await fakes.store.openCase({
+      kind: 'appeal',
+      projectId: PROJECT,
+      ownerUserId: OWNER,
+      target: { target: { kind: 'page', id: 'pg_1' }, path: page, quarantinePath },
+      reason: 'second opinion agreed'
+    });
+    const out = await resolveCase('mod-1', opened.id!, { action: 'restore', assessed: 'PG', reason: 'ketchup, not blood' });
+    expect(out.effects).toEqual(['restored']);
+    expect(fake.bucket(PUB).has(page)).toBe(true);
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(false);
+    expect(fakes.store.quarantine.has(page)).toBe(false);
+    expect(session.doc.pages[0].render.asset?.safety).toMatchObject({ assessed: 'PG', by: 'admin' });
+    expect(session.doc.pages[0].render.asset?.safety?.quarantined).toBeUndefined();
+    expect(fakes.store.notifications.at(-1)).toMatchObject({ userId: OWNER, title: 'Your image is back' });
+  });
+
+  it('an appeal the second opinion clears brings the page back (it was refused by copyObject before)', async () => {
+    const { fake, store, fakes, quarantinePath } = await heldPage();
+    const ctx = testContext(newSession(heldPageDoc(), undefined, OWNER));
+    (ctx as { assets: unknown }).assets = store;
+    fakes.llm.script.writer = [{ ...cleanAnswer({ role: 'vision', messages: [], jsonSchema: { name: 'comic_safety_image', schema: {} } }), rating: 'PG' }];
+    const r = await runAppeal(ctx, { kind: 'page', id: 'pg_1' }, 'It is a ketchup fight!');
+    expect(r).toMatchObject({ status: 'cleared', rating: 'PG' });
+    expect(fake.bucket(PUB).has(page)).toBe(true);
+    expect(fake.bucket(PRIV).has(quarantinePath)).toBe(false);
+    expect(ctx.session.doc.pages[0].render.asset?.safety).toMatchObject({ assessed: 'PG', by: 'second_opinion' });
+    expect(fakes.store.quarantine.size).toBe(0);
+  });
+
+  it('safety reports an honest false (never a servable image) when the pairing is wrong or the object is gone', async () => {
+    const { fake, store, quarantinePath } = await heldPage();
+    expect(await restoreFromQuarantine(store, quarantinePath, `u/${USER}/p/${PROJECT}/img/p2.webp`, PROJECT)).toBe(false);
+    fake.bucket(PRIV).delete(quarantinePath);
+    expect(await restoreFromQuarantine(store, quarantinePath, page, PROJECT)).toBe(false);
+    expect(fake.bucket(PUB).has(page)).toBe(false);
+  });
+});
+
+describe('restoreQuarantined has one caller', () => {
+  it('only safety/deps.ts (the moderation and appeal restore paths) calls it — never a route, tool or job', () => {
+    const root = fileURLToPath(new URL('..', import.meta.url)); // server/src
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) files.push(full);
+      }
+    };
+    walk(root);
+    const callers = files
+      .filter((f) => /restoreQuarantined\s*(?:\?\.|!)?\s*\(/.test(readFileSync(f, 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')))
+      .map((f) => relative(root, f).split('\\').join('/'))
+      .sort();
+    // Declarations (types.ts, the stores) don't count; the call is in safety/deps.ts alone.
+    const calls = callers.filter((f) => !['comic/assets.ts', 'comic/types.ts', 'comic/orchestrator.fakes.ts'].includes(f));
+    expect(calls).toEqual(['comic/safety/deps.ts']);
   });
 });
 
