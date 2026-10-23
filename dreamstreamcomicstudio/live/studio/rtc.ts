@@ -148,6 +148,8 @@ class PeerLink {
   /** The network path this link uses (null until known); a relay is billed per GB, so it's capped. */
   path: NetPath | null = null;
   onPath: ((p: NetPath) => void) | null = null;
+  /** Each stats report the path check already takes (usage metering: relay bytes received). */
+  onStats: ((r: RTCStatsReport, pc: RTCPeerConnection) => void) | null = null;
   /**
    * A (re)negotiation finished — signaling is back to `stable`. A sender added since (a screen
    * share) has its encodings only now, so a cap tried before this may not have taken.
@@ -310,7 +312,7 @@ class PeerLink {
     if (this.pathTimer) clearTimeout(this.pathTimer);
     this.pathTimer = null;
     if (this.closed || this.pc.connectionState !== 'connected') return;
-    const p = await netPath(this.pc);
+    const p = await netPath(this.pc, this.onStats);
     if (this.closed || this.pc.connectionState !== 'connected') return;
     if (p && p !== this.path) {
       this.path = p;
@@ -367,6 +369,8 @@ export interface GuestLink {
   state: RTCPeerConnectionState;
   cam: MediaStream | null;
   screen: MediaStream | null;
+  /** How this guest's link travels (Home Wi-Fi · Direct · our relay), null until known. */
+  path?: NetPath | null;
 }
 
 /**
@@ -402,6 +406,8 @@ export class HostPeers {
   private iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS;
   /** Any guest's media or connection state changed — re-render tiles. */
   onChange: (() => void) | null = null;
+  /** A guest link's own stats read (usage metering — no extra getStats). */
+  onStats: ((sid: string, r: RTCStatsReport, pc: RTCPeerConnection) => void) | null = null;
 
   constructor(private sendTo: (sid: string, d: RtcSignal) => void, iceServers?: RTCIceServer[] | null) {
     if (iceServers?.length) this.iceServers = iceServers;
@@ -477,7 +483,11 @@ export class HostPeers {
       if (s === 'connected') this.recap(); // encodings exist now — make the cap stick
       this.onChange?.();
     };
-    link.onPath = () => this.recap(); // onto or off a relay: its return feed's cap follows
+    link.onPath = () => {
+      this.recap(); // onto or off a relay: its return feed's cap follows
+      this.onChange?.(); // …and its tile says so
+    };
+    link.onStats = (r, pc) => this.onStats?.(sid, r, pc);
     this.links.set(sid, entry);
     this.recap();
     this.onChange?.();
@@ -511,6 +521,7 @@ export class HostPeers {
       state: e.state,
       cam: e.cam,
       screen: e.screen,
+      path: e.link.path,
     }));
   }
 
@@ -549,6 +560,8 @@ export class GuestPeer {
   private screenSender: RTCRtpSender | null = null;
   onHostStream: ((stream: MediaStream | null) => void) | null = null;
   onState: ((s: RTCPeerConnectionState) => void) | null = null;
+  /** How the link to the host travels, when it's known or changes. */
+  onPath: ((p: NetPath) => void) | null = null;
 
   constructor(send: SendSignal, cam: MediaStream, iceServers?: RTCIceServer[] | null) {
     this.link = new PeerLink(true, send, iceServers?.length ? iceServers : DEFAULT_ICE_SERVERS);
@@ -556,7 +569,10 @@ export class GuestPeer {
     this.link.onRemote = ({ stream }) => this.onHostStream?.(stream);
     this.link.onRemoteGone = () => this.onHostStream?.(null);
     this.link.onConnectionState = (s) => this.onState?.(s);
-    this.link.onPath = () => void this.capUplink();
+    this.link.onPath = (p) => {
+      void this.capUplink();
+      this.onPath?.(p);
+    };
     // A screen share added while relayed is renegotiated with the link still up (no path change):
     // its cap is applied again once the new sender exists for real. Unchanged caps are skipped.
     this.link.onNegotiated = () => void this.capUplink();

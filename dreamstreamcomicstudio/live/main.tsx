@@ -11,6 +11,7 @@ import './styles/calls.css';
 import './styles/meeting.css';
 import './styles/monitor-video.css';
 import './styles/invite.css';
+import './styles/usage.css';
 
 // Stream Studio's own host installs as its own app (start_url '/#/monitor'); the main host keeps
 // the manifest existing Home Screen installs were made from.

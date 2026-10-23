@@ -75,10 +75,17 @@ export function pathFromReport(stats: StatsLike): NetPath | null {
   return local && remote ? classifyPath(local, remote) : null;
 }
 
-/** The path the connection is using right now (null until it's chosen). */
-export async function netPath(pc: RTCPeerConnection): Promise<NetPath | null> {
+/**
+ * The path the connection is using right now (null until it's chosen). `onReport` sees the
+ * same stats report (usage metering reads its relay bytes — no second getStats).
+ */
+export async function netPath(pc: RTCPeerConnection, onReport?: ((r: RTCStatsReport, pc: RTCPeerConnection) => void) | null): Promise<NetPath | null> {
   try {
-    return pathFromReport((await pc.getStats()) as unknown as StatsLike);
+    const report = await pc.getStats();
+    try {
+      onReport?.(report, pc);
+    } catch { /* display only */ }
+    return pathFromReport(report as unknown as StatsLike);
   } catch {
     return null;
   }
@@ -740,6 +747,8 @@ export class ViewerLink {
   /** Status and events straight from the camera (the data channel). */
   onDirect: ((m: DirectMsg) => void) | null = null;
   onPath: ((p: NetPath | null) => void) | null = null;
+  /** Each stats report the path check already takes (usage metering: relay bytes received). */
+  onStats: ((r: RTCStatsReport, pc: RTCPeerConnection) => void) | null = null;
   /** The relay credentials are due: ask the room for fresh ones (`{t:'ice'}`). */
   onIceStale: (() => void) | null = null;
   private iceClock = new IceClock(() => this.onIceStale?.());
@@ -852,7 +861,7 @@ export class ViewerLink {
     const pc = this.pc;
     window.clearTimeout(this.pathTimer);
     if (!pc) return;
-    const p = await netPath(pc);
+    const p = await netPath(pc, this.onStats);
     if (pc !== this.pc) return;
     if (p !== this.path) {
       this.path = p;

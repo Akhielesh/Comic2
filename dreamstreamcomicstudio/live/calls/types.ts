@@ -188,5 +188,7 @@ export type UserLineMsg =
   | { t: 'dcall_state'; favs: PersonRec[]; blocked: PersonRec[]; prefs: { who: CallWho } }
   | { t: 'call_err'; error: CallError; ref?: string; id?: string }
   | { t: 'call_log'; rec: CallRecord }
+  /** This month's usage of your account (the answer to `{t:'usage_get'}`; usage/usageClient.ts). */
+  | { t: 'usage'; usage: unknown; allowances?: unknown }
   | { t: 'error'; code: string; msg: string }
   | { t: 'pong'; at?: number };

@@ -40,6 +40,8 @@ import {
   type DriveErrorCode,
 } from '../driveUpload';
 import { addMyRecording } from '../events';
+import { CLOUD_COPY_DRIVE_TIP, CLOUD_COPY_HEAD, FREE_CHIP, allowanceLevel, cloudCopyNotice } from '../costCopy';
+import { addSave, type SaveDest } from '../usage/ledger';
 import { fmtBytes, fmtDuration } from '../metrics';
 import { cloudCopyNoticePending, loadPrefs, markCloudCopyNoticeSeen, savePrefs, type StudioPrefs } from '../prefs';
 import { discardOpfsRecording, removeUnsaved, type FinishedRecording } from '../recorder';
@@ -134,9 +136,6 @@ type CloudUp =
   /** The allowance said no — retrying won't help; the free options will. */
   | { state: 'full'; message: string; freesAt: number | null }
   | { state: 'err'; code: CloudCopyErrorCode; message: string };
-
-/** Who pays, on every free option — the same words everywhere (ADR 0007 D4). */
-const FREE_CHIP = { drive: 'Free · yours to keep', device: 'Free · on this device' } as const;
 
 /** "about 3 min left" — only once there's enough signal to be honest about it. */
 export function etaText(sent: number, total: number, elapsedMs: number): string {
@@ -249,8 +248,10 @@ export function SaveSheet({
     return () => window.removeEventListener('beforeunload', warn);
   }, [driveActive]);
 
-  const finish = (where: string, target: Target, deleteNow: boolean) => {
+  const finish = (where: string, target: Target, deleteNow: boolean, dest: SaveDest = target === 'drive' ? 'drive' : 'device') => {
     setSaved((s) => [...s, where]);
+    // This device's Usage card: "Saved to Google Drive 6.2 GB · yours to keep".
+    addSave(dest, rec.data.size || rec.bytes);
     addMyRecording({ eventId: rec.eventId, title: rec.title, file: name, bytes: rec.bytes, at: Date.now() });
     if (remember) savePrefs({ ...loadPrefs(), saveTarget: target });
     push(`Saved · ${where}`, { icon: 'check', duration: 3200 });
@@ -352,12 +353,12 @@ export function SaveSheet({
       }
       if (canShare) {
         const ok = await shareFile(rec.data, name, rec.title);
-        if (ok) finish('Shared (choose Drive in the menu)', 'drive', false);
+        if (ok) finish('Shared (choose Drive in the menu)', 'drive', false, 'device');
         return;
       }
       downloadFile(rec.data, name);
       window.open(DRIVE_UPLOAD_URL, '_blank', 'noopener');
-      finish('Downloads → drag it into the Drive tab that just opened', 'drive', false);
+      finish('Downloads → drag it into the Drive tab that just opened', 'drive', false, 'device');
     });
 
   const toDownload = () =>
@@ -383,6 +384,7 @@ export function SaveSheet({
     })
       .then((res) => {
         setCloud({ state: 'done' });
+        addSave('cloud', copyBytes);
         // The server counted this copy when it started (in place of any unfinished earlier
         // try of it); fall back to doing the same locally.
         setQuota(
@@ -391,6 +393,10 @@ export function SaveSheet({
             (q ? { ...q, usedBytes: q.usedBytes - (q.retryBytes ?? 0) + copyBytes, copies: q.copies + (q.retryBytes ? 0 : 1), retryBytes: undefined } : q),
         );
         push('7-day copy stored — download it from the recap on any device', { icon: 'check' });
+        // At 80% and 100% of the 10 GB, say so in the app (ADR 0007 B7) — Drive and this device stay free.
+        const now = res?.quota ?? (quota ? { ...quota, usedBytes: quota.usedBytes - (quota.retryBytes ?? 0) + copyBytes } : null);
+        const note = now && cloudCopyNotice(allowanceLevel(now.usedBytes, now.limitBytes), now.usedBytes, now.limitBytes);
+        if (note) push(note, { icon: 'info', duration: 8000 });
       })
       .catch((e) => {
         if (e instanceof CloudCopyError && e.isLimit) {
@@ -657,7 +663,9 @@ export function SaveSheet({
 
         {hostKey && (
           <>
-            <div className="save-label" style={{ marginTop: 16 }}>Or a 7-day copy · through our servers</div>
+            <div className="save-label" style={{ marginTop: 16 }}>{CLOUD_COPY_HEAD}</div>
+            {/* One tip, outside the copy's own box: the copy itself is never called free. */}
+            {apiConnected && cloud.state === 'idle' && saved.length === 0 && <div className="save-hint" style={{ marginTop: 0, marginBottom: 6 }}>{CLOUD_COPY_DRIVE_TIP}</div>}
             <section className="save-cloud" aria-label="7-day copy on our servers">
               <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
                 <Icon name="globe" size={16} className="faint" />

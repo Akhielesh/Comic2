@@ -22,8 +22,12 @@ const EXACT = [
   'ds-calls-seen',
   OWNER_KEY,
 ];
-/** Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue. */
-const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-'];
+/**
+ * Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue —
+ * and this device's usage (live/usage/): a nursery's relay data a parent read, last nights,
+ * the month's ledger, hosted meetings, notices shown.
+ */
+const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-', 'ds-usage-'];
 
 export function purgeLiveAccountData(): void {
   try {

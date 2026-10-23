@@ -12,6 +12,8 @@ import type { Nav } from '../nav';
 import { isMeetingGuestLink } from '../nav';
 import { MAX_GUESTS, type ChatMsg, type EventMeta, type StreamStatus } from '../protocol';
 import { GuestPeer, sanitizeIceServers } from '../studio/rtc';
+import { PATH_PILL, PATH_TIP } from '../costCopy';
+import { streamPathOf } from '../usage/sessionMeter';
 import { IceClock } from '../rtcIce';
 import { ChatRail } from '../components/rails';
 import { Icon } from '../ui/icons';
@@ -56,6 +58,8 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   const [cam, setCam] = useState<MediaStream | null>(null);
   const [hostStream, setHostStream] = useState<MediaStream | null>(null);
   const [rtcState, setRtcState] = useState<RTCPeerConnectionState>('new');
+  /** How our link to the host travels (Home Wi-Fi · Direct · our relay), once known. */
+  const [linkPath, setLinkPath] = useState<'lan' | 'internet' | 'relay' | null>(null);
   const [linkEpoch, setLinkEpoch] = useState(0);
   const [slow, setSlow] = useState(false);
   const [sockStatus, setSockStatus] = useState<SocketStatus>('connected');
@@ -145,9 +149,11 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
     const peer = new GuestPeer((d) => sockRef.current?.send({ t: 'rtc', d }), camRef.current, iceRef.current);
     peer.onHostStream = setHostStream;
     peer.onState = setRtcState;
+    peer.onPath = setLinkPath;
     peerRef.current = peer;
     setHostStream(null);
     setRtcState('new');
+    setLinkPath(null);
     setSharing(false);
     setLinkEpoch((n) => n + 1);
     sockRef.current?.send({ t: 'rtc', d: { ready: true } });
@@ -430,6 +436,11 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
         <Pill tone={connected ? 'ok' : 'warn'} icon={meeting && connected ? 'users' : 'signal'}>
           {connected ? (meeting ? 'In the meeting' : 'On air with the host') : rtcState === 'failed' ? 'Link failed' : 'Connecting…'}
         </Pill>
+        {connected && linkPath && (
+          <span className="gv-path" title={PATH_TIP[streamPathOf(linkPath) ?? 'direct']}>
+            <Pill tone="neutral" icon={linkPath === 'lan' ? 'wifi' : 'lock'}>{PATH_PILL[streamPathOf(linkPath) ?? 'direct']}</Pill>
+          </span>
+        )}
       </div>
 
       <div className="gv-main">

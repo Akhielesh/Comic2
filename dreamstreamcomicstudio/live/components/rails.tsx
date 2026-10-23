@@ -7,6 +7,8 @@ import { fmtBps } from '../metrics';
 import type { ChatMsg, LobbyEntry, LogEntry, LogKind, PersonEntry, Role } from '../protocol';
 import { QUICK_EMOJI, rememberEmoji } from '../emoji';
 import { EmojiPicker } from './EmojiPicker';
+import { PATH_PILL, PATH_TIP } from '../costCopy';
+import { streamPathOf } from '../usage/sessionMeter';
 
 /* --------------------------------------------------------------- helpers */
 
@@ -155,6 +157,8 @@ export interface GuestSeat {
   sid: string;
   name: string;
   state: RTCPeerConnectionState;
+  /** How this guest's link travels, once known (Home Wi-Fi · Direct · our relay). */
+  path?: 'lan' | 'internet' | 'relay' | null;
 }
 
 export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestInvite, onRotateGuestInvite, onAdmit, onDeny, onKick, onPromote }: {
@@ -194,8 +198,8 @@ export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestIn
               <div className="pz-name">
                 {g.name} <span className="cm-role mod">guest</span>
               </div>
-              <div className="pz-note">
-                {g.state === 'connected' ? 'On the program — cam & mic mixed in'
+              <div className="pz-note" title={g.state === 'connected' && g.path ? PATH_TIP[streamPathOf(g.path) ?? 'direct'] : undefined}>
+                {g.state === 'connected' ? `On the program — cam & mic mixed in${g.path ? ` · ${PATH_PILL[streamPathOf(g.path) ?? 'direct']}` : ''}`
                   : g.state === 'failed' ? 'Link failed (restrictive network)'
                   : 'Linking…'}
               </div>

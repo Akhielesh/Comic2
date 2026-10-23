@@ -45,6 +45,10 @@ import { WeekCard } from './monitor/WeekCard';
 import { ReportSheet, SleepCard } from './monitor/SleepCard';
 import { SoundLevelCard } from './monitor/SoundLevelCard';
 import { ZoneEditor } from './monitor/ZoneEditor';
+import { PATH_PILL } from '../costCopy';
+import { createViewerMeter, pathTip, viewerPath, type ViewerMeter } from '../usage/monitorUsage';
+import { streamPathOf } from '../usage/sessionMeter';
+import { checkNurseryAllowance } from '../usage/usageClient';
 
 const BUCKET_MS = 5 * 60_000;
 const SOUND_SET = new Set<string>(SOUND_CATS);
@@ -191,6 +195,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   const fullRef = useRef(false);
   const vapidRef = useRef<string | null>(null);
   const micMeterRef = useRef<{ ctx: AudioContext; timer: number } | null>(null);
+  /** Minutes per path + relay bytes → `{t:'use'}` and this device's ledger (usage/monitorUsage.ts). */
+  const usageRef = useRef<ViewerMeter | null>(null);
   const pressRef = useRef<number | null>(null);
 
   const [reconnectKey, setReconnectKey] = useState(0);
@@ -382,6 +388,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       runFallback({ t: 'link', state: s });
     };
     link.onPath = setNetPath;
+    const usage = createViewerMeter(id, (m) => sockRef.current?.send(m));
+    usageRef.current = usage;
+    link.onStats = (r, pc) => usage.meter.observe(r, pc);
     // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
     link.onIceStale = () => sockRef.current?.send({ t: 'ice' });
     link.onDirect = (dm) => onDirectRef.current(dm);
@@ -428,10 +437,14 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       setSock(s);
       shareCh.set({ connected: s === 'connected' });
       if (s !== 'connected') tracker.detach();
+      if (s !== 'connected') usage.meter.disconnected();
       if (s === 'closed') setClosedMsg(detail || 'Disconnected from the nursery.');
     });
     sockRef.current = sockNow;
-    const tick = window.setInterval(() => setClock((c) => c + 1), 5000);
+    const tick = window.setInterval(() => {
+      setClock((c) => c + 1);
+      usage.meter.tick();
+    }, 5000);
     const cues = cuesRef.current;
     // Any tap also (re)starts the relay's sound where a phone stopped it — and,
     // once Listen is on, makes it ready inside the tap (iPhones need one).
@@ -450,6 +463,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       fallbackRef.current = { ...fallbackRef.current, pending: false };
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('pointerup', unlock);
+      usage.dispose();
+      if (usageRef.current === usage) usageRef.current = null;
       link.close();
       dec.close();
       if (relayDecRef.current === dec) relayDecRef.current = null;
@@ -466,6 +481,11 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   useEffect(() => {
     cuesRef.current.quiet = silentHere || near;
   }, [silentHere, near]);
+  // Which path the picture takes now, for this device's usage (display only).
+  const relayDrawing = relayView.has && !relayView.stale;
+  useEffect(() => {
+    usageRef.current?.meter.setPath(viewerPath({ linkState, netPath, relayOn, relayDrawing }));
+  }, [linkState, netPath, relayOn, relayDrawing, id, reconnectKey]);
 
   // Attach the self-view (video call) whenever it mounts.
   useEffect(() => {
@@ -566,6 +586,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         queryRef.current = new MonQuery((q) => sockRef.current?.send(q));
         setQuery(queryRef.current);
         tracker.attach((msg) => sockRef.current?.send(msg), queryRef.current, m.track);
+        // A new socket: usage reports count from here (the room keeps them per socket).
+        usageRef.current?.meter.connected();
+        // Parents: relay data at 80% / 100% is said in the app (one look, at most twice a day).
+        if (m.you.role === 'parent' && !m.you.guest) void checkNurseryAllowance(queryRef.current, id, (text) => push(text, { icon: 'info', duration: 9000 }));
         setNursery(m.nursery);
         setCams(m.cams);
         setViewers(m.viewers);
@@ -1281,7 +1305,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         {relayOn && cam && (relayView.has || !relayEarly) && (
           <span className={cx('ov-pill mv-relay-pill', relayEarly && 'early')} title={relayTitle} aria-label={relayTitle}>
             <Icon name={relayEarly ? 'zap' : 'cloud'} size={11} />
-            <span>{relayEarly ? 'Quick preview' : `${relayFull ? 'Camera full · via server' : 'Via our server'}${relayFps}`}</span>
+            <span>{relayEarly ? 'Quick preview' : `${relayFull ? `Camera full · ${PATH_PILL.server.toLowerCase()}` : PATH_PILL.server}${relayFps}`}</span>
             {!relayEarly && relayNoSound && <span className="extra"> · no sound</span>}
           </span>
         )}
@@ -1293,8 +1317,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
           </span>
         )}
         {linkState === 'connected' && (
-          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={netPath === 'lan' ? 'Straight over your home Wi-Fi — keeps working if the internet drops' : netPath === 'relay' ? 'Encrypted, through a relay server (your network blocks direct connections)' : 'Encrypted, device-to-device'}>
-            <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{netPath === 'lan' ? 'Home Wi-Fi' : netPath === 'relay' ? 'Encrypted · relay' : 'Encrypted · P2P'}</span>
+          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={pathTip(streamPathOf(netPath), id, me?.role === 'parent' && !guest)}>
+            <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{PATH_PILL[streamPathOf(netPath) ?? 'direct']}</span>
           </span>
         )}
       </div>
@@ -1764,6 +1788,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
               send={(msg) => sockRef.current?.send(msg)}
               push={push}
               people={{ summary: shareSummary(share), onInvite: () => openInvite(id) }}
+              query={query}
             />
           )}
           <PeopleCard

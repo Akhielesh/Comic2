@@ -9,6 +9,10 @@ import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
 import type { StatsResponse } from '../protocol';
 import { LogFilterBar, LogRows, filterLog } from '../components/rails';
+import { DELIVERY_WHO_PAYS, deliveryLine, meetingDeliveryLine } from '../costCopy';
+import { CostExpander } from '../usage/CostExpander';
+import { meetingUse } from '../usage/ledger';
+import { broadcastRecap } from '../usage/recap';
 import { Icon } from '../ui/icons';
 import { AreaChart, Avatar, Btn, Pill, cx, type PushToast } from '../ui/primitives';
 
@@ -30,6 +34,8 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
   const [err, setErr] = useState<string | null>(null);
   const [logFilter, setLogFilter] = useState('all');
   const recordings = useMemo(() => listMyRecordings().filter((r) => r.eventId === eventId), [eventId]);
+  // Guests on camera, as this device hosted them (usage/ledger.ts — this device only).
+  const meeting = useMemo(() => meetingUse(eventId), [eventId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +75,18 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
     ? [stats.curve[0], stats.curve[Math.floor(stats.curve.length / 2)], stats.curve[stats.curve.length - 1]].map((p) => fmtClockShort(p.at))
     : [];
   const live = meta.status === 'live' || meta.status === 'paused';
+  // Delivery (ADR 0007 D4): what it took, ≈ from what the recap already has; our cost folded away.
+  const delivery = broadcastRecap({
+    startedAt: meta.startedAt,
+    endedAt: meta.endedAt,
+    quality: meta.quality,
+    segMs: meta.segMs,
+    peakViewers: stats.peakViewers,
+    curve: stats.curve,
+    healthCurve: stats.healthCurve,
+    use: (stats as { use?: unknown }).use,
+    cloudCopyBytes: serverRecs.reduce((s, r) => s + (r.bytes > 0 ? r.bytes : 0), 0),
+  });
 
   const exportReport = () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -187,6 +205,22 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
         </div>
 
         <div className="col-side">
+          {/* delivery — who carried it, and what it took (ADR 0007 D4) */}
+          {(delivery || meeting) && (
+            <div className="card card-pad delivery-card" style={{ display: 'grid', gap: 6 }}>
+              <div className="row" style={{ gap: 8, alignItems: 'baseline' }}>
+                <h3 style={{ margin: 0, fontSize: 14.5 }}>Delivery</h3>
+                <span className="spacer" />
+                {delivery && <span className="delivery-who"><Icon name="globe" size={12} />{DELIVERY_WHO_PAYS}</span>}
+              </div>
+              {delivery && <p className="delivery-line mono">{deliveryLine(delivery)}</p>}
+              {meeting && <p className="delivery-line">{meetingDeliveryLine(meeting)} <span className="faint">· this device</span></p>}
+              {delivery && (
+                <CostExpander recap byKind={delivery.cloudCopy ? { broadcast: delivery.broadcast, cloud_copy: delivery.cloudCopy } : { broadcast: delivery.broadcast }} />
+              )}
+            </div>
+          )}
+
           {/* cloud recordings — kept 7 days, downloadable from any device */}
           <div className="card">
             <div className="card-head">
@@ -197,7 +231,7 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
             <div className="rec-list">
               {serverRecs.length === 0 && (
                 <div className="card-pad muted" style={{ fontSize: 12.5 }}>
-                  No cloud copy for this event. Turn on “Keep a cloud copy” in Customize → Quality &amp; encoding.
+                  No 7-day copy for this event. Recordings save to Google Drive or this device — free, and yours to keep. When a recording stops, the save sheet also offers a 7-day copy.
                 </div>
               )}
               {serverRecs.map((r) => {

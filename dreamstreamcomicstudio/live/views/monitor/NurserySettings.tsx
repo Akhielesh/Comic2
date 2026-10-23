@@ -5,6 +5,8 @@ import { WORKER_BASE } from '../../config';
 import type { MonRole, MonSettings } from '../../monitor/protocol';
 import { Icon } from '../../ui/icons';
 import { Btn, Segmented, Toggle, type PushToast } from '../../ui/primitives';
+import type { QueryLike } from '../../usage/usageClient';
+import { NurseryUsage } from '../settings/UsageCard';
 
 type Send = (msg: Record<string, unknown>) => void;
 
@@ -16,6 +18,7 @@ export function NurserySettings({
   send,
   push,
   people,
+  query,
 }: {
   nid: string;
   nurseryName: string;
@@ -25,6 +28,8 @@ export function NurserySettings({
   push: PushToast;
   /** Parents: "People & sharing" at a glance, with Invite. */
   people?: { summary: string; onInvite: () => void };
+  /** The monitor socket's query channel: parents read the nursery's usage over it. */
+  query?: QueryLike | null;
 }) {
   const [days, setDays] = useState('30');
   const [busy, setBusy] = useState<string | null>(null);
@@ -104,6 +109,13 @@ export function NurserySettings({
         <Toggle size="sm" on={settings.sleepTracking !== false} onChange={(v) => parent && set({ sleepTracking: v })} label="Sleep tracking" />
         <span><b>Sleep tracking &amp; morning report</b><small>Naps and nights from the camera’s movement and sound, with a summary when the night ends.</small></span>
       </label>
+
+      {parent && (
+        <>
+          <div className="mv-sect-title" style={{ marginTop: 16 }}>Usage</div>
+          <NurseryUsage query={query ?? null} nid={nid} />
+        </>
+      )}
 
       <div className="mv-sect-title" style={{ marginTop: 16 }}>Download history</div>
       <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
