@@ -142,6 +142,17 @@ describe('runChat reports the whole turn’s real provider usage', () => {
     expect(spentUsageOf(err)?.providerCostUsd).toBeCloseTo(0.9, 9);
   });
 
+  it('review: paid rounds then a final call that reported no usage keep the reported part as a floor', async () => {
+    fake.steps = [
+      () => ({ text: '', toolCalls: [{ id: 'c1', name: 'run_agent_swarm', arguments: '{}' }], usage: { promptTokens: 100_000, completionTokens: 10, costUsd: 0.9 } }),
+      // e.g. a stream cut by the idle timeout returns its partial text with no usage chunk
+      () => ({ text: 'Partial answer', model: 'free/a:free', usage: {} })
+    ];
+    const r = await runChat({ ...base, tools: [probeTool()], onDelta: () => undefined });
+    expect(r.usage.providerCostUsd).toBeUndefined();
+    expect((r.usage as { partialProviderCostUsd?: number }).partialProviderCostUsd).toBeCloseTo(0.9, 9);
+  });
+
   it('a failure before any call carries nothing', async () => {
     fake.steps = [() => new Error('provider down')];
     const err = await runChat(base).catch((e) => e);

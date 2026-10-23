@@ -37,6 +37,16 @@ describe('buildSettleEstimateFromUsage', () => {
     expect((await buildSettleEstimateFromUsage(seed('x/y:free'), { promptTokens: 1_000, candidatesTokens: 100 })).estimatedProviderCostUsd).toBe(0);
   });
 
+  it('review: a partially reported cost is a floor — paid rounds before a :free final answer never settle at $0', async () => {
+    // Some calls reported $0.9, the last one reported nothing (a stream cut before its usage chunk).
+    const free = await buildSettleEstimateFromUsage(seed('x/y:free'), { promptTokens: 200_000, candidatesTokens: 500, partialProviderCostUsd: 0.9 });
+    expect(free.estimatedProviderCostUsd).toBe(0.9);
+    expect(free.estimatedBillableUsd).toBeCloseTo(1.17, 6);
+    // On a paid final model the token estimate stands when it is higher than the reported part.
+    const paid = await buildSettleEstimateFromUsage(seed('acme/paid'), { promptTokens: 200_000, candidatesTokens: 1_000, partialProviderCostUsd: 0.05 });
+    expect(paid.estimatedProviderCostUsd).toBeCloseTo(0.202, 6);
+  });
+
   it('a paid model still settles on the reported cost, else on the summed tokens', async () => {
     expect((await buildSettleEstimateFromUsage(seed('acme/paid'), { promptTokens: 10, candidatesTokens: 10, providerCostUsd: 1.85 })).estimatedProviderCostUsd).toBe(1.85);
     // 200,000 prompt + 1,000 completion tokens at $0.001 / $0.002 per 1k.

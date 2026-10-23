@@ -787,6 +787,16 @@ describe('S6: only art the server wrote to a lane clients cannot rewrite is publ
     expect((await getReadiness(ctx, richDoc())).ok).toBe(true);
   });
 
+  it('the share image (OG card) is drawn only from a server-derived variant, never another path the asset names', async () => {
+    withArt({}, { variants: [{ path: `u/${USER}/tmp/evil_w1080.webp`, w: 1080, h: 1620 }] });
+    const loaded: string[] = [];
+    const load = assets.loadDataUrl.bind(assets);
+    assets.loadDataUrl = async (p) => (loaded.push(p), load(p));
+    await publish(ctx, { visibility: 'unlisted' });
+    expect(loaded.some((p) => p.includes('evil'))).toBe(false);
+    expect(loaded).toContain(`u/${USER}/p/proj-1/img/cover.webp`);
+  });
+
   it('a size variant is copied only from its deterministic server path (anything else is left out)', async () => {
     withArt({
       1: {
@@ -902,6 +912,93 @@ describe('L11: a moderation hold takes the pub/ copies down', () => {
     clock += SWEEP_GRACE_MS + 1;
     await sweepOrphanPublications(sweeper);
     expect(removed).toEqual([`pub/${key}/`]);
+  });
+
+  // A hold lands (projects trigger + the takedown F4 runs right after it) while a publication write
+  // is still checking or copying: the write must not leave a LIVE row on a held comic.
+  const holdNow = async () => {
+    store.forcePrivate('proj-1');
+    await removePublicationObjects('proj-1');
+  };
+  const holdDuringGate = () => {
+    restore();
+    restore = configurePublication({
+      store,
+      gate: (async (c: unknown, d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => (await holdNow(), gateFor()(c, d, o))) as never,
+      now: () => clock,
+      renderOg: fakeOg,
+      publicUrl: (p) => `https://cdn.test/${p}`,
+      assets: async () => assets
+    });
+  };
+  const allPub = () => [...assets.files.keys()].filter((p) => p.startsWith('pub/'));
+
+  it('a first publish whose checks outlast a hold ends suspended with no copies left, and says so honestly', async () => {
+    holdDuringGate();
+    const err = await publish(ctx, { visibility: 'public' }).catch((e) => e);
+    expect(err).toBeInstanceOf(PublishError);
+    expect(err).toMatchObject({ status: 403, reason: 'FORBIDDEN' });
+    expect(err.message).toMatch(/paused by DreamStream moderation/);
+    expect(store.rows.get('proj-1')!.status).toBe('suspended');
+    expect(allPub()).toEqual([]);
+    expect(store.projects.get('proj-1')!.isPublic).toBe(false);
+    expect(ctx.session.doc.publication?.status).toBe('suspended');
+    expect(payloadOf(store.rows.get('proj-1')!)).toBeNull();
+  });
+
+  it('an update whose checks outlast a hold is suspended too (never a live row pointing at copies the takedown deleted)', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'public' });
+    const key = store.rows.get('proj-1')!.assetKey!;
+    holdDuringGate();
+    clock += 1000;
+    await expect(publish(ctx, { visibility: 'public' })).rejects.toMatchObject({ status: 403, reason: 'FORBIDDEN' });
+    expect(store.rows.get('proj-1')!.status).toBe('suspended');
+    expect(pubFiles(key)).toEqual([]);
+    // Once the hold is lifted, republishing heals it under a fresh key (nothing points at deleted copies).
+    store.projects.get('proj-1')!.forcedPrivate = false;
+    useAssets();
+    clock += 1000;
+    await publish(ctx, { visibility: 'public' });
+    const row = store.rows.get('proj-1')!;
+    expect(row.status).toBe('live');
+    for (const p of Object.keys(payloadOf(row)!.urls)) expect(assets.files.has(p)).toBe(true);
+  });
+
+  it('going public while a hold lands is refused and the row suspended', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'unlisted' });
+    holdDuringGate();
+    await expect(updatePublication(ctx, { visibility: 'public' })).rejects.toMatchObject({ status: 403, reason: 'FORBIDDEN' });
+    expect(store.rows.get('proj-1')!.status).toBe('suspended');
+    expect(allPub()).toEqual([]);
+  });
+
+  it('a new link made while a hold lands is suspended and both keys are taken down', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'public' });
+    const copy = assets.copyObject.bind(assets);
+    let first = true;
+    assets.copyObject = async (src, dst) => {
+      if (first) {
+        first = false;
+        await holdNow();
+      }
+      return copy(src, dst);
+    };
+    await expect(regenerateLink(ctx)).rejects.toMatchObject({ status: 403, reason: 'FORBIDDEN' });
+    expect(store.rows.get('proj-1')!.status).toBe('suspended');
+    expect(allPub()).toEqual([]);
+  });
+
+  it('no hold: the extra check changes nothing (publish, settings, new link all stay live)', async () => {
+    useAssets();
+    await publish(ctx, { visibility: 'unlisted' });
+    await updatePublication(ctx, { visibility: 'public' });
+    await regenerateLink(ctx);
+    const row = store.rows.get('proj-1')!;
+    expect(row.status).toBe('live');
+    for (const p of Object.keys(payloadOf(row)!.urls)) expect(assets.files.has(p)).toBe(true);
   });
 });
 

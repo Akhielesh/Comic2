@@ -249,6 +249,19 @@ describe('gateWindows', () => {
     expect(windows.at(-1)!.endsWith(lines.at(-1)!)).toBe(true);
   });
 
+  it('a window smaller than the overlap (a retuned size) still moves forward and covers everything — never a loop', () => {
+    const flat = 'y'.repeat(10_000);
+    const hard = gateWindows(flat, 1_000, 2_000);
+    expect(hard.every((w) => w.length > 0 && w.length <= 1_000)).toBe(true);
+    expect(hard.join('')).toBe(flat); // no overlap possible: consecutive, complete, finite
+    const lines = Array.from({ length: 300 }, (_, i) => `l${i} ${'z'.repeat(i % 40)}`);
+    const text = lines.join('\n');
+    const windows = gateWindows(text, 500, 2_000);
+    expect(windows.length).toBeLessThan(text.length);
+    for (const w of windows) expect(w.length).toBeLessThanOrEqual(500);
+    for (const l of lines) expect(windows.some((w) => w.split('\n').includes(l))).toBe(true);
+  });
+
   it('a single huge line with no breaks is still covered (hard cuts, steady progress)', () => {
     const text = 'y'.repeat(100_000);
     const windows = gateWindows(text, 10_000, 500);
@@ -311,6 +324,22 @@ describe('runPublishGate: the whole text is read (S13)', () => {
     fakes.llm.fallback = sentinelAnswer('SENTINEL-ZETA');
     const gate = await runPublishGate(ctx, session.doc, { pageIds: ids, includeCover: false, languages: [] });
     expect(textCalls().length).toBeGreaterThan(0);
+    expect(gate.text.status).toBe('blocked');
+  });
+
+  it('a pass the pre-filter gave alone (classifier off) is not reused once the classifier is on', async () => {
+    resetSafety();
+    fakes = installSafetyFakes({ classifier: false });
+    const sentinel = 'SENTINEL-ZETA waves from the rooftop.';
+    const { doc, ctx, session, ids } = longDoc(1, { at: { offset: 100, text: sentinel } });
+    expect((await runPublishGate(ctx, doc, { pageIds: ids, includeCover: false, languages: [] })).text.status).toBe('pass');
+    expect(session.doc.safety?.text).toMatchObject({ model: 'prefilter' });
+    // The operator turns the classifier on: the same, unchanged text is read by a model now.
+    resetSafety();
+    fakes = installSafetyFakes();
+    fakes.llm.fallback = sentinelAnswer('SENTINEL-ZETA');
+    const gate = await runPublishGate(ctx, session.doc, { pageIds: ids, includeCover: false, languages: [] });
+    expect(textCalls()).toHaveLength(1);
     expect(gate.text.status).toBe('blocked');
   });
 

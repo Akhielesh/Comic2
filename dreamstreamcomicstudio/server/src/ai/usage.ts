@@ -40,6 +40,14 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' && Number
 const charsToTokens = (chars: number) => Math.ceil(Math.max(0, chars) / 4);
 const roundUsd = (usd: number) => Math.round(usd * 1e9) / 1e9;
 
+/**
+ * A metered usage record. `partialProviderCostUsd` is set only when SOME calls reported a cost and
+ * others did not (a stream cut before its usage chunk, a nested run that reported none): the
+ * reported part is real money already spent, so settlement never goes below it — even when the
+ * summed tokens are priced at a `:free` or cheap final model (see buildSettleEstimateFromUsage).
+ */
+export type MeteredUsage = ApiUsage & { partialProviderCostUsd?: number };
+
 export interface UsageMeter {
   /** Provider calls (and nested runs that reported usage) recorded so far. */
   readonly calls: number;
@@ -53,9 +61,10 @@ export interface UsageMeter {
   addNested(usage: ApiUsage | undefined): void;
   /**
    * The summed usage. `providerCostUsd` is present only when EVERY recorded call reported a
-   * cost (a partial sum would under-count); otherwise settlement prices the summed tokens.
+   * cost (a partial sum would under-count); otherwise settlement prices the summed tokens, never
+   * below the cost the reporting calls did report (`partialProviderCostUsd`).
    */
-  usage(promptSeed: string): ApiUsage;
+  usage(promptSeed: string): MeteredUsage;
 }
 
 export const createUsageMeter = (): UsageMeter => {
@@ -86,8 +95,9 @@ export const createUsageMeter = (): UsageMeter => {
       const candidates = num(usage.candidatesTokens);
       const total = num(usage.totalTokens) ?? num(usage.estimatedTokens);
       const cost = num(usage.providerCostUsd);
+      const partial = num((usage as MeteredUsage).partialProviderCostUsd);
       // A tool that made no model call reports nothing — nothing to add.
-      if (prompt === undefined && candidates === undefined && total === undefined && cost === undefined) return;
+      if (prompt === undefined && candidates === undefined && total === undefined && cost === undefined && partial === undefined) return;
       calls += 1;
       if (prompt !== undefined || candidates !== undefined) {
         promptTokens += prompt ?? 0;
@@ -97,16 +107,22 @@ export const createUsageMeter = (): UsageMeter => {
         promptTokens += input;
         completionTokens += Math.max(0, total - input);
       }
-      if (cost === undefined) costComplete = false;
-      else costUsd += cost;
+      if (cost === undefined) {
+        costComplete = false;
+        // The nested run's own reported part still counts toward the floor.
+        if (partial !== undefined) costUsd += partial;
+      } else costUsd += cost;
     },
     usage(promptSeed) {
-      return buildUsage(promptSeed || '', undefined, {
+      const reported = roundUsd(costUsd);
+      const usage: MeteredUsage = buildUsage(promptSeed || '', undefined, {
         promptTokenCount: promptTokens,
         candidatesTokenCount: completionTokens,
         totalTokenCount: promptTokens + completionTokens,
-        ...(calls > 0 && costComplete ? { costUsd: roundUsd(costUsd) } : {})
+        ...(calls > 0 && costComplete ? { costUsd: reported } : {})
       });
+      if (calls > 0 && !costComplete && reported > 0) usage.partialProviderCostUsd = reported;
+      return usage;
     }
   };
 };
@@ -128,11 +144,12 @@ export const withSpentUsage = <E>(err: E, usage: ApiUsage): E | Error => {
 
 /**
  * The usage a failed run had already spent, when there is something worth settling: a real
- * reported cost above $0, or (no cost reported) a positive token count. Undefined otherwise.
+ * reported cost above $0, or (no complete cost reported) a positive token count or a positive
+ * partially reported cost. Undefined otherwise.
  */
-export const spentUsageOf = (err: unknown): ApiUsage | undefined => {
-  const usage = (err as { spentUsage?: ApiUsage } | null | undefined)?.spentUsage;
+export const spentUsageOf = (err: unknown): MeteredUsage | undefined => {
+  const usage = (err as { spentUsage?: MeteredUsage } | null | undefined)?.spentUsage;
   if (!usage || typeof usage !== 'object') return undefined;
   if (typeof usage.providerCostUsd === 'number') return usage.providerCostUsd > 0 ? usage : undefined;
-  return (num(usage.totalTokens) ?? 0) > 0 ? usage : undefined;
+  return (num(usage.totalTokens) ?? 0) > 0 || (num(usage.partialProviderCostUsd) ?? 0) > 0 ? usage : undefined;
 };

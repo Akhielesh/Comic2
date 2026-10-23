@@ -76,6 +76,29 @@ describe('createUsageMeter', () => {
     expect(u.totalTokens).toBe(40);
   });
 
+  it('review: keeps the cost the reporting calls DID report as a settle floor (partialProviderCostUsd)', () => {
+    // Paid rounds reported $0.9, then the final stream was cut before its usage chunk: without the
+    // floor the whole turn settled on tokens priced at the final (possibly :free) model — $0.
+    const m = createUsageMeter();
+    m.addCall({ promptTokens: 100_000, completionTokens: 10, costUsd: 0.9 }, 0, 0);
+    m.addCall({}, 400_000, 2_000);
+    const u = m.usage('x');
+    expect(u.providerCostUsd).toBeUndefined();
+    expect(u.partialProviderCostUsd).toBeCloseTo(0.9, 9);
+    // A nested run's own partial counts too; a complete or cost-less turn carries no partial.
+    const n = createUsageMeter();
+    n.addNested({ totalTokens: 500, partialProviderCostUsd: 0.4 } as never);
+    expect(n.usage('x').partialProviderCostUsd).toBeCloseTo(0.4, 9);
+    const complete = createUsageMeter();
+    complete.addCall({ costUsd: 0.2 }, 0, 0);
+    expect(complete.usage('x').partialProviderCostUsd).toBeUndefined();
+    const none = createUsageMeter();
+    none.addCall({ promptTokens: 5, completionTokens: 5 }, 0, 0);
+    expect(none.usage('x').partialProviderCostUsd).toBeUndefined();
+    // A failed run whose only figure is that partial cost still settles it.
+    expect(spentUsageOf(withSpentUsage(new Error('x'), { partialProviderCostUsd: 0.9 } as never))).toBeDefined();
+  });
+
   it('a genuinely free turn reports a real $0', () => {
     const m = createUsageMeter();
     m.addCall({ promptTokens: 10, completionTokens: 10, costUsd: 0 }, 0, 0);

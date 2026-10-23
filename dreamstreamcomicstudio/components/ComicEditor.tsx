@@ -46,9 +46,12 @@ import { ACCENT_TEXT, GLASS, PRIMARY_BTN, RADIUS_PILL } from './chat/studioDesig
  * treated as the platform's: when in doubt the price stays in usage terms, never dollars for a governed user.
  */
 export const legacyRunUsesOwnKey = (): boolean => {
+  // The routing checks for an active key ENTRY; the header (services/apiClient) needs a VALUE. An entry with a blank
+  // value still routes to that provider but carries no key, so the platform would pay: never call that "own key".
+  const sends = (provider: 'nvidia' | 'openrouter') => !!getActiveKeyForUse(provider).key?.key?.trim() && isProviderEnabled(provider);
   try {
-    if (getSelectedImageSource() === 'nvidia' && getActiveKeyForUse('nvidia').key) return isProviderEnabled('nvidia');
-    if (getActiveKeyForUse('openrouter').key) return isProviderEnabled('openrouter');
+    if (getSelectedImageSource() === 'nvidia' && getActiveKeyForUse('nvidia').key) return sends('nvidia');
+    if (getActiveKeyForUse('openrouter').key) return sends('openrouter');
   } catch {
     /* storage unavailable: no own key can be sent either */
   }

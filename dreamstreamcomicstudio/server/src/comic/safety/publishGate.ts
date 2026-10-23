@@ -71,6 +71,8 @@ export const TOO_MUCH_TEXT_MESSAGE =
  * that straddles a cut is read whole. Text of `size` or less is exactly one window.
  */
 export function gateWindows(text: string, size = CLASSIFIER_CHARS, overlap = WINDOW_OVERLAP): string[] {
+  size = Math.max(1, Math.floor(size));
+  overlap = Math.max(0, Math.floor(overlap));
   if (text.length <= size) return [text];
   const out: string[] = [];
   let start = 0;
@@ -83,7 +85,10 @@ export function gateWindows(text: string, size = CLASSIFIER_CHARS, overlap = WIN
     out.push(text.slice(start, end));
     if (end >= text.length) return out;
     const lineStart = text.lastIndexOf('\n', end - overlap);
-    start = lineStart >= end - 2 * overlap && lineStart + 1 > start ? lineStart + 1 : end - overlap;
+    const next = lineStart >= end - 2 * overlap && lineStart + 1 > start ? lineStart + 1 : end - overlap;
+    // Always forward: a window too small for the overlap (a retuned size) gets none, never a loop
+    // that holds the publish lock forever.
+    start = next > start ? next : end;
   }
 }
 
@@ -246,7 +251,10 @@ export async function runPublishGateImpl(
   let text: { status: SafetyStatus; reasons: string[] };
   const cached = doc.safety?.text;
   let textVerdict: { assessed?: SafetyVerdict['assessed']; categories: SafetyCategory[]; model?: string } | null = null;
-  if (cached && cached.hash === textHash && cached.assessed) {
+  // A pass the pre-filter gave on its own (pre-filter-only operator mode) was never read by a model:
+  // once the classifier is on it is not reused (a block still is — it can only keep text out).
+  const prefilterOnlyPass = cached?.model === 'prefilter' && cached.assessed !== 'X' && deps.classifierOn();
+  if (cached && cached.hash === textHash && cached.assessed && !prefilterOnlyPass) {
     textVerdict = { assessed: cached.assessed, categories: cached.categories || [], ...(cached.model ? { model: cached.model } : {}) };
   } else if (!words.trim()) {
     textVerdict = { assessed: 'G', categories: [], model: 'empty' };

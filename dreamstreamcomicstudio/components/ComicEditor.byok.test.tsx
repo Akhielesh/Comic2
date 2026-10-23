@@ -19,7 +19,7 @@ vi.mock('../services/geminiService', () => ({
 }));
 
 import { ComicEditor, legacyRunUsesOwnKey } from './ComicEditor';
-import { addKey, clearAllKeys } from '../services/apiKeys';
+import { addKey, clearAllKeys, replaceAllKeys } from '../services/apiKeys';
 import { setProviderEnabled } from '../services/sourceGovernance';
 import { setPreferredSource } from '../services/modelSelection';
 
@@ -92,6 +92,16 @@ describe('legacyRunUsesOwnKey', () => {
     expect(legacyRunUsesOwnKey()).toBe(false);
     setPreferredSource('image', 'nvidia');
     expect(legacyRunUsesOwnKey()).toBe(true);
+  });
+
+  it('an active key entry with a blank value sends no key header: the platform pays, so usage terms', () => {
+    const now = new Date().toISOString();
+    const blank = (provider: 'openrouter' | 'nvidia') => ({ id: `k_${provider}`, provider, label: 'Synced key', key: '   ', active: true, limitUsd: null, usedUsd: 0, periodStart: now, createdAt: now });
+    replaceAllKeys([blank('openrouter')]);
+    expect(legacyRunUsesOwnKey()).toBe(false);
+    replaceAllKeys([blank('nvidia')]);
+    setPreferredSource('image', 'nvidia');
+    expect(legacyRunUsesOwnKey()).toBe(false);
   });
 
   it('the Gemini fallback is treated as the platform’s (fail closed: never dollars by guess)', () => {

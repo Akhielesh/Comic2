@@ -296,7 +296,8 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   if (requestedModel && resolved.provider === 'openrouter') {
     try {
       const { models: catalogModels } = await getCatalog();
-      const entry = catalogModels.find((m) => m.id === requestedModel);
+      // A variant (`:nitro`, `:online`, …) is checked as its base model (see catalogEntryFor).
+      const entry = catalogEntryFor(catalogModels, requestedModel);
       if (entry) {
         const fit = productFitForModel(entry, 'chat_studio');
         if (!fit.allowed) {
@@ -868,6 +869,26 @@ export const preparedInputTokens = (
 };
 
 /**
+ * The catalog row for a model id as OpenRouter will serve it. OpenRouter also serves VARIANTS of
+ * a listed model that the catalog does not list on their own — `vendor/model:nitro`, `:floor`,
+ * `:online` (adds the paid web plugin), `:thinking`, `:extended`, `:exacto` … — billed at (at
+ * least) the base model's price, so an unlisted variant resolves to its base row. Without this a
+ * pinned `vendor/opus-class:nitro` skipped the chat-capability check and its hold fell back to a
+ * cheap neighbour's price. A `:free` id never resolves to its paid base (it is $0 or it 404s).
+ */
+export const catalogEntryFor = <T extends { id: string }>(models: T[], rawId: string): T | undefined => {
+  const id = String(rawId || '').trim();
+  if (!id) return undefined;
+  const lower = id.toLowerCase();
+  const exact = models.find((m) => m.id === id) || models.find((m) => m.id.toLowerCase() === lower);
+  if (exact || hasFreeSuffix(id)) return exact;
+  const colon = lower.indexOf(':');
+  if (colon <= 0) return undefined;
+  const base = lower.slice(0, colon);
+  return models.find((m) => m.id.toLowerCase() === base);
+};
+
+/**
  * The provider cost of one call at the live catalog price of the most expensive of `models`
  * (OpenRouter publishes a per-token price for every model). The usage budget takes it as a floor
  * for the hold, so a pinned model the pricing table doesn't know is never held at a cheap
@@ -884,7 +905,7 @@ export const catalogHoldFloorUsd = async (
     const { models: catalogModels } = await getCatalog();
     let best = 0;
     for (const id of ids) {
-      const pricing = catalogModels.find((m) => m.id === id)?.pricing;
+      const pricing = catalogEntryFor(catalogModels, id)?.pricing;
       if (!pricing) continue;
       const price = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
       const usd = inputTokens * price(pricing.promptPerToken) + outputTokens * price(pricing.completionPerToken) + price(pricing.requestFlat);

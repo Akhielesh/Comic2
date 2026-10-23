@@ -434,7 +434,14 @@ export const settleReservedOperation = async (input: {
     if (!reservation.governed) throw err;
     logger.error('usage_budget_settle_estimate_failed', { message: (err as Error)?.message, operation: input.operation });
     const reported = Number(input.usage?.providerCostUsd);
-    actual = Number.isFinite(reported) && reported > 0 ? withProviderCost(reservation.estimated, reported) : reservation.estimated;
+    // A partially reported cost is a floor, not the whole bill: never below the hold's estimate.
+    const partial = Number(input.usage?.partialProviderCostUsd);
+    actual =
+      Number.isFinite(reported) && reported > 0
+        ? withProviderCost(reservation.estimated, reported)
+        : Number.isFinite(partial) && partial > (reservation.estimated.estimatedProviderCostUsd || 0)
+          ? withProviderCost(reservation.estimated, partial)
+          : reservation.estimated;
   }
 
   const settled = await settleReservation({
@@ -501,11 +508,15 @@ export const formatLimitErrorResponse = (details: LimitExceededDetails) => ({
   details
 });
 
-/** The payload with `usage.providerCostUsd` removed (a dollar figure), everything else untouched. */
+/**
+ * The payload with the dollar figures in `usage` removed (`providerCostUsd`, and the partial
+ * reported cost a multi-call turn may carry), everything else untouched.
+ */
 const withoutProviderCost = <T extends Record<string, unknown>>(payload: T): T => {
   const usage = payload.usage;
-  if (!usage || typeof usage !== 'object' || Array.isArray(usage) || !('providerCostUsd' in usage)) return payload;
-  const { providerCostUsd: _dollars, ...rest } = usage as Record<string, unknown>;
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return payload;
+  if (!('providerCostUsd' in usage) && !('partialProviderCostUsd' in usage)) return payload;
+  const { providerCostUsd: _dollars, partialProviderCostUsd: _partialDollars, ...rest } = usage as Record<string, unknown>;
   return { ...payload, usage: rest };
 };
 

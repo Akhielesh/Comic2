@@ -143,6 +143,18 @@ describe('BalloonLayer — editing', () => {
     expect(asSentence('  spaced  ')).toBe('spaced.');
   });
 
+  it('asSentence: every lettered script keeps its own ending (Arabic, Urdu, Japanese quotes, French spacing)', () => {
+    expect(asSentence('هل أنت بخير؟')).toBe('هل أنت بخير؟');
+    expect(asSentence('میں ٹھیک ہوں۔')).toBe('میں ٹھیک ہوں۔');
+    expect(asSentence('「こんにちは。」')).toBe('「こんにちは。」');
+    expect(asSentence('（はい！）')).toBe('（はい！）');
+    expect(asSentence('« Bonjour ! »')).toBe('« Bonjour ! »');
+    expect(asSentence('Wait‼')).toBe('Wait‼');
+    // No ending of its own: one period, still.
+    expect(asSentence('「こんにちは」')).toBe('「こんにちは」.');
+    expect(asSentence('مرحبا')).toBe('مرحبا.');
+  });
+
   it('places lines that have no balloon (fallback) so no text is lost', () => {
     const { hit, drawn } = setup({ editable: true });
     expect(drawn('pg_1_l4')).toBeTruthy();

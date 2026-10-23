@@ -61,7 +61,8 @@ import {
   ogPath,
   OG_PATH_RE,
   planSnapshot,
-  snapshotPaths
+  snapshotPaths,
+  withServerVariants
 } from './snapshot.js';
 import { createSupabasePublicationStore, SlugTakenError, type PublicationBackend, type PublishedListing } from './store.js';
 
@@ -309,8 +310,12 @@ const bufferOf = async (ctx: StudioContext, path: string | undefined): Promise<B
 };
 
 /** The 1080 variant (else the original) of a live asset: what the OG renderer reads. */
-const previewPathOf = (asset?: AssetRef): string | undefined =>
-  asset ? ((asset.variants || []).find((v) => v.w === 1080) || (asset.variants || []).slice(-1)[0] || asset).path : undefined;
+const previewPathOf = (live?: AssetRef): string | undefined => {
+  if (!live) return undefined;
+  // Same rule as the copies (S6): a variant counts only at its deterministic server path.
+  const asset = withServerVariants(live);
+  return ((asset.variants || []).find((v) => v.w === 1080) || (asset.variants || []).slice(-1)[0] || asset).path;
+};
 
 const pubPathsOfCard = (card: ShareCard | Record<string, never> | undefined): string[] =>
   isRecord(card) && isRecord((card as unknown as ShareCard).og) ? Object.values((card as unknown as ShareCard).og).map((o) => o?.path).filter((p): p is string => typeof p === 'string') : [];
@@ -651,6 +656,51 @@ async function buildOg(
   return { og, ...(themeColor ? { themeColor } : {}), written };
 }
 
+const HELD_MESSAGE = 'This comic is paused by DreamStream moderation, so it can’t be published right now. You can still read and edit it.';
+
+/**
+ * A moderation hold that landed while this write was in flight (L11). The projects trigger only
+ * suspends a row that is live when the hold commits, and the hold's takedown
+ * (removePublicationObjects) runs right after it — both usually long before a publish that was
+ * mid-check writes its row. Without this, that write leaves a LIVE row on a held comic: its fresh
+ * copies are never taken down (no sweep touches a live row), an update's snapshot points at the
+ * copies the takedown just deleted, and lifting the hold would serve it again as is. So the hold is
+ * read again after every write that leaves the row live: when it is on, the row is suspended, its
+ * copies (and `alsoKeys`, e.g. regenerate's old key) are removed, and the owner gets the same honest
+ * 403 as a publish refused up front. A failed read is logged and the write stands (the trigger and
+ * the takedown cover every other ordering); a failed suspension keeps the copies (never a live row
+ * pointing at deleted objects).
+ */
+async function refuseIfHeldMeanwhile(ctx: StudioContext, row: PublicationRow, alsoKeys: string[] = []): Promise<void> {
+  const d = deps();
+  let held: boolean;
+  try {
+    held = (await d.store.projectFlags(ctx.projectId, ctx.userId)).forcedPrivate;
+  } catch (err) {
+    logger.warn('comic_publication_hold_recheck_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    return;
+  }
+  if (!held) return;
+  const suspended: PublicationRow = { ...row, status: 'suspended', updatedAt: d.now() };
+  let takenDown = false;
+  try {
+    await d.store.upsert(suspended);
+    takenDown = true;
+  } catch (err) {
+    logger.warn('comic_publication_hold_suspend_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+  }
+  if (takenDown) {
+    for (const key of new Set([row.assetKey, ...alsoKeys])) {
+      if (!key || !ASSET_KEY_RE.test(key)) continue;
+      await ctx.assets.removePrefix(`pub/${key}/`).catch((err) => logger.warn('comic_publication_takedown_failed', { projectId: ctx.projectId, message: (err as Error)?.message }));
+    }
+    const ops = mirrorOps(ctx.session.doc, suspended);
+    if (ops.length) ctx.session.commit(ops, { origin: 'job', label: 'Paused by moderation' });
+  }
+  logger.info('comic_publication_hold_raced', { projectId: ctx.projectId, takenDown });
+  throw new PublishError('FORBIDDEN', HELD_MESSAGE, { status: 403, code: 'FORBIDDEN' });
+}
+
 /** Publish or update. Throws PublishError with an honest message on every refusal; nothing changes on a refusal. */
 export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequest): Promise<PublishOutcome> {
   const req = parsePublishRequest(rawReq);
@@ -660,9 +710,7 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     const doc = ctx.session.doc;
     const flags = await d.store.projectFlags(ctx.projectId, ctx.userId);
     if (!flags.exists) throw new PublishError('NOT_FOUND', "That comic doesn't exist or you don't have access to it.", { status: 404, code: 'NOT_FOUND' });
-    if (flags.forcedPrivate) {
-      throw new PublishError('FORBIDDEN', 'This comic is paused by DreamStream moderation, so it can’t be published right now. You can still read and edit it.', { status: 403, code: 'FORBIDDEN' });
-    }
+    if (flags.forcedPrivate) throw new PublishError('FORBIDDEN', HELD_MESSAGE, { status: 403, code: 'FORBIDDEN' });
     const existing = await d.store.get(ctx.projectId, ctx.userId);
     const live = isLiveish(existing) ? existing : null;
     // A row suspended by a moderation hold (now lifted) keeps its link, but its pub/ copies may have
@@ -778,6 +826,8 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
       if (mine.length) await ctx.assets.remove(mine).catch(() => undefined);
       throw err;
     }
+    // A hold that landed during the checks and copies above: suspend, take down, refuse (L11).
+    await refuseIfHeldMeanwhile(ctx, row, live && live.assetKey !== assetKey ? [live.assetKey] : []);
 
     // Listing mirror (service role). The row is the truth; a failed mirror is logged, not fatal.
     await ctx.session.flush().catch(() => undefined);
@@ -882,6 +932,8 @@ export async function updatePublication(ctx: StudioContext, rawPatch: Publicatio
       next.card = card;
     }
     await d.store.upsert(next);
+    // The row was read live before the (possibly slow) gate: a hold that landed meanwhile is honoured (L11).
+    await refuseIfHeldMeanwhile(ctx, next);
     if (next.visibility !== row.visibility) {
       await ctx.session.flush().catch(() => undefined);
       await d.store.mirrorProject({
@@ -946,6 +998,8 @@ export async function regenerateLink(ctx: StudioContext): Promise<PublicationOwn
         next.slug = d.newSlug();
       }
     }
+    // A hold that landed while the copies were made: suspend, take both keys down, refuse (L11).
+    await refuseIfHeldMeanwhile(ctx, next, [oldKey]);
     await ctx.session.flush().catch(() => undefined);
     try {
       const keptRating = publicationRatingOf(next);

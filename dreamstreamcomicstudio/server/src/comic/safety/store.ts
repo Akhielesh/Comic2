@@ -110,8 +110,12 @@ export interface SafetyStore {
   reportsSince(projectId: string, sinceMs: number): Promise<{ reporterId?: string | null; fingerprint?: string | null; reason: string }[]>;
   /** Appeals by this owner since `sinceMs`. */
   appealsSince(userId: string, sinceMs: number): Promise<number>;
-  /** Open case counts per project (moderation queue). */
-  openCaseCounts(limit: number): Promise<Record<string, number>>;
+  /**
+   * Open case counts per project (moderation queue); `projectId` narrows it to one comic (the
+   * auto-hold lift asks only about its own). THROWS on a database error: an unknown count must
+   * never read as "no open cases" (that would lift a hold with reports still unreviewed).
+   */
+  openCaseCounts(limit: number, projectId?: string): Promise<Record<string, number>>;
   publicationBySlug(slug: string): Promise<PublicationRef | null>;
   publicationByProject(projectId: string): Promise<PublicationRef | null>;
   projectInfo(projectId: string): Promise<{ ownerUserId: string; name?: string; isForcedPrivate: boolean } | null>;
@@ -390,13 +394,19 @@ export function createSupabaseSafetyStore(opts: { db?: () => SupabaseClient } = 
       return count || 0;
     },
 
-    async openCaseCounts(limit) {
+    async openCaseCounts(limit, projectId) {
       const db = admin();
       if (!db) return {};
-      const { data, error } = await db.from('comic_safety_cases').select('project_id').eq('status', 'open').order('created_at', { ascending: false }).limit(Math.max(1, Math.min(1000, limit)));
+      let query = db.from('comic_safety_cases').select('project_id').eq('status', 'open');
+      if (projectId !== undefined) {
+        // One comic's own open cases (not a platform-wide newest-1000 window it may fall outside of).
+        if (!uuidOrNull(projectId)) return {};
+        query = query.eq('project_id', projectId);
+      }
+      const { data, error } = await query.order('created_at', { ascending: false }).limit(Math.max(1, Math.min(1000, limit)));
       if (error) {
         warn('openCaseCounts', error);
-        return {};
+        throw error;
       }
       const out: Record<string, number> = {};
       for (const r of data || []) {

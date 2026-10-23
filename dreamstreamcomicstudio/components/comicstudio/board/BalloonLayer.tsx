@@ -139,8 +139,14 @@ interface DragState {
   alt: boolean;
 }
 
-/** Sentence-final punctuation (Latin, ellipsis, CJK, Devanagari danda), optionally followed by closing quotes / brackets. */
-const SENTENCE_END = /[.!?\u2026\u3002\uFF01\uFF1F\u0964\u0965]["'\u2019\u201D\u00BB)\]]*$/;
+/**
+ * Sentence-final punctuation of every script the studio letters \u2014 Latin . ! ? \u203C \u2047 \u2048 \u2049 and the ellipsis, CJK
+ * \u3002\uFF01\uFF1F\uFF0E\uFF61, Devanagari / Bengali / Gurmukhi danda \u0964 \u0965, Arabic \u061F and the Urdu full stop \u06D4 \u2014 optionally followed
+ * by closing quotes / brackets (\u201C\u2026\u201D \u2019 \u00BB \u203A \u300D \u300F \uFF09 \u3011 \u2026), with the (narrow) no-break space French puts before
+ * \u00AB Bonjour ! \u00BB.
+ */
+const SENTENCE_END =
+  /[.!?\u2026\u203C\u2047-\u2049\u3002\uFF01\uFF1F\uFF0E\uFF61\u0964\u0965\u061F\u06D4][\s"'\u2019\u201D\u00BB\u203A)\]}\u300D\u300F\u3009\u300B\u3011\u3015\uFF09\uFF3D\uFF5D]*$/;
 
 /**
  * A spoken label as one sentence: "Speech — Arjun: You owe me an explanation, Maya." keeps its own full stop

@@ -114,8 +114,12 @@ export function copiesFor(assetKey: string, slot: 'cover' | 'page', asset: Asset
   return out;
 }
 
-/** The asset with only the variants the server derived at their deterministic paths (see isServerVariant). */
-const withServerVariants = (asset: AssetRef): AssetRef =>
+/**
+ * The asset with only the variants the server derived at their deterministic paths (see
+ * isServerVariant). Every reader of a live asset's variants on the publish path goes through it: the
+ * copies (planSnapshot) and the share image the OG card is drawn from (publication.ts previewPathOf).
+ */
+export const withServerVariants = (asset: AssetRef): AssetRef =>
   asset.variants?.length ? { ...asset, variants: asset.variants.filter((v) => !!v && typeof v.path === 'string' && isServerVariant(asset, v)) } : asset;
 
 /** The publish plan: which pages/cover go out and where every live path is copied. */

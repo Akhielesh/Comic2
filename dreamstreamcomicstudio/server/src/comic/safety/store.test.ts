@@ -128,6 +128,19 @@ describe('createSupabaseSafetyStore', () => {
     await expect(createSupabaseSafetyStore({ db: () => broken.db }).forcePrivate(PROJECT, 'x', null)).rejects.toMatchObject({ code: '42501' });
   });
 
+  it("openCaseCounts asks about one comic's own open cases, and an unknown count is an error, never \"none open\"", async () => {
+    const ok = fakeDb(() => ({ data: [{ project_id: PROJECT }, { project_id: PROJECT }], error: null }));
+    expect(await createSupabaseSafetyStore({ db: () => ok.db }).openCaseCounts(1000, PROJECT)).toEqual({ [PROJECT]: 2 });
+    expect(ok.calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['status', 'open'], ['project_id', PROJECT]]);
+    // The moderation-queue form (no project) stays the platform-wide newest window.
+    const all = fakeDb(() => ({ data: [], error: null }));
+    await createSupabaseSafetyStore({ db: () => all.db }).openCaseCounts(50);
+    expect(all.calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['status', 'open']]);
+    // A failed lookup must not read as zero open cases (the auto-hold lift would fire on it).
+    const broken = fakeDb(() => ({ data: null, error: { code: '57014' } }));
+    await expect(createSupabaseSafetyStore({ db: () => broken.db }).openCaseCounts(1000, PROJECT)).rejects.toMatchObject({ code: '57014' });
+  });
+
   it('notifications fall back to a bare system row on an older table (no title/message columns)', async () => {
     let n = 0;
     const { db, calls } = fakeDb((table) => (table === 'notifications' && (n += 1) === 1 ? { error: { code: '42703' } } : { error: null }));

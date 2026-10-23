@@ -440,7 +440,9 @@ const OWNER_COPY: Record<ResolveAction | 'hold_lifted', { title: string; message
   force_private: { title: 'Your comic is paused', message: "A moderator made your comic private because it didn't fit the content rules. You can ask for a review from the studio." },
   hold_lifted: {
     title: 'Your comic is no longer paused',
-    message: 'A moderator reviewed the reports and found nothing wrong. Publish it again from the studio to bring the link back.'
+    // Honest whatever else the review decided: a page withheld in the same review was already
+    // announced on its own ("An image was withheld"), so this never claims nothing was wrong.
+    message: 'A moderator finished reviewing the reports on your comic. Publish it again from the studio to bring the link back.'
   }
 };
 
@@ -611,7 +613,8 @@ export async function resolveCase(
   // An automatic hold (reader reports / a failed report re-check) ends with the last open case.
   let holdLifted = false;
   if ((body.action === 'dismiss' || body.action === 'restore') && info?.isForcedPrivate) {
-    const open = await deps.store.openCaseCounts(1000).catch(() => null);
+    // This comic's own open cases; an unknown count (a failed lookup) never lifts the hold.
+    const open = await deps.store.openCaseCounts(1000, c.projectId).catch(() => null);
     if (open && !open[c.projectId]) {
       holdLifted = await deps.store.liftAutoHold(c.projectId).catch((err) => {
         logger.warn('comic_case_lift_hold_failed', { projectId: c.projectId, ...errorFacts(err) });

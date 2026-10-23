@@ -168,6 +168,21 @@ describe('POST /api/recipes/run — a recipe’s pinned model is resolved, check
     expect(runner.runRecipe).not.toHaveBeenCalled();
   });
 
+  it('review: a VARIANT pin (`:floor`, `:nitro`) is checked and priced as its base model', async () => {
+    const r = await run({ recipe: { title: 'x', prompt: 'go', settings: { model: 'vendor/expensive:floor' } }, model: picker, messages });
+    expect(r.status).toBe(200);
+    expect(enforcer.reserve.mock.calls[0][0].estimateFloorUsd).toBeGreaterThan(0.2);
+    expect(runner.runRecipe.mock.calls[0][0].model).toBe('vendor/expensive:floor');
+
+    enforcer.reserve.mockClear();
+    runner.runRecipe.mockClear();
+    const media = await run({ recipe: { title: 'x', prompt: 'go', settings: { model: 'vendor/image-only:nitro' } }, model: picker, messages });
+    expect(media.status).toBe(400);
+    expect(media.json.error.code).toBe('MODEL_NOT_CHAT_CAPABLE');
+    expect(enforcer.reserve).not.toHaveBeenCalled();
+    expect(runner.runRecipe).not.toHaveBeenCalled();
+  });
+
   it('no pin: unchanged — the request’s model and its paid net are priced and run', async () => {
     const r = await run({ recipe: { title: 'x', prompt: 'go' }, model: picker, messages });
     expect(r.status).toBe(200);

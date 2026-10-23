@@ -816,6 +816,27 @@ describe('gate S9 — the real engine’s provider usage drives the settle', () 
     expect(turnEvents(user)[0].holdUsd).toBeGreaterThan(0.15);
   });
 
+  it('review: an OpenRouter VARIANT of a pricey model (`:nitro`, `:online`, any case) is held at its base model’s live price', async () => {
+    // The catalog lists only `vendor/pricey`; OpenRouter still serves `vendor/pricey:nitro` at
+    // (at least) that price. The hold used to miss the catalog row and fall to the cheap table guess.
+    for (const pin of ['vendor/pricey:nitro', 'vendor/pricey:online', 'Vendor/Pricey']) {
+      const user = freshUser();
+      const r = await post('/api/chat', ask('Explain recursion with an example', { model: pin }), { 'x-test-user': user });
+      expect(r.status).toBe(200);
+      expect(turnEvents(user)[0].holdUsd).toBeGreaterThan(0.15);
+    }
+  });
+
+  it('review: catalogEntryFor resolves variants to the base row, but never a `:free` id to its paid base', async () => {
+    const { catalogEntryFor } = await import('./chat.js');
+    const rows = [{ id: 'vendor/pricey' }, { id: 'vendor/cheap:free' }];
+    expect(catalogEntryFor(rows, 'vendor/pricey:nitro')?.id).toBe('vendor/pricey');
+    expect(catalogEntryFor(rows, 'vendor/cheap:free')?.id).toBe('vendor/cheap:free');
+    expect(catalogEntryFor(rows, 'vendor/pricey:free')).toBeUndefined();
+    expect(catalogEntryFor(rows, 'vendor/unknown')).toBeUndefined();
+    expect(catalogEntryFor(rows, '')).toBeUndefined();
+  });
+
   it('a governed user whose usage can’t cover a pricey pin gets a free model instead — never the unpriced pin', async () => {
     const user = freshUser();
     db.budgets.set(user, 0.1);

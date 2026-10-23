@@ -316,6 +316,22 @@ describe('moderator cases', () => {
     expect(fakes.store.notifications.at(-1)).toMatchObject({ userId: OWNER, title: 'Your comic is no longer paused', message: expect.stringMatching(/Publish it again/) });
   });
 
+  it("the lift asks about this comic's own open cases, and an unknown count never lifts the hold", async () => {
+    fakes.store.projects.set(PROJECT, { ownerUserId: OWNER, name: 'Spice Run', isForcedPrivate: true, forcedReason: 'auto: reader reports' });
+    const counts = fakes.store.openCaseCounts;
+    const asked: unknown[][] = [];
+    fakes.store.openCaseCounts = async (...args: Parameters<typeof counts>) => {
+      asked.push(args);
+      throw Object.assign(new Error('db busy'), { code: '57014' });
+    };
+    const a = await fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r1', target: {}, reason: 'other' });
+    const out = await resolveCase('mod-1', a.id!, { action: 'dismiss', reason: '' });
+    expect(asked).toEqual([[1000, PROJECT]]);
+    expect(out.effects).not.toContain('hold_lifted');
+    expect(fakes.store.projects.get(PROJECT)?.isForcedPrivate).toBe(true);
+    fakes.store.openCaseCounts = counts;
+  });
+
   it("a moderator's own pause is never lifted by dismissing a report", async () => {
     fakes.store.projects.set(PROJECT, { ownerUserId: OWNER, isForcedPrivate: true, forcedReason: 'moderator: a published page was withheld' });
     const a = await fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r1', target: {}, reason: 'other' });
@@ -423,6 +439,10 @@ describe('a moderator withhold on a reader report reaches the source image', () 
     expect((await resolveCase('mod-1', b.id!, { action: 'dismiss', reason: 'duplicate' })).effects).toContain('hold_lifted');
     expect(fakes.store.projects.get(PROJECT)?.isForcedPrivate).toBe(false);
     expect(await gateStatus(session)).toBe('blocked');
+    // The owner hears both, and neither contradicts the other: an image was withheld, and the
+    // pause is over — never "found nothing wrong" after a takedown in the same review.
+    expect(fakes.store.notifications.map((n) => n.title)).toEqual(['An image was withheld', 'Your comic is no longer paused']);
+    expect(fakes.store.notifications.at(-1)?.message).not.toMatch(/nothing wrong/i);
   });
 
   it('a page redrawn since publishing: the withheld image in history is marked, the new drawing is untouched', async () => {

@@ -38,7 +38,10 @@ describe('telemetry_mask_capability_paths.sql (S19)', () => {
     expect(SQL).toMatch(/to_regclass\(format\('public\.%I', t\)\) is null/);
     expect(SQL).toMatch(/column_name = 'surface'/);
     const updates = [...SQL.matchAll(/update public\.%I\s+set (\w+)\s*=/g)].map((m) => m[1]);
-    expect(updates).toEqual(['surface', 'surface', 'surface', 'surface', 'surface']);
+    expect(updates).toEqual(['surface', 'surface', 'surface', 'surface', 'surface', 'message', 'message', 'metadata', 'metadata']);
+    // The free-text step is guarded by the column's type too (text / jsonb).
+    expect(SQL).toMatch(/column_name = 'message' and data_type = 'text'/);
+    expect(SQL).toMatch(/column_name = 'metadata' and data_type = 'jsonb'/);
     expect(SQL).not.toMatch(/\b(delete|drop|truncate|alter|grant|revoke)\b/i);
     expect(RULES).toHaveLength(4);
   });
@@ -64,5 +67,51 @@ describe('telemetry_mask_capability_paths.sql (S19)', () => {
     expect(once).toBe(loggablePath(stored));
     expect(scrub(once)).toBe(once);
     expect(once).not.toContain(SLUG);
+  });
+
+  describe('step 4: capability URLs inside message / metadata (an error filename or stack frame)', () => {
+    /** SQL string literal → JS RegExp source: '' → ', [:space:] → \s (backslashes are literal: standard_conforming_strings). */
+    const re = (lit: string, flags: string) => new RegExp(lit.replace(/''/g, "'").replace(/\[:space:\]/g, '\\s'), flags);
+    const FREE = [
+      ...SQL.matchAll(/set (message|metadata) = regexp_replace\((?:message|metadata::text), '((?:[^']|'')+)', '([^']+)', 'gi'\)(?:::jsonb)?\s*where (?:message|metadata::text) ~\* '((?:[^']|'')+)'/g)
+    ].map((m) => ({ column: m[1], pattern: re(m[2], 'gi'), replacement: m[3].replace(/\\(\d)/g, '$$$1'), guard: re(m[4], 'i') }));
+    const scrubText = (column: string, value: string) => {
+      let v = value;
+      for (const rule of FREE) if (rule.column === column && rule.guard.test(v)) v = v.replace(rule.pattern, rule.replacement);
+      return v;
+    };
+
+    it('has the four statements (slug + token, for each column)', () => {
+      expect(FREE.map((r) => r.column)).toEqual(['message', 'message', 'metadata', 'metadata']);
+    });
+
+    it('masks every capability URL, keeps the jsonb valid and everything else as it was; a second run is a no-op', () => {
+      const page = `https://comics.dreamstreamstudio.ai/c/${SLUG}?lang=hi`;
+      const metadata = {
+        filename: page,
+        lineno: 110,
+        stack: `Error: boom\n    at ${page}:110:5\n    at https://comics.dreamstreamstudio.ai/assets/index-Ab12.js:1:2`,
+        nested: { u: 'run@HTTPS://DreamStreamStudio.ai/Share/tok_abc123XYZ:3:9 "q"', api: `https://dreamstreamstudio.ai/api/comic/public/s/${SLUG}/event` },
+        other: 'b "quoted" \\ back https://openrouter.ai/api/v1/x?y=1'
+      };
+      const once = scrubText('metadata', JSON.stringify(metadata));
+      const parsed = JSON.parse(once) as typeof metadata;
+      expect(once).not.toContain(SLUG);
+      expect(once).not.toContain('tok_abc123XYZ');
+      expect(parsed.filename).toBe('https://comics.dreamstreamstudio.ai/c/:slug?lang=hi');
+      expect(parsed.stack).toContain('https://comics.dreamstreamstudio.ai/assets/index-Ab12.js:1:2');
+      expect(parsed.nested.u).toBe('run@HTTPS://DreamStreamStudio.ai/Share/:token:3:9 "q"');
+      expect(parsed.nested.api).toBe('https://dreamstreamstudio.ai/api/comic/public/s/:slug/event');
+      expect(parsed.other).toBe(metadata.other);
+      expect(scrubText('metadata', once)).toBe(once);
+
+      const message = `URL '${page}' cannot be created; see https://dreamstreamstudio.ai/api/shares/token/tok_abc123XYZ`;
+      const masked = scrubText('message', message);
+      expect(masked).toBe("URL 'https://comics.dreamstreamstudio.ai/c/:slug?lang=hi' cannot be created; see https://dreamstreamstudio.ai/api/shares/token/:token");
+      expect(scrubText('message', masked)).toBe(masked);
+      for (const plain of ['Script error.', 'https://x.test/c/', 'see /c/not-a-url', 'https://dreamstreamstudio.ai/?view=read&id=11111111-2222-3333-4444-555555555555']) {
+        expect(scrubText('message', plain)).toBe(plain);
+      }
+    });
   });
 });
