@@ -1,9 +1,14 @@
 // Invite / event page (Luma-style) — fully cloud-backed: cover, date block,
 // host, description and RSVPs all come from the worker, so the link works on
 // any device. Viewers join (or save a spot) with just a name.
-import React, { useEffect, useState } from 'react';
+//
+// It looks at the event again on a schedule that knows the start time (see
+// invitePoll.ts: ≤ 12 requests per waiting tab-hour), never while the tab is
+// hidden, and once more when you come back to it.
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getEvent, rsvpEvent } from '../api';
 import { loadViewerName, saveViewerName } from '../events';
+import { canLookNow, planInviteCheck, pruneLooks } from '../invitePoll';
 import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
 import type { EventMeta } from '../protocol';
@@ -12,6 +17,7 @@ import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
 import { LiveLegalLinks } from '../ui/legalLinks';
 import { StreamStudioLogo } from '../ui/logo';
+import { useOnPageReturn, usePageVisible } from '../ui/pageVisibility';
 import { Avatar, Btn, Pill, cx, type PushToast } from '../ui/primitives';
 
 function fmtEventDate(ms: number | null): { day: string; time: string; mon: string; date: string } {
@@ -31,28 +37,72 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
   const [name, setName] = useState(loadViewerName);
   const [rsvped, setRsvped] = useState(false);
   const [, setClock] = useState(0);
+  const visible = usePageVisible();
+  /** Bumped after every look, so the next one is scheduled from what it found. */
+  const [looked, setLooked] = useState(0);
+  const metaRef = useRef<EventMeta | null>(null);
+  const idRef = useRef(eventId);
+  /** When this tab looked (last hour) — the hourly budget is counted from these. */
+  const looks = useRef<number[]>([]);
+  const nearLooks = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      getEvent(eventId)
-        .then((m) => {
-          if (cancelled) return;
-          setMeta(m);
-          // The invite flips to the watch page the moment the host goes live.
-          if (m.status === 'live' || m.status === 'paused') nav.viewer(eventId);
-        })
-        .catch((e) => !cancelled && setErr(e instanceof Error ? e.message : 'Event not found.'));
-    void load();
-    const poll = window.setInterval(load, 30_000);
-    const tick = window.setInterval(() => setClock((c) => c + 1), 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(poll);
-      window.clearInterval(tick);
-    };
+  const look = useCallback(async () => {
+    const id = eventId;
+    const now = Date.now();
+    looks.current = [...pruneLooks(looks.current, now), now];
+    try {
+      const m = await getEvent(id);
+      if (idRef.current !== id) return;
+      metaRef.current = m;
+      setMeta(m);
+      setErr(null);
+      // The invite flips to the watch page the moment the host goes live.
+      if (m.status === 'live' || m.status === 'paused') nav.viewer(id);
+    } catch (e) {
+      // A blip while the page is already showing the event isn't "not found".
+      if (idRef.current === id && !metaRef.current) setErr(e instanceof Error ? e.message : 'Event not found.');
+    }
+    if (idRef.current === id) setLooked((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
+
+  useEffect(() => {
+    idRef.current = eventId;
+    metaRef.current = null;
+    nearLooks.current = 0;
+    looks.current = [];
+    setMeta(null);
+    setErr(null);
+    void look();
+  }, [eventId, look]);
+
+  // The next look: only while the tab is on screen (hiding it clears the timer).
+  useEffect(() => {
+    const m = metaRef.current;
+    if (!visible || !m) return;
+    const plan = planInviteCheck(m, Date.now(), nearLooks.current, looks.current);
+    if (plan.inMs == null) return;
+    const t = window.setTimeout(() => {
+      nearLooks.current = plan.near ? nearLooks.current + 1 : 0;
+      void look();
+    }, plan.inMs);
+    return () => window.clearTimeout(t);
+  }, [visible, looked, look]);
+
+  // Back on the tab (or back online): one look if the last is getting old and the
+  // hourly budget allows; otherwise the scheduled look comes soon enough. An ended
+  // event is never asked again, on return or on a timer.
+  useOnPageReturn(() => {
+    if (canLookNow(looks.current, Date.now(), metaRef.current)) void look();
+  });
+
+  // The countdown ("Live in 12m") only needs a nudge every few seconds, and none while hidden.
+  useEffect(() => {
+    if (!visible) return;
+    setClock((c) => c + 1);
+    const tick = window.setInterval(() => setClock((c) => c + 1), 5000);
+    return () => window.clearInterval(tick);
+  }, [visible]);
 
   if (err) {
     return (

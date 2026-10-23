@@ -8,8 +8,10 @@ import {
   DRIVE_CHUNK_BYTES,
   DriveError,
   errorFromApi,
+  STATUS_TTL_MS,
   getDriveStatus,
   nextOffsetFromRange,
+  peekDriveStatus,
   resetDriveStatus,
   saveRecordingToDrive,
   uploadResumable,
@@ -318,5 +320,55 @@ describe('getDriveStatus', () => {
       throw new TypeError('Failed to fetch');
     }) as unknown as typeof fetch;
     expect(await getDriveStatus({ force: true })).toMatchObject({ connected: false, error: 'network' });
+  });
+});
+
+describe('Drive status keeps the backend asleep (ADR 0007 C11)', () => {
+  const realFetch = globalThis.fetch;
+  const ok = () => resp(200, { ok: true, connected: true, configured: true, email: 'me@x.com', expired: false }) as unknown as Response;
+  beforeEach(() => {
+    resetDriveStatus();
+    vi.mocked(accessToken).mockResolvedValue('jwt');
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 9, 22, 9));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.fetch = realFetch;
+  });
+
+  it('a good answer is reused for 10 minutes, so one save session wakes the backend at most once', async () => {
+    expect(STATUS_TTL_MS).toBe(10 * 60_000);
+    const f = vi.fn(async () => ok());
+    globalThis.fetch = f as unknown as typeof fetch;
+    await getDriveStatus(); // the save sheet opens
+    vi.advanceTimersByTime(9 * 60_000); // …a long Drive upload later
+    await getDriveStatus();
+    expect(f).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(60_001);
+    await getDriveStatus();
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed check is shown but never cached', async () => {
+    const f = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    globalThis.fetch = f as unknown as typeof fetch;
+    expect(await getDriveStatus()).toMatchObject({ error: 'network' });
+    globalThis.fetch = vi.fn(async () => ok()) as unknown as typeof fetch;
+    expect(await getDriveStatus()).toMatchObject({ connected: true });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('Google refusing the grant mid-upload drops the cached “connected”', async () => {
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) =>
+      String(url).includes('upload-session') ? (resp(200, { ok: true, uploadUrl: SESSION, folderId: 'f' }) as unknown as Response) : ok(),
+    ) as unknown as typeof fetch;
+    await getDriveStatus();
+    expect(peekDriveStatus()).toMatchObject({ connected: true });
+    const refused = vi.fn(async () => resp(401, 'invalid credentials') as unknown as Response);
+    await expect(saveRecordingToDrive(blobOf(10), 'a.webm', { fetchImpl: refused as unknown as typeof fetch, sleep: instantSleep() })).rejects.toMatchObject({ code: 'reconnect' });
+    expect(peekDriveStatus()).toBeNull();
   });
 });
