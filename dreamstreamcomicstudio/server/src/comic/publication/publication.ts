@@ -6,8 +6,12 @@
 //    loaded owner-scoped, and the publication row is read/written by (project_id, user_id);
 //  - readers only ever see the frozen, allow-listed snapshot and opaque pub/<assetKey>/ copies;
 //    later edits never go live until the owner republishes (which re-runs the safety gate);
-//  - the safety gate (runPublishGate) runs for BOTH visibilities; unchecked content is never
-//    published (fail closed: 503 with an honest message), blocked pages need explicit consent;
+//  - the safety gate (runPublishGate) runs for BOTH visibilities over the doc itself (its text check
+//    reads shared publishableText(), which covers every author text the snapshot publishes);
+//    unchecked content is never published (fail closed: 503 with an honest message), only pages
+//    the gate PASSED go out, blocked pages need explicit consent;
+//  - the gate's rating (G / PG / PG-13) is frozen in the row's safety.rating at publish time and
+//    is what readers, the gallery mirror (projects.content_rating) and the preview card show;
 //  - regenerate and unpublish kill the old slug the moment the row commits (the edge does no
 //    caching) and delete the old pub/ objects; publishing again after an unpublish mints a NEW slug;
 //  - projects.is_public is mirrored by the service role only.
@@ -29,7 +33,7 @@ import {
   type PublishRequest,
   type ShareCard
 } from '../../../../shared/comic/publication.js';
-import { effectiveRating, safetyStatusOf, type ContentRating, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { effectiveRating, isContentRating, safetyStatusOf, type ContentRating, type SafetyStatus } from '../../../../shared/comic/safety.js';
 import { comicShareUrl } from '../../../../services/productHost.js';
 import { logger } from '../../lib/logger.js';
 import { runPublishGate, type PublishGateResult } from '../safety/index.js';
@@ -99,7 +103,12 @@ export function configurePublication(next: Partial<PublicationDeps>): () => void
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 
-export type PublishErrorReason = 'BAD_REQUEST' | 'NOT_FOUND' | 'NOT_READY' | 'SAFETY_BLOCKED' | 'LANG_INCOMPLETE' | 'CONFLICT' | 'SAFETY_UNAVAILABLE' | 'FORBIDDEN';
+/**
+ * The public API code of a refusal (the route sends it as `error.code`). A safety check that could
+ * not run is 'NOT_AVAILABLE' (contract §12.6: needs_check → 503 NOT_AVAILABLE, which the client
+ * treats as retryable); 'SAFETY_UNAVAILABLE' is kept only so older callers still type-check.
+ */
+export type PublishErrorReason = 'BAD_REQUEST' | 'NOT_FOUND' | 'NOT_READY' | 'SAFETY_BLOCKED' | 'LANG_INCOMPLETE' | 'CONFLICT' | 'NOT_AVAILABLE' | 'SAFETY_UNAVAILABLE' | 'FORBIDDEN';
 
 /** A StudioError that carries the public API code and machine-readable details. */
 export class PublishError extends StudioError {
@@ -243,6 +252,16 @@ const ratingOf = (ctx: StudioContext, doc: ComicDoc): ContentRating => ctx.ratin
 
 const isLiveish = (row: PublicationRow | null): row is PublicationRow & { slug: string; assetKey: string } =>
   !!row && (row.status === 'live' || row.status === 'suspended') && !!row.slug && SLUG_RE.test(row.slug) && !!row.assetKey && ASSET_KEY_RE.test(row.assetKey);
+
+/**
+ * The rating a publication was safety-checked under, frozen in safety.rating at publish time.
+ * Undefined for rows published before ratings were recorded (or a malformed value): readers and
+ * the gallery treat that as unknown, never as kids-friendly. Same rule as the anon RPCs.
+ */
+export const publicationRatingOf = (row: Pick<PublicationRow, 'safety'> | null | undefined): ContentRating | undefined => {
+  const r = row?.safety?.rating;
+  return isContentRating(r) ? r : undefined;
+};
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -395,6 +414,8 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     if (og) view.ogImageUrl = og;
     if (row.publishedAt) view.publishedAt = row.publishedAt;
     if (row.startPage !== undefined) view.startPage = row.startPage ?? null;
+    const rating = publicationRatingOf(row);
+    if (rating) view.rating = rating;
   }
   if (row?.defaultLang) view.defaultLang = row.defaultLang;
   if (row?.firstPublishedAt) view.firstPublishedAt = row.firstPublishedAt;
@@ -420,39 +441,7 @@ export async function getPublicationView(ctx: StudioContext): Promise<Publicatio
 
 // ── Gate interpretation ──────────────────────────────────────────────────────
 
-/**
- * The doc the publish gate reads. Its text check covers publishableText() (titles, logline,
- * tagline, cast names, every line and the published translations), but the snapshot ALSO
- * publishes author text that list misses: chapter titles, the back-cover blurb, book and
- * end-card credits, the dedication and the style name. Those ride along as extra cast "names"
- * (plain lines of text to the classifier), so no word reaches readers without the check.
- * Never stored: only the gate sees it.
- */
-export function gateDocOf(doc: ComicDoc, pageIds: string[]): ComicDoc {
-  const want = new Set(pageIds);
-  const extra = [
-    ...(doc.pages || []).filter((p) => want.has(p.id)).map((p) => p.chapterTitle),
-    doc.book?.blurb,
-    ...(Array.isArray(doc.book?.credits) ? doc.book!.credits : []),
-    doc.reader?.credits,
-    doc.reader?.dedication,
-    doc.style?.name
-  ].filter((t): t is string => typeof t === 'string' && !!t.trim());
-  if (!extra.length) return doc;
-  const known = new Set((doc.cast || []).map((c) => c.name));
-  const texts = [...new Set(extra)].filter((t) => !known.has(t));
-  if (!texts.length) return doc;
-  return {
-    ...doc,
-    cast: [
-      ...(doc.cast || []),
-      ...texts.map((name, i) => ({ id: `_published_text_${i}`, name, tier: 'extra' as const, look: { summary: '' }, refs: [], sheet: { status: 'none' as const, history: [] } }))
-    ]
-  };
-}
-
 const BAD: ReadonlySet<SafetyStatus> = new Set(['blocked', 'over_rating']);
-const UNSURE: ReadonlySet<SafetyStatus> = new Set(['unchecked', 'pending']);
 
 interface GateDecision {
   pageIds: string[];
@@ -474,7 +463,8 @@ export function interpretGate(doc: ComicDoc, gate: PublishGateResult, pageIds: s
   const blockedPages: number[] = [];
   const reasons = new Set<string>();
   const out: string[] = [];
-  let unsure = UNSURE.has(gate.text?.status ?? 'unchecked');
+  // Only text the gate checked AND passed is published; anything else fails closed below.
+  let unsure = gate.text?.status !== 'pass';
   for (const id of pageIds) {
     const verdict = gate.pages?.[id];
     const status: SafetyStatus = verdict?.status ?? 'unchecked';
@@ -486,8 +476,10 @@ export function interpretGate(doc: ComicDoc, gate: PublishGateResult, pageIds: s
       }
       continue;
     }
-    if (UNSURE.has(status)) unsure = true;
-    else out.push(id);
+    // Only a page the gate PASSED goes out; anything else it could not vouch for (unchecked,
+    // pending, or a status this code does not know) fails closed as "could not check".
+    if (status === 'pass') out.push(id);
+    else unsure = true;
   }
   if (blockedPages.length) {
     const list = blockedPages.sort((a, b) => a - b).join(', ');
@@ -503,10 +495,10 @@ export function interpretGate(doc: ComicDoc, gate: PublishGateResult, pageIds: s
     if (BAD.has(status)) {
       cover = false; // a blocked cover is simply left out; the preview falls back to page 1
       blockers.push({ target: { kind: 'cover' }, status: status as SafetyBlocker['status'], categories: [] });
-    } else if (UNSURE.has(status)) unsure = true;
+    } else if (status !== 'pass') unsure = true;
   }
   if (unsure || gate.status === 'needs_check') {
-    throw new PublishError('SAFETY_UNAVAILABLE', "Safety checks are unavailable right now, so nothing was published — your comic stays private. Try again in a few minutes.", {
+    throw new PublishError('NOT_AVAILABLE', "Safety checks are unavailable right now, so nothing was published — your comic stays private. Try again in a few minutes.", {
       status: 503,
       code: 'NOT_AVAILABLE'
     });
@@ -575,7 +567,8 @@ async function buildOg(
   snapshot: ComicDoc,
   plan: SnapshotPlan,
   languages: string[],
-  previous: ShareCard | null
+  previous: ShareCard | null,
+  rating?: ContentRating
 ): Promise<{ og: ShareCard['og']; themeColor?: string; written: string[] }> {
   const d = deps();
   const og: ShareCard['og'] = {};
@@ -591,7 +584,7 @@ async function buildOg(
   let themeColor = previous?.themeColor;
   for (const lang of languages) {
     const text = localizedText(doc, lang, pageCount);
-    const base = { title: text.title, subtitle: text.description, kindLabel: kind, pageCount, lang, showMark: true as const, languagesLabel: langsLabel, fallbackTitle: source.title };
+    const base = { title: text.title, subtitle: text.description, kindLabel: kind, pageCount, lang, showMark: true as const, languagesLabel: langsLabel, fallbackTitle: source.title, ...(rating ? { rating } : {}) };
     const hash = ogHash({ ...base, coverPath });
     const path = ogPath(plan.assetKey, lang, hash);
     const alt = cleanText(`Cover of ${text.title}, a ${kind.toLowerCase()}`, 200);
@@ -657,9 +650,14 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     if (!candidates.length) throw new PublishError('NOT_READY', 'Draw at least one page before publishing.', { status: 422, code: 'NOT_READY' });
     const wantCover = hasPublishableArt(doc.cover?.render);
 
-    // Safety gate (both visibilities; platform-paid).
-    const gate = await d.gate(ctx, gateDocOf(doc, candidates.map((p) => p.id)), { pageIds: candidates.map((p) => p.id), includeCover: wantCover, languages });
+    // Safety gate (both visibilities; platform-paid). It reads the doc itself: its text check is
+    // shared publishableText(), which covers every author text the snapshot publishes (titles,
+    // logline, tagline, cast names, lines, chapter titles, blurb, credits, dedication, style name
+    // and the published translations), so no helper doc is needed.
+    const gate = await d.gate(ctx, doc, { pageIds: candidates.map((p) => p.id), includeCover: wantCover, languages });
     const decision = interpretGate(doc, gate, candidates.map((p) => p.id), wantCover, exclude);
+    // The rating the gate verified this snapshot under, frozen with the row (unknown → none).
+    const rating = isContentRating(gate.rating) ? gate.rating : undefined;
 
     // Identity: keep the live link on an update; a NEW slug + key after an unpublish.
     const now = d.now();
@@ -675,7 +673,7 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     const snapshot = buildSnapshot(prepared, plan);
 
     const previousCard = live && isRecord(live.card) && (live.card as unknown as ShareCard).v === 1 ? (live.card as unknown as ShareCard) : null;
-    const { og, themeColor, written } = await buildOg(ctx, prepared, snapshot, plan, languages, previousCard);
+    const { og, themeColor, written } = await buildOg(ctx, prepared, snapshot, plan, languages, previousCard, rating);
     const showCreator = req.showCreator ?? existing?.showCreator ?? PUBLISH_DEFAULTS.showCreator;
     const creator = showCreator ? await d.store.publicUsername(ctx.userId) : undefined;
     const card = buildShareCard({ doc: prepared, snapshot, languages, publicUrl: d.publicUrl, og, ...(themeColor ? { themeColor } : {}), ...(creator ? { creator } : {}) });
@@ -700,7 +698,7 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
       publishedRev: doc.rev,
       safety: {
         status: gate.status,
-        rating: gate.rating,
+        ...(rating ? { rating } : {}),
         checkedHash: gate.checkedHash,
         costUsd: gate.costUsd,
         excludedPageIds: [...exclude].filter((id) => doc.pages.some((p) => p.id === id)),
@@ -732,7 +730,7 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     await ctx.session.flush().catch(() => undefined);
     const publicCover = coverUrlPath(snapshot);
     try {
-      await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: row.visibility === 'public', shareSlug: row.slug, publicCover, publishedAt: now, listing: listingOf(snapshot) });
+      await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: row.visibility === 'public', shareSlug: row.slug, publicCover, publishedAt: now, listing: listingOf(snapshot), contentRating: rating ?? null });
     } catch (err) {
       logger.warn('comic_publication_mirror_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
     }
@@ -792,9 +790,9 @@ export async function updatePublication(ctx: StudioContext, rawPatch: Publicatio
         }
         // Going to the public gallery re-runs the gate (it may hold public-only rules).
         const pageIds = (row.snapshot?.pages || []).map((p) => p.id).filter((id) => doc.pages.some((p) => p.id === id));
-        const gate = await d.gate(ctx, gateDocOf(doc, pageIds), { pageIds, includeCover: !!row.snapshot?.cover?.render?.asset, languages: row.languages });
+        const gate = await d.gate(ctx, doc, { pageIds, includeCover: !!row.snapshot?.cover?.render?.asset, languages: row.languages });
         if (pageIds.length) interpretGate(doc, gate, pageIds, false, new Set());
-        else if (gate.status !== 'cleared') throw new PublishError('SAFETY_UNAVAILABLE', 'Safety checks are unavailable right now. Try again in a few minutes.', { status: 503, code: 'NOT_AVAILABLE' });
+        else if (gate.status !== 'cleared') throw new PublishError('NOT_AVAILABLE', 'Safety checks are unavailable right now. Try again in a few minutes.', { status: 503, code: 'NOT_AVAILABLE' });
       }
       next.visibility = patch.visibility;
     }
@@ -829,7 +827,9 @@ export async function updatePublication(ctx: StudioContext, rawPatch: Publicatio
         shareSlug: next.slug,
         publicCover: next.snapshot ? coverUrlPath(next.snapshot) : null,
         publishedAt: next.publishedAt ?? null,
-        listing: listingOf(next.snapshot)
+        listing: listingOf(next.snapshot),
+        // The snapshot did not change, so neither does its frozen rating (heals rows mirrored before ratings).
+        ...(publicationRatingOf(next) ? { contentRating: publicationRatingOf(next) } : {})
       });
     }
     const ops = mirrorOps(ctx.session.doc, next);
@@ -884,7 +884,8 @@ export async function regenerateLink(ctx: StudioContext): Promise<PublicationOwn
     }
     await ctx.session.flush().catch(() => undefined);
     try {
-      await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: next.visibility === 'public', shareSlug: next.slug, publicCover: next.snapshot ? coverUrlPath(next.snapshot) : null, publishedAt: next.publishedAt ?? null, listing: listingOf(next.snapshot) });
+      const keptRating = publicationRatingOf(next);
+      await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: next.visibility === 'public', shareSlug: next.slug, publicCover: next.snapshot ? coverUrlPath(next.snapshot) : null, publishedAt: next.publishedAt ?? null, listing: listingOf(next.snapshot), ...(keptRating ? { contentRating: keptRating } : {}) });
     } catch (err) {
       logger.warn('comic_publication_mirror_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
     }
@@ -908,7 +909,7 @@ export async function unpublish(ctx: StudioContext): Promise<PublicationOwnerVie
       await d.store.upsert(next);
       await ctx.session.flush().catch(() => undefined);
       try {
-        await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: false, shareSlug: null, publicCover: null, publishedAt: null });
+        await d.store.mirrorProject({ projectId: ctx.projectId, userId: ctx.userId, isPublic: false, shareSlug: null, publicCover: null, publishedAt: null, contentRating: null });
       } catch (err) {
         logger.warn('comic_publication_mirror_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
       }
@@ -942,7 +943,8 @@ export function payloadOf(row: PublicationRow, publicUrl = deps().publicUrl): Pu
       allowEmbed: row.allowEmbed,
       publishedAt: row.publishedAt ?? 0,
       updatedAt: row.updatedAt ?? 0,
-      card: row.card as ShareCard
+      card: row.card as ShareCard,
+      ...(publicationRatingOf(row) ? { rating: publicationRatingOf(row) } : {})
     },
     doc: row.snapshot,
     urls

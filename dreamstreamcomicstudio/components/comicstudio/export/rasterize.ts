@@ -271,11 +271,13 @@ export async function renderSlotToBlob(
 ): Promise<Blob> {
   if (slot.plate) return renderPlateToBlob(doc, slot.plate, { ...opts, art: opts.coverArt, artUrl: opts.coverUrl });
   const lang = doc.format.language;
+  // The slot may come from another language's copy of the book: letter THIS doc's page.
+  const page = slot.page ? (doc.pages.find((p) => p.id === slot.page!.id) ?? slot.page) : undefined;
   const letter: Letter | undefined =
     slot.kind === 'cover'
       ? (ctx, w, h) => letterCover(ctx, doc, w, h, opts)
-      : slot.page
-        ? (ctx, w, h) => letterPage(ctx, doc, slot.page!, w, h, opts)
+      : page
+        ? (ctx, w, h) => letterPage(ctx, doc, page, w, h, opts)
         : undefined;
   if (opts.image) return rasterizeImage(opts.image, opts, letter, lang);
   if (!slot.url) throw new ExportError(`${slot.label} has no image to export.`);

@@ -18,8 +18,11 @@ import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
 import { CONTENT_RATINGS, type ContentRating } from '../../shared/comic/safety';
 import { refOwnerKey } from '../../shared/comic/refs';
 import type { LibraryIndex, LibraryKind, LibraryQuote, LibraryRunView } from '../../shared/comic/library';
+import { SLUG_RE } from '../../shared/comic/publication';
 import type {
   PublicComicPayload,
+  PublicPublicationInfo,
+  ReaderLanguage,
   PublicationOwnerView,
   PublicationSettingsPatch,
   PublishRequest,
@@ -186,6 +189,13 @@ export const STUDIO_ERROR_COPY: Readonly<Record<string, CodeCopy>> = {
   NOT_AVAILABLE: {
     kind: 'not_available',
     message: "That isn't available yet.",
+    retryable: false
+  },
+  // Restricted accounts (contract §7, P1-ROUTES): spends, uploads and publishing are paused while a
+  // review is open; reading and free edits still work.
+  FORBIDDEN: {
+    kind: 'forbidden',
+    message: "Your account can't do that right now — new drawings, uploads and publishing are paused while a review is open. You can keep reading and editing.",
     retryable: false
   }
 };
@@ -356,11 +366,61 @@ export async function loadStudioProject(id: string, opts: { signal?: AbortSignal
   }
 }
 
-/** Published comic for the public reader. Works logged out (the token is optional). */
-export async function loadPublicComic(id: string, opts: { signal?: AbortSignal } = {}): Promise<{ doc: ComicDoc; urls: Record<string, string> }> {
+/** GET /api/comic/public/:id as the legacy `/?view=read&id=` reader reads it (contract §14.1, as amended). */
+export interface PublicComicByIdResult {
+  doc: ComicDoc;
+  urls: Record<string, string>;
+  /** The reader languages (source first). Empty when an older server sent none. */
+  languages: ReaderLanguage[];
+  /** Set when `?lang=` named a published edition (the doc is localized). */
+  lang?: string;
+  /** A live publication (non-owners): the reader can replaceState to `/c/<publication.slug>`. */
+  publication?: PublicPublicationInfo;
+  /** The owner's sanitized private preview (no publication; never shared). */
+  preview?: true;
+}
+
+const LANG_CODE_RE = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/;
+
+const asReaderLanguages = (v: unknown): ReaderLanguage[] => {
+  if (!Array.isArray(v)) return [];
+  const out: ReaderLanguage[] = [];
+  for (const l of v.slice(0, 64)) {
+    if (!isObject(l) || typeof l.code !== 'string' || !LANG_CODE_RE.test(l.code)) continue;
+    const text = (x: unknown) => (typeof x === 'string' ? x.slice(0, 80) : '');
+    out.push({ code: l.code, endonym: text(l.endonym) || l.code, english: text(l.english) || l.code, complete: l.complete === true, isSource: l.isSource === true });
+  }
+  return out;
+};
+
+/** A publication block only when it carries a well-formed slug (a link must never be built from junk). */
+const asPublicPublication = (v: unknown): PublicPublicationInfo | undefined =>
+  isObject(v) && typeof v.slug === 'string' && SLUG_RE.test(v.slug) && (v.visibility === 'public' || v.visibility === 'unlisted')
+    ? (v as unknown as PublicPublicationInfo)
+    : undefined;
+
+/**
+ * Published comic for the public reader. Works logged out (the token is optional). Keeps the
+ * amended fields: `languages`, `lang`, and either `publication` (anyone else: the live, public
+ * publication — the legacy reader can move to /c/<slug>) or `preview: true` (the owner).
+ */
+export async function loadPublicComic(id: string, opts: { signal?: AbortSignal; lang?: string } = {}): Promise<PublicComicByIdResult> {
   try {
-    const res = await get<{ doc?: unknown; urls?: unknown }>(`/api/comic/public/${encodeURIComponent(id)}`, { signal: opts.signal });
-    return { doc: asDoc(res?.doc), urls: asUrls(res?.urls) };
+    const q = opts.lang && LANG_CODE_RE.test(opts.lang) ? `?lang=${encodeURIComponent(opts.lang)}` : '';
+    const res = await get<{ doc?: unknown; urls?: unknown; languages?: unknown; lang?: unknown; publication?: unknown; preview?: unknown }>(
+      `/api/comic/public/${encodeURIComponent(id)}${q}`,
+      { signal: opts.signal }
+    );
+    const publication = res?.preview === true ? undefined : asPublicPublication(res?.publication);
+    const lang = typeof res?.lang === 'string' && LANG_CODE_RE.test(res.lang) ? res.lang : undefined;
+    return {
+      doc: asDoc(res?.doc),
+      urls: asUrls(res?.urls),
+      languages: asReaderLanguages(res?.languages),
+      ...(lang ? { lang } : {}),
+      ...(publication ? { publication } : {}),
+      ...(res?.preview === true ? { preview: true as const } : {})
+    };
   } catch (err) {
     throw toStudioApiError(err, 'public');
   }
@@ -822,11 +882,24 @@ export interface TranslationQuote {
   byok: boolean;
 }
 
-/** GET /projects/:id/translation-quote?langs= — the client never duplicates the price tables. */
-export async function getTranslationQuote(id: string, langs: string[], opts: { signal?: AbortSignal } = {}): Promise<TranslationQuote> {
+/**
+ * GET /projects/:id/translation-quote?langs= — the client never duplicates the price tables.
+ * Optional scope (the `translate` SpendAction's pageIds / lineIds / force, P2-AMEND): sent as
+ * `pageIds=`, `lineIds=` and `force=1`; a server that does not read them yet quotes the whole edition
+ * (an over-quote, never an under-quote — the spend is re-gated server-side either way).
+ */
+export async function getTranslationQuote(
+  id: string,
+  langs: string[],
+  opts: { signal?: AbortSignal; pageIds?: string[]; lineIds?: string[]; force?: boolean } = {}
+): Promise<TranslationQuote> {
   return call('project', async () => {
     const list = [...new Set(langs.filter((l) => typeof l === 'string' && l))];
-    const res = await get<Partial<TranslationQuote>>(`${projectPath(id)}/translation-quote?langs=${enc(list.join(','))}`, opts);
+    const ids = (v: string[] | undefined, max: number) => [...new Set((v || []).filter((x) => typeof x === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(x)))].slice(0, max);
+    const pageIds = ids(opts.pageIds, 200);
+    const lineIds = ids(opts.lineIds, 200);
+    const scope = `${pageIds.length ? `&pageIds=${enc(pageIds.join(','))}` : ''}${lineIds.length ? `&lineIds=${enc(lineIds.join(','))}` : ''}${opts.force ? '&force=1' : ''}`;
+    const res = await get<Partial<TranslationQuote>>(`${projectPath(id)}/translation-quote?langs=${enc(list.join(','))}${scope}`, opts.signal ? { signal: opts.signal } : {});
     return {
       perLanguage: Array.isArray(res?.perLanguage) ? res.perLanguage : [],
       usd: typeof res?.usd === 'number' && Number.isFinite(res.usd) ? res.usd : 0,
@@ -877,16 +950,20 @@ export async function requestSafetyReview(id: string, body: { target: RenderTarg
 
 export type ReportReason = 'sexual' | 'violent' | 'hateful' | 'self_harm' | 'real_person' | 'copyright' | 'other';
 
-/** POST /api/comic/public/s/:slug/report — always 202 (even for an unknown slug). Anonymous. */
+/**
+ * POST /api/comic/public/s/:slug/report — always 202 (even for an unknown slug). Works logged out;
+ * a signed-in reader's bearer token is sent (optionalAuth reads it), so their report counts as one
+ * signed-in reporter (weight 1) instead of an anonymous one (0.5). Still no cookies or provider keys.
+ */
 export async function reportPublicComic(
   slug: string,
   body: { reason: ReportReason; pageN?: number; note?: string; turnstileToken?: string },
   opts: { signal?: AbortSignal } = {}
 ): Promise<void> {
-  await call('public', () =>
+  await call('public', async () =>
     publicRequest<unknown>(`/api/comic/public/s/${enc(slug)}/report`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
       body: JSON.stringify(body),
       signal: opts.signal
     })

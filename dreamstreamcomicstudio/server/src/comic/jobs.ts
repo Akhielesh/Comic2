@@ -1267,7 +1267,8 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
   const cost = costOf(ctx);
-  const spentBefore = ctx.session.doc.spend.totalUsd;
+  // What THIS re-check cost, read from its own ledger entry (other runs may spend meanwhile).
+  const entriesBefore = new Set(ctx.session.doc.spend.entries.map((e) => e.id));
   addPending(ctx.session, estimate.usd);
   const notices: Card[] = [];
   let out: LetterResult = { visionRan: false };
@@ -1283,7 +1284,9 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   } finally {
     addPending(ctx.session, -estimate.usd);
   }
-  const spent = round4(Math.max(0, ctx.session.doc.spend.totalUsd - spentBefore));
+  const spent = round4(
+    ctx.session.doc.spend.entries.reduce((sum, e) => (!entriesBefore.has(e.id) && e.kind === 'qc' && e.label === `Check page ${page.n}` ? sum + (e.usd || 0) : sum), 0)
+  );
   const qc = findPage(ctx.session.doc, page.id)?.render.qc;
   const faces = qc?.keepOut?.some((k) => k.kind === 'face');
   const overlay = ctx.session.doc.format.lettering !== 'in_art';

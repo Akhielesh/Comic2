@@ -133,48 +133,55 @@ export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: La
   const coverSlot = slots.find((s) => s.kind === 'cover');
   const coverUrl = coverSlot?.url;
   const multi = books.length > 1;
+  // The back cover's vignette (the cover art) is fetched once for every language too.
+  let coverArt: LoadedImage | null = null;
+  if (!overrides && coverUrl && slots.some((s) => s.plate === 'back_cover')) coverArt = await loadExportImage(coverUrl, opts.signal).catch(() => null);
   let files = 0;
   const failed: FailedSlot[] = [];
   const total = slots.length * books.length;
   let done = 0;
 
-  for (const slot of slots) {
-    checkCancelled(opts.signal);
-    // The art is the same in every language: fetch it once.
-    let image: LoadedImage | null = null;
-    if (!overrides && slot.url && !slot.plate) {
-      try {
-        image = await loadExportImage(slot.url, opts.signal);
-      } catch (err) {
-        checkCancelled(opts.signal);
-        const message = err instanceof ExportError ? err.message : 'The image couldn’t be loaded.';
-        for (const b of books) failed.push({ label: multi ? `${slot.label} · ${b.name}` : slot.label, message });
-        done += books.length;
-        continue;
-      }
-    }
-    try {
-      const results = await forEachReported(
-        books,
-        (b) => (multi ? `${slot.label} · ${b.name}` : slot.label),
-        async (b) => {
-          const blob = overrides
-            ? await renderSlotWith(b.doc, slot, raster, { ...opts, coverUrl })
-            : await renderSlotToBlob(b.doc, slot, { ...raster, ...(image ? { image } : {}), coverUrl });
+  try {
+    for (const slot of slots) {
+      checkCancelled(opts.signal);
+      // The art is the same in every language: fetch it once.
+      let image: LoadedImage | null = null;
+      if (!overrides && slot.url && !slot.plate) {
+        try {
+          image = await loadExportImage(slot.url, opts.signal);
+        } catch (err) {
           checkCancelled(opts.signal);
-          (root.folder(b.folder) || root).file(`${slot.fileBase}.png`, await blobBytes(blob), { binary: true });
-          files += 1;
-        },
-        {
-          signal: opts.signal,
-          onProgress: (p) => opts.onProgress?.({ done: done + p.done, total, label: p.label.replace(/\(\d+ of \d+\)/, `(${done + p.done + 1} of ${total})`) })
+          const message = err instanceof ExportError ? err.message : 'The image couldn’t be loaded.';
+          for (const b of books) failed.push({ label: multi ? `${slot.label} · ${b.name}` : slot.label, message });
+          done += books.length;
+          continue;
         }
-      );
-      failed.push(...results);
-    } finally {
-      image?.release();
+      }
+      try {
+        const results = await forEachReported(
+          books,
+          (b) => (multi ? `${slot.label} · ${b.name}` : slot.label),
+          async (b) => {
+            const blob = overrides
+              ? await renderSlotWith(b.doc, slot, raster, { ...opts, coverUrl })
+              : await renderSlotToBlob(b.doc, slot, { ...raster, ...(image ? { image } : {}), coverUrl, ...(coverArt ? { coverArt } : {}) });
+            checkCancelled(opts.signal);
+            (root.folder(b.folder) || root).file(`${slot.fileBase}.png`, await blobBytes(blob), { binary: true });
+            files += 1;
+          },
+          {
+            signal: opts.signal,
+            onProgress: (p) => opts.onProgress?.({ done: done + p.done, total, label: p.label.replace(/\(\d+ of \d+\)/, `(${done + p.done + 1} of ${total})`) })
+          }
+        );
+        failed.push(...results);
+      } finally {
+        image?.release();
+      }
+      done += books.length;
     }
-    done += books.length;
+  } finally {
+    coverArt?.release();
   }
   if (opts.signal?.aborted) throw new ExportError(CANCELLED);
   if (!files) throw new ExportError(`Couldn’t export any pages. ${failed[0]?.message || ''}`.trim());

@@ -52,7 +52,7 @@ import {
 import { findPage, newId, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type Panel, type RenderTarget } from '../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../shared/comic/ops';
 import { aspectMismatch } from '../../../shared/comic/book';
-import { effectiveRating } from '../../../shared/comic/safety';
+import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
@@ -589,6 +589,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const status = pageVisualStatus(doc, sourcePage);
   const busy = isBusy(sourcePage.render);
   const drawn = hasImage(sourcePage.render);
+  // A take that failed the content check is never shown or sent anywhere: it can be redrawn safer,
+  // re-checked or swapped for an earlier version — not marked up, AI-edited, fitted or lettered.
+  const artBlocked = drawn && !canServeToOwner(sourcePage.render.asset);
+  const artOk = drawn && !artBlocked;
   const target: RenderTarget = useMemo(() => ({ kind: 'page', id: sourcePage.id }), [sourcePage.id]);
   const overlayLettering = doc.format.lettering === 'overlay';
   const boxes = useMemo(() => panelBoxesFor(doc, sourcePage), [doc, sourcePage]);
@@ -646,13 +650,37 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     },
     [studio, sourcePage.id, doc]
   );
+  /** A "don't translate" line reads in the original in every edition: a translation of it would never show. */
+  const keepsSource = useCallback(
+    (lineId: string) => !!lang && sourcePage.panels.some((p) => p.lines.some((l) => l.id === lineId && l.noTranslate === true)),
+    [lang, sourcePage.panels]
+  );
+  const keepsSourceNotice = useCallback(
+    () => setNotice(`This line stays in ${sourceName} in every language (it is marked “don’t translate”). Switch to ${sourceName} to change it.`),
+    [sourceName]
+  );
   const onEditionText = useCallback(
     (lineId: string, text: string) => {
       if (!lang) return;
+      if (keepsSource(lineId)) {
+        keepsSourceNotice();
+        return;
+      }
       const op = translationEditOp(doc, lang, sourcePage.id, lineId, text);
       if (op) void studio.patch([op], { undo: true, label: 'Edit translation' });
     },
-    [studio, doc, lang, sourcePage.id]
+    [studio, doc, lang, sourcePage.id, keepsSource, keepsSourceNotice]
+  );
+  /** Open the inline text editor on a balloon (in an edition, never on a line that stays in the original). */
+  const startEditing = useCallback(
+    (lineId: string | null) => {
+      if (lineId && keepsSource(lineId)) {
+        keepsSourceNotice();
+        return;
+      }
+      setEditingLineId(lineId);
+    },
+    [keepsSource, keepsSourceNotice]
   );
 
   // ── Lettering: plans, selection, inspector ──────────────────────────────
@@ -666,7 +694,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const selectedLine = selection.primary;
   const selectionKey = selection.ids.join('|');
   useEffect(() => setInspectorClosed(false), [selectionKey]);
-  const letteringEditable = mode === 'move' && overlayLettering && !busy && drawn;
+  const letteringEditable = mode === 'move' && overlayLettering && !busy && artOk;
   const tidy = useMemo(() => (overlayLettering ? tidyOps(vDoc, page, aspect, measure) : []), [overlayLettering, vDoc, page, aspect, measure]);
   const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
   const crowdedIds = [...placements.crowded];
@@ -801,7 +829,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     if (m === 'markup') setTrayOpen(false);
   };
 
-  const canEdit = drawn && !busy && instruction.trim().length > 0;
+  const canEdit = artOk && !busy && instruction.trim().length > 0;
   const submitEdit = () => {
     if (!canEdit) return;
     const action = editActionFor(sourcePage.id, instruction, region, panelN);
@@ -832,9 +860,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         id: 'edit',
         label: lang ? 'Edit translation' : 'Edit text',
         icon: <PencilLine className="h-4 w-4" />,
+        disabled: keepsSource(lineId),
+        hint: keepsSource(lineId) ? `Stays in ${sourceName}` : undefined,
         onSelect: () => {
           selection.select(lineId);
-          setEditingLineId(lineId);
+          startEditing(lineId);
         }
       },
       {
@@ -1008,7 +1038,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         onChange={changeMode}
         options={[
           { value: 'move', label: (<><MousePointer2 className="h-3 w-3" aria-hidden /> {overlayLettering ? 'Lettering' : 'View'}</>) },
-          { value: 'markup', label: (<><SquareDashed className="h-3 w-3" aria-hidden /> Mark up</>), disabled: !drawn }
+          { value: 'markup', label: (<><SquareDashed className="h-3 w-3" aria-hidden /> Mark up</>), disabled: !artOk }
         ]}
       />
       {region && (
@@ -1016,7 +1046,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           <X className="h-3 w-3" aria-hidden /> Clear mark
         </GhostButton>
       )}
-      {overlayLettering && drawn && (
+      {overlayLettering && artOk && (
         <GhostButton size="xs" onClick={() => setLettering((v) => !v)} aria-pressed={!lettering}>
           {lettering ? <EyeOff className="h-3 w-3" aria-hidden /> : <Eye className="h-3 w-3" aria-hidden />}
           {lettering ? 'Hide lettering' : 'Show lettering'}
@@ -1093,7 +1123,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 selectedLineIds={selection.ids}
                 onSelectionChange={selection.set}
                 editingLineId={editingLineId}
-                onEditingChange={setEditingLineId}
+                onEditingChange={startEditing}
                 addKind={letteringEditable && !lang ? addKind : null}
                 onAddAt={onAddAt}
                 onBalloonMenu={(lineId, at) => setMenu({ lineId, at })}
@@ -1117,7 +1147,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                   />
                 }
               >
-                <MarkupLayer active={mode === 'markup' && drawn && !busy} region={region} panelN={panelN} onRegion={markRegion} />
+                <MarkupLayer active={mode === 'markup' && artOk && !busy} region={region} panelN={panelN} onRegion={markRegion} />
               </ComicPageView>
             </div>
           </div>
@@ -1161,8 +1191,14 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             }
           }}
           rows={phone ? 2 : 3}
-          disabled={!drawn}
-          placeholder={drawn ? 'e.g. “Make it night with lanterns lit” or “Give Maya a red scarf”' : 'Render this page first — edits change an existing drawing.'}
+          disabled={!artOk}
+          placeholder={
+            artBlocked
+              ? 'This take didn’t fit the content rules, so it can’t be edited — redraw it safer, or use an earlier version below (free).'
+              : drawn
+                ? 'e.g. “Make it night with lanterns lit” or “Give Maya a red scarf”'
+                : 'Render this page first — edits change an existing drawing.'
+          }
           className="w-full resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[13px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none disabled:opacity-60 coarse:text-[16px]"
         />
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
@@ -1178,7 +1214,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
               </button>
             </span>
           ) : (
-            <GhostButton size="xs" disabled={!drawn || busy} onClick={() => changeMode('markup')}>
+            <GhostButton size="xs" disabled={!artOk || busy} onClick={() => changeMode('markup')}>
               <SquareDashed className="h-3 w-3" aria-hidden /> Mark an area
             </GhostButton>
           )}
@@ -1189,7 +1225,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
               value={panelN ? String(panelN) : ''}
               onChange={(e) => setPanelN(e.target.value ? Number(e.target.value) : undefined)}
               className={SELECT_CLS}
-              disabled={!drawn}
+              disabled={!artOk}
             >
               <option value="">Whole page</option>
               {sourcePage.panels.map((p) => (
@@ -1240,7 +1276,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             </GhostButton>
           )}
         </div>
-        {drawn && mismatch && (
+        {artOk && mismatch && (
           <div data-testid="aspect-notice" className="rounded-xl border border-amber-500/30 bg-amber-500/[0.08] p-2.5 text-[12px] leading-snug text-[var(--ds-ink)]">
             <p>
               This page came back {mismatch.got}, but your book is {mismatch.want}. Fit it to {mismatch.want} for free (the art is padded or trimmed, never redrawn),
@@ -1387,7 +1423,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         apply={apply}
         onEditText={(id) => {
           selection.select(id);
-          setEditingLineId(id);
+          startEditing(id);
         }}
         onAskAI={(text) => void studio.send(`(about the selected balloon${selection.ids.length > 1 ? 's' : ''}) ${text}`, { focus: 'selection' })}
         onDeselect={selection.clear}
@@ -1411,14 +1447,14 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       orientation={layout.toolbar === 'rail' ? 'vertical' : 'horizontal'}
       mode={mode}
       onModeChange={changeMode}
-      markupDisabled={!drawn || busy}
+      markupDisabled={!artOk || busy}
       canUndo={!!studio.canUndo}
       canRedo={!!studio.canRedo}
       undoLabel={studio.undoLabel}
       onUndo={() => studio.undo?.()}
       onRedo={() => studio.redo?.()}
       lettering={
-        overlayLettering && drawn
+        overlayLettering && artOk
           ? {
               open: trayOpen || inspectorOpen,
               disabled: busy,

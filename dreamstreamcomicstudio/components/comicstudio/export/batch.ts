@@ -37,7 +37,9 @@ export function renderSlotWith(doc: ComicDoc, slot: ExportSlot, raster: RasterOp
     if (r.renderImage) return r.renderImage(slot.url, raster);
     return renderCoverToBlob(doc, slot.url, raster);
   }
-  return (r.renderPage ?? renderPageToBlob)(doc, slot.page!, slot.url, raster);
+  // The slot may come from another language's copy of the book: render THIS doc's page.
+  const page = doc.pages.find((p) => p.id === slot.page?.id) ?? slot.page!;
+  return (r.renderPage ?? renderPageToBlob)(doc, page, slot.url, raster);
 }
 
 /** Plate resolution: the book's page width (the first drawn page's pixel width), within sane bounds. */

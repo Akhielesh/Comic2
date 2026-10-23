@@ -17,7 +17,8 @@ vi.mock('./studioApi', async (importOriginal) => {
 });
 
 import { StudioApiError } from './studioApi';
-import { useStudio } from './useStudio';
+import { actOutcomeOf, useStudio } from './useStudio';
+import { stopsSequence } from './conversation/cards/useAction';
 
 interface FakeStream {
   id: string;
@@ -185,6 +186,127 @@ describe('useStudio — actions', () => {
     emit(lastStream(), { type: 'ops', rev: 6, ops: [{ op: 'render', target: { kind: 'page', id: 'pg_2' }, patch: { status: 'rendering' } }] });
     expect(result.current.isRendering({ kind: 'page', id: 'pg_2' })).toBe(true);
     expect(result.current.renderingTotal).toBe(2); // + the style option already drawing
+  });
+});
+
+describe('useStudio — act() resolves its outcome (P2-STUDIO-CORE)', () => {
+  const gate = {
+    id: 'g9',
+    action: { type: 'render_pages' as const },
+    title: 'Draw 3 pages',
+    summary: '3 pages',
+    estimateUsd: 0.2,
+    imageCount: 3,
+    model: 'nano-banana',
+    createdAt: 1,
+    status: 'open' as const,
+    reason: 'policy' as const
+  };
+
+  it('a clean stream resolves ok and not gated', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_cover' });
+    });
+    await finish(lastStream(), 6);
+    await expect(p).resolves.toMatchObject({ ok: true, gated: false, aborted: false });
+    expect(stopsSequence(await p)).toBe(false);
+  });
+
+  it('a stream that commits an open gate resolves gated (sequences stop)', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_pages' });
+    });
+    emit(lastStream(), { type: 'ops', rev: 6, ops: [{ op: 'gate', gate }] });
+    await finish(lastStream(), 6);
+    const out = actOutcomeOf(await p);
+    expect(out).toMatchObject({ ok: true, gated: true });
+    expect(stopsSequence(out)).toBe(true);
+  });
+
+  it('closing a gate (status approved / null) is not "gated"', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'approve_gate', gateId: 'g9' });
+    });
+    emit(lastStream(), { type: 'ops', rev: 6, ops: [{ op: 'gate', gate: { ...gate, status: 'approved' } }, { op: 'gate', gate: null }] });
+    await finish(lastStream(), 6);
+    expect(actOutcomeOf(await p)).toMatchObject({ ok: true, gated: false });
+  });
+
+  it('a refusal inside the stream resolves ok:false with its code', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_pages' });
+    });
+    emit(lastStream(), { type: 'error', message: 'x', code: 'COOLDOWN' });
+    await act(async () => lastStream().resolve());
+    const out = actOutcomeOf(await p);
+    expect(out).toMatchObject({ ok: false, code: 'COOLDOWN', gated: false });
+    expect(stopsSequence(out)).toBe(true);
+  });
+
+  it('a transport failure resolves ok:false (never throws to the card)', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_cover' });
+    });
+    await act(async () => lastStream().reject(new StudioApiError('billing', 'Out of credit.', { status: 402 })));
+    expect(actOutcomeOf(await p)).toMatchObject({ ok: false, error: 'Out of credit.' });
+  });
+
+  it('a duplicate click resolves skipped (no second stream); local edits resolve ok', async () => {
+    const { result } = await setup();
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    act(() => {
+      first = result.current.act({ type: 'render_cover' });
+      second = result.current.act({ type: 'render_cover' });
+    });
+    expect(streams).toHaveLength(1);
+    expect(actOutcomeOf(await second)).toMatchObject({ ok: false, skipped: true });
+    await finish(lastStream(), 6);
+    expect(actOutcomeOf(await first)).toMatchObject({ ok: true });
+    let local!: Promise<unknown>;
+    act(() => {
+      local = result.current.act({ type: 'patch', ops: [{ op: 'note_add', text: 'n' }] });
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await finish(lastStream(), 7);
+    expect(actOutcomeOf(await local)).toMatchObject({ ok: true, gated: false });
+  });
+
+  it('void call sites keep working: actOutcomeOf(undefined) is null', () => {
+    expect(actOutcomeOf(undefined)).toBeNull();
+    expect(actOutcomeOf({ ok: true })).toBeNull();
+  });
+});
+
+describe('useStudio — send() object form (the composer)', () => {
+  it('sends inline photos, inbox paths, targets and an explicit focus in one turn', async () => {
+    const { result } = await setup();
+    const att = { name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA' };
+    act(() =>
+      void result.current.send('These are Maya', {
+        attachments: [att],
+        inboxPaths: ['u/x/p/ref/b.webp'],
+        attachmentTargets: [{ kind: 'character', id: 'c_maya' }, { kind: 'character', id: 'c_maya' }],
+        focus: { pageId: 'pg_1' }
+      })
+    );
+    expect(lastStream().req).toEqual({
+      kind: 'message',
+      text: 'These are Maya',
+      attachments: [att, { inboxPath: 'u/x/p/ref/b.webp' }],
+      attachmentTargets: [{ kind: 'character', id: 'c_maya' }, { kind: 'character', id: 'c_maya' }],
+      focus: { pageId: 'pg_1' }
+    });
   });
 });
 

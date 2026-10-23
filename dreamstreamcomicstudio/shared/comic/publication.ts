@@ -4,6 +4,7 @@
 // director's context line. Links are read-only; readers may download unless the author turns allowDownload off.
 
 import type { AspectRatio, ComicDoc } from './doc.js';
+import type { ContentRating } from './safety.js';
 
 export type Visibility = 'private' | 'unlisted' | 'public'; // 'private' = no live publication
 export type PublicationStatus = 'live' | 'unpublished' | 'suspended';
@@ -100,6 +101,8 @@ export interface PublicationOwnerView {
   stats?: { views: number; uniques7d: number; completes7d: number; byChannel7d: Record<string, number>; daily: Array<{ day: string; views: number }> };
   readiness: PublishReadiness;
   suspendedReason?: string;
+  /** The rating the live publication was safety-checked under (frozen at publish time; P2-PUBLIC-PAYLOAD). */
+  rating?: ContentRating;
 }
 /** doc.publication — server-written mirror for UI + the director context line. */
 export interface PublicationMirror {
@@ -148,6 +151,12 @@ export interface PublicPublicationInfo {
   publishedAt: number;
   updatedAt: number;
   card: ShareCard;
+  /**
+   * The content rating (G / PG / PG-13) the publish gate verified this snapshot under, frozen at
+   * publish time (comic_publications.safety.rating; P2-PUBLIC-PAYLOAD). Optional: publications made
+   * before ratings were recorded have none — readers treat that as unknown, never as kids-friendly.
+   */
+  rating?: ContentRating;
 }
 /** GET /api/comic/public/s/:slug (edge). urls: every path in `doc` → public object URL. */
 export interface PublicComicPayload { publication: PublicPublicationInfo; doc: ComicDoc; urls: Record<string, string> }

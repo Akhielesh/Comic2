@@ -189,11 +189,14 @@ const geometryOf = (patch: Partial<Balloon>): BalloonGeometryOverride => {
   return out;
 };
 
-/** The `translation` op for a typed edition text (the server forces status/at/sourceHash too). */
+/**
+ * The `translation` op for a typed edition text (the server forces status/at/sourceHash too). Null for a
+ * "don't translate" line: every edition draws its original text, so a translation would never show.
+ */
 export function translationEditOp(doc: ComicDoc, lang: string, pageId: string, lineId: string, text: string, now = Date.now()): DocOp | null {
   const line = findLine(doc, pageId, lineId);
   const t = text.trim();
-  if (!line || !t) return null;
+  if (!line || !t || line.noTranslate === true) return null;
   return { op: 'translation', lang, lineId, patch: { text: t, status: 'edited', sourceHash: lineSourceHash(line), at: now } };
 }
 

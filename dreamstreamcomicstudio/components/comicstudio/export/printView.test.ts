@@ -1,17 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../shared/comic/doc';
+import { languageSpec } from '../../../shared/comic/languages';
+import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import {
-  PrintError,
-  balloonSvgMarkup,
-  buildPrintHtml,
-  collectPrintSheets,
-  decoratePrintDocument,
-  escapeHtml,
-  fitBox,
-  openPrintView,
-  printPageSize
-} from './printView';
+import { makeBook } from './__fixtures__/books';
+import { localizedFor } from './sequence';
+import { PrintError, buildPrintHtml, collectPrintSheets, decoratePrintDocument, escapeHtml, fitBox, openPrintView, printPageSize } from './printView';
 
 const withCover = (mutate?: (d: ComicDoc) => void) =>
   makeSampleDoc((d) => {
@@ -20,6 +14,7 @@ const withCover = (mutate?: (d: ComicDoc) => void) =>
   });
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html');
+const ORIGIN = 'https://studio.test';
 
 describe('print geometry', () => {
   it('sizes the sheet from the aspect with a 10.5in long edge', () => {
@@ -45,100 +40,123 @@ describe('collectPrintSheets', () => {
     expect(skipped).toEqual(['Page 2 (not drawn yet)', 'Page 3 (not drawn yet)', 'Page 4 (not drawn yet)', 'Page 6 (not drawn yet)']);
   });
 
-  it('skips images whose links are not signed yet', () => {
+  it('includes the book plates in reading order', () => {
+    const { sheets } = collectPrintSheets(makeBook(), fakeUrlFor);
+    expect(sheets.map((s) => `${s.kind}:${s.key}`)).toEqual(['cover:cover', 'plate:title', 'page:pg_1', 'page:pg_5', 'plate:end', 'plate:back_cover']);
+  });
+
+  it('skips images whose links are not signed yet, and never writes an unsafe URL', () => {
     const { sheets, skipped } = collectPrintSheets(withCover(), (a) => (typeof a === 'object' && a?.path === 'u/cover.png' ? undefined : fakeUrlFor(a)));
     expect(sheets[0].key).toBe('pg_1');
     expect(skipped[0]).toBe('Cover (image link not ready yet)');
+    const evil = collectPrintSheets(withCover(), () => 'javascript:alert(1)');
+    expect(evil.sheets).toHaveLength(0);
+    expect(evil.skipped).toContain('Page 1 (image link not ready yet)');
   });
 });
 
 describe('buildPrintHtml', () => {
-  it('declares one zero-margin sheet per page at the comic’s size', () => {
+  it('declares one zero-margin sheet per page at the book’s trim, with the self-hosted faces', () => {
     const doc = withCover();
-    const html = buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets);
+    const html = buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets, { origin: ORIGIN });
     expect(html).toContain('@page { size: 7in 10.5in; margin: 0; }');
-    expect(html).toContain('fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue');
+    expect(html).toContain(`font-family:"${FONT_REGISTRY['comic-neue'].family}"`);
+    expect(html).toMatch(/src:url\("https:\/\/studio\.test\//);
+    expect(html).not.toContain('fonts.googleapis.com'); // Latin only: no Google CSS
     const dom = parse(html);
+    expect(dom.documentElement.getAttribute('lang')).toBe('en');
+    expect(dom.documentElement.getAttribute('dir')).toBe('ltr');
     const sheets = Array.from(dom.querySelectorAll('.sheet'));
     expect(sheets.map((s) => s.getAttribute('data-label'))).toEqual(['Cover', 'Page 1', 'Page 5']);
     expect(dom.querySelector('.sheet img')!.getAttribute('src')).toBe('https://cdn.test/u/cover.png');
   });
 
-  it('letters overlay pages with HTML balloons (escaped, uppercase, positioned)', () => {
-    const doc = withCover((d) => (d.pages[0].panels[2].lines[1].text = 'Fish & <chips>'));
-    const dom = parse(buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets));
+  it('letters overlay pages with one vector SVG from the engine plans (escaped)', () => {
+    const doc = withCover((d) => (d.pages[0].panels[2].lines[1].text = 'Fish & <chips> </text><script>alert(1)</script>'));
+    const html = buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets, { origin: ORIGIN });
+    expect(html).not.toContain('<script>');
+    const dom = parse(html);
     const page1 = dom.querySelector('.sheet[data-label="Page 1"]')!;
-    const balloons = page1.querySelectorAll('.b');
-    expect(balloons).toHaveLength(5);
-    const l4 = page1.querySelector<HTMLElement>('.b[data-line="pg_1_l4"]')!;
-    expect(l4.textContent).toBe('FISH & <CHIPS>');
-    const l2 = page1.querySelector<HTMLElement>('.b[data-line="pg_1_l2"]')!;
-    expect(l2.style.left).toBe('6%');
-    expect(l2.dataset.tx).toBe('0.2');
-    expect(page1.querySelector('.b[data-kind="sfx"] .bt')!.getAttribute('style')).toMatch(/font-size:[\d.]+in;color:#/);
-    expect(dom.querySelector('.sheet[data-label="Cover"] .b')).toBeNull();
+    const svg = page1.querySelector('.page > svg')!;
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1000 1500');
+    expect(svg.querySelectorAll('[data-testid="balloon"]')).toHaveLength(5);
+    expect(page1.querySelector('[data-line-id="pg_1_l4"]')!.textContent).toContain('FISH & <CHIPS>');
+    expect(dom.querySelectorAll('script')).toHaveLength(0);
+    expect(dom.querySelector('.sheet[data-label="Cover"] svg')).toBeNull(); // painted cover: nothing over it
   });
 
-  it('adds no overlay balloons for in-art lettering', () => {
+  it('adds no overlay lettering for in-art comics', () => {
     const doc = withCover((d) => (d.format.lettering = 'in_art'));
-    const dom = parse(buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets));
-    expect(dom.querySelectorAll('.b')).toHaveLength(0);
+    const dom = parse(buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets, { origin: ORIGIN }));
+    expect(dom.querySelectorAll('[data-testid="balloon"]')).toHaveLength(0);
+  });
+
+  it('prints an edition: html lang, its lettering, the script face from Google CSS, the overlay cover title', () => {
+    const te = localizedFor(makeBook(undefined, { overlayCover: true }), 'te');
+    const html = buildPrintHtml(te, collectPrintSheets(te, fakeUrlFor).sheets, { origin: ORIGIN, urlFor: fakeUrlFor });
+    const dom = parse(html);
+    expect(dom.documentElement.getAttribute('lang')).toBe('te');
+    const family = FONT_REGISTRY[languageSpec('te')!.fonts.dialogue].family;
+    expect(html).toContain(`fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}`);
+    expect(dom.querySelector('.sheet[data-label="Page 1"] svg')!.textContent).toContain('పాత దిల్లీ');
+    const coverSvg = dom.querySelector('.sheet[data-label="Cover"] svg.cover-title')!;
+    expect(coverSvg.textContent).toContain('కుంకుమపువ్వు దొంగ');
+    // Plates are drawn as SVG with their texts; the back cover shows the cover art.
+    expect(dom.querySelector('.sheet[data-label="The End"] svg')!.textContent).toContain('The End');
+    expect(dom.querySelector('.sheet[data-label="Back cover"] image')!.getAttribute('href')).toBe('https://cdn.test/u/proj/cover.png');
   });
 
   it('lists skipped pages in the (screen-only) toolbar', () => {
     const doc = withCover();
-    const html = buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets, { skipped: ['Page 2 (not drawn yet)'] });
+    const html = buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets, { skipped: ['Page 2 (not drawn yet)'], origin: ORIGIN });
     expect(html).toContain('Not included: Page 2 (not drawn yet)');
     expect(html).toContain('@media print');
   });
 });
 
-describe('balloon outlines', () => {
-  it('draws speech as tail-under, body, tail-over', () => {
-    const svg = balloonSvgMarkup('speech', 200, 60, { x: 100, y: 160 }, 1, 2);
-    expect(svg.match(/<path/g)).toHaveLength(3);
-    expect(svg).toContain('stroke-width="4"');
-    expect(svg).not.toContain('dasharray');
-  });
-
-  it('dashes whispers, trails thoughts and skips sfx', () => {
-    expect(balloonSvgMarkup('whisper', 200, 60, { x: 100, y: 160 }, 1, 2)).toContain('stroke-dasharray');
-    expect(balloonSvgMarkup('thought', 200, 60, { x: 100, y: 200 }, 1, 2)).toContain('<circle');
-    expect(balloonSvgMarkup('sfx', 200, 60, null, 1, 2)).toBe('');
-    expect(balloonSvgMarkup('caption', 200, 60, null, 1, 2)).toContain('#fff6c8');
-  });
-
-  it('decorates a print document with an outline per non-sfx balloon', () => {
-    const doc = withCover();
-    const dom = parse(buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets));
+describe('decoratePrintDocument', () => {
+  it('re-plans the lettering when the art turns out to have another shape (idempotent)', () => {
+    const doc = withCover((d) => {
+      d.pages[0].render.asset = { ...d.pages[0].render.asset!, w: undefined, h: undefined };
+      d.format.pageAspect = '2:3';
+    });
+    const dom = parse(buildPrintHtml(doc, collectPrintSheets(doc, fakeUrlFor).sheets, { origin: ORIGIN }));
+    const img = dom.querySelector<HTMLImageElement>('.sheet[data-label="Page 1"] img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 1000 });
+    Object.defineProperty(img, 'naturalHeight', { value: 1000 });
     decoratePrintDocument(dom, doc);
-    const page1 = dom.querySelector('.sheet[data-label="Page 1"]')!;
-    expect(page1.querySelectorAll('.b > svg')).toHaveLength(4);
-    expect(page1.querySelector('.b[data-kind="sfx"] > svg')).toBeNull();
-    // Idempotent: decorating again replaces, never stacks.
+    const svgs = dom.querySelectorAll('.sheet[data-label="Page 1"] .page > svg');
+    expect(svgs).toHaveLength(1);
+    expect(svgs[0].getAttribute('viewBox')).toBe('0 0 1000 1000');
     decoratePrintDocument(dom, doc);
-    expect(page1.querySelectorAll('.b > svg')).toHaveLength(4);
+    expect(dom.querySelectorAll('.sheet[data-label="Page 1"] .page > svg')).toHaveLength(1);
   });
 });
 
 describe('openPrintView', () => {
   const fakeWindow = () => {
     const document = window.document.implementation.createHTMLDocument('print');
-    return { document, focus: vi.fn(), print: vi.fn() } as unknown as Window & { print: ReturnType<typeof vi.fn> };
+    return { document, focus: vi.fn(), print: vi.fn(), innerWidth: 390 } as unknown as Window & { print: ReturnType<typeof vi.fn> };
   };
 
-  it('writes the document, decorates it and prints', async () => {
+  it('writes the document and prints, honest about images that did not load', async () => {
     const win = fakeWindow();
     const onStatus = vi.fn();
     const result = await openPrintView(withCover(), fakeUrlFor, { win, onStatus, timeoutMs: 5 });
     expect(win.print).toHaveBeenCalled();
     expect(win.document.querySelectorAll('.sheet')).toHaveLength(3);
-    expect(win.document.querySelectorAll('.b > svg').length).toBeGreaterThan(0);
+    expect(win.document.querySelectorAll('[data-testid="balloon"]').length).toBeGreaterThan(0);
     expect(result.pages).toBe(3);
     expect(result.skipped).toHaveLength(4);
     // jsdom never loads images, so the status is honest about it.
     expect(result.failedImages).toEqual(['Cover', 'Page 1', 'Page 5']);
     expect(onStatus).toHaveBeenLastCalledWith(expect.stringMatching(/didn’t load/));
+  });
+
+  it('prints a chosen edition', async () => {
+    const win = fakeWindow();
+    await openPrintView(makeBook(), fakeUrlFor, { win, timeoutMs: 5, lang: 'te' });
+    expect(win.document.documentElement.getAttribute('lang')).toBe('te');
   });
 
   it('explains a blocked pop-up', async () => {

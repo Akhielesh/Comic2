@@ -8,7 +8,7 @@ import { emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { JOB_TIMINGS, estimateSpendAction, isOwnProjectAssetPath, mergeBalloons, sanitizePatchOps, sanitizeCtxFor, startAction } from './jobs.js';
-import { fakeImages, newSession, plannedDoc, testContext, TINY_PNG } from './orchestrator.fakes.js';
+import { fakeBilling, fakeImages, newSession, plannedDoc, testContext, TINY_PNG } from './orchestrator.fakes.js';
 import { installSafetyFakes, resetSafety } from './safety/testkit.js';
 import { StudioError } from './types.js';
 
@@ -65,6 +65,58 @@ describe('patch sanitizer (P2-SERVER)', () => {
     // The same shape with a clean own-project path is accepted (rebuilt, unchecked).
     const [op] = sanitizePatchOps(doc, [{ op: 'character', id: 'c_new', patch: { name: 'X', refs: [{ path: 'u/user-1/p/proj-1/ref/fresh.webp' }] } }], sctx) as Extract<DocOp, { op: 'character' }>[];
     expect(op.patch.refs).toEqual([{ path: 'u/user-1/p/proj-1/ref/fresh.webp', source: 'upload', at: expect.any(Number) }]);
+  });
+
+  it('a restored photo is always an upload (checked before first use); one the client knew as blocked stays out', () => {
+    const doc = plannedDoc();
+    const ok = 'u/user-1/p/proj-1/img/legacy-up.webp';
+    const bad = 'u/user-1/p/proj-1/ref/was-blocked.webp';
+    const sheetBad = 'u/user-1/p/proj-1/img/sheet-x.webp';
+    const { sctx } = ctxFor(doc);
+    const [op] = sanitizePatchOps(
+      doc,
+      [
+        {
+          op: 'character',
+          id: 'c_back',
+          patch: {
+            name: 'Back',
+            // "generated" can't be proven for a path the doc no longer holds: it comes back as an upload.
+            refs: [{ path: ok, source: 'generated', label: 'face' }, { path: bad, source: 'upload', safety: { assessed: 'X', at: 1, quarantined: true } }],
+            sheet: { status: 'ready', history: [], asset: { path: sheetBad, source: 'generated', at: 1, safety: { assessed: 'X', at: 1 } } }
+          }
+        }
+      ],
+      sctx
+    ) as Extract<DocOp, { op: 'character' }>[];
+    expect(op.patch.refs).toEqual([{ path: ok, source: 'upload', at: expect.any(Number), label: 'face' }]);
+    expect(op.patch.sheet).toMatchObject({ status: 'none', history: [] });
+    expect(op.patch.sheet?.asset).toBeUndefined();
+    // An unknown label word is dropped, not stored.
+    const [odd] = sanitizePatchOps(doc, [{ op: 'place', id: 'pl_back', patch: { name: 'Lake', refs: [{ path: ok, label: 'zzz_made_up' }] } }], sctx) as Extract<DocOp, { op: 'place' }>[];
+    expect(odd.patch.refs).toEqual([{ path: ok, source: 'upload', at: expect.any(Number) }]);
+  });
+
+  it('a whole balloons array never stores a link cycle (links are checked against the new array)', () => {
+    const doc = plannedDoc();
+    doc.pages[1].panels[2].lines = [{ id: 'ln_2_3', kind: 'speech', speakerId: 'c_arjun', text: 'Second' }];
+    const { sctx } = ctxFor(doc);
+    const [op] = sanitizePatchOps(
+      doc,
+      [
+        {
+          op: 'balloons',
+          pageId: 'pg_2',
+          balloons: [
+            { lineId: 'ln_2_2', x: 0.1, y: 0.1, w: 0.2, linkTo: 'ln_2_3' },
+            { lineId: 'ln_2_3', x: 0.5, y: 0.5, w: 0.2, linkTo: 'ln_2_2' }
+          ]
+        }
+      ],
+      sctx
+    ) as Extract<DocOp, { op: 'balloons' }>[];
+    expect(op.balloons[0].linkTo).toBe('ln_2_3');
+    expect(op.balloons[1].linkTo).toBeUndefined();
   });
 
   it('a live character never gets its sheet rewritten by a patch; kind and count are accepted', () => {
@@ -204,6 +256,41 @@ describe('the real safety module in a render run (fake platform classifier)', ()
     // A first take has no earlier version to fall back to: it stays, withheld (never served to anyone).
     expect(canServeToOwner(sheet.asset)).toBe(false);
     expect(sheet.asset?.safety).toMatchObject({ assessed: 'X', quarantined: true });
+  });
+});
+
+describe('recheck_page honesty (P2-SERVER review)', () => {
+  const drawnDoc = (lettering: 'overlay' | 'in_art' = 'overlay') => {
+    const doc = plannedDoc();
+    doc.format = { ...doc.format, lettering };
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'u/user-1/p/proj-1/img/p1.webp', source: 'generated', at: 1 }, qc: { score: 0.9, issues: [], checkedAt: 1 } };
+    return doc;
+  };
+
+  it('usage said no: the message says so (no "try later"), nothing was spent, balloons re-laid for free', async () => {
+    const session = newSession(drawnDoc());
+    const ctx = testContext(session, { billing: fakeBilling(0) });
+    const quotedUsd = estimateSpendAction(session.doc, { type: 'recheck_page', pageId: 'pg_1' }, false).usd;
+    const out = await startAction(ctx, { type: 'recheck_page', pageId: 'pg_1', quotedUsd }, { confirmed: true, origin: 'user' });
+    expect(out.outcome.message).toMatch(/^You've used this month's included generation allowance\. Page 1's balloons were re-laid from the stored layout instead — nothing was spent\.$/);
+    expect(session.doc.spend.entries).toHaveLength(0);
+    expect(ctx.llmFake.calls).toHaveLength(0);
+  });
+
+  it('an in_art comic: the quote and the outcome never promise balloons; the cost is read from its own ledger entry', async () => {
+    const session = newSession(drawnDoc('in_art'));
+    const ctx = testContext(session);
+    const gated = await startAction(ctx, { type: 'recheck_page', pageId: 'pg_1' }, { confirmed: false, origin: 'user', forceGate: 'policy' });
+    expect(gated.outcome.status).toBe('gated');
+    expect(session.doc.gate!.summary).toMatch(/its page check is renewed/);
+    expect(session.doc.gate!.summary).not.toMatch(/balloon/);
+    const ran = await startAction(ctx, { type: 'approve_gate', gateId: session.doc.gate!.id }, { confirmed: true, origin: 'user' });
+    await ran.done;
+    const qcEntries = session.doc.spend.entries.filter((e) => e.kind === 'qc');
+    expect(qcEntries).toHaveLength(1);
+    const last = [...session.doc.conversation].reverse().find((m) => m.role === 'assistant')!;
+    expect(last.text).toMatch(/^Re-checked page 1 \(/);
+    expect(last.text).not.toMatch(/balloon/);
   });
 });
 

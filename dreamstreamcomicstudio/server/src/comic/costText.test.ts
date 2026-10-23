@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { PLATFORM_MARKUP } from '../../../shared/comic/models.js';
-import { DOLLAR_VIEW, costFormatter, costViewFor, governDollars, standardPageProviderUsd } from './costText.js';
+import type { Card } from '../../../shared/comic/doc.js';
+import { DOLLAR_VIEW, costFormatter, costViewFor, governCard, governDollars, standardPageProviderUsd } from './costText.js';
 
 const usage = (pctPerStandardPage: number | null, governed = true): StudioCaps['usage'] => ({ governed, pctLeft: 70, exhausted: false, pctPerStandardPage });
 
@@ -53,5 +54,36 @@ describe('governDollars (the safety net under every governed text)', () => {
     expect(out).toContain('spent free so far');
     expect(governDollars(text, DOLLAR_VIEW)).toBe(text);
     expect(governDollars('no money here', view)).toBe('no money here');
+  });
+
+  it('reads thousands separators as one amount (never "…% of your usage,250.50")', () => {
+    const big = governDollars('That would be $1,250.50 in total.', view);
+    expect(big).not.toMatch(/\$|,\d/);
+    expect(big).toMatch(/^That would be ≈\d+% of your usage in total\.$/);
+    expect(governDollars('$1,250.50', view)).toBe(governDollars('$1250.50', view));
+  });
+});
+
+describe('governCard (the words ON a card)', () => {
+  const view = costViewFor({ ...DEFAULT_CAPS, usage: usage(2) });
+  it('rewords notice text and every free-text field of an options card; other cards and dollar views are untouched', () => {
+    const options: Card = {
+      type: 'options',
+      id: 'k1',
+      question: 'Draw it now ($0.40)?',
+      choices: [
+        { id: 'o1', label: 'Yes ($0.40)', description: 'All 3 pages ≈ $0.40', reply: 'Yes, draw it for $0.40' },
+        { id: 'o2', label: 'Not yet' }
+      ]
+    };
+    const out = governCard(options, view) as Extract<Card, { type: 'options' }>;
+    expect(JSON.stringify(out)).not.toMatch(/\$/);
+    expect(out.choices[0].label).toMatch(/^Yes \(≈[\d.]+% of your usage\)$/);
+    expect(out.choices[1]).toEqual({ id: 'o2', label: 'Not yet' }); // no keys invented
+    const notice: Card = { type: 'notice', id: 'n1', tone: 'info', text: 'Spent $0.12.' };
+    expect((governCard(notice, view) as { text: string }).text).not.toMatch(/\$/);
+    expect(governCard(options, DOLLAR_VIEW)).toBe(options);
+    const gate: Card = { type: 'gate', id: 'g1', gateId: 'gate_1' };
+    expect(governCard(gate, view)).toBe(gate);
   });
 });

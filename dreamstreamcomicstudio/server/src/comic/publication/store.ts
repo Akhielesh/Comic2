@@ -10,6 +10,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { SLUG_RE } from '../../../../shared/comic/publication.js';
+import { isContentRating, type ContentRating } from '../../../../shared/comic/safety.js';
 import { logger } from '../../lib/logger.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
 import { StudioError } from '../types.js';
@@ -26,7 +27,8 @@ export interface PublicationBackend extends PublicationStore {
    * is_public, state.shareSlug, state.publicCover, state.coverImageId (= publicCover while
    * public), state.publishedAt (first publish kept). While public, `listing` (the PUBLISHED
    * title/logline) becomes the row's name and state.overview, so the gallery shows what passed
-   * the publish gate — never a later, unreviewed edit of the live doc.
+   * the publish gate — never a later, unreviewed edit of the live doc. `contentRating` mirrors the
+   * frozen publish-time rating to projects.content_rating (the gallery's "Kids-friendly" filter).
    */
   mirrorProject(args: MirrorArgs): Promise<void>;
   /** Public @username (never email or real name), only for showCreator. */
@@ -50,6 +52,11 @@ export interface MirrorArgs {
   publishedAt: number | null;
   /** Written only while public (name + state.overview); private rows keep the owner's live text. */
   listing?: PublishedListing;
+  /**
+   * projects.content_rating (comic_safety.sql; service role only — a DB guard keeps clients out):
+   * the publish gate's rating on publish, null on unpublish, undefined = leave it as it is.
+   */
+  contentRating?: ContentRating | null;
 }
 
 /** Thrown by upsert when the slug (or asset key) collides; the caller mints a new one and retries. */
@@ -71,6 +78,12 @@ type PgError = { code?: string; message?: string };
 const pgCode = (err: unknown): string => String((err as PgError)?.code || '').toUpperCase();
 const isMissingTable = (err: unknown) => pgCode(err) === '42P01' || pgCode(err) === 'PGRST205' || pgCode(err) === 'PGRST202';
 const isInvalidId = (err: unknown) => pgCode(err) === '22P02';
+/** An update naming a column the database doesn't have yet (Postgres 42703, PostgREST PGRST204). */
+const isMissingColumn = (err: unknown) => pgCode(err) === '42703' || pgCode(err) === 'PGRST204';
+
+/** The projects.content_rating value to write: a known rating, null to clear, undefined to leave alone. */
+const ratingColumn = (r: ContentRating | null | undefined): ContentRating | null | undefined =>
+  r === null ? null : r === undefined ? undefined : isContentRating(r) ? r : undefined;
 
 const unavailable = (err: unknown, action: string): StudioError => {
   logger.error('comic_publication_store_error', {
@@ -243,7 +256,7 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
       return { exists: !!row, forcedPrivate: row?.is_forced_private === true };
     },
 
-    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt, listing }) {
+    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt, listing, contentRating }) {
       const db = admin();
       const { data, error } = await db.from('projects').select('state').eq('id', projectId).eq('user_id', userId).maybeSingle();
       if (error) throw unavailable(error, 'save');
@@ -251,7 +264,16 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
       const state = mirrorState(isRecord((data as { state?: unknown }).state) ? ((data as { state: Record<string, unknown> }).state) : {}, { isPublic, shareSlug, publicCover, publishedAt, listing });
       const patch: Record<string, unknown> = { is_public: isPublic, state };
       if (isPublic && listing) patch.name = listingName(listing.name);
-      const { error: updateError } = await db.from('projects').update(patch).eq('id', projectId).eq('user_id', userId);
+      const rating = ratingColumn(contentRating);
+      if (rating !== undefined) patch.content_rating = rating;
+      let { error: updateError } = await db.from('projects').update(patch).eq('id', projectId).eq('user_id', userId);
+      if (updateError && 'content_rating' in patch && isMissingColumn(updateError)) {
+        // comic_safety.sql (which adds the column) isn't applied yet: mirror everything else; the
+        // gallery then shows no rating, which its filter treats as "not kids-friendly".
+        logger.warn('comic_publication_rating_column_missing', { code: pgCode(updateError), hint: 'apply server/sql/comic_safety.sql' });
+        delete patch.content_rating;
+        ({ error: updateError } = await db.from('projects').update(patch).eq('id', projectId).eq('user_id', userId));
+      }
       if (updateError) throw unavailable(updateError, 'save');
     },
 
@@ -312,6 +334,8 @@ export interface MemoryProject {
   forcedPrivate: boolean;
   state: Record<string, unknown>;
   name?: string;
+  /** projects.content_rating (server-written mirror of the publish-time rating). */
+  contentRating?: ContentRating | null;
 }
 
 export interface MemoryPublicationStore extends PublicationBackend {
@@ -380,12 +404,14 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
       const p = projects.get(projectId);
       return { exists: !!p && p.userId === userId, forcedPrivate: !!p?.forcedPrivate };
     },
-    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt, listing }) {
+    async mirrorProject({ projectId, userId, isPublic, shareSlug, publicCover, publishedAt, listing, contentRating }) {
       const p = projects.get(projectId);
       if (!p || p.userId !== userId) throw new StudioError('NOT_FOUND', 'missing', { status: 404 });
       p.isPublic = isPublic && !p.forcedPrivate;
       p.state = mirrorState(p.state, { isPublic, shareSlug, publicCover, publishedAt, listing });
       if (isPublic && listing) p.name = listingName(listing.name);
+      const rating = ratingColumn(contentRating);
+      if (rating !== undefined) p.contentRating = rating;
     },
     async publicUsername() {
       return 'maya_draws';
@@ -409,7 +435,9 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
             publishedAt: row.publishedAt,
             updatedAt: row.updatedAt,
             assetKey: row.assetKey,
-            card: row.card
+            card: row.card,
+            // Same rule as the SQL: only a known rating, frozen in safety.rating (older rows: no key).
+            ...(isContentRating(row.safety?.rating) ? { rating: row.safety.rating } : {})
           },
           doc: cloneJson(row.snapshot)
         };

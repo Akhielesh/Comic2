@@ -27,7 +27,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
-import type { StreamRequest, StudioFocus } from '../../shared/comic/events';
+import type { StreamRequest, StudioEvent, StudioFocus } from '../../shared/comic/events';
 import {
   mapAssetRefs,
   variantFor,
@@ -191,7 +191,7 @@ interface QueuedPatch {
 }
 
 /** What a finished stream reported. */
-interface StreamOutcome {
+export interface StreamOutcome {
   ok: boolean;
   error?: string;
   code?: string;
@@ -199,6 +199,43 @@ interface StreamOutcome {
   /** Trying the same request again could succeed (network, busy, rate limit, server hiccup). */
   retryable: boolean;
 }
+
+/**
+ * What `act()` resolves to: the stream's outcome plus `gated` — this action's stream committed an
+ * OPEN approval gate (the spend waits for the user). Card sequences (conversation/cards/useAction
+ * `stopsSequence`) stop on `ok: false`, `aborted` or `gated`, so a second spend never runs behind a
+ * refusal and a second gate never replaces the first. Call sites that ignore the value keep working
+ * (`void studio.act(…)`); the shared StudioController type still says `Promise<void>` (types.ts), so
+ * typed readers use `actOutcomeOf(result)`.
+ */
+export interface StudioActOutcome extends StreamOutcome {
+  gated: boolean;
+  /** The action never reached the server (a duplicate click, an invalid action, no comic loaded). */
+  skipped?: boolean;
+}
+
+const skippedOutcome = (error?: string): StudioActOutcome => ({
+  ok: false,
+  aborted: false,
+  retryable: false,
+  gated: false,
+  skipped: true,
+  ...(error ? { error } : {})
+});
+const localOutcome: StudioActOutcome = { ok: true, aborted: false, retryable: false, gated: false };
+
+/** A StudioActOutcome from whatever `studio.act()` resolved to (null for a controller that resolves void). */
+export const actOutcomeOf = (result: unknown): StudioActOutcome | null => {
+  if (!result || typeof result !== 'object') return null;
+  const r = result as Partial<StudioActOutcome>;
+  return typeof r.ok === 'boolean' && typeof r.gated === 'boolean' ? (r as StudioActOutcome) : null;
+};
+
+/** The stream event committed an open approval gate. */
+const opensGate = (event: StudioEvent): boolean =>
+  event.type === 'ops' &&
+  Array.isArray(event.ops) &&
+  event.ops.some((op) => !!op && op.op === 'gate' && !!op.gate && typeof op.gate === 'object' && op.gate.status === 'open');
 
 /** Server codes that mean "try again later", not "this can never be saved". */
 const RETRYABLE_CODES = new Set(['CONFLICT', 'RATE_LIMIT', 'COOLDOWN', 'TIMEOUT', 'INTERNAL', 'NOT_AVAILABLE', 'PROVIDER_ERROR']);
@@ -357,7 +394,11 @@ export function useStudio(projectId: string): ComicStudioController {
   // ── Streams ────────────────────────────────────────────────────────────────
 
   const runStream = useCallback(
-    async (kind: StreamKind, request: StreamRequest, opts: { streamId?: string; actionType?: string } = {}): Promise<StreamOutcome> => {
+    async (
+      kind: StreamKind,
+      request: StreamRequest,
+      opts: { streamId?: string; actionType?: string; onEvent?: (event: StudioEvent) => void } = {}
+    ): Promise<StreamOutcome> => {
       const generation = generationRef.current;
       const d = guarded(generation);
       const streamId = opts.streamId || localId('stream');
@@ -383,6 +424,7 @@ export function useStudio(projectId: string): ComicStudioController {
               reported = event.message;
               reportedCode = event.code;
             }
+            opts.onEvent?.(event);
             d({ type: 'stream_event', streamId, event, now: Date.now() });
           },
           ctrl.signal
@@ -701,24 +743,42 @@ export function useStudio(projectId: string): ComicStudioController {
   }, [abortStreams, guarded, refresh]);
 
   const act = useCallback(
-    async (action: StudioAction) => {
-      if (!action || typeof action !== 'object') return;
-      if (action.type === 'patch') return patch(action.ops);
-      if (action.type === 'cancel') return cancel();
+    async (action: StudioAction): Promise<StudioActOutcome> => {
+      if (!action || typeof action !== 'object') return skippedOutcome();
+      if (action.type === 'patch') {
+        await patch(action.ops);
+        return localOutcome;
+      }
+      if (action.type === 'cancel') {
+        await cancel();
+        return localOutcome;
+      }
       // Switching to another version is a free, instant, undoable edit (timeline.md §3): the
       // optimistic `render_use` patch replaces the old round-trip action.
       if (action.type === 'restore_render') {
-        if (!action.target || typeof action.target !== 'object' || typeof action.path !== 'string' || !action.path) return;
-        return patch([{ op: 'render_use', target: action.target, path: action.path, at: Date.now() }], { label: 'switch versions' });
+        if (!action.target || typeof action.target !== 'object' || typeof action.path !== 'string' || !action.path) return skippedOutcome();
+        await patch([{ op: 'render_use', target: action.target, path: action.path, at: Date.now() }], { label: 'switch versions' });
+        return localOutcome;
       }
-      if (!stateRef.current.base) return;
+      if (!stateRef.current.base) return skippedOutcome('The comic is still loading.');
       // A double click must not run (and bill) the same action twice.
       const key = JSON.stringify(action);
-      if (actionsInFlightRef.current.has(key)) return;
+      if (actionsInFlightRef.current.has(key)) return skippedOutcome();
       actionsInFlightRef.current.add(key);
       const generation = generationRef.current;
+      let gated = false;
       try {
-        await runStream('action', { kind: 'action', action }, { actionType: action.type });
+        const outcome = await runStream(
+          'action',
+          { kind: 'action', action },
+          {
+            actionType: action.type,
+            onEvent: (event) => {
+              if (opensGate(event)) gated = true;
+            }
+          }
+        );
+        return { ...outcome, gated };
       } finally {
         if (generation === generationRef.current) actionsInFlightRef.current.delete(key);
       }
@@ -979,7 +1039,10 @@ export function useStudio(projectId: string): ComicStudioController {
   const runNextStep = useCallback(
     async (step: NextStep): Promise<void> => {
       if (!step || typeof step !== 'object') return;
-      if (step.action) return act(step.action);
+      if (step.action) {
+        await act(step.action);
+        return;
+      }
       if (step.client) return runClientAction(step.client);
       const text = (typeof step.say === 'string' && step.say.trim() ? step.say : step.label || '').trim();
       if (text) return send(text);
@@ -1086,7 +1149,8 @@ export function useStudio(projectId: string): ComicStudioController {
       clearError,
       urlFor,
       send,
-      act,
+      // Resolves a StudioActOutcome; the shared type says Promise<void> (see actOutcomeOf).
+      act: act as StudioController['act'],
       patch,
       cancel,
       refresh,

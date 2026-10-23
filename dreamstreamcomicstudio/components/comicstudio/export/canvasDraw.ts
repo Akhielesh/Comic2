@@ -32,11 +32,16 @@ export interface Bounds {
   h: number;
 }
 
+/** Offscreen layers reused across calls (one page's groups share a few small buffers). */
+export type LayerPool = { layer: CanvasLayer; busy: boolean }[];
+
 export interface DrawNodesOptions {
   makePath?: PathFactory;
   createLayer?: LayerFactory;
   /** Region (in the current user space) layers need to cover; default: the whole canvas. */
   layerBounds?: Bounds;
+  /** Share layers between calls (default: a fresh pool per call). */
+  pool?: LayerPool;
 }
 
 /** An offscreen 2D canvas (OffscreenCanvas when available, else a detached <canvas>). */
@@ -215,7 +220,7 @@ interface Env {
   region: { x: number; y: number; w: number; h: number } | null | undefined;
   /** Device-pixel origin of the current target (0,0 for the page; a layer's region otherwise). */
   offset: { x: number; y: number };
-  pool: { layer: CanvasLayer; busy: boolean }[];
+  pool: LayerPool;
   /** Alpha multiplier when a group could not get a layer. */
   alpha: number;
   /** Mask-cut mode: black fills are erased (destination-out); nothing else draws. */
@@ -486,7 +491,7 @@ export function drawSvgNodes(ctx: CanvasRenderingContext2D, nodes: readonly SvgN
     masks,
     region: regionFor(ctx, opts.layerBounds),
     offset: { x: 0, y: 0 },
-    pool: [],
+    pool: opts.pool ?? [],
     alpha: 1,
     cut: false
   };
@@ -574,9 +579,10 @@ export interface LetterDrawOptions {
  * pageWidthPx / 1000 — see `drawLetteringOnPage`). Same nodes and order as the board's SVG.
  */
 export function drawLetterPlan(ctx: CanvasRenderingContext2D, plans: readonly LetterPlan[], opts: LetterDrawOptions): void {
+  const pool: LayerPool = [];
   letterGroups(plans).forEach((group, i) => {
     const nodes = letteringNodes(group, { aspect: opts.aspect, widthPx: opts.widthPx, idPrefix: `ex${i}` });
-    drawSvgNodes(ctx, nodes, { makePath: opts.makePath, createLayer: opts.createLayer, layerBounds: groupBounds(group) });
+    drawSvgNodes(ctx, nodes, { makePath: opts.makePath, createLayer: opts.createLayer, layerBounds: groupBounds(group), pool });
   });
 }
 

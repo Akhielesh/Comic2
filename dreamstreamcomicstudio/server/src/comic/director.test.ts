@@ -673,5 +673,39 @@ describe('P2-SERVER director wiring', () => {
     expect(reply.text).not.toMatch(/\$/);
     expect(reply.text).toMatch(/^A new page costs about ≈?<?[\d.]+% of your usage\.$/);
   });
+
+  it('…nor on the cards: an ask_user question with prices in its options reads in usage', async () => {
+    const session = newSession(plannedDoc());
+    const llm = scriptedLlm({
+      director: [
+        {
+          toolCalls: [
+            toolCall('q1', 'ask_user', {
+              question: 'Draw page 1 now ($0.08)?',
+              options: [{ label: 'Yes ($0.08)', description: 'One page ≈ $0.08', reply: 'Yes, draw page 1 for $0.08' }, { label: 'Not yet' }]
+            })
+          ]
+        },
+        { text: 'Shall I draw it?' }
+      ]
+    });
+    const caps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } };
+    await runDirectorTurn(testContext(session, { llm, caps }), { text: 'what next?', attachments: [] });
+    const reply = session.doc.conversation.at(-1)!;
+    const options = reply.cards?.find((c) => c.type === 'options');
+    expect(options).toBeDefined();
+    expect(JSON.stringify(options)).not.toMatch(/\$/);
+    expect(JSON.stringify(options)).toMatch(/% of your usage/);
+    // An admin asking the same reads the prices as written.
+    const admin = newSession(plannedDoc());
+    const llm2 = scriptedLlm({
+      director: [
+        { toolCalls: [toolCall('q1', 'ask_user', { question: 'Draw page 1 now ($0.08)?', options: [{ label: 'Yes ($0.08)' }, { label: 'Not yet' }] })] },
+        { text: 'Shall I draw it?' }
+      ]
+    });
+    await runDirectorTurn(testContext(admin, { llm: llm2, caps: { ...DEFAULT_CAPS, admin: true } }), { text: 'what next?', attachments: [] });
+    expect(JSON.stringify(admin.doc.conversation.at(-1)!.cards?.find((c) => c.type === 'options'))).toContain('Yes ($0.08)');
+  });
 });
 

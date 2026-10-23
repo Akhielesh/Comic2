@@ -165,6 +165,32 @@ describe('public edge endpoints', () => {
     await expect(trackPublicEvent('abcdefghijklmnopq', { type: 'complete' })).resolves.toBeUndefined();
   });
 
+  it('a signed-in report carries the bearer token (weight 1), still no cookies or provider keys', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await reportPublicComic('abcdefghijklmnopq', { reason: 'violent', pageN: 2 });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/comic/public/s/abcdefghijklmnopq/report');
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('omit');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok_123', 'Content-Type': 'application/json' });
+    expect(JSON.stringify(init.headers)).not.toMatch(/x-.*key/i);
+    expect(JSON.parse(init.body)).toEqual({ reason: 'violent', pageN: 2 });
+  });
+
+  it('getTranslationQuote sends an optional page/line scope (sanitised) and force', async () => {
+    api.get.mockResolvedValue({ perLanguage: [], usd: 0.002, byok: false });
+    await getTranslationQuote('p1', ['te'], { lineIds: ['pg_1_l1', 'pg_1_l1', 'bad id!', 'pg_1_l2'], pageIds: ['pg_1'], force: true });
+    expect(api.get).toHaveBeenLastCalledWith('/api/comic/projects/p1/translation-quote?langs=te&pageIds=pg_1&lineIds=pg_1_l1%2Cpg_1_l2&force=1', {});
+  });
+
+  it('a restricted-account refusal (FORBIDDEN) reads as calm copy, never the code', () => {
+    const e = toStudioApiError({ status: 403, message: 'FORBIDDEN', details: { error: { code: 'FORBIDDEN', message: 'FORBIDDEN' } } }, 'project');
+    expect(e.kind).toBe('forbidden');
+    expect(e.code).toBe('FORBIDDEN');
+    expect(e.message).toMatch(/paused while a review is open/);
+    expect(e.message).not.toMatch(/FORBIDDEN/);
+  });
+
   it('reports return on 202; the library never fails the UI', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 202 }));
     await expect(reportPublicComic('abcdefghijklmnopq', { reason: 'other', note: 'x' })).resolves.toBeUndefined();

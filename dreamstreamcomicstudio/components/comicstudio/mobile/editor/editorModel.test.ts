@@ -198,6 +198,15 @@ describe('editing a translated edition', () => {
     expect(translationEditOp(doc, 'te', 'pg_1', 'pg_1_l1', '   ')).toBeNull();
     expect(translationEditOp(doc, 'te', 'pg_1', 'nope', 'x')).toBeNull();
   });
+
+  it('a "don’t translate" line never gets a translation (every edition draws its original), so an edit there is dropped', () => {
+    const doc = withTelugu((d) => {
+      d.pages[0].panels.flatMap((p) => p.lines).find((l) => l.id === 'pg_1_l1')!.noTranslate = true;
+    });
+    expect(translationEditOp(doc, 'te', 'pg_1', 'pg_1_l1', 'హైదరాబాద్', NOW)).toBeNull();
+    const r = editionOps([{ op: 'line', pageId: 'pg_1', panelId: doc.pages[0].panels.find((p) => p.lines.some((l) => l.id === 'pg_1_l1'))!.id, id: 'pg_1_l1', patch: { text: 'హైదరాబాద్' } }], 'te', doc, NOW);
+    expect(r).toEqual({ ops: [], dropped: 1 });
+  });
 });
 
 describe('gestures and sheets', () => {

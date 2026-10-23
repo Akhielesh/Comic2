@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { buildMotionTimeline, cameraRect, kenBurns, pickRecorderMime, readMs } from './motionComic';
+import { fakeContext } from './__fixtures__/fakeCanvas';
+import { makeBook } from './__fixtures__/books';
+import { buildMotionTimeline, cameraRect, centeredText, kenBurns, pickRecorderMime, readMs } from './motionComic';
 
 const drawn = (mutate?: (d: ComicDoc) => void): ComicDoc =>
   makeSampleDoc((d) => {
@@ -47,6 +49,23 @@ describe('motion comic timeline', () => {
     expect(shots.some((s) => s.pageId === doc.pages[1].id)).toBe(false);
   });
 
+  it('shows the book plates as title cards in book order', () => {
+    const doc = makeBook();
+    const kinds = buildMotionTimeline(doc).shots.filter((s) => s.kind !== 'panel').map((s) => (s.kind === 'plate' ? `plate:${s.plate}` : s.kind));
+    expect(kinds).toEqual(['cover', 'plate:title', 'page', 'page', 'plate:end', 'plate:back_cover', 'outro']);
+    expect(buildMotionTimeline(doc, { plates: false }).shots.some((s) => s.kind === 'plate')).toBe(false);
+  });
+
+  it('never shows withheld art', () => {
+    const doc = drawn((d) => {
+      d.pages[0].render.asset = { ...d.pages[0].render.asset!, safety: { assessed: 'X', at: 1 } };
+      d.cover.render.asset = { ...d.cover.render.asset!, safety: { quarantined: true, at: 1 } };
+    });
+    const { shots } = buildMotionTimeline(doc);
+    expect(shots.some((s) => s.kind === 'cover')).toBe(false);
+    expect(shots.some((s) => s.pageId === doc.pages[0].id)).toBe(false);
+  });
+
   it('reading time grows with words but never drops under a beat', () => {
     expect(readMs('Hi')).toBe(650);
     expect(readMs('one two three four five six seven eight nine ten eleven twelve')).toBeGreaterThan(3000);
@@ -81,5 +100,20 @@ describe('recorder format', () => {
     expect(pickRecorderMime((m) => m.startsWith('video/mp4'))?.ext).toBe('mp4');
     expect(pickRecorderMime((m) => m === 'video/webm;codecs=vp9')).toEqual({ mime: 'video/webm;codecs=vp9', ext: 'webm' });
     expect(pickRecorderMime(() => false)).toBeNull();
+  });
+});
+
+describe('title card text', () => {
+  it('wraps with the script-aware wrapper and sets the direction', () => {
+    const f = fakeContext(1080, 1920);
+    const end = centeredText(f.ctx, 'سلام دوست چلو چاند تک چلیں', 'ur', 540, 100, 120, 50);
+    const lines = f.calls.filter((c) => c.name === 'fillText');
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.every((c) => c.state.direction === 'rtl' && c.state.textAlign === 'center')).toBe(true);
+    expect(end).toBe(100 + lines.length * 50);
+    const te = fakeContext();
+    centeredText(te.ctx, 'కుంకుమపువ్వు దొంగ', 'te', 500, 0, 130, 40);
+    // Never breaks inside a word / syllable: every drawn line is made of whole words.
+    for (const c of te.calls.filter((x) => x.name === 'fillText')) for (const w of String(c.args[0]).split(' ')) expect(['కుంకుమపువ్వు', 'దొంగ']).toContain(w);
   });
 });

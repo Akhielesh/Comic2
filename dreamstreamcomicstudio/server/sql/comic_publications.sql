@@ -25,6 +25,11 @@
 --       - projects_guard_publication_state: a client re-save of a v4 listing row can never
 --         change the server-mirrored state.shareSlug / state.publicCover (the gallery reads
 --         them from public rows).
+--   * Content rating (P2-PUBLIC-PAYLOAD): the publish gate's rating (G / PG / PG-13) is frozen in
+--     safety.rating at publish time. comic_share_card and comic_public_payload expose it as
+--     `rating` only when it is one of those three values; older rows simply have no `rating` key
+--     (readers treat that as unknown, never as kids-friendly). Re-applying this file only replaces
+--     the two function bodies; their grants, SECURITY DEFINER and search_path stay as they are.
 --   * pub/ objects are not registered in image_assets; publication code owns their lifecycle.
 --     comic_publication_orphan_keys() lists pub/<key>/ prefixes with no live/suspended row
 --     (older than a day, so an in-flight publish is never swept) for the server's sweep
@@ -146,6 +151,10 @@ as $$
            'assetKey', c.asset_key, 'card', c.card,
            'publishedAt', (extract(epoch from c.published_at) * 1000)::bigint,
            'updatedAt', (extract(epoch from c.updated_at) * 1000)::bigint)
+         -- The frozen publish-time rating, only when it is a known value (older rows: no key).
+         || case when c.safety ->> 'rating' in ('G', 'PG', 'PG-13')
+                 then jsonb_build_object('rating', c.safety ->> 'rating')
+                 else '{}'::jsonb end
     from public.comic_publications c
     join public.projects p on p.id = c.project_id
    where p_slug ~ '^[A-Za-z0-9]{17}$'
@@ -168,7 +177,11 @@ as $$
               'allowDownload', c.allow_download, 'allowEmbed', c.allow_embed,
               'publishedAt', (extract(epoch from c.published_at) * 1000)::bigint,
               'updatedAt', (extract(epoch from c.updated_at) * 1000)::bigint,
-              'assetKey', c.asset_key, 'card', c.card),
+              'assetKey', c.asset_key, 'card', c.card)
+            -- The frozen publish-time rating, only when it is a known value (older rows: no key).
+            || case when c.safety ->> 'rating' in ('G', 'PG', 'PG-13')
+                    then jsonb_build_object('rating', c.safety ->> 'rating')
+                    else '{}'::jsonb end,
            'doc', c.snapshot)
     from public.comic_publications c
     join public.projects p on p.id = c.project_id

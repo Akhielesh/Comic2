@@ -414,6 +414,23 @@ describe('PageEditor — prices, versions, aspect and safety (P2-EDITOR)', () =>
     expect(studio.act).toHaveBeenCalledWith({ type: 'safety_recheck', target: { kind: 'page', id: 'pg_1' } });
   });
 
+  it('safety: a blocked take cannot be marked up, AI-edited or fitted — the tools say why (no paid call is ever offered on it)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].render.asset = { ...d.pages[0].render.asset!, w: 1024, h: 1024, safety: { assessed: 'X', at: 1 } };
+    });
+    const { studio } = openAt(null, doc);
+    expect(screen.getByRole('radio', { name: /Mark up/ })).toBeDisabled();
+    const field = screen.getByLabelText('What should change?');
+    expect(field).toBeDisabled();
+    expect(field.getAttribute('placeholder')).toMatch(/didn’t fit the content rules.*redraw it safer.*earlier version/);
+    fireEvent.change(field, { target: { value: 'Make it night' } });
+    expect(screen.getByRole('button', { name: /Apply edit/ })).toBeDisabled();
+    // The 1:1 take would normally offer the free fit: not on a withheld image.
+    expect(screen.queryByTestId('aspect-notice')).toBeNull();
+    expect(screen.queryByTestId('markup-layer')!.getAttribute('aria-hidden')).toBe('true');
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
   it('safety: over the comic’s rating the page is veiled; Change rating opens the Story tab', () => {
     const doc = makeSampleDoc((d) => {
       d.settings = { ...d.settings, rating: 'PG' };
@@ -486,6 +503,26 @@ describe('PageEditor — editing a translated edition (i18n.md §10.2)', () => {
     expect(within(menu).getByRole('menuitem', { name: /Delete/ })).toBeDisabled();
     fireEvent.click(within(menu).getByRole('menuitem', { name: /Reset position/ }));
     expect(lastPatch(studio)[0]).toEqual([{ op: 'edition_balloon', lang: 'te', lineId: 'pg_1_l2', patch: null }]);
+  });
+
+  it('a “don’t translate” line stays in the original: no inline edit, no translation, and the editor says why', () => {
+    const doc = withTelugu();
+    doc.pages[0].panels.flatMap((p) => p.lines).find((l) => l.id === 'pg_1_l1')!.noTranslate = true;
+    const { studio } = openAt(null, doc);
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Edit which language' })).getByRole('radio', { name: /తెలుగు/ }));
+    fireEvent.contextMenu(hitOf('pg_1_l1'), { clientX: 5, clientY: 5 });
+    const item = within(screen.getByRole('menu')).getByRole('menuitem', { name: /Edit translation/ });
+    expect(item).toBeDisabled();
+    expect(item).toHaveTextContent('Stays in English');
+    fireEvent.doubleClick(hitOf('pg_1_l1'));
+    expect(screen.getByText(/This line stays in English in every language/)).toBeInTheDocument();
+    expect(screen.queryByTestId('balloon-text-editor')).toBeNull();
+    // A translated line still opens its inline editor (the translation is what it edits).
+    fireEvent.doubleClick(hitOf('pg_1_l2'));
+    expect((screen.getByTestId('balloon-text-editor') as HTMLTextAreaElement).value).toBe('పదండి!');
+    expect((studio.patch as ReturnType<typeof vi.fn>).mock.calls.flatMap((c) => c[0]).some((o: { op: string }) => o.op === 'translation' || o.op === 'line')).toBe(false);
+    // The script has no Telugu field for it either.
+    expect(within(lineRow('pg_1_l1')).queryByLabelText('Telugu translation')).toBeNull();
   });
 });
 

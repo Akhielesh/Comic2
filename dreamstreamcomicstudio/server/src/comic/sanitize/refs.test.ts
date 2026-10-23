@@ -82,6 +82,16 @@ describe('ref_add', () => {
     }
   });
 
+  it('an Undo re-add of a photo the client itself knew as blocked is refused (the claim can only keep it out)', () => {
+    const own = 'u/user-1/p/proj-1/ref/was-blocked.webp';
+    for (const safety of [{ assessed: 'X', at: 1 }, { assessed: 'G', at: 1, quarantined: true }]) {
+      expect(() => run(plannedDoc(), [{ op: 'ref_add', owner: MAYA, ref: { path: own, source: 'upload', at: 1, safety } }])).toThrow(/content check/);
+    }
+    // A clean claim never lets anything in: the verdict is still dropped (checked before first use).
+    const [op] = run(plannedDoc(), [{ op: 'ref_add', owner: MAYA, ref: { path: own, safety: { assessed: 'G', at: 1 } } }]);
+    expect((op as { ref: RefAsset }).ref.safety).toBeUndefined();
+  });
+
   it('refuses blocked images and the inbox as a destination', () => {
     const doc = docWithAttachment();
     doc.conversation[0].attachments = [ref(2, { safety: { assessed: 'X', at: 1 } })];
