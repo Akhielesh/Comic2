@@ -6,6 +6,13 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Stream Studio costs, for the owner (2026-10-23, ADR 0007):** DreamStream → Account → Admin →
+  **Costs → Stream Studio** shows what Stream Studio really costs instead of a fixed $0: cost per
+  feature (baby monitor, calls, live streams, recordings), minutes by connection path, the
+  biggest nurseries / accounts / events, how much of each free allowance is used with a
+  month-end projection, and alerts (TURN over $10 a month among them). A daily check opens a
+  GitHub issue when an alert changes — and says so plainly when it couldn't measure, never
+  "all clear". Measured cheaply: at most one storage write per room per hour, never per frame.
 - **Call anyone on Stream Studio (2026-10-22):** Calls has a search box — find any member by
   name and call them by voice or video, not just people in your nurseries. Family is
   marked as family; a first call to someone outside your family asks you to check it's
@@ -73,6 +80,16 @@ All notable user-facing changes. Format loosely follows
   & family calls, each marked **Yours**, **One step** (welcome code) or **Locked** (ask an
   admin), with what you have there ("2 nurseries") and a link straight in. Answered once
   by the server (`GET /api/account/studios`) so the apps can't disagree.
+
+### Changed
+- **Recordings save to Google Drive or your device first (2026-10-23):** the save sheet now
+  leads with **Google Drive · free, yours to keep** and **This device · free**. The 7-day copy
+  on our servers is something you choose (it shows its size and how much of your 10 GB it
+  uses) instead of happening by default. If you had it on, it's off once and the save sheet
+  tells you, so you can turn it back on.
+- **Fewer background checks (2026-10-23):** an event's invite page no longer asks the server
+  every 30 seconds, and the monitor's sound and week cards don't refresh while hidden — less
+  battery and data on your phone, less load on ours.
 
 ### Fixed
 - **Calls connect faster and say why when they can't (2026-10-22):** answering is about twice
@@ -338,6 +355,12 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Relay logins are personal and short-lived (2026-10-23):** the relay that connects phones on
+  strict networks now gets its own login per person and room — at most 4 hours for members,
+  2 hours for guests and never past their pass — renewed before it runs out (an overnight
+  monitor stays connected) and cancelled when a guest is removed, someone leaves a nursery, a
+  studio guest is removed or a call ends. Video over the relay is sent at a sensible quality
+  instead of full rate.
 - **Calls: hardened before launch (2026-10-22):** a link can no longer answer a call for
   you — only tapping **Answer** on the notification does; someone you blocked or silenced
   can't reach you by having someone else add you to a call, and "Decline & block" blocks
