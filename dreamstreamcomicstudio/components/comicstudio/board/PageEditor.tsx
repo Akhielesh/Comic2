@@ -621,8 +621,6 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // Fit the page inside the stage's CONTENT box (measured directly — outside the zoom transform — so
   // pinch-zooming never feeds back into the fit; no padding arithmetic).
   const pageWidth = fitPageToStage({ w: stage.width, h: stage.height }, aspect, 0);
-  const imgWidth = editorImageWidth(ff, zoom, pageWidth, devicePixelRatioNow());
-  const imageUrl = imgWidth ? studio.urlFor(sourcePage.render.asset, { width: imgWidth }) : studio.urlFor(sourcePage.render.asset);
 
   const patch = useCallback((ops: DocOp[]) => void studio.patch(ops), [studio]);
   /** Lettering edits: free, undoable, labelled ("Undo move balloon"). In an edition they land in it. */
@@ -929,6 +927,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const sheetShown = layout.tools === 'sheet' && (tools.open || layout.kind !== 'phone') && !compactInspectorOpen;
   const sheetInset = sheetShown ? sheetHeights[tools.detent] : 0;
   const stageInset = Math.max(sheetInset, coverInset);
+  // The image variant follows the page's size with NO sheet over the stage: opening the lettering
+  // inspector or moving the tools sheet between detents never swaps in (and downloads) a smaller file.
+  const restingPageWidth = fitPageToStage({ w: stage.width, h: stage.height + stageInset }, aspect, 0);
+  const imgWidth = editorImageWidth(ff, zoom, restingPageWidth, devicePixelRatioNow());
+  const imageUrl = imgWidth ? studio.urlFor(sourcePage.render.asset, { width: imgWidth }) : studio.urlFor(sourcePage.render.asset);
   const trayAvailable = letteringEditable && phone;
   const attention = outsideCount + overflowIds.length + crowdedIds.length;
 

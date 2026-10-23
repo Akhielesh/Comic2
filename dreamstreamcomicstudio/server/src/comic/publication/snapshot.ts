@@ -243,8 +243,21 @@ export function buildSnapshot(doc: ComicDoc, plan: SnapshotPlan): ComicDoc {
   if (doc.letterStyle) snapshot.letterStyle = plain(doc.letterStyle);
   if (doc.book) snapshot.book = plain(doc.book);
   if (doc.reader) snapshot.reader = plain(doc.reader);
-  snapshot.i18n = publicI18n(i18nOf(doc), editions);
+  snapshot.i18n = onlyPublishedLines(publicI18n(i18nOf(doc), editions), pages);
   return snapshot;
+}
+
+/**
+ * Translations (and per-language balloon geometry) of the published lines only: a withheld page's
+ * lines, or a line deleted since it was translated, never ride along in the public payload. Cover
+ * and brief translations stay (the snapshot publishes both).
+ */
+function onlyPublishedLines(i18n: NonNullable<ComicDoc['i18n']>, pages: Page[]): NonNullable<ComicDoc['i18n']> {
+  const ids = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => panel.lines.map((l) => l.id))));
+  const keep = <T>(rec: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(rec || {}).filter(([id]) => ids.has(id)));
+  const editions: typeof i18n.editions = {};
+  for (const [lang, e] of Object.entries(i18n.editions)) editions[lang] = { ...e, lines: keep(e.lines), balloons: keep(e.balloons) };
+  return { ...i18n, editions };
 }
 
 /** Every storage path inside a snapshot (assets + variants), for the reader's url map. */
