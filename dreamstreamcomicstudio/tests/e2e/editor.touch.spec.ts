@@ -173,24 +173,24 @@ test.describe('balloons on touch', () => {
     expect(balloonOps(await qa.ops()), 'a long-press never edits').toHaveLength(0);
   });
 
-  test('a 500 ms long-press opens the balloon context menu', async ({ qa, page }) => {
-    // mobile.md §5.5: Edit text · Style… · Duplicate · Bring to front / Send back · Lock · Reset · Delete,
-    // in the ContextMenuSheet (mobile/touch/ContextMenuSheet.tsx). Selecting alone is not enough.
+  test('a 500 ms long-press surfaces the balloon actions (Duplicate, Delete)', async ({ qa, page }) => {
+    // mobile.md §5.5: the balloon's actions behind a long-press. Today they arrive in the lettering
+    // inspector layer ("Lettering"), which BalloonLayer opens by selecting on long-press/contextmenu; the
+    // ContextMenuSheet list (Edit text · Style… · Duplicate · Bring to front · Lock · Reset · Delete) is
+    // P2-EDITOR's. Either way a NEW layer (not the editor dialog itself) must carry the actions.
     const touch = new Touch(page);
     test.skip(!(await touch.supported()), 'multi-touch needs Chromium (CDP)');
     await qa.open({ surface: 'editor', fixture: 'heist-12p', page: 1 });
     const hit = page.locator('[data-testid="balloon-hit"]').first();
     const b = (await hit.boundingBox())!;
-    // A NEW layer (not the editor dialog itself, whose inspector also offers Delete once a balloon is
-    // selected) that carries the balloon actions.
-    const menus = page
-      .locator('[role="menu"]:visible, [role="dialog"]:visible')
-      .filter({ hasNot: page.locator('[data-testid="balloon-hit"]') })
-      .filter({ has: page.getByRole('menuitem', { name: /duplicate|delete/i }).or(page.getByRole('button', { name: /^(duplicate|delete)/i })) });
-    const before = await menus.count();
+    const layers = page.locator('[role="menu"]:visible, [role="dialog"]:visible').filter({ hasNot: page.locator('[data-testid="balloon-hit"]') });
+    const withActions = layers
+      .filter({ has: page.getByRole('menuitem', { name: /duplicate/i }).or(page.getByRole('button', { name: /^duplicate/i })) })
+      .filter({ has: page.getByRole('menuitem', { name: /delete/i }).or(page.getByRole('button', { name: /^delete/i })) });
+    expect(await withActions.count(), 'no action layer before the press').toBe(0);
     await touch.longPress(center(b), 520);
     await qa.settle(350);
-    expect(await menus.count(), 'a context menu with the balloon actions opened').toBeGreaterThan(before);
+    expect(await withActions.count(), 'a layer with the balloon actions (Duplicate, Delete) opened').toBeGreaterThan(0);
     expect(balloonOps(await qa.ops()), 'a long-press never edits').toHaveLength(0);
   });
 

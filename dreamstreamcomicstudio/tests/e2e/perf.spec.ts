@@ -103,7 +103,8 @@ test.describe('performance on a mid-range phone', () => {
     if (heap !== null) expect(heap, 'JS heap after the full scroll').toBeLessThan(180 * 1048576);
   });
 
-  test('no long task over 100 ms while dragging a balloon', async ({ qa, page }) => {
+  /** A 2 s touch drag of a selected balloon on page 1 (CPU 4×): long tasks during the move and after the drop. */
+  const dragBalloon = async (qa: import('./helpers/harness').QaHarness, page: import('@playwright/test').Page) => {
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
     await qa.open({ surface: 'editor', fixture: 'heist-12p', page: 1 }, { settle: 800 });
@@ -111,7 +112,13 @@ test.describe('performance on a mid-range phone', () => {
     await expect(hit).toBeVisible();
     const b = (await hit.boundingBox())!;
     const from = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-    // Select first (a selected balloon drags without the hold), then watch long tasks for a 2 s drag.
+    const take = () =>
+      page.evaluate(() => {
+        const w = window as unknown as { __longTasks: number[] };
+        const out = w.__longTasks.slice();
+        w.__longTasks = [];
+        return out;
+      });
     await page.evaluate(() => {
       const w = window as unknown as { __longTasks: number[] };
       w.__longTasks = [];
@@ -119,13 +126,12 @@ test.describe('performance on a mid-range phone', () => {
         for (const e of list.getEntries()) w.__longTasks.push(Math.round(e.duration));
       }).observe({ type: 'longtask' });
     });
+    // Select first (a selected balloon drags without the hold).
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from.x, y: from.y, id: 1 }] });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await qa.settle(300);
+    await qa.settle(400);
     await qa.clearOps();
-    await page.evaluate(() => {
-      (window as unknown as { __longTasks: number[] }).__longTasks = [];
-    });
+    await take();
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from.x, y: from.y, id: 1 }] });
     const steps = 120; // ≈ 2 s at 60 Hz
     for (let i = 1; i <= steps; i++) {
@@ -133,12 +139,25 @@ test.describe('performance on a mid-range phone', () => {
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: from.x + Math.sin(t * Math.PI * 2) * 40, y: from.y + t * 30, id: 1 }] });
       await page.waitForTimeout(16);
     }
+    await qa.settle(150);
+    const during = await take();
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await qa.settle(400);
-    const longTasks = await page.evaluate(() => (window as unknown as { __longTasks: number[] }).__longTasks);
-    const moved = (await qa.ops()).filter((o) => o.kind === 'patch').length;
-    test.info().annotations.push({ type: 'long-tasks', description: longTasks.length ? longTasks.join(', ') + ' ms' : 'none' });
-    expect(moved, 'the drag moved the balloon (one patch)').toBeGreaterThanOrEqual(1);
-    expect(Math.max(0, ...longTasks), 'longest task during the 2 s balloon drag').toBeLessThanOrEqual(100);
+    await qa.settle(500);
+    const drop = await take();
+    const patches = (await qa.ops()).filter((o) => o.kind === 'patch').length;
+    test.info().annotations.push({ type: 'long-tasks', description: `move: ${during.join(', ') || 'none'} ms · drop: ${drop.join(', ') || 'none'} ms` });
+    return { during, drop, patches };
+  };
+
+  test('no long task over 100 ms while dragging a balloon', async ({ qa, page }) => {
+    const { during, patches } = await dragBalloon(qa, page);
+    expect(patches, 'the drag moved the balloon (one patch on release)').toBeGreaterThanOrEqual(1);
+    expect(Math.max(0, ...during), `longest task while the finger moves (all: ${during.join(', ') || 'none'} ms)`).toBeLessThanOrEqual(100);
+  });
+
+  test('dropping a dragged balloon commits without a long task over 100 ms', async ({ qa, page }) => {
+    const { drop, patches } = await dragBalloon(qa, page);
+    expect(patches, 'the drop committed one patch').toBeGreaterThanOrEqual(1);
+    expect(Math.max(0, ...drop), `longest task after the drop (all: ${drop.join(', ') || 'none'} ms)`).toBeLessThanOrEqual(100);
   });
 });

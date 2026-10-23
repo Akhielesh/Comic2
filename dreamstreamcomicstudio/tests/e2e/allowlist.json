@@ -37,6 +37,19 @@
         "detail": "div\\.absolute\\.inset-0"
       },
       "reason": "BalloonLayer resolves a touch within 22 px (NEAREST_TAP_PX) to the nearest balloon through the art layer behind it, so probes landing on that layer still select the balloon."
+    },
+    {
+      "id": "qa-kit-main-scroll-focus",
+      "check": "axe",
+      "owner": "P1-QA",
+      "surfaces": [
+        "kit"
+      ],
+      "match": {
+        "sig": "^scrollable-region-focusable$",
+        "ctx": "^<main id=\"qa-main\""
+      },
+      "reason": "The kit scenes' own scrolling <main> (qa/KitScenes.tsx, a harness wrapper, not product UI) has nothing focusable in the art scene; making it focusable would turn the whole page into a tap target."
     }
   ],
   "knownFailures": [
@@ -62,16 +75,6 @@
         "label": "^Not drawn yet <> "
       },
       "reason": "StyleTab: a FAILED style option tile paints the 'Not drawn yet' placeholder on top of its own error text.",
-      "removeBy": "wave3"
-    },
-    {
-      "id": "recap-kind-segment-labels-overlap",
-      "check": "collision",
-      "owner": "P1-CONVERSATION",
-      "match": {
-        "ctx": "Comic kind"
-      },
-      "reason": "RecapCard / FormatPanel 'Comic kind' segmented control: Comic/Manga/Webtoon labels overlap at 768–1024 px (segments narrower than their labels).",
       "removeBy": "wave3"
     },
     {
@@ -173,16 +176,6 @@
       "removeBy": "wave3"
     },
     {
-      "id": "composer-option-chips",
-      "check": "hit-target",
-      "owner": "P2-CONVERSATION",
-      "match": {
-        "ctx": "^Comic options"
-      },
-      "reason": "Composer option chips (format, art style, quality) are 32 px tall; their 44 px ::after areas overlap each other and the Send button.",
-      "removeBy": "wave3"
-    },
-    {
       "id": "composer-chip-names",
       "check": "axe",
       "owner": "P2-CONVERSATION",
@@ -202,16 +195,6 @@
         "ctx": "^Conversation"
       },
       "reason": "The 'Stop' pill above the composer is 24 px tall and its ::after area runs under the composer surface.",
-      "removeBy": "wave3"
-    },
-    {
-      "id": "nextstep-chips-touch",
-      "check": "hit-target",
-      "owner": "P2-CONVERSATION",
-      "match": {
-        "ctx": "^Next steps"
-      },
-      "reason": "Next-step chips: rows of 44 px chips touch, so the edge probes land in the neighbouring chip's label.",
       "removeBy": "wave3"
     },
     {
@@ -244,16 +227,6 @@
         "ctx": "mb-3 h-1 w-full overflow-hidden rounded-full"
       },
       "reason": "RendersCard progress bar has role=progressbar but no accessible name.",
-      "removeBy": "wave3"
-    },
-    {
-      "id": "options-own-answer-input",
-      "check": "hit-target",
-      "owner": "P2-CONVERSATION",
-      "match": {
-        "label": "^Your own answer$"
-      },
-      "reason": "OptionsCard 'Your own answer' input is 36 px tall on touch.",
       "removeBy": "wave3"
     },
     {
@@ -364,27 +337,6 @@
       "removeBy": "wave3"
     },
     {
-      "id": "board-tab-chips",
-      "check": "hit-target",
-      "owner": "P2-BOARD",
-      "match": {
-        "ctx": "^Board( <|$)"
-      },
-      "reason": "Board tab chips (Media, Pages n/m) are 44 px tall but touch the neighbouring chip and the header row, so edge probes land outside.",
-      "removeBy": "wave3"
-    },
-    {
-      "id": "board-panel-actions",
-      "check": "hit-target",
-      "owner": "P2-BOARD",
-      "match": {
-        "ctx": "^#board-panel( <|$)",
-        "label": "^(Add|Render \\d+ sheets)"
-      },
-      "reason": "CastTab header actions ('Add', 'Render n sheets') are below 44 px on touch.",
-      "removeBy": "wave3"
-    },
-    {
       "id": "reader-tab-toolbar",
       "check": "*",
       "owner": "P2-BOARD",
@@ -474,7 +426,7 @@
       "owner": "P1-TIMELINE",
       "match": {
         "sig": "^(nested-interactive|label-content-name-mismatch)$",
-        "label": "^div\\[aria-label=\"(Cover|Page \\d+),"
+        "ctx": "^<div role=\"option\"[^>]*aria-label=\"(Cover|Page \\d+),"
       },
       "reason": "TimelineClip role=option tiles contain focusable controls (nested-interactive) and their aria-label ('Page 2, ready') drops the visible text (label-content-name-mismatch).",
       "removeBy": "wave3"
@@ -543,6 +495,89 @@
         "detail": "= 4\\.3"
       },
       "reason": "--ds-muted on the soft surfaces measures 4.36:1 for 11–12 px text (needs 4.5:1).",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "breakdown-tile-names",
+      "check": "axe",
+      "owner": "P1-BOOKMODEL",
+      "match": {
+        "sig": "^label-content-name-mismatch$",
+        "ctx": "^<button[^>]*aria-label=\"(Cover|Page \\d+), "
+      },
+      "reason": "BreakdownCard page/cover tiles: the aria-label ('Page 2, 4 panels, not drawn, about $0.07 to draw') does not contain the tile's visible text (label-content-name-mismatch, WCAG 2.5.3) — start the label with the visible words.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "ref-tile-names",
+      "check": "axe",
+      "owner": "P1-REFS",
+      "match": {
+        "sig": "^label-content-name-mismatch$",
+        "ctx": "^<div role=\"button\"[^>]*aria-label=\"Photo \\d+"
+      },
+      "reason": "RefTile (role=button): the aria-label ('Photo 2, Side') does not contain the tile's visible text (label chip / badges) — label-content-name-mismatch, WCAG 2.5.3.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "easy-lettering-small-targets",
+      "check": "hit-target",
+      "owner": "P1-LETTER-UI",
+      "match": {
+        "testid": "^easy-lettering$"
+      },
+      "reason": "EasyLetteringPanel on touch: Smaller/Bigger text (32 px), the text-colour swatches (28 px, their 44 px ::after areas overlap each other), the font chips (23 px tall, rows touching) and 'More…' (55x25) are below 44 px / steal each other's probes.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "editor-landscape-handles",
+      "check": "hit-target",
+      "owner": "P2-EDITOR",
+      "projects": [
+        "iphone-15-landscape"
+      ],
+      "match": {
+        "testid": "^(tail|width)-handle$"
+      },
+      "reason": "Phone landscape (734x343): the editor page is ~104 px wide, so the selected balloon's tail and width handles' 44 px hit areas overlap each other and the page edge (mobile.md §5.6 landscape editor layout).",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "editor-landscape-side-insets",
+      "check": "safe-area",
+      "owner": "P2-EDITOR",
+      "projects": [
+        "iphone-15-landscape"
+      ],
+      "surfaces": [
+        "editor"
+      ],
+      "match": {
+        "detail": "inside the (left|right) "
+      },
+      "reason": "Phone landscape: the editor's lettering panel (Balloon type: Shout, Robot / radio …) runs into the right notch inset — the editor ignores --sa-left/--sa-right.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "style-palette-remove-hover-only",
+      "check": "hover-only",
+      "owner": "P2-BOARD",
+      "match": {
+        "label": "^Remove #[0-9a-f]{3,8}$",
+        "ctx": "^Palette"
+      },
+      "reason": "StyleTab palette swatches: the 16 px 'Remove #hex' buttons are opacity-0 until hover (group-hover), so on touch they are invisible yet tappable (StyleTab.tsx; the CastTab ref-remove button uses the same pattern).",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "classic-reader-edge-hover-only",
+      "check": "hover-only",
+      "owner": "P2-READER-PUBLIC",
+      "match": {
+        "testid": "^reader-stage$",
+        "label": "^(Previous|Next) page$"
+      },
+      "reason": "ComicReaderView: the side 'Previous page' / 'Next page' zones (md+) are opacity-0 until hover, so on touch tablets they are invisible yet tappable.",
       "removeBy": "wave3"
     }
   ],
@@ -624,18 +659,26 @@
       "removeBy": "wave3"
     },
     {
-      "id": "editor-long-press-menu",
-      "test": "editor\\.touch\\.spec\\.ts › .*long-press opens the balloon context menu",
-      "owner": "P2-EDITOR",
-      "reason": "BalloonLayer's long-press / contextmenu only selects the balloon; mobile.md §5.5 wants the balloon menu (Edit text · Style… · Duplicate · Bring to front · Lock · Reset · Delete) in mobile/touch/ContextMenuSheet.",
-      "mode": "fail",
-      "removeBy": "wave3"
-    },
-    {
       "id": "editor-zoom-proof-drag",
       "test": "editor\\.touch\\.spec\\.ts › .*after a 2× pinch a 60 px drag",
       "owner": "P2-EDITOR",
       "reason": "PageEditor does not mount TouchCanvas yet, so there is no pinch zoom to drag at (mobile.md §5.1/§10.4: at 2× a 60 px drag must move the balloon 30 px of page).",
+      "mode": "fail",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "reader-hidden-hud-taps",
+      "test": "reader\\.formfactor\\.spec\\.ts › .*a hidden HUD takes no taps",
+      "owner": "P1-READER",
+      "reason": "ReaderHud hides its rows with opacity-0 + pointer-events-none, but the bars inside keep pointer-events-auto, so Close reader / Guided View / Reader settings / Full screen stay tappable while invisible (a tap meant to bring the HUD back can close the reader). Fix: pointer-events-none on the bars too (or inert) while hidden.",
+      "mode": "fail",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "editor-drop-long-task",
+      "test": "perf\\.spec\\.ts › .*dropping a dragged balloon commits",
+      "owner": "P2-EDITOR",
+      "reason": "pixel-8 at CPU 4×: the frames while a balloon moves stay at 50–75 ms, but releasing it (the balloon op → re-render of the editor and board) is one 190–230 ms task; mobile.md §10.4 allows no long task > 100 ms during the drag (memoise the page/board under the editor, or commit in a transition).",
       "mode": "fail",
       "removeBy": "wave3"
     }
