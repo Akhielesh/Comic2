@@ -11,7 +11,7 @@
  *   POST /api/events                       create an event → { id, hostKey }
  *   GET  /api/events/:id                   public event meta
  *   GET  /api/events/:id/ws                WebSocket → EventRoom
- *   POST /api/events/:id/segments?seq&ms   host uploads one segment (binary body)
+ *   POST /api/events/:id/segments?seq&ms   host uploads one segment (binary body; one DO request: /ingest)
  *   GET  /api/events/:id/segments/:seq     viewers fetch a segment (CDN-cached)
  *   GET  /api/events/:id/stats?k=hostKey   host-gated analytics + activity log
  *   POST /api/events/:id/rsvp              name-only "save my spot" from invites
@@ -67,6 +67,51 @@ async function authHost(env: Env, id: string, key: string | null): Promise<boole
     new Request('https://room.internal/auth', { headers: { 'x-host-key': key } }),
   );
   return res.status === 204;
+}
+
+/**
+ * Host passes (feature doc §7 C10): a host key the room has confirmed for an event, remembered by
+ * this isolate as its SHA-256, so the next segments skip the room's `/auth` (a billed DO request
+ * per segment, 600 a stream-hour). A pass never makes a key valid:
+ *   - only the room's yes is remembered — a wrong or old key is asked about every time, and is
+ *     refused before anything is written to R2;
+ *   - the room's `/ingest` still checks the key on every segment, and a refusal there drops the
+ *     pass and the stored segment (so a key the room stopped accepting gets at most one segment
+ *     into R2 per isolate, never to a viewer);
+ *   - each `/ingest` yes renews it; unused, it lapses after HOST_PASS_TTL_MS.
+ */
+const HOST_PASS_TTL_MS = 10 * 60_000;
+const HOST_PASS_MAX = 512;
+const hostPasses = new Map<string, { h: string; until: number }>();
+
+/** Test hook. */
+export function resetHostPasses(): void {
+  hostPasses.clear();
+}
+
+async function keyHash(key: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)));
+  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function sameHash(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function hasHostPass(id: string, key: string, now: number): Promise<boolean> {
+  const p = hostPasses.get(id);
+  if (!p || p.until <= now) return false;
+  return sameHash(p.h, await keyHash(key));
+}
+
+async function grantHostPass(id: string, key: string, now: number): Promise<void> {
+  const h = await keyHash(key);
+  hostPasses.delete(id); // re-insert: the Map's order is the eviction order (oldest first)
+  hostPasses.set(id, { h, until: now + HOST_PASS_TTL_MS });
+  while (hostPasses.size > HOST_PASS_MAX) hostPasses.delete(hostPasses.keys().next().value as string);
 }
 
 const json = (data: unknown, status = 200, extra: Record<string, string> = {}) =>
@@ -370,11 +415,14 @@ export default {
         if (!Number.isFinite(seq) || seq <= 0) return withCors(json({ error: 'bad seq' }, 400), cors);
 
         // Cost/security guardrail: reject forged segment uploads before reading
-        // their body or writing bytes to R2. The ingest call below still records
-        // the segment after storage succeeds, but this cheap DO auth gate keeps a
-        // bad host key from turning public event IDs into R2 write amplification.
-        if (!(await authHost(env, id, hostKey))) {
-          return withCors(json({ error: 'forbidden' }, 403), cors);
+        // their body or writing bytes to R2, so a bad host key can't turn public
+        // event IDs into R2 write amplification. The room's /auth answers that
+        // once per isolate (a host pass, above); /ingest below re-checks the key
+        // on every segment after storage succeeds.
+        if (!hostKey) return withCors(json({ error: 'forbidden' }, 403), cors);
+        if (!(await hasHostPass(id, hostKey, Date.now()))) {
+          if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
+          await grantHostPass(id, hostKey, Date.now());
         }
 
         const bytes = await req.arrayBuffer();
@@ -391,9 +439,11 @@ export default {
           headers: { 'content-type': 'application/json', 'x-host-key': hostKey },
         });
         if (!res.ok) {
+          hostPasses.delete(id); // the room said no: ask it again next time, before R2
           ctx.waitUntil(env.LIVE_BUCKET.delete(key)); // defensive cleanup if the room rejects after storage
           return withCors(res, cors);
         }
+        await grantHostPass(id, hostKey, Date.now()); // the room just confirmed the key again
         return withCors(json({ ok: true, seq }), cors);
       }
 
