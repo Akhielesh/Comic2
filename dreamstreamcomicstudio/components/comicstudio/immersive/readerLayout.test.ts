@@ -155,7 +155,8 @@ describe('bookGeometry', () => {
     expect(g.book.w).toBeLessThanOrEqual(390 - 20 + 1e-6);
     expect(g.book.h).toBeLessThanOrEqual(760 - 20 + 1e-6);
     const wide = bookGeometry({ view: v, stage: { w: 852, h: 393 }, layout: 'single', rtl: false, aspectOf: () => A23, pageAspect: A23, fit: 'width', widthClass: 'expanded' });
-    expect(wide.page.w).toBeCloseTo(852 - 48, 6);
+    expect(wide.page.w).toBeCloseTo(852, 6);
+    expect(wide.book.x).toBeCloseTo(0, 6);
     expect(wide.page.h).toBeGreaterThan(393);
   });
 

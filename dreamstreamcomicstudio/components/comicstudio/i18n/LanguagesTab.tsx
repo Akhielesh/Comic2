@@ -16,7 +16,8 @@ import { BookA, CheckCircle2, ChevronRight, Globe, Languages, LoaderCircle, Sear
 import type { ComicDoc, TranslationRegister } from '../../../shared/comic/doc';
 import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
 import { LANGUAGES, dirOf, languageSpec, sameLanguage, scriptOf, type LanguageSpec } from '../../../shared/comic/languages';
-import { estimateJobs, formatUsd } from '../../../shared/comic/models';
+import { estimateJobs } from '../../../shared/comic/models';
+import { useCostFormat } from '../conversation/cost';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
 import { EmptyHint, GhostButton, PrimaryButton, SectionTitle, Surface, cx } from '../board/ui';
 import type { StudioController } from '../types';
@@ -213,6 +214,8 @@ function SourceLanguage({ studio, doc }: { studio: StudioController; doc: ComicD
 function LetteringNotices({ studio, doc }: { studio: StudioController; doc: ComicDoc }) {
   const [confirming, setConfirming] = useState<'pages' | 'cover' | null>(null);
   const byok = !!studio.caps?.byok;
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  const cost = useCostFormat(studio);
   const pages = inArtPages(doc);
   const editions = Object.keys(i18nOf(doc).editions).length > 0;
   const notices: React.ReactNode[] = [];
@@ -231,7 +234,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
       notices.push(
         <div key="pages" className="space-y-2">
           <p>
-            <strong>Translated editions need overlay lettering.</strong> {pages.length === 1 ? 'Page' : `${pages.length} pages`} {pages.length === 1 ? 'has' : 'have'} the words painted into the art, so readers of a translation would still see the original words. Redrawing {pages.length === 1 ? 'it' : 'them'} without text costs ≈ {formatUsd(usd)} once; after that every language — including this one — gets exact, editable balloons for free.
+            <strong>Translated editions need overlay lettering.</strong> {pages.length === 1 ? 'Page' : `${pages.length} pages`} {pages.length === 1 ? 'has' : 'have'} the words painted into the art, so readers of a translation would still see the original words. Redrawing {pages.length === 1 ? 'it' : 'them'} without text costs {cost.approx(usd)} once; after that every language — including this one — gets exact, editable balloons for free.
           </p>
           {confirming === 'pages' ? (
             <div className="flex flex-wrap gap-2" role="group" aria-label="Confirm the redraw">
@@ -244,7 +247,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
                   await studio.act({ type: 'render_pages', pageIds: pages.map((p) => p.id), quotedUsd: usd });
                 }}
               >
-                Redraw {pages.length === 1 ? 'page' : `${pages.length} pages`} · ≈ {formatUsd(usd)}
+                Redraw {pages.length === 1 ? 'page' : `${pages.length} pages`} · {cost.approx(usd)}
               </PrimaryButton>
               <GhostButton size="sm" className="coarse:h-11" onClick={() => setConfirming(null)}>
                 Not now
@@ -264,7 +267,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
     notices.push(
       <div key="cover" className="space-y-2">
         <p>
-          The cover title is painted in {languageSpec(doc.format.language)?.english || 'the original language'}. A textless cover with an editable title is a one-time ≈ {formatUsd(usd)}; every language's title is free after that. (Optional — the reader shows the translated title either way.)
+          The cover title is painted in {languageSpec(doc.format.language)?.english || 'the original language'}. A textless cover with an editable title is a one-time {cost.approx(usd)}; every language's title is free after that. (Optional — the reader shows the translated title either way.)
         </p>
         {confirming === 'cover' ? (
           <div className="flex flex-wrap gap-2" role="group" aria-label="Confirm the cover redraw">
@@ -276,7 +279,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
                 void studio.act({ type: 'render_cover', textless: true, quotedUsd: usd });
               }}
             >
-              Textless cover · ≈ {formatUsd(usd)}
+              Textless cover · {cost.approx(usd)}
             </PrimaryButton>
             <GhostButton size="sm" className="coarse:h-11" onClick={() => setConfirming(null)}>
               Keep the painted cover
@@ -300,6 +303,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
 
 function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { studio: StudioController; doc: ComicDoc; lang: string; quote?: TranslationQuote['perLanguage'][number]; quoteLoading: boolean; onReview(): void }) {
   const [removing, setRemoving] = useState(false);
+  const cost = useCostFormat(studio);
   const spec = languageSpec(lang);
   const edition = i18nOf(doc).editions[lang];
   if (!spec || !edition) return null;
@@ -360,7 +364,7 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
             onClick={() => quote && void studio.act({ type: 'translate', languages: [lang], quotedUsd: quote.usd })}
           >
             {p.missing || p.stale ? 'Translate missing' : 'Finish the review'}
-            {quote ? ` · ${quote.usd > 0 ? `≈ ${formatUsd(quote.usd)}` : 'Free'}` : ''}
+            {quote ? ` · ${cost.approx(quote.usd)}` : ''}
           </PrimaryButton>
         )}
         <label className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--ds-muted)]">
@@ -425,6 +429,7 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
     return p.missing + p.stale + p.unreviewed > 0;
   }) : []), [doc, editions]);
   const rowsQuote = useQuote(doc?.id, needingWork, workKey);
+  const cost = useCostFormat(studio);
   const addQuote = useQuote(doc?.id, pending, `${workKey}#${pending.join(',')}`);
 
   if (!doc) return null;
@@ -533,7 +538,7 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
                   return (
                     <span key={code} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-[var(--ds-raised)] py-1 pl-3 pr-1 text-[13px] shadow-sm">
                       <span lang={code} dir={dirOf(code)} className="break-words">{s.endonym}</span>
-                      {q && <span className="text-[11.5px] tabular-nums text-[var(--ds-muted)]">{q.usd > 0 ? `≈ ${formatUsd(q.usd)}` : 'Free'}</span>}
+                      {q && <span className="text-[11.5px] tabular-nums text-[var(--ds-muted)]">{cost.approx(q.usd)}</span>}
                       <button type="button" aria-label={`Remove ${s.english}`} onClick={() => setPending((p) => p.filter((x) => x !== code))} className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11">
                         <X className="h-3.5 w-3.5" aria-hidden />
                       </button>
@@ -564,7 +569,7 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
                   setAdding(false);
                 }}
               >
-                Translate{addQuote.quote ? ` · ${addQuote.quote.usd > 0 ? `≈ ${formatUsd(addQuote.quote.usd)}` : 'Free'}` : ''}
+                Translate{addQuote.quote ? ` · ${cost.approx(addQuote.quote.usd)}` : ''}
               </PrimaryButton>
             </div>
           )}

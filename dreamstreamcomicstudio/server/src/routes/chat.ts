@@ -595,7 +595,27 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     xaiKey: ak.providerKeys?.xai?.byok ? ak.providerKeys.xai.key : undefined
   };
   const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
-  if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
+  if (imageRequested) {
+    // Usage budget: middleware/keys.ts falls back to the PLATFORM Gemini / Ideogram / Flux keys,
+    // and this tool reserves nothing — so on a platform key a governed user would spend platform
+    // image money outside their usage (even once it's used up). The tool is BYOK by contract
+    // (toolCatalog: "your account"): platform image keys are only used where no budget applies
+    // (admins, metering off). Everyone else gets their own keys only, and with none the tool
+    // answers honestly how to add one ($0).
+    const platformImageKeysOk = !meteringEnabled() || (await isUsageExemptAdmin(req));
+    if (platformImageKeysOk) {
+      if (imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
+    } else {
+      metaTools.push(
+        makeImageTool({
+          ...imageKeys,
+          geminiKey: hasByokForProvider(req, 'gemini') ? imageKeys.geminiKey : undefined,
+          ideogramKey: hasByokForProvider(req, 'ideogram') ? imageKeys.ideogramKey : undefined,
+          pixazoKey: hasByokForProvider(req, 'pixazo') ? imageKeys.pixazoKey : undefined
+        })
+      );
+    }
+  }
 
   // Deep research is a HEAVY tool (multi-search + page reads + 2 model calls), so it is
   // offered only when the user's message actually signals a research intent — not on every
@@ -885,12 +905,13 @@ export const noFreeModelDetails = (details: LimitExceededDetails): LimitExceeded
 export const reserveChat = async (req: any, p: PreparedChat, metadata: Record<string, unknown>): Promise<ChatGate> => {
   if (!req.user?.id) return { ok: true, p, reserve: null };
   const first = await reserveChatPlan(req, p, metadata);
-  if (first.allowed) return { ok: true, p, reserve: first };
+  if (!('details' in first)) return { ok: true, p, reserve: first };
   if (first.details.reason !== 'usage_budget_exhausted' || p.freeModelsOnly) return { ok: false, details: first.details };
   const free = await freeModelsOnlyPlan(p);
-  if (!free) return { ok: false, details: noFreeModelDetails(first.details) };
+  // Only OpenRouter has free models: elsewhere the honest refusal stands as it is (not "busy").
+  if (!free) return { ok: false, details: p.resolved.provider === 'openrouter' ? noFreeModelDetails(first.details) : first.details };
   const second = await reserveChatPlan(req, free, metadata);
-  if (!second.allowed) {
+  if ('details' in second) {
     return { ok: false, details: second.details.reason === 'usage_budget_exhausted' ? noFreeModelDetails(first.details) : second.details };
   }
   // The refused attempt left its details on the request; this turn is going ahead.
@@ -904,7 +925,7 @@ export const reserveChat = async (req: any, p: PreparedChat, metadata: Record<st
  * the reply is still recorded honestly against the usage, so this note isn't added.
  */
 export const freeModelsNotice = (gate: ChatGate, servedModel: string | undefined, opts: { swarm?: boolean } = {}): CapabilityNotice | null => {
-  if (!gate.ok || !gate.degradedFrom) return null;
+  if ('details' in gate || !gate.degradedFrom) return null;
   if (servedModel && !hasFreeSuffix(servedModel)) return null;
   const exhausted = (gate.degradedFrom.details.pctLeft ?? 0) < 0.5;
   const lead = exhausted
@@ -919,8 +940,7 @@ export const freeModelsNotice = (gate: ChatGate, servedModel: string | undefined
   return {
     tool: 'usage_budget',
     level: 'info',
-    message: `${lead}, so this reply came from a free model${instead} — nothing was taken from your usage. Free models can be slower, and live web search is paused.`,
-    fix: 'Add your own API key in Settings → API keys to use every model again.',
+    message: `${lead}, so this reply came from a free model${instead} — nothing was taken from your usage. Free models can be slower and don't search the web automatically. Add your own API key in Settings → API keys to use every model again.`,
     at: new Date().toISOString()
   };
 };
@@ -976,7 +996,7 @@ export const holdForChatHelper = async (
       outputTokens: input.maxTokens,
       metadata: { route: input.operation, helper: true }
     });
-    if (!reserve.allowed) return { run: false, details: reserve.details };
+    if ('details' in reserve) return { run: false, details: reserve.details };
     return { run: true, reserve, req: view };
   } catch (err) {
     // Fail closed at $0: the helper is skipped rather than run unmetered.
@@ -1421,8 +1441,9 @@ chatRouter.post('/memory/import', async (req, res, next) => {
     });
     // A user-started import (not a background helper): an honest, percent-only refusal.
     if (!hold.run) {
-      return hold.details
-        ? res.status(402).json({ error: formatLimitErrorResponse(hold.details) })
+      const details = (hold as { details?: LimitExceededDetails }).details;
+      return details
+        ? res.status(402).json({ error: formatLimitErrorResponse(details) })
         : res.status(503).json({ error: { message: USAGE_UNAVAILABLE_MESSAGE, code: 'USAGE_UNAVAILABLE' } });
     }
     const result = await runHeldHelper(hold, meter, () =>
@@ -1641,7 +1662,7 @@ chatRouter.post('/', async (req, res, next) => {
 
     // Usage budget: reserve the turn (a refused paid plan re-plans onto free models at $0).
     const gate = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length });
-    if (!gate.ok) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
+    if ('details' in gate) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
     const { p, reserve } = gate;
 
     try {
@@ -1789,12 +1810,20 @@ const streamChatTurn = async (
 
 // Streaming variant — Server-Sent Events. Emits `meta`, `delta`/`reasoning`,
 // then a `final` event carrying the full ChatResponse (with billing), or `error`.
-chatRouter.post('/stream', async (req, res) => {
-  const prep = await prepareChat(req);
-  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+chatRouter.post('/stream', async (req, res, next) => {
+  let gate: Extract<ChatGate, { ok: true }>;
+  try {
+    const prep = await prepareChat(req);
+    if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
 
-  const gate = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length });
-  if (!gate.ok) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
+    const reserved = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length });
+    if ('details' in reserved) return res.status(402).json({ error: formatLimitErrorResponse(reserved.details) });
+    gate = reserved;
+  } catch (err) {
+    // Nothing streamed or spent yet. Express 4 doesn't catch an async throw — without this the
+    // request would hang until the client gives up.
+    return next(err);
+  }
 
   await streamChatTurn(req, res, gate);
 });
@@ -1802,20 +1831,27 @@ chatRouter.post('/stream', async (req, res) => {
 // Agent swarm (SSE). Plans → runs specialized agents in parallel → synthesizes.
 // Mirrors /stream for billing + transport, but emits `trace` events so the client
 // can render the plan executing live. OpenRouter-only (agents need tool calling).
-chatRouter.post('/swarm', async (req, res) => {
-  const prep = await prepareChat(req);
-  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+chatRouter.post('/swarm', async (req, res, next) => {
+  let gate: Extract<ChatGate, { ok: true }>;
+  try {
+    const prep = await prepareChat(req);
+    if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
 
-  if (prep.prepared.resolved.provider !== 'openrouter') {
-    return res.status(400).json({
-      error: { message: 'The agent swarm requires an OpenRouter key (agents use tool calling).', code: 'SWARM_REQUIRES_OPENROUTER' }
-    });
+    if (prep.prepared.resolved.provider !== 'openrouter') {
+      return res.status(400).json({
+        error: { message: 'The agent swarm requires an OpenRouter key (agents use tool calling).', code: 'SWARM_REQUIRES_OPENROUTER' }
+      });
+    }
+
+    // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry; synthesis on p.model —
+    // the hold is priced at the whole chain.
+    const reserved = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length, swarm: true });
+    if ('details' in reserved) return res.status(402).json({ error: formatLimitErrorResponse(reserved.details) });
+    gate = reserved;
+  } catch (err) {
+    // Nothing streamed or spent yet (see /stream).
+    return next(err);
   }
-
-  // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry; synthesis on p.model —
-  // the hold is priced at the whole chain.
-  const gate = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length, swarm: true });
-  if (!gate.ok) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
 
   // The agent team always keeps a paid retry, so a free-models-only turn is answered by one free
   // model instead (same SSE events; the client renders a final without traces).

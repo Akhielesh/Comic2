@@ -17,6 +17,11 @@ export interface SafetyVeilProps {
   rating: ContentRating;
   children: React.ReactNode;
   onRedrawSafer?(): void;
+  /**
+   * What "Redraw safer" costs, already formatted for this user (formatCostForUser: "≈ $0.07", "≈2% of
+   * your usage", "Free"). Shown on the button so a paid redraw is never a surprise.
+   */
+  redrawPrice?: string;
   onChangeRating?(): void;
   onCheckAgain?(): void;
 }
@@ -48,8 +53,9 @@ const Actions: React.FC<{ items: { label: string; onClick?: () => void; primary?
   );
 };
 
-export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children, onRedrawSafer, onChangeRating, onCheckAgain }) => {
+export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children, onRedrawSafer, onChangeRating, onCheckAgain, redrawPrice }) => {
   const status = safetyStatusOf(asset?.safety, rating);
+  const redrawLabel = redrawPrice?.trim() ? `Redraw safer · ${redrawPrice.trim()}` : 'Redraw safer';
   const [shown, setShown] = useState(false);
   // A different image (or a new verdict) is veiled again.
   useEffect(() => setShown(false), [asset?.path, asset?.safety?.assessed]);
@@ -66,7 +72,7 @@ export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children,
           <p className="break-words text-[12px] leading-snug text-[var(--ds-muted)]">This take didn&apos;t fit the content rules.</p>
           <Actions
             items={[
-              { label: 'Redraw safer', onClick: onRedrawSafer, primary: true },
+              { label: redrawLabel, onClick: onRedrawSafer, primary: true },
               { label: 'Check again', onClick: onCheckAgain }
             ]}
           />
@@ -94,7 +100,10 @@ export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children,
     const assessed = asset?.safety?.assessed;
     return (
       <div className="relative h-full w-full overflow-hidden rounded-[inherit]" data-safety="over_rating">
-        <div aria-hidden="true" className="h-full w-full [filter:blur(18px)] motion-safe:transition-[filter]">
+        {/* `inert` as well as aria-hidden: anything interactive inside the blurred art (the editor's
+            balloon buttons, a card's pointer shortcut) must not take keyboard focus or clicks while it
+            is veiled — focus would land on something the reader can't see. */}
+        <div aria-hidden="true" inert data-safety-blurred className="h-full w-full [filter:blur(18px)] motion-safe:transition-[filter]">
           {children}
         </div>
         <div className="absolute inset-0 grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] place-items-center p-2 text-center sm:p-3">
@@ -106,7 +115,7 @@ export const SafetyVeil: React.FC<SafetyVeilProps> = ({ asset, rating, children,
             <Actions
               items={[
                 { label: 'Show', onClick: () => setShown(true) },
-                { label: 'Redraw safer', onClick: onRedrawSafer, primary: true },
+                { label: redrawLabel, onClick: onRedrawSafer, primary: true },
                 { label: 'Change rating', onClick: onChangeRating }
               ]}
             />

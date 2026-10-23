@@ -20,6 +20,7 @@ import {
   alignOps,
   balloonOp,
   canLinkToPrevious,
+  isLinked,
   clearStyleOps,
   deleteLinesOps,
   distributeOps,
@@ -132,7 +133,8 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
   const textStroke = v('textStroke');
   const shadow = v('shadow');
   const locked = selPlans.length > 0 && selPlans.every((p) => p.locked);
-  const linked = !!one && !!page.balloons.find((b) => b.lineId === one.id)?.linkTo;
+  // Linked at either end (its own connector to the previous line, or the next line's into it).
+  const linked = !!one && isLinked(page, one.id);
   const aspect = 1000 / H;
 
   const scopes: { id: StyleScope; label: string; disabled?: boolean }[] = [

@@ -1,13 +1,17 @@
 // VersionStack + the versions card: flip, use (free, optimistic render_use), compare, sheet confirm,
 // honest staleness after a restore.
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { pageSpecHash, type ComicDoc } from '../../../shared/comic/doc';
-import { makeFakeStudio } from '../conversation/testing/fixtures';
+import { makeFakeStudio, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { A, richDoc } from './__fixtures__/richDoc';
 import { VersionStack } from './VersionStack';
 import { VersionsCard } from './VersionsCard';
+
+// Admin / own-key wording (dollars) unless a test publishes a governed status.
+beforeEach(() => showDollarPrices());
+afterEach(() => resetUsageStatus());
 
 const P1 = { kind: 'page' as const, id: 'pg_1' };
 const setup = (doc: ComicDoc = richDoc(), props: Partial<React.ComponentProps<typeof VersionStack>> = {}, extra: Parameters<typeof makeFakeStudio>[0] = {}) => {
@@ -86,6 +90,32 @@ describe('VersionStack', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/marks page 1 out of date/);
     fireEvent.click(screen.getByRole('button', { name: 'Use v1 anyway' }));
     expect(studio.patch.mock.calls[0][0]).toEqual([{ op: 'render_use', target: { kind: 'sheet', id: 'c_maya' }, path: 'u/x/p/maya-v1.webp', at: expect.any(Number) }]);
+  });
+
+  it('a current version whose shape does not match the book offers the free fit itself (no round-trip message now)', () => {
+    const doc = richDoc();
+    doc.pages[0].render = { ...doc.pages[0].render, asset: A('p1-sq', 31, { w: 1024, h: 1024 }) };
+    const { studio } = setup(doc);
+    expect(screen.getByText(/This version is 1:1; the book is 4:5/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Fit to 4:5 · Free' }));
+    expect(studio.act).toHaveBeenCalledWith({ type: 'fit_render', target: P1 });
+  });
+
+  it('governed users never see dollars: facts, compare, the stale note and the sheet confirm speak in usage', () => {
+    showUsagePrices(1);
+    const doc = richDoc();
+    doc.pages[0].render = { ...doc.pages[0].render, specHash: 'old-spec' };
+    const { container, unmount } = setup(doc);
+    expect(container.textContent).not.toMatch(/\$/);
+    expect(screen.getByText(/redraw it \((≈[\d.]+%|<0\.1%) of your usage\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(container.textContent).not.toMatch(/\$/);
+    unmount();
+    const sheet = setup(richDoc(), { target: { kind: 'sheet', id: 'c_maya' } });
+    fireEvent.click(screen.getByRole('radio', { name: /^v1/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use v1 · Free' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/would be (≈[\d.]+%|<0\.1%) of your usage/);
+    expect(sheet.container.textContent).not.toMatch(/\$/);
   });
 
   it('an undrawn image says so instead of showing an empty stack', () => {

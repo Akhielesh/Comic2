@@ -849,7 +849,8 @@ describe('v5: restoreQuarantined (appeal cleared / moderator restore)', () => {
       [`q/${USER}/${PROJECT}/../../x.webp`, art],
       [`library/v1/a/b.webp`, art],
       [quarantinePath, ''],
-      [undefined, art]
+      [undefined, art],
+      [quarantinePath, 'u/---/p/x/img/page-1.webp'] // a degenerate owner segment: a 400, never a raw Error
     ] as const;
     for (const [q, dst] of refused) {
       await expect(store.restoreQuarantined!(q as string, dst as string)).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 400 });

@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom';
 import { Leaf } from 'lucide-react';
 import type { ComicDoc, SpendEntry } from '../../../shared/comic/doc';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
+import { compactUsageShare } from '../../../services/costDisplay';
 import type { StudioController } from '../types';
 import { AdaptiveSheet } from './sheets/AdaptiveSheet';
 import { isPhoneLayout } from './formFactor';
@@ -53,11 +54,7 @@ const useSavingsFlash = (total: number): boolean => {
 };
 
 /** "Saved ≈0.5% of your usage" → "≈0.5%" for a narrow spot; undefined when it isn't a readable share. */
-const shortShare = (cost: CostFormat, usd: number): string | undefined => {
-  if (!cost.governed) return cost.exact(usd);
-  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(cost.exact(usd));
-  return m ? m[1] : undefined;
-};
+const shortShare = (cost: CostFormat, usd: number): string | undefined => (cost.governed ? compactUsageShare(cost.exact(usd)) : cost.exact(usd));
 
 /** The breakdown shown from the chip (also used by the phone ⋯ menu's spend sheet). */
 export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({ doc, cost: costProp }) => {

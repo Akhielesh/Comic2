@@ -14,6 +14,7 @@ import {
   duplicateLineOps,
   easyShapeOps,
   fixSafeAreaOps,
+  isLinked,
   linkOps,
   lockOps,
   moveLineToPanelOps,
@@ -150,6 +151,20 @@ describe('balloon ops always carry a full balloon for software-placed lines', ()
     const [op] = linkOps(page, 'pg_1_l4', false, resolved) as [{ op: string; balloons: { lineId: string; linkTo?: string }[] }];
     expect(op.op).toBe('balloons');
     expect(op.balloons.find((b) => b.lineId === 'pg_1_l4')!.linkTo).toBeUndefined();
+  });
+
+  it('unlink clears the links at both ends (its own and the next balloon’s into it); isLinked sees both', () => {
+    const { page, resolved } = ctx((d) => {
+      d.pages[0].balloons.push({ lineId: 'pg_1_l4', x: 0.5, y: 0.6, w: 0.3, linkTo: 'pg_1_l3', pinned: true });
+    });
+    // l3 has no linkTo of its own, but l4 links INTO it.
+    expect(isLinked(page, 'pg_1_l3')).toBe(true);
+    expect(isLinked(page, 'pg_1_l4')).toBe(true);
+    expect(isLinked(page, 'pg_1_l1')).toBe(false);
+    const [op] = linkOps(page, 'pg_1_l3', false, resolved) as [{ op: string; balloons: { lineId: string; linkTo?: string }[] }];
+    expect(op.op).toBe('balloons');
+    expect(op.balloons.some((b) => b.linkTo)).toBe(false);
+    expect(linkOps({ ...page, balloons: op.balloons } as typeof page, 'pg_1_l3', false, resolved)).toEqual([]);
   });
 });
 

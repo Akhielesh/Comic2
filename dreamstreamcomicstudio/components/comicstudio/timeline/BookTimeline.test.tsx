@@ -3,14 +3,17 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
-import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex } from './BookTimeline';
+import { computeAccessibleName } from 'dom-accessibility-api';
 import { clipThumbWidth } from './TimelineClip';
 
 const setWidth = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
 
 const options = () => screen.getAllByRole('option');
-const optionNamed = (re: RegExp) => options().find((o) => re.test(o.getAttribute('aria-label') || ''))!;
+/** Clips are named by their own content (no aria-label that could drift from the visible text). */
+const nameOf = (el: Element) => computeAccessibleName(el);
+const optionNamed = (re: RegExp) => options().find((o) => re.test(nameOf(o)))!;
 const lastPatch = (studio: ReturnType<typeof makeFakeStudio>) => studio.patch.mock.calls[studio.patch.mock.calls.length - 1];
 
 const setup = (doc: ComicDoc = makeSampleDoc(), extra: Parameters<typeof makeFakeStudio>[0] = {}, props: Partial<React.ComponentProps<typeof BookTimeline>> = {}) => {
@@ -20,6 +23,8 @@ const setup = (doc: ComicDoc = makeSampleDoc(), extra: Parameters<typeof makeFak
 };
 
 beforeEach(() => {
+  // Admin / own-key wording (dollars); governed users have their own tests.
+  showDollarPrices();
   setWidth(1280);
   try {
     window.localStorage.clear();
@@ -27,7 +32,10 @@ beforeEach(() => {
     /* ignore */
   }
 });
-afterEach(() => setWidth(1024));
+afterEach(() => {
+  setWidth(1024);
+  resetUsageStatus();
+});
 
 describe('BookTimeline', () => {
   it('shows the book in order: cover, pages, add-page, then the free software-page chips', () => {
@@ -35,7 +43,8 @@ describe('BookTimeline', () => {
     const listbox = screen.getByRole('listbox', { name: 'Book timeline' });
     expect(listbox.getAttribute('aria-orientation')).toBe('horizontal');
     expect(listbox.getAttribute('aria-roledescription')).toBe('page timeline');
-    const labels = options().map((o) => o.getAttribute('aria-label'));
+    const labels = options().map((o) => nameOf(o));
+    for (const o of options()) expect(o).not.toHaveAttribute('aria-label');
     expect(labels[0]).toMatch(/^Cover, planned/);
     expect(labels[1]).toMatch(/^Page 1, ready/);
     expect(labels[2]).toMatch(/^Page 2, planned/);
@@ -49,7 +58,7 @@ describe('BookTimeline', () => {
   it('plates appear as clips when switched on; a ghost chip switches one on (free book op)', () => {
     const doc = makeSampleDoc({ book: { titlePage: true, endPage: false, backCover: 'none', firstPageRight: true, uniformTrim: true } });
     const { studio } = setup(doc);
-    expect(options()[1].getAttribute('aria-label')).toBe('Title page, made by software, free');
+    expect(nameOf(options()[1])).toBe('Title page, made by software, free');
     fireEvent.click(optionNamed(/^“The End” — /));
     expect(lastPatch(studio)[0]).toEqual([{ op: 'book', patch: { endPage: true } }]);
   });
@@ -128,6 +137,46 @@ describe('BookTimeline', () => {
     expect(studio.patch).not.toHaveBeenCalled();
   });
 
+  it('governed users: the clip menu, the dock summary and clip names speak in shares of their usage', () => {
+    showUsagePrices(1);
+    const doc = makeSampleDoc();
+    doc.spend = { ...doc.spend, totalUsd: 0.42, savedUsd: 0.06 };
+    const { container } = setup(doc);
+    expect(container.textContent).not.toMatch(/\$/);
+    fireEvent.keyDown(optionNamed(/^Page 1,/), { key: 'm' });
+    const menu = screen.getByRole('menu', { name: 'Page 1 actions' });
+    expect(within(menu).getByRole('menuitem', { name: /Redraw/ }).textContent).toMatch(/(≈[\d.]+%|<0\.1%) of your usage$/);
+    expect(menu.textContent).not.toMatch(/\$/);
+    for (const o of options()) expect(nameOf(o)).not.toMatch(/\$/);
+  });
+
+  it('before the usage status loads (non-admin): no dollar figure anywhere in the dock', () => {
+    resetUsageStatus();
+    const doc = makeSampleDoc();
+    doc.spend = { ...doc.spend, totalUsd: 0.42 };
+    const { container } = setup(doc);
+    expect(container.textContent).not.toMatch(/\$/);
+  });
+
+  it('the toast Undo runs the studio undo while this edit is still on top of the one undo stack', () => {
+    const { studio, rerender } = setup();
+    fireEvent.keyDown(optionNamed(/^Page 1,/), { key: 'Delete' });
+    const [, opts] = lastPatch(studio);
+    // The studio recorded it (under this label) and nothing landed on top since.
+    const live = { ...studio, canUndo: true, undoLabel: opts.label };
+    rerender(<BookTimeline studio={live} reorderActivation="immediate" />);
+    const before = studio.patch.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(studio.undo).toHaveBeenCalledTimes(1);
+    expect(studio.patch.mock.calls.length).toBe(before);
+  });
+
+  it('a hidden-state clip has no focusable control inside it (nested-interactive) and failed badges keep 4.5:1', () => {
+    setup();
+    for (const o of options()) expect(o.querySelector('button, [tabindex]:not([tabindex="-1"]), a[href], input')).toBeNull();
+    expect(document.querySelector('.bg-red-600\\/90')).toBeNull();
+  });
+
   it('collapses below lg by default (phones keep the board), remembers the choice, hides in Read', () => {
     setWidth(360);
     const { unmount } = setup();
@@ -165,7 +214,7 @@ describe('BookTimeline', () => {
   it('compact mode (page editor strip): no dock bar, no ghost chips, tap opens the page', () => {
     const { studio } = setup(makeSampleDoc(), {}, { compact: true });
     expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
-    expect(options().some((o) => /made by software/.test(o.getAttribute('aria-label') || ''))).toBe(false);
+    expect(options().some((o) => /made by software/.test(nameOf(o)))).toBe(false);
     fireEvent.click(optionNamed(/^Page 3,/));
     expect(studio.openPage).toHaveBeenCalledWith('pg_3');
   });
@@ -204,7 +253,7 @@ describe('BookTimeline', () => {
   describe('touch: long-press lifts a clip so scrolling never turns into a move', () => {
     const layout = () =>
       options()
-        .filter((o) => /^Page \d/.test(o.getAttribute('aria-label') || ''))
+        .filter((o) => /^Page \d/.test(nameOf(o)))
         .forEach((el, i) => {
           Object.defineProperty(el, 'offsetLeft', { value: i * 64, configurable: true });
           Object.defineProperty(el, 'offsetWidth', { value: 60, configurable: true });
@@ -263,7 +312,7 @@ describe('BookTimeline', () => {
     const { studio } = setup();
     const p1 = optionNamed(/^Page 1,/);
     // jsdom has no layout: give the three page clips positions.
-    const pageClips = options().filter((o) => /^Page \d/.test(o.getAttribute('aria-label') || ''));
+    const pageClips = options().filter((o) => /^Page \d/.test(nameOf(o)));
     pageClips.forEach((el, i) => {
       Object.defineProperty(el, 'offsetLeft', { value: i * 64, configurable: true });
       Object.defineProperty(el, 'offsetWidth', { value: 60, configurable: true });

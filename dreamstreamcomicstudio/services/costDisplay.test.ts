@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PLATFORM_MARKUP } from '../shared/comic/models';
-import { DOLLAR_CONTEXT, costContextFromAllowance, formatCostForUser, standardPageProviderUsd } from './costDisplay';
+import { DOLLAR_CONTEXT, compactUsageShare, costContextFromAllowance, formatCostForUser, standardPageProviderUsd } from './costDisplay';
 import { normalizeAllowanceStatus } from './usageAllowance';
 
 const governedStatus = (pctPerStandardPage: number | null) =>
@@ -52,5 +52,16 @@ describe('formatCostForUser', () => {
   it('stays honest (no invented number) when the share is unknown', () => {
     const ctx = costContextFromAllowance(governedStatus(null));
     expect(formatCostForUser(0.2, ctx)).toBe('uses a little of your usage');
+  });
+});
+
+describe('compactUsageShare (narrow spots)', () => {
+  it('keeps only a readable share; dollars and the unknown phrase give nothing', () => {
+    expect(compactUsageShare('≈2% of your usage')).toBe('≈2%');
+    expect(compactUsageShare('≈0.5% of your usage')).toBe('≈0.5%');
+    expect(compactUsageShare('<0.1% of your usage')).toBe('<0.1%');
+    expect(compactUsageShare('Free')).toBe('Free');
+    expect(compactUsageShare('uses a little of your usage')).toBeUndefined();
+    expect(compactUsageShare('$0.07')).toBeUndefined();
   });
 });

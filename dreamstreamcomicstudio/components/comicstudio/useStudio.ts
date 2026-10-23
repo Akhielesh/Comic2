@@ -1150,7 +1150,7 @@ export function useStudio(projectId: string): ComicStudioController {
       urlFor,
       send,
       // Resolves a StudioActOutcome; the shared type says Promise<void> (see actOutcomeOf).
-      act: act as StudioController['act'],
+      act: act as unknown as StudioController['act'],
       patch,
       cancel,
       refresh,

@@ -46,10 +46,20 @@ describe('chat routes reserve the whole chain', () => {
   const source = readFileSync(fileURLToPath(new URL('./chat.ts', import.meta.url)), 'utf8');
   const reserveCalls = source.split('reserveForOperation({').slice(1).map((chunk) => chunk.slice(0, chunk.indexOf('})')));
 
-  it('passes pricedModels at every reserve site (/, /stream, /swarm)', () => {
-    expect(reserveCalls).toHaveLength(3);
-    for (const call of reserveCalls) {
-      expect(call).toContain('pricedModels: chatPricedModels(p)');
-    }
+  it('the chat-turn reserve prices chatPricedModels(p); helpers price their own chain', () => {
+    // reserveChatPlan (every chat turn) + holdForChatHelper (enhance/title/memory/follow-ups).
+    expect(reserveCalls).toHaveLength(2);
+    expect(reserveCalls.filter((c) => c.includes('pricedModels: chatPricedModels(p)'))).toHaveLength(1);
+    expect(reserveCalls.filter((c) => c.includes('pricedModels: input.models'))).toHaveLength(1);
+  });
+
+  it('every chat route (/, /stream, /swarm) reserves through reserveChat', () => {
+    expect(source.match(/await reserveChat\(req, prep\.prepared/g) || []).toHaveLength(3);
+  });
+
+  it('a free-models-only plan prices (and sends) no paid retry', () => {
+    expect(
+      chatPricedModels({ resolved: { provider: 'openrouter' }, model: 'a/free-one:free', fallbackModels: ['a/free-one:free', 'b/free-two:free'], freeModelsOnly: true })
+    ).toEqual(['a/free-one:free', 'b/free-two:free']);
   });
 });

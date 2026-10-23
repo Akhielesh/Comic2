@@ -10,7 +10,9 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChevronUp, Images } from 'lucide-react';
 import { newId, renderTargetKey, type RenderTarget } from '../../../shared/comic/doc';
-import { formatUsd } from '../../../shared/comic/models';
+import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
+import { useCostFormat } from '../conversation/cost';
+import { isPhoneLayout } from '../mobile/formFactor';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import type { StudioController } from '../types';
 import { useFormFactor } from '../mobile/useFormFactor';
@@ -111,6 +113,9 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const [open, setOpen] = useStoredFlag(DOCK_OPEN_KEY, ff.width >= DOCK_OPEN_MIN_WIDTH);
   const doc = studio.doc;
   const edit = useTimelineEdit(studio);
+  // Prices in the viewer's terms: governed users read a share of their usage, never dollars.
+  const cost = useCostFormat(studio);
+  const phoneLayout = isPhoneLayout(ff.layout);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ key: string; rect: DOMRect | null } | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -477,7 +482,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const summary = dockSummary(doc).replace(/^Book · /, '');
+  const summary = dockSummary(doc, cost.exact).replace(/^Book · /, '');
   const menuClip = menu ? clips.find((c) => c.key === menu.key) ?? null : null;
   const pageIdx = menuClip ? pageIndex(menuClip.key) : -1;
   const menuItems = menuClip
@@ -487,10 +492,12 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
         canMoveLeft: pageIdx > 0,
         canMoveRight: pageIdx >= 0 && pageIdx < pages.length - 1,
         canAddPage: canAddPage(doc, maxPages),
-        pageCount: pages.length
+        pageCount: pages.length,
+        price: cost.approx,
+        writeUsd: PLAN_USD_PER_PAGE * (byok ? 1 : PLATFORM_MARKUP)
       })
     : [];
-  const pagePrice = formatUsd(redrawPrice(doc, 'page', byok));
+  const pagePrice = cost.approx(redrawPrice(doc, 'page', byok));
 
   const strip = (
     <div
@@ -552,7 +559,8 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
               compact={compact}
               selected={studio.focusedPageId === clip.key}
               tabIndex={tabIndex}
-              nextPrice={clip.kind === 'page' && clip.page?.panels.length ? `${clip.drawn ? 'Redraw' : 'Draw'} ≈ ${pagePrice}` : undefined}
+              nextPrice={clip.kind === 'page' && clip.page?.panels.length ? `${clip.drawn ? 'Redraw' : 'Draw'} ${pagePrice}` : undefined}
+              cost={cost}
               shift={shift}
               lifted={lifted}
               animate={!reduceMotion}
@@ -582,6 +590,9 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
     <section
       aria-label="Book timeline"
       className={cx('relative w-full min-w-0 max-w-full shrink-0 overflow-hidden', !compact && 'border-t border-[var(--ds-hairline)] bg-[var(--ds-surface)]')}
+      // The dock sits on the screen's bottom edge on tablets and desktops: keep its controls out of the
+      // home-indicator inset (P1-QA timeline-dock-safe-area). Phones put the tab bar there, which pads itself.
+      style={!compact && !phoneLayout ? { paddingBottom: 'var(--sa-bottom, 0px)' } : undefined}
     >
       <p id={hintId} className="sr-only">
         Enter opens. M opens actions. V shows versions. Alt plus arrow keys move a page. Delete removes it; undo brings it back.
@@ -593,7 +604,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
             aria-expanded={open}
             aria-controls={stripId}
             onClick={() => setOpen(!open)}
-            className={cx('tap-target inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING)}
+            className={cx('inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:px-3', FOCUS_RING)}
           >
             <ChevronUp className={cx('h-3.5 w-3.5 transition-transform motion-reduce:transition-none', !open && 'rotate-180')} aria-hidden />
             Book
@@ -606,7 +617,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
             <button
               type="button"
               onClick={() => studio.setTab('media')}
-              className={cx('tap-target inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING)}
+              className={cx('inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:min-w-11 coarse:justify-center coarse:px-3', FOCUS_RING)}
               aria-label="Open Media: every image in this comic"
             >
               <Images className="h-3.5 w-3.5" aria-hidden />

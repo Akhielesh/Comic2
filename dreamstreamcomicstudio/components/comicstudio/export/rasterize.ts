@@ -38,17 +38,23 @@ export interface RasterOptions {
   measure?: Measure;
   /** Width in px of a software plate (default: DEFAULT_PLATE_WIDTH). */
   plateWidth?: number;
+  /**
+   * Never draw an image or plate with a long edge above this (px), and never upscale to reach it.
+   * The ZIP memory guard sets it when a big book would not fit in the device's memory (zipMemory.ts).
+   */
+  maxEdge?: number;
   /** Tests / special canvases. */
   makePath?: PathFactory;
   createLayer?: LayerFactory;
 }
 
-/** Output canvas size for an image (keeps aspect; never above MAX_EXPORT_EDGE). */
-export const rasterSize = (naturalW: number, naturalH: number, longEdge?: number): { width: number; height: number } => {
+/** Output canvas size for an image (keeps aspect; never above MAX_EXPORT_EDGE, nor above `maxEdge`). */
+export const rasterSize = (naturalW: number, naturalH: number, longEdge?: number, maxEdge?: number): { width: number; height: number } => {
   const w = Math.max(1, naturalW || 1);
   const h = Math.max(1, naturalH || 1);
   const long = Math.max(w, h);
-  const target = Math.min(MAX_EXPORT_EDGE, longEdge && longEdge > 0 ? longEdge : long);
+  const cap = maxEdge && maxEdge > 0 ? maxEdge : Infinity;
+  const target = Math.min(MAX_EXPORT_EDGE, cap, longEdge && longEdge > 0 ? longEdge : long);
   const scale = target / long;
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
 };
@@ -165,7 +171,7 @@ type Letter = (ctx: CanvasRenderingContext2D, width: number, height: number) => 
 
 /** Draw an already-loaded image (plus optional lettering) and encode it. The image is not released. */
 export async function rasterizeImage(image: Pick<LoadedImage, 'source' | 'width' | 'height'>, opts: RasterOptions = {}, letter?: Letter, lang?: string): Promise<Blob> {
-  const { width, height } = rasterSize(image.width, image.height, opts.longEdge);
+  const { width, height } = rasterSize(image.width, image.height, opts.longEdge, opts.maxEdge);
   const { canvas, ctx } = makeCanvas(width, height, lang);
   ctx.drawImage(image.source, 0, 0, width, height);
   if (letter) await letter(ctx, width, height);
@@ -235,9 +241,11 @@ export async function renderPlateToBlob(
   const layout = plateLayout(doc, kind);
   let width = Math.round(Math.min(MAX_EXPORT_EDGE, Math.max(200, opts.plateWidth ?? opts.longEdge ?? DEFAULT_PLATE_WIDTH)));
   let height = Math.round((width * layout.height) / layout.width);
-  if (height > MAX_EXPORT_EDGE) {
-    width = Math.round((width * MAX_EXPORT_EDGE) / height);
-    height = MAX_EXPORT_EDGE;
+  const plateCap = Math.min(MAX_EXPORT_EDGE, opts.maxEdge && opts.maxEdge > 0 ? Math.max(200, opts.maxEdge) : Infinity);
+  if (Math.max(width, height) > plateCap) {
+    const scale = plateCap / Math.max(width, height);
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
   }
   let art: PlateArtImage | null | undefined = opts.art;
   let loaded: LoadedImage | null = null;

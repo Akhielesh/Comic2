@@ -287,7 +287,7 @@ describe('one version numbering (shared/comic/book.ts) and governed prices', () 
     expect(await admin.tools().use_version.execute({ target: 'page 3', version: 1 })).toMatch(/A new take is ≈\$\d/);
   });
 
-  it('fit_render from the director passes caps: its refusal quotes the redraw in usage terms', async () => {
+  it('fit_render from the director: its refusal quotes the redraw in usage terms (tool result and cards)', async () => {
     const doc = drawnDoc();
     const { tools, turn } = setup(doc, governed);
     const out = await tools().fit_render.execute({ target: 'page', page: 3, mode: 'crop' });

@@ -6,24 +6,30 @@
 //   • PNG      — a ZIP of lettered PNG pages
 //   • Motion   — an animated "motion comic" video (9:16 / 1:1 / 16:9) for social/sharing
 // Exports use the language picked in the switch (i18n.md §10.2), so "Download the Telugu PDF"
-// is one tap. Sharing: the full Share sheet, "Copy link" once published, and "Preview as reader"
-// (the live /c/ link in a new tab when published — a full navigation, as the enforced reader CSP
-// requires — otherwise the owner preview with the cover intro).
+// is one tap: the SOURCE doc goes to the exporter with `{ lang }`, so files are named "…-te.pdf" and
+// the script's lettering faces load for that language. "All languages (ZIP)" puts every published
+// edition (or, before publishing, every ready one) in one ZIP, a folder each — sized to the device's
+// memory first (export/zipMemory.ts). Every result's `notice` (a lettering font that didn't load, images
+// saved smaller to fit) is shown, never swallowed. Sharing: the full Share sheet, "Copy link" once
+// published, and "Preview as reader" (the live /c/ link in a new tab when published — a full
+// navigation, as the enforced reader CSP requires — otherwise the owner preview with the cover intro).
 //
 // Wave 2 (P2-BOARD): "Read full screen" opens <ImmersiveReader> straight from the click (the
 // Fullscreen API needs that user gesture); a chip, card or the director opening the reader
 // (studio.readerRequest) opens it too, in Guided View when asked. The root fills the board
 // (`h-full min-h-0`, no 520 px floor), so a landscape phone never scrolls the reader inside the board.
 
-import React, { useEffect, useRef, useState } from 'react';
-import { BookOpen, Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Languages, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
 import { readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { SHARE_PATH } from '../../../shared/comic/publication';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
 import type { ReaderRequest, StudioController } from '../types';
 import { openPrintView } from '../export/printView';
-import { exportPngZip } from '../export/zipExport';
+import { exportLanguagesZip, exportPngZip } from '../export/zipExport';
+import { collectExportSlots, exportLanguages } from '../export/sequence';
+import { planZipMemory } from '../export/zipMemory';
 import { exportComicPdf } from '../export/pdfExport';
 import { exportMotionComic, MOTION_SIZES, type MotionAspect } from '../export/motionComic';
 import { ImmersiveReader } from '../immersive/ImmersiveReader';
@@ -49,6 +55,21 @@ type ExportState =
   | { kind: 'error'; text: string };
 
 const STUDIO_LANGUAGE_ENV = { search: '', stored: null, navigatorLanguages: [] as string[] };
+
+/** "Done" text plus the honest extras: what was left out, and the export's own notice. */
+export const exportDoneState = (text: string, leftOut: string[], notice?: string, extra?: string): ExportState => {
+  const parts = [text];
+  if (leftOut.length) parts.push(`Left out — ${leftOut.join('; ')}.`);
+  if (extra) parts.push(extra);
+  if (notice) parts.push(notice);
+  return { kind: 'done', tone: leftOut.length || notice || extra ? 'warn' : 'success', text: parts.join(' ') };
+};
+
+/** English names, "English, Telugu and Hindi". */
+const languageList = (codes: readonly string[]): string => {
+  const names = codes.map((c) => languageSpec(c)?.english || c);
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+};
 
 /** Reader requests already answered (a request object opens the reader once, even across remounts). */
 const answeredRequests = new WeakSet<ReaderRequest>();
@@ -182,89 +203,102 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const working = state.kind === 'working';
   const drawn = !!doc.cover.render.asset?.path || doc.pages.some((p) => !!p.render.asset?.path);
   const exportLabel = editionName ? ` (${editionName})` : '';
+  // The exporters get the SOURCE doc and the edition's code: "-te" file names, that script's faces.
+  const exportLang = L.lang;
+  // A draft edition still shows some lines in the original language — the download says so too.
+  const draftNote =
+    editionName && L.fallback.length
+      ? `${L.fallback.length} ${L.fallback.length === 1 ? 'line is' : 'lines are'} still in ${languageSpec(source)?.english || source} in this edition.`
+      : undefined;
+
+  // "All languages (ZIP)": the published editions once live, else every ready edition (never drafts).
+  const live = doc.publication?.status === 'live' ? doc.publication : undefined;
+  const allLanguages = useMemo(() => {
+    const wanted = live?.languages?.length ? live.languages : switchOptions.filter((o) => !o.draft).map((o) => o.code);
+    return exportLanguages(doc, wanted);
+    // switchOptions is derived from doc.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, live?.languages?.join(',')]);
+  // Sized to this device before anything is drawn (only while the sheet is open).
+  const allZipPlan = useMemo(() => {
+    if (!sheetOpen || allLanguages.length < 2) return null;
+    try {
+      return planZipMemory(collectExportSlots(doc, studio.urlFor).slots, allLanguages.length);
+    } catch {
+      return null;
+    }
+  }, [sheetOpen, allLanguages, doc, studio.urlFor]);
+
+  /** Shared plumbing for the cancellable exports: progress, honest failure, cleanup. */
+  const run = <R,>(label: string, task: (signal: AbortSignal, onProgress: (p: { done: number; total: number; label: string }) => void) => Promise<R>, done: (r: R) => ExportState, fallback: string) => {
+    setSheetOpen(false);
+    const controller = new AbortController();
+    abort.current = controller;
+    set({ kind: 'working', label });
+    task(controller.signal, (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total }))
+      .then((r) => set(done(r)))
+      .catch((err: Error) => set({ kind: 'error', text: err?.message || fallback }))
+      .finally(() => {
+        if (abort.current === controller) abort.current = null;
+      });
+  };
 
   const print = () => {
     setSheetOpen(false);
     set({ kind: 'working', label: 'Opening the print view…' });
     // Opened synchronously inside the click so pop-up blockers allow it.
-    openPrintView(localized, studio.urlFor, { onStatus: (label) => set({ kind: 'working', label }) })
+    openPrintView(doc, studio.urlFor, { lang: exportLang, onStatus: (label) => set({ kind: 'working', label }) })
       .then((r) => {
         const notes = [...r.skipped, ...r.failedImages.map((f) => `${f} (didn’t load)`)];
         set(
-          notes.length
-            ? { kind: 'done', tone: 'warn', text: `Print view ready with ${r.pages} pages. Not included: ${notes.join(', ')}.` }
-            : { kind: 'done', tone: 'success', text: `Print view ready — choose “Save as PDF” in the dialog for a PDF.` }
+          exportDoneState(
+            notes.length ? `Print view ready with ${r.pages} pages.` : `Print view ready — choose “Save as PDF” in the dialog for a PDF.`,
+            notes,
+            r.notice,
+            draftNote
+          )
         );
       })
       .catch((err: Error) => set({ kind: 'error', text: err?.message || 'Couldn’t open the print view.' }));
   };
 
-  const zip = () => {
-    setSheetOpen(false);
-    const controller = new AbortController();
-    abort.current = controller;
-    set({ kind: 'working', label: `Preparing pages${exportLabel}…` });
-    exportPngZip(localized, studio.urlFor, {
-      signal: controller.signal,
-      onProgress: (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total })
-    })
-      .then((r) => {
-        const notes = [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped];
-        set(
-          notes.length
-            ? { kind: 'done', tone: 'warn', text: `Downloaded ${r.fileName} with ${r.files} images. Left out — ${notes.join('; ')}` }
-            : { kind: 'done', tone: 'success', text: `Downloaded ${r.fileName} (${r.files} images).` }
-        );
-      })
-      .catch((err: Error) => set({ kind: 'error', text: err?.message || 'Export failed.' }))
-      .finally(() => {
-        if (abort.current === controller) abort.current = null;
-      });
-  };
+  const zip = () =>
+    run(
+      `Preparing pages${exportLabel}…`,
+      (signal, onProgress) => exportPngZip(doc, studio.urlFor, { lang: exportLang, signal, onProgress }),
+      (r) => exportDoneState(`Downloaded ${r.fileName} (${r.files} images).`, [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped], r.notice, draftNote),
+      'Export failed.'
+    );
 
-  const pdf = () => {
-    setSheetOpen(false);
-    const controller = new AbortController();
-    abort.current = controller;
-    set({ kind: 'working', label: `Preparing the PDF${exportLabel}…` });
-    exportComicPdf(localized, studio.urlFor, {
-      signal: controller.signal,
-      onProgress: (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total })
-    })
-      .then((r) => {
-        const notes = [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped];
-        set(
-          notes.length
-            ? { kind: 'done', tone: 'warn', text: `Downloaded ${r.fileName} (${r.pages} pages). Left out — ${notes.join('; ')}` }
-            : { kind: 'done', tone: 'success', text: `Downloaded ${r.fileName} (${r.pages} pages).` }
-        );
-      })
-      .catch((err: Error) => set({ kind: 'error', text: err?.message || 'PDF export failed.' }))
-      .finally(() => {
-        if (abort.current === controller) abort.current = null;
-      });
-  };
+  const zipAll = () =>
+    run(
+      `Preparing ${allLanguages.length} languages…`,
+      (signal, onProgress) => exportLanguagesZip(doc, studio.urlFor, { languages: allLanguages, signal, onProgress }),
+      (r) =>
+        exportDoneState(
+          `Downloaded ${r.fileName} — ${languageList(r.languages ?? allLanguages)}, a folder each (${r.files} images).`,
+          [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped],
+          r.notice
+        ),
+      'Export failed.'
+    );
+
+  const pdf = () =>
+    run(
+      `Preparing the PDF${exportLabel}…`,
+      (signal, onProgress) => exportComicPdf(doc, studio.urlFor, { lang: exportLang, signal, onProgress }),
+      (r) => exportDoneState(`Downloaded ${r.fileName} (${r.pages} pages).`, [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped], r.notice, draftNote),
+      'PDF export failed.'
+    );
 
   const motion = (aspect: MotionAspect) => {
-    setSheetOpen(false);
-    const controller = new AbortController();
-    abort.current = controller;
     const { width, height } = MOTION_SIZES[aspect];
-    set({ kind: 'working', label: `Building a ${aspect} motion comic (${width}×${height})${exportLabel}…` });
-    exportMotionComic(localized, studio.urlFor, {
-      aspect,
-      signal: controller.signal,
-      onProgress: (p) => set({ kind: 'working', label: p.label, done: p.done, total: p.total })
-    })
-      .then((r) => {
-        const secs = Math.round(r.durationMs / 100) / 10;
-        const note = r.skipped.length ? ` Left out — ${r.skipped.join('; ')}.` : '';
-        set({ kind: 'done', tone: r.skipped.length ? 'warn' : 'success', text: `Downloaded ${r.fileName} — ${secs}s, ${aspect}.${note}` });
-      })
-      .catch((err: Error) => set({ kind: 'error', text: err?.message || 'Motion export failed.' }))
-      .finally(() => {
-        if (abort.current === controller) abort.current = null;
-      });
+    run(
+      `Building a ${aspect} motion comic (${width}×${height})${exportLabel}…`,
+      (signal, onProgress) => exportMotionComic(doc, studio.urlFor, { aspect, lang: exportLang, signal, onProgress }),
+      (r) => exportDoneState(`Downloaded ${r.fileName} — ${Math.round(r.durationMs / 100) / 10}s, ${aspect}.`, r.skipped, r.notice, draftNote),
+      'Motion export failed.'
+    );
   };
 
   const openFullScreen = (intro = false) => {
@@ -399,6 +433,21 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           <SheetRow icon={<Printer className="h-4 w-4" />} label="Print" hint="Crisp vector lettering — choose “Save as PDF” there" onClick={print} disabled={working} />
           <SheetRow icon={<FileDown className="h-4 w-4" />} label="PDF" hint="A print-ready PDF, downloaded directly" onClick={pdf} disabled={working} />
           <SheetRow icon={<FileArchive className="h-4 w-4" />} label="PNG pages (ZIP)" hint="Every page as a lettered image" onClick={zip} disabled={working} />
+          {allLanguages.length > 1 && (
+            <SheetRow
+              icon={<Languages className="h-4 w-4" />}
+              label="All languages (ZIP)"
+              hint={
+                allZipPlan && !allZipPlan.fits
+                  ? 'Too big for one ZIP on this device — pick a language above and download it on its own'
+                  : allZipPlan?.maxEdge
+                    ? `${languageList(allLanguages)} · saved smaller to fit this device (up to ${allZipPlan.maxEdge.toLocaleString('en-US')} px)`
+                    : `${languageList(allLanguages)} — a folder each`
+              }
+              onClick={zipAll}
+              disabled={working || (!!allZipPlan && !allZipPlan.fits)}
+            />
+          )}
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 px-2.5 py-2">
             <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--ds-ink)]">
               <Clapperboard className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" aria-hidden /> Motion comic

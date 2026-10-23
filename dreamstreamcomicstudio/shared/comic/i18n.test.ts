@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
-import { normalizeDoc, type ComicDoc, type Line } from './doc';
+import { editionViewDoc } from '../../components/comicstudio/mobile/editor/editorModel';
+import { normalizeDoc, type ComicDoc, type LanguageEdition, type Line } from './doc';
 import { applyOps, type DocOp } from './ops';
 import {
   editionProgress,
@@ -108,6 +109,90 @@ describe('localizeDoc', () => {
     expect(hi.brief.logline).toBe('एक चोर…');
     expect(i18nOf(hi)).toEqual({ editions: {}, glossary: [] });
     expect(localizeDoc(hi, 'hi')).toBe(hi); // cannot be re-localized
+  });
+});
+
+describe('localizeDoc: edition positions for software-placed lines (Telugu)', () => {
+  /** Telugu edition over the sample doc. pg_1_l4 has no stored source balloon; page 2 has none at all. */
+  const telugu = (balloons: Record<string, unknown>): ComicDoc => {
+    const doc = normalizeDoc(makeSampleDoc());
+    const l = (id: string) => lines(doc).find((x) => x.id === id)!;
+    doc.i18n = {
+      glossary: [],
+      editions: {
+        te: {
+          lang: 'te',
+          register: 'everyday',
+          lines: {
+            pg_1_l2: { text: 'ఇంకొక్కటే…', status: 'reviewed', sourceHash: lineSourceHash(l('pg_1_l2')), at: 1 },
+            pg_1_l4: { text: 'నువ్వు నాకు వివరణ ఇవ్వాలి, మాయా.', status: 'reviewed', sourceHash: lineSourceHash(l('pg_1_l4')), at: 1 }
+          },
+          balloons: balloons as LanguageEdition['balloons']
+        }
+      }
+    };
+    return doc;
+  };
+  const balloonOf = (doc: ComicDoc, pageId: string, lineId: string) => doc.pages.find((p) => p.id === pageId)!.balloons.find((b) => b.lineId === lineId);
+
+  it('appends the edition position of a line with no stored balloon as a full balloon, after the stored ones', () => {
+    const doc = telugu({ pg_1_l2: { x: 0.1, y: 0.52 }, pg_1_l4: { x: 0.3, y: 0.62, w: 0.33, pinned: true, tailX: 0.4, tailY: 0.8, fontScale: 0.9 } });
+    const before = JSON.stringify(doc);
+    const te = localizeDoc(doc, 'te');
+    expect(te.format.language).toBe('te');
+    expect(lines(te).find((x) => x.id === 'pg_1_l4')!.text).toBe('నువ్వు నాకు వివరణ ఇవ్వాలి, మాయా.');
+    // The stored balloon keeps the merge it always had; the software-placed line gets its Telugu position.
+    expect(balloonOf(te, 'pg_1', 'pg_1_l2')).toMatchObject({ x: 0.1, y: 0.52, w: 0.22, tailX: 0.2, tailY: 0.7 });
+    expect(balloonOf(te, 'pg_1', 'pg_1_l4')).toEqual({ lineId: 'pg_1_l4', x: 0.3, y: 0.62, w: 0.33, tailX: 0.4, tailY: 0.8, pinned: true, fontScale: 0.9 });
+    expect(te.pages[0].balloons.map((b) => b.lineId)).toEqual(['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l5', 'pg_1_l4']);
+    // Pure: the studio doc is untouched, and the other pages / languages are unaffected.
+    expect(JSON.stringify(doc)).toBe(before);
+    expect(te.pages[1].balloons).toEqual([]);
+    expect(te.pages[4].balloons).toEqual(doc.pages[4].balloons);
+    expect(localizeDoc(doc, 'en')).toBe(doc);
+    expect(localizeDoc(doc, 'hi')).toBe(doc);
+    expect(localizeDoc(te, 'te')).toBe(te);
+  });
+
+  it('a partial or broken position keeps the software placement; ghosts and other pages never gain a balloon', () => {
+    const te = localizeDoc(
+      telugu({
+        pg_1_l4: { x: 0.3, y: 0.6 }, // no width: cannot draw a full balloon
+        pg_2_l1: { x: 0.2, y: 0.2, w: 0 },
+        pg_2_l2: { x: Number.NaN, y: 0.2, w: 0.3 },
+        pg_2_l3: { x: 1.4, y: -0.2, w: 3, tailX: 0.5 }, // raw (un-normalized) data is clamped; a half tail is dropped
+        ghost_line: { x: 0.1, y: 0.1, w: 0.2 }
+      }),
+      'te'
+    );
+    expect(balloonOf(te, 'pg_1', 'pg_1_l4')).toBeUndefined();
+    expect(te.pages[1].balloons).toEqual([{ lineId: 'pg_2_l3', x: 1, y: 0, w: 1 }]);
+    expect(te.pages.flatMap((p) => p.balloons).some((b) => b.lineId === 'ghost_line')).toBe(false);
+  });
+
+  it('old docs are unchanged: no software-placed override ⇒ the same balloons as before', () => {
+    const doc = translated();
+    const hi = localizeDoc(doc, 'hi');
+    hi.pages.forEach((p, i) => expect(p.balloons).toEqual(doc.pages[i].balloons));
+    // Only the stored-balloon merge, exactly as before.
+    const moved = localizeDoc(applyOps(doc, [{ op: 'edition_balloon', lang: 'hi', lineId: 'pg_1_l1', patch: { x: 0.2 } }]), 'hi');
+    expect(moved.pages[0].balloons).toEqual(doc.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l1' ? { ...b, x: 0.2 } : b)));
+  });
+
+  it('a Telugu move made through the edition_balloon op reaches the reader, and the editor view draws the same page', () => {
+    const doc = applyOps(telugu({}), [{ op: 'edition_balloon', lang: 'te', lineId: 'pg_1_l4', patch: { x: 0.3, y: 0.62, w: 0.33, pinned: true } }]);
+    const te = localizeDoc(doc, 'te');
+    expect(balloonOf(te, 'pg_1', 'pg_1_l4')).toEqual({ lineId: 'pg_1_l4', x: 0.3, y: 0.62, w: 0.33, pinned: true });
+    expect(editionViewDoc(doc, 'te')).toEqual(te);
+  });
+
+  it('a published snapshot carries the override (publicI18n) and its reader draws it; one without stays as it was', () => {
+    const doc = telugu({ pg_1_l4: { x: 0.3, y: 0.62, w: 0.33, pinned: true } });
+    const snapshot: ComicDoc = { ...doc, i18n: publicI18n(i18nOf(doc), ['te']) };
+    expect(balloonOf(localizeDoc(snapshot, 'te'), 'pg_1', 'pg_1_l4')).toEqual({ lineId: 'pg_1_l4', x: 0.3, y: 0.62, w: 0.33, pinned: true });
+    const plain = telugu({});
+    const plainSnapshot: ComicDoc = { ...plain, i18n: publicI18n(i18nOf(plain), ['te']) };
+    expect(localizeDoc(plainSnapshot, 'te').pages.map((p) => p.balloons)).toEqual(plain.pages.map((p) => p.balloons));
   });
 });
 

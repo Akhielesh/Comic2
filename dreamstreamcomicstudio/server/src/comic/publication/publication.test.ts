@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { DEFAULT_SETTINGS, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
+import { editionProgress, editionReadiness, fallbackLineIds, lineSourceHash, localizeDoc } from '../../../../shared/comic/i18n.js';
 import { ASSET_KEY_RE, SLUG_RE, type ShareCard } from '../../../../shared/comic/publication.js';
 import { effectiveRating, publishableText, type SafetyStatus } from '../../../../shared/comic/safety.js';
 import { __resetSharpSlotPeakForTests, sharpSlotStats, withSharpSlot } from '../imageMeasure.js';
@@ -206,7 +207,7 @@ describe('buildPublicSnapshot (allow-list, exact key sets)', () => {
       for (const pn of p.panels) {
         expect(keys(pn)).toEqual(['action', 'castIds', 'id', 'lines', 'n', 'shot', 'size']);
         expect([pn.action, pn.shot, pn.castIds]).toEqual(['', 'medium', []]);
-        for (const l of pn.lines) expect(keys(l).every((k) => ['id', 'kind', 'speakerId', 'text', 'style'].includes(k))).toBe(true);
+        for (const l of pn.lines) expect(keys(l).every((k) => ['id', 'kind', 'speakerId', 'text', 'style', 'noTranslate'].includes(k))).toBe(true);
       }
       for (const b of p.balloons) expect(keys(b).every((k) => ['lineId', 'x', 'y', 'w', 'tailX', 'tailY', 'pinned', 'z', 'locked', 'linkTo'].includes(k))).toBe(true);
     }
@@ -651,6 +652,25 @@ describe('content rating (G / PG / PG-13), frozen at publish time, end to end', 
     expect(store.projects.get('proj-1')!.contentRating).toBe('G');
   });
 
+  it('a rating change after publishing marks the published version behind (its label would change); republishing clears it', async () => {
+    const view = await publish(ctx, { visibility: 'public' });
+    expect([view.rating, view.behind]).toEqual(['PG', false]);
+    ctx.session.commit([{ op: 'settings', patch: { rating: 'G' } }], { origin: 'user' });
+    const { getPublicationView } = await import('./index.js');
+    const after = await getPublicationView(ctx);
+    expect([after.rating, after.behind]).toEqual(['PG', true]); // the published label stays frozen until a republish
+    withGate(gateFor({}, undefined, 'G'));
+    clock += 1000;
+    const republished = await publish(ctx, { visibility: 'public' });
+    expect([republished.rating, republished.behind]).toEqual(['G', false]);
+    // A legacy row without a recorded rating never trips it.
+    const row = store.rows.get('proj-1')!;
+    const { rating: _r, ...legacySafety } = row.safety;
+    store.rows.set('proj-1', { ...row, safety: legacySafety });
+    ctx.session.commit([{ op: 'settings', patch: { rating: 'PG' } }], { origin: 'user' });
+    expect((await getPublicationView(ctx)).behind).toBe(false);
+  });
+
   it('unpublish clears the gallery rating mirror and the owner view', async () => {
     await publish(ctx, { visibility: 'public' });
     const view = await unpublish(ctx);
@@ -683,6 +703,64 @@ describe('content rating (G / PG / PG-13), frozen at publish time, end to end', 
     expect(view.rating).toBeUndefined();
     expect(store.projects.get('proj-1')!.contentRating).toBeNull();
     expect('rating' in store.rpcPayload(view.slug!)!.publication).toBe(false);
+  });
+});
+
+describe('published editions stay complete over the snapshot itself (queue: editionProgress needs)', () => {
+  /** A doc whose Hindi edition is publishable: every line translated + reviewed against its CURRENT source, one never-translated line. */
+  const translatedDoc = () => {
+    const doc = richDoc();
+    doc.format = { ...doc.format, lettering: 'overlay' };
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    const spell = lines[0];
+    spell.noTranslate = true;
+    spell.text = 'ZZZAP-SPELL';
+    const translated = Object.fromEntries(
+      lines.filter((l) => l !== spell && l.text.trim()).map((l) => [l.id, { text: `HI:${l.text}`, status: 'reviewed' as const, sourceHash: lineSourceHash(l), gloss: PRIVATE.gloss, at: 1 }])
+    );
+    doc.i18n = { editions: { hi: { lang: 'hi', lines: translated, balloons: {}, register: 'everyday' } }, glossary: [] };
+    return { doc, spell };
+  };
+  const snapOf = (doc: ComicDoc, pageIds = doc.pages.map((p) => p.id)) =>
+    buildPublicSnapshot(doc, { ...planSnapshot(doc, { assetKey: 'K'.repeat(22), pageIds, includeCover: true, languages: ['en', 'hi'] }), publicationId: 'pub-uuid', publishedAt: 1, rev: 1 });
+
+  it('a publishable edition is still publishable, complete and fallback-free when read from the public snapshot', () => {
+    const { doc, spell } = translatedDoc();
+    expect(editionReadiness(doc, 'hi').publishable).toBe(true); // precondition: what publish() requires
+    const snapshot = snapOf(doc);
+    const p = editionProgress(snapshot, 'hi');
+    expect([p.missing, p.stale, p.staleEdited]).toEqual([0, 0, 0]); // routes readerLanguages → complete: true
+    expect(p.done).toBe(p.total);
+    expect(editionReadiness(snapshot, 'hi').publishable).toBe(true); // the legacy reader's language list offers it
+    expect(fallbackLineIds(localizeDoc(snapshot, 'hi'))).toEqual([]); // no "N lines untranslated" chip on a published edition
+    const pubSpell = snapshot.pages.flatMap((pg) => pg.panels.flatMap((pn) => pn.lines)).find((l) => l.id === spell.id)!;
+    expect(pubSpell).toMatchObject({ noTranslate: true, text: 'ZZZAP-SPELL' });
+    // The localized reader keeps the spell in the source language (its script font), not a translation.
+    const localizedSpell = localizeDoc(snapshot, 'hi').pages.flatMap((pg) => pg.panels.flatMap((pn) => pn.lines)).find((l) => l.id === spell.id)!;
+    expect(localizedSpell).toMatchObject({ text: 'ZZZAP-SPELL', lang: doc.format.language });
+    // Still the public projection: no gloss, model or issue; status reviewed; at 0.
+    const entry = Object.values(snapshot.i18n!.editions.hi.lines)[0];
+    expect(Object.keys(entry).sort()).toEqual(['at', 'sourceHash', 'status', 'text']);
+    expect(JSON.stringify(snapshot)).not.toContain(PRIVATE.gloss);
+  });
+
+  it('a translation that was stale in the live doc keeps an empty hash (never vouched for), and only published lines carry one', () => {
+    const { doc } = translatedDoc();
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).filter((l) => !l.noTranslate && l.text.trim());
+    const staleId = lines[1].id;
+    doc.i18n!.editions.hi.lines[staleId] = { ...doc.i18n!.editions.hi.lines[staleId], sourceHash: 'old-hash' };
+    const snapshot = snapOf(doc);
+    const hi = snapshot.i18n!.editions.hi.lines;
+    expect(hi[staleId].sourceHash).toBe('');
+    expect(editionProgress(snapshot, 'hi').stale).toBe(1);
+    for (const l of lines.filter((x) => x.id !== staleId)) expect(hi[l.id].sourceHash).toBe(lineSourceHash(l));
+  });
+
+  it('render error details and other private render fields never reach the snapshot', () => {
+    const doc = richDoc();
+    doc.pages[0].render = { ...doc.pages[0].render, error: 'PRIVATE-RENDER-ERROR', errorDetail: { code: 'PROVIDER_429', provider: 'PRIVATE-PROVIDER', at: 1, text: 'PRIVATE-ERROR-DETAIL' }, attempts: 3 };
+    const json = JSON.stringify(snapOf(doc));
+    for (const leaked of ['PRIVATE-RENDER-ERROR', 'PRIVATE-PROVIDER', 'PRIVATE-ERROR-DETAIL', 'errorDetail', '"attempts"']) expect(json).not.toContain(leaked);
   });
 });
 

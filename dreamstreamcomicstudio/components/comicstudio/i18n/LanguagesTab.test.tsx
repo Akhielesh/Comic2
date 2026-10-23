@@ -5,7 +5,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { lineSourceHash, textSourceHash } from '../../../shared/comic/i18n';
 import { applyOps } from '../../../shared/comic/ops';
 import { AUTO_CORRECTED_NOTE } from '../../../shared/comic/translationPlan';
-import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { registeredCard, registeredTabs } from '../features';
 import { feature, languagesTabVisible } from './index';
 import { LanguagesTab } from './LanguagesTab';
@@ -32,6 +32,8 @@ function withTelugu(doc = makeSampleDoc(), status: 'reviewed' | 'machine' = 'rev
 }
 
 beforeEach(() => {
+  // Admin / own-key wording (dollars); governed users have their own test.
+  showDollarPrices();
   quoteMock.mockReset();
   quoteMock.mockImplementation(async (_id, langs) => ({
     perLanguage: langs.map((lang) => ({ lang, lines: 3, free: 1, upToDate: false, usd: 0.05, seconds: 12 })),
@@ -39,7 +41,10 @@ beforeEach(() => {
     byok: false
   }));
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  resetUsageStatus();
+});
 
 describe('feature registration', () => {
   it('registers the translation card and the Languages tab (visible once there is dialogue)', () => {
@@ -65,6 +70,15 @@ describe('LanguagesTab', () => {
     const go = await screen.findByRole('button', { name: 'Translate · ≈ $0.05' });
     fireEvent.click(go);
     expect(studio.act).toHaveBeenCalledWith({ type: 'translate', languages: ['te'], quotedUsd: 0.05 });
+  });
+
+  it('governed users read every quote as a share of their usage — never dollars', async () => {
+    showUsagePrices(1);
+    const studio = makeFakeStudio({ doc: withTelugu(makeSampleDoc(), 'machine') });
+    const { container } = render(<LanguagesTab studio={studio} />);
+    const btn = await screen.findByRole('button', { name: /^(Translate missing|Finish the review) · (≈[\d.]+%|<0\.1%) of your usage$/ });
+    expect(btn).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\$/);
   });
 
   it('a reviewed edition reads "Ready to publish"; a draft offers "Translate missing" with its price', async () => {

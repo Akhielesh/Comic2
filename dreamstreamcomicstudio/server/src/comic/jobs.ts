@@ -3206,19 +3206,65 @@ const oneOf = <T extends string>(v: unknown, list: readonly T[]): T | undefined 
 const num = (v: unknown, lo: number, hi: number): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : undefined;
 
-/** Copy only the listed keys whose sanitizer accepts the value; throws when a present key is invalid. */
+/** A field sanitizer's "drop this key, keep the rest of the edit" answer (an unknown value is never stored). */
+const DROP: unique symbol = Symbol('drop');
+/**
+ * A field sanitizer's "unset this optional field" answer. Contract R4: the Undo inverse of a FIRST edit sends
+ * null for a key that was absent before (a first logline, turn hook, role, kind…). It goes back to absent
+ * (undefined: never stored, so spec hashes match the ones before the edit) instead of failing the whole Undo.
+ */
+const CLEAR: unique symbol = Symbol('clear');
+/** An optional field: null clears it (R4); any other value goes through `fn`. Never for a required field. */
+const clearable =
+  (fn: (v: unknown) => unknown) =>
+  (v: unknown): unknown =>
+    v === null ? CLEAR : fn(v);
+
+/**
+ * Copy only the listed keys whose sanitizer accepts the value; throws when a present key is invalid,
+ * except a sanitizer that answers DROP (that key is left out and the rest of the edit still applies)
+ * or CLEAR (the key is unset).
+ */
 const pick = (raw: unknown, spec: Record<string, (v: unknown) => unknown>, what: string): Record<string, unknown> => {
   if (!isObject(raw)) throw badRequest(`Invalid ${what}.`);
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
+    if (!Object.prototype.hasOwnProperty.call(spec, key)) continue;
     const fn = spec[key];
-    if (!fn) continue;
     if (value === undefined) continue;
     const v = fn(value);
+    if (v === DROP) continue;
+    if (v === CLEAR) {
+      out[key] = undefined;
+      continue;
+    }
     if (v === undefined) throw badRequest(`Invalid ${what}: ${key}.`);
     out[key] = v;
   }
   return out;
+};
+
+/** Character.likeness values a client may set (contract §5.4; absent = 'auto'). */
+const CAST_LIKENESS: readonly NonNullable<Character['likeness']>[] = ['auto', 'sheet_only', 'sheet_and_photo'];
+/** Character.count: 1 = a single being, 2–12 = a group drawn as one identity class ("three ducklings"). */
+const CAST_COUNT_MAX = 12;
+/** Non-human look lines (doc.ts CharacterLook.species / markings: ≤ 120). */
+const LOOK_LINE_FIELDS = new Set<string>(['species', 'markings']);
+const LOOK_LINE_MAX = 120;
+
+/**
+ * Look text as stored: C0/C1 control characters and lone surrogates removed (Postgres jsonb rejects
+ * \u0000 and unpaired surrogates; a clip never splits a pair), trimmed, clipped. ZWJ/ZWNJ and combining
+ * marks stay (Telugu, Hindi). `oneLine` (species, markings) also turns tabs/newlines into one space.
+ */
+const lookText = (v: unknown, max: number, oneLine: boolean): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  let s = v
+    .replace(/[\u0000-\u0008\u000E-\u001F\u007F-\u009F]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+  s = (oneLine ? s.replace(/\s+/g, ' ') : s.replace(/[\u000B\u000C]/g, ' ')).trim().slice(0, max);
+  if (/[\uD800-\uDBFF]$/.test(s)) s = s.slice(0, -1);
+  return s.trim();
 };
 
 export const sanitizeFormatPatch = (raw: unknown): Partial<Format> =>
@@ -3257,13 +3303,31 @@ export const sanitizeSettingsPatch = (raw: unknown): Partial<Settings> => {
   return out as Partial<Settings>;
 };
 
+/**
+ * A client/tool look patch: only LOOK_FIELDS, strings only (anything else is dropped), control characters
+ * stripped. summary ≤ 600, species / markings one line ≤ 120, the rest ≤ 300. '' clears a field.
+ */
 export const sanitizeLook = (raw: unknown): Record<string, string> | undefined => {
   if (!isObject(raw)) return undefined;
   const out: Record<string, string> = {};
   for (const key of LOOK_FIELDS) {
-    const v = str(raw[key], key === 'summary' ? 600 : 300);
+    const line = LOOK_LINE_FIELDS.has(key);
+    const v = lookText(raw[key], key === 'summary' ? 600 : line ? LOOK_LINE_MAX : 300, line);
     if (v !== undefined) out[key] = v;
   }
+  return out;
+};
+
+/**
+ * A client `character` look patch: sanitizeLook, plus `null` = "this field was not set" (contract R4: the Undo
+ * inverse of a first species / markings / hair … sends null). It clears the key (undefined, never stored, so the
+ * page spec hash is the one before the edit) instead of being ignored, which left the field set after Undo.
+ * `summary` is always present and never cleared.
+ */
+const clientLook = (raw: unknown): Record<string, string | undefined> | undefined => {
+  const out: Record<string, string | undefined> | undefined = sanitizeLook(raw);
+  if (!out || !isObject(raw)) return out;
+  for (const key of LOOK_FIELDS) if (key !== 'summary' && raw[key] === null) out[key] = undefined;
   return out;
 };
 
@@ -3406,13 +3470,13 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           raw.patch,
           {
             title: (v) => str(v, 200),
-            logline: (v) => str(v, 600),
-            premise: (v) => str(v, 4000),
-            genre: (v) => str(v, 120),
-            tone: (v) => str(v, 200),
-            audience: (v) => str(v, 200),
-            setting: (v) => str(v, 1000),
-            themes: (v) => strList(v, 12, 120),
+            logline: clearable((v) => str(v, 600)),
+            premise: clearable((v) => str(v, 4000)),
+            genre: clearable((v) => str(v, 120)),
+            tone: clearable((v) => str(v, 200)),
+            audience: clearable((v) => str(v, 200)),
+            setting: clearable((v) => str(v, 1000)),
+            themes: clearable((v) => strList(v, 12, 120)),
             notes: (v) => strList(v, 40, 500)
           },
           'brief'
@@ -3434,7 +3498,7 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         out.push({ op: 'settings', patch: sanitizeSettingsPatch(raw.patch) });
         break;
       case 'source': {
-        const patch = pick(raw.patch, { script: (v) => (typeof v === 'string' ? v.slice(0, LONG_TEXT_LIMIT) : undefined) }, 'source');
+        const patch = pick(raw.patch, { script: clearable((v) => (typeof v === 'string' ? v.slice(0, LONG_TEXT_LIMIT) : undefined)) }, 'source');
         out.push({ op: 'source', patch: { ...patch, updatedAt: Date.now() } });
         break;
       }
@@ -3443,11 +3507,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           raw.patch,
           {
             status: (v) => oneOf(v, ['empty', 'drafted', 'locked'] as const),
-            name: (v) => str(v, 80),
-            spec: (v) => str(v, 2000),
-            palette: (v) => strList(v, 8, 40),
-            linework: (v) => str(v, 300),
-            avoid: (v) => strList(v, 12, 120),
+            name: clearable((v) => str(v, 80)),
+            spec: clearable((v) => str(v, 2000)),
+            palette: clearable((v) => strList(v, 8, 40)),
+            linework: clearable((v) => str(v, 300)),
+            avoid: clearable((v) => strList(v, 12, 120)),
             presetId: (v) => (v === null ? null : typeof v === 'string' && getStylePreset(v) ? v : undefined),
             refs: assetList(known, restore),
             board: (v) => (v === null ? null : assetList(known)([v])?.[0])
@@ -3465,15 +3529,18 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           raw.patch,
           {
             name: (v) => str(v, 80) || undefined,
-            role: (v) => str(v, 200),
+            role: clearable((v) => str(v, 200)),
             tier: (v) => oneOf(v, CAST_TIERS),
-            look: sanitizeLook,
-            personality: (v) => str(v, 1000),
-            voice: (v) => str(v, 600),
+            look: clientLook,
+            personality: clearable((v) => str(v, 1000)),
+            voice: clearable((v) => str(v, 600)),
             refs: assetList(known, restore),
-            // Undo of character_remove re-creates the whole entity (kind, count and the sheet it had).
-            kind: (v) => (typeof v === 'string' && (CAST_KINDS as readonly string[]).includes(v) ? v : undefined),
-            count: (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(12, Math.max(1, Math.round(v))) : undefined),
+            // Cast details (the board's kind / group / likeness pickers, and Undo of character_remove, which
+            // re-creates the whole entity). An unknown value is dropped, never stored; the rest of the edit applies.
+            // null (the Undo inverse of a first kind / count / likeness) unsets it: person / single / 'auto'.
+            kind: clearable((v) => oneOf(v, CAST_KINDS) ?? DROP),
+            count: clearable((v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= CAST_COUNT_MAX ? v : DROP)),
+            likeness: clearable((v) => oneOf(v, CAST_LIKENESS) ?? DROP),
             sheet: (v) => restoredSheet(v, known, restore)
           },
           'character'
@@ -3511,7 +3578,7 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           {
             summary: (v) => str(v, 1000),
             layout: (v) => str(v, 1000),
-            turnHook: (v) => str(v, 500),
+            turnHook: clearable((v) => str(v, 500)),
             // Reader look: chapter openers ("" or null clears; the safety patch screen reads the text).
             chapterTitle: (v) => (v === null || v === '' ? null : str(v, DOC_LIMITS.chapterTitleChars) || undefined)
           },
@@ -3528,11 +3595,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           {
             size: (v) => oneOf(v, PANEL_SIZES),
             shot: (v) => oneOf(v, SHOT_TYPES),
-            angle: (v) => str(v, 200),
+            angle: clearable((v) => str(v, 200)),
             action: (v) => str(v, 2000),
             castIds: (v) => (Array.isArray(v) && v.length <= 12 && v.every((x) => typeof x === 'string' && castIds.has(x)) ? [...new Set(v as string[])] : undefined),
             placeId: (v) => (v === null || v === '' ? null : typeof v === 'string' && placeIds.has(v) ? v : undefined),
-            mood: (v) => str(v, 200)
+            mood: clearable((v) => str(v, 200))
           },
           'panel'
         );
@@ -3616,7 +3683,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         break;
       }
       case 'cover': {
-        const patch = pick(raw.patch, { title: (v) => str(v, 200), tagline: (v) => str(v, 300), direction: (v) => str(v, 1500) }, 'cover');
+        const patch = pick(
+          raw.patch,
+          { title: clearable((v) => str(v, 200)), tagline: clearable((v) => str(v, 300)), direction: clearable((v) => str(v, 1500)) },
+          'cover'
+        );
         out.push({ op: 'cover', patch });
         break;
       }

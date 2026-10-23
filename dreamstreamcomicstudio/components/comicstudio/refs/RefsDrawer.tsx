@@ -288,8 +288,8 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
           owner={owner}
           moveTargets={targets}
           onMakeMain={() => move(sel, 0)}
-          onLabel={(label: RefLabel | null) => void patch([{ op: 'ref_patch', owner, path: sel.path, patch: label ? { label } : ({ label: null } as never) }], 'Label photo')}
-          onNote={(note) => void patch([{ op: 'ref_patch', owner, path: sel.path, patch: note ? { note } : ({ note: null } as never) }], 'Photo note')}
+          onLabel={(label: RefLabel | null) => void patch([{ op: 'ref_patch', owner, path: sel.path, patch: label ? { label } : { label: null } }], 'Label photo')}
+          onNote={(note) => void patch([{ op: 'ref_patch', owner, path: sel.path, patch: note ? { note } : { note: null } }], 'Photo note')}
           onCrop={(mode) => {
             setError(null);
             void studio.act(mode === 'reset' ? { type: 'ref_crop', owner, path: sel.path, reset: true } : { type: 'ref_crop', owner, path: sel.path }).catch((err) => setError((err as Error)?.message || "Couldn't crop that photo."));

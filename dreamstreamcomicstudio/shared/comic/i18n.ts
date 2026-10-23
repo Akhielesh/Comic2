@@ -6,6 +6,7 @@
 // the author), has no open major linguist issue, and the comic uses overlay lettering.
 
 import type {
+  Balloon,
   BalloonGeometryOverride,
   ComicDoc,
   GlossaryTerm,
@@ -251,28 +252,67 @@ export const editionReadiness = (doc: ComicDoc, lang: string, overflowLineIds?: 
 
 // ── Localized view ───────────────────────────────────────────────────────────
 
-/** The doc as a reader of `lang` sees it. Pure; memoizable. */
+const own = <T>(map: Record<string, T> | undefined, key: string): T | undefined =>
+  map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const unit = (v: number) => Math.min(1, Math.max(0, v));
+
+/**
+ * An edition position for a line that has NO stored source balloon (software-placed in the source, moved in
+ * this language only) as a full balloon. Needs finite x / y and w > 0, else undefined (the line keeps its
+ * software placement); the tail only as a pair; pinned only when true; fontScale 0.7–1.3 like the stored path.
+ */
+const editionOnlyBalloon = (lineId: string, o: BalloonGeometryOverride | undefined): Balloon | undefined => {
+  if (!isObj(o) || !finite(o.x) || !finite(o.y) || !finite(o.w) || o.w <= 0) return undefined;
+  const b: Balloon & Pick<BalloonGeometryOverride, 'fontScale'> = { lineId, x: unit(o.x), y: unit(o.y), w: Math.min(1, o.w) };
+  if (finite(o.tailX) && finite(o.tailY)) {
+    b.tailX = unit(o.tailX);
+    b.tailY = unit(o.tailY);
+  }
+  if (o.pinned === true) b.pinned = true;
+  if (finite(o.fontScale)) b.fontScale = Math.min(1.3, Math.max(0.7, o.fontScale));
+  return b;
+};
+
+/**
+ * The doc as a reader of `lang` sees it. Pure; memoizable. Edition balloon overrides apply over the stored
+ * source balloon; an override for a line with no stored balloon on its page is appended as a full balloon
+ * (after the stored ones, in reading order), so the reader and the export draw what the edition editor shows.
+ */
 export const localizeDoc = (doc: ComicDoc, lang: string): ComicDoc => {
   const source = doc.format.language;
   if (isSource(doc, lang)) return doc;
   const edition = i18nOf(doc).editions[lang];
   if (!edition) return doc;
-  const pages = doc.pages.map((page) => ({
-    ...page,
-    panels: page.panels.map((panel) => ({
-      ...panel,
-      lines: panel.lines.map((line): Line => {
-        if (line.noTranslate) return { ...line, lang: line.lang ?? source };
-        const t = edition.lines[line.id];
-        if (t) return { ...line, text: t.text };
-        return { ...line, lang: line.lang ?? source };
-      })
-    })),
-    balloons: page.balloons.map((b) => {
-      const o = edition.balloons[b.lineId];
+  const overrides = edition.balloons;
+  const pages = doc.pages.map((page) => {
+    const balloons = page.balloons.map((b) => {
+      const o = own(overrides, b.lineId);
       return o ? { ...b, ...o } : b;
-    })
-  }));
+    });
+    const placed = new Set(page.balloons.map((b) => b.lineId));
+    for (const panel of page.panels)
+      for (const line of panel.lines) {
+        if (placed.has(line.id)) continue;
+        const extra = editionOnlyBalloon(line.id, own(overrides, line.id));
+        if (!extra) continue;
+        placed.add(line.id);
+        balloons.push(extra);
+      }
+    return {
+      ...page,
+      panels: page.panels.map((panel) => ({
+        ...panel,
+        lines: panel.lines.map((line): Line => {
+          if (line.noTranslate) return { ...line, lang: line.lang ?? source };
+          const t = own(edition.lines, line.id);
+          if (t) return { ...line, text: t.text };
+          return { ...line, lang: line.lang ?? source };
+        })
+      })),
+      balloons
+    };
+  });
   const cover = { ...doc.cover };
   if (edition.cover?.title) cover.title = edition.cover.title.text;
   if (edition.cover?.tagline) cover.tagline = edition.cover.tagline.text;

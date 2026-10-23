@@ -209,6 +209,21 @@ class DockBoundary extends React.Component<{ children: React.ReactNode }, { fail
   }
 }
 
+/**
+ * The board while the page editor is open over it (a full-screen modal): frozen. Every edit in the
+ * editor — a balloon drop, a line of text — changes the doc, and without this the whole board behind
+ * the modal (every page card, the tab strip, the gate, the book timeline) re-rendered inside the same
+ * task as the drop: one 190–230 ms task on a mid phone (QA `editor-drop-long-task`). Nobody can see or
+ * touch the board then (the modal covers it and traps focus); it catches up in one render the moment
+ * the editor closes. Hooks inside it (store subscriptions) still update themselves.
+ */
+export const FrozenWhileEditing = React.memo<{ frozen: boolean; children: React.ReactNode }>(
+  ({ children }) => <>{children}</>,
+  // Skip only while frozen before AND after: opening renders once (unchanged), closing catches up.
+  (prev, next) => prev.frozen && next.frozen
+);
+FrozenWhileEditing.displayName = 'FrozenWhileEditing';
+
 const TabBadge: React.FC<{ children: React.ReactNode; active: boolean }> = ({ children, active }) => (
   <span
     className={cx(
@@ -318,82 +333,84 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
   const mask = clip.start && clip.end ? FADE_MASK.both : clip.end ? FADE_MASK.end : clip.start ? FADE_MASK.start : '';
 
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board>
-      <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 py-1.5 sm:px-4 sm:py-2', HAIRLINE)}>
-        <span className="hidden text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] md:inline">Board</span>
-        <div
-          ref={stripRef}
-          role="tablist"
-          aria-label="Board"
-          onScroll={measure}
-          data-tab-strip
-          className={cx('-mx-1 flex min-w-0 flex-1 snap-x snap-proximity scroll-px-2 gap-0.5 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden', mask)}
-        >
-          {tabs.map((t, i) => {
-            const active = t.id === tab;
-            const b = badge(t.id);
-            return (
-              <button
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current[t.id] = el;
-                }}
-                type="button"
-                role="tab"
-                id={`board-tab-${t.id}`}
-                aria-selected={active}
-                aria-controls="board-panel"
-                tabIndex={active ? 0 : -1}
-                onClick={() => setTab(t.id)}
-                onKeyDown={(e) => onTabKey(e, i)}
-                className={cx(
-                  'inline-flex shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-xl px-2 py-1.5 text-[13px] font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:px-2.5 coarse:min-h-[44px] coarse:px-3',
-                  active ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
-                )}
-              >
-                {/* Below 600 px: labels only (the row scrolls, with a fade, when it still doesn't fit). */}
-                <span className="hidden medium:inline-flex">{t.icon}</span>
-                {t.label}
-                {b !== null && (!hideInactiveBadges || active) && <TabBadge active={active}>{b}</TabBadge>}
-              </button>
-            );
-          })}
+    <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board data-board-frozen={focused ? 'true' : undefined}>
+      <FrozenWhileEditing frozen={!!focused}>
+        <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 py-1.5 sm:px-4 sm:py-2', HAIRLINE)}>
+          <span className="hidden text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] md:inline">Board</span>
+          <div
+            ref={stripRef}
+            role="tablist"
+            aria-label="Board"
+            onScroll={measure}
+            data-tab-strip
+            className={cx('-mx-1 flex min-w-0 flex-1 snap-x snap-proximity scroll-px-2 gap-0.5 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden', mask)}
+          >
+            {tabs.map((t, i) => {
+              const active = t.id === tab;
+              const b = badge(t.id);
+              return (
+                <button
+                  key={t.id}
+                  ref={(el) => {
+                    tabRefs.current[t.id] = el;
+                  }}
+                  type="button"
+                  role="tab"
+                  id={`board-tab-${t.id}`}
+                  aria-selected={active}
+                  aria-controls="board-panel"
+                  tabIndex={active ? 0 : -1}
+                  onClick={() => setTab(t.id)}
+                  onKeyDown={(e) => onTabKey(e, i)}
+                  className={cx(
+                    'inline-flex shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-xl px-2 py-1.5 text-[13px] font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:px-2.5 coarse:min-h-[44px] coarse:px-3',
+                    active ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                  )}
+                >
+                  {/* Below 600 px: labels only (the row scrolls, with a fade, when it still doesn't fit). */}
+                  <span className="hidden medium:inline-flex">{t.icon}</span>
+                  {t.label}
+                  {b !== null && (!hideInactiveBadges || active) && <TabBadge active={active}>{b}</TabBadge>}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
-      <GateBanner studio={studio} compact={gateCompact} />
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        id="board-panel"
-        role="tabpanel"
-        aria-labelledby={`board-tab-${tab}`}
-        tabIndex={-1}
-        data-board-scroll={tab === 'read' ? 'reader' : 'board'}
-        className={cx(
-          'min-h-0 flex-1 overscroll-contain focus:outline-none',
-          // Read: the reader owns the ONLY scroller (visualqa P1-6) — no nested scrolling, and on a phone
-          // the page art shows on first view. Its root fills this box instead of forcing a min height.
-          tab === 'read' ? 'flex flex-col overflow-hidden [&>div]:min-h-0' : 'overflow-y-auto'
-        )}
-      >
-        {tab === 'story' && <StoryTab studio={studio} doc={doc} />}
-        {tab === 'cast' && <CastTab studio={studio} doc={doc} />}
-        {tab === 'style' && <StyleTab studio={studio} doc={doc} />}
-        {tab === 'pages' && <PagesTab studio={studio} doc={doc} />}
-        {tab === 'read' && <ReaderTab studio={studio} doc={doc} />}
-        {(() => {
-          const reg = tabs.find((t) => t.id === tab)?.registration;
-          return reg ? <reg.Component studio={studio} /> : null;
-        })()}
-      </div>
-      {/* Timeline dock slot: the book timeline's own summary bar / strip (collapsed below lg; not in Read). */}
-      <div data-board-dock className="min-w-0 shrink-0 empty:hidden">
-        {tab !== 'read' && (
-          <DockBoundary>
-            <BookTimeline studio={studio} />
-          </DockBoundary>
-        )}
-      </div>
+        <GateBanner studio={studio} compact={gateCompact} />
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          id="board-panel"
+          role="tabpanel"
+          aria-labelledby={`board-tab-${tab}`}
+          tabIndex={-1}
+          data-board-scroll={tab === 'read' ? 'reader' : 'board'}
+          className={cx(
+            'min-h-0 flex-1 overscroll-contain focus:outline-none',
+            // Read: the reader owns the ONLY scroller (visualqa P1-6) — no nested scrolling, and on a phone
+            // the page art shows on first view. Its root fills this box instead of forcing a min height.
+            tab === 'read' ? 'flex flex-col overflow-hidden [&>div]:min-h-0' : 'overflow-y-auto'
+          )}
+        >
+          {tab === 'story' && <StoryTab studio={studio} doc={doc} />}
+          {tab === 'cast' && <CastTab studio={studio} doc={doc} />}
+          {tab === 'style' && <StyleTab studio={studio} doc={doc} />}
+          {tab === 'pages' && <PagesTab studio={studio} doc={doc} />}
+          {tab === 'read' && <ReaderTab studio={studio} doc={doc} />}
+          {(() => {
+            const reg = tabs.find((t) => t.id === tab)?.registration;
+            return reg ? <reg.Component studio={studio} /> : null;
+          })()}
+        </div>
+        {/* Timeline dock slot: the book timeline's own summary bar / strip (collapsed below lg; not in Read). */}
+        <div data-board-dock className="min-w-0 shrink-0 empty:hidden">
+          {tab !== 'read' && (
+            <DockBoundary>
+              <BookTimeline studio={studio} />
+            </DockBoundary>
+          )}
+        </div>
+      </FrozenWhileEditing>
       {focused && <PageEditor studio={studio} doc={doc} pageId={focused} />}
     </div>
   );

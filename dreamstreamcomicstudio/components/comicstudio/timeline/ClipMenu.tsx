@@ -21,7 +21,8 @@ import {
   Trash2,
   Type
 } from 'lucide-react';
-import { formatUsd, PLAN_USD_PER_PAGE } from '../../../shared/comic/models';
+import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
+import { failClosedMoney } from './bookModel';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import type { ClipVM } from './bookModel';
 import { cx, FOCUS_RING } from './ui';
@@ -58,11 +59,27 @@ export interface ClipMenuItem {
 
 const icon = (C: React.ComponentType<{ className?: string }>) => <C className="h-4 w-4" />;
 
-/** The items for a clip (pure; tested). */
+/**
+ * The items for a clip (pure; tested). `price` prints a quote for the viewer (conversation/cost
+ * useCostFormat(studio).approx: "≈ $0.06" for admins / own key, "≈2% of your usage" for governed
+ * users); without it, quotes read in usage terms — never dollars by default. `writeUsd` is the
+ * writer's quote (markup included unless BYOK; default: the plan price with markup).
+ */
 export function clipMenuItems(
   clip: ClipVM,
-  opts: { redrawUsd: number; coverUsd: number; canMoveLeft: boolean; canMoveRight: boolean; canAddPage: boolean; pageCount: number }
+  opts: {
+    redrawUsd: number;
+    coverUsd: number;
+    canMoveLeft: boolean;
+    canMoveRight: boolean;
+    canAddPage: boolean;
+    pageCount: number;
+    price?: (usd: number) => string;
+    writeUsd?: number;
+  }
 ): ClipMenuItem[] {
+  const price = opts.price ?? failClosedMoney;
+  const writeUsd = opts.writeUsd ?? PLAN_USD_PER_PAGE * PLATFORM_MARKUP;
   const busyReason = clip.busy ? `${clip.label} is still drawing — wait for it to finish.` : undefined;
   if (clip.plate) {
     return [
@@ -78,7 +95,7 @@ export function clipMenuItems(
     items.push({
       action: 'cover_redesign',
       label: clip.drawn ? 'Redesign the cover' : 'Draw the cover',
-      meta: `≈ ${formatUsd(opts.coverUsd)}`,
+      meta: price(opts.coverUsd),
       icon: icon(RefreshCw),
       disabled: clip.busy,
       reason: busyReason
@@ -97,13 +114,13 @@ export function clipMenuItems(
     items.push({
       action: 'redraw',
       label: clip.drawn ? 'Redraw (new take)' : 'Draw this page',
-      meta: `≈ ${formatUsd(opts.redrawUsd)}`,
+      meta: price(opts.redrawUsd),
       icon: icon(RefreshCw),
       disabled: clip.busy,
       reason: busyReason
     });
   } else {
-    items.push({ action: 'write', label: 'Write this page with AI', meta: `≈ ${formatUsd(PLAN_USD_PER_PAGE)}`, icon: icon(Sparkles) });
+    items.push({ action: 'write', label: 'Write this page with AI', meta: price(writeUsd), icon: icon(Sparkles) });
   }
   const full = opts.canAddPage ? undefined : 'This comic is at its page limit.';
   items.push({ action: 'duplicate', label: 'Duplicate', meta: 'Free', icon: icon(Copy), shortcut: 'D', disabled: clip.busy || !opts.canAddPage, reason: busyReason ?? full });

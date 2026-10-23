@@ -16,7 +16,7 @@ import { durationFor, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart 
 import { emptyLeafRefs, PageLeaf, type LeafExtraRefs } from './PageLeaf';
 import { playPageTurn } from './paperSound';
 import { bookGeometry, letterbox, type BookGeometry, type BookView, type LayoutDecision } from './readerLayout';
-import { isDoubleTap, tapCommand, WheelAccumulator, type ReaderCommand } from './readerInput';
+import { isDoubleTap, scrollsInside, tapCommand, WheelAccumulator, type ReaderCommand } from './readerInput';
 import type { ReaderEvent, ReaderState } from './readerMachine';
 import { gutterFor, ReaderSlot, type SlotImage, type SlotRefs } from './ReaderSlot';
 import { contentKey, LAYER_Z, mountWindow, planTurn, roleOf, type TurnPlan, type TurnStyle } from './turnPlan';
@@ -647,7 +647,8 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
   };
 
-  // Wheel: steps; Ctrl/⌘ + wheel zooms at the cursor (not in Guided View).
+  // Wheel: steps; Ctrl/⌘ + wheel zooms at the cursor (not in Guided View). A wheel over content that can
+  // still scroll that way (the End card when it overflows) scrolls it instead of turning the page.
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
@@ -674,6 +675,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
         return;
       }
       if (layout === 'scroll') return;
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && scrollsInside(e.target, el, e.deltaY)) return;
       // Page wider than tall on screen (fit: width): vertical wheel scrolls the page natively.
       if (fit === 'width' && Math.abs(e.deltaY) > Math.abs(e.deltaX)) return;
       e.preventDefault();
@@ -733,7 +735,11 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     <div
       ref={stageRef}
       data-testid="book-stage"
-      className={fit === 'width' ? 'absolute inset-0 select-none overflow-y-auto overflow-x-hidden' : 'absolute inset-0 select-none overflow-hidden'}
+      // When the page scrolls (fit: width), the scroller is keyboard-reachable (axe scrollable-region-focusable).
+      tabIndex={fit === 'width' ? 0 : undefined}
+      aria-label={fit === 'width' ? 'Page — scroll to read' : undefined}
+      role={fit === 'width' ? 'region' : undefined}
+      className={fit === 'width' ? 'absolute inset-0 select-none overflow-y-auto overflow-x-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-accent)]' : 'absolute inset-0 select-none overflow-hidden'}
       style={{ touchAction: fit === 'width' ? 'pan-y' : 'none', overscrollBehavior: 'contain', cursor: drag.current && !drag.current.peek ? 'grabbing' : undefined }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

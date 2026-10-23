@@ -1610,6 +1610,9 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
   const index = page ? pages.findIndex((p) => p.id === page.id) : -1;
   const prev = index > 0 ? pages[index - 1] : undefined;
   const next = index >= 0 && index < pages.length - 1 ? pages[index + 1] : undefined;
+  // Manga / right-to-left books turn the other way: ← goes forward, and the header's arrows swap
+  // sides with it (the header swipe already mirrors through swipeTurn).
+  const rtl = doc.format.readingDirection === 'rtl';
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => studio.openPage(null), [studio]);
   const ff = useFormFactor();
@@ -1647,21 +1650,19 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
       if (e.altKey || mod) return;
       // Never turn the page while balloons are selected (arrows nudge them instead).
       if (studio.selection && studio.selection.lineIds.length > 0) return;
-      if (e.key === 'ArrowLeft' && prev) {
-        e.preventDefault();
-        studio.openPage(prev.id);
-      } else if (e.key === 'ArrowRight' && next) {
-        e.preventDefault();
-        studio.openPage(next.id);
-      }
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const forward = (e.key === 'ArrowRight') !== rtl;
+      const to = forward ? next : prev;
+      if (!to) return;
+      e.preventDefault();
+      studio.openPage(to.id);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [prev, next, studio]);
+  }, [prev, next, studio, rtl]);
 
   if (!page) return null;
   const status = pageVisualStatus(doc, page);
-  const rtl = doc.format.readingDirection === 'rtl';
 
   // Phones: a horizontal swipe on the header turns the page (the stage pans and zooms instead).
   const headerSwipe = layout.fullBleed
@@ -1682,6 +1683,18 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
         }
       }
     : {};
+
+  // The arrow points the way the page turns: in a right-to-left book "Next" sits on the left.
+  const prevButton = (
+    <IconButton label="Previous page" disabled={!prev} onClick={() => prev && studio.openPage(prev.id)}>
+      {rtl ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+    </IconButton>
+  );
+  const nextButton = (
+    <IconButton label="Next page" disabled={!next} onClick={() => next && studio.openPage(next.id)}>
+      {rtl ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+    </IconButton>
+  );
 
   return (
     <ModalPortal>
@@ -1718,9 +1731,7 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
             {...headerSwipe}
             data-testid="editor-header"
           >
-            <IconButton label="Previous page" disabled={!prev} onClick={() => prev && studio.openPage(prev.id)}>
-              <ChevronLeft className="h-4 w-4" />
-            </IconButton>
+            {rtl ? nextButton : prevButton}
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                 <h2 className="shrink-0 whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]">
@@ -1730,9 +1741,7 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
               </div>
               {page.summary && <p className="truncate text-[12px] text-[var(--ds-muted)]">{page.summary}</p>}
             </div>
-            <IconButton label="Next page" disabled={!next} onClick={() => next && studio.openPage(next.id)}>
-              <ChevronRight className="h-4 w-4" />
-            </IconButton>
+            {rtl ? prevButton : nextButton}
             <IconButton label="Close editor" onClick={close}>
               <X className="h-4 w-4" />
             </IconButton>

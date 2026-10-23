@@ -2,6 +2,12 @@
 // the exact inverse computed BEFORE the edit (shared/comic/undo.ts inverseOps). The toast pauses
 // while hovered or focused, announces politely, and sits above the safe area. Deleted pages also
 // stay in Media → Deleted, so nothing depends on catching the toast in time.
+//
+// One undo stack (P1-CLIENTSTATE/P1-TIMELINE): a timeline edit is committed through studio.patch, which
+// records it on the studio's global undo stack. The toast's Undo therefore runs studio.undo() while that
+// entry is still on top — never a second, stale inverse that a later Ctrl+Z would re-send (a page_restore
+// for a page no longer in the trash answered 400). Only when other edits landed on top since does it
+// apply its own exact inverse (unrecorded); the global entry is then a no-op that undo skips.
 
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Undo2, X } from 'lucide-react';
@@ -33,8 +39,10 @@ export interface UndoEntry {
   id: number;
   /** "Page 3 deleted". */
   message: string;
-  /** Applied (with undo:false) when the user taps Undo. */
+  /** Applied (with undo:false) when the user taps Undo and the global stack moved on. */
   inverse: DocOp[];
+  /** The label the edit was recorded under on the studio's undo stack. */
+  label?: string;
 }
 
 export interface TimelineEdit {
@@ -53,16 +61,19 @@ export function useTimelineEdit(studio: StudioController): TimelineEdit {
   const [toast, setToast] = useState<UndoEntry | null>(null);
   const docRef = useRef<ComicDoc | null>(studio.doc);
   docRef.current = studio.doc;
+  const studioRef = useRef(studio);
+  studioRef.current = studio;
 
   const commit = useCallback(
     (ops: DocOp[], message: string, opts: { label?: string } = {}) => {
       const before = docRef.current;
       if (!before || !ops.length) return false;
       const plan = undoPlan(before, ops);
-      void studio.patch(ops, { label: opts.label ?? plan.label });
+      const label = opts.label ?? plan.label;
+      void studio.patch(ops, { label });
       if (plan.inverse && plan.inverse.length) {
         toastSeq += 1;
-        const entry: UndoEntry = { id: toastSeq, message, inverse: plan.inverse };
+        const entry: UndoEntry = { id: toastSeq, message, inverse: plan.inverse, ...(label ? { label } : {}) };
         stack.current = [...stack.current, entry].slice(-MAX_ENTRIES);
         setToast(entry);
         publishToast(entry.id);
@@ -74,11 +85,18 @@ export function useTimelineEdit(studio: StudioController): TimelineEdit {
 
   const undo = useCallback(
     (entry: UndoEntry) => {
+      const isNewest = stack.current[stack.current.length - 1]?.id === entry.id;
       stack.current = stack.current.filter((e) => e.id !== entry.id);
       setToast((t) => (t?.id === entry.id ? null : t));
-      void studio.patch(entry.inverse, { undo: false, label: `Undo: ${entry.message}` });
+      const live = studioRef.current;
+      // Still the top of the studio's undo stack: undo it there (one stack, redo works too).
+      if (isNewest && live.canUndo && entry.label && live.undoLabel === entry.label) {
+        live.undo();
+        return;
+      }
+      void live.patch(entry.inverse, { undo: false, label: `Undo: ${entry.message}` });
     },
-    [studio]
+    []
   );
 
   const undoLast = useCallback(() => {

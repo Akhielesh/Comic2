@@ -78,6 +78,35 @@ describe('PageEditor', () => {
     expect(studio.openPage).toHaveBeenLastCalledWith('pg_3');
   });
 
+  it('a right-to-left book turns the other way: ← goes forward, and the header arrows swap sides', () => {
+    const doc = makeSampleDoc((d) => {
+      d.format.readingDirection = 'rtl';
+    });
+    const { studio } = open('pg_2', doc);
+    fireEvent.keyDown(document.body, { key: 'ArrowLeft' });
+    expect(studio.openPage).toHaveBeenLastCalledWith('pg_3');
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    expect(studio.openPage).toHaveBeenLastCalledWith('pg_1');
+    // "Next page" is the left-hand header button (it points left, the way the page turns).
+    const header = screen.getByTestId('editor-header');
+    const turnButtons = within(header)
+      .getAllByRole('button')
+      .filter((b) => /^(Next|Previous) page$/.test(b.getAttribute('aria-label') || b.textContent || ''));
+    expect(turnButtons.map((b) => b.getAttribute('aria-label') || b.textContent)).toEqual(['Next page', 'Previous page']);
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(studio.openPage).toHaveBeenLastCalledWith('pg_3');
+  });
+
+  it('a right-to-left book stops at its ends (← on the last page does nothing)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.format.readingDirection = 'rtl';
+    });
+    const last = [...doc.pages].sort((a, b) => b.n - a.n)[0];
+    const { studio } = open(last.id, doc);
+    fireEvent.keyDown(document.body, { key: 'ArrowLeft' });
+    expect(studio.openPage).not.toHaveBeenCalled();
+  });
+
   it('does not turn pages while typing', () => {
     const { studio } = open('pg_2');
     const textarea = screen.getByLabelText('What should change?');

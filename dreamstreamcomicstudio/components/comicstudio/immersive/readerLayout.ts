@@ -254,7 +254,10 @@ export const bookGeometry = (g: GeometryInput): BookGeometry => {
     let pw: number;
     let ph: number;
     if (g.fit === 'width') {
-      pw = availW;
+      // Phone landscape (mobile.md §7.1): the page IS the stage width (± 0 px) — desk margins would
+      // leave ~24 px gutters on a 616 px stage (P1-QA reader-landscape-fit-width). Safe areas are
+      // already outside the stage; the page scrolls vertically.
+      pw = stageW;
       ph = pw / a;
     } else {
       ph = Math.min(availH, availW / a);

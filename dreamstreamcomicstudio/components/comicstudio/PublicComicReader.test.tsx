@@ -6,7 +6,7 @@
 // quiet relink of expired signed links.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicDoc } from '../../shared/comic/doc';
 import type { PublicComicPayload } from '../../shared/comic/publication';
 import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
@@ -22,18 +22,22 @@ const api = vi.hoisted(() => ({
 vi.mock('./studioApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./studioApi')>()), ...api }));
 const pdfMock = vi.hoisted(() => ({ exportComicPdf: vi.fn() }));
 vi.mock('./export/pdfExport', () => pdfMock);
+const zipMock = vi.hoisted(() => ({ exportPngZip: vi.fn(), exportLanguagesZip: vi.fn() }));
+vi.mock('./export/zipExport', () => zipMock);
 
 // Imported after the mocks are registered.
 const { PublicComicReader } = await import('./PublicComicReader');
 
 const SLUG = 'AbCdEfGhIjKlMnOpQ';
+/** A publication's asset key: published objects live at pub/<22-char key>/… */
+const KEY = 'AbCdEfGhIjKlMnOpQrStUv';
 const urls = { 'u/proj/pages/p1.png': 'https://signed.test/p1.png?token=a', 'u/proj/pages/p5.png': 'https://signed.test/p5.png?token=b' };
 
 const snapshotDoc = (mutate?: (d: ComicDoc) => void): ComicDoc =>
   makeSampleDoc((d) => {
-    d.cover.render = { status: 'ready', history: [], asset: { path: 'pub/k/cover.webp', source: 'generated', at: 0, w: 1000, h: 1500 } };
+    d.cover.render = { status: 'ready', history: [], asset: { path: `pub/${KEY}/cover.webp`, source: 'generated', at: 0, w: 1000, h: 1500 } };
     d.pages.forEach((p, i) => {
-      p.render = { status: 'ready', history: [], asset: { path: `pub/k/p${i + 1}.webp`, source: 'generated', at: 0, w: 1000, h: 1500 } };
+      p.render = { status: 'ready', history: [], asset: { path: `pub/${KEY}/p${i + 1}.webp`, source: 'generated', at: 0, w: 1000, h: 1500 } };
     });
     mutate?.(d);
   });
@@ -76,6 +80,7 @@ const deferred = <T,>() => {
 
 beforeEach(() => {
   Object.values(api).forEach((f) => f.mockReset());
+  [pdfMock.exportComicPdf, zipMock.exportPngZip, zipMock.exportLanguagesZip].forEach((f) => f.mockReset());
   api.trackPublicEvent.mockResolvedValue(undefined);
   Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
   Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
@@ -183,10 +188,103 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Download PDF' }));
     await waitFor(() => expect(screen.getByText('Downloaded the PDF.')).toBeInTheDocument());
-    // Built from the public images in the browser — nothing server-side, nothing private.
+    // Built from the public images in the browser — nothing server-side, nothing private: only
+    // pub/<22-char key>/ objects, through the edge's https URL, never a draft or anything else.
     const urlFor = pdfMock.exportComicPdf.mock.calls[0][1] as (a: unknown) => string | undefined;
-    expect(urlFor({ path: 'pub/k/p1.webp', source: 'generated', at: 0 })).toBe('https://public.test/pub/k/p1.webp');
+    expect(urlFor({ path: `pub/${KEY}/p1.webp`, source: 'generated', at: 0 })).toBe(`https://public.test/pub/${KEY}/p1.webp`);
     expect(urlFor({ path: 'u/someone/private.png', source: 'generated', at: 0 })).toBeUndefined();
+    expect(urlFor({ path: 'pub/short/p1.webp', source: 'generated', at: 0 })).toBeUndefined();
+    expect(urlFor('https://evil.example/x.png')).toBeUndefined();
+    expect(urlFor({ path: `pub/${KEY}/p1.webp`, source: 'generated', at: 0, safety: { assessed: 'X', at: 1 } })).toBeUndefined();
+  });
+
+  it('downloads only PUBLISHED languages: a reader on an unpublished source is offered the published edition, by name', async () => {
+    pdfMock.exportComicPdf.mockResolvedValue({ fileName: 'x-te.pdf', pages: 2, failed: [], skipped: [] });
+    const doc = snapshotDoc((d) => {
+      d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, register: 'neutral' } as never }, glossary: [] };
+    });
+    window.localStorage.setItem('comicstudio.reader.lang', 'en');
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ languages: ['te'] }, doc));
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
+    expect(screen.queryByRole('menuitem', { name: /all .* languages/ })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download PDF (Telugu)' }));
+    await waitFor(() => expect(screen.getByText('Downloaded the PDF (Telugu).')).toBeInTheDocument());
+    const [passedDoc, , opts] = pdfMock.exportComicPdf.mock.calls[0] as [ComicDoc, unknown, { lang?: string }];
+    // The snapshot in its source language (the exporter localizes it to the published edition).
+    expect(passedDoc.format.language).toBe('en');
+    expect(passedDoc.i18n?.editions.te).toBeDefined();
+    expect(opts.lang).toBe('te');
+  });
+
+  it('offers every published language as one ZIP and shows the export’s notice', async () => {
+    const FONT = 'Some lettering fonts didn’t load, so the file may use a fallback font. Try again in a moment for the exact lettering.';
+    zipMock.exportLanguagesZip.mockResolvedValue({ fileName: 'x-all-languages.zip', files: 4, failed: [], skipped: [], languages: ['en', 'te'], notice: FONT });
+    const doc = snapshotDoc((d) => {
+      d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, register: 'neutral' } as never }, glossary: [] };
+    });
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ languages: ['en', 'te'] }, doc));
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download all 2 languages (.zip)' }));
+    await waitFor(() => expect(screen.getByText(`Downloaded 2 languages, a folder each. ${FONT}`)).toBeInTheDocument());
+    const [, urlFor, opts] = zipMock.exportLanguagesZip.mock.calls[0] as [ComicDoc, (a: unknown) => string | undefined, { languages?: string[] }];
+    expect(opts.languages).toEqual(['en', 'te']);
+    expect(urlFor({ path: 'u/someone/private.png', source: 'generated', at: 0 })).toBeUndefined();
+  });
+
+  it('an export that refuses (too big for the device) says why, and the reader keeps working', async () => {
+    zipMock.exportPngZip.mockRejectedValue(new Error('This book has too many pages to zip on this device (it would need about 900 MB of memory). Download the PDF instead — it keeps every page in one smaller file — or use a computer.'));
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download page images (.zip)' }));
+    expect(await screen.findByText(/Couldn’t prepare the download: This book has too many pages to zip on this device/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Start reading/ })).toBeEnabled();
+  });
+
+  it('the embed’s Download goes through the same gated public download', async () => {
+    pdfMock.exportComicPdf.mockResolvedValue({ fileName: 'x.pdf', pages: 6, failed: [], skipped: [] });
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG, embed: true }} />);
+    await screen.findByTestId('comic-reader');
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Download/ }));
+    await waitFor(() => expect(pdfMock.exportComicPdf).toHaveBeenCalled());
+    const urlFor = pdfMock.exportComicPdf.mock.calls[0][1] as (a: unknown) => string | undefined;
+    expect(urlFor('https://evil.example/x.png')).toBeUndefined();
+    expect(urlFor({ path: `pub/${KEY}/p1.webp`, source: 'generated', at: 0 })).toBe(`https://public.test/pub/${KEY}/p1.webp`);
+  });
+
+  it('an embed whose author turned downloads off offers none', async () => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ allowDownload: false }));
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG, embed: true }} />);
+    await screen.findByTestId('comic-reader');
+    // The ⋯ menu still offers Report, but no download of any kind.
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('menuitem', { name: 'Report this comic' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Download/ })).toBeNull();
+  });
+
+  it('counts one share per share: not again for a click while the copy menu is already open', async () => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady />);
+    await screen.findByRole('button', { name: /Start reading/ });
+    const share = within(screen.getByTestId('public-reader-header')).getByRole('button', { name: 'Share' });
+    fireEvent.click(share);
+    await waitFor(() => expect(share).toHaveAttribute('aria-expanded', 'true'));
+    fireEvent.click(share);
+    const shares = () => api.trackPublicEvent.mock.calls.filter((c) => JSON.stringify(c).includes('"share"')).length;
+    expect(shares()).toBe(1);
+  });
+
+  it('Report waits until the reader is known (never flashes for the owner while identity loads)', async () => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    const { rerender } = render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady={false} />);
+    await screen.findByRole('button', { name: /Start reading/ });
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    rerender(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady />);
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
   });
 
   it('lets readers report the comic, but never shows Report to its owner', async () => {

@@ -75,6 +75,7 @@ import { composeInStudio } from '../conversation/composerBus';
 import { CardShell, GhostButton, PrimaryButton, Segmented, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
+import { compactUsageShare } from '../../../services/costDisplay';
 import type { CardProps } from '../extensions';
 import { PageWireframe } from './PageWireframe';
 
@@ -181,10 +182,7 @@ const isBusyStatus = (s: Status) => s === 'queued' || s === 'rendering';
  */
 export const shortCost = (cost: CostFormat, usd: number, kind: 'spent' | 'quote'): string | undefined => {
   if (!cost.governed) return kind === 'quote' ? cost.badge(usd) : cost.exact(usd);
-  const s = cost.exact(usd);
-  if (s === 'Free') return s;
-  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(s);
-  return m ? m[1] : undefined;
+  return compactUsageShare(cost.exact(usd));
 };
 
 /** Spent (drawn) or to-draw cost of a tile, printed for this user; undefined when there is no real number. */

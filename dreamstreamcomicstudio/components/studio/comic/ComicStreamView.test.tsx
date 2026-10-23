@@ -1,8 +1,11 @@
 // Smoke test for the v3 Comic Studio stream surface: renders the right cards from state.
 
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+
+// The cost chip reads the usage status; keep these smoke tests offline (status unknown).
+vi.mock('../../usage/useUsageAllowance', () => ({ useUsageAllowance: () => null }));
 import { ComicStreamView } from './ComicStreamView';
 import { AppStep, type ComicState } from '../../../types';
 
@@ -65,8 +68,9 @@ describe('ComicStreamView', () => {
     expect(screen.getByText('Style')).toBeInTheDocument();
     // "Cast" appears in both the rail and the card title — at least one of each.
     expect(screen.getAllByText('Cast').length).toBeGreaterThan(0);
-    // page count chip + cost render
+    // page count chip + cost render (usage status unknown → never a dollar figure)
     expect(screen.getByText(/This comic ·/)).toBeInTheDocument();
+    expect(screen.getByText(/This comic ·/).textContent).not.toMatch(/\$\d/);
   });
 
   it('shows a thinking banner while analyzing a fresh script', () => {

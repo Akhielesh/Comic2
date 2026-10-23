@@ -237,4 +237,17 @@ describe('prices the director reads are worded for the user', () => {
     const none = setup(sixPageKidsDoc(), 'how is the Hindi?', {}, { ...governed, admin: true }).tools;
     expect(await none.read_translation.execute({ language: 'hi' })).toMatch(/^There is no Hindi translation yet\. translate_comic would cost ≈ \$\d/);
   });
+
+  it("the run's own words reach the director in the same currency: started and cached runs never carry dollars", async () => {
+    const { tools, ctx } = setup(sixPageKidsDoc(), 'translate it into తెలుగు', { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }, governed);
+    const out = await tools.translate_comic.execute({ languages: ['తెలుగు'] });
+    expect(out).toMatch(/Telugu/);
+    expect(out).not.toMatch(/\$/);
+    expect(out).toMatch(new RegExp(`^Translating 12 lines into Telugu \\(${usage.source}\\)`));
+    await ctx.settled();
+    const cachedDoc = translated();
+    cachedDoc.settings = { ...cachedDoc.settings, confirm: 'always' };
+    const cached = await setup(cachedDoc, 'translate into Telugu', {}, governed).tools.translate_comic.execute({ languages: ['te'] });
+    expect(cached).toContain('Telugu is already up to date. Nothing to translate (free).');
+  });
 });

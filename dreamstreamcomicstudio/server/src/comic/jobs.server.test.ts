@@ -4,10 +4,11 @@
 // reference check and render-verdict follow-ups (real safety module, fake platform classifier),
 // activity cost badges. Fakes only at the network edge; $0.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
+import { emptyRender, pageSpecHash, type CharacterLook, type ComicDoc } from '../../../shared/comic/doc.js';
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
+import { inverseOps } from '../../../shared/comic/undo.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
-import { JOB_TIMINGS, estimateSpendAction, isOwnProjectAssetPath, mergeBalloons, sanitizePatchOps, sanitizeCtxFor, startAction } from './jobs.js';
+import { JOB_TIMINGS, estimateSpendAction, isOwnProjectAssetPath, mergeBalloons, runAction, sanitizeLook, sanitizePatchOps, sanitizeCtxFor, startAction } from './jobs.js';
 import { fakeBilling, fakeImages, newSession, plannedDoc, testContext, TINY_PNG } from './orchestrator.fakes.js';
 import { installSafetyFakes, resetSafety } from './safety/testkit.js';
 import { StudioError } from './types.js';
@@ -147,6 +148,157 @@ describe('patch sanitizer (P2-SERVER)', () => {
     expect(() => sanitizePatchOps(session.doc, tooMany, sctx)).toThrow(/Too many changes/);
     const translations = Array.from({ length: 2001 }, (): unknown => ({ op: 'translation', lang: 'hi', lineId: 'ln_1_2', patch: { text: 'x' } }));
     expect(() => sanitizePatchOps(session.doc, translations, sctx)).toThrow(/Too many changes/);
+  });
+});
+
+describe('cast details and non-human look lines (P2-WIRING-SERVER)', () => {
+  type CharOp = Extract<DocOp, { op: 'character' }>;
+  const charPatch = (doc: ComicDoc, id: string, patch: unknown) => {
+    const { sctx } = ctxFor(doc);
+    const [op] = sanitizePatchOps(doc, [{ op: 'character', id, patch }], sctx) as CharOp[];
+    return op;
+  };
+
+  it('kind, count and likeness from the board are kept and persist', () => {
+    const doc = plannedDoc();
+    const op = charPatch(doc, 'c_maya', { kind: 'animal', count: 3, likeness: 'sheet_only', look: { species: 'mallard duckling', markings: 'white blaze on the chest' } });
+    expect(op.patch).toEqual({ kind: 'animal', count: 3, likeness: 'sheet_only', look: { species: 'mallard duckling', markings: 'white blaze on the chest' } });
+    const next = applyOps(doc, [op]);
+    const maya = next.cast.find((c) => c.id === 'c_maya')!;
+    expect(maya).toMatchObject({ kind: 'animal', count: 3, likeness: 'sheet_only' });
+    expect(maya.look).toMatchObject({ summary: doc.cast[0].look.summary, species: 'mallard duckling', markings: 'white blaze on the chest' });
+    // Back to a single being and the default likeness; a new character keeps its details too.
+    expect(charPatch(next, 'c_maya', { count: 1, likeness: 'auto', kind: 'person' }).patch).toEqual({ count: 1, likeness: 'auto', kind: 'person' });
+    for (const likeness of ['auto', 'sheet_only', 'sheet_and_photo']) expect(charPatch(doc, 'c_duck', { name: 'Duck', likeness }).patch).toEqual({ name: 'Duck', likeness });
+    for (const kind of ['person', 'animal', 'creature', 'robot', 'toy', 'vehicle', 'object']) expect(charPatch(doc, 'c_maya', { kind }).patch).toEqual({ kind });
+    const created = applyOps(doc, [charPatch(doc, 'c_ducks', { name: 'Ducklings', tier: 'extra', kind: 'animal', count: 12, likeness: 'sheet_and_photo' })]);
+    expect(created.cast.find((c) => c.id === 'c_ducks')).toMatchObject({ name: 'Ducklings', kind: 'animal', count: 12, likeness: 'sheet_and_photo' });
+  });
+
+  it('an unknown kind, count or likeness is dropped (never stored) and the rest of the edit still applies', () => {
+    const doc = plannedDoc();
+    const bad: unknown[][] = [
+      ['kind', 'dragon'], ['kind', 'Animal'], ['kind', 42], ['kind', ''],
+      ['count', 0], ['count', 13], ['count', 2.5], ['count', -1], ['count', '3'], ['count', Number.NaN], ['count', Number.POSITIVE_INFINITY],
+      ['likeness', 'always'], ['likeness', 'SHEET_ONLY'], ['likeness', true], ['likeness', { x: 1 }]
+    ];
+    for (const [key, value] of bad) {
+      const op = charPatch(doc, 'c_maya', { role: 'Pickpocket', [key as string]: value });
+      // toStrictEqual: the key is absent, not present-as-undefined (which would clear the stored value).
+      expect(op.patch, `${key}=${String(value)}`).toStrictEqual({ role: 'Pickpocket' });
+    }
+    const created = applyOps(doc, [charPatch(doc, 'c_frog', { name: 'Frog', kind: 'dragon', count: 99, likeness: 'always' })]);
+    const frog = created.cast.find((c) => c.id === 'c_frog')!;
+    expect(frog.name).toBe('Frog');
+    expect('kind' in frog || 'count' in frog || 'likeness' in frog).toBe(false);
+  });
+
+  it('species and markings: one trimmed line ≤ 120, control characters stripped, Telugu and Hindi intact', () => {
+    const look = sanitizeLook({
+      species: '  mallard\tduckling\n\u0000\u001b ',
+      markings: `${'w'.repeat(200)}`,
+      summary: 'Small duck.\nAlways near the lake.\u0007',
+      bogus: 'x'
+    })!;
+    expect(look).toEqual({ species: 'mallard duckling', markings: 'w'.repeat(120), summary: 'Small duck.\nAlways near the lake.' });
+    expect(sanitizeLook({ species: 'బాతు పిల్ల', markings: 'క్ష‍త్రియ రంగు' })).toEqual({ species: 'బాతు పిల్ల', markings: 'క్ష‍త్రియ రంగు' });
+    expect(sanitizeLook({ species: 'हंस का बच्चा' })).toEqual({ species: 'हंस का बच्चा' });
+    // A clip never splits an emoji, and lone surrogates (rejected by Postgres jsonb) never get stored.
+    expect(sanitizeLook({ markings: `${'a'.repeat(119)}🦆` })).toEqual({ markings: 'a'.repeat(119) });
+    expect(sanitizeLook({ species: '\uD83Dduck\uDE00' })).toEqual({ species: 'duck' });
+    // Non-strings are dropped; '' clears a field; no control character survives anywhere.
+    expect(sanitizeLook({ species: 42, markings: { a: 1 }, hair: '' })).toEqual({ hair: '' });
+    const all = sanitizeLook(Object.fromEntries(['summary', 'age', 'hair', 'species', 'markings'].map((k) => [k, `x\u0000\u0008\u000b\u000c\u001f\u007f\u0085\u009fy`])))!;
+    for (const v of Object.values(all)) expect(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(v)).toBe(false);
+    expect(all.species).toBe('x y');
+    expect(sanitizeLook('nope')).toBeUndefined();
+  });
+
+  it('a board patch saves kind / count / likeness / species / markings on the live doc (survives a reload)', async () => {
+    const { session, ctx } = ctxFor();
+    // The board sends a partial look (just the fields the user touched); the op merges it into the stored look.
+    const look = { species: '  mallard duckling ', markings: 'green\nhead' } as unknown as CharacterLook;
+    await runAction(ctx, { type: 'patch', ops: [{ op: 'character', id: 'c_maya', patch: { kind: 'animal', count: 3, likeness: 'sheet_only', look } }] }, { confirmed: false });
+    const maya = session.doc.cast.find((c) => c.id === 'c_maya')!;
+    expect(maya).toMatchObject({ kind: 'animal', count: 3, likeness: 'sheet_only' });
+    expect(maya.look).toMatchObject({ species: 'mallard duckling', markings: 'green head' });
+    const reloaded = JSON.parse(JSON.stringify(session.doc)) as ComicDoc;
+    expect(reloaded.cast.find((c) => c.id === 'c_maya')).toMatchObject({ kind: 'animal', count: 3, likeness: 'sheet_only', look: { species: 'mallard duckling', markings: 'green head' } });
+  });
+
+  it('Undo of the board pickers and the look lines restores the character exactly (null = was not set, contract R4)', async () => {
+    const { session, ctx } = ctxFor();
+    const before = JSON.parse(JSON.stringify(session.doc)) as ComicDoc;
+    const hashes = before.pages.map((p) => pageSpecHash(before, p));
+    const edit: DocOp[] = [
+      { op: 'character', id: 'c_maya', patch: { kind: 'animal', count: 3, likeness: 'sheet_only', look: { species: 'mallard duckling', markings: 'white blaze', eyes: 'amber' } as unknown as CharacterLook } }
+    ];
+    // The client computes the inverse against what it sees (useStudio → shared undo): absent keys → null.
+    const inverse = inverseOps(session.doc, edit);
+    const inverseLook = (inverse[0] as Extract<DocOp, { op: 'character' }>).patch.look as unknown as Record<string, unknown>;
+    expect(inverse[0]).toMatchObject({ op: 'character', patch: { kind: null, count: null, likeness: null } });
+    expect(inverseLook).toMatchObject({ summary: 'Young courier with a red scarf', hair: 'black bob', species: null, markings: null, eyes: null });
+    await runAction(ctx, { type: 'patch', ops: edit }, { confirmed: false });
+    expect(session.doc.cast[0]).toMatchObject({ kind: 'animal', count: 3, likeness: 'sheet_only', look: { species: 'mallard duckling', markings: 'white blaze', eyes: 'amber' } });
+    expect(pageSpecHash(session.doc, session.doc.pages[0])).not.toBe(hashes[0]); // a group of 3 + new look: page 1 is stale
+    // Undo (the inverse goes over the wire as JSON, like the real client's patch).
+    await runAction(ctx, { type: 'patch', ops: JSON.parse(JSON.stringify(inverse)) }, { confirmed: false });
+    const maya = JSON.parse(JSON.stringify(session.doc.cast[0]));
+    expect(maya).toEqual(before.cast[0]);
+    expect(['kind', 'count', 'likeness'].some((k) => k in maya) || 'species' in maya.look || 'eyes' in maya.look).toBe(false);
+    // The page spec hash is the one before the edit: Undo never leaves a page looking stale (or re-billed).
+    expect(session.doc.pages.map((p) => pageSpecHash(session.doc, p))).toEqual(hashes);
+    // null never invents a value: a new character created with nulls has no kind / count / likeness; null summary is ignored.
+    const created = applyOps(before, [charPatch(before, 'c_fox', { name: 'Fox', kind: null, count: null, likeness: null, look: { summary: null, species: null } })]);
+    const fox = JSON.parse(JSON.stringify(created.cast.find((c) => c.id === 'c_fox')));
+    expect(fox).toMatchObject({ name: 'Fox', look: { summary: '' } });
+    expect(['kind', 'count', 'likeness'].some((k) => k in fox) || 'species' in fox.look).toBe(false);
+    expect(charPatch(before, 'c_maya', { look: { summary: null } }).patch).toStrictEqual({ look: {} });
+  });
+
+  it('Undo of a FIRST edit of any optional field round-trips (null clears it, contract R4) instead of failing the whole Undo', async () => {
+    const { session, ctx, sctx } = ctxFor();
+    const first: DocOp[] = [
+      { op: 'brief', patch: { setting: 'Old Delhi', audience: 'teens', themes: ['loyalty'] } },
+      { op: 'style', patch: { linework: 'brush ink', avoid: ['gore'] } },
+      { op: 'page', id: 'pg_1', patch: { turnHook: 'A shadow at the door.' } },
+      { op: 'panel', pageId: 'pg_1', id: 'pn_1_1', patch: { angle: 'low angle', mood: 'tense' } },
+      { op: 'cover', patch: { tagline: 'Deliver or die trying', direction: 'Maya mid-leap' } },
+      { op: 'source', patch: { script: 'PAGE 1. Maya runs.' } },
+      { op: 'character', id: 'c_arjun', patch: { role: 'Spice vendor', personality: 'Grumpy', voice: 'Short sentences' } }
+    ];
+    for (const op of first) {
+      const before = JSON.parse(JSON.stringify(session.doc)) as ComicDoc;
+      const inverse = JSON.parse(JSON.stringify(inverseOps(session.doc, [op]))) as DocOp[];
+      expect(JSON.stringify(inverse), op.op).toContain('null'); // the field was absent before
+      await runAction(ctx, { type: 'patch', ops: [op] }, { confirmed: false });
+      expect(JSON.stringify(session.doc), op.op).not.toBe(JSON.stringify(before));
+      await runAction(ctx, { type: 'patch', ops: inverse }, { confirmed: false });
+      const after = JSON.parse(JSON.stringify(session.doc)) as ComicDoc;
+      for (const key of ['brief', 'style', 'pages', 'cast'] as const) expect(after[key], `${op.op} ${key}`).toEqual(before[key]);
+      expect({ ...after.cover, render: null }, op.op).toEqual({ ...before.cover, render: null });
+      expect(after.source.script, op.op).toEqual(before.source.script);
+      expect(after.pages.map((p) => pageSpecHash(after, p)), op.op).toEqual(before.pages.map((p) => pageSpecHash(before, p)));
+    }
+    // Required fields never clear: null is still refused there.
+    for (const bad of [
+      { op: 'brief', patch: { title: null } },
+      { op: 'page', id: 'pg_1', patch: { summary: null } },
+      { op: 'panel', pageId: 'pg_1', id: 'pn_1_1', patch: { action: null } },
+      { op: 'character', id: 'c_maya', patch: { name: null } },
+      { op: 'character', id: 'c_maya', patch: { tier: null } },
+      { op: 'style', patch: { status: null } }
+    ])
+      expect(() => sanitizePatchOps(session.doc, [bad], sctx), bad.op).toThrow(/Invalid/);
+  });
+
+  it('prototype keys in a patch are ignored, never stored or called', () => {
+    const { session, sctx } = ctxFor();
+    const raw = JSON.parse('{"title":"T","constructor":"x","__proto__":{"polluted":1},"toString":"y","hasOwnProperty":"z"}');
+    expect(sanitizePatchOps(session.doc, [{ op: 'brief', patch: raw }], sctx)).toEqual([{ op: 'brief', patch: { title: 'T' } }]);
+    const look = JSON.parse('{"summary":"S","constructor":"x","__proto__":{"species":"evil"}}');
+    expect(charPatch(session.doc, 'c_maya', { look }).patch).toEqual({ look: { summary: 'S' } });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
 

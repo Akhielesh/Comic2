@@ -1,14 +1,18 @@
 // One clip of the book timeline (timeline.md §4.2): an aspect-true thumbnail in a fixed-height box,
 // a status ring, the version count and the real money recorded against it. The clip is a listbox
 // option (roving focus is handled by BookTimeline); every action it offers also exists in ClipMenu.
+// A11y (P1-QA timeline-clip-option-a11y): the option holds no focusable control (the ⋯ is a pointer
+// affordance; keyboard users press M / the context-menu key) and its name is its own content — the
+// full description for screen readers, the short visible label hidden from them — so no aria-label
+// can drift from the visible text. Money is printed for the viewer (governed users: no dollars).
 
 import React from 'react';
 import { AlertTriangle, Info, LoaderCircle, MoreHorizontal, Plus } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import { formatUsd } from '../../../shared/comic/models';
+import type { CostFormat } from '../conversation/cost';
 import { LayoutGlyph } from '../library/procedural/LayoutGlyph';
 import type { StudioController } from '../types';
-import { STATUS_TEXT, plural, type ClipVM } from './bookModel';
+import { STATUS_TEXT, failClosedMoney, plural, type ClipVM } from './bookModel';
 import { PlateView } from './PlateView';
 import type { PlateKind } from './plates';
 import { BlockedTile, cx, FOCUS_RING } from './ui';
@@ -42,13 +46,16 @@ const ringFor = (clip: ClipVM): string => {
   }
 };
 
-/** "Page 3, out of date, 3 versions, $0.17 spent". */
-export const clipAriaLabel = (clip: ClipVM): string => {
+/**
+ * "Page 3, out of date, 3 versions, $0.17 spent". `money` prints for the viewer; without one the
+ * amount is left out (never dollars by default — governed users never see them).
+ */
+export const clipAriaLabel = (clip: ClipVM, money?: (usd: number) => string): string => {
   const parts = [clip.label];
   if (clip.plate) parts.push('made by software, free');
   else parts.push(STATUS_TEXT[clip.status].toLowerCase());
   if (clip.versions > 1) parts.push(plural(clip.versions, 'version'));
-  if (clip.spentUsd > 0) parts.push(`${formatUsd(clip.spentUsd)} spent`);
+  if (clip.spentUsd > 0 && money) parts.push(`${money(clip.spentUsd)} spent`);
   if (clip.mismatch) parts.push(`shape ${clip.mismatch.got}, book is ${clip.mismatch.want}`);
   if (clip.continuity) parts.push('neighbouring page changed');
   return parts.join(', ');
@@ -61,8 +68,10 @@ export interface TimelineClipProps {
   compact: boolean;
   selected: boolean;
   tabIndex: 0 | -1;
-  /** "Redraw ≈ $0.06" hint on hover/focus (registry price); undefined hides it. */
+  /** "Redraw ≈ $0.06" hint on hover/focus (registry price, printed for the viewer); undefined hides it. */
   nextPrice?: string;
+  /** The viewer's money format (conversation/cost useCostFormat). Absent: no amounts are printed. */
+  cost?: CostFormat;
   /** Drag visuals: translateX of this clip, and whether it is the lifted one. */
   shift?: number;
   lifted?: boolean;
@@ -85,6 +94,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   selected,
   tabIndex,
   nextPrice,
+  cost,
   shift = 0,
   lifted,
   animate,
@@ -102,7 +112,10 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   const url = clip.asset && !clip.blocked ? urlFor(clip.asset, { width: 240 }) : undefined;
   const busy = clip.status === 'queued' || clip.status === 'rendering';
   const short = clip.kind === 'page' ? `P${clip.page?.n ?? ''}` : clip.kind === 'cover' ? 'Cover' : clip.label;
-  const title = [clip.label, clip.plate ? 'Free — made by software' : STATUS_TEXT[clip.status], clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 ? `${formatUsd(clip.spentUsd)} spent` : '', nextPrice || '']
+  const money = cost?.exact;
+  // The tiny label under the thumb only fits a dollar amount; a governed share lives in the title and name.
+  const spentTiny = clip.spentUsd > 0 && cost && !cost.governed ? cost.exact(clip.spentUsd) : '';
+  const title = [clip.label, clip.plate ? 'Free — made by software' : STATUS_TEXT[clip.status], clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 && money ? `${money(clip.spentUsd)} spent` : '', nextPrice || '']
     .filter(Boolean)
     .join(' · ');
 
@@ -134,7 +147,6 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
       ref={itemRef}
       role="option"
       aria-selected={selected}
-      aria-label={clipAriaLabel(clip)}
       aria-describedby={describedBy}
       aria-busy={busy || undefined}
       tabIndex={tabIndex}
@@ -154,7 +166,8 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
       )}
       style={{ transform: shift ? `translateX(${shift}px)${lifted ? ' scale(1.04)' : ''}` : lifted ? 'scale(1.04)' : undefined, minWidth: 44 }}
     >
-      <div className={cx('relative overflow-hidden rounded-lg bg-[var(--ds-well)]', ringFor(clip))} style={{ width: w, height: h }}>
+      <span className="sr-only">{clipAriaLabel(clip, money)}</span>
+      <div className={cx('relative overflow-hidden rounded-lg bg-[var(--ds-well)]', ringFor(clip))} style={{ width: w, height: h }} aria-hidden>
         {body}
         {busy && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/25" aria-hidden>
@@ -162,18 +175,19 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
           </span>
         )}
         {clip.mismatch && !compact && (
-          <span className="absolute left-0.5 top-0.5 inline-flex items-center gap-0.5 rounded bg-amber-500/90 px-1 text-[9px] font-semibold leading-[14px] text-white" aria-hidden>
+          <span className="absolute left-0.5 top-0.5 inline-flex items-center gap-0.5 rounded bg-amber-700 px-1 text-[9px] font-semibold leading-[14px] text-white" aria-hidden>
             <AlertTriangle className="h-2.5 w-2.5" />
             {clip.mismatch.got}
           </span>
         )}
         {clip.status === 'stale' && (
-          <span className="absolute inset-x-0 bottom-0 bg-amber-500/90 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
+          <span className="absolute inset-x-0 bottom-0 bg-amber-700 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
             Out of date
           </span>
         )}
         {clip.status === 'failed' && (
-          <span className="absolute inset-x-0 bottom-0 bg-red-600/90 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
+          // red-700: white 8.5 px text at ≥ 4.5:1 (red-600/90 measured 4.35:1 — P1-QA timeline-failed-badge-contrast).
+          <span className="absolute inset-x-0 bottom-0 bg-red-700 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
             Failed
           </span>
         )}
@@ -182,27 +196,28 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
             <Info className="h-2.5 w-2.5" />
           </span>
         )}
+        {/* A pointer affordance, not a control: no button inside the option (nested-interactive). The
+            same menu opens with M, the context-menu key and a right-click / long-press. Positioned by
+            itself (no .tap-target, whose touch rule overrode `absolute` — P1-SHELL). */}
         {!compact && (
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-hidden
+          <span
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onMenu(e.currentTarget);
             }}
-            className="tap-target absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded-md bg-transparent text-[var(--ds-ink)] opacity-0 transition-opacity hover:bg-[var(--ds-surface-strong)] group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-80"
+            title={`${clip.label} actions`}
+            className="absolute right-0.5 top-0.5 inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-[var(--ds-ink)] opacity-0 transition-opacity hover:bg-[var(--ds-surface-strong)] group-hover:opacity-100 group-focus-within:opacity-100 coarse:h-7 coarse:w-7 coarse:bg-[var(--ds-surface-strong)] coarse:opacity-90"
           >
             <MoreHorizontal className="h-3.5 w-3.5" />
-          </button>
+          </span>
         )}
       </div>
       {!compact && (
-        <div className="w-full min-w-0 text-center leading-tight" style={{ maxWidth: w + 8 }}>
+        <div className="w-full min-w-0 text-center leading-tight" style={{ maxWidth: w + 8 }} aria-hidden>
           <p className="truncate text-[10.5px] font-semibold text-[var(--ds-ink)]">{short}</p>
           <p className="truncate text-[10px] tabular-nums text-[var(--ds-muted)]">
-            {clip.plate ? 'Free' : [clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 ? formatUsd(clip.spentUsd) : ''].filter(Boolean).join(' · ') || ' '}
+            {clip.plate ? 'Free' : [clip.versions > 1 ? `v${clip.versions}` : '', spentTiny].filter(Boolean).join(' · ') || ' '}
           </p>
         </div>
       )}
@@ -230,7 +245,6 @@ export const AddClip: React.FC<{
       role="option"
       aria-selected={false}
       aria-disabled={disabled || undefined}
-      aria-label={`${label} — ${hint}`}
       title={`${label} — ${hint}`}
       tabIndex={tabIndex}
       onClick={() => !disabled && onActivate()}
@@ -239,7 +253,9 @@ export const AddClip: React.FC<{
       className={cx('flex shrink-0 cursor-pointer flex-col items-center gap-0.5 rounded-xl p-1 hover:bg-[var(--ds-hover)]', FOCUS_RING, disabled && 'cursor-not-allowed opacity-45')}
       style={{ minWidth: 44 }}
     >
+      <span className="sr-only">{`${label} — ${hint}`}</span>
       <div
+        aria-hidden
         className={cx(
           'flex items-center justify-center rounded-lg border border-dashed text-[var(--ds-muted)]',
           ghost ? 'border-[var(--ds-hairline)] bg-transparent' : 'border-[#D97757]/45 bg-[#D97757]/5 text-[var(--ds-accent)]'
@@ -249,7 +265,7 @@ export const AddClip: React.FC<{
         <Plus className="h-4 w-4" aria-hidden />
       </div>
       {!compact && (
-        <div className="w-full min-w-0 text-center leading-tight" style={{ maxWidth: ghost ? 64 : 52 }}>
+        <div className="w-full min-w-0 text-center leading-tight" style={{ maxWidth: ghost ? 64 : 52 }} aria-hidden>
           <p className="truncate text-[10.5px] font-semibold text-[var(--ds-ink)]">{label}</p>
           <p className="truncate text-[10px] text-[var(--ds-muted)]">Free</p>
         </div>

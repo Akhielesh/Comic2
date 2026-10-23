@@ -63,3 +63,15 @@ export const formatCostForUser = (usd: number, ctx: CostDisplayContext, opts: { 
   if (pct < 10) return `≈${trimZero(pct.toFixed(1))}% of your usage`;
   return `≈${Math.round(pct)}% of your usage`;
 };
+
+/**
+ * The share alone, for a narrow spot (a header pill, a table cell, a thumbnail label):
+ * "≈2% of your usage" → "≈2%", "<0.1% of your usage" → "<0.1%", "Free" → "Free". Anything else (dollars,
+ * or "uses a little of your usage" while the share is unknown) → undefined: the caller then shows no
+ * figure in that spot — never a dollar amount for a governed user.
+ */
+export const compactUsageShare = (formatted: string): string | undefined => {
+  if (formatted === 'Free') return formatted;
+  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(formatted);
+  return m ? m[1] : undefined;
+};

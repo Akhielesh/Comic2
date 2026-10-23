@@ -29,6 +29,13 @@ describe('rasterSize', () => {
     const s = rasterSize(6000, 9000);
     expect(Math.max(s.width, s.height)).toBe(MAX_EXPORT_EDGE);
   });
+
+  it('a memory cap (maxEdge) shrinks big art but never upscales small art to reach it', () => {
+    expect(rasterSize(2000, 3000, undefined, 1500)).toEqual({ width: 1000, height: 1500 });
+    expect(rasterSize(800, 1200, undefined, 1500)).toEqual({ width: 800, height: 1200 });
+    // An explicit long edge is capped too (the ZIP guard wins over a caller's bigger request).
+    expect(rasterSize(1000, 1500, 3000, 1500)).toEqual({ width: 1000, height: 1500 });
+  });
 });
 
 describe('fontFor', () => {
@@ -111,6 +118,13 @@ describe('canvas renders', () => {
     expect(texts).toContain('Made with DreamStream Comic Studio');
     expect(texts.join(' ')).toContain('Story by');
     expect(f.calls.some((c) => c.name === 'stroke')).toBe(true); // the accent rule
+  });
+
+  it('a plate respects the memory cap (maxEdge) on its long edge', async () => {
+    await renderPlateToBlob(makeBook(), 'end', { plateWidth: 1200, maxEdge: 1500 });
+    const canvas = made[0].ctx.canvas as unknown as { width: number; height: number };
+    expect(canvas.height).toBe(1500);
+    expect(canvas.width).toBe(1000);
   });
 
   it('a back cover whose vignette cannot load keeps its placeholder instead of failing', async () => {

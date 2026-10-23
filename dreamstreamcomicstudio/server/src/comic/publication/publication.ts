@@ -395,6 +395,11 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
   const d = deps();
   const readiness = await getReadiness(ctx, doc, opts.req ?? (row && row.languages.length ? { visibility: row.visibility, languages: row.languages } : undefined));
   const live = isLiveish(row);
+  // The frozen label is reader-visible: when the comic's rating has changed since publishing (the
+  // owner picked another rating, the audience changed, or the account ceiling moved), republishing
+  // would re-check and relabel it, so the published version is "behind". Rows without a recorded
+  // rating never trip this (nothing to compare).
+  const publishedRating = live ? publicationRatingOf(row) : undefined;
   const view: PublicationOwnerView = {
     visibility: live ? row.visibility : 'private',
     status: row ? row.status : null,
@@ -404,7 +409,9 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     showCreator: row ? row.showCreator : PUBLISH_DEFAULTS.showCreator,
     publishedRev: live ? row.publishedRev : 0,
     docRev: doc.rev,
-    behind: live ? contentFingerprint(doc, row.languages) !== String(row.safety?.contentHash || '') : false,
+    behind: live
+      ? contentFingerprint(doc, row.languages) !== String(row.safety?.contentHash || '') || (!!publishedRating && publishedRating !== ratingOf(ctx, doc))
+      : false,
     readiness
   };
   if (live) {
@@ -414,8 +421,7 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     if (og) view.ogImageUrl = og;
     if (row.publishedAt) view.publishedAt = row.publishedAt;
     if (row.startPage !== undefined) view.startPage = row.startPage ?? null;
-    const rating = publicationRatingOf(row);
-    if (rating) view.rating = rating;
+    if (publishedRating) view.rating = publishedRating;
   }
   if (row?.defaultLang) view.defaultLang = row.defaultLang;
   if (row?.firstPublishedAt) view.firstPublishedAt = row.firstPublishedAt;

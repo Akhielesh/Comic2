@@ -130,3 +130,25 @@ export const SHORTCUTS: { keys: string; action: string }[] = [
   { keys: 'Esc', action: 'Zoom out → leave Guided View → close the reader' },
   { keys: '?', action: 'This list' }
 ];
+
+/**
+ * True when a vertical wheel at `target` would scroll an element between it and the stage (overflowing,
+ * overflow-y auto/scroll, not yet at its end in that direction) — e.g. a long End card. That element
+ * scrolls natively; the book does not turn under it.
+ */
+export const scrollsInside = (target: EventTarget | null, stage: Element, dy: number): boolean => {
+  let el: Element | null = target instanceof Element ? target : null;
+  while (el && el !== stage) {
+    if (el instanceof HTMLElement && el.scrollHeight > el.clientHeight + 1) {
+      let oy = '';
+      try {
+        oy = getComputedStyle(el).overflowY;
+      } catch {
+        oy = '';
+      }
+      if ((oy === 'auto' || oy === 'scroll') && (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1 : el.scrollTop > 0)) return true;
+    }
+    el = el.parentElement;
+  }
+  return false;
+};

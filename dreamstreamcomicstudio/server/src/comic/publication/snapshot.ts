@@ -17,13 +17,15 @@ import {
   type ComicDoc,
   type ComicKind,
   type Cover,
+  type I18nState,
   type Line,
   type Page,
   type Panel,
-  type QcReport
+  type QcReport,
+  type TextTranslation
 } from '../../../../shared/comic/doc.js';
 import { hashString } from '../../../../shared/comic/hash.js';
-import { i18nOf, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
+import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import type { ShareCard } from '../../../../shared/comic/publication.js';
 import { pubPath } from '../storagePaths.js';
@@ -130,6 +132,10 @@ const publicLine = (line: Line): Line => {
   const out: Line = { id: String(line.id), kind: line.kind, text: String(line.text ?? '') };
   if (typeof line.speakerId === 'string' && line.speakerId) out.speakerId = line.speakerId;
   if (line.style && typeof line.style === 'object') out.style = plain(line.style);
+  // A rendering hint, not private: a never-translated line (spell, made-up word, song) stays in the
+  // source language in every edition, so the reader neither counts it as "untranslated" nor marks a
+  // published edition incomplete (editionProgress / fallbackLineIds read it; P2-PUBLIC-PAYLOAD).
+  if (line.noTranslate === true) out.noTranslate = true;
   return out;
 };
 
@@ -243,7 +249,7 @@ export function buildSnapshot(doc: ComicDoc, plan: SnapshotPlan): ComicDoc {
   if (doc.letterStyle) snapshot.letterStyle = plain(doc.letterStyle);
   if (doc.book) snapshot.book = plain(doc.book);
   if (doc.reader) snapshot.reader = plain(doc.reader);
-  snapshot.i18n = onlyPublishedLines(publicI18n(i18nOf(doc), editions), pages);
+  snapshot.i18n = onlyPublishedLines(publicI18n(i18nOf(doc), editions), pages, i18nOf(doc));
   return snapshot;
 }
 
@@ -251,12 +257,28 @@ export function buildSnapshot(doc: ComicDoc, plan: SnapshotPlan): ComicDoc {
  * Translations (and per-language balloon geometry) of the published lines only: a withheld page's
  * lines, or a line deleted since it was translated, never ride along in the public payload. Cover
  * and brief translations stay (the snapshot publishes both).
+ *
+ * Each kept line translation carries the source hash of the PUBLISHED line when it was current in
+ * the live doc (publicI18n blanks it), so the snapshot is self-consistent: editionProgress /
+ * editionReadiness over the public doc see a published edition as complete (the legacy
+ * /public/:id `languages[].complete` and the reader's language list rely on it). The hash is of
+ * public text only; a stale translation keeps '' (publishing refuses stale editions anyway).
  */
-function onlyPublishedLines(i18n: NonNullable<ComicDoc['i18n']>, pages: Page[]): NonNullable<ComicDoc['i18n']> {
-  const ids = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => panel.lines.map((l) => l.id))));
-  const keep = <T>(rec: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(rec || {}).filter(([id]) => ids.has(id)));
+function onlyPublishedLines(i18n: NonNullable<ComicDoc['i18n']>, pages: Page[], live: I18nState): NonNullable<ComicDoc['i18n']> {
+  const lines = new Map<string, Line>();
+  for (const p of pages) for (const panel of p.panels) for (const l of panel.lines) lines.set(l.id, l);
+  const keep = <T>(rec: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(rec || {}).filter(([id]) => lines.has(id)));
   const editions: typeof i18n.editions = {};
-  for (const [lang, e] of Object.entries(i18n.editions)) editions[lang] = { ...e, lines: keep(e.lines), balloons: keep(e.balloons) };
+  for (const [lang, e] of Object.entries(i18n.editions)) {
+    const liveLines = live.editions[lang]?.lines || {};
+    const out: Record<string, TextTranslation> = {};
+    for (const [id, t] of Object.entries(keep(e.lines))) {
+      const hash = lineSourceHash(lines.get(id)!);
+      const current = Object.prototype.hasOwnProperty.call(liveLines, id) && liveLines[id]?.sourceHash === hash;
+      out[id] = { ...t, sourceHash: current ? hash : '' };
+    }
+    editions[lang] = { ...e, lines: out, balloons: keep(e.balloons) };
+  }
   return { ...i18n, editions };
 }
 

@@ -286,7 +286,18 @@ export function zOrderOps(page: Page, lineIds: readonly string[], move: ZMove, p
 export const lockOps = (page: Page, lineIds: readonly string[], locked: boolean, resolved: ReadonlyMap<string, Balloon>): DocOp[] =>
   lineIds.map((id) => balloonOp(page, id, locked ? { locked: true, pinned: true } : { locked: false }, resolved));
 
-/** Link a balloon to the previous line of the same panel (a connector neck), or unlink it. */
+/**
+ * Is this balloon part of a connector chain — linked to the previous line (its own `linkTo`) or linked
+ * INTO by the next one? (`linkTo` points to the PREVIOUS line in reading order — contract §2.)
+ */
+export const isLinked = (page: Page, lineId: string): boolean =>
+  page.balloons.some((b) => (b.lineId === lineId && !!b.linkTo) || b.linkTo === lineId);
+
+/**
+ * Link a balloon to the previous line of the same panel (a connector neck), or unlink it. Unlinking
+ * clears the links at BOTH ends of the balloon (its own and one pointing into it), the same as the
+ * director's arrange_balloons — so "Unlink" always removes every connector the selection shows.
+ */
 export function linkOps(page: Page, lineId: string, link: boolean, resolved: ReadonlyMap<string, Balloon>): DocOp[] {
   const ref = findLineRef(page, lineId);
   if (!ref) return [];
@@ -298,8 +309,14 @@ export function linkOps(page: Page, lineId: string, link: boolean, resolved: Rea
     ops.push(balloonOp(page, lineId, { linkTo: prev.id }, resolved));
     return ops;
   }
-  if (!storedOf(page, lineId)?.linkTo) return [];
-  return [{ op: 'balloons', pageId: page.id, balloons: page.balloons.map((b) => (b.lineId === lineId ? (({ linkTo: _l, ...rest }) => rest)(b) : b)) }];
+  if (!isLinked(page, lineId)) return [];
+  return [
+    {
+      op: 'balloons',
+      pageId: page.id,
+      balloons: page.balloons.map((b) => (b.lineId === lineId || b.linkTo === lineId ? (({ linkTo: _l, ...rest }) => rest)(b) : b))
+    }
+  ];
 }
 
 /** May this line link to the previous line of its panel? */

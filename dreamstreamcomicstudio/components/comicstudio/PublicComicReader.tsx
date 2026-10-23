@@ -12,14 +12,18 @@
 //
 // READ-ONLY by construction: this file only GETs the snapshot, posts anonymous view/complete/share
 // events and the report form. Nothing here can edit, spend or reach anything but the published comic.
+// Share-link downloads go through export/publicDownload (downloadPublicComic): the author's switch is
+// enforced there too, only `pub/` public images are fetched (https, no credentials), and only PUBLISHED
+// languages are ever exported — a reader looking at an unpublished source language is offered the
+// published edition, by name. Every export's `notice` (fonts, smaller images) is shown.
 // Links out of /c/* are full navigations (its enforced CSP must not carry over into the app).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Download, ExternalLink, FileArchive, FileText, Flag, Home, RotateCcw, X } from 'lucide-react';
+import { BookOpen, Download, ExternalLink, FileArchive, FileText, Flag, Home, Languages, RotateCcw, X } from 'lucide-react';
 import type { AssetRef, ComicDoc } from '../../shared/comic/doc';
 import { buildShareUrl, SHARE_PATH, SLUG_RE, type PublicPublicationInfo } from '../../shared/comic/publication';
 import { canServeToOwner, isContentRating, type ContentRating } from '../../shared/comic/safety';
-import { sameLanguage } from '../../shared/comic/languages';
+import { languageSpec, sameLanguage } from '../../shared/comic/languages';
 import { COMICS_ORIGIN } from '../../services/productHost';
 import { CANVAS_BG } from '../chat/studioDesign';
 import { Skeleton } from '../studio/kit/Shimmer';
@@ -29,6 +33,7 @@ import { ReaderLanguagePicker } from './i18n/ReaderLanguagePicker';
 import { nextLanguage, readStoredReaderLang, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
 import { readerString } from './i18n/readerStrings';
 import { ImmersiveReader } from './immersive/ImmersiveReader';
+import { publicExportLanguage, publicExportLanguages } from './export/publicLanguages';
 import { EmptyArt } from './library/procedural/EmptyArt';
 import { useFormFactor } from './mobile/useFormFactor';
 import { ComicReaderView, ReaderMenu, type ReaderMenuItem } from './reader/ComicReaderView';
@@ -76,7 +81,7 @@ const urlForMap = (urls: Record<string, string> | null) => (asset?: AssetRef | s
 
 /** The rating the publish gate assigned (publication info when the edge sends it; the owner's own gate result otherwise). */
 const ratingOf = (publication: PublicPublicationInfo | null | undefined, doc: ComicDoc | null): ContentRating | undefined => {
-  const fromPub = (publication as (PublicPublicationInfo & { rating?: unknown }) | null | undefined)?.rating;
+  const fromPub: unknown = publication?.rating;
   if (isContentRating(fromPub)) return fromPub;
   const gate = doc?.safety?.publish;
   return gate?.ok && isContentRating(gate.rating) ? gate.rating : undefined;
@@ -87,6 +92,31 @@ const parseAspect = (a?: string): number | undefined => {
   const n = aspectNumber(a as never);
   return Number.isFinite(n) && n > 0 ? n : undefined;
 };
+
+type DownloadKind = 'pdf' | 'zip' | 'zip_all';
+
+/** What a finished download says: what came out, what was left out, and the export's own notice. */
+export const downloadDoneText = (
+  kind: DownloadKind,
+  res: { pages?: number; files?: number; failed: unknown[]; skipped: string[]; notice?: string; languages?: string[] },
+  langName?: string
+): string => {
+  const left = res.skipped.length + res.failed.length;
+  const edition = langName ? ` (${langName})` : '';
+  let text: string;
+  if (kind === 'pdf') {
+    const pages = res.pages ?? 0;
+    text = left ? `Downloaded ${pages} page${pages === 1 ? '' : 's'}${edition} — ${left} couldn’t be included.` : `Downloaded the PDF${edition}.`;
+  } else if (kind === 'zip') {
+    text = left ? `Downloaded the page images${edition} — ${left} couldn’t be included.` : `Downloaded the page images${edition}.`;
+  } else {
+    const n = res.languages?.length ?? 0;
+    text = left ? `Downloaded ${n} languages, a folder each — ${left} images couldn’t be included.` : `Downloaded ${n} languages, a folder each.`;
+  }
+  return res.notice ? `${text} ${res.notice}` : text;
+};
+
+const englishName = (code: string) => languageSpec(code)?.english || code;
 
 const fullNavigate = (href: string) => {
   try {
@@ -149,7 +179,8 @@ const ReaderShell: React.FC<ShellProps> = ({
   const source = doc?.format.language || 'en';
   const allowDownload = mode === 'slug' ? !!(publication?.allowDownload ?? boot?.allowDownload) : isOwner;
   const rating = ratingOf(publication, doc);
-  const canReport = mode === 'slug' && !!slug && SLUG_RE.test(slug) && !isOwner;
+  // Never offered to the owner — not even for the moment before their identity is known.
+  const canReport = mode === 'slug' && !!slug && SLUG_RE.test(slug) && !isOwner && identityReady;
 
   // ── View: the cover card, the inline reader, or the immersive reader over either ──
   const deepLinked = start.page !== undefined && !start.guided;
@@ -219,39 +250,68 @@ const ReaderShell: React.FC<ShellProps> = ({
   const embedOpenHref = slug && SLUG_RE.test(slug) ? `${COMICS_ORIGIN}${SHARE_PATH(slug)}` : COMICS_ORIGIN;
 
   // ── Downloads: made here, from the public images; withheld pages are never included ──
-  const [downloading, setDownloading] = useState<'pdf' | 'zip' | null>(null);
+  // Share link: only the published languages (never an unpublished source), through downloadPublicComic.
+  const exportable = useMemo(
+    () => (mode === 'slug' && doc && publication ? publicExportLanguages({ publication, doc }) : doc ? [lang] : []),
+    [mode, doc, publication, lang]
+  );
+  // The edition a single-language download produces: the reader's own when it is published, else the
+  // author's default / first published one — and the menu names it, so nobody gets a surprise language.
+  const downloadLang = mode === 'slug' && doc && publication ? publicExportLanguage({ publication, doc }, lang) : lang;
+  const readingExportable = !!downloadLang && sameLanguage(downloadLang, lang);
+  const nameDownloadLang = exportable.length > 1 || !readingExportable;
+  const [downloading, setDownloading] = useState<DownloadKind | null>(null);
   const safeUrlFor = useCallback((a?: AssetRef | string | null) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a)), [urlFor]);
   const download = useCallback(
-    async (kind: 'pdf' | 'zip') => {
-      if (!localized || downloading || !allowDownload) return;
+    async (kind: DownloadKind) => {
+      if (!doc || downloading || !allowDownload) return;
       setDownloading(kind);
-      setNotice(kind === 'pdf' ? 'Preparing the PDF…' : 'Preparing the page images…');
+      setNotice(kind === 'pdf' ? 'Preparing the PDF…' : kind === 'zip' ? 'Preparing the page images…' : 'Preparing every language…');
       try {
-        if (kind === 'pdf') {
+        let res: Parameters<typeof downloadDoneText>[1];
+        if (mode === 'slug') {
+          if (!publication || !urls) throw new Error('the comic is still loading.');
+          const { downloadPublicComic } = await import('./export/publicDownload');
+          res = kind === 'pdf' ? await downloadPublicComic({ publication, doc, urls }, 'pdf', { lang }) : await downloadPublicComic({ publication, doc, urls }, kind, { lang });
+        } else if (kind === 'pdf') {
+          // Owner preview / legacy link: the owner's own signed images, the edition being read.
           const { exportComicPdf } = await import('./export/pdfExport');
-          const res = await exportComicPdf(localized, safeUrlFor);
-          const left = res.skipped.length + res.failed.length;
-          setNotice(left ? `Downloaded ${res.pages} page${res.pages === 1 ? '' : 's'} — ${left} couldn’t be included.` : 'Downloaded the PDF.');
+          res = await exportComicPdf(doc, safeUrlFor, { lang });
         } else {
           const { exportPngZip } = await import('./export/zipExport');
-          const res = await exportPngZip(localized, safeUrlFor);
-          const left = res.skipped.length + res.failed.length;
-          setNotice(left ? `Downloaded the page images — ${left} couldn’t be included.` : 'Downloaded the page images.');
+          res = await exportPngZip(doc, safeUrlFor, { lang });
         }
+        setNotice(downloadDoneText(kind, res, kind !== 'zip_all' && nameDownloadLang && downloadLang ? englishName(downloadLang) : undefined));
       } catch (err) {
         setNotice(`Couldn’t prepare the download: ${(err as Error)?.message || 'please try again.'}`);
       } finally {
         setDownloading(null);
       }
     },
-    [localized, downloading, allowDownload, safeUrlFor]
+    [doc, downloading, allowDownload, mode, publication, urls, lang, safeUrlFor, nameDownloadLang, downloadLang]
   );
-  const downloadItems: ReaderMenuItem[] = allowDownload && localized
-    ? [
-        { id: 'pdf', label: downloading === 'pdf' ? 'Preparing…' : 'Download PDF', icon: <FileText className="h-4 w-4" aria-hidden />, onSelect: () => void download('pdf'), disabled: !!downloading },
-        { id: 'zip', label: downloading === 'zip' ? 'Preparing…' : 'Download page images (.zip)', icon: <FileArchive className="h-4 w-4" aria-hidden />, onSelect: () => void download('zip'), disabled: !!downloading }
-      ]
-    : [];
+  const edition = nameDownloadLang && downloadLang ? ` (${englishName(downloadLang)})` : '';
+  const downloadItems: ReaderMenuItem[] =
+    allowDownload && localized && exportable.length > 0
+      ? [
+          { id: 'pdf', label: downloading === 'pdf' ? 'Preparing…' : `Download PDF${edition}`, icon: <FileText className="h-4 w-4" aria-hidden />, onSelect: () => void download('pdf'), disabled: !!downloading },
+          { id: 'zip', label: downloading === 'zip' ? 'Preparing…' : `Download page images (.zip)${edition}`, icon: <FileArchive className="h-4 w-4" aria-hidden />, onSelect: () => void download('zip'), disabled: !!downloading },
+          ...(mode === 'slug' && exportable.length > 1
+            ? [
+                {
+                  id: 'zip_all',
+                  label: downloading === 'zip_all' ? 'Preparing…' : `Download all ${exportable.length} languages (.zip)`,
+                  icon: <Languages className="h-4 w-4" aria-hidden />,
+                  onSelect: () => void download('zip_all'),
+                  disabled: !!downloading
+                }
+              ]
+            : [])
+        ]
+      : [];
+  // The readers' own built-in PDF (the immersive end card, the embed's menu) exports the language on
+  // screen: offer it only when that language is one the author published.
+  const builtInDownload = allowDownload && (mode === 'project' || readingExportable);
   const moreItems: ReaderMenuItem[] = canReport
     ? [{ id: 'report', label: 'Report this comic', icon: <Flag className="h-4 w-4" aria-hidden />, onSelect: () => setReportOpen(true) }]
     : [];
@@ -338,8 +398,10 @@ const ReaderShell: React.FC<ShellProps> = ({
           {shareUrl && (
             <div
               onClickCapture={(e) => {
-                // One share event per share: the trigger, not each item of its fallback menu.
-                if ((e.target as HTMLElement).closest?.('button[aria-haspopup]')) onShareClick();
+                // One share event per share: the trigger (not each item of its fallback menu), and not
+                // again for a click on the trigger while that menu is already open.
+                const trigger = (e.target as HTMLElement).closest?.('button[aria-haspopup]');
+                if (trigger && trigger.getAttribute('aria-expanded') !== 'true') onShareClick();
               }}
             >
               <ShareButton compact target={{ url: shareUrl, title, text: logline || undefined, coverUrl: boot?.card.coverUrl }} />
@@ -450,7 +512,8 @@ const ReaderShell: React.FC<ShellProps> = ({
         chrome={embed || compact ? 'auto-hide' : 'docked'}
         immersiveEntry
         onShare={embed && shareUrl ? () => void shareNow() : undefined}
-        allowDownload={embed && allowDownload}
+        // The embed has no header menu: its ⋯ Download goes through the same gated public download.
+        onDownload={embed && builtInDownload ? () => void download('pdf') : undefined}
         onReport={
           embed && canReport
             ? (n) => {
@@ -512,7 +575,7 @@ const ReaderShell: React.FC<ShellProps> = ({
       >
         {main}
         {notice && (
-          <p role="status" className="absolute inset-x-3 bottom-3 z-30 mx-auto flex w-fit max-w-[calc(100%-24px)] items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] py-1 pl-3 pr-1 text-[12px] text-[var(--ds-ink)] shadow-sm backdrop-blur-md">
+          <p role="status" className="absolute inset-x-3 bottom-3 z-30 mx-auto flex w-fit max-w-[calc(100%-24px)] items-center gap-1.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] py-1 pl-3 pr-1 text-[12px] text-[var(--ds-ink)] shadow-sm backdrop-blur-md">
             <span className="min-w-0 [overflow-wrap:anywhere]">{notice}</span>
             <IconButton size="sm" label="Dismiss" onClick={() => setNotice(null)}>
               <X className="h-3.5 w-3.5" />
@@ -531,7 +594,7 @@ const ReaderShell: React.FC<ShellProps> = ({
           initialPage={immersive.page}
           initialGuided={immersive.guided}
           initialPanel={immersive.panel}
-          allowDownload={allowDownload}
+          allowDownload={builtInDownload}
           syncUrl={mode === 'slug'}
           onImageError={onImageError}
           onPageChange={onPageChange}

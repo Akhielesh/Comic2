@@ -1,4 +1,5 @@
 // MediaBin / MediaPreview / the timeline feature module (timeline.md §4.3, §7 client).
+import { computeAccessibleName } from 'dom-accessibility-api';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -161,7 +162,7 @@ describe('MediaBin', () => {
     );
     fireEvent.click(tile(/^Deleted page 4.*deleted$/));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restore this page · Free' }));
-    fireEvent.keyDown(screen.getAllByRole('option').find((o) => /^Page 1,/.test(o.getAttribute('aria-label') || ''))!, { key: 'Delete' });
+    fireEvent.keyDown(screen.getAllByRole('option').find((o) => /^Page 1,/.test(computeAccessibleName(o)))!, { key: 'Delete' });
     expect(screen.getAllByRole('button', { name: 'Undo' })).toHaveLength(1);
     expect(screen.getByText('Page 1 deleted')).toBeInTheDocument();
   });

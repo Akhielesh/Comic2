@@ -12,15 +12,15 @@
 //   - the author's "no downloads" choice is enforced here too, not just by hiding a button.
 // The only network calls are GETs of those public images (and font files); no API is called.
 
-import type { AssetRef, ComicDoc } from '../../../shared/comic/doc';
-import type { PublicPublicationInfo } from '../../../shared/comic/publication';
-import { sameLanguage } from '../../../shared/comic/languages';
+import type { AssetRef } from '../../../shared/comic/doc';
 import { canServeToOwner } from '../../../shared/comic/safety';
 import { ExportError } from './errors';
 import { exportComicPdf, type PdfExportOptions, type PdfExportResult } from './pdfExport';
-import { exportLanguages } from './sequence';
+import { publicDownloadsAllowed, publicExportLanguage, publicExportLanguages, type PublicDownloadSource } from './publicLanguages';
 import { exportLanguagesZip, exportPngZip, type ZipExportOptions, type ZipExportResult } from './zipExport';
 import type { UrlFor } from './sequence';
+
+export { publicDownloadsAllowed, publicExportLanguage, publicExportLanguages, type PublicDownloadSource } from './publicLanguages';
 
 /** A published object path: `pub/<22-char base62 key>/<file>` (contract §9.3 PublicAsset). */
 export const PUBLIC_ASSET_PATH_RE = /^pub\/[A-Za-z0-9]{22}\/[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
@@ -48,41 +48,14 @@ export function publicExportUrlFor(urls: Readonly<Record<string, string>> | null
   };
 }
 
-/** The author's download switch (absent ⇒ allowed: the addendum's default is true). */
-export const publicDownloadsAllowed = (publication?: Pick<PublicPublicationInfo, 'allowDownload'> | null): boolean => publication?.allowDownload !== false;
-
-export interface PublicDownloadSource {
-  publication: Pick<PublicPublicationInfo, 'allowDownload' | 'languages'> & Partial<Pick<PublicPublicationInfo, 'defaultLang'>>;
-  /** The snapshot doc as served (source language + published editions). */
-  doc: ComicDoc;
-  urls: Readonly<Record<string, string>>;
-}
-
 export type PublicDownloadKind = 'pdf' | 'zip' | 'zip_all';
 
-export interface PublicDownloadOptions extends Pick<PdfExportOptions, 'onProgress' | 'signal' | 'download'>, Pick<ZipExportOptions, 'longEdge'> {
+export interface PublicDownloadOptions extends Pick<PdfExportOptions, 'onProgress' | 'signal' | 'download'>, Pick<ZipExportOptions, 'longEdge' | 'memoryBudget'> {
   /** The reader's language (must be published; falls back to the publication default, then the source). */
   lang?: string;
 }
 
 export const NO_PUBLISHED_LANGUAGE = 'This comic has no published language to download yet.';
-
-/**
- * The languages a share-link reader may download: the published editions the snapshot really carries.
- * Never the source language when the author did not publish it (`exportLanguages` alone would fall
- * back to it). An old publication without a language list publishes its source (the publish default).
- */
-export function publicExportLanguages(src: PublicDownloadSource): string[] {
-  const listed = src.publication.languages?.filter((l) => typeof l === 'string' && l) ?? [];
-  if (!listed.length) return exportLanguages(src.doc, [src.doc.format?.language || 'en']);
-  return exportLanguages(src.doc, listed).filter((l) => listed.some((p) => sameLanguage(p, l)));
-}
-
-/** The published language to export for a reader's choice (undefined when nothing is published). */
-export function publicExportLanguage(src: PublicDownloadSource, lang?: string): string | undefined {
-  const published = publicExportLanguages(src);
-  return published.find((l) => lang && sameLanguage(l, lang)) ?? published.find((l) => src.publication.defaultLang && sameLanguage(l, src.publication.defaultLang)) ?? published[0];
-}
 
 /**
  * Download a published comic for a share-link reader: the PDF or the page images of the reader's
@@ -91,12 +64,12 @@ export function publicExportLanguage(src: PublicDownloadSource, lang?: string): 
 export async function downloadPublicComic(src: PublicDownloadSource, kind: 'pdf', opts?: PublicDownloadOptions): Promise<PdfExportResult>;
 export async function downloadPublicComic(src: PublicDownloadSource, kind: 'zip' | 'zip_all', opts?: PublicDownloadOptions): Promise<ZipExportResult>;
 export async function downloadPublicComic(src: PublicDownloadSource, kind: PublicDownloadKind, opts: PublicDownloadOptions = {}): Promise<PdfExportResult | ZipExportResult> {
-  if (!publicDownloadsAllowed(src.publication)) throw new ExportError(DOWNLOADS_OFF);
+  if (!publicDownloadsAllowed(src.publication)) throw new ExportError(DOWNLOADS_OFF, 'downloads_off');
   const urlFor = publicExportUrlFor(src.urls);
   const lang = publicExportLanguage(src, opts.lang);
-  if (!lang) throw new ExportError(NO_PUBLISHED_LANGUAGE);
+  if (!lang) throw new ExportError(NO_PUBLISHED_LANGUAGE, 'no_language');
   const common = { onProgress: opts.onProgress, signal: opts.signal, download: opts.download };
   if (kind === 'pdf') return exportComicPdf(src.doc, urlFor, { ...common, lang });
-  if (kind === 'zip') return exportPngZip(src.doc, urlFor, { ...common, lang, longEdge: opts.longEdge });
-  return exportLanguagesZip(src.doc, urlFor, { ...common, languages: publicExportLanguages(src), longEdge: opts.longEdge });
+  if (kind === 'zip') return exportPngZip(src.doc, urlFor, { ...common, lang, longEdge: opts.longEdge, memoryBudget: opts.memoryBudget });
+  return exportLanguagesZip(src.doc, urlFor, { ...common, languages: publicExportLanguages(src), longEdge: opts.longEdge, memoryBudget: opts.memoryBudget });
 }

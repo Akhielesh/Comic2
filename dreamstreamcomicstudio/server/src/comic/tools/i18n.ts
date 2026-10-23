@@ -26,7 +26,7 @@ import { scriptShare } from '../i18n/translate.js';
 import { swapSourceOps } from '../actions/i18n.js';
 import { prefilterText } from '../safety/index.js';
 import { startAction, type RunActionOptions } from '../jobs.js';
-import { costFormatterFor } from '../costText.js';
+import { costFormatterFor, governDollars } from '../costText.js';
 import { pushNextSteps, type DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 
@@ -110,7 +110,9 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Ex
   }
   const cover = textlessCoverQuote(ctx.session.doc, quote.byok);
   if (cover !== null) notes.push(`The cover title is painted; a textless cover with an editable per-language title is a one-time ${cost.approx(cover)} (render_cover textless, ask first).`);
-  return [message, ...notes].join(' ');
+  // The run's own message ("Translating 12 lines into Telugu (≈ $0.02)…", "Nothing to translate ($0)") is
+  // worded in i18n/index.ts: the same view applies to it, so the director never reads two currencies.
+  return governDollars([message, ...notes].join(' '), cost.view);
 }
 
 // ── Tools ────────────────────────────────────────────────────────────────────

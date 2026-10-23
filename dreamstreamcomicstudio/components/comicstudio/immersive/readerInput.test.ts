@@ -2,7 +2,7 @@
 // G/F/P/?/Esc, modifier chords ignored, webtoon scrolling, tap zones, double-tap, wheel accumulation
 // with cooldown and RTL mirroring.
 import { describe, expect, it } from 'vitest';
-import { inOuterGrabZone, isDoubleTap, keyCommand, SHORTCUTS, tapCommand, WheelAccumulator } from './readerInput';
+import { inOuterGrabZone, isDoubleTap, keyCommand, scrollsInside, SHORTCUTS, tapCommand, WheelAccumulator } from './readerInput';
 
 const book = { rtl: false, layout: 'single' as const };
 const manga = { rtl: true, layout: 'spread' as const };
@@ -99,5 +99,33 @@ describe('WheelAccumulator', () => {
   it('the shortcuts sheet lists every key command', () => {
     const keys = SHORTCUTS.map((s) => s.keys).join(' ');
     for (const k of ['←', 'Space', 'Page Up', 'Home', 'G', 'P', 'F', 'Esc', '?']) expect(keys).toContain(k);
+  });
+});
+
+describe('scrollsInside (a long End card scrolls under the wheel instead of turning pages)', () => {
+  const box = (scrollHeight: number, clientHeight: number, scrollTop: number) => {
+    const el = document.createElement('div');
+    el.style.overflowY = 'auto';
+    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true });
+    el.scrollTop = scrollTop;
+    Object.defineProperty(el, 'scrollTop', { value: scrollTop, configurable: true, writable: true });
+    return el;
+  };
+
+  it('true while the overflowing content can still move that way; false at its end or outside it', () => {
+    const stage = document.createElement('div');
+    const card = box(900, 400, 0);
+    const child = document.createElement('p');
+    card.appendChild(child);
+    stage.appendChild(card);
+    expect(scrollsInside(child, stage, 40)).toBe(true); // can scroll down
+    expect(scrollsInside(child, stage, -40)).toBe(false); // already at the top
+    const bottom = box(900, 400, 500);
+    stage.appendChild(bottom);
+    expect(scrollsInside(bottom, stage, 40)).toBe(false); // at the end: the wheel turns the page again
+    expect(scrollsInside(bottom, stage, -40)).toBe(true);
+    expect(scrollsInside(stage, stage, 40)).toBe(false);
+    expect(scrollsInside(null, stage, 40)).toBe(false);
   });
 });

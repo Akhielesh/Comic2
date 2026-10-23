@@ -179,7 +179,14 @@ const assertRestorePair = (quarantinePath: unknown, originalPath: unknown): void
   if (typeof quarantinePath !== 'string' || !isSafeStoragePath(quarantinePath) || !isQuarantinePath(quarantinePath)) {
     throw new StudioError('BAD_REQUEST', 'Only an image in the safety hold can be restored.', { status: 400 });
   }
-  if (typeof originalPath !== 'string' || !isRestorableOriginal(originalPath) || quarantinePathFor(originalPath) !== quarantinePath) {
+  let expected: string | null = null;
+  try {
+    // buildQuarantinePath throws a plain Error for a degenerate segment ("u/---/x.webp"): still a 400, never a 500.
+    expected = typeof originalPath === 'string' && isRestorableOriginal(originalPath) ? quarantinePathFor(originalPath) : null;
+  } catch {
+    expected = null;
+  }
+  if (!expected || expected !== quarantinePath) {
     throw new StudioError('BAD_REQUEST', 'A held image can only go back to the place it was taken from.', { status: 400 });
   }
 };
@@ -1294,12 +1301,13 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     if (doomed.length) await removeObjects(doomed);
   };
 
-  /** HEAD on the object (service role, either bucket): true / false, or throws when Storage can't say. */
+  /**
+   * HEAD on the object (service role, either bucket). storage-js answers {data:false} only for a 400/404
+   * and THROWS for anything else (network, 5xx), so a returned false really means "not there".
+   */
   const objectExists = async (path: string): Promise<boolean> => {
-    const { data, error } = await withTimeout(admin().storage.from(bucketOf(path)).exists(path), STORAGE_OP_TIMEOUT_MS, 'Storage exists');
-    if (data === true) return true;
-    if (!error || isNotFoundErr(error)) return false;
-    throw error;
+    const { data } = await withTimeout(admin().storage.from(bucketOf(path)).exists(path), STORAGE_OP_TIMEOUT_MS, 'Storage exists');
+    return data === true;
   };
 
   /**
@@ -1363,11 +1371,16 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     }
     await reinstateRows([originalPath]);
     if (outcome !== 'already' && canHaveVariants(originalPath)) {
+      // The variant rows come back inside the rebuild itself: a rebuild that outlives the budget still
+      // lands its rows (register() keeps a quarantine-deleted row as it is, so only this un-deletes it).
       const rebuild = downloadBytes(originalPath)
-        .then(({ buffer }) => writeVariants(originalPath, buffer))
+        .then(async ({ buffer }) => {
+          const made = await writeVariants(originalPath, buffer);
+          await reinstateRows(made.map((v) => v.path));
+          return made;
+        })
         .catch(() => [] as AssetVariant[]);
-      const variants = await withinBudget(rebuild, VARIANT_BUDGET_MS, [] as AssetVariant[]);
-      await reinstateRows(variants.map((v) => v.path));
+      await withinBudget(rebuild, VARIANT_BUDGET_MS, [] as AssetVariant[]);
     }
     // Bucket and outcome only — never a path or content (safety D10).
     logger.info('comic_asset_restored', { bucket, outcome });

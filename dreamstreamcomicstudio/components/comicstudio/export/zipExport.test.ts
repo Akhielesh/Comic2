@@ -4,7 +4,7 @@ import type { ComicDoc, Page } from '../../../shared/comic/doc';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { makeBook } from './__fixtures__/books';
 import { ExportError } from './rasterize';
-import { blobBytes, exportFileStem, exportLanguagesZip, exportPngZip } from './zipExport';
+import { blobBytes, exportFileStem, exportLanguagesZip, exportPngZip, zipToBlob } from './zipExport';
 
 const png = (label: string) => new Blob([new TextEncoder().encode(`png:${label}`)], { type: 'image/png' });
 
@@ -157,5 +157,122 @@ describe('exportLanguagesZip (all published languages)', () => {
     expect(result.languages).toEqual(['en', 'te']);
     expect(result.failed).toEqual([{ label: 'Page 5 · Telugu', message: 'Something went wrong: boom' }]);
     expect(result.files).toBe(5);
+  });
+});
+
+describe('ZIP memory guard (every PNG is held in memory until the archive is written)', () => {
+  const MB = 1024 * 1024;
+  /** A long book: `n` drawn 2K pages. */
+  const longBook = (n: number) =>
+    makeBook(
+      (d) => {
+        const base = d.pages[0];
+        d.pages = Array.from({ length: n }, (_, i) => ({
+          ...base,
+          id: `pg_${i + 1}`,
+          n: i + 1,
+          render: { status: 'ready' as const, history: [], asset: { path: `u/proj/pages/p${i + 1}.png`, source: 'generated' as const, at: 0, w: 1365, h: 2048 } }
+        }));
+        d.publication = { visibility: 'unlisted', status: 'live', publishedRev: 1, publishedAt: 1, languages: ['en', 'te'] };
+      },
+      { plates: false }
+    );
+
+  it('a ZIP that fits is untouched (full size, no notice)', async () => {
+    const renderPage = vi.fn(async (_d: ComicDoc, p: Page) => png(p.id));
+    const result = await exportPngZip(longBook(4), fakeUrlFor, { download: vi.fn(), renderPage, renderImage: async () => png('c'), memoryBudget: 400 * MB });
+    expect(result.maxEdge).toBeUndefined();
+    expect(result.notice).toBeUndefined();
+    expect((renderPage.mock.calls[0] as unknown[])[3]).not.toHaveProperty('maxEdge');
+  });
+
+  it('all languages over budget: every image is drawn smaller, and the result says so honestly', async () => {
+    const renderPage = vi.fn(async (_d: ComicDoc, p: Page) => png(p.id));
+    const result = await exportLanguagesZip(longBook(20), fakeUrlFor, { download: vi.fn(), renderPage, renderImage: async () => png('c'), memoryBudget: 150 * MB });
+    expect(result.languages).toEqual(['en', 'te']);
+    expect(result.maxEdge).toBeGreaterThanOrEqual(1280);
+    expect(result.maxEdge).toBeLessThan(2048);
+    expect(renderPage.mock.calls.every((c) => ((c as unknown[])[3] as { maxEdge?: number }).maxEdge === result.maxEdge)).toBe(true);
+    expect(result.notice).toMatch(/^To fit in this device’s memory, the images were saved at up to [\d,]+ px \(full size is 2,048 px\)\. Download one language at a time for full-size pages\.$/);
+    expect(result.files).toBe(42);
+  });
+
+  it('too big even when smaller: refuses BEFORE any work with a clear next step, and the tab survives', async () => {
+    const renderPage = vi.fn(async (_d: ComicDoc, p: Page) => png(p.id));
+    const download = vi.fn();
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const err = await exportLanguagesZip(longBook(60), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 96 * MB }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ExportError);
+      expect((err as ExportError).code).toBe('too_big');
+      expect((err as Error).message).toMatch(/too big to zip in all 2 languages at once on this device .*Download one language at a time instead\./);
+      expect(renderPage).not.toHaveBeenCalled();
+      expect(download).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // One language at a time may still fit (smaller) — the advice is real.
+      const one = await exportPngZip(longBook(60), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 96 * MB, lang: 'te' }).catch((e: unknown) => e);
+      expect(one).toBeInstanceOf(ExportError);
+      expect((one as ExportError).code).toBe('too_big');
+      expect((one as Error).message).toMatch(/Download the PDF instead/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('one language over budget is drawn smaller with an honest notice (no "one language" advice)', async () => {
+    const renderPage = vi.fn(async (_d: ComicDoc, p: Page) => png(p.id));
+    const result = await exportPngZip(longBook(20), fakeUrlFor, { download: vi.fn(), renderPage, renderImage: async () => png('c'), memoryBudget: 80 * MB, lang: 'te' });
+    expect(result.fileName).toBe('కుంకుమపువ్వు-దొంగ-te-pages.zip');
+    expect(result.maxEdge).toBeGreaterThanOrEqual(1280);
+    expect(result.notice).toMatch(/^To fit in this device’s memory/);
+    expect(result.notice).not.toMatch(/one language/);
+  });
+});
+
+describe('zipToBlob (the archive is written into Blob slices, never one big heap buffer)', () => {
+  /** A stand-in for JSZip's internal stream: emits the given chunks when resumed. */
+  const fakeZip = (chunks: Uint8Array[], opts: { fail?: boolean } = {}) => {
+    const handlers: Record<string, ((x?: unknown) => void)[]> = {};
+    const stream = {
+      paused: false,
+      on(event: string, cb: (x?: unknown) => void) {
+        (handlers[event] ||= []).push(cb);
+        return stream;
+      },
+      resume() {
+        for (const c of chunks) {
+          if (stream.paused) return stream;
+          handlers.data?.forEach((h) => h(c));
+        }
+        if (opts.fail) handlers.error?.forEach((h) => h(new Error('disk full')));
+        else handlers.end?.forEach((h) => h());
+        return stream;
+      },
+      pause() {
+        stream.paused = true;
+        return stream;
+      }
+    };
+    return { generateInternalStream: () => stream, stream };
+  };
+  type Source = Parameters<typeof zipToBlob>[0];
+
+  it('joins every chunk, in order, into one application/zip Blob', async () => {
+    const blob = await zipToBlob(fakeZip([new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5, 6])]) as unknown as Source);
+    expect(blob.type).toBe('application/zip');
+    expect(Array.from(await blobBytes(blob))).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('a writer failure is an honest export error, not a crash', async () => {
+    await expect(zipToBlob(fakeZip([new Uint8Array([1])], { fail: true }) as unknown as Source)).rejects.toThrow(/Couldn’t write the ZIP file/);
+  });
+
+  it('cancelling stops the writer', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const z = fakeZip([new Uint8Array([1])]);
+    await expect(zipToBlob(z as unknown as Source, controller.signal)).rejects.toThrow('Export cancelled.');
+    expect(z.stream.paused).toBe(true);
   });
 });

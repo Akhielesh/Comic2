@@ -50,6 +50,7 @@ import { StudioComposer, type StudioComposerHandle } from './conversation/Studio
 import { COMPOSE_EVENT } from './conversation/composerBus';
 import { QualityPanel } from './conversation/panels/QualityPanel';
 import { costFormat, useCostContext, useCostFormat, type CostDisplayContext, type CostFormat } from './conversation/cost';
+import { compactUsageShare } from '../../services/costDisplay';
 import { LETTERING_OPTIONS } from './conversation/panels/FormatPanel';
 import { GhostButton, PrimaryButton, Segmented, SectionLabel, cx, plural } from './conversation/ui';
 import { renderingPageCount } from './studioReducer';
@@ -158,9 +159,7 @@ export const spendKindsShown = (byKind: Partial<Record<string, number>>): string
 export const shortSpend = (cost: CostFormat, usd: number): string | undefined => {
   const s = cost.exact(usd);
   if (!cost.governed) return s;
-  if (s === 'Free') return '0%';
-  const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(s);
-  return m ? m[1] : undefined;
+  return s === 'Free' ? '0%' : compactUsageShare(s);
 };
 
 /** "Spent $0.42 on this comic" / "Spent ≈4% of your usage on this comic" (governed users never read dollars). */
@@ -695,7 +694,7 @@ export const SettingsPanel: React.FC<{
                   role="radio"
                   aria-checked={on}
                   onClick={() => !on && setSettings({ confirm: o.value })}
-                  className="flex w-full items-start gap-2.5 text-left focus-visible:outline-none"
+                  className="flex w-full items-start gap-2.5 text-left focus-visible:outline-none coarse:min-h-11"
                 >
                   <span
                     aria-hidden
@@ -797,7 +796,8 @@ const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean }> = ({ onBac
         <Skeleton pill className="h-8 w-16" />
       </div>
     </header>
-    <div className="flex min-h-0 flex-1">
+    {/* The page keeps its main landmark while the comic loads (P1-QA: no <main> during loading). */}
+    <main id="studio-main" className="flex min-h-0 flex-1">
       <div className={cx('flex min-h-0 flex-col justify-end gap-4 p-6', wide ? 'w-2/5' : 'w-full')}>
         <Skeleton className="h-4 w-2/3" />
         <Skeleton className="h-4 w-1/2" />
@@ -811,12 +811,12 @@ const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean }> = ({ onBac
           ))}
         </div>
       )}
-    </div>
+    </main>
   </div>
 );
 
 const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () => void; retrying: boolean }> = ({ message, onRetry, onBack, retrying }) => (
-  <div className={`grid h-full min-h-0 w-full place-items-center p-6 ${CANVAS_BG}`}>
+  <main id="studio-main" className={`grid h-full min-h-0 w-full place-items-center p-6 ${CANVAS_BG}`}>
     <div role="alert" className={`w-full max-w-md rounded-2xl ${HAIRLINE} bg-[var(--ds-surface)] p-6 text-center shadow-[0_8px_32px_rgba(0,0,0,0.08)]`}>
       <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-amber-500/10 text-amber-600">
         <AlertTriangle className="h-6 w-6" aria-hidden />
@@ -832,7 +832,7 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
         </GhostButton>
       </div>
     </div>
-  </div>
+  </main>
 );
 
 // ── Phone board: "Ask the Director…" ─────────────────────────────────────────

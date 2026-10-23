@@ -106,8 +106,9 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => setOpen((v) => !v)}
         title="Chat ID and debug options"
         aria-label="Chat ID and debug options"
+        // A disclosure (plain buttons inside), not an ARIA menu — so no aria-haspopup="menu",
+        // which would promise arrow-key menu navigation the popup doesn't have.
         aria-expanded={open}
-        aria-haspopup="menu"
         className={`tap-target flex items-center gap-0.5 rounded-xl sm:rounded-l-none sm:rounded-r-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
         {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600 sm:hidden" /> : <Hash className="h-3.5 w-3.5 sm:hidden" />}
@@ -262,14 +263,19 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         </button>
 
         {showModelSelector !== false && (
-          <ChatModelChip
-            modelId={session.modelId}
-            modelName={session.modelName}
-            source={session.source}
-            autoMode={session.autoMode}
-            lockedSource={session.lockedSource}
-            onClick={onOpenModelPicker}
-          />
+          // Below 360 px the chip's name/status lines truncate a little sooner, so the one-line
+          // header (toggle · model · usage meter · chat-ID menu) fits a 320 px phone with no
+          // overlap even for a long pinned model name.
+          <div className="flex min-w-0 [@media(max-width:359px)]:[&_span]:max-w-[76px]">
+            <ChatModelChip
+              modelId={session.modelId}
+              modelName={session.modelName}
+              source={session.source}
+              autoMode={session.autoMode}
+              lockedSource={session.lockedSource}
+              onClick={onOpenModelPicker}
+            />
+          </div>
         )}
 
         {/* Editable session title */}

@@ -54,6 +54,48 @@ describe('SafetyVeil', () => {
     expect(screen.getByAltText('page art')).toBeInTheDocument();
   });
 
+  it('over the rating: controls inside the blurred art are inert (no keyboard focus) until "Show"', () => {
+    const onBalloon = vi.fn();
+    const { container } = render(
+      <SafetyVeil asset={asset({ assessed: 'PG-13', at: 1 })} rating="PG" onRedrawSafer={vi.fn()}>
+        <div>
+          {pic}
+          <button type="button" onClick={onBalloon}>
+            Balloon 1
+          </button>
+        </div>
+      </SafetyVeil>
+    );
+    const blurred = container.querySelector('[data-safety-blurred]') as HTMLElement & { inert?: boolean };
+    expect(blurred).toHaveAttribute('inert');
+    expect(blurred).toHaveAttribute('aria-hidden', 'true');
+    // Not in the accessibility tree, and the only reachable buttons are the veil's own.
+    expect(screen.queryByRole('button', { name: 'Balloon 1' })).toBeNull();
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Show', 'Redraw safer']);
+    // Shown: the art and its controls are live again.
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+    expect(container.querySelector('[inert]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Balloon 1' }));
+    expect(onBalloon).toHaveBeenCalledTimes(1);
+  });
+
+  it('"Redraw safer" carries its price when the caller knows it (a paid redraw is never a surprise)', () => {
+    const redraw = vi.fn();
+    const { rerender } = render(
+      <SafetyVeil asset={asset({ assessed: 'X', at: 1 })} rating="PG" onRedrawSafer={redraw} redrawPrice="≈2% of your usage">
+        {pic}
+      </SafetyVeil>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Redraw safer · ≈2% of your usage' }));
+    expect(redraw).toHaveBeenCalledTimes(1);
+    rerender(
+      <SafetyVeil asset={asset({ assessed: 'PG-13', at: 1 })} rating="PG" onRedrawSafer={redraw} redrawPrice="  ">
+        {pic}
+      </SafetyVeil>
+    );
+    expect(screen.getByRole('button', { name: 'Redraw safer' })).toBeInTheDocument();
+  });
+
   it('pending shows "Checking…"; pass and unchecked pass straight through', () => {
     const { rerender } = render(<SafetyVeil asset={asset({ pending: true, at: 1 })} rating="PG">{pic}</SafetyVeil>);
     expect(screen.getByRole('status')).toHaveTextContent('Checking…');

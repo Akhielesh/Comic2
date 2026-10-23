@@ -7,11 +7,10 @@
 // cost/model/QC from what the render recorded, prices from the model registry. Unknown stays unknown
 // ("not recorded"), never estimated into a fact.
 
-import { aspectMismatch, bookSequence, continuityHint, type BookSlot, type BookSlotKind } from '../../../shared/comic/book';
+import { aspectMismatch, bookSequence, continuityHint, versionList as sharedVersionList, type BookSlot, type BookSlotKind } from '../../../shared/comic/book';
 import {
   archiveOf,
   bookOf,
-  currentVersion,
   findPage,
   getRender,
   isPageStale,
@@ -95,26 +94,15 @@ type AnyVersion = RenderVersion | ArchivedVersion;
 
 /** Every version of a target — current, history, its archived versions — numbered v1 = oldest. */
 export function versionList(doc: ComicDoc, target: RenderTarget): VersionItem[] {
-  const r = getRender(doc, target);
-  if (!r) return [];
-  const key = renderTargetKey(target);
   const want = specHashFor(doc, target);
   const shaped = target.kind === 'page' || target.kind === 'cover';
-  const seen = new Set<string>();
-  const raw: { v: AnyVersion; current: boolean; archived: boolean }[] = [];
-  const push = (v: AnyVersion | undefined, current: boolean, archived: boolean) => {
-    if (!v?.path || seen.has(v.path)) return;
-    seen.add(v.path);
-    raw.push({ v, current, archived });
-  };
-  push(currentVersion(r), true, false);
-  for (const v of r.history) push(v, false, false);
-  for (const a of archiveOf(doc)) if (a.targetKey === key) push(a, false, true);
-  raw.sort((a, b) => (a.v.at || 0) - (b.v.at || 0) || (a.v.path < b.v.path ? -1 : a.v.path > b.v.path ? 1 : 0));
-  return raw.map(({ v, current, archived }, i) => {
+  // The ONE numbering (shared/comic/book versionList, P2-AMEND): the same v-numbers the director's
+  // list_versions / use_version use — this view only adds what the UI shows about each version.
+  return sharedVersionList(doc, target).map(({ n, version, current, archived }) => {
+    const v: AnyVersion = version;
     const rv = v as RenderVersion & Partial<ArchivedVersion>;
     const item: VersionItem = {
-      n: i + 1,
+      n,
       path: v.path,
       asset: assetPartOf(v),
       current,
@@ -342,7 +330,7 @@ export const insertOps = (after: number, id = newId('pg')): DocOp[] => [{ op: 'p
 export const duplicateOps = (pageId: string, newPageId = newId('pg')): DocOp[] => [{ op: 'page_duplicate', id: pageId, newId: newPageId }];
 export const deleteOps = (pageId: string, now = Date.now()): DocOp[] => [{ op: 'page_delete', id: pageId, deletedAt: now }];
 export const renderUseOps = (target: RenderTarget, path: string, opts: { adopt?: boolean; now?: number } = {}): DocOp[] => [
-  { op: 'render_use', target, path, at: opts.now ?? Date.now(), ...(opts.adopt ? { adopt: true } : {}) } as DocOp
+  { op: 'render_use', target, path, at: opts.now ?? Date.now(), ...(opts.adopt ? { adopt: true } : {}) }
 ];
 
 /** Page-cap pre-check (the server enforces it too): a free plan holds up to DOC_LIMITS.pages pages. */

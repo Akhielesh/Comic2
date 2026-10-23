@@ -212,7 +212,9 @@ export const WebtoonStage = forwardRef<WebtoonStageHandle, WebtoonStageProps>(fu
         if (f > 0.3 && f < 0.7) props.onTapCenter();
       }}
     >
-      <div className={gapless ? 'flex flex-col items-center' : 'flex flex-col items-center gap-6 py-6'} style={{ paddingTop: 'calc(var(--sa-top) + 8px)' }}>
+      {/* The reading room is already inset by the safe areas (ImmersiveReader): no second --sa-top /
+          --sa-bottom here (it doubled the notch gap on phones). */}
+      <div className={gapless ? 'flex flex-col items-center' : 'flex flex-col items-center gap-6 py-6'} style={{ paddingTop: 8 }}>
         {items.map((item, i) => (
           <WebtoonPage
             key={item.key}
@@ -232,7 +234,7 @@ export const WebtoonStage = forwardRef<WebtoonStageHandle, WebtoonStageProps>(fu
             }}
           />
         ))}
-        <div className="relative w-full" style={{ width, minHeight: Math.min(size.h, 640), paddingBottom: 'var(--sa-bottom)' }}>
+        <div className="relative w-full" style={{ width, minHeight: Math.min(size.h, 640) }}>
           <div className="relative h-full min-h-[inherit] bg-[var(--ds-reader-paper-back)]" style={{ minHeight: Math.min(size.h, 640) }}>
             {endCard}
           </div>
