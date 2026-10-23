@@ -16,11 +16,13 @@ const isMissingTableError = (error: unknown) => {
   return code === '42P01' || code === 'PGRST205';
 };
 
-// Platform owners — ALWAYS bootstrap admins, locked in code so a misconfigured
-// ADMIN_EMAILS env can never lock the owners out. Owners (and any admin) can
-// grant further admin/moderator/researcher roles via the admin role endpoints;
-// no guessable defaults beyond these two real accounts.
-const OWNER_ADMIN_EMAILS = ['akhieleshsrirangam@gmail.com', 'akhielesh99@gmail.com'];
+// Platform owner — ALWAYS a bootstrap admin, locked in code so a misconfigured
+// ADMIN_EMAILS env can never lock the owner out. The owner (and any admin) can
+// grant further admin/moderator/researcher roles via the admin role endpoints
+// (user_roles); nothing else is hard-coded. Every address listed here becomes an
+// admin the moment someone signs up with it, so it must be an inbox we control —
+// a typo'd 'akhielesh99@gmail.com' (no such account; not ours) was removed for that reason.
+const OWNER_ADMIN_EMAILS = ['akhieleshsrirangam@gmail.com'];
 
 export const parseAdminEmails = () => {
   const configured = process.env.ADMIN_EMAILS
