@@ -43,7 +43,8 @@ export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback,
   const loaded = phase === 'loaded';
   return (
     <span className="relative block h-full w-full" data-library-image={asset.id}>
-      <span className={cx('block h-full w-full', loaded && 'invisible')} aria-hidden={loaded || undefined}>
+      {/* The image carries the alt text, so the fallback underneath is decoration (never read twice). */}
+      <span className={cx('block h-full w-full', loaded && 'invisible')} aria-hidden="true">
         {fallback}
       </span>
       <img

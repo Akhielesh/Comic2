@@ -3,10 +3,10 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { formFactorFor } from '../useFormFactor';
 import { StudioLayout, readSplit, SPLIT_STORAGE_KEY } from './StudioLayout';
-import { MobileTabBar, type StudioNavItem } from './MobileTabBar';
+import { DISABLED_HINT_MS, MobileTabBar, type StudioNavItem } from './MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode } from './PaneSwitcher';
 import { DualScreen, segmentSizes } from './DualScreen';
 import { CompactHeaderMenu } from './CompactHeaderMenu';
@@ -89,6 +89,35 @@ describe('StudioLayout', () => {
     expect(document.querySelector('[data-segment="1"] [data-pane="chat"]')).not.toBeNull();
   });
 
+  it('rotating, unfolding or resizing never remounts a pane: drafts and focus-free state survive every layout', () => {
+    let mounts = 0;
+    const Draft: React.FC = () => {
+      const [text, setText] = React.useState('');
+      React.useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <input aria-label="draft" value={text} onChange={(e) => setText(e.target.value)} />;
+    };
+    const book: Segments = { count: 2, axis: 'horizontal', rects: [rect(0, 0, 540, 1000), rect(560, 0, 540, 1000)], hinge: { start: 540, end: 560 } };
+    const at = (ff: ReturnType<typeof formFactorFor>) => (
+      <StudioLayout ff={ff} chat={<Draft />} board={<p>board pane</p>} view="chat" navItems={nav()} onBack={vi.fn()} />
+    );
+    const { rerender } = render(at(formFactorFor({ w: 390, h: 844, coarse: true })));
+    fireEvent.change(screen.getByLabelText('draft'), { target: { value: 'half-typed script' } });
+    const host = document.querySelector('[data-pane-host="chat"]');
+    for (const ff of [
+      formFactorFor({ w: 844, h: 390, coarse: true }), // rotate → rail
+      formFactorFor({ w: 882, h: 1104, coarse: true }), // unfold → split
+      formFactorFor({ w: 1100, h: 1000, coarse: true, segments: book }), // span → dual-screen
+      formFactorFor({ w: 344, h: 882, coarse: true }) // fold again → cover screen
+    ]) {
+      rerender(at(ff));
+      expect(screen.getByLabelText('draft')).toHaveValue('half-typed script');
+      expect(document.querySelector('[data-pane="chat"] [data-pane-host="chat"]')).toBe(host);
+    }
+    expect(mounts).toBe(1);
+  });
+
   it('readSplit ignores garbage and falls back', () => {
     window.localStorage.setItem(SPLIT_STORAGE_KEY, '{"bad":1}');
     expect(readSplit([40, 60])).toEqual([40, 60]);
@@ -113,7 +142,25 @@ describe('MobileTabBar', () => {
     expect(chat.className).toContain('min-h-[44px]');
     expect(chat.className).toContain('min-w-[64px]');
     expect(screen.getByRole('button', { name: 'Board, 2 of 5 pages ready, drawing' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Read, Read opens once a page is drawn/ })).toBeDisabled();
+    const read = screen.getByRole('button', { name: /^Read, Read opens once a page is drawn/ });
+    expect(read).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('a tap on an unavailable item says why (touch has no tooltips) and never selects it', () => {
+    vi.useFakeTimers();
+    try {
+      const items = nav({ read: { disabled: true, disabledReason: 'Read opens once a page is drawn' } });
+      render(<MobileTabBar items={items} />);
+      fireEvent.click(screen.getByRole('button', { name: /^Read,/ }));
+      expect(items[2].onSelect).not.toHaveBeenCalled();
+      expect(screen.getByRole('status')).toHaveTextContent('Read opens once a page is drawn');
+      act(() => {
+        vi.advanceTimersByTime(DISABLED_HINT_MS + 10);
+      });
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

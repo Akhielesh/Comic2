@@ -102,7 +102,7 @@ export class QaHarness {
     }
     await this.page.goto(`/qa/comic-qa.html?${params.toString()}`, { waitUntil: 'domcontentloaded' });
     await this.page.waitForSelector('html[data-qa-ready]', { state: 'attached', timeout: 45_000 });
-    const crash = await this.page.locator('[data-qa-crash]').first().getAttribute('data-qa-crash').catch(() => null);
+    const crash = await this.page.evaluate(() => document.querySelector('[data-qa-crash]')?.getAttribute('data-qa-crash') ?? null);
     if (crash) throw new Error(`QA surface crashed: ${crash}`);
     this.safeAreaOn = opts.safeArea ?? this.device.coarse;
     if (this.safeAreaOn) await setSafeAreas(this.page, this.device.safeArea);
@@ -132,7 +132,7 @@ export class QaHarness {
 
   /** The studio root's data-layout. */
   async layout(): Promise<string | null> {
-    return this.page.locator('.gesture-root[data-layout]').first().getAttribute('data-layout').catch(() => null);
+    return this.page.evaluate(() => document.querySelector('.gesture-root[data-layout]')?.getAttribute('data-layout') ?? null);
   }
 
   async ops(): Promise<Array<{ kind: string; payload?: unknown; at: number }>> {

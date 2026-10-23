@@ -19,6 +19,7 @@ import { BudgetMeter, CategoryBreakdown, CostDelta, KpiTile, PeakDay, SkeletonBl
 import { CloudflareCard } from './costs/CloudflareCard';
 import { COST_PALETTE_CLASS, CATEGORY_SHORT_LABEL, STACK_ORDER } from './costs/costPalette';
 import { fmtCount, fmtDay, fmtTime, fmtUsd, pctChange } from './costs/costFormat';
+import { UsageBudgetsPanel } from '../usage/UsageBudgetsPanel';
 
 // Admin → Costs. A cost-benefit view of the whole platform on REAL data
 // (GET /api/admin/costs): what it costs to run (AI, email, containers, connectors, fixed
@@ -605,6 +606,8 @@ export const CostCentre: React.FC = () => {
     <div className={`space-y-4 p-1 text-[var(--ds-ink)] ${COST_PALETTE_CLASS}`}>
       {header}
       {body}
+      {/* Per-user usage budgets ($10 lifetime per user, all studios) — independent of the report above. */}
+      <UsageBudgetsPanel />
     </div>
   );
 };

@@ -24,7 +24,7 @@ vi.mock('./immersive/ImmersiveReader', () => ({
   )
 }));
 
-import { ComicStudio, ComicStudioShell, SPLIT_STORAGE_KEY } from './ComicStudio';
+import { ComicStudio, ComicStudioShell, SPLIT_STORAGE_KEY, SpendBreakdown, spendKindsShown } from './ComicStudio';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
 import type { FormFactor } from './mobile/formFactor';
@@ -138,6 +138,17 @@ describe('ComicStudio shell', () => {
     expect(within(panel).getByText(/\$0\.42 of your \$5\.00 budget/)).toBeInTheDocument();
     expect(within(panel).getByText(/\$0\.30 of this was paid with your own API key/)).toBeInTheDocument();
     expect(within(panel).getByText(/estimates/)).toBeInTheDocument();
+  });
+
+  it('the breakdown never hides spend: translations and kinds this build does not know yet are listed', () => {
+    const doc = makeSampleDoc({
+      spend: { totalUsd: 0.37, byKind: { page: 0.3, translate: 0.05, future_kind: 0.02 } as never, entries: [] }
+    });
+    expect(spendKindsShown(doc.spend.byKind)).toEqual(['page', 'translate', 'future_kind']);
+    render(<SpendBreakdown doc={doc} />);
+    expect(screen.getByText('Translations')).toBeInTheDocument();
+    expect(screen.getByText('$0.05')).toBeInTheDocument();
+    expect(screen.getByText('future kind')).toBeInTheDocument();
   });
 
   it('settings: confirm policy, threshold, budget cap, lettering and direction all patch the doc', () => {
@@ -290,8 +301,12 @@ describe('ComicStudio on phones (single)', () => {
     doc.pages = doc.pages.map((p) => ({ ...p, render: { ...p.render, status: 'none' as const, asset: undefined } }));
     mountAt(PHONE, makeFakeStudio({ doc }));
     const read = within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Read/ });
-    expect(read).toBeDisabled();
+    expect(read).toHaveAttribute('aria-disabled', 'true');
     expect(read).toHaveAccessibleName(/Read opens once a page is drawn/);
+    // A tap explains instead of doing nothing, and opens no empty reader.
+    fireEvent.click(read);
+    expect(document.querySelector('[data-nav-hint]')).toHaveTextContent('Read opens once a page is drawn');
+    expect(screen.queryByRole('dialog', { name: 'Full-screen reader' })).toBeNull();
   });
 
   it('"Ask the Director…" on the board opens a composer sheet that closes after sending', () => {

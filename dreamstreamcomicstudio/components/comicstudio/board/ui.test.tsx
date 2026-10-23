@@ -5,7 +5,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, STUCK_FACTOR, Segmented, isStuck } from './ui';
+import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, STUCK_FACTOR, Segmented, isStuck, registerStudioRefresh } from './ui';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -103,5 +103,29 @@ describe('RenderOverlay', () => {
     expect(onRefresh).toHaveBeenCalled();
     expect(isStuck(30_000 * STUCK_FACTOR + 1, 30)).toBe(true);
     expect(isStuck(29_000, 30)).toBe(false);
+  });
+
+  it('without a caller-supplied re-check, a stuck overlay uses the open studio’s free refresh — and offers no dead button outside one', () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const stuck = (
+      <div className="relative">
+        <RenderOverlay status="queued" since={now - 3 * 3_600_000} typicalSec={20} />
+      </div>
+    );
+    const first = render(stuck);
+    expect(screen.getByText(/Still queued · much longer than usual/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+    first.unmount();
+
+    const refresh = vi.fn();
+    const unregister = registerStudioRefresh(refresh);
+    try {
+      render(stuck);
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
   });
 });

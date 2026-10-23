@@ -66,13 +66,81 @@ export interface HalftoneOptions {
   radius?: number;
 }
 
-/** Rotated dot screen (classic print halftone). */
+/**
+ * Screen directions whose lattice repeats exactly inside a square tile: tan θ = a/b with small
+ * integers (0°, ±26.6°, ±45°, ±63.4°, 90°). A tile drawn on any other angle shows a seam every
+ * repeat when it is used as a CSS background, so angles snap to the nearest of these.
+ */
+const SEAMLESS_DIRS: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [2, 1],
+  [1, 1],
+  [1, 2],
+  [0, 1]
+];
+
+/** The seamless direction (b, a) nearest `angleDeg`, and k = |(b, a)| (the tile holds k² lattice cells). */
+export function seamlessDirection(angleDeg: number): { a: number; b: number; k: number; deg: number } {
+  const t = clamp(angleDeg, -90, 90);
+  let best: readonly [number, number] = SEAMLESS_DIRS[0];
+  let err = Infinity;
+  for (const d of SEAMLESS_DIRS) {
+    const e = Math.abs((Math.atan2(d[1], d[0]) * 180) / Math.PI - Math.abs(t));
+    if (e < err) {
+      err = e;
+      best = d;
+    }
+  }
+  const a = t < 0 ? -best[1] : best[1];
+  const b = best[0];
+  return { a, b, k: Math.hypot(a, b), deg: r2((Math.atan2(a, b) * 180) / Math.PI) };
+}
+
+/**
+ * Rotated dot screen (classic print halftone) as a SEAMLESS tile: the dot lattice is rotated to a
+ * seamless direction and its spacing nudged so the tile edge is a whole number of pixels; dots
+ * that cross an edge are drawn again on the opposite side.
+ */
 export function halftone(o: HalftoneOptions = {}): TextureTile {
-  const cell = clamp(o.cell ?? 8, 2, 64);
+  const want = clamp(o.cell ?? 8, 2, 64);
+  const { a, b, k } = seamlessDirection(o.angle ?? 45);
+  const T = Math.max(2, Math.round(want * k));
+  const cell = T / k;
   const rad = clamp(o.radius ?? 0.32, 0.02, 0.7) * cell;
-  const angle = clamp(o.angle ?? 45, -90, 90);
-  const body = `<defs><pattern id="h" width="${r2(cell)}" height="${r2(cell)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${r2(angle)})"><circle cx="${r2(cell / 2)}" cy="${r2(cell / 2)}" r="${r2(rad)}" fill="${attr(o.color ?? '#000000')}" fill-opacity="${r2(clamp(o.opacity ?? 0.35, 0, 1))}"/></pattern></defs><rect width="100%" height="100%" fill="url(#h)"/>`;
-  return tile(doc(cell * 4, body), cell * 4);
+  const s = cell / k;
+  // Lattice basis e1 = s(b, a), e2 = s(-a, b) (|e| = cell), offset so dots sit inside the tile
+  // where they can (centred for 0°/90°, at the quarter points for 45°).
+  const off = T / (2 * k * k);
+  const wrap = (v: number) => {
+    const m = ((v % T) + T) % T;
+    return T - m < 1e-6 ? 0 : m;
+  };
+  const centres = new Map<string, [number, number]>();
+  const n = Math.ceil(k) + 2;
+  for (let i = -n; i <= n; i += 1) {
+    for (let j = -n; j <= n; j += 1) {
+      const x = wrap(off + s * (i * b - j * a));
+      const y = wrap(off + s * (i * a + j * b));
+      centres.set(`${r2(x)}:${r2(y)}`, [x, y]);
+    }
+  }
+  // Every dot, plus its copy across each edge it crosses (so the repeat has no seam).
+  const drawn = new Map<string, [number, number]>();
+  for (const [x, y] of centres.values()) {
+    for (const dx of [-T, 0, T]) {
+      for (const dy of [-T, 0, T]) {
+        const cx = x + dx;
+        const cy = y + dy;
+        if (cx + rad > 0 && cx - rad < T && cy + rad > 0 && cy - rad < T) drawn.set(`${r2(cx)}:${r2(cy)}`, [cx, cy]);
+      }
+    }
+  }
+  const dots = [...drawn.values()];
+  const body =
+    `<g fill="${attr(o.color ?? '#000000')}" fill-opacity="${r2(clamp(o.opacity ?? 0.35, 0, 1))}">` +
+    dots.map(([x, y]) => `<circle cx="${r2(x)}" cy="${r2(y)}" r="${r2(rad)}"/>`).join('') +
+    '</g>';
+  return tile(doc(T, body), T);
 }
 
 /** Dot radius (fraction of the cell) that covers `level` % of the area. */
@@ -92,12 +160,31 @@ export function benDay(o: { color?: string; cell?: number; radius?: number; opac
   return tile(doc(c, body), c);
 }
 
-/** Parallel raster lines (engraving / TV-scan feel). */
+/** Parallel raster lines (engraving / TV-scan feel), seamless at any snapped angle. */
 export function rasterLines(o: { spacing?: number; angle?: number; color?: string; width?: number; opacity?: number } = {}): TextureTile {
-  const s = clamp(o.spacing ?? 6, 2, 48);
-  const w = clamp(o.width ?? 1, 0.25, s);
-  const body = `<defs><pattern id="l" width="${r2(s)}" height="${r2(s)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${r2(clamp(o.angle ?? 0, -90, 90))})"><rect width="${r2(s)}" height="${r2(w)}" fill="${attr(o.color ?? '#000000')}" fill-opacity="${r2(clamp(o.opacity ?? 0.4, 0, 1))}"/></pattern></defs><rect width="100%" height="100%" fill="url(#l)"/>`;
-  return tile(doc(s * 4, body), s * 4);
+  const want = clamp(o.spacing ?? 6, 2, 48);
+  const { a, b, k } = seamlessDirection(o.angle ?? 0);
+  const T = Math.max(2, Math.round(want * k));
+  const sp = T / k;
+  const w = clamp(o.width ?? 1, 0.25, sp);
+  // Lines run along u = (b, a)/k, spaced sp along n = (-a, b)/k; the family repeats every T px.
+  const ux = b / k;
+  const uy = a / k;
+  const nx = -a / k;
+  const ny = b / k;
+  const proj = [0, nx * T, ny * T, (nx + ny) * T];
+  const lo = Math.floor(Math.min(...proj) / sp) - 1;
+  const hi = Math.ceil(Math.max(...proj) / sp) + 1;
+  const L = T * 2;
+  let d = '';
+  for (let m = lo; m <= hi; m += 1) {
+    const off = (m + 0.5) * sp;
+    const px = nx * off;
+    const py = ny * off;
+    d += `M${r2(px - ux * L)} ${r2(py - uy * L)}L${r2(px + ux * L)} ${r2(py + uy * L)}`;
+  }
+  const body = `<path d="${d}" fill="none" stroke="${attr(o.color ?? '#000000')}" stroke-width="${r2(w)}" stroke-opacity="${r2(clamp(o.opacity ?? 0.4, 0, 1))}"/>`;
+  return tile(doc(T, body), T);
 }
 
 /** Two crossing hatch directions (pen-and-ink midtones). */

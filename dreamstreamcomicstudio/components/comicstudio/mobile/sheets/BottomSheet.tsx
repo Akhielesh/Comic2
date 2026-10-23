@@ -293,16 +293,23 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <button
-          type="button"
-          onClick={cycle}
-          aria-label={list.length > 1 ? 'Resize sheet' : 'Drag to close'}
-          tabIndex={list.length > 1 ? 0 : -1}
-          data-hit-exempt="grabber: the whole 52 px header is its drag zone"
-          className="absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
-        >
-          <span aria-hidden className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />
-        </button>
+        {list.length > 1 ? (
+          // Several detents: the grabber is also a keyboard/screen-reader way to resize.
+          <button
+            type="button"
+            onClick={cycle}
+            aria-label="Resize sheet"
+            data-hit-exempt="grabber: the whole 52 px header is its drag zone"
+            className="absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+          >
+            <span aria-hidden className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />
+          </button>
+        ) : (
+          // One detent: a visual affordance only (drag the header down; Close and Esc are the accessible way out).
+          <span aria-hidden data-sheet-grabber className="pointer-events-none absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 items-start justify-center pt-1.5">
+            <span className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />
+          </span>
+        )}
         {title ? (
           <h2 id={titleId} className="min-w-0 flex-1 truncate pt-1.5 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">
             {title}

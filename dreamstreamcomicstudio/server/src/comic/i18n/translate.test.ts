@@ -452,6 +452,12 @@ describe('review fixes: no double charge, Stop semantics, honest message order',
     await ctx2.settled();
     expect(ctx2.llmFake.calls.filter((c) => c.role === 'translator')).toHaveLength(1); // the Stop still holds
     expect(s2.doc.conversation[s2.doc.conversation.length - 1].text).toContain('Stopped');
+    // Stop takes effect AFTER the current chunk: the started (paid) call was not aborted and its lines are kept.
+    expect(ctx2.llmFake.calls.find((c) => c.role === 'translator')?.signal).toBeUndefined();
+    expect(editionProgress(s2.doc, 'te').done).toBeGreaterThan(2);
+    // …and the review that had not started yet is skipped (those lines honestly wait for review).
+    expect(ctx2.llmFake.calls.filter((c) => c.role === 'linguist')).toHaveLength(0);
+    expect(editionProgress(s2.doc, 'te').unreviewed).toBeGreaterThan(0);
   });
 
   it('UI-started: when the user wrote meanwhile, the summary is APPENDED and the progress message points to it', async () => {

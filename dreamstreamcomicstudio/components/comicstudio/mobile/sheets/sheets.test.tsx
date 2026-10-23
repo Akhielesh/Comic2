@@ -200,6 +200,22 @@ describe('AdaptiveSheet', () => {
     // Non-modal: no scrim, the canvas behind stays usable.
     expect(document.querySelector('[data-sheet-scrim]')).toBeNull();
   });
+
+  it('a one-detent sheet shows its grabber as a visual only (no dead control for assistive tech); Close is the way out', () => {
+    const onClose = vi.fn();
+    render(
+      <FormFactorProvider value={PHONE}>
+        <BottomSheet open onClose={onClose} label="Spending">
+          <p>breakdown</p>
+        </BottomSheet>
+      </FormFactorProvider>
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Spending' });
+    expect(screen.queryByRole('button', { name: /Resize sheet|Drag to close/ })).toBeNull();
+    expect(dialog.querySelector('[data-sheet-grabber]')).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalled();
+  });
 });
 
 describe('SideSheet', () => {

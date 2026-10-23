@@ -3,9 +3,17 @@
 // reduced-motion and viewport-segment media queries, `window.viewport.segments` (Viewport Segments
 // API, feature-detected), and `navigator.connection` (saveData). SSR/jsdom-safe: without a window it
 // reports the desktop defaults. A <FormFactorProvider> can pin a value (tests, the QA harness).
+//
+// The on-screen keyboard is NOT a new form factor. index.html opts into Android's
+// `interactive-widget=resizes-content`, so opening the keyboard shrinks innerHeight (a 360×740 phone
+// drops to ~360 px tall, a landscape Android tablet to ~450): read naively that is "compact height"
+// → the phone-landscape rail layout, which would swap the whole shell (and remount the composer the
+// user is typing in) the moment a field is tapped. While a text field is focused and the width is
+// unchanged, a SHORTER window keeps the keyboard-less height; the real height returns on blur/resize.
 
 import React, { createContext, useContext, useSyncExternalStore } from 'react';
 import { DESKTOP_FORM_FACTOR, SINGLE_SEGMENT, classifyViewport, sameFormFactor, segmentsFromRects, type FormFactor, type Segments } from './formFactor';
+import { isEditable } from './useKeyboardInset';
 
 const QUERIES = {
   coarse: '(pointer: coarse)',
@@ -52,11 +60,29 @@ const readSegments = (): Segments => {
   return SINGLE_SEGMENT;
 };
 
-/** A snapshot of the current window (desktop defaults outside a browser). */
-export const readFormFactor = (): FormFactor => {
+/**
+ * Pure: the height to classify. With a text field focused at the same width, a window that got
+ * SHORTER is the on-screen keyboard (Android resizes the layout viewport) — keep the previous height.
+ */
+export const keyboardSteadyHeight = (prev: Pick<FormFactor, 'width' | 'height'> | null | undefined, w: number, h: number, editableFocused: boolean): number =>
+  prev && editableFocused && prev.width === w && h < prev.height ? prev.height : h;
+
+const editableFocused = (): boolean => {
+  try {
+    return typeof document !== 'undefined' && isEditable(document.activeElement);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * A snapshot of the current window (desktop defaults outside a browser). `prev` (the last snapshot)
+ * lets the keyboard rule above hold the height steady while the user types.
+ */
+export const readFormFactor = (prev?: FormFactor | null): FormFactor => {
   if (!hasWindow()) return DESKTOP_FORM_FACTOR;
   const w = window.innerWidth;
-  const h = window.innerHeight;
+  const h = keyboardSteadyHeight(prev, w, window.innerHeight, editableFocused());
   const coarse = matches(QUERIES.coarse, false);
   const segments = readSegments();
   let lowMemory = false;
@@ -88,7 +114,7 @@ let detach: (() => void) | null = null;
 
 /** Re-read the window; keep the same object when nothing changed (stable for useSyncExternalStore). */
 const refresh = (): boolean => {
-  const next = readFormFactor();
+  const next = readFormFactor(snapshot);
   if (snapshot && sameFormFactor(snapshot, next)) return false;
   snapshot = next;
   return true;
@@ -113,6 +139,8 @@ const attach = (): (() => void) => {
   };
   window.addEventListener('resize', schedule);
   window.addEventListener('orientationchange', schedule);
+  // A field losing focus releases a height held for the keyboard (no resize may follow on desktop).
+  window.addEventListener('focusout', schedule);
   const mqls: MediaQueryList[] = [];
   if (typeof window.matchMedia === 'function') {
     for (const q of Object.values(QUERIES)) {
@@ -132,6 +160,7 @@ const attach = (): (() => void) => {
   return () => {
     window.removeEventListener('resize', schedule);
     window.removeEventListener('orientationchange', schedule);
+    window.removeEventListener('focusout', schedule);
     for (const mql of mqls) {
       if (typeof mql.removeEventListener === 'function') mql.removeEventListener('change', schedule);
       else if (typeof mql.removeListener === 'function') mql.removeListener(schedule);

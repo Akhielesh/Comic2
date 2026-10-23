@@ -119,7 +119,9 @@ async function fetchIndex(): Promise<LibraryIndex> {
 /** Load once per page (cached snapshot first, network revalidation when stale). Never rejects. */
 export function loadComicLibrary(): Promise<void> {
   if (inflight) return inflight;
-  if (current.status === 'ready' && revalidated) return Promise.resolve();
+  // One network attempt per page load, success or not: after a failure every consumer keeps its
+  // procedural art instead of re-asking on each mount (a reload tries again).
+  if (revalidated) return Promise.resolve();
   const cached = typeof window !== 'undefined' ? readCache() : undefined;
   if (cached && current.status !== 'ready') publish(snapshotOf('ready', cached.index));
   if (cached && Date.now() - cached.at < LIBRARY_FRESH_MS) {

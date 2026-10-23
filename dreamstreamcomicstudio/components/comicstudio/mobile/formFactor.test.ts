@@ -14,7 +14,7 @@ import {
   widthClassOf,
   type Segments
 } from './formFactor';
-import { formFactorFor, readFormFactor, resetFormFactorStore } from './useFormFactor';
+import { formFactorFor, keyboardSteadyHeight, readFormFactor, resetFormFactorStore } from './useFormFactor';
 
 const rect = (left: number, top: number, width: number, height: number): DOMRectReadOnly =>
   ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRectReadOnly;
@@ -130,6 +130,43 @@ describe('readFormFactor (the live store’s reader)', () => {
       ({ matches: q === '(pointer: coarse)' || q === '(prefers-reduced-motion: reduce)', addEventListener: () => undefined, removeEventListener: () => undefined }) as unknown as MediaQueryList) as typeof window.matchMedia;
     const ff = readFormFactor();
     expect(ff).toMatchObject({ width: 390, height: 844, layout: 'single', coarse: true, anyFine: false, hover: false, reducedMotion: true });
+  });
+
+  it('the on-screen keyboard is not a new form factor: an Android resize while typing keeps the phone layout', () => {
+    vi.stubGlobal('innerWidth', 360);
+    vi.stubGlobal('innerHeight', 740);
+    window.matchMedia = ((q: string) =>
+      ({ matches: q === '(pointer: coarse)', addEventListener: () => undefined, removeEventListener: () => undefined }) as unknown as MediaQueryList) as typeof window.matchMedia;
+    const before = readFormFactor();
+    expect(before.layout).toBe('single');
+    const box = document.createElement('textarea');
+    document.body.appendChild(box);
+    try {
+      box.focus();
+      // interactive-widget=resizes-content: the keyboard shrinks the layout viewport to 360 × 352.
+      vi.stubGlobal('innerHeight', 352);
+      const typing = readFormFactor(before);
+      expect(typing).toMatchObject({ layout: 'single', heightClass: 'regular', height: 740 });
+      // Without a focused field the same shrink is a real resize (phone landscape / a short window).
+      box.blur();
+      expect(readFormFactor(before)).toMatchObject({ layout: 'single-rail', heightClass: 'compact', height: 352 });
+      // Rotating (a new width) re-learns even while typing.
+      box.focus();
+      vi.stubGlobal('innerWidth', 740);
+      vi.stubGlobal('innerHeight', 360);
+      expect(readFormFactor(before).layout).toBe('single-rail');
+    } finally {
+      box.remove();
+    }
+  });
+
+  it('keyboardSteadyHeight holds the height only for a focused field, the same width and a SHORTER window', () => {
+    const prev = { width: 1280, height: 800 };
+    expect(keyboardSteadyHeight(prev, 1280, 450, true)).toBe(800); // Android tablet landscape keyboard
+    expect(keyboardSteadyHeight(prev, 1280, 450, false)).toBe(450);
+    expect(keyboardSteadyHeight(prev, 800, 1280, true)).toBe(1280);
+    expect(keyboardSteadyHeight(prev, 1280, 900, true)).toBe(900);
+    expect(keyboardSteadyHeight(null, 1280, 450, true)).toBe(450);
   });
 
   it('reads foldable segments from the Viewport Segments API when present', () => {

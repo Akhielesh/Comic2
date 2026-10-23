@@ -8,9 +8,14 @@
 //
 // Both panes STAY MOUNTED: the hidden one gets `hidden` + `inert` instead of unmounting, so chat
 // scroll, the composer draft and the board's tab scroll survive every switch (and images in the
-// hidden pane are released by the image budget).
+// hidden pane are released by the image budget). That holds across LAYOUT changes too — rotating a
+// phone (single ↔ single-rail), unfolding a foldable (single → split / dual-screen) or resizing an
+// iPad Split View: each pane renders through a portal into one persistent host node, and whichever
+// layout is active adopts that node into its slot. The React trees (drafts, upload progress, open
+// editors) never remount; only the host node moves.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { applyGutterDelta } from '../../../studio/kit/ResizableSplit';
 import { defaultSplitFor, minPanePx, type FormFactor } from '../formFactor';
 import { isDoubleTap, type Tap } from '../touch/gestureMath';
@@ -159,6 +164,36 @@ export const SplitView: React.FC<{ left: React.ReactNode; right: React.ReactNode
   );
 };
 
+// ── Persistent panes ─────────────────────────────────────────────────────────
+
+/** One detached node per pane, created once; the pane's React tree portals into it. */
+const usePaneHost = (name: 'chat' | 'board'): HTMLDivElement | null => {
+  const [node] = useState<HTMLDivElement | null>(() => {
+    if (typeof document === 'undefined') return null;
+    const el = document.createElement('div');
+    el.setAttribute('data-pane-host', name);
+    // Fills its slot like the pane content it replaces (a flex item that may shrink to 0).
+    el.style.cssText = 'display:flex;flex:1 1 0%;min-width:0;min-height:0;width:100%;height:100%';
+    return el;
+  });
+  return node;
+};
+
+/**
+ * Where a pane shows in the current layout: adopts the pane's host node (a `display: contents`
+ * wrapper, so the layout's own flex rules apply to the host). Without a DOM (SSR) it renders the
+ * content inline.
+ */
+const PaneSlot: React.FC<{ host: HTMLDivElement | null; fallback: React.ReactNode }> = ({ host, fallback }) => {
+  const adopt = useCallback(
+    (slot: HTMLDivElement | null) => {
+      if (slot && host && host.parentNode !== slot) slot.appendChild(host);
+    },
+    [host]
+  );
+  return host ? <div ref={adopt} className="contents" /> : <>{fallback}</>;
+};
+
 // ── Layout ───────────────────────────────────────────────────────────────────
 
 export interface StudioLayoutProps {
@@ -181,6 +216,32 @@ const PhonePane: React.FC<{ id: 'chat' | 'board'; hidden: boolean; children: Rea
 );
 
 export const StudioLayout: React.FC<StudioLayoutProps> = ({ ff, chat, board, view, paneMode = 'both', navItems, onBack }) => {
+  const chatHost = usePaneHost('chat');
+  const boardHost = usePaneHost('board');
+  // The portals sit at a fixed place in this tree, so a layout switch never remounts the panes.
+  const portals = (
+    <>
+      {chatHost ? createPortal(chat, chatHost) : null}
+      {boardHost ? createPortal(board, boardHost) : null}
+    </>
+  );
+  return (
+    <>
+      {portals}
+      <LayoutBody
+        ff={ff}
+        chat={<PaneSlot host={chatHost} fallback={chat} />}
+        board={<PaneSlot host={boardHost} fallback={board} />}
+        view={view}
+        paneMode={paneMode}
+        navItems={navItems}
+        onBack={onBack}
+      />
+    </>
+  );
+};
+
+const LayoutBody: React.FC<StudioLayoutProps> = ({ ff, chat, board, view, paneMode = 'both', navItems, onBack }) => {
   const { layout, segments } = ff;
 
   if (layout === 'single' || layout === 'single-rail') {

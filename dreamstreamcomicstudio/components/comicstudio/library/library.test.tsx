@@ -58,10 +58,15 @@ describe('useComicLibrary', () => {
     expect(result.current.byKind('style_preview')).toEqual([]);
   });
 
-  it('a 500 is "unavailable" too', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })));
+  it('a 500 is "unavailable" too, and later mounts do not re-ask (one attempt per page load)', async () => {
+    const spy = vi.fn(async () => new Response('nope', { status: 500 }));
+    vi.stubGlobal('fetch', spy);
     const { result } = renderHook(() => useComicLibrary());
     await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    const later = renderHook(() => useComicLibrary());
+    await loadComicLibrary();
+    expect(later.result.current.status).toBe('unavailable');
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it('loads once per page (single flight), caches in sessionStorage, and answers lookups', async () => {
@@ -155,6 +160,23 @@ describe('StylePresetsCard', () => {
     fireEvent.click(radios[0]);
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'use_preset', presetId: 'watercolor-storybook' }));
     expect(document.querySelectorAll('[data-preset-thumb]')).toHaveLength(2);
+  });
+
+  it('is one tab stop: arrow keys move between styles without picking, Enter picks', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('x', { status: 503 })));
+    const studio = makeFakeStudio();
+    render(<StylePresetsCard card={card} message={{ id: 'm', role: 'assistant', text: '', at: 0 }} studio={studio} />);
+    const radios = screen.getAllByRole('radio');
+    expect(radios.map((r) => r.tabIndex)).toEqual([0, -1]);
+    radios[0].focus();
+    fireEvent.keyDown(radios[0], { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(radios[1]);
+    expect(radios.map((r) => r.tabIndex)).toEqual([-1, 0]);
+    expect(studio.act).not.toHaveBeenCalled();
+    fireEvent.keyDown(radios[1], { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(radios[0]); // wraps
+    fireEvent.click(radios[0]);
+    await waitFor(() => expect(studio.act).toHaveBeenCalledTimes(1));
   });
 
   it('shows the current preset as picked and does not re-run it', () => {

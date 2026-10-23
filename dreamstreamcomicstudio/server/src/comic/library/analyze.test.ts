@@ -144,6 +144,18 @@ describe('planRefine: rule-chosen strategy', () => {
     const cover = entry('cover.kids-storybook');
     expect(guardRewrite(cover, cover.prompt, 'A picture-book cover with a toddler and ducklings at a lake at sunset.')).toContain("'THE LITTLE LAKE'");
   });
+
+  it('the IP lint holds for model-written text: a rewrite or a vision note naming a studio never reaches a prompt', () => {
+    const preview = entry('style.watercolor-storybook');
+    const named = 'A girl and her terrier on a canal bridge at dusk, painted like a Ghibli film, warm washes and soft pencil lines.';
+    expect(guardRewrite(preview, preview.prompt, named)).toBe(preview.prompt);
+    const merged = mergeLibraryScore(preview, measure(), { ...visionJson({ score: 0.5, briefMatch: 0.5 }), issues: ['Looks like a Disney still', 'The dog is missing'] });
+    const plan = planRefine(preview, merged, { attempt: 1, maxAttempts: 3, basePrompt: preview.prompt, rev: 1 });
+    expect(plan.strategy).toBe('regenerate');
+    const prompt = (plan as { prompt: string }).prompt;
+    expect(prompt).toContain('Fix: The dog is missing.');
+    expect(/disney/i.test(prompt)).toBe(false);
+  });
 });
 
 describe('post-processing ($0 sharp)', () => {

@@ -289,7 +289,9 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
       const first = pages[0]?.page.n;
       const end = onPage(first ? `Translating page ${first} into ${spec.endonym}…` : `Translating the title into ${spec.endonym}…`);
       try {
-        const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating, signal });
+        // No abort signal on the call itself: Stop takes effect AFTER the current chunk (a started call is
+        // paid for, so its lines are kept), exactly like a render that is already drawing.
+        const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating });
         const ops = chunkOps(ctx.session.doc, lang, result, Date.now(), result.model);
         if (ops.length) ctx.session.commit(ops, { origin: 'job' });
         translatedIds.push(...Object.keys(result.lines), ...Object.keys(result.extras));

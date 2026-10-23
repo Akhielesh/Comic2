@@ -3,7 +3,8 @@
 // hides while the on-screen keyboard is open (html.kb-open) so it never rides on the keyboard.
 // NavigationRail renders the same items for phones in landscape.
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -32,22 +33,69 @@ const DOT_CLS: Record<NonNullable<StudioNavItem['dot']>, string> = {
   pulse: 'bg-[var(--ds-accent)] animate-pulse motion-reduce:animate-none'
 };
 
+/** How long the "why is this unavailable" bubble stays after a tap on a disabled item. */
+export const DISABLED_HINT_MS = 2600;
+
+/**
+ * The reason a tapped, unavailable item can't open (touch has no tooltips, and a dead tap is silent):
+ * a calm bubble beside the item, fixed to the viewport so the bar/rail can never clip it, and kept
+ * inside 12 px gutters at every width.
+ */
+const DisabledHint: React.FC<{ text: string; rect: DOMRect; orientation: 'bar' | 'rail' }> = ({ text, rect, orientation }) => {
+  if (typeof document === 'undefined') return null;
+  const vw = window.innerWidth || 0;
+  const vh = window.innerHeight || 0;
+  const centre = rect.left + rect.width / 2;
+  const style: React.CSSProperties =
+    orientation === 'bar'
+      ? {
+          left: 12,
+          right: 12,
+          bottom: Math.max(8, vh - rect.top + 8),
+          justifyContent: centre > vw * 0.66 ? 'flex-end' : centre < vw * 0.33 ? 'flex-start' : 'center'
+        }
+      : { left: rect.right + 8, right: 12, top: Math.max(8, rect.top), justifyContent: 'flex-start' };
+  return createPortal(
+    <div role="status" data-nav-hint className="pointer-events-none fixed z-[70] flex" style={style}>
+      <span className="max-w-[16rem] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.14)] backdrop-blur-md animate-fade-in">
+        {text}
+      </span>
+    </div>,
+    document.body
+  );
+};
+
 export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' | 'rail' }> = ({ item, orientation }) => {
+  const [hint, setHint] = useState<DOMRect | null>(null);
+  useEffect(() => {
+    if (!hint) return;
+    const t = setTimeout(() => setHint(null), DISABLED_HINT_MS);
+    return () => clearTimeout(t);
+  }, [hint]);
   const spoken = [item.label, item.badgeLabel, item.dot === 'amber' ? 'waiting for your approval' : item.dot === 'accent' ? 'new reply' : item.dot === 'pulse' ? 'drawing' : null, item.disabled ? item.disabledReason : null]
     .filter(Boolean)
     .join(', ');
   return (
     <button
       type="button"
-      onClick={item.onSelect}
-      disabled={item.disabled}
+      // Unavailable items stay focusable and tappable (aria-disabled): a tap says why instead of nothing.
+      onClick={(e) => {
+        if (item.disabled) {
+          if (item.disabledReason) setHint(e.currentTarget.getBoundingClientRect());
+          return;
+        }
+        setHint(null);
+        item.onSelect();
+      }}
+      aria-disabled={item.disabled || undefined}
       aria-current={item.current ? 'page' : undefined}
       aria-label={spoken}
       title={item.disabled ? item.disabledReason : undefined}
       data-nav={item.id}
       className={cx(
-        'press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-40',
+        'press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45',
         orientation === 'bar' ? 'flex-1' : 'w-14 py-1.5',
+        item.disabled ? 'cursor-not-allowed opacity-40' : '',
         item.current ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
       )}
     >
@@ -55,7 +103,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
         aria-hidden
         className={cx(
           'relative grid h-7 w-14 place-items-center rounded-full transition-colors',
-          item.current ? 'bg-[#D97757]/[0.14]' : 'group-hover:bg-[var(--ds-hover)]'
+          item.current ? 'bg-[#D97757]/[0.14]' : !item.disabled && 'group-hover:bg-[var(--ds-hover)]'
         )}
       >
         {item.icon}
@@ -65,6 +113,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
         <span className="truncate">{item.label}</span>
         {item.badge && <span className="rounded-full bg-[var(--ds-well-strong)] px-1 py-px text-[9.5px] font-semibold tabular-nums text-[var(--ds-muted)]">{item.badge}</span>}
       </span>
+      {hint && item.disabledReason && <DisabledHint text={item.disabledReason} rect={hint} orientation={orientation} />}
     </button>
   );
 };

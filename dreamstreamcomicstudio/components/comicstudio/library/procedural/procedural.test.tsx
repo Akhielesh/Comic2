@@ -12,7 +12,7 @@ import { PresetThumb } from './PresetThumb';
 import { LayoutGlyph, LAYOUT_GLYPH_NUMBERS_FROM } from './LayoutGlyph';
 import { BubblePreview } from './BubblePreview';
 import { EmptyArt, type EmptyArtVariant } from './EmptyArt';
-import { benDay, bokeh, crosshatch, focusLines, halftone, paperGrain, rainPath, rasterLines, risoGrain, screentone, speedLines } from './textures';
+import { benDay, bokeh, crosshatch, focusLines, halftone, paperGrain, rainPath, rasterLines, risoGrain, screentone, seamlessDirection, speedLines } from './textures';
 
 /** Markup with React's per-render ids normalised (they depend on render order only). */
 const ID_RE = new RegExp(`pt-(${STYLE_PRESETS.map((p) => p.id).sort((a, b) => b.length - a.length).join('|')})-[A-Za-z0-9_]+`, 'g');
@@ -147,6 +147,44 @@ describe('textures', () => {
     expect(screentone(60).svg).not.toBe(screentone(10).svg);
     // Colour strings can't break out of their attribute.
     expect(halftone({ color: '"/><script>x</script>' }).svg).not.toMatch(/<script/);
+  });
+
+  it('dot and line screens tile seamlessly as CSS backgrounds (any angle snaps to a repeating one)', () => {
+    const circles = (svg: string) => [...svg.matchAll(/<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([\d.]+)"/g)].map((m) => m.slice(1).map(Number));
+    for (const t of [halftone(), halftone({ angle: 0 }), halftone({ angle: 15, cell: 12 }), halftone({ angle: -60, cell: 5 }), screentone(10), screentone(60)]) {
+      expect(Number.isInteger(t.size)).toBe(true);
+      const dots = circles(t.svg);
+      expect(dots.length).toBeGreaterThan(0);
+      const has = (x: number, y: number) => dots.some(([cx, cy]) => Math.abs(cx - x) < 0.02 && Math.abs(cy - y) < 0.02);
+      // A dot cut by an edge reappears on the opposite edge, so the repeat shows no seam.
+      for (const [cx, cy, r] of dots) {
+        if (cx - r < 0) expect(has(cx + t.size, cy), `${t.svg} @${cx},${cy}`).toBe(true);
+        if (cx + r > t.size) expect(has(cx - t.size, cy)).toBe(true);
+        if (cy - r < 0) expect(has(cx, cy + t.size)).toBe(true);
+        if (cy + r > t.size) expect(has(cx, cy - t.size)).toBe(true);
+      }
+    }
+    for (const angle of [0, 20, 45, -45, 70, 90]) {
+      const { a, b, k } = seamlessDirection(angle);
+      const t = rasterLines({ angle, spacing: 7 });
+      expect(Number.isInteger(t.size)).toBe(true);
+      expect(t.svg).not.toMatch(/NaN/);
+      const sp = t.size / k;
+      const [nx, ny] = [-a / k, b / k];
+      const segs = [...t.svg.matchAll(/M([-\d.]+) ([-\d.]+)L([-\d.]+) ([-\d.]+)/g)].map((m) => m.slice(1).map(Number));
+      const offsets = segs.map(([x1, y1]) => nx * x1 + ny * y1);
+      // Every line sits on the same lattice (offset ≡ sp/2 mod sp) …
+      for (const d of offsets) expect(Math.abs(d / sp - 0.5 - Math.round(d / sp - 0.5))).toBeLessThan(0.01);
+      // … the lattice is unchanged by a one-tile shift (n·(T,0) and n·(0,T) are whole spacings) …
+      expect(Number.isInteger(Math.round((nx * t.size) / sp * 1e6) / 1e6)).toBe(true);
+      expect(Number.isInteger(Math.round((ny * t.size) / sp * 1e6) / 1e6)).toBe(true);
+      // … and the lines cover the whole tile.
+      const corners = [0, nx * t.size, ny * t.size, (nx + ny) * t.size];
+      expect(Math.min(...offsets)).toBeLessThanOrEqual(Math.min(...corners));
+      expect(Math.max(...offsets)).toBeGreaterThanOrEqual(Math.max(...corners));
+    }
+    expect(seamlessDirection(45).deg).toBe(45);
+    expect(seamlessDirection(-30).deg).toBeCloseTo(-26.57, 2);
   });
 
   it('motion lines and bokeh are seeded and finite', () => {

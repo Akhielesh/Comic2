@@ -85,8 +85,8 @@ export async function reviewTranslations(llm: LlmClient, doc: ComicDoc, lang: st
           { role: 'system', content: linguistSystemPrompt(doc, lang) },
           { role: 'user', content: linguistUserMessage(doc, lang, batch) }
         ],
-        jsonSchema: { name: 'comic_translation_review', schema: REVIEW_SCHEMA, strict: true },
-        signal
+        jsonSchema: { name: 'comic_translation_review', schema: REVIEW_SCHEMA, strict: true }
+        // `signal` is checked BETWEEN batches only: a started review call is paid for, so it finishes and is kept.
       });
       run.calls += 1;
       const wanted = new Set(batch.map((b) => b.id));

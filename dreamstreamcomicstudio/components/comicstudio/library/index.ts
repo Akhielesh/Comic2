@@ -19,7 +19,7 @@ export const LibraryAdminSection: React.FC = () =>
       fallback: React.createElement(
         'div',
         { className: 'flex items-center gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 text-[13px] text-[var(--ds-muted)]' },
-        React.createElement(Loader2, { className: 'h-4 w-4 animate-spin', 'aria-hidden': true }),
+        React.createElement(Loader2, { className: 'h-4 w-4 motion-safe:animate-spin', 'aria-hidden': true }),
         'Loading the library console…'
       )
     },

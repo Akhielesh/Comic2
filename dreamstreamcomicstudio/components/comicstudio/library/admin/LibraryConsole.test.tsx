@@ -103,6 +103,41 @@ describe('LibraryConsole', () => {
     expect(screen.getByRole('button', { name: /Build library/ })).toBeDisabled();
   });
 
+  it('Pause says it is finishing the current step and stops the loop after it', async () => {
+    let finishStep: (v: LibraryStepView) => void = () => undefined;
+    api.getLibraryManifest.mockResolvedValue(manifest({ activeRun: runView() }));
+    api.stepLibraryRun.mockImplementation(() => new Promise<LibraryStepView>((resolve) => (finishStep = resolve)));
+    render(<LibraryConsole />);
+    fireEvent.click(await screen.findByRole('button', { name: /Resume/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Pause$/ }));
+    expect(await screen.findByText('Pausing after this step…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pausing/ })).toBeDisabled();
+    finishStep({ ...runView(), message: 'Drew 1.', waitMs: 0 });
+    expect(await screen.findByRole('button', { name: /Resume/ })).toBeInTheDocument();
+    expect(api.stepLibraryRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('a live image can be taken down from its drawer (after a confirm), and selection boxes are labelled', async () => {
+    const live = {
+      ...manifest().entries[0],
+      row: {
+        status: 'published' as const, score: 0.9, rev: 1, attempts: 1, costUsd: 0.04, issues: [], upToDate: true,
+        published: { rev: 1, url: 'https://cdn.test/library/v1/style.noir-ink/1.webp', at: 1 },
+        candidates: [{ rev: 1, url: 'https://cdn.test/library/v1/style.noir-ink/1.webp', w: 800, h: 1000, score: 0.9, issues: [], strategy: 'first' as const, at: 1, current: true }]
+      }
+    };
+    api.getLibraryManifest.mockResolvedValue(manifest({ entries: [live, manifest().entries[1]] }));
+    api.rejectLibraryAsset.mockResolvedValue(live);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<LibraryConsole />);
+    expect(await screen.findByRole('checkbox', { name: 'Select style.noir-ink' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /style\.noir-ink/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Take down/ }));
+    await waitFor(() => expect(api.rejectLibraryAsset).toHaveBeenCalledWith('style.noir-ink', undefined, { unpublish: true }));
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
   it('shows a load error with a retry', async () => {
     api.getLibraryManifest.mockRejectedValueOnce(new Error('Admins only.'));
     render(<LibraryConsole />);

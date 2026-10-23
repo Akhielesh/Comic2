@@ -30,6 +30,18 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
   const locked = doc?.style.status === 'locked';
   const drawn = doc ? doc.pages.filter((p) => p.render.status === 'ready').length : 0;
 
+  const onGroupKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step && e.key !== 'Home' && e.key !== 'End') return;
+    const radios = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
+    if (!radios.length) return;
+    e.preventDefault();
+    const at = Math.max(0, radios.indexOf(document.activeElement as HTMLButtonElement));
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? radios.length - 1 : (at + step + radios.length) % radios.length;
+    radios.forEach((r, i) => (r.tabIndex = i === next ? 0 : -1));
+    radios[next].focus();
+  };
+
   if (!presets.length) {
     return (
       <CardShell title="Styles" icon={<Palette className="h-4 w-4" />} aria-label="Style presets">
@@ -46,10 +58,17 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
       aria-label="Style presets"
     >
       {card.note && <p className="mb-3 text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{card.note}</p>}
-      <div role="radiogroup" aria-label="Pick a style" className={cx('grid gap-2 sm:gap-2.5', presets.length <= 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3')}>
-        {presets.map((p) => {
+      <div
+        role="radiogroup"
+        aria-label="Pick a style"
+        onKeyDown={onGroupKey}
+        className={cx('grid gap-2 sm:gap-2.5', presets.length <= 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3')}
+      >
+        {presets.map((p, i) => {
           const on = chosen === p.id;
           const pending = isPending(`use:${p.id}`);
+          // Roving focus (one tab stop): arrows move between styles, Enter/Space picks one.
+          const tabStop = chosen && presets.some((x) => x.id === chosen) ? on : i === 0;
           return (
             <button
               key={p.id}
@@ -57,12 +76,13 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
               role="radio"
               aria-checked={on}
               aria-label={`${p.name}: ${p.tagline}`}
-              disabled={anyPending}
+              tabIndex={tabStop ? 0 : -1}
+              aria-disabled={anyPending || undefined}
               onClick={() => {
-                if (!on) void run(`use:${p.id}`, { type: 'use_preset', presetId: p.id });
+                if (!on && !anyPending) void run(`use:${p.id}`, { type: 'use_preset', presetId: p.id });
               }}
               className={cx(
-                'group relative min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 disabled:cursor-wait',
+                'group relative min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 aria-disabled:cursor-wait',
                 'motion-safe:transition-[transform,border-color,box-shadow] motion-safe:duration-200',
                 on ? 'border-[#D97757]/60 ring-2 ring-[#D97757]/25' : 'border-[var(--ds-hairline)] hover:border-[#D97757]/35 motion-safe:hover:-translate-y-px'
               )}
@@ -81,7 +101,7 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
                 />
                 {(on || pending) && (
                   <span className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--ds-accent)] text-white shadow-sm">
-                    {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    {pending ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
                   </span>
                 )}
               </span>

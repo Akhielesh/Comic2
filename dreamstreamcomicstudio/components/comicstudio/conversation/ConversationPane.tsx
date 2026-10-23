@@ -17,7 +17,7 @@ import { EmptyConversation } from './EmptyConversation';
 import { AssistantMessage, DirectorMark, UserBubble } from './MessageItem';
 import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
 import { AgentThinking } from '../../studio/kit/streamMotion';
-import { useKeyboardInset } from '../mobile/useKeyboardInset';
+import { subscribeKeyboardInset } from '../mobile/useKeyboardInset';
 import { cx } from './ui';
 
 const NEAR_BOTTOM_PX = 96;
@@ -59,7 +59,6 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
     },
     [composerApiRef]
   );
-  const { kb } = useKeyboardInset();
   const pinnedRef = useRef(true);
   const [pinned, setPinned] = useState(true);
 
@@ -105,10 +104,17 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
   }, [signature, scrollToBottom, isEmpty]);
 
   // The keyboard opening/closing resizes the log: keep a pinned conversation on the latest message.
-  useEffect(() => {
-    if (pinnedRef.current && !isEmpty) scrollToBottom();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kb]);
+  // Subscribed directly (it also keeps --app-h/--kb written while the pane is mounted): re-rendering
+  // every message on each frame of the keyboard animation would make typing janky on a phone.
+  const isEmptyRef = useRef(isEmpty);
+  isEmptyRef.current = isEmpty;
+  useEffect(
+    () =>
+      subscribeKeyboardInset(() => {
+        if (pinnedRef.current && !isEmptyRef.current) scrollToBottom();
+      }),
+    [scrollToBottom]
+  );
 
   // Sending always brings the conversation back to the latest.
   useEffect(() => {

@@ -9,6 +9,7 @@ import {
   checkQualityAccess,
   PAID_PLAN_TIERS,
   PRO_QUALITY_DENIED_MESSAGE,
+  PRO_QUALITY_USAGE_MESSAGE,
   qualityDeniedFromCaps,
   studioCapsFor
 } from './access.js';
@@ -50,9 +51,26 @@ describe('checkQualityAccess', () => {
     expect(await checkQualityAccess(req('u'), 'pro', false, { planFor, billingEnabled: true })).toEqual({ ok: true });
   });
 
-  it('denies Pro without a signed-in user, and allows everything when billing is off', async () => {
+  it('denies Pro without a signed-in user (billing on or off)', async () => {
     expect((await checkQualityAccess(req(), 'pro', false, { planFor: async () => 'pro', billingEnabled: true })).ok).toBe(false);
-    expect(await checkQualityAccess(req(), 'pro', false, { planFor: async () => 'free', billingEnabled: false })).toEqual({ ok: true });
+    expect((await checkQualityAccess(req(), 'pro', false, { billingEnabled: false, meteringEnabled: true })).ok).toBe(false);
+  });
+
+  it('billing off: the usage budget decides Pro (admin, exempt or allow_pro only; lookups fail closed)', async () => {
+    const off = { billingEnabled: false, meteringEnabled: true, isAdminFor: async () => false };
+    const governed = vi.fn(async () => ({ governed: true, allowPro: false }));
+    expect(await checkQualityAccess(req('g'), 'pro', false, { ...off, budgetFlagsFor: governed })).toEqual({ ok: false, message: PRO_QUALITY_USAGE_MESSAGE });
+    expect(PRO_QUALITY_USAGE_MESSAGE).not.toMatch(/\$|paid plan/);
+    expect(await checkQualityAccess(req('g'), 'standard', false, { ...off, budgetFlagsFor: governed })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('g'), 'pro', true, { ...off, budgetFlagsFor: governed })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('p'), 'pro', false, { ...off, budgetFlagsFor: async () => ({ governed: true, allowPro: true }) })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('e'), 'pro', false, { ...off, budgetFlagsFor: async () => ({ governed: false, allowPro: false }) })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('a'), 'pro', false, { ...off, isAdminFor: async () => true, budgetFlagsFor: governed })).toEqual({ ok: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect((await checkQualityAccess(req('x'), 'pro', false, { ...off, budgetFlagsFor: async () => { throw new Error('db down'); } })).ok).toBe(false);
+    warn.mockRestore();
+    // Metering switched off entirely: nothing is metered, the legacy open gate applies.
+    expect(await checkQualityAccess(req('y'), 'pro', false, { billingEnabled: false, meteringEnabled: false })).toEqual({ ok: true });
   });
 
   it('caches the plan lookup briefly per user', async () => {
@@ -95,9 +113,23 @@ describe('studioCapsFor', () => {
     warn.mockRestore();
   });
 
-  it('fails open on the tier gate when billing is off or the plan lookup fails; admin lookup fails closed', async () => {
-    const off = await studioCapsFor(req('u7'), { byok: false }, deps({ billingEnabled: false }));
-    expect(off).toMatchObject({ plan: 'free', qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+  it('billing off: governed users keep Easy AND Pro editors but render Draft/Standard; Pro for admin/own key/exempt/allow_pro', async () => {
+    const off = (over: Partial<Parameters<typeof studioCapsFor>[2]> = {}) =>
+      deps({ billingEnabled: false, meteringEnabled: true, budgetFlagsFor: async () => ({ governed: true, allowPro: false }), ...over });
+    const governed = await studioCapsFor(req('u7'), { byok: false }, off());
+    expect(governed).toMatchObject({ plan: 'free', qualityTiers: ['draft', 'standard'], modelOverride: false, proEditor: true });
+    expect(await studioCapsFor(req('u7b'), { byok: false }, off({ budgetFlagsFor: async () => ({ governed: true, allowPro: true }) }))).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    expect(await studioCapsFor(req('u7c'), { byok: false }, off({ budgetFlagsFor: async () => ({ governed: false, allowPro: false }) }))).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'] });
+    expect(await studioCapsFor(req('u7d'), { byok: true }, off())).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    expect(await studioCapsFor(req('u7e'), { byok: false }, off({ isAdminFor: async () => true }))).toMatchObject({ admin: true, qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    expect(await studioCapsFor(req(), { byok: false }, off())).toMatchObject({ qualityTiers: ['draft', 'standard'], modelOverride: false });
+    const warnOff = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await studioCapsFor(req('u7f'), { byok: false }, off({ budgetFlagsFor: async () => { throw new Error('db down'); } }))).toMatchObject({ qualityTiers: ['draft', 'standard'] });
+    warnOff.mockRestore();
+    expect(await studioCapsFor(req('u7g'), { byok: false }, off({ meteringEnabled: false }))).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+  });
+
+  it('fails open on the tier gate when the plan lookup fails (billing on); admin lookup fails closed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const failed = await studioCapsFor(req('u8'), { byok: false }, deps({ planFor: async () => { throw new Error('ledger down'); }, isAdminFor: async () => { throw new Error('roles down'); } }));
     expect(failed).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], admin: false, plan: 'free' });

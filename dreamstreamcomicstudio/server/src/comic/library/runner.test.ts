@@ -307,5 +307,47 @@ describe('refine and review', () => {
     // Rejecting the weaker new candidate keeps the earlier published image live.
     await rejectAsset(t.deps, 'style.test-one', undefined, ADMIN);
     expect((await publicIndex(t.deps)).index.assets.map((a) => a.rev)).toEqual([1]);
+    // A takedown removes the live image too (every screen falls back to procedural art).
+    const before = t.published;
+    await rejectAsset(t.deps, 'style.test-one', 'takedown', ADMIN, { unpublish: true });
+    expect((await publicIndex(t.deps)).index.assets).toEqual([]);
+    expect(t.repo.assets.get('1:style.test-one')!.published).toBeNull();
+    expect(t.published).toBe(before + 1);
+  });
+
+  it('a Cancel that lands mid-step is never overwritten by "completed"; what was drawn is kept', async () => {
+    const base = fakeLibraryImages();
+    let runId = '';
+    let t: ReturnType<typeof testLibrary>;
+    const images = {
+      calls: base.calls,
+      generate: async (req: Parameters<typeof base.generate>[0]) => {
+        await cancelRun(t.deps, runId, ADMIN); // the admin clicks Cancel while this image is drawing
+        return base.generate(req);
+      }
+    };
+    t = testLibrary({ images, manifest: TEST_MANIFEST.slice(0, 1) });
+    runId = await start(t);
+    const view = await stepRun(t.deps, runId, 1, ADMIN);
+    expect(view.status).toBe('cancelled');
+    expect(view.message).toMatch(/cancelled/i);
+    expect(t.repo.runs.get(runId)!.status).toBe('cancelled');
+    expect(t.repo.runs.get(runId)!.spent_usd).toBeGreaterThan(0); // real spend is still recorded
+    expect(t.repo.assets.get('1:style.test-one')!.status).toBe('published');
+  });
+
+  it('a row left mid-attempt by a cancelled build becomes reviewable once no step can hold it', async () => {
+    const images = fakeLibraryImages(() => new Promise<never>(() => undefined));
+    const t = testLibrary({ images, manifest: TEST_MANIFEST.slice(0, 1) });
+    const runId = await start(t);
+    void stepRun(t.deps, runId, 1, ADMIN); // the container dies mid-draw
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.repo.assets.get('1:style.test-one')!.status).toBe('generating');
+    await expect(rejectAsset(t.deps, 'style.test-one', undefined, ADMIN)).rejects.toMatchObject({ status: 409 });
+    await cancelRun(t.deps, runId, ADMIN);
+    await expect(rejectAsset(t.deps, 'style.test-one', undefined, ADMIN)).rejects.toMatchObject({ status: 409 });
+    t.clock.now += LIBRARY_LEASE_MS + 1000;
+    const view = await rejectAsset(t.deps, 'style.test-one', 'stuck', ADMIN);
+    expect(view.row?.status).toBe('rejected');
   });
 });

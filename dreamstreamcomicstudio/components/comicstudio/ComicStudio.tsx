@@ -42,6 +42,7 @@ import { Skeleton } from '../studio/kit/Shimmer';
 import { CANVAS_BG, HAIRLINE, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { BoardPane } from './board/BoardPane';
+import { registerStudioRefresh } from './board/ui';
 import { pageProgress } from './board/boardModel';
 import { ConversationPane } from './conversation/ConversationPane';
 import { StudioComposer, type StudioComposerHandle } from './conversation/StudioComposer';
@@ -132,11 +133,23 @@ export const SPEND_KIND_LABELS: Record<SpendKind, string> = {
   translate: 'Translations'
 };
 
-const SPEND_ORDER: SpendKind[] = ['page', 'edit', 'sheet', 'style', 'cover', 'plan', 'chat', 'qc'];
+const SPEND_ORDER: SpendKind[] = ['page', 'edit', 'sheet', 'style', 'cover', 'translate', 'plan', 'chat', 'qc'];
+
+/** Every kind with spend, in display order — a kind this build doesn't know yet still shows (never a silent gap). */
+export const spendKindsShown = (byKind: Partial<Record<string, number>>): string[] => {
+  const positive = (k: string) => {
+    const v = byKind[k];
+    return typeof v === 'number' && Number.isFinite(v) && v > 0;
+  };
+  const known = SPEND_ORDER.filter(positive);
+  const other = Object.keys(byKind).filter((k) => !(SPEND_ORDER as string[]).includes(k) && positive(k));
+  return [...known, ...other];
+};
 
 export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
   const spend = doc.spend;
-  const kinds = SPEND_ORDER.filter((k) => (spend.byKind[k] || 0) > 0);
+  const byKind = spend.byKind as Partial<Record<string, number>>;
+  const kinds = spendKindsShown(byKind);
   const byokUsd = spend.entries.filter((e) => e.byok).reduce((n, e) => n + (Number.isFinite(e.usd) ? e.usd : 0), 0);
   const anyEstimated = spend.entries.some((e) => e.estimated);
   const budget = typeof doc.settings.budgetUsd === 'number' && doc.settings.budgetUsd > 0 ? doc.settings.budgetUsd : null;
@@ -158,9 +171,9 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc }> = ({ doc }) => {
       {kinds.length ? (
         <dl className="mt-3 space-y-1.5 border-t border-[var(--ds-hairline-soft)] pt-3">
           {kinds.map((k) => (
-            <div key={k} className="flex items-center justify-between text-[13px]">
-              <dt className="text-[var(--ds-muted)]">{SPEND_KIND_LABELS[k]}</dt>
-              <dd className="font-medium tabular-nums text-[var(--ds-ink)]">{formatUsd(spend.byKind[k] || 0)}</dd>
+            <div key={k} className="flex items-center justify-between gap-3 text-[13px]">
+              <dt className="min-w-0 truncate text-[var(--ds-muted)]">{SPEND_KIND_LABELS[k as SpendKind] || k.replace(/_/g, ' ')}</dt>
+              <dd className="shrink-0 font-medium tabular-nums text-[var(--ds-ink)]">{formatUsd(byKind[k] || 0)}</dd>
             </div>
           ))}
         </dl>
@@ -665,9 +678,17 @@ const AskDirectorPill: React.FC<{ busy: boolean; onAsk: () => void; onViewChat: 
 export const readUnavailableReason = (doc: ComicDoc | null): string | undefined =>
   doc && pageProgress(doc).ready > 0 ? undefined : 'Read opens once a page is drawn';
 
+/**
+ * Keeps --app-h / --kb / html.kb-open in sync while the studio is open. Its own tiny component: the
+ * keyboard animates over many frames, and the shell (header, both panes) must not re-render on each.
+ */
+const KeyboardInsetMount: React.FC = () => {
+  useKeyboardInset();
+  return null;
+};
+
 export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack: () => void }> = ({ studio, onBack }) => {
   const ff = useFormFactor();
-  useKeyboardInset();
   useThemeColor();
   const phone = isPhoneLayout(ff.layout);
   const [view, setView] = useState<'chat' | 'board'>('chat');
@@ -694,6 +715,11 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
   useEffect(() => {
     initTheme();
   }, []);
+
+  // A render overlay stuck far past its usual time offers "Check again": a free reload of the comic.
+  const refreshRef = useRef(studio.refresh);
+  refreshRef.current = studio.refresh;
+  useEffect(() => registerStudioRefresh(() => void refreshRef.current()), []);
 
   // Name the tab after the comic while it's open.
   const title = doc?.brief.title;
@@ -869,6 +895,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
       style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)' }}
       data-layout={ff.layout}
     >
+      <KeyboardInsetMount />
       <button
         type="button"
         onClick={skipToComposer}

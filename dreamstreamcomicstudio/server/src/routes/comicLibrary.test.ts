@@ -166,6 +166,17 @@ describe('admin console API', () => {
     expect(runs.runs[0]).toMatchObject({ id: run.id, status: 'completed', total: 5 });
   });
 
+  it('reject only drops the candidate; unpublish: true takes the live image down (bad ids are 400)', async () => {
+    const { run } = await (await post('/api/comic/admin/library/runs', { confirm: true, ids: ['style.test-one'] })).json();
+    await post(`/api/comic/admin/library/runs/${run.id}/step`, { n: 1 });
+    expect(t.repo.assets.get('1:style.test-one')!.published?.rev).toBe(1);
+    expect((await post('/api/comic/admin/library/assets/..%2Fx/reject', {})).status).toBe(400);
+    const res = await post('/api/comic/admin/library/assets/style.test-one/reject', { note: 'takedown', unpublish: true });
+    expect(res.status).toBe(200);
+    expect((await res.json()).row).toMatchObject({ status: 'rejected' });
+    expect(t.repo.assets.get('1:style.test-one')!.published).toBeNull();
+  });
+
   it('no platform key → 503 with an honest message', async () => {
     t = testLibrary({ keys: null });
     const res = await post('/api/comic/admin/library/runs', { confirm: true });

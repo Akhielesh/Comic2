@@ -446,6 +446,26 @@ export const STUCK_FALLBACK_MS = 15 * 60_000;
 export const isStuck = (elapsedMs: number, typicalSec?: number): boolean =>
   elapsedMs > (typicalSec && typicalSec > 0 ? typicalSec * 1000 * STUCK_FACTOR : STUCK_FALLBACK_MS);
 
+// The studio shell registers its free re-check (studio.refresh: one GET, no AI) here, so EVERY stuck
+// overlay can offer "Check again" without each frame threading the controller down. Outside a studio
+// nothing is registered and the overlay just says it is taking long (no dead button).
+const studioRefreshers = new Set<() => void>();
+
+/** Register the open studio's refresh; returns the unregister function. */
+export const registerStudioRefresh = (refresh: () => void): (() => void) => {
+  studioRefreshers.add(refresh);
+  return () => {
+    studioRefreshers.delete(refresh);
+  };
+};
+
+/** The registered studio refresh (the most recent), if a studio is open. */
+export const studioRefresh = (): (() => void) | undefined => {
+  let last: (() => void) | undefined;
+  studioRefreshers.forEach((fn) => (last = fn));
+  return last;
+};
+
 /**
  * The status layer over any render frame: shimmer + elapsed + model while drawing, error
  * + Retry when failed, an amber "out of date" badge when stale. Sits inside a `relative` box.
@@ -471,6 +491,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
     const slow = status === 'rendering' && typicalSec && elapsed > typicalSec * 2500;
     // A clock that reads "378d" helps nobody: past 10× the usual time it stops and offers a free re-check.
     const stuck = !!since && isStuck(elapsed, typicalSec);
+    const recheck = onRefresh ?? (stuck ? studioRefresh() : undefined);
     return (
       <div className={cx('absolute inset-0 z-[3] flex flex-col justify-end', overImage ? 'bg-black/25' : '')} aria-live="polite">
         {!overImage && <div className="studio-shimmer absolute inset-0" aria-hidden />}
@@ -488,12 +509,12 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
           ) : stuck ? (
             <>
               <span className="min-w-0">{status === 'queued' ? 'Still queued' : 'Still drawing'} · much longer than usual</span>
-              {onRefresh && (
+              {recheck && (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onRefresh();
+                    recheck();
                   }}
                   className={`tap-target rounded-full px-1.5 font-semibold text-[var(--ds-accent)] hover:underline ${FOCUS_RING}`}
                 >

@@ -136,7 +136,7 @@ describe('usage budget gate (reserveForOperation)', () => {
     const second = await run();
     expect(second.allowed).toBe(false);
     expect(provider).toHaveBeenCalledTimes(1);
-    if (second.allowed) throw new Error('unreachable');
+    if (!('details' in second)) throw new Error('unreachable');
     expect(second.details).toMatchObject({ reason: 'usage_budget_exhausted', requiredCt: 0, availableCt: 0 });
     expect(second.details.message).toContain('Settings → API keys');
     expect(JSON.stringify(second.details)).not.toMatch(/\$\d/);
@@ -208,7 +208,7 @@ describe('usage budget gate (reserveForOperation)', () => {
     keys.hasKey = true;
     const r = await reserve(makeReq());
     expect(r.allowed).toBe(false);
-    if (r.allowed) return;
+    if (!('details' in r)) return;
     expect(r.details).toMatchObject({ reason: 'usage_budget_unavailable', canFallbackToByok: true });
     expect(r.details.message).toContain('nothing was spent');
     expect(ledger.reserveUsageTokens).not.toHaveBeenCalled();

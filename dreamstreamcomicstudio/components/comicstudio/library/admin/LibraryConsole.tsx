@@ -133,11 +133,14 @@ export const LibraryConsole: React.FC = () => {
   const [starting, setStarting] = useState(false);
   const [run, setRun] = useState<LibraryRunView | LibraryStepView | null>(null);
   const [driving, setDriving] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const stop = useRef({ current: false }).current;
   const mounted = useRef(true);
+  /** Only the newest drive loop may step or touch state (a stale loop from before a Pause just ends). */
+  const driveGen = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -199,14 +202,17 @@ export const LibraryConsole: React.FC = () => {
   /** Drive a run: one step after another while this console is open and not paused. */
   const drive = useCallback(
     async (runId: string) => {
+      const gen = ++driveGen.current;
+      const live = () => !stop.current && mounted.current && gen === driveGen.current;
       stop.current = false;
+      setPausing(false);
       setDriving(true);
       let failures = 0;
       try {
-        while (!stop.current && mounted.current) {
+        while (live()) {
           try {
             const view = await stepLibraryRun(runId, 3);
-            if (!mounted.current) return;
+            if (!mounted.current || gen !== driveGen.current) return;
             failures = 0;
             setRun(view);
             if (view.status !== 'running') {
@@ -217,7 +223,7 @@ export const LibraryConsole: React.FC = () => {
           } catch (err) {
             failures += 1;
             const status = statusOf(err);
-            if (!mounted.current) return;
+            if (!mounted.current || gen !== driveGen.current) return;
             // Bad input, auth, missing key/tables: stop and say why. Network blips: back off and resume.
             if ((status >= 400 && status < 500 && status !== 408 && status !== 429) || status === 503 || failures >= 5) {
               setNotice({ tone: 'warn', text: `${errText(err)} The build is paused; Resume continues where it stopped.` });
@@ -227,8 +233,9 @@ export const LibraryConsole: React.FC = () => {
           }
         }
       } finally {
-        if (mounted.current) {
+        if (mounted.current && gen === driveGen.current) {
           setDriving(false);
+          setPausing(false);
           void load();
         }
       }
@@ -324,8 +331,9 @@ export const LibraryConsole: React.FC = () => {
 
   const totals = useMemo(() => {
     const rows = (manifest?.entries || []).map((e) => e.row).filter(Boolean);
+    const core = (manifest?.entries || []).filter((e) => !e.optional && e.row).map((e) => e.row!);
     return {
-      published: rows.filter((r) => r!.status === 'published' || r!.published).length,
+      published: core.filter((r) => r.status === 'published' || r.published).length,
       review: rows.filter((r) => r!.status === 'needs_review').length,
       spent: rows.reduce((n, r) => n + (r!.costUsd || 0), 0)
     };
@@ -344,7 +352,7 @@ export const LibraryConsole: React.FC = () => {
   if (!manifest && !loadError) {
     return (
       <div className={cx(panel, 'flex items-center gap-2 text-[13px] text-[var(--ds-muted)]')}>
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Loading the library…
+        <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden /> Loading the library…
       </div>
     );
   }
@@ -425,17 +433,23 @@ export const LibraryConsole: React.FC = () => {
         <section className={panel} aria-label="Build in progress">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0 text-[13px] font-semibold">
-              {driving ? 'Building…' : 'Build paused'}{' '}
+              {pausing ? 'Pausing after this step…' : driving ? 'Building…' : 'Build paused'}{' '}
               <span className="font-normal tabular-nums text-[var(--ds-muted)]">
                 {active.counts.done}/{active.counts.total} · {usd(active.spentUsd)} of {usd(active.budgetUsd)}
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
               {driving ? (
-                <button type="button" className={ghost} onClick={() => {
+                <button
+                  type="button"
+                  className={ghost}
+                  disabled={pausing}
+                  onClick={() => {
                     stop.current = true;
-                  }}>
-                  <Pause className="h-3.5 w-3.5" aria-hidden /> Pause
+                    setPausing(true);
+                  }}
+                >
+                  <Pause className="h-3.5 w-3.5" aria-hidden /> {pausing ? 'Pausing…' : 'Pause'}
                 </button>
               ) : (
                 <button type="button" className={primary} onClick={() => void drive(active.id)} disabled={!manifest.platformKey}>
@@ -486,7 +500,7 @@ export const LibraryConsole: React.FC = () => {
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" className={ghost} onClick={() => void getQuote()} disabled={quoting}>
-            {quoting ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Sparkles className="h-3.5 w-3.5" aria-hidden />} Get a quote (free)
+            {quoting ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <Sparkles className="h-3.5 w-3.5" aria-hidden />} Get a quote (free)
           </button>
           <button
             type="button"
@@ -558,7 +572,7 @@ export const LibraryConsole: React.FC = () => {
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button type="button" className={primary} onClick={() => void build()} disabled={starting || quote.images === 0}>
-                {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />} Build {quote.images}
+                {starting ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />} Build {quote.images}
               </button>
               <button type="button" className={ghost} onClick={() => setConfirming(false)}>
                 Not now
@@ -604,7 +618,7 @@ export const LibraryConsole: React.FC = () => {
                     </span>
                   </button>
                   <label className="flex min-h-[32px] cursor-pointer items-center gap-1.5 border-t border-[var(--ds-hairline-soft)] px-2 text-[11px] text-[var(--ds-muted)] coarse:min-h-[44px]">
-                    <input type="checkbox" checked={isSel} onChange={() => toggle(e.id)} className="h-3.5 w-3.5 accent-[#D97757]" /> Select
+                    <input type="checkbox" checked={isSel} onChange={() => toggle(e.id)} aria-label={`Select ${e.id}`} className="h-3.5 w-3.5 accent-[#D97757]" /> Select
                   </label>
                 </li>
               );
@@ -628,10 +642,12 @@ const AssetDrawer: React.FC<{
 }> = ({ entry, busyKey, note, setNote, onClose, act, running }) => {
   const row = entry.row;
   const busy = (k: string) => busyKey === `${k}:${entry.id}`;
-  // Publish/reject only wait for THIS asset's in-flight attempt; regenerate waits for the running build (one run at a time).
-  const drawing = row?.status === 'generating' || row?.status === 'analyzing';
+  // Publish/reject only wait for THIS asset's in-flight attempt while a build runs (a row left
+  // mid-attempt by a cancelled build is the server's call: it answers 409 until no step can hold it);
+  // regenerate waits for the running build (one run at a time).
+  const drawing = running && (row?.status === 'generating' || row?.status === 'analyzing');
   return (
-    <div className="mt-3 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3" aria-label={`${entry.id} details`}>
+    <div role="region" className="mt-3 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3" aria-label={`${entry.id} details`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-mono text-[12px] font-semibold">{entry.id}</p>
@@ -665,9 +681,23 @@ const AssetDrawer: React.FC<{
                     <span className="text-[var(--ds-muted)]">{c.strategy}</span>
                   </div>
                   {live && <span className={cx('inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold', STATUS_CLASS.published)}>Live</span>}
+                  {live && (
+                    <button
+                      type="button"
+                      className={cx(ghost, 'mt-1 w-full')}
+                      disabled={drawing || busy('takedown')}
+                      onClick={() => {
+                        // eslint-disable-next-line no-alert
+                        if (!window.confirm(`Take ${entry.id} down? Every screen falls back to its free procedural art until another image is published.`)) return;
+                        void act(`takedown:${entry.id}`, () => rejectLibraryAsset(entry.id, note.trim() || undefined, { unpublish: true }), `Took ${entry.id} down.`).then(() => setNote(''));
+                      }}
+                    >
+                      {busy('takedown') ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <ImageOff className="h-3.5 w-3.5" aria-hidden />} Take down
+                    </button>
+                  )}
                   {!c.current && <span className="block text-[10px] text-[var(--ds-muted)]">Older prompt</span>}
-                  {c.issues.slice(0, 3).map((i) => (
-                    <p key={i} className="leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">
+                  {c.issues.slice(0, 3).map((i, k) => (
+                    <p key={`${k}:${i}`} className="leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">
                       {i}
                     </p>
                   ))}
@@ -686,7 +716,7 @@ const AssetDrawer: React.FC<{
                       disabled={drawing || busy('publish')}
                       onClick={() => void act(`publish:${entry.id}`, () => publishLibraryAsset(entry.id, c.rev), `Published ${entry.id} (rev ${c.rev}).`)}
                     >
-                      {busy('publish') ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />} Publish this
+                      {busy('publish') ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />} Publish this
                     </button>
                   )}
                 </div>
@@ -718,7 +748,7 @@ const AssetDrawer: React.FC<{
               void act(`regenerate:${entry.id}`, () => regenerateLibraryAsset(entry.id, note.trim() ? { note: note.trim() } : {}), `Regenerating ${entry.id}.`).then(() => setNote(''));
             }}
           >
-            {busy('regenerate') ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />} Regenerate
+            {busy('regenerate') ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />} Regenerate
           </button>
           {row && row.status !== 'rejected' && (
             <button
@@ -727,7 +757,7 @@ const AssetDrawer: React.FC<{
               disabled={drawing || busy('reject')}
               onClick={() => void act(`reject:${entry.id}`, () => rejectLibraryAsset(entry.id, note.trim() || undefined), `Rejected ${entry.id}.`).then(() => setNote(''))}
             >
-              {busy('reject') ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />} Reject
+              {busy('reject') ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />} Reject
             </button>
           )}
         </div>
