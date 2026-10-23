@@ -28,9 +28,18 @@
  * `failed`, restarts ICE (a few times, then gives up and says so). A `ready`
  * from the HOST tells a guest to rebuild its link — that is how a studio that
  * reloaded, or whose camera came up late, picks guests back up.
+ *
+ * Relays cost per GB (Cloudflare TURN bills what it sends to the relaying device), so each
+ * link re-reads its network path, and one going through a relay sends less: the return feed
+ * ≤ 700 kbps, a guest's camera ≤ 600 kbps and screen ≤ 1 Mbps (lifted again if the path goes
+ * direct). TURN credentials are short-lived: the views ask the room for fresh ones when
+ * `iceMs` says (live/rtcIce.ts), and a relayed link restarts ICE onto them before the old
+ * ones lapse.
  */
 
+import { netPath, type NetPath } from '../monitor/rtc';
 import type { RtcSignal } from '../protocol';
+import { keepRelay, turnRenewed } from '../rtcIce';
 
 export type TrackKind = 'cam' | 'screen';
 
@@ -65,14 +74,22 @@ export function sanitizeIceServers(raw: unknown): RTCIceServer[] | null {
 export const MAX_ICE_RESTARTS = 3;
 /** A link that sits in `disconnected` this long gets an ICE restart. */
 export const DISCONNECTED_GRACE_MS = 3000;
+/** A connected link re-reads its network path this often (an ICE restart can move it on or off a relay). */
+export const PATH_RECHECK_MS = 15_000;
+
+/** Through a relay (TURN, billed per GB): the return feed, a guest's camera and a guest's screen never go above these. */
+export const RELAY_RETURN_BPS = 700_000;
+export const RELAY_GUEST_CAM_BPS = 600_000;
+export const RELAY_GUEST_SCREEN_BPS = 1_000_000;
 
 /**
  * Video budget for one guest's return feed (the program canvas): fewer guests get more,
  * and the picture is scaled to ≤ 540 lines — plenty for a meeting tile, and four
  * encodes of it still fit a home uplink.
  */
-export function returnFeedEncoding(guests: number, sourceHeight: number): { maxBitrate: number; scaleResolutionDownBy: number } {
-  const maxBitrate = guests <= 1 ? 1_200_000 : guests === 2 ? 900_000 : 700_000;
+export function returnFeedEncoding(guests: number, sourceHeight: number, relayed = false): { maxBitrate: number; scaleResolutionDownBy: number } {
+  const base = guests <= 1 ? 1_200_000 : guests === 2 ? 900_000 : 700_000;
+  const maxBitrate = relayed ? Math.min(base, RELAY_RETURN_BPS) : base;
   const scale = sourceHeight > 540 ? Math.round((sourceHeight / 540) * 100) / 100 : 1;
   return { maxBitrate, scaleResolutionDownBy: scale };
 }
@@ -89,6 +106,22 @@ async function capSender(sender: RTCRtpSender, enc: { maxBitrate: number; scaleR
     await sender.setParameters(params);
   } catch {
     /* not negotiated yet / older browser — re-applied once connected; congestion control still adapts */
+  }
+}
+
+/** Cap one video sender's bitrate (null: no cap of ours — congestion control alone, as off a relay). */
+async function limitBitrate(sender: RTCRtpSender | null, bps: number | null): Promise<void> {
+  if (!sender) return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) params.encodings = [{}];
+    const e = params.encodings[0];
+    if (bps == null ? e.maxBitrate == null : e.maxBitrate === bps) return;
+    if (bps == null) delete e.maxBitrate;
+    else e.maxBitrate = bps;
+    await sender.setParameters(params);
+  } catch {
+    /* not negotiated yet: re-applied once it is (onNegotiated), or when the path changes */
   }
 }
 
@@ -112,8 +145,17 @@ class PeerLink {
   onRemote: ((r: RemoteStream) => void) | null = null;
   onRemoteGone: ((streamId: string) => void) | null = null;
   onConnectionState: ((s: RTCPeerConnectionState) => void) | null = null;
+  /** The network path this link uses (null until known); a relay is billed per GB, so it's capped. */
+  path: NetPath | null = null;
+  onPath: ((p: NetPath) => void) | null = null;
+  /**
+   * A (re)negotiation finished — signaling is back to `stable`. A sender added since (a screen
+   * share) has its encodings only now, so a cap tried before this may not have taken.
+   */
+  onNegotiated: (() => void) | null = null;
   private restarts = 0;
   private discTimer: ReturnType<typeof setTimeout> | null = null;
+  private pathTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
 
   constructor(polite: boolean, private signal: SendSignal, iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS) {
@@ -136,6 +178,9 @@ class PeerLink {
       const st = this.pc.connectionState;
       this.recover(st);
       this.onConnectionState?.(st);
+    };
+    this.pc.onsignalingstatechange = () => {
+      if (!this.closed && this.pc.signalingState === 'stable') this.onNegotiated?.();
     };
     this.pc.ontrack = (e) => {
       const stream = e.streams[0];
@@ -236,6 +281,7 @@ class PeerLink {
     }
     if (st === 'connected') {
       this.restarts = 0;
+      void this.checkPath();
       return;
     }
     if (st === 'failed') this.restartIce();
@@ -259,16 +305,39 @@ class PeerLink {
     }
   }
 
-  /** New ICE list from the room (TURN arrived): use it, and re-gather if not up yet. */
-  setIceServers(iceServers: RTCIceServer[]): void {
+  /** Which network path the link uses now (re-read while connected); tells the owner when it changes. */
+  private async checkPath(): Promise<void> {
+    if (this.pathTimer) clearTimeout(this.pathTimer);
+    this.pathTimer = null;
+    if (this.closed || this.pc.connectionState !== 'connected') return;
+    const p = await netPath(this.pc);
+    if (this.closed || this.pc.connectionState !== 'connected') return;
+    if (p && p !== this.path) {
+      this.path = p;
+      this.onPath?.(p);
+    }
+    this.pathTimer = setTimeout(() => void this.checkPath(), PATH_RECHECK_MS);
+  }
+
+  /**
+   * New ICE list from the room (TURN arrived, or fresh credentials): use it, and re-gather if
+   * not up yet — or, if the link goes through a relay on the credentials these replace,
+   * restart onto them now, before those lapse.
+   */
+  setIceServers(list: RTCIceServer[]): void {
     if (this.closed) return;
+    let renewed = false;
     try {
-      this.pc.setConfiguration({ ...this.pc.getConfiguration(), iceServers });
+      const cur = this.pc.getConfiguration();
+      const iceServers = keepRelay(cur.iceServers ?? [], list);
+      renewed = turnRenewed(cur.iceServers, iceServers);
+      this.pc.setConfiguration({ ...cur, iceServers });
     } catch {
       return;
     }
     const st = this.pc.connectionState;
     if (this.pc.remoteDescription && st !== 'connected' && st !== 'new') this.restartIce();
+    else if (renewed && st === 'connected' && this.path === 'relay') this.restartIce();
   }
 
   /** What kind a remote stream id maps to right now. */
@@ -280,6 +349,8 @@ class PeerLink {
     this.closed = true;
     if (this.discTimer) clearTimeout(this.discTimer);
     this.discTimer = null;
+    if (this.pathTimer) clearTimeout(this.pathTimer);
+    this.pathTimer = null;
     try {
       this.pc.close();
     } catch {
@@ -338,7 +409,7 @@ export class HostPeers {
 
   /** The room's ICE list (STUN + TURN): new links use it, links still connecting re-gather. */
   setIceServers(list: RTCIceServer[]): void {
-    this.iceServers = list;
+    this.iceServers = keepRelay(this.iceServers, list);
     for (const e of this.links.values()) e.link.setIceServers(list);
   }
 
@@ -360,14 +431,14 @@ export class HostPeers {
     }
   }
 
-  /** Re-apply every link's video cap — the guest count changed, so the per-link budget did too. */
+  /** Re-apply every link's video cap — the guest count changed (so the per-link budget did), or a link's path did. */
   private recap(): void {
     const n = this.links.size;
     for (const e of this.links.values()) {
       const track = e.videoSender?.track;
       if (!e.videoSender || !track) continue;
       const h = track.getSettings?.().height ?? 720;
-      void capSender(e.videoSender, returnFeedEncoding(n, h));
+      void capSender(e.videoSender, returnFeedEncoding(n, h, e.link.path === 'relay'));
     }
   }
 
@@ -406,6 +477,7 @@ export class HostPeers {
       if (s === 'connected') this.recap(); // encodings exist now — make the cap stick
       this.onChange?.();
     };
+    link.onPath = () => this.recap(); // onto or off a relay: its return feed's cap follows
     this.links.set(sid, entry);
     this.recap();
     this.onChange?.();
@@ -474,6 +546,7 @@ export class GuestPeer {
   private link: PeerLink;
   private screenStream: MediaStream | null = null;
   private camSender: RTCRtpSender | null = null;
+  private screenSender: RTCRtpSender | null = null;
   onHostStream: ((stream: MediaStream | null) => void) | null = null;
   onState: ((s: RTCPeerConnectionState) => void) | null = null;
 
@@ -483,6 +556,17 @@ export class GuestPeer {
     this.link.onRemote = ({ stream }) => this.onHostStream?.(stream);
     this.link.onRemoteGone = () => this.onHostStream?.(null);
     this.link.onConnectionState = (s) => this.onState?.(s);
+    this.link.onPath = () => void this.capUplink();
+    // A screen share added while relayed is renegotiated with the link still up (no path change):
+    // its cap is applied again once the new sender exists for real. Unchanged caps are skipped.
+    this.link.onNegotiated = () => void this.capUplink();
+  }
+
+  /** Through a relay our camera and screen send less (billed per GB); off it, no cap of ours. */
+  private async capUplink(): Promise<void> {
+    const relayed = this.link.path === 'relay';
+    await limitBitrate(this.camSender, relayed ? RELAY_GUEST_CAM_BPS : null);
+    await limitBitrate(this.screenSender, relayed ? RELAY_GUEST_SCREEN_BPS : null);
   }
 
   /** Guest flipped their camera — swap the outgoing video track in place. */
@@ -500,10 +584,12 @@ export class GuestPeer {
       this.link.removeLocalStream(this.screenStream);
       this.screenStream.getTracks().forEach((t) => t.stop());
       this.screenStream = null;
+      this.screenSender = null;
     }
     if (stream) {
       this.screenStream = stream;
-      this.link.addLocalStream(stream, 'screen');
+      this.screenSender = this.link.addLocalStream(stream, 'screen');
+      if (this.link.path === 'relay') void limitBitrate(this.screenSender, RELAY_GUEST_SCREEN_BPS);
     }
   }
 

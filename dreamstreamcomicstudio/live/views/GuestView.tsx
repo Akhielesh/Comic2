@@ -12,6 +12,7 @@ import type { Nav } from '../nav';
 import { isMeetingGuestLink } from '../nav';
 import { MAX_GUESTS, type ChatMsg, type EventMeta, type StreamStatus } from '../protocol';
 import { GuestPeer, sanitizeIceServers } from '../studio/rtc';
+import { IceClock } from '../rtcIce';
 import { ChatRail } from '../components/rails';
 import { Icon } from '../ui/icons';
 import { StreamStudioLogo } from '../ui/logo';
@@ -72,6 +73,8 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   const camRef = useRef<MediaStream | null>(null);
   const iceRef = useRef<RTCIceServer[] | null>(null);
   const iceWaitRef = useRef<number | null>(null);
+  // Relay credentials last a couple of hours: ask the room for fresh ones when it says (`iceMs`).
+  const iceClockRef = useRef(new IceClock(() => sockRef.current?.send({ t: 'ice' })));
   /** Bumps on every hello — a late ICE reply or timer from an older socket is ignored. */
   const helloSeqRef = useRef(0);
   const statusRef = useRef<StreamStatus>('idle');
@@ -117,6 +120,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
     return () => {
       aliveRef.current = false;
       if (iceWaitRef.current != null) window.clearTimeout(iceWaitRef.current);
+      iceClockRef.current.stop();
       peerRef.current?.close();
       sockRef.current?.close();
       camRef.current?.getTracks().forEach((t) => t.stop());
@@ -186,6 +190,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
           case 'ice': {
             const list = sanitizeIceServers(msg.servers);
             if (list) iceRef.current = list;
+            iceClockRef.current.arm(msg.iceMs);
             if (!peerRef.current) buildPeer(helloSeqRef.current);
             else if (list) peerRef.current.setIceServers(list);
             break;
@@ -231,6 +236,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   const leave = () => {
     sockRef.current?.send({ t: 'rtc', d: { bye: true } });
     if (iceWaitRef.current != null) window.clearTimeout(iceWaitRef.current);
+    iceClockRef.current.stop();
     peerRef.current?.close();
     peerRef.current = null;
     sockRef.current?.close();

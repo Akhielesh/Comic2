@@ -633,6 +633,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       peersRef.current = n;
       setP2pCount(n);
     };
+    // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
+    hub.onIceStale = () => sockRef.current?.send({ t: 'ice' });
     hub.onTalk = (key, s) => {
       let el = talkElsRef.current.get(key);
       if (!s) {
@@ -880,7 +882,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       case 'hello':
         setNursery({ name: m.nursery.name, baby: m.nursery.baby });
         setViewers(m.viewers);
-        hubRef.current?.setIce(m.ice);
+        hubRef.current?.setIce(m.ice, m.iceMs);
         applySettings(m.settings);
         if (pendingZonesRef.current) {
           sockRef.current?.send({ t: 'settings', zones: { dev: device.id, list: pendingZonesRef.current } });
@@ -896,6 +898,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         break;
       case 'presence':
         setViewers(m.viewers);
+        break;
+      case 'ice':
+        hubRef.current?.setIce(m.servers, m.iceMs);
         break;
       case 'settings':
         applySettings(m.settings);

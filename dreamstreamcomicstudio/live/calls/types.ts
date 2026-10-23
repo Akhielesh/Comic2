@@ -68,14 +68,18 @@ export type LineMsg =
       you: { sid: string; uid: string; name: string; role: string; label: string | null };
       nursery: { id: string; name: string; baby: string | null };
       ice: RTCIceServer[];
+      /** Relay credentials are due for renewal in this many ms (absent: STUN only). */
+      iceMs?: number;
       vapid: string | null;
       calls: Call[];
       callLog: CallRecord[];
     }
   | { t: 'call'; call: Call }
-  | { t: 'call_started'; ref: string; id: string; ice?: RTCIceServer[] }
+  | { t: 'call_started'; ref: string; id: string; ice?: RTCIceServer[]; iceMs?: number }
   /** To the device that just picked up: fresh relay credentials for this call. */
-  | { t: 'call_joined'; id: string; ice?: RTCIceServer[] }
+  | { t: 'call_joined'; id: string; ice?: RTCIceServer[]; iceMs?: number }
+  /** Answering `{t:'call_ice'}` during a long call: fresh relay credentials (still the caller's). */
+  | { t: 'call_ice'; id: string; ice?: RTCIceServer[]; iceMs?: number }
   | { t: 'call_err'; error: CallError; ref?: string; id?: string }
   | { t: 'call_rtc'; id: string; from: string; d: CallSignal }
   | { t: 'call_log'; rec: CallRecord }
@@ -92,7 +96,8 @@ export type LineMsg =
 export type CallSignal =
   | { sdp: RTCSessionDescriptionInit; cid?: string }
   | { cand: RTCIceCandidateInit; cid?: string }
-  | { restart: true; cid?: string };
+  /** `renew`: their relay credentials were renewed; restart even a working connection onto them. */
+  | { restart: true; renew?: true; cid?: string };
 
 /** Most people in one call (a mesh — every phone sends to every other). */
 export const MAX_IN_CALL = 4;

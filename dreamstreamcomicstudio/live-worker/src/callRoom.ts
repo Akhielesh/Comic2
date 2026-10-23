@@ -24,13 +24,16 @@
  *    from their line) cancels the call there and then.
  *  - Only sockets that hold a valid ticket count towards the device limit;
  *    sockets still waiting to authenticate have a small pool of their own.
+ *  - Relay (TURN) credentials are this call's own, per person, counted against
+ *    the caller's account (./ice), refreshed on request during a long call
+ *    (`call_ice`), and revoked when the call ends.
  *
  * The worker routes only /ws here; /x/* is for other Durable Objects.
  */
 
 import { CALL_ID_RE, cleanPerson, hashTicket, MAX_DIRECT_TO, mintTicket, overallStatus, userLineName, UUID_RE, type RingStatus } from './directCalls';
 import { CallBook, missedBy, toRecord, type Call, type CallStat } from './familyCalls';
-import { iceServers, type IceEnv } from './ice';
+import { iceFields, iceFor, revokeIce, type IceEnv } from './ice';
 
 export interface CallRoomEnv extends IceEnv {
   USER_LINE: DurableObjectNamespace;
@@ -131,6 +134,11 @@ export class CallRoom {
 
   private line(uid: string): DurableObjectStub {
     return this.env.USER_LINE.get(this.env.USER_LINE.idFromName(userLineName(uid)));
+  }
+
+  /** STUN + this call's own relay credential for one person, counted against the caller's account (./ice). */
+  private ice(meta: Meta, uid: string) {
+    return iceFor(this.env, { room: `c:${meta.id}`, who: uid, bill: { scope: 'account', id: meta.from.uid } });
   }
 
   /** Tell someone's line something (another Durable Object). Never throws. */
@@ -407,7 +415,7 @@ export class CallRoom {
       t: 'hello',
       you: { sid: a.sid, uid, name: a.name, role: 'member', label: null, mode: 'line', dev: a.dev },
       nursery: { id: 'direct', name: 'Stream Studio', baby: null },
-      ice: await iceServers(this.env),
+      ...iceFields(await this.ice(meta, uid)),
       vapid: null,
       calls: book.forUser(uid),
       callLog: [],
@@ -440,7 +448,7 @@ export class CallRoom {
         // Saved before anything else is awaited: the joiner's offer is right behind this message.
         await this.commit(book, [call]);
         await this.armDeadlines();
-        this.send(ws, { t: 'call_joined', id, ice: await iceServers(this.env) });
+        this.send(ws, { t: 'call_joined', id, ...iceFields(await this.ice(meta, a.uid)) });
         // Picked up: the person's other devices stop ringing.
         if (a.uid !== meta.from.uid && !answered) await this.post(a.uid, '/x/update', { id, stop: true });
         return;
@@ -449,6 +457,12 @@ export class CallRoom {
         const book = await this.book();
         if (book.vouch(id, a.sid, uuids(msg.uids), now)) await this.state.storage.put('calls', book.toJSON());
         return;
+      }
+      case 'call_ice': {
+        // A long call's relay credentials are due: fresh ones for someone still in it.
+        const call = (await this.book()).get(id);
+        if (!call || call.ended || !call.parts.some((p) => p.sid === a.sid && p.gone == null)) return;
+        return this.send(ws, { t: 'call_ice', id, ...iceFields(await this.ice(meta, a.uid)) });
       }
       case 'call_stats': {
         const book = await this.book();
@@ -516,6 +530,8 @@ export class CallRoom {
     const rec = toRecord(call);
     const missed = new Set(missedBy(call));
     await Promise.all([call.from.uid, ...call.invited].map((uid) => this.post(uid, '/x/log', { rec, missed: missed.has(uid) })));
+    // Nobody needs this call's relay any more: its credentials stop working now, not hours later.
+    await revokeIce(this.env, `c:${call.id}`).catch(() => 0);
     await this.ensureAlarm(CLEANUP_MS);
   }
 

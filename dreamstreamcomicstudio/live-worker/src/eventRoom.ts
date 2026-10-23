@@ -19,7 +19,7 @@
  * attachments, so the room survives eviction mid-event.
  */
 
-import { iceServers, type IceEnv } from './ice';
+import { iceFor, revokeIce, type IceEnv } from './ice';
 import { EMOJI_LIBRARY, STRIKE_LIMIT, TIMEOUT_MS, checkSpam, hasProfanity, type SpamState } from './moderation';
 
 export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
@@ -863,6 +863,11 @@ export class EventRoom {
         try {
           ws.close(4002, 'kicked');
         } catch { /* closed */ }
+        // A removed on-air guest's relay credential stops working now, not when it would lapse.
+        if (a.role === 'guest') {
+          const meta = await this.getMeta();
+          if (meta) await revokeIce(this.env, `e:${meta.id}`, (w) => w === a.sid).catch(() => 0);
+        }
         await this.broadcastViewers();
         this.peopleSync();
         await this.addLog('mod', 'MOD', `Removed “${a.name}” from the stream`);
@@ -915,13 +920,17 @@ export class EventRoom {
   }
 
   /**
-   * ICE servers for the host ⇄ guest links: STUN always, plus short-lived Cloudflare TURN
-   * credentials when the owner configured them (shared with the monitor and calls via
-   * ./ice). Only the crew that opens peer links may ask — viewers never touch WebRTC.
+   * ICE servers for the host ⇄ guest links: STUN always, plus a short-lived Cloudflare TURN
+   * credential of this event's own for the asker when the owner configured TURN (./ice):
+   * the host ≤ 4 h, each guest ≤ 2 h, counted against the event, and `iceMs` says when to
+   * ask again. Only the crew that opens peer links may ask — viewers never touch WebRTC.
    */
   private async onIce(ws: WebSocket, me: Attach): Promise<void> {
     if (me.role !== 'host' && me.role !== 'guest') return;
-    this.send(ws, { t: 'ice', servers: await iceServers(this.env) });
+    const meta = await this.getMeta();
+    if (!meta) return;
+    const g = await iceFor(this.env, { room: `e:${meta.id}`, who: me.role === 'host' ? 'host' : me.sid, bill: { scope: 'event', id: meta.id }, guest: me.role === 'guest' });
+    this.send(ws, { t: 'ice', servers: g.servers, ...(g.iceMs != null ? { iceMs: g.iceMs } : {}) });
   }
 
   private async onPin(me: Attach, text: string | null): Promise<void> {

@@ -33,7 +33,7 @@
  * The singleton instance named KEY_HOLDER only stores the VAPID key pair.
  */
 
-import { iceServers } from './ice';
+import { iceFields, iceFor, revokeIce, STUN, type IceGrant, type TurnBill } from './ice';
 import { audioOnly, bareJpeg, KIND_AUDIO, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDIO, readHead, seqDiff, type RelayHead } from './relayWire';
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord, type CallStat } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
@@ -620,9 +620,28 @@ export class MonitorRoom {
     return this.vapid;
   }
 
-  /** STUN + Cloudflare TURN when configured (shared with every live WebRTC path). */
-  private iceServers(): Promise<unknown[]> {
-    return iceServers(this.env);
+  /**
+   * STUN + a Cloudflare TURN credential of this nursery's own for this socket's person
+   * (./ice): members ≤ 4 h, guests ≤ 2 h and never past their pass — none once it's over.
+   * Monitor relay bytes count against the nursery; a call's against its caller (`bill`).
+   */
+  private async ice(a: Attach, bill?: TurnBill): Promise<IceGrant> {
+    const nid = (await this.state.storage.get<string>('nid')) || '';
+    let until: number | undefined;
+    if (a.guest) {
+      const pass = this.guests.guests(Date.now()).find((g) => g.id === a.guest);
+      if (!pass) return { servers: STUN, iceMs: null };
+      until = pass.expires_at;
+    }
+    return iceFor(this.env, { room: `n:${nid}`, who: a.uid || a.sid, bill: bill ?? { scope: 'nursery', id: nid }, guest: !!a.guest, until });
+  }
+
+  /** Revoke the relay credentials of the people `match` picks (a removed guest or member): best effort. */
+  private revokeTurn(match: (who: string) => boolean): void {
+    void (async () => {
+      const nid = (await this.state.storage.get<string>('nid')) || '';
+      await revokeIce(this.env, `n:${nid}`, match).catch(() => 0);
+    })();
   }
 
   /** CSV download for parents and caregivers (the member's own token decides). */
@@ -828,6 +847,11 @@ export class MonitorRoom {
         return;
       case 'ping':
         return this.send(ws, { t: 'pong', at: Date.now() });
+      case 'ice': {
+        // Relay credentials are due (the hello said when): fresh ones for this camera or viewer.
+        const g = await this.ice(a);
+        return this.send(ws, { t: 'ice', servers: g.servers, ...(g.iceMs != null ? { iceMs: g.iceMs } : {}) });
+      }
     }
   }
 
@@ -971,7 +995,7 @@ export class MonitorRoom {
       await this.state.storage.put('settings', settings);
     }
 
-    const [tl, ice, vapid, duty, sleep] = await Promise.all([this.timeline(), this.iceServers(), this.vapidKeys(), this.duty(), this.sleepStatus()]);
+    const [tl, ice, vapid, duty, sleep] = await Promise.all([this.timeline(), this.ice(a), this.vapidKeys(), this.duty(), this.sleepStatus()]);
     this.send(ws, {
       t: 'hello',
       you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev, ...(a.guest ? { guest: true, until } : {}) },
@@ -984,7 +1008,7 @@ export class MonitorRoom {
       track: { running: this.tracker.running(), latest: this.tracker.latest() },
       duty,
       sleep,
-      ice,
+      ...iceFields(ice),
       vapid: vapid?.publicKey ?? null,
     });
     if (a.role === 'parent') this.send(ws, { t: 'share', share: this.guests.info(Date.now()) });
@@ -2337,6 +2361,8 @@ export class MonitorRoom {
       }
     }
     this.dropGuestPushes(set);
+    // Their relay credentials stop working now, not when they'd lapse.
+    if (!set || set.size) this.revokeTurn((who) => who.startsWith('g:') && (!set || set.has(who.slice(2))));
   }
 
   /** Forget ended guests' phones for alerts (null = every guest). */
@@ -2391,6 +2417,8 @@ export class MonitorRoom {
     }
     // At once, before anything else awaits: a demoted parent's next message is a non-parent's.
     const moved = this.recheckRoles(people, who, new Set(cut));
+    // Anyone no longer a member loses this nursery's relay credentials now (connected or not).
+    this.revokeTurn((w) => !w.startsWith('g:') && !ids.has(w));
     // Removed people leave any family call at once and are never rung again.
     const book = await this.callBook();
     const changed = cut.flatMap((sid) => book.leave(sid, Date.now()));
@@ -2413,6 +2441,7 @@ export class MonitorRoom {
       }
       for (const id of gone) this.guests.removeGuest(id, now);
       this.dropGuestPushes(gone);
+      this.revokeTurn((w) => w.startsWith('g:') && gone.has(w.slice(2)));
       for (const p of promoted) await this.addLog({ kind: 'people', msg: `${a.name} made ${p.name} a member — they now watch with their own account`, by: a.name });
       this.sendShareInfo();
     } else {
@@ -2555,14 +2584,15 @@ export class MonitorRoom {
     const now = Date.now();
     await this.expireCalls(now);
     const book = await this.callBook();
-    const [ice, vapid] = await Promise.all([this.iceServers(), this.vapidKeys()]);
+    // A line rings for calls, which count against whoever places them: this person, when it's them.
+    const [ice, vapid] = await Promise.all([this.ice(a, { scope: 'account', id: a.uid! }), this.vapidKeys()]);
     const mine = (r: CallRecord) => r.from.uid === a.uid || r.invited.includes(a.uid!);
     const log = ((await this.state.storage.get<CallRecord[]>('callLog')) ?? []).filter(mine).slice(-30);
     this.send(ws, {
       t: 'hello',
       you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode: 'line', dev: a.dev },
       nursery: { id: nid, ...meta },
-      ice,
+      ...iceFields(ice),
       vapid: vapid?.publicKey ?? null,
       calls: book.forUser(a.uid!),
       callLog: log,
@@ -2626,13 +2656,13 @@ export class MonitorRoom {
       case 'call_start': {
         // Fresh relay credentials for this call — fetched before the book is read, so nothing
         // can change the book between reading and saving it.
-        const ice = await this.iceServers();
+        const ice = await this.ice(a, { scope: 'account', id: a.uid });
         await this.expireCalls(now);
         const book = await this.callBook();
         const ref = clip(msg.ref, 20);
         const call = book.start(me, uuids(msg.to), msg.video !== false, crypto.randomUUID().replace(/-/g, '').slice(0, 16), now);
         if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, ref });
-        this.send(ws, { t: 'call_started', ref, id: call.id, ice });
+        this.send(ws, { t: 'call_started', ref, id: call.id, ...iceFields(ice) });
         await this.commitCalls(book, [call]);
         const meta = await this.meta();
         await this.callPush(call.invited, { title: me.label || me.name, body: `${call.video ? 'Video' : 'Audio'} call · ${familyOf(meta)}`, kind: 'call', call: call.id }, Math.round(RING_MS / 1000), 'high');
@@ -2646,7 +2676,13 @@ export class MonitorRoom {
         // Saved before anything else is awaited: the joiner's offer is right behind this message.
         await this.commitCalls(book, [call]);
         await this.ensureAlarm(LINE_CHECK_MS);
-        return this.send(ws, { t: 'call_joined', id, ice: await this.iceServers() });
+        return this.send(ws, { t: 'call_joined', id, ...iceFields(await this.ice(a, { scope: 'account', id: call.from.uid })) });
+      }
+      case 'call_ice': {
+        // A long call's relay credentials are due: fresh ones, still counted against its caller.
+        const call = (await this.callBook()).get(id);
+        if (!call || call.ended || !call.parts.some((p) => p.sid === a.sid && p.gone == null)) return;
+        return this.send(ws, { t: 'call_ice', id, ...iceFields(await this.ice(a, { scope: 'account', id: call.from.uid })) });
       }
       case 'call_up': {
         // "Their media still reaches me": keeps a device that lost the room in the call (not broadcast).
