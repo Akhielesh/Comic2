@@ -17,7 +17,7 @@ import { QA_FIXTURES, QA_NOW, isQaFixture, makeQaDoc, parseQaImagePath, type QaF
 
 // ── Query parameters ─────────────────────────────────────────────────────────
 
-export const QA_SURFACES = ['studio', 'board', 'editor', 'reader', 'classic-reader', 'public'] as const;
+export const QA_SURFACES = ['studio', 'board', 'editor', 'reader', 'classic-reader', 'public', 'kit'] as const;
 export type QaSurface = (typeof QA_SURFACES)[number];
 
 /** Scene states layered on a fixture (`state=`). */
@@ -42,12 +42,14 @@ export interface QaParams {
   img: QaImageMode;
   /** Mask shimmer/caret/animations for deterministic screenshots. */
   still: boolean;
+  /** surface=kit: the component scene (qa/KitScenes.tsx validates the name). */
+  kit: string | null;
 }
 
 const TABS: readonly StudioTab[] = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'];
 const pick = <T extends string>(value: string | null, allowed: readonly T[], fallback: T): T => (value && (allowed as readonly string[]).includes(value) ? (value as T) : fallback);
 
-/** Parse `?surface=studio|board|editor|reader|public&fixture=…&tab=pages&page=2&lang=en` (mobile.md §10.2). */
+/** Parse `?surface=studio|board|editor|reader|public|kit&fixture=…&tab=pages&page=2&lang=en&kit=…` (mobile.md §10.2). */
 export const parseQaParams = (search: string, env: { webdriver?: boolean } = {}): QaParams => {
   const q = new URLSearchParams(search);
   const fixture = q.get('fixture');
@@ -66,7 +68,8 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     publicResult: pick(q.get('public'), ['ok', 'not-found', 'error', 'slow'] as const, 'ok'),
     // Under Playwright the PNG fixtures are served by a route; opened by hand, SVG data URLs need no server.
     img: pick(q.get('img'), ['png', 'svg'] as const, env.webdriver ? 'png' : 'svg'),
-    still: q.get('still') === '1'
+    still: q.get('still') === '1',
+    kit: /^[a-z][a-z-]{0,31}$/.test(q.get('kit') || '') ? q.get('kit') : null
   };
 };
 

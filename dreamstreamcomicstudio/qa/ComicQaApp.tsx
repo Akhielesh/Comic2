@@ -5,7 +5,8 @@
 // in-memory QA controller (components/comicstudio/testing/qaController.ts), so Playwright can measure
 // real layout on every device without auth, a backend, money or flakiness.
 //
-//   /qa/comic-qa.html?surface=studio|board|editor|reader|classic-reader|public
+//   /qa/comic-qa.html?surface=studio|board|editor|reader|classic-reader|public|kit
+//                    &kit=breakdown|refs|refs-drawer|timeline|art     (surface=kit; qa/KitScenes.tsx)
 //                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
 //                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1
@@ -29,6 +30,7 @@ import { PublicComicReader } from '../components/comicstudio/PublicComicReader';
 import { ImmersiveReader } from '../components/comicstudio/immersive/ImmersiveReader';
 import { QA_PROJECT_ID, makeQaDoc, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
 import { parseQaParams, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
+import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
 
 const FULL: React.CSSProperties = { height: '100dvh', width: '100%', overflow: 'hidden' };
 
@@ -161,6 +163,9 @@ const Surface: React.FC<{ params: QaParams }> = ({ params }) => {
       return <Reader params={params} classic={false} />;
     case 'classic-reader':
       return <Reader params={params} classic />;
+    case 'kit':
+      if (!isKitScene(params.kit)) throw new Error(`Unknown kit scene "${params.kit ?? ''}" (one of ${KIT_SCENES.join(', ')})`);
+      return <KitSurface params={params} scene={params.kit} />;
     case 'public':
       return (
         <div style={FULL}>

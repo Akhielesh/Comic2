@@ -12,7 +12,7 @@
 //     --full       the whole device matrix (mobile.md §10.2: 14 devices + reflow-320) instead of the smoke
 //     --project    extra/alternative Playwright project globs (repeatable)
 //
-// Environment: QA_OUT_DIR (default dist-qa), QA_ARTIFACTS (default node_modules/.cache/comic-qa),
+// Environment: QA_OUT_DIR (default <QA_ARTIFACTS>/dist-qa), QA_ARTIFACTS (default node_modules/.cache/comic-qa),
 // QA_CHROMIUM_PATH / PLAYWRIGHT_BROWSERS_PATH (see tests/e2e/playwright.config.ts). The build gets
 // FAKE placeholder Supabase values when none are set (the client throws at import on an empty URL;
 // the harness never contacts Supabase — it is offline by construction).
@@ -31,10 +31,13 @@ const has = (flag) => own.includes(flag);
 const projects = [];
 for (let i = 0; i < own.length; i++) if (own[i] === '--project' && own[i + 1]) projects.push(own[++i]);
 
+const QA_ARTIFACTS = process.env.QA_ARTIFACTS || 'node_modules/.cache/comic-qa';
 const env = {
   ...process.env,
-  QA_OUT_DIR: process.env.QA_OUT_DIR || 'dist-qa',
-  QA_ARTIFACTS: process.env.QA_ARTIFACTS || 'node_modules/.cache/comic-qa',
+  // The QA bundle goes under the artifacts folder (not dist-qa/ in the source tree), so tsc
+  // (allowJs) and vitest never pick up a built bundle while other work runs in the same checkout.
+  QA_OUT_DIR: process.env.QA_OUT_DIR || path.join(QA_ARTIFACTS, 'dist-qa'),
+  QA_ARTIFACTS,
   VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co',
   VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key'
 };

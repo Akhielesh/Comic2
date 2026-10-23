@@ -400,6 +400,17 @@ describe('ComicStudio on other form factors', () => {
     expect(document.querySelector('[data-segment="0"] [data-pane="chat"]')).not.toBeNull();
     expect(document.querySelector('[data-segment="1"] [data-pane="board"]')).not.toBeNull();
     expect((document.querySelector('[data-hinge]') as HTMLElement).style.width).toBe('20px');
+    // The header never straddles the hinge: Back · title · pane switcher end just before it (−6 px flex
+    // gap), a spacer covers it, and the rest of the controls sit on the second screen.
+    const header = screen.getByRole('banner');
+    expect(header).toHaveAttribute('data-header', 'medium');
+    const first = header.querySelector('[data-header-segment="0"]') as HTMLElement;
+    expect(first.style.width).toBe('534px');
+    expect(within(first).getByRole('textbox', { name: 'Comic title' })).toBeInTheDocument();
+    expect(within(first).getByRole('radiogroup', { name: 'Panes' })).toBeInTheDocument();
+    expect(within(first).queryByRole('button', { name: 'More' })).toBeNull();
+    expect((header.querySelector('[data-header-hinge]') as HTMLElement).style.width).toBe('20px');
+    expect(within(header).getByRole('button', { name: 'More' })).toBeInTheDocument();
   });
 
   it('desktop keeps the classic header: quality, spend, Read and no pane switcher', () => {

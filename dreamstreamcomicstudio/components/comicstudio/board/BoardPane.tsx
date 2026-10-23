@@ -14,7 +14,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronDown, FileText, LayoutGrid, Palette, Users } from 'lucide-react';
-import { formatUsd } from '../../../shared/comic/models';
+import { formatUsd, getImageModel } from '../../../shared/comic/models';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
@@ -80,7 +80,9 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
   const { busyKey, fire } = useClickGuard(4000);
   const [details, setDetails] = useState(false);
   if (!gate || gate.status !== 'open') return null;
-  const images = `${gate.imageCount} ${gate.imageCount === 1 ? 'image' : 'images'} on ${gate.model}`;
+  // People read the model's nickname ("Nano Banana 2.1"), not a long raw id (visualqa P0-1 / P1-6).
+  const modelName = getImageModel((gate.model || '').trim())?.nickname || gate.model;
+  const images = `${gate.imageCount} ${gate.imageCount === 1 ? 'image' : 'images'} on ${modelName}`;
   const overBudget = gate.reason === 'budget' ? ' · over your budget cap' : '';
   const buttons = (
     <div className="flex shrink-0 gap-2">

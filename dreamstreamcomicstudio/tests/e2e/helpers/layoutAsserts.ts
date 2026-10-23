@@ -440,6 +440,17 @@ function detect(args: DetectArgs) {
       if (cx - 22 < 0 || cy - 22 < 0 || cx + 22 > vw || cy + 22 > vh) continue; // not fully on screen: scrolled away
       const owns = (hit: Element | null) => !!hit && (hit === el || el.contains(hit) || (hit.closest('label') as HTMLLabelElement | null)?.control === el);
       if (!owns(document.elementFromPoint(cx, cy))) continue; // covered (sheet, popover, scrolled under chrome)
+      // Floating chrome (a fixed/sticky bar, or a pill in a pointer-events:none overlay such as "Jump to
+      // latest") passing over scrolled content covers part of a target; that is layering, not a small
+      // target, so those probes are ignored (a neighbour or a badge in the same flow still fails).
+      const floating = (hit: Element) => {
+        for (let a: Element | null = hit; a && a !== de && !a.contains(el); a = a.parentElement) {
+          const s = cs(a);
+          if (s.position === 'fixed' || s.position === 'sticky') return true;
+          if (a !== hit && s.pointerEvents === 'none') return true;
+        }
+        return false;
+      };
       let stolen: string | null = null;
       // A 44 px target owns the points 21 px out along both axes and 15 px out on the diagonals (15·√2 ≈ 21):
       // a 44 px square AND a 44 px circle (rounded-full) pass; anything smaller, or a neighbour/badge
@@ -455,7 +466,7 @@ function detect(args: DetectArgs) {
         [15, 15]
       ]) {
         const hit = document.elementFromPoint(cx + dx, cy + dy);
-        if (!owns(hit)) {
+        if (!owns(hit) && !(hit && floating(hit))) {
           stolen = `probe (${dx},${dy}) → ${hit ? sig(hit) : 'nothing'}`;
           break;
         }

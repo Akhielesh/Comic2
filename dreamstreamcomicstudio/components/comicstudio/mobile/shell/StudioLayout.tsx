@@ -225,9 +225,12 @@ export const StudioLayout: React.FC<StudioLayoutProps> = ({ ff, chat, board, vie
       {boardHost ? createPortal(board, boardHost) : null}
     </>
   );
+  // LayoutBody comes FIRST: React attaches refs and runs layout effects children-first in tree order, so
+  // the slot adopts each host node (into the document) before the panes' own mount-time layout effects
+  // run — a pane measuring itself on mount (autosizing fields, scroll pinning) sees real geometry, not a
+  // detached node.
   return (
     <>
-      {portals}
       <LayoutBody
         ff={ff}
         chat={<PaneSlot host={chatHost} fallback={chat} />}
@@ -237,6 +240,7 @@ export const StudioLayout: React.FC<StudioLayoutProps> = ({ ff, chat, board, vie
         navItems={navItems}
         onBack={onBack}
       />
+      {portals}
     </>
   );
 };

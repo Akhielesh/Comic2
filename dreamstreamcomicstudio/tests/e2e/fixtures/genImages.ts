@@ -98,7 +98,8 @@ export const GOLDEN_IMAGES: Array<[string, number, number]> = [
 export default async function globalSetup(): Promise<void> {
   if (!process.env.QA_BASE_URL) {
     const app = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
-    const out = path.resolve(app, process.env.QA_OUT_DIR || 'dist-qa');
+    // playwright.config.ts resolves the folder (QA_OUT_DIR, dist-qa/, or the layout-smoke cache folder).
+    const out = process.env.QA_OUT_DIR_RESOLVED || path.resolve(app, process.env.QA_OUT_DIR || 'dist-qa');
     if (!fs.existsSync(path.join(out, 'qa', 'comic-qa.html'))) {
       throw new Error(`The QA build is missing (${path.join(out, 'qa', 'comic-qa.html')}). Run \`npm run qa:build\` (QA_BUILD=1 vite build --outDir dist-qa) first, or use \`node scripts/layout-smoke.mjs\`.`);
     }

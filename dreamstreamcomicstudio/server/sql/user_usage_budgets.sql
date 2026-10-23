@@ -115,7 +115,8 @@ begin
   v_has_row := found;
 
   if v_has_row and v_row.exempt then
-    return jsonb_build_object('governed', false, 'allowed', true, 'pct_used', 0, 'pct_left', 100);
+    -- `exempt` tells the server this is an admin-granted "no limit" (not merely "no default").
+    return jsonb_build_object('governed', false, 'exempt', true, 'allowed', true, 'pct_used', 0, 'pct_left', 100);
   end if;
 
   if v_has_row then
@@ -131,9 +132,10 @@ begin
     exception when others then
       v_default := null;
     end;
-    -- No row and no positive default → this user is not governed.
+    -- No row and no positive default → not governed by a budget (the server then keeps the
+    -- token wallet's own limits for this user; `exempt:false` says so).
     if v_default is null or v_default <= 0 then
-      return jsonb_build_object('governed', false, 'allowed', true, 'pct_used', 0, 'pct_left', 100);
+      return jsonb_build_object('governed', false, 'exempt', false, 'allowed', true, 'pct_used', 0, 'pct_left', 100);
     end if;
     v_budget := v_default;
     v_since := '-infinity'::timestamptz;
@@ -159,6 +161,7 @@ begin
       'governed', true,
       'allowed', false,
       'reason', 'USAGE_BUDGET_EXHAUSTED',
+      'period', case when v_has_row then v_row.period else 'lifetime' end,
       'pct_used', v_pct,
       'pct_left', 100 - v_pct
     );

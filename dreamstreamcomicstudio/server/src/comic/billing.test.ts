@@ -99,6 +99,20 @@ describe('createBillingHooks', () => {
     expect((req as Request & { usageReservation?: unknown }).usageReservation).toBeUndefined();
   });
 
+  it("holds the studio's own price: the registry image price at the rendered resolution, the text list price for its tokens", async () => {
+    const { hooks, reserve } = setup();
+    await hooks.reserve({ ...pageArgs, resolution: '4K' });
+    expect(reserve.mock.calls[0][0].estimateFloorUsd).toBeCloseTo(0.113, 6); // Nano Banana 2.1 at 4K
+    await hooks.reserve({ ...pageArgs, resolution: '2K' });
+    expect(reserve.mock.calls[1][0].estimateFloorUsd).toBeCloseTo(0.0504, 6);
+    await hooks.reserve({ operation: 'comic.text.director', provider: 'openrouter', model: 'google/gemini-3.8-flash', stage: 'chat', inputTokens: 10_000, outputTokens: 2_000 });
+    // (10k × $0.825 + 2k × $4.125) / 1M
+    expect(reserve.mock.calls[2][0].estimateFloorUsd).toBeCloseTo(0.0165, 6);
+    // An unpriced text model adds no floor (the gate's own catalog estimate stands).
+    await hooks.reserve({ operation: 'comic.text.director', provider: 'openrouter', model: 'unknown/text-model', stage: 'chat', inputTokens: 100, outputTokens: 100 });
+    expect(reserve.mock.calls[3][0]).not.toHaveProperty('estimateFloorUsd');
+  });
+
   it('maps a 512 swatch to the ledger 1K price point', async () => {
     const { hooks, reserve } = setup();
     await hooks.reserve({ ...pageArgs, resolution: '512' });

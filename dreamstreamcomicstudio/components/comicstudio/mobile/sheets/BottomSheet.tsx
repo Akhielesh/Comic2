@@ -11,6 +11,8 @@
 //  - Modal: scrim, aria-modal, focus trap + restore, Esc, and the back gesture closes it.
 //    Non-modal: a labelled region with no scrim (the canvas behind stays interactive).
 //  - Reduced motion: detents jump (no spring); the entrance is a plain fade.
+//  - Layered at z 85 (scrim) / 86 (sheet), like SideSheet and the fixed PopSheet: above the page
+//    editor (70) and the full-screen reader (80), so a sheet opened from either is never hidden under it.
 
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -272,7 +274,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
       data-detent={typeof current === 'number' ? String(current) : current}
       onFocusCapture={onFocusCapture}
       className={cx(
-        `fixed inset-x-0 z-[76] mx-auto flex w-full max-w-[640px] flex-col overflow-hidden rounded-t-[var(--sheet-radius,20px)] ${HAIRLINE} border-b-0 bg-[var(--ds-surface-strong)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none`,
+        `fixed inset-x-0 z-[86] mx-auto flex w-full max-w-[640px] flex-col overflow-hidden rounded-t-[var(--sheet-radius,20px)] ${HAIRLINE} border-b-0 bg-[var(--ds-surface-strong)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none`,
         ff.reducedMotion ? 'animate-fade-in' : 'studio-reveal',
         motion,
         className
@@ -337,7 +339,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   return createPortal(
     modal ? (
       <>
-        <div className="fixed inset-0 z-[75] bg-black/30 animate-fade-in" aria-hidden onClick={close} data-sheet-scrim />
+        <div className="fixed inset-0 z-[85] bg-black/30 animate-fade-in" aria-hidden onClick={close} data-sheet-scrim />
         {sheet}
       </>
     ) : (

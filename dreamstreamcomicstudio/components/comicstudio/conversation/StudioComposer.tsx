@@ -432,10 +432,21 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           const path = res?.ref?.path;
           patchAtt(path ? { upload: 'done', inboxPath: path, progress: 1 } : { upload: 'failed' });
         })
-        .catch(() => patchAtt({ upload: 'failed' }))
+        .catch((err: unknown) => {
+          const e = (err && typeof err === 'object' ? err : {}) as { kind?: string; code?: string; message?: string };
+          // A photo the content rules refuse would be refused inline too (and fail the whole message):
+          // say so now, on this photo, and take it out — never a silent fallback that fails later.
+          if (e.kind === 'content_policy' || e.code === 'CONTENT_POLICY') {
+            setAttachments((prev) => prev.filter((a) => a.id !== att.id));
+            showNotice(`${att.name}: ${e.message || 'this image doesn’t fit the content rules, so it wasn’t added.'}`);
+            return;
+          }
+          // Anything else (offline, inbox full, a server hiccup): the photo goes inline with the message.
+          patchAtt({ upload: 'failed' });
+        })
         .finally(() => uploads.current.delete(att.id));
     },
-    [studio]
+    [studio, showNotice]
   );
 
   const addFiles = useCallback(
@@ -899,14 +910,19 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                       </span>
                     </div>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(a.id)}
-                    aria-label={`Remove ${a.name}`}
-                    className={`tap-target absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${SHADOW_SOFT} ${TRANSITION} hover:scale-105 coarse:h-6 coarse:w-6`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
+                  {/* The corner position lives on a wrapper: on touch, index.css's `.tap-target { position: relative }`
+                      (unlayered, after the utilities) would override `absolute` on the button itself and drop the ✕
+                      into the flow under the thumbnail. */}
+                  <span className="absolute -right-1.5 -top-1.5 flex" data-attachment-remove>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.id)}
+                      aria-label={`Remove ${a.name}`}
+                      className={`tap-target grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${SHADOW_SOFT} ${TRANSITION} hover:scale-105 coarse:h-6 coarse:w-6`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
                 </li>
               );
             })}

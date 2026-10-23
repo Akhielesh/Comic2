@@ -88,7 +88,7 @@ export const ALLOWANCE_THRESHOLDS = [30, 70, 90, 100] as const;
 // ---- Config ------------------------------------------------------------------------------
 
 const DEFAULT_BUDGET_USD = 10;
-/** Hard ceiling an admin can set (typo guard: $10 000 instead of $10). Mirrors the SQL check. */
+/** Hard ceiling an admin can set (typo guard: $10 000 instead of $10). The SQL check (≤ 100 000) is a looser backstop. */
 export const MAX_BUDGET_USD = 1000;
 
 let meteringOverride: boolean | null = null;
@@ -103,7 +103,8 @@ export const __setMeteringEnabledForTests = (value: boolean | null): void => {
 
 /**
  * The default budget for users without a `user_usage_budgets` row: PLATFORM_ALLOWANCE_DEFAULT_USD
- * (default $10, lifetime). <= 0 means "no default" — only users with a row are governed.
+ * (default $10, lifetime). <= 0 means "no default" — only users with a row are governed by a
+ * budget; everyone else stays on the token wallet's own limits (never unlimited).
  */
 export const defaultBudgetUsd = (): number => {
   const raw = (process.env.PLATFORM_ALLOWANCE_DEFAULT_USD ?? '').trim();
@@ -391,9 +392,14 @@ export type BudgetReserveEvent = {
 };
 
 export type BudgetReserveOutcome =
-  | { kind: 'ungoverned' }
+  /**
+   * No budget applies. `exempt` = an admin-granted "no limit" row (the wallet is skipped too);
+   * otherwise there is simply no default budget and the token wallet's limits still apply.
+   */
+  | { kind: 'ungoverned'; exempt: boolean }
   | { kind: 'reserved'; pctUsed: number; pctLeft: number; crossedNow: number[] }
-  | { kind: 'denied'; pctUsed: number; pctLeft: number }
+  /** `resetsAt`: next reset for a monthly budget row; null for lifetime usage (no reset). */
+  | { kind: 'denied'; pctUsed: number; pctLeft: number; resetsAt: string | null }
   | { kind: 'unavailable' };
 
 /**
@@ -450,13 +456,13 @@ export const tryReserveAllowance = async (input: {
     return { kind: 'unavailable' };
   }
   invalidateAllowanceStatus(input.userId);
-  if (raw.governed !== true) return { kind: 'ungoverned' };
+  if (raw.governed !== true) return { kind: 'ungoverned', exempt: raw.exempt === true };
 
   const pctUsed = clampPct(raw.pct_used);
   const pctLeft = clampPct(raw.pct_left, Math.round((100 - pctUsed) * 10) / 10);
   if (!raw.allowed) {
     lastPctCache.set(input.userId, pctUsed);
-    return { kind: 'denied', pctUsed, pctLeft };
+    return { kind: 'denied', pctUsed, pctLeft, resetsAt: raw.period === 'monthly' ? firstOfNextUtcMonthIso() : null };
   }
   const before = lastPctCache.get(input.userId);
   lastPctCache.set(input.userId, pctUsed);
@@ -724,7 +730,13 @@ export const upsertUsageBudget = async (input: {
       ...changes
     };
     const { data, error } = await db.from('user_usage_budgets').insert(row).select(BUDGET_COLUMNS).single();
-    if (error) throw new Error(error.message);
+    if (error) {
+      // auth.users FK: an id that isn't an account gets an honest 404, not a raw database error.
+      if ((error as { code?: string }).code === '23503') {
+        throw Object.assign(new Error('No account with this user id.'), { status: 404, publicMessage: 'No account with this user id.' });
+      }
+      throw new Error(error.message);
+    }
     after = data as Record<string, unknown>;
   }
   invalidateAllowanceStatus(input.userId);

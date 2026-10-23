@@ -231,7 +231,13 @@ describe('StudioComposer — attachments', () => {
     render(<StudioComposer studio={studio} />);
     fireEvent.change(fileInput(), { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } });
     await screen.findByAltText('a.png');
-    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }));
+    const remove = screen.getByRole('button', { name: 'Remove a.png' });
+    // The corner position sits on a wrapper: on touch, `.tap-target { position: relative }` (index.css,
+    // after the utilities) would otherwise override `absolute` and drop the ✕ under the thumbnail.
+    expect(remove).toHaveClass('tap-target');
+    expect(remove).not.toHaveClass('absolute');
+    expect(remove.parentElement).toHaveClass('absolute');
+    fireEvent.click(remove);
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
   });
 
@@ -419,6 +425,28 @@ describe('StudioComposer — attach sheet and inbox uploads', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(studio.send).toHaveBeenCalledWith('', [{ name: 'a.png', mimeType: 'image/png', dataUrl: expect.stringMatching(/^data:image\/png/) }]);
     expect(signal?.aborted).toBe(true);
+  });
+
+  it('a photo the content rules refuse is taken out with the reason (never re-sent inline to fail later)', async () => {
+    const refusal = Object.assign(new Error("This image doesn't fit DreamStream's content rules, so it wasn't added."), { kind: 'content_policy', code: 'CONTENT_POLICY' });
+    const uploadRef = vi.fn(() => Promise.reject(refusal));
+    const studio = makeFakeStudio({ uploadRef: uploadRef as never });
+    renderAt(DESKTOP, studio);
+    fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files: [new File(['x'], 'bad.png', { type: 'image/png' })] } });
+    expect(await screen.findByText(/bad\.png: This image doesn't fit DreamStream's content rules/)).toBeInTheDocument();
+    expect(screen.queryByAltText('bad.png')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+  });
+
+  it('any other upload failure keeps the photo: it goes inline with the message', async () => {
+    const uploadRef = vi.fn(() => Promise.reject(Object.assign(new Error('offline'), { kind: 'network' })));
+    const studio = makeFakeStudio({ uploadRef: uploadRef as never });
+    renderAt(DESKTOP, studio);
+    fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files: [new File(['x'], 'ok.png', { type: 'image/png' })] } });
+    await screen.findByAltText('ok.png');
+    await act(async () => undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(studio.send).toHaveBeenCalledWith('', [{ name: 'ok.png', mimeType: 'image/png', dataUrl: expect.stringMatching(/^data:image\/png/) }]);
   });
 });
 

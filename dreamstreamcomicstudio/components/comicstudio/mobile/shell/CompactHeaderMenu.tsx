@@ -33,11 +33,26 @@ export interface CompactHeaderMenuProps {
   title?: string;
 }
 
+/** Menu keyboard contract (role="menu"): ↑/↓ move between enabled items (wrapping), Home/End jump. */
+export const onMenuKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])'));
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement as HTMLElement);
+  let next = -1;
+  if (e.key === 'ArrowDown') next = (i + 1) % items.length;
+  else if (e.key === 'ArrowUp') next = i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = items.length - 1;
+  if (next < 0) return;
+  e.preventDefault();
+  items[next].focus();
+};
+
 export const CompactHeaderMenu: React.FC<CompactHeaderMenuProps> = ({ open, onClose, anchorRef, rows, top, title = 'Comic' }) => (
   <AdaptiveSheet open={open} onClose={onClose} label="More" title={title} anchorRef={anchorRef} placement="below" align="end" className="w-64 py-1">
     <div className="flex flex-col py-1">
       {top && <div className="border-b border-[var(--ds-hairline-soft)] px-4 pb-3 pt-1">{top}</div>}
-      <div role="menu" aria-label="More" className="flex flex-col p-1.5">
+      <div role="menu" aria-label="More" onKeyDown={onMenuKeyDown} className="flex flex-col p-1.5">
         {rows.map((r) => (
           <button
             key={r.id}

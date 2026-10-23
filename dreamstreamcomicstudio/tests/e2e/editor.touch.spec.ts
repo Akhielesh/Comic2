@@ -82,9 +82,11 @@ test.describe('balloons on touch', () => {
     await qa.settle(300);
     expect(balloonOps(await qa.ops()), 'an unselected quick drag never moves a balloon').toHaveLength(0);
 
-    // Hold 250 ms, then drag: moves it.
+    // Hold 250 ms, then drag: moves it. Re-measure first: the quick drag above may have panned the page.
     await qa.clearOps();
-    await touch.drag(s, { x: s.x + 60, y: s.y }, { holdMs: 260, steps: 8 });
+    const again = (await hits.nth(far).boundingBox()) || second;
+    const s2 = center(again);
+    await touch.drag(s2, { x: s2.x + 60, y: s2.y }, { holdMs: 300, steps: 8 });
     await qa.settle(300);
     expect(balloonOps(await qa.ops()).length, 'hold + drag moves the balloon').toBeGreaterThanOrEqual(1);
   });

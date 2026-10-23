@@ -2,7 +2,7 @@
 // permission: every edit stays reachable in Easy (and by asking the director). The only gate is the
 // `caps.proEditor` capability, which is true for everyone today.
 //
-// Placement: a 2-segment pill in the studio header from 1024 px (the regular header); below that —
+// Placement: a 2-segment pill in the regular studio header (from 1024 px; 1100 on touch); below that —
 // phones and narrow tablets, where the title and the pane switcher need the room — the header slot
 // renders nothing and the same control lives at the top of the ⋯ menu (`variant="menu"`).
 
@@ -19,7 +19,7 @@ export const MODE_HINT = 'Easy keeps it simple — you can still ask me to do an
 export interface ModeToggleProps {
   studio: Pick<StudioController, 'mode' | 'setMode' | 'caps'>;
   compact?: boolean;
-  /** 'header' (default): only in the regular (≥ 1024) header. 'menu': full width with a one-line explanation. */
+  /** 'header' (default): only in the regular header (≥ 1024; ≥ 1100 on touch). 'menu': full width with a one-line explanation. */
   variant?: 'header' | 'menu';
 }
 

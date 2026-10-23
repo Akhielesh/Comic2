@@ -62,6 +62,9 @@ describe('AllowanceBanner', () => {
     expect(bar.textContent).toContain('ask us for a top-up, or add your own key');
     const copy = bar.querySelector('span.flex-1') as HTMLElement;
     expect(copy.className).not.toContain('truncate');
+    // At 320 px the actions drop to a second line instead of squeezing the sentence to a sliver.
+    expect(bar.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    expect(copy.className).toContain('min-w-[11rem]');
     const keys = screen.getByRole('button', { name: 'API keys' });
     expect(keys.className).not.toMatch(/(^|\s)hidden(\s|$)/);
     expect(container.textContent).not.toMatch(MONEY);

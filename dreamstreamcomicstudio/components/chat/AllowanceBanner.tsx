@@ -69,13 +69,14 @@ export const AllowanceBanner: React.FC = () => {
   const left = formatPctLeft(status.pctLeft);
   const units = status.friendlyUnits?.label;
   // The hard stop must be readable in full on a 320 px phone (it carries the two ways forward),
-  // so it wraps instead of truncating, and its "API keys" path stays visible on every width.
+  // so it wraps instead of truncating, its actions drop to a second line when the row is too
+  // narrow (the sentence keeps a readable width), and its "API keys" path stays visible.
   const hardStop = threshold >= 100;
 
   return (
     <div
       role="status"
-      className={`flex gap-2.5 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${hardStop ? 'items-start sm:items-center' : 'items-center'} ${toneClasses}`}
+      className={`flex gap-x-2.5 gap-y-1 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${hardStop ? 'flex-wrap items-start sm:items-center' : 'items-center'} ${toneClasses}`}
     >
       {tone === 'info' ? (
         <Gauge className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" />
@@ -84,7 +85,7 @@ export const AllowanceBanner: React.FC = () => {
       )}
 
       <span
-        className={`min-w-0 flex-1 ${hardStop ? 'leading-snug' : 'truncate'}`}
+        className={`flex-1 ${hardStop ? 'min-w-[11rem] leading-snug' : 'min-w-0 truncate'}`}
         title={hardStop && !showConsent ? USAGE_EXHAUSTED_COPY : undefined}
       >
         {showConsent ? (

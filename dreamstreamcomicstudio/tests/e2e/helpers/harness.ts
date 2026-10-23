@@ -21,7 +21,9 @@ import { installVisualViewportStub } from './keyboard';
 export { expect };
 
 export type QaQuery = Partial<{
-  surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public';
+  surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public' | 'kit';
+  /** surface=kit: the component scene (qa/KitScenes.tsx). */
+  kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art';
   fixture: 'lake-1p' | 'heist-12p' | 'deep-40p' | 'webtoon-20p' | 'stress' | 'empty';
   tab: string;
   page: number;

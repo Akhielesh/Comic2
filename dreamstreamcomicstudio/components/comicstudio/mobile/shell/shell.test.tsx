@@ -127,6 +127,19 @@ describe('StudioLayout', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('a pane measuring itself on mount (layout effect) is already in the document', () => {
+    const seen: Record<string, boolean> = {};
+    const Probe: React.FC<{ id: string }> = ({ id }) => {
+      const ref = React.useRef<HTMLParagraphElement>(null);
+      React.useLayoutEffect(() => {
+        seen[id] = !!ref.current?.isConnected;
+      }, [id]);
+      return <p ref={ref}>{id}</p>;
+    };
+    render(<StudioLayout ff={formFactorFor({ w: 390, h: 844, coarse: true })} chat={<Probe id="chat" />} board={<Probe id="board" />} view="chat" navItems={nav()} onBack={vi.fn()} />);
+    expect(seen).toEqual({ chat: true, board: true });
+  });
+
   it('readSplit ignores garbage and falls back', () => {
     window.localStorage.setItem(SPLIT_STORAGE_KEY, '{"bad":1}');
     expect(readSplit([40, 60])).toEqual([40, 60]);
@@ -236,5 +249,34 @@ describe('CompactHeaderMenu', () => {
     fireEvent.click(settings);
     expect(onClose).toHaveBeenCalled();
     expect(onSettings).toHaveBeenCalled();
+  });
+
+  it('arrow keys move between enabled items (wrapping), Home/End jump — the menu keyboard contract', () => {
+    render(
+      <CompactHeaderMenu
+        open
+        onClose={vi.fn()}
+        anchorRef={{ current: document.body }}
+        rows={[
+          { id: 'quality', label: 'Quality', icon: null, onSelect: vi.fn() },
+          { id: 'read', label: 'Read the comic', icon: null, disabled: true, hint: 'Nothing drawn yet', onSelect: vi.fn() },
+          { id: 'settings', label: 'Settings', icon: null, onSelect: vi.fn() },
+          { id: 'resync', label: 'Resync', icon: null, onSelect: vi.fn() }
+        ]}
+      />
+    );
+    const menu = screen.getByRole('menu', { name: 'More' });
+    const item = (name: string | RegExp) => screen.getByRole('menuitem', { name });
+    item('Quality').focus();
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(item('Settings')).toHaveFocus(); // the disabled row is skipped
+    fireEvent.keyDown(menu, { key: 'End' });
+    expect(item('Resync')).toHaveFocus();
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(item('Quality')).toHaveFocus(); // wraps
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(item('Resync')).toHaveFocus();
+    fireEvent.keyDown(menu, { key: 'Home' });
+    expect(item('Quality')).toHaveFocus();
   });
 });

@@ -12,6 +12,53 @@ vi.mock('./rbac.js', () => ({
   })
 }));
 
+// A tiny in-memory user_usage_budgets for upsertUsageBudget (no real database).
+const store = vi.hoisted(() => ({
+  rows: new Map<string, Record<string, unknown>>(),
+  users: new Set<string>(['tester-1']),
+  writes: [] as Array<{ op: string; row: Record<string, unknown> }>
+}));
+vi.mock('./supabase.js', () => ({
+  getSupabaseAdmin: () => ({
+    from: (table: string) => {
+      if (table !== 'user_usage_budgets') throw new Error(`unexpected table ${table}`);
+      let userId = '';
+      let pending: { op: 'insert' | 'update'; row: Record<string, unknown> } | null = null;
+      const q: Record<string, unknown> = {
+        select: () => q,
+        eq: (_col: string, v: string) => {
+          userId = v;
+          return q;
+        },
+        insert: (row: Record<string, unknown>) => {
+          pending = { op: 'insert', row };
+          return q;
+        },
+        update: (row: Record<string, unknown>) => {
+          pending = { op: 'update', row };
+          return q;
+        },
+        maybeSingle: async () => ({ data: store.rows.get(userId) ?? null, error: null }),
+        single: async () => {
+          if (!pending) return { data: null, error: { message: 'nothing pending' } };
+          const p = pending as { op: 'insert' | 'update'; row: Record<string, unknown> };
+          store.writes.push({ op: p.op, row: p.row });
+          if (p.op === 'insert') {
+            const id = String(p.row.user_id);
+            if (!store.users.has(id)) return { data: null, error: { code: '23503', message: 'violates foreign key constraint' } };
+            store.rows.set(id, { ...p.row });
+            return { data: store.rows.get(id), error: null };
+          }
+          const next = { ...(store.rows.get(userId) || {}), ...p.row };
+          store.rows.set(userId, next);
+          return { data: next, error: null };
+        }
+      };
+      return q;
+    }
+  })
+}));
+
 const {
   __resetPlatformAllowance,
   __setMeteringEnabledForTests,
@@ -32,6 +79,7 @@ const {
   thresholdsCrossed,
   thresholdsMet,
   tryReserveAllowance,
+  upsertUsageBudget,
   usageNotEnoughMessage,
   validateUsageBudgetPatch,
   USAGE_UNAVAILABLE_MESSAGE
@@ -170,7 +218,7 @@ describe('tryReserveAllowance (atomic RPC wrapper)', () => {
   it('never lets caller metadata mark metered spend as platform overhead (platformPaid is stripped)', async () => {
     const rpc = fakeRpc();
     await tryReserveAllowance({ userId: 'u', reservationId: 'r2', estimateUsd: 0.05, event: { ...event, metadata: { platformPaid: true, route: '/x' } } });
-    const sent = (rpc.tryReserve.mock.calls[0] as unknown[])[0] as { event: { metadata: Record<string, unknown> } };
+    const sent = (vi.mocked(rpc.tryReserve).mock.calls[0] as unknown[])[0] as { event: { metadata: Record<string, unknown> } };
     expect(sent.event.metadata).toEqual({ route: '/x' });
   });
 
@@ -188,9 +236,15 @@ describe('tryReserveAllowance (atomic RPC wrapper)', () => {
   it('denies, is ungoverned, or fails CLOSED (never throws)', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     fakeRpc({ tryReserve: vi.fn(async () => ({ governed: true, allowed: false, reason: 'USAGE_BUDGET_EXHAUSTED', pct_used: 99.6, pct_left: 0.4 })) });
-    expect(await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event })).toEqual({ kind: 'denied', pctUsed: 99.6, pctLeft: 0.4 });
+    expect(await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event })).toEqual({ kind: 'denied', pctUsed: 99.6, pctLeft: 0.4, resetsAt: null });
+    fakeRpc({ tryReserve: vi.fn(async () => ({ governed: true, allowed: false, period: 'monthly', pct_used: 100, pct_left: 0 })) });
+    const monthly = await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event });
+    expect(monthly).toMatchObject({ kind: 'denied', pctLeft: 0 });
+    expect(monthly.kind === 'denied' && monthly.resetsAt).toMatch(/^\d{4}-\d{2}-01T00:00:00/);
     fakeRpc({ tryReserve: vi.fn(async () => ({ governed: false, allowed: true })) });
-    expect(await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event })).toEqual({ kind: 'ungoverned' });
+    expect(await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event })).toEqual({ kind: 'ungoverned', exempt: false });
+    fakeRpc({ tryReserve: vi.fn(async () => ({ governed: false, exempt: true, allowed: true })) });
+    expect(await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event })).toEqual({ kind: 'ungoverned', exempt: true });
     fakeRpc({ tryReserve: vi.fn(async () => { throw new Error('function usage_budget_try_reserve does not exist'); }) });
     expect(await tryReserveAllowance({ userId: 'u', reservationId: 'r', estimateUsd: 0.2, event })).toEqual({ kind: 'unavailable' });
     fakeRpc({ tryReserve: vi.fn(async () => null) });
@@ -265,5 +319,38 @@ describe('admin helpers', () => {
     expect(validateUsageBudgetPatch({ period: 'weekly' as never })).toMatch(/period/);
     expect(validateUsageBudgetPatch({ exempt: 'yes' as never })).toMatch(/exempt/);
     expect(validateUsageBudgetPatch({ note: 'x'.repeat(501) })).toMatch(/note/);
+  });
+});
+
+describe('upsertUsageBudget (admin)', () => {
+  beforeEach(() => {
+    store.rows.clear();
+    store.writes = [];
+  });
+
+  it("a new row counts the user's whole history (topping up never silently resets what they used)", async () => {
+    const { before, after } = await upsertUsageBudget({ userId: 'tester-1', actorId: 'admin-1', patch: { budgetUsd: 15, note: '  beta top-up  ' } });
+    expect(before).toBeNull();
+    expect(after).toMatchObject({ user_id: 'tester-1', budget_usd: 15, period: 'lifetime', note: 'beta top-up', updated_by: 'admin-1' });
+    expect(after.period_started_at).toBe('1970-01-01T00:00:00.000Z');
+  });
+
+  it('updates only the patched fields; resetPeriod starts a fresh window now', async () => {
+    await upsertUsageBudget({ userId: 'tester-1', actorId: 'admin-1', patch: { budgetUsd: 10 } });
+    const t0 = Date.now();
+    const { before, after } = await upsertUsageBudget({ userId: 'tester-1', actorId: 'admin-2', patch: { exempt: true, resetPeriod: true } });
+    expect(before).toMatchObject({ budget_usd: 10 });
+    expect(before?.exempt).not.toBe(true);
+    expect(after).toMatchObject({ budget_usd: 10, exempt: true, updated_by: 'admin-2' });
+    expect(Date.parse(String(after.period_started_at))).toBeGreaterThanOrEqual(t0 - 5);
+    expect(store.writes.at(-1)).toMatchObject({ op: 'update' });
+    expect(store.writes.at(-1)?.row).not.toHaveProperty('budget_usd');
+  });
+
+  it('an id that is not an account is an honest 404, not a raw database error', async () => {
+    await expect(upsertUsageBudget({ userId: 'ghost', actorId: 'admin-1', patch: { budgetUsd: 5 } })).rejects.toMatchObject({
+      status: 404,
+      message: 'No account with this user id.'
+    });
   });
 });

@@ -6,7 +6,7 @@
 // un-re-measured textareas; balloons inside the page and not colliding; the editor aside inside its
 // dialog; the phone board ≥ 45 % of the height; one <main>. Known failures live in allowlist.json.
 
-import { test } from './helpers/harness';
+import { test, expect } from './helpers/harness';
 import type { CheckId } from './helpers/allowlist';
 import { markConversationScroller, openComposerOptions, openMoreMenu, openQuality, openSettings, openSpend, closeTopLayer, scrollEditorTools } from './helpers/scenes';
 
@@ -70,15 +70,29 @@ test.describe('layout smoke @smoke', () => {
   test('page editor: drawn page', async ({ qa, page }) => {
     await qa.open({ surface: 'editor', fixture: 'stress', page: 1 });
     await qa.check('editor', 'drawn-open', opts);
-    const balloon = page.locator('[data-testid="balloon-hit"]').first();
-    if (await balloon.isVisible().catch(() => false)) {
-      await balloon.focus();
-      await qa.settle(250);
-      await qa.check('editor', 'drawn-selected', opts);
-    }
     await scrollEditorTools(page);
     await qa.check('editor', 'drawn-tools-bottom', opts);
   });
+
+  // The lettering inspector with a balloon selected, Easy and Pro (visualqa P0-2: the aside left the
+  // dialog at 1024 px). QA_SCREENSHOTS=1 also compares the classic-fixture lettering baseline.
+  for (const mode of ['easy', 'pro'] as const) {
+    test(`page editor: balloon selected (${mode} inspector)`, async ({ qa, page }) => {
+      await qa.open({ surface: 'editor', fixture: 'heist-12p', page: 1, mode });
+      const balloon = page.locator('[data-testid="balloon-hit"]').first();
+      test.skip(!(await balloon.isVisible().catch(() => false)), 'no editable balloon on this page');
+      await balloon.focus();
+      await qa.settle(350);
+      await expect.soft(page.locator('[data-testid="lettering-inspector"]').first(), 'selecting a balloon shows the lettering inspector').toBeVisible();
+      await qa.check('editor', `selected-${mode}`, opts);
+      await scrollEditorTools(page);
+      await qa.check('editor', `selected-${mode}-tools-bottom`, opts);
+      if (process.env.QA_SCREENSHOTS === '1' && mode === 'easy') {
+        const pageEl = page.locator('[role="dialog"] [data-testid="comic-page"]').first();
+        await expect(pageEl).toHaveScreenshot('lettering-heist-p1.png', { maxDiffPixelRatio: 0.01 });
+      }
+    });
+  }
 
   test('page editor: planned page', async ({ qa, page }) => {
     await qa.open({ surface: 'editor', fixture: 'stress', page: 2 });

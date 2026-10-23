@@ -77,6 +77,27 @@ describe('BoardPane', () => {
     expect(studio.act).toHaveBeenCalledWith({ type: 'approve_gate', gateId: 'gate_1' });
   });
 
+  it('names the model by its nickname, never the raw provider route (visualqa P0-1)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.gate = {
+        id: 'gate_2',
+        action: { type: 'render_pages' },
+        title: 'Draw 2 pages',
+        summary: '2 pages',
+        estimateUsd: 0.14,
+        imageCount: 2,
+        model: 'google/gemini-nano-banana-2.1',
+        createdAt: SAMPLE_NOW,
+        status: 'open',
+        reason: 'policy'
+      };
+    });
+    render(<BoardPane studio={makeStudio(doc)} />);
+    const banner = screen.getByRole('region', { name: 'Waiting for your approval' });
+    expect(banner).toHaveTextContent('2 images on Nano Banana 2.1');
+    expect(banner).not.toHaveTextContent('google/gemini-nano-banana-2.1');
+  });
+
   it('declines a gate', () => {
     const doc = makeSampleDoc((d) => {
       d.gate = { id: 'g2', action: { type: 'render_cover' }, title: 'Cover', summary: '', estimateUsd: 0.07, imageCount: 1, model: 'x', createdAt: 0, status: 'open', reason: 'budget' };

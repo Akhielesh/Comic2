@@ -32,6 +32,7 @@ import { logger } from '../lib/logger.js';
 import { releaseReservedOperation, reserveForOperation, settleReservedOperation } from '../services/usageEnforcer.js';
 import type { UsagePayload } from '../services/costEstimator.js';
 import { studioKeysFromRequest } from './keys.js';
+import { estimateTextCostUsd } from './textModels.js';
 import type { BillingHooks, BillingReservation, BillingReserveResult } from './types.js';
 
 type ReserveArgs = Parameters<BillingHooks['reserve']>[0];
@@ -146,6 +147,13 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
       ...(args.resolution ? { resolution: args.resolution } : {})
     };
 
+    // The studio's own price for THIS call (registry image price at the resolution it renders;
+    // text list price for its token budget) — the usage budget never holds less than this, so
+    // parallel page renders can't each under-reserve against a stale catalog row.
+    const estimateFloorUsd = isImage
+      ? registryImageCostUsd(args.model, args.resolution, args.imageUnits || 0)
+      : estimateTextCostUsd(args.model, args.inputTokens || 0, args.outputTokens || 0);
+
     let reserved: Awaited<ReturnType<typeof reserveForOperation>>;
     try {
       reserved = await reserveFn({
@@ -160,7 +168,8 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
         projectId,
         comicId: projectId,
         stage: args.stage,
-        metadata
+        metadata,
+        ...(estimateFloorUsd !== undefined && estimateFloorUsd > 0 ? { estimateFloorUsd } : {})
       });
     } catch (err) {
       logger.warn('comic_billing_reserve_failed', {

@@ -94,6 +94,17 @@ export const reserveForOperation = async (input: {
   comicId?: string;
   stage?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Usage budget only: every other model this call may fall back to (e.g. an OpenRouter
+   * `models` chain). The hold is priced at the most expensive of them, so a `:free` primary
+   * with a paid fallback can never slip past an exhausted budget at $0.
+   */
+  pricedModels?: string[];
+  /**
+   * Usage budget only: the caller's own provider-cost estimate for this call (e.g. Comic
+   * Studio's registry price for the resolution it actually renders). The hold is never lower.
+   */
+  estimateFloorUsd?: number;
 }): Promise<
   | {
       allowed: true;
@@ -174,7 +185,12 @@ export const reserveForOperation = async (input: {
       metadata: input.metadata
     });
     estimate = await estimateCharge(seed);
-    if (budgetChecked) estimate = await budgetEstimateFor(seed, estimate, model, input.fallbackModel);
+    if (budgetChecked) {
+      estimate = await budgetEstimateFor(seed, estimate, model, input.fallbackModel, {
+        pricedModels: input.pricedModels,
+        floorUsd: input.estimateFloorUsd
+      });
+    }
   } catch (err) {
     if (!budgetChecked) throw err;
     return budgetRefusal(input.req, userId, provider, { kind: 'unavailable' }, err);
@@ -182,6 +198,10 @@ export const reserveForOperation = async (input: {
 
   let reservationId: string | undefined;
   let governed = false;
+  // The token wallet is skipped only when ONE meter already decided: the budget (governed), the
+  // admin rule, or an admin-granted exempt row. A user with no budget at all (no row and no
+  // default) keeps the wallet's own limits — never unlimited.
+  let skipWallet = budgetsOn && isAdmin;
   if (budgetChecked) {
     reservationId = crypto.randomUUID();
     const outcome = await tryReserveAllowance({
@@ -204,6 +224,7 @@ export const reserveForOperation = async (input: {
       return budgetRefusal(input.req, userId, provider, outcome);
     }
     governed = outcome.kind === 'reserved';
+    skipWallet = governed || (outcome.kind === 'ungoverned' && outcome.exempt);
     if (outcome.kind === 'reserved' && outcome.crossedNow.length) {
       const notices = allowanceCrossingNotices(outcome.crossedNow);
       if (notices.length) input.req.allowanceNotices = [...(input.req.allowanceNotices || []), ...notices];
@@ -223,7 +244,7 @@ export const reserveForOperation = async (input: {
     metadata: input.metadata,
     // Budgets on: the budget (or the admin/exempt rule) is the one meter, so the token wallet's
     // limits are skipped; governed reservations reuse the RPC's id and RESERVED row.
-    ...(budgetsOn ? { skipWalletLimits: true, governed, reservationId, costEventRecorded: governed } : {})
+    ...(skipWallet ? { skipWalletLimits: true, governed, reservationId, costEventRecorded: governed } : {})
   };
 
   let reserved: Awaited<ReturnType<typeof reserveUsageTokens>>;
@@ -259,21 +280,24 @@ export const reserveForOperation = async (input: {
 export const UNVERIFIED_PRICE_FLOOR_USD = 0.001;
 
 /**
- * The estimate the usage budget reserves. Two rules keep a governed user from walking past an
- * exhausted budget with a $0 estimate (the database gate lets $0 calls through, so `:free`
- * models keep working):
+ * The estimate the usage budget reserves. These rules keep a governed user from walking past an
+ * exhausted budget with a $0 (or too-low) estimate (the database gate lets $0 calls through, so
+ * `:free` models keep working):
  *  1. The priced model comes from the X-Gemini-Model header / body.model, which the CLIENT
  *     controls — every call site passes the model it actually calls as `fallbackModel`, so the
  *     hold is never lower than that model's estimate.
  *  2. A $0 estimate only stands for a verified-free model (`:free` suffix, or its own catalog row
  *     at $0). An unknown model that fell back to some other $0 row holds a small floor instead;
  *     settle records the real cost either way.
+ *  3. `pricedModels` (a fallback chain) is priced at its most expensive member.
+ *  4. `floorUsd` (the caller's own estimate, e.g. a registry image price) is a floor.
  */
 const budgetEstimateFor = async (
   seed: ReturnType<typeof buildEstimateFromRequestBody>,
   estimate: TokenEstimateResponse,
   model: string,
-  fallbackModel: string
+  fallbackModel: string,
+  opts: { pricedModels?: string[]; floorUsd?: number } = {}
 ): Promise<TokenEstimateResponse> => {
   const called = String(fallbackModel || '').trim();
   let best = estimate;
@@ -282,17 +306,34 @@ const budgetEstimateFor = async (
     calledEstimate = await estimateCharge({ ...seed, model: called });
     if (calledEstimate.estimatedProviderCostUsd > best.estimatedProviderCostUsd) best = calledEstimate;
   }
+  // 3. A fallback chain is priced at its most expensive member (OpenRouter may route to any).
+  const seen = new Set([model.trim(), called]);
+  for (const raw of (opts.pricedModels || []).slice(0, 8)) {
+    const m = String(raw || '').trim();
+    if (!m || seen.has(m)) continue;
+    seen.add(m);
+    const alt = await estimateCharge({ ...seed, model: m });
+    if (alt.estimatedProviderCostUsd > best.estimatedProviderCostUsd) best = alt;
+  }
+  // 4. The caller's own estimate (e.g. the registry price at the real resolution) is a floor.
+  const floor = Number(opts.floorUsd);
+  if (Number.isFinite(floor) && floor > best.estimatedProviderCostUsd) best = withProviderCost(best, floor);
   if (best.estimatedProviderCostUsd > 0) return best;
   const calledModel = called || model.trim();
   const verifiedFree = hasFreeSuffix(calledModel) || calledEstimate.modelPricing?.model === calledModel;
   if (verifiedFree) return best;
-  const markup = Number.isFinite(best.markup) && best.markup > 0 ? best.markup : 1;
-  const billable = UNVERIFIED_PRICE_FLOOR_USD * markup;
+  return withProviderCost(best, UNVERIFIED_PRICE_FLOOR_USD);
+};
+
+/** The same estimate, re-priced at `providerUsd` (billable and CT follow the markup). */
+const withProviderCost = (estimate: TokenEstimateResponse, providerUsd: number): TokenEstimateResponse => {
+  const markup = Number.isFinite(estimate.markup) && estimate.markup > 0 ? estimate.markup : 1;
+  const billable = providerUsd * markup;
   return {
-    ...best,
-    estimatedProviderCostUsd: UNVERIFIED_PRICE_FLOOR_USD,
+    ...estimate,
+    estimatedProviderCostUsd: Number(providerUsd.toFixed(6)),
     estimatedBillableUsd: Number(billable.toFixed(6)),
-    estimatedCt: Math.ceil(billable * (best.ctPerUsd || 10_000))
+    estimatedCt: Math.ceil(billable * (estimate.ctPerUsd || 10_000))
   };
 };
 
@@ -342,7 +383,7 @@ const budgetRefusal = async (
   }
   const details = buildAllowanceExhaustedDetails({
     pctLeft: outcome.kind === 'denied' ? outcome.pctLeft : 100,
-    resetsAt: null,
+    resetsAt: outcome.kind === 'denied' ? outcome.resetsAt : null,
     canFallbackToByok,
     byokFallbackMode,
     unavailable: outcome.kind === 'unavailable'
@@ -381,9 +422,20 @@ export const settleReservedOperation = async (input: {
     return null;
   }
 
-  const actual = await buildSettleEstimateFromUsage(input.seed, input.usage, {
-    imageUnits: input.imageUnits
-  });
+  let actual: TokenEstimateResponse;
+  try {
+    actual = await buildSettleEstimateFromUsage(input.seed, input.usage, {
+      imageUnits: input.imageUnits
+    });
+  } catch (err) {
+    // The provider call already happened. For a governed reservation, record the hold's own
+    // estimate (or the provider's reported cost) rather than throwing — a throw makes the caller
+    // RELEASE the row, which would erase real platform spend from the user's usage.
+    if (!reservation.governed) throw err;
+    logger.error('usage_budget_settle_estimate_failed', { message: (err as Error)?.message, operation: input.operation });
+    const reported = Number(input.usage?.providerCostUsd);
+    actual = Number.isFinite(reported) && reported > 0 ? withProviderCost(reservation.estimated, reported) : reservation.estimated;
+  }
 
   const settled = await settleReservation({
     userId: userIdOf(input.req)!,

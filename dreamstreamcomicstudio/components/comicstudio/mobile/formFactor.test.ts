@@ -101,6 +101,16 @@ describe('derived rules', () => {
     expect(headerVariantFor(formFactorFor({ w: 390, h: 844, coarse: true }))).toBe('compact');
     expect(headerVariantFor(formFactorFor({ w: 820, h: 1180, coarse: true }))).toBe('medium');
     expect(headerVariantFor(formFactorFor({ w: 1440, h: 900 }))).toBe('regular');
+    // iPad Pro portrait (1024 / 1032 touch): 44 px targets + the pane switcher → still the medium header.
+    expect(headerVariantFor(formFactorFor({ w: 1024, h: 1366, coarse: true }))).toBe('medium');
+    expect(headerVariantFor(formFactorFor({ w: 1032, h: 1376, coarse: true }))).toBe('medium');
+    // The same width with a mouse, and touch tablets in landscape, get the full header.
+    expect(headerVariantFor(formFactorFor({ w: 1024, h: 768 }))).toBe('regular');
+    expect(headerVariantFor(formFactorFor({ w: 1180, h: 820, coarse: true }))).toBe('regular');
+    // A spanning foldable: each half of the header has one screen.
+    expect(
+      headerVariantFor(formFactorFor({ w: 1114, h: 720, coarse: true, segments: { count: 2, axis: 'horizontal', rects: [], hinge: { start: 540, end: 574 } } }))
+    ).toBe('medium');
     expect(showsPaneSwitcher(formFactorFor({ w: 820, h: 1180, coarse: true }))).toBe(true);
     expect(showsPaneSwitcher(formFactorFor({ w: 1440, h: 900 }))).toBe(false);
     expect(showsPaneSwitcher(formFactorFor({ w: 1366, h: 1024, coarse: true }))).toBe(true);

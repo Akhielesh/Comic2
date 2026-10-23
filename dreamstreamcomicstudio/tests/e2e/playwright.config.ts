@@ -13,7 +13,7 @@
 //
 // Environment:
 //   QA_BASE_URL       use an already-running server (skips webServer)
-//   QA_OUT_DIR        the built QA folder (default dist-qa)
+//   QA_OUT_DIR        the built QA folder (default dist-qa/ when built, else <QA_ARTIFACTS>/dist-qa)
 //   QA_ARTIFACTS      report/test-results/fixture cache root (default node_modules/.cache/comic-qa)
 //   QA_CHROMIUM_PATH  a Chromium binary when the pinned Playwright build is not installed
 //   QA_WEBKIT=1       run the iOS/iPadOS projects on WebKit (needs `playwright install webkit`)
@@ -30,10 +30,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(HERE, '../..');
 const CI = !!process.env.CI;
 const PORT = Number(process.env.QA_PORT || 4179);
-const OUT_DIR = path.resolve(APP, process.env.QA_OUT_DIR || 'dist-qa');
 const ARTIFACTS = path.resolve(APP, process.env.QA_ARTIFACTS || 'node_modules/.cache/comic-qa');
+// The built QA folder: QA_OUT_DIR, else dist-qa/ (`npm run qa:build`), else the cache folder that
+// scripts/layout-smoke.mjs builds into (kept out of the source tree so tsc/vitest never see a bundle).
+const OUT_DIR = path.resolve(
+  APP,
+  process.env.QA_OUT_DIR || (fs.existsSync(path.resolve(APP, 'dist-qa/qa/comic-qa.html')) ? 'dist-qa' : path.join(path.relative(APP, ARTIFACTS), 'dist-qa'))
+);
 const BASE_URL = process.env.QA_BASE_URL || `http://127.0.0.1:${PORT}`;
 process.env.QA_ARTIFACTS_RESOLVED = ARTIFACTS;
+process.env.QA_OUT_DIR_RESOLVED = OUT_DIR;
 
 /**
  * The Chromium to launch. CI installs the build the pinned @playwright/test expects. Locally (and in

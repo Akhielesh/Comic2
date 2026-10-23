@@ -7,7 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
 
 type Ev = { userId: string; reservationId: string; costUsd: number; status: 'RESERVED' | 'SETTLED' | 'RELEASED'; createdAt: number };
-const db = vi.hoisted(() => ({ events: [] as Ev[], budgets: new Map<string, number>(), rpcCalls: 0, rpcFails: false }));
+const db = vi.hoisted(() => ({
+  events: [] as Ev[],
+  budgets: new Map<string, number>(),
+  exempt: new Set<string>(),
+  monthly: new Set<string>(),
+  noDefault: false,
+  rpcCalls: 0,
+  rpcFails: false
+}));
 
 const ledger = vi.hoisted(() => ({
   reserveUsageTokens: vi.fn(),
@@ -73,11 +81,14 @@ const installFakeRpc = () =>
         db.rpcCalls += 1;
         if (db.rpcFails) throw new Error('connection refused');
         await new Promise((r) => setTimeout(r, 1)); // interleave concurrent callers
+        if (db.exempt.has(userId)) return { governed: false, exempt: true, allowed: true, pct_used: 0, pct_left: 100 };
+        if (!db.budgets.has(userId) && db.noDefault) return { governed: false, exempt: false, allowed: true, pct_used: 0, pct_left: 100 };
         const budget = db.budgets.get(userId) ?? Number(event.default_budget_usd);
         const u = used(userId);
         const pct = (v: number) => Math.min(100, Math.round((v / budget) * 1000) / 10);
         if (estimateUsd > 0 && u + estimateUsd > budget) {
-          return { governed: true, allowed: false, reason: 'USAGE_BUDGET_EXHAUSTED', pct_used: pct(u), pct_left: 100 - pct(u) };
+          const period = db.monthly.has(userId) ? 'monthly' : 'lifetime';
+          return { governed: true, allowed: false, reason: 'USAGE_BUDGET_EXHAUSTED', period, pct_used: pct(u), pct_left: 100 - pct(u) };
         }
         db.events.push({ userId, reservationId, costUsd: estimateUsd, status: 'RESERVED', createdAt: Date.now() });
         return { governed: true, allowed: true, pct_used: pct(u + estimateUsd), pct_left: 100 - pct(u + estimateUsd) };
@@ -104,6 +115,9 @@ beforeEach(() => {
   installFakeRpc();
   db.events = [];
   db.budgets.clear();
+  db.exempt.clear();
+  db.monthly.clear();
+  db.noDefault = false;
   db.rpcCalls = 0;
   db.rpcFails = false;
   keys.hasKey = false;
@@ -272,6 +286,75 @@ describe('usage budget gate (reserveForOperation)', () => {
     db.events.push({ userId: 'tester-1', reservationId: 'old', costUsd: 0.05, status: 'SETTLED', createdAt: Date.now() });
     const second = await reserveForOperation({ req: makeReq(), operation: 'chat.completion', provider: 'openrouter', fallbackModel: 'mystery-model' });
     expect(second.allowed).toBe(false);
+  });
+
+  it('exempt rows skip the wallet; with no budget at all the wallet limits still apply (never unlimited)', async () => {
+    db.exempt.add('tester-1');
+    expect((await reserve(makeReq())).allowed).toBe(true);
+    expect(ledger.reserveUsageTokens.mock.calls[0][0]).toMatchObject({ skipWalletLimits: true, governed: false, costEventRecorded: false });
+
+    db.exempt.clear();
+    db.noDefault = true; // PLATFORM_ALLOWANCE_DEFAULT_USD <= 0 and no row
+    expect((await reserve(makeReq())).allowed).toBe(true);
+    const walletInput = ledger.reserveUsageTokens.mock.calls[1][0];
+    expect(walletInput.skipWalletLimits).toBeUndefined();
+    expect(walletInput.governed).toBeUndefined();
+  });
+
+  it('prices a fallback chain at its most expensive member (a :free primary cannot slip past a used-up budget)', async () => {
+    db.budgets.set('tester-1', 0.05);
+    db.events.push({ userId: 'tester-1', reservationId: 'old', costUsd: 0.05, status: 'SETTLED', createdAt: Date.now() });
+    const chained = await reserveForOperation({
+      req: makeReq(),
+      operation: 'chat.completion',
+      provider: 'openrouter',
+      fallbackModel: 'cheap/model:free',
+      pricedModels: ['cheap/model:free', 'paid/model']
+    });
+    expect(chained.allowed).toBe(false);
+    if ('details' in chained) expect(chained.details.reason).toBe('usage_budget_exhausted');
+  });
+
+  it("holds at least the caller's own estimate (e.g. the registry price at the real resolution)", async () => {
+    db.budgets.set('tester-1', 10);
+    const r = await reserveForOperation({
+      req: makeReq(),
+      operation: 'comic.image.page',
+      provider: 'openrouter',
+      fallbackModel: 'nb-2.1',
+      imageUnits: 1,
+      metadata: { estimateUsd: 0.0336 },
+      estimateFloorUsd: 0.113
+    });
+    expect(r.allowed).toBe(true);
+    expect(db.events.at(-1)?.costUsd).toBeCloseTo(0.113, 6);
+    if (r.allowed) expect(r.reservation.estimated.estimatedProviderCostUsd).toBeCloseTo(0.113, 6);
+  });
+
+  it('a monthly budget refusal names when it comes back (not "doesn\'t reset")', async () => {
+    db.budgets.set('tester-1', 0.01);
+    db.monthly.add('tester-1');
+    db.events.push({ userId: 'tester-1', reservationId: 'old', costUsd: 0.01, status: 'SETTLED', createdAt: Date.now() });
+    const r = await reserve(makeReq(), 0.5);
+    expect(r.allowed).toBe(false);
+    if (!('details' in r)) throw new Error('expected a refusal');
+    expect(r.details.resetAt).not.toBe('');
+    expect(r.details.message).toContain('comes back on');
+    expect(r.details.message).not.toContain("doesn't reset");
+  });
+
+  it('settle still records the spend when the settle estimate fails (never erases a governed call)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const estimator = await import('./costEstimator.js');
+    const req = makeReq();
+    const r = await reserve(req, 0.4);
+    if (!r.allowed) throw new Error('expected allowed');
+    vi.mocked(estimator.buildSettleEstimateFromUsage).mockRejectedValueOnce(new Error('pricing catalog offline'));
+    await expect(
+      settleReservedOperation({ req, operation: 'x', provider: r.provider, model: r.model, seed: r.seed, usage: { providerCostUsd: 0.31 } })
+    ).resolves.toBeTruthy();
+    expect(db.events.find((e) => e.status === 'SETTLED')?.costUsd).toBeCloseTo(0.31, 6);
+    err.mockRestore();
   });
 
   it('metering off: no budget, legacy wallet path', async () => {

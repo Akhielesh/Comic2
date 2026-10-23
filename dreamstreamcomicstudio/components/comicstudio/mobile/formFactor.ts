@@ -101,14 +101,27 @@ export const defaultSplitFor = (ff: Pick<FormFactor, 'width' | 'orientation' | '
 };
 
 /**
+ * Touch windows narrower than this keep the medium header even from 1024: with 44 px targets AND the
+ * pane switcher, the full labelled header (Share · Easy/Pro · Quality · $ · saved · usage · Read)
+ * leaves an iPad Pro in portrait (1024 / 1032 wide) about 30 px for the comic's title.
+ */
+export const TOUCH_REGULAR_HEADER_MIN = 1100;
+
+/**
  * How dense the studio header is:
  *  - 'compact'  phones (single / single-rail): ⋯ menu holds quality, mode, savings, settings;
- *  - 'medium'   split below 1024: icon-only quality and Read, slots render their compact form;
- *  - 'regular'  split from 1024: today's desktop header.
+ *  - 'medium'   split below 1024 (below 1100 on touch), and every dual-screen foldable (each half of
+ *               the header has one screen): icon-only quality and Read, slots render their compact
+ *               form, Easy/Pro in ⋯;
+ *  - 'regular'  wider: today's desktop header.
  */
 export type HeaderVariant = 'compact' | 'medium' | 'regular';
-export const headerVariantFor = (ff: Pick<FormFactor, 'layout' | 'width'>): HeaderVariant =>
-  isPhoneLayout(ff.layout) ? 'compact' : ff.width < 1024 ? 'medium' : 'regular';
+export const headerVariantFor = (ff: Pick<FormFactor, 'layout' | 'width'> & Partial<Pick<FormFactor, 'coarse'>>): HeaderVariant =>
+  isPhoneLayout(ff.layout)
+    ? 'compact'
+    : ff.layout === 'dual-screen' || ff.width < 1024 || (ff.coarse === true && ff.width < TOUCH_REGULAR_HEADER_MIN)
+      ? 'medium'
+      : 'regular';
 
 /** The header pane switcher (Chat | Both | Board) shows on touch tablets, foldables and narrow windows. */
 export const showsPaneSwitcher = (ff: Pick<FormFactor, 'layout' | 'width' | 'coarse'>): boolean =>

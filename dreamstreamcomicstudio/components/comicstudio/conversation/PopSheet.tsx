@@ -245,7 +245,7 @@ export const PopSheet: React.FC<PopSheetProps> = ({
         aria-label={label}
         tabIndex={-1}
         data-sheet="popover"
-        className={cx(`fixed z-[76] ${SHEET_SURFACE}`, className)}
+        className={cx(`fixed z-[86] ${SHEET_SURFACE}`, className)}
         style={
           pos
             ? { left: pos.left, top: pos.top, maxHeight: `min(${pos.maxHeight}px, 560px)`, ...(pos.width ? { width: pos.width } : {}), maxWidth: `calc(100vw - ${SHEET_GUTTER * 2}px)` }
@@ -297,7 +297,7 @@ export const SlideOver: React.FC<SlideOverProps> = ({ open, onClose, title, chil
   useBackLayer(open, onClose, `slideover:${title}`);
   if (!open) return null;
   return (
-    <div className={cx('fixed inset-0 z-[75] flex', side === 'right' ? 'justify-end' : 'justify-start')}>
+    <div className={cx('fixed inset-0 z-[85] flex', side === 'right' ? 'justify-end' : 'justify-start')}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px] animate-fade-in" aria-hidden onClick={onClose} />
       <div
         ref={ref}

@@ -119,6 +119,19 @@ test.describe('layout scanner', () => {
     expect(f.map((x) => x.label).sort()).toEqual(['Big', 'Tiny']);
   });
 
+  test('floating chrome over a target is layering, a neighbour in the flow is not', async ({ page: p }) => {
+    await p.setContent(
+      page(`<main style="padding:40px;position:relative">
+        <button aria-label="Tile" style="width:60px;height:60px;display:block;margin:0">tile</button>
+        <div style="position:absolute;left:40px;top:40px;width:200px;pointer-events:none"><button aria-label="Jump" style="pointer-events:auto;width:60px;height:24px;margin-left:20px;margin-top:2px">j</button></div>
+        <div style="margin-top:20px"><button aria-label="Left" style="width:44px;height:44px;margin:0">l</button><button aria-label="Overlap" style="width:44px;height:44px;margin-left:-6px;position:relative">o</button></div>
+      </main>`)
+    );
+    const f = await scanLayout(p, { checks: ['hit-target'] });
+    // Tile: a probe lands on the floating pill (ignored). Jump: genuinely small. Left: its neighbour overlaps it.
+    expect(f.map((x) => x.label).sort()).toEqual(['Jump', 'Left']);
+  });
+
   test('hover-only controls on touch', async ({ page: p }) => {
     await p.setContent(page(`<main><div style="opacity:0.2"><button aria-label="Delete">del</button></div><div style="opacity:0;pointer-events:none"><button aria-label="Hidden">h</button></div></main>`));
     const f = await scanLayout(p, { checks: ['hover-only'] });

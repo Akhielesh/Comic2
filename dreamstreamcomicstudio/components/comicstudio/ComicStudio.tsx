@@ -18,7 +18,7 @@
 // Keyboard-safe: the root follows the visible height (--app-h from useKeyboardInset), safe areas are
 // tokens (--sa-*), and the back gesture closes the top layer (reader, sheets) before the studio.
 
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
   AlertTriangle,
@@ -279,6 +279,29 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const showSpendChip = !phone || ff.width >= SPEND_CHIP_MIN_WIDTH;
   const showBack = ff.layout !== 'single-rail'; // the rail carries Back in phone landscape
 
+  // Book-posture foldables: no control may straddle the hinge (mobile.md §3.6). Back + title end just
+  // before it, a spacer covers it, and the rest of the header lives on the second screen.
+  const headerRef = useRef<HTMLElement>(null);
+  const hinge = ff.layout === 'dual-screen' && ff.segments.axis === 'horizontal' ? ff.segments.hinge : undefined;
+  const [firstSegmentW, setFirstSegmentW] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = headerRef.current;
+    if (!hinge || !el) {
+      setFirstSegmentW(null);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    let pad = 0;
+    try {
+      pad = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+    } catch {
+      /* no layout (tests) */
+    }
+    // −6: the header's flex gap sits between this group and the hinge spacer.
+    setFirstSegmentW(Math.max(0, Math.round(hinge.start - (r.left + pad) - 6)));
+  }, [hinge, ff.width]);
+  const hingeW = hinge ? Math.max(0, hinge.end - hinge.start) : 0;
+
   const rows: MenuRow[] = [];
   if (phone) {
     rows.push({
@@ -321,20 +344,42 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
     </div>
   );
 
-  return (
-    <header
-      className="flex shrink-0 items-center gap-1.5 border-b border-[var(--ds-hairline-soft)] px-2 sm:px-3"
-      style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}
-      data-header={variant}
-    >
+  const lead = (
+    <>
       {showBack && (
         <button type="button" onClick={onBack} aria-label="Back to your projects" title="Back" className={headerIconBtn}>
           <ArrowLeft className="h-4 w-4" />
         </button>
       )}
       <TitleField title={doc.brief.title || 'Untitled comic'} onCommit={(title) => void studio.patch([{ op: 'brief', patch: { title } }])} />
+    </>
+  );
+  const switcher = showsPaneSwitcher(ff) ? <PaneSwitcher value={paneMode} onChange={onPaneMode} className="shrink-0" /> : null;
+  const splitAtHinge = !!hinge && firstSegmentW !== null;
 
-      {showsPaneSwitcher(ff) && <PaneSwitcher value={paneMode} onChange={onPaneMode} className="shrink-0" />}
+  return (
+    <header
+      ref={headerRef}
+      className="flex shrink-0 items-center gap-1.5 border-b border-[var(--ds-hairline-soft)] px-2 sm:px-3"
+      style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}
+      data-header={variant}
+    >
+      {splitAtHinge ? (
+        <>
+          {/* First screen: Back · title · pane switcher. It may still shrink (never overflow the header)
+              if the second screen's controls ever need more than their half. */}
+          <div className="flex min-w-0 items-center gap-1.5" style={{ width: firstSegmentW ?? undefined, flexShrink: 1 }} data-header-segment="0">
+            {lead}
+            {switcher}
+          </div>
+          <div aria-hidden className="shrink-0" style={{ width: hingeW }} data-header-hinge />
+        </>
+      ) : (
+        <>
+          {lead}
+          {switcher}
+        </>
+      )}
 
       <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
         {slotRange(-Infinity, H.quality)}

@@ -18,8 +18,10 @@ test('Enter: newline on touch, send on desktop', async ({ qa, device, page }) =>
   if (device.coarse) {
     await expect(box).toHaveValue('a\nb');
     expect(sends, 'Enter must not send on a touch keyboard').toHaveLength(0);
-    // The button still sends.
-    await page.getByRole('button', { name: 'Send' }).first().click();
+    // The button still sends (the visible composer's own Send: other layouts keep a hidden twin).
+    const sendBtn = page.locator('button[aria-label="Send"]:visible').first();
+    await expect(sendBtn, 'the composer shows an enabled Send button').toBeEnabled({ timeout: 5_000 });
+    await sendBtn.click();
     await qa.settle(200);
     const after = (await qa.ops()).filter((o) => o.kind === 'send');
     expect(after).toHaveLength(1);
