@@ -345,7 +345,7 @@ export const CostCentre: React.FC = () => {
         <p className="text-xs text-[var(--ds-muted)]">What DreamStream costs to run vs what it brings in — every figure labelled measured, estimated or fixed.</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {(report?.stream?.alerts.length ?? 0) > 0 && (
+        {((report?.stream?.alerts.length ?? 0) > 0 || (report?.stream?.errors.length ?? 0) > 0) && (
           <button
             type="button"
             onClick={() => setTab('Stream Studio')}
@@ -353,7 +353,9 @@ export const CostCentre: React.FC = () => {
             data-testid="stream-alert-badge"
           >
             <TriangleAlert className="h-3.5 w-3.5" style={{ color: report!.stream!.alerts.some((a) => a.severity === 'critical') ? '#d03b3b' : '#fab219' }} aria-hidden />
-            {report!.stream!.alerts.length} Stream Studio {report!.stream!.alerts.length === 1 ? 'alert' : 'alerts'}
+            {report!.stream!.alerts.length > 0 && `${report!.stream!.alerts.length} Stream Studio ${report!.stream!.alerts.length === 1 ? 'alert' : 'alerts'}`}
+            {/* A dataset that didn't answer is not "no alerts": its alerts couldn't be checked. */}
+            {report!.stream!.errors.length > 0 && `${report!.stream!.alerts.length > 0 ? ' · ' : 'Stream Studio: '}couldn’t measure ${report!.stream!.errors.length} ${report!.stream!.errors.length === 1 ? 'dataset' : 'datasets'}`}
           </button>
         )}
         <span className="text-[11px] text-[var(--ds-muted)]" aria-live="polite">

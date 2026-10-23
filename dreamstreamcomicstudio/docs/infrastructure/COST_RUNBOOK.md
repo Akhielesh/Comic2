@@ -176,8 +176,12 @@ Then run this once a month (or when a bill looks off):
 - [ ] Cloudflare: R2 `dreamstream-live` size near zero (janitor working).
 - [ ] Admin → Costs → **Stream Studio**: no alerts; every headroom meter projects < 80% of its
       allowance (they are account-wide); per-nursery-day DO GB-s ≤ 40 (hibernation working);
-      our-server share of monitor minutes ≤ 10%. The GitHub issue labelled `stream-cost-watch`
-      is closed (the daily job opens it when an alert starts and closes it when all clear).
+      our-server share of monitor minutes ≤ 10% (shown once viewers report their paths, Phase B).
+      The GitHub issue labelled `stream-cost-watch` is closed (the daily job opens it when an alert
+      starts and closes it only when every dataset answered and nothing fires) and its last run is
+      green. A red run or an open issue saying **"Couldn't measure"** means a Cloudflare dataset
+      didn't answer (token revoked or out of scope, wrong account id, renamed field): the alerts it
+      feeds kept their last state — fix the read, don't assume all clear.
 - [ ] Cloudflare: an account budget alert (Billing → budget alerts) is set at **$10** — the
       backstop that still fires if metering breaks. TURN is on in production since 2026-10-22.
 - [ ] Supabase: still on free plan; DB < 500 MB; storage < 1 GB.

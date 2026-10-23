@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   aeUsageSql,
   AE_ROW_LIMIT,
+  alertDatasets,
   buildStreamSection,
+  failedDatasets,
   fetchStreamAnalytics,
   namespaceLabelsFromEnv,
+  parseAeActive,
   parseAeRows,
   r2OperationClass,
   streamVerdict,
@@ -31,6 +34,18 @@ const row = (day: string, kind: AeUsageRow['kind'], scope: AeUsageRow['scope'], 
   account,
   counters: addUsage(emptyCounters(), d)
 });
+
+const mark = (day: string, scopeId: string) => ({ day, scope: 'nursery' as const, scopeId });
+
+/** One healthy GraphQL account answer: every dataset present. */
+const healthyAccount = (query: string): Record<string, unknown> =>
+  query.includes('callsTurnUsageAdaptiveGroups')
+    ? { callsTurnUsageAdaptiveGroups: [] }
+    : query.includes('durableObjectsInvocationsAdaptiveGroups')
+      ? { workersInvocationsAdaptive: [], durableObjectsInvocationsAdaptiveGroups: [] }
+      : query.includes('durableObjectsPeriodicGroups')
+        ? { durableObjectsPeriodicGroups: [] }
+        : { r2OperationsAdaptiveGroups: [], r2StorageAdaptiveGroups: [] };
 
 const range30 = () => {
   const r = computeCostRange(30, new Date(NOW));
@@ -73,6 +88,8 @@ const analytics = (over: Partial<StreamAnalytics> = {}): StreamAnalytics => ({
     // previous period
     row('2026-09-10', 'monitor', 'nursery', N1, { relayFrames: 20_000 })
   ],
+  // The rooms' daily activity marks: N1 had a camera on the 19th and 20th, N2 on the 20th.
+  aeActive: [mark('2026-10-19', N1), mark('2026-10-20', N1), mark('2026-10-20', N2)],
   errors: [],
   ...over
 });
@@ -92,7 +109,8 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
       if (url.endsWith('/analytics_engine/sql')) {
         const d: Record<string, unknown> = { day: '2026-10-20 00:00:00', kind: 'monitor', scope: 'nursery', scope_id: N1, account: '' };
         usageToDoubles(addUsage(emptyCounters(), { relayFrames: 12, minutes: { server: 3 } })).forEach((v, i) => (d[`d${i + 1}`] = String(v)));
-        return { ok: true, status: 200, json: async () => ({ data: [d, { ...d, kind: 'nope' }], rows: 2 }) };
+        const active = { day: '2026-10-20 00:00:00', kind: 'active', scope: 'nursery', scope_id: N2, account: '' };
+        return { ok: true, status: 200, json: async () => ({ data: [d, { ...d, kind: 'nope' }, active], rows: 3 }) };
       }
       const q = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> };
       const account = q.query.includes('durableObjectsInvocationsAdaptiveGroups')
@@ -122,22 +140,58 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
     expect(a.r2Storage).toEqual([{ bucket: 'dreamstream-live', payloadBytes: 9e9 }]); // latest sample per bucket
     expect(a.ae).toHaveLength(1);
     expect(a.ae?.[0].counters).toMatchObject({ relayFrames: 12, minutes: { server: 3 } });
+    expect(a.aeActive).toEqual([{ day: '2026-10-20', scope: 'nursery', scopeId: N2 }]); // the mark is not a usage row
     expect(a.errors).toEqual([]);
+    expect(failedDatasets(a)).toEqual([]);
   });
 
-  it('isolates a failing dataset and never echoes the token', async () => {
+  it('isolates a failing dataset and never echoes the token or the account id', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: { body?: string }) => {
       if (String(init?.body).includes('durableObjectsPeriodicGroups')) {
-        return { ok: true, status: 200, json: async () => ({ data: null, errors: [{ message: 'unknown field rowsWritten for token SECRET-T' }] }) };
+        return { ok: true, status: 200, json: async () => ({ data: null, errors: [{ message: 'unknown field rowsWritten for token SECRET-T on account acct-9' }] }) };
       }
       if (url.endsWith('/sql')) return { ok: false, status: 403, json: async () => ({ errors: [{ message: 'not entitled' }] }) };
-      return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [{}] } } }) };
+      return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [healthyAccount(JSON.parse(String(init?.body)).query)] } } }) };
     });
-    const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW, creds: { token: 'SECRET-T', accountId: 'a' }, fetchImpl });
+    const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW, creds: { token: 'SECRET-T', accountId: 'acct-9' }, fetchImpl });
     expect(a.errors).toHaveLength(2);
     expect(a.errors.join(' ')).not.toContain('SECRET-T');
+    expect(a.errors.join(' ')).not.toContain('acct-9');
     expect(a.doRequests).toEqual([]); // the other datasets still answered
     expect(a.ae).toBeUndefined();
+    expect(Object.keys(a.failures ?? {}).sort()).toEqual(['ae', 'periodic']);
+    expect(failedDatasets(a)).toEqual(['periodic', 'ae']);
+  });
+
+  it('treats an answer with no account, or a dataset missing from it, as a failure — never as zero', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.endsWith('/sql')) return { ok: true, status: 200, json: async () => ({ meta: [] }) }; // no data rows
+      const q = JSON.parse(String(init?.body)).query as string;
+      if (q.includes('callsTurnUsageAdaptiveGroups')) return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [] } } }) };
+      if (q.includes('durableObjectsPeriodicGroups')) return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [{}] } } }) };
+      return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [healthyAccount(q)] } } }) };
+    });
+    const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW, creds: { token: 'tok-0123456789', accountId: 'f'.repeat(32) }, fetchImpl });
+    expect(a.turnEgressBytes).toBeUndefined(); // not 0 GB
+    expect(a.doPeriodic).toBeUndefined();
+    expect(failedDatasets(a)).toEqual(['periodic', 'turn', 'ae']);
+    expect(a.errors.join(' | ')).toMatch(/TURN egress: no account in the answer/);
+    expect(a.errors.join(' | ')).toMatch(/durableObjectsPeriodicGroups missing from the answer/);
+    // Nothing was asked without credentials: nothing failed.
+    expect(failedDatasets({ configured: false, nowMs: NOW, aeFromMs: NOW, errors: [] })).toEqual([]);
+  });
+
+  it('maps every alert to the datasets it is evaluated from (unknown ids: all of them)', () => {
+    expect(alertDatasets('turn_spend')).toEqual(['turn']);
+    expect(alertDatasets('turn_leak')).toEqual(['turn']);
+    expect(alertDatasets('free_tier:turnGb')).toEqual(['turn']);
+    expect(alertDatasets('free_tier:doRowsWritten')).toEqual(['periodic']);
+    expect(alertDatasets('free_tier:workerRequests')).toEqual(['requests']);
+    expect(alertDatasets('r2_near_free')).toEqual(['r2']);
+    expect(alertDatasets('hibernation')).toEqual(['periodic', 'ae']);
+    expect(alertDatasets('relay_creep')).toEqual(['ae']);
+    expect(alertDatasets('email_near_free')).toEqual([]);
+    expect(alertDatasets('something_new')).toEqual(['requests', 'periodic', 'r2', 'turn', 'ae']);
   });
 
   it('builds one Analytics Engine query with every counter, capped at its retention', () => {
@@ -255,15 +309,101 @@ describe('Stream costs — the section (pure)', () => {
     expect(s.projection.at1k).toBeGreaterThan(0);
   });
 
+  it('divides by every active nursery (the daily marks), not only the ones that used the relay', () => {
+    // 20 healthy nurseries (30 GB-s a day each, P2P only — they owe nothing and write no usage row)
+    // plus 1 on the server relay for 2 days. Dividing by relay users said 600 GB-s → "hibernation broken".
+    const ids = Array.from({ length: 21 }, (_, i) => `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000`);
+    const days = ['2026-10-19', '2026-10-20'];
+    const s = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({
+        doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 21 * 500 })),
+        doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: ((21 * 30) / 0.128) * 1e6, rowsWritten: 21 * 1500 })),
+        ae: days.map((day) => row(day, 'monitor', 'nursery', ids[0], { relayFrames: 54_000, minutes: { server: 600 } })),
+        aeActive: days.flatMap((day) => ids.map((id) => mark(day, id)))
+      })
+    });
+    expect(s.kpis.activeNurseryDays).toBe(42);
+    expect(s.kpis.gbSeconds).toBeCloseTo(30, 1);
+    expect(s.kpis.rowsWritten).toBe(1500);
+    expect(s.kpis.doRequests).toBe(500);
+    expect(s.alerts.map((a) => a.id)).not.toContain('hibernation');
+    expect(s.activeNurseries).toBe(21);
+    expect(s.projection.at1k).toBeLessThan(500); // not ≈ $9,367/mo
+  });
+
+  it('without activity marks, per-nursery figures are unknown and their alerts stay off (never ÷ relay users)', () => {
+    const hot = analytics({
+      aeActive: [],
+      doPeriodic: [
+        { date: '2026-10-19', namespaceId: MONITOR_NS, activeTimeUs: (600 / 0.128) * 1e6, rowsWritten: 197_000 },
+        { date: '2026-10-20', namespaceId: MONITOR_NS, activeTimeUs: (600 / 0.128) * 1e6, rowsWritten: 197_000 }
+      ]
+    });
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: hot, namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' }, phase0Shipped: true });
+    expect(s.kpis).toMatchObject({ activeNurseryDays: 0, doRequests: null, rowsWritten: null, gbSeconds: null });
+    expect(s.perNurseryMonthUsd).toBeNull();
+    expect(s.projection.at1k).toBeNull();
+    expect(s.alerts.map((a) => a.id)).not.toContain('hibernation');
+    expect(s.alerts.map((a) => a.id)).not.toContain('write_diet');
+    expect(s.notes.some((n) => n.includes('daily activity marks'))).toBe(true);
+  });
+
+  it('computes no our-server share and no relay-creep alert until monitor viewers report their other paths', () => {
+    // Phase A: the room measures only its own our-server minutes; Home Wi-Fi / Direct come with the apps' reports.
+    const relayOnly = analytics({
+      ae: [
+        row('2026-10-19', 'monitor', 'nursery', N1, { relayFrames: 54_000, minutes: { server: 60 } }),
+        row('2026-10-20', 'call', 'account', U1, { minutes: { turn: 30, direct: 30 } }, U1)
+      ]
+    });
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: relayOnly });
+    expect(s.kpis.serverShare).toBeNull(); // not 100%
+    expect(s.alerts.map((a) => a.id)).not.toContain('relay_creep');
+    expect(s.freePathShare).toBeCloseTo(0.5, 6); // calls only: 30 direct of 60
+    expect(s.notes.some((n) => n.includes('don’t report their Home Wi-Fi'))).toBe(true);
+    // Once reports arrive the share and the alert work as designed.
+    const reported = analytics({ ae: [row('2026-10-19', 'monitor', 'nursery', N1, { minutes: { server: 300, direct: 700 } })] });
+    const r = buildStreamSection({ nowMs: Date.parse('2026-10-21T12:00:00Z'), range: range30(), analytics: reported });
+    expect(r.kpis.serverShare).toBeCloseTo(0.3, 6);
+    expect(r.alerts.map((a) => a.id)).toContain('relay_creep');
+  });
+
+  it('does not read one night on the 1st as the month’s trend (headroom and its alerts)', () => {
+    const first = Date.parse('2026-11-01T06:17:00Z');
+    const r = computeCostRange(7, new Date(first));
+    const s = buildStreamSection({
+      nowMs: first,
+      range: { fromMs: r.fromMs, toMs: r.toMs, prevFromMs: r.prevFromMs, days: 7 },
+      analytics: analytics({ nowMs: first, turnEgressBytes: 1.95e9, workersMtd: [{ script: 'dreamstream-live', requests: 150_000 }] })
+    });
+    // Straight through 6 h this was 17.7M requests (177% → critical) and 231 GB of TURN ($11.56 → warning).
+    expect(s.headroom.find((h) => h.id === 'workerRequests')?.projectedPct).toBeLessThan(80);
+    expect(s.alerts.map((a) => a.id)).not.toContain('turn_spend');
+    expect(s.alerts.map((a) => a.id)).not.toContain('free_tier:workerRequests');
+  });
+
   it('reads R2 storage from its own query (the daily watch has no Workers card) and warns near the free 10 GB', () => {
     const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics({ r2Storage: [{ bucket: 'dreamstream-live', payloadBytes: 9e9 }] }) });
     expect(s.headroom.find((h) => h.id === 'r2StoredGb')).toMatchObject({ used: 9, projected: 9, projectedPct: 90 });
     expect(s.alerts.filter((a) => a.id.includes('r2'))).toEqual([expect.objectContaining({ id: 'free_tier:r2StoredGb', severity: 'warning' })]);
   });
 
+  it('says "set up but nothing answered" — not "connect" — when every dataset failed', () => {
+    const failed: StreamAnalytics = { configured: true, nowMs: NOW, aeFromMs: NOW, errors: ['TURN egress: HTTP 403'], failures: { turn: 'HTTP 403' } };
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: failed });
+    expect(s.sources).toEqual({ graphql: false, analyticsEngine: false });
+    expect(s.configured).toBe(true);
+    expect(s.errors).toEqual(['TURN egress: HTTP 403']);
+    expect(streamVerdict(s, formatUsd)).toMatch(/^Not measured — Cloudflare analytics is set up but no dataset answered/);
+  });
+
   it('is honest when nothing is connected', () => {
     const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: null });
     expect(s.sources).toEqual({ graphql: false, analyticsEngine: false });
+    expect(s.configured).toBe(false);
     expect(s.marginalUsd).toBe(0);
     expect(s.headroom).toEqual([]);
     expect(s.alerts).toEqual([]);

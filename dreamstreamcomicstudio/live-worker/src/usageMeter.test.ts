@@ -219,6 +219,29 @@ describe('UsageMeter — durable sources with a watermark in the row (EventRoom)
     expect(row(storage, T0 + 24 * H)?.counters.broadcast?.segBytes).toBe(5_000);
   });
 
+  it('finds the watermark across idle months — an event reopened in November after a quiet October counts only what is new', async () => {
+    /** Adds the DO storage `list` the meter uses when it is there (sorted keys, prefix, end, reverse, limit). */
+    const withList = (st: ReturnType<typeof fakeStorage>) =>
+      Object.assign(st, {
+        async list<T>(o: { prefix?: string; end?: string; reverse?: boolean; limit?: number } = {}) {
+          let keys = [...st.data.keys()].filter((k) => k.startsWith(o.prefix ?? '') && (o.end == null || k < o.end)).sort();
+          if (o.reverse) keys.reverse();
+          if (o.limit != null) keys = keys.slice(0, o.limit);
+          return new Map(keys.map((k) => [k, structuredClone(st.data.get(k)) as T]));
+        },
+      });
+    for (const storage of [withList(fakeStorage()), fakeStorage()]) {
+      let segCount = 600;
+      const collect = (prev: unknown) => ({ delta: { broadcast: { segCount: segCount - ((prev as { seg?: number } | null)?.seg ?? 0) } }, src: { seg: segCount } });
+      const sep = Date.parse('2026-09-20T20:00:00Z');
+      const nov = Date.parse('2026-11-05T20:00:00Z');
+      await new UsageMeter({ storage, scope: 'event' }).flush(sep, { scopeId: 'ev1', collect });
+      segCount = 601; // one more segment, two months later
+      expect(await new UsageMeter({ storage, scope: 'event' }).flush(nov, { scopeId: 'ev1', collect })).toBe('written');
+      expect(row(storage, nov)?.counters.broadcast?.segCount).toBe(1); // not 601
+    }
+  });
+
   it('carries the watermark across a month boundary', async () => {
     const storage = fakeStorage();
     const m = new UsageMeter({ storage, scope: 'event' });

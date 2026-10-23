@@ -18,6 +18,7 @@ import {
   monthKey,
   monthsBefore,
   prevMonthKey,
+  PROJECTION_MIN_DAYS,
   projectMonthEnd,
   sanitizeMonth,
   sanitizeUsage,
@@ -193,6 +194,14 @@ describe('stream usage — month-end projection', () => {
     expect(crossed.crossesOn).toBe('2026-11-05');
     expect(projectMonthEnd(1, at('2026-11-05T12:00:00Z'), 1000).crossesOn).toBeNull();
   });
+
+  it('can treat the first days of a month as at least `minDays` elapsed (the alerts’ floor), and is plain straight-line after', () => {
+    const first = projectMonthEnd(1.95, at('2026-11-01T06:17:00Z'), null, { minDays: PROJECTION_MIN_DAYS });
+    expect(first.daysElapsed).toBe(3);
+    expect(first.projected).toBeCloseTo((1.95 / 3) * 30, 3);
+    const later = projectMonthEnd(500, at('2026-10-11T00:00:00Z'), 1000, { minDays: PROJECTION_MIN_DAYS });
+    expect(later.projected).toBeCloseTo(1550, 6); // 10 days in: the floor no longer matters
+  });
 });
 
 describe('stream usage — alerts', () => {
@@ -223,6 +232,16 @@ describe('stream usage — alerts', () => {
     const crit = evaluateStreamAlerts({ nowMs: at('2026-10-21T00:00:00Z'), turnGbMonthToDate: 800 });
     expect(crit.find((a) => a.id === 'turn_spend')?.severity).toBe('critical');
     expect(evaluateStreamAlerts({ nowMs: now, turnGbMonthToDate: 5 })).toEqual([]);
+  });
+
+  it('does not extrapolate one night into a monthly TURN alert on the 1st (the watch runs at 06:17 UTC)', () => {
+    // One all-night TURN viewer at 0.69 Mbps ≈ 1.95 GB by 06:17 on the 1st; the real month is ≈ 96 GB ($4.80).
+    // A plain straight line said ≈ 231 GB ($11.56) — a false warning, then a close the next day, every month.
+    expect(evaluateStreamAlerts({ nowMs: at('2026-11-01T06:17:00Z'), turnGbMonthToDate: 1.95 })).toEqual([]);
+    // A real leak still shows the next morning: 63 GB by 06:17 on the 2nd → on course for ≈ 630 GB ($31 at list price).
+    expect(evaluateStreamAlerts({ nowMs: at('2026-11-02T06:17:00Z'), turnGbMonthToDate: 63 })).toEqual([expect.objectContaining({ id: 'turn_spend', severity: 'warning' })]);
+    // …and the leak rule is on actuals, so it never waits for the floor.
+    expect(evaluateStreamAlerts({ nowMs: at('2026-11-01T06:17:00Z'), turnGbMonthToDate: 600 }).map((a) => a.id)).toEqual(['turn_leak', 'turn_spend']);
   });
 
   it('flags a TURN leak (500 GB before the 15th, or 20 GB from one identifier in a day)', () => {

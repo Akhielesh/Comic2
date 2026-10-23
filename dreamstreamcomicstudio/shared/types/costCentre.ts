@@ -170,6 +170,8 @@ export interface StreamAlertRow {
 export interface StreamCostSection {
   /** Which sources answered: Cloudflare GraphQL (measured) and Analytics Engine (in-room counters). */
   sources: { graphql: boolean; analyticsEngine: boolean };
+  /** Cloudflare analytics credentials are set (the reads were asked), whether or not they answered. */
+  configured?: boolean;
   /** Month to date (UTC) that headroom, overage and alerts cover. */
   month: { from: string; to: string; daysElapsed: number; daysInMonth: number };
   /** Stream Studio's share of the account's overage this month (marginal $; $0 inside the free tiers). */
@@ -177,10 +179,10 @@ export interface StreamCostSection {
   /** List-price value of the selected range's usage, and the range before it (estimated). */
   listValueUsd: number;
   prevListValueUsd: number | null;
-  /** Estimated list value per active nursery-month and per broadcast-hour. */
+  /** Estimated list value per active nursery-month (null until the rooms' daily activity marks exist) and per broadcast-hour. */
   perNurseryMonthUsd: number | null;
   perBroadcastHourUsd: number | null;
-  /** Share (0–1) of monitor + call minutes on Home Wi-Fi or Direct. */
+  /** Share (0–1) of monitor + call + meeting minutes on Home Wi-Fi or Direct (monitor only once its viewers report paths). */
   freePathShare: number | null;
   activeNurseries: number;
   events: number;

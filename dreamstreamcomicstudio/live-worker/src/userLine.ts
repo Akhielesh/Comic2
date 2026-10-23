@@ -69,7 +69,7 @@ import {
 import { RING_MS, type CallRecord } from './familyCalls';
 import { callRpc, verifyMember, type SupabaseEnv } from './supabaseAuth';
 import { isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
-import { UsageMeter, type SocketUsage, type UsageSink } from './usageMeter';
+import { UsageMeter, type SocketUsage } from './usageMeter';
 import { FAIR_USE, isUsageKind, sanitizeUsage, type UsageMonth } from '../../shared/stream/usage';
 
 /** The baby monitor's VAPID key holder (one key pair for every push this app sends). */
@@ -79,8 +79,8 @@ const VAPID_SUBJECT = 'https://dreamstreamstudio.ai';
 export interface UserLineEnv extends SupabaseEnv {
   MONITOR_ROOM: DurableObjectNamespace;
   CALL_ROOM: DurableObjectNamespace;
-  /** Workers Analytics Engine (optional): Stream Studio usage points. */
-  STREAM_USAGE?: UsageSink;
+  // No STREAM_USAGE here on purpose: every call's Analytics Engine point is written once, by the room
+  // that measured it (CallRoom / MonitorRoom). The line keeps only the member's own month row.
 }
 
 /** The member's own usage this month (`{t:'usage_get'}` → `{t:'usage'}`; Phase B's Usage card). */
@@ -154,11 +154,15 @@ const clip = (s: unknown, n: number) => String(s ?? '').trim().slice(0, n);
 
 export class UserLine {
   private vapid: VapidKeys | null = null;
-  /** The account's usage month (calls it placed, …): ≤ 1 `use:YYYY-MM` row an hour. */
+  /**
+   * The account's usage month (calls it placed, …): ≤ 1 `use:YYYY-MM` row an hour, for the member's own
+   * Usage card. No Analytics Engine sink: the room that measured each call already wrote its point, and
+   * a second one here would double every call in Admin → Costs.
+   */
   private readonly usage: UsageMeter;
 
   constructor(private state: DurableObjectState, private env: UserLineEnv) {
-    this.usage = new UsageMeter({ storage: state.storage, sink: env.STREAM_USAGE, scope: 'account' });
+    this.usage = new UsageMeter({ storage: state.storage, sink: null, scope: 'account' });
     // Idle lines never wake the object: the runtime answers keepalive pings.
     try {
       state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}'));

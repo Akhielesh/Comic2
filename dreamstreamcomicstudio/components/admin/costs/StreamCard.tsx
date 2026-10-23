@@ -229,7 +229,7 @@ const Setup: React.FC<{ s: StreamCostSection }> = ({ s }) => (
         <Radio className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden />
         <div>
           <SurfaceTitle>Stream Studio costs — not measured yet</SurfaceTitle>
-          <SurfaceSubtitle>Today it fits inside the $5 Workers Paid plan; connect analytics to see real figures</SurfaceSubtitle>
+          <SurfaceSubtitle>Nothing is measured until Cloudflare analytics is connected — these steps turn it on</SurfaceSubtitle>
         </div>
       </div>
     }
@@ -260,6 +260,44 @@ const Setup: React.FC<{ s: StreamCostSection }> = ({ s }) => (
     <p className="flex items-center gap-1.5 border-t border-[var(--ds-hairline-soft)] px-3 py-2 text-[11px] text-[var(--ds-muted)]">
       <KeyRound className="h-3 w-3" aria-hidden /> The token is read server-side only and never sent to the browser.
     </p>
+  </Surface>
+);
+
+/** Credentials are set, but no dataset answered: say so, and why — not "connect it", and no claim about what it costs. */
+const NoAnswer: React.FC<{ s: StreamCostSection }> = ({ s }) => (
+  <Surface
+    className="!my-0"
+    header={
+      <div className="flex items-center gap-2">
+        <TriangleAlert className="h-4 w-4" style={{ color: STATUS.warning }} aria-hidden />
+        <div>
+          <SurfaceTitle>Stream Studio costs — Cloudflare analytics didn’t answer</SurfaceTitle>
+          <SurfaceSubtitle>The token is set, but no dataset answered, so nothing could be measured — including whether usage is inside the free tiers</SurfaceSubtitle>
+        </div>
+      </div>
+    }
+  >
+    <div className="px-3 pb-3 text-xs" data-testid="stream-no-answer">
+      {s.errors.length > 0 ? (
+        <ul className="space-y-0.5 text-[var(--ds-ink)]" aria-label="What Cloudflare said">
+          {s.errors.map((e) => (
+            <li key={e} className="font-mono text-[11px]">
+              {e}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[var(--ds-muted)]">Cloudflare returned nothing usable for this month.</p>
+      )}
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--ds-muted)]">
+        <li>
+          Check the token still exists and has <span className="font-semibold">Account › Account Analytics › Read</span> on the account in{' '}
+          <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code>.
+        </li>
+        <li>The in-room counters (Analytics Engine) appear after the live Worker has written its first usage point.</li>
+        <li>Until it answers, rely on the Cloudflare account budget alert (Billing → budget alerts) as the backstop.</li>
+      </ul>
+    </div>
   </Surface>
 );
 
@@ -296,7 +334,10 @@ export const StreamCard: React.FC<{ stream?: StreamCostSection; days: number }> 
     return <p className="px-1 py-6 text-center text-xs text-[var(--ds-muted)]">This server doesn’t report Stream Studio costs yet — deploy the backend to see them.</p>;
   }
   const s = stream;
-  if (!s.sources.graphql && !s.sources.analyticsEngine) return <Setup s={s} />;
+  if (!s.sources.graphql && !s.sources.analyticsEngine) return s.configured ? <NoAnswer s={s} /> : <Setup s={s} />;
+  // Monitor viewers' Home Wi-Fi / Direct minutes come with the apps' reports (Phase B); until then only our-server minutes are known.
+  const monitorMix = s.pathMix.find((m) => m.kind === 'monitor');
+  const monitorServerOnly = !!monitorMix && monitorMix.minutes.server > 0 && monitorMix.minutes.lan + monitorMix.minutes.direct + monitorMix.minutes.turn === 0;
 
   const consumers = who === 'Nurseries' ? s.top.nurseries : who === 'Accounts' ? s.top.accounts : s.top.events;
   return (
@@ -306,7 +347,7 @@ export const StreamCard: React.FC<{ stream?: StreamCostSection; days: number }> 
         <div className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs text-[var(--ds-ink)]">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" style={{ color: STATUS.warning }} aria-hidden />
           <div>
-            <div className="font-semibold">Some Cloudflare datasets didn’t answer — the rest is shown</div>
+            <div className="font-semibold">Some Cloudflare datasets didn’t answer — the alerts they feed can’t be checked until they do; the rest is shown</div>
             <ul className="text-[var(--ds-muted)]">
               {s.errors.map((e) => (
                 <li key={e}>{e}</li>
@@ -340,7 +381,7 @@ export const StreamCard: React.FC<{ stream?: StreamCostSection; days: number }> 
           testId="stream-kpi-free"
           label="Minutes on free paths"
           value={s.freePathShare == null ? '—' : fmtPct(s.freePathShare * 100, s.freePathShare >= 0.995 ? 0 : 1)}
-          sub="Home Wi-Fi + Direct, of monitor, call and meeting minutes."
+          sub={monitorServerOnly ? 'Calls and meetings only — monitor viewers don’t report their paths yet.' : 'Home Wi-Fi + Direct, of monitor, call and meeting minutes.'}
         />
       </div>
 
@@ -351,7 +392,7 @@ export const StreamCard: React.FC<{ stream?: StreamCostSection; days: number }> 
             <div>
               <SurfaceTitle>Free-tier headroom</SurfaceTitle>
               <SurfaceSubtitle>
-                Month to date ({s.month.daysElapsed} of {s.month.daysInMonth} days), straight-line to month end · account-wide, shared with every Worker
+                Month to date ({s.month.daysElapsed} of {s.month.daysInMonth} days), straight-line to month end (at least 3 days counted) · account-wide, shared with every Worker
               </SurfaceSubtitle>
             </div>
           }
@@ -378,6 +419,11 @@ export const StreamCard: React.FC<{ stream?: StreamCostSection; days: number }> 
         >
           <div className="px-3 pb-3">
             <PathMix mix={s.pathMix} />
+            {monitorServerOnly && (
+              <p className="mt-2 text-[11px] text-[var(--ds-muted)]" data-testid="stream-monitor-paths-note">
+                Baby monitor: only minutes through our server are measured so far. Home Wi-Fi and Direct viewing isn’t reported yet, so this bar isn’t a share.
+              </p>
+            )}
           </div>
         </Surface>
       </div>

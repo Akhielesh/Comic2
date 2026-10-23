@@ -114,6 +114,27 @@ describe('StreamCard', () => {
     expect(screen.queryByTestId('stream-card')).toBeNull();
   });
 
+  it('says Cloudflare didn’t answer (with why) when the token is set but every dataset failed — never "connect it" or "fits the $5 plan"', () => {
+    render(<StreamCard stream={stream({ sources: { graphql: false, analyticsEngine: false }, configured: true, errors: ['TURN egress: HTTP 403: Authentication error'] })} days={30} />);
+    expect(screen.getByText('Stream Studio costs — Cloudflare analytics didn’t answer')).toBeInTheDocument();
+    expect(within(screen.getByTestId('stream-no-answer')).getByText('TURN egress: HTTP 403: Authentication error')).toBeInTheDocument();
+    expect(screen.queryByText('Stream Studio costs — not measured yet')).toBeNull();
+    expect(screen.queryByText(/Workers Paid plan/)).toBeNull();
+    expect(screen.queryByTestId('stream-card')).toBeNull();
+  });
+
+  it('never claims what Stream Studio costs before anything is measured', () => {
+    render(<StreamCard stream={stream({ sources: { graphql: false, analyticsEngine: false } })} days={30} />);
+    expect(screen.queryByText(/fits inside/i)).toBeNull();
+  });
+
+  it('labels a monitor bar that only has our-server minutes, instead of showing it as a share', () => {
+    const mix = stream().pathMix.map((m) => (m.kind === 'monitor' ? { ...m, minutes: { lan: 0, direct: 0, turn: 0, server: 60 } } : m));
+    render(<StreamCard stream={stream({ pathMix: mix, freePathShare: 0.5 })} days={30} />);
+    expect(screen.getByTestId('stream-monitor-paths-note')).toHaveTextContent('only minutes through our server are measured');
+    expect(within(screen.getByTestId('stream-kpi-free')).getByText(/Calls and meetings only/)).toBeInTheDocument();
+  });
+
   it('says which datasets failed and still shows the rest', () => {
     render(<StreamCard stream={stream({ errors: ['TURN egress: timed out after 8s'] })} days={7} />);
     expect(screen.getByText('TURN egress: timed out after 8s')).toBeInTheDocument();
@@ -157,6 +178,13 @@ describe('CostCentre — Stream Studio tab', () => {
     render(<CostCentre />);
     const table = await screen.findByRole('table', { name: 'Products cost-benefit' });
     expect(within(table).getByText('$0.04 est.')).toBeInTheDocument();
+  });
+
+  it('shows the badge when a dataset couldn’t be measured, even with no alert firing', async () => {
+    getCostCentre.mockResolvedValue({ ...report(), stream: stream({ alerts: [], errors: ['TURN egress: timed out after 8s'] }) });
+    render(<CostCentre />);
+    const badge = await screen.findByTestId('stream-alert-badge');
+    expect(badge).toHaveTextContent('Stream Studio: couldn’t measure 1 dataset');
   });
 
   it('opens the Stream Studio tab from the alert badge', async () => {

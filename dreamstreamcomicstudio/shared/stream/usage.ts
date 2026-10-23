@@ -48,6 +48,14 @@ export const USAGE_KIND_LABEL: Readonly<Record<UsageKind, string>> = {
  */
 export type UsageScope = 'nursery' | 'account' | 'event';
 
+/**
+ * Analytics Engine index of a room's once-a-day "active" mark (a nursery with a camera connected that
+ * UTC day). Not a usage kind and carries no counters: it is the denominator of the per-active-nursery-day
+ * KPIs, which can't come from the usage points because a nursery that never uses the server relay owes
+ * nothing and writes none.
+ */
+export const ACTIVE_MARK = 'active';
+
 export const isUsageKind = (v: unknown): v is UsageKind => typeof v === 'string' && (USAGE_KINDS as readonly string[]).includes(v);
 export const isStreamPath = (v: unknown): v is StreamPath => typeof v === 'string' && (STREAM_PATHS as readonly string[]).includes(v);
 
@@ -513,12 +521,23 @@ export interface MonthProjection {
 }
 
 /**
- * Straight-line projection of a month-to-date counter: today's run-rate × days in the month. At
- * least one hour of the month counts as elapsed, so the first minutes don't explode the rate.
+ * Stream Studio's projections (headroom, the alerts, the daily watch) treat at least this many days of
+ * the month as elapsed. Usage is bunched at night: the daily watch runs at 06:17 UTC, so on the 1st a
+ * straight line through ~6 hours of mostly night-time monitoring would be multiplied ×118 and raise a
+ * false "on course for" alert every month. With the floor, a real spike still shows (it is large by
+ * construction), and the TURN-leak rule (500 GB before the 15th) uses month-to-date actuals, not this.
  */
-export function projectMonthEnd(monthToDate: number, nowMs: number, limit?: number | null): MonthProjection {
+export const PROJECTION_MIN_DAYS = 3;
+
+/**
+ * Straight-line projection of a month-to-date counter: today's run-rate × days in the month. At
+ * least one hour of the month counts as elapsed (or `minDays`, when given), so the first hours don't
+ * explode the rate.
+ */
+export function projectMonthEnd(monthToDate: number, nowMs: number, limit?: number | null, opts: { minDays?: number } = {}): MonthProjection {
   const { startMs, endMs, daysInMonth } = monthBounds(nowMs);
-  const elapsedMs = Math.max(3_600_000, Math.min(endMs - startMs, nowMs - startMs));
+  const floorMs = Math.max(3_600_000, Math.min(endMs - startMs, (Number(opts.minDays) || 0) * DAY_MS));
+  const elapsedMs = Math.max(floorMs, Math.min(endMs - startMs, nowMs - startMs));
   const daysElapsed = elapsedMs / DAY_MS;
   const used = Math.max(0, finite(monthToDate));
   const perDay = used / daysElapsed;
@@ -628,7 +647,7 @@ export function evaluateStreamAlerts(input: StreamAlertInput): StreamAlert[] {
   }
 
   if (input.turnGbMonthToDate != null && input.turnGbMonthToDate >= 0) {
-    const proj = projectMonthEnd(input.turnGbMonthToDate, input.nowMs);
+    const proj = projectMonthEnd(input.turnGbMonthToDate, input.nowMs, null, { minDays: PROJECTION_MIN_DAYS });
     const listUsd = proj.projected * STREAM_UNIT_PRICES.turnPerGb;
     const billableUsd = Math.max(0, proj.projected - STREAM_ALLOWANCES.turnGb) * STREAM_UNIT_PRICES.turnPerGb;
     if (billableUsd >= t.turnUsdMonth) {

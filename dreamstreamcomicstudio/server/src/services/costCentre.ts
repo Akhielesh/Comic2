@@ -812,7 +812,9 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
       revenueUsd: null,
       note: stream.sources.graphql || stream.sources.analyticsEngine
         ? 'Infra: Durable Objects, R2, TURN and Worker requests (Cloudflare analytics, measured) + in-room usage counters (estimated). Marginal $ is month to date.'
-        : 'Infra only: runs on the dreamstream-live Worker inside Workers Paid. Connect Cloudflare analytics for real figures.',
+        : stream.configured
+          ? 'Infra only: runs on the dreamstream-live Worker. Cloudflare analytics is set up but didn’t answer, so nothing is measured (see the Stream Studio tab).'
+          : 'Infra only: runs on the dreamstream-live Worker inside Workers Paid. Connect Cloudflare analytics for real figures.',
       verdict: `${streamVerdict(stream, formatUsd)} · ${plural(rows.liveProfiles, 'member')}.`
     },
     {

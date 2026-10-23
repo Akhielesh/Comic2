@@ -237,6 +237,79 @@ describe('MonitorRoom usage — relay minutes and the hourly write', () => {
   });
 });
 
+describe('MonitorRoom usage — our-server minutes only while frames can flow', () => {
+  /** What the nursery's month holds plus what the viewer still carries, through our server (minutes). */
+  const serverMinutes = (m: ReturnType<typeof monitor>, viewer: FakeWS) => {
+    const att = viewer.deserializeAttachment() as { u?: { monitor?: { c: { minutes?: { server?: number } }; f?: { minutes?: { server?: number } } } } };
+    const owed = (att.u?.monitor?.c.minutes?.server ?? 0) - (att.u?.monitor?.f?.minutes?.server ?? 0);
+    return (month(m.store)?.counters.monitor?.minutes.server ?? 0) + owed + (m.room.usage.pendingTotals().get('monitor')?.minutes.server ?? 0);
+  };
+
+  it('stops a viewer’s clock while its camera is gone or paused for privacy, and restarts it when frames flow again', async () => {
+    const c = clock();
+    const m = monitor();
+    let cam = await m.join('tok-parent', 'camera', 'crib');
+    const viewer = await m.join('tok-care', 'viewer', 'bedside');
+    await m.say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    c.advance(10 * 60_000); // 10 min of relayed picture
+    await m.close(cam); // the camera phone dies at 01:00…
+    c.advance(6 * 60 * 60_000); // …the bedside viewer stays subscribed all night (linkFallback.ts keeps the relay wanted)
+    await m.room.alarm();
+    cam = await m.join('tok-parent', 'camera', 'crib'); // back at 07:00
+    c.advance(5 * 60_000); // 5 min relayed
+    await m.say(cam, { t: 'status', st: { paused: 'privacy' } });
+    c.advance(30 * 60_000); // paused for privacy: nothing is relayed
+    await m.say(cam, { t: 'status', st: {} });
+    c.advance(5 * 60_000); // 5 min relayed
+    await m.say(viewer, { t: 'relay', on: false });
+    expect(serverMinutes(m, viewer)).toBeCloseTo(20, 3); // not 6 h 50 min
+  });
+
+  it('a viewer that subscribes while its camera is away starts its clock only when the camera arrives', async () => {
+    const c = clock();
+    const m = monitor();
+    const viewer = await m.join('tok-care', 'viewer', 'bedside');
+    await m.say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    c.advance(60 * 60_000);
+    const cam = await m.join('tok-parent', 'camera', 'crib');
+    c.advance(15 * 60_000);
+    await m.say(viewer, { t: 'relay', on: false });
+    expect(serverMinutes(m, viewer)).toBeCloseTo(15, 3);
+    void cam;
+  });
+});
+
+describe('MonitorRoom usage — the daily activity mark (per-active-nursery-day denominator)', () => {
+  it('marks the nursery active once a UTC day while a camera is on — P2P-only too — with no storage write', async () => {
+    const c = clock();
+    const m = monitor();
+    await m.join('tok-parent', 'camera', 'crib');
+    const before = m.writes.length;
+    for (let k = 0; k < 10; k++) {
+      await m.room.alarm();
+      c.advance(15_000);
+    }
+    const marks = () => m.points.filter((p) => p.indexes?.[0] === 'active');
+    expect(marks()).toEqual([{ indexes: ['active'], blobs: ['nursery', NID, '', ''] }]);
+    expect(m.writes.slice(before).filter((k) => k.startsWith('use:'))).toEqual([]); // a P2P-only nursery owes nothing: no usage row
+    // A wake (memory gone) doesn't repeat it: the camera's attachment carries the day.
+    (m.room as unknown as { activeDay: string | null }).activeDay = null;
+    await m.room.alarm();
+    expect(marks()).toHaveLength(1);
+    c.advance(24 * H); // the next UTC day: one more
+    await m.room.alarm();
+    expect(marks()).toHaveLength(2);
+  });
+
+  it('writes no mark without a camera (a viewer alone is not an active nursery-day)', async () => {
+    clock();
+    const m = monitor();
+    await m.join('tok-care', 'viewer', 'bedside');
+    await m.room.alarm();
+    expect(m.points.filter((p) => p.indexes?.[0] === 'active')).toEqual([]);
+  });
+});
+
 describe('MonitorRoom usage — read paths', () => {
   it('parents can read this month’s usage; caregivers and viewers can’t', async () => {
     const m = monitor();
@@ -445,6 +518,8 @@ describe('Direct calls — usage counts against the caller’s account', () => {
     expect(aliceMonth?.counters.call?.minutes).toMatchObject({ turn: 6, lan: 6 });
     expect(month(w.lineOf(sam.uid).h.store)).toBeNull();
     expect(points.find((p) => p.indexes?.[0] === 'call')).toMatchObject({ blobs: ['account', alice.uid, alice.uid, expect.any(String)] });
+    // Written once — by the room that measured it. The caller's line keeps the month row only (no second point).
+    expect(points.filter((p) => p.indexes?.[0] === 'call')).toHaveLength(1);
 
     // The member reads their own month (Phase B's Usage card) over the socket they already have.
     await w.say(alice, alicePhone, { t: 'usage_get' });
@@ -478,6 +553,8 @@ describe('Direct calls — usage counts against the caller’s account', () => {
     expect(month(line.h.store)?.counters.call?.minutes.turn).toBe(11.5);
     const bogus = await line.obj.fetch(new Request('https://line.internal/x/use', { method: 'POST', body: JSON.stringify({ kind: 'bogus' }) }));
     expect(await bogus.json()).toEqual({ ok: false });
+    // The MonitorRoom wrote each family call's point; the line's hourly writes add none (no double count).
+    expect(points).toEqual([]);
   });
 });
 

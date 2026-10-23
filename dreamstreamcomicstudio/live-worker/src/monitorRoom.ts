@@ -162,7 +162,10 @@ interface Attach {
   guest?: string;
   /** Usage this socket carries (survives hibernation; usageMeter.ts) and its relay clock. */
   u?: SocketUsage;
+  /** Viewer: "picture through our server" clock start (ms) — runs only while its camera's frames can flow. */
   rs?: number;
+  /** Camera: the UTC day this nursery's daily activity mark was last written (so a wake doesn't repeat it). */
+  am?: string;
 }
 
 export interface SplStatus {
@@ -561,6 +564,8 @@ export class MonitorRoom {
   private relayRx = new Map<string, RelayRx>();
   /** Cameras paused for privacy: nothing of theirs is relayed. */
   private relayPrivacy = new Set<string>();
+  /** The UTC day the activity mark was written (memory; the camera's attachment `am` is the durable copy). */
+  private activeDay: string | null = null;
   private lastStatusAt = new Map<string, number>();
   private lastSoundAt = new Map<string, number>();
   private curBucket: { t: number; s: number; cry: number } | null = null;
@@ -886,6 +891,8 @@ export class MonitorRoom {
         }
         this.beats.delete(a.dev);
         this.lastStatus.delete(a.dev);
+        // Viewers stay subscribed while the camera is away (linkFallback.ts), but nothing flows: stop their clocks.
+        this.syncRelayClocks(a.dev, Date.now(), ws);
       }
       // Viewers relaying this camera no longer need to; tell the camera's peers.
       this.broadcast({ t: 'cam_gone', sid: a.sid, dev: a.dev });
@@ -1024,6 +1031,7 @@ export class MonitorRoom {
       this.relayCams.delete(a.dev);
       this.relayPrivacy.delete(a.dev);
       for (const s of this.authed()) if (s.a.mode === 'viewer' && s.a.relay === a.dev) this.relayRx.set(s.a.sid, freshRx());
+      this.syncRelayClocks(a.dev, Date.now()); // viewers still subscribed get frames again
       this.updateRelayWant(a.dev);
       const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
       const wasAlerted = await this.state.storage.get<boolean>(`alerted:${a.dev}`);
@@ -1077,8 +1085,11 @@ export class MonitorRoom {
     const now = Date.now();
     this.markBeat(a.dev);
     // Privacy pause holds back every relay message from this camera (even a throttled status says so).
+    const wasPrivate = this.relayPrivacy.has(a.dev);
     if ((msg.st as Record<string, unknown> | undefined)?.paused === 'privacy') this.relayPrivacy.add(a.dev);
     else this.relayPrivacy.delete(a.dev);
+    // Nothing is relayed while paused: its viewers' "through our server" clocks stop, and restart on resume.
+    if (wasPrivate !== this.relayPrivacy.has(a.dev)) this.syncRelayClocks(a.dev, now);
     if (now - (this.lastStatusAt.get(a.dev) ?? 0) < 800) return;
     this.lastStatusAt.set(a.dev, now);
     const s = (msg.st ?? {}) as Record<string, unknown>;
@@ -1180,6 +1191,7 @@ export class MonitorRoom {
     if (kind === 'privacy') {
       if (msg.on) this.relayPrivacy.add(a.dev);
       else this.relayPrivacy.delete(a.dev);
+      this.syncRelayClocks(a.dev, Date.now());
       await this.addLog({ kind: 'privacy', msg: msg.on ? `Video paused for privacy on ${where} — sound monitoring continues` : `Video resumed on ${where}`, dev: a.dev });
       return;
     }
@@ -1778,7 +1790,8 @@ export class MonitorRoom {
     a.relay = msg.on ? clip(msg.dev, 40) || undefined : undefined;
     a.rc = a.relay && Array.isArray(msg.codecs) ? relayCodecMask(msg.codecs) : undefined;
     a.ri = a.relay && msg.instant ? true : undefined;
-    relayClock(this.usage, a, 'monitor', !!a.relay, Date.now());
+    // The clock runs only while frames can flow: its camera is here and not paused for privacy.
+    relayClock(this.usage, a, 'monitor', !!a.relay && this.relayFlowing(a.relay), Date.now());
     ws.serializeAttachment(a);
     const rx = this.relayRx.get(a.sid);
     if (!a.relay) this.relayRx.delete(a.sid);
@@ -1811,6 +1824,24 @@ export class MonitorRoom {
       if (!m) want.jpeg += 1;
     }
     this.broadcast(want, (x) => x.mode === 'camera' && x.dev === dev);
+  }
+
+  /** Can this camera's relay frames reach viewers now: connected, and not paused for privacy? */
+  private relayFlowing(dev: string, except?: WebSocket): boolean {
+    return !this.relayPrivacy.has(dev) && this.authed().some((s) => s.ws !== except && s.a.mode === 'camera' && s.a.dev === dev);
+  }
+
+  /**
+   * Run each subscribed viewer's "through our server" clock only while its camera's frames can flow
+   * (a viewer stays subscribed while the camera is away or paused). Attachments only — no storage.
+   */
+  private syncRelayClocks(dev: string, now: number, except?: WebSocket): void {
+    const on = this.relayFlowing(dev, except);
+    for (const { ws, a } of this.authed()) {
+      if (ws === except || a.mode !== 'viewer' || a.relay !== dev || on === (a.rs != null)) continue;
+      relayClock(this.usage, a, 'monitor', on, now);
+      ws.serializeAttachment(a);
+    }
   }
 
   private relayCam(dev: string): { codec: number; at: number; keyAt: number; keyPending: boolean } {
@@ -2783,6 +2814,27 @@ export class MonitorRoom {
     this.parkUsage(except);
   }
 
+  /**
+   * Once per UTC day while a camera is connected: the nursery's activity mark (one Analytics Engine
+   * point, no storage) — the denominator of Admin → Costs' per-active-nursery-day figures. The day
+   * rides a camera's attachment, so neither a wake nor hibernation repeats it.
+   */
+  private async markActive(now: number): Promise<void> {
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (this.activeDay === day) return;
+    const cams = () => this.authed().filter((s) => s.a.mode === 'camera');
+    if (!cams().length) return;
+    if (!cams().some((s) => s.a.am === day)) {
+      const nid = await this.state.storage.get<string>('nid');
+      const cam = cams()[0];
+      if (!nid || !cam) return;
+      this.usage.mark('nursery', nid);
+      cam.a.am = day;
+      cam.ws.serializeAttachment(cam.a);
+    }
+    this.activeDay = day;
+  }
+
   /** What memory still holds rides a connected socket's attachment, so hibernation can't lose it. */
   private parkUsage(except?: WebSocket): void {
     if (!this.usage.pendingTotals().size) return;
@@ -2897,6 +2949,9 @@ export class MonitorRoom {
     const ringingUntil = await this.expireCalls(now);
 
     if (this.curBucket) await this.saveBucket(this.curBucket);
+    // Relay clocks follow their cameras (self-heals one a wake left wrong), then the day's mark and the hourly write.
+    for (const dev of new Set(this.authed().flatMap((x) => (x.a.mode === 'viewer' && x.a.relay ? [x.a.relay] : [])))) this.syncRelayClocks(dev, now);
+    await this.markActive(now);
     await this.meterTick(now);
     // Next wake-up: cameras need heartbeat checks, incidents need escalation,
     // an open sleep session needs closing if its camera never comes back,

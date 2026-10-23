@@ -22,6 +22,7 @@
  */
 
 import {
+  ACTIVE_MARK,
   addUsage,
   compactUsage,
   dominantPath,
@@ -30,7 +31,6 @@ import {
   maxUsage,
   monthKey,
   monthsBefore,
-  prevMonthKey,
   sanitizeMonth,
   sanitizeUsage,
   subUsage,
@@ -59,6 +59,8 @@ export interface MeterStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
   delete?(key: string): Promise<boolean | void>;
+  /** Used to find the latest earlier month's watermark in one read (else month-by-month gets). */
+  list?<T = unknown>(options?: { prefix?: string; end?: string; reverse?: boolean; limit?: number }): Promise<Map<string, T>>;
 }
 
 /** Per-socket usage in its WebSocket attachment: cumulative `c`, already written `f`, per kind. */
@@ -222,10 +224,11 @@ export class UsageMeter {
         return 'too_soon';
       }
 
-      // Durable sources: what changed since the watermark in the row (or last month's, at a rollover).
+      // Durable sources: what changed since the watermark in the row — or, in a month with no row yet,
+      // in the LATEST earlier row (an event idle for months must not re-count its whole life).
       let collected: Collected | null = null;
       if (opts.collect) {
-        const prevSrc = row ? row.src : (await this.opts.storage.get<StoredUsageRow>(usageKey(prevMonthKey(month))))?.src;
+        const prevSrc = row ? row.src : await this.lastSrc(month);
         collected = await opts.collect(prevSrc ?? null);
       }
 
@@ -265,6 +268,37 @@ export class UsageMeter {
     } catch {
       return 'error'; // fail open: the counters stay owed for the next flush
     }
+  }
+
+  /**
+   * The watermark in the latest row before `month` (null when there is none: a first flush). One list
+   * read where the storage has it; otherwise month by month, back as far as rows are kept.
+   */
+  private async lastSrc(month: string): Promise<unknown> {
+    const s = this.opts.storage;
+    const before = usageKey(month);
+    if (s.list) {
+      const rows = await s.list<StoredUsageRow>({ prefix: 'use:', end: before, reverse: true, limit: KEEP_MONTHS });
+      for (const [key, r] of rows) if (/^use:\d{4}-\d{2}$/.test(key) && key < before && r?.src !== undefined) return r.src;
+      return null;
+    }
+    for (let i = 1; i <= KEEP_MONTHS; i++) {
+      const r = await s.get<StoredUsageRow>(usageKey(monthsBefore(month, i)));
+      if (r?.src !== undefined) return r.src;
+    }
+    return null;
+  }
+
+  /**
+   * A once-a-day "this scope was active" mark: one Analytics Engine point, no counters, no storage.
+   * The denominator of the per-active-nursery-day KPIs (a nursery that never uses the relay owes
+   * nothing, so its usage never shows it was there). Never throws.
+   */
+  mark(scope: UsageScope, scopeId: string, account = ''): void {
+    try {
+      if (!scopeId) return;
+      this.opts.sink?.writeDataPoint({ indexes: [ACTIVE_MARK], blobs: [scope, scopeId, account || '', ''] });
+    } catch { /* fail open: analytics is best-effort */ }
   }
 
   /** One Analytics Engine data point right now (a call that ended). No storage. Never throws. */
