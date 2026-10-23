@@ -1291,8 +1291,8 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
     ? `Re-checked page ${page.n} (${cost(spent || estimate.usd)})${overlay ? ` and re-laid its balloons around the art${faces ? ', keeping faces clear' : ''}` : ''}.${typeof qc?.score === 'number' ? ` Page check score: ${qc.score.toFixed(2)}.` : ''}`
     : out.visionError?.code === 'BILLING_DENIED'
       ? // Usage left / a spending limit said no: say THAT (its message is already in the user's terms), not "try later".
-        `${out.visionError.userMessage.replace(/[.!]?\s*$/, '.')} Page ${page.n}'s balloons were re-laid from the stored layout instead — nothing was spent.`
-      : `The re-check of page ${page.n} couldn't run just now, so its balloons were re-laid from the stored layout instead${spent ? ` (${cost(spent)} was spent on the attempt)` : ' — nothing was spent'}.`;
+        `${out.visionError.userMessage.replace(/[.!]?\s*$/, '.')} ${overlay ? `Page ${page.n}'s balloons were re-laid from the stored layout instead` : `Page ${page.n} is unchanged`} — nothing was spent.`
+      : `The re-check of page ${page.n} couldn't run just now${overlay ? ', so its balloons were re-laid from the stored layout instead' : ''}${spent ? ` (${cost(spent)} was spent on the attempt)` : ' — nothing was spent'}.`;
   deliver(ctx, opts, message, notices.length ? notices : [noticeCard(out.visionRan ? 'success' : 'warn', message)]);
   return finished({ status: 'done', message });
 }
