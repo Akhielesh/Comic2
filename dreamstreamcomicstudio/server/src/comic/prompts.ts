@@ -53,6 +53,7 @@ import {
   type ResolvedImageJob
 } from '../../../shared/comic/models.js';
 import { isPhotoLikeness, pickRefs, type RefContext } from '../../../shared/comic/refRanking.js';
+import { layoutPanelCount, parseLayout, synthesizeLayout, type LayoutCell, type ParsedLayout } from '../../../shared/comic/pageGeometry.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import {
   ALWAYS_ART_AVOID,
@@ -648,194 +649,14 @@ export const stagePanel = (page: Page, panel: Panel): StagedCharacter[] => {
   }));
 };
 
-// ── Layout blueprint (synthesis + parsing; shared with writer and vision) ───
+// ── Layout blueprint (synthesis + parsing; shared with writer, vision and the client) ───
+//
+// One implementation: shared/comic/pageGeometry.ts (the board's wireframes, the editor's panel
+// hit-testing and the server's prompts and QC all read a blueprint the same way). These are
+// re-exported under their old names; pageGeometry.parity.test.ts pins the equality.
 
-export interface LayoutCell {
-  /** Panel indexes (0-based, reading order) in this row/band. */
-  panels: number[];
-  /** Relative height weight of the row. */
-  weight: number;
-  /** A tall panel spanning two rows beside a stack: index into `panels` of the tall one. */
-  span?: { tallSide: 'left' | 'right'; stacked: number };
-}
-
-export interface ParsedLayout {
-  mode: 'rows' | 'stack' | 'single';
-  rows: LayoutCell[];
-}
-
-const NUMBER_WORDS: Record<string, number> = {
-  a: 1, an: 1, one: 1, single: 1, two: 2, pair: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9
-};
-
-const numberFrom = (token: string): number | undefined => {
-  const t = token.toLowerCase();
-  if (/^\d+$/.test(t)) return Number(t);
-  return NUMBER_WORDS[t];
-};
-
-const rangeText = (from: number, to: number) => (from === to ? `panel ${from}` : `panels ${from}–${to}`);
-
-/**
- * Synthesize a row blueprint from panel sizes when the plan has no usable layout:
- * splash = full page (or a dominant full-width row), wide/large = a full row, tall = spans
- * two rows beside up to two stacked panels, small/medium pair up (three smalls share a row).
- * The output uses the same vocabulary the writer is asked for, so parseLayout() reads it.
- */
-export const synthesizeLayout = (
-  panels: Pick<Panel, 'size'>[],
-  format: Pick<Format, 'kind' | 'readingDirection'>
-): string => {
-  const n = panels.length;
-  if (!n) return '';
-  const rtl = format.readingDirection === 'rtl';
-  if (format.kind === 'webtoon') {
-    const tall = panels.map((p, i) => (p.size === 'tall' || p.size === 'splash' || p.size === 'large' ? i + 1 : 0)).filter(Boolean);
-    return `Stacked vertically: ${n} full-width panel${n === 1 ? '' : 's'} (${rangeText(1, n)}), top to bottom.${
-      tall.length ? ` Panel${tall.length > 1 ? 's' : ''} ${tall.join(', ')} ${tall.length > 1 ? 'are' : 'is'} extra tall.` : ''
-    }`;
-  }
-  if (format.kind === 'strip') {
-    return `Row 1: ${n === 1 ? 'one panel' : `${n} equal panels side by side`} (${rangeText(1, n)}${rtl ? ', right to left' : ''}).`;
-  }
-  if (n === 1) return 'One full-page splash panel (panel 1).';
-  const rows: string[] = [];
-  let row = 1;
-  let i = 0;
-  const pairText = (count: number, from: number) =>
-    `${count === 2 ? 'two equal panels' : 'three small panels'} side by side (${rangeText(from, from + count - 1)}${rtl ? ', right to left' : ''})`;
-  while (i < n) {
-    const size = panels[i].size;
-    const next = panels[i + 1]?.size;
-    const shares = (s?: PanelSize) => s === 'small' || s === 'medium';
-    if (size === 'splash') {
-      rows.push(`Row ${row}: one dominant splash panel across the full width, about half the page height (panel ${i + 1}).`);
-      i += 1;
-      row += 1;
-    } else if (size === 'wide' || size === 'large') {
-      rows.push(`Row ${row}: one ${size} panel across the full width (panel ${i + 1}).`);
-      i += 1;
-      row += 1;
-    } else if (size === 'tall') {
-      let stacked = 0;
-      while (stacked < 2 && i + 1 + stacked < n && shares(panels[i + 1 + stacked].size)) stacked += 1;
-      if (stacked === 0) {
-        rows.push(`Row ${row}: one tall panel across the full width (panel ${i + 1}).`);
-        i += 1;
-        row += 1;
-      } else {
-        const tallSide = rtl ? 'right' : 'left';
-        const stackSide = rtl ? 'left' : 'right';
-        const stack = stacked === 1 ? `one panel on the ${stackSide} (panel ${i + 2})` : `two stacked panels on the ${stackSide} (${rangeText(i + 2, i + 1 + stacked)})`;
-        rows.push(`Rows ${row}–${row + 1}: one tall panel on the ${tallSide} (panel ${i + 1}) beside ${stack}.`);
-        i += 1 + stacked;
-        row += 2;
-      }
-    } else if (size === 'small' && panels[i + 1]?.size === 'small' && panels[i + 2]?.size === 'small' && panels[i + 3]?.size !== 'small') {
-      rows.push(`Row ${row}: ${pairText(3, i + 1)}.`);
-      i += 3;
-      row += 1;
-    } else if (shares(next) && shares(size)) {
-      rows.push(`Row ${row}: ${pairText(2, i + 1)}.`);
-      i += 2;
-      row += 1;
-    } else {
-      rows.push(`Row ${row}: one panel across the full width (panel ${i + 1}).`);
-      i += 1;
-      row += 1;
-    }
-  }
-  return rows.join(' ');
-};
-
-const rowWeight = (text: string): number => {
-  if (/\b(splash|dominant|two-thirds|most of the page)\b/i.test(text)) return 2.2;
-  if (/\b(large|big|tall|half the page|half-page)\b/i.test(text)) return 1.6;
-  if (/\b(small|thin|short|narrow)\b/i.test(text)) return 0.85;
-  return 1;
-};
-
-const COUNT_RE = /\b(\d+|an?|one|single|two|pair|three|four|five|six|seven|eight|nine)\s+(?:of\s+)?((?:[a-z-]+\s+){0,3}?)panels?\b/gi;
-
-/** Every "<number> [adjectives] panel(s)" phrase in a segment, in order. */
-const countPhrases = (segment: string): { n: number; words: string }[] => {
-  const out: { n: number; words: string }[] = [];
-  const re = new RegExp(COUNT_RE.source, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(segment))) {
-    const n = numberFrom(m[1]);
-    if (n) out.push({ n, words: (m[2] || '').toLowerCase() });
-  }
-  return out;
-};
-
-/**
- * Count panels described in one row segment ("two equal panels", "3 panels", "a wide
- * panel"). A leading plural count wins ("two panels: one small panel and one large panel"
- * is 2); otherwise singular phrases add up ("one small panel and one large panel" is 2).
- */
-const countInSegment = (segment: string): number => {
-  const phrases = countPhrases(segment);
-  if (!phrases.length) return 0;
-  if (phrases[0].n >= 2) return phrases[0].n;
-  return phrases.reduce((sum, p) => sum + p.n, 0);
-};
-
-/**
- * Parse a row blueprint ("Row 1: one wide panel. Row 2: two equal panels. Rows 3–4: one
- * tall panel on the left beside two stacked panels on the right.", "Stacked vertically: 5
- * full-width panels") into rows. Returns null when it can't be read with confidence.
- */
-export const parseLayout = (layout: string): ParsedLayout | null => {
-  const text = clean(layout);
-  if (!text) return null;
-  const stack = /\bstacked vertically\b|\bvertical stack\b/i.exec(text);
-  if (stack) {
-    const m = /(\d+|one|two|three|four|five|six|seven|eight|nine)\s+(?:[a-z-]+\s+){0,2}panels?/i.exec(text);
-    const n = m ? numberFrom(m[1]) : undefined;
-    if (!n) return null;
-    const tall = new Set<number>();
-    const tallMatch = /panels?\s+([\d,\sand]+)\s+(?:is|are)\s+extra tall/i.exec(text);
-    if (tallMatch) for (const d of tallMatch[1].match(/\d+/g) || []) tall.add(Number(d) - 1);
-    return {
-      mode: 'stack',
-      rows: Array.from({ length: n }, (_, i) => ({ panels: [i], weight: tall.has(i) ? 1.6 : 1 }))
-    };
-  }
-  if (/^one full-page splash panel\b|^a single full-page (splash )?panel\b|^full-page splash\b/i.test(text)) {
-    return { mode: 'single', rows: [{ panels: [0], weight: 1 }] };
-  }
-  // Split into row segments at "Row N" / "Rows N–M"; else at sentence boundaries.
-  const marked = text.split(/(?=\brows?\s*\d+)/i).map(clean).filter((s) => /\brows?\s*\d+/i.test(s));
-  const segments = marked.length ? marked : text.split(/(?<=[.;])\s+|\n+/).map(clean).filter((s) => /panel/i.test(s));
-  if (!segments.length) return null;
-  const rows: LayoutCell[] = [];
-  let next = 0;
-  for (const segment of segments) {
-    const spanRange = /\brows\s*(\d+)\s*(?:–|—|-|to|and)\s*(\d+)/i.exec(segment);
-    const isSpan = /\btall\b/i.test(segment) && /\b(stacked|beside|next to)\b/i.test(segment);
-    if (isSpan || (spanRange && /\btall\b/i.test(segment))) {
-      // The stacked group is every counted phrase that isn't the tall panel itself.
-      const others = countPhrases(segment.replace(/\brows?\s*\d+\s*(?:–|—|-|to|and)?\s*\d*\s*:?/i, '')).filter((p) => !/\btall\b/.test(p.words));
-      const stacked = Math.min(3, others.length ? (others[0].n >= 2 ? others[0].n : others.reduce((s, p) => s + p.n, 0)) : 2);
-      const sideMatch = /\btall panel\b[^.;]*?\bon the (left|right)\b/i.exec(segment) || /\bon the (left|right)\b[^.;]*?\btall panel\b/i.exec(segment);
-      const tallSide = (sideMatch?.[1]?.toLowerCase() as 'left' | 'right') || 'left';
-      const panels = Array.from({ length: 1 + stacked }, (_, k) => next + k);
-      rows.push({ panels, weight: 2, span: { tallSide, stacked } });
-      next += 1 + stacked;
-      continue;
-    }
-    const count = countInSegment(segment.replace(/\brows?\s*\d+\s*:?/i, ''));
-    if (!count) return null;
-    rows.push({ panels: Array.from({ length: count }, (_, k) => next + k), weight: rowWeight(segment) });
-    next += count;
-  }
-  return rows.length ? { mode: 'rows', rows } : null;
-};
-
-/** Number of panels a parsed layout accounts for. */
-export const layoutPanelCount = (parsed: ParsedLayout | null): number =>
-  parsed ? parsed.rows.reduce((n, r) => n + r.panels.length, 0) : 0;
+export type { LayoutCell, ParsedLayout };
+export { layoutPanelCount, parseLayout, synthesizeLayout };
 
 const FULL_WIDTH_SIZES = new Set<PanelSize>(['wide', 'large', 'splash']);
 

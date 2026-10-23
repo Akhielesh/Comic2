@@ -6,12 +6,21 @@
 //    a newline and the Send button sends, like mainstream mobile chat apps, so half-typed scripts
 //    never go out by accident. On fine pointers Enter sends and Shift+Enter is a newline.
 //    ⌘/Ctrl+Enter always sends. 16 px text on every coarse pointer (no iOS focus zoom).
-//  - Attach (+), paste or drop: PNG/JPG/WebP images ≤ 10 MB become attachments (character
-//    photos, style refs; big photos are downscaled first). On touch, + opens an action sheet:
-//    Photo library · Take a photo (camera) · Script or document. Images upload to the comic's
-//    inbox right away (`uploadRef(…, {kind:'inbox'})`, with progress) and go with the message as
-//    `inboxPaths`; if that upload is unavailable or still running at send time, the image goes
-//    inline as before — never lost, never blocking. Script files are read IN THE
+//  - Attach (+), paste or drop: photos (JPG/PNG/WebP/GIF/AVIF, and HEIC where the browser can
+//    read it) and scripts. On touch, + opens an action sheet: Photo library · Take a photo
+//    (camera) · Script or document. Photos go through the ONE refs pipeline (refs/downscale:
+//    quickReject → prepareImageFile, ≤ 40 MB originals shrunk to ≤ 2048 px, hashed) and upload to
+//    the comic's inbox right away (`uploadRef(…, {kind:'inbox'})`, up to 3 at a time, with a
+//    progress ring per photo); the message carries their `inboxPaths`, and Send waits until every
+//    photo is in (the server only takes inbox paths that exist). An exact duplicate reuses the
+//    earlier upload (free); a photo the content rules refuse, or one that doesn't fit, gets an
+//    honest row (refs/UploadQueue) instead of a silent drop; an upload that keeps failing goes
+//    inline with the message as before — never lost. Removing a photo deletes its inbox copy.
+//    Up to 12 photos per message (REF_LIMITS.perMessageImages).
+//  - Quick-assign ("Who's this?"): tap a photo to say who it is — a cast member, a new
+//    character, a place or the art style — or "Assign all…" for several; the message sends
+//    those as `attachmentTargets` and the server files them for free before the director turn.
+//    Script files are read IN THE
 //    BROWSER to plain text before upload — .txt/.md as-is, and .docx (mammoth), .pdf
 //    (pdf.js) and .fdx (Final Draft XML) via scriptImport, whose parsers load only when
 //    such a file is attached. The server appends short scripts to the message and saves
@@ -26,8 +35,16 @@
 //    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, Palette, Plus, Sparkles, Square, X } from 'lucide-react';
+import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, Palette, Plus, Sparkles, Square, Users, X } from 'lucide-react';
 import { TIER_PRESETS } from '../../../shared/comic/models';
+import { refInboxOf } from '../../../shared/comic/doc';
+import type { AttachmentTarget } from '../../../shared/comic/events';
+import { REF_LIMITS } from '../../../shared/comic/refs';
+import { deleteInboxRef } from '../studioApi';
+import { ACCEPT_ATTR, prepareImageFile, quickReject } from '../refs/downscale';
+import { UploadQueue } from '../refs/UploadQueue';
+import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
+import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
 import { voiceInputSupported } from '../../../hooks/useDictation';
 import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
@@ -45,9 +62,14 @@ import { useElementSize } from '../board/ui';
 import { importScriptFile, scriptKindOf, ScriptImportError, SCRIPT_ACCEPT } from './scriptImport';
 
 export const VOICE_AUTOSEND_KEY = 'comicstudio.voiceAutoSend';
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-/** Files per message (server cap, images and scripts together). */
+/** Largest upload body after the in-browser shrink (originals may be up to 40 MB). */
+export const MAX_IMAGE_BYTES = REF_LIMITS.maxUploadBytes;
+/** Files that travel INSIDE the message (scripts, and photos that couldn't upload) — server cap. */
 export const MAX_ATTACHMENTS = 6;
+/** Photos per message (server cap; they upload to the inbox first). */
+export const MAX_IMAGES = REF_LIMITS.perMessageImages;
+/** Photos uploading at the same time (preparing runs one at a time — phone memory). */
+export const MAX_PARALLEL_UPLOADS = 3;
 /** Characters the server keeps from one text file. */
 export const MAX_TEXT_CHARS = 200_000;
 /** Longest message text the server accepts; longer text is sent as a script file. */
@@ -56,17 +78,20 @@ export const MAX_MESSAGE_CHARS = 60_000;
 export const MAX_PAYLOAD_CHARS = 9_000_000;
 const MAX_TEXTAREA_PX = 240;
 
-const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
 const TEXT_TYPES = new Set(['text/plain', 'text/markdown', 'text/x-markdown']);
 const TEXT_EXT = /\.(txt|md|markdown|text|fountain)$/i;
 // .docx/.pdf/.fdx need in-browser extraction (mammoth/pdf.js/XML); the rest are plain text.
 const RICH_SCRIPT_KINDS = new Set(['docx', 'pdf', 'fdx']);
-const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp';
+// HEIC is deliberately not listed: the iOS picker then hands over JPEG (refs.md §7.4).
+const IMAGE_ACCEPT = ACCEPT_ATTR;
 const ACCEPT = `${IMAGE_ACCEPT},${SCRIPT_ACCEPT}`;
 /** Below this composer width the quality chip and the voice auto-send toggle step aside. */
 const ROOMY_PX = 400;
 
 export type ComposerPanel = 'format' | 'style' | 'quality';
+
+/** A photo's way into the comic's inbox. */
+export type ComposerUploadState = 'preparing' | 'queued' | 'uploading' | 'done' | 'failed';
 
 interface ComposerAttachment extends PendingAttachment {
   id: string;
@@ -74,12 +99,26 @@ interface ComposerAttachment extends PendingAttachment {
   /** Characters in a text attachment (for the chip). */
   chars?: number;
   truncated?: boolean;
-  /** Images: inbox upload state. 'done' carries `inboxPath`; anything else falls back to the data URL. */
-  upload?: 'pending' | 'done' | 'failed';
+  /**
+   * Photos: inbox upload state. 'done' carries `inboxPath`; 'failed' goes inline (its `dataUrl` is
+   * filled when it fails); undefined = no uploader here, the photo always goes inline.
+   */
+  upload?: ComposerUploadState;
   inboxPath?: string;
-  /** 0..1 while pending. */
+  /** 0..1 while uploading. */
   progress?: number;
+  /** Local preview (object URL or data URL). */
+  previewUrl?: string;
+  /** Why the upload failed (shown on its row). */
+  error?: string;
+  /** The server stored it but it looks like a photo already in the inbox. */
+  near?: boolean;
+  /** Quick-assign: who/what this photo is (undefined = the director decides). */
+  target?: AttachmentTarget;
 }
+
+/** Photos still on their way in (Send waits for them). */
+export const isUploadBusy = (state: ComposerUploadState | undefined): boolean => state === 'preparing' || state === 'queued' || state === 'uploading';
 
 /**
  * What Enter does in the composer (contract §13.4): coarse pointers insert a newline (the Send
@@ -194,7 +233,8 @@ export const shrinkImage = async (file: File, original: string): Promise<{ dataU
   }
 };
 
-const isImageFile = (f: File) => IMAGE_TYPES.has(f.type.toLowerCase());
+/** Anything that claims to be a picture goes to the photo pipeline (which refuses SVG and friends honestly). */
+const isImageFile = (f: File) => f.type.toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '');
 const isTextFile = (f: File) => TEXT_TYPES.has(f.type.toLowerCase()) || TEXT_EXT.test(f.name);
 
 const charCount = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k chars` : `${n} chars`);
@@ -225,21 +265,68 @@ export const buildOutgoing = (text: string, list: PendingAttachment[]): { text: 
   return { text: message, attachments };
 };
 
-/** What goes to `studio.send`: the legacy array form unless inbox uploads or a focus ride along. */
+/**
+ * What goes to `studio.send`: the legacy array form unless inbox uploads, photo assignments or a
+ * focus ride along. `attachmentTargets` (aligned with the IMAGE attachments in send order: inline
+ * photos first, then inbox photos — useStudio.send and the server keep that order) is only sent
+ * when at least one photo is assigned.
+ */
 export const sendArgs = (
   outgoing: { text: string; attachments: PendingAttachment[] },
   inboxPaths: string[],
-  focusSelection: boolean
+  focusSelection: boolean,
+  attachmentTargets?: AttachmentTarget[]
 ): [string, SendOptions | PendingAttachment[]] => {
-  if (!inboxPaths.length && !focusSelection) return [outgoing.text, outgoing.attachments];
+  const targets = attachmentTargets && attachmentTargets.some(Boolean) ? attachmentTargets : undefined;
+  if (!inboxPaths.length && !focusSelection && !targets) return [outgoing.text, outgoing.attachments];
   return [
     outgoing.text,
     {
       attachments: outgoing.attachments,
       ...(inboxPaths.length ? { inboxPaths } : {}),
+      ...(targets ? { attachmentTargets: targets } : {}),
       ...(focusSelection ? { focus: 'selection' as const } : {})
     }
   ];
+};
+
+/** A blob as a data: URL (inline fallback and previews where object URLs don't exist). */
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error || new Error('read failed'));
+    reader.readAsDataURL(blob);
+  });
+
+const objectUrlFor = (blob: Blob): string | undefined => {
+  try {
+    return typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' ? URL.createObjectURL(blob) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+const revokeUrl = (url?: string) => {
+  try {
+    if (url && url.startsWith('blob:') && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+  } catch {
+    /* ignore */
+  }
+};
+
+const NETWORK_COPY = 'Couldn’t upload yet — it will go with your message instead.';
+
+/** An upload error the user can't fix by trying again right now. */
+const errorInfo = (err: unknown): { kind: string; code: string; message: string; retryable: boolean; aborted: boolean } => {
+  const e = (err && typeof err === 'object' ? err : {}) as { kind?: unknown; code?: unknown; message?: unknown; retryable?: unknown; name?: unknown };
+  const kind = typeof e.kind === 'string' ? e.kind : '';
+  return {
+    kind,
+    code: typeof e.code === 'string' ? e.code : '',
+    message: typeof e.message === 'string' ? e.message : '',
+    retryable: e.retryable === true || kind === 'network' || kind === 'server' || kind === 'rate_limit' || kind === 'connection_lost',
+    aborted: e.name === 'AbortError' || kind === 'aborted'
+  };
 };
 
 export interface StudioComposerProps {
@@ -287,7 +374,6 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const scriptInputRef = useRef<HTMLInputElement>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
-  const uploads = useRef(new Map<string, AbortController>());
   const dictationBaseRef = useRef('');
   const dragDepth = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -321,7 +407,9 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const ready = !!doc;
   const hasContent = text.trim().length > 0 || attachments.length > 0;
-  const canSend = ready && hasContent && !messageBusy;
+  // Photos still uploading hold Send (the server only takes inbox paths that exist).
+  const uploadsBusy = attachments.some((a) => a.kind === 'image' && isUploadBusy(a.upload));
+  const canSend = ready && hasContent && !messageBusy && !uploadsBusy;
 
   // The page-editor selection rides along as the message's focus ("Page 3 · 2 balloons") until the
   // user dismisses the chip; a new selection brings the chip back.
@@ -397,57 +485,230 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const studioRef = useRef(studio);
+  studioRef.current = studio;
+  const showNoticeRef = useRef(showNotice);
+  showNoticeRef.current = showNotice;
 
-  // Abort in-flight inbox uploads when the composer goes away.
+  /**
+   * Per-photo runtime (not render state): the picked file, the prepared upload body, its hash,
+   * the inbox path once stored, and the abort handle. A photo is "alive" while it has an entry.
+   */
+  const runtime = useRef(
+    new Map<string, { file: File; name: string; blob?: Blob; hash?: string; inboxPath?: string; ctrl?: AbortController; attempts: number; preview?: string }>()
+  );
+  const prepQueue = useRef<string[]>([]);
+  const preparingNow = useRef(false);
+  const uploadQueue = useRef<string[]>([]);
+  const uploadingNow = useRef(0);
+  /** Rows for photos that never became attachments (refused, didn't fit, couldn't be read). */
+  const [rows, setRows] = useState<UploadItem[]>([]);
+  const mountedRef = useRef(true);
+
+  const patchAtt = useCallback((id: string, p: Partial<ComposerAttachment>) => {
+    if (!mountedRef.current) return;
+    setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, ...p } : a)));
+  }, []);
+
+  const addRow = useCallback((row: Omit<UploadItem, 'owner' | 'progress' | 'attempts'>) => {
+    if (!mountedRef.current) return;
+    setRows((prev) => [...prev.filter((r) => r.id !== row.id), { owner: { kind: 'inbox' }, progress: 0, attempts: 0, ...row }].slice(-MAX_IMAGES));
+  }, []);
+
+  /** Drop the comic's inbox copy of a photo the user took out (the inbox also prunes itself after 24 h). */
+  const dropInboxCopy = useCallback((path: string | undefined) => {
+    const projectId = docRef.current?.id;
+    if (!path || !projectId) return;
+    // Another photo of this message may still use the same stored copy (a re-added duplicate).
+    for (const rt of runtime.current.values()) if (rt.inboxPath === path) return;
+    void deleteInboxRef(projectId, path).catch(() => undefined);
+  }, []);
+
+  /** Take a photo out of the message (and out of the pipeline). */
+  const forget = useCallback((id: string) => {
+    const rt = runtime.current.get(id);
+    runtime.current.delete(id);
+    rt?.ctrl?.abort();
+    revokeUrl(rt?.preview);
+    prepQueue.current = prepQueue.current.filter((x) => x !== id);
+    uploadQueue.current = uploadQueue.current.filter((x) => x !== id);
+    if (mountedRef.current) setAttachments((prev) => prev.filter((a) => a.id !== id));
+    return rt;
+  }, []);
+
+  // Abort in-flight uploads and free previews when the composer goes away.
   useEffect(() => {
-    const map = uploads.current;
+    mountedRef.current = true;
+    const map = runtime.current;
     return () => {
-      map.forEach((c) => c.abort());
+      mountedRef.current = false;
+      map.forEach((rt) => {
+        rt.ctrl?.abort();
+        revokeUrl(rt.preview);
+      });
       map.clear();
     };
   }, []);
 
-  /** Start the inbox upload for an image attachment; any failure keeps the inline data-URL path. */
-  const startInboxUpload = useCallback(
-    (att: ComposerAttachment, original: File) => {
-      if (typeof studio.uploadRef !== 'function') return;
-      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      if (ctrl) uploads.current.set(att.id, ctrl);
-      const patchAtt = (p: Partial<ComposerAttachment>) => setAttachments((prev) => prev.map((a) => (a.id === att.id ? { ...a, ...p } : a)));
-      const body = (att.dataUrl !== '' && att.mimeType !== original.type ? dataUrlToBlob(att.dataUrl) : null) || original;
-      let result: Promise<{ ref?: { path?: string } }>;
+  /** Another photo of this message already uses that inbox path. */
+  const pathTaken = (path: string, exceptId: string) => {
+    for (const [id, rt] of runtime.current) if (id !== exceptId && rt.inboxPath === path) return true;
+    return false;
+  };
+
+  /** A failed upload keeps the photo: it travels inline with the message (as before). */
+  const failToInline = useCallback(
+    async (id: string, message: string) => {
+      const rt = runtime.current.get(id);
+      if (!rt) return;
+      let dataUrl = '';
       try {
-        result = studio.uploadRef(body, { kind: 'inbox' }, {
-          name: att.name,
-          ...(ctrl ? { signal: ctrl.signal } : {}),
-          onProgress: (f) => patchAtt({ progress: Math.max(0, Math.min(1, f)) })
-        });
+        dataUrl = await blobToDataUrl(rt.blob || rt.file);
       } catch {
-        uploads.current.delete(att.id);
-        patchAtt({ upload: 'failed' });
-        return;
+        /* unreadable: the row says so and the photo can be removed */
       }
-      Promise.resolve(result)
-        .then((res) => {
-          const path = res?.ref?.path;
-          patchAtt(path ? { upload: 'done', inboxPath: path, progress: 1 } : { upload: 'failed' });
-        })
-        .catch((err: unknown) => {
-          const e = (err && typeof err === 'object' ? err : {}) as { kind?: string; code?: string; message?: string };
-          // A photo the content rules refuse would be refused inline too (and fail the whole message):
-          // say so now, on this photo, and take it out — never a silent fallback that fails later.
-          if (e.kind === 'content_policy' || e.code === 'CONTENT_POLICY') {
-            setAttachments((prev) => prev.filter((a) => a.id !== att.id));
-            showNotice(`${att.name}: ${e.message || 'this image doesn’t fit the content rules, so it wasn’t added.'}`);
-            return;
-          }
-          // Anything else (offline, inbox full, a server hiccup): the photo goes inline with the message.
-          patchAtt({ upload: 'failed' });
-        })
-        .finally(() => uploads.current.delete(att.id));
+      if (!runtime.current.has(id)) return;
+      patchAtt(id, { upload: 'failed', error: dataUrl ? message : 'Couldn’t read this photo — remove it and add it again.', dataUrl, mimeType: (rt.blob || rt.file).type || 'image/jpeg', progress: 0 });
     },
-    [studio, showNotice]
+    [patchAtt]
   );
+
+  const pumpUploads = useCallback(() => {
+    while (uploadingNow.current < MAX_PARALLEL_UPLOADS && uploadQueue.current.length) {
+      const id = uploadQueue.current.shift()!;
+      const rt = runtime.current.get(id);
+      if (!rt?.blob) continue;
+      uploadingNow.current += 1;
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      void uploadOne(id).finally(() => {
+        uploadingNow.current -= 1;
+        pumpUploads();
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const uploadOne = useCallback(
+    async (id: string): Promise<void> => {
+      const rt = runtime.current.get(id);
+      const upload = studioRef.current.uploadRef;
+      if (!rt?.blob || typeof upload !== 'function') return;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
+      rt.ctrl = ctrl;
+      rt.attempts += 1;
+      patchAtt(id, { upload: 'uploading', progress: 0, error: undefined });
+      try {
+        const res = await upload(rt.blob, { kind: 'inbox' }, {
+          name: rt.name,
+          ...(rt.hash ? { hash: rt.hash } : {}),
+          ...(ctrl ? { signal: ctrl.signal } : {}),
+          onProgress: (f) => {
+            if (runtime.current.has(id)) patchAtt(id, { progress: Math.max(0, Math.min(1, f)) });
+          }
+        });
+        const stored = res?.ref?.path;
+        // An exact duplicate of a photo already in the inbox: use that copy (free, no second upload).
+        const path = stored || res?.duplicateOf;
+        if (!runtime.current.has(id)) {
+          // Removed while it was uploading: don't leave the new copy behind.
+          if (stored && !res?.duplicateOf) dropInboxCopy(stored);
+          return;
+        }
+        if (!path) {
+          await failToInline(id, 'Couldn’t add that photo to the comic — it will go with your message instead.');
+          return;
+        }
+        if (pathTaken(path, id)) {
+          forget(id);
+          showNoticeRef.current(`${rt.name} is already in this message.`);
+          return;
+        }
+        rt.inboxPath = path;
+        patchAtt(id, { upload: 'done', inboxPath: path, progress: 1, near: !!stored && res?.notice?.kind === 'near_duplicate' });
+      } catch (err) {
+        if (!runtime.current.has(id)) return;
+        const e = errorInfo(err);
+        if (e.aborted) return;
+        // Refused by the content rules: out of the message, with an honest row (never re-sent inline to fail later).
+        if (e.kind === 'content_policy' || e.code === 'CONTENT_POLICY' || e.code === 'SAFETY_BLOCKED') {
+          forget(id);
+          addRow({ id, name: rt.name, state: 'rejected', message: e.message ? `Not added — ${e.message.replace(/^./, (c) => c.toLowerCase())}` : BLOCKED_COPY });
+          return;
+        }
+        // The inbox (or the comic) is full: say so; nothing was stored.
+        if (e.kind === 'limit' || e.code === 'LIMIT') {
+          forget(id);
+          addRow({ id, name: rt.name, state: 'over_cap', message: e.message || 'This comic can’t take more photos right now — send or remove some first.' });
+          return;
+        }
+        // One calm automatic retry for a network blip or a busy server; then the photo goes inline.
+        if (e.retryable && rt.attempts < 2) {
+          patchAtt(id, { upload: 'queued', progress: 0 });
+          await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          if (!runtime.current.has(id)) return;
+          uploadQueue.current.push(id);
+          return;
+        }
+        await failToInline(id, e.kind === 'network' || e.kind === 'connection_lost' || !e.message ? NETWORK_COPY : `${e.message} It will go with your message instead.`);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [patchAtt, failToInline, forget, addRow, dropInboxCopy]
+  );
+
+  const pumpPrepare = useCallback(async () => {
+    if (preparingNow.current) return;
+    preparingNow.current = true;
+    try {
+      while (prepQueue.current.length) {
+        const id = prepQueue.current.shift()!;
+        const rt = runtime.current.get(id);
+        if (!rt) continue;
+        try {
+          const img = await prepareImageFile(rt.file);
+          if (!runtime.current.has(id)) continue;
+          // The same picture twice in one message: keep the first.
+          if (img.hash && [...runtime.current].some(([other, r]) => other !== id && r.hash === img.hash)) {
+            forget(id);
+            showNoticeRef.current(`${rt.name} is already in this message.`);
+            continue;
+          }
+          rt.blob = img.blob;
+          rt.hash = img.hash;
+          const preview = objectUrlFor(img.blob) || (await blobToDataUrl(img.blob).catch(() => ''));
+          if (!runtime.current.has(id)) {
+            revokeUrl(preview);
+            continue;
+          }
+          rt.preview = preview;
+          // Already in this comic's inbox (added earlier, not sent yet): reuse that copy — free.
+          const known = img.hash ? refInboxOf(docRef.current || ({ refInbox: [] } as never)).find((r) => r.hash === img.hash) : undefined;
+          if (known && !pathTaken(known.path, id)) {
+            rt.inboxPath = known.path;
+            patchAtt(id, { upload: 'done', inboxPath: known.path, progress: 1, previewUrl: preview, mimeType: img.mimeType });
+            continue;
+          }
+          if (typeof studioRef.current.uploadRef !== 'function') {
+            // No uploader (an older controller): the photo travels inline, already shrunk.
+            const dataUrl = await blobToDataUrl(img.blob).catch(() => '');
+            if (runtime.current.has(id)) patchAtt(id, { upload: undefined, dataUrl, previewUrl: preview, mimeType: img.mimeType });
+            continue;
+          }
+          patchAtt(id, { upload: 'queued', previewUrl: preview, mimeType: img.mimeType, progress: 0 });
+          uploadQueue.current.push(id);
+          pumpUploads();
+        } catch (err) {
+          if (!runtime.current.has(id)) continue;
+          forget(id);
+          addRow({ id, name: rt.name, state: 'failed', retryable: false, message: err instanceof Error && err.message ? err.message : 'That file couldn’t be opened as an image.' });
+        }
+      }
+    } finally {
+      preparingNow.current = false;
+    }
+  }, [patchAtt, pumpUploads, forget, addRow]);
 
   const addFiles = useCallback(
     async (input: FileList | File[]) => {
@@ -455,48 +716,39 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       if (!files.length) return;
       const problems: string[] = [];
       const added: ComposerAttachment[] = [];
-      const imageFiles = new Map<string, File>();
-      let count = attachmentsRef.current.length;
-      let payload = attachmentsRef.current.reduce((n, a) => n + a.dataUrl.length, 0);
+      let images = attachmentsRef.current.filter((a) => a.kind === 'image').length;
+      let texts = attachmentsRef.current.filter((a) => a.kind === 'text').length;
+      let payload = attachmentsRef.current.filter((a) => a.kind === 'text').reduce((n, a) => n + a.dataUrl.length, 0);
       const fits = (dataUrl: string, name: string) => {
         if (payload + dataUrl.length > MAX_PAYLOAD_CHARS) {
-          problems.push(`${name} doesn't fit — one message can carry about 9 MB of files. Send it in the next message`);
+          problems.push(`${name} doesn't fit — one message can carry about 9 MB of text files. Send it in the next message`);
           return false;
         }
         return true;
       };
       for (const file of files) {
-        if (count >= MAX_ATTACHMENTS) {
-          problems.push(`Up to ${MAX_ATTACHMENTS} files per message`);
-          break;
-        }
         if (isImageFile(file)) {
-          if (file.size > MAX_IMAGE_BYTES) {
-            problems.push(`${file.name} is over 10 MB`);
+          if (images >= MAX_IMAGES) {
+            if (!problems.some((p) => p.startsWith('Up to'))) problems.push(`Up to ${MAX_IMAGES} photos per message — send these, then add more`);
             continue;
           }
-          try {
-            const original = await readAs(file, 'dataUrl');
-            const shrunk = await shrinkImage(file, original);
-            const dataUrl = shrunk?.dataUrl || original;
-            if (!fits(dataUrl, file.name || 'That image')) continue;
-            const att: ComposerAttachment = {
-              id: attachId(),
-              kind: 'image',
-              name: file.name || 'photo.jpg',
-              mimeType: shrunk?.mimeType || file.type || 'image/png',
-              dataUrl,
-              upload: typeof studio.uploadRef === 'function' ? 'pending' : undefined,
-              progress: 0
-            };
-            added.push(att);
-            imageFiles.set(att.id, file);
-            payload += dataUrl.length;
-            count += 1;
-          } catch {
-            problems.push(`Couldn't read ${file.name}`);
+          const name = file.name || 'photo.jpg';
+          // Cheap checks first (type, the 40 MB original limit) — the honest reason, before any work.
+          const refused = await quickReject(file);
+          if (refused) {
+            addRow({ id: attachId(), name, state: 'failed', retryable: false, message: refused });
+            continue;
           }
+          const att: ComposerAttachment = { id: attachId(), kind: 'image', name, mimeType: file.type || 'image/jpeg', dataUrl: '', upload: 'preparing', progress: 0 };
+          runtime.current.set(att.id, { file, name, attempts: 0 });
+          prepQueue.current.push(att.id);
+          added.push(att);
+          images += 1;
         } else if (isTextFile(file)) {
+          if (texts >= MAX_ATTACHMENTS) {
+            problems.push(`Up to ${MAX_ATTACHMENTS} files per message`);
+            continue;
+          }
           try {
             const content = (await readAs(file, 'text')).replace(/\r\n?/g, '\n');
             if (!content.trim()) {
@@ -510,12 +762,16 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             if (!fits(dataUrl, file.name || 'That file')) continue;
             added.push({ id: attachId(), kind: 'text', name: file.name || 'script.txt', mimeType, dataUrl, chars: kept.length, truncated });
             payload += dataUrl.length;
-            count += 1;
+            texts += 1;
             if (truncated) problems.push(`${file.name} was trimmed to the first ${charCount(MAX_TEXT_CHARS)}`);
           } catch {
             problems.push(`Couldn't read ${file.name}`);
           }
         } else if (RICH_SCRIPT_KINDS.has(scriptKindOf(file.name, file.type) || '')) {
+          if (texts >= MAX_ATTACHMENTS) {
+            problems.push(`Up to ${MAX_ATTACHMENTS} files per message`);
+            continue;
+          }
           // .docx / .pdf / .fdx — extract to plain text in the browser, then upload the text.
           try {
             const imported = await importScriptFile(file);
@@ -523,21 +779,18 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             if (!fits(dataUrl, file.name || 'That script')) continue;
             added.push({ id: attachId(), kind: 'text', name: `${imported.name}.txt`, mimeType: 'text/plain', dataUrl, chars: imported.text.length, truncated: imported.truncated });
             payload += dataUrl.length;
-            count += 1;
+            texts += 1;
             if (imported.truncated) problems.push(`${file.name} was trimmed to the first ${charCount(MAX_TEXT_CHARS)}`);
           } catch (err) {
             problems.push(err instanceof ScriptImportError ? err.message : `Couldn't read ${file.name}`);
           }
         } else {
-          problems.push(`${file.name || 'That file'} isn't supported — use PNG, JPG or WebP images, or .txt/.md/.docx/.pdf/.fdx/.fountain scripts`);
+          problems.push(`${file.name || 'That file'} isn't supported — use JPG, PNG, WebP, GIF or AVIF photos, or .txt/.md/.docx/.pdf/.fdx/.fountain scripts`);
         }
       }
       if (added.length) {
         setAttachments((prev) => [...prev, ...added]);
-        for (const a of added) {
-          const f = imageFiles.get(a.id);
-          if (f && a.upload === 'pending') startInboxUpload(a, f);
-        }
+        void pumpPrepare();
       }
       if (problems.length) {
         showNotice(`${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}.`);
@@ -546,46 +799,81 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       // Phones: don't pop the keyboard over the photo the user just picked.
       if (added.length && !coarse) focusEnd();
     },
-    [focusEnd, showNotice, startInboxUpload, coarse, studio.uploadRef]
+    [focusEnd, showNotice, pumpPrepare, addRow, coarse]
   );
 
   const removeAttachment = (id: string) => {
-    uploads.current.get(id)?.abort();
-    uploads.current.delete(id);
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    const rt = forget(id);
+    dropInboxCopy(rt?.inboxPath);
+  };
+
+  /** Retry a photo whose upload failed (it was going to go inline). */
+  const retryAttachment = (id: string) => {
+    const rt = runtime.current.get(id);
+    if (!rt?.blob) return;
+    rt.attempts = 0;
+    patchAtt(id, { upload: 'queued', error: undefined, progress: 0 });
+    uploadQueue.current.push(id);
+    pumpUploads();
+  };
+
+  // ── Quick-assign ("Who's this?") ──────────────────────────────────────────
+
+  /** Which photo's menu is open ('all' = Assign all…). */
+  const [assigning, setAssigning] = useState<string | 'all' | null>(null);
+  const assignAnchorRef = useRef<HTMLElement | null>(null);
+  const assignAllRef = useRef<HTMLButtonElement>(null);
+  const imageAttachments = attachments.filter((a) => a.kind === 'image');
+  const assignTo = (target: AttachmentTarget) => {
+    const ids = assigning === 'all' ? imageAttachments.map((a) => a.id) : assigning ? [assigning] : [];
+    // `null` (let the director decide) clears the choice.
+    setAttachments((prev) => prev.map((a) => (ids.includes(a.id) ? { ...a, target: target || undefined } : a)));
+    setAssigning(null);
   };
 
   // ── Send ───────────────────────────────────────────────────────────────────
 
+  const busyCount = attachments.filter((a) => a.kind === 'image' && isUploadBusy(a.upload)).length;
+
   const sendNow = useCallback(
     (rawText: string, list: ComposerAttachment[]) => {
       if (!ready || messageBusy) return false;
-      // Images already in the comic's inbox travel by path; anything else (no uploader, still
-      // uploading, failed) goes inline as before — never lost, never blocking the send.
+      // Photos still on their way in: the server only takes inbox paths that exist — wait.
+      if (list.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) return false;
+      // Photos in the comic's inbox travel by path; the rest (no uploader, failed) go inline.
       const uploaded = list.filter((a) => a.kind === 'image' && a.upload === 'done' && a.inboxPath);
-      const inline = list.filter((a) => !uploaded.includes(a));
+      const inline = list.filter((a) => !uploaded.includes(a) && (a.kind === 'text' || !!a.dataUrl));
+      if (inline.length > MAX_ATTACHMENTS) {
+        showNotice(`Only ${MAX_ATTACHMENTS} files can go inside one message — retry the photos that didn’t upload, or remove some.`);
+        return false;
+      }
       const inboxPaths = uploaded.map((a) => a.inboxPath as string);
       const outgoing = buildOutgoing(rawText, inline);
       if (!outgoing.text && !outgoing.attachments.length && !inboxPaths.length) return false;
-      // An upload still running is superseded by its inline copy: stop it (no orphan in the inbox).
-      for (const a of inline) {
-        uploads.current.get(a.id)?.abort();
-        uploads.current.delete(a.id);
-      }
-      const [sendText, opts] = sendArgs(outgoing, inboxPaths, focusActive);
+      // Aligned with the IMAGE attachments as sent: inline photos first, then inbox photos.
+      const targets: AttachmentTarget[] = [...inline.filter((a) => a.kind === 'image'), ...uploaded].map((a) => a.target ?? null);
+      const [sendText, opts] = sendArgs(outgoing, inboxPaths, focusActive, targets);
       void studio.send(sendText, opts);
+      // Sent photos leave the pipeline (their inbox copies now belong to the message).
+      for (const a of list) {
+        const rt = runtime.current.get(a.id);
+        runtime.current.delete(a.id);
+        revokeUrl(rt?.preview);
+      }
       setText('');
       setAttachments([]);
+      setRows([]);
       setHint(null);
       setPanel(null);
       setAttachOpen(false);
+      setAssigning(null);
       requestAnimationFrame(() => {
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
       });
       onSent?.();
       return true;
     },
-    [messageBusy, ready, studio, focusActive, onSent]
+    [messageBusy, ready, studio, focusActive, onSent, showNotice]
   );
 
   const submit = () => {
@@ -628,11 +916,12 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     const said = (spoken || '').trim();
     if (!said) return;
     const joined = joinDictation(said);
-    if (autoSend && ready && !messageBusy) {
-      sendNow(joined, attachmentsRef.current);
-      return;
-    }
+    if (autoSend && ready && !messageBusy && sendNow(joined, attachmentsRef.current)) return;
+    // Not sent (photos still uploading, or auto-send is off): the words wait in the box.
     setText(joined);
+    if (autoSend && attachmentsRef.current.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) {
+      showNotice('Your photos are still uploading — tap Send when they’re in.');
+    }
     focusEnd();
   };
 

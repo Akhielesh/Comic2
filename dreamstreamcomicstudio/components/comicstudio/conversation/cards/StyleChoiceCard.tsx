@@ -6,13 +6,13 @@
 import React from 'react';
 import { Lock, Palette, RefreshCw, RotateCcw } from 'lucide-react';
 import type { Card, ComicDoc, StyleOption } from '../../../../shared/comic/doc';
-import { formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
+import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, plural } from '../ui';
 import { STYLE_DIRECTION_COUNT, quoteStyleOptions } from '../panels/StylePanel';
 import { RenderThumb } from './renderTile';
 import { failureSummary, retryAllFailed } from './RendersCard';
-import { useAction } from './useAction';
+import { useAction, useStudioSequenceGuard } from './useAction';
 
 type StyleChoiceData = Extract<Card, { type: 'style_choice' }>;
 
@@ -30,7 +30,9 @@ export const lockedOptionId = (doc: ComicDoc): string | null => {
 
 export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStudioController }> = ({ studio }) => {
   const doc = studio.doc;
-  const { run, isPending } = useAction(studio.act);
+  const guard = useStudioSequenceGuard(studio);
+  const { run, isPending } = useAction(studio.act, { guard });
+  const cost = useCostFormat(studio);
   if (!doc) return null;
   const options = doc.style.options;
   const locked = lockedOptionId(doc);
@@ -115,25 +117,25 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
         {retry && retry.actions.length > 0 && (
           <GhostButton
             size="sm"
-            className="tap-target"
+            className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
             busy={isPending('retry-all')}
             disabled={drawing > 0}
             title={drawing > 0 ? 'Waiting for the options that are drawing now' : undefined}
             onClick={() => void run('retry-all', ...retry.actions)}
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Retry {plural(retry.count, 'failed style', 'failed styles')}
-            <span className="text-[var(--ds-muted)]">≈ {formatUsd(retry.usd)}</span>
+            <span className="text-[var(--ds-muted)]">{cost.approx(retry.usd)}</span>
           </GhostButton>
         )}
         <GhostButton
           size="sm"
-          className="tap-target"
+          className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
           busy={isPending('more')}
           disabled={drawing > 0}
           onClick={() => void run('more', { type: 'render_style_options', quotedUsd: moreUsd })}
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-          More options <span className="text-[var(--ds-muted)]">≈ {formatUsd(moreUsd)}</span>
+          More options <span className="text-[var(--ds-muted)]">{cost.approx(moreUsd)}</span>
         </GhostButton>
         {locked && (
           <span className="text-[11.5px] text-[var(--ds-muted)]">Every page will be drawn in this style.</span>

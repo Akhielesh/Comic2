@@ -4,64 +4,56 @@
 // script and returns: the panel rectangles, QC issues (missing/extra characters, identity
 // drift, anatomy), every piece of text it can read, a 0–1 score and — for overlay
 // lettering — one balloon per script line placed near its speaker inside its panel.
-// Everything the model returns is post-processed deterministically: coordinates are
-// clamped, balloons are forced inside their panels, sized from their text, de-overlapped
-// and kept in reading order, and any line the model skipped gets a layout-based balloon.
-// Without vision (or when its output is unusable) fallbackBalloons() lays balloons out
-// from the panel blueprint alone, so a page is never left unlettered.
+// Everything the model returns is post-processed deterministically by the SHARED placement
+// engine (shared/comic/lettering/place.ts): its rectangles are hints, balloons are sized from
+// their text and language, kept inside their panels and the safe area, off faces/hands/action
+// (keepOut) with tails toward the speaker (heads), de-overlapped by outline and kept in reading
+// order; any line the model skipped is placed like the fallback. Without vision (or when its
+// output is unusable) fallbackBalloons() lays balloons out from the panel blueprint alone, and
+// placeStoredBalloons() re-lays a page for free from its stored QC — never unlettered.
 //
 // Balloon geometry (page-normalized, origin top-left): x, y = the balloon's top-left
 // corner, w = its width as a fraction of the page width; tailX/tailY = the tail tip.
 // Height is derived from the text by the renderer; estimateBalloonHeight() mirrors it.
 
-import type {
-  AspectRatio,
-  Balloon,
-  Box,
-  ComicDoc,
-  ComicKind,
-  KeepOut,
-  Line,
-  LineKind,
-  Page,
-  QcReport,
-  SpeakerMark
-} from '../../../shared/comic/doc.js';
+import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, Page, QcReport, SpeakerMark } from '../../../shared/comic/doc.js';
+import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
+import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
+import { estimatePanelBoxes as sharedPanelBoxes } from '../../../shared/comic/pageGeometry.js';
 import { SAFETY_CATEGORIES, effectiveRating, type SafetyCategory, type SafetyVerdict } from '../../../shared/comic/safety.js';
+import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout.js';
 import type { MessagePart } from '../ai/providers/types.js';
-import { layoutPanelCount, pageAspectFor, parseLayout, stagePanel, synthesizeLayout, upperName, type ParsedLayout } from './prompts.js';
+import { pageAspectFor, stagePanel, upperName } from './prompts.js';
 import { prefilterText, verdictFromVision } from './safety/index.js';
 import { completeStructured, type StructuredCheck } from './writer.js';
 import type { LlmClient } from './types.js';
 
-// ── Geometry constants ───────────────────────────────────────────────────────
+// ── Geometry (shared engine) ─────────────────────────────────────────────────
+//
+// Panel boxes come from shared/comic/pageGeometry.ts and balloons are placed by the shared,
+// deterministic engine (shared/comic/lettering/place.ts) with language-aware text metrics
+// (shared/comic/textLayout.ts, the line's or the comic's language) — the same code the board,
+// the free re-layout and the exports use, so a balloon lands where the editor would put it.
 
-/** Outer page margin and gutter between panels (fractions of the page). */
-const MARGIN = 0.02;
-const GUTTER = 0.02;
-/** Webtoon panels get generous vertical spacing. */
-const STACK_GUTTER = 0.04;
-/** Balloon width range (fraction of page width). */
+/** Balloon width range (fraction of page width) for the v4 estimate. */
 export const MIN_BALLOON_W = 0.16;
 export const MAX_BALLOON_W = 0.34;
-/** Padding between a balloon and its panel border. */
-const PAD = 0.012;
-/** Vertical gap between stacked balloons. */
-const GAP = 0.01;
-/** Lettering metrics in page-WIDTH units (one glyph ≈ 1/95 of the page width). */
-const CHAR_W = 0.0105;
-const LINE_H = 0.022;
-const BALLOON_PAD_W = 0.03;
-const BALLOON_PAD_H = 0.026;
-
-const SPOKEN = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
+/** Default safe margin (page-WIDTH fraction) when the comic has no lettering style yet. */
+const DEFAULT_SAFE_MARGIN = 0.03;
 
 export interface LayoutOptions {
   readingDirection?: 'ltr' | 'rtl';
   kind?: ComicKind;
   /** Page width / height (defaults to the render's pixel size, else 2:3). */
   pageAspect?: number;
+  /** The comic: real lettering metrics (style, fonts, language) and its safe margin. Absent ⇒ estimates. */
+  doc?: ComicDoc;
+  /** Lettering language for the estimates when no doc is given (default: each line's own, else 'en'). */
+  lang?: string;
+  /** Areas balloons must not cover and speakers' heads (QC, lettering.md §6.6). */
+  keepOut?: KeepOut[];
+  heads?: SpeakerMark[];
 }
 
 const clean = (value: unknown): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
@@ -84,277 +76,85 @@ const pageAspectOf = (page: Page, opts: LayoutOptions = {}): number => {
   return opts.pageAspect && opts.pageAspect > 0 ? opts.pageAspect : 2 / 3;
 };
 
-// ── Panel boxes from the layout blueprint ────────────────────────────────────
-
-const boxesFromLayout = (parsed: ParsedLayout, n: number, rtl: boolean): Box[] => {
-  const boxes: Box[] = new Array(n);
-  const contentW = 1 - 2 * MARGIN;
-  if (parsed.mode === 'single') {
-    boxes[0] = { x: MARGIN, y: MARGIN, w: contentW, h: 1 - 2 * MARGIN };
-    return boxes;
-  }
-  const gutter = parsed.mode === 'stack' ? STACK_GUTTER : GUTTER;
-  const totalWeight = parsed.rows.reduce((s, r) => s + r.weight, 0) || 1;
-  const usableH = 1 - 2 * MARGIN - gutter * (parsed.rows.length - 1);
-  let y = MARGIN;
-  for (const row of parsed.rows) {
-    const h = (usableH * row.weight) / totalWeight;
-    if (row.span) {
-      // A tall panel beside a stack: the tall one takes ~45% of the width.
-      const tallW = (contentW - GUTTER) * 0.45;
-      const stackW = contentW - GUTTER - tallW;
-      const tallLeft = row.span.tallSide === 'left';
-      const tallX = tallLeft ? MARGIN : MARGIN + stackW + GUTTER;
-      const stackX = tallLeft ? MARGIN + tallW + GUTTER : MARGIN;
-      const k = Math.max(1, row.panels.length - 1);
-      const cellH = (h - GUTTER * (k - 1)) / k;
-      const tall: Box = { x: tallX, y, w: tallW, h };
-      const stack: Box[] = Array.from({ length: k }, (_, i) => ({ x: stackX, y: y + i * (cellH + GUTTER), w: stackW, h: cellH }));
-      // Reading order: the tall panel first when it sits on the reading-start side.
-      const startSide = rtl ? 'right' : 'left';
-      const ordered = row.span.tallSide === startSide ? [tall, ...stack] : [stack[0], tall, ...stack.slice(1)];
-      row.panels.forEach((idx, i) => {
-        if (idx < n) boxes[idx] = ordered[i];
-      });
-    } else {
-      const k = row.panels.length;
-      const w = (contentW - GUTTER * (k - 1)) / k;
-      row.panels.forEach((idx, i) => {
-        const col = rtl ? k - 1 - i : i;
-        if (idx < n) boxes[idx] = { x: MARGIN + col * (w + GUTTER), y, w, h };
-      });
-    }
-    y += h + gutter;
-  }
-  return boxes;
-};
-
-/** A plain grid by panel count — the last resort when no blueprint can be read. */
-const gridLayout = (n: number): ParsedLayout => {
-  const perRow = n <= 2 ? 1 : n <= 4 ? 2 : 3;
-  const rows: ParsedLayout['rows'] = [];
-  for (let i = 0; i < n; i += perRow) rows.push({ panels: Array.from({ length: Math.min(perRow, n - i) }, (_, k) => i + k), weight: 1 });
-  return { mode: 'rows', rows };
-};
+const rtlOf = (page: Page, opts: LayoutOptions): boolean => (opts.readingDirection || (inferRtl(page.layout) ? 'rtl' : 'ltr')) === 'rtl';
 
 /**
- * Estimate panel rectangles (reading order, page-normalized, 2% margins and gutters) from
- * the page's row blueprint ("Row 1: one wide panel. Row 2: two equal panels…"). When the
- * blueprint is missing or disagrees with the panel count, the same blueprint is
- * synthesized from the panel sizes; a plain grid is the last resort.
+ * Estimate panel rectangles (reading order, page-normalized, 2% margins and gutters) from the
+ * page's row blueprint — shared/comic/pageGeometry.ts, so the board, the editor and the server
+ * agree to the digit (pageGeometry.parity.test.ts).
  */
-export const estimatePanelBoxes = (page: Page, opts: LayoutOptions = {}): Box[] => {
-  const n = page.panels.length;
-  if (!n) return [];
-  const rtl = (opts.readingDirection || (inferRtl(page.layout) ? 'rtl' : 'ltr')) === 'rtl';
-  const kind: ComicKind = opts.kind || (/\bstacked vertically\b/i.test(page.layout || '') ? 'webtoon' : 'comic');
-  const format = { kind, readingDirection: rtl ? ('rtl' as const) : ('ltr' as const) };
-  const fits = (p: ParsedLayout | null): p is ParsedLayout =>
-    !!p && layoutPanelCount(p) === n && (kind !== 'webtoon' || p.mode === 'stack');
-  let parsed = page.layout ? parseLayout(page.layout) : null;
-  if (!fits(parsed)) parsed = parseLayout(synthesizeLayout(page.panels, format));
-  if (!fits(parsed)) parsed = gridLayout(n);
-  return boxesFromLayout(parsed, n, rtl).map((b) => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) }));
-};
+export const estimatePanelBoxes = (page: Page, opts: LayoutOptions = {}): Box[] =>
+  sharedPanelBoxes(page, {
+    readingDirection: rtlOf(page, opts) ? 'rtl' : 'ltr',
+    kind: opts.kind || (/\bstacked vertically\b/i.test(page.layout || '') ? 'webtoon' : 'comic')
+  });
 
-// ── Balloon sizing ───────────────────────────────────────────────────────────
+/** Balloon width from text length and script (textLayout estimate: Indic/CJK/Arabic aware), 0.16–0.42 of the page. */
+export const balloonWidth = (text: string, lang = 'en'): number => round4(estimateWidthForText(text, lang));
 
-/** Balloon width from text length: short lines ≈ 0.16 of the page, long ones up to 0.34. */
-export const balloonWidth = (text: string): number => {
-  const len = clean(text).length;
-  const t = clamp((len - 12) / (110 - 12), 0, 1);
-  return round4(MIN_BALLOON_W + t * (MAX_BALLOON_W - MIN_BALLOON_W));
-};
+/** Estimated balloon height as a fraction of the page HEIGHT (text wrapped at width w, language-aware). */
+export const estimateBalloonHeight = (text: string, w: number, pageAspect = 2 / 3, lang = 'en'): number => round4(estimateTextHeight(text, w, pageAspect, lang));
 
-/** Estimated balloon height as a fraction of the page HEIGHT (word-wrapped at width w). */
-export const estimateBalloonHeight = (text: string, w: number, pageAspect = 2 / 3): number => {
-  const perLine = Math.max(6, Math.floor((w - BALLOON_PAD_W) / CHAR_W));
-  let lines = 1;
-  let current = 0;
-  for (const word of clean(text).split(' ')) {
-    if (!word) continue;
-    const len = word.length;
-    if (current === 0) current = Math.min(len, perLine);
-    else if (current + 1 + len <= perLine) current += 1 + len;
-    else {
-      lines += 1 + Math.floor(Math.max(0, len - 1) / perLine);
-      current = len % perLine || perLine;
-    }
-  }
-  return round4((lines * LINE_H + BALLOON_PAD_H) * pageAspect);
-};
+/** Doc-less sizing: the engine falls back to its own textLayout estimates (outline = text box + the kind's bleed). */
+const ESTIMATE_SIZER = () => ({ h: 0, bounds: { x: 0, y: 0, w: 0, h: 0 } });
 
-interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-const overlaps = (a: Rect, b: Rect, margin = 0.006) =>
-  a.x < b.x + b.w + margin && b.x < a.x + a.w + margin && a.y < b.y + b.h + margin && b.y < a.y + a.h + margin;
-
-const inside = (px: number, py: number, r: Rect) => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
-
-const PAGE_BOX: Box = { x: 0, y: 0, w: 1, h: 1 };
-
-/** Fit a balloon of (w, h) at (x, y) inside a box (shrinking the width if the box is narrow). */
-const fitInBox = (x: number, y: number, w: number, h: number, box: Box): Rect => {
-  const width = Math.min(w, Math.max(0.05, box.w - 2 * PAD));
-  const maxX = box.x + box.w - width - PAD;
-  const maxY = box.y + box.h - h - PAD;
-  return {
-    x: clamp(x, Math.min(box.x + PAD, maxX), Math.max(box.x + PAD, maxX)),
-    y: maxY < box.y + PAD ? box.y + PAD : clamp(y, box.y + PAD, maxY),
-    w: width,
-    h
-  };
-};
-
-/** Tail tip: outside the balloon, inside the panel; defaults to just below the balloon. */
-const fixTail = (rect: Rect, box: Box, tailX?: number, tailY?: number): { tailX: number; tailY: number } => {
-  const lo = (v: number, a: number, b: number) => clamp(v, a, b);
-  const valid = typeof tailX === 'number' && typeof tailY === 'number' && tailX >= 0 && tailY >= 0;
-  let tx = valid ? lo(tailX!, box.x + PAD, box.x + box.w - PAD) : rect.x + rect.w / 2;
-  let ty = valid ? lo(tailY!, box.y + PAD, box.y + box.h - PAD) : rect.y + rect.h + 0.035;
-  if (inside(tx, ty, rect)) {
-    tx = rect.x + rect.w / 2;
-    ty = rect.y + rect.h + 0.035;
-  }
-  tx = lo(tx, box.x + PAD, box.x + box.w - PAD);
-  ty = lo(ty, box.y + PAD, box.y + box.h - PAD);
-  // A balloon parked at the bottom of its panel points up instead.
-  if (inside(tx, ty, rect)) ty = lo(rect.y - 0.035, box.y + PAD, box.y + box.h - PAD);
-  return { tailX: round4(tx), tailY: round4(ty) };
-};
-
-interface Placed {
-  line: Line;
-  panelIndex: number;
-  rect: Rect;
-  tailX?: number;
-  tailY?: number;
-  pinned?: boolean;
-}
-
-const toBalloon = (p: Placed): Balloon => ({
-  lineId: p.line.id,
-  x: round4(p.rect.x),
-  y: round4(p.rect.y),
-  w: round4(p.rect.w),
-  ...(typeof p.tailX === 'number' && typeof p.tailY === 'number' ? { tailX: p.tailX, tailY: p.tailY } : {}),
-  ...(p.pinned ? { pinned: true } : {})
-});
-
-/** Lines of a page in reading order, with their panel index (blank lines skipped). */
-const pageLines = (page: Page) =>
-  page.panels.flatMap((panel, panelIndex) => panel.lines.filter((l) => clean(l.text)).map((line) => ({ line, panelIndex })));
-
-/**
- * Keep reading order inside each panel (an earlier balloon must sit higher, or at the same
- * height further toward the reading start) and push overlapping balloons down, then
- * sideways, within their panel. Pinned balloons never move; they are obstacles.
- */
-const settle = (placed: Placed[], boxes: Box[], rtl: boolean): Placed[] => {
-  const settled: Placed[] = [];
-  for (const item of placed) {
-    if (item.pinned) {
-      settled.push(item);
-      continue;
-    }
-    const box = boxes[item.panelIndex] || PAGE_BOX;
-    let rect = { ...item.rect };
-    // Reading order vs the previous balloon in the same panel.
-    const prev = [...settled].reverse().find((p) => p.panelIndex === item.panelIndex);
-    if (prev) {
-      const sameRow = Math.abs(rect.y - prev.rect.y) < 0.02;
-      const readFirst = rect.y < prev.rect.y - 0.02 || (sameRow && (rtl ? rect.x > prev.rect.x : rect.x < prev.rect.x));
-      if (readFirst) rect = fitInBox(rect.x, prev.rect.y + Math.max(0.03, prev.rect.h * 0.6), rect.w, rect.h, box);
-    }
-    for (let guard = 0; guard < 12; guard += 1) {
-      const hit = settled.find((p) => overlaps(rect, p.rect));
-      if (!hit) break;
-      const down = fitInBox(rect.x, hit.rect.y + hit.rect.h + GAP, rect.w, rect.h, box);
-      if (!settled.some((p) => p !== hit && overlaps(down, p.rect)) && !overlaps(down, hit.rect)) {
-        rect = down;
-        break;
-      }
-      // No room below: try beside the obstacle (right first in ltr, left first in rtl).
-      const right = fitInBox(hit.rect.x + hit.rect.w + GAP, rect.y, rect.w, rect.h, box);
-      const left = fitInBox(hit.rect.x - rect.w - GAP, rect.y, rect.w, rect.h, box);
-      const options = rtl ? [left, right] : [right, left];
-      const side = options.find((o) => !settled.some((p) => overlaps(o, p.rect)));
-      if (side) {
-        rect = side;
-        break;
-      }
-      if (down.y === rect.y) break; // boxed in — accept the overlap rather than leave the panel
-      rect = down;
-    }
-    const tail = typeof item.tailX === 'number' ? fixTail(rect, box, item.tailX, item.tailY) : undefined;
-    settled.push({ ...item, rect, ...(tail || {}) });
-  }
-  return settled;
+/** One call into the shared engine with this module's defaults. */
+const place = (
+  page: Page,
+  boxes: Box[],
+  opts: LayoutOptions,
+  extra: { suggestions?: Map<string, Balloon> } = {}
+): Balloon[] => {
+  const aspect = pageAspectOf(page, opts);
+  const doc = opts.doc;
+  const ls = doc?.letterStyle as { safeMargin?: number } | undefined;
+  return placeBalloonsDetailed({
+    page,
+    boxes,
+    aspect,
+    rtl: rtlOf(page, opts),
+    plansFor: doc ? letteringSizer(doc, page, aspect, estimateMeasure) : ESTIMATE_SIZER,
+    ...(opts.keepOut?.length ? { keepOut: opts.keepOut } : {}),
+    ...(opts.heads?.length ? { heads: opts.heads } : {}),
+    ...(extra.suggestions?.size ? { suggestions: extra.suggestions } : {}),
+    safeMargin: typeof ls?.safeMargin === 'number' ? ls.safeMargin : DEFAULT_SAFE_MARGIN,
+    existing: page.balloons || [],
+    keep: 'pinned',
+    ...(doc?.format?.language ? { lang: doc.format.language } : opts.lang ? { lang: opts.lang } : {})
+  }).balloons;
 };
 
 // ── Fallback layout (no vision) ──────────────────────────────────────────────
 
 /**
- * Deterministic balloons from the panel boxes alone: opening captions in the panel's
- * top-left corner (top-right for rtl), closing captions bottom-right (bottom-left for rtl),
- * dialogue stacked from the top of the panel above each speaker's staged position (the same
- * left/right staging the page prompt asked for), sound effects mid-panel. Pinned balloons
- * on the page are kept as-is.
+ * Deterministic balloons from the panel boxes alone (shared engine): opening captions in the
+ * panel's reading-start top corner, closing captions in the end-bottom corner, dialogue near the
+ * speaker's staged position with its tail toward them, sound effects mid-panel, reading order kept,
+ * outlines never overlapping and never leaving the page's safe area. Pinned and locked balloons
+ * are kept exactly where the user put them; a re-laid balloon keeps its z and link.
  */
 export const fallbackBalloons = (page: Page, panelBoxes?: Box[], opts: LayoutOptions = {}): Balloon[] => {
-  const rtl = (opts.readingDirection || (inferRtl(page.layout) ? 'rtl' : 'ltr')) === 'rtl';
   const boxes = panelBoxes && panelBoxes.length === page.panels.length ? panelBoxes : estimatePanelBoxes(page, opts);
-  const aspect = pageAspectOf(page, opts);
-  const pinned = new Map(page.balloons.filter((b) => b.pinned).map((b) => [b.lineId, b]));
-  const placed: Placed[] = [];
-  page.panels.forEach((panel, panelIndex) => {
-    const box = boxes[panelIndex];
-    if (!box) return;
-    const staged = stagePanel(page, panel);
-    const lines = panel.lines.filter((l) => clean(l.text));
-    let cursor = box.y + PAD;
-    let spokenSeen = 0;
-    lines.forEach((line, k) => {
-      const pin = pinned.get(line.id);
-      if (pin) {
-        const h = estimateBalloonHeight(line.text, pin.w, aspect);
-        placed.push({ line, panelIndex, rect: { x: pin.x, y: pin.y, w: pin.w, h }, tailX: pin.tailX, tailY: pin.tailY, pinned: true });
-        return;
-      }
-      const w = Math.min(balloonWidth(line.text), Math.max(0.05, box.w - 2 * PAD));
-      const h = estimateBalloonHeight(line.text, w, aspect);
-      if (line.kind === 'caption') {
-        const opening = lines.slice(0, k).every((l) => l.kind === 'caption');
-        const startX = rtl ? box.x + box.w - PAD - w : box.x + PAD;
-        const endX = rtl ? box.x + PAD : box.x + box.w - PAD - w;
-        const rect = opening ? fitInBox(startX, cursor, w, h, box) : fitInBox(endX, box.y + box.h - PAD - h, w, h, box);
-        if (opening) cursor = rect.y + rect.h + GAP;
-        placed.push({ line, panelIndex, rect });
-        return;
-      }
-      if (line.kind === 'sfx') {
-        const rect = fitInBox(box.x + box.w * 0.55 - w / 2, box.y + box.h * 0.55, w, h, box);
-        placed.push({ line, panelIndex, rect });
-        return;
-      }
-      const speaker = staged.find((s) => s.id === line.speakerId);
-      // Unknown speaker: alternate sides, starting on the reading-start side.
-      const alt = spokenSeen % 2 === 0 ? 0.28 : 0.72;
-      const fx = speaker ? speaker.x : rtl ? 1 - alt : alt;
-      spokenSeen += 1;
-      const rect = fitInBox(box.x + fx * box.w - w / 2, cursor, w, h, box);
-      cursor = rect.y + rect.h + GAP;
-      const headY = Math.max(rect.y + rect.h + 0.035, box.y + box.h * 0.4);
-      const tail = fixTail(rect, box, box.x + fx * box.w, Math.min(headY, box.y + box.h - PAD));
-      placed.push({ line, panelIndex, rect, ...tail });
-    });
-  });
-  return settle(placed, boxes, rtl).map(toBalloon);
+  return place(page, boxes, opts);
+};
+
+/**
+ * Free placement from what is STORED (lettering.md §9 — `relayout_balloons` and QC-once reuse):
+ * the page check's measured panel boxes, faces and speakers' heads when the current image has
+ * them, else the panel blueprint. No image load, no AI call.
+ */
+export const placeStoredBalloons = (doc: ComicDoc, page: Page, qc?: QcReport): Balloon[] => {
+  const opts: LayoutOptions = {
+    doc,
+    readingDirection: doc.format.readingDirection,
+    kind: doc.format.kind,
+    pageAspect: letteringAspect(doc, page),
+    ...(qc?.keepOut?.length ? { keepOut: qc.keepOut } : {}),
+    ...(qc?.heads?.length ? { heads: qc.heads } : {})
+  };
+  const measured = qc?.panelBoxes;
+  const boxes = Array.isArray(measured) && measured.length === page.panels.length ? measured : estimatePanelBoxes(page, opts);
+  return place(page, boxes, opts);
 };
 
 // ── Lettering verification ───────────────────────────────────────────────────
@@ -765,42 +565,29 @@ const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page,
   return { value: reading, problems };
 };
 
-/** Balloons from a vision reading: clamped, sized from text, inside their panels, in order, no overlaps. */
+/**
+ * Balloons from a vision reading (shared engine): the model's rectangles are HINTS (one candidate
+ * each), not law — every balloon is sized from its text and language, kept inside its panel and
+ * the safe area, in reading order, off faces/hands/action (keepOut) with tails toward the speaker's
+ * mouth (heads). Lines the model skipped are placed like the fallback. Pinned/locked stay put.
+ * `trustBoxes:false` (panel-count mismatch): the estimated boxes are used and the model's own
+ * positions, made on the real image, steer the placement.
+ */
 export const layoutBalloonsFromVision = (
   page: Page,
   raw: { lineId: string; x: number; y: number; w: number; tailX?: number; tailY?: number }[],
   boxes: Box[],
   opts: LayoutOptions & { trustBoxes?: boolean } = {}
 ): Balloon[] => {
-  const rtl = (opts.readingDirection || (inferRtl(page.layout) ? 'rtl' : 'ltr')) === 'rtl';
-  const aspect = pageAspectOf(page, opts);
-  const byLine = new Map(raw.map((b) => [b.lineId, b]));
-  const pinned = new Map(page.balloons.filter((b) => b.pinned).map((b) => [b.lineId, b]));
-  let fallback: Map<string, Balloon> | null = null;
-  const fallbackFor = (lineId: string) => {
-    if (!fallback) fallback = new Map(fallbackBalloons(page, boxes, opts).map((b) => [b.lineId, b]));
-    return fallback.get(lineId);
-  };
-  const placed: Placed[] = [];
-  for (const { line, panelIndex } of pageLines(page)) {
-    const panelBox = boxes[panelIndex];
-    const box = opts.trustBoxes !== false && panelBox ? panelBox : PAGE_BOX;
-    const pin = pinned.get(line.id);
-    if (pin) {
-      placed.push({ line, panelIndex, rect: { x: pin.x, y: pin.y, w: pin.w, h: estimateBalloonHeight(line.text, pin.w, aspect) }, tailX: pin.tailX, tailY: pin.tailY, pinned: true });
-      continue;
-    }
-    const spoken = SPOKEN.has(line.kind);
-    const fromVision = byLine.get(line.id);
-    const src = fromVision || fallbackFor(line.id);
-    if (!src) continue;
-    const w = balloonWidth(line.text);
-    const h = estimateBalloonHeight(line.text, Math.min(w, Math.max(0.05, box.w - 2 * PAD)), aspect);
-    const rect = fitInBox(src.x, src.y, w, h, box);
-    const tail = spoken ? fixTail(rect, box, src.tailX, src.tailY) : undefined;
-    placed.push({ line, panelIndex, rect, ...(tail || {}) });
+  const lineIds = new Set(page.panels.flatMap((p) => p.lines.map((l) => l.id)));
+  const suggestions = new Map<string, Balloon>();
+  for (const b of raw) {
+    if (!lineIds.has(b.lineId) || suggestions.has(b.lineId)) continue;
+    if (![b.x, b.y, b.w].every((v) => typeof v === 'number' && Number.isFinite(v))) continue;
+    suggestions.set(b.lineId, { lineId: b.lineId, x: clamp01(b.x), y: clamp01(b.y), w: clamp(b.w, 0.05, 1) });
   }
-  return settle(placed, opts.trustBoxes !== false ? boxes : [], rtl).map(toBalloon);
+  const panelBoxes = boxes.length === page.panels.length ? boxes : estimatePanelBoxes(page, opts);
+  return place(page, panelBoxes, opts, { suggestions });
 };
 
 const pageAspectForDoc = (doc: ComicDoc, page: Page): number => {
@@ -888,7 +675,7 @@ export async function analyzePageRender(args: {
 }): Promise<{ qc: QcReport; balloons: Balloon[]; costUsd?: number; model: string; safety?: SafetyVerdict }> {
   const { doc, page } = args;
   const overlay = doc.format.lettering !== 'in_art';
-  const opts: LayoutOptions = { readingDirection: doc.format.readingDirection, kind: doc.format.kind, pageAspect: pageAspectForDoc(doc, page) };
+  const opts: LayoutOptions = { doc, readingDirection: doc.format.readingDirection, kind: doc.format.kind, pageAspect: pageAspectForDoc(doc, page) };
   const estimated = estimatePanelBoxes(page, opts);
   const lineCount = page.panels.reduce((n, p) => n + p.lines.length, 0);
   const user: MessagePart[] = [
@@ -968,7 +755,9 @@ export async function analyzePageRender(args: {
 
   // Only force balloons into panel boxes the model actually measured; with a panel-count
   // mismatch its balloon positions (made on the real image) beat estimated boxes.
-  const balloons = overlay ? layoutBalloonsFromVision(page, reading.balloons, boxes, { ...opts, trustBoxes: countOk }) : [];
+  const balloons = overlay
+    ? layoutBalloonsFromVision(page, reading.balloons, boxes, { ...opts, keepOut: reading.keepOut, heads: reading.heads, trustBoxes: countOk })
+    : [];
   const qc: QcReport = {
     score: round4(clamp(score, 0, 1)),
     issues: dedupe(issues).slice(0, 14),

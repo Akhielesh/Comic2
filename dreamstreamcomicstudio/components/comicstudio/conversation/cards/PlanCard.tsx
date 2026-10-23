@@ -11,13 +11,14 @@
 import React, { useState } from 'react';
 import { BookOpen, Check, LayoutTemplate } from 'lucide-react';
 import { isPageStale, type Card, type Character, type ComicDoc, type Msg, type Page } from '../../../../shared/comic/doc';
-import { formatUsd, getImageModel, type SpendEstimate } from '../../../../shared/comic/models';
+import { getImageModel, type SpendEstimate } from '../../../../shared/comic/models';
 import { missingSheetsFor, pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
 import { registeredCard } from '../../features';
 import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
+import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, PrimaryButton, cx, plural } from '../ui';
-import { useAction } from './useAction';
+import { useAction, useStudioSequenceGuard } from './useAction';
 
 type PlanCardData = Extract<Card, { type: 'plan' }>;
 
@@ -74,7 +75,10 @@ export const PlanCard: React.FC<{ card: PlanCardData; studio: ComicStudioControl
 /** Fallback page list (no breakdown feature): headline, panels and status per page. */
 export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioController }> = ({ studio }) => {
   const doc = studio.doc;
-  const { run, isPending } = useAction(studio.act);
+  // "Approve & render all" stops after the approval if it didn't go through (or a gate opened).
+  const guard = useStudioSequenceGuard(studio);
+  const { run, isPending } = useAction(studio.act, { guard });
+  const cost = useCostFormat(studio);
   const [expanded, setExpanded] = useState(false);
   if (!doc) return null;
 
@@ -153,22 +157,22 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           approved ? (
             <PrimaryButton
               size="sm"
-              className="tap-target"
+              className="tap-target !h-auto min-h-8 py-1 coarse:min-h-11"
               busy={isPending('render')}
               disabled={starting}
               onClick={() => void run('render', { type: 'render_pages', quotedUsd: estimate.usd })}
             >
-              Draw {drawLabel} (≈ {formatUsd(estimate.usd)})
+              Draw {drawLabel} ({cost.approx(estimate.usd)})
             </PrimaryButton>
           ) : (
             <PrimaryButton
               size="sm"
-              className="tap-target"
+              className="tap-target !h-auto min-h-8 py-1 coarse:min-h-11"
               busy={isPending('approve')}
               disabled={starting}
               onClick={() => void run('approve', { type: 'approve_plan' }, { type: 'render_pages', quotedUsd: estimate.usd })}
             >
-              Approve &amp; render all (≈ {formatUsd(estimate.usd)})
+              Approve &amp; render all ({cost.approx(estimate.usd)})
             </PrimaryButton>
           )
         ) : null}

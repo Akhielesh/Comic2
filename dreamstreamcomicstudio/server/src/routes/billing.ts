@@ -1,5 +1,12 @@
 import { Router } from 'express';
-import type { BillingInterval, CreditPackId, PurchasablePlanTier, TokenEstimateRequest } from '../../../shared/types/billing.js';
+import type {
+  BillingInterval,
+  BillingUsageHistoryItem,
+  ComicCostReport,
+  CreditPackId,
+  PurchasablePlanTier,
+  TokenEstimateRequest
+} from '../../../shared/types/billing.js';
 import { estimateCharge } from '../services/costEstimator.js';
 import {
   addPurchasedCredits,
@@ -29,6 +36,7 @@ import {
   reactivateSubscription
 } from '../services/stripe.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { getAllowanceStatus, isUsageExemptAdmin } from '../services/platformAllowance.js';
 import {
   previewCoupon,
   createCouponDefinition,
@@ -395,11 +403,126 @@ billingRouter.post('/spend-cap', async (req, res, next) => {
   }
 });
 
+// ── Legacy spend reports (usage-history, comic-cost) ─────────────────────────────────────────
+// Governed users (everyone the usage budget limits — P1-LIMITS) never see dollars for their
+// usage: they get the same report as a SHARE of their usage, with every money field (USD and
+// the wallet's CT, which is dollars at a fixed rate) left out. Admins, exempt accounts and a
+// deployment with metering off keep the full dollar report. Dollars need a POSITIVE answer that
+// no limit applies: a usage lookup that fails counts as governed (nothing in dollars).
+
+/** `capUsd` (server-only, never serialized) is only read when `showUsd` is false. */
+export type ReportAudience = { showUsd: boolean; capUsd: number | null };
+
+export const legacyReportAudience = async (req: Parameters<typeof isUsageExemptAdmin>[0], userId: string): Promise<ReportAudience> => {
+  try {
+    if (await isUsageExemptAdmin(req)) return { showUsd: true, capUsd: null };
+    const status = await getAllowanceStatus(userId);
+    if (status.governed === false) return { showUsd: true, capUsd: null };
+    return { showUsd: false, capUsd: status.enabled && status.capUsd > 0 ? status.capUsd : null };
+  } catch {
+    return { showUsd: false, capUsd: null };
+  }
+};
+
+/** The comic report a governed user sees: shares of their usage, never an amount. */
+export type GovernedComicCostReport = {
+  comicId: string;
+  governed: true;
+  /** Share of the user's usage this comic took (settled platform-paid calls), 0–100; null when unknown. */
+  usagePct: number | null;
+  byStage: Record<string, { usagePct: number | null }>;
+  byModel: Record<string, { usagePct: number | null }>;
+  /** Calls that ran on the user's own API key — billed by their provider, never counted against usage. */
+  ownKeyEvents: number;
+  events: Array<{
+    id: string;
+    createdAt: string;
+    operation: string;
+    stage?: string;
+    provider: string;
+    model: string;
+    isByok: boolean;
+    status: string;
+    usagePct: number | null;
+  }>;
+};
+
+/** Settled platform-paid spend counts against usage (the same rows the budget RPC sums). */
+const countsAgainstUsage = (event: { isByok: boolean; status: string }) =>
+  !event.isByok && String(event.status || '').toUpperCase() === 'SETTLED';
+
+const shareOf = (usd: number, capUsd: number | null): number | null => {
+  if (capUsd === null || !(capUsd > 0)) return null;
+  const pct = (Math.max(0, Number(usd) || 0) / capUsd) * 100;
+  return Math.min(100, Math.round(pct * 100) / 100);
+};
+
+/** Project the dollar report onto shares of the user's usage (usage counts real provider cost). */
+export const toGovernedComicCost = (report: ComicCostReport, capUsd: number | null): GovernedComicCostReport => {
+  const byStage: Record<string, number> = {};
+  const byModel: Record<string, number> = {};
+  let totalUsd = 0;
+  let ownKeyEvents = 0;
+  const events = (report.events || []).map((event) => {
+    const counted = countsAgainstUsage(event);
+    const usd = counted ? Math.max(0, Number(event.providerCostUsd) || 0) : 0;
+    if (event.isByok) ownKeyEvents += 1;
+    if (counted) {
+      totalUsd += usd;
+      const stage = event.stage || 'unknown';
+      const model = event.model || 'unknown';
+      byStage[stage] = (byStage[stage] || 0) + usd;
+      byModel[model] = (byModel[model] || 0) + usd;
+    }
+    return {
+      id: event.id,
+      createdAt: event.createdAt,
+      operation: event.operation,
+      ...(event.stage ? { stage: event.stage } : {}),
+      provider: event.provider,
+      model: event.model,
+      isByok: event.isByok,
+      status: event.status,
+      usagePct: counted ? shareOf(usd, capUsd) : 0
+    };
+  });
+  const shares = (bucket: Record<string, number>) =>
+    Object.fromEntries(Object.entries(bucket).map(([key, usd]) => [key, { usagePct: shareOf(usd, capUsd) }]));
+  return {
+    comicId: report.comicId,
+    governed: true,
+    usagePct: shareOf(totalUsd, capUsd),
+    byStage: shares(byStage),
+    byModel: shares(byModel),
+    ownKeyEvents,
+    events
+  };
+};
+
+/** Ledger history without amounts (USD, CT, and metadata, which can carry estimate dollars). */
+export const toGovernedUsageHistory = (items: BillingUsageHistoryItem[]) =>
+  items.map((item) => ({
+    id: item.id,
+    createdAt: item.createdAt,
+    entryType: item.entryType,
+    ...(item.provider ? { provider: item.provider } : {}),
+    ...(item.model ? { model: item.model } : {}),
+    ...(item.operation ? { operation: item.operation } : {}),
+    ...(item.projectId ? { projectId: item.projectId } : {})
+  }));
+
+/** Comic/project ids are uuids or slug-like ids; anything else could reshape the PostgREST `or` filter. */
+const COMIC_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
 billingRouter.get('/usage-history', async (req, res, next) => {
   try {
     const user = requireAuthUser(req.user);
-    const history = await listUsageHistory(user.id, parseLimit(req.query.limit));
-    res.json({ items: history });
+    const [history, audience] = await Promise.all([
+      listUsageHistory(user.id, parseLimit(req.query.limit)),
+      legacyReportAudience(req, user.id)
+    ]);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(audience.showUsd ? { items: history } : { governed: true, items: toGovernedUsageHistory(history) });
   } catch (error) {
     next(error);
   }
@@ -408,8 +531,13 @@ billingRouter.get('/usage-history', async (req, res, next) => {
 billingRouter.get('/comic-cost/:comicId', async (req, res, next) => {
   try {
     const user = requireAuthUser(req.user);
-    const report = await getComicCostReport(user.id, req.params.comicId);
-    res.json(report);
+    const comicId = String(req.params.comicId || '');
+    if (!COMIC_ID_PATTERN.test(comicId)) {
+      throw Object.assign(new Error('Invalid comic id'), { status: 400, publicCode: 'BAD_REQUEST' });
+    }
+    const [report, audience] = await Promise.all([getComicCostReport(user.id, comicId), legacyReportAudience(req, user.id)]);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(audience.showUsd ? report : toGovernedComicCost(report, audience.capUsd));
   } catch (error) {
     next(error);
   }

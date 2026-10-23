@@ -34,7 +34,10 @@ export const CardShell: React.FC<{
       <header className="mb-3 flex items-center justify-between gap-3">
         <span className={`flex min-w-0 items-center gap-2 text-[14px] font-semibold tracking-tight ${INK}`}>
           {icon && <span className="shrink-0 text-[var(--ds-accent)]">{icon}</span>}
-          <span className="truncate">{title}</span>
+          {/* A long gate or renders title truncates; the full text stays readable on hover. */}
+          <span className="truncate" title={typeof title === 'string' ? title : undefined}>
+            {title}
+          </span>
         </span>
         {right && <span className={`shrink-0 text-[12px] ${MUTED}`}>{right}</span>}
       </header>
@@ -120,9 +123,21 @@ export function Segmented<T extends string | number>({
   label: string;
   className?: string;
 }) {
+  const checked = options.findIndex((o) => o.value === value);
+  const focusIndex = checked >= 0 ? checked : 0;
+  // Arrow keys move between options (and choose), like a native radio group.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step || !options.length) return;
+    e.preventDefault();
+    const next = (focusIndex + step + options.length) % options.length;
+    onChange(options[next].value);
+    const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    buttons[next]?.focus();
+  };
   return (
-    <div role="radiogroup" aria-label={label} className={cx('flex rounded-xl bg-[var(--ds-well-strong)] p-0.5', className)}>
-      {options.map((o) => {
+    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} className={cx('flex min-w-0 rounded-xl bg-[var(--ds-well-strong)] p-0.5', className)}>
+      {options.map((o, i) => {
         const on = o.value === value;
         return (
           <button
@@ -130,14 +145,17 @@ export function Segmented<T extends string | number>({
             type="button"
             role="radio"
             aria-checked={on}
-            title={o.title}
+            // Roving focus: the checked option — or the first one when none matches — is the Tab stop.
+            tabIndex={i === focusIndex ? 0 : -1}
+            title={o.title ?? (typeof o.label === 'string' ? o.label : undefined)}
             onClick={() => onChange(o.value)}
             className={cx(
               `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]`,
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
-            {o.label}
+            {/* Text labels truncate inside their segment instead of running into the neighbour. */}
+            {typeof o.label === 'string' || typeof o.label === 'number' ? <span className="min-w-0 truncate">{o.label}</span> : o.label}
           </button>
         );
       })}

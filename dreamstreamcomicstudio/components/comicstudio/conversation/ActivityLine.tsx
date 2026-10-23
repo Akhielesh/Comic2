@@ -5,14 +5,15 @@
 // Each line carries a tiny cost badge (events.ts `activity.cost`): "Free" when software does
 // the work, "AI" for a cheap text step, "Image" for a paid drawing — and while a run is going,
 // what software saved in it ("Saved ≈$0.07 — done by software, no AI cost", decisions-final
-// #6). Honest and subtle: badges only appear when the server says what a step costs.
+// #6; governed users read it as a share of their usage, never dollars). Honest and subtle:
+// badges only appear when the server says what a step costs.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Square } from 'lucide-react';
-import { formatUsd } from '../../../shared/comic/models';
 import type { ActivityItem } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { activeActivities } from '../studioReducer';
+import { useCostFormat } from './cost';
 import { cx, plural } from './ui';
 
 export type ActivityCost = 'free' | 'text' | 'image';
@@ -74,6 +75,7 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
   const detached = !studio.busy && studio.renderingTotal > 0;
   const visible = active.length > 0 || studio.busy || detached;
   const savedUsd = studio.doc?.spend.savedUsd;
+  const cost = useCostFormat(studio);
 
   // Baseline of "saved by software" while idle; the delta during a run is what this run saved.
   const baseline = useRef<number | undefined>(savedUsd);
@@ -116,7 +118,7 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
             className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-px text-[10.5px] font-medium leading-4 text-emerald-700 dark:text-emerald-300"
             title="Free — done by the editor, no AI cost"
           >
-            Saved ≈{formatUsd(saved)}
+            {cost.saved(saved)}
             <span className="sr-only"> — done by software, no AI cost</span>
           </span>
         )}
@@ -126,7 +128,7 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
             title={`${others} more ${others === 1 ? 'step' : 'steps'}`}
-            className="tap-target inline-flex shrink-0 items-center gap-0.5 rounded-full px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+            className="inline-flex min-h-[28px] shrink-0 items-center gap-0.5 rounded-full px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] coarse:min-h-[44px] coarse:min-w-[44px] coarse:justify-center"
           >
             +{others}
             <ChevronDown className={cx('h-3 w-3 transition-transform motion-reduce:transition-none', open && 'rotate-180')} aria-hidden />
@@ -136,7 +138,8 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
           <button
             type="button"
             onClick={() => void studio.cancel()}
-            className="tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+            // A real 44 px pill on touch (no ::after spill under the composer — P1-QA hit-target finding).
+            className="inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] px-2.5 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] coarse:min-h-[44px] coarse:px-3.5"
             title="Stop queued work (images already drawing finish and are kept)"
           >
             <Square className="h-2.5 w-2.5 fill-current" aria-hidden /> Stop

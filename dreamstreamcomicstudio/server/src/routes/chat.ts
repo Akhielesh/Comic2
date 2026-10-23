@@ -707,6 +707,26 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
   usage: result.usage
 });
 
+/**
+ * Every model a chat call may end up billed for (usage budget, P1-LIMITS): the OpenRouter
+ * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which
+ * runChatParams and the swarm always send on OpenRouter — even after a free-only chain).
+ * reserveForOperation prices the hold at the most expensive of them, so a `:free` primary with a
+ * paid fallback can never slip past an exhausted budget at $0. Exported for sibling routes that
+ * reuse prepareChat (e.g. /api/recipes).
+ */
+export const chatPricedModels = (p: {
+  resolved: { provider: string };
+  model: string;
+  fallbackModels?: string[];
+}): string[] | undefined => {
+  if (p.resolved.provider !== 'openrouter') return p.fallbackModels?.length ? [...p.fallbackModels] : undefined;
+  const chain = [...(p.fallbackModels || []), p.model, TEXT_FALLBACK]
+    .map((m) => (typeof m === 'string' ? m.trim() : ''))
+    .filter(Boolean);
+  return Array.from(new Set(chain));
+};
+
 const runChatParams = (p: PreparedChat) => ({
   provider: p.resolved.provider,
   apiKey: p.resolved.apiKey,
@@ -1275,6 +1295,9 @@ chatRouter.post('/', async (req, res, next) => {
           req,
           operation: 'chat.completion',
           fallbackModel: p.model,
+          // Price the hold at the most expensive model OpenRouter may route to (free primary,
+          // paid fallback): an exhausted governed user must never pass at $0.
+          pricedModels: chatPricedModels(p),
           provider: p.resolved.provider,
           stage: 'chat',
           metadata: { route: req.path, historyLength: p.messages.length, model: p.model }
@@ -1340,6 +1363,7 @@ chatRouter.post('/stream', async (req, res) => {
         req,
         operation: 'chat.completion',
         fallbackModel: p.model,
+        pricedModels: chatPricedModels(p),
         provider: p.resolved.provider,
         stage: 'chat',
         metadata: { route: req.path, historyLength: p.messages.length, model: p.model }
@@ -1455,6 +1479,8 @@ chatRouter.post('/swarm', async (req, res) => {
         req,
         operation: 'chat.completion',
         fallbackModel: p.model,
+        // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry; synthesis on p.model.
+        pricedModels: chatPricedModels(p),
         provider: p.resolved.provider,
         stage: 'chat',
         metadata: { route: req.path, historyLength: p.messages.length, model: p.model, swarm: true }

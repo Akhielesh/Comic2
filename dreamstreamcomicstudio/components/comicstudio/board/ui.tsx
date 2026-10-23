@@ -3,8 +3,10 @@
 // lettering fonts are never used here — only inside the comic content (balloons, SFX).
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { LoaderCircle, RotateCcw, TriangleAlert } from 'lucide-react';
+import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
+import type { RenderState } from '../../../shared/comic/doc';
 import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, RADIUS_PANEL, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
+import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -135,7 +137,11 @@ export const Chip: React.FC<{ children: React.ReactNode; className?: string; tit
   </span>
 );
 
-/** Segmented control (radio group) with arrow-key support. */
+/**
+ * Segmented control (radio group) with arrow-key support. With a MIXED value (a multi-selection whose
+ * members disagree, so no option is checked) the first enabled option stays in the tab order, so the
+ * control is never unreachable by keyboard (P1-LETTER-UI note: Pro Weight/Align/Case/Border).
+ */
 export function Segmented<T extends string>({
   value,
   options,
@@ -164,8 +170,11 @@ export function Segmented<T extends string>({
     onChange(options[next].value);
     refs.current[next]?.focus();
   };
+  // The one option in the tab order: the checked one, else (mixed / disabled value) the first enabled.
+  const checkedIndex = options.findIndex((o) => o.value === value && !o.disabled);
+  const tabStop = checkedIndex >= 0 ? checkedIndex : options.findIndex((o) => !o.disabled);
   return (
-    <div role="radiogroup" aria-label={label} className={cx('inline-flex rounded-xl bg-[var(--ds-well-strong)] p-0.5', className)}>
+    <div role="radiogroup" aria-label={label} className={cx('inline-flex min-w-0 max-w-full rounded-xl bg-[var(--ds-well-strong)] p-0.5', className)}>
       {options.map((o, i) => {
         const on = o.value === value;
         return (
@@ -177,8 +186,8 @@ export function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={on}
-            tabIndex={on ? 0 : -1}
-            title={o.title}
+            tabIndex={i === tabStop ? 0 : -1}
+            title={o.title ?? (typeof o.label === 'string' ? o.label : undefined)}
             disabled={o.disabled}
             onClick={() => onChange(o.value)}
             onKeyDown={(e) => onKey(e, i)}
@@ -189,7 +198,8 @@ export function Segmented<T extends string>({
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
-            {o.label}
+            {/* Text labels truncate inside their segment instead of overlapping a neighbour in a narrow row. */}
+            {typeof o.label === 'string' ? <span className="min-w-0 truncate">{o.label}</span> : o.label}
           </button>
         );
       })}
@@ -202,7 +212,8 @@ export function Segmented<T extends string>({
 /** An explicit font-size utility (so the default size doesn't fight it). */
 const HAS_TEXT_SIZE = /(^|\s)([a-z]+:)?text-(\[\d|xs\b|sm\b|base\b|lg\b|[2-9]?xl\b)/;
 
-const FIELD_BASE = `w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] hover:border-[var(--ds-hairline)] focus:border-[#D97757]/50 focus:bg-[var(--ds-surface-strong)] focus:outline-none ${TRANSITION}`;
+// coarse: every field is a real 44 px target on touch (P1-QA: Story/Style/Cast fields measured ~30 px).
+const FIELD_BASE = `w-full rounded-lg border border-transparent bg-transparent px-2 py-1 coarse:min-h-[44px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] hover:border-[var(--ds-hairline)] focus:border-[#D97757]/50 focus:bg-[var(--ds-surface-strong)] focus:outline-none ${TRANSITION}`;
 
 export interface InlineFieldProps {
   value: string;
@@ -436,6 +447,13 @@ export interface RenderOverlayProps {
   compact?: boolean;
   /** A free re-check of the job (re-poll / resync) offered when a render is far past its usual time. */
   onRefresh?: () => void;
+  /**
+   * The render itself: a failure reads its sanitized `errorDetail` (exact time, provider facts) and
+   * `attempts` for the calm "failed 16:52 · rate limited" caption. Without it, `error` + `since` are used.
+   */
+  render?: Pick<RenderState, 'error' | 'errorDetail' | 'attempts' | 'updatedAt'>;
+  /** What the frame shows ("Page 6"): names the failure for screen readers. */
+  label?: string;
 }
 
 /** Past this multiple of the model's usual time the clock stops and "Check again" is offered. */
@@ -483,10 +501,14 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
   onRerender,
   overImage,
   compact,
-  onRefresh
+  onRefresh,
+  render,
+  label
 }) => {
   const busy = status === 'queued' || status === 'rendering';
   const now = useNow(busy);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = React.useId();
   if (busy) {
     const elapsed = since ? Math.max(0, now - since) : 0;
     const slow = status === 'rendering' && typicalSec && elapsed > typicalSec * 2500;
@@ -536,37 +558,77 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
     );
   }
   if (status === 'failed') {
-    // A legible card over a softened frame — never raw text over the plan sketch or the art.
+    // CALM (reliability.md §3, the 2026-10-22 incident): a quiet card that says WHEN it failed and a
+    // short reason ("failed 16:52 · rate limited"), so a stale failure from an earlier outage is
+    // recognisable; the provider's exact words are one tap away (Details). Never a red wall of text,
+    // never raw text over the plan sketch or the art; the card scrolls inside a small frame.
+    const facts = failureFacts(render ?? { error, updatedAt: since });
+    const caption = failureCaption(facts.error, facts.at, now);
+    const when = formatFailedAt(facts.at, now);
+    const hasDetails = !!(facts.error || facts.facts);
     return (
       <div
-        role="alert"
+        role="group"
+        aria-label={`${label ? `${label}: ` : ''}${caption}`}
+        data-failed=""
         className={cx(
-          'absolute inset-0 z-[3] flex flex-col items-center justify-center p-3 text-center',
+          'absolute inset-0 z-[3] flex flex-col items-center justify-[safe_center] overflow-y-auto overscroll-contain p-2 text-center',
           // Opaque over placeholders: the plan sketch / "Not drawn yet" copy never shows through (visualqa P2-2).
-          overImage ? 'bg-black/45' : 'bg-[var(--ds-surface)]'
+          overImage ? 'bg-black/40' : 'bg-[var(--ds-surface)]'
         )}
       >
         <div
           className={cx(
-            'flex max-w-[92%] flex-col items-center rounded-xl border border-red-500/25 bg-[var(--ds-surface-strong)] shadow-[0_4px_16px_rgba(0,0,0,0.12)]',
-            compact ? 'gap-1.5 px-2.5 py-2' : 'gap-2 px-3.5 py-3'
+            'flex min-w-0 max-w-[94%] flex-col items-center rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] shadow-[0_2px_10px_rgba(0,0,0,0.10)]',
+            compact ? 'gap-1 px-2.5 py-2' : 'gap-1.5 px-3.5 py-3'
           )}
         >
-          <TriangleAlert className={cx('shrink-0 text-red-500', compact ? 'h-4 w-4' : 'h-5 w-5')} aria-hidden />
-          <p className={cx('line-clamp-4 max-w-[28ch] leading-snug text-red-700 dark:text-red-300', compact ? 'text-[11.5px]' : 'text-[12px]')}>
-            {error || 'This couldn’t be drawn.'}
+          <CircleAlert className={cx('shrink-0 text-amber-600 dark:text-amber-300', compact ? 'h-4 w-4' : 'h-5 w-5')} aria-hidden />
+          <p className={cx('min-w-0 max-w-[28ch] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere] first-letter:uppercase', compact ? 'text-[11.5px]' : 'text-[12px]')}>
+            {caption}
           </p>
-          {onRetry && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRetry();
-              }}
-              className={`inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[40px] tap-target ${FOCUS_RING}`}
+          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+            {onRetry && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetry();
+                }}
+                className={`tap-target inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[40px] ${FOCUS_RING}`}
+              >
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {retryLabel}
+              </button>
+            )}
+            {hasDetails && (
+              <button
+                type="button"
+                aria-expanded={detailsOpen}
+                aria-controls={detailsId}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDetailsOpen((v) => !v);
+                }}
+                className={`tap-target rounded-full px-1.5 py-0.5 text-[11.5px] font-medium text-[var(--ds-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
+              >
+                {detailsOpen ? 'Hide details' : 'Details'}
+              </button>
+            )}
+          </div>
+          {detailsOpen && hasDetails && (
+            <div
+              id={detailsId}
+              className="max-h-28 w-full min-w-0 overflow-y-auto overscroll-contain rounded-lg bg-[var(--ds-well)] px-2 py-1.5 text-left text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]"
             >
-              <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {retryLabel}
-            </button>
+              {facts.error && <p className="whitespace-pre-wrap">{facts.error}</p>}
+              {facts.facts && <p className="mt-0.5">{facts.facts}</p>}
+              {when && (
+                <p className="mt-0.5">
+                  Failed at {when}
+                  {facts.attempts && facts.attempts > 1 ? ` after ${facts.attempts} tries` : ''}.
+                </p>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -602,6 +664,66 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
     );
   }
   return null;
+};
+
+/**
+ * A labelled on/off switch row (role="switch"): the whole row is the 44 px target on touch, the
+ * description wraps under the label, and the knob respects reduced motion.
+ */
+export const SwitchRow: React.FC<{
+  label: React.ReactNode;
+  description?: React.ReactNode;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+  /** Extra controls at the end of the row (e.g. "Edit text"). */
+  after?: React.ReactNode;
+}> = ({ label, description, checked, onChange, disabled, className, after }) => {
+  const id = React.useId();
+  return (
+    <div className={cx('flex min-w-0 items-center gap-2', className)}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-labelledby={`${id}-l`}
+        aria-describedby={description ? `${id}-d` : undefined}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={cx(
+          'group flex min-h-[36px] min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2 py-1 text-left hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[44px]',
+          FOCUS_RING
+        )}
+      >
+        <span
+          aria-hidden
+          className={cx(
+            'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 motion-reduce:transition-none',
+            checked ? 'bg-[var(--ds-accent)]' : 'bg-[var(--ds-well-strong)]'
+          )}
+        >
+          <span
+            className={cx(
+              'absolute h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 motion-reduce:transition-none',
+              checked ? 'translate-x-[18px]' : 'translate-x-0.5'
+            )}
+          />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span id={`${id}-l`} className="block text-[12.5px] font-medium leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">
+            {label}
+          </span>
+          {description && (
+            <span id={`${id}-d`} className="block text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">
+              {description}
+            </span>
+          )}
+        </span>
+      </button>
+      {after}
+    </div>
+  );
 };
 
 /** Inline confirmation strip (destructive or costly actions). */

@@ -13,6 +13,7 @@ import { listCustomAgents } from '../../services/chatAgents';
 import { ChatPanelContext } from './panelContext';
 import { applyAgentStep } from './agentActivity';
 import { AllowanceBanner } from './AllowanceBanner';
+import { UsageMeter } from '../usage/UsageMeter';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, MapArtifact, AgentActivityEvent, AgentActivityArtifact } from '../../apiTypes';
@@ -63,6 +64,32 @@ interface CommandPaletteProps {
 const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: React.ComponentType<P> } => ({
   default: ((m as { default?: unknown }).default ?? m[name]) as React.ComponentType<P>
 });
+
+/**
+ * Slim header for the non-chat views: the sidebar toggle, the view title and the user's usage
+ * left (P1-LIMITS) — one calm meter, percent + friendly units, never dollars. The meter renders
+ * nothing for admins / exempt accounts / while the usage backend is unavailable, and is the
+ * compact 44 px gauge on phones so the row never overflows at 320–360 px.
+ */
+export const StudioViewHeader: React.FC<{
+  title: string;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
+  compactMeter: boolean;
+}> = ({ title, sidebarOpen, onToggleSidebar, compactMeter }) => (
+  <div className={`relative z-20 flex min-w-0 items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
+    <button
+      onClick={onToggleSidebar}
+      className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target shrink-0`}
+      title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+      aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+    >
+      {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+    </button>
+    <span className={`min-w-0 truncate text-sm ${HEADING}`}>{title}</span>
+    <UsageMeter compact={compactMeter} className="ml-auto" />
+  </div>
+);
 
 const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHomeProps>(m, 'ChatHome')));
 const LibraryView = lazy(() => import('./LibraryView').then((m) => pickExport<LibraryViewProps>(m, 'LibraryView')));
@@ -1364,16 +1391,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             skip it entirely (the toggle moves into their own sticky bar) so the
             board content starts at the very top — no wasted title strip. */}
         {resolvedView !== 'dashboards' && resolvedView !== 'gallery' && resolvedView !== 'library' && (
-        <div className={`relative z-20 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
-          <button
-            onClick={() => setSidebarOpen((v) => !v)}
-            className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target`}
-            title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-          >
-            {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
-          </button>
-          <span className={`text-sm ${HEADING}`}>Home</span>
-        </div>
+        <StudioViewHeader
+          title="Home"
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          compactMeter={!isDesktop}
+        />
         )}
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
           <Suspense

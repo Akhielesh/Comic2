@@ -6,15 +6,21 @@
 // Layout (visualqa P0-1): the summary and the price block WRAP instead of squeezing each
 // other — real model ids are long unbroken tokens (OpenRouter slugs, 60+ characters), so
 // the model line is truncated with the full id in its title and the registry nickname shown.
+//
+// Governed users (the included DreamStream usage) never see dollars here: the quote, the
+// Approve button, the reason line and the server's summary all read as a share of their
+// usage ("≈2% of your usage"); admins and own-key comics keep real prices (conversation/cost.ts).
 
 import React from 'react';
 import { CheckCircle2, CircleSlash, Coins, TriangleAlert } from 'lucide-react';
 import type { Card, ComicDoc, Gate, Msg } from '../../../../shared/comic/doc';
-import { formatUsd, getImageModel } from '../../../../shared/comic/models';
+import { getImageModel } from '../../../../shared/comic/models';
 import { CountUp } from '../../../studio/kit/streamMotion';
 import { registeredCard } from '../../features';
 import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
+import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
+import { costFormat, useCostFormat, usageSafeSpendText, type CostFormat } from '../cost';
 import { CardShell, GhostButton, PrimaryButton, plural } from '../ui';
 import { useAction } from './useAction';
 
@@ -27,14 +33,21 @@ export const gateModelName = (model: string | undefined): string => {
   return getImageModel(raw)?.nickname || raw;
 };
 
-/** One honest sentence: why the studio stopped to ask (contract §4.6 Gate.reason). */
-export const gateReasonCopy = (gate: Gate, doc: ComicDoc): string => {
+const DOLLARS = costFormat(DOLLAR_CONTEXT);
+
+/**
+ * One honest sentence: why the studio stopped to ask (contract §4.6 Gate.reason). `cost` decides
+ * how amounts read (dollars by default; usage terms for governed users).
+ */
+export const gateReasonCopy = (gate: Gate, doc: ComicDoc, cost: CostFormat = DOLLARS): string => {
   switch (gate.reason) {
     case 'budget': {
       const cap = doc.settings.budgetUsd;
       const spent = doc.spend.totalUsd;
+      if (cost.governed)
+        return 'This would take this comic past the budget you set for it. Approve to go over it just this once, or raise the budget in Settings.';
       return typeof cap === 'number' && cap > 0
-        ? `This would take you past your ${formatUsd(cap)} budget (${formatUsd(spent)} spent so far). Approve to go over it just this once, or raise the budget in Settings.`
+        ? `This would take you past your ${cost.exact(cap)} budget (${cost.exact(spent)} spent so far). Approve to go over it just this once, or raise the budget in Settings.`
         : 'This would take you past your budget. Approve to go over it just this once, or raise the budget in Settings.';
     }
     case 'first_render':
@@ -53,7 +66,7 @@ export const gateReasonCopy = (gate: Gate, doc: ComicDoc): string => {
       // re-quote (the price moved since a button showed it, or a chip carried no price) or a turn
       // whose spends add up — say what is true instead of blaming a setting.
       if (s.confirm !== 'never' && Number.isFinite(s.bigSpendUsd) && gate.estimateUsd > s.bigSpendUsd)
-        return `You asked me to check before spends over ${formatUsd(s.bigSpendUsd)}.`;
+        return cost.governed ? 'You asked me to check before bigger spends.' : `You asked me to check before spends over ${cost.exact(s.bigSpendUsd)}.`;
       return 'Here’s the up-to-date price first — nothing is spent until you approve.';
     }
   }
@@ -84,9 +97,36 @@ export const messageHasGateBreakdown = (message: Msg | undefined, gateId: string
 export const approvedCopy = (gate: Gate): string =>
   gate.action.type === 'translate' ? 'Approved — translating now.' : gate.action.type === 'edit_page' ? 'Approved — editing now.' : 'Approved — drawing now.';
 
+/**
+ * The big quote. Dollars count up ("≈ $0.21"); a share of the usage reads "≈2%" large with
+ * "of your usage" under it, so the number stays scannable without ever showing a dollar.
+ */
+export const GatePrice: React.FC<{ usd: number; cost: CostFormat }> = ({ usd, cost }) => {
+  if (!cost.governed) {
+    return (
+      <div className="text-[22px] font-semibold leading-none tracking-tight tabular-nums text-[var(--ds-ink)]">
+        ≈ <CountUp value={usd} prefix="$" decimals={2} />
+      </div>
+    );
+  }
+  const text = cost.approx(usd);
+  const m = /^([≈<][\d.]+%)\s+(of your usage)$/.exec(text);
+  return m ? (
+    <div className="leading-none text-[var(--ds-ink)]" data-testid="gate-usage-price">
+      <span className="text-[22px] font-semibold tracking-tight tabular-nums">{m[1]}</span>
+      <span className="ml-1 text-[12px] font-medium text-[var(--ds-muted)]">{m[2]}</span>
+    </div>
+  ) : (
+    <div className="text-[14px] font-semibold leading-tight text-[var(--ds-ink)]" data-testid="gate-usage-price">
+      {text}
+    </div>
+  );
+};
+
 export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioController; message?: Msg }> = ({ card, studio, message }) => {
   const doc = studio.doc;
   const { run, isPending } = useAction(studio.act);
+  const cost = useCostFormat(studio);
   if (!doc) return null;
   const gate = doc.gate && doc.gate.id === card.gateId ? doc.gate : null;
 
@@ -125,15 +165,13 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
       aria-label="Spend approval"
       className="min-w-0 max-w-full"
     >
-      {open && <p className="mb-2.5 text-[12.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{gateReasonCopy(gate, doc)}</p>}
+      {open && <p className="mb-2.5 text-[12.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{gateReasonCopy(gate, doc, cost)}</p>}
 
       {/* Wraps: the price block drops under the summary when space is short, never squeezing it. */}
       <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-        <p className="min-w-0 flex-1 basis-[14rem] text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{gate.summary}</p>
+        <p className="min-w-0 flex-1 basis-[14rem] text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{usageSafeSpendText(gate.summary, cost)}</p>
         <div className="min-w-0 max-w-full shrink-0 text-right">
-          <div className="text-[22px] font-semibold leading-none tracking-tight tabular-nums text-[var(--ds-ink)]">
-            ≈ <CountUp value={gate.estimateUsd} prefix="$" decimals={2} />
-          </div>
+          <GatePrice usd={gate.estimateUsd} cost={cost} />
           <div className="mt-1 max-w-[16rem] truncate text-[11px] text-[var(--ds-muted)]" title={gate.model || undefined} data-testid="gate-model">
             {[gate.imageCount > 0 ? plural(gate.imageCount, 'image') : '', modelName].filter(Boolean).join(' · ')}
           </div>
@@ -149,12 +187,13 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
       {open ? (
         <div className="mt-3.5 flex flex-wrap gap-2">
           <PrimaryButton
-            className="tap-target"
+            // Grows (never clips) when a usage-terms price makes the label longer on a phone.
+            className="tap-target !h-auto min-h-9 py-1.5 coarse:min-h-11"
             busy={isPending('approve')}
             disabled={deciding}
             onClick={() => void run('approve', { type: 'approve_gate', gateId: gate.id })}
           >
-            Approve · {formatUsd(gate.estimateUsd)}
+            Approve · {cost.governed ? cost.approx(gate.estimateUsd) : cost.exact(gate.estimateUsd)}
           </PrimaryButton>
           <GhostButton className="tap-target" busy={isPending('decline')} disabled={deciding} onClick={() => void run('decline', { type: 'decline_gate', gateId: gate.id })}>
             Not now

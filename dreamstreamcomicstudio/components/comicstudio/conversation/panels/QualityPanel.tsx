@@ -1,12 +1,16 @@
 // Quality panel (composer chip "✦ Standard", header quality pill): Draft / Standard / Pro
 // with the model each tier draws on, the per-page price (registry estimate, platform
-// markup unless the user pays with their own key) and a speed hint.
+// markup unless the user pays with their own key) and a speed hint. Governed users see the
+// price as a share of their usage ("≈0.7% of your usage/page"), never dollars (P1-LIMITS).
+// (The image-model picker arrives with the W-M round; this panel stays tier-only.)
 
 import React from 'react';
 import { Check, Gauge } from 'lucide-react';
 import type { ComicDoc, QualityTier } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
-import { TIER_PRESETS, formatUsd, getImageModel, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import { TIER_PRESETS, getImageModel, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import type { StudioCaps } from '../../../../shared/comic/capabilities';
+import { useCostFormat } from '../cost';
 import { cx } from '../ui';
 
 export const QUALITY_ORDER: QualityTier[] = ['draft', 'standard', 'pro'];
@@ -18,10 +22,13 @@ export interface QualityPanelProps {
   patch: (ops: DocOp[]) => Promise<void> | void;
   byok?: boolean;
   onDone?: () => void;
+  /** The user's caps (usage-terms prices for governed users; admins and own keys see dollars). */
+  caps?: StudioCaps;
 }
 
-export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = false, onDone }) => {
+export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = false, onDone, caps }) => {
   const current = doc.settings.quality;
+  const cost = useCostFormat({ byok, caps });
   const override = getImageModel(doc.settings.imageModelOverride);
 
   return (
@@ -63,8 +70,8 @@ export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = f
                       {spec.nickname} · {resolution}
                     </span>
                   </span>
-                  <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[var(--ds-ink)]">
-                    {formatUsd(tierPagePrice(tier, byok))}
+                  <span className={cx('text-[12px] font-semibold tabular-nums text-[var(--ds-ink)]', cost.governed ? 'min-w-0 text-right' : 'shrink-0')}>
+                    {cost.exact(tierPagePrice(tier, byok))}
                     <span className="font-normal text-[var(--ds-muted)]">/page</span>
                   </span>
                 </span>
@@ -80,7 +87,12 @@ export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = f
         })}
       </div>
       <p className="px-3 pb-1.5 pt-2 text-[10.5px] leading-snug text-[var(--ds-muted)]">
-        {byok ? 'Prices are what your own API key is charged.' : 'Estimates include DreamStream’s platform fee.'} Style options always use a quick
+        {byok
+          ? 'Prices are what your own API key is charged.'
+          : cost.governed
+            ? 'Shown as a share of your DreamStream usage.'
+            : 'Estimates include DreamStream’s platform fee.'}{' '}
+        Style options always use a quick
         1K draft.
         {override && <> Advanced override: every image uses {override.nickname}.</>}
       </p>

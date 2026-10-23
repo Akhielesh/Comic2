@@ -8,11 +8,13 @@ import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
 import type { ComicDoc, StyleBible } from '../../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops';
-import { PLATFORM_MARKUP, estimateJobs, formatUsd } from '../../../../shared/comic/models';
+import { STYLE_DIRECTIONS_USD, estimateJobs, styleDirectionsUsd } from '../../../../shared/comic/models';
+import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
 import { stylePreviewId } from '../../../../shared/comic/library';
 import { LibraryImage } from '../../library/LibraryImage';
 import { PresetThumb } from '../../library/procedural/PresetThumb';
+import { useCostFormat } from '../cost';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
 
 /** Ops that make a preset the (drafted) style. A locked board from another look is dropped. */
@@ -36,8 +38,8 @@ export const presetOps = (doc: ComicDoc, preset: StylePreset): DocOp[] => {
 
 export const STYLE_DIRECTION_COUNT = 3;
 
-/** Mirror of the server's writer cost for proposing directions (jobs.ts STYLE_DIRECTIONS_USD). */
-export const STYLE_DIRECTIONS_TEXT_USD = 0.015;
+/** The writer cost for proposing directions — the shared constant the server gate uses (P2-AMEND). */
+export const STYLE_DIRECTIONS_TEXT_USD = STYLE_DIRECTIONS_USD;
 
 /**
  * The same quote the server gate makes for `render_style_options` (jobs.ts estimateSpendAction):
@@ -49,7 +51,7 @@ export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, w
     override: doc.settings.imageModelOverride,
     byok
   });
-  const text = withDirections ? 0 : STYLE_DIRECTIONS_TEXT_USD * (byok ? 1 : PLATFORM_MARKUP);
+  const text = withDirections ? 0 : styleDirectionsUsd(byok);
   return Math.round((est.usd + text) * 10000) / 10000;
 };
 
@@ -62,10 +64,13 @@ export interface StylePanelProps {
   /** Close the panel (after an action that moves the conversation on). */
   onDone: () => void;
   byok?: boolean;
+  /** The user's caps (usage-terms prices for governed users; admins and own keys see dollars). */
+  caps?: StudioCaps;
 }
 
-export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescribeOwn, onDone, byok = false }) => {
+export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescribeOwn, onDone, byok = false, caps }) => {
   const [confirming, setConfirming] = useState<StylePreset | null>(null);
+  const cost = useCostFormat({ byok, caps });
   const style = doc.style;
   const locked = style.status === 'locked';
   const exploring = style.options.some((o) => o.render.status === 'queued' || o.render.status === 'rendering');
@@ -98,7 +103,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
           <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
           <span className="min-w-0">
             {exploring ? 'Drawing style options…' : `Explore ${STYLE_DIRECTION_COUNT} directions for my story`}
-            {!exploring && <span className="whitespace-nowrap font-normal opacity-80"> · ≈ {formatUsd(quote)}</span>}
+            {!exploring && <span className="whitespace-nowrap font-normal opacity-80"> · {cost.approx(quote)}</span>}
           </span>
         </PrimaryButton>
         <GhostButton

@@ -4,7 +4,9 @@
 // Path-addressed ops commute with server commits (an upload landing, the director attaching),
 // unlike the old whole-array `refs` patches. Rules:
 //   ref_add       only a path this comic already holds ("Use as reference" from a page, a sheet or
-//                 the media bin), or this project's own private ref lane (Undo of a remove). The server
+//                 the media bin), or this project's own storage lanes — the private ref lane and the
+//                 project's image lane, never a size variant, q/ or pub/ copy (contract §5.4 restore
+//                 paths: Undo of a remove, including photos of a removed character/place). The server
 //                 REBUILDS the ref: client-sent hash/dhash/quality/caption/subject/safety/original/crop
 //                 are dropped; metadata is copied from where the path already lives. Blocked or
 //                 quarantined images are refused. Never into the inbox (uploads only).
@@ -125,11 +127,17 @@ const refElsewhere = (doc: ComicDoc, path: string): RefAsset | undefined => {
   return undefined;
 };
 
-/** u/<user>/p/<project>/ref/<id>.webp of THIS user and THIS project (the private upload lane). */
+/**
+ * u/<user>/p/<project>/{ref,img}/<id>.<ext> of THIS user and THIS project: the private upload lane
+ * and the project's image lane (legacy uploads, generated sheets used as references). Never a size
+ * variant (…_w480), never q/ (quarantine) or pub/ (publication copies), never another project's.
+ * An object that was quarantined has left this path, so it can't be loaded or sent anywhere; a
+ * restored ref carries no safety verdict, so the job runner checks it before its first use.
+ */
 const isOwnRefLane = (path: string, ctx: SanitizeCtx, doc: ComicDoc): boolean => {
   if (!ctx?.userId || !doc?.id) return false;
-  const m = /^u\/([^/]+)\/p\/([^/]+)\/ref\/[A-Za-z0-9_-]{1,80}\.webp$/.exec(path);
-  return !!m && m[1] === ctx.userId && m[2] === doc.id;
+  const m = /^u\/([^/]+)\/p\/([^/]+)\/(?:ref|img)\/([A-Za-z0-9_-]{1,80})\.(?:webp|png|jpe?g)$/.exec(path);
+  return !!m && m[1] === ctx.userId && m[2] === doc.id && !/_w\d{2,4}$/.test(m[3]);
 };
 
 const refAdd: OpSanitizer<Op<'ref_add'>> = {

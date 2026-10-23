@@ -3,16 +3,20 @@
 // navigates on the client (open the reader, a tab, undo), or sends text to the director.
 // Paid chips carry their price ("Make the cover · ≈$0.07", the click is the confirmation and
 // the action's quotedUsd makes a stale chip re-quote instead of overspending); free ones say
-// "Free". Old messages keep working: plain `suggestions` strings still send themselves, and
-// v4 object suggestions ({ label, action | tab | say }) are upgraded on the fly.
+// "Free". Governed users see the price as a share of their usage ("≈2% of your usage") —
+// never dollars (conversation/cost.ts). Old messages keep working: plain `suggestions` strings
+// still send themselves, and v4 object suggestions ({ label, action | tab | say }) are upgraded
+// on the fly. The chip's accessible name is its visible text (label + price), so voice-control
+// users can say what they see.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { isPageStale, isValidNextStep, type ComicDoc, type Msg, type NextStep, type StudioTab } from '../../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../../shared/comic/limits';
 import { SPEND_ACTION_TYPES } from '../../../../shared/comic/ops';
-import { formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
+import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
+import { costFormat, useCostFormat, type CostFormat } from '../cost';
 import { ChipButton, cx } from '../ui';
 import { hasRecap } from './recap';
 
@@ -72,10 +76,15 @@ export const chipsFor = (msg: Msg, doc: ComicDoc | null, opts: { fallback?: bool
   return opts.fallback ? fallbackNextSteps(doc).map((step) => ({ step })) : [];
 };
 
-/** Price badge text: "Free" at $0, "≈$0.07" when paid, nothing when unpriced. */
-export const priceBadge = (usd: number | undefined): string | undefined => {
+const DOLLARS = costFormat(DOLLAR_CONTEXT);
+
+/**
+ * Price badge text: "Free" at $0, "≈$0.07" when paid (or "≈2% of your usage" for a governed
+ * user), nothing when unpriced.
+ */
+export const priceBadge = (usd: number | undefined, cost: CostFormat = DOLLARS): string | undefined => {
   if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0) return undefined;
-  return usd === 0 ? 'Free' : `≈${formatUsd(usd)}`;
+  return usd === 0 ? 'Free' : cost.badge(usd);
 };
 
 const priceOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
@@ -98,13 +107,18 @@ export const chipUsd = (step: NextStep): number | undefined => {
   return own ?? quoted;
 };
 
+/** A price as servers write it at the end of a label: Free, ≈$0.14, ≈2% of your usage, <0.1% of your usage. */
+const PRICE = String.raw`(?:free|[≈<]\s*\$[\d.,]+|[≈<]\s*[\d.,]+%\s*of\s+your\s+usage)`;
+const PRICE_SUFFIX = new RegExp(String.raw`(?:\s*\(${PRICE}\)|\s+[·•–—-]\s*${PRICE})\s*$`, 'i');
+
 /**
  * The label as shown next to its badge: a server label that already spells out the price
- * ("Fit to 4:5 (Free)", "Draw 2 pages · ≈$0.14") loses that suffix, so the price reads once.
+ * ("Fit to 4:5 (Free)", "Draw 2 pages · ≈$0.14", "Draw 2 pages · ≈2% of your usage") loses that
+ * suffix, so the price reads once — and a governed user never sees a dollar suffix.
  */
 export const chipLabel = (label: string, badge: string | undefined): string => {
   if (!badge) return label;
-  const trimmed = label.replace(/(?:\s*\((?:free|≈\s*\$[\d.,]+)\)|\s+[·•–—-]\s*(?:free|≈\s*\$[\d.,]+))\s*$/i, '').trim();
+  const trimmed = label.replace(PRICE_SUFFIX, '').trim();
   return trimmed || label;
 };
 
@@ -138,6 +152,7 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
   // Per chip: a long-running action (a render streams until it lands) must not freeze the
   // other chips — "Read it" stays tappable while "Make the cover" draws.
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  const cost = useCostFormat(studio);
   const pendingRef = useRef(new Set<string>());
   const mounted = useRef(true);
   useEffect(() => {
@@ -168,7 +183,7 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
       {chips.map((chip, i) => {
         const key = `${chip.step.label}:${i}`;
         const usd = chipUsd(chip.step);
-        const badge = priceBadge(usd);
+        const badge = priceBadge(usd, cost);
         const label = chipLabel(chip.step.label, badge);
         const busy = pending.has(key);
         // Text chips wait for the director; a second text chip waits for the first one's turn.
@@ -179,11 +194,12 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
             onClick={() => void tap(chip, key)}
             disabled={disabled}
             aria-busy={busy || undefined}
-            aria-label={badge ? `${label}, ${badge === 'Free' ? 'free' : `about ${formatUsd(usd!)}`}` : undefined}
             className="min-w-0"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />}
             <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+            {/* The name a screen reader announces is the visible text: "Make the cover, ≈2% of your usage". */}
+            {badge && <span className="sr-only">, </span>}
             {badge && (
               <span
                 className={cx(
@@ -197,7 +213,6 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
                       ? 'Estimate — tapping is your OK, and the price is re-checked before anything is drawn'
                       : 'Estimate — I’ll confirm the price with you before anything is drawn'
                 }
-                aria-hidden
               >
                 {badge}
               </span>

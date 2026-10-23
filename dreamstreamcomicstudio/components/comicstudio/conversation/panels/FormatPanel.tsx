@@ -10,7 +10,9 @@ import React from 'react';
 import { BookHeart, BookOpen, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
 import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Format, type LetteringMode, type Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
-import { estimateJobs, formatUsd, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import { estimateJobs, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import type { StudioCaps } from '../../../../shared/comic/capabilities';
+import { useCostFormat } from '../cost';
 import { AspectGlyph, Segmented, SectionLabel, cx } from '../ui';
 
 export const KIND_OPTIONS: { value: ComicKind; label: string; icon: React.ReactNode }[] = [
@@ -130,10 +132,13 @@ export interface FormatPanelProps {
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
   byok?: boolean;
+  /** The user's caps (usage-terms prices for governed users; admins and own keys see dollars). */
+  caps?: StudioCaps;
 }
 
-export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = false }) => {
+export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = false, caps }) => {
   const format = doc.format;
+  const cost = useCostFormat({ byok, caps });
   // Unique per instance: the panel can be open in the composer and inside a recap card at once.
   const pageCountId = `comicstudio-page-count-${React.useId().replace(/[^\w-]/g, '')}`;
   // The values a staling change replaced, so "Switch back" can restore them for free.
@@ -161,7 +166,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
       {undoStale && staleNow > 0 ? (
         <div role="status" className="flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2.5 text-[12px] leading-snug text-[var(--ds-ink)]">
           <p className="min-w-0 flex-1 basis-[12rem] [overflow-wrap:anywhere]">
-            {staleNow === 1 ? '1 drawn page is' : `${staleNow} drawn pages are`} now out of date — redraw ≈ {formatUsd(redrawQuoteUsd(doc, staleNow, byok))} when you’re
+            {staleNow === 1 ? '1 drawn page is' : `${staleNow} drawn pages are`} now out of date — redraw {cost.approx(redrawQuoteUsd(doc, staleNow, byok))} when you’re
             ready, or switch back to keep {staleNow === 1 ? 'it' : 'them'} as {staleNow === 1 ? 'it is' : 'they are'}.
           </p>
           <button
@@ -181,7 +186,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
           <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
           <span className="min-w-0 [overflow-wrap:anywhere]">
             {pagesWord(drawn.length)} {drawn.length === 1 ? 'is' : 'are'} already drawn. A new page shape or lettering mode marks{' '}
-            {drawn.length === 1 ? 'it' : 'them'} out of date (redraw ≈ {formatUsd(redrawQuoteUsd(doc, drawn.length, byok))}) — nothing is redrawn until you ask.
+            {drawn.length === 1 ? 'it' : 'them'} out of date (redraw {cost.approx(redrawQuoteUsd(doc, drawn.length, byok))}) — nothing is redrawn until you ask.
           </span>
         </p>
       ) : null}
@@ -294,7 +299,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
           </div>
         </div>
         <p className="mt-2 text-[11px] text-[var(--ds-muted)]">
-          ≈ {formatUsd(perPage * format.pageCount)} to draw {format.pageCount === 1 ? 'it' : `all ${format.pageCount}`} on{' '}
+          {cost.approx(perPage * format.pageCount)} to draw {format.pageCount === 1 ? 'it' : `all ${format.pageCount}`} on{' '}
           {pageModel.nickname} · planning is free until you approve.
         </p>
       </div>

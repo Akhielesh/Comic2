@@ -6,12 +6,22 @@
 // Reader props (contract §13.3): `letteringAriaHidden`, `visibleLineIds` (guided reveal), `paper`
 // (the reader's paper layer between art and lettering), `srcWidth` (variant pick from the measured
 // box width) and `editionLang` (edition geometry edits are reported with { lang }).
+//
+// Safety (safety.md §10): with `safety`, the art AND its lettering sit inside a SafetyVeil (blurred when
+// over the comic's rating, a neutral tile — never an <img> — when blocked). Without it, a blocked image
+// still never waits on a URL the server will not sign: it shows the withheld tile instead of a shimmer.
+// A public snapshot's `render.withheld` page shows "Page N isn't available right now".
+// `ComicCoverView` is the cover counterpart: the art plus the overlay title (CoverTitleLayer).
 
 import React, { useState } from 'react';
+import { EyeOff } from 'lucide-react';
 import type { Balloon, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
+import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety';
 import type { PatchOptions } from '../types';
 import { ImageDevelop } from '../../studio/kit/streamMotion';
+import { SafetyVeil } from '../safety/SafetyVeil';
+import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { BalloonLayer } from './BalloonLayer';
 import { pageAspectOf } from './balloonGeometry';
 import { SHOT_LABEL, isFreshRender } from './boardModel';
@@ -68,7 +78,37 @@ export interface ComicPageViewProps {
   /** Add mode: the next click on the page adds a line of this kind there. */
   addKind?: LineKind | null;
   onAddAt?: (kind: LineKind, point: { x: number; y: number }) => void;
+  /** Long-press / right-click / Menu key on a balloon (editor): open its action menu. */
+  onBalloonMenu?: (lineId: string, at: { x: number; y: number }) => void;
+  /** Editing a translated edition: inline text edits (a `translation`, never a source `line`). */
+  onEditionTextChange?: (lineId: string, text: string) => void;
+  /** Wrap the art and lettering in a SafetyVeil at this rating, with the actions the host offers. */
+  safety?: PageSafety;
 }
+
+/** SafetyVeil wiring for a page or cover (the host decides which actions it can offer). */
+export interface PageSafety {
+  rating: ContentRating;
+  onRedrawSafer?(): void;
+  onCheckAgain?(): void;
+  onChangeRating?(): void;
+}
+
+/** The calm placeholder for art that isn't shown (withheld from readers, or blocked for everyone). */
+export const WithheldArt: React.FC<{ label: string; detail?: string }> = ({ label, detail }) => (
+  <div
+    role="img"
+    aria-label={label}
+    data-testid="withheld-art"
+    className="absolute inset-0 grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden bg-[var(--ds-well-strong)] p-3 text-center"
+  >
+    <div className="min-w-0 max-w-full">
+      <EyeOff className="mx-auto mb-1.5 h-5 w-5 text-[var(--ds-muted)]" aria-hidden />
+      <p className="break-words text-[12.5px] font-medium leading-snug text-[var(--ds-ink)]">{label}</p>
+      {detail && <p className="mt-0.5 break-words text-[11.5px] leading-snug text-[var(--ds-muted)]">{detail}</p>}
+    </div>
+  </div>
+);
 
 /** Fallback page width for geometry before the box has been measured (and in tests). */
 const FALLBACK_WIDTH = 600;
@@ -157,7 +197,10 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   onEditingChange,
   addKind,
   onAddAt,
-  onLetteringOps
+  onLetteringOps,
+  onBalloonMenu,
+  onEditionTextChange,
+  safety
 }) => {
   const [boxRef, size] = useElementSize<HTMLDivElement>();
   const [natural, setNatural] = useState<{ path: string; w: number; h: number } | null>(null);
@@ -177,6 +220,9 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   const showImage = !!src && failed !== src;
   const waitingForUrl = !src && !!assetPath;
   const lettering = doc.format.lettering === 'overlay' && showImage && !hideLettering;
+  // Public snapshots mark art they withhold; a blocked image is never signed, so never wait for it.
+  const withheld = !!page.render.withheld;
+  const blocked = !withheld && !safety && !!page.render.asset && !canServeToOwner(page.render.asset);
 
   const img = showImage ? (
     <img
@@ -204,14 +250,28 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
     />
   ) : null;
 
-  return (
-    <div
-      ref={boxRef}
-      data-testid="comic-page"
-      data-page-id={page.id}
-      className={cx('relative w-full overflow-hidden bg-white', className)}
-      style={{ aspectRatio: String(aspect), ...style }}
-    >
+  if (withheld || blocked) {
+    return (
+      <div
+        ref={boxRef}
+        data-testid="comic-page"
+        data-page-id={page.id}
+        data-withheld={withheld ? page.render.withheld : 'blocked'}
+        className={cx('relative w-full overflow-hidden bg-white', className)}
+        style={{ aspectRatio: String(aspect), ...style }}
+      >
+        <WithheldArt
+          label={withheld ? `Page ${page.n} isn’t available right now` : 'Image withheld'}
+          detail={withheld ? undefined : 'This take didn’t fit the content rules.'}
+        />
+        {children}
+        {overlay}
+      </div>
+    );
+  }
+
+  const art = (
+    <>
       {showImage ? (
         // Keyed by asset: a new render remounts (and develops in when it just landed); the
         // wrapper never changes shape as time passes, so the image is never re-created.
@@ -255,7 +315,129 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           onEditingChange={onEditingChange}
           addKind={addKind}
           onAddAt={onAddAt}
+          onBalloonMenu={onBalloonMenu}
+          onEditionTextChange={onEditionTextChange}
         />
+      )}
+    </>
+  );
+
+  return (
+    <div
+      ref={boxRef}
+      data-testid="comic-page"
+      data-page-id={page.id}
+      className={cx('relative w-full overflow-hidden bg-white', className)}
+      style={{ aspectRatio: String(aspect), ...style }}
+    >
+      {safety ? (
+        // The veil wraps the art AND its lettering (a blurred page must not keep crisp balloons on top).
+        <div className="absolute inset-0" data-testid="page-veil">
+          <SafetyVeil asset={page.render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
+            {art}
+          </SafetyVeil>
+        </div>
+      ) : (
+        art
+      )}
+      {children}
+      {overlay}
+    </div>
+  );
+};
+
+export interface ComicCoverViewProps {
+  /** The (localized) doc: the overlay title is drawn in its language. */
+  doc: ComicDoc;
+  imageUrl?: string;
+  srcWidth?: (boxWidthPx: number) => string | undefined;
+  className?: string;
+  style?: React.CSSProperties;
+  alt?: string;
+  loading?: 'lazy' | 'eager';
+  onImageError?: () => void;
+  /** The reader's paper layer between the art and the title. */
+  paper?: boolean;
+  safety?: PageSafety;
+  /** Status layer drawn over the cover. */
+  overlay?: React.ReactNode;
+  children?: React.ReactNode;
+}
+
+/**
+ * The cover as it reads: the art at its real aspect (object-contain), the overlay title and tagline set by
+ * software when the cover is textless (`cover.lettering === 'overlay'`; CoverTitleLayer draws nothing for
+ * a painted title), the SafetyVeil, and the withheld placeholder.
+ */
+export const ComicCoverView: React.FC<ComicCoverViewProps> = ({ doc, imageUrl, srcWidth, className, style, alt, loading = 'lazy', onImageError, paper, safety, overlay, children }) => {
+  const [boxRef, size] = useElementSize<HTMLDivElement>();
+  const [failed, setFailed] = useState<string | null>(null);
+  const [variantFailed, setVariantFailed] = useState<string | null>(null);
+  const [natural, setNatural] = useState<{ path: string; aspect: number } | null>(null);
+  const render = doc.cover.render;
+  const assetPath = render.asset?.path;
+  const known = render.asset?.w && render.asset?.h ? render.asset.w / render.asset.h : 0;
+  const aspect = (natural && natural.path === assetPath ? natural.aspect : 0) || known || pageAspectOf(doc, { render });
+  const pickedUrl = srcWidth && size.width > 0 ? srcWidth(size.width) : undefined;
+  const src = pickedUrl && variantFailed !== pickedUrl ? pickedUrl : imageUrl;
+  const showImage = !!src && failed !== src;
+  const withheld = !!render.withheld;
+  const blocked = !withheld && !safety && !!render.asset && !canServeToOwner(render.asset);
+  const title = doc.brief?.title || 'Untitled comic';
+
+  const art = (
+    <>
+      {showImage ? (
+        <img
+          src={src}
+          alt={alt || `Cover of ${title}`}
+          loading={loading}
+          decoding="async"
+          draggable={false}
+          className="absolute inset-0 h-full w-full select-none object-contain"
+          onLoad={(e) => {
+            const el = e.currentTarget;
+            if (assetPath && el.naturalWidth > 0 && el.naturalHeight > 0) setNatural({ path: assetPath, aspect: el.naturalWidth / el.naturalHeight });
+          }}
+          onError={() => {
+            if (pickedUrl && src === pickedUrl && pickedUrl !== imageUrl) {
+              setVariantFailed(pickedUrl);
+              return;
+            }
+            setFailed(src || null);
+            onImageError?.();
+          }}
+        />
+      ) : assetPath && failed === null ? (
+        <div className="studio-shimmer absolute inset-0" role="img" aria-label="Loading cover" />
+      ) : (
+        <div className="absolute inset-0 grid place-items-center bg-[var(--ds-surface-strong)] p-3 text-center text-[12px] text-[var(--ds-muted)]">
+          {failed ? 'Couldn’t load the cover — it will retry with a fresh link.' : 'No cover drawn yet.'}
+        </div>
+      )}
+      {paper && showImage && <div className="ds-reader-paper pointer-events-none absolute inset-0" aria-hidden />}
+      {showImage && <CoverTitleLayer doc={doc} aspect={aspect} />}
+    </>
+  );
+
+  return (
+    <div
+      ref={boxRef}
+      data-testid="comic-cover"
+      data-withheld={withheld ? render.withheld : blocked ? 'blocked' : undefined}
+      className={cx('relative w-full overflow-hidden bg-white', className)}
+      style={{ aspectRatio: String(aspect), ...style }}
+    >
+      {withheld || blocked ? (
+        <WithheldArt label={withheld ? 'The cover isn’t available right now' : 'Image withheld'} detail={withheld ? undefined : 'This take didn’t fit the content rules.'} />
+      ) : safety ? (
+        <div className="absolute inset-0">
+          <SafetyVeil asset={render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
+            {art}
+          </SafetyVeil>
+        </div>
+      ) : (
+        art
       )}
       {children}
       {overlay}

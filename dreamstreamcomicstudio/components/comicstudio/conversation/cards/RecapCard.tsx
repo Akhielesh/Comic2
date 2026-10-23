@@ -76,7 +76,8 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
         aria-label={CHANGE_LABEL[k]}
         aria-expanded={inline ? panel === k : undefined}
         className={cx(
-          'tap-target shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
+          // Real heights (no ::after spilling over the row above): 28 px with a mouse, 44 px on touch.
+          'inline-flex min-h-[28px] shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:px-3',
           inline && panel === k ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-accent)] hover:bg-[var(--ds-hover)]'
         )}
       >
@@ -107,7 +108,7 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
             </div>
             {panel === row.key && row.key === 'format' && (
               <div className="mt-2 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]">
-                <FormatPanel doc={doc} patch={studio.patch} byok={studio.byok} />
+                <FormatPanel doc={doc} patch={studio.patch} byok={studio.byok} caps={studio.caps} />
               </div>
             )}
             {panel === row.key && row.key === 'style' && (
@@ -117,6 +118,7 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
                   patch={studio.patch}
                   act={studio.act}
                   byok={studio.byok}
+                  caps={studio.caps}
                   onDone={() => setPanel(null)}
                   onDescribeOwn={() => composeInStudio({ text: 'Art style: ', hint: 'Describe the look — medium, line, color, mood…' })}
                 />

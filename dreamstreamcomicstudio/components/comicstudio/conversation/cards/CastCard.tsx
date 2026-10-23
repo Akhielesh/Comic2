@@ -10,8 +10,9 @@
 import React from 'react';
 import { AlertTriangle, Check, Users } from 'lucide-react';
 import type { Card, Character } from '../../../../shared/comic/doc';
-import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
+import { estimateJobs } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
+import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, cx, plural } from '../ui';
 import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount, kindOf } from './castVisual';
 import { useAction } from './useAction';
@@ -54,6 +55,7 @@ export const castStatusLine = (c: Character): string => {
 export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioController }> = ({ card, studio }) => {
   const doc = studio.doc;
   const { run, isPending } = useAction(studio.act);
+  const cost = useCostFormat(studio);
   if (!doc) return null;
   const ids = Array.isArray(card.characterIds) && card.characterIds.length ? card.characterIds : doc.cast.map((c) => c.id);
   const cast = ids.map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is Character => !!c);
@@ -124,7 +126,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <GhostButton
             size="sm"
-            className="tap-target"
+            className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
             busy={isPending('sheets')}
             onClick={() =>
               void run('sheets', {
@@ -135,7 +137,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
               })
             }
           >
-            Draw {plural(missing.length, 'sheet')} <span className="text-[var(--ds-muted)]">≈ {formatUsd(estimate.usd)}</span>
+            Draw {plural(missing.length, 'sheet')} <span className="text-[var(--ds-muted)]">{cost.approx(estimate.usd)}</span>
           </GhostButton>
           <span className="min-w-0 text-[11.5px] text-[var(--ds-muted)]">Sheets keep faces, outfits and markings consistent on every page.</span>
         </div>

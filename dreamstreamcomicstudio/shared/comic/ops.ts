@@ -206,7 +206,11 @@ export type SpendAction =
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
   /** Translation (writer-class translator + automated linguist review, always). lineIds (≤ DOC_LIMITS.translateLineIds):
    *  only these lines — the per-line "Re-translate line" (i18n.md §10.1). */
-  | ({ type: 'translate'; languages: string[]; pageIds?: string[]; lineIds?: string[]; force?: boolean; overwriteEdits?: boolean } & Quoted);
+  | ({ type: 'translate'; languages: string[]; pageIds?: string[]; lineIds?: string[]; force?: boolean; overwriteEdits?: boolean } & Quoted)
+  /** Paid re-check of a drawn page (lettering.md §9): one vision call re-reads the art (QC, faces, speakers), then
+   *  the balloons are re-laid around it. TEXT-priced (models.ts RELAYOUT_VISION_USD); gated, budgeted and refused
+   *  for restricted accounts like every spend. The free re-layout is `relayout_balloons` (stored QC, no AI). */
+  | ({ type: 'recheck_page'; pageId: string } & Quoted);
 
 export type StudioAction =
   | SpendAction
@@ -218,7 +222,8 @@ export type StudioAction =
   | { type: 'patch'; ops: DocOp[] }
   /** Compatibility action: commits `render_use`. */
   | { type: 'restore_render'; target: RenderTarget; path: string }
-  /** Free unless useVision (TEXT-priced vision re-check). */
+  /** Always free (stored QC boxes, keep-outs and heads; no AI). `useVision` is a legacy alias of the gated
+   *  `recheck_page` spend (the server quotes and gates it; it never re-checks for free). */
   | { type: 'relayout_balloons'; pageId: string; useVision?: boolean }
   | { type: 'cancel' }
   | { type: 'fit_render'; target: RenderTarget; mode?: 'pad' | 'crop' | 'auto' }
@@ -238,7 +243,7 @@ export type StudioAction =
   | { type: 'import_classic_cast'; projectId: string; names?: string[] }; // wave 3, owner's own data only
 
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
-  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate'
+  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page'
 ]);
 /** Moves here from routes/comic.ts:47 (single source for client + server). */
 export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([

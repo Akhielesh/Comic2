@@ -118,7 +118,10 @@ export const hasAccountKeyFor = async (userId: string, provider: string): Promis
  */
 export const attachAccountKeys = async (req: Request, _res: Response, next: NextFunction) => {
   try {
-    const userId = req.user?.id;
+    // Read the auth user structurally: this module is also type-checked from scopes that never
+    // load middleware/auth.ts's `Request.user` augmentation (the root client typecheck), and it
+    // must compile there too.
+    const userId = (req as Request & { user?: { id?: string } }).user?.id;
     const k = req.apiKeys;
     if (!userId || !k || !isSecureStoreAvailable()) return next();
     if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return next();

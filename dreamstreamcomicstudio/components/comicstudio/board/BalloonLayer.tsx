@@ -16,7 +16,11 @@
 //     duplicates, [ ] change stacking (Shift = to back/front), L locks, Enter/double-click edits text.
 //   - Touch: a tap selects without moving; a selected balloon drags past a 10 px slop; an unselected one
 //     drags only after a 220 ms hold ("lift"); travel is measured against the layer's on-screen rect, so
-//     it is right under any zoom. pointercancel reverts (never commits).
+//     it is right under any zoom. pointercancel reverts (never commits), and so does a SECOND finger: the
+//     drag claims the canvas's GestureArbiter, so TouchCanvas cancels it the moment a pinch starts.
+//   - Long-press (450 ms, still finger), right-click, the Menu key or Shift+F10 open the balloon's action
+//     menu (`onBalloonMenu`). A tap on empty art selects the nearest balloon (22 px) or clears the
+//     selection on RELEASE, so a one-finger pan of a zoomed page never drops the selection.
 // Every finished change sends the FULL balloon when the line had none stored yet (a software-placed
 // balloon), so a first drag never jumps to a default width or loses its tail; changes are pinned so an
 // automatic re-layout never moves them again.
@@ -39,6 +43,8 @@ import { nextSelection } from '../lettering/useLetteringSelection';
 import { planText } from '../lettering/svgMarkup';
 import { deleteLinesOps, duplicateLineOps, findLineRef, lockOps, outlineFractions, textEditOps, zOrderOps } from '../lettering/styleOps';
 import { useZoom } from '../mobile/touch/TouchCanvas';
+import { useGestureArbiter } from '../mobile/touch/GestureArbiter';
+import { haptic, longPressMs } from '../mobile/touch/pointerPolicy';
 import { LETTERING, pageAspectOf } from './balloonGeometry';
 import { LINE_KIND_LABEL, castName } from './boardModel';
 import { cx } from './ui';
@@ -76,6 +82,10 @@ export interface BalloonLayerProps {
   /** Add mode: the next click on the page adds a line of this kind there. */
   addKind?: LineKind | null;
   onAddAt?: (kind: LineKind, point: { x: number; y: number }) => void;
+  /** Long-press / right-click / Menu key on a balloon: open its action menu at `at` (client px). */
+  onBalloonMenu?: (lineId: string, at: { x: number; y: number }) => void;
+  /** Editing a translated edition: inline text edits are reported here (a `translation`, never a source `line`). */
+  onEditionTextChange?: (lineId: string, text: string) => void;
 }
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
@@ -107,6 +117,8 @@ export const planTip = (plan: LetterPlan, H: number, balloon?: Balloon): { x: nu
   const tail = resolveTailStyle(plan.style.tail, plan.kind, plan.style.shape);
   if (tail === 'none' || plan.style.shape === 'none') return null;
   if (balloon && typeof balloon.tailX === 'number' && typeof balloon.tailY === 'number') return { x: clamp01(balloon.tailX), y: clamp01(balloon.tailY) };
+  // The engine reports the tip it drew (after the render-time fit): no re-deriving.
+  if (plan.tip && Number.isFinite(plan.tip.x) && Number.isFinite(plan.tip.y) && H > 0) return { x: clamp01(plan.tip.x / 1000), y: clamp01(plan.tip.y / H) };
   if (!SPOKEN.has(plan.kind)) return null;
   return { x: clamp01((plan.x + plan.w * 0.42) / 1000), y: clamp01((plan.y + plan.h + 0.04 * H) / H) };
 };
@@ -148,7 +160,9 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   editingLineId,
   onEditingChange,
   addKind,
-  onAddAt
+  onAddAt,
+  onBalloonMenu,
+  onEditionTextChange
 }) => {
   const aspect = aspectProp && aspectProp > 0 ? aspectProp : pageWidth > 0 && pageHeight > 0 ? pageWidth / pageHeight : pageAspectOf(doc, page);
   // Live drafts while dragging (full balloons), drawn by re-planning the page with them applied.
@@ -168,13 +182,18 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [lifted, setLifted] = useState<string | null>(null);
   const zoom = useZoom();
+  const arbiter = useGestureArbiter();
   const layerRef = useRef<HTMLDivElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
+  /** Cancels the drag in progress (revert, commit nothing) — the arbiter's preempt and a second finger call it. */
+  const cancelActive = useRef<(() => void) | null>(null);
+  /** When the balloon menu last opened (Android also fires contextmenu for a long-press we answered). */
+  const menuAt = useRef(0);
   useEffect(() => () => cleanup.current?.(), []);
   // In a translated edition the drawn text is the TRANSLATION: committing it as a source `line` edit (or
-  // adding a source line) would overwrite the original dialogue, so text editing and "add" belong to the
-  // edition ops (wave 2) and are off here; geometry edits are reported with { lang }.
-  const canEditText = !editionLang;
+  // adding a source line) would overwrite the original dialogue. Text edits there go to
+  // `onEditionTextChange` (a `translation` op) and "add" is off; geometry edits are reported with { lang }.
+  const canEditText = !editionLang || !!onEditionTextChange;
   const addArmed = !!(editable && addKind && onAddAt && !editionLang);
   // The layer renders when there is lettering, or (editor) when "add" mode waits for a click — a wordless
   // page must still accept its first balloon.
@@ -184,15 +203,36 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   // registered non-passive touchmove listener cancels the scroll so the browser does not take the
   // gesture over (pointercancel) mid-drag.
   const touchDragRef = useRef(false);
+  // Touch pointers down on this layer (counted in the CAPTURE phase, before any balloon handler): a second
+  // finger cancels the drag in progress and never starts one of its own — it is a pinch.
+  const touches = useRef(new Set<number>());
   useEffect(() => {
     const el = layerRef.current;
     if (!editable || !el) return;
     const onTouchMove = (ev: TouchEvent) => {
       if (touchDragRef.current && ev.cancelable) ev.preventDefault();
     };
+    const onDownCapture = (ev: PointerEvent) => {
+      if (ev.pointerType !== 'touch') return;
+      if (ev.isPrimary) touches.current.clear();
+      touches.current.add(ev.pointerId);
+      if (touches.current.size > 1) cancelActive.current?.();
+    };
+    const onUp = (ev: PointerEvent) => {
+      touches.current.delete(ev.pointerId);
+    };
     el.addEventListener('touchmove', onTouchMove, { passive: false });
-    return () => el.removeEventListener('touchmove', onTouchMove);
+    el.addEventListener('pointerdown', onDownCapture, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+    return () => {
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('pointerdown', onDownCapture, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+    };
   }, [editable, rendered]);
+  const multiTouch = (e: React.PointerEvent) => e.pointerType === 'touch' && touches.current.size > 1;
 
   // ── Selection (controlled multi, controlled single, or local) ─────────────
   const [localSel, setLocalSel] = useState<string[]>([]);
@@ -293,6 +333,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     if (!editable || (!onBalloonChange && !onOps)) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
+    // A second finger is a pinch (TouchCanvas zooms): it never starts a drag of its own.
+    if (multiTouch(e)) return;
     const id = plan.lineId;
     const additive = e.shiftKey && mode === 'move';
     const wasSelected = selectionRef.current.includes(id);
@@ -320,19 +362,39 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     // Touch on an unselected balloon: a hold lifts it; a quick move pans/scrolls instead.
     let armed = !touch || wasSelected || mode !== 'move';
     touchDragRef.current = touch && armed;
+    // The drag owns the gesture while armed: the canvas does not pan under it, and a pinch preempts it.
+    let claim: number | null = null;
+    const own = () => {
+      if (claim === null) claim = arbiter.claim('balloon', () => {
+        claim = null;
+        finish(false);
+      });
+    };
+    if (armed) own();
     let liftTimer: ReturnType<typeof setTimeout> | null = null;
     if (!armed) {
       liftTimer = setTimeout(() => {
         armed = true;
         touchDragRef.current = true;
+        own();
         setLifted(id);
         select(id);
-        try {
-          navigator.vibrate?.(10);
-        } catch {
-          /* no haptics */
-        }
+        haptic(10);
       }, LIFT_MS);
+    }
+    // Long-press (still finger) on a balloon: its action menu. Never edits.
+    let menuTimer: ReturnType<typeof setTimeout> | null = null;
+    if (touch && mode === 'move' && onBalloonMenu) {
+      menuTimer = setTimeout(() => {
+        menuTimer = null;
+        if (st.moved) return;
+        const at = { x: st.origin.x, y: st.origin.y };
+        finish(false);
+        select(id);
+        haptic(8);
+        menuAt.current = Date.now();
+        onBalloonMenu(id, at);
+      }, longPressMs);
     }
     const startPlans = ids.map((x) => basePlanById.get(x)!).filter(Boolean);
     const others: Box[] = base.plans.filter((p) => !ids.includes(p.lineId)).map((p) => outlineFractions(p, H));
@@ -343,6 +405,10 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       const dxPx = ev.clientX - st.origin.x;
       const dyPx = ev.clientY - st.origin.y;
       if (!st.moved && Math.hypot(dxPx, dyPx) < slop) return;
+      if (menuTimer) {
+        clearTimeout(menuTimer);
+        menuTimer = null;
+      }
       if (!armed) {
         // Moved before the lift: this was a pan/scroll, not a drag.
         stop();
@@ -423,12 +489,19 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const cancel = () => finish(false);
     const stop = () => {
       if (liftTimer) clearTimeout(liftTimer);
+      if (menuTimer) clearTimeout(menuTimer);
+      liftTimer = null;
+      menuTimer = null;
       touchDragRef.current = false;
+      if (claim !== null) arbiter.release(claim);
+      claim = null;
+      if (cancelActive.current === cancel) cancelActive.current = null;
       cleanup.current?.();
       setDrafts(null);
       setGuides([]);
       setLifted(null);
     };
+    cancelActive.current = cancel;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
@@ -454,6 +527,13 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       handled();
       select(null);
       (e.currentTarget as HTMLElement).blur();
+      return;
+    }
+    if ((e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) && onBalloonMenu) {
+      handled();
+      if (!selectionRef.current.includes(id)) select(id);
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      onBalloonMenu(id, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
       return;
     }
     if ((e.key === 'Enter' || e.key === 'F2') && !mod && onEditingChange && canEditText) {
@@ -545,12 +625,14 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       return;
     }
     const pointer = e.pointerType || 'mouse';
+    if (multiTouch(e)) return;
     // Fingers are imprecise (small SFX and whispers stay selectable at fit on a phone); a mouse needs
     // only a few px, so a marquee can start close to a balloon.
     const nearPx = pointer === 'touch' ? NEAREST_TAP_PX : pointer === 'pen' ? 12 : 6;
-    if (rect) {
-      const px = e.clientX - rect.left;
-      const py = e.clientY - rect.top;
+    const nearest = (clientX: number, clientY: number): string | null => {
+      if (!rect) return null;
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
       let best: { id: string; d: number } | null = null;
       for (const p of base.plans) {
         const o = outlineFractions(p, H);
@@ -559,12 +641,49 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         const dist = Math.hypot(ox, oy);
         if (dist <= nearPx && (!best || dist < best.d)) best = { id: p.lineId, d: dist };
       }
-      if (best) {
-        select(best.id, e.shiftKey);
-        return;
-      }
+      return best ? best.id : null;
+    };
+    if (pointer === 'touch') {
+      // A finger on empty art may be the start of a pan (zoomed) or a pinch: decide on RELEASE. A tap
+      // selects the nearest balloon or clears the selection; a move or a second finger does nothing here.
+      cleanup.current?.();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const pid = e.pointerId;
+      let moved = false;
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId === pid && Math.hypot(ev.clientX - startX, ev.clientY - startY) > dragSlopPx('touch')) moved = true;
+      };
+      const end = (commit: boolean) => (ev: PointerEvent) => {
+        if (ev.pointerId !== pid) return;
+        cleanup.current?.();
+        if (!commit || moved) return;
+        select(nearest(startX, startY));
+      };
+      const up = end(true);
+      const off = end(false);
+      const abort = () => {
+        moved = true;
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', off);
+      cleanup.current = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', off);
+        if (cancelActive.current === abort) cancelActive.current = null;
+        cleanup.current = null;
+      };
+      cancelActive.current = abort;
+      return;
     }
-    if (pointer === 'touch' || !rect || (pointer === 'mouse' && e.button !== 0)) {
+    const near = nearest(e.clientX, e.clientY);
+    if (near) {
+      select(near, e.shiftKey);
+      return;
+    }
+    if (!rect || (pointer === 'mouse' && e.button !== 0)) {
       select(null);
       return;
     }
@@ -647,7 +766,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           const sel = selectedSet.has(id);
           const style = p.style;
           const fontLabel = FONT_REGISTRY[p.fontId]?.label ?? p.fontId;
-          const describe = `${presetName}; ${fontLabel}; ${style.shape.replace('_', ' ')} balloon${p.locked ? '; locked' : ''}${p.outOfSafeArea ? '; outside the safe area' : ''}${p.overflow ? '; text does not fit' : ''}`;
+          const describe = `${presetName}; ${fontLabel}; ${style.shape.replace('_', ' ')} balloon${p.locked ? '; locked' : ''}${p.outOfSafeArea ? '; outside the safe area' : ''}${p.overflow ? '; text does not fit' : ''}${onBalloonMenu ? '; the menu key opens its actions' : ''}`;
           return (
             <div
               key={id}
@@ -657,6 +776,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               data-fallback={base.placements.fallback.has(id) || undefined}
               data-crowded={base.placements.crowded.has(id) || undefined}
               data-locked={p.locked || undefined}
+              // A selected balloon owns its gestures (drag at once; the canvas neither pans nor zooms on it).
+              data-no-canvas-gesture={sel || undefined}
               lang={p.lang}
               dir={p.dir}
               className={cx(
@@ -681,9 +802,15 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
                 if (canEditText) onEditingChange?.(id);
               }}
               onContextMenu={(e) => {
-                // Long-press/right-click selects (the inspector holds the actions).
+                // Right-click / Android's own long-press: select, and open the balloon menu (once — the
+                // touch long-press timer may already have opened it for the same hold).
                 e.preventDefault();
+                cancelActive.current?.();
                 if (!sel) select(id);
+                if (onBalloonMenu && Date.now() - menuAt.current > 700) {
+                  menuAt.current = Date.now();
+                  onBalloonMenu(id, { x: e.clientX, y: e.clientY });
+                }
               }}
               onKeyDown={(e) => onKeyDown(e, p)}
               onFocus={() => {
@@ -720,7 +847,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           style={{ left: `${marquee.x * 100}%`, top: `${marquee.y * 100}%`, width: `${marquee.w * 100}%`, height: `${marquee.h * 100}%` }}
         />
       )}
-      {editable && canEditText && editingPlan && editingLine && onOps && (
+      {editable && canEditText && editingPlan && editingLine && (editionLang ? !!onEditionTextChange : !!onOps) && (
         <BalloonTextEditor
           key={editingPlan.lineId}
           plan={editingPlan}
@@ -728,8 +855,13 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           pageWidthPx={pageWidth}
           text={editingLine.text}
           onCommit={(text) => {
-            const ops = textEditOps(page, editingPlan.lineId, text);
-            if (ops.length) onOps(ops, { label: 'Edit balloon text' });
+            if (editionLang) {
+              // The drawn text is this edition's translation: a change is a `translation`, never a source edit.
+              if (text.trim() && text !== editingLine.text) onEditionTextChange?.(editingPlan.lineId, text);
+            } else {
+              const ops = textEditOps(page, editingPlan.lineId, text);
+              if (ops.length) onOps?.(ops, { label: 'Edit balloon text' });
+            }
             onEditingChange?.(null);
           }}
           onCancel={() => onEditingChange?.(null)}
@@ -773,6 +905,7 @@ const Handles: React.FC<{
           aria-valuemin={0}
           aria-valuemax={100}
           data-testid="tail-handle"
+          data-no-canvas-gesture
           tabIndex={0}
           onPointerDown={(e) => onDrag(e, 'tail')}
           onKeyDown={(e) => onKey(e, 'tail')}
@@ -791,6 +924,7 @@ const Handles: React.FC<{
         aria-valuemin={6}
         aria-valuemax={95}
         data-testid="width-handle"
+        data-no-canvas-gesture
         tabIndex={0}
         aria-orientation="horizontal"
         onPointerDown={(e) => onDrag(e, 'width')}

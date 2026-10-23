@@ -93,6 +93,8 @@ export interface FakeAssetStore extends AssetStore {
   crops: { path: string; aspect?: string }[];
   fits: { path: string; aspect: AspectRatio; mode: string }[];
   quarantined: { path: string; reason: string; quarantinePath: string }[];
+  /** restoreQuarantined calls that brought an object back (appeal cleared / moderator restore). */
+  restored: { quarantinePath: string; originalPath: string }[];
   removed: string[];
   copies: { src: string; dst: string }[];
   puts: { path: string; contentType: string; cacheControl?: string; bytes: number }[];
@@ -154,6 +156,7 @@ export function fakeAssetStore(): FakeAssetStore {
     crops: [],
     fits: [],
     quarantined: [],
+    restored: [],
     removed: [],
     copies: [],
     puts: [],
@@ -215,6 +218,16 @@ export function fakeAssetStore(): FakeAssetStore {
       store.missing.add(path);
       store.quarantined.push({ path, reason, quarantinePath });
       return { quarantinePath };
+    },
+    async restoreQuarantined(quarantinePath, originalPath) {
+      // Mirrors the real store's guard: only a q/ object of this store comes back, to the path it left.
+      const entry = store.quarantined.find((q) => q.quarantinePath === quarantinePath && q.path === originalPath);
+      if (!entry || !store.files.has(quarantinePath)) throw new StudioError('NOT_FOUND', 'That image is no longer held.', { status: 404 });
+      store.files.set(originalPath, store.files.get(quarantinePath)!);
+      store.files.delete(quarantinePath);
+      store.missing.delete(originalPath);
+      store.quarantined = store.quarantined.filter((q) => q !== entry);
+      store.restored.push({ quarantinePath, originalPath });
     },
     async remove(paths) {
       for (const p of paths || []) {

@@ -2,16 +2,18 @@ import { Request, Response, Router } from 'express';
 import crypto from 'node:crypto';
 import { requireGeminiKey, requirePixazoKey, requireOpenRouterKey, requireNvidiaKey, requireIdeogramKey } from '../middleware/keys.js';
 import { checkLimits } from '../middleware/limits.js';
-import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL, OPENROUTER_IMAGE_MODEL, NVIDIA_IMAGE_MODEL, IDEOGRAM_MODEL_ID } from '../config.js';
+import { BILLING_ENABLED, FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL, OPENROUTER_IMAGE_MODEL, NVIDIA_IMAGE_MODEL, IDEOGRAM_MODEL_ID } from '../config.js';
 import { generateGeminiImage } from '../ai/image.js';
 import { generateFluxImage } from '../ai/flux.js';
 import { generateIdeogramImage } from '../ai/ideogram.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
+import type { GenerateImageResult } from '../ai/providers/types.js';
 import { resolveStageModel } from '../ai/stageModels.js';
 import { persistGeneratedImage } from '../services/imageStorage.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
+  hasByokForProvider,
   releaseReservedOperation,
   reserveForOperation,
   settleReservedOperation
@@ -22,6 +24,8 @@ import {
   resolvePlanTierForUser,
   tryConsumeFreeNanoBananaUsage
 } from '../services/modelAccessPolicy.js';
+import { getAllowanceStatus, isUsageExemptAdmin, meteringEnabled } from '../services/platformAllowance.js';
+import type { BillingPlanTier, ReservationState } from '../../../shared/types/billing.js';
 
 export const imageRouter = Router();
 
@@ -189,6 +193,114 @@ const toBillingLimitError = (details: unknown) => {
   return error;
 };
 
+// ── Model access + daily cap on the legacy routes (P1-LIMITS / P2-PLATFORM) ────────────────────
+// With Stripe billing ON the plan decides which image models a user may request. With billing OFF
+// and usage metering ON (production today) there are no plans to buy: the usage budget is the one
+// meter, and the rule matches Comic Studio (comic/access.ts): the user's own key, admins, exempt
+// budget rows and `allow_pro` rows may request any model; everyone else (governed testers) gets
+// the everyday list. A usage lookup that fails closes to the everyday list. Metering off keeps
+// the legacy plan gate.
+
+export type ImageModelAccess =
+  | { mode: 'plan'; planTier: BillingPlanTier | string }
+  | { mode: 'usage'; pro: boolean };
+
+export interface ImageModelAccessDeps {
+  billingEnabled?: boolean;
+  meteringEnabled?: boolean;
+  planFor?: (userId: string) => Promise<BillingPlanTier | string>;
+  isAdmin?: (req: Request) => Promise<boolean>;
+  statusFor?: (userId: string) => Promise<{ enabled: boolean; governed: boolean; allowPro: boolean }>;
+}
+
+export const resolveImageModelAccess = async (
+  req: Request,
+  opts: { byok: boolean },
+  deps: ImageModelAccessDeps = {}
+): Promise<ImageModelAccess> => {
+  const userId = req.user?.id;
+  const billingOn = deps.billingEnabled ?? BILLING_ENABLED;
+  const meteringOn = deps.meteringEnabled ?? meteringEnabled();
+  if (billingOn || !meteringOn) {
+    return { mode: 'plan', planTier: userId ? await (deps.planFor || resolvePlanTierForUser)(userId) : 'free' };
+  }
+  if (opts.byok) return { mode: 'usage', pro: true };
+  if (!userId) return { mode: 'usage', pro: false };
+  try {
+    if (await (deps.isAdmin || isUsageExemptAdmin)(req)) return { mode: 'usage', pro: true };
+    const status = await (deps.statusFor || getAllowanceStatus)(userId);
+    if (!status.enabled) return { mode: 'usage', pro: false };
+    return { mode: 'usage', pro: !status.governed || status.allowPro };
+  } catch {
+    return { mode: 'usage', pro: false };
+  }
+};
+
+/** The honest refusal for a governed user asking for a model outside the included usage. */
+export const IMAGE_MODEL_USAGE_MESSAGE =
+  "This image model isn't part of your included usage yet — Nano Banana works great, or add your own Gemini key in Settings → API keys to use it.";
+
+export const assertImageModelAllowed = (access: ImageModelAccess, requestedModel: string) => {
+  if (access.mode === 'plan') {
+    return assertModelAllowedForTier({ scope: 'image', planTier: access.planTier, requestedModel });
+  }
+  try {
+    return assertModelAllowedForTier({ scope: 'image', planTier: access.pro ? 'creator' : 'free', requestedModel });
+  } catch (err) {
+    // No plans while billing is off: say what actually limits the user (no plan-tier wording).
+    const original = err as Error & { status?: number; publicCode?: string; details?: Record<string, unknown> };
+    const error = new Error(IMAGE_MODEL_USAGE_MESSAGE) as Error & { status?: number; publicCode?: string; details?: Record<string, unknown> };
+    error.status = original.status ?? 403;
+    error.publicCode = original.publicCode ?? 'MODEL_NOT_ALLOWED_FOR_PLAN';
+    error.details = {
+      scope: 'image',
+      reason: 'usage_budget',
+      requestedModel: original.details?.requestedModel ?? requestedModel,
+      allowedModels: original.details?.allowedModels ?? []
+    };
+    throw error;
+  }
+};
+
+/**
+ * The free plan's daily Nano Banana cap only applies where the usage budget is NOT the meter:
+ * never on the user's own key (it never counts), never when the budget governed the call or the
+ * admin/exempt rule skipped the wallet ("no daily caps" — P1-LIMITS). Users the budget does not
+ * cover (no default budget, metering off) keep the plan's wallet limits, cap included.
+ */
+export const freeDailyCapApplies = (reservation: Pick<ReservationState, 'byokBypass' | 'governed' | 'walletSkipped'>): boolean =>
+  !reservation.byokBypass && !reservation.governed && !reservation.walletSkipped;
+
+// ── Metering around a provider image call ───────────────────────────────────────────────────────
+// The provider call IS the spend. When it fails, the hold is released (nothing was spent). Once it
+// succeeded the spend is real and is SETTLED — even when storing the image afterwards fails —
+// because releasing then would erase real platform spend from the user's usage and the ledger.
+
+/** Release a hold whose provider call produced nothing. Best effort: the original error wins. */
+const releaseQuietly = async (operation: string, release: () => Promise<unknown>): Promise<void> => {
+  try {
+    await release();
+  } catch (releaseError) {
+    console.error(`[BILLING] release failed (${operation})`, (releaseError as Error)?.message || releaseError);
+  }
+};
+
+type SettleResult = Awaited<ReturnType<typeof settleReservedOperation>>;
+
+/**
+ * Settle a call whose provider spend already happened. Never throws: a failed settle leaves the
+ * RESERVED hold in place (it keeps counting until the reconciliation job repairs it) — it is never
+ * released, and the user still gets the image they paid for.
+ */
+const settleSpentQuietly = async (operation: string, settle: () => Promise<SettleResult>): Promise<SettleResult | null> => {
+  try {
+    return await settle();
+  } catch (settleError) {
+    console.error(`[BILLING] settle failed (${operation})`, (settleError as Error)?.message || settleError);
+    return null;
+  }
+};
+
 imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
   try {
     const apiKey = requireGeminiKey(req, res);
@@ -213,32 +325,8 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
 
     const payload = await withIdempotency(req, res, 'image:gemini', async () => {
       const effectiveModel = modelId || IMAGE_MODEL;
-      const planTier = req.user?.id ? await resolvePlanTierForUser(req.user.id) : 'free';
-      assertModelAllowedForTier({
-        scope: 'image',
-        planTier,
-        requestedModel: effectiveModel
-      });
-
-      const freeNanoBananaUsage = req.user?.id
-        ? await tryConsumeFreeNanoBananaUsage({
-            userId: req.user.id,
-            planTier,
-            modelId: effectiveModel
-          })
-        : {
-            applied: false as const,
-            allowed: true as const,
-            usedCount: 0,
-            limit: 0
-          };
-      if (freeNanoBananaUsage.applied && !freeNanoBananaUsage.allowed) {
-        throw createFreeNanoBananaLimitError({
-          usedCount: freeNanoBananaUsage.usedCount,
-          limit: freeNanoBananaUsage.limit,
-          resetAt: freeNanoBananaUsage.resetAt
-        });
-      }
+      const access = await resolveImageModelAccess(req, { byok: hasByokForProvider(req, 'gemini') });
+      assertImageModelAllowed(access, effectiveModel);
 
       const reserve = await reserveForOperation({
         req,
@@ -260,9 +348,80 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
         throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
       }
 
-      const generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], effectiveModel);
+      const releaseHold = (reason: string) =>
+        releaseQuietly('image.gemini.generate', () =>
+          releaseReservedOperation({
+            req,
+            operation: 'image.gemini.generate',
+            provider: 'gemini',
+            model: effectiveModel,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            reason,
+            metadata: { route: '/api/image/gemini', storage }
+          })
+        );
+
+      // The free plan's daily Nano Banana cap — only where the usage budget isn't the meter.
+      if (req.user?.id && freeDailyCapApplies(reserve.reservation)) {
+        let freeNanoBananaUsage: Awaited<ReturnType<typeof tryConsumeFreeNanoBananaUsage>>;
+        try {
+          freeNanoBananaUsage = await tryConsumeFreeNanoBananaUsage({
+            userId: req.user.id,
+            planTier: access.mode === 'plan' ? access.planTier : await resolvePlanTierForUser(req.user.id),
+            modelId: effectiveModel
+          });
+        } catch (capError) {
+          await releaseHold('free_cap_unavailable');
+          throw capError;
+        }
+        if (freeNanoBananaUsage.applied && !freeNanoBananaUsage.allowed) {
+          await releaseHold('free_daily_cap_reached');
+          throw createFreeNanoBananaLimitError({
+            usedCount: freeNanoBananaUsage.usedCount,
+            limit: freeNanoBananaUsage.limit,
+            resetAt: freeNanoBananaUsage.resetAt
+          });
+        }
+      }
+
+      let generated: Awaited<ReturnType<typeof generateGeminiImage>>;
+      try {
+        generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], effectiveModel);
+      } catch (error) {
+        // Nothing came back from the provider: free the hold.
+        await releaseHold((error as Error)?.message || 'generation_failed');
+        throw error;
+      }
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
+
+      // From here the provider has been paid: the spend is settled, never released.
+      const settleSpend = () =>
+        settleSpentQuietly('image.gemini.generate', () =>
+          settleReservedOperation({
+            req,
+            operation: 'image.gemini.generate',
+            provider: 'gemini',
+            model: effectiveModel || generated.model || IMAGE_MODEL,
+            seed: {
+              provider: 'gemini',
+              model: effectiveModel || generated.model || IMAGE_MODEL,
+              operation: 'image.gemini.generate',
+              imageUnits: 1,
+              resolution,
+              projectId: typeof projectId === 'string' ? projectId : undefined,
+              comicId: typeof projectId === 'string' ? projectId : undefined,
+              stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+              byok: reserve.reservation.byokBypass
+            },
+            usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
+            imageUnits: 1,
+            metadata: {
+              route: '/api/image/gemini',
+              storage
+            }
+          })
+        );
 
       try {
         if (storage !== 'test') {
@@ -294,52 +453,16 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
             });
           }
         }
-
-        // Settle billing in the background so the generated image returns immediately.
-        // The reservation is already recorded; the daily reconciliation job repairs any
-        // settle that fails here.
-        void settleReservedOperation({
-          req,
-          operation: 'image.gemini.generate',
-          provider: 'gemini',
-          model: effectiveModel || generated.model || IMAGE_MODEL,
-          seed: {
-            provider: 'gemini',
-            model: effectiveModel || generated.model || IMAGE_MODEL,
-            operation: 'image.gemini.generate',
-            imageUnits: 1,
-            resolution,
-            projectId: typeof projectId === 'string' ? projectId : undefined,
-            comicId: typeof projectId === 'string' ? projectId : undefined,
-            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
-            byok: reserve.reservation.byokBypass
-          },
-          usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
-          imageUnits: 1,
-          metadata: {
-            route: '/api/image/gemini',
-            storage
-          }
-        }).catch((settleError) => {
-          console.error('[BILLING] async settle failed (image.gemini.generate)', (settleError as Error)?.message || settleError);
-        });
-
-        return attachBillingToPayload(responsePayload, reserve.reservation, null);
-      } catch (error) {
-        await releaseReservedOperation({
-          req,
-          operation: 'image.gemini.generate',
-          provider: 'gemini',
-          model: effectiveModel || generated.model || IMAGE_MODEL,
-          projectId: typeof projectId === 'string' ? projectId : undefined,
-          reason: (error as Error)?.message || 'generation_failed',
-          metadata: {
-            route: '/api/image/gemini',
-            storage
-          }
-        });
-        throw error;
+      } catch (persistError) {
+        // Storing failed AFTER a successful generation: record the real spend, then surface the error.
+        await settleSpend();
+        throw persistError;
       }
+
+      // Settle in the background so the generated image returns immediately. The reservation is
+      // already recorded; the daily reconciliation job repairs any settle that fails here.
+      void settleSpend();
+      return attachBillingToPayload(responsePayload, reserve.reservation, null);
     });
 
     res.json(payload);
@@ -402,10 +525,54 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
         throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
       }
 
-      const generated = await generateFluxImage(apiKey, { prompt, aspectRatio, resolution, negativePrompt, seed, steps });
+      let generated: Awaited<ReturnType<typeof generateFluxImage>>;
+      try {
+        generated = await generateFluxImage(apiKey, { prompt, aspectRatio, resolution, negativePrompt, seed, steps });
+      } catch (error) {
+        // Nothing came back from the provider: free the hold.
+        await releaseQuietly('image.flux.generate', () =>
+          releaseReservedOperation({
+            req,
+            operation: 'image.flux.generate',
+            provider: 'pixazo',
+            model: FLUX_MODEL_ID,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            reason: (error as Error)?.message || 'generation_failed',
+            metadata: { route: '/api/image/flux', storage }
+          })
+        );
+        throw error;
+      }
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
-      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
+
+      // From here the provider has been paid: the spend is settled, never released.
+      const settleSpend = () =>
+        settleSpentQuietly('image.flux.generate', () =>
+          settleReservedOperation({
+            req,
+            operation: 'image.flux.generate',
+            provider: 'pixazo',
+            model: generated.model || FLUX_MODEL_ID,
+            seed: {
+              provider: 'pixazo',
+              model: generated.model || FLUX_MODEL_ID,
+              operation: 'image.flux.generate',
+              imageUnits: 1,
+              resolution,
+              projectId: typeof projectId === 'string' ? projectId : undefined,
+              comicId: typeof projectId === 'string' ? projectId : undefined,
+              stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+              byok: reserve.reservation.byokBypass
+            },
+            usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
+            imageUnits: 1,
+            metadata: {
+              route: '/api/image/flux',
+              storage
+            }
+          })
+        );
 
       try {
         if (storage !== 'test') {
@@ -437,47 +604,14 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
             });
           }
         }
-
-        settledBilling = await settleReservedOperation({
-          req,
-          operation: 'image.flux.generate',
-          provider: 'pixazo',
-          model: generated.model || FLUX_MODEL_ID,
-          seed: {
-            provider: 'pixazo',
-            model: generated.model || FLUX_MODEL_ID,
-            operation: 'image.flux.generate',
-            imageUnits: 1,
-            resolution,
-            projectId: typeof projectId === 'string' ? projectId : undefined,
-            comicId: typeof projectId === 'string' ? projectId : undefined,
-            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
-            byok: reserve.reservation.byokBypass
-          },
-          usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
-          imageUnits: 1,
-          metadata: {
-            route: '/api/image/flux',
-            storage
-          }
-        });
-
-        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
-      } catch (error) {
-        await releaseReservedOperation({
-          req,
-          operation: 'image.flux.generate',
-          provider: 'pixazo',
-          model: generated.model || FLUX_MODEL_ID,
-          projectId: typeof projectId === 'string' ? projectId : undefined,
-          reason: (error as Error)?.message || 'generation_failed',
-          metadata: {
-            route: '/api/image/flux',
-            storage
-          }
-        });
-        throw error;
+      } catch (persistError) {
+        // Storing failed AFTER a successful generation: record the real spend, then surface the error.
+        await settleSpend();
+        throw persistError;
       }
+
+      const settledBilling = await settleSpend();
+      return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
     });
 
     res.json(payload);
@@ -544,10 +678,54 @@ imageRouter.post('/ideogram', checkLimits('ideogram'), async (req, res, next) =>
         throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
       }
 
-      const generated = await generateIdeogramImage(apiKey, { prompt, aspectRatio, resolution, negativePrompt, seed, modelId: resolvedModel });
+      let generated: Awaited<ReturnType<typeof generateIdeogramImage>>;
+      try {
+        generated = await generateIdeogramImage(apiKey, { prompt, aspectRatio, resolution, negativePrompt, seed, modelId: resolvedModel });
+      } catch (error) {
+        // Nothing came back from the provider: free the hold.
+        await releaseQuietly('image.ideogram.generate', () =>
+          releaseReservedOperation({
+            req,
+            operation: 'image.ideogram.generate',
+            provider: 'ideogram',
+            model: resolvedModel,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            reason: (error as Error)?.message || 'generation_failed',
+            metadata: { route: '/api/image/ideogram', storage }
+          })
+        );
+        throw error;
+      }
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
-      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
+
+      // From here the provider has been paid: the spend is settled, never released.
+      const settleSpend = () =>
+        settleSpentQuietly('image.ideogram.generate', () =>
+          settleReservedOperation({
+            req,
+            operation: 'image.ideogram.generate',
+            provider: 'ideogram',
+            model: generated.model || resolvedModel,
+            seed: {
+              provider: 'ideogram',
+              model: generated.model || resolvedModel,
+              operation: 'image.ideogram.generate',
+              imageUnits: 1,
+              resolution,
+              projectId: typeof projectId === 'string' ? projectId : undefined,
+              comicId: typeof projectId === 'string' ? projectId : undefined,
+              stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+              byok: reserve.reservation.byokBypass
+            },
+            usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
+            imageUnits: 1,
+            metadata: {
+              route: '/api/image/ideogram',
+              storage
+            }
+          })
+        );
 
       try {
         if (storage !== 'test') {
@@ -579,47 +757,14 @@ imageRouter.post('/ideogram', checkLimits('ideogram'), async (req, res, next) =>
             });
           }
         }
-
-        settledBilling = await settleReservedOperation({
-          req,
-          operation: 'image.ideogram.generate',
-          provider: 'ideogram',
-          model: generated.model || resolvedModel,
-          seed: {
-            provider: 'ideogram',
-            model: generated.model || resolvedModel,
-            operation: 'image.ideogram.generate',
-            imageUnits: 1,
-            resolution,
-            projectId: typeof projectId === 'string' ? projectId : undefined,
-            comicId: typeof projectId === 'string' ? projectId : undefined,
-            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
-            byok: reserve.reservation.byokBypass
-          },
-          usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
-          imageUnits: 1,
-          metadata: {
-            route: '/api/image/ideogram',
-            storage
-          }
-        });
-
-        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
-      } catch (error) {
-        await releaseReservedOperation({
-          req,
-          operation: 'image.ideogram.generate',
-          provider: 'ideogram',
-          model: generated.model || resolvedModel,
-          projectId: typeof projectId === 'string' ? projectId : undefined,
-          reason: (error as Error)?.message || 'generation_failed',
-          metadata: {
-            route: '/api/image/ideogram',
-            storage
-          }
-        });
-        throw error;
+      } catch (persistError) {
+        // Storing failed AFTER a successful generation: record the real spend, then surface the error.
+        await settleSpend();
+        throw persistError;
       }
+
+      const settledBilling = await settleSpend();
+      return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
     });
 
     res.json(payload);
@@ -706,15 +851,32 @@ imageRouter.post('/openrouter', async (req, res, next) => {
       const promptWithHint = typeof aspectRatio === 'string' && aspectRatio.trim()
         ? `${prompt}\n\n(Aspect ratio: ${aspectRatio.trim()})`
         : prompt;
-      const generated = await getProvider('openrouter').generateImage(
-        {
-          model: effectiveModel,
-          prompt: promptWithHint,
-          referenceImages: Array.isArray(referenceImages) ? referenceImages : [],
-          negativePrompt: typeof negativePrompt === 'string' ? negativePrompt : undefined
-        },
-        resolveProviderContext(apiKey)
-      );
+      let generated: GenerateImageResult;
+      try {
+        generated = await getProvider('openrouter').generateImage(
+          {
+            model: effectiveModel,
+            prompt: promptWithHint,
+            referenceImages: Array.isArray(referenceImages) ? referenceImages : [],
+            negativePrompt: typeof negativePrompt === 'string' ? negativePrompt : undefined
+          },
+          resolveProviderContext(apiKey)
+        );
+      } catch (error) {
+        // Nothing came back from the provider: free the hold.
+        await releaseQuietly('image.openrouter.generate', () =>
+          releaseReservedOperation({
+            req,
+            operation: 'image.openrouter.generate',
+            provider: 'openrouter',
+            model: effectiveModel,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            reason: (error as Error)?.message || 'generation_failed',
+            metadata: { route: '/api/image/openrouter', storage }
+          })
+        );
+        throw error;
+      }
       const apiMs = Date.now() - apiStart;
 
       const dataUrl = generated.imageDataUrl;
@@ -735,6 +897,31 @@ imageRouter.post('/openrouter', async (req, res, next) => {
         timings: buildTimings(apiMs),
         ...(downgradedFrom ? { modelDowngrade: { from: downgradedFrom, to: effectiveModel, reason: downgradeReason } } : {})
       };
+
+      // From here the provider has been paid: the spend is settled, never released.
+      const settleSpend = () =>
+        settleSpentQuietly('image.openrouter.generate', () =>
+          settleReservedOperation({
+            req,
+            operation: 'image.openrouter.generate',
+            provider: 'openrouter',
+            model: generated.model || effectiveModel,
+            seed: {
+              provider: 'openrouter',
+              model: generated.model || effectiveModel,
+              operation: 'image.openrouter.generate',
+              imageUnits: 1,
+              resolution: effectiveResolution,
+              projectId: typeof projectId === 'string' ? projectId : undefined,
+              comicId: typeof projectId === 'string' ? projectId : undefined,
+              stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+              byok: reserve.reservation.byokBypass
+            },
+            usage,
+            imageUnits: 1,
+            metadata: { route: '/api/image/openrouter', storage }
+          })
+        );
 
       try {
         if (storage !== 'test') {
@@ -766,46 +953,16 @@ imageRouter.post('/openrouter', async (req, res, next) => {
             });
           }
         }
-
-        // Settle billing in the background so the generated image returns immediately.
-        // The reservation is already recorded; the daily reconciliation job repairs any
-        // settle that fails here. Per-key cost attribution still works via usage.providerCostUsd.
-        void settleReservedOperation({
-          req,
-          operation: 'image.openrouter.generate',
-          provider: 'openrouter',
-          model: generated.model || effectiveModel,
-          seed: {
-            provider: 'openrouter',
-            model: generated.model || effectiveModel,
-            operation: 'image.openrouter.generate',
-            imageUnits: 1,
-            resolution: effectiveResolution,
-            projectId: typeof projectId === 'string' ? projectId : undefined,
-            comicId: typeof projectId === 'string' ? projectId : undefined,
-            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
-            byok: reserve.reservation.byokBypass
-          },
-          usage,
-          imageUnits: 1,
-          metadata: { route: '/api/image/openrouter', storage }
-        }).catch((settleError) => {
-          console.error('[BILLING] async settle failed (image.openrouter.generate)', (settleError as Error)?.message || settleError);
-        });
-
-        return attachBillingToPayload(responsePayload, reserve.reservation, null);
-      } catch (error) {
-        await releaseReservedOperation({
-          req,
-          operation: 'image.openrouter.generate',
-          provider: 'openrouter',
-          model: generated.model || effectiveModel,
-          projectId: typeof projectId === 'string' ? projectId : undefined,
-          reason: (error as Error)?.message || 'generation_failed',
-          metadata: { route: '/api/image/openrouter', storage }
-        });
-        throw error;
+      } catch (persistError) {
+        // Storing failed AFTER a successful generation: record the real spend, then surface the error.
+        await settleSpend();
+        throw persistError;
       }
+
+      // Settle in the background so the generated image returns immediately. The reservation is
+      // already recorded; the daily reconciliation job repairs any settle that fails here.
+      void settleSpend();
+      return attachBillingToPayload(responsePayload, reserve.reservation, null);
     });
 
     res.json(payload);
@@ -875,15 +1032,32 @@ imageRouter.post('/nvidia', async (req, res, next) => {
       const promptWithHint = typeof aspectRatio === 'string' && aspectRatio.trim()
         ? `${prompt}\n\n(Aspect ratio: ${aspectRatio.trim()})`
         : prompt;
-      const generated = await getProvider('nvidia').generateImage(
-        {
-          model: effectiveModel,
-          prompt: promptWithHint,
-          referenceImages: Array.isArray(referenceImages) ? referenceImages : [],
-          negativePrompt: typeof negativePrompt === 'string' ? negativePrompt : undefined
-        },
-        resolveProviderContext(apiKey, 'nvidia')
-      );
+      let generated: GenerateImageResult;
+      try {
+        generated = await getProvider('nvidia').generateImage(
+          {
+            model: effectiveModel,
+            prompt: promptWithHint,
+            referenceImages: Array.isArray(referenceImages) ? referenceImages : [],
+            negativePrompt: typeof negativePrompt === 'string' ? negativePrompt : undefined
+          },
+          resolveProviderContext(apiKey, 'nvidia')
+        );
+      } catch (error) {
+        // Nothing came back from the provider: free the hold.
+        await releaseQuietly('image.nvidia.generate', () =>
+          releaseReservedOperation({
+            req,
+            operation: 'image.nvidia.generate',
+            provider: 'nvidia',
+            model: effectiveModel,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            reason: (error as Error)?.message || 'generation_failed',
+            metadata: { route: '/api/image/nvidia', storage }
+          })
+        );
+        throw error;
+      }
       const apiMs = Date.now() - apiStart;
 
       const dataUrl = generated.imageDataUrl;
@@ -904,6 +1078,31 @@ imageRouter.post('/nvidia', async (req, res, next) => {
         timings: buildTimings(apiMs)
       };
 
+      // From here the provider has been paid: the spend is settled, never released.
+      const settleSpend = () =>
+        settleSpentQuietly('image.nvidia.generate', () =>
+          settleReservedOperation({
+            req,
+            operation: 'image.nvidia.generate',
+            provider: 'nvidia',
+            model: generated.model || effectiveModel,
+            seed: {
+              provider: 'nvidia',
+              model: generated.model || effectiveModel,
+              operation: 'image.nvidia.generate',
+              imageUnits: 1,
+              resolution: effectiveResolution,
+              projectId: typeof projectId === 'string' ? projectId : undefined,
+              comicId: typeof projectId === 'string' ? projectId : undefined,
+              stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+              byok: reserve.reservation.byokBypass
+            },
+            usage,
+            imageUnits: 1,
+            metadata: { route: '/api/image/nvidia', storage }
+          })
+        );
+
       try {
         if (storage !== 'test') {
           const saved = await persistGeneratedImage({
@@ -923,43 +1122,16 @@ imageRouter.post('/nvidia', async (req, res, next) => {
             dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? dataUrl : undefined
           };
         }
-
-        void settleReservedOperation({
-          req,
-          operation: 'image.nvidia.generate',
-          provider: 'nvidia',
-          model: generated.model || effectiveModel,
-          seed: {
-            provider: 'nvidia',
-            model: generated.model || effectiveModel,
-            operation: 'image.nvidia.generate',
-            imageUnits: 1,
-            resolution: effectiveResolution,
-            projectId: typeof projectId === 'string' ? projectId : undefined,
-            comicId: typeof projectId === 'string' ? projectId : undefined,
-            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
-            byok: reserve.reservation.byokBypass
-          },
-          usage,
-          imageUnits: 1,
-          metadata: { route: '/api/image/nvidia', storage }
-        }).catch((settleError) => {
-          console.error('[BILLING] async settle failed (image.nvidia.generate)', (settleError as Error)?.message || settleError);
-        });
-
-        return attachBillingToPayload(responsePayload, reserve.reservation, null);
-      } catch (error) {
-        await releaseReservedOperation({
-          req,
-          operation: 'image.nvidia.generate',
-          provider: 'nvidia',
-          model: generated.model || effectiveModel,
-          projectId: typeof projectId === 'string' ? projectId : undefined,
-          reason: (error as Error)?.message || 'generation_failed',
-          metadata: { route: '/api/image/nvidia', storage }
-        });
-        throw error;
+      } catch (persistError) {
+        // Storing failed AFTER a successful generation: record the real spend, then surface the error.
+        await settleSpend();
+        throw persistError;
       }
+
+      // Settle in the background so the generated image returns immediately. The reservation is
+      // already recorded; the daily reconciliation job repairs any settle that fails here.
+      void settleSpend();
+      return attachBillingToPayload(responsePayload, reserve.reservation, null);
     });
 
     res.json(payload);

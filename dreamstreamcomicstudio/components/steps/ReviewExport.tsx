@@ -25,6 +25,9 @@ import { appendCappedHistory } from '../../services/projectStorage';
 import { ApiError } from '../../services/apiClient';
 import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { getComicCost } from '../../services/billing';
+import { costContextFromAllowance } from '../../services/costDisplay';
+import { useUsageAllowance } from '../usage/useUsageAllowance';
+import { comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, type ComicCostResponse } from './comicCostDisplay';
 import { normalizeComicAgentSettings, outputTargetLabel } from '../../services/comicAgentSettings';
 import { transitionAgentRun } from '../../services/comicAgentRun';
 import { AgentStageShell } from '../AgentStageShell';
@@ -63,7 +66,17 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [auditScoresByPanel, setAuditScoresByPanel] = useState<Record<string, { driftScore: number; issues: string[]; suggestedFix?: string }>>({});
   const [regenError, setRegenError] = useState<string | null>(null);
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
-  const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number; totalProviderCostUsd: number; byStage: Record<string, { ct: number; usd: number }>; byModel: Record<string, { ct: number; usd: number }> } | null>(null);
+  const [comicCost, setComicCost] = useState<ComicCostResponse | null>(null);
+  // Governed users never see dollars (P1-LIMITS): the usage status decides how spend reads.
+  // Read on mount / focus and once after the comic's recorded spend changes — never polled.
+  const spendKey = comicCost ? (isGovernedComicCost(comicCost) ? comicCost.usagePct : comicCost.totalProviderCostUsd) : null;
+  const allowance = useUsageAllowance({ refreshKey: spendKey });
+  const costCtx = useMemo(() => costContextFromAllowance(allowance), [allowance]);
+  const costView = useMemo(
+    () => (comicCost ? comicCostView(comicCost, costCtx, { digits: 4, lineDigits: 4 }) : null),
+    [comicCost, costCtx]
+  );
+  const costLabel = costView ? costView.total : costReport ? localCostLabel(costReport, costCtx, 4) : 'n/a';
   const [showBubbleEditor, setShowBubbleEditor] = useState(false);
   const autoPrepareKeyRef = useRef('');
 
@@ -201,15 +214,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
     let active = true;
     const loadComicCost = async () => {
       try {
-        const cost = await getComicCost(projectId);
+        const cost = (await getComicCost(projectId)) as ComicCostResponse;
         if (!active) return;
-        setComicCost({
-          totalActualCt: cost.totalActualCt,
-          totalBillableUsd: cost.totalBillableUsd,
-          totalProviderCostUsd: cost.totalProviderCostUsd,
-          byStage: cost.byStage || {},
-          byModel: cost.byModel || {}
-        });
+        setComicCost(cost);
       } catch {
         if (active) setComicCost(null);
       }
@@ -538,7 +545,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
       const reportFolder = zip.folder('report');
       if (reportFolder && exportData.report) {
         reportFolder.file('ai_usage.json', JSON.stringify(exportData.report.ai_usage, null, 2));
-        reportFolder.file('cost_summary.json', JSON.stringify(exportData.report.cost_summary, null, 2));
+        reportFolder.file('cost_summary.json', JSON.stringify(costSummaryForExport(exportData.report.cost_summary, costCtx), null, 2));
         reportFolder.file('storage.json', JSON.stringify(exportData.report.storage, null, 2));
       }
 
@@ -726,14 +733,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           <div className="mt-1 text-sm font-bold text-black">{failedPanels}</div>
         </div>
         <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Cost</div>
-          <div className="mt-1 text-sm font-bold text-black">
-            {comicCost
-              ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
-              : costReport
-                ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
-                : 'n/a'}
-          </div>
+          <div className="text-[11px] uppercase text-slate-600 font-bold">{costCtx.governed ? 'Usage' : 'Cost'}</div>
+          <div className="mt-1 break-words text-sm font-bold text-black">{costLabel}</div>
         </div>
         <div className="rounded-xl border-2 border-black bg-white p-3">
           <div className="text-[11px] uppercase text-slate-600 font-bold">Model</div>
@@ -807,16 +808,11 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
           <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
             <div className="rounded-xl border-2 border-black bg-white p-4">
-              <div className="text-xs font-display uppercase text-slate-600">Cost summary</div>
-              <div className="mt-1 text-xl font-display text-black">
-                {isCostLoading
-                  ? "Updating..."
-                  : comicCost
-                    ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
-                    : costReport
-                      ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
-                      : "n/a"}
+              <div className="text-xs font-display uppercase text-slate-600">{costCtx.governed ? 'Usage so far' : 'Cost summary'}</div>
+              <div className="mt-1 break-words text-xl font-display text-black">
+                {isCostLoading ? "Updating..." : costLabel}
               </div>
+              {costView?.ownKeyNote && <div className="mt-1 text-[11px] text-slate-600">{costView.ownKeyNote}</div>}
               <div className="mt-1 text-[11px] font-mono text-slate-600">
                 {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
               </div>
@@ -851,20 +847,20 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
             </div>
           </div>
 
-          {comicCost && (Object.keys(comicCost.byStage).length > 0 || Object.keys(comicCost.byModel).length > 0) && (
+          {costView && (costView.byStage.length > 0 || costView.byModel.length > 0) && (
             <div className="rounded-xl border-2 border-black bg-white p-4">
-              <div className="text-xs font-display uppercase text-slate-600">Cost breakdown</div>
+              <div className="text-xs font-display uppercase text-slate-600">{costView.governed ? 'Usage breakdown' : 'Cost breakdown'}</div>
               <div className="mt-3 grid gap-4 text-xs sm:grid-cols-2">
-                <div>
+                <div className="min-w-0">
                   <div className="mb-1 font-bold text-black">By stage</div>
-                  {Object.entries(comicCost.byStage).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([stage, v]) => (
-                    <div key={stage} className="flex justify-between gap-2 py-0.5"><span className="truncate text-slate-600">{stage}</span><span className="shrink-0 font-mono text-black">${v.usd.toFixed(4)}</span></div>
+                  {costView.byStage.slice(0, 6).map((line) => (
+                    <div key={line.key} className="flex justify-between gap-2 py-0.5"><span className="min-w-0 truncate text-slate-600">{line.key}</span><span className="shrink-0 font-mono text-black">{line.value}</span></div>
                   ))}
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="mb-1 font-bold text-black">By model</div>
-                  {Object.entries(comicCost.byModel).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([model, v]) => (
-                    <div key={model} className="flex justify-between gap-2 py-0.5"><span className="truncate text-slate-600">{model}</span><span className="shrink-0 font-mono text-black">${v.usd.toFixed(4)}</span></div>
+                  {costView.byModel.slice(0, 6).map((line) => (
+                    <div key={line.key} className="flex justify-between gap-2 py-0.5"><span className="min-w-0 truncate text-slate-600">{line.key}</span><span className="shrink-0 font-mono text-black">{line.value}</span></div>
                   ))}
                 </div>
               </div>

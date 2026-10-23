@@ -8,7 +8,7 @@
 // pinned conversation stays pinned when the keyboard opens or closes.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, RefreshCw, X } from 'lucide-react';
+import { ArrowDown } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { conversationEntries } from '../studioReducer';
 import { ActivityLine } from './ActivityLine';
@@ -16,6 +16,7 @@ import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
 import { AssistantMessage, DirectorMark, UserBubble } from './MessageItem';
 import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
+import { SavedByEditorNote, StudioErrorBanner, StudioNoticeToast } from './StudioNotices';
 import { AgentThinking } from '../../studio/kit/streamMotion';
 import { subscribeKeyboardInset } from '../mobile/useKeyboardInset';
 import { cx } from './ui';
@@ -236,25 +237,11 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
           </div>
         )}
         <div className="mx-auto w-full max-w-3xl">
-          {studio.error && (
-            <div role="alert" className="mb-2 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-[12.5px] text-[var(--ds-ink)]">
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{studio.error}</span>
-              <button
-                type="button"
-                onClick={() => {
-                  studio.clearError();
-                  void studio.refresh();
-                }}
-                className="tap-target inline-flex shrink-0 items-center gap-1 font-semibold hover:underline"
-                title="Reload the latest state of this comic"
-              >
-                <RefreshCw className="h-3 w-3" aria-hidden /> Resync
-              </button>
-              <button type="button" onClick={studio.clearError} aria-label="Dismiss error" className="tap-target shrink-0 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
+          {/* Calm, docked messages: the last error (tailored by its code), the undo/redo notice and
+              the "done by the editor" savings line — never a silent studio. */}
+          <StudioErrorBanner studio={studio} className="mb-2" />
+          <StudioNoticeToast studio={studio} className="mb-2" />
+          <SavedByEditorNote studio={studio} className="mb-1" />
           <ActivityLine studio={studio} className="mb-1" />
           {aboveComposer}
           <StudioComposer studio={studio} apiRef={setComposer} />

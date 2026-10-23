@@ -91,11 +91,19 @@ interface ComicReaderProps {
  * dashboard's Read). Classic comics render below; v4 studio comics delegate to the v4
  * PublicComicReader, which loads the published doc (or the signed-in owner's own,
  * unpublished one) from /api/comic/public/:id.
+ *
+ * Safe areas: both readers are full-screen layers, so they keep their chrome out of the notch,
+ * the rounded corners and the home indicator (env(safe-area-inset-*) via the --sa-* tokens; the
+ * v4 reader pads its own header and reader, the classic reader pads its frame).
  */
 export const ComicReader: React.FC<ComicReaderProps> = (props) => {
   if (isStudioV4Project(props.project)) {
     return (
-      <div className="fixed inset-0 z-50 overflow-y-auto bg-[var(--ds-canvas)]" data-testid="studio-comic-reader">
+      <div
+        className="fixed inset-x-0 top-0 z-50 overflow-hidden bg-[var(--ds-canvas)]"
+        style={{ height: 'var(--app-h, 100dvh)' }}
+        data-testid="studio-comic-reader"
+      >
         <Suspense
           fallback={
             <div className="flex h-full items-center justify-center text-sm text-[var(--ds-muted)]" role="status">
@@ -103,12 +111,21 @@ export const ComicReader: React.FC<ComicReaderProps> = (props) => {
             </div>
           }
         >
-          <PublicComicReader projectId={props.project.id} onClose={props.onClose} />
+          {/* The owner reads their own comic (isReadOnly is false only for a local project): no Report, no analytics. */}
+          <PublicComicReader source={{ kind: 'project', projectId: props.project.id }} isOwner={!props.isReadOnly} onClose={props.onClose} />
         </Suspense>
       </div>
     );
   }
   return <ClassicComicReader {...props} />;
+};
+
+/** The classic reader's full-screen frame, inset by the device safe areas. */
+const SAFE_FRAME: React.CSSProperties = {
+  paddingTop: 'var(--sa-top)',
+  paddingRight: 'var(--sa-right)',
+  paddingBottom: 'var(--sa-bottom)',
+  paddingLeft: 'var(--sa-left)'
 };
 
 const ClassicComicReader: React.FC<ComicReaderProps> = ({
@@ -399,7 +416,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   };
 
   return (
-    <div ref={readerRef} className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col">
+    <div ref={readerRef} className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col" style={SAFE_FRAME}>
       <StaticSiteHeader
         isAuthenticated={!!user}
         onGoHome={() => onNavigate?.('home')}
@@ -669,7 +686,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       />
 
       {showComments && (
-        <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col">
+        <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col" style={{ paddingTop: 'var(--sa-top)', paddingBottom: 'var(--sa-bottom)', paddingLeft: 'var(--sa-left)' }}>
           <div className="p-4 border-b-4 border-black flex items-center justify-between bg-white shrink-0">
             <div className="font-display text-xl">Comments</div>
             <button onClick={() => setShowComments(false)} className="p-2 rounded-full hover:bg-slate-100">

@@ -931,7 +931,7 @@ describe('v5 §16.5 sets', () => {
   it('spend and non-spend action types are disjoint and cover every StudioAction type', () => {
     for (const t of SPEND_ACTION_TYPES) expect(NON_SPEND_ACTION_TYPES.has(t)).toBe(false);
     const all: Record<StudioAction['type'], true> = {
-      render_style_options: true, render_sheets: true, render_pages: true, edit_page: true, render_cover: true, translate: true,
+      render_style_options: true, render_sheets: true, render_pages: true, edit_page: true, render_cover: true, translate: true, recheck_page: true,
       approve_gate: true, decline_gate: true, pick_style: true, plan_pages: true, approve_plan: true, patch: true, restore_render: true,
       relayout_balloons: true, cancel: true, fit_render: true, show_breakdown: true, use_preset: true, ref_crop: true, publish: true,
       update_publication: true, unpublish: true, regenerate_link: true, decline_publish: true, safety_recheck: true,

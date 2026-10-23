@@ -1,7 +1,7 @@
 // Feature action registry (contract §12.1; created in wave 0 by P0-B, FROZEN in wave 1).
 //
 // jobs.ts startAction() dispatches every non-core StudioAction type through here. Core
-// actions (the five image spends, gates, styles, plan, patch, restore, relayout, cancel)
+// actions (the five image spends, the page re-check, gates, styles, plan, patch, restore, relayout, cancel)
 // stay in jobs.ts and can never be registered by a feature.
 
 import { createKeyedRegistry, type ActionHandler } from '../extensions.js';
@@ -17,7 +17,7 @@ import { TIMELINE_ACTIONS } from './timeline.js';
 export const CORE_ACTION_TYPES: ReadonlySet<string> = new Set([
   'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover',
   'approve_gate', 'decline_gate', 'pick_style', 'plan_pages', 'approve_plan', 'patch', 'restore_render',
-  'relayout_balloons', 'cancel'
+  'relayout_balloons', 'recheck_page', 'cancel'
 ]);
 
 const registry = createKeyedRegistry<ActionHandler>({

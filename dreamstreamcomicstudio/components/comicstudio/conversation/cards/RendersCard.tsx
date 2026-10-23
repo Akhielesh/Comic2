@@ -12,13 +12,14 @@ import React from 'react';
 import { ImageIcon, RotateCcw } from 'lucide-react';
 import { getRender, renderTargetKey, type Card, type ComicDoc, type RenderState, type RenderTarget } from '../../../../shared/comic/doc';
 import type { SpendAction } from '../../../../shared/comic/ops';
-import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
+import { estimateJobs } from '../../../../shared/comic/models';
 import { quoteRenderPages } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
+import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, plural } from '../ui';
 import { failureFacts, failureReason, formatFailedAt } from './failure';
 import { RenderThumb, describeTarget } from './renderTile';
-import { useAction } from './useAction';
+import { useAction, useStudioSequenceGuard } from './useAction';
 
 type RendersCardData = Extract<Card, { type: 'renders' }>;
 
@@ -109,7 +110,10 @@ export const failureSummary = (failed: FailedItem[], now: number = Date.now()): 
 
 export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioController }> = ({ card, studio }) => {
   const doc = studio.doc;
-  const { run, isPending } = useAction(studio.act);
+  // "Retry N failed" runs one spend per kind; it stops at the first one that didn't go through.
+  const guard = useStudioSequenceGuard(studio);
+  const { run, isPending } = useAction(studio.act, { guard });
+  const cost = useCostFormat(studio);
   if (!doc) return null;
   const targets: RenderTarget[] = Array.isArray(card.targets) ? card.targets : [];
 
@@ -146,7 +150,14 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
   return (
     <CardShell title={card.label || 'Drawing'} icon={<ImageIcon className="h-4 w-4" />} right={live.length ? summary : undefined} aria-label={card.label || 'Renders'}>
       {busy > 0 && (
-        <div className="mb-3 h-1 w-full overflow-hidden rounded-full bg-[var(--ds-well-strong)]" role="progressbar" aria-valuemin={0} aria-valuemax={live.length} aria-valuenow={ready}>
+        <div
+          className="mb-3 h-1 w-full overflow-hidden rounded-full bg-[var(--ds-well-strong)]"
+          role="progressbar"
+          aria-label={`${card.label || 'Drawing'}: ${ready} of ${live.length} ready`}
+          aria-valuemin={0}
+          aria-valuemax={live.length}
+          aria-valuenow={ready}
+        >
           <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${live.length ? Math.max(4, (ready / live.length) * 100) : 0}%` }} />
         </div>
       )}
@@ -183,9 +194,14 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
       )}
       {retry && retry.actions.length > 0 && (
         <div className="mt-2.5">
-          <GhostButton size="sm" className="tap-target" busy={isPending('retry-all')} onClick={() => void run('retry-all', ...retry.actions)}>
+          <GhostButton
+            size="sm"
+            className="tap-target !h-auto min-h-8 flex-wrap py-1 coarse:min-h-11"
+            busy={isPending('retry-all')}
+            onClick={() => void run('retry-all', ...retry.actions)}
+          >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Retry {plural(retry.count, 'failed image')}
-            <span className="text-[var(--ds-muted)]">≈ {formatUsd(retry.usd)}</span>
+            <span className="text-[var(--ds-muted)]">{cost.approx(retry.usd)}</span>
           </GhostButton>
         </div>
       )}

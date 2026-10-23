@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { ScriptInput } from './steps/ScriptInput';
 import { StyleSelection } from './steps/StyleSelection';
@@ -28,7 +28,10 @@ import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { getComicCost, BILLING_SUMMARY_REFRESH_EVENT } from '../services/billing';
-import { DollarSign, Loader2, MessageSquare, X } from 'lucide-react';
+import { DollarSign, Gauge, Loader2, MessageSquare, X } from 'lucide-react';
+import { costContextFromAllowance } from '../services/costDisplay';
+import { useUsageAllowance } from './usage/useUsageAllowance';
+import { comicCostView, isGovernedComicCost, type ComicCostResponse } from './steps/comicCostDisplay';
 import { createStudioProject } from './comicstudio/studioApi';
 import { ACCENT_TEXT, GLASS, PRIMARY_BTN, RADIUS_PILL } from './chat/studioDesign';
 
@@ -134,25 +137,18 @@ export const OpenInNewStudioBanner: React.FC<{
 
 // Always-visible "what has THIS comic cost so far" chip — real settled spend from the
 // billing ledger, refreshed after every generation. Hover shows the per-stage split.
-const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [totalUsd, setTotalUsd] = useState<number | null>(null);
-  const [byStage, setByStage] = useState<Array<{ stage: string; usd: number }>>([]);
+// Governed users (the usage budget limits them) see a share of their usage, never dollars.
+export const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [report, setReport] = useState<ComicCostResponse | null>(null);
   useEffect(() => {
     let active = true;
     const load = async () => {
       try {
-        const report = await getComicCost(projectId);
-        if (!active) return;
-        setTotalUsd(report.totalBillableUsd ?? 0);
-        setByStage(
-          Object.entries(report.byStage || {})
-            .map(([stage, v]) => ({ stage, usd: v.usd }))
-            .filter((s) => s.usd > 0)
-            .sort((a, b) => b.usd - a.usd)
-        );
+        const next = (await getComicCost(projectId)) as ComicCostResponse;
+        if (active) setReport(next);
       } catch {
         // Billing backend unavailable → hide rather than show a broken chip.
-        if (active) setTotalUsd(null);
+        if (active) setReport(null);
       }
     };
     void load();
@@ -162,23 +158,33 @@ const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
       window.removeEventListener(BILLING_SUMMARY_REFRESH_EVENT, load);
     };
   }, [projectId]);
-  if (totalUsd === null) return null;
+  // Read on mount / focus and once after the recorded spend changes — never polled.
+  const spendKey = report ? (isGovernedComicCost(report) ? report.usagePct : report.totalProviderCostUsd) : null;
+  const allowance = useUsageAllowance({ refreshKey: spendKey });
+  const ctx = useMemo(() => costContextFromAllowance(allowance), [allowance]);
+  const view = useMemo(() => (report ? comicCostView(report, ctx, { digits: 2, lineDigits: 3 }) : null), [report, ctx]);
+  if (!view) return null;
+  const Icon = view.governed ? Gauge : DollarSign;
   return (
     <div className="relative group hidden md:block">
-      <div className="flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 cursor-default" title="What this comic has cost so far">
-        <DollarSign size={12} className="text-green-600" />
-        <span className="tabular-nums">This comic: ${totalUsd.toFixed(2)}</span>
+      <div
+        className="flex max-w-[18rem] items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 cursor-default"
+        title={view.governed ? 'How much of your usage this comic has used' : 'What this comic has cost so far'}
+      >
+        <Icon size={12} className={`shrink-0 ${view.governed ? 'text-slate-500' : 'text-green-600'}`} aria-hidden />
+        <span className="truncate tabular-nums">This comic: {view.total}</span>
       </div>
-      {byStage.length > 0 && (
-        <div className="absolute right-0 mt-2 w-56 z-50 hidden group-hover:block">
+      {(view.byStage.length > 0 || view.ownKeyNote) && (
+        <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] z-50 hidden group-hover:block">
           <div className="bg-white border-2 border-black rounded-xl shadow-comic p-3 text-left space-y-1">
-            <div className="text-[10px] font-bold uppercase text-slate-500">Cost by stage</div>
-            {byStage.map((s) => (
-              <div key={s.stage} className="flex justify-between text-[11px] text-slate-600 tabular-nums">
-                <span className="capitalize truncate">{s.stage.replace(/_/g, ' ')}</span>
-                <span>${s.usd.toFixed(3)}</span>
+            <div className="text-[10px] font-bold uppercase text-slate-500">{view.governed ? 'Usage by stage' : 'Cost by stage'}</div>
+            {view.byStage.map((line) => (
+              <div key={line.key} className="flex justify-between gap-2 text-[11px] text-slate-600 tabular-nums">
+                <span className="min-w-0 capitalize truncate">{line.key.replace(/_/g, ' ')}</span>
+                <span className="shrink-0">{line.value}</span>
               </div>
             ))}
+            {view.ownKeyNote && <div className="pt-1 text-[11px] text-slate-500">{view.ownKeyNote}</div>}
           </div>
         </div>
       )}

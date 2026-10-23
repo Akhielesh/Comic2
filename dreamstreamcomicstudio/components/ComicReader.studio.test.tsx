@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 
 vi.mock('./comicstudio/PublicComicReader', () => ({
-  PublicComicReader: ({ projectId, onClose }: { projectId: string; onClose?: () => void }) => (
-    <div data-testid="v4-reader">
-      v4 reader for {projectId}
+  PublicComicReader: ({ source, isOwner, onClose }: { source?: { kind: string; projectId?: string }; isOwner?: boolean; onClose?: () => void }) => (
+    <div data-testid="v4-reader" data-kind={source?.kind} data-owner={String(!!isOwner)}>
+      v4 reader for {source?.projectId}
       <button onClick={onClose}>close v4</button>
     </div>
   )
@@ -70,10 +70,11 @@ const project = (id: string, extra: Record<string, unknown> = {}): Project => ({
   state: state(extra)
 });
 
-const renderReader = (p: Project, onClose = vi.fn()) => {
+const renderReader = (p: Project, onClose = vi.fn(), isReadOnly?: boolean) => {
   render(
     <ComicReader
       project={p}
+      isReadOnly={isReadOnly}
       onClose={onClose}
       onUpdateProject={() => undefined}
       onOpenPrivacy={() => undefined}
@@ -95,6 +96,27 @@ describe('ComicReader → v4 delegation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'close v4' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+    // A local project is the owner's: the v4 reader hides Report and sends no analytics.
+    expect(screen.getByTestId('v4-reader')).toHaveAttribute('data-kind', 'project');
+    expect(screen.getByTestId('v4-reader')).toHaveAttribute('data-owner', 'true');
+    // The layer sizes to the visible height (keyboard / browser bars), not a fixed 100vh.
+    expect(screen.getByTestId('studio-comic-reader').style.height).toBe('var(--app-h, 100dvh)');
+  });
+
+  it('treats a public (read-only) v4 comic as someone else’s', async () => {
+    renderReader(project('22222222-2222-3333-4444-555555555555', { studioVersion: 4 }), vi.fn(), true);
+    expect(await screen.findByTestId('v4-reader')).toHaveAttribute('data-owner', 'false');
+  });
+
+  it('keeps the classic reader out of the notch and the home indicator', () => {
+    const { container } = render(
+      <ComicReader project={project('classic-2', { pipelineMode: 'classic' })} onClose={() => undefined} onUpdateProject={() => undefined} onOpenPrivacy={() => undefined} onOpenTerms={() => undefined} onOpenFaq={() => undefined} />
+    );
+    const frame = container.firstElementChild as HTMLElement;
+    expect(frame.style.paddingTop).toBe('var(--sa-top)');
+    expect(frame.style.paddingBottom).toBe('var(--sa-bottom)');
+    expect(frame.style.paddingLeft).toBe('var(--sa-left)');
+    expect(frame.style.paddingRight).toBe('var(--sa-right)');
   });
 
   it('keeps classic comics in the classic reader', () => {
