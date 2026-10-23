@@ -59,8 +59,10 @@ export function createViewerMeter(nid: string, send: (m: UseReport) => void, now
 /**
  * The direct pill's tooltip. On our relay it adds this month's relay data when a parent's
  * device last read it ("Relay data this month: 2.1 of 10 GB") — no request of its own.
+ * `isParent`: the nursery's usage is parents-only (the room answers 'forbidden' to everyone
+ * else), so a caregiver, viewer or share-link guest on the same device never sees the figure.
  */
-export function pathTip(path: StreamPath | null, nid: string): string {
-  if (path === 'turn') return relayTip(knownNurseryRelay(nid));
+export function pathTip(path: StreamPath | null, nid: string, isParent: boolean): string {
+  if (path === 'turn') return relayTip(isParent ? knownNurseryRelay(nid) : null);
   return PATH_TIP[path ?? 'direct'];
 }

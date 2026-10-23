@@ -67,8 +67,8 @@ function Allowance({ label, used, limit, value, sub, notice }: { label: string; 
       <span className="usage-row-value mono">
         {value} <span className="usage-pct">{pct}%</span>
       </span>
-      <div className="usage-meter" aria-label={`${label}: ${pct}% of the allowance`}>
-        <Meter value={Math.min(100, pct)} tone={TONE[level]} height={5} />
+      <div className="usage-meter">
+        <Meter value={Math.min(100, pct)} tone={TONE[level]} height={5} label={`${label}: ${pct}% of the allowance`} />
       </div>
       {notice && (
         <p className="usage-notice" role="status">
@@ -126,15 +126,31 @@ function broadcastsThisMonth(now: number): { count: number; ms: number } {
   return { count, ms };
 }
 
-export function AccountUsageCard({ signedIn, now: nowProp }: { signedIn: boolean; now?: number }) {
+/** The event the 7-day copies quota is read through (usageClient.fetchAccountCloudQuota), if any. */
+const hostsAnEvent = () => listMyEvents().some((e) => e.id && e.hostKey);
+
+/**
+ * `signedIn`: true for a member, false when signed out, null while the account is still being
+ * checked (a fresh load of #/settings?s=usage) — that reads as loading, never as signed out.
+ */
+export function AccountUsageCard({ signedIn, now: nowProp }: { signedIn: boolean | null; now?: number }) {
   // One moment for the whole card: it's a snapshot, refreshed by opening it again.
   const [now] = useState(() => nowProp ?? Date.now());
-  // undefined = asking; null = couldn't tell.
-  const [acct, setAcct] = useState<AccountUsage | null | undefined>(signedIn ? undefined : null);
-  const [quota, setQuota] = useState<CloudCopyQuota | null | undefined>(signedIn ? undefined : null);
+  // undefined = asking; null = couldn't tell (or signed out).
+  const [acct, setAcct] = useState<AccountUsage | null | undefined>(signedIn === false ? null : undefined);
+  const [quota, setQuota] = useState<CloudCopyQuota | null | undefined>(signedIn === false ? null : undefined);
   useEffect(() => {
-    if (!signedIn) return;
+    if (signedIn === null) return;
+    if (!signedIn) {
+      // Signed out while open: the previous account's month doesn't stay on screen.
+      setAcct(null);
+      setQuota(null);
+      return;
+    }
     let alive = true;
+    // Signed in after the card opened: show loading again, not the "couldn't load" of before.
+    setAcct(undefined);
+    setQuota(undefined);
     void requestAccountUsage().then((r) => alive && setAcct(r));
     void fetchAccountCloudQuota().then((q) => alive && setQuota(q));
     return () => {
@@ -163,6 +179,10 @@ export function AccountUsageCard({ signedIn, now: nowProp }: { signedIn: boolean
   if (dev.saves.device > 0) free.push(<Row key="device" label="Saved to this device" sub={USAGE.device} value={fmtBytes(dev.saves.device)} />);
 
   const anyServers = (relay?.bytes ?? 0) > 0 || callRelay > 0 || cloudUsed > 0 || dev.saves.cloud > 0 || monPaid > 0 || casts.count > 0;
+  // "Nothing went through our servers" is a claim about the account's month: said only once
+  // that month AND the 7-day copies have actually been read (no hosted event = none to read).
+  // Never while loading, offline, signed out, or when either read failed.
+  const monthKnown = !!acct && quota !== undefined && (quota !== null || !hostsAnEvent());
   const relayLevel = relay ? allowanceLevel(relay.bytes, relayLimit) : 'ok';
   const cloudLevel = quota ? allowanceLevel(quota.usedBytes, quota.limitBytes) : 'ok';
 
@@ -175,8 +195,8 @@ export function AccountUsageCard({ signedIn, now: nowProp }: { signedIn: boolean
   return (
     <section className="usage-card" aria-label="Usage this month">
       <Head month={month} />
-      {!signedIn && <p className="usage-note">{USAGE.signedOut}</p>}
-      {signedIn && acct === undefined && <p className="usage-note" role="status">{USAGE.loading}</p>}
+      {signedIn === false && <p className="usage-note">{USAGE.signedOut}</p>}
+      {signedIn !== false && acct === undefined && <p className="usage-note" role="status">{USAGE.loading}</p>}
       {signedIn && acct === null && <p className="usage-note">{USAGE.offline}</p>}
 
       <Group title={USAGE.freeHead} tone="free">
@@ -184,7 +204,7 @@ export function AccountUsageCard({ signedIn, now: nowProp }: { signedIn: boolean
       </Group>
 
       <Group title={USAGE.serversHead} tone="servers">
-        {!anyServers && <p className="usage-empty">{USAGE.empty}</p>}
+        {monthKnown && !anyServers && <p className="usage-empty">{USAGE.empty}</p>}
         {relay && (
           <Allowance
             label="Relay data · calls you placed"
@@ -192,7 +212,7 @@ export function AccountUsageCard({ signedIn, now: nowProp }: { signedIn: boolean
             limit={relayLimit}
             value={`${relay.measured ? '' : '≈ '}${fmtGb(relay.bytes)} of ${fmtGb(relayLimit)}`}
             sub={callRelay > 0 ? `${fmtDuration(callRelay)} of calls through our relay${relay.measured ? '' : ` · ${USAGE.estimated}`}` : USAGE.relayNoCount}
-            notice={relayNotice(relayLevel, relay.bytes, relayLimit / 1e9, month, 'account')}
+            notice={relayNotice(relayLevel, relay.bytes, relayLimit / 1e9, month, 'account', { measured: relay.measured })}
           />
         )}
         {quota && (
@@ -286,7 +306,7 @@ export function NurseryUsageCard({ query, nid, now: nowProp, showNight = true }:
                 limit={relayLimit}
                 value={`${relay.measured ? '' : '≈ '}${fmtGb(relay.bytes)} of ${fmtGb(relayLimit)}`}
                 sub={turn > 0 ? `${fmtDuration(turn)} through our relay${relay.measured ? '' : ` · ${USAGE.estimated}`}` : USAGE.relayNoCount}
-                notice={relayNotice(relayLevel, relay.bytes, relayLimit / 1e9, month, 'nursery')}
+                notice={relayNotice(relayLevel, relay.bytes, relayLimit / 1e9, month, 'nursery', { measured: relay.measured })}
               />
             )}
             {server > 0 && <Row label="Picture through our server" sub={USAGE.serverPicture} value={fmtDuration(server)} />}

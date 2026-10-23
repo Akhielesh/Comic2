@@ -1317,7 +1317,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
           </span>
         )}
         {linkState === 'connected' && (
-          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={pathTip(streamPathOf(netPath), id)}>
+          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={pathTip(streamPathOf(netPath), id, me?.role === 'parent' && !guest)}>
             <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{PATH_PILL[streamPathOf(netPath) ?? 'direct']}</span>
           </span>
         )}

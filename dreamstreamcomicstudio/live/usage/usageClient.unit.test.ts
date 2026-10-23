@@ -112,6 +112,14 @@ describe('a nursery’s month and its notices', () => {
     expect(dueRelayNotice('account', 'u1', month(10.1e9, 'call', '2026-11'), 10)?.level).toBe('full');
   });
 
+  it('a month estimated from minutes (no bytes reported) says ≈; a measured one doesn’t', () => {
+    // 30 relayed minutes × 1.5 Mbps ≈ 0.34 GB of a 0.4 GB allowance: 84%.
+    const est = dueRelayNotice('account', 'u2', month(0), 0.4);
+    expect(est?.level).toBe('warn');
+    expect(est?.text).toMatch(/You’ve used ≈ 0\.34 GB of your 0\.4 GB of relay data this month \(estimated from minutes\)/);
+    expect(dueRelayNotice('account', 'u3', month(8.4e9), 10)?.text).toMatch(/^You’ve used 8\.4 GB of your 10 GB/);
+  });
+
   it('a parent’s monitor looks at most twice a day, and says it in the app at 80% and 100%', async () => {
     const said: string[] = [];
     const q = query(nurseryReply(month(8.3e9, 'monitor')));

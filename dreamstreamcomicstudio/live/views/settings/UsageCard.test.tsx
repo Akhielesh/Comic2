@@ -144,6 +144,13 @@ describe('Settings → Usage (the account)', () => {
     outside.querySelector('details.usage-cost')?.remove();
     expect(outside.textContent).not.toMatch(/\$/);
 
+    // Each allowance meter has its own accessible name (not "meter, 21" twice).
+    const meters = within(card).getAllByRole('meter');
+    expect(meters.map((m) => m.getAttribute('aria-label'))).toEqual(['Relay data · calls you placed: 21% of the allowance', '7-day cloud copies: 31% of the allowance']);
+    expect(within(card).getByRole('meter', { name: 'Relay data · calls you placed: 21% of the allowance' }).getAttribute('aria-valuenow')).toBe('21');
+    // …and no name on a generic wrapper, where screen readers ignore it.
+    expect(card.querySelector('.usage-meter[aria-label]')).toBeNull();
+
     // At most one tip.
     expect(card.querySelectorAll('.usage-tip').length).toBe(1);
     // One question, over the line that was already open.
@@ -166,7 +173,8 @@ describe('Settings → Usage (the account)', () => {
     const relay = (await screen.findByText('Relay data · calls you placed')).closest('.usage-row')!;
     expect(relay.textContent).toMatch(/≈ /);
     expect(relay.textContent).toMatch(/estimated from minutes/);
-    expect(relay.querySelector('[role=status]')?.textContent).toMatch(/You’ve used this month’s 10 GB of relay data\..*Resets November 1\./);
+    // Estimated from minutes: the 100% notice says so (no exact claim it can't back).
+    expect(relay.querySelector('[role=status]')?.textContent).toMatch(/By our estimate, you’ve used this month’s 10 GB of relay data\..*Resets November 1\./);
     unmount();
 
     resetAccountLineForTests();
@@ -203,6 +211,77 @@ describe('Settings → Usage (the account)', () => {
     expect(l.sent).toEqual([]);
     expect(quota.fetch).not.toHaveBeenCalled();
   });
+
+  // "Nothing went through our servers" is a claim about the account's month: it is said only
+  // once that month (and the 7-day copies) have actually been read — never while loading,
+  // offline, signed out or when the line didn't answer.
+  const EMPTY = /Nothing went through our servers this month/;
+
+  it('while loading: says it’s loading, and never claims nothing went through our servers', () => {
+    line(month({}), { connected: false });
+    render(<AccountUsageCard signedIn now={NOW} />);
+    expect(screen.getByText('Loading this month’s usage…')).toBeTruthy();
+    expect(screen.queryByText(EMPTY)).toBeNull();
+  });
+
+  it('couldn’t load (no line, offline, no answer): no “nothing went through our servers”', async () => {
+    render(<AccountUsageCard signedIn now={NOW} />);
+    expect(await screen.findByText(/Couldn’t load this month’s usage right now/)).toBeTruthy();
+    expect(screen.queryByText(EMPTY)).toBeNull();
+  });
+
+  it('signed out: no claim about the account’s month either', () => {
+    render(<AccountUsageCard signedIn={false} now={NOW} />);
+    expect(screen.queryByText(EMPTY)).toBeNull();
+  });
+
+  it('the account loads after the card opened (#/settings?s=usage on a fresh load): loading, then the month — never “couldn’t load” in between', async () => {
+    const l = line(month({ call: counters({ minutes: { turn: 12 }, turnBytes: 8e9 }) }), { connected: false });
+    const { rerender } = render(<AccountUsageCard signedIn={null} now={NOW} />);
+    // Still checking who's signed in: it says it's loading, asks nothing yet.
+    expect(screen.getByText('Loading this month’s usage…')).toBeTruthy();
+    expect(screen.queryByText(/Sign in to see/)).toBeNull();
+    expect(l.sent).toEqual([]);
+    rerender(<AccountUsageCard signedIn now={NOW} />);
+    expect(screen.getByText('Loading this month’s usage…')).toBeTruthy();
+    expect(screen.queryByText(/Couldn’t load/)).toBeNull();
+    expect(screen.queryByText(EMPTY)).toBeNull();
+    act(() => l.up());
+    const relay = (await screen.findByText('Relay data · calls you placed')).closest('.usage-row')!;
+    expect(relay.textContent).toMatch(/8\.0 GB of 10 GB/);
+    expect(screen.queryByText(EMPTY)).toBeNull();
+  });
+
+  it('signed out while open: the previous account’s month goes away', async () => {
+    line(month({ call: counters({ minutes: { turn: 12 }, turnBytes: 2e9 }) }));
+    const { rerender } = render(<AccountUsageCard signedIn now={NOW} />);
+    await screen.findByText('Relay data · calls you placed');
+    rerender(<AccountUsageCard signedIn={false} now={NOW} />);
+    expect(screen.queryByText('Relay data · calls you placed')).toBeNull();
+    expect(screen.getByText(/Sign in to see your calls and 7-day copies here/)).toBeTruthy();
+  });
+
+  it('the 7-day copies are still being read: no empty claim until they are', async () => {
+    line(month({}));
+    addMyEvent({ id: 'ev1', hostKey: 'hk', title: 'Party', createdAt: NOW, scheduledAt: null });
+    let answer: (v: unknown) => void = () => undefined;
+    quota.fetch.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<AccountUsageCard signedIn now={NOW} />);
+    await screen.findByText('Relay data · calls you placed');
+    expect(screen.queryByText(EMPTY)).toBeNull();
+    await act(async () => answer({ usedBytes: 0, limitBytes: 10 * 1024 ** 3, copies: 0, nextFreeAt: null }));
+    expect(await screen.findByText(EMPTY)).toBeTruthy();
+  });
+
+  it('the 7-day copies couldn’t be read (an event hosted here, the read failed): no empty claim', async () => {
+    line(month({}));
+    addMyEvent({ id: 'ev1', hostKey: 'hk', title: 'Party', createdAt: NOW, scheduledAt: null });
+    quota.fetch.mockResolvedValue(null);
+    render(<AccountUsageCard signedIn now={NOW} />);
+    await screen.findByText('Relay data · calls you placed');
+    await act(async () => undefined);
+    expect(screen.queryByText(EMPTY)).toBeNull();
+  });
 });
 
 describe('a nursery’s Usage (parents)', () => {
@@ -222,6 +301,8 @@ describe('a nursery’s Usage (parents)', () => {
     const server = within(card).getByText('Picture through our server').closest('.usage-row')!;
     expect(server.textContent).toMatch(/3 h 10 m/);
     expect(server.textContent).toMatch(/sound and alerts are never limited/);
+    // The server path is named as what it is, here too.
+    expect(server.textContent).toMatch(/in memory only, never stored, not end-to-end encrypted/);
     expect(card.querySelector('details.usage-cost')?.textContent).toContain(`${approxUsd(listValueUsd(monitor, 'monitor').usd)} this month at list price`);
     expect(card.querySelectorAll('.usage-tip').length).toBe(1);
     expect(q.asked).toEqual(['usage']);

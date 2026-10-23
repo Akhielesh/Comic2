@@ -118,6 +118,19 @@ export const VIEWER_VIA_SERVER = ' · through our server';
 export const MEETING_LINE = 'Direct between you and your guests — free.';
 export const MEETING_LINE_TIP = 'If someone’s network blocks direct video, an encrypted relay carries it for them.';
 
+/**
+ * The Invite sheet's line during a meeting, from the guests connected now: "free" only for the
+ * direct ones; a guest through our TURN is said in words (visible text — a seat's title never
+ * shows on touch devices). Nobody relayed yet: the meeting line and its relay caveat.
+ */
+export function meetingPathLine(links: { direct: number; relay: number }): string {
+  const direct = Math.max(0, Math.floor(links.direct));
+  const relay = Math.max(0, Math.floor(links.relay));
+  if (relay === 0) return `${MEETING_LINE} ${MEETING_LINE_TIP}`;
+  if (direct === 0) return `Through our encrypted relay for ${relay === 1 ? 'your guest' : `all ${relay} guests`} — a network blocks direct video.`;
+  return `Direct for ${direct} guest${direct === 1 ? '' : 's'} — free; ${relay} through our encrypted relay (a network blocks direct video).`;
+}
+
 const replayHours = Math.round(REPLAY_WINDOW_MS / 3_600_000);
 /** Go live: it goes through our servers — and the host isn't charged for it. */
 export const GO_LIVE_LINE = `Through our servers · free for you · replay kept ${replayHours} h.`;
@@ -130,9 +143,12 @@ export function bytesPerHour(p: Pick<QualityPreset, 'videoBps' | 'audioBps'>, vi
   return ((p.videoBps * videoFactor + p.audioBps) / 8) * 3600;
 }
 
-/** Under the Studio's ready check, before going live. */
+/**
+ * Under the Studio's ready check, before going live — which every Go live button opens, so this
+ * says on screen everything GO_LIVE_LINE says (through our servers, free for you, the replay).
+ */
 export function studioViewersLine(p: Pick<QualityPreset, 'id' | 'videoBps' | 'audioBps'>): string {
-  return `Your viewers watch through our servers — free for you. You upload ≈ ${fmtGb(bytesPerHour(p))} an hour at ${p.id}.`;
+  return `Your viewers watch through our servers — free for you. You upload ≈ ${fmtGb(bytesPerHour(p))} an hour at ${p.id}. The replay is kept ${replayHours} h.`;
 }
 
 /** Customize → Recording → "Also keep a 7-day cloud copy". */
@@ -190,15 +206,16 @@ export function callReceipt(t: { ms: PathTime; turnBytes: number }, outgoing: bo
 }
 
 /**
- * "12 min · direct · free" or "12 min · encrypted relay · 0.14 GB of your relay data". A call
- * counts against the person who placed it (owner decision), so the other end hears whose it is.
+ * "12 min · direct · free" or "12 min · encrypted relay · uses your relay data". A call counts
+ * against the person who placed it (owner decision), so the other end hears whose it is.
+ * No GB figure: the account counts a call from its minutes, for everyone on it, not from this
+ * device's own relay bytes — a figure here would disagree with Usage (which says ≈).
  */
 export function callReceiptText(r: CallReceipt): string {
   const d = fmtDuration(r.ms);
   if (r.path === 'lan') return `${d} · Home Wi-Fi · free`;
   if (r.path === 'direct') return `${d} · direct · free`;
   if (!r.outgoing) return `${d} · encrypted relay · counts toward the caller’s relay data`;
-  if (r.turnBytes > 0) return `${d} · encrypted relay · ${fmtGb(r.turnBytes)} of your relay data`;
   return `${d} · encrypted relay · uses your relay data`;
 }
 
@@ -261,7 +278,7 @@ export const USAGE = {
   drive: 'yours to keep',
   device: 'on this device',
   relayNoCount: 'Direct and Home Wi-Fi don’t count',
-  serverPicture: `up to ${FAIR_USE.serverPictureHoursPerNurseryDay} h a day · sound and alerts are never limited`,
+  serverPicture: `in memory only, never stored, not end-to-end encrypted · up to ${FAIR_USE.serverPictureHoursPerNurseryDay} h a day · sound and alerts are never limited`,
   thisDevice: 'this device',
   estimated: '≈ estimated from minutes until apps report exact relay data',
   nurseryNote: 'Everyone who watches this nursery. Home Wi-Fi, Direct and relay come from each viewer’s app; time through our server is measured by our server.',
@@ -312,6 +329,9 @@ export const RELAY_OUT_MONITOR = 'Relay data is used up, so on networks that blo
  * The relay-data notice. Honest about what happens: Direct and Home Wi-Fi never count, and
  * the baby monitor's sound and alerts are never limited. `pictureFallback`: the room has said
  * the relayed picture steps down at 100% (only then is that claimed).
+ * `measured`: the bytes were reported by apps (relayDataOf). Anything else — every call today,
+ * whose relay data the server works out from minutes — is said as the estimate it is (≈ at 80%,
+ * "By our estimate" at 100%). Left out, it's taken as an estimate: never a made-up exact figure.
  */
 export function relayNotice(
   level: AllowanceLevel,
@@ -319,14 +339,18 @@ export function relayNotice(
   limitGb: number,
   month: string,
   scope: 'account' | 'nursery',
-  opts: { pictureFallback?: boolean } = {},
+  opts: { measured?: boolean; pictureFallback?: boolean } = {},
 ): string | null {
   if (level === 'ok') return null;
+  const measured = opts.measured === true;
   const whose = scope === 'nursery' ? 'this nursery’s' : 'your';
   if (level === 'warn') {
-    return `${scope === 'nursery' ? 'This nursery has' : 'You’ve'} used ${fmtGb(usedBytes)} of ${whose} ${limitGb} GB of relay data this month. Direct and Home Wi-Fi don’t count. Resets ${resetDay(month)}.`;
+    const used = measured ? fmtGb(usedBytes) : `≈ ${fmtGb(usedBytes)}`;
+    return `${scope === 'nursery' ? 'This nursery has' : 'You’ve'} used ${used} of ${whose} ${limitGb} GB of relay data this month${measured ? '' : ' (estimated from minutes)'}. Direct and Home Wi-Fi don’t count. Resets ${resetDay(month)}.`;
   }
-  const head = `${scope === 'nursery' ? 'This nursery has' : 'You’ve'} used this month’s ${limitGb} GB of relay data.`;
+  const who = scope === 'nursery' ? 'this nursery has' : 'you’ve';
+  const said = `${who} used this month’s ${limitGb} GB of relay data.`;
+  const head = measured ? said[0].toUpperCase() + said.slice(1) : `By our estimate, ${said}`;
   if (scope === 'nursery' && opts.pictureFallback) return `${head} ${RELAY_OUT_MONITOR} Resets ${resetDay(month)}.`;
   return `${head} Direct and Home Wi-Fi don’t count${scope === 'nursery' ? ', and the baby monitor’s sound and alerts are never limited' : ''}. Resets ${resetDay(month)}.`;
 }

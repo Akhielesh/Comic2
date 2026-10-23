@@ -217,9 +217,9 @@ export interface RelayNotice {
 
 /** The notice for a month's relay data, if one is due now (once per level per month per device). */
 export function dueRelayNotice(scope: 'account' | 'nursery', id: string, usage: UsageMonth, limitGb: number): RelayNotice | null {
-  const used = relayDataOf(usage, scope === 'nursery' ? 'monitor' : 'call').bytes;
+  const { bytes: used, measured } = relayDataOf(usage, scope === 'nursery' ? 'monitor' : 'call');
   const level = allowanceLevel(used, limitGb * 1e9);
-  const text = relayNotice(level, used, limitGb, usage.month, scope);
+  const text = relayNotice(level, used, limitGb, usage.month, scope, { measured });
   if (!text || !noticeOnce(`${scope}:${id}:${usage.month}:${level}`)) return null;
   return { level, text };
 }

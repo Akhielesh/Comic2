@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../ui/icons';
 import { Btn, cx, initials, redactUrlSearchParams } from '../ui/primitives';
 import type { GuestLink } from './rtc';
-import { MEETING_LINE, PATH_PILL } from '../costCopy';
+import { PATH_PILL, meetingPathLine } from '../costCopy';
 import { streamPathOf } from '../usage/sessionMeter';
 
 /* ------------------------------------------------------------ invite sheet */
@@ -47,6 +47,10 @@ export function InviteSheet({
   }, [armed]);
 
   const taken = guests.length;
+  // How the meeting travels right now (only connected guests whose path is known count).
+  const up = guests.filter((g) => g.state === 'connected' && g.path);
+  const relayed = up.filter((g) => g.path === 'relay').length;
+  const pathLine = meetingPathLine({ direct: up.length - relayed, relay: relayed });
   return (
     <div className="sheet-scrim" role="dialog" aria-modal="true" aria-labelledby="invite-title" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="sheet invite-sheet">
@@ -105,7 +109,7 @@ export function InviteSheet({
         <div className="sheet-foot">
           <span className="muted" style={{ fontSize: 12.5, flex: 1 }}>
             {meeting
-              ? `Private — nothing is broadcast. ${MEETING_LINE} Go live any time to stream this meeting to viewers.`
+              ? `Private — nothing is broadcast. ${pathLine} Go live any time to stream this meeting to viewers.`
               : 'Guests appear in your program in Grid, Spotlight or Sidebar. No account needed.'}
           </span>
           <Btn variant="ghost" onClick={onClose}>Done</Btn>

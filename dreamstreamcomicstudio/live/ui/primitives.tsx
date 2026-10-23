@@ -192,10 +192,11 @@ export function Tabs({ tabs, value, onChange, className }: { tabs: TabDef[]; val
 }
 
 /* ------------------------------------------------------------------ meter */
-export function Meter({ value, max = 100, tone = 'green', height = 6 }: { value: number; max?: number; tone?: string; height?: number }) {
+/** `label`: the meter's accessible name — without one a screen reader hears only "meter, 21". */
+export function Meter({ value, max = 100, tone = 'green', height = 6, label }: { value: number; max?: number; tone?: string; height?: number; label?: string }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
-    <div className="meter" style={{ height }} role="meter" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
+    <div className="meter" style={{ height }} role="meter" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
       <i className={`meter-${tone}`} style={{ width: pct + '%' }} />
     </div>
   );

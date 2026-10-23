@@ -40,23 +40,25 @@ describe('CallHost — the call’s receipt', () => {
     expect(push).toHaveBeenCalledWith('12 min · direct · free', { icon: 'check', duration: 5000 });
   });
 
-  it('a relayed call you placed: the receipt, then one look at your month — a notice at 80%', async () => {
+  it('a relayed call you placed: the receipt, then one look at your month — a notice at 80%, said as the estimate it is', async () => {
     const push = vi.fn();
     const sent: unknown[] = [];
     setAccountLine((m) => {
       sent.push(m);
       queueMicrotask(() => acceptAccountUsage({
         t: 'usage',
-        usage: { month: new Date().toISOString().slice(0, 7), scope: 'account', counters: { call: { ...emptyCounters(), turnBytes: 8.6e9 } }, updatedAt: 0 },
+        // What the server really keeps for calls: relayed minutes, no bytes (≈ 11.25 MB a minute).
+        usage: { month: new Date().toISOString().slice(0, 7), scope: 'account', counters: { call: { ...emptyCounters(), minutes: { lan: 0, direct: 0, turn: 765, server: 0 } } }, updatedAt: 0 },
         allowances: { relayDataGb: 10, cloudCopyGb: 10 },
       }));
       return true;
     });
     calls.snap = ended({ ms: 12 * 60_000, path: 'turn', turnBytes: 1.4e8, outgoing: true });
     render(<CallHost push={push} suspended={false} />);
-    expect(push).toHaveBeenCalledWith('12 min · encrypted relay · 0.14 GB of your relay data', { icon: 'globe', duration: 5000 });
+    // No GB figure from this device's own bytes: the account counts the call differently.
+    expect(push).toHaveBeenCalledWith('12 min · encrypted relay · uses your relay data', { icon: 'globe', duration: 5000 });
     await waitFor(() => expect(push).toHaveBeenCalledTimes(2));
-    expect(push.mock.calls[1][0]).toMatch(/^You’ve used 8\.6 GB of your 10 GB of relay data this month\. Direct and Home Wi-Fi don’t count\./);
+    expect(push.mock.calls[1][0]).toMatch(/^You’ve used ≈ 8\.6 GB of your 10 GB of relay data this month \(estimated from minutes\)\. Direct and Home Wi-Fi don’t count\./);
     expect(sent).toEqual([{ t: 'usage_get' }]);
   });
 

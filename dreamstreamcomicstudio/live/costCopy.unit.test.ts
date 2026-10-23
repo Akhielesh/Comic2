@@ -87,9 +87,12 @@ function everyString(): string[] {
     out.push(nightReceiptText('Last night', t), meetingDeliveryLine({ ms: t, guests: 3 }));
   }
   out.push(deliveryLine({ durMs: 62 * MIN, peakViewers: 20, storedBytes: 1.2e9, deliveredBytes: 23e9 }));
+  for (const [direct, relay] of [[0, 0], [3, 0], [2, 1], [1, 2], [0, 1], [0, 3]]) out.push(copy.meetingPathLine({ direct, relay }));
   for (const level of ['warn', 'full'] as const) {
     for (const scope of ['account', 'nursery'] as const) {
-      out.push(relayNotice(level, 8.2e9, 10, '2026-10', scope)!, relayNotice(level, 10.4e9, 10, '2026-10', scope, { pictureFallback: true })!);
+      for (const measured of [true, false]) {
+        out.push(relayNotice(level, 8.2e9, 10, '2026-10', scope, { measured })!, relayNotice(level, 10.4e9, 10, '2026-10', scope, { measured, pictureFallback: true })!);
+      }
     }
     out.push(cloudCopyNotice(level, 8.5 * 1024 ** 3, 10 * 1024 ** 3)!);
   }
@@ -152,7 +155,10 @@ describe('rule 1 — "free" is never said of our relay or our server', () => {
   it('receipts: free only for Home Wi-Fi and direct', () => {
     expect(callReceiptText(callReceipt({ ms: paths({ direct: 12 * MIN }), turnBytes: 0 }, true)!)).toBe('12 min · direct · free');
     expect(callReceiptText(callReceipt({ ms: paths({ lan: 12 * MIN }), turnBytes: 0 }, false)!)).toBe('12 min · Home Wi-Fi · free');
-    expect(callReceiptText(callReceipt({ ms: paths({ turn: 12 * MIN }), turnBytes: 1.4e8 }, true)!)).toBe('12 min · encrypted relay · 0.14 GB of your relay data');
+    // This device's own relay bytes aren't what the account counts (calls are counted from
+    // minutes, for everyone on the call), so the receipt quotes no GB figure that would
+    // disagree with Usage.
+    expect(callReceiptText(callReceipt({ ms: paths({ turn: 12 * MIN }), turnBytes: 1.4e8 }, true)!)).toBe('12 min · encrypted relay · uses your relay data');
     expect(callReceiptText(callReceipt({ ms: paths({ turn: 12 * MIN }), turnBytes: 0 }, true)!)).toBe('12 min · encrypted relay · uses your relay data');
     // A call counts against the person who placed it (owner decision).
     expect(callReceiptText(callReceipt({ ms: paths({ turn: 12 * MIN }), turnBytes: 1.4e8 }, false)!)).toBe('12 min · encrypted relay · counts toward the caller’s relay data');
@@ -245,12 +251,27 @@ describe('rule 4 — every action that uses our servers says so before it starts
   });
 
   it('Studio: the ready check says who carries the stream; Go live says it too; the viewer count carries it while live', () => {
-    expect(studioViewersLine(P720)).toBe('Your viewers watch through our servers — free for you. You upload ≈ 1.2 GB an hour at 720p.');
+    expect(studioViewersLine(P720)).toBe('Your viewers watch through our servers — free for you. You upload ≈ 1.2 GB an hour at 720p. The replay is kept 24 h.');
     const sv = src('./views/StudioView.tsx');
     expect(sv).toMatch(/cost=\{studioViewersLine\(preset\)\}/);
-    expect(sv.match(/GO_LIVE_LINE/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(sv.match(/GO_LIVE_LINE/g)?.length).toBeGreaterThanOrEqual(4);
     expect(sv).toMatch(/BROADCAST_TIP/);
     expect(BROADCAST_TIP).toMatch(/^Live · through our servers · free for you, up to 200 viewers/);
+  });
+
+  // A `title` never shows on touch devices: the line must be on screen before a broadcast
+  // starts. Every Go live (toolbar, "Go live with this meeting", "Go live again", the phone
+  // studio's buttons, the G key) opens the ready check, which shows studioViewersLine — only
+  // its own "Tap to go live" (inside that card) starts the broadcast.
+  it('Studio: no Go live button starts a broadcast before the ready check has shown the path line', () => {
+    const sv = src('./views/StudioView.tsx');
+    const direct = [...sv.matchAll(/onClick=\{(?:ctl\.)?goLive\}/g)].length;
+    expect(direct).toBe(0);
+    expect(sv).toMatch(/onGo=\{goLive\}/); // the ready check's own button
+    expect(sv.match(/onClick=\{ctl\.requestGoLive\}/g)?.length).toBe(2); // the phone studio
+    expect(sv).toMatch(/else if \(status === 'idle'\) requestGoLive\(\);/); // the G key
+    expect(sv.match(/onClick=\{requestGoLive\}/g)?.length).toBeGreaterThanOrEqual(3); // toolbar: meeting, Go live, Go live again
+    expect(sv).toMatch(/Go live again/);
   });
 
   it('Save sheet: free options first, each with who pays; the 7-day copy is headed "through our servers" before its button', () => {
@@ -285,25 +306,51 @@ describe('rule 5 — a limit never cuts the baby monitor’s sound or alerts', (
     expect(allowanceLevel(8, 10)).toBe('warn');
     expect(allowanceLevel(10, 10)).toBe('full');
     expect(allowanceLevel(5, 0)).toBe('ok');
-    expect(relayNotice('ok', 1e9, 10, '2026-10', 'account')).toBeNull();
-    expect(relayNotice('warn', 8.2e9, 10, '2026-10', 'account')).toBe('You’ve used 8.2 GB of your 10 GB of relay data this month. Direct and Home Wi-Fi don’t count. Resets November 1.');
-    expect(relayNotice('warn', 8.2e9, 10, '2026-10', 'nursery')).toBe('This nursery has used 8.2 GB of this nursery’s 10 GB of relay data this month. Direct and Home Wi-Fi don’t count. Resets November 1.');
-    const full = relayNotice('full', 10.2e9, 10, '2026-10', 'nursery')!;
+    const exact = { measured: true };
+    expect(relayNotice('ok', 1e9, 10, '2026-10', 'account', exact)).toBeNull();
+    expect(relayNotice('warn', 8.2e9, 10, '2026-10', 'account', exact)).toBe('You’ve used 8.2 GB of your 10 GB of relay data this month. Direct and Home Wi-Fi don’t count. Resets November 1.');
+    expect(relayNotice('warn', 8.2e9, 10, '2026-10', 'nursery', exact)).toBe('This nursery has used 8.2 GB of this nursery’s 10 GB of relay data this month. Direct and Home Wi-Fi don’t count. Resets November 1.');
+    const full = relayNotice('full', 10.2e9, 10, '2026-10', 'nursery', exact)!;
     expect(full).toMatch(/sound and alerts are never limited/);
     // The picture only "pauses" where the room says it does.
     expect(full).not.toMatch(/pause/);
-    const enforced = relayNotice('full', 10.2e9, 10, '2026-10', 'nursery', { pictureFallback: true })!;
+    const enforced = relayNotice('full', 10.2e9, 10, '2026-10', 'nursery', { measured: true, pictureFallback: true })!;
     expect(enforced).toContain(RELAY_OUT_MONITOR);
     expect(RELAY_OUT_MONITOR).toMatch(/sound and alerts are unchanged/);
     expect(RELAY_OUT_MONITOR).not.toMatch(/our server/); // never "falls back to our server"
     // Calls and the account: nothing about the monitor, no claim of a cut.
-    expect(relayNotice('full', 10.2e9, 10, '2026-10', 'account')).toBe('You’ve used this month’s 10 GB of relay data. Direct and Home Wi-Fi don’t count. Resets November 1.');
+    expect(relayNotice('full', 10.2e9, 10, '2026-10', 'account', exact)).toBe('You’ve used this month’s 10 GB of relay data. Direct and Home Wi-Fi don’t count. Resets November 1.');
+  });
+
+  it('relay data estimated from minutes (every call, for now) is said as an estimate: ≈ at 80%, “by our estimate” at 100%', () => {
+    const est = { measured: false };
+    expect(relayNotice('warn', 8.1e9, 10, '2026-10', 'account', est)).toBe('You’ve used ≈ 8.1 GB of your 10 GB of relay data this month (estimated from minutes). Direct and Home Wi-Fi don’t count. Resets November 1.');
+    expect(relayNotice('warn', 8.1e9, 10, '2026-10', 'nursery', est)).toBe('This nursery has used ≈ 8.1 GB of this nursery’s 10 GB of relay data this month (estimated from minutes). Direct and Home Wi-Fi don’t count. Resets November 1.');
+    expect(relayNotice('full', 10.2e9, 10, '2026-10', 'account', est)).toBe('By our estimate, you’ve used this month’s 10 GB of relay data. Direct and Home Wi-Fi don’t count. Resets November 1.');
+    const nursery = relayNotice('full', 10.2e9, 10, '2026-10', 'nursery', est)!;
+    expect(nursery).toMatch(/^By our estimate, this nursery has used this month’s 10 GB of relay data\./);
+    expect(nursery).toMatch(/sound and alerts are never limited/);
+    // A caller that doesn't say whether it was measured gets the estimate wording — never a
+    // made-up exact figure.
+    expect(relayNotice('warn', 8.1e9, 10, '2026-10', 'account')).toMatch(/≈ 8\.1 GB/);
+    expect(relayNotice('full', 10.2e9, 10, '2026-10', 'nursery', { pictureFallback: true })).toMatch(/^By our estimate/);
   });
 
   it('the 7-day copies notice: rolling, so space frees up as copies expire', () => {
     expect(cloudCopyNotice('ok', 1, 10)).toBeNull();
     expect(cloudCopyNotice('warn', 8.5 * 1024 ** 3, 10 * 1024 ** 3)).toBe('8.5 GB of your 10 GB of 7-day copies is in use. Google Drive and this device are free, and the file is yours to keep.');
     expect(cloudCopyNotice('full', 10 * 1024 ** 3, 10 * 1024 ** 3)).toMatch(/space frees up as older copies expire after 7 days/);
+  });
+});
+
+describe('the meeting line (Invite sheet)', () => {
+  it('free only for the direct guests; a relayed guest is said in words', () => {
+    expect(copy.meetingPathLine({ direct: 0, relay: 0 })).toBe(`${MEETING_LINE} ${MEETING_LINE_TIP}`);
+    expect(copy.meetingPathLine({ direct: 3, relay: 0 })).toBe(`${MEETING_LINE} ${MEETING_LINE_TIP}`);
+    expect(copy.meetingPathLine({ direct: 2, relay: 1 })).toBe('Direct for 2 guests — free; 1 through our encrypted relay (a network blocks direct video).');
+    expect(copy.meetingPathLine({ direct: 1, relay: 2 })).toBe('Direct for 1 guest — free; 2 through our encrypted relay (a network blocks direct video).');
+    expect(copy.meetingPathLine({ direct: 0, relay: 1 })).toBe('Through our encrypted relay for your guest — a network blocks direct video.');
+    expect(copy.meetingPathLine({ direct: 0, relay: 3 })).toBe('Through our encrypted relay for all 3 guests — a network blocks direct video.');
   });
 });
 
@@ -347,5 +394,20 @@ describe('Help: the Usage guide and answers follow the same rules', () => {
     expect(bad).toEqual([]);
     expect(usageHelp.join(' ')).toMatch(/sound and alerts are never limited/);
     expect(usageHelp.join(' ')).toMatch(/never a bill/);
+  });
+
+  // A parent who searches Help for "server" must never read that the baby monitor's picture
+  // goes through our server without also reading that it isn't end-to-end encrypted then.
+  it('every Help and Guide text about the monitor’s picture through our server says it isn’t end-to-end encrypted', () => {
+    const texts = [...guide.matchAll(/(?:body|intro|a): '((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]);
+    const aboutServerPicture = (t: string) =>
+      t.split(/(?<=[.!?])\s/).some((sentence) => /\b(?:through|by|via) our server\b|\bour server passes\b/i.test(sentence) && /\b(?:picture|video|sound)\b/i.test(sentence));
+    const hits = texts.filter(aboutServerPicture);
+    expect(hits.length).toBeGreaterThanOrEqual(5);
+    expect(hits.filter((t) => !/not end-to-end encrypted/i.test(t))).toEqual([]);
+    // The Usage entries use the pill's own words (PATH_TIP.server).
+    for (const t of usageHelp.flatMap((block) => [...block.matchAll(/(?:body|intro|a): '((?:[^'\\]|\\.)*)'/g)].map((m) => m[1])).filter(aboutServerPicture)) {
+      expect(t).toMatch(/in memory only, never stored, not end-to-end encrypted/);
+    }
   });
 });

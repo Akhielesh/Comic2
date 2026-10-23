@@ -658,7 +658,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // browser still gates audio behind a tap, in which case stop at "Tap to go live".
   useEffect(() => {
     if (!ready) return;
-    if (status !== 'idle') {
+    // 'ended' too: "Go live again" restarts through the same check.
+    if (status !== 'idle' && status !== 'ended') {
       setReady(null);
       return;
     }
@@ -816,6 +817,19 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     push(kindRef.current === 'meeting' ? 'You are live — this meeting is now broadcasting' : 'You are live', { icon: 'broadcast' });
   };
   goLiveRef.current = goLive;
+
+  /**
+   * Every Go live button (toolbar, "Go live with this meeting", "Go live again", the phone
+   * studio, the G key) opens the ready check instead of starting at once: it shows who carries
+   * the broadcast and what it uses ON SCREEN before anything starts (rule 4 — a title tooltip
+   * never shows on touch), then counts 3-2-1 with Cancel. The tap also unlocks audio, so the
+   * count can finish without a second tap.
+   */
+  const requestGoLive = () => {
+    if (!mixed) return; // no camera yet — the button says why
+    mixerRef.current?.unlock();
+    setReady((r) => r ?? { phase: 'checking', count: 3 });
+  };
 
   /** A meeting that never went live just ends — no recap to show, back to the dashboard. */
   const endMeeting = async () => {
@@ -1157,7 +1171,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       if (k === 'g') {
         if (isLive || status === 'paused') void endStream();
         else if (meetingIdle) push('Use “Go live with this meeting” to broadcast — G won’t do it by accident', { icon: 'info' });
-        else if (status === 'idle') goLive();
+        else if (status === 'idle') requestGoLive();
       } else if (k === 'i') {
         setInviteOpen(true);
       } else if (k === ' ') {
@@ -1361,7 +1375,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     guestCount: guests.length,
     toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
-    goLive, end: () => void endStream(),
+    requestGoLive, end: () => void endStream(),
     recOn, toggleRec, recLabel: recOn ? fmtDuration(recElapsed / 1000) : null,
     banners: studioBanners,
     exit: () => (isPhone ? nav.dashboard() : setDevice('desktop')),
@@ -1441,13 +1455,13 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         <HelpButton />
         {meetingIdle && (
           <>
-            <Btn variant="ghost" icon="broadcast" onClick={goLive} disabled={!mime || !mixed} data-tour="studio-golive" title={mixed ? `Broadcast this meeting to viewers. ${GO_LIVE_LINE}` : 'Waiting for your camera'}>Go live with this meeting</Btn>
+            <Btn variant="ghost" icon="broadcast" onClick={requestGoLive} disabled={!mime || !mixed || !!ready} data-tour="studio-golive" title={mixed ? `Broadcast this meeting to viewers. ${GO_LIVE_LINE}` : 'Waiting for your camera'}>Go live with this meeting</Btn>
             <Btn variant="danger" icon="stop" onClick={() => void endMeeting()}>End meeting</Btn>
           </>
         )}
-        {status === 'idle' && !isMeeting && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime || !mixed} data-tour="studio-golive" title={mixed ? GO_LIVE_LINE : 'Waiting for your camera'}>Go live</Btn>}
+        {status === 'idle' && !isMeeting && <Btn variant="solid" icon="broadcast" onClick={requestGoLive} disabled={!mime || !mixed || !!ready} data-tour="studio-golive" title={mixed ? GO_LIVE_LINE : 'Waiting for your camera'}>Go live</Btn>}
         {(isLive || status === 'paused') && <Btn variant="danger" icon="stop" onClick={() => void endStream()}>End stream</Btn>}
-        {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime || !mixed}>Go live again</Btn>}
+        {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={requestGoLive} disabled={!mime || !mixed || !!ready} title={mixed ? GO_LIVE_LINE : 'Waiting for your camera'}>Go live again</Btn>}
         {status === 'ended' && <Btn variant="subtle" icon="chart" onClick={() => nav.summary(eventId, hostKey)}>View recap</Btn>}
       </div>
 
@@ -1769,7 +1783,8 @@ interface MobileCtl {
   cutScene(s: SceneId): void;
   sendChat(text: string): void;
   sendEmoji(e: string): void;
-  goLive(): void;
+  /** Opens the ready check (the path line on screen first), never goes live at once. */
+  requestGoLive(): void;
   end(): void;
   exit(): void;
   hostName: string;
@@ -1890,12 +1905,12 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
         {ctl.status === 'idle' && ctl.meeting ? (
           <>
             <button className="ms-end" onClick={ctl.endMeeting}><span className="ms-end-dot" />End meeting</button>
-            <button className="ms-react" onClick={ctl.goLive} disabled={!ctl.canGoLive} aria-label="Go live with this meeting" title="Go live with this meeting"><Icon name="broadcast" size={18} /></button>
+            <button className="ms-react" onClick={ctl.requestGoLive} disabled={!ctl.canGoLive} aria-label="Go live with this meeting" title="Go live with this meeting"><Icon name="broadcast" size={18} /></button>
           </>
         ) : (
           <>
             {ctl.status === 'idle'
-              ? <button className="ms-golive" onClick={ctl.goLive} disabled={!ctl.canGoLive}><Icon name="broadcast" size={18} />Go live</button>
+              ? <button className="ms-golive" onClick={ctl.requestGoLive} disabled={!ctl.canGoLive}><Icon name="broadcast" size={18} />Go live</button>
               : <button className="ms-end" onClick={ctl.end}><span className="ms-end-dot" />End stream</button>}
             <button className="ms-react" onClick={() => ctl.sendEmoji('❤️')} aria-label="Send heart"><Icon name="heart" size={18} /></button>
           </>

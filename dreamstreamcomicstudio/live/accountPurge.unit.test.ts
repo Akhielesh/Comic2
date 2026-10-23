@@ -30,6 +30,20 @@ describe('Stream Studio sign-out wipe', () => {
     expect(localStorage.getItem('ds-live-tour-welcome-done')).toBe('1');
   });
 
+  it('removes this device’s usage too: a nursery’s relay data (parents only), last nights, the month’s ledger, hosted meetings, notices', () => {
+    const usage = [
+      'ds-usage-relay-n1', // the nursery's month of relay data, read by a parent
+      'ds-usage-nights-n1', // "Last night: 10 h · all direct · free"
+      'ds-usage-device-2026-10', // "Baby monitor on this device 212 h", "Saved to Google Drive 6.2 GB"
+      'ds-usage-meetings',
+      'ds-usage-notice-nursery:n1:2026-10:warn',
+      'ds-usage-checked-n1',
+    ];
+    for (const k of usage) localStorage.setItem(k, '{"month":"2026-10","bytes":2100000000,"limitGb":10}');
+    purgeLiveAccountData();
+    for (const k of usage) expect(localStorage.getItem(k), k).toBeNull();
+  });
+
   it('signed out elsewhere (no session): the previous account’s data goes on the next load', () => {
     seed();
     localStorage.setItem(OWNER_KEY, 'u-akhielesh');

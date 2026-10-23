@@ -301,7 +301,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                 direct links. What goes through our servers is shown here with its fair-use allowance. You’re never
                 charged. It loads when you open this page.
               </p>
-              <AccountUsageCard signedIn={live.status === 'member'} />
+              <AccountUsageCard signedIn={live.status === 'loading' ? null : live.status === 'member'} />
             </>
           )}
           {cat === 'recording' && (

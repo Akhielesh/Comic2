@@ -3,6 +3,11 @@
    DreamStream (est.)" expander, path lines before an action and receipts after.
    Calm and quiet: free is green, through-our-servers is plain, allowances amber
    at 80% and red at 100%. Theme tokens only (light + dark).
+
+   Small text never uses the plain --green / --amber / --live: on the light panel
+   they read 3.8:1 / 3.2:1 (and --live 4.1:1 on the dark one), under WCAG AA's
+   4.5:1. Text takes the token mixed 35% toward the ink (≥ 4.8:1 in both themes,
+   styles/usageContrast.unit.test.ts); the plain tokens stay for icons and bars.
    ========================================================================== */
 
 .usage-card { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
@@ -12,7 +17,8 @@
 
 .usage-group { display: grid; gap: 2px; }
 .usage-group-title { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding-bottom: 4px; border-bottom: 1px solid var(--line-soft); }
-.usage-free .usage-group-title { color: var(--green); }
+.usage-free .usage-group-title { color: color-mix(in srgb, var(--green) 65%, var(--text)); }
+.usage-free .usage-group-title svg { color: var(--green); }
 
 .usage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
 .usage-row:last-child { border-bottom: 0; }
@@ -21,14 +27,16 @@
 .usage-row-value { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .usage-pct { color: var(--muted); margin-left: 4px; }
 .usage-meter { grid-column: 1 / -1; margin-top: 4px; }
-.usage-allow.is-warn .usage-pct { color: var(--amber); }
-.usage-allow.is-full .usage-pct { color: var(--live); }
+.usage-allow.is-warn .usage-pct { color: color-mix(in srgb, var(--amber) 65%, var(--text)); font-weight: 600; }
+.usage-allow.is-full .usage-pct { color: color-mix(in srgb, var(--live) 65%, var(--text)); font-weight: 600; }
 .usage-notice { grid-column: 1 / -1; display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; padding: 8px 10px; border-radius: var(--r-sm); background: var(--amber-wash); color: var(--text); }
 .usage-allow.is-full .usage-notice { background: var(--live-wash); }
 .usage-notice svg { flex: none; margin-top: 2px; }
 
 .usage-empty, .usage-none, .usage-note { margin: 4px 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
-.usage-empty { color: var(--green); }
+.usage-empty { color: color-mix(in srgb, var(--green) 65%, var(--text)); }
+/* "resets November 1", the foot note, "· this device": secondary, but still read. */
+.usage-card .faint, .ns-usage .faint { color: var(--muted); }
 .usage-night { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; font-size: 13px; }
 .usage-tip { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 9px 11px; border-radius: var(--r-sm); background: var(--green-wash); font-size: 12.5px; line-height: 1.45; }
 .usage-tip svg { flex: none; margin-top: 2px; color: var(--green); }
@@ -48,7 +56,8 @@
 .usage-cost-foot { font-size: 11.5px; }
 
 /* Before an action: the path and who pays, on the verb. */
-.cost-line { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green); font-weight: 600; }
+.cost-line { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: color-mix(in srgb, var(--green) 65%, var(--text)); font-weight: 600; }
+.cost-line:not(.servers) svg { color: var(--green); }
 .cost-line.servers { color: var(--muted); }
 .rc-cost { margin: 2px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
 
