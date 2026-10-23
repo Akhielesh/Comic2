@@ -46,6 +46,9 @@ export const costContextFromAllowance = (
 
 const trimZero = (s: string) => s.replace(/\.0$/, '');
 
+/** What formatCostForUser prints for a governed user while their share isn't known yet (fail closed). */
+export const UNKNOWN_USAGE_SHARE = 'uses a little of your usage';
+
 /**
  * "≈2% of your usage" for governed users; "$0.05" for admins / own key.
  * `includesMarkup`: the quote was priced with the 1.3x platform markup (e.g. estimateJobs);
@@ -57,7 +60,7 @@ export const formatCostForUser = (usd: number, ctx: CostDisplayContext, opts: { 
   if (amount === 0) return 'Free';
   const providerUsd = opts.includesMarkup ? amount / PLATFORM_MARKUP : amount;
   const perUsd = ctx.pctPerUsd;
-  if (!(typeof perUsd === 'number' && perUsd > 0)) return 'uses a little of your usage';
+  if (!(typeof perUsd === 'number' && perUsd > 0)) return UNKNOWN_USAGE_SHARE;
   const pct = providerUsd * perUsd;
   if (pct < 0.1) return '<0.1% of your usage';
   if (pct < 10) return `≈${trimZero(pct.toFixed(1))}% of your usage`;
@@ -75,3 +78,13 @@ export const compactUsageShare = (formatted: string): string | undefined => {
   const m = /^(≈[\d.]+%|<0\.1%) of your usage$/.exec(formatted);
   return m ? m[1] : undefined;
 };
+
+/**
+ * A formatted amount that has to read INSIDE a sentence ("costs X once", "X spent", "Spent X on this
+ * comic"): the unknown-share wording is a verb phrase ("uses a little of your usage"), which breaks
+ * those sentences ("costs uses a little of your usage once"), so it becomes a noun phrase. Every
+ * other string (dollars, "≈2% of your usage", "Free") is returned unchanged. `unknown` lets a spent
+ * TOTAL say "some of your usage" (it may not be little).
+ */
+export const amountInSentence = (formatted: string, unknown = 'a little of your usage'): string =>
+  formatted === UNKNOWN_USAGE_SHARE ? unknown : formatted;
