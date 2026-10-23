@@ -20,6 +20,7 @@ import { STATE_INFO, STATE_RANK, type BabyState, type MonServerMsg, type MonSett
 import { CameraHub, type Quality } from '../monitor/rtc';
 import { sceneIntervalMs } from '../monitor/videoBudget';
 import { NO_WANT, readWant, RelayEncoder, watchersNote, type RelayWant } from '../monitor/relay';
+import { StatusCadence } from '../monitor/statusCadence';
 import type { BrainEvent } from '../monitor/soundBrain';
 import { SOUND_INFO, type SoundCat } from '../monitor/soundClasses';
 import { NurseryEars, type EarsSnapshot, type ModelState } from '../monitor/soundEngine';
@@ -148,6 +149,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const sootheRef = useRef(new SoothePlayer());
   const wakeRef = useRef(new ScreenWakeLock());
   const tickersRef = useRef<Ticker[]>([]);
+  /** What goes to the room: news at once, a keepalive every 2 min — every 2 s only while it asks (live_want). */
+  const cadenceRef = useRef(new StatusCadence());
   // Keyed by the viewer (CameraHub keys), so a parent's socket reconnecting mid-talk keeps their voice.
   const talkElsRef = useRef(new Map<string, HTMLAudioElement>());
   const callersRef = useRef(new Map<string, { stream: MediaStream | null; who: string; on: boolean }>());
@@ -741,8 +744,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             call: callerOn?.who ?? null,
             enc,
         };
-        sockRef.current?.send({ t: 'status', st });
-        // Straight to viewers too — over the home Wi-Fi this keeps working when the internet doesn't.
+        if (cadenceRef.current.due(st, Date.now())) sockRef.current?.send({ t: 'status', st });
+        // Straight to viewers every 2 s — over the home Wi-Fi this keeps working when the internet doesn't.
         hubRef.current?.direct({ t: 'st', st, dev: device.id });
       }),
     );
@@ -883,6 +886,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         setNursery({ name: m.nursery.name, baby: m.nursery.baby });
         setViewers(m.viewers);
         hubRef.current?.setIce(m.ice, m.iceMs);
+        // A new room connection: full-rate status until it says otherwise (rooms before live_want never do).
+        cadenceRef.current.reset();
+        void hubRef.current?.setRelayDataOut(m.fair?.level === 'out');
         applySettings(m.settings);
         if (pendingZonesRef.current) {
           sockRef.current?.send({ t: 'settings', zones: { dev: device.id, list: pendingZonesRef.current } });
@@ -922,6 +928,13 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         break;
       case 'relay_want':
         setRelay(readWant(m as unknown as Record<string, unknown>));
+        break;
+      case 'live_want':
+        cadenceRef.current.setLive(m.on);
+        break;
+      case 'fair':
+        // Relay data used up: viewers reached through a TURN relay get sound only (the direct picture carries on).
+        void hubRef.current?.setRelayDataOut(m.relay.level === 'out');
         break;
       case 'relay_key':
         relayRef.current?.requestKey();
@@ -1228,7 +1241,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const talkLine = talkers.length ? `${talkers.join(' & ')} ${talkers.length > 1 ? 'are' : 'is'} talking` : null;
   // Viewers on the relay picture aren't "connecting" — they're watching through the server
   // (those only bridging while their direct picture connects still are, but count as through it).
-  const watching = watchersNote({ viewers: viewers.length, direct: p2pCount, onRelay: viewers.filter((v) => v.relay).length, relayed: relayViewers, jpeg: relayMode === 'jpeg' });
+  const watching = watchersNote({ viewers: viewers.length, direct: p2pCount, onRelay: viewers.filter((v) => v.relay).length, relayed: relayViewers, jpeg: relayMode === 'jpeg', sound: relayMode === 'sound' });
   const busy = (hubRef.current?.pressure ?? 0) > 0;
   return (
     <div className={cx('cam-run', dim && 'dimmed')} onPointerDown={touch}>

@@ -13,11 +13,12 @@ import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket 
 import { openInvite, registerShareChannel, ShareChannel, shareSummary } from '../monitor/invite';
 import { useGuestPass } from './monitor/useGuestPass';
 import { focusLayout } from '../monitor/viewFocus';
-import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
+import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type FairState, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
 import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
 import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
+import { pageShown, ViewGate } from '../monitor/viewGate';
 import { RelayMeter } from '../monitor/videoBudget';
 import { probeDecoders, RelayDecoder, soundControls } from '../monitor/relay';
 import type { RelayCodec } from '../monitor/relayWire';
@@ -184,6 +185,17 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   const p2pStreamRef = useRef<MediaStream | null>(null);
   const fallbackRef = useRef(initialFallback());
   const camSidRef = useRef<string | null>(null);
+  /**
+   * Sound only while nobody looks (feature doc §7 C5; viewGate.ts): whether this screen is shown
+   * (picture-in-picture counts), told to the room and the camera on change. `capsRef`: what the
+   * room takes; `nearRef`: cameras on this device's network (their direct picture comes first);
+   * `shownAtRef`: when the screen was last shown (a status from before then isn't "offline" yet).
+   */
+  const gateRef = useRef(new ViewGate(typeof document === 'undefined' || pageShown(document)));
+  const capsRef = useRef<string[]>([]);
+  const nearRef = useRef<string[]>([]);
+  const shownAtRef = useRef(Date.now());
+  const camDevRef = useRef<string | null>(null);
   /** The camera was told we're talking / on video (re-asserted after the room reconnects). */
   const toldRef = useRef({ talk: false, video: false });
   const wakeRef = useRef(new ScreenWakeLock());
@@ -266,6 +278,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   const [report, setReport] = useState<{ session?: string } | null>(null);
   const [zoneEdit, setZoneEdit] = useState(false);
   const [stalled, setStalled] = useState(false);
+  /** The nursery's relay data this month: at 'out', a picture that needs a relay is sound only. */
+  const [fair, setFair] = useState<FairState | null>(null);
+  const fairOutRef = useRef(false);
+  fairOutRef.current = fair?.level === 'out';
   // Two-way audio etiquette: walkie-talkie by default, silent alerts near the nursery.
   const [hearWhileTalking, setHearWhileTalking] = useState(() => readFlag('ds-monitor-hear-while-talking'));
   const [silentHere, setSilentHere] = useState(() => readFlag(`ds-monitor-silent-${id}`));
@@ -383,6 +399,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     setClosedMsg(null);
     const link = new ViewerLink((to, d) => sockRef.current?.send({ t: 'rtc', to, d }), [], `${getDevice().id}.${TAB_ID}`);
     link.quality = qualityRef.current;
+    link.setShown(gateRef.current.isShown);
     link.onState = (s) => {
       setLinkState(s);
       runFallback({ t: 'link', state: s });
@@ -618,6 +635,12 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         if (m.cams.length) markSetup(id, 'camera');
         // A new socket: the room has forgotten our relay subscription — and the
         // camera may have missed that we stopped (or are still) talking.
+        capsRef.current = m.caps ?? [];
+        nearRef.current = m.near ?? [];
+        setFair(m.fair ?? null);
+        gateRef.current.reset();
+        sendView();
+        runFallback({ t: 'near', on: !!camDevRef.current && nearRef.current.includes(camDevRef.current) });
         runFallback({ t: 'hello' });
         {
           const target = m.cams.find((c) => c.sid === pickCam(m.cams, camSidRef.current));
@@ -758,6 +781,13 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       case 'ice':
         linkRef.current?.setIce(m.servers, m.iceMs);
         break;
+      case 'near':
+        nearRef.current = m.near;
+        runFallback({ t: 'near', on: !!camDevRef.current && m.near.includes(camDevRef.current) });
+        break;
+      case 'fair':
+        setFair(m.relay);
+        break;
       case 'error':
         if (['removed', 'ended', 'forbidden', 'auth'].includes(m.code)) setClosedMsg(m.msg);
         else push(m.msg, { icon: 'alert' });
@@ -781,6 +811,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   const sockStateRef = useRef(sock);
   sockStateRef.current = sock;
   const onDirect = (dm: DirectMsg) => {
+    gateRef.current.dcMessage(Date.now());
     const roomUp = sockStateRef.current === 'connected';
     if (dm.t === 'st') {
       const old = statusRef.current[dm.dev];
@@ -853,8 +884,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
 
   // Watching a different camera (or none): its own relay subscription, a clean picture.
   const camDev = cam?.dev ?? null;
+  camDevRef.current = camDev;
   useEffect(() => {
     clearRelayPicture();
+    runFallback({ t: 'near', on: !!camDev && nearRef.current.includes(camDev) });
     runFallback({ t: 'cam', dev: camDev });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camDev]);
@@ -873,6 +906,34 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Tell the room, once per change, whether this screen is shown and the camera's data channel delivers. */
+  const sendView = () => {
+    if (!capsRef.current.includes('view')) return;
+    const d = gateRef.current.due(Date.now());
+    if (d) sockRef.current?.send({ t: 'view', ...d, ...(d.dc && camDevRef.current ? { dev: camDevRef.current } : {}) });
+  };
+  // Hidden (locked, another app or tab in front, no picture-in-picture): said at once to the room and
+  // the camera, who take the picture away after the grace and keep the sound. Shown: back at once.
+  // A browser that can't tell us about its own picture-in-picture (Firefox) always counts as shown.
+  useEffect(() => {
+    const apply = () => {
+      const shown = pageShown(document, videoRef.current as (HTMLVideoElement & { webkitPresentationMode?: string }) | null);
+      if (shown && !gateRef.current.isShown) shownAtRef.current = Date.now();
+      gateRef.current.setShown(shown);
+      linkRef.current?.setShown(shown);
+      sendView();
+    };
+    apply();
+    document.addEventListener('visibilitychange', apply);
+    // The data channel going quiet (or delivering again) needs no event of its own.
+    const t = window.setInterval(sendView, 2000);
+    return () => {
+      document.removeEventListener('visibilitychange', apply);
+      window.clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pip]);
 
   // Audio-only viewers need no instant picture.
   useEffect(() => {
@@ -927,7 +988,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       // starts this viewer's window over (besides its own probes and our trailing ack),
       // so "it picks up again by itself" stays true.
       const f = fallbackRef.current;
-      if (next.stale && camLiveRef.current && f.relay && f.dev && now - askedAt >= 8000) {
+      // Not while hidden or with relay data used up: then no pictures come on purpose (sound only).
+      if (next.stale && camLiveRef.current && f.relay && f.dev && gateRef.current.isShown && !fairOutRef.current && now - askedAt >= 8000) {
         askedAt = now;
         sendRelay(f.dev, f.early);
       }
@@ -969,11 +1031,15 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     if (!v) return;
     const on = () => setPip(true);
     const off = () => setPip(false);
+    // Safari's own pop-out (presentation mode) says so with an event of its own.
+    const mode = () => setPip((v as HTMLVideoElement & { webkitPresentationMode?: string }).webkitPresentationMode === 'picture-in-picture');
     v.addEventListener('enterpictureinpicture', on);
     v.addEventListener('leavepictureinpicture', off);
+    v.addEventListener('webkitpresentationmodechanged', mode);
     return () => {
       v.removeEventListener('enterpictureinpicture', on);
       v.removeEventListener('leavepictureinpicture', off);
+      v.removeEventListener('webkitpresentationmodechanged', mode);
     };
   }, [hasVideo]);
 
@@ -1094,7 +1160,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     setQuality(q);
     // Also sent with every new call's offer, so a reconnect starts at this quality.
     if (linkRef.current) linkRef.current.quality = q;
-    if (cam) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'quality', v: { q, vid: linkRef.current?.vid } });
+    // Straight to the camera on the data channel when it takes it there (nothing through our server).
+    if (cam && !linkRef.current?.sendQuality(q)) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'quality', v: { q, vid: linkRef.current?.vid } });
   };
 
   const soothe = (on: boolean) => {
@@ -1196,7 +1263,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
 
   /* ------------------------------------------------------------ derived */
   const now = Date.now();
-  const state: BabyState | 'offline' | 'unknown' = !cam ? 'unknown' : !camStatus ? 'unknown' : now - camStatus.at < 30_000 ? camStatus.st.state : 'offline';
+  // A screen just shown again gets a moment for fresh status (the camera sends it within 2 s) before an old one reads "offline".
+  const statusFresh = !!camStatus && (now - camStatus.at < 30_000 || now - shownAtRef.current < 8000);
+  const state: BabyState | 'offline' | 'unknown' = !cam ? 'unknown' : !camStatus ? 'unknown' : statusFresh ? camStatus.st.state : 'offline';
   const info = STATE_INFO[state];
   const today = useMemo(() => summarize(log, tl), [log, tl]);
   const soothingNow = camStatus?.st.soothing ?? null;
@@ -1236,6 +1305,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   // What the relay pill says (honest: through our server, not end-to-end encrypted, never stored).
   const relayFps = relayView.has && !relayView.stale && relayView.fps ? ` · ${relayView.fps} fps` : '';
   const relayNoSound = relayView.has && !relayView.sound;
+  // Relay data used up (fair use): wherever this picture needs a relay, it is sound only (honest, not "stalled").
+  const relayDataOut = fair?.level === 'out' && !!cam && ((linkState === 'connected' && netPath === 'relay') || (relayOn && !relayEarly));
   // What the sound controls say — never "Sound on" while relay sound waits for a tap.
   const soundUi = soundControls({
     muted,
@@ -1261,7 +1332,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
           <span>On the phone in the nursery, open this nursery and tap “Be the camera”.</span>
         </div>
       )}
-      {cam && !hasVideo && !showRelay && (
+      {cam && !hasVideo && !showRelay && !relayDataOut && (
         <div className="mv-empty">
           <div className="knock-dots" aria-hidden><span /><span /><span /></div>
           <span>
@@ -1283,6 +1354,11 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
             : camStatus.st.paused === 'hidden'
               ? 'The camera phone locked its screen or left the app, so its video stopped. Open Stream Studio on that phone.'
               : 'The camera phone paused the video (a call or another app). Sound monitoring continues.'}
+        </div>
+      ) : relayDataOut && state !== 'offline' ? (
+        <div className="mv-paused" role="status">
+          <Icon name="volume" size={20} />
+          Relay data is used up, so the picture pauses on networks that block direct video. Sound and alerts are unchanged. On the same Wi-Fi as the camera, the picture stays.
         </div>
       ) : stalled && hasVideo && !showRelay && state !== 'offline' ? (
         <div className="mv-paused">

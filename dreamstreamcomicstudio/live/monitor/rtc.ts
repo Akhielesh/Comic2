@@ -34,6 +34,7 @@
  */
 
 import { TalkProcessor } from './voice';
+import { HIDDEN_GRACE_MS } from './viewGate';
 import { applyIce, IceClock, keepRelay, turnRenewed } from '../rtcIce';
 import type { EncLimit, EncStatus, MonRtc } from './protocol';
 
@@ -41,15 +42,39 @@ export type Signal = (to: string, d: MonRtc) => void;
 /** How the media flows: on the home network, across the internet, or through a relay server. */
 export type NetPath = 'lan' | 'internet' | 'relay';
 
-const isPrivateIp = (ip?: string | null) =>
-  !!ip && (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.)/.test(ip) || /^f[cd][0-9a-f]{2}:/i.test(ip) || /^fe80:/i.test(ip) || ip.endsWith('.local'));
+/** An address only reachable inside a home network: RFC 1918, link-local, loopback, IPv6 ULA (fc00::/7) or link-local (fe80::/10), an mDNS name. */
+export const isPrivateIp = (ip?: string | null): boolean =>
+  !!ip &&
+  (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.)/.test(ip) || /^f[cd][0-9a-f]{0,2}:/i.test(ip) || /^fe[89ab][0-9a-f]?:/i.test(ip) || /\.local\.?$/i.test(ip));
 
-/** Classify a selected ICE candidate pair. */
+/** The /64 of a global IPv6 address (null otherwise): one home's network — a phone on mobile data has a /64 of its own. */
+export function v6Net(ip?: string | null): string | null {
+  const s = (ip ?? '').trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  if (!s.includes(':') || !/^[0-9a-f:]+$/.test(s) || isPrivateIp(s)) return null;
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  const all = [...head, ...Array(Math.max(0, fill)).fill('0'), ...tail];
+  if (all.length !== 8 || all.some((h) => !/^[0-9a-f]{1,4}$/.test(h))) return null;
+  return all.slice(0, 4).map((h) => parseInt(h, 16).toString(16)).join(':');
+}
+
+/**
+ * Classify a selected ICE candidate pair. Home Wi-Fi ('lan') only when both ends are on the home
+ * network: a private address (or an mDNS name, which only resolves there) — or the same global
+ * IPv6 /64, which is one home's network. A host candidate is NOT enough by itself: two phones on
+ * carrier IPv6 have global host candidates and connect host-to-host across the internet — that
+ * is 'internet' (it was shown as "Home Wi-Fi" and given the LAN upload budget). A host candidate
+ * whose address the browser hides counts as local, as before.
+ */
 export function classifyPath(local: { candidateType?: string; address?: string | null }, remote: { candidateType?: string; address?: string | null }): NetPath {
   if (local.candidateType === 'relay' || remote.candidateType === 'relay') return 'relay';
-  const remoteLocal = remote.candidateType === 'host' || isPrivateIp(remote.address);
-  const localLocal = local.candidateType === 'host' || isPrivateIp(local.address);
-  return localLocal && remoteLocal ? 'lan' : 'internet';
+  const home = (c: { candidateType?: string; address?: string | null }) => isPrivateIp(c.address) || (c.candidateType === 'host' && !c.address);
+  if (home(local) && home(remote)) return 'lan';
+  const l = v6Net(local.address);
+  return l && l === v6Net(remote.address) ? 'lan' : 'internet';
 }
 
 /** The subset of RTCStatsReport this file reads (a Map of stats dictionaries). */
@@ -123,8 +148,8 @@ export const LADDER: readonly Encoding[] = [
   { maxBitrate: 500_000, scaleResolutionDownBy: 2, maxFramerate: 15 },
   { maxBitrate: 320_000, scaleResolutionDownBy: 3, maxFramerate: 12 },
 ];
-/** Through a TURN relay server (pay-per-GB): never more than this. */
-const RELAY_CAP: Encoding = { maxBitrate: 650_000, scaleResolutionDownBy: 2, maxFramerate: 20 };
+/** Through a TURN relay server (pay-per-GB): never more than this (ADR 0006 Phase 0: 400 kbit/s at 15 fps). */
+export const RELAY_CAP: Encoding = { maxBitrate: 400_000, scaleResolutionDownBy: 2, maxFramerate: 15 };
 /** "Data saver" chosen by the viewer. */
 const SD_CAP: Encoding = { maxBitrate: 450_000, scaleResolutionDownBy: 2, maxFramerate: 15 };
 /** Bandwidth trimming never goes below this. */
@@ -373,7 +398,18 @@ interface CamPeer {
   ov: boolean;
   /** Arrived while the direct slots were full: no video until it proves to be on the home Wi-Fi. */
   held: boolean;
+  /** The viewer's screen is hidden (`{t:'vis'}` on the data channel); after HIDDEN_GRACE_MS, `off`. */
+  hidden: boolean;
+  hideTimer: number | undefined;
+  /** No picture for now — nobody is looking at it (sound keeps going). */
+  off: boolean;
 }
+
+/**
+ * Viewer → camera over the data channel (free: it never touches our server), for cameras that
+ * said `dcc` in their answer: the picture quality it asks for, and whether its screen is shown.
+ */
+export type ViewerDcMsg = { t: 'q'; q: Quality } | { t: 'vis'; on: boolean };
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
@@ -382,6 +418,8 @@ const STATS_MS = 5000;
 export class CameraHub {
   private peers = new Map<string, CamPeer>();
   private videoOn = true;
+  /** The nursery's relay data is used up: no picture through a TURN relay. */
+  private relayOut = false;
   private adaptState: AdaptState = newAdapt(Date.now());
   private samples: EncSample[] = [];
   private statsTimer: number | undefined;
@@ -471,10 +509,64 @@ export class CameraHub {
     }
   }
 
+  /**
+   * The picture this viewer gets: none while the video is paused for privacy, it asked for sound
+   * only, it waits for a free slot, its screen has been hidden for a while — or the nursery's relay
+   * data is used up and it is reached through a TURN relay (feature doc §4.7: sound only there;
+   * the direct and Home Wi-Fi picture carry on).
+   */
   private videoFor(peer: CamPeer): MediaStreamTrack | null {
-    const t = this.videoOn && peer.quality !== 'audio' && !peer.held ? this.tracks().video : null;
+    const t = this.videoOn && peer.quality !== 'audio' && !peer.held && !peer.off && !(this.relayOut && peer.path === 'relay') ? this.tracks().video : null;
     hintMotion(t);
     return t;
+  }
+
+  private async refreshVideo(peer: CamPeer): Promise<void> {
+    await videoTransceiver(peer.pc)?.sender.replaceTrack(this.videoFor(peer)).catch(() => undefined);
+  }
+
+  /** The nursery's relay data is used up (the room's `fair`): viewers reached through TURN get sound only. */
+  async setRelayDataOut(out: boolean): Promise<void> {
+    if (out === this.relayOut) return;
+    this.relayOut = out;
+    for (const peer of this.peers.values()) if (peer.path === 'relay') await this.refreshVideo(peer);
+  }
+
+  /** A message from a viewer on its data channel (quality, screen shown or hidden). */
+  private onViewerDc(peer: CamPeer, raw: unknown): void {
+    let m: ViewerDcMsg;
+    try {
+      m = JSON.parse(String(raw)) as ViewerDcMsg;
+    } catch {
+      return;
+    }
+    if (this.peers.get(peer.key) !== peer) return;
+    if (m.t === 'q' && (m.q === 'hd' || m.q === 'sd' || m.q === 'audio')) void this.setQuality(peer.key, m.q);
+    else if (m.t === 'vis') this.setShown(peer, m.on !== false);
+  }
+
+  /**
+   * The viewer's screen: hidden for HIDDEN_GRACE_MS → its picture stops (no video to a screen
+   * nobody sees; its sound and the data channel's alerts keep going); shown → back at once.
+   */
+  private setShown(peer: CamPeer, shown: boolean): void {
+    window.clearTimeout(peer.hideTimer);
+    peer.hideTimer = undefined;
+    peer.hidden = !shown;
+    if (shown) {
+      if (peer.off) {
+        peer.off = false;
+        void this.refreshVideo(peer);
+      }
+      return;
+    }
+    if (peer.off) return;
+    peer.hideTimer = window.setTimeout(() => {
+      peer.hideTimer = undefined;
+      if (this.peers.get(peer.key) !== peer || !peer.hidden) return;
+      peer.off = true;
+      void this.refreshVideo(peer);
+    }, HIDDEN_GRACE_MS);
   }
 
   /** Direct video slots taken over the internet (connected, not on the home Wi-Fi, not audio-only), besides `except`. */
@@ -555,7 +647,8 @@ export class CameraHub {
           await a.sender.replaceTrack(audio);
         }
         await pc.setLocalDescription(await pc.createAnswer());
-        this.send(peer, { sdp: pc.localDescription!.toJSON() });
+        // dcc: this camera takes the viewer's quality and screen state on the data channel.
+        this.send(peer, { sdp: pc.localDescription!.toJSON(), dcc: 1 });
         await this.applyEncodings();
       } catch {
         // Start clean next time; the viewer falls back to the relay and retries.
@@ -568,10 +661,12 @@ export class CameraHub {
 
   private create(key: string, sid: string, pcId: string | null, who: string): CamPeer {
     this.close(key);
-    const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle' });
-    const peer: CamPeer = { key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '', ov: false, held: false };
+    const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 1 });
+    const peer: CamPeer = { key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '', ov: false, held: false, hidden: false, hideTimer: undefined, off: false };
     pc.ondatachannel = (e) => {
-      if (e.channel.label === 'mon') peer.dc = e.channel;
+      if (e.channel.label !== 'mon') return;
+      peer.dc = e.channel;
+      e.channel.onmessage = (ev) => this.onViewerDc(peer, ev.data);
     };
     pc.onicecandidate = (e) => {
       if (this.peers.get(key) === peer) this.send(peer, { ice: e.candidate ? e.candidate.toJSON() : null });
@@ -661,7 +756,10 @@ export class CameraHub {
       if (peer.pc.connectionState !== 'connected') continue;
       try {
         const s = readEncStats((await peer.pc.getStats()) as unknown as StatsLike);
+        const wasRelay = peer.path === 'relay';
         if (s.path) peer.path = s.path;
+        // Relay data used up: moving onto (or off) a TURN relay takes the picture away (or brings it back).
+        if (this.relayOut && wasRelay !== (peer.path === 'relay')) await this.refreshVideo(peer);
         // Audio-only and paused viewers have no video encoder to judge.
         if (peer.quality !== 'audio' && this.videoOn) samples.push({ key: peer.key, ...s, path: peer.path });
       } catch { /* closing */ }
@@ -697,6 +795,7 @@ export class CameraHub {
   close(key: string): void {
     const peer = this.peers.get(key);
     if (!peer) return;
+    window.clearTimeout(peer.hideTimer);
     this.peers.delete(key);
     this.onTalk?.(key, null, peer.name);
     this.onCallerVideo?.(key, null, peer.name);
@@ -753,6 +852,12 @@ export class ViewerLink {
   onIceStale: (() => void) | null = null;
   private iceClock = new IceClock(() => this.onIceStale?.());
   private pathTimer: number | undefined;
+  private dc: RTCDataChannel | null = null;
+  /** The camera takes quality and screen state on the data channel (it said `dcc` in its answer). */
+  private dcc = false;
+  /** This viewer's screen is shown (picture-in-picture counts): the camera hears it on the data channel. */
+  private shown = true;
+  private onOnline: (() => void) | null = null;
 
   /**
    * `vid` identifies this viewer (device + tab) across room reconnects, so the
@@ -801,13 +906,20 @@ export class ViewerLink {
     this.camSid = camSid;
     this.pcId = randomId();
     this.full = false;
+    this.dcc = false;
     this.setState('connecting');
-    const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle' });
+    // A candidate gathered ahead (iceCandidatePoolSize): the home Wi-Fi path is tried a moment sooner.
+    const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 1 });
     this.pc = pc;
     // The order of codecs in our offer is what we'd like to receive: H.264 first.
     preferCodecs(pc.addTransceiver('video', { direction: 'sendrecv' }));
     pc.addTransceiver('audio', { direction: 'sendrecv' });
     const dc = pc.createDataChannel('mon', { ordered: true });
+    this.dc = dc;
+    // A screen that is already hidden says so as soon as it can (the camera then waits the grace).
+    dc.onopen = () => {
+      if (!this.shown) this.sendDc({ t: 'vis', on: false });
+    };
     dc.onmessage = (e) => {
       try {
         this.onDirect?.(JSON.parse(String(e.data)) as DirectMsg);
@@ -850,6 +962,14 @@ export class ViewerLink {
         void this.restartIce();
       }
     }, 2000);
+    // The network came back or changed (Wi-Fi ↔ mobile data): find the best path NOW — back onto
+    // the home Wi-Fi as soon as it's there — instead of waiting for the old one to time out.
+    if (this.onOnline) window.removeEventListener?.('online', this.onOnline);
+    this.onOnline = () => {
+      // Only between negotiations (a restart mid-offer would fail the call), and once it got going.
+      if (this.pc === pc && pc.signalingState === 'stable' && pc.connectionState !== 'closed' && pc.connectionState !== 'new') void this.restartIce();
+    };
+    window.addEventListener?.('online', this.onOnline);
     await pc.setLocalDescription(await pc.createOffer());
     if (this.pc !== pc) return;
     // ov: if the camera's direct slots are full, we'll watch its relay picture.
@@ -906,6 +1026,7 @@ export class ViewerLink {
     // Answers, candidates and byes for an older call of ours are stale.
     if (d.pc && d.pc !== this.pcId) return;
     if (d.sdp?.type === 'answer') {
+      if (d.dcc === 1) this.dcc = true;
       await this.pc.setRemoteDescription(d.sdp).catch(() => this.setState('failed'));
     } else if (d.ice) {
       await this.pc.addIceCandidate(d.ice).catch(() => undefined);
@@ -924,6 +1045,34 @@ export class ViewerLink {
       // The camera hung up (it's stopping): the call is over, not failed.
       this.setState('closed');
     }
+  }
+
+  private sendDc(m: ViewerDcMsg): boolean {
+    if (!this.dcc || this.dc?.readyState !== 'open') return false;
+    try {
+      this.dc.send(JSON.stringify(m));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The picture quality, straight to the camera over the data channel when it takes it there
+   * (free — no message through our server). False: send it through the room instead.
+   */
+  sendQuality(q: Quality): boolean {
+    return this.sendDc({ t: 'q', q });
+  }
+
+  /**
+   * This viewer's screen is shown or hidden (picture-in-picture counts as shown). The camera
+   * stops the picture after HIDDEN_GRACE_MS hidden and brings it back at once (viewGate.ts).
+   */
+  setShown(shown: boolean): void {
+    if (shown === this.shown) return;
+    this.shown = shown;
+    this.sendDc({ t: 'vis', on: shown });
   }
 
   /** Open the mic to the nursery (FaceTime-style unmute). Returns the mic track for a level meter. */
@@ -996,6 +1145,9 @@ export class ViewerLink {
     window.clearTimeout(this.connectTimer);
     window.clearInterval(this.watchdog);
     window.clearTimeout(this.pathTimer);
+    if (this.onOnline) window.removeEventListener?.('online', this.onOnline);
+    this.onOnline = null;
+    this.dc = null;
     if (this.path) {
       this.path = null;
       this.onPath?.(null);

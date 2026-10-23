@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { adapt, CameraHub, classifyPath, encodingFor, LADDER, newAdapt, orderCodecs, readEncStats, summarizeEnc, ViewerLink, type EncSample } from './rtc';
+import { adapt, CameraHub, classifyPath, encodingFor, LADDER, newAdapt, orderCodecs, readEncStats, summarizeEnc, v6Net, ViewerLink, type EncSample } from './rtc';
+import { HIDDEN_GRACE_MS } from './viewGate';
 import type { MonRtc } from './protocol';
 
 describe('classifyPath', () => {
@@ -20,6 +21,32 @@ describe('classifyPath', () => {
   it('relay wins over everything', () => {
     expect(classifyPath({ candidateType: 'relay' }, { candidateType: 'host', address: '192.168.1.3' })).toBe('relay');
     expect(classifyPath({ candidateType: 'host' }, { candidateType: 'relay' })).toBe('relay');
+  });
+
+  // Feature doc §7 C3: a host candidate alone is not "Home Wi-Fi".
+  it('carrier IPv6: two phones on mobile data connect host-to-host across the internet — not Home Wi-Fi', () => {
+    expect(classifyPath({ candidateType: 'host', address: '2a01:4b00:8000:1::23' }, { candidateType: 'host', address: '2607:fb90:a1b2:7::9' })).toBe('internet');
+    // A global IPv6 host on one end, a private address on the other: across the internet.
+    expect(classifyPath({ candidateType: 'host', address: '2a01:4b00:8000:1::23' }, { candidateType: 'host', address: '192.168.1.31' })).toBe('internet');
+  });
+
+  it('IPv6 on the same home network (one /64): Home Wi-Fi', () => {
+    expect(classifyPath({ candidateType: 'host', address: '2001:db8:aa:1:1c2d::5' }, { candidateType: 'host', address: '2001:0db8:00aa:0001:9:8:7:6' })).toBe('lan');
+    expect(v6Net('2001:db8:aa:1::5')).toBe('2001:db8:aa:1');
+    expect(v6Net('[2001:db8:aa:1::5]')).toBe('2001:db8:aa:1');
+    expect(v6Net('fe80::1')).toBeNull(); // link-local is private already
+    expect(v6Net('192.168.1.2')).toBeNull();
+  });
+
+  it('a public IPv4 or a carrier-NAT (100.64/10) host candidate is not the home network', () => {
+    expect(classifyPath({ candidateType: 'host', address: '81.2.3.4' }, { candidateType: 'host', address: '81.2.3.9' })).toBe('internet');
+    expect(classifyPath({ candidateType: 'host', address: '100.72.1.4' }, { candidateType: 'host', address: '100.72.9.8' })).toBe('internet');
+  });
+
+  it('private kinds: RFC 1918, link-local, ULA, mDNS names', () => {
+    for (const a of ['10.1.2.3', '172.20.0.4', '192.168.0.9', '169.254.3.3', 'fd00::1', 'fc12:3::4', 'fe80::9', 'feb0::1', '5f3a.local']) {
+      expect(classifyPath({ candidateType: 'host', address: a }, { candidateType: 'prflx', address: '192.168.1.2' })).toBe('lan');
+    }
   });
 });
 
@@ -50,7 +77,8 @@ describe('encodingFor (the ladder)', () => {
   });
 
   it('caps a TURN relay path and the viewer’s Data saver choice', () => {
-    expect(encodingFor({ ...hd, peers: 1, internetPeers: 1, path: 'relay' })).toEqual({ maxBitrate: 650_000, scaleResolutionDownBy: 2, maxFramerate: 20 });
+    // ADR 0006 Phase 0: a TURN-relayed picture is capped at 400 kbit/s, 15 fps.
+    expect(encodingFor({ ...hd, peers: 1, internetPeers: 1, path: 'relay' })).toEqual({ maxBitrate: 400_000, scaleResolutionDownBy: 2, maxFramerate: 15 });
     expect(encodingFor({ quality: 'sd', pressure: 0, peers: 1, internetPeers: 0, path: 'lan' })).toEqual({ maxBitrate: 450_000, scaleResolutionDownBy: 2, maxFramerate: 15 });
     expect(encodingFor({ quality: 'sd', pressure: 0, peers: 8, internetPeers: 8, path: 'internet' })).toEqual({ maxBitrate: 450_000, scaleResolutionDownBy: 2, maxFramerate: 15 });
   });
@@ -188,7 +216,9 @@ class FakePC {
   onicecandidate: ((e: { candidate: null }) => void) | null = null;
   ondatachannel: unknown = null;
   ontrack: unknown = null;
-  constructor() {
+  /** The data channel a viewer made (it counts what it sent). */
+  dc: { label: string; readyState: string; onmessage: unknown; onopen: (() => void) | null; sent: string[]; send(m: string): void } | null = null;
+  constructor(public config?: RTCConfiguration) {
     FakePC.all.push(this);
   }
   getTransceivers() {
@@ -199,8 +229,9 @@ class FakePC {
     this.transceivers.push(t);
     return t;
   }
-  createDataChannel() {
-    return { onmessage: null };
+  createDataChannel(label: string) {
+    this.dc = { label, readyState: 'open', onmessage: null, onopen: null, sent: [], send(m: string) { this.sent.push(m); } };
+    return this.dc;
   }
   async setRemoteDescription(d: { type: string; sdp: string }) {
     this.remote = d;
@@ -267,7 +298,8 @@ describe('CameraHub: one connection per viewer session', () => {
   it('answers on the call it was offered, preferring H.264, and caps the encoder', async () => {
     await hub.onSignal('s1', offer('p1'), 'Mom');
     expect(FakePC.all).toHaveLength(1);
-    expect(sent.at(-1)).toEqual({ to: 's1', d: { sdp: { type: 'answer', sdp: 'a' }, pc: 'p1' } });
+    // dcc: this camera takes the viewer's quality and screen state on the data channel.
+    expect(sent.at(-1)).toEqual({ to: 's1', d: { sdp: { type: 'answer', sdp: 'a' }, pc: 'p1', dcc: 1 } });
     const v = FakePC.all[0].transceivers[0];
     expect((v.prefs as { mimeType: string }[])[0].mimeType).toBe('video/H264');
     expect(v.sender.params.encodings[0]).toMatchObject({ maxBitrate: 1_600_000, scaleResolutionDownBy: 1, maxFramerate: 24 });
@@ -320,7 +352,7 @@ describe('CameraHub: one connection per viewer session', () => {
     await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' } });
     await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' } });
     expect(FakePC.all).toHaveLength(1);
-    expect(sent.at(-1)?.d).toEqual({ sdp: { type: 'answer', sdp: 'a' } });
+    expect(sent.at(-1)?.d).toEqual({ sdp: { type: 'answer', sdp: 'a' }, dcc: 1 });
     expect(hub.keyOf('s1')).toBe('s1');
   });
 
@@ -490,5 +522,135 @@ describe('ViewerLink', () => {
     // The next attempt starts clean.
     await link.connect('cam1');
     expect(link.full).toBe(false);
+  });
+});
+
+describe('direct-first and sound-only paths (feature doc §7 C3, C5, §4.7)', () => {
+  let sent: { to: string; d: MonRtc }[];
+  const videoTrack = { kind: 'video' } as unknown as MediaStreamTrack;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    vi.stubGlobal('MediaStream', class {});
+    vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/VP8' }] }) });
+    FakePC.all = [];
+    sent = [];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const camera = () => new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: videoTrack, audio: null }));
+  /** A viewer calls; the camera answers; the call connects on `path`; its data channel opens on the camera. */
+  const call = async (hub: CameraHub, n: number, path: 'lan' | 'internet') => {
+    await hub.onSignal(`s${n}`, { sdp: { type: 'offer', sdp: 'o' }, pc: `p${n}`, vid: `v${n}` });
+    const pc = FakePC.all.at(-1)!;
+    const channel = { label: 'mon', onmessage: null as ((e: { data: string }) => void) | null };
+    (pc.ondatachannel as (e: { channel: typeof channel }) => void)({ channel });
+    pc.connect(path);
+    await vi.advanceTimersByTimeAsync(1600);
+    return { pc, say: (m: unknown) => channel.onmessage?.({ data: JSON.stringify(m) }), video: () => pc.transceivers[0].sender.track };
+  };
+
+  it('camera: a viewer whose screen is hidden loses the picture after the grace (sound stays), and gets it back at once', async () => {
+    const hub = camera();
+    const v = await call(hub, 0, 'lan');
+    expect(v.video()).toBe(videoTrack);
+    v.say({ t: 'vis', on: false });
+    await vi.advanceTimersByTimeAsync(HIDDEN_GRACE_MS - 1000);
+    expect(v.video()).toBe(videoTrack); // a glance away keeps it
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(v.video()).toBeNull();
+    v.say({ t: 'vis', on: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(v.video()).toBe(videoTrack);
+    // Back before the grace ends: never taken away.
+    v.say({ t: 'vis', on: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    v.say({ t: 'vis', on: true });
+    await vi.advanceTimersByTimeAsync(HIDDEN_GRACE_MS);
+    expect(v.video()).toBe(videoTrack);
+    hub.closeAll();
+  });
+
+  it('camera: quality from the data channel (no message through the room)', async () => {
+    const hub = camera();
+    const v = await call(hub, 0, 'lan');
+    v.say({ t: 'q', q: 'audio' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(v.video()).toBeNull();
+    v.say({ t: 'q', q: 'hd' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(v.video()).toBe(videoTrack);
+    v.say({ t: 'q', q: 'bogus' });
+    v.say('not json');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(v.video()).toBe(videoTrack);
+    hub.closeAll();
+  });
+
+  it('camera: relay data used up — a viewer through TURN gets sound only, the Home Wi-Fi one keeps the picture', async () => {
+    const hub = camera();
+    const home = await call(hub, 0, 'lan');
+    const far = await call(hub, 1, 'internet');
+    // The far viewer's call goes through a TURN relay.
+    far.pc.stats = new Map<string, Record<string, unknown>>([
+      ['t', { type: 'transport', id: 't', selectedCandidatePairId: 'cp' }],
+      ['cp', { type: 'candidate-pair', id: 'cp', localCandidateId: 'l', remoteCandidateId: 'r' }],
+      ['l', { type: 'local-candidate', id: 'l', candidateType: 'host', address: '192.168.1.2' }],
+      ['r', { type: 'remote-candidate', id: 'r', candidateType: 'relay', address: '141.101.90.1' }],
+    ]);
+    await vi.advanceTimersByTimeAsync(5000); // the stats tick reads the new path
+    await hub.setRelayDataOut(true);
+    expect(far.video()).toBeNull();
+    expect(home.video()).toBe(videoTrack);
+    await hub.setRelayDataOut(false);
+    expect(far.video()).toBe(videoTrack);
+    hub.closeAll();
+  });
+
+  it('viewer: quality and screen state go on the data channel to a camera that takes them there', async () => {
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    await link.connect('cam1');
+    const pc = FakePC.all[0];
+    expect(pc.config).toMatchObject({ iceCandidatePoolSize: 1 });
+    // A camera from before this change (no dcc): the room carries the quality, as before.
+    expect(link.sendQuality('sd')).toBe(false);
+    const pcId = sent.find((m) => m.d.sdp)!.d.pc;
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'a' }, pc: pcId, dcc: 1 });
+    expect(link.sendQuality('audio')).toBe(true);
+    link.setShown(false);
+    link.setShown(false); // only on change
+    link.setShown(true);
+    expect(pc.dc!.sent.map((m) => JSON.parse(m))).toEqual([{ t: 'q', q: 'audio' }, { t: 'vis', on: false }, { t: 'vis', on: true }]);
+    link.close();
+  });
+
+  it('viewer: a screen already hidden when the call starts says so once the channel opens', async () => {
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    link.setShown(false);
+    await link.connect('cam1');
+    const pc = FakePC.all[0];
+    const pcId = sent.find((m) => m.d.sdp)!.d.pc;
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'a' }, pc: pcId, dcc: 1 });
+    pc.dc!.onopen?.();
+    expect(pc.dc!.sent.map((m) => JSON.parse(m))).toEqual([{ t: 'vis', on: false }]);
+    link.close();
+  });
+
+  it('viewer: the network coming back restarts ICE at once (back onto the home Wi-Fi without waiting)', async () => {
+    const listeners = new Map<string, () => void>();
+    vi.stubGlobal('window', { ...globalThis, setTimeout, clearTimeout, setInterval, clearInterval, addEventListener: (t: string, f: () => void) => listeners.set(t, f), removeEventListener: (t: string) => listeners.delete(t) });
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    await link.connect('cam1');
+    FakePC.all[0].connect('lan');
+    sent = [];
+    listeners.get('online')!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.filter((m) => m.d.sdp?.type === 'offer')).toHaveLength(1);
+    link.close();
+    expect(listeners.has('online')).toBe(false);
   });
 });

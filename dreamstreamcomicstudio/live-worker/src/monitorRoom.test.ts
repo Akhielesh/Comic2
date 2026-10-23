@@ -324,7 +324,7 @@ describe('MonitorRoom relay video (WebCodecs, sound, windows)', () => {
     await say(vp8, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8', 'bogus'] });
     await say(jpegOnly, { t: 'relay', on: true, dev: 'crib', codecs: [] });
     await say(legacy, { t: 'relay', on: true, dev: 'crib' });
-    expect(cam.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 4, avc: 1, vp8: 2, vp9: 0, jpeg: 2 });
+    expect(cam.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 4, avc: 1, vp8: 2, vp9: 0, jpeg: 2, v: 4 });
     const send = (b: ArrayBuffer) => {
       tick();
       return room.webSocketMessage(cam as never, b);

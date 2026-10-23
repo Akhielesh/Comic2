@@ -7,6 +7,11 @@
  *    something is on screen right away instead of after the full P2P
  *    handshake (or its 10 s give-up), and drops it once the direct picture has
  *    actually rendered a frame (not merely "connected" — the swap is seamless).
+ *  - Same network: when the room says the viewer is on the camera's network
+ *    (`near`, feature doc §7 C3), there is no instant picture at all — the
+ *    direct one over the home Wi-Fi is a moment away, and nothing should pass
+ *    through our server for it. If it really can't connect, the fallback
+ *    below still brings the relay.
  *  - Fallback: when the direct picture can't get through (no TURN server and
  *    a network that blocks P2P, or the camera's direct slots are full), the
  *    relay stays, and P2P is retried in the background with back-off.
@@ -42,6 +47,8 @@ export interface Fallback {
   retry: boolean;
   /** The instant picture is scheduled (the direct one gets a moment first). */
   pending: boolean;
+  /** On the camera's own network (the room's `near`): no instant picture through the server. */
+  near: boolean;
 }
 
 export type FallbackInput =
@@ -57,6 +64,8 @@ export type FallbackInput =
   | { t: 'cam'; dev: string | null }
   /** Whether to use the instant picture (the viewer chose audio-only, or back). */
   | { t: 'instant'; on: boolean }
+  /** The room says whether the camera being watched is on this viewer's network. */
+  | { t: 'near'; on: boolean }
   /** The scheduled P2P retry is due. */
   | { t: 'retry' };
 
@@ -71,7 +80,7 @@ export type FallbackEffect =
   | { t: 'instant_clear' }
   | { t: 'connect' };
 
-export const initialFallback = (instant = true): Fallback => ({ relay: false, early: false, instant, dev: null, link: 'idle', fails: 0, retry: false, pending: false });
+export const initialFallback = (instant = true): Fallback => ({ relay: false, early: false, instant, dev: null, link: 'idle', fails: 0, retry: false, pending: false, near: false });
 
 /** The direct picture's head start before the instant (relay) picture is asked for. */
 export const INSTANT_DELAY_MS = 1000;
@@ -89,7 +98,7 @@ export function stepFallback(s0: Fallback, input: FallbackInput): { s: Fallback;
   let s = s0;
   /** While the direct picture (re)connects: give it a head start, then the instant picture. */
   const schedule = () => {
-    if (s.instant && s.dev && !s.relay && !s.pending && connecting(s.link)) {
+    if (s.instant && !s.near && s.dev && !s.relay && !s.pending && connecting(s.link)) {
       fx.push({ t: 'instant_in', ms: INSTANT_DELAY_MS });
       s = { ...s, pending: true };
     }
@@ -142,7 +151,7 @@ export function stepFallback(s0: Fallback, input: FallbackInput): { s: Fallback;
       if (!s.pending) return { s, fx };
       s = { ...s, pending: false };
       // Still not through: a picture now, via the room, until the direct one renders.
-      if (s.instant && s.dev && !s.relay && connecting(s.link)) {
+      if (s.instant && !s.near && s.dev && !s.relay && connecting(s.link)) {
         fx.push({ t: 'relay_on', dev: s.dev, instant: true });
         s = { ...s, relay: true, early: true };
       }
@@ -173,6 +182,18 @@ export function stepFallback(s0: Fallback, input: FallbackInput): { s: Fallback;
       if (input.on === s.instant) return { s, fx };
       s = { ...s, instant: input.on };
       if (!input.on) {
+        unschedule();
+        if (s.relay && s.early) {
+          fx.push({ t: 'relay_off' });
+          s = { ...s, relay: false, early: false };
+        }
+      } else schedule();
+      return { s, fx };
+    }
+    case 'near': {
+      if (input.on === s.near) return { s, fx };
+      s = { ...s, near: input.on };
+      if (input.on) {
         unschedule();
         if (s.relay && s.early) {
           fx.push({ t: 'relay_off' });

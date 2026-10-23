@@ -38,11 +38,12 @@ import { audioOnly, bareJpeg, KIND_AUDIO, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDI
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord, type CallStat } from './familyCalls';
 import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
-import { clockTime, isValidTz, localIso, localParts, MonitorStore, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
+import { clockTime, isValidTz, localIso, localParts, MonitorStore, packMinute, timelineOf, unpackMinute, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
+import { MONITOR_TURN_BPS, netTag, relayDataState, type FairState } from './monitorFair';
 import { endSession, manualSleep, manualWake, newSleepSm, sessionKind, stepSleep, type SleepEvent, type SleepSm, type SleepStats } from './sleepTracker';
 import { bearerFrom, callRpc, verifyMember, type LiveIdentity, type SupabaseEnv } from './supabaseAuth';
 import { callUsage, carriersOf, clampClientReport, relayClock, UsageMeter, type SocketUsage, type UsageSink } from './usageMeter';
-import { compactUsage, FAIR_USE, isEmptyUsage, type UsageMonth } from '../../shared/stream/usage';
+import { compactUsage, FAIR_USE, isEmptyUsage, monthKey, type UsageMonth } from '../../shared/stream/usage';
 import { userLineName } from './directCalls';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
 
@@ -166,6 +167,41 @@ interface Attach {
   rs?: number;
   /** Camera: the UTC day this nursery's daily activity mark was last written (so a wake doesn't repeat it). */
   am?: string;
+  // ---- Kept on the socket, not in memory: the room hibernates between most messages (ADR 0006 WS-9).
+  /** Camera: when it last sent anything (ms) — with its keepalive pings, the watchdog's proof of life. */
+  lb?: number;
+  /** Camera: reported as not responding (the alert went out; cleared — "back online" — when it speaks again). */
+  sf?: boolean;
+  /** Camera: paused for privacy — none of its relay messages go anywhere. */
+  pv?: boolean;
+  /** Camera: its minute rows not written yet, packed — the phone keeps them too, until `stats_ok`. */
+  mp?: [number, ReturnType<typeof packMinute>][];
+  /** Camera: the newest minute already pushed to viewers (a batch sent again isn't pushed twice). */
+  bm?: number;
+  /** Camera: the `live_want` it was last told. */
+  lw?: boolean;
+  /** Monitor sockets: the relay-data level this socket was last told (`fair`; absent = 'ok'). */
+  fl?: FairState['level'];
+  /** Viewer: its screen is shown (`view`). false = hidden: after the grace, sound only. Absent = an app that never says. */
+  vis?: boolean;
+  /** Viewer: hidden since (ms) — the picture goes HIDDEN_GRACE_MS later. */
+  hz?: number;
+  /** Viewer: a camera's data channel is delivering its status to it (`view`), so it needs no live status from here… */
+  dc?: boolean;
+  /** …from this camera (device id; absent = any camera). */
+  dcd?: string;
+  /** Viewer: an instant-picture subscription held back (the camera's device id) — it's on the camera's network. */
+  rn?: string;
+  /** Which network the socket came from: a hash of its public network (an IPv4 address, an IPv6 /64), never the address. */
+  nt?: string;
+  /** Camera: said goodbye (stopped on purpose) at this time — its socket closing next is expected. */
+  bye?: number;
+  /**
+   * Closed by the room at this time (ms): signed out, counted nowhere, heard no more. The runtime
+   * can keep listing a socket the room closed for minutes (a phone that's gone never answers the
+   * close), so a closed socket must never still count — as a camera, a line, or a sign-in due.
+   */
+  cl?: number;
 }
 
 export interface SplStatus {
@@ -333,20 +369,69 @@ const DEFAULT_SETTINGS: Settings = {
   sensitivity: 'medium', cryRepeatMin: 3, cryEscalateMin: 5, noiseDb: 70, machineCheck: true, sleepTracking: true, zones: {}, tz: 'UTC',
 };
 const AUTH_TIMEOUT_MS = 10_000;
-const ALARM_MS = 15_000;
-const BEAT_STALE_MS = 45_000;
+/**
+ * A camera that hasn't sent anything — not a status, not a minute, not even its 25 s keepalive
+ * ping (answered by the runtime, read back with getWebSocketAutoResponseTimestamp) — for this
+ * long is "not responding" (phone locked, app frozen, off Wi-Fi): parents are alerted.
+ * (A camera whose socket CLOSES is caught at once: webSocketClose + OFFLINE_GRACE_MS.)
+ */
+export const BEAT_STALE_MS = 75_000;
+/**
+ * The watchdog is a dead man's switch (ADR 0006 WS-9). Its alarm sits WATCH_MS after the
+ * camera's last proof of life, and the camera's own messages push it later — only once it is
+ * within WATCH_PUSH_MS, so a healthy camera costs a row (setAlarm) every minute or so and no
+ * alarm wake at all. It used to be an alarm every 15 s, each rewriting a 7-day blob: ≈ 5,760
+ * rows and 2,880 billed wakes a night. When it does go off, the alarm reads the real proof of
+ * life (the camera's last message, or its last keepalive ping): stale for BEAT_STALE_MS →
+ * "not responding"; otherwise it sets itself again. So a camera that dies is reported 75–105 s
+ * later (it was 45–60 s); the viewers' own screens notice a frozen picture in 6 s.
+ */
+export const WATCH_MS = 105_000;
+export const WATCH_PUSH_MS = 30_000;
+/** A camera that missed a keepalive ping (every 25 s) when the watchdog looks: next look at exactly stale. */
+const WATCH_SUSPECT_MS = 30_000;
+/** Camera messages look at the watchdog's alarm at most this often (memory: a wake looks again). */
+const WATCH_CHECK_MS = 10_000;
 const OFFLINE_GRACE_MS = 20_000;
+/**
+ * Minute rows are written in batches (ADR 0006 WS-9): once BATCH_ROWS are waiting, or the oldest
+ * has waited BATCH_WAIT_MS — and at once when a batch would change the sleep tracker (asleep,
+ * woke, a report), when the camera stops or its socket closes, when it is reported not
+ * responding, when an alert is raised, or when it sends a backlog. Until then they ride the
+ * camera socket's attachment (which survives hibernation; every read includes them) and the
+ * phone keeps them too, until the room says `stats_ok`. A batch is one row written per
+ * camera-hour (monitorStore.ts), not three per minute.
+ */
+const BATCH_ROWS = 5;
+const BATCH_WAIT_MS = 6 * 60_000;
+/** Waiting minutes never make an attachment bigger than this (the runtime's limit is 2 KiB in all). */
+const PENDING_MAX_CHARS = 900;
 const LOG_HELLO = 150;
-const TL_BUCKET_MS = 5 * 60_000;
-const TL_KEEP_MS = 7 * 24 * 60 * 60_000;
+/**
+ * What this room can do, for clients that adapt (ADR 0006 Phase 0 contract: `hello.caps`):
+ * `view` — viewers say when their screen is hidden (`{t:'view', vis, dc, dev?}`), and the room
+ * sends a camera `live_want` (full-rate status only while someone needs it from the room).
+ */
+const CAPS = ['view'] as const;
+/**
+ * A viewer whose screen is hidden this long gets the relay's SOUND only — no picture to a
+ * screen nobody sees (feature doc §7 C5). Same value as live/monitor/viewGate.ts (a test checks).
+ */
+export const HIDDEN_GRACE_MS = 20_000;
+/** One-off storage moves done (migrate()). */
+const SCHEMA_VERSION = 2;
 const MAX_SOCKETS = 14;
 /** Family members' apps listening for calls (separate from the monitor's devices). */
 const MAX_LINES = 24;
 const CALL_PUSH_CAP = 40;
-/** While a call is up, the alarm checks its lines this often… */
-const LINE_CHECK_MS = 30_000;
-/** …and drops a line in the call that hasn't pinged or said anything for this long (half-open socket). */
+/**
+ * While a call is up, a line in it that hasn't pinged or said anything for this long is dropped
+ * (half-open socket). The alarm is set for the moment each line would be this stale — a fixed
+ * time, so a chatty camera's re-plans can't keep moving it later (dropStaleLines).
+ */
 const LINE_STALE_MS = 60_000;
+/** An answered ("I'm on it") incident still counts this long after the answer. */
+const ACKED_STALE_MS = 30 * 60_000;
 /** All an 'admin' socket (the Invite sheet off the watch screen) may send. */
 const ADMIN_MSGS = new Set(['members_changed', 'share_set', 'share_off', 'share_pass', 'share_extend', 'guest_remove', 'request_dismiss', 'ping']);
 const MAX_CAMERAS = 4;
@@ -384,9 +469,10 @@ const RELAY_VIEWER_KEY_MS = 2000;
 /** A camera that sent no video for this long is treated as JPEG-only. */
 const RELAY_VIDEO_STALE_MS = 5000;
 const PURGE_EVERY_MS = 6 * 60 * 60_000;
+/** A sleep session whose camera stopped sending minutes this long ago is closed where the data stopped. */
+const SLEEP_GONE_MS = 45 * 60_000;
 const MACHINE_DB = 50;
 const MACHINE_GAP_MS = 12 * 60 * 60_000;
-const STATE_RANK: Record<BabyState, number> = { calm: 1, stirring: 2, awake: 2, noisy: 3, fussing: 4, crying: 5 };
 const PUSH_COOLDOWN_MS: Record<string, number> = {
   alarm: 60_000, glass: 2 * 60_000, zone: 2 * 60_000, fuss: 10 * 60_000, cough: 10 * 60_000, crash: 10 * 60_000, cat: 15 * 60_000,
   loud: 10 * 60_000, noise: 10 * 60_000, camera: 10 * 60_000, offline: 5 * 60_000, battery: 30 * 60_000, insight: 6 * 60 * 60_000, guest: 0,
@@ -507,6 +593,23 @@ export function relayRoute(head: RelayHead, raw: ArrayBuffer, rc: number | undef
 }
 
 /**
+ * What a viewer that gets SOUND ONLY (its screen hidden past the grace, or the nursery's relay
+ * data used up) gets of a relay message: the sound out of a video + sound message, a sound-only
+ * message as it is — never a picture. Viewers from before the framed format (bare JPEGs, no
+ * sound path) never say they're hidden, so they never get here.
+ */
+export function relaySound(head: RelayHead, raw: ArrayBuffer, rc: number | undefined): ArrayBuffer | null {
+  if (rc == null) return null;
+  if (head.kind === KIND_VIDEO_AUDIO) return audioOnly(raw);
+  return head.kind === KIND_AUDIO ? raw : null;
+}
+
+/** This viewer's relay is sound only now: hidden for the grace, or the nursery's relay data is used up. */
+export function relaySoundOnly(a: { vis?: boolean; hz?: number; fl?: string }, now: number): boolean {
+  return (a.vis === false && a.hz != null && now - a.hz >= HIDDEN_GRACE_MS) || a.fl === 'out';
+}
+
+/**
  * One viewer's relay window: the last seq forwarded (`fw`, at `fwAt`) and
  * acknowledged (`ack`, at `ackAt`), waiting for a key frame, when it last
  * asked the camera for one (`keyAt`), whether a probe went out since
@@ -553,23 +656,31 @@ export function sanitizeZones(v: unknown): Zone[] {
 }
 
 export class MonitorRoom {
-  // In-memory, best-effort (rebuilt after eviction; the alarm re-seeds grace).
-  private beats = new Map<string, number>();
-  private staleFlagged = new Set<string>();
+  // Memory is best-effort: the room hibernates between most messages and wakes with none of it.
+  // What matters lives in storage (history, incidents, sleep, settings) or on the sockets'
+  // attachments (a camera's proof of life, privacy pause, unwritten minutes; a viewer's screen
+  // state) — never only here. What's here is a cache or a pace limiter that a wake rebuilds.
+  /** The camera's last status, for presence (a new viewer makes the camera send a fresh one at once). */
   private lastStatus = new Map<string, { st: CamStatus; at: number }>();
   private relayBuckets = new Map<string, FrameBucket>();
   /** Per camera: the video codec it last sent (and when), and its key-frame requests. */
   private relayCams = new Map<string, { codec: number; at: number; keyAt: number; keyPending: boolean }>();
   /** Per viewer socket: its relay window. */
   private relayRx = new Map<string, RelayRx>();
-  /** Cameras paused for privacy: nothing of theirs is relayed. */
-  private relayPrivacy = new Set<string>();
   /** The UTC day the activity mark was written (memory; the camera's attachment `am` is the durable copy). */
   private activeDay: string | null = null;
   private lastStatusAt = new Map<string, number>();
   private lastSoundAt = new Map<string, number>();
-  private curBucket: { t: number; s: number; cry: number } | null = null;
-  private lastBucketSave = 0;
+  /** When a camera message last looked at the watchdog's alarm (pace only). */
+  private watchCheckedAt = 0;
+  /** The nursery's relay data this month (cache; every socket's attachment `fl` holds what it was told). */
+  private fair: FairState | null = null;
+  /** Per camera: the relay_want it was last sent (outgoing messages are free; this only skips repeats). */
+  private relayWantSent = new Map<string, string>();
+  /** Per camera: when relay frames last re-checked who gets the picture (a hidden viewer's grace ends without a message). */
+  private relayWantAt = new Map<string, number>();
+  /** The attachment each socket's running handler holds (see sockets()). */
+  private live = new Map<WebSocket, Attach>();
   private vapid: VapidKeys | null = null;
   /** Call lines: when each last sent anything (pings are answered by the runtime — see the constructor). */
   private lineSeen = new Map<string, number>();
@@ -587,17 +698,24 @@ export class MonitorRoom {
     this.usage = new UsageMeter({ storage: state.storage, sink: env.STREAM_USAGE, scope: 'nursery' });
     this.ready = state.blockConcurrencyWhile(() => this.migrate());
     // Keepalive pings are answered by the runtime without waking the room: a ping carries no
-    // state here (camera liveness is its 2-s status, presence is the socket list, guests' last
-    // seen is set at sign-in), so this only saves wake-ups — and a pong comes back even while
-    // the room is busy. getWebSocketAutoResponseTimestamp then says when a socket last pinged.
+    // state here (presence is the socket list, guests' last seen is set at sign-in), so this
+    // saves wake-ups — and a pong comes back even while the room is busy.
+    // getWebSocketAutoResponseTimestamp then says when a socket last pinged: for a camera, that
+    // is half of the watchdog's proof of life (the other half: its last message, `lb`).
     try {
       state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}'));
     } catch { /* older runtime: the ping handlers below answer */ }
   }
 
-  /** Create the tables; move the pre-database log (a KV array) into them once. */
+  /**
+   * Create the tables (and turn the per-minute table into hour blocks, once — monitorStore.ts).
+   * One-off moves run once per nursery, behind a schema number, not on every wake: the
+   * pre-database log (a KV array) into the tables, and the old 7-day timeline blob deleted
+   * (the timeline is computed from the minutes now).
+   */
   private async migrate(): Promise<void> {
     this.store.init();
+    if (((await this.state.storage.get<number>('schema')) ?? 0) >= SCHEMA_VERSION) return;
     const old = await this.state.storage.get<{ id: string; at: number; kind: string; msg: string; by?: string; dev?: string; secs?: number; conf?: number }[]>('log');
     if (old?.length) {
       for (const e of old) {
@@ -605,6 +723,8 @@ export class MonitorRoom {
       }
     }
     if (old) await this.state.storage.delete('log');
+    if ((await this.state.storage.get('tl')) !== undefined) await this.state.storage.delete('tl');
+    await this.state.storage.put('schema', SCHEMA_VERSION);
   }
 
   private sevOf(kind: string): Severity {
@@ -685,6 +805,8 @@ export class MonitorRoom {
     const from = num(param('from'), to - 90 * 24 * 60 * 60_000, to, to - 7 * 24 * 60 * 60_000);
     const settings = await this.settings();
     const meta = await this.meta();
+    // The minutes still waiting on a camera's socket go into the file too (written now).
+    if (kind === 'minutes') for (const s of this.authed()) if (s.a.mode === 'camera' && s.a.dev && s.a.mp?.length) await this.commitMinutes(s.ws, s.a, now);
     const csv = kind === 'track' ? this.tracker.csv(from, to + 1, (t) => localIso(t, settings.tz)) : this.store.csv(kind, from, to + 1, settings.tz);
     const slug = (meta.name || 'nursery').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'nursery';
     return new Response(`﻿${csv}\r\n`, {
@@ -714,18 +836,29 @@ export class MonitorRoom {
       } catch { /* closing */ }
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
+    // Same network as the camera? (monitorFair.ts) A hash in this socket's attachment, gone with
+    // the socket — the address itself is never kept, logged, stored or sent. Worked out before
+    // the socket is accepted: its first message (the sign-in) must find the attachment there.
+    const nt = await netTag(nid, req.headers.get('cf-connecting-ip')).catch(() => null);
     this.state.acceptWebSocket(server);
     const a: Attach = { sid: crypto.randomUUID().slice(0, 10), at: Date.now(), authed: false };
+    if (nt) a.nt = nt;
     server.serializeAttachment(a);
-    await this.ensureAlarm(AUTH_TIMEOUT_MS);
+    // A socket that never signs in is dropped by the next alarm (within the watchdog's, when one is set).
+    await this.ensureAlarm(AUTH_TIMEOUT_MS, WATCH_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   // ------------------------------------------------------------- sockets
+  /**
+   * Every socket with its attachment. A socket whose message (or close) is being handled right now
+   * comes with the very object its handler holds (`live`), so a helper that updates attachments
+   * never saves a stale copy of it — and the handler's own save never undoes the helper's.
+   */
   private sockets(): { ws: WebSocket; a: Attach }[] {
     const out: { ws: WebSocket; a: Attach }[] = [];
     for (const ws of this.state.getWebSockets()) {
-      const a = ws.deserializeAttachment() as Attach | null;
+      const a = this.live.get(ws) ?? (ws.deserializeAttachment() as Attach | null);
       if (a) out.push({ ws, a });
     }
     return out;
@@ -755,10 +888,14 @@ export class MonitorRoom {
   private presence() {
     const cams: { sid: string; dev: string; dn: string; by: string; since: number; status: CamStatus | null; statusAt: number | null }[] = [];
     const viewers: { sid: string; name: string; label: string | null; role: MonRole; dn: string; relay: boolean; guest?: boolean }[] = [];
-    for (const { a } of this.authed()) {
+    for (const { ws, a } of this.authed()) {
       if (a.mode === 'camera' && a.dev) {
         const ls = this.lastStatus.get(a.dev);
-        cams.push({ sid: a.sid, dev: a.dev, dn: a.dn || 'Camera', by: a.name || 'Member', since: a.at, status: ls?.st ?? null, statusAt: ls?.at ?? null });
+        // The camera sends its status when something material changes, so its last status still
+        // holds while it's alive: say when it was last confirmed (a message or a keepalive), so a
+        // viewer arriving between changes doesn't see a live camera as gone quiet.
+        const at = ls ? (a.sf ? ls.at : Math.max(ls.at, this.seenAt(ws, a))) : null;
+        cams.push({ sid: a.sid, dev: a.dev, dn: a.dn || 'Camera', by: a.name || 'Member', since: a.at, status: ls?.st ?? null, statusAt: at });
       } else if (a.mode === 'viewer') {
         viewers.push({ sid: a.sid, name: a.name || 'Member', label: a.label ?? null, role: a.role || 'viewer', dn: a.dn || 'Device', relay: !!a.relay && !a.ri, ...(a.guest ? { guest: true } : {}) });
       }
@@ -772,12 +909,22 @@ export class MonitorRoom {
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     await this.ready;
+    // Binary = a relay message (video, sound or JPEG) from an authenticated camera: the hot path.
+    if (typeof raw !== 'string') {
+      const a = ws.deserializeAttachment() as Attach | null;
+      return a ? this.onRelayFrame(a, raw) : undefined;
+    }
     const a = ws.deserializeAttachment() as Attach | null;
     if (!a) return;
+    this.live.set(ws, a);
+    try {
+      await this.onText(ws, a, raw);
+    } finally {
+      if (this.live.get(ws) === a) this.live.delete(ws);
+    }
+  }
 
-    // Binary = a relay message (video, sound or JPEG) from an authenticated camera.
-    if (typeof raw !== 'string') return this.onRelayFrame(a, raw);
-
+  private async onText(ws: WebSocket, a: Attach, raw: string): Promise<void> {
     if (raw.length > RTC_FRAME_MAX) return;
     let msg: Record<string, unknown>;
     try {
@@ -787,6 +934,8 @@ export class MonitorRoom {
     }
     const big = msg.t === 'rtc' || msg.t === 'call_rtc' || msg.t === 'auth' || msg.t === 'push_sub' || msg.t === 'call_push' || msg.t === 'stats' || msg.t === 'settings';
     if (!big && raw.length > FRAME_MAX) return;
+    // A socket the room closed (replaced, timed out, refused) is heard no more — not even a new sign-in.
+    if (a.cl) return;
 
     if (!a.authed) {
       if (msg.t === 'auth') await this.onAuth(ws, a, msg);
@@ -801,17 +950,21 @@ export class MonitorRoom {
     }
     // An admin socket manages people and the share link, nothing else.
     if (a.mode === 'admin' && !ADMIN_MSGS.has(String(msg.t))) return;
+    // Anything from a camera proves it's alive (kept on its socket: a wake can't forget it),
+    // and keeps the watchdog's alarm from going off for nothing.
+    if (a.mode === 'camera' && a.dev) await this.cameraSpoke(ws, a, Date.now());
 
     switch (msg.t) {
       case 'rtc':
         return this.onRtc(a, msg);
       case 'status':
-        return this.onStatus(a, msg);
+        return this.onStatus(ws, a, msg);
       case 'beat':
-        if (a.mode === 'camera' && a.dev) this.markBeat(a.dev);
-        return;
+        return; // proof of life only (cameraSpoke)
+      case 'view':
+        return this.onView(ws, a, msg);
       case 'event':
-        return this.onCamEvent(a, msg);
+        return this.onCamEvent(ws, a, msg);
       case 'stats':
         return this.onStats(ws, a, msg);
       case 'log':
@@ -840,10 +993,18 @@ export class MonitorRoom {
         return this.onSettings(a, msg);
       case 'q':
         return msg.q === 'usage' ? this.onUsageQuery(ws, a, msg) : this.onQuery(ws, msg);
-      case 'use':
+      case 'use': {
         if (a.mode !== 'viewer') return;
-        this.usage.report(a, 'monitor', clampClientReport(msg, Date.now() - a.at));
-        return ws.serializeAttachment(a);
+        const now = Date.now();
+        const use = clampClientReport(msg, now - a.at);
+        // A monitor viewer can't receive more through TURN than its picture and sound: one viewer
+        // can't use up the whole nursery's relay data by saying so (monitorFair.ts).
+        use.turnBytes = Math.min(use.turnBytes ?? 0, ((Math.max(0, now - a.at) / 1000 + 60) * MONITOR_TURN_BPS) / 8);
+        this.usage.report(a, 'monitor', use);
+        ws.serializeAttachment(a);
+        // Relay data may have crossed the nursery's allowance (or a new month began).
+        return this.checkFair(now);
+      }
       case 'track_put':
         return this.onTrackPut(ws, a, msg);
       case 'track_del':
@@ -868,7 +1029,11 @@ export class MonitorRoom {
         return this.onEndAll(a);
       case 'bye':
         if (a.mode === 'camera' && a.dev) {
-          await this.state.storage.put(`bye:${a.dev}`, Date.now());
+          // Stopped on purpose: its socket closing next is no "went offline" (kept on the socket, not written).
+          a.bye = Date.now();
+          ws.serializeAttachment(a);
+          // Monitoring is over: the night's last minutes are written now, not left waiting for a batch.
+          await this.commitMinutes(ws, a, Date.now());
           await this.addLog({ kind: 'camera', msg: `${a.dn || 'Camera'} was stopped by ${a.name}`, by: a.name, dev: a.dev });
         }
         return;
@@ -890,49 +1055,85 @@ export class MonitorRoom {
       this.lineSeen.delete(a.sid);
       return this.onLineGone(a);
     }
-    // The room can still list a socket while it closes: take it out of every
-    // count below (presence, relay viewers), and finish the closing handshake.
+    // Finish the closing handshake.
+    return this.retire(ws, a, 1000, 'bye');
+  }
+
+  /**
+   * The room is done with this socket: out of every count at once (signed out, `cl`) — presence,
+   * relay viewers, the camera cap, the watchdog — its goodbye handled (a camera's waiting minutes
+   * written, the usage it carried handed on, "went offline" unless the device is still here),
+   * then closed. The runtime can keep listing a socket the room closed for minutes when its phone
+   * is gone (it never answers the close): such a leftover must never raise a false "not
+   * responding", hide a real one, or take a camera's place.
+   */
+  private async retire(ws: WebSocket, a: Attach, code: number, reason: string): Promise<void> {
+    const closing: Attach = { ...a, authed: false, cl: Date.now() };
     try {
-      ws.serializeAttachment({ ...a, authed: false });
-      ws.close(1000, 'bye');
+      ws.serializeAttachment(closing);
+      ws.close(code, reason);
     } catch { /* already closed */ }
+    if (!a.authed) return;
+    if (a.mode === 'line') {
+      this.lineSeen.delete(a.sid);
+      return this.onLineGone(a);
+    }
     if (a.mode === 'admin') return; // never in presence
+    this.live.set(ws, closing);
+    try {
+      await this.onClosed(ws, a);
+    } finally {
+      if (this.live.get(ws) === closing) this.live.delete(ws);
+    }
+  }
+
+  private async onClosed(ws: WebSocket, a: Attach): Promise<void> {
+    const now = Date.now();
+    // A camera's waiting minutes are written now: the phone may never come back to send them again.
+    if (a.mode === 'camera' && a.mp?.length) await this.commitMinutes(ws, a, now, undefined, true);
     // What this socket carried (relay minutes, stashed frames) goes back to memory; written below or parked.
-    relayClock(this.usage, a, 'monitor', false, Date.now());
+    relayClock(this.usage, a, 'monitor', false, now);
     this.usage.release(a);
     if (a.mode === 'camera' && a.dev) {
       const stillThere = this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev);
       if (!stillThere) {
-        const bye = await this.state.storage.get<number>(`bye:${a.dev}`);
-        if (bye && Date.now() - bye < 30_000) {
-          await this.state.storage.delete(`bye:${a.dev}`);
-        } else {
+        // Stopped on purpose (bye), or already reported not responding: nothing more to say.
+        const expected = (a.bye != null && now - a.bye < 30_000) || !!a.sf;
+        if (!expected) {
           // Unexpected drop: alert unless it comes back within the grace window.
           const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
-          pending[a.dev] = { at: Date.now(), dn: a.dn || 'Camera' };
+          pending[a.dev] = { at: now, dn: a.dn || 'Camera' };
           await this.state.storage.put('pendingOffline', pending);
           await this.ensureAlarm(OFFLINE_GRACE_MS);
         }
-        this.beats.delete(a.dev);
         this.lastStatus.delete(a.dev);
+        this.relayWantSent.delete(a.dev);
         // Viewers stay subscribed while the camera is away (linkFallback.ts), but nothing flows: stop their clocks.
-        this.syncRelayClocks(a.dev, Date.now(), ws);
+        this.syncRelayClocks(a.dev, now, ws);
       }
       // Viewers relaying this camera no longer need to; tell the camera's peers.
       this.broadcast({ t: 'cam_gone', sid: a.sid, dev: a.dev });
+      this.sendNear();
     }
     if (a.mode === 'viewer') {
       this.broadcast({ t: 'peer_gone', sid: a.sid }, (x) => x.mode === 'camera');
       this.relayRx.delete(a.sid);
       if (a.relay) this.updateRelayWant(a.relay);
     }
+    // A viewer that needed live status may have been the last one.
+    this.updateLiveWant();
     this.syncPresence();
     // The last camera left: write the night's usage now if the hour allows, else keep it on a socket that stays.
-    if (a.mode === 'camera' && !this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera')) await this.meterTick(Date.now(), ws);
+    if (a.mode === 'camera' && !this.authed().some((s) => s.ws !== ws && s.a.mode === 'camera')) await this.meterTick(now, ws);
     else this.parkUsage(ws);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
+    await this.ready;
+    const a = ws.deserializeAttachment() as Attach | null;
+    // Closed here, so retired here: a camera whose socket errored is handled like one that
+    // dropped (back within the grace, or "went offline"), not left counting as connected.
+    if (a && !a.cl) return this.retire(ws, a, 1011, 'error');
     try {
       ws.close(1011, 'error');
     } catch { /* closed */ }
@@ -979,7 +1180,9 @@ export class MonitorRoom {
     a.role = res.data.role;
     a.label = res.data.label ?? null;
     const meta = { name: res.data.nursery_name || 'Nursery', baby: res.data.baby_name || null };
-    await this.state.storage.put('meta', meta);
+    // Written only when it changed (every connect used to write it: a row each time).
+    const known = await this.state.storage.get<{ name: string; baby: string | null }>('meta');
+    if (known?.name !== meta.name || known?.baby !== meta.baby) await this.state.storage.put('meta', meta);
     return this.admit(ws, a, mode, msg, meta);
   }
 
@@ -1012,14 +1215,14 @@ export class MonitorRoom {
       return;
     }
 
-    // A device re-joining as the same camera replaces its stale socket.
+    // A device re-joining as the same camera replaces its stale socket — retired now, not when the
+    // runtime finally drops it: a phone that changed networks leaves its old connection half-open
+    // for minutes, and that leftover must not go "not responding" (a false alarm that would hide
+    // a real one), count against the camera cap, or show twice in presence. Its waiting minutes
+    // are written; the device is still here, so it is no "went offline".
     if (mode === 'camera') {
       for (const s of this.authed()) {
-        if (s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev) {
-          try {
-            s.ws.close(4005, 'replaced');
-          } catch { /* closed */ }
-        }
+        if (s.ws !== ws && s.a.mode === 'camera' && s.a.dev === a.dev) await this.retire(s.ws, s.a, 4005, 'replaced');
       }
     }
 
@@ -1030,14 +1233,18 @@ export class MonitorRoom {
       await this.state.storage.put('settings', settings);
     }
 
-    const [tl, ice, vapid, duty, sleep] = await Promise.all([this.timeline(), this.ice(a), this.vapidKeys(), this.duty(), this.sleepStatus()]);
+    const now = Date.now();
+    const [ice, vapid, duty, sleep, fair] = await Promise.all([this.ice(a), this.vapidKeys(), this.duty(), this.sleepStatus(), this.fairNow(now)]);
+    a.fl = fair.level;
+    if (mode === 'camera') a.lb = now; // its first proof of life
+    ws.serializeAttachment(a);
     this.send(ws, {
       t: 'hello',
       you: { sid: a.sid, uid: a.uid, name: a.name, role: a.role, label: a.label, mode, dev: a.dev, ...(a.guest ? { guest: true, until } : {}) },
       nursery: { id: nid, ...meta },
       ...this.presence(),
       log: this.store.events({ limit: LOG_HELLO }).reverse().map(toLog),
-      tl,
+      tl: this.timeline(now),
       settings,
       incidents: this.store.activeIncidents(),
       track: { running: this.tracker.running(), latest: this.tracker.latest() },
@@ -1045,18 +1252,24 @@ export class MonitorRoom {
       sleep,
       ...iceFields(ice),
       vapid: vapid?.publicKey ?? null,
+      caps: CAPS,
+      // The nursery's relay data this month (its level decides where the picture may go).
+      fair,
+      // Cameras on this viewer's network: their direct picture over the home Wi-Fi comes first.
+      ...(mode === 'viewer' ? { near: this.nearCams(a) } : {}),
     });
-    if (a.role === 'parent') this.send(ws, { t: 'share', share: this.guests.info(Date.now()) });
+    if (a.role === 'parent') this.send(ws, { t: 'share', share: this.guests.info(now) });
 
     if (mode === 'camera') {
-      this.markBeat(a.dev);
       // A camera that (re)joins picks up viewers already waiting on its relay;
       // its messages start a new count, so every one of them starts on a key frame.
       this.relayCams.delete(a.dev);
-      this.relayPrivacy.delete(a.dev);
+      this.relayWantSent.delete(a.dev);
       for (const s of this.authed()) if (s.a.mode === 'viewer' && s.a.relay === a.dev) this.relayRx.set(s.a.sid, freshRx());
-      this.syncRelayClocks(a.dev, Date.now()); // viewers still subscribed get frames again
+      this.syncRelayClocks(a.dev, now); // viewers still subscribed get frames again
       this.updateRelayWant(a.dev);
+      // Viewers on this camera's network learn it (a yes/no, never an address).
+      this.sendNear();
       const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
       const wasAlerted = await this.state.storage.get<boolean>(`alerted:${a.dev}`);
       if (pending[a.dev]) {
@@ -1070,13 +1283,39 @@ export class MonitorRoom {
       } else {
         await this.addLog({ kind: 'camera', msg: `${a.dn} started watching${meta.baby ? ` ${meta.baby}` : ''} (by ${a.name})`, by: a.name, dev: a.dev });
       }
-      await this.ensureAlarm(ALARM_MS);
+      // The watchdog: a dead man's switch its messages and keepalives keep pushing back.
+      await this.ensureAlarm(WATCH_MS);
+      await this.markActive(now);
+      // Its hello put it back to full rate, whatever a retired socket's goodbye told it before: say it again.
+      delete a.lw;
     }
+    // Whether each camera must send its status at full rate (a camera starts at full rate and is told at once).
+    this.updateLiveWant();
     this.syncPresence();
+  }
+
+  /** Cameras on this socket's network (devices): compared by hash, in memory, never stored. */
+  private nearCams(a: Attach): string[] {
+    if (!a.nt) return [];
+    return this.authed().flatMap(({ a: c }) => (c.mode === 'camera' && c.dev && c.nt === a.nt ? [c.dev] : []));
+  }
+
+  /** Tell every viewer which cameras are on its network (a camera came or went). Outgoing messages are free. */
+  private sendNear(): void {
+    for (const { ws, a } of this.authed()) if (a.mode === 'viewer' && a.nt) this.send(ws, { t: 'near', near: this.nearCams(a) });
   }
 
   private reject(ws: WebSocket, code: string, msg: string): void {
     this.send(ws, { t: 'error', code, msg });
+    // A sign-in refused: closed, and never again a sign-in due (an alarm) while the runtime lists it.
+    // (A signed-in socket refused a new role closes the usual way: its goodbye comes with the close.)
+    const a = this.live.get(ws) ?? (ws.deserializeAttachment() as Attach | null);
+    if (a && !a.authed && !a.cl) {
+      a.cl = Date.now();
+      try {
+        ws.serializeAttachment(a);
+      } catch { /* closed */ }
+    }
     try {
       ws.close(code === 'auth' ? 4001 : code === 'full' ? 4003 : 4004, code);
     } catch { /* closed */ }
@@ -1099,21 +1338,119 @@ export class MonitorRoom {
     }
   }
 
-  private markBeat(dev: string): void {
-    this.beats.set(dev, Date.now());
-    this.staleFlagged.delete(dev);
+  // -------------------------------------------------------- camera liveness
+  /** A camera's last proof of life: its last message, or its last keepalive ping (answered by the runtime). */
+  private seenAt(ws: WebSocket, a: Attach): number {
+    let pinged = 0;
+    try {
+      pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
+    } catch { /* not supported: messages only */ }
+    return Math.max(a.lb ?? a.at, pinged);
   }
 
-  private onStatus(a: Attach, msg: Record<string, unknown>): void {
+  /**
+   * Anything a camera sends proves it's alive. Kept on its socket (`lb`), so neither a wake nor
+   * hibernation forgets it; a camera reported "not responding" that speaks again is back online.
+   */
+  private async cameraSpoke(ws: WebSocket, a: Attach, now: number): Promise<void> {
+    const wasStale = !!a.sf;
+    a.lb = now;
+    delete a.sf;
+    ws.serializeAttachment(a);
+    if (wasStale && a.dev) await this.cameraBack(a.dev, a.dn);
+    await this.keepWatch(now);
+  }
+
+  /** A camera reported not responding is alive after all: its alert ends ("responding again"). */
+  private async cameraBack(dev: string, dn: string | undefined): Promise<void> {
+    await this.state.storage.delete(`alerted:${dev}`);
+    await this.addLog({ kind: 'online', msg: `${dn || 'Camera'} is responding again`, dev });
+    await this.resolveHazard('offline', dev, 'responding again');
+  }
+
+  /**
+   * The watchdog's alarm is close (or not set): plan the next one from the proof of life just
+   * received. At most one look every WATCH_CHECK_MS; nothing written unless the alarm moves.
+   */
+  private async keepWatch(now: number): Promise<void> {
+    if (now - this.watchCheckedAt < WATCH_CHECK_MS) return;
+    this.watchCheckedAt = now;
+    const cur = await this.state.storage.getAlarm();
+    // Far enough away, or due now (it runs and plans the next itself).
+    if (cur != null && (cur - now > WATCH_PUSH_MS || cur <= now)) return;
+    await this.planAlarm(now, cur);
+  }
+
+  /**
+   * When the room next needs to wake, from what is really pending: sign-ins that may time out, the
+   * cameras' watchdog, cameras that dropped without a goodbye, incidents to escalate or that go
+   * stale, a sleep session whose camera went away, family calls ringing or up. Null = nothing (it
+   * sleeps). Every time here is a fixed moment, never "so long from now": a camera's messages
+   * re-plan the alarm every 10 s or so, and a relative time would be moved later each time and
+   * never come.
+   */
+  private async nextAlarmAt(now: number): Promise<number | null> {
+    let at = Infinity;
+    const want = (t: number | null | undefined) => {
+      if (t != null && Number.isFinite(t)) at = Math.min(at, Math.max(now + 1000, t));
+    };
+    for (const { ws, a } of this.sockets()) {
+      // A sign-in still due (a socket the room already closed is due nothing).
+      if (!a.authed) {
+        if (!a.cl) want(a.at + AUTH_TIMEOUT_MS);
+      } else if (a.mode === 'camera' && a.dev && !a.sf) {
+        const seen = this.seenAt(ws, a);
+        // Missed a keepalive already: look again exactly when it would count as not responding.
+        want(seen + (now - seen >= WATCH_SUSPECT_MS ? BEAT_STALE_MS : WATCH_MS));
+      }
+    }
+    const pending = (await this.state.storage.get<Record<string, { at: number; dn: string }>>('pendingOffline')) ?? {};
+    for (const p of Object.values(pending)) want(p.at + OFFLINE_GRACE_MS);
+    want(this.store.nextIncidentAt());
+    // An incident nobody resolved is tidied when it goes stale (escalate()), so a stuck one can't
+    // linger on everyone's screen or soak up the next real alert of its kind.
+    for (const inc of this.store.activeIncidents()) want(incidentStaleAt(inc) + 1);
+    const sm = await this.state.storage.get<SleepSm>('sleepSm');
+    if (sm?.session && sm.lastM != null) want(sm.lastM + SLEEP_GONE_MS + 60_000);
+    const book = await this.callBook();
+    want(book.nextDeadline() == null ? null : book.nextDeadline()! + 500);
+    // Each line in a call that's up: looked at when it would count as gone silent (dropStaleLines).
+    const inCall = callingSids(book);
+    if (inCall.size) {
+      for (const { ws, a } of this.authed()) if (a.mode === 'line' && inCall.has(a.sid)) want(this.lineSeenAt(ws, a) + LINE_STALE_MS);
+    }
+    return at === Infinity ? null : at;
+  }
+
+  /** Set the alarm to the next thing due (`cur`: what it is now, when the caller already read it). */
+  private async planAlarm(now: number, cur?: number | null): Promise<void> {
+    const next = await this.nextAlarmAt(now);
+    const was = cur === undefined ? await this.state.storage.getAlarm() : cur;
+    if (next == null) {
+      if (was != null) await this.state.storage.deleteAlarm?.();
+      return;
+    }
+    if (was !== next) await this.state.storage.setAlarm(next);
+  }
+
+  // ----------------------------------------------------------- status
+  /**
+   * The camera's status. Current camera apps send it when something material changes, plus a
+   * keepalive every 2 minutes — and every 2 s while the room asks (`live_want`: someone is watching
+   * without the camera's own data channel). Older apps send it every 2 s; both work.
+   */
+  private onStatus(ws: WebSocket, a: Attach, msg: Record<string, unknown>): void {
     if (a.mode !== 'camera' || !a.dev) return;
     const now = Date.now();
-    this.markBeat(a.dev);
     // Privacy pause holds back every relay message from this camera (even a throttled status says so).
-    const wasPrivate = this.relayPrivacy.has(a.dev);
-    if ((msg.st as Record<string, unknown> | undefined)?.paused === 'privacy') this.relayPrivacy.add(a.dev);
-    else this.relayPrivacy.delete(a.dev);
-    // Nothing is relayed while paused: its viewers' "through our server" clocks stop, and restart on resume.
-    if (wasPrivate !== this.relayPrivacy.has(a.dev)) this.syncRelayClocks(a.dev, now);
+    const priv = (msg.st as Record<string, unknown> | undefined)?.paused === 'privacy';
+    if (priv !== !!a.pv) {
+      if (priv) a.pv = true;
+      else delete a.pv;
+      ws.serializeAttachment(a);
+      // Nothing is relayed while paused: its viewers' "through our server" clocks stop, and restart on resume.
+      this.syncRelayClocks(a.dev, now);
+    }
     if (now - (this.lastStatusAt.get(a.dev) ?? 0) < 800) return;
     this.lastStatusAt.set(a.dev, now);
     const s = (msg.st ?? {}) as Record<string, unknown>;
@@ -1152,47 +1489,81 @@ export class MonitorRoom {
       enc: sanitizeEnc(s.enc),
     };
     this.lastStatus.set(a.dev, { st, at: now });
+    // Nothing is written: the history is the camera's minute rows, the timeline is built from them.
     this.broadcast({ t: 'status', dev: a.dev, sid: a.sid, st, at: now }, (x) => x.mode === 'viewer');
-    void this.trackBucket(state, now);
   }
 
-  /** 5-minute timeline buckets keep the WORST state seen (cry beats calm). */
-  private async trackBucket(state: BabyState, now: number): Promise<void> {
-    const t = Math.floor(now / TL_BUCKET_MS) * TL_BUCKET_MS;
-    const rank = STATE_RANK[state];
-    if (!this.curBucket || this.curBucket.t !== t) {
-      if (this.curBucket) await this.saveBucket(this.curBucket);
-      this.curBucket = { t, s: rank, cry: 0 };
+  /**
+   * A viewer's screen (`{t:'view', vis, dc, dev?}`, sent on change): shown or hidden, and
+   * whether a camera's data channel is delivering its status (`dev`: which camera; absent: any).
+   * Hidden past HIDDEN_GRACE_MS, its relay is sound only; shown again, its picture starts over
+   * on a key frame. It decides whether the camera must send live status (`live_want`).
+   */
+  private onView(ws: WebSocket, a: Attach, msg: Record<string, unknown>): void {
+    if (a.mode !== 'viewer') return;
+    const now = Date.now();
+    const vis = msg.vis !== false;
+    const wasVis = a.vis !== false;
+    const wasSound = relaySoundOnly(a, now);
+    a.vis = vis;
+    if (vis) delete a.hz;
+    else if (wasVis || a.hz == null) a.hz = now;
+    if (msg.dc === true) a.dc = true;
+    else delete a.dc;
+    const dcd = msg.dc === true ? clip(msg.dev, 40) : '';
+    if (dcd) a.dcd = dcd;
+    else delete a.dcd;
+    ws.serializeAttachment(a);
+    if (a.relay) {
+      // Its "through our server" picture clock runs only while it can see the picture.
+      relayClock(this.usage, a, 'monitor', this.clockOn(a, now), now);
+      ws.serializeAttachment(a);
+      if (wasSound && !relaySoundOnly(a, now)) {
+        // The picture is back: it starts on a key frame.
+        const rx = this.relayRx.get(a.sid);
+        if (rx) rx.wait = true;
+        this.requestKey(a.relay);
+      }
+      this.updateRelayWant(a.relay);
     }
-    const changed = rank > this.curBucket.s;
-    this.curBucket.s = Math.max(this.curBucket.s, rank);
-    if (state === 'crying') this.curBucket.cry += 1;
-    if (changed || now - this.lastBucketSave > 60_000) await this.saveBucket(this.curBucket);
+    this.updateLiveWant();
   }
 
-  private async saveBucket(b: { t: number; s: number; cry: number }): Promise<void> {
-    this.lastBucketSave = Date.now();
-    const tl = (await this.state.storage.get<[number, number, number][]>('tl')) ?? [];
-    const last = tl[tl.length - 1];
-    if (last && last[0] === b.t) {
-      last[1] = Math.max(last[1], b.s);
-      last[2] = Math.max(last[2], b.cry);
-    } else {
-      tl.push([b.t, b.s, b.cry]);
+  /** Does this viewer need the camera's status from the room every 2 s? Only on screen, and without the camera's data channel. */
+  private wantsLive(v: Attach, camDev: string): boolean {
+    if (v.mode !== 'viewer' || v.vis === false) return false;
+    return !(v.dc && (!v.dcd || v.dcd === camDev));
+  }
+
+  /**
+   * Tell each camera whether anyone needs its status at full rate from the room (`live_want`).
+   * Off, the camera sends only what changes (and a keepalive every 2 minutes): its viewers on screen hear
+   * the rest every 2 s over the data channel, and hidden ones see nothing anyway. A viewer app
+   * that never says `view` always counts (vis absent ≠ false) — as before this change.
+   */
+  private updateLiveWant(): void {
+    const socks = this.authed();
+    for (const { ws, a } of socks) {
+      if (a.mode !== 'camera' || !a.dev) continue;
+      const on = socks.some((s) => this.wantsLive(s.a, a.dev!));
+      if (a.lw === on) continue;
+      a.lw = on;
+      ws.serializeAttachment(a);
+      this.send(ws, { t: 'live_want', on });
     }
-    const cutoff = Date.now() - TL_KEEP_MS;
-    while (tl.length && tl[0][0] < cutoff) tl.shift();
-    await this.state.storage.put('tl', tl);
   }
 
-  private async timeline(): Promise<[number, number, number][]> {
-    const tl = (await this.state.storage.get<[number, number, number][]>('tl')) ?? [];
-    const since = Date.now() - 24 * 60 * 60_000;
-    return tl.filter((b) => b[0] >= since);
+  /**
+   * The 24 h timeline strip: 5-minute buckets of the worst state, built from the camera's minute
+   * rows (stored, plus the ones still waiting to be written) — it used to be a blob of its own,
+   * rewritten every 15 s.
+   */
+  private timeline(now: number): [number, number, number][] {
+    return timelineOf(this.minutesWithPending(now - 24 * 60 * 60_000, now + 60_000));
   }
 
   // ------------------------------------------------------- camera events
-  private async onCamEvent(a: Attach, msg: Record<string, unknown>): Promise<void> {
+  private async onCamEvent(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.mode !== 'camera' || !a.dev) return;
     const kind = String(msg.kind ?? '');
     const meta = await this.meta();
@@ -1213,8 +1584,9 @@ export class MonitorRoom {
       return this.resolveHazard('paused', a.dev, 'back');
     }
     if (kind === 'privacy') {
-      if (msg.on) this.relayPrivacy.add(a.dev);
-      else this.relayPrivacy.delete(a.dev);
+      if (msg.on) a.pv = true;
+      else delete a.pv;
+      ws.serializeAttachment(a);
       this.syncRelayClocks(a.dev, Date.now());
       await this.addLog({ kind: 'privacy', msg: msg.on ? `Video paused for privacy on ${where} — sound monitoring continues` : `Video resumed on ${where}`, dev: a.dev });
       return;
@@ -1392,12 +1764,10 @@ export class MonitorRoom {
   }
 
   // --------------------------------------------------------- minute stats
-  /** The camera's per-minute measurements (batched while it was offline). */
-  private async onStats(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
-    if (a.mode !== 'camera' || !a.dev || !Array.isArray(msg.rows)) return;
-    const now = Date.now();
+  /** A camera's minute rows, checked (6 h back at most, 240 at a time), oldest first. */
+  private sanitizeRows(dev: string, raw: unknown[], now: number): MinuteRow[] {
     const rows: MinuteRow[] = [];
-    for (const r of (msg.rows as unknown[]).slice(0, 240)) {
+    for (const r of raw.slice(0, 240)) {
       if (!r || typeof r !== 'object') continue;
       const x = r as Record<string, unknown>;
       const m = Math.floor(Number(x.m) / 60_000) * 60_000;
@@ -1407,35 +1777,142 @@ export class MonitorRoom {
         for (const [k, v] of Object.entries(x.sounds as Record<string, unknown>)) if (isSoundCat(k)) sounds[k] = Math.round(num(v, 0, 60));
       }
       rows.push({
-        dev: a.dev, m,
+        dev, m,
         laeq: numOrNull(x.laeq, 0, 140), lmax: numOrNull(x.lmax, 0, 140), l10: numOrNull(x.l10, 0, 140), l50: numOrNull(x.l50, 0, 140), l90: numOrNull(x.l90, 0, 140), lpk: numOrNull(x.lpk, 0, 160),
         cal: x.cal ? 1 : 0,
         motion: numOrNull(x.motion, 0, 100), mmax: numOrNull(x.mmax, 0, 100), crib: numOrNull(x.crib, 0, 100), outside: numOrNull(x.outside, 0, 100), light: numOrNull(x.light, 0, 255),
         state: numOrNull(x.state, 1, 5), sounds, visit: x.visit ? 1 : 0,
       });
     }
-    rows.sort((p, q) => p.m - q.m);
-    for (const r of rows) this.store.putMinute(r);
-    if (rows.length) {
-      this.send(ws, { t: 'stats_ok', upto: rows[rows.length - 1].m });
-      this.broadcast({ t: 'minutes', rows }, (x) => x.mode === 'viewer');
-      await this.afterMinutes(a.dev, rows);
+    return rows.sort((p, q) => p.m - q.m);
+  }
+
+  /** The minute rows a camera's socket holds, not written yet. */
+  private pendingOf(a: Attach): MinuteRow[] {
+    if (!a.dev || !a.mp) return [];
+    return a.mp.map(([m, p]) => unpackMinute(a.dev!, m, p)).filter((r): r is MinuteRow => !!r);
+  }
+
+  /** Minutes as every reader should see them: what is stored, plus what the cameras' sockets still hold. */
+  minutesWithPending(from: number, to: number, dev?: string): MinuteRow[] {
+    const extra = this.authed().flatMap(({ a }) => (a.mode === 'camera' && (!dev || a.dev === dev) ? this.pendingOf(a) : [])).filter((r) => r.m >= from && r.m < to);
+    const rows = this.store.minutes(from, to, dev);
+    if (!extra.length) return rows;
+    const key = (r: MinuteRow) => `${r.dev}\u0000${r.m}`;
+    const seen = new Set(extra.map(key));
+    return [...rows.filter((r) => !seen.has(key(r))), ...extra].sort((p, q) => p.m - q.m || (p.dev < q.dev ? -1 : p.dev > q.dev ? 1 : 0));
+  }
+
+  /**
+   * The camera's per-minute measurements. Every minute the phone sends the rows the room hasn't
+   * acknowledged; the room shows the new ones on the family's live charts at once, and WRITES them
+   * in batches (BATCH_ROWS / BATCH_WAIT_MS — at once when the sleep tracker would change), acking
+   * with `stats_ok` only what is written. Until then they ride this socket's attachment.
+   */
+  private async onStats(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (a.mode !== 'camera' || !a.dev || !Array.isArray(msg.rows)) return;
+    const now = Date.now();
+    const rows = this.sanitizeRows(a.dev, msg.rows as unknown[], now);
+    if (!rows.length) return;
+    // Live charts: only the minutes viewers weren't sent yet (the phone resends unacknowledged ones).
+    const fresh = rows.filter((r) => r.m > (a.bm ?? -Infinity));
+    if (fresh.length) {
+      this.broadcast({ t: 'minutes', rows: fresh }, (x) => x.mode === 'viewer');
+      a.bm = fresh[fresh.length - 1].m;
     }
+    const byM = new Map(this.pendingOf(a).map((r) => [r.m, r]));
+    for (const r of rows) byM.set(r.m, r);
+    const list = [...byM.values()].sort((p, q) => p.m - q.m);
+    const packed = list.map((r): [number, ReturnType<typeof packMinute>] => [r.m, packMinute(r)]);
+    const commit =
+      list.length >= BATCH_ROWS ||
+      now - list[0].m >= BATCH_WAIT_MS ||
+      JSON.stringify(packed).length > PENDING_MAX_CHARS ||
+      (await this.sleepWouldChange(a.dev, list));
+    if (commit) return this.commitMinutes(ws, a, now, list);
+    a.mp = packed;
+    ws.serializeAttachment(a);
+  }
+
+  /** Would these minutes move the sleep tracker (fell asleep, woke, a report)? A dry run on a copy. */
+  private async sleepWouldChange(dev: string, rows: MinuteRow[]): Promise<boolean> {
+    const settings = await this.settings();
+    if (!settings.sleepTracking || !rows.length || !(await this.sleepMain(dev, rows[rows.length - 1].m, false))) return false;
+    const sm = structuredClone((await this.state.storage.get<SleepSm>('sleepSm')) ?? newSleepSm());
+    for (const r of rows) if (stepSleep(sm, sleepMinute(r), () => 'dry').length) return true;
+    return false;
+  }
+
+  /**
+   * Write a camera's waiting minutes (one row per camera-hour), acknowledge them, and run what
+   * follows from them: sleep tracking, the sound-machine check, housekeeping. `closing`: its
+   * socket is going — no acknowledgement, nothing saved on it.
+   */
+  private async commitMinutes(ws: WebSocket, a: Attach, now: number, rows?: MinuteRow[], closing = false): Promise<void> {
+    if (!a.dev) return;
+    const list = rows ?? this.pendingOf(a);
+    if (a.mp) {
+      delete a.mp;
+      if (!closing) ws.serializeAttachment(a);
+    }
+    if (!list.length) return;
+    this.store.putMinutes(list);
+    if (!closing) this.send(ws, { t: 'stats_ok', upto: list[list.length - 1].m });
+    await this.afterMinutes(a.dev, list);
+    await this.housekeeping(now);
+  }
+
+  /** Write this camera's waiting minutes now (an alert, a camera not responding): the history around it is safe. */
+  private async flushCamera(dev: string): Promise<void> {
+    for (const { ws, a } of this.authed()) {
+      if (a.mode === 'camera' && a.dev === dev && a.mp?.length) await this.commitMinutes(ws, a, Date.now());
+    }
+  }
+
+  /**
+   * Upkeep that used to ride the 15 s alarm, now on the writes that happen anyway: the 6-hourly
+   * retention purge, the day's activity mark, the hourly usage write, the relay-data month.
+   */
+  private async housekeeping(now: number): Promise<void> {
+    const purgedAt = (await this.state.storage.get<number>('purgedAt')) ?? 0;
+    if (now - purgedAt > PURGE_EVERY_MS) {
+      this.store.purge(now);
+      this.guests.purge(now);
+      this.tracker.purge(now);
+      await this.usage.prune(now);
+      await this.state.storage.put('purgedAt', now);
+    }
+    await this.markActive(now);
+    await this.meterTick(now);
+    const stale = this.fair ? this.fair.month !== monthKey(now) : this.authed().some((s) => s.a.fl && s.a.fl !== 'ok');
+    if (stale) await this.checkFair(now);
+  }
+
+  /**
+   * Which camera's minutes drive the sleep tracker: the one already doing it, until it has been
+   * quiet for 10 minutes — then whoever reports. `take`: write the change (it's only a change).
+   */
+  private async sleepMain(dev: string, last: number, take: boolean): Promise<boolean> {
+    const cur = await this.state.storage.get<{ dev: string; at: number }>('sleepDev');
+    if (cur?.dev === dev) return true;
+    if (cur) {
+      const pend = this.authed().flatMap(({ a }) => (a.mode === 'camera' && a.dev === cur.dev ? this.pendingOf(a).map((r) => r.m) : []));
+      const mainLast = Math.max(cur.at, this.store.lastMinute(cur.dev) ?? 0, ...pend);
+      if (last - mainLast <= 10 * 60_000) return false;
+    }
+    if (take) await this.state.storage.put('sleepDev', { dev, at: last });
+    return true;
   }
 
   /** Sleep tracking + the sound-machine check run on the nursery's main camera. */
   private async afterMinutes(dev: string, rows: MinuteRow[]): Promise<void> {
     const settings = await this.settings();
-    let sleepDev = await this.state.storage.get<{ dev: string; at: number }>('sleepDev');
     const last = rows[rows.length - 1].m;
-    if (!sleepDev || sleepDev.dev === dev || last - sleepDev.at > 10 * 60_000) sleepDev = { dev, at: last };
-    if (sleepDev.dev !== dev) return;
-    await this.state.storage.put('sleepDev', sleepDev);
-
+    if (!(await this.sleepMain(dev, last, true))) return;
     if (settings.sleepTracking) {
       const sm = (await this.state.storage.get<SleepSm>('sleepSm')) ?? newSleepSm();
       const events: SleepEvent[] = [];
-      for (const r of rows) events.push(...stepSleep(sm, { m: r.m, state: r.state, motion: r.motion, crib: r.crib, sounds: r.sounds, visit: r.visit }, newId));
+      for (const r of rows) events.push(...stepSleep(sm, sleepMinute(r), newId));
       await this.state.storage.put('sleepSm', sm);
       await this.onSleepEvents(events);
     }
@@ -1497,7 +1974,7 @@ export class MonitorRoom {
 
   /** Room conditions and notable events in a window. */
   private summarise(from: number, to: number): { laeq: number | null; l90: number | null; peak: number | null; light: number | null; counts: Record<string, number>; visits: number; noisyMin: number } {
-    const rows = this.store.minutes(from, to);
+    const rows = this.minutesWithPending(from, to);
     const vals = (k: keyof MinuteRow) => rows.map((r) => r[k] as number | null).filter((v): v is number => v != null);
     const energy = (xs: number[]) => (xs.length ? 10 * Math.log10(xs.reduce((a, d) => a + 10 ** (d / 10), 0) / xs.length) : null);
     const laeq = energy(vals('laeq'));
@@ -1550,10 +2027,11 @@ export class MonitorRoom {
     const now = Date.now();
     const settings = await this.settings();
     let inc = this.store.openIncident(kind, dev);
-    if (inc && inc.status === 'acked' && now - (inc.ack_at ?? 0) > 10 * 60_000) {
-      // Answered a while ago and happening again: that's a new incident.
-      this.store.updateIncident(inc.id, { status: 'resolved', resolved_at: now });
-      this.broadcast({ t: 'incident', inc: { ...inc, status: 'resolved', resolved_at: now } });
+    // Answered a while ago and happening again — or so old it no longer counts (the tidy-up may not
+    // have run yet): that's a new incident, and people are alerted. A stuck one never swallows it.
+    if (inc && ((inc.status === 'acked' && now - (inc.ack_at ?? 0) > 10 * 60_000) || now > incidentStaleAt(inc))) {
+      this.store.updateIncident(inc.id, { status: 'resolved', resolved_at: now, next_at: null });
+      this.broadcast({ t: 'incident', inc: { ...inc, status: 'resolved', resolved_at: now, next_at: null } });
       inc = null;
     }
     if (inc) {
@@ -1565,6 +2043,8 @@ export class MonitorRoom {
       id: newId(), at: now, kind, sev: entry.sev, title: note.title, dev, status: 'open',
       ack_by: null, ack_at: null, resolved_at: null, pushes: 1, next_at: escalate != null ? now + escalate : null,
     };
+    // The history around an alert is written now, not left waiting for a batch.
+    await this.flushCamera(dev);
     this.store.addIncident(row);
     this.store.setEventIncident(entry.id, row.id);
     this.broadcast({ t: 'incident', inc: row });
@@ -1602,9 +2082,8 @@ export class MonitorRoom {
       this.broadcast({ t: 'incident', inc: { ...inc, pushes, next_at: next } });
     }
     for (const inc of this.store.activeIncidents()) {
-      const h = HAZARD[inc.kind as HazardKind];
-      const stale = inc.status === 'acked' ? now - (inc.ack_at ?? inc.at) > 30 * 60_000 : now - inc.at > (h?.staleMs ?? 60 * 60_000);
-      if (stale) {
+      // Due at a fixed time of its own (nextAlarmAt), not only when something else wakes the room.
+      if (now > incidentStaleAt(inc)) {
         this.store.updateIncident(inc.id, { status: 'resolved', resolved_at: now, next_at: null });
         this.broadcast({ t: 'incident', inc: { ...inc, status: 'resolved', resolved_at: now, next_at: null } });
       }
@@ -1808,25 +2287,33 @@ export class MonitorRoom {
    */
   private onRelay(ws: WebSocket, a: Attach, msg: Record<string, unknown>): void {
     if (a.mode !== 'viewer') return;
+    const now = Date.now();
     const prev = a.relay;
     const prevRc = a.rc;
     const prevRi = !!a.ri;
-    a.relay = msg.on ? clip(msg.dev, 40) || undefined : undefined;
+    const dev = msg.on ? clip(msg.dev, 40) || undefined : undefined;
+    // Feature doc §7 C3, LAN first: a viewer on the camera's own network gets no instant picture
+    // through our server — its direct picture over the home Wi-Fi is a moment away. Held back
+    // (`rn`), not refused: if the direct picture really fails it asks again (no longer instant).
+    const near = !!dev && !!msg.instant && this.nearCams(a).includes(dev);
+    if (near) a.rn = dev;
+    else delete a.rn;
+    a.relay = near ? undefined : dev;
     a.rc = a.relay && Array.isArray(msg.codecs) ? relayCodecMask(msg.codecs) : undefined;
     a.ri = a.relay && msg.instant ? true : undefined;
-    // The clock runs only while frames can flow: its camera is here and not paused for privacy.
-    relayClock(this.usage, a, 'monitor', !!a.relay && this.relayFlowing(a.relay), Date.now());
+    // The clock runs only while frames can flow (its camera is here and not paused for privacy) and it can see them.
+    relayClock(this.usage, a, 'monitor', this.clockOn(a, now), now);
     ws.serializeAttachment(a);
     const rx = this.relayRx.get(a.sid);
     if (!a.relay) this.relayRx.delete(a.sid);
     else if (a.relay !== prev || a.rc !== prevRc || !rx) {
-      this.relayRx.set(a.sid, freshRx(Date.now()));
+      this.relayRx.set(a.sid, freshRx(now));
       this.requestKey(a.relay);
     } else {
       // The same subscription again: its window starts over where the camera is
       // now (what it missed isn't still owed). A flowing picture keeps going; a
       // waiting one asks for a key frame (at most once per RELAY_VIEWER_KEY_MS).
-      Object.assign(rx, { fw: null, ack: null, ackAt: Date.now(), fwAt: Date.now(), probed: false, held: 0 });
+      Object.assign(rx, { fw: null, ack: null, ackAt: now, fwAt: now, probed: false, held: 0 });
       if (rx.wait && this.getsVideo(a)) this.viewerKey(a.relay, rx);
     }
     if (prev && prev !== a.relay) this.updateRelayWant(prev);
@@ -1835,34 +2322,53 @@ export class MonitorRoom {
     if (prev !== a.relay || prevRi !== !!a.ri) this.syncPresence();
   }
 
-  /** Tell a camera how many viewers want its relay, and what they decode. */
-  private updateRelayWant(dev: string): void {
-    const want = { t: 'relay_want', n: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 };
+  /**
+   * Tell a camera how many viewers want its relay and what they decode — `v`: how many of them get
+   * the PICTURE (on screen, relay data left); the rest get its sound only, so a camera whose relay
+   * viewers are all hidden encodes no video at all (relay.ts). The codec counts are picture viewers
+   * only; `n` stays everyone, for camera apps from before `v` (they keep sending pictures the room
+   * then drops, and their sound still reaches everyone). Sent only when it changed.
+   */
+  private updateRelayWant(dev: string, force = false): void {
+    const now = Date.now();
+    const want = { t: 'relay_want', n: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0, v: 0 };
     for (const { a } of this.authed()) {
       if (a.mode !== 'viewer' || a.relay !== dev) continue;
-      const m = a.rc ?? 0;
       want.n += 1;
+      if (relaySoundOnly(a, now)) continue;
+      const m = a.rc ?? 0;
+      want.v += 1;
       if (m & 1) want.avc += 1;
       if (m & 2) want.vp8 += 1;
       if (m & 4) want.vp9 += 1;
       if (!m) want.jpeg += 1;
     }
+    const key = JSON.stringify(want);
+    if (!force && this.relayWantSent.get(dev) === key) return;
+    this.relayWantSent.set(dev, key);
     this.broadcast(want, (x) => x.mode === 'camera' && x.dev === dev);
   }
 
   /** Can this camera's relay frames reach viewers now: connected, and not paused for privacy? */
   private relayFlowing(dev: string, except?: WebSocket): boolean {
-    return !this.relayPrivacy.has(dev) && this.authed().some((s) => s.ws !== except && s.a.mode === 'camera' && s.a.dev === dev);
+    return this.authed().some((s) => s.ws !== except && s.a.mode === 'camera' && s.a.dev === dev && !s.a.pv);
+  }
+
+  /** Should this viewer's "picture through our server" clock run: subscribed, frames flowing, a picture it can see? */
+  private clockOn(a: Attach, now: number, except?: WebSocket): boolean {
+    return !!a.relay && a.vis !== false && a.fl !== 'out' && this.relayFlowing(a.relay, except) && !relaySoundOnly(a, now);
   }
 
   /**
    * Run each subscribed viewer's "through our server" clock only while its camera's frames can flow
-   * (a viewer stays subscribed while the camera is away or paused). Attachments only — no storage.
+   * (a viewer stays subscribed while the camera is away or paused) and it gets the picture.
+   * Attachments only — no storage.
    */
   private syncRelayClocks(dev: string, now: number, except?: WebSocket): void {
-    const on = this.relayFlowing(dev, except);
     for (const { ws, a } of this.authed()) {
-      if (ws === except || a.mode !== 'viewer' || a.relay !== dev || on === (a.rs != null)) continue;
+      if (ws === except || a.mode !== 'viewer' || a.relay !== dev) continue;
+      const on = this.clockOn(a, now, except);
+      if (on === (a.rs != null)) continue;
       relayClock(this.usage, a, 'monitor', on, now);
       ws.serializeAttachment(a);
     }
@@ -1935,9 +2441,15 @@ export class MonitorRoom {
     // Every camera message is a billed DO request (20:1): counted in memory only — no await, no storage.
     this.usage.bump('monitor', 'relayFrames');
     const head = readHead(raw);
-    if (!head || this.relayPrivacy.has(a.dev)) return;
+    if (!head || a.pv) return;
     const dev = a.dev;
     const now = Date.now();
+    // A hidden viewer's grace ends without a message: about once a second, re-tell the camera who
+    // gets the picture (only sent when it changed), so it stops encoding video nobody sees.
+    if (now - (this.relayWantAt.get(dev) ?? 0) >= 1000) {
+      this.relayWantAt.set(dev, now);
+      this.updateRelayWant(dev);
+    }
     const isVideo = head.kind === KIND_VIDEO || head.kind === KIND_VIDEO_AUDIO;
     let bucket = this.relayBuckets.get(dev);
     if (!bucket) this.relayBuckets.set(dev, (bucket = new FrameBucket(now)));
@@ -1956,7 +2468,9 @@ export class MonitorRoom {
     for (const s of this.authed()) {
       const v = s.a;
       if (v.mode !== 'viewer' || v.relay !== dev) continue;
-      const out = relayRoute(head, raw, v.rc, vc);
+      // Its screen hidden past the grace, or the nursery's relay data used up: the sound, never the picture.
+      const soundOnly = relaySoundOnly(v, now);
+      const out = soundOnly ? relaySound(head, raw, v.rc) : relayRoute(head, raw, v.rc, vc);
       if (!out) continue;
       // Viewers from before the framed format: bare JPEGs, no window.
       if (v.rc == null) {
@@ -1979,6 +2493,10 @@ export class MonitorRoom {
       let send: ArrayBuffer | null = out;
       if (lag > RELAY_DEAD) {
         send = null; // nothing acknowledged for 3 s: probably gone (probes only)
+      } else if (soundOnly) {
+        // When its picture comes back, it starts on a key frame.
+        rx.wait = true;
+        if (lag > RELAY_LAG * 2) send = null;
       } else if (isVideo) {
         if (!rx.wait && lag > RELAY_LAG) {
           rx.wait = true;
@@ -2039,7 +2557,7 @@ export class MonitorRoom {
     if (q === 'history') {
       const to = Math.min(now + 60_000, num(msg.to, 0, now + 60_000, now));
       const from = num(msg.from, to - 7 * 24 * 60 * 60_000, to, to - 6 * 60 * 60_000);
-      return reply({ from, to, ...historyBuckets(this.store.minutes(from, to, msg.dev ? clip(msg.dev, 40) : undefined), from, to) });
+      return reply({ from, to, ...historyBuckets(this.minutesWithPending(from, to, msg.dev ? clip(msg.dev, 40) : undefined), from, to) });
     }
     if (q === 'events') {
       const kinds = Array.isArray(msg.kinds) ? (msg.kinds as unknown[]).map((k) => clip(k, 20)).filter(Boolean).slice(0, 30) : undefined;
@@ -2069,7 +2587,7 @@ export class MonitorRoom {
       const row = sid ? this.store.sleep(sid) : this.store.lastSleep(1, 'night')[0] ?? null;
       if (!row) return reply({ report: null });
       const end = row.end ?? now;
-      const minutes = this.store.minutes(row.start, end + 60_000);
+      const minutes = this.minutesWithPending(row.start, end + 60_000);
       const incidents = this.store.incidentsBetween(row.start, end).filter((i) => i.ack_at);
       return reply({
         report: {
@@ -2675,28 +3193,29 @@ export class MonitorRoom {
    * A phone that dies mid-call can leave its socket half-open for minutes, so
    * the room would keep it "in" the call forever. A line in an answered call
    * that hasn't pinged (the runtime's auto-response time) or said anything for
-   * a minute is dropped — it gets the usual grace to come back. True while any
-   * call is up (the alarm keeps checking).
+   * a minute is dropped — it gets the usual grace to come back. The alarm is
+   * set for when each line would be that stale (nextAlarmAt). True while any
+   * call is up.
    */
   private async dropStaleLines(now: number): Promise<boolean> {
-    const book = await this.callBook();
-    const up = book.toJSON().filter((c) => !c.ended && c.answeredAt != null);
-    if (!up.length) return false;
-    const inCall = new Set(up.flatMap((c) => c.parts.filter((p) => p.gone == null).map((p) => p.sid)));
+    const inCall = callingSids(await this.callBook());
+    if (!inCall.size) return false;
     for (const { ws, a } of this.authed()) {
       if (a.mode !== 'line' || !inCall.has(a.sid)) continue;
-      let pinged = 0;
-      try {
-        pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
-      } catch { /* not supported */ }
-      if (now - Math.max(a.at, pinged, this.lineSeen.get(a.sid) ?? 0) < LINE_STALE_MS) continue;
-      try {
-        ws.close(4008, 'stale');
-      } catch { /* closed */ }
-      this.lineSeen.delete(a.sid);
-      await this.onLineGone(a);
+      if (now - this.lineSeenAt(ws, a) < LINE_STALE_MS) continue;
+      // Retired, not just closed: a half-open leftover never counts as a line again.
+      await this.retire(ws, a, 4008, 'stale');
     }
     return true;
+  }
+
+  /** A call line's last sign of life: its last message (memory), its last keepalive ping, or when it connected. */
+  private lineSeenAt(ws: WebSocket, a: Attach): number {
+    let pinged = 0;
+    try {
+      pinged = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? 0;
+    } catch { /* not supported */ }
+    return Math.max(a.at, pinged, this.lineSeen.get(a.sid) ?? 0);
   }
 
   private async onCallMsg(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
@@ -2738,7 +3257,8 @@ export class MonitorRoom {
         if ('error' in call) return this.send(ws, { t: 'call_err', error: call.error, id });
         // Saved before anything else is awaited: the joiner's offer is right behind this message.
         await this.commitCalls(book, [call]);
-        await this.ensureAlarm(LINE_CHECK_MS);
+        // The call is up: its lines are watched from now on (each at the moment it would go stale).
+        await this.planAlarm(now);
         return this.send(ws, { t: 'call_joined', id, ...iceFields(await this.ice(a, { scope: 'account', id: call.from.uid })) });
       }
       case 'call_ice': {
@@ -2829,10 +3349,14 @@ export class MonitorRoom {
     if (gone.size) await this.state.storage.put('callPush', all.filter((r) => !gone.has(r.sub.endpoint)));
   }
 
-  private async ensureAlarm(inMs: number): Promise<void> {
+  /**
+   * Make sure the alarm goes off within `inMs` (only ever moves it earlier). `slackMs`: it may go
+   * off that much later — when an alarm is due then anyway, nothing is written.
+   */
+  private async ensureAlarm(inMs: number, slackMs = 0): Promise<void> {
     const cur = await this.state.storage.getAlarm();
     const want = Date.now() + Math.max(1000, inMs);
-    if (cur == null || cur > want) await this.state.storage.setAlarm(want);
+    if (cur == null || cur > want + slackMs) await this.state.storage.setAlarm(want);
   }
 
   // ---------------------------------------------------------------- usage
@@ -2879,6 +3403,47 @@ export class MonitorRoom {
     if (host && this.usage.stash(host.a)) host.ws.serializeAttachment(host.a);
   }
 
+  /** The nursery's relay data this month (monitorFair.ts): cached for the month, else read (never written). */
+  private async fairNow(now: number): Promise<FairState> {
+    if (this.fair && this.fair.month === monthKey(now)) return this.fair;
+    try {
+      this.fair = relayDataState(await this.usage.month(now, this.usageCarriers(now)), now);
+    } catch {
+      this.fair = relayDataState(null, now); // fail open: never take a picture away on a metering error
+    }
+    return this.fair;
+  }
+
+  /**
+   * Re-read the nursery's relay data (a viewer reported, or a month began) and tell every monitor
+   * socket whose level changed (`{t:'fair', relay}`): at 'out', relay viewers get the relay's
+   * sound only and cameras send no video through a TURN relay; the direct and Home Wi-Fi picture,
+   * all sound and every alert carry on. Back to 'ok' (a new month), the picture comes back.
+   */
+  private async checkFair(now: number): Promise<void> {
+    this.fair = null;
+    const f = await this.fairNow(now);
+    const devs = new Set<string>();
+    for (const { ws, a } of this.authed()) {
+      if (a.mode !== 'camera' && a.mode !== 'viewer') continue;
+      if ((a.fl ?? 'ok') === f.level) continue;
+      const wasOut = a.fl === 'out';
+      a.fl = f.level;
+      if (a.mode === 'viewer' && a.relay) {
+        relayClock(this.usage, a, 'monitor', this.clockOn(a, now), now);
+        if (wasOut && f.level !== 'out') {
+          const rx = this.relayRx.get(a.sid);
+          if (rx) rx.wait = true;
+          this.requestKey(a.relay);
+        }
+        devs.add(a.relay);
+      }
+      ws.serializeAttachment(a);
+      this.send(ws, { t: 'fair', relay: f });
+    }
+    for (const dev of devs) this.updateRelayWant(dev);
+  }
+
   /** Parents only: this month's usage of the nursery (Phase B's Usage card). A read — never a write. */
   private async onUsageQuery(ws: WebSocket, a: Attach, msg: Record<string, unknown>): Promise<void> {
     const id = clip(msg.id, 20);
@@ -2910,35 +3475,32 @@ export class MonitorRoom {
   async alarm(): Promise<void> {
     await this.ready;
     const now = Date.now();
-    let again = false;
 
-    // 1. Sockets that never authenticated are dropped.
+    // 1. Sockets that never authenticated are dropped (once: a closed one the runtime still lists is left be).
     for (const { ws, a } of this.sockets()) {
-      if (!a.authed) {
-        if (now - a.at > AUTH_TIMEOUT_MS) {
-          try {
-            ws.close(4001, 'auth timeout');
-          } catch { /* closed */ }
-        } else again = true;
-      }
+      if (!a.authed && !a.cl && now - a.at > AUTH_TIMEOUT_MS) await this.retire(ws, a, 4001, 'auth timeout');
     }
 
-    // 2. Connected cameras that stopped heartbeating (phone locked, app frozen).
+    // 2. The watchdog: connected cameras with no proof of life — no message, no keepalive ping —
+    //    for BEAT_STALE_MS (phone locked, app frozen, off Wi-Fi with the socket half-open).
+    //    Proof of life is the device's: a quiet socket of a camera that is alive on another one
+    //    (it reconnected; the old connection never closed) is a leftover — retired, never an alarm.
     const meta = await this.meta();
-    for (const { a } of this.authed()) {
-      if (a.mode !== 'camera' || !a.dev) continue;
-      again = true;
-      const beat = this.beats.get(a.dev);
-      if (beat == null) {
-        this.beats.set(a.dev, now); // evicted & rebuilt — start a fresh grace
+    const cams = this.authed().filter((s) => s.a.mode === 'camera' && !!s.a.dev);
+    const alive = new Set(cams.filter((s) => now - this.seenAt(s.ws, s.a) < BEAT_STALE_MS).map((s) => s.a.dev));
+    for (const { ws, a } of cams) {
+      if (!a.dev || now - this.seenAt(ws, a) < BEAT_STALE_MS) continue;
+      if (alive.has(a.dev)) {
+        await this.retire(ws, a, 4005, 'replaced');
+        if (a.sf) await this.cameraBack(a.dev, a.dn);
         continue;
       }
-      if (now - beat > BEAT_STALE_MS && !this.staleFlagged.has(a.dev)) {
-        this.staleFlagged.add(a.dev);
-        await this.state.storage.put(`alerted:${a.dev}`, true);
-        const entry = await this.addLog({ kind: 'offline', msg: `${a.dn} stopped responding — check the camera phone`, dev: a.dev });
-        await this.raiseHazard('offline', entry, { title: 'Baby camera not responding', body: `${meta.name} · ${a.dn} — the phone may be locked, asleep or off Wi-Fi`, entryId: entry.id }, a.dev);
-      }
+      if (a.sf) continue;
+      a.sf = true;
+      ws.serializeAttachment(a);
+      await this.state.storage.put(`alerted:${a.dev}`, true);
+      const entry = await this.addLog({ kind: 'offline', msg: `${a.dn} stopped responding — check the camera phone`, dev: a.dev });
+      await this.raiseHazard('offline', entry, { title: 'Baby camera not responding', body: `${meta.name} · ${a.dn} — the phone may be locked, asleep or off Wi-Fi`, entryId: entry.id }, a.dev);
     }
 
     // 3. Cameras that dropped without saying goodbye.
@@ -2955,7 +3517,7 @@ export class MonitorRoom {
         await this.state.storage.put(`alerted:${dev}`, true);
         const entry = await this.addLog({ kind: 'offline', msg: `${p.dn} went offline`, dev });
         await this.raiseHazard('offline', entry, { title: 'Baby camera went offline', body: `${meta.name} · ${p.dn} disconnected — check its battery and Wi-Fi`, entryId: entry.id }, dev);
-      } else again = true;
+      }
     }
     if (changed) await this.state.storage.put('pendingOffline', pending);
 
@@ -2964,43 +3526,47 @@ export class MonitorRoom {
 
     // 5. A sleep session whose camera went away for good.
     const sm = await this.state.storage.get<SleepSm>('sleepSm');
-    if (sm?.session && sm.lastM != null && now - sm.lastM > 45 * 60_000) {
+    if (sm?.session && sm.lastM != null && now - sm.lastM > SLEEP_GONE_MS) {
       const events = endSession(sm, sm.lastM + 60_000);
       await this.state.storage.put('sleepSm', sm);
       await this.onSleepEvents(events);
     }
 
-    // 6. Retention.
-    const purgedAt = (await this.state.storage.get<number>('purgedAt')) ?? 0;
-    if (now - purgedAt > PURGE_EVERY_MS) {
-      this.store.purge(now);
-      this.guests.purge(now);
-      this.tracker.purge(now);
-      await this.usage.prune(now);
-      await this.state.storage.put('purgedAt', now);
-    }
+    // 6. Lines in a call that went silent; family calls nobody picked up (or that lost everyone).
+    await this.dropStaleLines(now);
+    await this.expireCalls(now);
 
-    // 7. Lines in a call that went silent; family calls nobody picked up (or that lost everyone).
-    const callsUp = await this.dropStaleLines(now);
-    const ringingUntil = await this.expireCalls(now);
-
-    if (this.curBucket) await this.saveBucket(this.curBucket);
-    // Relay clocks follow their cameras (self-heals one a wake left wrong), then the day's mark and the hourly write.
+    // 7. Relay clocks follow their cameras (self-heals one a wake left wrong); retention, the day's
+    //    mark and the hourly usage write when they're due.
     for (const dev of new Set(this.authed().flatMap((x) => (x.a.mode === 'viewer' && x.a.relay ? [x.a.relay] : [])))) this.syncRelayClocks(dev, now);
-    await this.markActive(now);
-    await this.meterTick(now);
-    // Next wake-up: cameras need heartbeat checks, incidents need escalation,
-    // an open sleep session needs closing if its camera never comes back,
-    // a ringing call needs its "no answer".
-    let want: number | null = again ? now + ALARM_MS : null;
-    if (ringingUntil != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, ringingUntil + 500));
-    if (callsUp) want = Math.min(want ?? Infinity, now + LINE_CHECK_MS);
-    const nextInc = this.store.nextIncidentAt();
-    if (nextInc != null) want = Math.min(want ?? Infinity, Math.max(now + 1000, nextInc));
-    const open = await this.state.storage.get<SleepSm>('sleepSm');
-    if (open?.session) want = Math.min(want ?? Infinity, now + 15 * 60_000);
-    if (want != null) await this.state.storage.setAlarm(want);
+    await this.housekeeping(now);
+
+    // Next wake-up: whatever is due first — or none at all.
+    await this.planAlarm(now);
   }
+}
+
+/** A minute row as the sleep tracker reads it. */
+const sleepMinute = (r: MinuteRow) => ({ m: r.m, state: r.state, motion: r.motion, crib: r.crib, sounds: r.sounds, visit: r.visit });
+
+/**
+ * When an incident stops being current — escalate() resolves it then, and a new alert of its kind
+ * on that camera opens a new incident (and alerts people) rather than joining it: answered ones
+ * ACKED_STALE_MS after the answer, the others their kind's staleMs after they began.
+ */
+function incidentStaleAt(inc: IncidentRow): number {
+  if (inc.status === 'acked') return (inc.ack_at ?? inc.at) + ACKED_STALE_MS;
+  return inc.at + (HAZARD[inc.kind as HazardKind]?.staleMs ?? 60 * 60_000);
+}
+
+/** The sockets (call lines) still in a call that's up — answered, not ended, not dropped from it. */
+function callingSids(book: CallBook): Set<string> {
+  const out = new Set<string>();
+  for (const c of book.toJSON()) {
+    if (c.ended || c.answeredAt == null) continue;
+    for (const p of c.parts) if (p.gone == null) out.add(p.sid);
+  }
+  return out;
 }
 
 function toLog(e: StoredEvent): MonLog {

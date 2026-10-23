@@ -217,7 +217,8 @@ describe('MonitorRoom: connecting family calls', () => {
     vi.setSystemTime(t0);
     const { connected, room, pinged, alarm } = setup();
     const { mom, gpa } = await connected();
-    expect(alarm()).toBeLessThanOrEqual(t0 + 30_000); // checked while the call is up
+    // Checked while the call is up — at the moment a line would have been quiet for a minute.
+    expect(alarm()).toBe(t0 + 60_000);
     vi.setSystemTime(t0 + 70_000);
     pinged.set(mom, t0 + 65_000); // Mom's app still pings; Grandpa's went silent
     await room.alarm();

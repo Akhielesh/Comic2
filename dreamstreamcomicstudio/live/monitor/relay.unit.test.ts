@@ -139,7 +139,8 @@ afterEach(() => {
 });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const want = (w: Partial<RelayWant>): RelayWant => ({ ...NO_WANT, ...w });
+/** A relay_want; everyone gets the picture unless `v` says fewer do. */
+const want = (w: Partial<RelayWant>): RelayWant => ({ ...NO_WANT, v: w.n ?? 0, ...w });
 
 /* ------------------------------------------------------- pure parts */
 
@@ -154,7 +155,7 @@ describe('relay picture: sizes, codecs, rates', () => {
   });
 
   it('configures realtime encoding, H.264 in Annex B (parameter sets in every key frame)', () => {
-    expect(encoderConfig('avc', 640, 360)).toMatchObject({ codec: 'avc1.42E01E', width: 640, height: 360, latencyMode: 'realtime', avc: { format: 'annexb' }, bitrate: 450_000, framerate: 15 });
+    expect(encoderConfig('avc', 640, 360)).toMatchObject({ codec: 'avc1.42E01E', width: 640, height: 360, latencyMode: 'realtime', avc: { format: 'annexb' }, bitrate: 400_000, framerate: 15 });
     expect(encoderConfig('vp8', 640, 360)).not.toHaveProperty('avc');
   });
 
@@ -177,9 +178,12 @@ describe('relay picture: sizes, codecs, rates', () => {
   });
 
   it('reads relay_want from this room and from an older one (n only → everyone JPEG)', () => {
-    expect(readWant({ n: 3, avc: 2, vp8: 3, vp9: 0, jpeg: 0 })).toEqual({ n: 3, avc: 2, vp8: 3, vp9: 0, jpeg: 0 });
-    expect(readWant({ n: 2 })).toEqual({ n: 2, avc: 0, vp8: 0, vp9: 0, jpeg: 2 });
-    expect(readWant({ n: -4, avc: 'x' })).toEqual({ n: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 });
+    expect(readWant({ n: 3, avc: 2, vp8: 3, vp9: 0, jpeg: 0 })).toEqual({ n: 3, v: 3, avc: 2, vp8: 3, vp9: 0, jpeg: 0 });
+    expect(readWant({ n: 2 })).toEqual({ n: 2, v: 2, avc: 0, vp8: 0, vp9: 0, jpeg: 2 });
+    expect(readWant({ n: -4, avc: 'x' })).toEqual({ n: 0, v: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 });
+    // This room says how many get the picture; the rest of the relay viewers get its sound only.
+    expect(readWant({ n: 3, avc: 1, vp8: 1, vp9: 0, jpeg: 0, v: 1 })).toEqual({ n: 3, v: 1, avc: 1, vp8: 1, vp9: 0, jpeg: 0 });
+    expect(readWant({ n: 1, avc: 0, vp8: 0, vp9: 0, jpeg: 0, v: 9 }).v).toBe(1);
   });
 
   it('steps the bitrate down on a backlog (at most every 3 s) and back up after 20 s clear', () => {
@@ -482,6 +486,42 @@ describe('RelayEncoder (camera)', () => {
     const back = frames().slice(n).filter((m) => m.kind === 'video');
     expect(back[0]).toMatchObject({ key: true, audio: null }); // nothing captured during the outage goes out
     enc.stop();
+  });
+
+  it('sound only when every relay viewer only gets the sound (hidden screens): no picture encoded, fewer larger messages', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { enc, frames, step } = rig();
+    enc.setWant(want({ n: 2, v: 2, vp8: 2 }));
+    await vi.advanceTimersByTimeAsync(0);
+    step();
+    expect(frames().at(-1)?.kind).toBe('video');
+    expect(enc.mode).toBe('vp8');
+    // Both viewers hide their screens: the room says nobody needs the picture (v: 0).
+    enc.setWant(want({ n: 2, v: 0 }));
+    const before = frames().length;
+    for (let i = 0; i < 30; i++) {
+      enc.pushSound(new Float32Array(3200).fill(0.2), 48_000); // ~67 ms each, 2 s in all
+      step();
+    }
+    const after = frames().slice(before);
+    expect(enc.mode).toBe('sound');
+    expect(enc.active).toBe(true);
+    expect(after.every((m) => m.kind === 'audio')).toBe(true);
+    // ≥ 200 ms of sound a message: 2 s of sound in ≤ 10 messages (it was one every 40–100 ms).
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.length).toBeLessThanOrEqual(10);
+    expect(encoders.at(-1)!.state).toBe('closed'); // the phone's encoder is let go
+    // Someone looks again: the picture is back, starting on a key frame.
+    enc.setWant(want({ n: 2, v: 1, vp8: 1 }));
+    step();
+    const back = frames().slice(before + after.length).filter((m) => m.kind === 'video');
+    expect(back[0]).toMatchObject({ key: true });
+    enc.stop();
+  });
+
+  it('the camera says how the relay goes: “(sound only)” when nobody gets the picture', () => {
+    expect(watchersNote({ viewers: 1, direct: 0, onRelay: 1, relayed: 1, jpeg: false, sound: true })).toBe(' · 1 through the server (sound only)');
+    expect(watchersNote({ viewers: 1, direct: 0, onRelay: 1, relayed: 1, jpeg: true })).toBe(' · 1 through the server (still pictures)');
   });
 
   it('stops when nobody is left on the relay', async () => {

@@ -4,7 +4,10 @@
  * it's still connecting, or the camera's direct slots are full — the camera
  * encodes ONE small video stream with WebCodecs and sends it through the
  * nursery's room, which passes it to every such viewer. 640 px on the long
- * side, 10–15 fps, ~450 kbit/s, a key frame every 2 s, sound alongside.
+ * side, 10–15 fps, ≤ 400 kbit/s, a key frame every 2 s, sound alongside.
+ * When every relay viewer only gets the sound (their screens are hidden, or the
+ * nursery's relay data is used up — the room's `relay_want` says `v: 0`), it
+ * encodes no picture at all: sound only, in fewer, larger messages.
  *
  * Camera — `RelayEncoder`:
  *  - draws the live picture into a canvas at 640×360 (or 360×640 / 640×480,
@@ -59,30 +62,39 @@ export const SEND_RESUME = 32 * 1024;
 const SOUND_MAX_BUFFERED = 256 * 1024;
 /** No frame went out for this long: the sound goes on its own. */
 const SOUND_ALONE_MS = 150;
-/** Encoder rungs: the uplink decides (see RelayRate). */
+/**
+ * Encoder rungs: the uplink decides (see RelayRate). The top is 400 kbit/s at 15 fps (ADR 0006
+ * Phase 0: the relay cap) — a monitor's picture needs motion more than detail.
+ */
 export const RELAY_RUNGS = [
-  { bps: 450_000, fps: 15 },
+  { bps: 400_000, fps: 15 },
   { bps: 300_000, fps: 12 },
   { bps: 200_000, fps: 10 },
 ] as const;
+/** Sound only: one message per this much sound (the viewer's jitter buffer holds 300 ms). */
+export const SOUND_ONLY_CHUNK_MS = 200;
 
 /** How many relay viewers there are, and what they decode (the room's relay_want). */
 export interface RelayWant {
+  /** Everyone on the relay (they all get its sound). */
   n: number;
+  /** Of them, the ones that get the picture (on screen, relay data left). The rest: sound only. */
+  v: number;
+  /** Picture viewers by what they decode. */
   avc: number;
   vp8: number;
   vp9: number;
-  /** Viewers that decode none of them (JPEG only). */
+  /** Picture viewers that decode none of them (JPEG only). */
   jpeg: number;
 }
-export const NO_WANT: RelayWant = { n: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 };
+export const NO_WANT: RelayWant = { n: 0, v: 0, avc: 0, vp8: 0, vp9: 0, jpeg: 0 };
 
-/** From the room's message (older rooms only send n: everyone gets JPEG). */
+/** From the room's message (older rooms only send n: everyone gets JPEG; rooms before `v`: everyone gets the picture). */
 export function readWant(m: Record<string, unknown>): RelayWant {
   const k = (v: unknown) => Math.max(0, Math.min(64, Math.round(Number(v) || 0)));
   const n = k(m.n);
-  if (!('avc' in m)) return { ...NO_WANT, n, jpeg: n };
-  return { n, avc: k(m.avc), vp8: k(m.vp8), vp9: k(m.vp9), jpeg: k(m.jpeg) };
+  if (!('avc' in m)) return { ...NO_WANT, n, v: n, jpeg: n };
+  return { n, v: 'v' in m ? Math.min(n, k(m.v)) : n, avc: k(m.avc), vp8: k(m.vp8), vp9: k(m.vp9), jpeg: k(m.jpeg) };
 }
 
 /** The relay picture's size: the camera's aspect, 640 on the long side (never upscaled), even numbers. */
@@ -193,10 +205,11 @@ export class RelayRate {
  * doesn't mark as on the relay (`onRelay`): their picture passes through the
  * server too, so the camera says so.
  */
-export function watchersNote(o: { viewers: number; direct: number; onRelay: number; relayed: number; jpeg: boolean }): string {
+export function watchersNote(o: { viewers: number; direct: number; onRelay: number; relayed: number; jpeg: boolean; sound?: boolean }): string {
   const through = Math.max(o.onRelay, o.relayed);
   const connecting = o.direct < o.viewers - o.onRelay ? ' · connecting…' : '';
-  return `${connecting}${through ? ` · ${through} through the server${o.jpeg ? ' (still pictures)' : ''}` : ''}`;
+  const how = o.sound ? ' (sound only)' : o.jpeg ? ' (still pictures)' : '';
+  return `${connecting}${through ? ` · ${through} through the server${how}` : ''}`;
 }
 
 export interface RelayEncoderDeps {
@@ -272,9 +285,10 @@ export class RelayEncoder {
     return this.running;
   }
 
-  /** What's being sent now: video (and its codec), JPEG only, or nothing. */
-  get mode(): RelayCodec | 'jpeg' | null {
+  /** What's being sent now: video (and its codec), JPEG only, sound only, or nothing. */
+  get mode(): RelayCodec | 'jpeg' | 'sound' | null {
     if (!this.running) return null;
+    if (this.want.v === 0) return 'sound';
     return this.codec && this.enc ? this.codec : 'jpeg';
   }
 
@@ -349,6 +363,14 @@ export class RelayEncoder {
     // frame here would only refill the socket (and lock a tight uplink into key frames).
     if (this.backlogged) this.backlogged = false;
     else if (this.rate.onClear(now)) this.reconfigure();
+    if (this.want.v === 0) {
+      // Every relay viewer gets the sound only: no picture is drawn or encoded (the phone's
+      // encoder is let go); the next picture viewer starts on a key frame.
+      if (this.enc) this.closeEncoder();
+      this.forceKey = true;
+      this.flushSound(now);
+      return;
+    }
     const v = this.deps.source();
     if (v && v.readyState >= 2 && v.videoWidth > 0) {
       const { w, h } = relaySize(v.videoWidth, v.videoHeight);
@@ -363,9 +385,9 @@ export class RelayEncoder {
     this.flushSound(now);
   }
 
-  /** Relay viewers who get JPEG (they decode none of what's being encoded). */
+  /** Relay viewers who get JPEG (they get the picture and decode none of what's being encoded). */
   private jpegViewers(codec: RelayCodec | null = this.enc ? this.codec : null): number {
-    return this.want.n - (codec ? this.want[codec] : 0);
+    return Math.max(0, this.want.v - (codec ? this.want[codec] : 0));
   }
 
   private draw(v: HTMLVideoElement, w: number, h: number): boolean {
@@ -508,8 +530,10 @@ export class RelayEncoder {
 
   /** Sound goes with the frames; alone only when no frame went out for a while. */
   private flushSound(now: number): void {
-    // Filling a gap between frames: a short chunk; a JPEG-only camera: ~100 ms chunks (fewer messages).
-    if (this.sound.pendingMs < (this.enc ? 40 : 100) || now - this.lastVideoAt < SOUND_ALONE_MS || now - this.encodingAt < SOUND_ALONE_MS) return;
+    // Filling a gap between frames: a short chunk; a JPEG-only camera: ~100 ms chunks; sound only:
+    // SOUND_ONLY_CHUNK_MS (every message is a billed request at the room: fewer, larger ones).
+    const chunk = this.want.v === 0 ? SOUND_ONLY_CHUNK_MS : this.enc ? 40 : 100;
+    if (this.sound.pendingMs < chunk || now - this.lastVideoAt < SOUND_ALONE_MS || now - this.encodingAt < SOUND_ALONE_MS) return;
     const audio = this.sound.take();
     if (!audio) return;
     const buf = pack({ kind: 'audio', seq: this.seq, ts: u32(now), codec: this.enc ? this.codec : null, audio });

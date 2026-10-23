@@ -629,7 +629,7 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - [ ] A sign-in from a new browser produces an email within **2 minutes**. "Not you?" revokes all sessions, kicks all sockets and starts a password reset.
 - [ ] Relay binary frames seen by the DO contain no JPEG SOI marker (`FF D8`) (test). Replayed or stale frames are dropped. After removal plus 60 s, a removed device cannot decrypt new frames.
 - [ ] Between E2E-capable peers, forwarded `rtc.d` contains no plaintext `sdp` or `candidate` (test), and an unsealed offer to a key-holding camera is refused.
-- [ ] 7-day production median per active nursery-day: **DO requests ≤ 1,000, rows written ≤ 1,800, DO duration ≤ 40 GB-s**. Relay share is reported in the cost centre.
+- [ ] 7-day production median per active nursery-day: **DO requests ≤ 1,000, rows written ≤ 1,800, DO duration ≤ 40 GB-s**. Relay share is reported in the cost centre. *(Built 2026-10-23; a simulated 12 h night gives 542 / 1,040 / 3.6 GB-s — `live-worker/src/monitorRoom.night.test.ts`. Production median still to be read.)*
 - [ ] GET `/glance` returns 200 with an ETag, then 304 when unchanged (p95 ≤ 150 ms when warm). `{t:'glance'}` frames are sent only on a bump. Replaying the fixture of a recorded night gives **60 bumps or fewer**.
 - [ ] POST `/act` with the same `id` twice gives one acknowledgement. It is role-gated and writes the same log as a WebSocket acknowledgement.
 - [ ] The production APNs probe returns an APNs error body **with `apns-id`**, or the FCM-for-iOS fallback is recorded as the decision. The FCM sender passes against recorded fixtures. The service-worker "I'm on it" action acknowledges without opening the app.
@@ -946,21 +946,21 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - [ ] `keys.ts`: device keys (non-extractable ECDSA and ECDH P-256) in IndexedDB `ds-keys`; NMK store per `(nid, e)`; handle `key_req` (wrap with `sealed.wrapNmk`), `key_wrap`, `key_init`, `key_rotate`; send `dev_hello` after `hello`.
 - [ ] `relayCrypto.ts`: thin wrappers over `sealed.sealFrame`/`openFrame` with sequence state.
 - [ ] `MonitorCamera.tsx`:
-  - The 2 s `startTicker(2000…)` status sender becomes **change-detected plus a 60 s keepalive**, and keeps sending every 2 s only while `live_want` is on. Data-channel `st` stays at 2 s.
-  - Batch `stats` every 5 min (`stats5`).
+  - [x] The 2 s `startTicker(2000…)` status sender becomes **change-detected plus a keepalive**, and keeps sending every 2 s only while `live_want` is on. Data-channel `st` stays at 2 s. *(Done 2026-10-23, `live/monitor/statusCadence.ts`: urgent news at once, other news within 10 s, keepalive every 2 min so idle is ≤ 30 an hour as the done-when below asks.)*
+  - Batch `stats` every 5 min (`stats5`). *(Replaced 2026-10-23 by server-side batching: the room writes the minutes the phone sends every minute in batches, so `stats5` isn't needed — feature doc §7, C3–C5 status.)*
   - Mint `eid` in `sendSound`/`sendVision`.
   - Encrypt relay frames when `e2e1` is listed, with JPEG ≤ `SNAPSHOT_MAX − 64`.
   - Refuse unsealed `rtc` once it holds an NMK.
 - [ ] `MonitorViewer.tsx`:
-  - On `visibilitychange` (around line 391), send `view`. When hidden, send the quality command `'audio'` (`replaceTrack(null)`) and turn the relay off; restore when visible.
+  - [x] On `visibilitychange`, send `view`. When hidden, the picture goes (`replaceTrack(null)`) and the relay is sound only; restored when visible. *(Done 2026-10-23: `view` at once, the camera and room apply a 20 s grace; the camera hears it on the data channel, `{t:'vis'}`, not as a quality command, so the viewer's own quality choice stands.)*
   - Dedupe alerts in `onDirect` against room events by `eid` and alert on first arrival.
   - Decrypt relay frames.
 - [ ] `rtc.ts`:
-  - `RELAY_CAP` → `{maxBitrate: 400_000, maxFramerate: 15, scaleResolutionDownBy: 2}`.
+  - [x] `RELAY_CAP` → `{maxBitrate: 400_000, maxFramerate: 15, scaleResolutionDownBy: 2}`. *(Done 2026-10-23; the server relay's encoder also tops out at 400 kbps.)*
   - Batch ICE candidates in 75 ms windows.
   - Seal and open signaling when both sides list `e2e1`.
-  - Send ICE restarts and quality commands over the open `mon` data channel when it is available.
-  - Apply `ice_refresh` with `pc.setConfiguration`.
+  - Send ICE restarts and quality commands over the open `mon` data channel when it is available. *(Quality: done 2026-10-23 for cameras that say `dcc`; ICE restarts: not yet.)*
+  - [x] Apply `ice_refresh` with `pc.setConfiguration`. *(Done by the TURN guardrails, 2026-10-22: `{t:'ice'}` + `applyIce`.)*
 - [ ] `PeopleCard.tsx`: after a guest is removed, show "Link and passcode changed" with a one-tap "Share the new link". Admin actions call WS-5's `StepUp` first.
 - [ ] `NurserySettings.tsx`: a Devices list per nursery (`mon_devices`, Revoke) and a Security log tab (events of kind `security`).
 
@@ -1025,13 +1025,13 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - `live-worker/src/room/glanceState.ts`, `room/actor.ts`, `room/roster.ts`, `room/*.test.ts` (all new)
 
 **Tasks:**
-- [ ] **Cost:**
-  - `ALARM_MS` 15 s → 60 s. Liveness = `max(lastStatusAt, getWebSocketAutoResponseTimestamp(cameraWs))`, stale after 75 s.
-  - **Remove `saveBucket` from `alarm()`** and delete `trackBucket`/`saveBucket`/the `tl` blob. `timeline()` is computed from minute blocks plus `sounds.cry` in 5-minute buckets.
-  - Accept change-only `status`. Add `onView` and `live_want` (same pattern as `updateRelayWant`).
-  - Batched `stats` write `sleepDev`/`sleepSm` once per batch.
-  - **Packed minute blocks** in `monitorStore.ts`: `mon_blocks(dev TEXT, h INTEGER, d TEXT, PRIMARY KEY(dev,h)) WITHOUT ROWID`, upserted per batch with `ON CONFLICT DO UPDATE`. Reads decode blocks; read both `mon_blocks` and the legacy `mon_minutes` for 31 days, then drop `mon_minutes` and `mon_minutes_m`. Retention deletes whole blocks.
-  - Gate `migrate()` behind `PRAGMA user_version`. Keep `beats`/`lastStatus` in the camera socket's `serializeAttachment` (≤ 2 KB). No floating storage promises.
+- [ ] **Cost:** *(Done 2026-10-23 on `impl/costs-monitor-diet` except the last two bullets; a simulated night: 542 requests, 1,040 rows, 216 alarms — feature doc §7, C3–C5 status.)*
+  - [x] Liveness = `max(last camera message, getWebSocketAutoResponseTimestamp(cameraWs))`, stale after 75 s. *(Built as a dead man's switch rather than a 60 s alarm: the alarm sits 105 s after the last proof of life and the camera's messages push it later — ≈ 17 alarm wakes an hour, reported 75–105 s after the last sign of life.)*
+  - [x] **Remove `saveBucket` from `alarm()`** and delete `trackBucket`/`saveBucket`/the `tl` blob. `timeline()` is computed from minute blocks plus `sounds.cry` in 5-minute buckets.
+  - [x] Accept change-only `status`. Add `onView` and `live_want` (same pattern as `updateRelayWant`).
+  - [x] Batched `stats` write `sleepDev`/`sleepSm` once per batch. *(`sleepSm` once per batch, `sleepDev` only on a takeover.)*
+  - [x] **Packed minute blocks** in `monitorStore.ts`: `mon_blocks(dev TEXT, h INTEGER, d TEXT, PRIMARY KEY(dev,h)) WITHOUT ROWID`, upserted per batch with `ON CONFLICT DO UPDATE`. Reads decode blocks; retention deletes whole blocks. *(The legacy `mon_minutes` is converted into blocks once and dropped, instead of 31 days of reading both.)*
+  - [x] Gate `migrate()` behind a schema number. Keep the camera's proof of life in its socket's `serializeAttachment` (≤ 2 KB). No floating storage promises. *(A KV `schema` key rather than `PRAGMA user_version`; `lastStatus` stays a memory cache — the camera resends it within 2 s whenever someone needs it.)*
   - Idempotent `eid` insert in `onCamEvent`/`addLog`.
   - VAPID through `push/vapidCache.ts`.
 - [ ] **Auth and session:**
