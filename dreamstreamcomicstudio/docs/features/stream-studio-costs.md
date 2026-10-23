@@ -616,7 +616,7 @@ Saving is at scale beyond free tiers (§2) unless noted. Effort: S < 3 days, M 1
 | 7 | **P3 TURN on the side that receives less:** camera first (monitor), guests first (meetings), only the blocked side (calls, via `classifyFailure`, `callMesh.ts:165`) | Monitor relayed night $0.16 → ~$0.005–0.01 (**verify with a 1 h metered test first**); meeting host-on-TURN $0.18 → ≤ $0.03/h; calls about half | M | M (UDP-blocked receivers need TURN over TLS 443 on retry) | after P2 | same pill |
 | 8 | **P4 Relay-path caps:** 1:1 calls ≤ 800 kbps, groups ≤ 450 kbps (`callMesh.ts:111`); guest cameras ≤ 600 kbps and screens ≤ 1 Mbps on relay (`studio/rtc.ts`) | 45–70% of TURN GB on those paths | S | L | calls and meeting owners | "Relay · lower quality to save data" |
 | 9 | **P7 End-to-end encrypted relay frames**, then the server relay goes *before* viewer-side TURN for one-way monitor video | Viewer TURN $0.16 → relay $0.0055 per night, for any number of viewers | L | M | ADR 0006 Phase 0 (E2E) | "Through our server · encrypted" |
-| 10 | **P9 Broadcast rail trims:** one DO call per segment (`index.ts:342, 354`); `putMeta` every N segments; chat/emoji `stats` batched (`eventRoom.ts:730`); EventRoom `deleteAll()` after the 7-day sweep; **R2 lifecycle** (`events/` 9 days, abort multipart after 1 day); later an R2 custom domain for segments (no Worker per GET) | ≈ $0.02–0.04 per 100–200-viewer hour once past free tiers; no zombie storage | S–M | L | ADR 0006 WS-11 (`eventRoom.ts`), WS-7 (`index.ts`) | — |
+| 10 | **P9 Broadcast rail trims:** one DO call per segment (`index.ts:342, 354`); `putMeta` every N segments; chat/emoji `stats` batched (`eventRoom.ts:730`); EventRoom `deleteAll()` after the 7-day sweep (replaced on review: the sweep empties R2 only and keeps the event usable, see C10); **R2 lifecycle** (`events/` 9 days, abort multipart after 1 day); later an R2 custom domain for segments (no Worker per GET) | ≈ $0.02–0.04 per 100–200-viewer hour once past free tiers; no zombie storage | S–M | L | ADR 0006 WS-11 (`eventRoom.ts`), WS-7 (`index.ts`) | — |
 | 11 | **P11 Keep the container asleep:** Drive status cache 60 s → 10 min (`driveUpload.ts:29`) with invalidate-on-error | ≈ $0.0027 per avoided wake; protects the 25 GiB-h | S | L | this plan, C11 | — |
 | 12 | **P12 "Family live":** direct P2P broadcast from the host phone to ≤ 4 viewers who connect without TURN; others on the R2 rail | ≈ $0 saving (the rail is already ≈ $0.01–0.03/h), but < 1 s latency and **no 24 h copy on our servers** | L | M | later | "Go live: direct to your viewers — free" |
 | 13 | **Native hub + port mapping** (ADR 0006 Phase 4): the camera phone app opens a mapped port (NAT-PMP/PCP/UPnP), so remote viewers behind carrier NAT can reach home directly. History lives on the hub. coturn only past ~1 TB/month | ADR: $0.092 → $0.040 per nursery at 10k; most remaining TURN disappears | XL | M | ADR 0006 Phase 4 | "Direct · free" for nearly everyone |
@@ -756,7 +756,7 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
 | C7 | Relay-path caps (8) | `live/calls/callMesh.ts:111`, `live/studio/rtc.ts` | TURN GB per relayed 1:1 call-hour ≤ **0.4** (from ≈ 0.68). **Status: built 2026-10-22** (same branch); the target holds by construction, to be confirmed against Cloudflare's per-identifier `egressBytes` once Phase A queries them |
 | C8 | TURN on the side that receives less (7) | `ice.ts` + room "who gets TURN first" | After a 1 h lab test: TURN egress per relayed monitor viewer-hour ≤ **15 MB** (from ≈ 310 MB) |
 | C9 | E2E relay, then relay before viewer-side TURN (9) | ADR 0006 Phase 0 E2E | Viewer-side TURN ≤ **2%** of monitor viewer-minutes |
-| C10 | Broadcast trims + R2 lifecycle (10) | `index.ts` (WS-7), `eventRoom.ts` (WS-11); the owner runs `wrangler r2 bucket lifecycle add` | DO requests per stream-hour ≤ **800** (from ≈ 1,371: drops the 600 `authHost` calls); rows ≤ **1,000** (from ≈ 1,920: `putMeta` every 10 segments, batched chat `stats`); dead-event DO storage **0** after 9 days. **Status: built 2026-10-23** (branch `impl/costs-broadcast`; measured 1,403 → 690 requests and 1,654 → 307 rows; see the note below). The lifecycle rules are the owner's to apply |
+| C10 | Broadcast trims + R2 lifecycle (10) | `index.ts` (WS-7), `eventRoom.ts` (WS-11); the owner runs `wrangler r2 bucket lifecycle add` | DO requests per stream-hour ≤ **800** (from ≈ 1,371: drops the 600 `authHost` calls); rows ≤ **1,000** (from ≈ 1,920: `putMeta` every 10 segments, batched chat `stats`); dead-event DO storage **0** after 9 days, amended on review to: an ended event keeps **0 R2, no alarm and a few KB of rows** after 9 days (it can go live again; owner rule: a sweep never deletes an event that can still be used). **Status: built 2026-10-23** (branch `impl/costs-broadcast`; measured 1,403 → 690 requests and 1,654 → 312 rows; see the note below). The lifecycle rules are the owner's to apply |
 | C11 | Container asleep (11) | `live/driveUpload.ts:29` | ≤ **1** container wake per Drive save session |
 | C12 | Family live (12), native hub + port mapping (13), coturn past 1 TB/month | later | Separate ADRs |
 
@@ -908,8 +908,8 @@ moderator, a forged upload, a late viewer, the end and the summary. The BEFORE c
 
 | 1-hour stream | DO requests before → after | Rows before → after |
 |---|---|---|
-| 20 viewers (the doc's baseline above) | 1,403 → **690** | 1,654 → **307** |
-| 100 viewers | 1,635 → **922** | 4,207 → **337** |
+| 20 viewers (the doc's baseline above) | 1,403 → **690** | 1,654 → **312** |
+| 100 viewers | 1,635 → **922** | 4,207 → **347** |
 
 What is left in the after column:
 - **The rail costs 600 `/ingest` requests a stream-hour**, one per segment, plus about 6 watchdog alarms.
@@ -943,36 +943,62 @@ The row target holds with a wide margin at both sizes.
 - **A working copy while live.** Stats, the chat ring, top chatters and seen names are kept in memory and written in
   one checkpoint at most once a minute (`HOT_SAVE_MS`). The checkpoint rides the 10th segment or the next event, or
   comes sooner once 25 chat lines are unsaved (`CHAT_SAVE_EVERY`). Before, a chat line cost 3 rows and a reaction 1.
-- **Moderation is never batched.** A deleted line is written at once, even one that was never saved. Strikes and
-  timeouts are written at once, and profanity is never stored.
+- **The working copy survives hibernation** (added on review). A live room can hibernate: about 10 s with no event,
+  which happens in an upload stall or when the encoder stops while the studio stays live. Hibernation drops memory
+  but keeps every socket's attachment, so until the checkpoint:
+  - each unsaved line rides its poster's socket (short keys, ≤ 1,800 bytes by a high estimate; the runtime's limit is
+    2,048). A line that doesn't fit is written at once;
+  - the host's socket carries the counters: reactions, the peak, viewer-minutes and the room's upkeep;
+  - a wake takes them back and recounts what the lines add (the chat total, the chat curve, top chatters). The viewers
+    in the room are counted as seen;
+  - a socket that leaves or is kicked with unsaved lines has them written at once. A milestone is written at once
+    (≤ 7 a stream), so none is announced twice.
+
+  This costs about 5–10 rows a stream-hour (the table above includes it) and no requests.
+- **Moderation is never batched.** A deleted line is written at once, even one that was never saved. It is taken off
+  every socket that carries it before anything else, so no wake brings it back. **Every delete reaches every screen**,
+  even for a line the room no longer holds, because a line a deploy took is still on the screens that got it. Clients
+  drop a delete idempotently. Strikes and timeouts are written at once, and profanity is never stored.
 - **Rooms that aren't live write at once, as before.** That covers meetings, idle rooms and paused streams, any of
   which may hibernate at any time.
 - **The segments sample the viewer curve** every 30 s. Viewer-minutes count time on air and never a pause. While live,
   the alarm is only a 10-minute watchdog (`LIVE_WATCHDOG_MS`), down from a `setAlarm` row and a request every 30 s. It
   covers a stalled stream, the 2 h auto-end and the hourly usage flush.
-- **Dead events cost nothing.**
-  - The 7-day sweep deletes the event's R2 prefix, closes any socket still open, then calls `deleteAlarm()` and
-    `deleteAll()`. The worker's `compatibility_date` is before 2026-02-24, so `deleteAll` doesn't take the alarm by
-    itself.
+- **Ended events cost nothing to keep, and stay usable** (corrected on review: the first build ran `deleteAll()`).
+  - An ended event can go live again from the same studio link with no time limit ("Go live again"). Its invite page,
+    RSVPs, host key and guest link must keep working, for example a test run 14 days before a scheduled show, or a
+    weekly show on one link. The owner's rule is that a sweep never deletes an event that can still be used.
+  - So the 7-day sweep deletes the event's R2 prefix (copies, any segment left), clears the copy list, logs it and
+    sets **no further alarm**. It deletes no row and closes no socket.
+  - What stays is a few KB of rows (meta, host key, RSVPs, guest key, the recap and log, the usage rows). The 20-viewer
+    sim's room is under 64 KB. That is about $0.20 a GB-month: 10,000 such events cost about $0.12 a month, with
+    **no R2, no alarm and no requests**.
   - The usage is written first. A flush held back by the hourly bound postpones the sweep by up to an hour, so
-    nothing is lost or counted twice. After the sweep, the event's usage lives in Analytics Engine; its monthly row
-    went with the room.
-  - If R2 is down, the sweep and the 24 h segment purge retry hourly. Past day 9 the rows go anyway, and the
-    lifecycle rule below takes what's left. So **dead-event storage is 0 by day 7, and by day 9 at the latest.**
-  - A swept room ignores anything a lingering socket says, so nothing writes rows back.
+    nothing is lost or counted twice. The kept totals and watermark mean a restart next month counts only what is new.
+  - If R2 is down, the sweep and the 24 h segment purge retry hourly. Past day 9 the room stops trying and the
+    lifecycle rule below takes what's left. So **an ended event holds no R2 by day 7, and by day 9 at the latest.**
+  - A host who goes live again while R2 is being emptied stops the purge. The room re-reads the meta before each R2
+    page, so the new session's segments, copies and watchdog are left alone.
+  - The live watchdog's "2 h without segments" now counts from the latest segment or the (re)start, whichever is
+    later. Before, a session that went live again weeks after an end inherited the old last segment. If its first
+    segment came later than one watchdog tick (10 min), it was ended at once with an end time a week back, and the
+    sweep took its new copy.
 - **Usage estimates follow.** A segment counts 1 DO request (it was 2). Rows are counted when they are written, and
   only for an event that has been on air.
 
 **Honest bounds:**
-- **Hibernation loses no progress.** An eviction that also drops every socket, which is a deploy, can leave `latestSeq`
-  up to 9 segments behind until the next segment. The studio reconnects with its own counter and puts it right. An
-  eviction can also miss up to 9 segments of usage.
+- **Hibernation loses no progress, no chat line and no counter.** It can lose at most the viewer-curve and health
+  points of the unsaved minute (2 of each), and a viewer who joined and left inside it from the unique count.
+- **An eviction that also drops every socket, which is a deploy, loses more.** It can leave `latestSeq` up to 9
+  segments behind until the next segment; the studio reconnects with its own counter and puts it right. It can also
+  miss up to 9 segments of usage, and take the unsaved minute of chat history and counters from the replay list and
+  the summary (fewer than 25 lines). It never takes a delete, a strike or a timeout, and a delete still reaches every
+  screen that shows the line.
 - **Only a studio reload inside that same window could reuse a seq.** It needs a deploy and a reload within the same
   minute. Fixing it needs a client change.
-- **An eviction can take the unsaved minute of chat history and counters** from the replay list and the summary. That
-  is fewer than 25 lines. It never takes a delete, a strike or a timeout.
-- **Events that never end keep their rows.** These are mostly abandoned instant meetings, a few KB each. A safe expiry
-  rule needs a product decision, because guest and studio links must keep working.
+- **No event is ever deleted, ended or not.** An ended event, or one that never ended (mostly abandoned instant
+  meetings), keeps a few KB of rows and costs no requests. Expiring an event N days after it ends needs an owner
+  decision and copy the UI states openly ("this link expires …"), because guest and studio links must keep working.
 
 **R2 lifecycle (owner, once).** These commands are prepared here and in `live-worker/README.md` → Deploy. They were not
 run. They back up the room's own janitor:
@@ -1002,7 +1028,7 @@ npx wrangler r2 bucket lifecycle list dreamstream-live
   - the forged upload never reaches R2 or a viewer;
   - deleted and hidden lines never come back;
   - the summary adds up;
-  - storage is 0 by day 9.
+  - an ended event holds no R2 and no alarm by day 9, stays under 64 KB, and its invite page and studio link still work.
 - `eventRoom.test.ts`:
   - no row between saves;
   - hibernation, the reload after it, and the eviction bound;
@@ -1012,10 +1038,16 @@ npx wrangler r2 bucket lifecycle list dreamstream-live
   - reactions, and a meeting writing at once;
   - the curve by segments, viewer-minutes across a pause, the stalled-stream watchdog;
   - the sweep, with a held-back flush and with R2 down until or past day 9;
-  - guest-link rotation.
+  - guest-link rotation;
+  - on review, hibernation while live: a delete after a stall reaches every screen, a deleted line never comes back,
+    a delete for a line the room lost still goes out, the summary adds up, no milestone twice, a viewer leaving or
+    kicked keeps their lines, a line too big for the attachment is written at once, no extra rows;
+  - on review, the sweep keeps a usable event: a test run before a scheduled show, "Go live again" 30 days later, a
+    restart during the sweep, and the watchdog after a restart.
 - `index.test.ts`: one `/auth` for 600 segments, refusals never remembered, a pass per event, a rotated key, the
   TTL, no key, the 512 cap.
-- `usageHooks.test.ts` was updated: usage rides the meta every 10 segments, and the sweep adds no second count.
+- `usageHooks.test.ts` was updated: usage rides the meta every 10 segments, the sweep adds no second count, and a
+  restart next month counts only the new segment.
 
 **C11** was already done (see C1/C2/C11 above): `STATUS_TTL_MS` is 10 min in `live/driveUpload.ts`.
 

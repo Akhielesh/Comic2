@@ -5,15 +5,15 @@
  * what Cloudflare bills:
  *   - Durable Object requests: every Worker → room fetch (a WebSocket upgrade too), every alarm, and incoming
  *     WebSocket messages at 20:1 (outgoing messages are free);
- *   - SQLite rows written: every key put or deleted, every setAlarm / deleteAlarm, every key a deleteAll removes.
+ *   - SQLite rows written: every key put or deleted, every setAlarm / deleteAlarm.
  *
  * The harness is `eventTestKit.ts`. The BEFORE figures were measured by this same sim at 87082ad (before
  * C10) and are pinned below.
  *
  * It also proves nothing people rely on broke: every viewer gets every segment, in order; a studio reload
  * resumes at the right seq; a forged upload never reaches R2 or a viewer; moderation sticks (deleted
- * messages stay deleted, profanity is never stored); the host's summary adds up; and an ended event's room
- * storage is empty by day 9.
+ * messages stay deleted, profanity is never stored); the host's summary adds up; and an ended event holds no
+ * R2 and no alarm by day 9, yet stays usable (its links work, it can go live again).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Sim, type SimWS, T0 } from './eventTestKit';
@@ -331,7 +331,7 @@ describe('broadcast rail — a 1-hour stream, counted (C10)', () => {
     expect(r.sim.rows()).toBeLessThanOrEqual(1000);
   });
 
-  it('an ended event’s room storage is empty by day 9 (deleteAll after the 7-day sweep); its usage was written first', async () => {
+  it('an ended event costs nothing to keep by day 9 (no R2, no alarm, a few KB of rows) and stays usable; its usage was written first', async () => {
     const r = await runStream({ viewers: 20, chatPerViewerHour: 6, emojiPerViewerHour: 12 });
     const h = r.sim.room(r.id);
     const endedAt = r.sim.now;
@@ -345,15 +345,25 @@ describe('broadcast rail — a 1-hour stream, counted (C10)', () => {
     // The event is still there for its recap during the 7 days.
     expect((await r.sim.worker(`/api/events/${r.id}`)).status).toBe(200);
     const pointsBefore = r.sim.points.length;
+    const alarmsBefore = r.sim.alarms;
     await r.sim.advanceTo(endedAt + 9 * DAY);
-    expect(h.store.size).toBe(0);
     expect(h.alarmAt).toBeNull();
     expect([...r.sim.r2.keys()].filter((k) => k.startsWith(`events/${r.id}/`))).toEqual([]);
-    // The broadcast's usage reached Analytics Engine before the rows went.
+    // The broadcast's usage reached Analytics Engine before the sweep.
     expect(r.sim.points.length).toBeGreaterThanOrEqual(pointsBefore);
     expect(r.sim.points.some((p) => (p as { indexes?: string[] }).indexes?.[0] === 'broadcast')).toBe(true);
-    // A dead event reads as gone — and stays gone (nothing writes it back).
-    expect((await r.sim.worker(`/api/events/${r.id}`)).status).toBe(404);
-    expect(h.store.size).toBe(0);
+    // What is kept: the rows that make the event usable (an ended event can go live again from the same
+    // links), a few KB with no alarm — so no request a month from now, however long it is kept.
+    const bytes = [...h.store.values()].reduce((n: number, v) => n + JSON.stringify(v).length, 0);
+    expect(bytes).toBeLessThan(64 * 1024);
+    const alarms = r.sim.alarms;
+    await r.sim.advanceTo(endedAt + 40 * DAY);
+    expect(r.sim.alarms).toBe(alarms);
+    expect(alarms - alarmsBefore).toBeLessThanOrEqual(4); // the 7-day sweep (and a postponed flush) at most
+    const invite = await r.sim.worker(`/api/events/${r.id}`);
+    expect(invite.status).toBe(200);
+    expect(((await invite.json()) as { status: string }).status).toBe('ended');
+    const studio = await r.sim.open(r.id, `k=${encodeURIComponent(r.hostKey)}&name=Host`);
+    expect(studio.msgs('hello')[0].you).toMatchObject({ role: 'host' });
   });
 });

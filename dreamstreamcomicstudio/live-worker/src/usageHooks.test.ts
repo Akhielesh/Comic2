@@ -456,11 +456,20 @@ describe('EventRoom usage — segments ride the meta (written every SEG_SAVE_EVE
     row = month(e.store);
     expect(row?.counters.broadcast).toMatchObject({ segBytes: 1_200_000, segCount: 2 });
     const points = e.points.length;
-    // The 7-day sweep: everything was already counted, so it adds no point, and then the room's rows go.
+    // The 7-day sweep: everything was already counted, so it adds no point. The event stays (it can go live again)…
     c.advance(6 * 24 * H);
     await e.room.alarm();
     expect(e.points.slice(points).filter((p) => p.indexes?.[0] === 'broadcast')).toEqual([]);
-    expect(e.store.size).toBe(0);
+    expect(e.store.get('meta')).toBeDefined();
+    // …and its kept totals and watermark mean a restart next month counts only what is new — never the old show again.
+    c.advance(10 * 24 * H);
+    await e.room.webSocketMessage(e.host as never, JSON.stringify({ t: 'state', status: 'live' }));
+    await e.ingest(3, 100_000);
+    await e.room.webSocketMessage(e.host as never, JSON.stringify({ t: 'state', status: 'ended' }));
+    c.advance(24 * H);
+    await e.room.alarm();
+    expect(month(e.store)?.month).toBe('2026-11');
+    expect(month(e.store)?.counters.broadcast).toMatchObject({ segBytes: 100_000, segCount: 1 });
   });
 
   it('a meeting that never went live writes no usage row at all', async () => {

@@ -102,8 +102,13 @@ The room doubles as the **WebRTC signaling relay** for up to 4 on-air guests:
   ends the stream immediately (restartable; going live again clears `endedAt`).
 - Host websocket drop while live → `paused` + 2-minute grace → auto-end.
 - 2 h without segment ingest while "live" → auto-end.
-- Segments purge 24 h after end; server recordings purge after 7 days, and then the room deletes
-  its own storage (`deleteAll`) — a dead event costs nothing.
+- Segments purge 24 h after end; server recordings purge after 7 days, and then the room sets no
+  further alarm. The event itself is never deleted: an ended event can go live again from the same
+  studio link, and its invite page, RSVPs and host/guest keys keep working. What stays is a few KB of
+  rows with no R2, no alarm and no requests. A host who goes live again mid-purge stops it.
+- While live, a chat line not yet written rides its poster's socket attachment and the counters ride
+  the host's, so a room that hibernates in an upload stall loses neither; a delete always reaches
+  every screen.
 - One DO request per segment: the Worker remembers a host key the room confirmed (a per-isolate
   pass); the room still checks the key on every `/ingest`. While live the room writes its meta every
   10 segments and its stats/chat at most once a minute (deletes, strikes and timeouts at once).

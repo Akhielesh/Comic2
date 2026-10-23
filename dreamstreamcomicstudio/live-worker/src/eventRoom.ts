@@ -12,7 +12,10 @@
  * curve + host health telemetry, RSVPs, the server-side recording registry —
  * and scheduled cleanup: segments (the 24 h replay window) purge a day after
  * the stream ends, server recordings purge after 7 days, and then the room
- * deletes its own storage (`deleteAll`), so a dead event costs nothing.
+ * sets no further alarm. The event itself is never deleted: an ended event
+ * can go live again from the same studio link, and its invite page, RSVPs,
+ * host and guest keys keep working (a scheduled show, a weekly show on one
+ * link). What stays is a few KB of rows — no R2, no alarm, no requests.
  *
  * Uses the WebSocket hibernation API so an idle room costs nothing between
  * messages. All durable facts live in storage; per-socket facts live in
@@ -24,9 +27,12 @@
  *     every SEG_SAVE_EVERY segments and at every state change.
  *   - Stats, the chat ring, top chatters and seen names are a working copy in memory, written at
  *     most once a HOT_SAVE_MS riding a write or an event that happens anyway — never per chat line
- *     or reaction. Moderation is never batched: a deleted line is written at once, strikes and
- *     timeouts too. When the room isn't live (it may hibernate any time) every change is written
- *     at once, as before.
+ *     or reaction. A live room can still hibernate (≈ 10 s with no event: an upload stall, a stopped
+ *     encoder), so until that write what only memory has rides the sockets' attachments: each unsaved
+ *     line its poster's socket (a line too long to ride is written at once), the counters the host's
+ *     socket. A wake takes them back; only an eviction that drops the sockets (a deploy) can lose them.
+ *     Moderation is never batched: a deleted line is written at once, strikes and timeouts too, and a
+ *     delete always reaches every screen. When the room isn't live every change is written at once.
  *   - The viewer curve is sampled by the segments themselves (every 30 s); the alarm is only a
  *     LIVE_WATCHDOG_MS watchdog (a stalled or abandoned stream, the hourly usage flush).
  */
@@ -34,7 +40,7 @@
 import { iceFor, revokeIce, type IceEnv } from './ice';
 import { EMOJI_LIBRARY, STRIKE_LIMIT, TIMEOUT_MS, checkSpam, hasProfanity, type SpamState } from './moderation';
 import { FLUSH_EVERY_MS, UsageMeter, type Collected, type FlushResult, type UsageSink } from './usageMeter';
-import { addUsage, compactUsage, emptyCounters, sanitizeUsage, STREAM_ESTIMATES, subUsage, type UsageDelta } from '../../shared/stream/usage';
+import { addUsage, compactUsage, emptyCounters, maxUsage, sanitizeUsage, STREAM_ESTIMATES, subUsage, type UsageDelta } from '../../shared/stream/usage';
 
 export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
@@ -129,12 +135,39 @@ interface Progress {
   use?: UsageDelta;
 }
 
+/** A chat line not in storage yet, carried by its poster's socket until the next checkpoint (survives hibernation). Short keys: 2 KB a socket. */
+interface CarriedLine {
+  /** id */
+  i: string;
+  /** at */
+  t: number;
+  /** text */
+  x: string;
+  /** The poster's role, only when it isn't the socket's (a viewer promoted since keeps 'viewer' on older lines). */
+  r?: Role;
+}
+
+/** The room's counters as of the latest change, carried by the host's socket while live (absolute; they only grow). */
+interface HotCounters {
+  /** emojiTotal */
+  e: number;
+  /** peakViewers, peakAt */
+  pv: number;
+  pa: number | null;
+  /** stats.use: viewer-minutes and the room's upkeep. */
+  use?: UsageDelta;
+}
+
 interface Attach {
   sid: string;
   name: string;
   role: Role;
   /** The host's socket only: the latest progress, so a room that hibernated between segments loses none of it. */
   p?: Progress;
+  /** Live: this socket's lines that the next checkpoint writes. */
+  cl?: CarriedLine[];
+  /** Live, the host's socket only: the counters that the next checkpoint writes. */
+  h?: HotCounters;
 }
 
 /** The room's working copy while live (feature doc §7 C10): loaded once, written in batches. */
@@ -145,12 +178,6 @@ interface HotState {
   seenNames: string[];
 }
 type HotKey = keyof HotState;
-const HOT_DEFAULTS: { [K in HotKey]: () => HotState[K] } = {
-  stats: () => emptyStats(),
-  chat: () => [],
-  chatters: () => ({}),
-  seenNames: () => [],
-};
 
 interface Env extends IceEnv {
   EVENT_ROOM: DurableObjectNamespace;
@@ -172,9 +199,13 @@ export const SEG_SAVE_EVERY = 10;
 export const HOT_SAVE_MS = 60_000;
 /** …or as soon as this many chat lines are unsaved (bounds what an eviction could take from the replay list). */
 export const CHAT_SAVE_EVERY = 25;
+/** What an attachment may grow to by our (conservative) estimate; the runtime's limit is 2,048 bytes. */
+export const ATTACH_BUDGET = 1800;
+/** Room kept in the host's attachment for the progress and the counters it is handed later. */
+const HOST_RESERVE = 400;
 /** While live the alarm is a watchdog only: segments sample the curve, the watchdog catches a stalled stream. */
 export const LIVE_WATCHDOG_MS = 10 * 60_000;
-/** A sweep that can't empty R2 retries hourly; past this the room's rows go anyway (R2's lifecycle rule takes the rest). */
+/** A sweep that can't empty R2 retries hourly; past this it stops trying (R2's lifecycle rule takes the rest). */
 export const SWEEP_GRACE_MS = 2 * 24 * 60 * 60_000;
 const HEALTH_MIN_INTERVAL_MS = 20_000;
 const RSVP_CAP = 500;
@@ -210,6 +241,27 @@ const emptyStats = (): Stats => ({
 /** Segments ingested so far (the progress counter: it only grows). */
 const segCount = (u: UsageDelta | undefined): number => sanitizeUsage(u).segCount;
 
+/**
+ * An attachment's serialized size, estimated high: the runtime stores a string with any character
+ * beyond Latin-1 at two bytes a character, so then everything is counted twice.
+ */
+function attachBytes(a: Attach): number {
+  const s = JSON.stringify(a);
+  return /[^\u0000-\u00ff]/.test(s) ? 2 * s.length : s.length;
+}
+
+/** +1 in the per-minute bucket `at` (in order; a late line finds its own minute). */
+function bumpBucket(curve: { at: number; n: number }[], at: number): void {
+  let i = curve.length - 1;
+  while (i >= 0 && curve[i].at > at) i--;
+  if (i >= 0 && curve[i].at === at) curve[i].n += 1;
+  else curve.splice(i + 1, 0, { at, n: 1 });
+  if (curve.length > CURVE_CAP) curve.splice(0, curve.length - CURVE_CAP);
+}
+
+const sameUsage = (a: UsageDelta | undefined, b: UsageDelta | undefined) =>
+  JSON.stringify(compactUsage(sanitizeUsage(a))) === JSON.stringify(compactUsage(sanitizeUsage(b)));
+
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
@@ -225,8 +277,9 @@ export class EventRoom {
   /** The latest segment progress, ahead of the stored meta by `unsaved` segments (memory; rebuilt from the host's attachment). */
   private prog: (Progress & { unsaved: number }) | null = null;
   private progScanned = false;
-  /** The working copy and what in it is not written yet. */
-  private hot: Partial<HotState> = {};
+  /** The working copy (loaded once, with what the sockets carry) and what in it is not written yet. */
+  private hot: HotState | null = null;
+  private hotLoad: Promise<HotState> | null = null;
   private dirty = new Set<HotKey>();
   private unsavedChat = 0;
   private lastCheckpoint = 0;
@@ -297,31 +350,191 @@ export class EventRoom {
     return any;
   }
 
-  /** The working copy of one hot key (loaded from storage once). */
-  private async hotGet<K extends HotKey>(k: K): Promise<HotState[K]> {
-    if (this.hot[k] === undefined) {
-      const v = (await this.state.storage.get<HotState[K]>(k)) ?? HOT_DEFAULTS[k]();
-      // A concurrent load may have landed (and been changed) meanwhile: keep that copy.
-      if (this.hot[k] === undefined) (this.hot as HotState)[k] = v;
-    }
-    return this.hot[k] as HotState[K];
+  /** The working copy, loaded once (concurrent callers share the load). */
+  private loadHot(): Promise<HotState> {
+    if (this.hot) return Promise.resolve(this.hot);
+    return (this.hotLoad ??= this.readHot().finally(() => {
+      this.hotLoad = null;
+    }));
   }
 
-  private async getStats(): Promise<Stats> {
-    const s = await this.hotGet('stats');
-    if (!s.healthCurve) s.healthCurve = []; // rooms created before health telemetry
-    return s;
+  /** Storage, plus what the sockets carry that storage doesn't have yet (the room hibernated before its checkpoint). */
+  private async readHot(): Promise<HotState> {
+    const [stats, chat, chatters, seenNames] = await Promise.all([
+      this.state.storage.get<Stats>('stats'),
+      this.state.storage.get<ChatMsg[]>('chat'),
+      this.state.storage.get<Record<string, number>>('chatters'),
+      this.state.storage.get<string[]>('seenNames'),
+    ]);
+    const hot: HotState = { stats: stats ?? emptyStats(), chat: chat ?? [], chatters: chatters ?? {}, seenNames: seenNames ?? [] };
+    if (!hot.stats.healthCurve) hot.stats.healthCurve = []; // rooms created before health telemetry
+    this.hot = hot;
+    const atts = this.attachments();
+    // Lines a write already took (the room went before it could take them off the sockets): just drop them.
+    const saved = new Set(hot.chat.map((m) => m.id));
+    this.dropCarried(new Set(atts.flatMap((a) => (a.cl ?? []).filter((l) => saved.has(l.i)).map((l) => l.i))));
+    this.absorbCarried(atts);
+    return hot;
+  }
+
+  private async hotGet<K extends HotKey>(k: K): Promise<HotState[K]> {
+    return (await this.loadHot())[k];
+  }
+
+  private getStats(): Promise<Stats> {
+    return this.hotGet('stats');
+  }
+
+  private attachments(): Attach[] {
+    const out: Attach[] = [];
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (a) out.push(a);
+    }
+    return out;
+  }
+
+  /** A line in the counts: the chat total, its minute on the chat curve, its poster among the top chatters. */
+  private countLine(hot: HotState, m: ChatMsg): void {
+    hot.stats.chatTotal += 1;
+    bumpBucket(hot.stats.chatCurve, Math.floor(m.at / 60_000) * 60_000);
+    if (Object.keys(hot.chatters).length < 200 || hot.chatters[m.name] != null) {
+      hot.chatters[m.name] = (hot.chatters[m.name] ?? 0) + 1;
+    }
+  }
+
+  /**
+   * Take into the working copy what these sockets carry and it doesn't have: unsaved lines (with the counts
+   * they add), the host's counters, and the viewers in the room (they were seen). It is then unsaved, so the
+   * next checkpoint writes it — and, until then, the sockets keep carrying it.
+   */
+  private absorbCarried(atts: Attach[]): void {
+    const hot = this.hot;
+    if (!hot) return;
+    const stats = hot.stats;
+    const have = new Set(hot.chat.map((m) => m.id));
+    const lines: ChatMsg[] = [];
+    for (const a of atts) {
+      for (const l of a.cl ?? []) {
+        if (have.has(l.i)) continue;
+        have.add(l.i);
+        lines.push({ id: l.i, sid: a.sid, name: a.name, role: l.r ?? a.role, text: l.x, at: l.t });
+      }
+    }
+    if (lines.length) {
+      lines.sort((x, y) => x.at - y.at);
+      for (const m of lines) this.countLine(hot, m);
+      hot.chat = [...hot.chat, ...lines].sort((x, y) => x.at - y.at).slice(-CHAT_CAP);
+      this.unsavedChat += lines.length;
+      this.dirty.add('chat').add('stats').add('chatters');
+    }
+    for (const a of atts) {
+      const c = a.role === 'host' ? a.h : undefined;
+      if (c) {
+        if (Number(c.e) > stats.emojiTotal) {
+          stats.emojiTotal = Number(c.e);
+          this.dirty.add('stats');
+        }
+        if (Number(c.pv) > stats.peakViewers) {
+          stats.peakViewers = Number(c.pv);
+          stats.peakAt = c.pa ?? null;
+          this.dirty.add('stats');
+        }
+        const use = compactUsage(maxUsage(sanitizeUsage(stats.use), sanitizeUsage(c.use)));
+        if (!sameUsage(use, stats.use)) {
+          stats.use = use;
+          this.dirty.add('stats');
+        }
+      }
+      if ((a.role === 'viewer' || a.role === 'mod') && !hot.seenNames.includes(a.name) && hot.seenNames.length < 2000) {
+        hot.seenNames.push(a.name);
+        stats.uniqueViewers = hot.seenNames.length;
+        this.dirty.add('seenNames').add('stats');
+      }
+    }
+  }
+
+  /** The ids of every line the sockets carry. */
+  private carriedIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const a of this.attachments()) for (const l of a.cl ?? []) ids.add(l.i);
+    return ids;
+  }
+
+  /** Take these lines off every socket that carries them (they are written now, or deleted). */
+  private dropCarried(ids: ReadonlySet<string>): void {
+    if (!ids.size) return;
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (!a?.cl?.some((l) => ids.has(l.i))) continue;
+      const cl = a.cl.filter((l) => !ids.has(l.i));
+      if (cl.length) a.cl = cl;
+      else delete a.cl;
+      try {
+        ws.serializeAttachment(a);
+      } catch { /* on its way out */ }
+    }
+  }
+
+  /** Live: the line rides its poster's socket until the checkpoint. False when it doesn't fit (then it is written now). */
+  private carryLine(ws: WebSocket, m: ChatMsg): boolean {
+    try {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (!a) return false;
+      const line: CarriedLine = { i: m.id, t: m.at, x: m.text };
+      if (m.role !== a.role) line.r = m.role;
+      const next: Attach = { ...a, cl: [...(a.cl ?? []), line] };
+      if (attachBytes(next) > ATTACH_BUDGET - (a.role === 'host' ? HOST_RESERVE : 0)) return false;
+      ws.serializeAttachment(next);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Copy the counters into every host socket's attachment (free; survives hibernation). False when no host socket took them. */
+  private mirrorHot(): boolean {
+    const s = this.hot?.stats;
+    if (!s) return false;
+    const h: HotCounters = { e: s.emojiTotal, pv: s.peakViewers, pa: s.peakAt };
+    const use = compactUsage(sanitizeUsage(s.use));
+    if (Object.keys(use).length) h.use = use;
+    let any = false;
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (a?.role !== 'host') continue;
+      a.h = h;
+      try {
+        ws.serializeAttachment(a);
+        any = true;
+      } catch { /* on its way out */ }
+    }
+    return any;
+  }
+
+  /** A socket is going: what only it carried (its unsaved lines; the host's counters) goes into the working copy. */
+  private async takeFrom(a: Attach | null): Promise<{ lines: boolean; counters: boolean }> {
+    const lines = !!a?.cl?.length;
+    const counters = a?.role === 'host' && !!a.h;
+    if (a && (lines || counters)) {
+      await this.loadHot();
+      this.absorbCarried([a]);
+    }
+    return { lines, counters };
   }
 
   /**
    * The working copy changed. Live: written with the next checkpoint (at most once a HOT_SAVE_MS,
-   * or when CHAT_SAVE_EVERY lines are unsaved). Not live (the room may hibernate any time): now.
+   * or when CHAT_SAVE_EVERY lines are unsaved); until then the host's socket carries the counters.
+   * Not live, or no host socket to carry them: now.
    */
   private async saveSoon(keys: HotKey[], live?: boolean, now = Date.now()): Promise<void> {
     for (const k of keys) this.dirty.add(k);
     if (!this.dirty.size) return;
     const isLive = live ?? (await this.getMeta())?.status === 'live';
-    if (!isLive || now - this.lastCheckpoint >= HOT_SAVE_MS || this.unsavedChat >= CHAT_SAVE_EVERY) await this.checkpoint(now);
+    if (!isLive || now - this.lastCheckpoint >= HOT_SAVE_MS || this.unsavedChat >= CHAT_SAVE_EVERY || !this.mirrorHot()) {
+      await this.checkpoint(now);
+    }
   }
 
   /**
@@ -334,13 +547,17 @@ export class EventRoom {
     const m = meta ?? (this.prog && this.prog.unsaved > 0 ? await this.getMeta() : undefined);
     if (!this.dirty.size && !m) return;
     const onAir = !!(m ?? (await this.state.storage.get<EventMeta>('meta')))?.startedAt;
+    const carried = this.carriedIds();
+    // Loaded (with what the sockets carry) before the keys are chosen: what this write takes off the sockets is in it.
+    const hot = onAir || this.dirty.size || carried.size ? await this.loadHot() : null;
+    // A carried line and the counts it adds are written together, never one without the other.
+    if (carried.size) this.dirty.add('chat').add('stats').add('chatters');
     const keys = [...new Set<HotKey>(onAir ? [...this.dirty, 'stats'] : this.dirty)];
-    if (onAir) {
-      const stats = await this.getStats();
-      stats.use = compactUsage(addUsage(sanitizeUsage(stats.use), { rowsWrittenEst: keys.length + (m ? 1 : 0) }));
+    if (onAir && hot) {
+      hot.stats.use = compactUsage(addUsage(sanitizeUsage(hot.stats.use), { rowsWrittenEst: keys.length + (m ? 1 : 0) }));
     }
     const batch: Record<string, unknown> = {};
-    for (const k of keys) batch[k] = this.hot[k];
+    if (hot) for (const k of keys) batch[k] = hot[k];
     if (m) batch.meta = m;
     this.dirty.clear();
     const chat = this.unsavedChat;
@@ -353,6 +570,7 @@ export class EventRoom {
       this.unsavedChat += chat;
       throw err;
     }
+    this.dropCarried(carried); // in storage now: the sockets needn't carry them any more
     if (m) this.progressSaved(m);
   }
 
@@ -644,7 +862,12 @@ export class EventRoom {
     const carried = this.mirrorProgress();
     // The segments sample the viewer curve while live (no 30 s alarm).
     if (meta.status === 'live') await this.sampleIfDue(now);
-    if (save || !carried || unsaved >= SEG_SAVE_EVERY || (this.dirty.size > 0 && now - this.lastCheckpoint >= HOT_SAVE_MS)) {
+    if (
+      save ||
+      !carried ||
+      unsaved >= SEG_SAVE_EVERY ||
+      (this.dirty.size > 0 && (now - this.lastCheckpoint >= HOT_SAVE_MS || !this.mirrorHot())) // the host's socket carries the counters until then
+    ) {
       await this.checkpoint(now, meta);
     }
     this.broadcast({ t: 'segment', seq, ms, at });
@@ -656,7 +879,7 @@ export class EventRoom {
   /**
    * One alarm, four jobs: watch a live stream (stalled or abandoned; the segments sample the curve);
    * end a paused stream whose host never came back; purge segments when the 24 h replay window
-   * closes; purge server recordings after 7 days — and then the room's own storage.
+   * closes; purge server recordings after 7 days. The event itself stays (it can go live again).
    */
   async alarm(): Promise<void> {
     const meta = await this.getMeta();
@@ -682,11 +905,14 @@ export class EventRoom {
       const now = Date.now();
       const stats = await this.getStats();
       // Abandoned room (host vanished without ending): auto-end after 2 h of
-      // silence so viewers see "ended" and the retention janitor takes over.
-      if (meta.lastIngestAt && now - meta.lastIngestAt > 2 * 60 * 60_000) {
+      // silence so viewers see "ended" and the retention janitor takes over. Silence counts from the
+      // latest segment or the (re)start, whichever is later: a session that went live again weeks after
+      // an end never inherits the old session's last segment (that would end it at once, a week back).
+      const lastSign = Math.max(meta.lastIngestAt ?? 0, meta.startedAt ?? 0);
+      if (lastSign && now - lastSign > 2 * 60 * 60_000) {
         this.sample(stats, now, true);
         meta.status = 'ended';
-        meta.endedAt = meta.lastIngestAt;
+        meta.endedAt = lastSign;
         await this.checkpoint(now, meta);
         this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
         await this.addLog('warn', 'WARN', 'Stream auto-ended after 2 h without segments');
@@ -714,14 +940,17 @@ export class EventRoom {
 
     if (now >= recPurgeAt) return this.sweep(meta, now, flushed);
     if (now >= segPurgeAt) {
+      const same = () => this.stillEnded(meta.endedAt);
       try {
-        await this.deletePrefix(`events/${meta.id}/seg/`);
+        // Asked before each R2 page: a host who went live again owns what is there now (and its own alarms).
+        if (!(await this.deletePrefix(`events/${meta.id}/seg/`, same))) return;
       } catch (err) {
         // R2 hiccup: try again in an hour (an alarm that kept throwing would never arm the 7-day sweep).
         console.warn('event janitor: segment purge failed, retrying in 1 h', err instanceof Error ? err.message : err);
-        await this.state.storage.setAlarm(Math.min(now + 60 * 60_000, recPurgeAt));
+        if (await same()) await this.state.storage.setAlarm(Math.min(now + 60 * 60_000, recPurgeAt));
         return;
       }
+      if (!(await same())) return;
       await this.addLog('sys', 'SYS', 'Replay window closed — segments purged after 24 h');
       await this.state.storage.setAlarm(recPurgeAt);
       return;
@@ -730,11 +959,13 @@ export class EventRoom {
   }
 
   /**
-   * The 7-day sweep: the event's R2 objects (recordings, any segment left), then every row and the
-   * alarm — a dead event's room keeps nothing (C10: storage 0 by day 9). Its usage is written
-   * first: a flush that is held back by the hourly bound postpones the sweep until it can run, so
-   * nothing is lost. R2 that can't be emptied retries hourly; past SWEEP_GRACE_MS the rows go
-   * anyway and R2's lifecycle rule (`events/` after 9 days) takes what's left.
+   * The 7-day sweep: the event's R2 objects (recordings, any segment left) go — the event stays. An ended
+   * event can go live again from the same studio link, and its invite page, RSVPs, host and guest keys must
+   * keep working (a test run before a scheduled show, a weekly show on one link), so no row that makes it
+   * usable is deleted: what is left is a few KB, with no alarm and no requests. Usage is written first: a
+   * flush held back by the hourly bound postpones the sweep, so nothing is lost or counted twice. R2 that
+   * can't be emptied retries hourly; past SWEEP_GRACE_MS the room stops trying and R2's lifecycle rule
+   * (`events/` after 9 days) takes what's left. A host who goes live again meanwhile stops the sweep.
    */
   private async sweep(meta: EventMeta, now: number, flushed: FlushResult): Promise<void> {
     const late = now >= (meta.endedAt ?? now) + RECORDING_RETENTION_MS + SWEEP_GRACE_MS;
@@ -742,28 +973,30 @@ export class EventRoom {
       await this.state.storage.setAlarm(now + (flushed === 'too_soon' ? FLUSH_EVERY_MS : 60 * 60_000));
       return;
     }
+    const same = () => this.stillEnded(meta.endedAt);
     try {
-      await this.deletePrefix(`events/${meta.id}/`);
+      if (!(await this.deletePrefix(`events/${meta.id}/`, same))) return; // live again: that session is its own
     } catch (err) {
       if (!late) {
         console.warn('event sweep: R2 purge failed, retrying in 1 h', err instanceof Error ? err.message : err);
-        await this.state.storage.setAlarm(now + 60 * 60_000);
+        if (await same()) await this.state.storage.setAlarm(now + 60 * 60_000);
         return;
       }
+      console.warn('event sweep: R2 still failing past the grace period; its lifecycle rule takes the rest', err instanceof Error ? err.message : err);
     }
-    // Nobody can do anything in a dead event; a socket left open would only write rows back.
-    for (const ws of this.state.getWebSockets()) {
-      try {
-        ws.close(1000, 'event expired');
-      } catch { /* already closed */ }
-    }
-    // compatibility_date 2026-01-01: deleteAll() doesn't take the alarm with it (that came 2026-02-24).
-    await this.state.storage.deleteAlarm();
-    await this.state.storage.deleteAll();
-    this.hot = {};
-    this.dirty.clear();
-    this.prog = null;
-    this.progScanned = true;
+    if (!(await same())) return;
+    // The copies are gone; a copy registered while R2 was being emptied keeps its own 7 days (it armed its own alarm).
+    const recordings = (await this.state.storage.get<RecordingEntry[]>('recordings')) ?? [];
+    const left = recordings.filter((r) => r.at > now);
+    if (left.length !== recordings.length) await this.state.storage.put('recordings', left);
+    await this.addLog('sys', 'SYS', 'Retention sweep — replay and cloud copies purged. The event and its links stay: you can go live again.');
+    // No further alarm: nothing is left to purge. Going live again (or a new copy) arms the janitor anew.
+  }
+
+  /** Still the session that ended at `endedAt`? (A host who went live again owns what is there now.) */
+  private async stillEnded(endedAt: number | null): Promise<boolean> {
+    const m = await this.getMeta();
+    return !!m && m.status === 'ended' && m.endedAt === endedAt;
   }
 
   // ---------------------------------------------------------------- usage
@@ -778,6 +1011,8 @@ export class EventRoom {
     if (!this.usage.due(now)) return 'too_soon';
     const meta = await this.getMeta();
     if (!meta) return 'no_scope';
+    // After a wake, what the sockets carry joins the working copy first, so this checkpoint writes it too.
+    await this.loadHot();
     await this.checkpoint(now);
     const [stats, recordings, ownerId] = await Promise.all([
       this.getStats(),
@@ -787,13 +1022,16 @@ export class EventRoom {
     return this.usage.flush(now, { scopeId: meta.id, account: ownerId || '', collect: eventUsage(meta, stats, recordings ?? []) });
   }
 
-  private async deletePrefix(prefix: string): Promise<void> {
+  /** Empty an R2 prefix, page by page. `go` is asked before each page is deleted: false stops it (and returns false). */
+  private async deletePrefix(prefix: string, go?: () => Promise<boolean>): Promise<boolean> {
     let cursor: string | undefined;
     do {
       const page = await this.env.LIVE_BUCKET.list({ prefix, cursor, limit: 500 });
+      if (go && !(await go())) return false;
       if (page.objects.length > 0) await this.env.LIVE_BUCKET.delete(page.objects.map((o) => o.key));
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor);
+    return true;
   }
 
   // ------------------------------------------------------------- WebSocket
@@ -885,8 +1123,6 @@ export class EventRoom {
     if (msg.t !== 'rtc' && raw.length > FRAME_MAX) return;
     const me = ws.deserializeAttachment() as Attach | null;
     if (!me) return;
-    // A swept (dead) event: nothing a socket says may write rows back.
-    if (!(await this.state.storage.get('meta'))) return;
 
     switch (msg.t) {
       case 'chat':
@@ -921,13 +1157,14 @@ export class EventRoom {
 
   async webSocketClose(ws: WebSocket): Promise<void> {
     const me = ws.deserializeAttachment() as Attach | null;
-    if (!(await this.state.storage.get('meta'))) return; // a swept event: write nothing back
     // The host's socket may carry progress this room no longer has in memory (it hibernated):
     // take it, and hand it to any host socket that stays.
     if (me?.role === 'host') {
       this.absorb(me);
       this.mirrorProgress();
     }
+    // Likewise what only this socket carried: its unsaved lines, the host's counters (written below).
+    const carried = await this.takeFrom(me);
     await this.broadcastViewers();
     if (me?.role === 'pending') this.lobbySync();
     else this.peopleSync();
@@ -956,6 +1193,8 @@ export class EventRoom {
       } else if (meta) {
         await this.checkpoint(now); // whatever segment progress only the host's socket carried
       }
+    } else if (carried.lines || (carried.counters && !this.mirrorHot())) {
+      await this.checkpoint(); // no socket carries them any more
     }
   }
 
@@ -1018,24 +1257,16 @@ export class EventRoom {
       text: clean,
       at: now,
     };
-    const [chat, stats, chatters] = await Promise.all([this.hotGet('chat'), this.getStats(), this.hotGet('chatters')]);
-    chat.push(m);
-    if (chat.length > CHAT_CAP) chat.splice(0, chat.length - CHAT_CAP);
-    stats.chatTotal += 1;
-    const bucket = Math.floor(now / 60_000) * 60_000;
-    const last = stats.chatCurve[stats.chatCurve.length - 1];
-    if (last && last.at === bucket) last.n += 1;
-    else {
-      stats.chatCurve.push({ at: bucket, n: 1 });
-      if (stats.chatCurve.length > CURVE_CAP) stats.chatCurve.splice(0, stats.chatCurve.length - CURVE_CAP);
-    }
-    if (Object.keys(chatters).length < 200 || chatters[me.name] != null) {
-      chatters[me.name] = (chatters[me.name] ?? 0) + 1;
-    }
-    // Live: the line is in the working copy (a joiner's hello has it) and is written with the next
-    // checkpoint — not 3 rows per line. Hidden lines never get here; deletes are written at once.
+    const hot = await this.loadHot();
+    hot.chat.push(m);
+    if (hot.chat.length > CHAT_CAP) hot.chat.splice(0, hot.chat.length - CHAT_CAP);
+    this.countLine(hot, m);
+    // Live: the line is in the working copy (a joiner's hello has it) and rides its poster's socket until the
+    // next checkpoint writes it — not 3 rows per line, and a hibernation in between loses nothing. A line too
+    // long to ride is written now. Hidden lines never get here; deletes are written at once.
     this.unsavedChat += 1;
-    await this.saveSoon(['chat', 'stats', 'chatters'], meta.status === 'live', now);
+    const carried = meta.status === 'live' && this.carryLine(ws, m);
+    await this.saveSoon(['chat', 'stats', 'chatters'], carried, now);
     this.broadcast({ t: 'chat', m });
   }
 
@@ -1174,9 +1405,21 @@ export class EventRoom {
         await this.addLog('mod', 'MOD', `Denied entry to “${a.name}”`);
       } else if (action === 'kick') {
         this.send(ws, { t: 'kicked' });
+        // Their unsaved lines stay in the room for the crew (a delete can still take one): into the working copy,
+        // off the socket (nothing on its way out may bring one back later), and written now.
+        const carried = await this.takeFrom(a);
+        const fresh = ws.deserializeAttachment() as Attach | null;
+        const lines = carried.lines || !!fresh?.cl?.length; // (one posted meanwhile is in the working copy already)
+        if (fresh?.cl) {
+          delete fresh.cl;
+          try {
+            ws.serializeAttachment(fresh);
+          } catch { /* closed */ }
+        }
         try {
           ws.close(4002, 'kicked');
         } catch { /* closed */ }
+        if (lines) await this.checkpoint();
         // A removed on-air guest's relay credential stops working now, not when it would lapse.
         if (a.role === 'guest') {
           const meta = await this.getMeta();
@@ -1186,6 +1429,7 @@ export class EventRoom {
         this.peopleSync();
         await this.addLog('mod', 'MOD', `Removed “${a.name}” from the stream`);
       } else if (action === 'promote' && a.role === 'viewer') {
+        for (const l of a.cl ?? []) l.r ??= 'viewer'; // lines posted before stay a viewer's
         a.role = 'mod';
         ws.serializeAttachment(a);
         this.send(ws, { t: 'role', role: 'mod' });
@@ -1256,15 +1500,24 @@ export class EventRoom {
     this.broadcast({ t: 'pin', text: meta.pinned });
   }
 
-  /** Moderation is never batched: the line is gone from storage before anyone is told. */
+  /**
+   * Moderation is never batched, and never depends on the working copy: the line is taken off every socket
+   * that carries it and out of storage, and then every screen is told — always, even for a line the room no
+   * longer holds (an eviction took it, yet it is still on the screens that got it). Clients drop it idempotently.
+   */
   private async onDelete(me: Attach, id: string): Promise<void> {
     if (me.role !== 'host' && me.role !== 'mod') return;
-    const chat = await this.hotGet('chat');
-    const at = chat.findIndex((m) => m.id === id);
-    if (at >= 0) {
-      chat.splice(at, 1);
-      this.dirty.add('chat');
-      await this.checkpoint();
+    if (!id || id.length > 64) return;
+    try {
+      this.dropCarried(new Set([id])); // first, before any await: no later wake can bring it back
+      const hot = await this.loadHot();
+      const at = hot.chat.findIndex((m) => m.id === id);
+      if (at >= 0) {
+        hot.chat.splice(at, 1);
+        this.dirty.add('chat');
+        await this.checkpoint();
+      }
+    } finally {
       this.broadcast({ t: 'delete', id });
     }
   }
@@ -1310,7 +1563,8 @@ export class EventRoom {
       stats.peakAt = Date.now();
       changed.push('stats');
     }
-    await this.saveSoon(changed, live);
+    // A milestone is written at once (≤ 7 a stream), so no eviction can make the room announce it twice.
+    await this.saveSoon(changed, crossed != null ? false : live);
     if (crossed != null) {
       this.broadcast({ t: 'milestone', n: crossed });
       await this.addLog('join', 'JOIN', `${crossed} viewers — new peak this session`);
