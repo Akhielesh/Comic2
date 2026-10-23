@@ -256,6 +256,19 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(urlFor({ path: `pub/${KEY}/p1.webp`, source: 'generated', at: 0 })).toBe(`https://public.test/pub/${KEY}/p1.webp`);
   });
 
+  it('a snapshot without publication info offers no download (never the language on screen, even with the boot switch on)', async () => {
+    setBoot({ slug: SLUG, allowDownload: true, card: { title: 'The Saffron Thief', description: 'x', aspect: '2:3', pageCount: 6 } });
+    const doc = snapshotDoc();
+    const { publication: _omit, ...noPublication } = payload({}, doc);
+    api.loadPublicComicBySlug.mockResolvedValue(noPublication as unknown as PublicComicPayload);
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Start reading/ }));
+    const dialog = await screen.findByTestId('immersive-reader');
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /PDF|Download/i })).toBeNull();
+    expect(pdfMock.exportComicPdf).not.toHaveBeenCalled();
+  });
+
   it('an embed whose author turned downloads off offers none', async () => {
     api.loadPublicComicBySlug.mockResolvedValue(payload({ allowDownload: false }));
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG, embed: true }} />);

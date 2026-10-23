@@ -232,7 +232,8 @@ describe('ZIP memory guard (every PNG is held in memory until the archive is wri
     expect(renderPage).not.toHaveBeenCalled();
     // Following the advice works.
     const one = await exportPngZip(longBook(30), fakeUrlFor, { download, renderPage, renderImage: async () => png('c'), memoryBudget: 120 * MB, lang: 'te' });
-    expect(one.files).toBe(30);
+    expect(renderPage).toHaveBeenCalledTimes(30);
+    expect(one.files).toBe(31); // the cover + 30 pages
     expect(one.maxEdge).toBeGreaterThanOrEqual(1280);
     expect(download).toHaveBeenCalledTimes(1);
   });
