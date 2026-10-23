@@ -6,8 +6,8 @@
 //   ?e=ID#/summary?k=KEY   → private recap
 //   ?e=ID                  → invite page or watch page (meta decides)
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
-//                            #/account, #/monitor[/NURSERY[/camera|/watch]],
-//                            #/calls, #/call/NURSERY/CALL (a call notification → Calls)
+//                            #/account, #/monitor[/NURSERY[/camera|/watch|/invite]],
+//                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls)
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { consumeAuthReturn, openAuth, signOutEverywhereLocal, useAccount } from './account';
 import { getEvent } from './api';
@@ -31,6 +31,8 @@ const MonitorJoin = lazy(() => import('./views/MonitorJoin').then((m) => ({ defa
 const CallsView = lazy(() => import('./views/CallsView').then((m) => ({ default: m.CallsView })));
 import { useCalls } from './calls/callCenter';
 import { CallHost } from './views/calls/CallHost';
+import { InviteHost } from './views/monitor/InviteHost';
+import { openInvite } from './monitor/invite';
 import { StudiosCard } from './components/StudiosCard';
 import { isMissed, CALLS_SEEN_KEY } from './views/callsBadge';
 import { SettingsView } from './views/SettingsView';
@@ -78,11 +80,12 @@ export function parseRoute(): Route {
   if (hash === 'settings' || hash === 'account') return { view: 'settings' };
   if (hash === 'monitor') return { view: 'monitor' };
   // A ringing call's notification lands on Calls; the call itself rings on top.
-  if (hash === 'calls' || /^call\/[0-9a-f-]{36}\/[0-9a-f]{8,24}$/.test(hash)) return { view: 'calls' };
+  if (hash === 'calls' || /^call\/(?:[0-9a-f-]{36}|d)\/[0-9a-f]{8,24}$/.test(hash)) return { view: 'calls' };
   // Share link: #/monitor/join/<nursery>/<code> (the passcode is typed, never in the link).
   const join = hash.match(/^monitor\/join\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{16,64})$/);
   if (join) return { view: 'monitor-join', nid: join[1], code: join[2] };
-  const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch))?$/);
+  // #/monitor/<nursery>/invite opens the hub with the Invite sheet on top.
+  const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch|invite))?$/);
   if (mon) {
     if (mon[2] === 'camera') return { view: 'monitor-camera', nid: mon[1] };
     if (mon[2] === 'watch') return { view: 'monitor-watch', nid: mon[1] };
@@ -256,8 +259,10 @@ export function LiveApp() {
     void consumeAuthReturn().then((r) => {
       if (!r) return;
       setRoute(parseRoute());
-      if ('confirmed' in r) push('Email confirmed — you’re signed in', { icon: 'sparkles' });
-      else if (r.error === 'expired') {
+      if ('confirmed' in r) push(r.handoff ? 'Signed in with your DreamStream account' : 'Email confirmed — you’re signed in', { icon: 'sparkles' });
+      else if (r.handoff) {
+        openAuth('signin', 'That sign-in link has expired or was already used — sign in here, or continue with DreamStream.');
+      } else if (r.error === 'expired') {
         openAuth('signin', 'That link has expired or was already used. If you tapped it once already, your email is confirmed — just sign in.');
       } else {
         openAuth('signin', `That link didn’t work${r.message ? ` (${r.message})` : ''}. Sign in — we’ll send a fresh link if it’s still needed.`);
@@ -265,6 +270,14 @@ export function LiveApp() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A link straight to Invite (help, notifications): the hub, then the sheet.
+  useEffect(() => {
+    const inv = location.hash.match(/^#\/monitor\/([0-9a-f-]{36})\/invite$/);
+    if (!inv) return;
+    history.replaceState(null, '', `${location.pathname}${location.search}#/monitor/${inv[1]}`);
+    openInvite(inv[1]);
+  }, [route]);
 
   const nav: Nav = useMemo(() => {
     const navigate = (search: string, hash: string) => {
@@ -427,6 +440,7 @@ export function LiveApp() {
       {route.view === 'dashboard' && <WelcomeTour ready />}
       <CallHost push={push} suspended={route.view === 'monitor-camera'} />
       <AuthSheetHost push={push} />
+      <InviteHost push={push} />
       <GuideHost screenTour={screenTour} />
       {toastNode}
     </div>

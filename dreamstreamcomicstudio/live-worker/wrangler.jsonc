@@ -1,5 +1,5 @@
 {
-  // DreamStream Live Worker — owns the EventRoom Durable Object (chat, presence,
+  // Stream Studio's live Worker — owns the EventRoom Durable Object (chat, presence,
   // lobby, stream state) and the R2-served segment rail (near-zero-cost delivery:
   // R2 has no egress fees and segments are CDN-cached). See README.md.
   "name": "dreamstream-live",
@@ -11,12 +11,16 @@
     "bindings": [
       { "class_name": "EventRoom", "name": "EVENT_ROOM" },
       // Baby Monitor signaling + alerts. Never stores media (P2P video).
-      { "class_name": "MonitorRoom", "name": "MONITOR_ROOM" }
+      { "class_name": "MonitorRoom", "name": "MONITOR_ROOM" },
+      // Direct calls: a personal line per member, and a short-lived room per call.
+      { "class_name": "UserLine", "name": "USER_LINE" },
+      { "class_name": "CallRoom", "name": "CALL_ROOM" }
     ]
   },
   "migrations": [
     { "new_sqlite_classes": ["EventRoom"], "tag": "v1" },
-    { "new_sqlite_classes": ["MonitorRoom"], "tag": "v2" }
+    { "new_sqlite_classes": ["MonitorRoom"], "tag": "v2" },
+    { "new_sqlite_classes": ["UserLine", "CallRoom"], "tag": "v3" }
   ],
 
   "r2_buckets": [
@@ -25,11 +29,18 @@
     { "binding": "LIVE_BUCKET", "bucket_name": "dreamstream-live" }
   ],
 
+  // Stream Studio usage metering (ADR 0007; src/usageMeter.ts): ≤ 1 data point per room per hour,
+  // non-blocking, no storage rows. The table is created on the first write. Optional in code — a
+  // missing binding just means no points (the rooms' monthly rows still count). Read by the backend's
+  // Admin → Costs and the daily cost watch with the read-only Account Analytics token.
+  "analytics_engine_datasets": [{ "binding": "STREAM_USAGE", "dataset": "stream_usage" }],
+
   "vars": {
     // Comma-separated list of origins allowed to call the API (was "*" while testing).
     // Tightened to the known production frontends (security finding H4). If you add a
     // custom domain or preview host that needs the live API, append it here before deploy.
-    "ALLOWED_ORIGINS": "https://dreamstreamstudio.ai,https://comic2.pages.dev",
+    // stream.dreamstreamstudio.ai is Stream Studio's own address (shared/streamHost.ts).
+    "ALLOWED_ORIGINS": "https://dreamstreamstudio.ai,https://stream.dreamstreamstudio.ai,https://comic2.pages.dev",
     // Public values (already in the frontend bundle). The worker forwards the
     // caller's own bearer token to SECURITY DEFINER RPCs — it holds no secrets.
     "SUPABASE_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co",
@@ -39,12 +50,15 @@
   },
 
   // Public URLs:
-  // - https://dreamstreamstudio.ai/live-api/* for the custom domain.
+  // - https://stream.dreamstreamstudio.ai/live-api/* — Stream Studio's own host (same-origin API).
+  // - https://dreamstreamstudio.ai/live-api/* — the old address; kept for installed apps,
+  //   open tabs and anything still on dreamstreamstudio.ai/live.
   // - https://dreamstream-live.akhieleshsrirangam.workers.dev/* for the temporary
   //   comic2.pages.dev launch fallback. The Pages domain cannot own a custom
   //   Workers route, so the frontend uses workers.dev there.
   // The worker strips the /live-api prefix when present.
   "routes": [
-    { "pattern": "dreamstreamstudio.ai/live-api/*", "zone_name": "dreamstreamstudio.ai" }
+    { "pattern": "dreamstreamstudio.ai/live-api/*", "zone_name": "dreamstreamstudio.ai" },
+    { "pattern": "stream.dreamstreamstudio.ai/live-api/*", "zone_name": "dreamstreamstudio.ai" }
   ]
 }

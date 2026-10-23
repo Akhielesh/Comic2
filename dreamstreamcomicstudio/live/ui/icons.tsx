@@ -24,6 +24,8 @@ const ICONS: Record<string, React.ReactElement[]> = {
   layers: [P('M12 2l9 5-9 5-9-5z'), P('M3 12l9 5 9-5M3 17l9 5 9-5')],
   users: [P('M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'), h('circle', { cx: 9, cy: 7, r: 4 }), P('M22 21v-2a4 4 0 0 0-3-3.9M16 3.1A4 4 0 0 1 16 11')],
   user: [P('M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'), h('circle', { cx: 12, cy: 7, r: 4 })],
+  userPlus: [P('M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'), h('circle', { cx: 9, cy: 7, r: 4 }), P('M19 8v6M22 11h-6')],
+  qr: [P('M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3z'), P('M6 6h1v1H6zM17 6h1v1h-1zM6 17h1v1H6z'), P('M14 14h3v3h-3zM20 14v1M14 20h1M18 18h3v3h-3')],
   chat: [P('M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.8-.8L3 21l1.9-5.2A8.4 8.4 0 0 1 4 11.5a8.5 8.5 0 0 1 17 0z')],
   activity: [P('M22 12h-4l-3 9L9 3l-3 9H2')],
   signal: [P('M2 20h.01M7 20v-4M12 20v-8M17 20v-12M22 20V4')],

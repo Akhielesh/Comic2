@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Radio } from 'lucide-react';
 import { Button } from './Button';
+import { followLiveLink, liveAppUrl, openLiveApp } from '../services/liveLink';
 import { WaitlistForm } from './WaitlistForm';
 import { useAuth } from '../contexts/AuthContext';
 import { comicsEntryUrl } from '../services/productHost';
@@ -64,7 +65,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               Host polished creator sessions without OBS or webinar bloat: invite viewers, manage lobby/chat, bring guests on air, record the moment, and share the replay.
             </p>
             <div className="flex flex-wrap gap-4">
-              <Button onClick={() => { window.location.href = '/live.html'; }} className="text-xl px-10 py-5 shadow-comic hover:shadow-none transition-all" icon={<Radio />}>
+              <Button onClick={() => { void openLiveApp('/live.html'); }} className="text-xl px-10 py-5 shadow-comic hover:shadow-none transition-all" icon={<Radio />}>
                 Open Stream Studio
               </Button>
               <button
@@ -120,7 +121,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                   <div className="text-brand-yellow font-display text-xl">Leave with a replay</div>
                   <div className="text-sm font-mono text-zinc-400">Record locally, preserve key sessions, and turn events into reusable content.</div>
                 </div>
-                <a href="/live.html" className="shrink-0 px-4 py-2 bg-brand-yellow text-black border-2 border-white rounded-lg font-bold hover:bg-white transition-colors">Try beta</a>
+                <a href={liveAppUrl('/live.html')} onClick={(e) => followLiveLink(e, '/live.html')} className="shrink-0 px-4 py-2 bg-brand-yellow text-black border-2 border-white rounded-lg font-bold hover:bg-white transition-colors">Try beta</a>
               </div>
             </div>
           </div>
@@ -154,7 +155,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 Create a private event, share a viewer link, approve the room, go live with guests, chat in real time, record the session, and leave with a replay. Built for intimate creator workshops, coaching calls, classes, and paid-community sessions.
               </p>
               <a
-                href="/live.html"
+                href={liveAppUrl('/live.html')}
+                onClick={(e) => followLiveLink(e, '/live.html')}
                 className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-red hover:gap-3 transition-all"
               >
                 Open Stream Studio <ArrowRight size={16} />
@@ -440,7 +442,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 )}
               </li>
               <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
-              <li><a href="/live.html" className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
+              <li><a href={liveAppUrl('/live.html')} onClick={(e) => followLiveLink(e, '/live.html')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
             </ul>
           </div>
           <div>

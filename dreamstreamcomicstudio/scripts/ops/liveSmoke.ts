@@ -1,5 +1,7 @@
+import { STREAM_HOST_ON, STREAM_ORIGIN } from '../../shared/streamHost';
+
 export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle' | 'cors-preflight' | 'redirect';
-export type SmokeScope = 'all' | 'temporary-launch';
+export type SmokeScope = 'all' | 'temporary-launch' | 'stream-host';
 export type SmokeTargetScope = Exclude<SmokeScope, 'all'>;
 
 /**
@@ -66,7 +68,24 @@ export type RunLiveSmokeOptions = {
 const COLD_START_STATUSES = new Set([502, 503, 504]);
 const COLD_START_RETRIES = 4;
 
-export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
+/**
+ * Stream Studio's own host (shared/streamHost.ts). `npm run ops:live-smoke:stream-host` checks it
+ * before STREAM_HOST_ON is flipped (the custom domain must be attached first); once the switch is
+ * on, every `all` run includes these too.
+ */
+export const STREAM_HOST_TARGETS: SmokeTarget[] = [
+  { name: 'Stream Studio host', url: `${STREAM_ORIGIN}/`, kind: 'frontend', scopes: ['stream-host'] },
+  { name: 'Stream Studio host bundle', url: `${STREAM_ORIGIN}/`, kind: 'live-bundle', scopes: ['stream-host'] },
+  { name: 'Stream Studio host keeps old links', url: `${STREAM_ORIGIN}/live.html?e=smokeprobe`, kind: 'redirect', redirectTo: `${STREAM_ORIGIN}/?e=smokeprobe`, scopes: ['stream-host'] },
+  { name: 'Stream Studio host live worker', url: `${STREAM_ORIGIN}/live-api/api/events/smokeprobe`, kind: 'live-api', scopes: ['stream-host'] },
+  { name: 'Stream Studio host api backend', url: `${STREAM_ORIGIN}/api/health`, kind: 'api', scopes: ['stream-host'] }
+];
+
+/** Where an old Stream Studio address must redirect: its own host once switched on. */
+const liveRedirect = (legacyPathAndQuery: string, streamHostOn: boolean): string =>
+  streamHostOn ? `${STREAM_ORIGIN}/${legacyPathAndQuery.slice(legacyPathAndQuery.indexOf('?'))}` : `${CANONICAL_ORIGIN}${legacyPathAndQuery}`;
+
+export const buildSmokeTargets = (streamHostOn: boolean = STREAM_HOST_ON): SmokeTarget[] => [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
   // The Pages production host and www only redirect (one host, one sign-in). Fetched with
   // redirect: 'manual' — following would land on the custom domain's datacenter challenge.
@@ -74,12 +93,15 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
     name: 'Pages host redirects to the custom domain',
     url: `${LEGACY_PAGES_ORIGIN}/live.html?e=smokeprobe`,
     kind: 'redirect',
-    redirectTo: `${CANONICAL_ORIGIN}/live.html?e=smokeprobe`,
+    redirectTo: liveRedirect('/live.html?e=smokeprobe', streamHostOn),
     scopes: ['temporary-launch']
   },
-  { name: 'www redirects to the custom domain', url: 'https://www.dreamstreamstudio.ai/live?e=smokeprobe', kind: 'redirect', redirectTo: `${CANONICAL_ORIGIN}/live?e=smokeprobe` },
-  { name: 'stream studio', url: `${CANONICAL_ORIGIN}/live.html`, kind: 'frontend' },
-  { name: 'stream studio bundle', url: `${CANONICAL_ORIGIN}/live.html`, kind: 'live-bundle' },
+  { name: 'www redirects to the custom domain', url: 'https://www.dreamstreamstudio.ai/live?e=smokeprobe', kind: 'redirect', redirectTo: liveRedirect('/live?e=smokeprobe', streamHostOn) },
+  ...(streamHostOn
+    ? [{ name: 'old Stream Studio address moves to its host', url: `${CANONICAL_ORIGIN}/live.html?e=smokeprobe`, kind: 'redirect' as const, redirectTo: `${STREAM_ORIGIN}/?e=smokeprobe` }]
+    : []),
+  { name: 'Stream Studio', url: `${CANONICAL_ORIGIN}/live.html`, kind: 'frontend' },
+  { name: 'Stream Studio bundle', url: `${CANONICAL_ORIGIN}/live.html`, kind: 'live-bundle' },
   { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api', scopes: ['temporary-launch'] },
   { name: 'fallback live worker CORS preflight', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events', kind: 'cors-preflight', scopes: ['temporary-launch'] },
   {
@@ -92,18 +114,25 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
   { name: 'api backend', url: 'https://dreamstreamstudio.ai/api/health', kind: 'api' },
   // The backend container behind the dreamstream-api Worker, minus the custom domain's bot challenge.
-  { name: 'api backend (workers.dev)', url: 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health', kind: 'api', scopes: ['temporary-launch'] }
+  { name: 'api backend (workers.dev)', url: 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health', kind: 'api', scopes: ['temporary-launch'] },
+  ...STREAM_HOST_TARGETS
 ];
+
+export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = buildSmokeTargets();
 
 export const smokeTargetsForScope = (
   scope: SmokeScope = 'all',
-  targets: SmokeTarget[] = DEFAULT_SMOKE_TARGETS
+  targets: SmokeTarget[] = DEFAULT_SMOKE_TARGETS,
+  streamHostOn: boolean = STREAM_HOST_ON
 ): SmokeTarget[] => {
-  if (scope === 'all') return targets;
+  // The Stream Studio host joins the everyday run once the switch is on (before that it may
+  // not serve yet — check it with --stream-host).
+  if (scope === 'all') return targets.filter((target) => streamHostOn || !target.scopes?.includes('stream-host'));
   return targets.filter((target) => target.scopes?.includes(scope));
 };
 
 export function parseSmokeScope(args: string[]): SmokeScope {
+  if (args.includes('--stream-host') || args.includes('--scope=stream-host')) return 'stream-host';
   if (args.includes('--temporary-launch') || args.includes('--temporary') || args.includes('--scope=temporary')) {
     return 'temporary-launch';
   }
@@ -111,6 +140,9 @@ export function parseSmokeScope(args: string[]): SmokeScope {
 }
 
 export function formatSmokeScopeBanner(scope: SmokeScope): string | null {
+  if (scope === 'stream-host') {
+    return `Scope: Stream Studio host — checking ${STREAM_ORIGIN} serves the app, keeps old links and reaches both APIs. All PASS ⇒ safe to flip STREAM_HOST_ON (shared/streamHost.ts).`;
+  }
   if (scope !== 'temporary-launch') return null;
   return 'Scope: temporary launch — checking the comic2.pages.dev redirect + workers.dev; custom-domain targets intentionally omitted until the Cloudflare challenge is fixed.';
 }

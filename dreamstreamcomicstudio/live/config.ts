@@ -45,7 +45,7 @@ export const LIMITS: { label: string; value: string }[] = [
   { label: 'Session length', value: 'Unlimited — short clips or marathon sessions' },
   { label: 'Resolution ceiling', value: '1080p60 streaming · local recording at the same resolution, ~2.5× bitrate' },
   { label: 'Replay', value: 'Viewers can re-watch from the same link for 24 h after the stream ends' },
-  { label: 'Recordings', value: 'Saved to your device AND kept on the server for 7 days (then auto-deleted) — chat is never burned in' },
+  { label: 'Recordings', value: 'Saved to this device or your Google Drive — free, and yours to keep. Nothing is kept on our servers unless you choose a 7-day copy (up to 10 GB per account, then auto-deleted) — chat is never burned in' },
   { label: 'Moderation', value: 'Profanity & spam are auto-hidden with strikes → 5-minute timeouts, all logged' },
   { label: 'Cost guardrails', value: 'Closing the studio tab ends the stream instantly (restartable); silent drops auto-end after a 2-minute grace' },
 ];

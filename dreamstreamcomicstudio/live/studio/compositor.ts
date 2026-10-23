@@ -102,6 +102,8 @@ export class ProgramCompositor {
   private speaking = new Set<string>();
   private accent = '#c2603f';
   private lastMultiSig = -1;
+  /** Empty-seat hint drawn beside the host in Grid while nobody has joined (meetings). */
+  private placeholder: string | null = null;
   /** Fires when the user stops a screen share from the browser UI. */
   onScreenEnded: (() => void) | null = null;
 
@@ -227,6 +229,17 @@ export class ProgramCompositor {
   setRemoteTiles(tiles: ProgramTile[]): void {
     this.remoteTiles = tiles;
     this.dirty = true;
+  }
+
+  /**
+   * "Waiting for people — share the invite": an empty seat drawn next to the host in
+   * Grid while no guest has joined. Null hides it (always null while broadcasting).
+   */
+  setPlaceholder(text: string | null): void {
+    if (this.placeholder !== text) {
+      this.placeholder = text;
+      this.dirty = true;
+    }
   }
 
   /** Which tile the Spotlight/Sidebar scenes feature (null = auto). */
@@ -366,9 +379,13 @@ export class ProgramCompositor {
     }
     const gap = Math.round(Math.min(w, h) * 0.015);
 
+    const seat = this.scene === 'grid' && this.placeholder && this.remoteTiles.length === 0 ? this.placeholder : null;
     if (this.scene === 'grid' || tiles.length === 1) {
-      const n = tiles.length;
-      const cols = Math.ceil(Math.sqrt(n));
+      const n = tiles.length + (seat ? 1 : 0);
+      // A phone held upright stacks people (rows first) instead of slicing the
+      // portrait frame into tall slivers.
+      const portrait = h > w * 1.1;
+      const cols = portrait ? Math.ceil(n / Math.ceil(Math.sqrt(n))) : Math.ceil(Math.sqrt(n));
       const rows = Math.ceil(n / cols);
       const cw = (w - gap * (cols + 1)) / cols;
       const ch = (h - gap * (rows + 1)) / rows;
@@ -380,6 +397,14 @@ export class ProgramCompositor {
         const xOffset = row === rows - 1 ? (w - (inRow * (cw + gap) + gap)) / 2 : 0;
         this.drawTile(t, xOffset + gap + col * (cw + gap), gap + row * (ch + gap), cw, ch);
       });
+      if (seat) {
+        const i = tiles.length;
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const inRow = row === rows - 1 ? n - (rows - 1) * cols : cols;
+        const xOffset = row === rows - 1 ? (w - (inRow * (cw + gap) + gap)) / 2 : 0;
+        this.drawSeat(seat, xOffset + gap + col * (cw + gap), gap + row * (ch + gap), cw, ch);
+      }
       return;
     }
 
@@ -463,6 +488,36 @@ export class ProgramCompositor {
     ctx.lineWidth = talking ? Math.max(2, this.width / 480) : Math.max(1, this.width / 960);
     this.roundRectPath(x, y, tw, th, r);
     ctx.stroke();
+  }
+
+  /** An empty, dashed seat with a short hint — split on " — " into two lines. */
+  private drawSeat(text: string, x: number, y: number, tw: number, th: number): void {
+    const { ctx } = this;
+    if (tw <= 4 || th <= 4) return;
+    const r = Math.round(Math.min(this.width, this.height) * 0.012);
+    ctx.save();
+    ctx.fillStyle = '#1d1c22';
+    this.roundRectPath(x, y, tw, th, r);
+    ctx.fill();
+    ctx.setLineDash([Math.max(4, tw / 60), Math.max(4, tw / 60)]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = Math.max(1, this.width / 640);
+    this.roundRectPath(x + 1, y + 1, tw - 2, th - 2, r);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const [first, second] = text.split(' — ');
+    const fs = Math.max(11, Math.round(Math.min(tw, th) * 0.06));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    ctx.font = `600 ${fs}px 'Hanken Grotesk', sans-serif`;
+    ctx.fillText(first, x + tw / 2, y + th / 2 - (second ? fs * 0.7 : 0), tw - fs * 2);
+    if (second) {
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = `500 ${Math.round(fs * 0.82)}px 'Hanken Grotesk', sans-serif`;
+      ctx.fillText(second, x + tw / 2, y + th / 2 + fs * 0.75, tw - fs * 2);
+    }
+    ctx.restore();
   }
 
   private drawTileLabel(label: string, x: number, y: number, tw: number, th: number, stage: boolean): void {

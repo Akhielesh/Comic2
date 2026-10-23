@@ -12,6 +12,7 @@
     "/favicon.ico",
     "/live-sw.js",
     "/live.webmanifest",
+    "/stream.webmanifest",
     "/models/*",
     "/app.webmanifest",
     "/icons/*"

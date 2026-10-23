@@ -20,8 +20,10 @@ ask Supabase to send anything:
    `properties.verification_type` (never the raw `email_otp`, never Supabase's `action_link`):
    - main app: `https://dreamstreamstudio.ai/auth/callback?token_hash=…&type=signup|recovery|magiclink`
      (`App.tsx` verifies it with `verifyOtp`);
-   - live-app sign-up: `https://dreamstreamstudio.ai/live?after=monitor|settings|create&token_hash=…&type=signup`
-     (`consumeAuthReturn()` in `live/account.ts`).
+   - live-app sign-up: `https://dreamstreamstudio.ai/live?after=monitor|settings|create|calls&token_hash=…&type=signup`
+     (`consumeAuthReturn()` in `live/account.ts`) — with `STREAM_HOST_ON` (`shared/streamHost.ts`)
+     Stream Studio's own host instead: `https://stream.dreamstreamstudio.ai/?after=…&token_hash=…&type=signup`.
+     Recovery and magic links always stay on the main app, even when asked for from that host.
 
    Verifying needs the page's JavaScript (a POST), so a mail scanner that prefetches the link
    can't burn the token.
@@ -189,8 +191,8 @@ With the hook on, **every** Supabase Auth email — signup confirmation, magic l
 password reset, invite, email change, reauthentication code and the security notifications —
 is rendered with the branded `auth-*` templates in [`shared/email`](../../shared/email) and sent
 from `no-reply@dreamstreamstudio.ai` (security notices from `notifications@`; replies always go
-to `support@`). Flows that redirect into the live app (`redirect_to` path `/live…`) are branded
-**Stream Studio**; everything else **DreamStream Studio**.
+to `support@`). Flows that redirect into the live app (`redirect_to` path `/live…`, or anywhere on
+`stream.dreamstreamstudio.ai`) are branded **Stream Studio**; everything else **DreamStream Studio**.
 
 > **Why the order matters:** once the hook is enabled, Supabase sends nothing itself (SMTP is
 > not used). If the worker can't verify the call — e.g. `SUPABASE_AUTH_HOOK_SECRET` isn't set,

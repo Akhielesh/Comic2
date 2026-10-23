@@ -6,7 +6,7 @@
  */
 
 import { getEvent } from './api';
-import type { EventMeta, StreamStatus } from './protocol';
+import type { EventKind, EventMeta, StreamStatus } from './protocol';
 
 export interface MyEvent {
   id: string;
@@ -23,6 +23,10 @@ export interface MyEvent {
   access?: 'open' | 'approval';
   cover?: number;
   peakViewers?: number;
+  /** Instant meeting or broadcast (absent on events made before meetings → broadcast). */
+  kind?: EventKind;
+  /** Auto-record choice made for THIS event (falls back to the global default). */
+  autoRecord?: boolean;
 }
 
 export interface MyRecording {
@@ -96,6 +100,8 @@ export async function hydrateMyEvents(): Promise<MyEvent[]> {
           quality: meta.quality,
           access: meta.access,
           cover: meta.cover,
+          // Older rooms don't know their kind — keep what this browser remembers.
+          ...(meta.kind ? { kind: meta.kind } : {}),
         };
         updateMyEvent(e.id, patch);
         return { ...e, ...patch };

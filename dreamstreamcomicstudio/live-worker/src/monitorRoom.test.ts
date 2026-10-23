@@ -12,7 +12,9 @@ vi.mock('./webpush', () => ({
   },
 }));
 
-import { MonitorRoom, sanitizeZones, type MonEnv } from './monitorRoom';
+import { FrameBucket, MonitorRoom, relayCodecMask, sanitizeEnc, sanitizeZones, type MonEnv } from './monitorRoom';
+import { audioOnly, bareJpeg, readHead, seqDiff } from './relayWire';
+import { pack, unpack } from '../../live/monitor/relayWire';
 
 const NID = '11111111-2222-4333-8444-555555555555';
 let SQL: SqlJsStatic;
@@ -44,10 +46,13 @@ function sqlStorage() {
 
 class FakeWS {
   sent: unknown[] = [];
+  /** Binary frames received (relay pictures). */
+  bin: ArrayBuffer[] = [];
   closed: number | null = null;
   private att: unknown = null;
   send(s: string | ArrayBuffer) {
     if (typeof s === 'string') this.sent.push(JSON.parse(s));
+    else this.bin.push(s);
   }
   serializeAttachment(a: unknown) {
     this.att = structuredClone(a);
@@ -187,6 +192,555 @@ describe('MonitorRoom status', () => {
     expect(st.spl).toEqual({ db: 41.3, leq: 40.4, max: 140, cal: true });
     expect(st.crib).toBe(12);
     expect(st.visit).toBe(true);
+  });
+});
+
+describe('MonitorRoom relay (low-bandwidth picture)', () => {
+  // A bare JPEG, as cameras before the framed format send (still relayed as-is).
+  const frame = (n = 30_000) => {
+    const u = new Uint8Array(n);
+    u.set([0xff, 0xd8, 0xff]);
+    return u.buffer;
+  };
+  const sendFrame = (room: MonitorRoom, cam: FakeWS, n?: number) => room.webSocketMessage(cam as never, frame(n));
+
+  it('a camera that reconnects is told viewers are waiting on its relay', async () => {
+    const { join, say, close } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    expect(cam.msgs('relay_want').at(-1)).toMatchObject({ t: 'relay_want', n: 1 });
+    await close(cam);
+    const again = await join('tok-parent', 'camera', 'crib');
+    expect(again.msgs('relay_want').at(-1)).toMatchObject({ t: 'relay_want', n: 1 });
+  });
+
+  it('forwards a jittery 4 fps stream in full (no hard minimum gap)', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    let t = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const gaps = [240, 260, 120, 380, 250, 200, 300, 230, 270, 250, 90, 410, 250, 250, 240, 260];
+    for (let i = 0; i < 40; i++) {
+      t += gaps[i % gaps.length];
+      await sendFrame(room, cam);
+    }
+    now.mockRestore();
+    expect(viewer.bin).toHaveLength(40);
+  });
+
+  it('holds a flood to about 25 fps', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    let t = 2_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    for (let i = 0; i < 120; i++) {
+      t += 16; // 60 fps for ~2 s
+      await sendFrame(room, cam, 8_000);
+    }
+    now.mockRestore();
+    expect(viewer.bin.length).toBeGreaterThanOrEqual(50);
+    expect(viewer.bin.length).toBeLessThanOrEqual(25 * 2 + 8 + 1);
+  });
+
+  it('sends a camera’s frames only to viewers relaying that camera, and only from cameras', async () => {
+    const { room, join, say } = setup();
+    const crib = await join('tok-parent', 'camera', 'crib');
+    const play = await join('tok-care', 'camera', 'play');
+    const a = await join('tok-viewer', 'viewer', 'a');
+    const b = await join('tok-viewer', 'viewer', 'b');
+    const c = await join('tok-viewer', 'viewer', 'c');
+    await say(a, { t: 'relay', on: true, dev: 'crib' });
+    await say(b, { t: 'relay', on: true, dev: 'play' });
+    await sendFrame(room, crib);
+    await sendFrame(room, play);
+    await sendFrame(room, a as never); // a viewer can't inject frames
+    expect([a.bin.length, b.bin.length, c.bin.length]).toEqual([1, 1, 0]);
+    // Switching camera moves the subscription (and tells both cameras).
+    await say(a, { t: 'relay', on: true, dev: 'play' });
+    expect(crib.msgs('relay_want').at(-1)).toMatchObject({ t: 'relay_want', n: 0 });
+    expect(play.msgs('relay_want').at(-1)).toMatchObject({ t: 'relay_want', n: 2 });
+    expect(new FrameBucket(0).take(2 * 1024 * 1024, 0)).toBe(false); // bigger than a second's budget
+  });
+
+  it('a socket that is still closing no longer counts (presence, relay viewers)', async () => {
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-viewer', 'viewer', 'phone');
+    const other = await join('tok-care', 'viewer', 'laptop');
+    await say(viewer, { t: 'relay', on: true, dev: 'crib' });
+    expect(other.msgs('presence').at(-1)?.viewers).toEqual(expect.arrayContaining([expect.objectContaining({ dn: 'Laptop', relay: true })]));
+    // The runtime still lists the socket while its close is handled.
+    await room.webSocketClose(viewer as never);
+    expect(viewer.closed).toBe(1000);
+    expect(cam.msgs('relay_want').at(-1)).toMatchObject({ t: 'relay_want', n: 0 });
+    expect((other.msgs('presence').at(-1)?.viewers as unknown[]).length).toBe(1);
+    await room.webSocketClose(cam as never);
+    expect(other.msgs('presence').at(-1)?.cams).toEqual([]);
+  });
+
+  it('passes the camera’s encoder telemetry to viewers, sanitized', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const viewer = await join('tok-care', 'viewer', 'laptop');
+    await say(cam, { t: 'status', st: { state: 'calm', enc: { peers: 3, fps: 14.6, lim: 'cpu', impl: 'MediaCodec<script>', w: 99999, p: 1, relay: 4.25, extra: 'x' } } });
+    expect(viewer.msgs('status')[0].st).toMatchObject({ enc: { peers: 3, fps: 15, lim: 'cpu', impl: 'MediaCodecscript', w: 4096, p: 1, relay: 4.3 } });
+    expect(sanitizeEnc({ lim: 'bogus' })).toEqual({ peers: 0, fps: null, lim: null, impl: null, w: null, p: 0, relay: 0 });
+    expect(sanitizeEnc('nope')).toBeNull();
+  });
+});
+
+describe('MonitorRoom relay video (WebCodecs, sound, windows)', () => {
+  type Opt = { key?: boolean; audio?: number; codec?: 'avc' | 'vp8' | 'vp9'; size?: number };
+  let seq = 0;
+  const video = (o: Opt = {}) =>
+    pack({ kind: 'video', key: !!o.key, seq: seq++, ts: seq * 66, codec: o.codec ?? 'vp8', body: new Uint8Array(o.size ?? 3000).fill(7), audio: o.audio ? new Uint8Array(o.audio).fill(0x7f) : null });
+  const jpeg = () => pack({ kind: 'jpeg', seq: seq++, ts: seq * 66, body: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0, 1, 2, 3) });
+  const sound = (codec: 'vp8' | null = null) => pack({ kind: 'audio', seq: seq++, ts: seq * 66, codec, audio: new Uint8Array(800).fill(0x55) });
+  const kinds = (ws: { bin: ArrayBuffer[] }) =>
+    ws.bin.map((b) => {
+      const u = unpack(b);
+      return u ? `${u.kind}${u.key && u.kind === 'video' ? '*' : ''}${u.codec ? `:${u.codec}` : ''}${u.legacy ? ':bare' : ''}` : '?';
+    });
+  let t = 5_000_000;
+  const clock = () => vi.spyOn(Date, 'now').mockImplementation(() => t);
+  const tick = (ms = 66) => {
+    t += ms;
+  };
+
+  it('routes by codec: video to those who decode it, JPEG to the rest (bare for older viewers)', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const both = await join('tok-viewer', 'viewer', 'a');
+    const vp8 = await join('tok-viewer', 'viewer', 'b');
+    const jpegOnly = await join('tok-viewer', 'viewer', 'c');
+    const legacy = await join('tok-viewer', 'viewer', 'd');
+    await say(both, { t: 'relay', on: true, dev: 'crib', codecs: ['avc', 'vp8'] });
+    await say(vp8, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8', 'bogus'] });
+    await say(jpegOnly, { t: 'relay', on: true, dev: 'crib', codecs: [] });
+    await say(legacy, { t: 'relay', on: true, dev: 'crib' });
+    expect(cam.msgs('relay_want').at(-1)).toEqual({ t: 'relay_want', n: 4, avc: 1, vp8: 2, vp9: 0, jpeg: 2, v: 4 });
+    const send = (b: ArrayBuffer) => {
+      tick();
+      return room.webSocketMessage(cam as never, b);
+    };
+    await send(video({ key: true }));
+    await send(jpeg());
+    await send(video());
+    expect(kinds(both)).toEqual(['video*:vp8', 'video:vp8']);
+    expect(kinds(vp8)).toEqual(['video*:vp8', 'video:vp8']);
+    expect(kinds(jpegOnly)).toEqual(['jpeg']);
+    expect(kinds(legacy)).toEqual(['jpeg:bare']);
+    // The older viewer gets the image itself, not the header.
+    expect([...new Uint8Array(legacy.bin[0]).slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    await send(video({ key: true, codec: 'avc' }));
+    expect(kinds(both).at(-1)).toBe('video*:avc');
+    expect(kinds(vp8).at(-1)).toBe('video:vp8'); // can't decode H.264: nothing new
+    now.mockRestore();
+  });
+
+  it('asks the camera for a key frame when someone subscribes (once a second), and new viewers start on one', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const a = await join('tok-viewer', 'viewer', 'a');
+    const b = await join('tok-viewer', 'viewer', 'b');
+    await say(a, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    expect(cam.msgs('relay_key')).toHaveLength(1);
+    tick(200);
+    await say(b, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    expect(cam.msgs('relay_key')).toHaveLength(1); // inside the second: held…
+    tick(900);
+    await room.webSocketMessage(cam as never, video({ audio: 400 }));
+    expect(cam.msgs('relay_key')).toHaveLength(2); // …and sent with the camera's next message
+    // A delta before any key frame: no picture yet, but its sound goes through.
+    expect(kinds(a)).toEqual(['audio:vp8']);
+    tick();
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    tick();
+    await room.webSocketMessage(cam as never, video());
+    expect(kinds(a)).toEqual(['audio:vp8', 'video*:vp8', 'video:vp8']);
+    now.mockRestore();
+  });
+
+  it('a viewer that stops acknowledging skips to the next key frame, keeps its sound, and asks for a key', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const slow = await join('tok-viewer', 'viewer', 'slow');
+    const fast = await join('tok-viewer', 'viewer', 'fast');
+    await say(slow, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    await say(fast, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    const keys0 = cam.msgs('relay_key').length;
+    const send = async (o: Opt) => {
+      tick(70);
+      const b = video(o);
+      await room.webSocketMessage(cam as never, b);
+      // The fast viewer acknowledges everything; the slow one never does.
+      await say(fast, { t: 'rx', s: unpack(b)!.seq });
+    };
+    await send({ key: true, audio: 300 });
+    for (let i = 0; i < 40; i++) await send({ audio: 300 });
+    const slowKinds = kinds(slow);
+    const pics = slowKinds.filter((k) => k.startsWith('video')).length;
+    expect(pics).toBe(31); // the key frame + 30 in flight, then it waits…
+    expect(slowKinds.slice(pics).length).toBeGreaterThan(5);
+    expect(slowKinds.slice(pics).every((k) => k === 'audio:vp8')).toBe(true); // …and still hears the nursery
+    expect(kinds(fast).filter((k) => k.startsWith('video'))).toHaveLength(41);
+    expect(cam.msgs('relay_key').length).toBeGreaterThan(keys0);
+    // It catches up (acknowledges what it got): the next key frame resumes the picture.
+    await say(slow, { t: 'rx', s: unpack(slow.bin.at(-1)!)!.seq });
+    await send({});
+    expect(kinds(slow).at(-1)).toBe('audio:vp8'); // a delta: still waiting
+    await send({ key: true });
+    await send({});
+    expect(kinds(slow).slice(-2)).toEqual(['video*:vp8', 'video:vp8']);
+    now.mockRestore();
+  });
+
+  it('a viewer whose decoder failed asks for a key frame (k), and waits for it', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    tick();
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    const keys = cam.msgs('relay_key').length;
+    tick(1500);
+    await say(v, { t: 'rx', s: unpack(v.bin[0])!.seq, k: 1 });
+    // Within 2 s of its subscription's key frame: the camera's next regular one will do.
+    expect(cam.msgs('relay_key')).toHaveLength(keys);
+    tick(600);
+    await say(v, { t: 'rx', s: unpack(v.bin[0])!.seq, k: 1 });
+    expect(cam.msgs('relay_key')).toHaveLength(keys + 1);
+    tick();
+    await room.webSocketMessage(cam as never, video());
+    expect(kinds(v)).toEqual(['video*:vp8']);
+    now.mockRestore();
+  });
+
+  it('a privacy pause stops every relay message — video, JPEG and sound — until it ends', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    const j = await join('tok-viewer', 'viewer', 'j');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    await say(j, { t: 'relay', on: true, dev: 'crib', codecs: [] });
+    await say(cam, { t: 'event', kind: 'privacy', on: true });
+    for (const b of [video({ key: true, audio: 200 }), jpeg(), sound('vp8')]) {
+      tick();
+      await room.webSocketMessage(cam as never, b);
+    }
+    expect([v.bin.length, j.bin.length]).toEqual([0, 0]);
+    // The camera's status says so too (e.g. after the room restarted).
+    await say(cam, { t: 'event', kind: 'privacy', on: false });
+    tick(2000);
+    await say(cam, { t: 'status', st: { state: 'calm', paused: 'privacy' } });
+    tick();
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    expect(v.bin.length).toBe(0);
+    tick(2000);
+    await say(cam, { t: 'status', st: { state: 'calm', paused: null } });
+    tick();
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    tick();
+    await room.webSocketMessage(cam as never, jpeg());
+    expect(kinds(v)).toEqual(['video*:vp8']);
+    expect(kinds(j)).toEqual(['jpeg']);
+    now.mockRestore();
+  });
+
+  it('accepts relay messages only from cameras, within the size caps, with a valid header', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    const send = (ws: unknown, b: ArrayBuffer) => {
+      tick(200);
+      return room.webSocketMessage(ws as never, b);
+    };
+    await send(v, video({ key: true })); // a viewer can't inject a picture
+    await send(cam, video({ key: true, size: 129 * 1024 })); // over 128 KB of video
+    await send(cam, Uint8Array.of(9, 0, 0, 0, 0, 1, 0, 0, 0, 1, 2, 3).buffer); // unknown kind
+    await send(cam, Uint8Array.of(2, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3).buffer); // video without a codec
+    await send(cam, new ArrayBuffer(5)); // shorter than a header
+    expect(v.bin).toHaveLength(0);
+    await send(cam, video({ key: true, size: 100 * 1024 }));
+    expect(kinds(v)).toEqual(['video*:vp8']);
+    now.mockRestore();
+  });
+
+  it('a frame the token bucket drops makes every viewer resync on the next key frame', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    tick(1000);
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    // A burst far above 25 a second: the bucket runs dry.
+    for (let i = 0; i < 20; i++) {
+      tick(1);
+      const b = video();
+      await room.webSocketMessage(cam as never, b);
+      await say(v, { t: 'rx', s: unpack(b)!.seq });
+    }
+    const got = kinds(v).length;
+    expect(got).toBeLessThan(21);
+    tick(500);
+    await room.webSocketMessage(cam as never, video());
+    expect(kinds(v)).toHaveLength(got); // a delta after the gap is held back…
+    tick(100);
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    expect(kinds(v).at(-1)).toBe('video*:vp8'); // …until the key frame
+    now.mockRestore();
+  });
+
+  it('a JPEG-only camera’s sound reaches every viewer; a video camera’s only those on its video', async () => {
+    const now = clock();
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    const j = await join('tok-viewer', 'viewer', 'j');
+    const legacy = await join('tok-viewer', 'viewer', 'l');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    await say(j, { t: 'relay', on: true, dev: 'crib', codecs: [] });
+    await say(legacy, { t: 'relay', on: true, dev: 'crib' });
+    tick();
+    await room.webSocketMessage(cam as never, jpeg());
+    tick();
+    await room.webSocketMessage(cam as never, sound());
+    expect(kinds(v)).toEqual(['jpeg', 'audio']);
+    expect(kinds(j)).toEqual(['jpeg', 'audio']);
+    expect(kinds(legacy)).toEqual(['jpeg:bare']); // older viewers can't play it
+    tick();
+    await room.webSocketMessage(cam as never, video({ key: true }));
+    tick();
+    await room.webSocketMessage(cam as never, sound('vp8'));
+    expect(kinds(v).slice(-2)).toEqual(['video*:vp8', 'audio:vp8']);
+    expect(kinds(j)).toEqual(['jpeg', 'audio']);
+    now.mockRestore();
+  });
+
+  it('viewers only waiting for their direct picture are not listed as on the relay', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'], instant: true });
+    expect(cam.msgs('presence').at(-1)?.viewers).toEqual([expect.objectContaining({ relay: false })]);
+    expect(cam.msgs('relay_want').at(-1)).toMatchObject({ n: 1, vp8: 1 });
+    // Direct failed: the same subscription, now for real.
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    expect(cam.msgs('presence').at(-1)?.viewers).toEqual([expect.objectContaining({ relay: true })]);
+  });
+
+  it('reads the header exactly as the app writes it (one wire format, two copies)', () => {
+    const b = pack({ kind: 'video', key: true, seq: 0xfffffffe, ts: 99, codec: 'avc', body: Uint8Array.of(1, 2, 3), audio: Uint8Array.of(4, 5) });
+    expect(readHead(b)).toEqual({ kind: 3, key: true, seq: 0xfffffffe, codec: 1, legacy: false });
+    const snd = unpack(audioOnly(b)!)!;
+    expect(snd).toMatchObject({ kind: 'audio', key: false, seq: 0xfffffffe, ts: 99, codec: 'avc' });
+    expect([...snd.audio!]).toEqual([4, 5]);
+    expect(audioOnly(pack({ kind: 'video', seq: 1, ts: 1, codec: 'vp8', body: Uint8Array.of(1) }))).toBeNull();
+    expect(readHead(pack({ kind: 'jpeg', seq: 3, ts: 1, body: Uint8Array.of(1) }))).toMatchObject({ kind: 1, key: true });
+    expect(readHead(Uint8Array.of(0xff, 0xd8, 0xff, 0xdb).buffer)).toMatchObject({ kind: 1, legacy: true });
+    expect(new Uint8Array(bareJpeg(pack({ kind: 'jpeg', seq: 3, ts: 1, body: Uint8Array.of(0xff, 0xd8) })))).toEqual(Uint8Array.of(0xff, 0xd8));
+    expect(seqDiff(2, 0xffffffff)).toBe(3);
+    expect(relayCodecMask(['vp9', 'avc', 'nope'])).toBe(5);
+  });
+});
+
+/**
+ * A relay viewer stalls — a mobile-network blip, an app switch, a main-thread
+ * pause — while its socket stays open, then gets everything held meanwhile in
+ * one burst. Deterministic, against the real room: a camera at 15 fps (a key
+ * frame every 2 s and whenever the room asks), `owd` ms each way, both
+ * directions held during the stall. The viewer acknowledges like
+ * RelayDecoder: at most every 500 ms, on a message ('old' viewers — what's
+ * deployed — only then; 'new' ones also acknowledge the last message of a
+ * burst, ≤ 500 ms later). Before the fix the window froze for good after a
+ * 5–9 s stall: nothing more ever reached the viewer, and the camera was asked
+ * for a key frame every second for as long as it stayed.
+ */
+describe('MonitorRoom relay: a viewer that stalls never freezes for good', () => {
+  // A failed expectation must not leave Date.now frozen for the tests after it.
+  afterEach(() => vi.restoreAllMocks());
+  type Kind = 'sound' | 'video' | 'jpeg';
+  const STALL_AT = 4000;
+  const AFTER = 9000;
+
+  async function stall(o: { kind: Kind; stallMs: number; owd: number; client: 'old' | 'new' }) {
+    const t0 = 9_000_000;
+    let t = t0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    try {
+      const { room, join, say } = setup();
+      const cam = await join('tok-parent', 'camera', 'crib');
+      const v = await join('tok-viewer', 'viewer', 'v');
+      // kind 3 (video + sound), kind 2 (video, no sound) — or a JPEG-only viewer of a video camera.
+      await say(v, { t: 'relay', on: true, dev: 'crib', codecs: o.kind === 'jpeg' ? [] : ['vp8'] });
+      const from = t0 + STALL_AT;
+      const to = from + o.stallMs;
+      const end = to + AFTER;
+      const hold = (at: number) => (at >= from && at < to ? to : at);
+      const down: { sent: number; at: number; buf: ArrayBuffer }[] = [];
+      const up: { at: number; msg: Record<string, unknown> }[] = [];
+      const got: { at: number; sent: number; kind: string }[] = [];
+      let seen = 0;
+      let arrived = 0;
+      // The viewer's acknowledgements.
+      let last: number | null = null;
+      let acked: number | null = null;
+      let ackAt = -Infinity;
+      const ack = () => {
+        up.push({ at: hold(t + o.owd), msg: { t: 'rx', s: last } });
+        ackAt = t;
+        acked = last;
+      };
+      // The camera.
+      let seq = 0;
+      let keyAt = -Infinity;
+      let asked = cam.msgs('relay_key').length;
+      let nextFrame = t0;
+      let nextJpeg = t0;
+      let keysAfter = 0;
+      for (; t <= end; t += 5) {
+        if (t >= nextFrame) {
+          nextFrame += 66;
+          const n = cam.msgs('relay_key').length;
+          if (t >= to) keysAfter += n - asked;
+          const key = n > asked || t - keyAt >= 2000;
+          asked = n;
+          if (key) keyAt = t;
+          const audio = o.kind === 'sound' ? new Uint8Array(500).fill(0x55) : null;
+          await room.webSocketMessage(cam as never, pack({ kind: 'video', key, seq: seq++, ts: t - t0, codec: 'vp8', body: new Uint8Array(key ? 6000 : 1500).fill(1), audio }));
+        }
+        if (o.kind === 'jpeg' && t >= nextJpeg) {
+          nextJpeg += 250; // 4 a second, alongside the video
+          await room.webSocketMessage(cam as never, pack({ kind: 'jpeg', seq: seq++, ts: t - t0, body: Uint8Array.of(0xff, 0xd8, 0xff, 1, 2, 3) }));
+        }
+        for (; seen < v.bin.length; seen++) down.push({ sent: t, at: Math.max(hold(t + o.owd), down.at(-1)?.at ?? 0), buf: v.bin[seen] });
+        while (arrived < down.length && down[arrived].at <= t) {
+          const m = down[arrived++];
+          const u = unpack(m.buf)!;
+          got.push({ at: t, sent: m.sent, kind: u.kind });
+          last = u.seq;
+          if (t - ackAt >= 500) ack();
+        }
+        // The trailing acknowledgement (new viewers): the last message of a burst too.
+        if (o.client === 'new' && last != null && last !== acked && t - ackAt >= 500) ack();
+        while (up.length && up[0].at <= t) await say(v, up.shift()!.msg);
+      }
+      const pics = got.filter((g) => g.kind === (o.kind === 'jpeg' ? 'jpeg' : 'video') && g.sent >= to);
+      // Sound comes on its own while the picture waits, or inside the video messages.
+      const sound = got.filter((g) => (g.kind === 'audio' || (o.kind === 'sound' && g.kind === 'video')) && g.sent >= to);
+      // Pictures per second over the last six seconds, one count per second.
+      const perSecond = Array.from({ length: 6 }, (_, i) => pics.filter((g) => g.at >= end - 6000 + i * 1000 && g.at < end - 5000 + i * 1000).length);
+      return { firstPicture: pics.length ? pics[0].at - to : Infinity, firstSound: sound.length ? sound[0].at - to : Infinity, perSecond, keysAfter };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  for (const kind of ['sound', 'video', 'jpeg'] as const) {
+    it(`${kind === 'sound' ? 'video + sound' : kind === 'video' ? 'video without sound' : 'JPEG-only viewer'}: after a 5–9 s stall the picture is back within ~2 s, and stays`, async () => {
+      for (const stallMs of [5000, 7000, 9000]) {
+        for (const owd of [40, 100, 200]) {
+          for (const client of ['old', 'new'] as const) {
+            const r = await stall({ kind, stallMs, owd, client });
+            const at = `${client} viewer, ${stallMs} ms stall, ${owd} ms each way: ${JSON.stringify(r)}`;
+            expect(r.firstPicture, at).toBeLessThanOrEqual(2000);
+            if (kind === 'sound') expect(r.firstSound, at).toBeLessThanOrEqual(1600);
+            // Flowing again, not one lucky frame: every second, at the full rate.
+            expect(Math.min(...r.perSecond), at).toBeGreaterThanOrEqual(kind === 'jpeg' ? 3 : 12);
+            // And it doesn't drive the camera to a key frame every second.
+            expect(r.keysAfter, at).toBeLessThanOrEqual(2);
+          }
+        }
+      }
+    });
+  }
+
+  it('a stall the viewer never comes back from costs one small message a second, then one every 5 s — and no key frames', async () => {
+    let t = 9_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    let seq = 0;
+    const sizes: { at: number; bytes: number }[] = [];
+    let seen = 0;
+    const start = t;
+    let keys0 = 0;
+    for (let i = 0; i < 30 * 15; i++, t += 66) {
+      if (i === 15) keys0 = cam.msgs('relay_key').length;
+      await room.webSocketMessage(cam as never, pack({ kind: 'video', key: i % 30 === 0, seq: seq++, ts: i * 66, codec: 'vp8', body: new Uint8Array(1500).fill(1), audio: new Uint8Array(400).fill(0x55) }));
+      for (; seen < v.bin.length; seen++) sizes.push({ at: t - start, bytes: v.bin[seen].byteLength });
+    }
+    spy.mockRestore();
+    // The window (a key frame and 30 more), then sound up to 60 — then probes only.
+    const later = sizes.filter((s) => s.at > 6000);
+    const mid = later.filter((s) => s.at <= 13_000);
+    const late = later.filter((s) => s.at > 15_000);
+    // About one a second while it might be back (each one a chance to answer)…
+    expect(mid.length).toBeGreaterThanOrEqual(3);
+    expect(mid.length).toBeLessThanOrEqual(8);
+    // …then one every 5 s.
+    expect(late.length).toBeGreaterThanOrEqual(2);
+    expect(late.length).toBeLessThanOrEqual(4);
+    expect(later.every((s) => s.bytes < 1000)).toBe(true); // sound only, never a whole frame
+    expect(cam.msgs('relay_key').length - keys0).toBeLessThanOrEqual(1);
+  });
+
+  it('re-sending the same subscription starts its window over (a stuck viewer is unstuck by asking again)', async () => {
+    let t = 9_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const { room, join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    const sub = { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] };
+    await say(v, sub);
+    let seq = 0;
+    const send = async (key = false) => {
+      t += 66;
+      await room.webSocketMessage(cam as never, pack({ kind: 'video', key, seq: seq++, ts: t, codec: 'vp8', body: new Uint8Array(800).fill(1) }));
+    };
+    await send(true);
+    for (let i = 0; i < 40; i++) await send(); // never acknowledged: it waits
+    const n = v.bin.length;
+    await send(true);
+    expect(v.bin.length).toBe(n); // too far behind for this key frame
+    await say(v, sub);
+    await send(true);
+    await send();
+    expect(v.bin.length).toBe(n + 2);
+    expect(unpack(v.bin.at(-2)!)).toMatchObject({ kind: 'video', key: true });
+    spy.mockRestore();
+  });
+
+  it('a viewer that keeps asking can’t drive the camera to a key frame every second', async () => {
+    let t = 9_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t);
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const v = await join('tok-viewer', 'viewer', 'v');
+    await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    const k0 = cam.msgs('relay_key').length;
+    for (let i = 0; i < 20; i++) {
+      t += 1000;
+      await say(v, { t: 'rx', s: i, k: 1 });
+      await say(v, { t: 'relay', on: true, dev: 'crib', codecs: ['vp8'] });
+    }
+    expect(cam.msgs('relay_key').length - k0).toBeLessThanOrEqual(10); // one per 2 s at most
+    spy.mockRestore();
   });
 });
 
@@ -465,7 +1019,9 @@ describe('MonitorRoom guests (share link + passcode)', () => {
     const jo = await guestSocket(a.token, 'viewer', 'jo');
     const sam = await guestSocket(b.token, 'viewer', 'sam');
 
-    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true, ids: ['u-parent'] }), { status: 200 }));
+    vi.stubGlobal('fetch', async (url: string) =>
+      new Response(JSON.stringify(String(url).endsWith('/monitor_people') ? { ok: true, people: [{ user_id: 'u-parent', role: 'parent', label: 'Mom' }] } : { ok: true, ids: ['u-parent'] }), { status: 200 }),
+    );
     await say(mom, { t: 'members_changed', token: 'tok-parent' });
     expect(jo.closed).toBeNull();
 
@@ -494,6 +1050,421 @@ describe('MonitorRoom guests (share link + passcode)', () => {
     expect(pushes.some((p) => /Wrong passcodes/.test(String(p.payload.title)))).toBe(true);
     const right = await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Jo' }, '10.0.1.1');
     expect(right.status).toBe(429);
+  });
+
+  it('only parents set a new passcode or extend the link; the link and its guests stay', async () => {
+    const { room, join, say } = setup();
+    const guestSocket = (token: string) => join('', 'viewer', 'gran-ipad', { guest: token });
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join('tok-care', 'viewer', 'laptop');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer', days: 1 });
+    const first = mom.msgs('share').at(-1)!.share as { code: string; pass_at: number; expires_at: number; max_guests: number };
+    expect(first.max_guests).toBe(10);
+    const jo = (await (await joinHttp(room, { code: first.code, pass: 'blue-otter-42', name: 'Jo' })).json()) as { token: string };
+    const g = await guestSocket(jo.token);
+
+    // Not from a caregiver, not from a guest.
+    const before = mom.msgs('share').length;
+    await say(bob, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    await say(bob, { t: 'share_extend', days: 30 });
+    await say(g, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    await say(g, { t: 'share_extend', days: 30 });
+    expect(mom.msgs('share')).toHaveLength(before);
+
+    // A weak one is refused with the reason.
+    await say(mom, { t: 'share_pass', pass: 'aria2024' });
+    expect(mom.msgs('share_err').at(-1)!.msg).toMatch(/baby/);
+
+    await new Promise((r) => setTimeout(r, 2));
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    const after = mom.msgs('share').at(-1)!.share as { code: string; pass_at: number; guests: unknown[] };
+    expect(after.code).toBe(first.code);
+    expect(after.pass_at).toBeGreaterThan(first.pass_at);
+    expect(after.guests).toHaveLength(1);
+    expect(g.closed).toBeNull();
+    expect(mom.logs().at(-1)!.msg).toMatch(/new passcode .*guests stay signed in/);
+    expect(bob.msgs('share')).toHaveLength(0);
+    expect(JSON.stringify(mom.sent)).not.toContain('cedar-heron-otter-17');
+    expect((await joinHttp(room, { code: first.code, pass: 'blue-otter-42', name: 'Sam' }, '8.8.8.1')).status).toBe(401);
+    expect((await joinHttp(room, { code: first.code, pass: 'cedar-heron-otter-17', name: 'Sam' }, '8.8.8.2')).status).toBe(200);
+
+    // An absent "days" is never "forever".
+    await say(mom, { t: 'share_extend' });
+    expect((mom.msgs('share').at(-1)!.share as { expires_at: number }).expires_at).toBe(first.expires_at);
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect((mom.msgs('share').at(-1)!.share as { expires_at: number }).expires_at).toBe(first.expires_at + 7 * 24 * 3600_000);
+    expect(mom.logs().at(-1)!.msg).toMatch(/extended the share link by 7 days/);
+
+    // Signing everyone out with it.
+    await say(mom, { t: 'share_pass', pass: 'maple-river-lotus-55', signOut: true });
+    expect(g.closed).toBe(4004);
+    expect((mom.msgs('share').at(-1)!.share as { guests: unknown[] }).guests).toHaveLength(0);
+  });
+
+  it('a guest’s device hears when its pass ends now — in its hello, and again when a parent extends the link', async () => {
+    const { room, join, say } = setup();
+    const DAY = 24 * 3600_000;
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer', days: 1 });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    const body = (await (await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Grandma Jo' })).json()) as { token: string; guest: { until: number } };
+    expect(body.guest.until).toBeGreaterThan(Date.now() + DAY - 60_000);
+
+    // The room is the authority: its hello says when the pass ends.
+    const g = await join('', 'viewer', 'gran-ipad', { guest: body.token });
+    expect((g.msgs('hello')[0].you as { until?: number }).until).toBe(body.guest.until);
+    expect((mom.msgs('hello')[0].you as { until?: number }).until).toBeUndefined();
+
+    // "+7 days": the guest's device is told the new end right away…
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect(g.msgs('guest_pass')).toEqual([{ t: 'guest_pass', until: body.guest.until + 7 * DAY }]);
+    expect(mom.msgs('guest_pass')).toHaveLength(0);
+    // …and a device that was away hears it on its next connect.
+    const later = await join('', 'viewer', 'gran-phone', { guest: body.token });
+    expect((later.msgs('hello')[0].you as { until?: number }).until).toBe(body.guest.until + 7 * DAY);
+
+    // A new passcode that keeps guests signed in: their pass still ends when it did.
+    await new Promise((r) => setTimeout(r, 2));
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    expect(g.msgs('guest_pass').at(-1)).toEqual({ t: 'guest_pass', until: body.guest.until + 7 * DAY });
+    expect(g.closed).toBeNull();
+  });
+
+  it('push and log copy point to Invite', async () => {
+    const { room, join, say, subscribe } = setup();
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await subscribe(mom, 'https://push.test/mom');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Jo' });
+    expect(pushes.some((p) => /Invite → Who has access/.test(String(p.payload.body)))).toBe(true);
+  });
+});
+
+describe('MonitorRoom admin socket (the Invite sheet off the watch screen)', () => {
+  it('gets a slim hello and the share link, never presence or camera status, and can only manage people and sharing', async () => {
+    const { join, say } = setup();
+    const cam = await join('tok-parent', 'camera', 'crib');
+    const admin = await join('tok-parent', 'admin' as never, 'hub');
+    const hello = admin.msgs('hello')[0];
+    expect(Object.keys(hello).sort()).toEqual(['nursery', 't', 'you']);
+    expect(hello.you).toMatchObject({ role: 'parent', mode: 'admin' });
+    expect(hello.nursery).toMatchObject({ name: 'Nursery', baby: 'Aria' });
+    expect(admin.msgs('share')).toHaveLength(1);
+
+    const viewer = await join('tok-care', 'viewer', 'laptop');
+    await say(cam, { t: 'status', st: { state: 'calm', level: 3, motion: 1, light: 40, battery: 80, charging: true, soothing: null, cry: 0 } });
+    expect(viewer.msgs('status').length).toBeGreaterThan(0);
+    expect(admin.msgs('presence')).toHaveLength(0);
+    expect(admin.msgs('status')).toHaveLength(0);
+    // Not in presence.
+    const pres = viewer.msgs('presence').at(-1) as { viewers: { name: string }[] };
+    expect(pres.viewers.map((v) => v.name)).toEqual(['Bob']);
+
+    // Manages the link…
+    await say(admin, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    expect((admin.msgs('share').at(-1)!.share as { on: boolean }).on).toBe(true);
+    // …but nothing else (no logging into the nursery, no camera commands).
+    const logs = viewer.logs().length;
+    await say(admin, { t: 'log', kind: 'note', msg: 'hi' });
+    await say(admin, { t: 'cmd', to: 's-crib', c: 'soothe', v: { kind: 'shush' } });
+    expect(viewer.logs()).toHaveLength(logs);
+    expect(cam.msgs('cmd')).toHaveLength(0);
+    // The same command from a parent's watch screen does reach the camera.
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'cmd', to: 's-crib', c: 'soothe', v: { kind: 'shush' } });
+    expect(cam.msgs('cmd')).toHaveLength(1);
+  });
+
+  it('is for parents only', async () => {
+    const { join } = setup();
+    const ws = await join('tok-care', 'admin' as never, 'hub');
+    expect(ws.closed).toBe(4004);
+  });
+});
+
+describe('MonitorRoom: a role change reaches sockets already open', () => {
+  type Role = 'parent' | 'caregiver' | 'viewer';
+  /** Supabase as the room sees it: who each token is, and their role now (changed by a parent in the app). */
+  const supabase = (roles: Record<string, { uid: string; name: string; role: Role }>, o: { peopleDown?: boolean } = {}) =>
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      const token = String((init.headers as Record<string, string>).authorization).replace('Bearer ', '');
+      const fn = String(url).split('/rpc/')[1];
+      const body = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
+      const all = Object.values(roles);
+      const me = roles[token];
+      if (fn === 'monitor_my_role') return me ? body({ ok: true, user_id: me.uid, role: me.role, display_name: me.name, label: null, nursery_name: 'Nursery', baby_name: 'Aria' }) : body({ ok: false });
+      if (fn === 'monitor_member_ids') return body({ ok: true, ids: all.map((p) => p.uid) });
+      if (fn === 'monitor_people') return o.peopleDown ? body({ message: 'unavailable' }, 503) : body({ ok: true, people: all.map((p) => ({ user_id: p.uid, display_name: p.name, role: p.role, label: null })) });
+      return body({ ok: false }, 404);
+    });
+  const people = () => ({
+    'tok-parent': { uid: 'u-parent', name: 'Alice', role: 'parent' as Role },
+    'tok-dad': { uid: 'u-dad', name: 'Dan', role: 'parent' as Role },
+  });
+  /** Everything only a parent may send — none of it may work from a socket whose parent role is gone. */
+  const tryParentPowers = async (say: (ws: FakeWS, m: unknown) => Promise<void>, ws: FakeWS, guestId: string) => {
+    await say(ws, { t: 'share_set', pass: 'maple-river-lotus-55', role: 'caregiver', days: 30 });
+    await say(ws, { t: 'share_pass', pass: 'maple-river-lotus-55', signOut: true });
+    await say(ws, { t: 'share_extend', days: 30 });
+    await say(ws, { t: 'guest_remove', id: guestId });
+    await say(ws, { t: 'share_off' });
+    await say(ws, { t: 'members_changed', token: 'tok-dad' });
+  };
+  const joinHttp = (room: MonitorRoom, body: Record<string, unknown>) =>
+    room.fetch(new Request(`https://monitor.internal/guest?nid=${NID}`, { method: 'POST', body: JSON.stringify(body), headers: { 'cf-connecting-ip': '6.6.6.6' } }));
+  /** Mom, and Dad on every kind of socket: the Invite sheet, his watch screen, the crib camera and his call line. */
+  const family = async (roles: ReturnType<typeof people>, o: { peopleDown?: boolean } = {}) => {
+    const t = setup();
+    supabase(roles, o);
+    const mom = await t.join('tok-parent', 'viewer', 'phone');
+    const sheet = await t.join('tok-dad', 'admin' as never, 'dad-hub');
+    const watch = await t.join('tok-dad', 'viewer', 'dad-laptop');
+    const cam = await t.join('tok-dad', 'camera', 'crib');
+    const line = await t.join('tok-dad', 'line', 'dad-line');
+    await t.say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer', days: 7 });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    await joinHttp(t.room, { code, pass: 'blue-otter-42', name: 'Grandma Jo' });
+    const share = () => mom.msgs('share').at(-1)!.share as { code: string; pass_at: number; expires_at: number; role: string; on: boolean; guests: { id: string }[] };
+    expect(share().guests).toHaveLength(1);
+    expect(sheet.closed).toBeNull();
+    return { ...t, mom, sheet, watch, cam, line, share };
+  };
+
+  it('a parent made a Viewer loses every parent power at once: the Invite sheet closes, the camera stops, the watch screen can manage nothing', async () => {
+    const roles = people();
+    const { say, mom, sheet, watch, cam, line, share } = await family(roles);
+    const before = share();
+    const logs = mom.logs().length;
+
+    roles['tok-dad'].role = 'viewer';
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-dad'] });
+
+    // The Invite sheet (an 'admin' socket, which never gets roles_changed) is ended with the reason.
+    expect(sheet.msgs('error').at(-1)).toMatchObject({ code: 'forbidden', msg: 'Only parents can manage this nursery.' });
+    expect(sheet.closed).toBe(4004);
+    // A Viewer can't run a camera: it stops now (not at some later reconnect), saying why.
+    expect(cam.msgs('error').at(-1)).toMatchObject({ code: 'forbidden', msg: expect.stringMatching(/can watch but not run the camera/) });
+    expect(cam.closed).toBe(4004);
+    // The watch screen keeps watching, reconnects for its new role — and meanwhile can manage nothing.
+    expect(watch.closed).toBeNull();
+    expect(watch.msgs('roles_changed')).toHaveLength(1);
+    expect(line.closed).toBeNull();
+    const shares = watch.msgs('share').length;
+    await tryParentPowers(say, watch, before.guests[0].id);
+    await tryParentPowers(say, line, before.guests[0].id);
+    expect(share()).toEqual(before);
+    expect(mom.logs().slice(logs).map((e) => e.msg)).toEqual(['Alice updated who can access this nursery']);
+    // …and hears nothing more about the link (no new codes).
+    await new Promise((r) => setTimeout(r, 2));
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17' });
+    expect(share().pass_at).toBeGreaterThan(before.pass_at);
+    expect(watch.msgs('share')).toHaveLength(shares);
+    // Mom's own access didn't change: her picture isn't restarted.
+    expect(mom.msgs('roles_changed')).toHaveLength(0);
+  });
+
+  it('with nobody named, everyone’s role is read again: a parent made a Caregiver keeps the camera but nothing a parent alone may do', async () => {
+    const roles = people();
+    const { say, mom, sheet, watch, cam, share } = await family(roles);
+    const before = share();
+    roles['tok-dad'].role = 'caregiver';
+    await say(mom, { t: 'members_changed', token: 'tok-parent' });
+    expect(sheet.closed).toBe(4004);
+    expect(cam.closed).toBeNull();
+    expect(watch.closed).toBeNull();
+    await tryParentPowers(say, watch, before.guests[0].id);
+    await tryParentPowers(say, cam, before.guests[0].id);
+    expect(share()).toEqual(before);
+    // Mom is still a parent.
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect(share().expires_at).toBe(before.expires_at + 7 * 24 * 3600_000);
+  });
+
+  it('if Supabase can’t list roles, the person named signs in again on the Invite sheet, and keeps watching with no parent-only power', async () => {
+    const roles = people();
+    const { say, mom, sheet, watch, cam, line, share } = await family(roles, { peopleDown: true });
+    const before = share();
+    roles['tok-dad'].role = 'viewer';
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-dad'] });
+    // The sheet reconnects (not a final code) and signs in with whatever role Supabase gives then.
+    expect(sheet.closed).toBe(4009);
+    // A Supabase hiccup never stops anyone watching the baby.
+    expect(cam.closed).toBeNull();
+    expect(watch.closed).toBeNull();
+    expect(line.closed).toBeNull();
+    await tryParentPowers(say, watch, before.guests[0].id);
+    await tryParentPowers(say, cam, before.guests[0].id);
+    expect(share()).toEqual(before);
+    // Only the person named: Mom keeps hers.
+    await say(mom, { t: 'share_extend', days: 7 });
+    expect(share().expires_at).toBe(before.expires_at + 7 * 24 * 3600_000);
+  });
+
+  it('a demoted parent can’t take the Invite sheet back: signing in again as an admin is refused', async () => {
+    const roles = people();
+    const { join, say, mom } = await family(roles);
+    roles['tok-dad'].role = 'viewer';
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-dad'] });
+    const again = await join('tok-dad', 'admin' as never, 'dad-hub-2');
+    expect(again.closed).toBe(4004);
+    expect(again.msgs('share')).toHaveLength(0);
+  });
+});
+
+describe('MonitorRoom: guests who have an account (share link → member)', () => {
+  const T = { sam: 'tok-sam-0123456789abcdefghij', care: 'tok-care-0123456789abcdefghij', nobody: 'tok-nobody-0123456789abcdefgh' };
+  const joinHttp = (room: MonitorRoom, body: Record<string, unknown>, token?: string, ip = '7.7.7.7') =>
+    room.fetch(
+      new Request(`https://monitor.internal/guest?nid=${NID}`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'cf-connecting-ip': ip, ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      }),
+    );
+  /** Supabase by function: live_me (who), monitor_my_role (member?), monitor_member_ids. */
+  const supabase = (members: Set<string>) =>
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      const token = String((init.headers as Record<string, string>).authorization).replace('Bearer ', '');
+      const fn = String(url).split('/rpc/')[1];
+      const people: Record<string, { uid: string; name: string; role?: string; label?: string | null }> = {
+        'tok-parent': { uid: 'u-parent', name: 'Alice', role: 'parent', label: 'Mom' },
+        [T.sam]: { uid: 'u-sam', name: 'Sam Smith' },
+        [T.care]: { uid: 'u-care', name: 'Bob', role: 'caregiver', label: 'Grandpa' },
+      };
+      const p = people[token];
+      const body = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
+      if (fn === 'live_me') return p ? body({ member: true, user_id: p.uid, profile: { display_name: p.name } }) : body({ member: false });
+      if (fn === 'monitor_member_ids') return body({ ok: true, ids: [...members] });
+      if (fn === 'monitor_my_role') {
+        return p && members.has(p.uid)
+          ? body({ ok: true, user_id: p.uid, role: p.role ?? 'viewer', display_name: p.name, label: p.label ?? null, nursery_name: 'Nursery', baby_name: 'Aria' })
+          : body({ ok: false });
+      }
+      return body({ ok: false }, 404);
+    });
+
+  it('a member who opens the link is sent to watch instead of becoming a guest', async () => {
+    const { room, join, say } = setup();
+    const members = new Set(['u-parent', 'u-care']);
+    supabase(members);
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    const r = await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Bob' }, T.care);
+    expect(r.status).toBe(409);
+    expect(await r.json()).toEqual({ ok: false, reason: 'member' });
+    expect((mom.msgs('share').at(-1)!.share as { guests: unknown[] }).guests).toHaveLength(0);
+    // The passcode still has to be right first.
+    expect((await joinHttp(room, { code, pass: 'wrong-guess-zz', name: 'Bob' }, T.care)).status).toBe(401);
+  });
+
+  it('lists a guest with an account for parents (uid from Supabase, never the body); "Make member" promotes them', async () => {
+    const { room, join, say } = setup();
+    const members = new Set(['u-parent', 'u-care']);
+    supabase(members);
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    const bob = await join(T.care, 'viewer', 'laptop');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'caregiver' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+
+    // No token: an ordinary guest, whatever the body claims.
+    const anon = (await (await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Jo', uid: 'u-evil' })).json()) as { ok: boolean; account?: boolean };
+    expect(anon).toMatchObject({ ok: true });
+    expect(anon.account).toBeUndefined();
+    // A token Supabase doesn't recognise: also just a guest.
+    expect((await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Kim' }, T.nobody)).status).toBe(200);
+    expect((mom.msgs('share').at(-1)!.share as { requests: unknown[] }).requests).toEqual([]);
+
+    const res = (await (await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Uncle Sam', uid: 'u-evil' }, T.sam)).json()) as { ok: boolean; token: string; account?: boolean };
+    expect(res).toMatchObject({ ok: true, account: true });
+    const share = mom.msgs('share').at(-1)!.share as { requests: { id: string; uid: string; account: string; name: string; role: string }[] };
+    expect(share.requests).toEqual([expect.objectContaining({ uid: 'u-sam', account: 'Sam Smith', name: 'Uncle Sam', role: 'caregiver' })]);
+    expect(bob.msgs('share')).toHaveLength(0);
+    expect(mom.logs().at(-1)!.msg).toMatch(/has a Stream Studio account/);
+
+    const sam = await join('', 'viewer', 'sam-phone', { guest: res.token });
+    expect((sam.msgs('hello')[0].you as { guest: boolean }).guest).toBe(true);
+
+    // The parent adds Sam in Supabase (the app's setMember), then tells the room — naming who changed.
+    members.add('u-sam');
+    const rolesBefore = bob.msgs('roles_changed').length;
+    await say(mom, { t: 'members_changed', token: 'tok-parent', uids: ['u-sam'] });
+    expect(sam.msgs('promoted')).toHaveLength(1);
+    expect(sam.closed).toBe(4007);
+    const after = mom.msgs('share').at(-1)!.share as { guests: { name: string }[]; requests: unknown[] };
+    expect(after.requests).toEqual([]);
+    expect(after.guests.map((x) => x.name).sort()).toEqual(['Jo', 'Kim']);
+    expect(mom.logs().some((e) => /made Uncle Sam a member/.test(e.msg))).toBe(true);
+    // Bob's access didn't change: his live picture isn't restarted.
+    expect(bob.msgs('roles_changed')).toHaveLength(rolesBefore);
+    // The old guest pass is gone for good.
+    expect((await join('', 'viewer', 'sam-phone2', { guest: res.token })).closed).toBe(4004);
+  });
+
+  it('a new passcode (or "off") set while a join waits on Supabase wins: the old passcode gets no pass', async () => {
+    const { room, join, say } = setup();
+    supabase(new Set(['u-parent']));
+    // Hold the joiner's role look-up open, the way a slow Supabase does: the room takes other messages meanwhile.
+    const stub = globalThis.fetch;
+    let release: () => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const hold = () => {
+      const gate = new Promise<void>((r) => (release = () => r()));
+      const waiting = new Promise<void>((r) => (reached = () => r()));
+      vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+        if (String(url).endsWith('/monitor_my_role') && (init.headers as Record<string, string>).authorization === `Bearer ${T.sam}`) {
+          reached();
+          await gate;
+        }
+        return stub(url, init);
+      });
+      return waiting;
+    };
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+
+    // "Set a new passcode" + "sign out guests" lands after the old passcode was checked.
+    let waiting = hold();
+    let pending = joinHttp(room, { code, pass: 'blue-otter-42', name: 'Uncle Sam' }, T.sam);
+    await waiting;
+    await say(mom, { t: 'share_pass', pass: 'cedar-heron-otter-17', signOut: true });
+    release();
+    let r = await pending;
+    expect(r.status).toBe(401);
+    expect(await r.json()).toMatchObject({ ok: false, reason: 'wrong' });
+    let share = mom.msgs('share').at(-1)!.share as { guests: unknown[]; requests: unknown[] };
+    expect(share.guests).toEqual([]);
+    expect(share.requests).toEqual([]);
+    expect(mom.logs().some((e) => /Uncle Sam joined/.test(e.msg))).toBe(false);
+
+    // Turning the link off meanwhile: no pass either.
+    waiting = hold();
+    pending = joinHttp(room, { code, pass: 'cedar-heron-otter-17', name: 'Uncle Sam' }, T.sam, '7.7.7.8');
+    await waiting;
+    await say(mom, { t: 'share_off' });
+    release();
+    r = await pending;
+    expect(r.status).toBe(410);
+    expect(await r.json()).toMatchObject({ ok: false, reason: 'off' });
+    share = mom.msgs('share').at(-1)!.share as { guests: unknown[]; requests: unknown[] };
+    expect(share.guests).toEqual([]);
+    expect(mom.logs().some((e) => /Uncle Sam joined/.test(e.msg))).toBe(false);
+  });
+
+  it('a parent can keep them a guest instead', async () => {
+    const { room, join, say } = setup();
+    supabase(new Set(['u-parent']));
+    const mom = await join('tok-parent', 'viewer', 'phone');
+    await say(mom, { t: 'share_set', pass: 'blue-otter-42', role: 'viewer' });
+    const code = (mom.msgs('share').at(-1)!.share as { code: string }).code;
+    await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Sam' }, T.sam);
+    const req = (mom.msgs('share').at(-1)!.share as { requests: { id: string }[] }).requests[0];
+    await say(mom, { t: 'request_dismiss', id: req.id });
+    const after = mom.msgs('share').at(-1)!.share as { requests: unknown[]; guests: unknown[] };
+    expect(after.requests).toEqual([]);
+    expect(after.guests).toHaveLength(1);
   });
 });
 

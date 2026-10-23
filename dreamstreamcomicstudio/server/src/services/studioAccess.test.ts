@@ -62,6 +62,20 @@ describe('studio access', () => {
     expect(r.studios.find((s) => s.id === 'baby_monitor')?.action?.label).toBe('Set up a nursery');
   });
 
+  it('Stream Studio links: /live… as before with the host switch off, its own host with it on', () => {
+    const hrefs = (on: boolean, i: AccessInputs) => {
+      const r = computeStudioAccess(i, { streamHostOn: on });
+      return Object.fromEntries(r.studios.map((s) => [s.id, [s.href, s.action?.href].filter(Boolean)]));
+    };
+    const fresh = { ...base, streamMember: false, nurseries: 0 };
+    expect(hrefs(false, base)).toMatchObject({ stream_studio: ['/live'], baby_monitor: ['/live#/monitor'], chat_studio: ['/?view=chat'] });
+    expect(hrefs(false, fresh)).toMatchObject({ stream_studio: ['/live', '/live#/settings'], baby_monitor: ['/live#/monitor', '/live#/settings'] });
+    const S = 'https://stream.dreamstreamstudio.ai';
+    expect(hrefs(true, base)).toMatchObject({ stream_studio: [`${S}/`], baby_monitor: [`${S}/#/monitor`], chat_studio: ['/?view=chat'], comic_studio: ['/?view=dashboard'] });
+    expect(hrefs(true, fresh)).toMatchObject({ stream_studio: [`${S}/`, `${S}/#/settings`], baby_monitor: [`${S}/#/monitor`, `${S}/#/settings`] });
+    expect(hrefs(true, { ...base, nurseries: 0 }).baby_monitor).toEqual([`${S}/#/monitor`, `${S}/#/monitor`]);
+  });
+
   it('Code Studio is retired: it never appears, and every status is open, one step or locked', () => {
     const variants: AccessInputs[] = [
       base,

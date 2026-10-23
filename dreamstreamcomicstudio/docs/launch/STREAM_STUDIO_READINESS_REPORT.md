@@ -49,16 +49,16 @@ git status --short --branch
 npm run ops:live-smoke
 # FAIL primary app — Cloudflare challenge/interstitial
 # PASS fallback app — app shell returned
-# PASS stream studio — app shell returned
-# PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
+# PASS Stream Studio — app shell returned
+# PASS Stream Studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
 # PASS fallback live worker — missing-event probe returned JSON 404
 # FAIL custom-domain live worker — Cloudflare challenge/interstitial
 # PASS railway api — health ok
 
 npm run ops:live-smoke:temporary
 # PASS fallback app — app shell returned
-# PASS stream studio — app shell returned
-# PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
+# PASS Stream Studio — app shell returned
+# PASS Stream Studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
 # PASS fallback live worker — missing-event probe returned JSON 404
 # PASS railway api — health ok
 
@@ -86,7 +86,7 @@ supabase db advisors --linked --type all --level info --fail-on none -o json
 Evidence now passing:
 
 ```txt
-PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
+PASS Stream Studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
 PASS fallback live worker — missing-event probe returned JSON 404
 ```
 

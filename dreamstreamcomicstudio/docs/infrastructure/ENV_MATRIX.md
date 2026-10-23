@@ -105,6 +105,8 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 |---|---|---|---|---|
 | `CF_ANALYTICS_API_TOKEN` | `services/costCentre.ts` → `GET /api/admin/costs` | ⭕ 🔐 | — | **Read-only** token with *Account › Account Analytics › Read*. Queries the GraphQL Analytics API (Workers invocations per script, R2 storage). Never logged or returned to the client. Unset ⇒ Admin → Costs shows a setup card; all Supabase-based figures still work |
 | `CLOUDFLARE_ACCOUNT_ID` | `services/costCentre.ts` | ⭕ | — | The account tag for the analytics query; both vars must be set (as `dreamstream-api` Worker secrets or D1 `backend_env` rows) |
+| `STREAM_DO_NAMESPACES` | `services/streamCosts.ts` (Admin → Costs → Stream Studio) | ⭕ | — | Non-secret. `MonitorRoom=<id>,EventRoom=<id>,UserLine=<id>,CallRoom=<id>` (32-hex Durable Object namespace ids) — splits measured DO requests / rows / GB-s by room and gives exact per-nursery-day KPIs. Unset ⇒ DO figures are account-wide (labelled so). The same token above also reads the `stream_usage` Analytics Engine dataset. Also a GitHub Actions *variable* for `stream-cost-watch.yml` |
+| `STREAM_PHASE0_SHIPPED` | `services/streamCosts.ts` | ⭕ | — | `1` once ADR 0006 Phase 0 ships: applies the ≤ 1,800 rows per nursery-day "write diet" alert |
 
 ## Live / email workers (set on the workers, mirrored on backend)
 
@@ -112,6 +114,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 |---|---|---|---|---|
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
 | `AUTH_LINK_ORIGINS` | `services/authEmailLinks.ts` (backend auth emails) | ⭕ | — | Comma-separated **exact** origins auth-email links may point at besides `APP_PUBLIC_URL` (e.g. `http://localhost:3000,http://localhost:7000` for local dev). Default empty. Never wildcards — see `docs/email/SETUP.md` |
+| *(not an env var)* `STREAM_HOST_ON` | `shared/streamHost.ts` — Pages middleware, both apps, backend, email Worker | — | — | **Code constant on purpose** (one switch shipped in one push to every consumer). Moves Stream Studio to `https://stream.dreamstreamstudio.ai`; Stream Studio links in auth emails, the sign-in handoff (`POST /api/auth/handoff`) and the apex `/live*` 301 follow it. See `INFRA_MAP.md` §2a. |
 | `VITE_LIVE_WORKER_URL` | frontend (Stream Studio) | ⭕ | — | |
 | `VENTURES_ENABLED` / `VENTURES_KILL` / `VENTURES_*` | autopilot | ⭕ | 💸 (Redis, only for `ventures:worker`) | `false` in `wrangler.jsonc` (admins still get in); `VENTURES_PILOT_INLINE=false`. Build stage retired (ADR 0005). `VENTURES_INTAKE_TIMEOUT_MS` (default 120000) bounds the intake model call |
 
@@ -135,8 +138,10 @@ the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 | `BACKEND_TARGET` | dreamstream-api | ⭕ | — | `container` (default) or `origin` (proxy to `BACKEND_ORIGIN`) |
 | `BACKEND_ORIGIN` | dreamstream-api | ⭕ | — | Dormant Railway origin, used only when `BACKEND_TARGET=origin` |
 | `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | dreamstream-live | ✅ | — | Member checks for creating events + every baby-monitor socket (RPCs run as the caller's JWT) |
-| `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN, 1 TB/mo free) | Optional relay for baby-monitor video on strict networks; STUN-only without them |
-| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list |
+| `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN: $0.05/GB on what Cloudflare sends to the relaying device, after 1 TB/mo free shared by the account) | **Set in production since 2026-10-22.** Relay for baby-monitor video, family/direct calls and Stream Studio guests on strict networks (carrier / symmetric NAT, blocked UDP); STUN-only without them, and those connections fail (with a clear reason). Guardrails (`live-worker/src/ice.ts`, costs doc §7 C6): a credential per room + person + payer (never shared), members ≤ 4 h, guests ≤ 2 h and never past their pass, refreshed by clients before expiry (`iceMs` → `{t:'ice'}` / `{t:'call_ice'}`), revoked when a guest or member is removed, a studio guest is kicked or a direct call ends; each tagged with Cloudflare's `customIdentifier` (`n-`/`a-`/`e-` + HMAC of the nursery / caller account / event) so TURN analytics attribute every byte. Relayed video is capped (calls 700/450 kbps, studio 700/600 kbps/1 Mbps, monitor 650 kbps). Check: a monitor hello / `call_joined` lists `turn.cloudflare.com` plus an `iceMs`; `wrangler tail` shows one `turn_mint` line per credential (tag, scope, ttl — no ids); a `?relay=1` call connects. **Owner:** set a Cloudflare account budget alert at **$10/month** (Billing → budget alerts) as the backstop |
+| `TURN_TAG_SALT` | dreamstream-live | ⭕ 🔐 | — | Optional secret that keys the TURN `customIdentifier` HMAC. Unset: the TURN API token keys it (still non-reversible). Set it before Phase A's per-identifier analytics so tags stay stable if the API token is rotated (a new salt or token changes every tag) |
+| `STREAM_USAGE` (binding) | dreamstream-live | ⭕ | — (10M points/mo included) | Workers Analytics Engine dataset `stream_usage` (`wrangler.jsonc` `analytics_engine_datasets`): ≤ 1 usage point per room per hour (`src/usageMeter.ts`). Optional in code — absent ⇒ no points, the rooms' monthly `use:YYYY-MM` rows still count. Read by Admin → Costs → Stream Studio and the daily `stream-cost-watch` job |
+| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list (includes `https://stream.dreamstreamstudio.ai`, Stream Studio's own host) |
 
 ---
 

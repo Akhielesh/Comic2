@@ -158,4 +158,182 @@ describe('GuestAccess', () => {
     // Another address is unaffected.
     expect((await g.join({ code: share.code, pass: PASS, name: 'Jo', ip: '5.6.7.8' }, 200)).ok).toBe(true);
   });
+
+  it('tells parents how many guests a link admits', async () => {
+    const { g } = make();
+    expect(g.info(0)).toMatchObject({ on: false, max_guests: MAX_GUESTS, guests: [], requests: [], pass_at: null });
+    await g.createShare({ pass: PASS, role: 'viewer', days: 7, by: 'Mom' }, 100);
+    expect(g.info(200)).toMatchObject({ on: true, max_guests: MAX_GUESTS, pass_at: 100 });
+  });
+});
+
+describe('GuestAccess: a new passcode on the same link', () => {
+  const NEW = 'cedar-heron-otter-17';
+
+  it('keeps the link and its guests; only the new passcode works', async () => {
+    const { sql, g } = make();
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: 7, by: 'Mom' }, 0);
+    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 10);
+    if (!jo.ok) throw new Error(jo.reason);
+    expect(await g.setPasscode(NEW, false, 100)).toEqual({ removed: [] });
+    const after = g.info(100);
+    expect(after.code).toBe(share.code);
+    expect(after.pass_at).toBe(100);
+    expect(await g.verify(jo.token, 110)).not.toBeNull();
+    expect(await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 120)).toMatchObject({ ok: false, reason: 'wrong' });
+    expect((await g.join({ code: share.code, pass: NEW, name: 'Sam' }, 130)).ok).toBe(true);
+    expect(JSON.stringify(sql.exec('SELECT * FROM mon_shares').toArray())).not.toContain(NEW);
+  });
+
+  it('can sign the current guests out, and clears a lock', async () => {
+    const { g } = make();
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: null, by: 'Mom' }, 0);
+    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
+    if (!jo.ok) throw new Error(jo.reason);
+    for (let i = 0; i < MAX_FAILS_IN_A_ROW; i++) await g.join({ code: share.code, pass: `guess-${i}-xx`, name: 'X' }, 10 + i);
+    expect(g.info(20).locked_until).toBeGreaterThan(20);
+    expect(await g.setPasscode(NEW, true, 30)).toEqual({ removed: [jo.guest.id] });
+    expect(g.info(30).locked_until).toBeNull();
+    expect(await g.verify(jo.token, 31)).toBeNull();
+    expect((await g.join({ code: share.code, pass: NEW, name: 'Jo' }, 32)).ok).toBe(true);
+  });
+
+  it('does nothing without a link', async () => {
+    const { g } = make();
+    expect(await g.setPasscode(NEW, false, 0)).toBeNull();
+  });
+
+  it('a pass is only issued on the link exactly as it was checked (the room may wait on Supabase in between)', async () => {
+    const { sql, g } = make();
+    const guests = () => Number(sql.exec('SELECT COUNT(*) AS n FROM mon_guests').toArray()[0].n);
+    const checked = async (now: number) => {
+      const c = await g.check({ code: g.activeShare(now)!.code, pass: PASS, name: 'Uncle Sam' }, now);
+      if (!c.ok) throw new Error(c.reason);
+      return c;
+    };
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: 1, by: 'Mom' }, 0);
+
+    // A new passcode meanwhile ("sign out guests" or not): the old one gets nobody in.
+    let c = await checked(10);
+    await g.setPasscode(NEW, true, 20);
+    expect(await g.issue(c, { name: c.name }, 30)).toEqual({ ok: false, reason: 'wrong' });
+    c = await g.check({ code: share.code, pass: NEW, name: 'Uncle Sam' }, 40).then((r) => (r.ok ? r : Promise.reject(new Error(r.reason))));
+    await g.setPasscode(PASS, false, 50);
+    expect(await g.issue(c, { name: c.name }, 60)).toEqual({ ok: false, reason: 'wrong' });
+    expect(guests()).toBe(0);
+
+    // Turned off, or replaced by a new link, meanwhile.
+    c = await checked(70);
+    g.revokeShare(80);
+    expect(await g.issue(c, { name: c.name }, 90)).toEqual({ ok: false, reason: 'off' });
+    await g.createShare({ pass: PASS, role: 'caregiver', days: 1, by: 'Mom' }, 100);
+    c = await checked(110);
+    await g.createShare({ pass: PASS, role: 'caregiver', days: 1, by: 'Mom' }, 120);
+    expect(await g.issue(c, { name: c.name }, 130)).toEqual({ ok: false, reason: 'off' });
+    // Ended meanwhile.
+    c = await checked(140);
+    expect(await g.issue(c, { name: c.name }, 120 + 24 * 3600_000)).toEqual({ ok: false, reason: 'expired' });
+    expect(guests()).toBe(0);
+
+    // Nothing changed: in, with the link as it is now (an extension made meanwhile counts).
+    c = await checked(150);
+    g.extend(7, 160);
+    const r = await g.issue(c, { name: c.name }, 170);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.guest.expires_at).toBe(120 + 8 * 24 * 3600_000);
+    expect(await g.verify(r.token, 180)).not.toBeNull();
+  });
+});
+
+describe('GuestAccess: extending the link', () => {
+  const day = 24 * 60 * 60_000;
+
+  it('moves the link’s end and the guests’ passes with it', async () => {
+    const { g } = make();
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: 1, by: 'Mom' }, 0);
+    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1000);
+    if (!jo.ok) throw new Error(jo.reason);
+    expect(jo.guest.expires_at).toBe(day);
+    expect(g.extend(7, day / 2)?.expires_at).toBe(8 * day);
+    expect(g.info(day / 2).guests[0].expires_at).toBe(8 * day);
+    // Still watching after the original day.
+    expect(await g.verify(jo.token, 2 * day)).not.toBeNull();
+    expect((await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 2 * day)).ok).toBe(true);
+  });
+
+  it('never lets a pass run past 90 days from the join', async () => {
+    const { g } = make();
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: 30, by: 'Mom' }, 0);
+    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 0);
+    if (!jo.ok) throw new Error(jo.reason);
+    g.extend(30, 25 * day);
+    g.extend(30, 50 * day);
+    g.extend(30, 80 * day);
+    const info = g.info(80 * day);
+    // Each extension adds to the link's current end: 30 → 60 → 90 → 120 days.
+    expect(info.expires_at).toBe(120 * day);
+    expect(info.guests[0].expires_at).toBe(90 * day);
+    // "Until I turn it off" keeps the 90-day cap on passes too.
+    expect(g.extend(null, 81 * day)?.expires_at).toBeNull();
+    expect(g.info(81 * day).guests[0].expires_at).toBe(90 * day);
+    expect(await g.verify(jo.token, 90 * day + 1)).toBeNull();
+  });
+
+  it('does nothing without a link', () => {
+    const { g } = make();
+    expect(g.extend(7, 0)).toBeNull();
+  });
+});
+
+describe('GuestAccess: guests who have an account', () => {
+  it('lists them for parents until made a member, kept a guest, or removed', async () => {
+    const { g } = make();
+    const { share } = await g.createShare({ pass: PASS, role: 'caregiver', days: null, by: 'Mom' }, 0);
+    const sam = await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 1);
+    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 2);
+    if (!sam.ok || !jo.ok) throw new Error('join');
+    g.addRequest({ uid: 'u-sam', account: 'Sam Smith', name: 'Sam', guest_id: sam.guest.id }, 3);
+    const r = g.addRequest({ uid: 'u-jo', account: 'Jo Lee', name: 'Jo', guest_id: jo.guest.id }, 4);
+    expect(g.info(5).requests).toEqual([
+      expect.objectContaining({ uid: 'u-sam', account: 'Sam Smith', name: 'Sam', role: 'caregiver' }),
+      expect.objectContaining({ uid: 'u-jo', account: 'Jo Lee', name: 'Jo' }),
+    ]);
+    // Supabase now lists Sam as a member.
+    expect(g.resolveRequests(new Set(['u-parent', 'u-sam']), 6).map((x) => x.guest_id)).toEqual([sam.guest.id]);
+    expect(g.info(7).requests.map((x) => x.uid)).toEqual(['u-jo']);
+    expect(g.dismissRequest(r.id, 8)).toBe(true);
+    expect(g.dismissRequest(r.id, 9)).toBe(false);
+    expect(g.info(10).requests).toEqual([]);
+  });
+
+  it('keeps one open request per person, and drops it with the guest', async () => {
+    const { g } = make();
+    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: null, by: 'Mom' }, 0);
+    const a = await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 1);
+    const b = await g.join({ code: share.code, pass: PASS, name: 'Sam (tablet)' }, 2);
+    if (!a.ok || !b.ok) throw new Error('join');
+    g.addRequest({ uid: 'u-sam', account: 'Sam', name: 'Sam', guest_id: a.guest.id }, 3);
+    g.addRequest({ uid: 'u-sam', account: 'Sam', name: 'Sam (tablet)', guest_id: b.guest.id }, 4);
+    expect(g.info(5).requests.map((x) => x.guest_id)).toEqual([b.guest.id]);
+    g.removeGuest(b.guest.id, 6);
+    expect(g.info(7).requests).toEqual([]);
+  });
+});
+
+describe('GuestAccess storage upgrade', () => {
+  it('adds the passcode-change column to a room made before it', async () => {
+    const sql = sqlStorage();
+    // The first release's table, with a link in it.
+    sql.exec(`CREATE TABLE mon_shares (
+      id TEXT PRIMARY KEY, code TEXT NOT NULL, pass_hash TEXT NOT NULL, salt TEXT NOT NULL, rounds INTEGER NOT NULL,
+      role TEXT NOT NULL, created_at INTEGER NOT NULL, created_by TEXT NOT NULL, expires_at INTEGER, revoked_at INTEGER,
+      fails INTEGER NOT NULL DEFAULT 0, total_fails INTEGER NOT NULL DEFAULT 0, locked_until INTEGER NOT NULL DEFAULT 0)`);
+    sql.exec('INSERT INTO mon_shares VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', 's1', 'c'.repeat(22), 'h', 'salt', 1000, 'viewer', 50, 'Mom', null, null, 0, 0, 0);
+    const g = new GuestAccess(sql, 1000);
+    expect(g.info(100)).toMatchObject({ on: true, pass_at: 50 });
+    // Opening the room again is harmless.
+    expect(() => new GuestAccess(sql, 1000)).not.toThrow();
+    await g.setPasscode('cedar-heron-otter-17', false, 200);
+    expect(g.info(300).pass_at).toBe(200);
+  });
 });

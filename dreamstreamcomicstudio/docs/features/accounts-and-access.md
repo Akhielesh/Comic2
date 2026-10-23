@@ -2,11 +2,14 @@
 
 DreamStream has **one account system** (Supabase Auth) shared by every studio: the
 main app (Comic Studio, Chat Studio — `dreamstreamstudio.ai/`) and Stream Studio
-(`/live`: streaming, the baby monitor, the tracker and family calls). On the same
-host both apps share one session (`services/supabase.ts`, storage key
-`dreamstream_auth_token`; Stream Studio loads that same client) — and there is only one
-host: `www.dreamstreamstudio.ai` and `comic2.pages.dev` 301 to it (see decision 3).
-Each account has **one display name** every studio shows, and an `@username` handle.
+(streaming, the baby monitor, the tracker and family calls). Stream Studio is moving to its
+own address, **`stream.dreamstreamstudio.ai`** (like Atlas at `atlas.dreamstreamstudio.ai`),
+behind one switch — see [One address per app](#one-address-per-app--streamdreamstreamstudioai).
+Until the switch is on it is served at `dreamstreamstudio.ai/live`, where both apps share
+one session (`services/supabase.ts`, storage key `dreamstream_auth_token`; Stream Studio
+loads that same client). `www.dreamstreamstudio.ai` and `comic2.pages.dev` 301 to the
+bare domain (see decision 3). Each account has **one display name** every studio shows,
+and an `@username` handle.
 
 ## Who can use what — `GET /api/account/studios`
 
@@ -79,6 +82,73 @@ tours stay) when:
 A sign-out in another tab now also drops a Stream Studio tab's own session copy
 (sessionStorage, when "Remember me" was off), and `www.dreamstreamstudio.ai` (and since
 2026-10-22 `comic2.pages.dev`) redirects to the bare domain (sessions are per host).
+
+## One address per app — stream.dreamstreamstudio.ai
+
+**The switch.** `shared/streamHost.ts` → `STREAM_HOST_ON` (one constant, read by the Pages
+middleware, both apps, the backend and the email Worker). Off (as shipped): everything is
+exactly as before. On: Stream Studio lives at `https://stream.dreamstreamstudio.ai/`.
+
+**What the host does** (`functions/_middleware.ts`, tests in `api-proxy/src/index.test.ts`):
+- `stream.dreamstreamstudio.ai` serves the live app at `/` (every page is a rewrite to
+  `live.html` through the Pages `ASSETS` binding — never a redirect, so no loops); its
+  screens are `#/…` routes as before. `/live`, `/live/` and `/live.html` there 301 to `/`
+  with the query (old viewer `?e=…` links keep working; browsers keep the `#…` part with
+  host and guest keys). `www.stream…` 301s to it. The agent gate is the same. This works
+  whether or not the switch is on, so the host can be checked first:
+  `npm run ops:live-smoke:stream-host`.
+- `/live-api/*` and `/api/*` on the new host are Worker routes (`live-worker/wrangler.jsonc`,
+  `api-proxy/wrangler.jsonc`), so the app stays same-origin there.
+- With the switch on, `dreamstreamstudio.ai/live`, `/live/` and `/live.html` (and the
+  `comic2.pages.dev` / `www` versions, in one hop) 301 to the new host, mapping
+  `/live.html?e=X` → `/?e=X`. Cached for a day, not forever, so the switch can be undone.
+  Nothing else moves: `/live-api/*`, `/api/*`, `/assets/*`, `/live-sw.js` and
+  `/live.webmanifest` stay on the apex for installed apps, old service workers and open
+  tabs. `dreamstreamstudio.ai/live.html?legacy=1` still opens the app on the old address
+  (for anything left in that origin's storage, e.g. an unsaved recording).
+
+**Sign-in that follows you.** Each address keeps its own session (localStorage is per
+origin) and Supabase refresh tokens are single use, so a session is never copied between
+them. Instead, crossing over while signed in uses a **one-time sign-in link for your own
+account**:
+- `POST /api/auth/handoff {to: 'live'|'main', path?}` (`server/src/routes/authHandoff.ts`;
+  requireAuth, 10 a minute per account, our two origins only, no-store, never logs the
+  token) → `admin.generateLink({type:'magiclink', email: <caller's>})` →
+  `https://stream.dreamstreamstudio.ai/?token_hash=…&type=magiclink[&after=<screen>]` or
+  `https://dreamstreamstudio.ai/auth/callback?token_hash=…&type=magiclink&next=</ or /?view=…>`.
+  Both origins are constants and the path is a strict allowlist (`parseStreamHandoffPath`,
+  `parseMainHandoffPath`) — no open redirect. 404 while the switch is off.
+- DreamStream → Stream Studio: every "Open Stream Studio" link, "Your studios", the
+  stream-only redirect and the `?next=` hand-back use `services/liveLink.ts`
+  (`openLiveApp` / `followLiveLink`). Signed out, refused or slow (6 s): the plain link.
+  New-tab clicks keep the plain link.
+- Stream Studio → DreamStream: "Your studios" entries for the main app use `openMainApp`;
+  the main app's `/auth/callback` verifies the link and goes straight on to `next`.
+  Privacy/Terms links are plain absolute links (`mainAppUrl`).
+- Landing on Stream Studio signed out (an old bookmark, an installed app, a 301): the sign-in
+  sheet offers **Continue with DreamStream** → `dreamstreamstudio.ai/?next=<stream screen>` →
+  signed in there? straight back, signed in; if not, sign in there once and come back.
+  Only the screen travels, never a viewer/studio/guest key.
+- Stream Studio finishes `?token_hash=…&type=magiclink` in `live/account.ts`
+  (`consumeAuthReturn`, which already verified sign-up links) and removes it from the
+  address bar and history.
+
+**Emails.** With the switch on, Stream Studio sign-up confirmations link to
+`https://stream.dreamstreamstudio.ai/?after=…&token_hash=…&type=signup`; recovery and magic
+links stay on the main app (the new-password screen lives there), even when asked for from
+the Stream Studio host (`server/src/services/authEmailLinks.ts`). The Stream Studio email
+brand's home link and studio invites point at the new address.
+
+**Sign-out is per address.** Signing out of DreamStream doesn't sign Stream Studio out on the
+same device any more (and the other way round) — each has its own sign-out, and each wipes
+the Stream Studio data it holds (`live/accountPurge.ts`).
+
+**Installed apps and alerts.** The new host has its own manifest (`public/stream.webmanifest`,
+`start_url: /#/monitor`, `scope`/`id` `/`) and the alert service worker is registered at its
+root (`live/host.ts`); the apex keeps its old manifest and worker. Existing alert subscriptions
+keep receiving pushes, and tapping one opens the new address. To install the app or turn
+alerts on at the new address, add it to the Home Screen again from there and turn "Alerts on
+this device" on there (the help centre says so once the switch is on).
 
 ## Owner decisions — DECIDED 2026-10-22
 

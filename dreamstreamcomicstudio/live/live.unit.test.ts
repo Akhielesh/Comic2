@@ -334,6 +334,11 @@ describe('meeting scenes & guest links (v5)', async () => {
     expect(parseRoute()).toEqual({ view: 'calls' });
     history.replaceState(null, '', '/live.html#/call/not-a-nursery/x');
     expect(parseRoute()).toEqual({ view: 'dashboard' });
+    // A direct call (anyone on Stream Studio) has no nursery.
+    history.replaceState(null, '', '/live.html#/call/d/0123456789abcdef?answer=1');
+    expect(parseRoute()).toEqual({ view: 'calls' });
+    history.replaceState(null, '', '/live.html#/call/d/not-hex');
+    expect(parseRoute()).toEqual({ view: 'dashboard' });
   });
 
   it('keeps canvas dimensions even and orientation-faithful (regression)', () => {

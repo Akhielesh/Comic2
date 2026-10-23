@@ -13,6 +13,8 @@ import { useEffect, useState } from 'react';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '@/services/authEmail';
 import { claimDevice } from './accountPurge';
 import type { AccountNameResult } from '@/services/accountName';
+import { STREAM_RETURN_SCREENS } from '@/shared/streamHost';
+import { LIVE_APP_PATH } from './host';
 
 export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'member' | 'offline';
 
@@ -52,6 +54,26 @@ function set(a: LiveAccount): void {
 }
 
 export const getAccount = (): LiveAccount => current;
+
+/** Resolves once the account has loaded (or after `maxMs`), so anything that announces the
+ *  user's name — the studio's room socket — doesn't go out as a placeholder. */
+export function accountSettled(maxMs = 3000): Promise<LiveAccount> {
+  if (current.status !== 'loading') return Promise.resolve(current);
+  return new Promise((resolve) => {
+    const done = (a: LiveAccount) => {
+      if (a.status === 'loading') return;
+      listeners.delete(done);
+      window.clearTimeout(timer);
+      resolve(a);
+    };
+    const timer = window.setTimeout(() => {
+      listeners.delete(done);
+      resolve(current);
+    }, maxMs);
+    listeners.add(done);
+    void refreshAccount();
+  });
+}
 
 /** React hook — every view shares one account state. */
 export function useAccount(): LiveAccount {
@@ -211,28 +233,33 @@ function clearTicket(): void {
 
 /* ------------------------------------------------- email link return */
 
-/** Screens an email link may bring you back to (`/live?after=…`). */
-const RETURN_SCREENS = new Set(['monitor', 'settings', 'create']);
+/** Screens an email or handoff link may bring you back to (`?after=…`) — shared with the server. */
+const RETURN_SCREENS = new Set<string>(STREAM_RETURN_SCREENS);
 
 /**
  * Where confirmation links land. No fragment on purpose: Supabase appends the
  * session as `#access_token=…`, and a second `#` (as in `#/account`) would
- * hide it from the client. The screen to return to rides in `?after=`.
+ * hide it from the client. The screen to return to rides in `?after=`. The app's path is '/' on
+ * Stream Studio's own host and '/live' on the main one (live/host.ts).
  */
 export function confirmRedirectUrl(): string {
   const screen = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
   const after = RETURN_SCREENS.has(screen) ? `?after=${screen}` : '';
-  return `${location.origin}/live${after}`;
+  return `${location.origin}${LIVE_APP_PATH}${after}`;
 }
 
-export type AuthReturn = { confirmed: true } | { error: 'expired' | 'failed'; message?: string };
+/** `handoff`: a one-time sign-in link from DreamStream (type=magiclink), not an email confirmation. */
+export type AuthReturn = { confirmed: true; handoff?: boolean } | { error: 'expired' | 'failed'; message?: string; handoff?: boolean };
 
 /**
  * Back from an email link: verify it (or let supabase-js adopt the session from
  * the URL), explain a dead link, and land on the screen the user started from.
- * Two link shapes:
- *   ?after=…&token_hash=…&type=signup — sent by our backend; verified here.
- *   #access_token=…                    — older links (Supabase / the auth hook).
+ * Link shapes:
+ *   ?after=…&token_hash=…&type=signup    — sent by our backend; verified here.
+ *   ?token_hash=…&type=magiclink&after=… — the sign-in handoff from DreamStream
+ *                                          (POST /api/auth/handoff); verified here too.
+ *   #access_token=…                      — older links (Supabase / the auth hook).
+ * The token never stays in the address bar or history.
  * Returns null on an ordinary page load.
  */
 export async function consumeAuthReturn(): Promise<AuthReturn | null> {
@@ -251,8 +278,10 @@ export async function consumeAuthReturn(): Promise<AuthReturn | null> {
       : { error: 'failed', message: hash.get('error_description') || undefined };
   } else if (tokenHash) {
     const sb = await supa();
-    // Our links say type=signup; accept the other one-time-link types verifyOtp knows.
+    // Our links say type=signup (confirmations) or magiclink (the handoff); accept the other
+    // one-time-link types verifyOtp knows.
     const rawType = url.searchParams.get('type') || 'signup';
+    const handoff = rawType === 'magiclink';
     type LinkType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email';
     const type: LinkType = ['signup', 'invite', 'magiclink', 'recovery', 'email'].includes(rawType) ? (rawType as LinkType) : 'signup';
     let failure: { message?: string; code?: string; status?: number } | null = null;
@@ -266,12 +295,12 @@ export async function consumeAuthReturn(): Promise<AuthReturn | null> {
     }
     // On success verifyOtp stores the session and fires SIGNED_IN, which refreshes the account.
     if (!failure) {
-      result = { confirmed: true };
+      result = handoff ? { confirmed: true, handoff } : { confirmed: true };
     } else if (failure.code === 'otp_expired' || failure.status === 403 || /expired|invalid/i.test(failure.message || '')) {
       // Already used (opening it twice) or too old.
-      result = { error: 'expired' };
+      result = handoff ? { error: 'expired', handoff } : { error: 'expired' };
     } else {
-      result = { error: 'failed', message: failure.message || undefined };
+      result = { error: 'failed', message: failure.message || undefined, ...(handoff ? { handoff } : {}) };
     }
   } else if (hasTokens) {
     const sb = await supa();

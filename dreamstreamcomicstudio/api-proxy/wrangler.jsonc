@@ -49,7 +49,7 @@
     "EMAIL_PUBLIC_BASE_URL": "https://dreamstreamstudio.ai",
     "GOOGLE_OAUTH_REDIRECT_URL": "https://dreamstreamstudio.ai/api/connectors/oauth/callback",
     "CONNECTORS_APP_RETURN_URL": "https://dreamstreamstudio.ai/?view=chat",
-    "CORS_ORIGIN": "https://comic2.pages.dev,https://dreamstreamstudio.ai,https://www.dreamstreamstudio.ai",
+    "CORS_ORIGIN": "https://comic2.pages.dev,https://dreamstreamstudio.ai,https://www.dreamstreamstudio.ai,https://stream.dreamstreamstudio.ai",
     "TRUST_PROXY": "true",
     "STRICT_ENV_VALIDATION": "true",
     "VITE_SUPABASE_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co",
@@ -96,6 +96,8 @@
   ],
 
   "routes": [
-    { "pattern": "dreamstreamstudio.ai/api/*", "zone_name": "dreamstreamstudio.ai" }
+    { "pattern": "dreamstreamstudio.ai/api/*", "zone_name": "dreamstreamstudio.ai" },
+    // Stream Studio's own host (shared/streamHost.ts): same-origin /api/* there too.
+    { "pattern": "stream.dreamstreamstudio.ai/api/*", "zone_name": "dreamstreamstudio.ai" }
   ]
 }

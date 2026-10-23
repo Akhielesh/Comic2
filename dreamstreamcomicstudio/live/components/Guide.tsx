@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Icon } from '../ui/icons';
 import { Btn, cx } from '../ui/primitives';
+import { STREAM_HOST_ON, STREAM_HOSTNAME } from '@/shared/streamHost';
 
 export interface TourStep {
   target?: string;
@@ -19,28 +20,31 @@ export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | '
 export const TOURS: Record<TourId, TourStep[]> = {
   welcome: [
     { title: 'Welcome to Stream Studio 👋', body: 'Go live from your browser — viewers join with just a name — and run a private baby monitor from any of your devices. This 30-second tour shows you around.' },
-    { target: 'nav-create', title: 'Start a stream', body: 'Create an event to go live now or schedule one with an invite page. Hosting needs a free account (with your welcome code); watching never does.' },
+    { target: 'nav-create', title: 'Meet or go live', body: 'One tap starts an instant meeting (people you invite join on camera) or a live stream; schedule one with an invite page under Advanced. Hosting needs a free account (with your welcome code); joining or watching never does.' },
     { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
-    { target: 'nav-calls', title: 'Family calls', body: 'FaceTime-style video and voice calls with the people in your nurseries — one person or the whole family, up to four at once.' },
-    { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys.' },
+    { target: 'nav-calls', title: 'Calls', body: 'FaceTime-style video and voice calls with your family — or anyone on Stream Studio, found by name. One person or up to four at once.' },
+    { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys — and Usage: what was free this month, and what went through our servers.' },
     { target: 'account', title: 'Your account', body: 'Sign in or create an account here. New accounts need the welcome code you were given — it’s checked securely on our server.' },
     { target: 'help', title: 'Help is always here', body: 'Open Help anytime to search answers or replay a tour for the screen you’re on.' },
   ],
   create: [
     { target: 'host-signin', title: 'Sign in to host', body: 'Hosting is for account holders. Your viewers will never need an account.' },
-    { target: 'create-title', title: 'Name your stream', body: 'This shows on the watch page and the invite.' },
-    { target: 'create-quality', title: 'Pick a quality you can sustain', body: 'Choose by your upload speed. Stream Studio also lowers the bitrate automatically if your connection struggles, so viewers keep a smooth picture.' },
-    { target: 'create-submit', title: 'Create & share', body: 'You’ll get a viewer link to share and a private studio link (keep that one secret — it controls the stream).' },
+    { target: 'create-meeting', title: 'Instant meeting', body: 'People you invite join on camera — nothing is broadcast until you go live. The invite link is ready the moment the studio opens.' },
+    { target: 'create-golive', title: 'Go live now', body: 'One tap: a quick camera and mic check, a 3-second countdown, and you’re on air. Then share the watch link.' },
+    { target: 'create-title', title: 'Name it — or don’t', body: 'We name it for you (“Your meeting · today”). Change it if you like; it shows on the watch page and the invite.' },
+    { target: 'create-advanced', title: 'Advanced', body: 'Schedule, invite page, quality, who can watch, viewer cap and recording live here. Quick starts use whatever you set.' },
   ],
   studio: [
     { target: 'studio-preview', title: 'Your program', body: 'Exactly what viewers see. Scene cuts, camera flips and screen shares never interrupt the stream.' },
-    { target: 'studio-golive', title: 'Go live', body: 'Press G or this button. On phones the screen stays awake while you’re live.' },
+    { target: 'studio-ready', title: 'Ready check', body: 'Camera, mic and room check out, then a 3-second countdown takes you live. Cancel any time.' },
+    { target: 'studio-invite', title: 'Invite people', body: 'Share a link and up to 4 people join on camera — no account. They see and hear each other too. Make a new link to cut off old ones. (Shortcut: I)' },
+    { target: 'studio-golive', title: 'Go live', body: 'Press G or this button. A quick ready check says first that your viewers watch through our servers (free for you), then counts 3-2-1 — Cancel any time. In a meeting, “Go live with this meeting” broadcasts it. On phones the screen stays awake while you’re live.' },
     { target: 'studio-record', title: 'Record (optional)', body: 'Records to this device’s disk as you go — even hour-long sessions don’t eat memory. When it stops, you choose where it’s saved. Set a time limit in Customize to get 5-min and 1-min heads-ups.' },
     { target: 'studio-scenes', title: 'Scenes', body: 'Number keys 1–6 cut between layouts. Be-right-back pauses uploads.' },
     { target: 'studio-health', title: 'Health', body: 'Upload speed, auto-quality and any skipped segments. If it says “Degraded”, close other uploads or pick a lower quality.' },
   ],
   monitor: [
-    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Video and sound go device-to-device, encrypted, and nothing is ever recorded.' },
+    { title: 'Your private baby monitor', body: 'One phone in the nursery is the camera; any device you sign in on can watch. Nothing is ever recorded. Video and sound go device-to-device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, not end-to-end encrypted.' },
     { target: 'monitor-create', title: 'Create a nursery', body: 'One per baby or room. Add the baby’s name to get personal alerts like “Aria is crying”.' },
     { target: 'monitor-new', title: 'More nurseries', body: 'Grandparents’ house? Daycare? Add up to five.' },
   ],
@@ -48,7 +52,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'hub-checklist', title: 'Your setup checklist', body: 'Five steps from zero to a fully covered nursery. Each has a button that takes you straight there, and they tick off as you go.' },
     { target: 'hub-actions', title: 'Camera or viewer', body: 'On the phone that stays in the nursery tap “Be the camera”. On your own phone or laptop tap “Watch”.' },
     { target: 'device-name', title: 'Name this device', body: 'So everyone knows which camera is which (“Crib iPhone”, “Playroom tablet”).' },
-    { target: 'people', title: 'People & roles', body: 'Search people by name to add them, then pick a role — Parent, Caregiver or Viewer — and how they appear (Grandma, Nanny…). Removing someone cuts them off immediately.' },
+    { target: 'hub-invite', title: 'Invite family', body: 'Add someone with an account by name in two taps (people from your other nurseries come first), or share a link + passcode — with a QR code to scan — for anyone without one. People & roles below lists everyone; removing someone cuts them off immediately.' },
   ],
   watch: [
     { target: 'mv-views', title: 'Pick a layout', body: 'Monitor shows the picture and what needs you. Tracker logs feeds, diapers, sleep and growth for the whole family. All adds sleep, sound level, logs and settings. Bedside is a dark nightstand view with a big clock that dims itself and lights up for alerts. Turn your phone sideways for a full-screen picture.' },
@@ -62,13 +66,15 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'mv-week', title: 'This week', body: 'Six numbers from what the monitor measured — sleep, wakings, the longest stretch, crying, how fast alerts were answered and the room’s sound while asleep — against last week.' },
     { target: 'mv-sound', title: 'Sound level', body: 'The room in decibels, live and over the last hours — and a nudge if a sound machine runs louder than the 50 dB sleep guideline.' },
     { target: 'mv-timeline', title: 'The last 24 hours', body: 'Calm, awake, fussing and crying at a glance, with today’s totals and your quick logs.' },
-    { target: 'mv-people', title: 'People & sharing', body: 'Who’s watching right now. Parents can share a guest link with a passcode for family without an account — and remove anyone in one tap.' },
+    { target: 'mv-invite', title: 'Invite family', body: 'Add someone with an account in two taps, or share a link + passcode (with a QR code to scan) for anyone without one. The number is how many are watching right now; Who has access lists everyone, and a parent can remove anyone in one tap.' },
   ],
   calls: [
-    { title: 'Family calls', body: 'Video or voice-call anyone in your nurseries — Grandma, the sitter, the other parent. Calls go straight between devices, encrypted, and are never recorded.' },
+    { title: 'Calls', body: 'Video or voice-call the people in your nurseries — Grandma, the sitter, the other parent — or anyone else on Stream Studio. Calls go straight between devices, encrypted, and are never recorded.' },
+    { target: 'calls-search', title: 'Call anyone', body: 'Search by name to call anyone on Stream Studio. Your family is marked “In Aria’s family”; anyone else shows as a Stream Studio member. Star someone to keep them one tap away at the top.' },
     { target: 'calls-ring', title: 'Ring this device', body: 'Turn this on so calls ring even when Stream Studio is closed (on iPhone, from the Home Screen app).' },
     { target: 'calls-family', title: 'Call someone', body: 'The phone button is a voice call, the camera button a video call. “Call everyone” rings up to three people at once.' },
     { target: 'calls-recents', title: 'Recent calls', body: 'Who called, how long you talked, and any you missed. Tap one to call back.' },
+    { target: 'calls-privacy', title: 'Who can call you', body: 'Everyone on Stream Studio, or only the people in your nurseries. Someone outside your family can be declined and blocked right from their call — they can’t tell.' },
   ],
   camera: [
     { title: 'Make this the nursery camera', body: 'Frame the crib, let the checks turn green, then start. It works like a private FaceTime call: live to your family, never recorded.' },
@@ -278,7 +284,7 @@ export const GUIDES: HowTo[] = [
   },
   {
     id: 'talk', title: 'Talk, listen & video call (like FaceTime)', icon: 'phone', mins: 1, screens: ['watch'],
-    intro: 'Everything goes device-to-device, encrypted. Nothing is recorded.',
+    intro: 'Video goes device-to-device, encrypted, wherever the network allows. Nothing is recorded.',
     steps: [
       { title: 'Listen', body: 'Tap Listen (or “Tap to hear the nursery”). Browsers start muted until you tap.' },
       { title: 'Talk', body: 'Tap Talk to open your mic; tap again to stop. Or press and hold to talk only while holding, like a walkie-talkie.' },
@@ -319,13 +325,14 @@ export const GUIDES: HowTo[] = [
     ],
   },
   {
-    id: 'family', title: 'Invite family & set roles', icon: 'users', mins: 1, screens: ['nursery'],
-    intro: 'Everyone signs in with their own account — new accounts need your invitation code.',
+    id: 'family', title: 'Invite family & set roles', icon: 'users', mins: 1, screens: ['nursery', 'watch'],
+    intro: 'Tap Invite — on the nursery page or the watch screen. People with an account are added by name; anyone else gets a link + passcode.',
     steps: [
-      { title: 'Add someone', body: 'Nursery → People & roles → search their name → choose a role and how they appear (Grandma, Nanny…) → Add.' },
+      { title: 'Add someone with an account', body: 'Invite → Add by name. People from your other nurseries are listed first — tap one; or search their name. They start as a Viewer (watch, listen, alerts) — pick Caregiver or Parent if they need more, and how they appear (Grandma, Nanny…). Then “Let them know” sends them the link to sign in with.' },
       { title: 'Roles', body: 'Parent: everything, including people and settings. Caregiver: watch, talk, video call, soothe, run a camera, log. Viewer: watch, listen and get alerts.' },
-      { title: 'Removing someone', body: 'Remove them in People & roles — any open session is cut off immediately.' },
-      { title: 'No account? Share a link', body: 'Watch → People → Create a share link. Choose a passcode (8+ characters — “Suggest one” makes a memorable one), what guests can do, and how long the link works. Send the link, then tell them the passcode by phone or in a different app.' },
+      { title: 'No account? Share a link', body: 'Invite → Share a link → Create link (a passcode is already filled in). Send the link or let them scan the QR code, then tell them the passcode by phone or in a different app.' },
+      { title: 'Make a guest a member', body: 'If someone who joined with the link has an account, Who has access says so — tap Make member and they watch with their own account, no passcode.' },
+      { title: 'Removing someone', body: 'Invite → Who has access (or People & roles) → Remove — any open session is cut off immediately.' },
     ],
   },
   {
@@ -343,11 +350,24 @@ export const GUIDES: HowTo[] = [
     id: 'share', title: 'Share with a guest link & passcode', icon: 'link', mins: 1, screens: ['watch', 'nursery'],
     intro: 'For grandparents, a sitter or a friend without an account. They need both the link and the passcode you choose.',
     steps: [
-      { title: 'Create it', body: 'Watch → People → Create a share link. Pick a passcode, “Watch & listen” or “Also talk, soothe & answer alerts”, and 1 day, 7 days, 30 days or until you turn it off.' },
-      { title: 'Send it safely', body: 'Send the link (Copy or Send), and say the passcode out loud or send it in a different app. The passcode is shown once — we only keep a scrambled version of it.' },
-      { title: 'Stay in control', body: 'You’re told when a guest joins. People shows every guest with when they last watched — Remove ends their pass at once. New link & passcode, or Turn off, signs every guest out.' },
+      { title: 'Create it', body: 'Tap Invite → Share a link → Create link. A memorable passcode is already filled in (“Another one” swaps it); guests can “Watch & listen” or “Also talk, soothe & answer alerts”, for 1, 7 or 30 days or until you turn it off.' },
+      { title: 'Send it safely', body: 'Send the link (it never includes the passcode), or let them scan the QR code from your screen. Say the passcode out loud or send it in a different app — it’s shown once; we only keep a scrambled version of it.' },
+      { title: 'Forgot the passcode?', body: 'Set a new passcode — the link stays the same and guests stay signed in (tick the box to sign them out too). +7 days keeps the link working longer.' },
+      { title: 'Stay in control', body: 'You’re told when a guest joins. Who has access shows every guest with when they last watched — Remove ends their pass at once; New link or Turn off signs every guest out. Guests with an account can be made members.' },
       { title: 'If someone guesses', body: '5 wrong passcodes lock the link for 15 minutes and 20 turn it off — the parents get a notification either way.' },
     ],
+  },
+  {
+    id: 'usage', title: 'See what’s free — and what uses our servers', icon: 'gauge', mins: 1, screens: ['watch', 'calls', 'nursery'],
+    intro: 'Most of Stream Studio runs on your own devices and costs nobody anything. Each screen says which way it goes, and Usage adds up your month. You’re never charged.',
+    steps: [
+      { title: 'Read the pill', body: '“Home Wi-Fi · free” and “Direct · free”: straight between your devices. “Through our relay · encrypted”: your network blocks direct links, so an encrypted relay forwards it and it uses relay data. “Through our server”: the baby monitor’s picture passed along by our server — in memory only, never stored, not end-to-end encrypted.' },
+      { title: 'Open Usage', body: 'Customize → Usage shows this month: what was free — and what went through our servers, with your relay data and 7-day copies against their fair-use allowance. It loads when you open it — come back for newer numbers.' },
+      { title: 'Your nursery’s month', body: 'Parents: Nursery settings → Usage shows last night (“Last night: 10 h · all direct · free”) and the nursery’s month for everyone who watches it.' },
+      { title: 'Stay free', body: 'Keep the camera phone on the same Wi-Fi as yours (Home Wi-Fi uses no internet at all), save recordings to Google Drive or this device instead of a 7-day copy, and choose Audio only when you just want to listen.' },
+      { title: 'Fair use', body: 'Relay data: 10 GB a month for the calls you place and 10 GB for each nursery’s viewers — Direct and Home Wi-Fi never count. 7-day copies: 10 GB at a time. You’re told in the app at 80% and 100%; the baby monitor’s sound and alerts are never limited.' },
+    ],
+    actions: [{ label: 'Open Usage', hash: '#/settings?s=usage' }],
   },
   {
     id: 'fix-camera', title: 'Fix: the camera won’t start', icon: 'alert', mins: 1, screens: ['camera'],
@@ -396,19 +416,29 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'How do I create an account?', a: 'Tap your name/avatar (bottom of the menu) → Create account. Enter your name, email, password, date of birth and the welcome code you were given. Then confirm your email if asked.', tags: 'sign up register' },
       { q: 'What is the welcome code?', a: 'An invite code required for new accounts. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
       { q: 'I already had a DreamStream account', a: 'Just sign in — accounts created before Stream Studio accounts launched are unlocked automatically.' },
-      { q: 'Finding people', a: 'In a nursery’s People & roles, search by the person’s name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory' },
+      ...(STREAM_HOST_ON
+        ? [{
+            q: `Stream Studio’s address: ${STREAM_HOSTNAME}`,
+            a: `Stream Studio has its own address — ${STREAM_HOSTNAME} — and old dreamstreamstudio.ai/live links (viewer, guest and studio links included) bring you here. It has its own sign-in: tap “Continue with DreamStream” to bring yours over in one tap. If you added Stream Studio to your Home Screen before, add it again from this address, then turn “Alerts on this device” back on there.`,
+            tags: 'address url domain moved subdomain home screen alerts sign in',
+          }]
+        : []),
+      { q: 'Finding people', a: 'Tap Invite → Add by name. People from your other nurseries come first; or search by name. Only Stream Studio members appear, and only by name — emails are never shown.', tags: 'search users directory invite add' },
       { q: 'What happens if our internet goes down?', a: 'Phones on the same Wi-Fi as the camera keep the live picture, sound and alerts — they talk to each other directly (the picture shows “Home Wi-Fi”). Phones away from home, and notifications, come back when the internet does.', tags: 'offline wifi lan outage local network' },
-      { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent can make a guest link with a passcode (Watch → People → Create a share link). Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents' },
+      { q: 'Can someone watch the baby monitor without an account?', a: 'Yes — a parent taps Invite → Share a link → Create link, then sends the link (or shows the QR code) and tells them the passcode separately. Guests need both, parents see everyone who joins, and wrong guesses lock the link.', tags: 'guest share link passcode sitter grandparents qr code invite' },
     ],
   },
   {
     section: 'Going live',
     icon: 'broadcast',
     items: [
-      { q: 'Start a stream', a: 'New event → name it → Create. Open the studio, allow camera/mic, press Go live (or G). Share the viewer link.' },
+      { q: 'Start an instant meeting', a: 'Go live tab (or the Dashboard) → Instant meeting. The studio opens with the Invite sheet: share the link and up to 4 people join on camera with no account — they see and hear each other. Nothing is broadcast until you press “Go live with this meeting”. End meeting closes it for everyone.', tags: 'meeting call video conference invite' },
+      { q: 'Go live in one tap', a: 'Go live tab (or the Dashboard) → Go live now. Allow camera and mic once; a ready check confirms camera, mic and room, then a 3-second countdown takes you live (Cancel stops it). Then tap Share watch link.', tags: 'quick start countdown' },
+      { q: 'Start a stream', a: 'One tap: Go live now. To schedule one with an invite page, or change quality, access, viewer cap or recording first, open Advanced on the same page and press Create or Schedule.' },
       { q: 'Keep the private studio link secret', a: 'It contains the host key: anyone with it can control your stream. Share the viewer link instead.' },
-      { q: 'Guests on air', a: 'People panel → copy the guest link. Up to 4 guests join with cam, mic and screen share; Grid / Spotlight / Sidebar mix them in.' },
-      { q: 'Hotkeys', a: 'G go live/end · Space mic · V camera · R record · B be-right-back · 1–6 scenes · M metrics · / chat.' },
+      { q: 'Guests on air', a: 'Studio → Invite (or press I) → Share invite. Up to 4 guests join with cam, mic and screen share and hear each other; Grid / Spotlight / Sidebar mix them in. New link cuts off old ones.' },
+      { q: 'A guest can’t connect', a: 'Most often a strict network (mobile data, office Wi-Fi) blocking direct video — the studio retries by itself, and switching to Wi-Fi usually fixes it. If the camera is blocked, allow it from the address bar (🔒) and tap Try again.', tags: 'guest connecting stuck linking camera blocked' },
+      { q: 'Hotkeys', a: 'G go live/end · I invite · Space mic · V camera · R record · B be-right-back · 1–6 scenes · M metrics · / chat.' },
     ],
   },
   {
@@ -426,11 +456,11 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     section: 'Recording & saving',
     icon: 'record',
     items: [
-      { q: 'Where do recordings go?', a: 'When a recording stops you choose: a folder on your computer, your Google Drive, Share (Photos/Files on phones), or Downloads. Tick “Remember my choice” to skip the question next time.', tags: 'download save' },
+      { q: 'Where do recordings go?', a: 'When a recording stops you choose: your Google Drive, a folder on your computer, Share (Photos/Files on phones), or Downloads. All of these are free and the file is yours to keep — nothing is kept on our servers unless you also choose a 7-day copy. Tick “Remember my choice” to skip the question next time.', tags: 'download save free drive device' },
       { q: 'Save to Google Drive without signing in to Google here', a: 'On a computer with Google Drive for desktop, pick your “My Drive” folder once — every recording then saves straight into it and Drive syncs it. On phones, choose Drive in the share menu. We never ask for your Google password or permissions.', tags: 'drive oauth' },
       { q: 'Time limits & alerts', a: 'Customize → Recording: set a stream or recording length limit. You’ll get alerts at 5 minutes, 1 minute and 10 seconds (with a one-tap +15 min for streams), then it stops and asks where to save.', tags: 'duration limit timer' },
       { q: 'I closed the tab before saving', a: 'Recordings are written to this device’s disk as they record. Reopen the studio (or the dashboard) and choose “Save it now”.', tags: 'recover lost' },
-      { q: '7-day cloud copy', a: 'In the save sheet, Upload keeps a copy on our server for 7 days so you can download it from the recap on any device.' },
+      { q: '7-day cloud copy', a: 'Off unless you choose it. In the save sheet, “Keep a 7-day copy” puts a copy on our servers so you can download it from the recap on any device; it’s deleted after 7 days. The sheet shows its size and how much of your 10 GB of 7-day copies is in use before anything uploads. It uses your upload and our storage, so Google Drive or this device (both free, and yours for good) come first. To copy every recording automatically, turn on “Also keep a 7-day cloud copy” in Customize → Recording.', tags: 'cloud copy server storage quota 10 GB link' },
     ],
   },
   {
@@ -438,7 +468,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     icon: 'baby',
     items: [
       { q: 'Set it up', a: 'Baby monitor → create a nursery. On the phone in the nursery: sign in, open the nursery, tap “Be the camera”. On your phone/laptop: tap “Watch”.' },
-      { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC). Our server only passes small connection messages and status numbers. There is no record button.', tags: 'privacy security' },
+      { q: 'Is anything recorded?', a: 'Never. Video and sound go directly between the camera phone and your devices, encrypted (WebRTC), whenever your networks allow it. Our server passes small connection messages and status numbers — and, only for a device the direct connection can’t reach (or for a moment while it starts), the picture and sound themselves, passed along in memory and never stored, but not end-to-end encrypted. Privacy pause stops that too. There is no record button.', tags: 'privacy security relay server' },
       { q: 'How does sound detection work?', a: 'The camera phone runs an AI sound model (Google’s YAMNet, on the phone itself) plus a pitch-and-rhythm cry analyser and a smoke/CO alarm pattern detector. It recognizes crying, fussing, coughing, alarms, bangs, babbling, laughing, voices, music/TV and dogs — the audio never leaves the phone. Parents can set sensitivity while watching.', tags: 'cry detection ai model cough alarm' },
       { q: 'Talk and video call like FaceTime', a: 'While watching: tap Talk to open your mic (or press and hold to talk while holding). Tap Video to show your face on the nursery phone. Echo cancellation keeps it clear both ways.', tags: 'two-way audio facetime call' },
       { q: 'Alerts when my phone is locked', a: 'Turn on “Alerts on this device” while watching. Android and computers work right away. iPhone: Share → Add to Home Screen, open it from the Home Screen, then turn alerts on.', tags: 'notifications push iphone' },
@@ -446,10 +476,24 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Roles', a: 'Parent: everything incl. managing people. Caregiver: watch, talk, soothe, run a camera, log. Viewer: watch and get alerts. Each person can also have a name like Grandma or Nanny.' },
       { q: 'Soothing sounds', a: 'Soothe plays shush, white noise, rain, ocean or a heartbeat on the camera phone for 15–60 minutes. Sound detection ignores it.' },
       { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },
-      { q: 'No video on my network', a: 'Some networks block direct device-to-device video. The monitor switches to a low-bandwidth snapshot mode (1 picture per second, no audio) and keeps retrying full video.' },
+      { q: 'No video on my network', a: 'Some networks (often mobile data) block direct device-to-device video. The monitor then shows the picture through our server instead — smooth video (10–15 frames a second) with sound, or still pictures on older browsers — and keeps retrying the direct connection in the background. The same happens when the camera already sends directly to four people over the internet, and while a direct connection takes longer than a second to start, so the picture appears straight away. Through our server, video and sound are passed along in memory and never stored, but they are not end-to-end encrypted the way the direct connection is. Privacy pause stops it completely. Alerts are unaffected.', tags: 'relay server encrypted mobile data guest slow choppy sound' },
       { q: 'What can smart vision see?', a: 'With Smart vision on (camera setup → Make it smarter), the camera phone runs two Google MediaPipe models on its own video about once a second: whether your baby is lying, sitting or standing (and standing in the crib), rolling over, what they’re holding, risky things within reach (scissors, knives, cups, phones, remotes, plants, pets), soft toys near a sleeping baby, and which play area they’re in. Frames never leave the phone. It’s a beta: it can miss things, it can’t see blankets or pillows, and it does not watch breathing or sleep position. Adding the baby’s birthday in the Tracker helps — a baby too young to sit is always reported lying.', tags: 'posture rolling sitting standing objects toys safe sleep vision ai camera' },
       { q: 'Family video calls', a: 'Calls → tap the camera (video) or phone (voice) button next to anyone in your nurseries, or “Call everyone” for a group call of up to four. Calls ring wherever Stream Studio is open; turn on “Ring this device” to be rung with the app closed. During a call: mute, camera off, flip, add someone, or minimize to keep talking while you use the app. Device to device, encrypted, never recorded.', tags: 'facetime video call voice call family grandma group ring' },
+      { q: 'Call someone who isn’t in my nursery', a: 'Calls → search their name to call anyone on Stream Studio (they need an account). The first time you call someone outside your nurseries, Calls checks it’s the right person — they’ll see your name. Their phone says “Stream Studio member · not in your family” and answers with the camera off unless they choose video. Star people to keep them in Favourites.', tags: 'search call anyone friend member stranger favourites star direct' },
+      { q: 'Block someone or choose who can call me', a: 'When someone outside your family calls, tap “Decline & block” — their calls never reach you again, and they can’t tell. Calls → Who can call you: everyone on Stream Studio, or only people in your nurseries; unblock anyone from the Blocked list there.', tags: 'block unblock privacy who can call me family only spam' },
+      { q: 'A call won’t connect', a: 'After a few seconds the call says “Still connecting…”, and if it can’t connect it tells you why: your network or theirs is blocking calls, or your two networks can’t reach each other directly. Switching one of you between Wi-Fi and mobile data usually fixes it — the call retries on its own when the network changes, or tap Try again (Audio only needs less of the connection). A call carries on through short network blips, and on iPhone it plays on the loudspeaker.', tags: 'call not connecting connecting stuck spinner no audio no video failed lag frozen speaker earpiece' },
       { q: 'Is it a medical device?', a: 'No. It watches and listens; it does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.' },
+    ],
+  },
+  {
+    section: 'Usage & what’s free',
+    icon: 'gauge',
+    items: [
+      { q: 'What’s free, and what goes through your servers?', a: 'Free: anything straight between your devices — the baby monitor on Home Wi-Fi or Direct, calls and meetings that connect directly — and recordings saved to Google Drive or this device. Through our servers: a broadcast’s viewers (free for you), a 7-day copy, an encrypted relay when a network blocks direct links, and the baby monitor’s picture through our server (in memory only, never stored, not end-to-end encrypted). The pill on each screen says which way it’s going right now.', tags: 'cost free relay server turn direct home wifi usage data' },
+      { q: 'Where do I see my usage?', a: 'Customize → Usage: this month, what was free — next to what went through our servers, with your relay data and 7-day copies against their allowance. Parents also see each nursery’s month — and last night — in Nursery settings → Usage. It loads when you open it; nothing is checked in the background.', tags: 'usage meter month allowance settings nursery last night' },
+      { q: 'Fair use: the allowances', a: 'Relay data: 10 GB a month for the calls you place, and 10 GB a month for each nursery’s viewers — Direct and Home Wi-Fi never count. The baby monitor’s picture through our server (in memory only, never stored, not end-to-end encrypted): up to 16 hours a day per nursery. 7-day copies: 10 GB at a time (space frees up as copies expire). You’re told in the app at 80% and 100% — never by email. The baby monitor’s sound and alerts are never limited.', tags: 'fair use limit allowance relay data 10 GB cloud copy quota 80% 100%' },
+      { q: 'Am I charged?', a: 'No. Stream Studio doesn’t charge for any of this. “What this costs DreamStream (est.)” in Usage and in a recap shows our own cost at list price, for transparency — an estimate, never a bill.', tags: 'price charge bill pay cost money dollars' },
+      { q: 'Use less of our servers', a: 'Put the camera phone on the same Wi-Fi as your phone — Home Wi-Fi uses no internet at all and keeps working if it drops. Save recordings to Google Drive or this device instead of a 7-day copy. Just listening? Audio only sends no picture. Calls between phones on the same Wi-Fi go straight between them.', tags: 'save data tips frugal mobile data cellular' },
     ],
   },
   {

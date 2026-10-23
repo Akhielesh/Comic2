@@ -1,10 +1,13 @@
 // Joining a nursery with the share link + passcode — for family and sitters
 // without an account. Says nothing about the nursery until the passcode is
-// right; the room locks the link after repeated wrong guesses.
-import React, { useEffect, useState } from 'react';
-import { useAccount } from '../account';
-import { getDevice } from '../monitor/client';
-import { joinAsGuest, joinErrorText, loadGuest, type JoinError } from '../monitor/guest';
+// right; the room locks the link after repeated wrong guesses. Someone who is
+// already a member (signed in) goes straight to watching with their account;
+// anyone else signed in is shown to the parents as "has an account".
+import React, { useEffect, useMemo, useState } from 'react';
+import { accessToken, useAccount } from '../account';
+import { checkBrowser } from '../monitor/camera';
+import { getDevice, listNurseries } from '../monitor/client';
+import { clearGuest, joinAsGuest, joinErrorText, loadGuest, type JoinError } from '../monitor/guest';
 import type { Nav } from '../nav';
 import { Icon } from '../ui/icons';
 import { Btn, type PushToast } from '../ui/primitives';
@@ -16,15 +19,29 @@ export function MonitorJoin({ nid, code, nav, push }: { nid: string; code: strin
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<{ reason: JoinError; retryAt?: number | null; left?: number | null } | null>(null);
+  const browser = useMemo(() => (typeof navigator !== 'undefined' ? checkBrowser() : null), []);
 
   // Already holding a pass for this nursery on this device: straight in.
   useEffect(() => {
     if (loadGuest(nid)) nav.monitorWatch(nid);
   }, [nid]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Already a member? No guest pass needed — watch with your own account.
   useEffect(() => {
-    if (account.status === 'member' && account.name && !name) setName(account.name);
-  }, [account.status]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (account.status !== 'member') return;
+    if (account.name && !name) setName(account.name);
+    let alive = true;
+    void listNurseries().then((r) => {
+      const n = r.ok ? r.nurseries?.find((x) => x.id === nid) : null;
+      if (!alive || !n) return;
+      clearGuest(nid);
+      push(`You’re already in ${n.name} — watching with your account`, { icon: 'heart' });
+      nav.monitorWatch(nid);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [account.status, nid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const blocked = err?.reason === 'off' || err?.reason === 'expired' || err?.reason === 'bad_link' || err?.reason === 'full';
 
@@ -34,14 +51,27 @@ export function MonitorJoin({ nid, code, nav, push }: { nid: string; code: strin
     if (!name.trim()) return setErr({ reason: 'name' });
     setBusy(true);
     setErr(null);
-    const r = await joinAsGuest(nid, { code, pass, name: name.trim(), dev: getDevice().id });
+    // Signed in: the room asks Supabase who we are (members skip the guest pass).
+    const token = account.status === 'member' ? await accessToken() : null;
+    const r = await joinAsGuest(nid, { code, pass, name: name.trim(), dev: getDevice().id }, token);
     setBusy(false);
     if (r.ok === false) {
+      if (r.reason === 'member') {
+        clearGuest(nid);
+        push(joinErrorText(r), { icon: 'heart' });
+        nav.monitorWatch(nid);
+        return;
+      }
       setErr(r);
       if (r.reason === 'wrong') setPass('');
       return;
     }
-    push(`Welcome, ${r.pass.name} — you’re watching ${r.pass.nursery.baby || r.pass.nursery.name}`, { icon: 'heart' });
+    push(
+      r.account
+        ? `Welcome, ${r.pass.name} — a parent can now make you a member, so you can watch with your account`
+        : `Welcome, ${r.pass.name} — you’re watching ${r.pass.nursery.baby || r.pass.nursery.name}`,
+      { icon: 'heart', duration: r.account ? 5000 : 2600 },
+    );
     nav.monitorWatch(nid);
   };
 
@@ -53,6 +83,15 @@ export function MonitorJoin({ nid, code, nav, push }: { nid: string; code: strin
         <p className="faint" style={{ textAlign: 'center', margin: '0 0 18px', lineHeight: 1.5 }}>
           Enter the passcode the parent gave you. Video goes straight from the nursery camera to this device — it’s never recorded.
         </p>
+
+        {browser?.inApp && (
+          <div className="banner info join-inapp" role="note">
+            <Icon name="globe" size={15} />
+            <span>
+              You’re in {browser.inApp}’s built-in browser. It works here, but your guest pass stays inside {browser.inApp} — to keep watching from {browser.ios ? 'Safari' : 'Chrome'}, open this link there instead (⋯ menu → Open in browser).
+            </span>
+          </div>
+        )}
 
         <label className="field">
           <span>Your name</span>
@@ -103,6 +142,7 @@ export function MonitorJoin({ nid, code, nav, push }: { nid: string; code: strin
         <ul className="join-notes faint">
           <li><Icon name="lock" size={13} />Only use a link someone you trust sent you. Never share the passcode in the same message as the link.</li>
           <li><Icon name="shield" size={13} />Parents see everyone who joins and can remove you at any time.</li>
+          {account.status === 'member' && <li><Icon name="user" size={13} />You’re signed in, so the parents can make you a member — then you watch with your account, no passcode.</li>}
           <li><Icon name="info" size={13} />Not a medical device — it doesn’t monitor breathing or sleep position.</li>
         </ul>
       </form>

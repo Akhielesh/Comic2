@@ -10,10 +10,18 @@
 import React, { useSyncExternalStore, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
-import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
+import { openInvite, registerShareChannel, ShareChannel, shareSummary } from '../monitor/invite';
+import { useGuestPass } from './monitor/useGuestPass';
+import { focusLayout } from '../monitor/viewFocus';
+import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type FairState, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
 import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
+import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
+import { pageShown, ViewGate } from '../monitor/viewGate';
+import { RelayMeter } from '../monitor/videoBudget';
+import { probeDecoders, RelayDecoder, soundControls } from '../monitor/relay';
+import type { RelayCodec } from '../monitor/relayWire';
 import { SOUND_INFO, SOUND_CATS, soundHeadline, type SoundCat } from '../monitor/soundClasses';
 import { SOOTHE_OPTIONS, type SootheKind } from '../monitor/soothe';
 import { markSetup } from '../monitor/setupProgress';
@@ -29,7 +37,7 @@ import { stopTimer } from './tracker/TimerCard';
 import { TrackerSync } from '../monitor/trackerSync';
 import type { TrackKind } from '../monitor/trackTypes';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
-import { clearGuest, loadGuest, type GuestPass } from '../monitor/guest';
+import { clearGuest, type GuestPass } from '../monitor/guest';
 import { PeopleCard } from './monitor/PeopleCard';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { NurserySettings } from './monitor/NurserySettings';
@@ -38,6 +46,10 @@ import { WeekCard } from './monitor/WeekCard';
 import { ReportSheet, SleepCard } from './monitor/SleepCard';
 import { SoundLevelCard } from './monitor/SoundLevelCard';
 import { ZoneEditor } from './monitor/ZoneEditor';
+import { PATH_PILL } from '../costCopy';
+import { createViewerMeter, pathTip, viewerPath, type ViewerMeter } from '../usage/monitorUsage';
+import { streamPathOf } from '../usage/sessionMeter';
+import { checkNurseryAllowance } from '../usage/usageClient';
 
 const BUCKET_MS = 5 * 60_000;
 const SOUND_SET = new Set<string>(SOUND_CATS);
@@ -102,6 +114,8 @@ const LOG_META: Record<string, { icon: string; tone: string }> = {
 const logMeta = (kind: string) => (SOUND_SET.has(kind) ? { icon: SOUND_INFO[kind as SoundCat].icon, tone: SOUND_INFO[kind as SoundCat].tone } : LOG_META[kind] ?? { icon: 'info', tone: 'neutral' });
 
 const pushKey = (nid: string) => `ds-monitor-push-${nid}`;
+/** This tab, so two tabs on one device are two viewers to the camera. */
+const TAB_ID = Math.random().toString(36).slice(2, 8);
 /** In-app cue settings, most important first. */
 const camKey = (nid: string) => `ds-monitor-cam-${nid}`;
 
@@ -128,9 +142,25 @@ const canPip = () =>
     typeof (HTMLVideoElement.prototype as unknown as { webkitSetPresentationMode?: unknown }).webkitSetPresentationMode === 'function');
 
 export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: PushToast }) {
-  // Guests (share link + passcode) watch without an account.
-  const [guest, setGuest] = useState(() => loadGuest(id));
-  if (guest) return <ViewerInner id={id} nav={nav} push={push} guest={guest} onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }} />;
+  // Guests (share link + passcode) watch without an account — unless this
+  // account is a member, whose own access wins over a pass left on the device.
+  const [guest, setGuest] = useGuestPass(id);
+  if (guest) {
+    return (
+      <ViewerInner
+        id={id}
+        nav={nav}
+        push={push}
+        guest={guest}
+        onLeave={() => { clearGuest(id); setGuest(null); nav.monitor(); }}
+        onPromoted={() => {
+          clearGuest(id);
+          setGuest(null);
+          push(`You’re now a member of ${guest.nursery.name} — watching with your account`, { icon: 'heart', duration: 5000 });
+        }}
+      />
+    );
+  }
   return (
     <MonitorGate>
       <ViewerInner id={id} nav={nav} push={push} />
@@ -138,25 +168,53 @@ export function MonitorViewer({ id, nav, push }: { id: string; nav: Nav; push: P
   );
 }
 
-function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void }) {
+function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string; nav: Nav; push: PushToast; guest?: GuestPass | null; onLeave?: () => void; onPromoted?: () => void }) {
   const sockRef = useRef<MonitorSocket | null>(null);
   const linkRef = useRef<ViewerLink | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selfRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const relayUrlRef = useRef<string | null>(null);
+  const relayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const relayMeterRef = useRef(new RelayMeter());
+  const relayDecRef = useRef<RelayDecoder | null>(null);
+  /** What this browser decodes for the relay (null until probed; [] = JPEG only). */
+  const relayCodecsRef = useRef<RelayCodec[] | null>(null);
+  /** The relay picture (canvas capture) + its sound, for the <video> element. */
+  const relayStreamRef = useRef<MediaStream | null>(null);
+  /** The direct call's stream (shown once the call is connected). */
+  const p2pStreamRef = useRef<MediaStream | null>(null);
+  const fallbackRef = useRef(initialFallback());
+  const camSidRef = useRef<string | null>(null);
+  /**
+   * Sound only while nobody looks (feature doc §7 C5; viewGate.ts): whether this screen is shown
+   * (picture-in-picture counts), told to the room and the camera on change. `capsRef`: what the
+   * room takes; `nearRef`: cameras on this device's network (their direct picture comes first);
+   * `shownAtRef`: when the screen was last shown (a status from before then isn't "offline" yet).
+   */
+  const gateRef = useRef(new ViewGate(typeof document === 'undefined' || pageShown(document)));
+  const capsRef = useRef<string[]>([]);
+  const nearRef = useRef<string[]>([]);
+  const shownAtRef = useRef(Date.now());
+  const camDevRef = useRef<string | null>(null);
+  /** The camera was told we're talking / on video (re-asserted after the room reconnects). */
+  const toldRef = useRef({ talk: false, video: false });
   const wakeRef = useRef(new ScreenWakeLock());
   const cuesRef = useRef(new AlertCues());
   const retryRef = useRef<number | undefined>(undefined);
+  /** The instant (relay) picture's timer: the direct one gets a head start. */
+  const instantRef = useRef<number | undefined>(undefined);
+  /** The camera turned our direct picture away (its slots are full). */
+  const fullRef = useRef(false);
   const vapidRef = useRef<string | null>(null);
   const micMeterRef = useRef<{ ctx: AudioContext; timer: number } | null>(null);
+  /** Minutes per path + relay bytes → `{t:'use'}` and this device's ledger (usage/monitorUsage.ts). */
+  const usageRef = useRef<ViewerMeter | null>(null);
   const pressRef = useRef<number | null>(null);
 
   const [reconnectKey, setReconnectKey] = useState(0);
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
   const [closedMsg, setClosedMsg] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
-  const [shareErr, setShareErr] = useState<string | null>(null);
   const [me, setMe] = useState<{ sid: string; uid: string; role: MonRole; name: string; label: string | null } | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [cams, setCams] = useState<CamPresence[]>([]);
@@ -171,9 +229,19 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [linkState, setLinkState] = useState<LinkState>('idle');
   const [netPath, setNetPath] = useState<NetPath | null>(null);
   const [relayOn, setRelayOn] = useState(false);
-  const [relayUrl, setRelayUrl] = useState<string | null>(null);
+  /** The relay is only bridging while the direct picture connects (the "instant picture"). */
+  const [relayEarly, setRelayEarly] = useState(false);
+  /** The camera's direct slots were full, so this viewer watches the relay. */
+  const [relayFull, setRelayFull] = useState(false);
+  /** The relay picture as it really is: frames a second, stopped, or not started — and video or still pictures, with sound or not. */
+  // `blocked`: relay sound is arriving but the phone hasn't started it (it needs a tap).
+  const [relayView, setRelayView] = useState<{ has: boolean; fps: number; stale: boolean; jpeg?: boolean; sound?: boolean; blocked?: boolean }>({ has: false, fps: 0, stale: false });
+  /** The <video> element plays the relay's stream (canvas capture + sound): PiP and Listen work on it. */
+  const [relaySrc, setRelaySrc] = useState<{ video: boolean; sound: boolean } | null>(null);
   const [hasVideo, setHasVideo] = useState(false);
   const [muted, setMuted] = useState(true);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   const [night, setNight] = useState(false);
   const [quality, setQuality] = useState<Quality>('hd');
   const [talk, setTalk] = useState<'off' | 'starting' | 'on'>('off');
@@ -210,6 +278,10 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const [report, setReport] = useState<{ session?: string } | null>(null);
   const [zoneEdit, setZoneEdit] = useState(false);
   const [stalled, setStalled] = useState(false);
+  /** The nursery's relay data this month: at 'out', a picture that needs a relay is sound only. */
+  const [fair, setFair] = useState<FairState | null>(null);
+  const fairOutRef = useRef(false);
+  fairOutRef.current = fair?.level === 'out';
   // Two-way audio etiquette: walkie-talkie by default, silent alerts near the nursery.
   const [hearWhileTalking, setHearWhileTalking] = useState(() => readFlag('ds-monitor-hear-while-talking'));
   const [silentHere, setSilentHere] = useState(() => readFlag(`ds-monitor-silent-${id}`));
@@ -218,6 +290,23 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const lastFrameRef = useRef(Date.now());
   const [, setClock] = useState(0);
   const wide = useMediaQuery('(min-width: 980px)');
+
+  // The Invite sheet borrows this screen's socket for the share link and who's watching.
+  const shareCh = useMemo(
+    () =>
+      new ShareChannel(
+        (msg) => sockRef.current?.send(msg),
+        guest
+          ? () => {
+              sockRef.current?.send({ t: 'bye' });
+              onLeave?.();
+            }
+          : undefined,
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id],
+  );
+  useEffect(() => registerShareChannel(id, shareCh), [id, shareCh]);
 
   const canAct = me?.role === 'parent' || me?.role === 'caregiver';
   useFirstVisitTour('watch', sock === 'connected');
@@ -228,52 +317,179 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   if (roomCam) lastCamRef.current = roomCam;
   const cam = roomCam ?? (linkState === 'connected' ? lastCamRef.current : null);
   const camStatus = cam ? status[cam.dev] : undefined;
+  /** The camera is up and not paused: a relay picture that stops now is stuck, not resting. */
+  const camLiveRef = useRef(false);
+  camLiveRef.current = !!camStatus && Date.now() - camStatus.at < 30_000 && !camStatus.st.paused;
+  camSidRef.current = camSid;
+  const qualityRef = useRef(quality);
+  qualityRef.current = quality;
+
+  /**
+   * The P2P → relay fallback (monitor/linkFallback.ts) and its effects.
+   * Uses refs and state setters only, so any render's copy is safe to call.
+   */
+  const runFallback = (input: FallbackInput) => {
+    const { s, fx } = stepFallback(fallbackRef.current, input);
+    fallbackRef.current = s;
+    setRelayOn(s.relay);
+    setRelayEarly(s.early);
+    // "Camera full" holds through background retries until a direct picture gets
+    // through (not merely 'connected': a full camera connects, then turns us away).
+    if (input.t === 'link' && input.state === 'failed' && linkRef.current?.full) fullRef.current = true;
+    else if (!s.relay) fullRef.current = false;
+    setRelayFull(s.relay && !s.early && fullRef.current);
+    for (const e of fx) {
+      if (e.t === 'relay_on') sendRelay(e.dev, e.instant);
+      else if (e.t === 'relay_off') sockRef.current?.send({ t: 'relay', on: false });
+      else if (e.t === 'retry_clear') window.clearTimeout(retryRef.current);
+      else if (e.t === 'instant_clear') window.clearTimeout(instantRef.current);
+      else if (e.t === 'instant_in') {
+        window.clearTimeout(instantRef.current);
+        instantRef.current = window.setTimeout(() => runFallback({ t: 'instant_due' }), e.ms);
+      } else if (e.t === 'retry_in') {
+        window.clearTimeout(retryRef.current);
+        retryRef.current = window.setTimeout(() => runFallback({ t: 'retry' }), e.ms);
+      } else if (e.t === 'connect') {
+        const sid = camSidRef.current;
+        if (sid) void linkRef.current?.connect(sid);
+      }
+    }
+    if (!s.relay) clearRelayPicture();
+    syncVideo();
+  };
+
+  /** Subscribe to a camera's relay, saying what this browser decodes (the room routes by it). */
+  const sendRelay = (dev: string, instant: boolean) => {
+    sockRef.current?.send({ t: 'relay', on: true, dev, codecs: relayCodecsRef.current ?? [], ...(instant ? { instant: true } : {}) });
+  };
+
+  /** Forget the relay picture (a different camera, or the direct picture is back). */
+  const clearRelayPicture = () => {
+    relayMeterRef.current.reset();
+    relayDecRef.current?.reset();
+    const c = relayCanvasRef.current;
+    if (c) c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+    setRelayView((v) => (v.has || v.fps || v.stale ? { has: false, fps: 0, stale: false } : v));
+  };
+
+  /**
+   * What the <video> element plays: the direct call once it's connected (or
+   * when there's no relay picture), otherwise the relay's stream — so
+   * picture-in-picture, the Listen button and the bedside view work on either.
+   * (While the direct picture loads, the relay canvas stays on top of it.)
+   */
+  const syncVideo = () => {
+    const v = videoRef.current;
+    // Only once the relay has drawn something: a frozen direct frame beats a blank one.
+    const relayStream = fallbackRef.current.relay && relayMeterRef.current.last != null ? relayStreamRef.current : null;
+    const p2p = p2pStreamRef.current;
+    const useRelay = !!relayStream && (!p2p || linkRef.current?.state !== 'connected');
+    const want = useRelay ? relayStream : p2p;
+    if (v && v.srcObject !== want) {
+      v.srcObject = want;
+      if (want) void v.play().catch(() => undefined);
+    }
+    const next = useRelay && relayStream ? { video: relayStream.getVideoTracks().length > 0, sound: relayStream.getAudioTracks().length > 0 } : null;
+    setRelaySrc((cur) => (cur?.video === next?.video && cur?.sound === next?.sound ? cur : next));
+  };
   const baby = nursery.baby || 'Baby';
 
   /* ------------------------------------------------------------ socket */
   useEffect(() => {
     setClosedMsg(null);
-    const link = new ViewerLink((to, d) => sockRef.current?.send({ t: 'rtc', to, d }), []);
-    link.onState = setLinkState;
+    const link = new ViewerLink((to, d) => sockRef.current?.send({ t: 'rtc', to, d }), [], `${getDevice().id}.${TAB_ID}`);
+    link.quality = qualityRef.current;
+    link.setShown(gateRef.current.isShown);
+    link.onState = (s) => {
+      setLinkState(s);
+      runFallback({ t: 'link', state: s });
+    };
     link.onPath = setNetPath;
+    const usage = createViewerMeter(id, (m) => sockRef.current?.send(m));
+    usageRef.current = usage;
+    link.onStats = (r, pc) => usage.meter.observe(r, pc);
+    // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
+    link.onIceStale = () => sockRef.current?.send({ t: 'ice' });
     link.onDirect = (dm) => onDirectRef.current(dm);
     link.onStream = (s) => {
-      const v = videoRef.current;
-      if (v && v.srcObject !== s) {
-        v.srcObject = s;
-        if (s) void v.play().catch(() => undefined);
-      }
+      p2pStreamRef.current = s;
+      syncVideo();
       setHasVideo(!!s && s.getVideoTracks().length > 0);
     };
     linkRef.current = link;
 
+    // The relay picture (relay.ts): video decoded (or JPEGs drawn) straight onto
+    // a canvas — no re-render of this screen per frame — and its sound.
+    const dec = new RelayDecoder({
+      canvas: () => relayCanvasRef.current,
+      onPicture: (now) => {
+        const first = relayMeterRef.current.last == null;
+        relayMeterRef.current.frame(now);
+        if (first) {
+          setRelayView({ has: true, fps: 0, stale: false, jpeg: dec.codec === 'jpeg', sound: dec.hasSound, blocked: dec.soundBlocked });
+          syncVideo();
+        }
+      },
+      // Relay sound arrived, or started / stopped playing: the sound controls follow it at once.
+      onSound: () => setRelayView((v) => (v.sound === dec.hasSound && v.blocked === dec.soundBlocked ? v : { ...v, sound: dec.hasSound, blocked: dec.soundBlocked })),
+      onAck: (a) => sockRef.current?.send({ t: 'rx', ...a }),
+      onStream: (s) => {
+        relayStreamRef.current = s;
+        syncVideo();
+      },
+      onFallback: () => {
+        // Video keeps failing in this browser: still pictures from now on.
+        relayCodecsRef.current = [];
+        const f = fallbackRef.current;
+        if (f.relay && f.dev) sendRelay(f.dev, f.early);
+      },
+    });
+    relayDecRef.current = dec;
+    if (import.meta.env?.DEV) (globalThis as unknown as { __dsRelay?: unknown }).__dsRelay = dec;
     const onBinary = (data: Blob) => {
-      const url = URL.createObjectURL(data);
-      if (relayUrlRef.current) URL.revokeObjectURL(relayUrlRef.current);
-      relayUrlRef.current = url;
-      setRelayUrl(url);
+      if (fallbackRef.current.relay) dec.push(data);
     };
 
     const sockNow = openMonitorSocket(id, 'viewer', (m) => onMsgRef.current(m), onBinary, (s, detail) => {
       setSock(s);
+      shareCh.set({ connected: s === 'connected' });
       if (s !== 'connected') tracker.detach();
+      if (s !== 'connected') usage.meter.disconnected();
       if (s === 'closed') setClosedMsg(detail || 'Disconnected from the nursery.');
     });
     sockRef.current = sockNow;
-    const tick = window.setInterval(() => setClock((c) => c + 1), 5000);
+    const tick = window.setInterval(() => {
+      setClock((c) => c + 1);
+      usage.meter.tick();
+    }, 5000);
     const cues = cuesRef.current;
-    const unlock = () => cues.unlock();
+    // Any tap also (re)starts the relay's sound where a phone stopped it — and,
+    // once Listen is on, makes it ready inside the tap (iPhones need one).
+    const unlock = () => {
+      cues.unlock();
+      if (mutedRef.current) dec.resumeSound();
+      else dec.prepareSound();
+    };
     window.addEventListener('pointerdown', unlock);
+    // A touch only counts as a tap (user activation) on its way up — iPhones go by that.
+    window.addEventListener('pointerup', unlock);
     return () => {
       window.clearInterval(tick);
       window.clearTimeout(retryRef.current);
+      window.clearTimeout(instantRef.current);
+      fallbackRef.current = { ...fallbackRef.current, pending: false };
       window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('pointerup', unlock);
+      usage.dispose();
+      if (usageRef.current === usage) usageRef.current = null;
       link.close();
+      dec.close();
+      if (relayDecRef.current === dec) relayDecRef.current = null;
+      relayStreamRef.current = null;
       sockNow.close();
       queryRef.current?.cancelAll();
       stopMicMeter();
       cues.stopAll();
-      if (relayUrlRef.current) URL.revokeObjectURL(relayUrlRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, reconnectKey]);
@@ -282,6 +498,11 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   useEffect(() => {
     cuesRef.current.quiet = silentHere || near;
   }, [silentHere, near]);
+  // Which path the picture takes now, for this device's usage (display only).
+  const relayDrawing = relayView.has && !relayView.stale;
+  useEffect(() => {
+    usageRef.current?.meter.setPath(viewerPath({ linkState, netPath, relayOn, relayDrawing }));
+  }, [linkState, netPath, relayOn, relayDrawing, id, reconnectKey]);
 
   // Attach the self-view (video call) whenever it mounts.
   useEffect(() => {
@@ -382,14 +603,19 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         queryRef.current = new MonQuery((q) => sockRef.current?.send(q));
         setQuery(queryRef.current);
         tracker.attach((msg) => sockRef.current?.send(msg), queryRef.current, m.track);
+        // A new socket: usage reports count from here (the room keeps them per socket).
+        usageRef.current?.meter.connected();
+        // Parents: relay data at 80% / 100% is said in the app (one look, at most twice a day).
+        if (m.you.role === 'parent' && !m.you.guest) void checkNurseryAllowance(queryRef.current, id, (text) => push(text, { icon: 'info', duration: 9000 }));
         setNursery(m.nursery);
         setCams(m.cams);
         setViewers(m.viewers);
+        shareCh.set({ connected: true, me: { role: m.you.role, name: m.you.name, guest: !!m.you.guest }, nursery: m.nursery, viewers: m.viewers });
         setLog(m.log);
         setTl(m.tl);
         setSettings(m.settings);
         vapidRef.current = m.vapid;
-        linkRef.current?.setIce(m.ice);
+        linkRef.current?.setIce(m.ice, m.iceMs);
         const st: Record<string, { st: CamStatus; at: number; since: number }> = {};
         for (const c of m.cams) if (c.status && c.statusAt) st[c.dev] = { st: c.status, at: c.statusAt, since: c.statusAt };
         statusRef.current = st;
@@ -400,10 +626,31 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           const focus = sessionStorage.getItem(FOCUS_KEY);
           if (focus) {
             sessionStorage.removeItem(FOCUS_KEY);
+            // Alerts, settings and people live in All: show it for this visit (the saved layout stays).
+            const need = focusLayout(focus);
+            if (need) setViewState(need);
             window.setTimeout(() => document.querySelector(`[data-tour="mv-${focus}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 600);
           }
         } catch { /* storage unavailable */ }
         if (m.cams.length) markSetup(id, 'camera');
+        // A new socket: the room has forgotten our relay subscription — and the
+        // camera may have missed that we stopped (or are still) talking.
+        capsRef.current = m.caps ?? [];
+        nearRef.current = m.near ?? [];
+        setFair(m.fair ?? null);
+        gateRef.current.reset();
+        sendView();
+        runFallback({ t: 'near', on: !!camDevRef.current && nearRef.current.includes(camDevRef.current) });
+        runFallback({ t: 'hello' });
+        {
+          const target = m.cams.find((c) => c.sid === pickCam(m.cams, camSidRef.current));
+          const vid = linkRef.current?.vid;
+          if (target && linkRef.current?.state === 'connected') {
+            if (talk === 'on' || toldRef.current.talk) sockRef.current?.send({ t: 'cmd', to: target.sid, c: 'talk', v: { on: talk === 'on', vid } });
+            if (call || toldRef.current.video) sockRef.current?.send({ t: 'cmd', to: target.sid, c: 'video', v: { on: !!call, vid } });
+            toldRef.current = { talk: talk === 'on', video: !!call };
+          }
+        }
         // An episode still in progress when we join: show it (no sound).
         const recent = [...m.log].reverse().find((e) => ['cry', 'alarm', 'zone', 'crib_out', 'glass'].includes(e.kind) && Date.now() - e.at < 3 * 60_000);
         if (recent && !m.log.some((e) => e.at > recent.at && (e.kind === 'cry_end' || e.kind === 'ack' || e.kind === 'resolved'))) {
@@ -414,15 +661,18 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       }
       case 'share':
         setShare(m.share);
-        setShareErr(null);
+        shareCh.set({ share: m.share, err: null });
+        // Family who joined with the link count for the checklist's "Invite family".
+        if (m.share.guests.length) markSetup(id, 'family');
         break;
       case 'share_err':
-        setShareErr(m.msg);
+        shareCh.set({ err: m.msg });
         break;
       case 'presence':
         if (m.cams.length) markSetup(id, 'camera');
         setCams(m.cams);
         setViewers(m.viewers);
+        shareCh.set({ viewers: m.viewers });
         setCamSid((cur) => pickCam(m.cams, cur));
         break;
       case 'rtc':
@@ -509,10 +759,17 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         }
         break;
       case 'cam_gone':
-        if (linkRef.current?.target === m.sid) linkRef.current.close();
+        // The room lost the camera's socket. A call that's still up (home Wi-Fi,
+        // or the camera reconnecting) carries on; a camera that stops says bye itself.
+        if (linkRef.current?.target === m.sid && linkRef.current.state !== 'connected') linkRef.current.close();
         break;
       case 'roles_changed':
         setReconnectKey((k) => k + 1);
+        break;
+      case 'promoted':
+        // A parent made this guest a member: watch with the account from now on.
+        sockRef.current?.close();
+        onPromoted?.();
         break;
       case 'push_ok':
         setPushOn(true);
@@ -520,6 +777,16 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         break;
       case 'notice':
         push(m.text, { icon: 'info', duration: 4000 });
+        break;
+      case 'ice':
+        linkRef.current?.setIce(m.servers, m.iceMs);
+        break;
+      case 'near':
+        nearRef.current = m.near;
+        runFallback({ t: 'near', on: !!camDevRef.current && m.near.includes(camDevRef.current) });
+        break;
+      case 'fair':
+        setFair(m.relay);
         break;
       case 'error':
         if (['removed', 'ended', 'forbidden', 'auth'].includes(m.code)) setClosedMsg(m.msg);
@@ -544,6 +811,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const sockStateRef = useRef(sock);
   sockStateRef.current = sock;
   const onDirect = (dm: DirectMsg) => {
+    gateRef.current.dcMessage(Date.now());
     const roomUp = sockStateRef.current === 'connected';
     if (dm.t === 'st') {
       const old = statusRef.current[dm.dev];
@@ -590,7 +858,6 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     if (!camSid) {
       if (link.state === 'connected') return;
       link.close();
-      setRelayOn(false);
       return;
     }
     if (link.target !== camSid || link.state === 'closed' || link.state === 'idle') {
@@ -615,21 +882,121 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camSid, sock]);
 
+  // Watching a different camera (or none): its own relay subscription, a clean picture.
+  const camDev = cam?.dev ?? null;
+  camDevRef.current = camDev;
   useEffect(() => {
-    if (!cam) return;
-    if (linkState === 'failed') {
-      if (!relayOn) {
-        setRelayOn(true);
-        sockRef.current?.send({ t: 'relay', on: true, dev: cam.dev });
-      }
-      window.clearTimeout(retryRef.current);
-      retryRef.current = window.setTimeout(() => camSid && void linkRef.current?.connect(camSid), 60_000);
-    } else if (linkState === 'connected' && relayOn) {
-      setRelayOn(false);
-      sockRef.current?.send({ t: 'relay', on: false });
-    }
+    clearRelayPicture();
+    runFallback({ t: 'near', on: !!camDev && nearRef.current.includes(camDev) });
+    runFallback({ t: 'cam', dev: camDev });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkState, cam?.dev]);
+  }, [camDev]);
+
+  // What this browser can decode decides what the room sends it (video, or still pictures).
+  useEffect(() => {
+    let alive = true;
+    void probeDecoders().then((codecs) => {
+      if (!alive || relayCodecsRef.current) return;
+      relayCodecsRef.current = codecs;
+      const f = fallbackRef.current;
+      if (f.relay && f.dev && codecs.length) sendRelay(f.dev, f.early);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Tell the room, once per change, whether this screen is shown and the camera's data channel delivers. */
+  const sendView = () => {
+    if (!capsRef.current.includes('view')) return;
+    const d = gateRef.current.due(Date.now());
+    if (d) sockRef.current?.send({ t: 'view', ...d, ...(d.dc && camDevRef.current ? { dev: camDevRef.current } : {}) });
+  };
+  // Hidden (locked, another app or tab in front, no picture-in-picture): said at once to the room and
+  // the camera, who take the picture away after the grace and keep the sound. Shown: back at once.
+  // A browser that can't tell us about its own picture-in-picture (Firefox) always counts as shown.
+  useEffect(() => {
+    const apply = () => {
+      const shown = pageShown(document, videoRef.current as (HTMLVideoElement & { webkitPresentationMode?: string }) | null);
+      if (shown && !gateRef.current.isShown) shownAtRef.current = Date.now();
+      gateRef.current.setShown(shown);
+      linkRef.current?.setShown(shown);
+      sendView();
+    };
+    apply();
+    document.addEventListener('visibilitychange', apply);
+    // The data channel going quiet (or delivering again) needs no event of its own.
+    const t = window.setInterval(sendView, 2000);
+    return () => {
+      document.removeEventListener('visibilitychange', apply);
+      window.clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pip]);
+
+  // Audio-only viewers need no instant picture.
+  useEffect(() => {
+    runFallback({ t: 'instant', on: quality !== 'audio' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quality]);
+
+  // The direct call is up: keep the relay picture on top until the direct one
+  // has really drawn a frame (a seamless swap), then drop the relay. Never
+  // longer than RENDER_WAIT_MS (audio-only, a paused camera).
+  useEffect(() => {
+    if (linkState !== 'connected' || !relayOn) return;
+    const v = videoRef.current as (HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number; cancelVideoFrameCallback?: (h: number) => void }) | null;
+    let done = false;
+    let handle = 0;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      runFallback({ t: 'rendered' });
+    };
+    const direct = () => !!v && !!p2pStreamRef.current && v.srcObject === p2pStreamRef.current && v.videoWidth > 0;
+    const onFrame = () => {
+      if (direct()) finish();
+      else if (!done && v?.requestVideoFrameCallback) handle = v.requestVideoFrameCallback(onFrame);
+    };
+    if (v?.requestVideoFrameCallback) handle = v.requestVideoFrameCallback(onFrame);
+    const t0 = v?.currentTime ?? 0;
+    const poll = window.setInterval(() => {
+      if (!v?.requestVideoFrameCallback && direct() && v!.currentTime !== t0) finish();
+    }, 200);
+    const cap = window.setTimeout(finish, RENDER_WAIT_MS);
+    return () => {
+      done = true;
+      window.clearInterval(poll);
+      window.clearTimeout(cap);
+      if (handle && v?.cancelVideoFrameCallback) v.cancelVideoFrameCallback(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkState, relayOn]);
+
+  // The relay picture as it really is — frames a second, or stopped.
+  useEffect(() => {
+    if (!relayOn) return;
+    let askedAt = Date.now();
+    const t = window.setInterval(() => {
+      const m = relayMeterRef.current;
+      const dec = relayDecRef.current;
+      const now = Date.now();
+      const next = { has: m.last != null, fps: m.fps(now), stale: m.stale(now), jpeg: dec?.codec === 'jpeg', sound: !!dec?.hasSound, blocked: !!dec?.soundBlocked };
+      setRelayView((v) => (v.has === next.has && v.fps === next.fps && v.stale === next.stale && v.jpeg === next.jpeg && v.sound === next.sound && v.blocked === next.blocked ? v : next));
+      // Stopped while the camera is up and not paused: subscribe again — the room then
+      // starts this viewer's window over (besides its own probes and our trailing ack),
+      // so "it picks up again by itself" stays true.
+      const f = fallbackRef.current;
+      // Not while hidden or with relay data used up: then no pictures come on purpose (sound only).
+      if (next.stale && camLiveRef.current && f.relay && f.dev && gateRef.current.isShown && !fairOutRef.current && now - askedAt >= 8000) {
+        askedAt = now;
+        sendRelay(f.dev, f.early);
+      }
+    }, 1000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayOn]);
 
   useEffect(() => {
     wakeRef.current.onChange = setWake;
@@ -664,11 +1031,15 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     if (!v) return;
     const on = () => setPip(true);
     const off = () => setPip(false);
+    // Safari's own pop-out (presentation mode) says so with an event of its own.
+    const mode = () => setPip((v as HTMLVideoElement & { webkitPresentationMode?: string }).webkitPresentationMode === 'picture-in-picture');
     v.addEventListener('enterpictureinpicture', on);
     v.addEventListener('leavepictureinpicture', off);
+    v.addEventListener('webkitpresentationmodechanged', mode);
     return () => {
       v.removeEventListener('enterpictureinpicture', on);
       v.removeEventListener('leavepictureinpicture', off);
+      v.removeEventListener('webkitpresentationmodechanged', mode);
     };
   }, [hasVideo]);
 
@@ -680,6 +1051,9 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       v.muted = !on;
       if (on) void v.play().catch(() => undefined);
     }
+    // The relay's sound plays through an AudioContext: phones start it only from a
+    // tap — so it's made and started now, even before the relay is in use.
+    if (on) relayDecRef.current?.prepareSound();
     cuesRef.current.unlock();
   };
 
@@ -717,10 +1091,12 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     if (!link || !cam || talk !== 'off') return talk === 'on';
     setTalk('starting');
     if (muted) listen(true); // two-way: hear the nursery while you talk
-    sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: true } });
+    sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: true, vid: link.vid } });
+    toldRef.current.talk = true;
     const track = await link.startTalk();
     if (!track) {
-      sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: false } });
+      sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: false, vid: link.vid } });
+      toldRef.current.talk = false;
       setTalk('off');
       push('Microphone unavailable — allow it for this site to talk to the nursery', { icon: 'alert' });
       return false;
@@ -737,7 +1113,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   const stopTalk = async () => {
     stopMicMeter();
     await linkRef.current?.stopTalk();
-    if (cam) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: false } });
+    if (cam) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'talk', v: { on: false, vid: linkRef.current?.vid } });
+    if (sockRef.current?.open) toldRef.current.talk = false;
     setTalk('off');
     if (videoRef.current) videoRef.current.muted = muted;
   };
@@ -762,7 +1139,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       await link.stopVideo();
       call.stream.getTracks().forEach((t) => t.stop());
       setCall(null);
-      sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'video', v: { on: false } });
+      sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'video', v: { on: false, vid: link.vid } });
+      if (sockRef.current?.open) toldRef.current.video = false;
       return;
     }
     const s = await link.startVideo(facing);
@@ -772,13 +1150,18 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
     }
     call?.stream.getTracks().forEach((t) => t.stop());
     setCall({ stream: s, facing });
-    sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'video', v: { on: true } });
+    sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'video', v: { on: true, vid: link.vid } });
+    toldRef.current.video = true;
     if (talk === 'off') void startTalk({ duplex: true }); // a video call is a call: mic on too
   };
 
   const setQ = (q: Quality) => {
+    // (Audio-only also stops the instant relay picture — see the [quality] effect.)
     setQuality(q);
-    if (cam) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'quality', v: { q } });
+    // Also sent with every new call's offer, so a reconnect starts at this quality.
+    if (linkRef.current) linkRef.current.quality = q;
+    // Straight to the camera on the data channel when it takes it there (nothing through our server).
+    if (cam && !linkRef.current?.sendQuality(q)) sockRef.current?.send({ t: 'cmd', to: cam.sid, c: 'quality', v: { q, vid: linkRef.current?.vid } });
   };
 
   const soothe = (on: boolean) => {
@@ -880,7 +1263,9 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
 
   /* ------------------------------------------------------------ derived */
   const now = Date.now();
-  const state: BabyState | 'offline' | 'unknown' = !cam ? 'unknown' : !camStatus ? 'unknown' : now - camStatus.at < 30_000 ? camStatus.st.state : 'offline';
+  // A screen just shown again gets a moment for fresh status (the camera sends it within 2 s) before an old one reads "offline".
+  const statusFresh = !!camStatus && (now - camStatus.at < 30_000 || now - shownAtRef.current < 8000);
+  const state: BabyState | 'offline' | 'unknown' = !cam ? 'unknown' : !camStatus ? 'unknown' : statusFresh ? camStatus.st.state : 'offline';
   const info = STATE_INFO[state];
   const today = useMemo(() => summarize(log, tl), [log, tl]);
   const soothingNow = camStatus?.st.soothing ?? null;
@@ -912,10 +1297,33 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
   }
 
   /* ---------------------------------------------------------- the stage */
+  // The relay picture covers the direct one until the direct one has drawn a frame.
+  const showRelay = relayOn && !!cam && relayView.has;
+  // The camera stepped every picture down because its processor is maxed out.
+  const enc = camStatus && state !== 'offline' && state !== 'unknown' ? camStatus.st.enc : null;
+  const busyCam = !!enc && linkState === 'connected' && quality !== 'audio' && (enc.p > 0 || enc.lim === 'cpu');
+  // What the relay pill says (honest: through our server, not end-to-end encrypted, never stored).
+  const relayFps = relayView.has && !relayView.stale && relayView.fps ? ` · ${relayView.fps} fps` : '';
+  const relayNoSound = relayView.has && !relayView.sound;
+  // Relay data used up (fair use): wherever this picture needs a relay, it is sound only (honest, not "stalled").
+  const relayDataOut = fair?.level === 'out' && !!cam && ((linkState === 'connected' && netPath === 'relay') || (relayOn && !relayEarly));
+  // What the sound controls say — never "Sound on" while relay sound waits for a tap.
+  const soundUi = soundControls({
+    muted,
+    hearable: !!cam && ((hasVideo && !showRelay) || (showRelay && !!relaySrc?.sound)),
+    relaySound: !!relaySrc?.sound,
+    blocked: !!relayView.blocked,
+  });
+  const relayTitle = relayEarly
+    ? 'A quick preview through our server while the encrypted direct connection starts — passed along in memory, never stored, not end-to-end encrypted.'
+    : `${relayFull
+        ? 'The camera phone already sends its picture directly to four people over the internet, so you’re watching through our server instead'
+        : 'Your network blocks a direct connection, so the picture and sound come through our server instead'} — passed along in memory, never stored, but not end-to-end encrypted like a direct connection.${relayNoSound ? ' This browser gets still pictures without live sound; alerts still arrive.' : ''} Direct video is retried in the background.`;
   const stage = (
     <div className={cx('mv-stage', night && 'night', glow && `glow-${glow}`)} ref={stageRef} data-tour="mv-stage">
-      <video ref={videoRef} autoPlay playsInline muted={muted} className={cx(!hasVideo && 'hidden')} />
-      {relayOn && relayUrl && <img src={relayUrl} alt="Nursery snapshot (low-bandwidth mode)" className="mv-relay" />}
+      <video ref={videoRef} autoPlay playsInline muted={muted} className={cx(!hasVideo && !relaySrc?.video && 'hidden')} />
+      {/* Relay frames draw straight into this canvas; shown only while on the relay (the <video> carries a copy for PiP and its sound). */}
+      <canvas ref={relayCanvasRef} className={cx('mv-relay', !showRelay && 'hidden')} role="img" aria-label="Nursery picture, through our server" />
       {call && <video ref={selfRef} className={cx('mv-self', call.facing === 'user' && 'mirror')} autoPlay playsInline muted />}
       {!cam && (
         <div className="mv-empty">
@@ -924,10 +1332,18 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           <span>On the phone in the nursery, open this nursery and tap “Be the camera”.</span>
         </div>
       )}
-      {cam && !hasVideo && !relayUrl && (
+      {cam && !hasVideo && !showRelay && !relayDataOut && (
         <div className="mv-empty">
           <div className="knock-dots" aria-hidden><span /><span /><span /></div>
-          <span>{linkState === 'failed' ? 'Your network blocks direct video — switching to low-bandwidth mode…' : quality === 'audio' ? 'Audio-only mode' : 'Connecting securely to the camera…'}</span>
+          <span>
+            {relayOn && !relayEarly
+              ? relayFull
+                ? 'The camera is already sending its picture directly to four people — getting yours through our server…'
+                : 'Your network blocks a direct connection — getting the picture through our server…'
+              : quality === 'audio'
+                ? 'Audio-only mode'
+                : 'Connecting securely to the camera…'}
+          </span>
         </div>
       )}
       {camStatus?.st.paused && state !== 'offline' ? (
@@ -939,10 +1355,20 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
               ? 'The camera phone locked its screen or left the app, so its video stopped. Open Stream Studio on that phone.'
               : 'The camera phone paused the video (a call or another app). Sound monitoring continues.'}
         </div>
-      ) : stalled && hasVideo && state !== 'offline' ? (
+      ) : relayDataOut && state !== 'offline' ? (
+        <div className="mv-paused" role="status">
+          <Icon name="volume" size={20} />
+          Relay data is used up, so the picture pauses on networks that block direct video. Sound and alerts are unchanged. On the same Wi-Fi as the camera, the picture stays.
+        </div>
+      ) : stalled && hasVideo && !showRelay && state !== 'offline' ? (
         <div className="mv-paused">
           <Icon name="videoOff" size={20} />
           The picture stopped updating — the camera phone may have locked its screen. Sound and alerts continue; check the camera phone.
+        </div>
+      ) : showRelay && relayView.stale && state !== 'offline' ? (
+        <div className="mv-paused" role="status">
+          <Icon name="pause" size={20} />
+          Picture paused — no new frames from the camera for a few seconds. Alerts still arrive; it picks up again by itself.
         </div>
       ) : null}
       <div className="mv-ov-tl">
@@ -952,21 +1378,34 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             <Icon name="gauge" size={11} />{camStatus.st.spl.cal ? '' : '≈'}{Math.round(camStatus.st.spl.db)} dB
           </span>
         )}
-        {relayOn && <span className="ov-pill">Low-bandwidth · 1 fps · no audio</span>}
+        {relayOn && cam && (relayView.has || !relayEarly) && (
+          <span className={cx('ov-pill mv-relay-pill', relayEarly && 'early')} title={relayTitle} aria-label={relayTitle}>
+            <Icon name={relayEarly ? 'zap' : 'cloud'} size={11} />
+            <span>{relayEarly ? 'Quick preview' : `${relayFull ? `Camera full · ${PATH_PILL.server.toLowerCase()}` : PATH_PILL.server}${relayFps}`}</span>
+            {!relayEarly && relayNoSound && <span className="extra"> · no sound</span>}
+          </span>
+        )}
+        {busyCam && (
+          <span className="ov-pill mv-busy-pill" role="status" title="The camera phone’s processor is maxed out (many viewers, or Smart vision), so it sends everyone a smaller picture to keep it smooth.">
+            <Icon name="gauge" size={11} />
+            <span className="full">Camera phone is busy — showing a smaller picture</span>
+            <span className="short" aria-hidden>Camera busy · smaller picture</span>
+          </span>
+        )}
         {linkState === 'connected' && (
-          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={netPath === 'lan' ? 'Straight over your home Wi-Fi — keeps working if the internet drops' : netPath === 'relay' ? 'Encrypted, through a relay server (your network blocks direct connections)' : 'Encrypted, device-to-device'}>
-            <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{netPath === 'lan' ? 'Home Wi-Fi' : netPath === 'relay' ? 'Encrypted · relay' : 'Encrypted · P2P'}</span>
+          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={pathTip(streamPathOf(netPath), id, me?.role === 'parent' && !guest)}>
+            <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{PATH_PILL[streamPathOf(netPath) ?? 'direct']}</span>
           </span>
         )}
       </div>
       <div className="mv-ov-tr">
         <button className="mv-mini" onClick={() => setNight((v) => !v)} aria-pressed={night} aria-label="Night view" title="Night view"><Icon name="moon" size={16} /></button>
-        {hasVideo && canPip() && (
+        {(hasVideo || relaySrc?.video) && canPip() && (
           <button className="mv-mini" onClick={() => void togglePip()} aria-pressed={pip} aria-label="Pop out the video" title="Pop out — keep watching in other apps"><Icon name="layers" size={16} /></button>
         )}
         <button className="mv-mini" onClick={fullscreen} aria-label="Fullscreen" title="Fullscreen"><Icon name="maximize" size={16} /></button>
       </div>
-      {cam && muted && hasVideo && (
+      {soundUi.tap && (
         <button className="mv-listen" onClick={() => listen(true)}><Icon name="volume" size={18} />Tap to hear the nursery</button>
       )}
       {(talk === 'on' || others) && (
@@ -976,8 +1415,8 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
         </div>
       )}
       <div className="mv-controls">
-        <button className={cx('mv-round', !muted && 'on')} onClick={() => listen(muted)} aria-label={muted ? 'Listen' : 'Mute nursery sound'} aria-pressed={!muted}>
-          <Icon name={muted ? 'volumeOff' : 'volume'} size={20} /><span>{muted ? 'Listen' : 'Sound on'}</span>
+        <button className={cx('mv-round', soundUi.on && 'on')} onClick={() => listen(!soundUi.on)} aria-label={soundUi.on ? 'Mute nursery sound' : 'Listen'} aria-pressed={soundUi.on}>
+          <Icon name={soundUi.on ? 'volume' : 'volumeOff'} size={20} /><span>{soundUi.on ? 'Sound on' : 'Listen'}</span>
         </button>
         {canAct && cam && (
           <button
@@ -1289,7 +1728,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             }
           : null
       }
-      muted={muted}
+      muted={!soundUi.on}
       canAct={canAct}
       talking={talk === 'on'}
       wake={wake}
@@ -1307,7 +1746,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
       {takeover}
       <div className="mv-top">
         {!guest && <button className="iconbtn" onClick={() => nav.nursery(id)} aria-label="Back"><Icon name="arrowLeft" size={17} /></button>}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="mv-top-id" style={{ flex: 1, minWidth: 0 }}>
           <div className="mv-title">{nursery.name}{guest && <span className="pill-guest sm">Guest</span>}</div>
           <div className="faint" style={{ fontSize: 12 }}>
             {sock === 'connected' ? `${getDevice().name} · ${me ? ROLE_INFO[me.role].label : ''}` : sock === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
@@ -1327,6 +1766,17 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             <Icon name="moon" size={15} /><span>Bedside</span>
           </button>
         </div>
+        <button
+          type="button"
+          className="iconbtn mv-invite"
+          onClick={() => openInvite(id)}
+          data-tour="mv-invite"
+          aria-label={`${me?.role === 'parent' && !guest ? 'Invite and people' : 'People'} (${viewers.length} watching)`}
+          title={me?.role === 'parent' && !guest ? 'Invite family — add someone or share a link' : 'Who’s watching'}
+        >
+          <Icon name={me?.role === 'parent' && !guest ? 'userPlus' : 'users'} size={17} />
+          {viewers.length > 0 && <span className="mv-invite-badge" aria-hidden>{viewers.length}</span>}
+        </button>
         <HelpButton />
       </div>
       {alertStack}
@@ -1388,7 +1838,7 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
             onAck={ackIncident}
             onResolve={resolveIncident}
             onDuty={(on) => sockRef.current?.send({ t: 'duty', on, hours: 12 })}
-            onZones={() => (hasVideo ? setZoneEdit(true) : push('Wait for the live picture, then mark the zones', { icon: 'info' }))}
+            onZones={() => (hasVideo || relaySrc?.video ? setZoneEdit(true) : push('Wait for the live picture, then mark the zones', { icon: 'info' }))}
             compact={view === 'monitor'}
           />
           {view === 'monitor' ? (
@@ -1405,26 +1855,28 @@ function ViewerInner({ id, nav, push, guest, onLeave }: { id: string; nav: Nav; 
           {timeline}
           {activity}
           {alertsCard}
-          {!guest && <NurserySettings nid={id} nurseryName={nursery.name} role={me?.role ?? null} settings={settings} send={(msg) => sockRef.current?.send(msg)} push={push} />}
+          {!guest && (
+            <NurserySettings
+              nid={id}
+              nurseryName={nursery.name}
+              role={me?.role ?? null}
+              settings={settings}
+              send={(msg) => sockRef.current?.send(msg)}
+              push={push}
+              people={{ summary: shareSummary(share), onInvite: () => openInvite(id) }}
+              query={query}
+            />
+          )}
           <PeopleCard
-            nid={id}
             me={me}
             guest={!!guest}
             viewers={viewers}
             share={share}
-            shareErr={shareErr}
-            baby={baby}
-            nurseryName={nursery.name}
-            send={(msg) => {
-              setShareErr(null);
-              sockRef.current?.send(msg);
-            }}
-            push={push}
+            send={(msg) => sockRef.current?.send(msg)}
+            onInvite={(tab) => openInvite(id, tab)}
             onLeave={() => {
-              if (window.confirm('Leave this nursery? You’ll need the link and passcode to come back.')) {
-                sockRef.current?.send({ t: 'bye' });
-                onLeave?.();
-              }
+              sockRef.current?.send({ t: 'bye' });
+              onLeave?.();
             }}
           />
           </>

@@ -19,6 +19,8 @@ See `COST_RUNBOOK.md` for the optimization playbook.
 Browser
   → Cloudflare Pages: dreamstreamstudio.ai                                 [frontend, ~free]
       (comic2.pages.dev + www 301 to it; previews <hash>.comic2.pages.dev serve)
+      + stream.dreamstreamstudio.ai = Stream Studio's own host (same Pages project;
+        every page → live.html; /api/* + /live-api/* routed as below) — §2a
   → /api/*  →  dreamstream-api Worker  →  Backend Container (Express)     [billed only while awake]
                   (BACKEND_TARGET=origin → Railway instead: dormant fallback)
                   backend → Supabase  (Postgres + Auth + Storage)          [free tier]
@@ -98,8 +100,8 @@ All 4 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 
 | Worker | Repo dir | Route | Bindings | Purpose |
 |---|---|---|---|---|
-| **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*` (+ `dreamstream-api.akhieleshsrirangam.workers.dev`) | **Container** `Backend` via DO `BACKEND`; D1 `BACKEND_ENV` → `dreamstream-backend-env` (secrets); D1 `AGENT_DB` → `akhielesh-portfolio-analytics` (agent log only); vars `BACKEND_TARGET` (`container`\|`origin`), `BACKEND_ORIGIN` (Railway, dormant) + the backend's non-secret config | Same-origin front door **and host** of the Express backend: forwards `/api/*` to the single `Backend` container instance (`src/backend.ts`; boots on demand, sleeps after 15 min idle); sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); retryable 503 JSON while the container starts or if it can't. Every string var/secret on the Worker (except `BACKEND_*`) becomes container env, merged over the D1 rows (`src/backendEnv.ts`). Also the **AI-agent gate** (2026-10): answers `/api/agent-gate` (check-in page) and `/api/agent-gate/checkin` (50 questions / answers) itself, and returns 403 to known AI agents on every other `/api/*` — so agents never reach or wake the backend. Visits + answers are logged to `agent_visits` / `agent_checkins` with `site = dreamstreamstudio.ai`. |
-| **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), DO `MONITOR_ROOM` (`MonitorRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), vars `ALLOWED_ORIGINS`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`; optional secrets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling; creating an event requires a signed-in Live member (Supabase RPC check). MonitorRoom DO = the **baby monitor** (2026-10): P2P WebRTC signaling between a camera device and viewers (video never touches the server and is never recorded), sound/vision/offline alerts, incidents with on-duty routing + escalation, sleep tracking, Web Push (VAPID keys generated and kept in the DO), history in the DO's own SQLite (events 90 d, per-minute sound/motion rows 31 d, incidents, sleep sessions) and `GET /api/monitor/:nid/export` (CSV, bearer token); every socket is authorised against `monitor_my_role` in Supabase. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
+| **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*`, `stream.dreamstreamstudio.ai/api/*` (+ `dreamstream-api.akhieleshsrirangam.workers.dev`) | **Container** `Backend` via DO `BACKEND`; D1 `BACKEND_ENV` → `dreamstream-backend-env` (secrets); D1 `AGENT_DB` → `akhielesh-portfolio-analytics` (agent log only); vars `BACKEND_TARGET` (`container`\|`origin`), `BACKEND_ORIGIN` (Railway, dormant) + the backend's non-secret config | Same-origin front door **and host** of the Express backend: forwards `/api/*` to the single `Backend` container instance (`src/backend.ts`; boots on demand, sleeps after 15 min idle); sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); retryable 503 JSON while the container starts or if it can't. Every string var/secret on the Worker (except `BACKEND_*`) becomes container env, merged over the D1 rows (`src/backendEnv.ts`). Also the **AI-agent gate** (2026-10): answers `/api/agent-gate` (check-in page) and `/api/agent-gate/checkin` (50 questions / answers) itself, and returns 403 to known AI agents on every other `/api/*` — so agents never reach or wake the backend. Visits + answers are logged to `agent_visits` / `agent_checkins` with `site = dreamstreamstudio.ai`. |
+| **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*`, `stream.dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), DO `MONITOR_ROOM` (`MonitorRoom`), DO `USER_LINE` (`UserLine`), DO `CALL_ROOM` (`CallRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), vars `ALLOWED_ORIGINS`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`; optional secrets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling; creating an event requires a signed-in Live member (Supabase RPC check). MonitorRoom DO = the **baby monitor** (2026-10): P2P WebRTC signaling between a camera device and viewers (video goes device to device and is never recorded; only when P2P can't connect does a low-rate relay picture pass through the DO's memory, never stored), family calls (2026-10: lines per nursery, plus `UserLine` per member and `CallRoom` per direct call — DO migration v3), sound/vision/offline alerts, incidents with on-duty routing + escalation, sleep tracking, Web Push (VAPID keys generated and kept in the DO), history in the DO's own SQLite (events 90 d, per-minute sound/motion rows 31 d, incidents, sleep sessions) and `GET /api/monitor/:nid/export` (CSV, bearer token); every socket is authorised against `monitor_my_role` in Supabase. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
 | **dreamstream-email** | `email-worker/` | none (`*.workers.dev`) | `send_email` binding `EMAIL`, secrets `EMAIL_HMAC_SECRET` + `SUPABASE_AUTH_HOOK_SECRET`, vars `EMAIL_FROM`/`SUPABASE_VERIFY_URL`/brand | Transactional email. `POST /send` (HMAC `x-email-signature`); `POST /auth-hook` = Supabase Send Email Hook (Standard Webhooks sig). Caps live in backend config (200/day, 2500/mo). |
 | **dreamstream-data-egress** | `data-egress/` | `dreamstreamstudio.ai/egress/*` | optional secret `EGRESS_SHARED_SECRET` | HTTPS GET relay for **exactly 3 allowlisted hosts** (Yahoo Finance, Stooq, Treasury FiscalData) when the backend's datacenter IP is blocked. `x-egress-key` equality gate. Load-bearing for finance widgets. |
 
@@ -113,7 +115,51 @@ All 4 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 > frontends (`https://dreamstreamstudio.ai,https://comic2.pages.dev`) on 2026-06-16
 > (security finding H4). Append any new custom/preview origin that needs the live API.
 > `comic2.pages.dev` stays only for tabs opened before that host started redirecting
-> (2026-10-22); drop it in a later cleanup.
+> (2026-10-22); drop it in a later cleanup. `https://stream.dreamstreamstudio.ai` added
+> 2026-10-22 (Stream Studio's own host, §2a).
+
+### 2a. Stream Studio host — `stream.dreamstreamstudio.ai`
+
+Stream Studio (the live app: `live.html` + `live/**`) gets its own address, like Atlas
+(`atlas.dreamstreamstudio.ai`). **One switch:** `STREAM_HOST_ON` in `shared/streamHost.ts`,
+read by the Pages middleware, both apps, the backend and the email Worker. Details and the
+sign-in handoff: `docs/features/accounts-and-access.md` § One address per app.
+
+| Piece | Where | Needs the switch? |
+|---|---|---|
+| Host serves the app at `/` (rewrite to `live.html` via `env.ASSETS`), `/live*` → `/`, `www.stream` → host, agent gate | `functions/_middleware.ts` | no — works as soon as the domain is attached |
+| `stream.dreamstreamstudio.ai/api/*` → `dreamstream-api`; `/live-api/*` → `dreamstream-live` | `api-proxy/wrangler.jsonc`, `live-worker/wrangler.jsonc` (deployed by CI) | no |
+| CORS / origin trust | `CORS_ORIGIN` (api-proxy vars), live `ALLOWED_ORIGINS`; `isAllowedOrigin` already trusts `*.dreamstreamstudio.ai` | no |
+| Apex `/live`, `/live/`, `/live.html` 301 → host (1-day cache); `/live-api/*`, `/api/*`, `/assets/*`, `/live-sw.js`, manifest stay | `functions/_middleware.ts` | **yes** |
+| Links, "Your studios", invites, Stream Studio auth emails point at the host; `POST /api/auth/handoff` answers | `services/liveLink.ts`, `server/src/services/studioAccess.ts`, `authEmailLinks.ts`, `routes/authHandoff.ts` | **yes** |
+
+**Flip order (owner, then lead):**
+1. Owner: Cloudflare → Workers & Pages → the Pages project (`comic2`) → Custom domains →
+   add `stream.dreamstreamstudio.ai` (creates the DNS record + certificate).
+2. Owner: delete the retired `dreamstream-studio` Worker and its `*.dreamstreamstudio.ai/*`
+   route (today it answers the host with a 302 to the root).
+3. Owner: Google Cloud → the Web OAuth client → Authorized JavaScript origins → add
+   `https://stream.dreamstreamstudio.ai` (Drive uploads from Stream Studio;
+   `docs/connectors/google-setup.md`). Supabase → Auth → URL Configuration → Redirect URLs →
+   add `https://stream.dreamstreamstudio.ai/**` (not needed for our token-hash links, but
+   keeps GoTrue from falling back to the Site URL for any `redirectTo`). If Turnstile's widget
+   lists hostnames explicitly, make sure the host is covered.
+4. Lead: `npm run ops:live-smoke:stream-host` — all PASS (app shell, bundle, `/live.html?e=` →
+   `/?e=`, live worker JSON, API health). **Blocker before the flip:** devices that turned alerts on
+   at `dreamstreamstudio.ai/live` keep that subscription, so turning alerts on again at the new
+   host would deliver each alert twice, and signing out on the new host wouldn't stop the old
+   one. Ship the de-duplication first (the server replaces an account's older subscription from
+   the same device, or the new host clears the old `/live` registration on enable and sign-out).
+5. Lead: set `STREAM_HOST_ON = true` in `shared/streamHost.ts`, ship (Pages + backend +
+   email Worker redeploy from the same push), then `npm run ops:live-smoke` (now includes the
+   host and expects the apex 301s).
+Undo: set it back to `false` and ship; browsers forget the apex 301 within a day.
+
+Known limits: one handoff runs per page (`services/liveLink.ts` `once`), because each handoff
+link replaces the account's previous one-time token — so a handoff also cancels a password-reset
+or magic link the person had outstanding (they can request a new one). `?next=` only ever
+follows a path on the same site or, with the switch on, Stream Studio's address
+(`services/safeNext.ts`; control characters and backslashes are refused).
 
 ---
 
@@ -331,4 +377,5 @@ no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 | 2026-10-20 | Baby monitor v2: on-device AI sound model served from Pages (`/models/*`, excluded from Pages Functions), MonitorRoom sound events / video-call commands / per-category push kinds. No new paid resources. |
 | 2026-10-21 | Baby monitor guests + tracker: MonitorRoom SQLite gains `mon_shares` / `mon_guests` (share link + PBKDF2 passcode, hashed guest passes) and `mon_track` (baby tracker, 3-year retention); new public route `POST /api/monitor/:nid/guest` (rate-limited, lockouts inside the room). No new paid resources. |
 | 2026-10-21 | Baby monitor v3: MonitorRoom moved its log from KV-style storage to its SQLite (`monitorStore.ts`: events, minutes, incidents, sleep; one-time migration of the old log), DO alarm drives incident escalation + retention purge, new `/api/monitor/:nid/export` route, `public/keep-awake.mp4` (2 KB) for the screen-on fallback. No new paid resources (DO SQLite storage is within the plan's included storage). |
+| 2026-10-22 | **Stream Studio host** `stream.dreamstreamstudio.ai` prepared (§2a): middleware serves it, Worker routes `stream.dreamstreamstudio.ai/api/*` + `/live-api/*`, CORS/`ALLOWED_ORIGINS`, `POST /api/auth/handoff`; apex `/live*` 301 behind `STREAM_HOST_ON` (off until the domain is attached). No new paid resources. |
 | 2026-10-22 | **Code Studio retired** (ADR 0005): `dreamstream-studio` Worker (Container `Sandbox`, `standard-3`, `*.dreamstreamstudio.ai/*`) removed from the repo with its deploy workflow and `STUDIO_WORKER_URL`; owner deletes the deployed Worker + route + `STUDIO_HMAC_SECRET`. Ventures set admin-only with no tick loop (`VENTURES_ENABLED`/`VENTURES_PILOT_INLINE` = `false`). Workers Paid stays (backend container). |

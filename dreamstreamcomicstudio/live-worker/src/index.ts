@@ -1,5 +1,5 @@
 /**
- * dreamstream-live — API worker for DreamStream Live.
+ * dreamstream-live — API worker for Stream Studio.
  *
  * Delivery rail: the streamer's browser uploads short self-contained media
  * segments here; they land in R2 (zero egress fees) and viewers fetch them
@@ -11,7 +11,7 @@
  *   POST /api/events                       create an event → { id, hostKey }
  *   GET  /api/events/:id                   public event meta
  *   GET  /api/events/:id/ws                WebSocket → EventRoom
- *   POST /api/events/:id/segments?seq&ms   host uploads one segment (binary body)
+ *   POST /api/events/:id/segments?seq&ms   host uploads one segment (binary body; one DO request: /ingest)
  *   GET  /api/events/:id/segments/:seq     viewers fetch a segment (CDN-cached)
  *   GET  /api/events/:id/stats?k=hostKey   host-gated analytics + activity log
  *   POST /api/events/:id/rsvp              name-only "save my spot" from invites
@@ -22,30 +22,43 @@
  *   GET  /api/monitor/:nurseryId/export    CSV history (Authorization: Bearer; parents & caregivers)
  *   POST /api/monitor/:nurseryId/guest     share link + passcode → guest pass (no account)
  *
+ * Direct calls (Calls → search → call anyone on Stream Studio):
+ *   GET  /api/calls/u/:userId/ws           WebSocket → that member's UserLine (auth = first frame, own token)
+ *   GET  /api/calls/c/:callId/ws           WebSocket → the call's CallRoom (auth = first frame, call ticket)
+ *   (Nothing else under /api/calls: the Durable Objects' /x/* endpoints are internal.)
+ *
  * Creating an event requires a signed-in Stream Studio member (welcome-code
  * gated; verified against Supabase with the caller's own token). Watching
  * never needs an account.
  */
 
+import { CallRoom } from './callRoom';
+import { CLOUD_COPY_PART_BYTES, cloudCopyUsageFor, copyCompleteRoom, copyPartRoom, oversizeCopy, startCloudCopy, usageBody } from './cloudCopyQuota';
+import { userLineName } from './directCalls';
 import { EventRoom } from './eventRoom';
 import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
 import { bearerFrom, verifyMember } from './supabaseAuth';
+import { UserLine } from './userLine';
 
-export { EventRoom, MonitorRoom };
+export { CallRoom, EventRoom, MonitorRoom, UserLine };
 
 export interface Env {
   EVENT_ROOM: DurableObjectNamespace;
   MONITOR_ROOM: DurableObjectNamespace;
+  /** Direct calls: one line per member, one room per call. */
+  USER_LINE: DurableObjectNamespace;
+  CALL_ROOM: DurableObjectNamespace;
   LIVE_BUCKET: R2Bucket;
   ALLOWED_ORIGINS: string;
   SUPABASE_URL?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
+  /** Workers Analytics Engine dataset `stream_usage` (optional): Stream Studio usage points (usageMeter.ts). */
+  STREAM_USAGE?: AnalyticsEngineDataset;
 }
 
 const MAX_SEGMENT_BYTES = 32 * 1024 * 1024; // hard cap; ~6.8 Mbps * 10 s is well under this
-const MAX_REC_PART_BYTES = 64 * 1024 * 1024; // multipart recording upload part ceiling
 
 /** Host-key gate shared by the recording routes (the DO owns the key). */
 async function authHost(env: Env, id: string, key: string | null): Promise<boolean> {
@@ -54,6 +67,51 @@ async function authHost(env: Env, id: string, key: string | null): Promise<boole
     new Request('https://room.internal/auth', { headers: { 'x-host-key': key } }),
   );
   return res.status === 204;
+}
+
+/**
+ * Host passes (feature doc §7 C10): a host key the room has confirmed for an event, remembered by
+ * this isolate as its SHA-256, so the next segments skip the room's `/auth` (a billed DO request
+ * per segment, 600 a stream-hour). A pass never makes a key valid:
+ *   - only the room's yes is remembered — a wrong or old key is asked about every time, and is
+ *     refused before anything is written to R2;
+ *   - the room's `/ingest` still checks the key on every segment, and a refusal there drops the
+ *     pass and the stored segment (so a key the room stopped accepting gets at most one segment
+ *     into R2 per isolate, never to a viewer);
+ *   - each `/ingest` yes renews it; unused, it lapses after HOST_PASS_TTL_MS.
+ */
+const HOST_PASS_TTL_MS = 10 * 60_000;
+const HOST_PASS_MAX = 512;
+const hostPasses = new Map<string, { h: string; until: number }>();
+
+/** Test hook. */
+export function resetHostPasses(): void {
+  hostPasses.clear();
+}
+
+async function keyHash(key: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)));
+  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function sameHash(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function hasHostPass(id: string, key: string, now: number): Promise<boolean> {
+  const p = hostPasses.get(id);
+  if (!p || p.until <= now) return false;
+  return sameHash(p.h, await keyHash(key));
+}
+
+async function grantHostPass(id: string, key: string, now: number): Promise<void> {
+  const h = await keyHash(key);
+  hostPasses.delete(id); // re-insert: the Map's order is the eviction order (oldest first)
+  hostPasses.set(id, { h, until: now + HOST_PASS_TTL_MS });
+  while (hostPasses.size > HOST_PASS_MAX) hostPasses.delete(hostPasses.keys().next().value as string);
 }
 
 const json = (data: unknown, status = 200, extra: Record<string, string> = {}) =>
@@ -123,7 +181,8 @@ export default {
             new Request(`https://monitor.internal/guest?nid=${mon[1]}`, {
               method: 'POST',
               body,
-              headers: { 'content-type': 'application/json', 'cf-connecting-ip': req.headers.get('cf-connecting-ip') ?? '' },
+              // A signed-in person's own token (optional): the room asks Supabase who they are.
+              headers: { 'content-type': 'application/json', 'cf-connecting-ip': req.headers.get('cf-connecting-ip') ?? '', authorization: req.headers.get('authorization') ?? '' },
             }),
           );
           return withCors(new Response(res.body, { status: res.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), cors);
@@ -136,6 +195,25 @@ export default {
         }
       } catch (err) {
         console.error('monitor route error', err);
+        return withCors(json({ error: 'internal error' }, 500), cors);
+      }
+      return withCors(json({ error: 'not found' }, 404), cors);
+    }
+
+    // ---------------------------------------------------------- direct calls
+    // Strict: a member's line or a call's room, sockets only.
+    if (pathname.startsWith('/api/calls/')) {
+      const line = pathname.match(/^\/api\/calls\/u\/([0-9a-f-]{36})\/ws$/);
+      const call = pathname.match(/^\/api\/calls\/c\/([0-9a-f]{16})\/ws$/);
+      try {
+        if (line && UUID_RE.test(line[1]) && env.USER_LINE) {
+          return env.USER_LINE.get(env.USER_LINE.idFromName(userLineName(line[1]))).fetch(new Request(`https://line.internal/ws?uid=${line[1]}`, req));
+        }
+        if (call && env.CALL_ROOM) {
+          return env.CALL_ROOM.get(env.CALL_ROOM.idFromName(call[1])).fetch(new Request(`https://call.internal/ws?id=${call[1]}`, req));
+        }
+      } catch (err) {
+        console.error('calls route error', err);
         return withCors(json({ error: 'internal error' }, 500), cors);
       }
       return withCors(json({ error: 'not found' }, 404), cors);
@@ -210,9 +288,10 @@ export default {
 
       // /api/events/:id/recordings — host's server-side recording store.
       // Multipart upload (R2) so multi-GB masters fit through Worker limits:
-      //   POST ?op=init {file,mime}            → { key, uploadId }
-      //   PUT  ?op=part&key&uploadId&n=…       → { partNumber, etag }
-      //   POST ?op=complete {key,uploadId,parts,file,bytes,mime,durMs}
+      //   POST ?op=init {file,mime,bytes}      → { key, uploadId, partBytes, quota } (Bearer; 10 GB/account fair use)
+      //   GET  ?op=quota&k=hostKey[&bytes=N]   → { usedBytes, limitBytes, copies, nextFreeAt, retryBytes } (Bearer)
+      //   PUT  ?op=part&key&uploadId&n=…       → { partNumber, etag }  (must fit the size reserved at init)
+      //   POST ?op=complete {key,uploadId,parts,file,mime,durMs} (R2's real size is checked and registered)
       //   GET  ?k=hostKey                      → { recordings, expiresAt }
       //   GET  ?k=hostKey&download=<key>       → the file (attachment)
       if (sub === 'recordings') {
@@ -221,6 +300,10 @@ export default {
 
         if (req.method === 'GET') {
           if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
+          if (op === 'quota') {
+            const q = await cloudCopyUsageFor(env, req, { eventId: id, bytes: url.searchParams.get('bytes') }, Date.now(), (p) => ctx.waitUntil(p));
+            return withCors(q.ok ? json(usageBody(q.usage, q.retryBytes), 200, { 'cache-control': 'no-store' }) : json(q.body, q.status), cors);
+          }
           const download = url.searchParams.get('download');
           if (download) {
             if (!download.startsWith(`events/${id}/rec/`)) return withCors(json({ error: 'bad key' }, 400), cors);
@@ -244,24 +327,33 @@ export default {
         if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
 
         if (req.method === 'POST' && op === 'init') {
-          const { file, mime } = (await req.json().catch(() => ({}))) as { file?: string; mime?: string };
-          const safe = String(file ?? 'recording.webm').replace(/[^\w.-]/g, '_').slice(0, 80);
-          const key = `events/${id}/rec/${Date.now()}-${safe}`;
-          const upload = await env.LIVE_BUCKET.createMultipartUpload(key, {
-            httpMetadata: { contentType: String(mime ?? 'video/webm') },
-          });
-          return withCors(json({ key, uploadId: upload.uploadId }), cors);
+          const { file, mime, bytes } = (await req.json().catch(() => ({}))) as { file?: string; mime?: string; bytes?: number };
+          // Fair use (ADR 0007 D5): 10 GB of 7-day copies per account, rolling, on server truth
+          // (cloudCopyQuota.ts). Honest error, nothing stored; on yes the size is reserved and
+          // the upload's key carries it, so every part and the final object are held to it.
+          const started = await startCloudCopy(env, req, { eventId: id, bytes, file, mime }, Date.now(), (p) => ctx.waitUntil(p));
+          if (!started.ok) return withCors(json(started.body, started.status), cors);
+          return withCors(
+            json({ key: started.key, uploadId: started.uploadId, partBytes: CLOUD_COPY_PART_BYTES, quota: usageBody(started.usage) }),
+            cors,
+          );
         }
 
         if (req.method === 'PUT' && op === 'part') {
           const key = url.searchParams.get('key') ?? '';
           const uploadId = url.searchParams.get('uploadId') ?? '';
           const n = Number(url.searchParams.get('n'));
-          if (!key.startsWith(`events/${id}/rec/`) || !uploadId || !Number.isFinite(n) || n < 1) {
+          if (!key.startsWith(`events/${id}/rec/`) || !uploadId || !Number.isInteger(n) || n < 1) {
             return withCors(json({ error: 'bad part request' }, 400), cors);
           }
+          // Server truth: the parts together can never hold more than the size reserved at init.
+          const room = copyPartRoom(id, key, n);
+          if (!room.ok) return withCors(json(room.body, room.status), cors);
+          if (Number(req.headers.get('content-length')) > room.maxBytes) {
+            return withCors(json({ error: 'part size out of bounds' }, 413), cors);
+          }
           const body = await req.arrayBuffer();
-          if (body.byteLength === 0 || body.byteLength > MAX_REC_PART_BYTES) {
+          if (body.byteLength === 0 || body.byteLength > room.maxBytes) {
             return withCors(json({ error: 'part size out of bounds' }, 413), cors);
           }
           const upload = env.LIVE_BUCKET.resumeMultipartUpload(key, uploadId);
@@ -283,11 +375,29 @@ export default {
           if (!key.startsWith(`events/${id}/rec/`) || !body.uploadId || !Array.isArray(body.parts)) {
             return withCors(json({ error: 'bad complete request' }, 400), cors);
           }
+          const room = copyCompleteRoom(id, key);
+          if (!room.ok) return withCors(json(room.body, room.status), cors);
           const upload = env.LIVE_BUCKET.resumeMultipartUpload(key, body.uploadId);
-          await upload.complete(body.parts);
+          let stored: R2Object;
+          try {
+            stored = await upload.complete(body.parts);
+          } catch {
+            // Replaced by a newer try of the same recording, expired, or parts missing.
+            return withCors(
+              json({ error: 'upload_gone', message: 'This 7-day copy couldn’t be finished — start it again. Your recording is still on this device.' }, 409),
+              cors,
+            );
+          }
+          // R2's own size, not the app's: over the reservation → not kept.
+          if (stored.size > room.reserved) {
+            await env.LIVE_BUCKET.delete(key);
+            const over = oversizeCopy(stored.size, room.reserved);
+            return withCors(json(over.body, over.status), cors);
+          }
           const res = await roomCall(env, id, '/rec/register', {
             method: 'POST',
-            body: JSON.stringify({ key, file: body.file, bytes: body.bytes, mime: body.mime, durMs: body.durMs }),
+            // `stored`: what R2 really holds (usage + the host's list), not what the client said.
+            body: JSON.stringify({ key, file: body.file, bytes: stored.size, stored: stored.size, mime: body.mime, durMs: body.durMs }),
             headers: { 'content-type': 'application/json', 'x-host-key': hostKey ?? '' },
           });
           if (!res.ok) return withCors(res, cors);
@@ -305,11 +415,14 @@ export default {
         if (!Number.isFinite(seq) || seq <= 0) return withCors(json({ error: 'bad seq' }, 400), cors);
 
         // Cost/security guardrail: reject forged segment uploads before reading
-        // their body or writing bytes to R2. The ingest call below still records
-        // the segment after storage succeeds, but this cheap DO auth gate keeps a
-        // bad host key from turning public event IDs into R2 write amplification.
-        if (!(await authHost(env, id, hostKey))) {
-          return withCors(json({ error: 'forbidden' }, 403), cors);
+        // their body or writing bytes to R2, so a bad host key can't turn public
+        // event IDs into R2 write amplification. The room's /auth answers that
+        // once per isolate (a host pass, above); /ingest below re-checks the key
+        // on every segment after storage succeeds.
+        if (!hostKey) return withCors(json({ error: 'forbidden' }, 403), cors);
+        if (!(await hasHostPass(id, hostKey, Date.now()))) {
+          if (!(await authHost(env, id, hostKey))) return withCors(json({ error: 'forbidden' }, 403), cors);
+          await grantHostPass(id, hostKey, Date.now());
         }
 
         const bytes = await req.arrayBuffer();
@@ -322,13 +435,15 @@ export default {
 
         const res = await roomCall(env, id, '/ingest', {
           method: 'POST',
-          body: JSON.stringify({ seq, ms, at: Date.now(), mime: contentType }),
+          body: JSON.stringify({ seq, ms, at: Date.now(), mime: contentType, bytes: bytes.byteLength }),
           headers: { 'content-type': 'application/json', 'x-host-key': hostKey },
         });
         if (!res.ok) {
+          hostPasses.delete(id); // the room said no: ask it again next time, before R2
           ctx.waitUntil(env.LIVE_BUCKET.delete(key)); // defensive cleanup if the room rejects after storage
           return withCors(res, cors);
         }
+        await grantHostPass(id, hostKey, Date.now()); // the room just confirmed the key again
         return withCors(json({ ok: true, seq }), cors);
       }
 

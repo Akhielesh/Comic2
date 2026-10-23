@@ -56,6 +56,30 @@ export interface CamStatus {
     near: string[];
     adult: boolean;
   } | null;
+  /** The camera phone's video encoder right now (see CameraHub.telemetry). */
+  enc?: EncStatus | null;
+}
+
+/** Why an encoder is holding back: the phone's processor, the network, or nothing. */
+export type EncLimit = 'cpu' | 'bandwidth' | 'other' | 'none';
+
+export interface EncStatus {
+  /** Viewers connected peer-to-peer. */
+  peers: number;
+  /** Frames per second actually sent (slowest viewer), null before the first reading. */
+  fps: number | null;
+  /** Worst limitation across the viewers. */
+  lim: EncLimit | null;
+  /** Encoder in use, e.g. "MediaCodec" / "VideoToolbox" (hardware) or "libvpx" / "OpenH264" (software). */
+  impl: string | null;
+  /** Width of the largest picture sent, px. */
+  w: number | null;
+  /** Rungs the camera stepped down because the phone is busy (0 = full quality). */
+  p: number;
+  /** Relay pictures per second (0 = off). */
+  relay: number;
+  /** What the relay sends: a video codec, or JPEG (absent from older cameras). */
+  rc?: 'avc' | 'vp8' | 'vp9' | 'jpeg' | null;
 }
 
 export interface CamPresence {
@@ -90,7 +114,26 @@ export interface ShareInfo {
   expires_at: number | null;
   /** Too many wrong passcodes: nobody can join until then. */
   locked_until: number | null;
+  /** When the passcode was last set — a new value confirms "Set a new passcode". */
+  pass_at?: number | null;
+  /** Most guests one link admits. */
+  max_guests?: number;
   guests: { id: string; name: string; role: 'viewer' | 'caregiver'; created_at: number; last_seen: number; expires_at: number }[];
+  /** Guests who also have a Stream Studio account — a parent can make them members. */
+  requests?: ShareRequest[];
+}
+
+/** A guest with a Stream Studio account (uid verified by the room with Supabase). */
+export interface ShareRequest {
+  id: string;
+  uid: string;
+  /** Their account's display name. */
+  account: string;
+  /** The name they typed when joining. */
+  name: string;
+  guest_id: string;
+  role: 'viewer' | 'caregiver';
+  at: number;
 }
 
 export type MonLogKind =
@@ -246,14 +289,47 @@ export interface MonRtc {
   ice?: RTCIceCandidateInit | null;
   hello?: boolean;
   bye?: boolean;
+  /**
+   * The viewer's peer connection this belongs to (fresh per ViewerLink.connect).
+   * A new id means a new call: the camera builds a new connection for it instead
+   * of re-using the old one, and ignores late candidates / byes from older ones.
+   */
+  pc?: string;
+  /**
+   * The viewer (its device id + this tab), stable across socket reconnects: the
+   * camera keys its peer by it, so commands from the viewer's new socket still
+   * find the call.
+   */
+  vid?: string;
+  /** The picture the viewer wants, with its offer (so a new call starts at the right quality). */
+  q?: 'hd' | 'sd' | 'audio';
+  /** With an offer: this viewer can watch the relay picture if the camera's direct slots are full. */
+  ov?: 1;
+  /** With a bye from the camera: its direct slots are full — watch the relay picture. */
+  full?: boolean;
+  /** Camera → viewer: its relay (TURN) credential was renewed — restart ICE onto it (only the viewer offers). */
+  re?: 1;
+  /** Camera → viewer, with its answer: send quality and screen state on the data channel (rtc.ts ViewerDcMsg). */
+  dcc?: 1;
 }
 
 export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'video';
 
+/** The nursery's relay data this month (live-worker/src/monitorFair.ts; owner decision 2026-10-22: 10 GB). */
+export interface FairState {
+  month: string;
+  level: 'ok' | 'warn' | 'out';
+  usedGb: number;
+  ofGb: number;
+  measured: boolean;
+  resets: number;
+}
+
 export type MonServerMsg =
   | {
       t: 'hello';
-      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string; guest?: boolean };
+      /** Guests: `until` is when their pass ends now (the room is the authority — a parent may have extended the link). */
+      you: { sid: string; uid: string; name: string; role: MonRole; label: string | null; mode: MonMode; dev: string; guest?: boolean; until?: number };
       nursery: { id: string; name: string; baby: string | null };
       cams: CamPresence[];
       viewers: ViewerPresence[];
@@ -265,8 +341,24 @@ export type MonServerMsg =
       sleep?: SleepStatus;
       track?: { running: TrackItem[]; latest: Partial<Record<TrackKind, TrackItem>> };
       ice: RTCIceServer[];
+      /** Ask for fresh relay credentials (`{t:'ice'}`) in this many ms; absent: STUN only, nothing to refresh. */
+      iceMs?: number;
       vapid: string | null;
+      /** What this room can do (ADR 0006 Phase 0): 'view' = it takes `{t:'view'}` and sends cameras `live_want`. */
+      caps?: string[];
+      /** The nursery's relay data this month (absent: a room from before fair use). */
+      fair?: FairState;
+      /** Viewers: the cameras on this device's network (their direct picture comes first). */
+      near?: string[];
     }
+  /** Camera: does anyone need its status from the room every 2 s (statusCadence.ts)? */
+  | { t: 'live_want'; on: boolean }
+  /** The nursery's relay data level changed: at 'out', pictures that need a relay are sound only. */
+  | { t: 'fair'; relay: FairState }
+  /** Viewers: which cameras are on this device's network now. */
+  | { t: 'near'; near: string[] }
+  /** Fresh relay credentials, answering `{t:'ice'}`. */
+  | { t: 'ice'; servers: RTCIceServer[]; iceMs?: number }
   | { t: 'presence'; cams: CamPresence[]; viewers: ViewerPresence[] }
   | { t: 'share'; share: ShareInfo }
   | { t: 'track'; item: TrackItem }
@@ -285,15 +377,29 @@ export type MonServerMsg =
   | { t: 'r'; id: string; q: string; [k: string]: unknown }
   | { t: 'tell'; c: 'feedback' | 'talk_gain'; v: { factor?: number; db?: number; freq?: number }; from: string }
   | { t: 'cmd'; c: MonCmd; v: unknown; from: string; by: string }
-  | { t: 'relay_want'; n: number }
+  /** Viewers on this camera's relay picture, and how many decode each codec (jpeg = none). Older rooms send only n. */
+  | { t: 'relay_want'; n: number; avc?: number; vp8?: number; vp9?: number; jpeg?: number; v?: number }
+  /** A relay viewer needs a key frame (it subscribed, fell behind, or its decoder failed). */
+  | { t: 'relay_key' }
   | { t: 'settings'; settings: MonSettings }
   | { t: 'cam_gone'; sid: string; dev: string }
   | { t: 'peer_gone'; sid: string }
   | { t: 'roles_changed' }
+  /** This guest was made a member: drop the guest pass, reconnect with the account. */
+  | { t: 'promoted' }
+  /** This guest's pass now ends at `until` (a parent extended the link). */
+  | { t: 'guest_pass'; until: number }
   | { t: 'push_ok'; prefs: Record<string, boolean> }
   | { t: 'notice'; text: string }
   | { t: 'pong'; at: number }
   | { t: 'error'; code: string; msg: string };
+
+/** One line each, for choosing a role when inviting (least access first). */
+export const ROLE_INVITE: Record<MonRole, string> = {
+  viewer: 'Watch, listen and get alerts',
+  caregiver: 'Also talk, soothe, run a camera and log feeds',
+  parent: 'Everything, including inviting people and settings',
+};
 
 export const ROLE_INFO: Record<MonRole, { label: string; can: string }> = {
   parent: { label: 'Parent', can: 'Everything: watch, talk, video call, soothe, run cameras, manage people' },

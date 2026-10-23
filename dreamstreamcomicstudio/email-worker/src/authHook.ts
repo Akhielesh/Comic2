@@ -18,6 +18,7 @@ import {
   type EmailParams,
   type EmailTemplateName
 } from '../../shared/email';
+import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamHost } from '../../shared/streamHost';
 
 // ── Standard Webhooks signature ────────────────────────────────────────────────
 
@@ -199,20 +200,23 @@ export interface PlanOptions {
 
 export const STREAM_STUDIO_NAME = 'Stream Studio';
 
-/** True when the (GoTrue-validated) redirect lands in the live app: /live, /live/…, /live.html. */
+/** True when the (GoTrue-validated) redirect lands in the live app: /live, /live/…, /live.html,
+ *  or anywhere on Stream Studio's own host (stream.dreamstreamstudio.ai). */
 export const isLiveRedirect = (redirectTo: string | undefined): boolean => {
   if (!redirectTo) return false;
   try {
-    return /^\/live(?:\.html)?(?:\/|$)/.test(new URL(redirectTo).pathname);
+    const url = new URL(redirectTo);
+    return isStreamHost(url.hostname) || /^\/live(?:\.html)?(?:\/|$)/.test(url.pathname);
   } catch {
     return false;
   }
 };
 
-/** The Stream Studio sub-brand: product name + the live app as the brand's home link. */
-export const streamStudioBrand = (appUrl?: string): Partial<BrandConfig> => ({
+/** The Stream Studio sub-brand: product name + the live app as the brand's home link (its own
+ *  host once STREAM_HOST_ON — shared/streamHost.ts; `streamHostOn` is a parameter for tests). */
+export const streamStudioBrand = (appUrl?: string, streamHostOn: boolean = STREAM_HOST_ON): Partial<BrandConfig> => ({
   productName: STREAM_STUDIO_NAME,
-  appUrl: `${(appUrl || DEFAULT_BRAND.appUrl).replace(/\/+$/, '')}/live`
+  appUrl: streamHostOn ? STREAM_ORIGIN : `${(appUrl || DEFAULT_BRAND.appUrl).replace(/\/+$/, '')}/live`
 });
 
 /** Brand overrides for this send: Stream Studio for live-app flows, the env brand otherwise. */

@@ -109,7 +109,7 @@ export function buildStreamE2eChecklist(host: ReadinessHost = TEMPORARY_BETA_HOS
       key: 'open-live',
       title: 'Open Stream Studio',
       action: `Open ${live} in a fresh browser profile.`,
-      expect: `Live app shell loads (no Cloudflare interstitial); bundle resolves the live API to ${host.expectedWorkerBase}.`,
+      expect: `Stream Studio app shell loads (no Cloudflare interstitial); bundle resolves the live API to ${host.expectedWorkerBase}.`,
       url: live,
     },
     {

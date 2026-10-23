@@ -6,6 +6,50 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **See what's free — and what goes through our servers (2026-10-23):** Stream Studio now shows
+  how each thing travels. Before you start: "Direct between you and your guests — free" on
+  Instant meeting, and a ready check with the path before any Go live. While live: a small
+  pill — **Home Wi-Fi · free**, **Direct · free**, **Through our relay · encrypted** or
+  **Through our server** (in memory only, never stored, not end-to-end encrypted). Afterwards:
+  receipts ("Last night: 10 h · 98% direct · free", a Delivery block in the event recap, a
+  line when a call ends). **Settings → Usage** is a calm monthly card: what stayed on your
+  devices, what went through our servers, your allowances, one tip to stay free, and —
+  clearly labelled, never a charge — what it costs DreamStream. Only a nursery's parents see
+  its usage.
+- **Stream Studio costs, for the owner (2026-10-23, ADR 0007):** DreamStream → Account → Admin →
+  **Costs → Stream Studio** shows what Stream Studio really costs instead of a fixed $0: cost per
+  feature (baby monitor, calls, live streams, recordings), minutes by connection path, the
+  biggest nurseries / accounts / events, how much of each free allowance is used with a
+  month-end projection, and alerts (TURN over $10 a month among them). A daily check opens a
+  GitHub issue when an alert changes — and says so plainly when it couldn't measure, never
+  "all clear". Measured cheaply: at most one storage write per room per hour, never per frame.
+- **Call anyone on Stream Studio (2026-10-22):** Calls has a search box — find any member by
+  name and call them by voice or video, not just people in your nurseries. Family is
+  marked as family; a first call to someone outside your family asks you to check it's
+  the right person. Recents on both sides, favourites, and **Who can call you** (everyone,
+  or only my nurseries). **Decline & block** stops someone calling you without telling
+  them. Callers are rate-limited so nobody can be ring-bombed.
+- **Instant meeting and Go live now (2026-10-22):** Create opens on **Start now** — an
+  optional title and two big buttons. One tap opens the studio with the camera ready (and
+  for Go live, a short countdown you can cancel). Every other option is under **Advanced**,
+  and the dashboard has the same two buttons. Picking Schedule with no date (or a past one)
+  now says so instead of quietly creating an unscheduled event.
+- **Invite to the baby monitor in one sheet (2026-10-22):** **Invite** on the watch screen
+  (and **Invite family** in Calls) — add someone with an account by name (people from your
+  other nurseries first, starting as Viewer), or share a link: one tap creates it with a QR
+  code, **Send** shares the link without the passcode, a new passcode keeps the same link,
+  **+7 days** extends it (for guests already watching, too). **Who has access** lists members
+  and guests, and a guest who has an account can be made a member. Changing someone's role
+  takes effect at once on screens they already have open.
+- **Real video when phones can't connect directly (2026-10-22):** when a viewer's network
+  blocks the direct connection, the monitor now sends real video with sound through our
+  server (about 10–15 fps) instead of a 2–5 fps silent slideshow, and shows a first
+  picture within a couple of seconds while the direct connection is still being set up. This path is
+  encrypted in transit but, unlike the direct connection, not end-to-end, and nothing is stored;
+  it's used for a moment while a connection starts, when a network blocks the direct
+  connection, or when the camera already has its maximum of direct viewers. A viewer whose
+  phone stalls picks the picture back up by itself, and on iPhone the sound starts with your
+  tap on **Listen**.
 - **Comic Studio v4 is the default way to make a comic (2026-10-21):**
   - **New Comic opens the conversational studio.** Name it (or don't) and you land in
     the new Comic Studio: talk through your idea, see the page plan and the cost before
@@ -47,7 +91,40 @@ All notable user-facing changes. Format loosely follows
   admin), with what you have there ("2 nurseries") and a link straight in. Answered once
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
+### Changed
+- **The baby monitor is lighter on our servers and your battery (2026-10-23):** a phone
+  whose screen is off or hidden keeps the sound and alerts but stops receiving the picture
+  until it's looked at again (picture-in-picture counts as looking); a picture sent through
+  our relay or server is capped at a sensible quality; phones on the same Wi-Fi go direct and
+  are no longer mislabelled "Home Wi-Fi" on mobile data; and the nursery's room writes about
+  a tenth as often overnight, with every minute of history kept. If a nursery uses up its
+  monthly relay data, pictures that need the relay become sound only — direct and Home Wi-Fi
+  pictures, sound and alerts carry on, and nobody is moved onto the server path.
+- **Live streams cost less to run (2026-10-23):** fewer server calls per stream hour, chat and
+  counters saved in batches (and kept if the room pauses), and an ended event's video is
+  cleaned up after a week while its invite page, RSVPs and studio link keep working.
+- **Recordings save to Google Drive or your device first (2026-10-23):** the save sheet now
+  leads with **Google Drive · free, yours to keep** and **This device · free**. The 7-day copy
+  on our servers is something you choose (it shows its size and how much of your 10 GB it
+  uses) instead of happening by default. If you had it on, it's off once and the save sheet
+  tells you, so you can turn it back on.
+- **Fewer background checks (2026-10-23):** an event's invite page no longer asks the server
+  every 30 seconds, and the monitor's sound and week cards don't refresh while hidden — less
+  battery and data on your phone, less load on ours.
+
 ### Fixed
+- **Calls connect faster and say why when they can't (2026-10-22):** answering is about twice
+  as fast (median Accept → connected ≈0.6 s, was ≈1.4 s) — the camera opens while the call
+  connects. After 8 s a call says "Still connecting…", and if it fails it says why (your
+  network, theirs, or no route between them) with **Try again** and **Audio only**,
+  instead of hanging on "Connecting…". Calls recover from a network change or a dropped
+  connection, play through the iPhone's loudspeaker, and group calls send lighter video
+  so they don't lag.
+- **Baby monitor: smooth video for several viewers and share-link guests (2026-10-22):** no
+  more 1 fps. A direct connection that arrives late is kept rather than torn down, the
+  fallback picture resumes after a reconnect or camera switch, the camera sends each viewer
+  a quality ladder tuned for frame rate, and the viewer shows the frame rate actually
+  arriving — or "Picture paused" if frames stop.
 - **Every account email now comes from dreamstreamstudio.ai (2026-10-22):** sign-up,
   resend, password-reset and magic-link emails are only ever sent by our backend from
   `no-reply@dreamstreamstudio.ai` (signed with the domain's DKIM key, SPF + DMARC aligned,
@@ -299,6 +376,19 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Relay logins are personal and short-lived (2026-10-23):** the relay that connects phones on
+  strict networks now gets its own login per person and room — at most 4 hours for members,
+  2 hours for guests and never past their pass — renewed before it runs out (an overnight
+  monitor stays connected) and cancelled when a guest is removed, someone leaves a nursery, a
+  studio guest is removed or a call ends. Video over the relay is sent at a sensible quality
+  instead of full rate.
+- **Calls: hardened before launch (2026-10-22):** a link can no longer answer a call for
+  you — only tapping **Answer** on the notification does; someone you blocked or silenced
+  can't reach you by having someone else add you to a call, and "Decline & block" blocks
+  whoever actually added you; someone removed from a nursery stops ringing as family on
+  their next call; and nothing about how quickly a call is answered or cancelled reveals
+  whether you've blocked someone or have the app open. Idle connections can't fill up
+  your devices' slots.
 - **AI agents can no longer use DreamStream (2026-10-02):** AI crawlers, AI assistants and
   automated browsers that open a page are sent to a check-in page instead — 50 questions about
   who they are and what they do with data, plus a clearly-labelled synthetic sample record that

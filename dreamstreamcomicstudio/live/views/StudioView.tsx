@@ -1,7 +1,13 @@
 // Host Studio — the hero surface. Real camera → canvas program mixer →
 // segmented uploads, with scenes, transport, hotkeys, a four-tab right rail
 // (chat / people / activity / health) and a phone broadcaster mode.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+//
+// One-tap starts land here with an intent (quickStart.ts): an Instant meeting cuts to
+// Grid and opens the Invite sheet; Go live now runs a ready check and a 3-second
+// countdown. The room connection opens before the camera, so the invite link and
+// guests never wait on a camera prompt — and a blocked camera is a fixable card, not
+// a dead end.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getEvent, openRoomSocket, sendHostExitBeacon, uploadSegment, type RoomSocket, type SocketStatus } from '../api';
 import { SaveSheet, autoSave } from '../components/SaveSheet';
 import { checkLimit, fmtRemaining, markAlerted } from '../limits';
@@ -11,10 +17,16 @@ import { keepAwakeAdvice, ScreenWakeLock, type WakeState } from '../wakeLock';
 import { IS_LOCAL_DEV, SEGMENT_MS, presetById, type QualityPreset } from '../config';
 import { addMyEvent, findMyEvent, updateMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
-import { ProgramAudioMixer } from '../studio/audioMixer';
-import { HostPeers, type GuestLink } from '../studio/rtc';
+import { ProgramAudioMixer, takePrimedAudioContext } from '../studio/audioMixer';
+import { HostPeers, sanitizeIceServers, type GuestLink } from '../studio/rtc';
+import { IceClock } from '../rtcIce';
+import { CameraIssue, InviteSheet, ReadyCheck, type ReadyPhase } from '../studio/meetingUi';
+import { BROADCAST_TIP, GO_LIVE_LINE, studioViewersLine } from '../costCopy';
+import { MeetingMeter } from '../usage/studioUsage';
+import { shareOrCopy, takeStudioIntent } from '../quickStart';
 import {
   SegmentedRecorder,
+  cameraErrorMessage,
   lensLabel,
   listVideoInputs,
   openCamera,
@@ -22,6 +34,7 @@ import {
   pickSupportedMime,
   recordingFilename,
   setZoom,
+  takePrimedCamera,
   zoomCapability,
   type ZoomRange,
 } from '../media';
@@ -29,8 +42,8 @@ import { Ema, fmtBps, fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { guestUrl, viewerUrl } from '../nav';
 import { loadPrefs, playChime, savePrefs } from '../prefs';
-import { useAccount } from '../account';
-import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
+import { accountSettled, getAccount, useAccount } from '../account';
+import { MAX_GUESTS, type ChatMsg, type EventKind, type LobbyEntry, type LogEntry, type PersonEntry, type StreamStatus } from '../protocol';
 import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
 import { normalizeQuick } from '../emoji';
@@ -100,6 +113,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const compRef = useRef<ProgramCompositor | null>(null);
   const mixerRef = useRef<ProgramAudioMixer | null>(null);
   const hostPeersRef = useRef<HostPeers | null>(null);
+  /** On-camera guests' minutes per path, for the recap (usage/studioUsage.ts; this device only). */
+  const meetingMeterRef = useRef(new MeetingMeter());
   const guestNamesRef = useRef(new Map<string, string>());
   const tileVideosRef = useRef(new Map<string, HTMLVideoElement>());
   const socketRef = useRef<RoomSocket | null>(null);
@@ -168,6 +183,18 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const [guests, setGuests] = useState<GuestLink[]>([]);
   const [guestKey, setGuestKey] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
+  // One-tap hand-off from Create / the Dashboard — read once, never from the URL, so a
+  // copied or reloaded studio link never opens sheets or counts down by itself.
+  const [intent] = useState(() => takeStudioIntent(eventId));
+  const [kind, setKind] = useState<EventKind>(() => findMyEvent(eventId)?.kind ?? (intent === 'meeting' ? 'meeting' : 'broadcast'));
+  const [mediaReady, setMediaReady] = useState(false);
+  const [camStarting, setCamStarting] = useState(true);
+  const [camErr, setCamErr] = useState<string | null>(null);
+  const [camLabel, setCamLabel] = useState('');
+  const [roomReady, setRoomReady] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [ready, setReady] = useState<{ phase: ReadyPhase; count: number } | null>(intent === 'live' ? { phase: 'checking', count: 3 } : null);
+  const [shareLive, setShareLive] = useState(false);
   const [floats, spawnFloat] = useFloatingEmoji();
   const [, setClock] = useState(0); // 1 Hz re-render for timers
 
@@ -185,10 +212,292 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   focusIdRef.current = focusId;
   const lastAutoFocusRef = useRef<{ id: string | null; at: number }>({ id: null, at: 0 });
   const recStartRef = useRef(0);
+  const isMeeting = kind === 'meeting';
+  const meetingIdle = isMeeting && status === 'idle';
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
+  const aliveRef = useRef(true);
+  const peopleRef = useRef<PersonEntry[]>([]);
+  // ICE list from the room (STUN + TURN when configured); "settled" once it answered or timed out.
+  const iceRef = useRef<RTCIceServer[] | null>(null);
+  const iceSettledRef = useRef(false);
+  const iceTimerRef = useRef<number | null>(null);
+  // Relay credentials last a few hours: ask the room for fresh ones when it says (`iceMs`).
+  const iceClockRef = useRef(new IceClock(() => socketRef.current?.send({ t: 'ice' })));
+  /** Guests we've asked to (re)connect since the last hello — each once. */
+  const pingedRef = useRef(new Set<string>());
+  const inviteAutoRef = useRef(intent === 'meeting');
+  // Socket handlers live for the whole session; these refs give them the current closures.
+  const onGuestJoinedRef = useRef<(name: string) => void>(() => undefined);
+  const goLiveRef = useRef<() => void>(() => undefined);
 
   // ------------------------------------------------------------- lifecycle
+  /**
+   * Ask every guest already in the room to (re)connect: after the camera came up late,
+   * the studio reloaded, or a guest's first `ready` landed before we could answer it.
+   * Waits for the room's ICE list so the new links start with TURN when there is one.
+   */
+  const kickGuests = () => {
+    const peers = hostPeersRef.current;
+    if (!peers || !iceSettledRef.current) return;
+    for (const p of peopleRef.current) {
+      if (p.role !== 'guest' || peers.has(p.sid) || pingedRef.current.has(p.sid)) continue;
+      pingedRef.current.add(p.sid);
+      socketRef.current?.send({ t: 'rtc', to: p.sid, d: { ready: true } });
+    }
+  };
+
+  const settleIce = () => {
+    if (iceTimerRef.current != null) window.clearTimeout(iceTimerRef.current);
+    iceTimerRef.current = null;
+    iceSettledRef.current = true;
+    kickGuests();
+  };
+
+  /** Camera → program compositor + audio mixer → guest links. Re-runnable ("Try again"). */
+  const startMedia = async (p: QualityPreset, primed?: Promise<MediaStream> | null) => {
+    if (compRef.current || !aliveRef.current) return;
+    setCamErr(null);
+    setCamStarting(true);
+    let cam: MediaStream;
+    try {
+      cam = await (primed ?? openCamera(p));
+    } catch (e) {
+      if (!aliveRef.current) return;
+      setCamErr(cameraErrorMessage(e));
+      setCamStarting(false);
+      return;
+    }
+    if (!aliveRef.current || compRef.current) {
+      cam.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    try {
+      camRef.current = cam;
+      audioTrackRef.current = cam.getAudioTracks()[0] ?? null;
+      setCamLabel(cam.getVideoTracks()[0]?.label ?? '');
+      // The program follows the camera's real orientation/aspect — a phone
+      // held upright streams portrait instead of a hard center-crop.
+      const cs = cam.getVideoTracks()[0]?.getSettings() ?? {};
+      const dims = fitCanvasToSource(cs.width || p.width, cs.height || p.height, p.width, p.height);
+      const comp = new ProgramCompositor(dims.w, dims.h, prefs.fps);
+      comp.setHostInitial(hostNameRef.current);
+      comp.setLook(prefs.look);
+      comp.setPipLayout(prefs.pipPos, prefs.pipSize);
+      comp.setCamera(cam);
+      comp.onScreenEnded = () => {
+        comp.setScene('solo');
+        setScene((s) => (s === 'screen' ? 'solo' : s));
+        push('Screen share ended', { icon: 'screen' });
+      };
+      // A meeting opens on Grid: you, plus a seat that says who's still to come.
+      if (kindRef.current === 'meeting' && statusRef.current === 'idle') {
+        comp.setScene('grid');
+        setScene('grid');
+        comp.setPlaceholder('Waiting for people — share the invite');
+      }
+      comp.start();
+      compRef.current = comp;
+
+      // Program audio = ONE stable mixed track (host mic + guests), so the
+      // encoder never restarts when someone joins. Falls back to the raw
+      // mic track if WebAudio is unavailable. A context primed by the tap
+      // that started the session is already running (iOS needs that tap).
+      let programAudio: MediaStreamTrack | null = audioTrackRef.current;
+      try {
+        const mixer = new ProgramAudioMixer(takePrimedAudioContext());
+        mixer.addSource('host', cam);
+        mixerRef.current = mixer;
+        programAudio = mixer.track;
+      } catch {
+        mixerRef.current = null;
+      }
+      const output = comp.buildOutput(programAudio);
+      const programVideo = output.getVideoTracks()[0] ?? null;
+      setMixed(output);
+      setZoomCap(zoomCapability(cam.getVideoTracks()[0]));
+      setDevices(await listVideoInputs());
+      if (!aliveRef.current) return; // left while the device list loaded — cleanup already ran
+
+      // On-air guests: host-centric WebRTC mesh, signaled through the room.
+      const peers = new HostPeers((sid, d) => socketRef.current?.send({ t: 'rtc', to: sid, d }), iceRef.current);
+      peers.setReturnFeed({
+        // Guests see the program itself — the host and every other guest, live…
+        video: () => programVideo ?? camRef.current?.getVideoTracks()[0] ?? null,
+        // …and hear everyone but themselves (mix-minus); the raw mic without WebAudio.
+        audioFor: (sid) => mixerRef.current?.minusTrack(sid) ?? audioTrackRef.current,
+        release: (sid) => mixerRef.current?.dropMinus(sid),
+      });
+      const syncGuests = () => {
+        const list = peers.guests();
+        setGuests(list);
+        meetingMeterRef.current.sync(list);
+        const mixer = mixerRef.current;
+        const seen = new Set<string>();
+        const tiles: ProgramTile[] = [];
+        const videoFor = (stream: MediaStream): HTMLVideoElement => {
+          let v = tileVideosRef.current.get(stream.id);
+          if (!v) {
+            v = document.createElement('video');
+            v.muted = true; // tile video only — guest AUDIO flows through the mixer
+            v.playsInline = true;
+            v.srcObject = stream;
+            v.play().catch(() => undefined);
+            tileVideosRef.current.set(stream.id, v);
+          }
+          return v;
+        };
+        for (const g of list) {
+          if (g.cam) {
+            seen.add(g.cam.id);
+            tiles.push({ id: `${g.sid}-cam`, label: g.name, kind: 'cam', video: videoFor(g.cam) });
+            if (mixer) mixer.addSource(g.sid, g.cam);
+          } else if (mixer) {
+            mixer.removeSource(g.sid);
+          }
+          if (g.screen) {
+            seen.add(g.screen.id);
+            tiles.push({ id: `${g.sid}-screen`, label: `${g.name}'s screen`, kind: 'screen', video: videoFor(g.screen) });
+          }
+        }
+        for (const [id, v] of tileVideosRef.current) {
+          if (!seen.has(id)) {
+            v.srcObject = null;
+            tileVideosRef.current.delete(id);
+          }
+        }
+        if (mixer) {
+          // Unwire every guest source without a live link — including guests re-linked after
+          // a studio reload, whose names never went through guestNamesRef.
+          const liveSids = new Set(list.map((g) => g.sid));
+          for (const id of mixer.ids()) {
+            if (id !== 'host' && !liveSids.has(id)) mixer.removeSource(id);
+          }
+        }
+        comp.setRemoteTiles(tiles);
+      };
+      peers.onChange = syncGuests;
+      peers.onStats = (sid, r, pc) => meetingMeterRef.current.observe(sid, r, pc);
+      hostPeersRef.current = peers;
+      setMediaReady(true);
+      setCamStarting(false);
+      kickGuests();
+    } catch (e) {
+      // Past the camera, a failure here is the browser (canvas/WebAudio), not permission.
+      setCamErr(e instanceof Error ? `The studio couldn’t start on this browser (${e.message}).` : 'The studio couldn’t start on this browser.');
+      setCamStarting(false);
+    }
+  };
+
+  const retryCamera = () => void startMedia(preset);
+
+  /** The room: chat, people, the guest key and signaling. Opens before the camera. */
+  const openSocket = () => {
+    socketRef.current = openRoomSocket(
+      eventId,
+      { name: hostNameRef.current, k: hostKey },
+      (msg) => {
+        switch (msg.t) {
+          case 'hello':
+            setChat(msg.chat);
+            setViewers(msg.meta.viewers);
+            setPinned(msg.meta.pinned);
+            setStartedAt(msg.meta.startedAt);
+            if (msg.log) setLog(msg.log);
+            setRoomReady(true);
+            if (msg.you.role === 'host') {
+              // Mint (or fetch) the guest invite key, and the ICE list for guest links.
+              socketRef.current?.send({ t: 'guestkey' });
+              pingedRef.current.clear();
+              socketRef.current?.send({ t: 'ice' });
+              if (iceTimerRef.current != null) window.clearTimeout(iceTimerRef.current);
+              iceTimerRef.current = window.setTimeout(settleIce, 2000); // older rooms never answer
+            }
+            break;
+          case 'ice': {
+            const list = sanitizeIceServers(msg.servers);
+            if (list) {
+              iceRef.current = list;
+              hostPeersRef.current?.setIceServers(list);
+            }
+            iceClockRef.current.arm(msg.iceMs);
+            settleIce();
+            break;
+          }
+          case 'guestkey':
+            setGuestKey(msg.key);
+            if (inviteAutoRef.current) {
+              inviteAutoRef.current = false;
+              setInviteOpen(true);
+            }
+            break;
+          case 'guest':
+            guestNamesRef.current.set(msg.sid, msg.name);
+            if (!msg.on) {
+              hostPeersRef.current?.close(msg.sid);
+              push(kindRef.current === 'meeting' ? `${msg.name} left the meeting` : `${msg.name} left the guest seats`, { icon: 'users' });
+            } else {
+              onGuestJoinedRef.current(msg.name);
+            }
+            break;
+          case 'rtc':
+            void hostPeersRef.current?.onSignal(
+              msg.from,
+              guestNamesRef.current.get(msg.from) ?? 'Guest',
+              msg.d,
+            );
+            break;
+          case 'chat':
+            setChat((c) => [...c.slice(-199), msg.m]);
+            break;
+          case 'delete':
+            setChat((c) => c.filter((x) => x.id !== msg.id));
+            break;
+          case 'viewers':
+            setViewers(msg.n);
+            break;
+          case 'lobby':
+            setLobby(msg.pending);
+            break;
+          case 'people':
+            peopleRef.current = msg.list;
+            setPeople(msg.list);
+            // Guests already in the room when the studio (re)loaded never sent a join event:
+            // learn their names here so their tiles aren't labelled "Guest".
+            for (const p of msg.list) if (p.role === 'guest' && p.name) guestNamesRef.current.set(p.sid, p.name);
+            break;
+          case 'log':
+            setLog((l) => [...l.slice(-299), msg.entry]);
+            break;
+          case 'pin':
+            setPinned(msg.text);
+            break;
+          case 'emoji':
+            spawnFloat(msg.e);
+            break;
+          case 'milestone':
+            if (prefs.alertMilestones) {
+              push(`${msg.n} viewers — new peak!`, { icon: 'star' });
+              if (prefs.alertSound === 'soft') playChime();
+            }
+            break;
+          case 'config':
+            setMaxViewers(msg.maxViewers);
+            break;
+          case 'state':
+            setStatus(msg.status);
+            setStartedAt(msg.startedAt);
+            break;
+        }
+      },
+      () => setErr('Lost connection to the event room.'),
+      setSockStatus,
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
+    aliveRef.current = true;
     (async () => {
       const m = pickSupportedMime(undefined, prefs.preferMp4);
       if (!m) {
@@ -196,6 +505,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         return;
       }
       setMime(m);
+      let p: QualityPreset;
       try {
         const meta = await getEvent(eventId);
         if (cancelled) return;
@@ -214,191 +524,38 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             quality: meta.quality,
             access: meta.access,
             cover: meta.cover,
+            kind: meta.kind,
           };
           addMyEvent(adopted);
           void pushEventToCloud(adopted);
+        }
+        if (meta.kind) {
+          kindRef.current = meta.kind;
+          setKind(meta.kind);
         }
         setTitle(meta.title);
         setPinned(meta.pinned);
         setSegMs(meta.segMs || SEGMENT_MS);
         setMaxViewers(meta.maxViewers || 100);
-        const p = presetById(meta.quality);
+        p = presetById(meta.quality);
         setPreset(p);
         nextSeqRef.current = (meta.latestSeq || 0) + 1; // survive a studio reload mid-event
+        statusRef.current = meta.status;
         setStatus(meta.status);
         setStartedAt(meta.startedAt);
-
-        const cam = await openCamera(p);
-        if (cancelled) {
-          cam.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        camRef.current = cam;
-        audioTrackRef.current = cam.getAudioTracks()[0] ?? null;
-        // The program follows the camera's real orientation/aspect — a phone
-        // held upright streams portrait instead of a hard center-crop.
-        const cs = cam.getVideoTracks()[0]?.getSettings() ?? {};
-        const dims = fitCanvasToSource(cs.width || p.width, cs.height || p.height, p.width, p.height);
-        const comp = new ProgramCompositor(dims.w, dims.h, prefs.fps);
-        comp.setHostInitial(hostNameRef.current);
-        comp.setLook(prefs.look);
-        comp.setPipLayout(prefs.pipPos, prefs.pipSize);
-        comp.setCamera(cam);
-        comp.onScreenEnded = () => {
-          comp.setScene('solo');
-          setScene((s) => (s === 'screen' ? 'solo' : s));
-          push('Screen share ended', { icon: 'screen' });
-        };
-        comp.start();
-        compRef.current = comp;
-
-        // Program audio = ONE stable mixed track (host mic + guests), so the
-        // encoder never restarts when someone joins. Falls back to the raw
-        // mic track if WebAudio is unavailable.
-        let programAudio: MediaStreamTrack | null = audioTrackRef.current;
-        try {
-          const mixer = new ProgramAudioMixer();
-          mixer.addSource('host', cam);
-          mixerRef.current = mixer;
-          programAudio = mixer.track;
-        } catch {
-          mixerRef.current = null;
-        }
-        setMixed(comp.buildOutput(programAudio));
-        setZoomCap(zoomCapability(cam.getVideoTracks()[0]));
-        setDevices(await listVideoInputs());
-
-        // On-air guests: host-centric WebRTC mesh, signaled through the room.
-        const peers = new HostPeers((sid, d) => socketRef.current?.send({ t: 'rtc', to: sid, d }));
-        peers.setReturnFeed(cam.getVideoTracks()[0] ?? null, audioTrackRef.current);
-        const syncGuests = () => {
-          const list = peers.guests();
-          setGuests(list);
-          const mixer = mixerRef.current;
-          const seen = new Set<string>();
-          const tiles: ProgramTile[] = [];
-          const videoFor = (stream: MediaStream): HTMLVideoElement => {
-            let v = tileVideosRef.current.get(stream.id);
-            if (!v) {
-              v = document.createElement('video');
-              v.muted = true; // tile video only — guest AUDIO flows through the mixer
-              v.playsInline = true;
-              v.srcObject = stream;
-              v.play().catch(() => undefined);
-              tileVideosRef.current.set(stream.id, v);
-            }
-            return v;
-          };
-          for (const g of list) {
-            if (g.cam) {
-              seen.add(g.cam.id);
-              tiles.push({ id: `${g.sid}-cam`, label: g.name, kind: 'cam', video: videoFor(g.cam) });
-              if (mixer) mixer.addSource(g.sid, g.cam);
-            } else if (mixer) {
-              mixer.removeSource(g.sid);
-            }
-            if (g.screen) {
-              seen.add(g.screen.id);
-              tiles.push({ id: `${g.sid}-screen`, label: `${g.name}'s screen`, kind: 'screen', video: videoFor(g.screen) });
-            }
-          }
-          for (const [id, v] of tileVideosRef.current) {
-            if (!seen.has(id)) {
-              v.srcObject = null;
-              tileVideosRef.current.delete(id);
-            }
-          }
-          if (mixer) {
-            const liveSids = new Set(list.map((g) => g.sid));
-            for (const g of guestNamesRef.current.keys()) {
-              if (!liveSids.has(g) && mixer.has(g)) mixer.removeSource(g);
-            }
-          }
-          comp.setRemoteTiles(tiles);
-        };
-        peers.onChange = syncGuests;
-        hostPeersRef.current = peers;
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : 'Camera unavailable or live worker unreachable.');
+        if (meta.status !== 'idle') setReady(null); // a reload mid-stream never counts down again
+      } catch {
+        if (!cancelled) setErr('Couldn’t load this event — check the studio link, or whether the streaming backend is reachable.');
         return;
       }
-
-      socketRef.current = openRoomSocket(
-        eventId,
-        { name: hostNameRef.current, k: hostKey },
-        (msg) => {
-          switch (msg.t) {
-            case 'hello':
-              setChat(msg.chat);
-              setViewers(msg.meta.viewers);
-              setPinned(msg.meta.pinned);
-              setStartedAt(msg.meta.startedAt);
-              if (msg.log) setLog(msg.log);
-              // Mint (or fetch) the guest invite key for this event.
-              if (msg.you.role === 'host') socketRef.current?.send({ t: 'guestkey' });
-              break;
-            case 'guestkey':
-              setGuestKey(msg.key);
-              break;
-            case 'guest':
-              guestNamesRef.current.set(msg.sid, msg.name);
-              if (!msg.on) {
-                hostPeersRef.current?.close(msg.sid);
-                push(`${msg.name} left the guest seats`, { icon: 'users' });
-              } else {
-                push(`${msg.name} joined as a guest — try Grid (3) or Spotlight (4)`, { icon: 'users' });
-                if (prefs.alertSound === 'soft') playChime();
-              }
-              break;
-            case 'rtc':
-              void hostPeersRef.current?.onSignal(
-                msg.from,
-                guestNamesRef.current.get(msg.from) ?? 'Guest',
-                msg.d,
-              );
-              break;
-            case 'chat':
-              setChat((c) => [...c.slice(-199), msg.m]);
-              break;
-            case 'delete':
-              setChat((c) => c.filter((x) => x.id !== msg.id));
-              break;
-            case 'viewers':
-              setViewers(msg.n);
-              break;
-            case 'lobby':
-              setLobby(msg.pending);
-              break;
-            case 'people':
-              setPeople(msg.list);
-              break;
-            case 'log':
-              setLog((l) => [...l.slice(-299), msg.entry]);
-              break;
-            case 'pin':
-              setPinned(msg.text);
-              break;
-            case 'emoji':
-              spawnFloat(msg.e);
-              break;
-            case 'milestone':
-              if (prefs.alertMilestones) {
-                push(`${msg.n} viewers — new peak!`, { icon: 'star' });
-                if (prefs.alertSound === 'soft') playChime();
-              }
-              break;
-            case 'config':
-              setMaxViewers(msg.maxViewers);
-              break;
-            case 'state':
-              setStatus(msg.status);
-              setStartedAt(msg.startedAt);
-              break;
-          }
-        },
-        () => setErr('Lost connection to the event room.'),
-        setSockStatus,
-      );
+      // Room first: the invite link and guests don't wait for the camera prompt. The room
+      // learns the host's name at connect, so give the account a moment to load (a reload
+      // would otherwise announce "Host").
+      await accountSettled();
+      if (cancelled) return;
+      hostNameRef.current = prefs.hostName.trim() || getAccount().name?.trim() || hostNameRef.current;
+      openSocket();
+      await startMedia(p, takePrimedCamera());
     })();
 
     const clock = window.setInterval(() => {
@@ -461,6 +618,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
 
     return () => {
       cancelled = true;
+      aliveRef.current = false;
+      if (iceTimerRef.current != null) window.clearTimeout(iceTimerRef.current);
+      iceClockRef.current.stop();
       window.clearInterval(clock);
       window.clearInterval(speakTimer);
       window.clearInterval(curveTimer);
@@ -471,6 +631,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       // "unsaved" for recovery instead of being silently lost.
       void localRecRef.current?.stop();
       void wakeRef.current.disable();
+      meetingMeterRef.current.save(eventId);
       hostPeersRef.current?.closeAll();
       mixerRef.current?.close();
       for (const v of tileVideosRef.current.values()) v.srcObject = null;
@@ -487,6 +648,50 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   useEffect(() => {
     compRef.current?.setHostInitial(hostName);
   }, [hostName]);
+
+  // The empty-seat hint belongs to a private meeting only — never to a broadcast.
+  useEffect(() => {
+    compRef.current?.setPlaceholder(meetingIdle ? 'Waiting for people — share the invite' : null);
+  }, [meetingIdle, mediaReady]);
+
+  // "Go live now": once camera, mic and room check out, count 3-2-1 and go — unless the
+  // browser still gates audio behind a tap, in which case stop at "Tap to go live".
+  useEffect(() => {
+    if (!ready) return;
+    // 'ended' too: "Go live again" restarts through the same check.
+    if (status !== 'idle' && status !== 'ended') {
+      setReady(null);
+      return;
+    }
+    const audioRunning = () => (mixerRef.current ? mixerRef.current.running : true);
+    if (ready.phase === 'checking') {
+      if (mediaReady && roomReady && mime && !camErr) setReady({ phase: audioRunning() ? 'counting' : 'tap', count: 3 });
+      return;
+    }
+    if (ready.phase !== 'counting') return;
+    const t = window.setTimeout(() => {
+      if (ready.count > 1) setReady({ phase: 'counting', count: ready.count - 1 });
+      else if (!audioRunning()) setReady({ phase: 'tap', count: 0 });
+      else {
+        setReady(null);
+        goLiveRef.current();
+      }
+    }, 1000);
+    return () => window.clearTimeout(t);
+  }, [ready, mediaReady, roomReady, mime, camErr, status]);
+
+  // The "share the watch link" nudge steps aside once someone is watching.
+  useEffect(() => {
+    if (viewers > 0) setShareLive(false);
+  }, [viewers]);
+
+  // The recap's "guests: all direct · free" line: saved when it ends and when the page goes.
+  useEffect(() => {
+    const save = () => meetingMeterRef.current.save(eventId);
+    if (status === 'ended') save();
+    window.addEventListener('pagehide', save);
+    return () => window.removeEventListener('pagehide', save);
+  }, [status, eventId]);
 
   // Lobby alerts (someone knocked).
   useEffect(() => {
@@ -586,6 +791,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   };
 
   const goLive = () => {
+    if (!mixed) return; // no camera yet — the button says why
     mixerRef.current?.unlock(); // browsers may gesture-gate AudioContexts
     socketRef.current?.send({ t: 'state', status: 'live' });
     if (prefs.slowSec > 0) socketRef.current?.send({ t: 'config', slow: prefs.slowSec });
@@ -603,8 +809,44 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     updateMyEvent(eventId, { status: 'live', startedAt: freshStart, endedAt: null });
     const mine = findMyEvent(eventId);
     if (mine) void pushEventToCloud(mine);
-    if (prefs.autoRecord && !localRecRef.current) startRecording();
-    push('You are live', { icon: 'broadcast' });
+    // The event's own auto-record choice (set on Create) wins over the global default.
+    if ((mine?.autoRecord ?? prefs.autoRecord) && !localRecRef.current) void startRecording();
+    setReady(null);
+    setShareLive(true);
+    setInviteOpen(false);
+    push(kindRef.current === 'meeting' ? 'You are live — this meeting is now broadcasting' : 'You are live', { icon: 'broadcast' });
+  };
+  goLiveRef.current = goLive;
+
+  /**
+   * Every Go live button (toolbar, "Go live with this meeting", "Go live again", the phone
+   * studio, the G key) opens the ready check instead of starting at once: it shows who carries
+   * the broadcast and what it uses ON SCREEN before anything starts (rule 4 — a title tooltip
+   * never shows on touch), then counts 3-2-1 with Cancel. The tap also unlocks audio, so the
+   * count can finish without a second tap.
+   */
+  const requestGoLive = () => {
+    if (!mixed) return; // no camera yet — the button says why
+    mixerRef.current?.unlock();
+    setReady((r) => r ?? { phase: 'checking', count: 3 });
+  };
+
+  /** A meeting that never went live just ends — no recap to show, back to the dashboard. */
+  const endMeeting = async () => {
+    if (!window.confirm('End the meeting for everyone?')) return;
+    socketRef.current?.send({ t: 'state', status: 'ended' });
+    setStatus('ended');
+    setInviteOpen(false);
+    updateMyEvent(eventId, { status: 'ended', endedAt: Date.now() });
+    const mine = findMyEvent(eventId);
+    if (mine) void pushEventToCloud(mine);
+    push('Meeting ended', { icon: 'stop', duration: 3000 });
+    if (localRecRef.current) {
+      afterSaveRef.current = () => nav.dashboard();
+      await stopRecording();
+    } else {
+      nav.dashboard();
+    }
   };
 
   const pause = () => {
@@ -802,6 +1044,19 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     hostLog('scene', 'SCENE', `Cut to “${SCENES.find((s) => s.id === id)?.name}”`);
   };
 
+  // Someone took a guest seat: off air, cut to Grid for them; on air, the host decides.
+  onGuestJoinedRef.current = (name: string) => {
+    if (prefs.alertSound === 'soft') playChime();
+    const meeting = kindRef.current === 'meeting';
+    const offAir = statusRef.current === 'idle' || statusRef.current === 'ended';
+    if (offAir && sceneRef.current === 'solo' && compRef.current) {
+      void cutScene('grid');
+      push(meeting ? `${name} joined the meeting` : `${name} joined as a guest — switched to Grid`, { icon: 'users' });
+    } else {
+      push(meeting ? `${name} joined the meeting` : `${name} joined as a guest — try Grid (3) or Spotlight (4)`, { icon: 'users' });
+    }
+  };
+
   // ---------------------------------------------------------------- camera
   const switchCamera = async (deviceId: string) => {
     try {
@@ -859,8 +1114,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     camRef.current = fresh;
     compRef.current?.setCamera(fresh);
     fresh.getVideoTracks().forEach((t) => (t.enabled = camOn));
-    // Guests' return feed follows the camera swap in place (no renegotiation).
-    void hostPeersRef.current?.replaceCamTrack(fresh.getVideoTracks()[0] ?? null);
+    // Guests' return feed is the program canvas, so it follows the swap by itself.
     const cap = zoomCapability(fresh.getVideoTracks()[0]);
     setZoomCap(cap);
     setZoomVal(cap?.value ?? 1);
@@ -916,7 +1170,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       const k = e.key.toLowerCase();
       if (k === 'g') {
         if (isLive || status === 'paused') void endStream();
-        else if (status === 'idle') goLive();
+        else if (meetingIdle) push('Use “Go live with this meeting” to broadcast — G won’t do it by accident', { icon: 'info' });
+        else if (status === 'idle') requestGoLive();
+      } else if (k === 'i') {
+        setInviteOpen(true);
       } else if (k === ' ') {
         e.preventDefault();
         toggleMic();
@@ -953,11 +1210,68 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // Hidden monitors so the host hears guests (the program preview is muted).
   const guestMonitors = guests.filter((g) => g.cam).map((g) => <AudioSink key={g.sid} stream={g.cam!} />);
   const focusOptions = MULTI_SCENES.has(scene) ? (compRef.current?.allTiles() ?? []) : [];
-  const copyGuestInvite = () => {
-    if (!guestKey) return;
-    navigator.clipboard?.writeText(guestUrl(eventId, guestKey)).catch(() => undefined);
-    push('Guest invite link copied — up to 4 guests can join on air', { icon: 'users' });
+  const micLevel = useCallback(() => mixerRef.current?.levels().get('host') ?? 0, []);
+  const inviteUrl = guestKey ? guestUrl(eventId, guestKey, { meeting: isMeeting }) : null;
+  const shareInvite = async () => {
+    if (!inviteUrl) return;
+    const name = title || (isMeeting ? 'my meeting' : 'my stream');
+    const r = await shareOrCopy({
+      title: title || 'Stream Studio',
+      text: isMeeting ? `Join “${name}” — on camera, no account needed.` : `Join “${name}” on camera as my guest — no account needed.`,
+      url: inviteUrl,
+    });
+    if (r === 'copied') push(`Invite link copied — up to ${MAX_GUESTS} people can join on camera`, { icon: 'check' });
+    else if (r === 'failed') push('Couldn’t copy on this browser — use Share or copy it from the box', { icon: 'alert' });
   };
+  const copyGuestInvite = async () => {
+    if (!inviteUrl) return;
+    const r = await shareOrCopy({ url: inviteUrl }, { copyOnly: true });
+    push(r === 'copied' ? `Invite link copied — up to ${MAX_GUESTS} people can join on camera` : 'Couldn’t copy on this browser', { icon: r === 'copied' ? 'users' : 'alert' });
+  };
+  const rotateInvite = () => {
+    socketRef.current?.send({ t: 'guestkey', rotate: true });
+    push('New invite link — previously shared links no longer work', { icon: 'refresh' });
+  };
+  const shareWatch = async () => {
+    const r = await shareOrCopy({
+      title: title || 'Stream Studio',
+      text: `Watch “${title || 'my stream'}” live — just enter a name to join.`,
+      url: shareUrl,
+    });
+    if (r === 'copied') push('Watch link copied', { icon: 'check' });
+    else if (r === 'failed') push('Couldn’t copy on this browser', { icon: 'alert' });
+  };
+  const openInvite = () => setInviteOpen(true);
+  const inviteSheet = inviteOpen ? (
+    <InviteSheet
+      url={inviteUrl}
+      meeting={isMeeting}
+      guests={guests}
+      maxGuests={MAX_GUESTS}
+      onClose={() => setInviteOpen(false)}
+      onShare={() => void shareInvite()}
+      onCopy={() => void copyGuestInvite()}
+      onRotate={rotateInvite}
+    />
+  ) : null;
+  const cameraIssue = (
+    <CameraIssue message={camErr} starting={camStarting && !camErr} onRetry={retryCamera} onInvite={guestKey ? openInvite : undefined} />
+  );
+  const readyCard = ready ? (
+    <ReadyCheck
+      camera={mediaReady ? 'ok' : camErr ? 'error' : 'waiting'}
+      cameraLabel={camLabel}
+      micOk={!!audioTrackRef.current}
+      roomOk={roomReady}
+      quality={`${preset.id} · needs ≥ ${preset.minUplinkMbps} Mbps upload`}
+      cost={studioViewersLine(preset)}
+      phase={ready.phase}
+      count={ready.count}
+      getMicLevel={micLevel}
+      onCancel={() => setReady(null)}
+      onGo={goLive}
+    />
+  ) : null;
 
   const metricRows: [string, string][] = useMemo(
     () => [
@@ -1006,6 +1320,14 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
 
   const studioBanners = (
     <>
+      {shareLive && status === 'live' && (
+        <div className="banner info studio-banner share-live" role="status">
+          <Icon name="broadcast" size={15} />
+          <span style={{ flex: 1 }}><b>You’re live.</b><span className="sl-more"> Share the watch link — viewers join with just a name.</span></span>
+          <Btn variant="solid" size="sm" icon="share" onClick={() => void shareWatch()}>Share watch link</Btn>
+          <button className="iconbtn" aria-label="Dismiss" onClick={() => setShareLive(false)}><Icon name="x" size={14} /></button>
+        </div>
+      )}
       {limitBanner && (
         <div className="banner warn studio-banner" role="alert">
           <Icon name="clock" size={15} />
@@ -1053,11 +1375,22 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     guestCount: guests.length,
     toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
-    goLive, end: () => void endStream(),
+    requestGoLive, end: () => void endStream(),
     recOn, toggleRec, recLabel: recOn ? fmtDuration(recElapsed / 1000) : null,
     banners: studioBanners,
     exit: () => (isPhone ? nav.dashboard() : setDevice('desktop')),
     hostName,
+    meeting: isMeeting,
+    canGoLive: !!mime && !!mixed,
+    invite: openInvite,
+    shareWatch: () => void shareWatch(),
+    endMeeting: () => void endMeeting(),
+    overlay: (
+      <>
+        {cameraIssue}
+        {readyCard}
+      </>
+    ),
   };
 
   if (isPhone) {
@@ -1065,6 +1398,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       <div className="mstudio-fill">
         <MobileStudio ctl={mobileCtl} />
         {guestMonitors}
+        {inviteSheet}
         {saveSheet}
       </div>
     );
@@ -1088,7 +1422,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         <div className="st-meta">
           {status === 'live' && <Pill tone="live" dot pulse>LIVE</Pill>}
           {status === 'paused' && <Pill tone="warn" icon="pause">Be right back</Pill>}
-          {status === 'idle' && <Pill tone="neutral">Offline</Pill>}
+          {meetingIdle && <Pill tone="accent" icon="users">Meeting · not broadcasting</Pill>}
+          {status === 'idle' && !isMeeting && <Pill tone="neutral">Offline</Pill>}
           {status === 'ended' && <Pill tone="neutral">Ended</Pill>}
           {liveFor && <span className="st-timer">{liveFor}</span>}
         </div>
@@ -1103,22 +1438,30 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         {sockStatus === 'reconnecting'
           ? <Pill tone="warn" icon="refresh">Reconnecting…</Pill>
           : <Pill tone={healthy ? 'ok' : 'warn'} icon="signal">{healthy ? 'Healthy' : 'Degraded'}</Pill>}
-        <Pill tone="neutral" icon="eye">{viewers}/{maxViewers}</Pill>
+        {!meetingIdle && <span title={BROADCAST_TIP}><Pill tone="neutral" icon="eye">{viewers}/{maxViewers}</Pill></span>}
         <div className="t-sep" />
-        <IconBtn
-          name="link"
-          label="Copy viewer link"
-          onClick={() => {
-            navigator.clipboard?.writeText(shareUrl).catch(() => undefined);
-            push('Viewer link copied', { icon: 'check' });
-          }}
-        />
-        <IconBtn name="users" label="Copy guest invite link" onClick={copyGuestInvite} />
+        {!meetingIdle && <IconBtn name="share" label="Share watch link" onClick={() => void shareWatch()} />}
+        <Btn
+          variant={meetingIdle ? 'solid' : 'soft'}
+          size="sm"
+          icon="users"
+          onClick={openInvite}
+          data-tour="studio-invite"
+          title="Invite people on camera (I)"
+        >
+          {guests.length > 0 ? `Invite · ${guests.length}/${MAX_GUESTS}` : 'Invite'}
+        </Btn>
         <IconBtn name="sliders" label="Customize" onClick={() => nav.settings()} />
         <HelpButton />
-        {status === 'idle' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime} data-tour="studio-golive">Go live</Btn>}
+        {meetingIdle && (
+          <>
+            <Btn variant="ghost" icon="broadcast" onClick={requestGoLive} disabled={!mime || !mixed || !!ready} data-tour="studio-golive" title={mixed ? `Broadcast this meeting to viewers. ${GO_LIVE_LINE}` : 'Waiting for your camera'}>Go live with this meeting</Btn>
+            <Btn variant="danger" icon="stop" onClick={() => void endMeeting()}>End meeting</Btn>
+          </>
+        )}
+        {status === 'idle' && !isMeeting && <Btn variant="solid" icon="broadcast" onClick={requestGoLive} disabled={!mime || !mixed || !!ready} data-tour="studio-golive" title={mixed ? GO_LIVE_LINE : 'Waiting for your camera'}>Go live</Btn>}
         {(isLive || status === 'paused') && <Btn variant="danger" icon="stop" onClick={() => void endStream()}>End stream</Btn>}
-        {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime}>Go live again</Btn>}
+        {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={requestGoLive} disabled={!mime || !mixed || !!ready} title={mixed ? GO_LIVE_LINE : 'Waiting for your camera'}>Go live again</Btn>}
         {status === 'ended' && <Btn variant="subtle" icon="chart" onClick={() => nav.summary(eventId, hostKey)}>View recap</Btn>}
       </div>
 
@@ -1179,6 +1522,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                   </div>
                 )}
                 {prefs.floatingReactions && <FloatLayer floats={floats} />}
+                {cameraIssue}
+                {readyCard}
                 <div className="preview-controls">
                   <button className={cx('pv-ctl', !micOn && 'off')} onClick={toggleMic} aria-label="Microphone (Space)" title="Mic (Space)">
                     <Icon name={micOn ? 'mic' : 'micOff'} size={18} />
@@ -1204,7 +1549,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
 
             {/* camera source bar */}
             <div className="cam-bar">
-              <span className="cam-status"><span className="cam-dot" />Live camera</span>
+              <span className="cam-status"><span className="cam-dot" />{camErr ? 'Camera off' : camStarting ? 'Starting camera…' : meetingIdle ? 'Meeting camera' : 'Live camera'}</span>
               <div className="cam-controls">
                 {devices.length > 1 && (
                   <label className="cam-ctl-row">
@@ -1373,15 +1718,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                   people={people}
                   lobby={lobby}
                   guests={guests}
-                  onCopyGuestInvite={guestKey ? copyGuestInvite : undefined}
-                  onRotateGuestInvite={
-                    guestKey
-                      ? () => {
-                          socketRef.current?.send({ t: 'guestkey', rotate: true });
-                          push('Guest link rotated — previously shared links no longer work', { icon: 'refresh' });
-                        }
-                      : undefined
-                  }
+                  onCopyGuestInvite={guestKey ? () => void copyGuestInvite() : undefined}
+                  onRotateGuestInvite={guestKey ? rotateInvite : undefined}
                   onAdmit={(sid) => socketRef.current?.send({ t: 'admit', sid })}
                   onDeny={(sid) => socketRef.current?.send({ t: 'deny', sid })}
                   onKick={(sid) => socketRef.current?.send({ t: 'kick', sid })}
@@ -1414,6 +1752,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         </div>
       )}
       {guestMonitors}
+      {inviteSheet}
       {saveSheet}
     </div>
   );
@@ -1444,7 +1783,8 @@ interface MobileCtl {
   cutScene(s: SceneId): void;
   sendChat(text: string): void;
   sendEmoji(e: string): void;
-  goLive(): void;
+  /** Opens the ready check (the path line on screen first), never goes live at once. */
+  requestGoLive(): void;
   end(): void;
   exit(): void;
   hostName: string;
@@ -1452,6 +1792,14 @@ interface MobileCtl {
   toggleRec(): void;
   recLabel: string | null;
   banners: React.ReactNode;
+  /** An Instant meeting (private until the host goes live). */
+  meeting: boolean;
+  canGoLive: boolean;
+  invite(): void;
+  shareWatch(): void;
+  endMeeting(): void;
+  /** Camera problem card / ready check, drawn over the video. */
+  overlay: React.ReactNode;
 }
 
 function MobileStudio({ ctl }: { ctl: MobileCtl }) {
@@ -1474,13 +1822,18 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
       <div className="ms-top">
         {ctl.status === 'live' && <span className="ov-pill live"><span className="ov-dot pulse" />LIVE {ctl.liveFor ?? ''}</span>}
         {ctl.status === 'paused' && <span className="ov-pill">PAUSED</span>}
-        {ctl.status === 'idle' && <span className="ov-pill">Ready</span>}
+        {ctl.status === 'idle' && <span className="ov-pill">{ctl.meeting ? 'Meeting · not broadcasting' : 'Ready'}</span>}
         {ctl.status === 'ended' && <span className="ov-pill">Ended</span>}
-        <span className="ov-pill"><Icon name="eye" size={12} />{ctl.viewers}</span>
-        {ctl.guestCount > 0 && <span className="ov-pill"><Icon name="users" size={12} />{ctl.guestCount} on air</span>}
+        {!(ctl.meeting && ctl.status === 'idle') && <span className="ov-pill"><Icon name="eye" size={12} />{ctl.viewers}</span>}
+        {ctl.guestCount > 0 && <span className="ov-pill"><Icon name="users" size={12} />{ctl.guestCount} {ctl.meeting ? 'here' : 'on air'}</span>}
         <span className="spacer" />
+        <button className="ms-topbtn" onClick={ctl.invite} aria-label="Invite people" data-tour="studio-invite"><Icon name="users" size={15} /><span>Invite</span></button>
+        {!(ctl.meeting && ctl.status === 'idle') && (
+          <button className="ms-topbtn" onClick={ctl.shareWatch} aria-label="Share watch link"><Icon name="share" size={15} /><span>Share</span></button>
+        )}
         <button className="ms-x" onClick={ctl.exit} aria-label="Exit phone studio"><Icon name="x" size={16} /></button>
       </div>
+      {ctl.overlay}
 
       {/* right action rail */}
       <div className="ms-rail">
@@ -1549,10 +1902,19 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
       {/* bottom bar */}
       <div className="ms-bottom">
         <button className="ms-chatbtn" onClick={() => setShowChat(true)} aria-label="Open chat"><Icon name="chat" size={18} /><span>Chat</span></button>
-        {ctl.status === 'idle'
-          ? <button className="ms-golive" onClick={ctl.goLive}><Icon name="broadcast" size={18} />Go live</button>
-          : <button className="ms-end" onClick={ctl.end}><span className="ms-end-dot" />End stream</button>}
-        <button className="ms-react" onClick={() => ctl.sendEmoji('❤️')} aria-label="Send heart"><Icon name="heart" size={18} /></button>
+        {ctl.status === 'idle' && ctl.meeting ? (
+          <>
+            <button className="ms-end" onClick={ctl.endMeeting}><span className="ms-end-dot" />End meeting</button>
+            <button className="ms-react" onClick={ctl.requestGoLive} disabled={!ctl.canGoLive} aria-label="Go live with this meeting" title="Go live with this meeting"><Icon name="broadcast" size={18} /></button>
+          </>
+        ) : (
+          <>
+            {ctl.status === 'idle'
+              ? <button className="ms-golive" onClick={ctl.requestGoLive} disabled={!ctl.canGoLive}><Icon name="broadcast" size={18} />Go live</button>
+              : <button className="ms-end" onClick={ctl.end}><span className="ms-end-dot" />End stream</button>}
+            <button className="ms-react" onClick={() => ctl.sendEmoji('❤️')} aria-label="Send heart"><Icon name="heart" size={18} /></button>
+          </>
+        )}
       </div>
 
       {/* chat sheet */}

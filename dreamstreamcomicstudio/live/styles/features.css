@@ -62,6 +62,9 @@
 .auth-agree { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
 .auth-agree a { color: var(--accent-ink); }
 .auth-submit { width: 100%; }
+/* "Continue with DreamStream" — only on Stream Studio's own host (live/components/AuthSheet.tsx). */
+.auth-continue { display: grid; justify-items: center; gap: 8px; margin-top: 10px; }
+.auth-continue-note { font-size: 12px; text-align: center; line-height: 1.4; }
 .auth-captcha { display: flex; justify-content: center; min-height: 65px; margin: 4px 0 12px; }
 /* Replaces the form in place — don't replay the slide-up. */
 .sheet.sheet-swap { animation: none; }
@@ -1140,6 +1143,7 @@
 .family-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .family-who small { color: var(--muted); font-size: 12px; }
 .family-empty { font-size: 13px; margin: 6px 0 0; }
+.family-empty .btn { margin-left: 4px; vertical-align: middle; }
 .call-chip { width: 42px; height: 42px; border-radius: 50%; border: none; background: var(--green-wash); color: var(--green); display: grid; place-items: center; cursor: pointer; transition: transform .12s, background .15s; }
 .call-chip.video { background: var(--green); color: #fff; }
 .call-chip:hover:not(:disabled) { transform: scale(1.06); }

@@ -5,6 +5,8 @@ import { WORKER_BASE } from '../../config';
 import type { MonRole, MonSettings } from '../../monitor/protocol';
 import { Icon } from '../../ui/icons';
 import { Btn, Segmented, Toggle, type PushToast } from '../../ui/primitives';
+import type { QueryLike } from '../../usage/usageClient';
+import { NurseryUsage } from '../settings/UsageCard';
 
 type Send = (msg: Record<string, unknown>) => void;
 
@@ -15,6 +17,8 @@ export function NurserySettings({
   settings,
   send,
   push,
+  people,
+  query,
 }: {
   nid: string;
   nurseryName: string;
@@ -22,6 +26,10 @@ export function NurserySettings({
   settings: MonSettings;
   send: Send;
   push: PushToast;
+  /** Parents: "People & sharing" at a glance, with Invite. */
+  people?: { summary: string; onInvite: () => void };
+  /** The monitor socket's query channel: parents read the nursery's usage over it. */
+  query?: QueryLike | null;
 }) {
   const [days, setDays] = useState('30');
   const [busy, setBusy] = useState<string | null>(null);
@@ -64,6 +72,14 @@ export function NurserySettings({
         {!parent && <span className="faint" style={{ fontSize: 12 }}>Parents can change these</span>}
       </div>
 
+      {parent && people && (
+        <div className="ns-people">
+          <Icon name="users" size={16} />
+          <span><b>People &amp; sharing</b><small className="faint">{people.summary}</small></span>
+          <Btn variant="soft" size="sm" icon="userPlus" onClick={people.onInvite}>Invite</Btn>
+        </div>
+      )}
+
       <div className="ns-row">
         <div><b>Sound detection sensitivity</b><small>High catches soft whimpers and distant sounds; Low only clear, close cries.</small></div>
         <Segmented label="Sensitivity" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]} value={settings.sensitivity} onChange={(v) => parent && set({ sensitivity: v })} />
@@ -93,6 +109,13 @@ export function NurserySettings({
         <Toggle size="sm" on={settings.sleepTracking !== false} onChange={(v) => parent && set({ sleepTracking: v })} label="Sleep tracking" />
         <span><b>Sleep tracking &amp; morning report</b><small>Naps and nights from the camera’s movement and sound, with a summary when the night ends.</small></span>
       </label>
+
+      {parent && (
+        <>
+          <div className="mv-sect-title" style={{ marginTop: 16 }}>Usage</div>
+          <NurseryUsage query={query ?? null} nid={nid} />
+        </>
+      )}
 
       <div className="mv-sect-title" style={{ marginTop: 16 }}>Download history</div>
       <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>

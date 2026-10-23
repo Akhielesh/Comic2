@@ -1,6 +1,6 @@
-# dreamstream-live — DreamStream Live worker
+# dreamstream-live — Stream Studio's live worker
 
-The backend for **DreamStream Live** (Stream Studio): one Durable Object per event
+The backend for **Stream Studio** (`stream.dreamstreamstudio.ai`): one Durable Object per event
 (chat, lobby, presence, moderation, stream state) plus the R2 segment rail —
 the streamer's browser uploads short self-contained media segments, viewers pull
 them back through the Cloudflare cache. R2 has **zero egress fees**, so a
@@ -29,8 +29,21 @@ pointing at both ports, with `VITE_LIVE_WORKER_URL` set to the worker tunnel URL
 
 ```sh
 npx wrangler r2 bucket create dreamstream-live   # once
+# once: the 7-day copy ledger (quota/rec/<account>/…, cloudCopyQuota.ts) expires on its own,
+# so no per-copy record outlives its copy, even for an account that never checks again
+npx wrangler r2 bucket lifecycle add dreamstream-live quota-rec-expiry quota/rec/ --expire-days 8
+# once: backstops for each event room's own janitor (eventRoom.ts) — a sweep that failed, a room
+# that never ended — and unfinished 7-day-copy uploads (R2's default keeps their parts 7 days)
+npx wrangler r2 bucket lifecycle add dreamstream-live events-expiry events/ --expire-days 9
+npx wrangler r2 bucket lifecycle add dreamstream-live events-abort-multipart events/ --abort-multipart-days 1
+npx wrangler r2 bucket lifecycle list dreamstream-live
 cd live-worker && npx wrangler deploy
 ```
+
+The `quota/rec/` rule must stay **longer than 7 days**: a marker counts for 7 days from its
+upload, and deleting one sooner would let copies past the 10 GB allowance. The `events/` rule
+must stay longer than every promise (replay 24 h, copies 7 days); the rooms themselves purge on
+time and then delete their own storage, so it only catches what they missed.
 
 The worker is also exposed on workers.dev (used by the old Pages launch domain):
 
@@ -42,7 +55,7 @@ https://dreamstream-live.akhieleshsrirangam.workers.dev
 `live/config.ts`. Since 2026-10-22 that host only 301s to `dreamstreamstudio.ai`
 (`functions/_middleware.ts`), so the fallback serves just tabs opened before the switch;
 `ALLOWED_ORIGINS` keeps `https://comic2.pages.dev` for them until a later cleanup.
-Custom domains use same-origin `/live-api` (`dreamstreamstudio.ai/live-api/*`).
+Custom domains use same-origin `/live-api`: `stream.dreamstreamstudio.ai/live-api/*` (Stream Studio's own host) and `dreamstreamstudio.ai/live-api/*` (the old address, kept for installed apps and open tabs).
 
 If you move accounts or workers.dev subdomains, either update
 `FALLBACK_PAGES_LIVE_WORKER_BASE` in `live/config.ts` or set this in the frontend
@@ -89,4 +102,13 @@ The room doubles as the **WebRTC signaling relay** for up to 4 on-air guests:
   ends the stream immediately (restartable; going live again clears `endedAt`).
 - Host websocket drop while live → `paused` + 2-minute grace → auto-end.
 - 2 h without segment ingest while "live" → auto-end.
-- Segments purge 24 h after end; server recordings purge after 7 days.
+- Segments purge 24 h after end; server recordings purge after 7 days, and then the room sets no
+  further alarm. The event itself is never deleted: an ended event can go live again from the same
+  studio link, and its invite page, RSVPs and host/guest keys keep working. What stays is a few KB of
+  rows with no R2, no alarm and no requests. A host who goes live again mid-purge stops it.
+- While live, a chat line not yet written rides its poster's socket attachment and the counters ride
+  the host's, so a room that hibernates in an upload stall loses neither; a delete always reaches
+  every screen.
+- One DO request per segment: the Worker remembers a host key the room confirmed (a per-isolate
+  pass); the room still checks the key on every `/ingest`. While live the room writes its meta every
+  10 segments and its stats/chat at most once a minute (deletes, strikes and timeouts at once).

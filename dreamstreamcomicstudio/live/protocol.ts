@@ -6,6 +6,9 @@
 
 export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
+/** How an event started: a private meeting (nothing broadcast until the host goes live)
+ *  or a broadcast. Rooms created before meetings report none → broadcast. */
+export type EventKind = 'meeting' | 'broadcast';
 
 /** On-air guest seats per event (mirrors the worker's mesh cap). */
 export const MAX_GUESTS = 4;
@@ -16,7 +19,9 @@ export interface RtcSignal {
   ice?: RTCIceCandidateInit | null;
   /** MediaStream.id → what that stream is, so tiles label correctly. */
   meta?: Record<string, 'cam' | 'screen'>;
-  /** Guest is ready for (re)negotiation — host (re)creates its peer. */
+  /** Ready for (re)negotiation. From a guest: the host (re)creates its peer. From the
+   *  host: the guest rebuilds its peer and answers with its own `ready` (lost handshakes,
+   *  studio reloads and a camera that came up late all heal this way). */
   ready?: boolean;
   /** Sender is leaving — tear the peer down. */
   bye?: boolean;
@@ -47,6 +52,8 @@ export interface EventMeta {
   quick?: string[];
   /** Hard concurrent-viewer cap, host-set (≤200 platform ceiling). */
   maxViewers: number;
+  /** Meeting or broadcast (absent on older rooms → broadcast). */
+  kind?: EventKind;
   viewers: number;
   rsvpCount: number;
   rsvpNames: string[];
@@ -141,6 +148,8 @@ export type ServerMsg =
   | { t: 'pin'; text: string | null }
   | { t: 'guest'; sid: string; name: string; on: boolean }
   | { t: 'guestkey'; key: string }
+  /** `iceMs`: ask again (`{t:'ice'}`) in this many ms, before the relay credentials lapse; absent: STUN only. */
+  | { t: 'ice'; servers: RTCIceServer[]; iceMs?: number }
   | { t: 'rtc'; from: string; d: RtcSignal };
 
 export const EMOJI_SET = ['❤️', '🔥', '👏', '😂', '🤯', '🎉'] as const;

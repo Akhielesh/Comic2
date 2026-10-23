@@ -7,6 +7,7 @@ import type { FinishedRecording } from '../recorder';
 const h = vi.hoisted(() => ({
   account: { status: 'member', userId: 'u1', email: 'me@example.com' } as { status: string; userId?: string },
   drive: null as null | Record<string, unknown>,
+  quota: null as null | { usedBytes: number; limitBytes: number; copies: number; nextFreeAt: number | null; retryBytes?: number },
 }));
 
 vi.mock('../account', () => ({
@@ -15,6 +16,10 @@ vi.mock('../account', () => ({
 }));
 vi.mock('../api', () => ({ uploadRecording: vi.fn(() => new Promise(() => undefined)) }));
 vi.mock('../events', () => ({ addMyRecording: vi.fn() }));
+vi.mock('../cloudCopy', async (orig) => {
+  const real = await orig<typeof import('../cloudCopy')>();
+  return { ...real, fetchCloudCopyQuota: vi.fn(async () => h.quota) };
+});
 vi.mock('../recorder', () => ({ discardOpfsRecording: vi.fn(async () => undefined), removeUnsaved: vi.fn() }));
 vi.mock('../driveUpload', async (orig) => {
   const real = await orig<typeof import('../driveUpload')>();
@@ -28,10 +33,13 @@ vi.mock('../driveUpload', async (orig) => {
   };
 });
 
-import { connectDrive, DriveError, openConsentWindow, saveRecordingToDrive } from '../driveUpload';
+import { uploadRecording } from '../api';
+import { CloudCopyError, fetchCloudCopyQuota } from '../cloudCopy';
+import { connectDrive, DriveError, getDriveStatus, openConsentWindow, saveRecordingToDrive } from '../driveUpload';
 import { discardOpfsRecording } from '../recorder';
-import { savePrefs, loadPrefs } from '../prefs';
+import { cloudCopyNoticePending, savePrefs, loadPrefs } from '../prefs';
 import { SaveSheet } from './SaveSheet';
+import { deviceMonth } from '../usage/ledger';
 
 const rec = (): FinishedRecording => ({
   data: new Blob([new Uint8Array(4096)], { type: 'video/webm' }),
@@ -54,6 +62,7 @@ beforeEach(() => {
   localStorage.clear();
   h.account = { status: 'member', userId: 'u1' };
   h.drive = null;
+  h.quota = null;
 });
 
 const renderSheet = (props: Partial<React.ComponentProps<typeof SaveSheet>> = {}) => {
@@ -177,5 +186,178 @@ describe('SaveSheet — Google Drive', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(signal?.aborted).toBe(true);
+  });
+});
+
+const GB = 1024 ** 3;
+const quotaOf = (usedGb: number, extra: Partial<{ copies: number; nextFreeAt: number | null }> = {}) => ({
+  usedBytes: usedGb * GB,
+  limitBytes: 10 * GB,
+  copies: 2,
+  nextFreeAt: null,
+  ...extra,
+});
+const cloudRow = () => screen.getByRole('region', { name: /7-day copy on our servers/ });
+
+describe('SaveSheet — free first, the 7-day copy only when chosen (ADR 0007 C1)', () => {
+  it('every Drive and device option says it is free; the copy on our servers never does', async () => {
+    h.drive = connected;
+    h.quota = quotaOf(3.1);
+    renderSheet({ hostKey: 'hk' });
+    expect(screen.getByRole('button', { name: /Save to Google Drive/ })).toHaveTextContent('Free · yours to keep');
+    expect(screen.getByRole('button', { name: /To your browser’s Downloads folder/ })).toHaveTextContent('Free · on this device');
+    await waitFor(() => expect(cloudRow()).toHaveTextContent('kept 7 days · 3.1 of 10 GB used'));
+    expect(cloudRow()).toHaveTextContent('7-day copy · 4 KB');
+    expect(cloudRow()).toHaveTextContent(/Uses our storage/);
+    expect(cloudRow().textContent).not.toMatch(/free/i);
+    // The copy sits below the free choices.
+    const order = screen.getAllByRole('button').map((b) => b.textContent ?? '');
+    expect(order.findIndex((t) => /Keep a 7-day copy/.test(t))).toBeGreaterThan(order.findIndex((t) => /To your browser’s Downloads folder/.test(t)));
+  });
+
+  it('by default nothing uploads to our servers until the host taps “Keep a 7-day copy”', async () => {
+    h.quota = quotaOf(1);
+    vi.mocked(uploadRecording).mockResolvedValue({ key: 'k', quota: quotaOf(1.5) });
+    const { push } = renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    expect(uploadRecording).not.toHaveBeenCalled();
+    expect(fetchCloudCopyQuota).toHaveBeenCalledWith('ev1', 'hk', 4096);
+
+    fireEvent.click(keep);
+    await waitFor(() => expect(cloudRow()).toHaveTextContent('Stored'));
+    expect(uploadRecording).toHaveBeenCalledTimes(1);
+    expect(cloudRow()).toHaveTextContent('1.5 of 10 GB used');
+    expect(push).toHaveBeenCalledWith(expect.stringContaining('7-day copy stored'), expect.anything());
+  });
+
+  it('without a studio link there is no 7-day copy at all (and no quota read)', () => {
+    renderSheet();
+    expect(screen.queryByRole('region', { name: /7-day copy on our servers/ })).toBeNull();
+    expect(fetchCloudCopyQuota).not.toHaveBeenCalled();
+  });
+
+  it('a host who turned on “Also keep a 7-day cloud copy” still gets it right away', async () => {
+    savePrefs({ ...loadPrefs(), cloudRecordings: true });
+    h.quota = quotaOf(2);
+    renderSheet({ hostKey: 'hk' });
+    await waitFor(() => expect(uploadRecording).toHaveBeenCalledTimes(1));
+    expect(cloudRow()).toHaveTextContent(/Started because “Also keep a 7-day cloud copy” is on/);
+  });
+
+  it('opted in but no room left: says so (and when space frees up) instead of uploading', async () => {
+    savePrefs({ ...loadPrefs(), cloudRecordings: true });
+    const at = Date.UTC(2026, 9, 29, 12);
+    h.quota = quotaOf(10, { nextFreeAt: at });
+    renderSheet({ hostKey: 'hk' });
+    await waitFor(() => expect(cloudRow()).toHaveTextContent(/doesn’t have room for this one/));
+    expect(cloudRow()).toHaveTextContent(/Google Drive and this device are free/);
+    expect(cloudRow()).toHaveTextContent(new Date(at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }));
+    expect(uploadRecording).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Keep a 7-day copy/ })).toBeNull();
+  });
+
+  it('reopened after an unfinished try: offers the retry the server would accept, and says why', async () => {
+    // 10 GB counted, of which 4 KB is this recording's unfinished try — starting again replaces it.
+    h.quota = { ...quotaOf(10), usedBytes: 10 * GB, retryBytes: 4096 };
+    renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    expect(cloudRow()).not.toHaveTextContent(/doesn’t have room/);
+    expect(cloudRow()).toHaveTextContent(/unfinished try of this recording.*isn’t counted twice/);
+  });
+
+  it('opted in and reopened after an unfinished try: the copy still starts', async () => {
+    savePrefs({ ...loadPrefs(), cloudRecordings: true });
+    h.quota = { ...quotaOf(10), usedBytes: 10 * GB, retryBytes: 4096 };
+    renderSheet({ hostKey: 'hk' });
+    await waitFor(() => expect(uploadRecording).toHaveBeenCalledTimes(1));
+  });
+
+  it('the server’s “full” answer is shown as-is, with the day space frees up — no pointless retry', async () => {
+    h.quota = quotaOf(5);
+    const at = Date.UTC(2026, 9, 27, 9);
+    const msg = 'Your 10 GB of 7-day copies is full (9.0 GB used; this recording is 3.0 GB). Save it to Google Drive (free, yours to keep) or to this device instead — or wait for an older copy to expire.';
+    vi.mocked(uploadRecording).mockRejectedValue(new CloudCopyError('cloud_copy_full', msg, { freesAt: at, usedBytes: 9 * GB, limitBytes: 10 * GB }));
+    renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    fireEvent.click(keep);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(msg);
+    expect(alert).toHaveTextContent(/Space frees up/);
+    expect(cloudRow()).toHaveTextContent('9.0 of 10 GB used');
+    expect(screen.queryByRole('button', { name: /Try again/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /To your browser’s Downloads folder/ })).not.toBeDisabled();
+  });
+
+  it('any other failure keeps the device copy safe and offers a retry', async () => {
+    h.quota = quotaOf(1);
+    vi.mocked(uploadRecording).mockRejectedValue(new Error('part 3 failed (502)'));
+    renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    fireEvent.click(keep);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still safe on this device/);
+    expect(screen.getByRole('button', { name: /Try again/ })).toBeInTheDocument();
+  });
+
+  it('tells a host whose old default was switched off — once', async () => {
+    localStorage.setItem('ds-live-prefs', JSON.stringify({ ...loadPrefs(), cloudRecordings: true, prefsVersion: undefined }));
+    expect(loadPrefs().cloudRecordings).toBe(false); // migration (see prefs.unit.test.ts)
+    expect(cloudCopyNoticePending()).toBe(true);
+    h.quota = quotaOf(0);
+    const first = render(<SaveSheet rec={rec()} hostKey="hk" push={vi.fn()} onClose={vi.fn()} />);
+    expect(cloudRow()).toHaveTextContent(/7-day copies are now made only when you choose one/);
+    expect(uploadRecording).not.toHaveBeenCalled();
+    await waitFor(() => expect(cloudCopyNoticePending()).toBe(false));
+    first.unmount();
+    renderSheet({ hostKey: 'hk' });
+    expect(cloudRow()).not.toHaveTextContent(/now made only when you choose one/);
+  });
+
+  it('signed out: the copy asks for sign-in first (no upload, no quota read)', () => {
+    h.account = { status: 'signed_out' };
+    h.drive = { signedIn: false, available: true, connected: false, expired: false };
+    renderSheet({ hostKey: 'hk' });
+    expect(fetchCloudCopyQuota).not.toHaveBeenCalled();
+    expect(cloudRow()).toHaveTextContent('Sign in');
+  });
+
+  it('a Drive save asks the backend nothing more once the upload finishes (≤ 1 backend wake per save)', async () => {
+    h.drive = connected;
+    vi.mocked(saveRecordingToDrive).mockResolvedValue(SAVED);
+    renderSheet();
+    fireEvent.click(screen.getByRole('button', { name: /Save to Google Drive/ }));
+    await screen.findByRole('link', { name: /Open in Drive/ });
+    expect(screen.getByText(/DreamStream Recordings · me@example\.com/)).toBeInTheDocument();
+    expect(getDriveStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('SaveSheet — usage (ADR 0007 Phase B)', () => {
+  it('a 7-day copy that takes the account past 80% says so in the app; this device’s Usage counts it', async () => {
+    h.quota = quotaOf(7.5);
+    vi.mocked(uploadRecording).mockResolvedValue({ key: 'k', quota: quotaOf(8.4) });
+    const { push } = renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    fireEvent.click(keep);
+    await waitFor(() => expect(cloudRow()).toHaveTextContent('Stored'));
+    expect(push).toHaveBeenCalledWith('8.4 GB of your 10 GB of 7-day copies is in use. Google Drive and this device are free, and the file is yours to keep.', { icon: 'info', duration: 8000 });
+    expect(deviceMonth().saves.cloud).toBe(4096);
+  });
+
+  it('under 80%: no notice; a save to this device is counted as free in this device’s Usage', async () => {
+    h.quota = quotaOf(1);
+    vi.mocked(uploadRecording).mockResolvedValue({ key: 'k', quota: quotaOf(1.5) });
+    const { push } = renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    fireEvent.click(keep);
+    await waitFor(() => expect(cloudRow()).toHaveTextContent('Stored'));
+    expect(push).not.toHaveBeenCalledWith(expect.stringContaining('of 7-day copies is in use'), expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: /To your browser’s Downloads folder/ }));
+    await waitFor(() => expect(deviceMonth().saves.device).toBe(4096));
   });
 });

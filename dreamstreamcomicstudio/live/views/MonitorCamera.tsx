@@ -3,9 +3,13 @@
 // A FaceTime-grade camera: real lenses (back, ultra-wide, front) with live
 // preview, zoom, flip, two-way audio (parents' voices play on this speaker)
 // and parents' video calls shown full-screen. Live only, never recorded:
-// video/audio go peer-to-peer (encrypted) to the family's devices. All sound
-// and motion analysis — including the AI sound model — runs on this phone;
-// only events and a few numbers go to the room.
+// video/audio go peer-to-peer (end-to-end encrypted) to the family's devices —
+// and, for viewers the direct picture can't reach (a network that blocks it,
+// a full camera, or for a moment while it connects), as one small relay
+// stream through the room (not end-to-end encrypted, never stored;
+// monitor/relay.ts). All
+// sound and motion analysis — including the AI sound model — runs on this
+// phone; only events and a few numbers go to the room.
 import React, { useEffect, useRef, useState } from 'react';
 import {
   checkBrowser, dropAudioEl, listLenses, mediaErrorText, networkHint, openMedia, openVideoOnly, preferSpeaker, remoteAudioEl,
@@ -14,6 +18,9 @@ import {
 import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
 import { STATE_INFO, STATE_RANK, type BabyState, type MonServerMsg, type MonSettings, type ViewerPresence } from '../monitor/protocol';
 import { CameraHub, type Quality } from '../monitor/rtc';
+import { sceneIntervalMs } from '../monitor/videoBudget';
+import { NO_WANT, readWant, RelayEncoder, watchersNote, type RelayWant } from '../monitor/relay';
+import { StatusCadence } from '../monitor/statusCadence';
 import type { BrainEvent } from '../monitor/soundBrain';
 import { SOUND_INFO, type SoundCat } from '../monitor/soundClasses';
 import { NurseryEars, type EarsSnapshot, type ModelState } from '../monitor/soundEngine';
@@ -142,15 +149,26 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const sootheRef = useRef(new SoothePlayer());
   const wakeRef = useRef(new ScreenWakeLock());
   const tickersRef = useRef<Ticker[]>([]);
+  /** What goes to the room: news at once, a keepalive every 2 min — every 2 s only while it asks (live_want). */
+  const cadenceRef = useRef(new StatusCadence());
+  // Keyed by the viewer (CameraHub keys), so a parent's socket reconnecting mid-talk keeps their voice.
   const talkElsRef = useRef(new Map<string, HTMLAudioElement>());
   const callersRef = useRef(new Map<string, { stream: MediaStream | null; who: string; on: boolean }>());
-  const relayTimerRef = useRef<number | undefined>(undefined);
+  /** The relay picture (one encoder for every viewer who can't get the direct one). */
+  const relayRef = useRef<RelayEncoder | null>(null);
+  /** Viewers being encoded for (P2P) — smart vision steps back when it's more than one. */
+  const peersRef = useRef(0);
+  /** Latest motion / light (the heartbeat reads these; the screen may not re-render while dimmed). */
+  const motionRef = useRef(0);
+  const lightRef = useRef(128);
+  const dimRef = useRef(false);
   const lensRef = useRef(loadLens());
   const powerRef = useRef<PowerState>({ level: null, charging: null });
   const unwatchPowerRef = useRef<() => void>(() => undefined);
   const lastBatteryAlertRef = useRef(0);
   const motionRunRef = useRef<{ since: number | null; lastEvent: number }>({ since: null, lastEvent: 0 });
-  const talkersRef = useRef(new Map<string, string>());
+  /** Who is talking into the nursery: viewer key → their name and current socket. */
+  const talkersRef = useRef(new Map<string, { who: string; sid: string }>());
   const privacyRef = useRef(false);
   const interruptedRef = useRef(false);
   const lastTouchRef = useRef(Date.now());
@@ -169,6 +187,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
   const [p2pCount, setP2pCount] = useState(0);
+  /** What the relay sends right now (for the status line): a video codec, JPEG, or nothing. */
+  const [relayMode, setRelayMode] = useState<string | null>(null);
+  /** Viewers getting the relay picture — including those only bridging while their direct picture connects. */
+  const [relayViewers, setRelayViewers] = useState(0);
   const [snap, setSnap] = useState<EarsSnapshot>(EMPTY_SNAP);
   const [motion, setMotion] = useState(0);
   const [light, setLight] = useState(128);
@@ -207,8 +229,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     if (sayBye) sockRef.current?.send({ t: 'bye' });
     tickersRef.current.forEach((t) => t.stop());
     tickersRef.current = [];
-    window.clearInterval(relayTimerRef.current);
-    hubRef.current?.closeAll();
+    relayRef.current?.stop();
+    relayRef.current = null;
+    // Stopping on purpose: viewers end the call now instead of waiting for it to time out.
+    hubRef.current?.closeAll(sayBye);
     hubRef.current = null;
     const s = sockRef.current;
     sockRef.current = null;
@@ -263,8 +287,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             for (const e of events) sendScene(e);
           }
         }
-        const cost = ai.cost;
-        timer = window.setTimeout(tick, cost > 400 ? 3000 : cost > 150 ? 1500 : 1000);
+        // The live picture comes first: slower with several viewers or a busy phone
+        // (the relay counts as a viewer). Sound and cry detection never slow down.
+        const peers = peersRef.current + (relayRef.current?.active ? 1 : 0);
+        timer = window.setTimeout(tick, sceneIntervalMs(ai.cost, peers, hubRef.current?.pressure ?? 0));
       };
       tick();
     })();
@@ -291,7 +317,14 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   });
 
   useEffect(() => {
-    const t = window.setInterval(() => setClock((n) => n + 1), 1000);
+    let minute = -1;
+    const t = window.setInterval(() => {
+      // Dimmed, only the clock's minute is on screen: re-render once a minute, not every second.
+      const m = Math.floor(Date.now() / 60_000);
+      if (dimRef.current && m === minute) return;
+      minute = m;
+      setClock((n) => n + 1);
+    }, 1000);
     const onVis = () => {
       if (document.visibilityState === 'hidden' && phase === 'running') {
         setHiddenWarn(true);
@@ -412,7 +445,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         el.muted = true;
         window.setTimeout(() => (el.muted = false), 900);
       }
-      for (const sid of talkersRef.current.keys()) sockRef.current?.send({ t: 'tell', to: sid, c: 'feedback', v: { freq: h.freq } });
+      for (const t of talkersRef.current.values()) sockRef.current?.send({ t: 'tell', to: t.sid, c: 'feedback', v: { freq: h.freq } });
     };
     try {
       await ears.start(stream, { ai: true });
@@ -428,28 +461,59 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     const vision = visionRef.current;
     vision.setZones(zonesRef.current);
     let frameN = 0;
+    let lastMood: string | null = null;
+    // Shrink the frame before reading it (createImageBitmap resizes on the GPU
+    // where it can), so only 64×48 pixels come back to the CPU four times a
+    // second — not a whole 720p frame. Falls back to drawing the video directly.
+    let shrinkFails = typeof createImageBitmap === 'function' ? 0 : 3;
+    let grabbing = false;
+    const grab = async (v: HTMLVideoElement) => {
+      if (!c2d) return;
+      if (shrinkFails < 3) {
+        try {
+          const bmp = await createImageBitmap(v, { resizeWidth: FRAME_W, resizeHeight: FRAME_H, resizeQuality: 'low' });
+          c2d.drawImage(bmp, 0, 0, FRAME_W, FRAME_H);
+          bmp.close();
+          shrinkFails = 0;
+          return;
+        } catch {
+          shrinkFails += 1;
+        }
+      }
+      c2d.drawImage(v, 0, 0, FRAME_W, FRAME_H);
+    };
+    const look = () => {
+      if (!c2d) return;
+      const now = Date.now();
+      const r = vision.push(c2d.getImageData(0, 0, FRAME_W, FRAME_H).data, now);
+      earsRef.current?.setMotion(r.frame.motion);
+      visionNowRef.current = { crib: r.frame.crib, outside: r.frame.outside, visit: vision.inVisit };
+      motionRef.current = r.frame.motion;
+      lightRef.current = r.frame.light;
+      // The meters only matter on a lit screen.
+      if (frameN++ % 2 === 0 && !dimRef.current) {
+        setMotion(r.frame.motion);
+        setLight(r.frame.light);
+      }
+      for (const e of r.events) sendVision(e);
+      const run = motionRunRef.current;
+      if (r.frame.motion > 35 && !vision.inVisit) {
+        run.since ??= now;
+        if (now - run.since > 5000 && now - run.lastEvent > 10 * 60_000) {
+          run.lastEvent = now;
+          sockRef.current?.send({ t: 'event', kind: 'motion' });
+        }
+      } else run.since = null;
+    };
     tickersRef.current.push(
       startTicker(250, () => {
         const v = videoRef.current;
-        if (!c2d || !v || v.readyState < 2 || privacyRef.current) return;
-        c2d.drawImage(v, 0, 0, FRAME_W, FRAME_H);
-        const now = Date.now();
-        const r = vision.push(c2d.getImageData(0, 0, FRAME_W, FRAME_H).data, now);
-        earsRef.current?.setMotion(r.frame.motion);
-        visionNowRef.current = { crib: r.frame.crib, outside: r.frame.outside, visit: vision.inVisit };
-        if (frameN++ % 2 === 0) {
-          setMotion(r.frame.motion);
-          setLight(r.frame.light);
-        }
-        for (const e of r.events) sendVision(e);
-        const run = motionRunRef.current;
-        if (r.frame.motion > 35 && !vision.inVisit) {
-          run.since ??= now;
-          if (now - run.since > 5000 && now - run.lastEvent > 10 * 60_000) {
-            run.lastEvent = now;
-            sockRef.current?.send({ t: 'event', kind: 'motion' });
-          }
-        } else run.since = null;
+        if (!c2d || !v || v.readyState < 2 || privacyRef.current || grabbing) return;
+        grabbing = true;
+        void grab(v)
+          .then(() => !privacyRef.current && look())
+          .catch(() => undefined)
+          .finally(() => (grabbing = false));
       }),
       // Per-minute tallies: what was heard and the worst state.
       startTicker(1000, () => {
@@ -465,7 +529,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       startTicker(500, () => {
         const s = earsRef.current?.snapshot();
         if (!s) return;
-        setSnap(s);
+        // Dimmed, the screen shows only the state: re-render when it changes, not twice a second.
+        if (!dimRef.current || s.mood !== lastMood) setSnap(s);
+        lastMood = s.mood;
         if (s.level >= 12) setHeard(true);
       }),
     );
@@ -566,36 +632,46 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       [],
       () => ({ video: videoTrack(), audio: streamRef.current?.getAudioTracks()[0] ?? null }),
     );
-    hub.onCount = setP2pCount;
-    hub.onTalk = (sid, s) => {
-      let el = talkElsRef.current.get(sid);
+    hub.onCount = (n) => {
+      peersRef.current = n;
+      setP2pCount(n);
+    };
+    // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
+    hub.onIceStale = () => sockRef.current?.send({ t: 'ice' });
+    hub.onTalk = (key, s) => {
+      let el = talkElsRef.current.get(key);
       if (!s) {
         dropAudioEl(el);
-        talkElsRef.current.delete(sid);
+        talkElsRef.current.delete(key);
         return;
       }
       if (!el) {
         el = remoteAudioEl();
         el.volume = 0.85; // moderate start (ignored on iPhone — the parent's phone shapes the voice there)
-        talkElsRef.current.set(sid, el);
+        talkElsRef.current.set(key, el);
       }
       el.srcObject = s;
       void el.play().catch(() => undefined);
     };
-    hub.onCallerVideo = (sid, s, who) => {
-      const cur = callersRef.current.get(sid);
+    hub.onCallerVideo = (key, s, who) => {
+      const cur = callersRef.current.get(key);
       if (!s) {
-        callersRef.current.delete(sid);
-        setCaller((c) => (c?.sid === sid ? pickCaller() : c));
+        callersRef.current.delete(key);
+        setCaller((c) => (c?.sid === key ? pickCaller() : c));
         return;
       }
-      callersRef.current.set(sid, { stream: s, who, on: cur?.on ?? false });
+      callersRef.current.set(key, { stream: s, who, on: cur?.on ?? false });
     };
     hubRef.current = hub;
 
     sockRef.current = openMonitorSocket(id, 'camera', onMsg, () => undefined, (st, detail) => {
       setSock(st);
-      if (st !== 'connected') authedRef.current = false;
+      if (st !== 'connected') {
+        authedRef.current = false;
+        // Nothing can reach relay viewers now: stop encoding for them (the home Wi-Fi
+        // keeps the direct picture going). The room re-sends relay_want when we rejoin.
+        setRelay(NO_WANT);
+      }
       if (st === 'closed' && detail) {
         setErr(detail);
         setPhase('error');
@@ -619,7 +695,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         if (talking) {
           const f = talkGovRef.current.step(lv, bgRef.current);
           if (f < 1) {
-            for (const sid of talkersRef.current.keys()) sockRef.current?.send({ t: 'tell', to: sid, c: 'talk_gain', v: { factor: f, db: Math.round(lv) } });
+            for (const t of talkersRef.current.values()) sockRef.current?.send({ t: 'tell', to: t.sid, c: 'talk_gain', v: { factor: f, db: Math.round(lv) } });
             // Where the browser allows it (not iPhone), turn the speaker down here too.
             for (const el of talkElsRef.current.values()) el.volume = Math.max(0.3, el.volume * f);
           }
@@ -638,7 +714,11 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         const s = ears?.snapshot() ?? EMPTY_SNAP;
         // Keep ignoring the speaker while anyone is still talking.
         if (talkersRef.current.size && ears) ears.suppress(3000);
-        const talkNames = [...talkersRef.current.values()];
+        const talkNames = [...new Set([...talkersRef.current.values()].map((t) => t.who))];
+        const relay = relayRef.current;
+        const relayFps = relay?.sentFps() ?? 0;
+        const enc = hubRef.current ? { ...hubRef.current.telemetry(), relay: relayFps, rc: relay?.mode ?? null } : null;
+        setRelayMode((m) => (m === (relay?.mode ?? null) ? m : relay?.mode ?? null));
         const callerOn = [...callersRef.current.values()].find((c) => c.on);
         const st = {
             state: s.mood as BabyState,
@@ -662,9 +742,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             awake: wakeRef.current.state,
             talk: talkNames.length ? talkNames.join(' & ') : null,
             call: callerOn?.who ?? null,
+            enc,
         };
-        sockRef.current?.send({ t: 'status', st });
-        // Straight to viewers too — over the home Wi-Fi this keeps working when the internet doesn't.
+        if (cadenceRef.current.due(st, Date.now())) sockRef.current?.send({ t: 'status', st });
+        // Straight to viewers every 2 s — over the home Wi-Fi this keeps working when the internet doesn't.
         hubRef.current?.direct({ t: 'st', st, dev: device.id });
       }),
     );
@@ -790,12 +871,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     push('Sound meter calibrated on this phone', { icon: 'check' });
   };
 
-  const motionNow = useRef(0);
-  const lightNow = useRef(128);
-  motionNow.current = motion;
-  lightNow.current = light;
-  const motionVal = () => motionNow.current;
-  const lightVal = () => lightNow.current;
+  const motionVal = () => motionRef.current;
+  const lightVal = () => lightRef.current;
+  dimRef.current = dim;
 
   const pickCaller = (): { sid: string; who: string } | null => {
     for (const [sid, c] of callersRef.current) if (c.on && c.stream) return { sid, who: c.who };
@@ -807,7 +885,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       case 'hello':
         setNursery({ name: m.nursery.name, baby: m.nursery.baby });
         setViewers(m.viewers);
-        hubRef.current?.setIce(m.ice);
+        hubRef.current?.setIce(m.ice, m.iceMs);
+        // A new room connection: full-rate status until it says otherwise (rooms before live_want never do).
+        cadenceRef.current.reset();
+        void hubRef.current?.setRelayDataOut(m.fair?.level === 'out');
         applySettings(m.settings);
         if (pendingZonesRef.current) {
           sockRef.current?.send({ t: 'settings', zones: { dev: device.id, list: pendingZonesRef.current } });
@@ -824,6 +905,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       case 'presence':
         setViewers(m.viewers);
         break;
+      case 'ice':
+        hubRef.current?.setIce(m.servers, m.iceMs);
+        break;
       case 'settings':
         applySettings(m.settings);
         break;
@@ -833,13 +917,27 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       case 'peer_gone':
         // Their socket left the room; a call that's still up (same Wi-Fi) carries on.
         hubRef.current?.release(m.sid);
-        if (talkersRef.current.delete(m.sid)) setTalkers([...talkersRef.current.values()]);
+        // A talker whose call is still up is only changing sockets (they say so again on reconnect).
+        for (const [key, t] of [...talkersRef.current]) {
+          if (t.sid === m.sid && !hubRef.current?.isConnected(key)) talkersRef.current.delete(key);
+        }
+        setTalkers([...new Set([...talkersRef.current.values()].map((t) => t.who))]);
         break;
       case 'cmd':
         onCmd(m);
         break;
       case 'relay_want':
-        setRelay(m.n > 0);
+        setRelay(readWant(m as unknown as Record<string, unknown>));
+        break;
+      case 'live_want':
+        cadenceRef.current.setLive(m.on);
+        break;
+      case 'fair':
+        // Relay data used up: viewers reached through a TURN relay get sound only (the direct picture carries on).
+        void hubRef.current?.setRelayDataOut(m.relay.level === 'out');
+        break;
+      case 'relay_key':
+        relayRef.current?.requestKey();
         break;
       case 'error':
         if (m.code !== 'removed') push(m.msg, { icon: 'alert' });
@@ -865,6 +963,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const onCmd = (m: Extract<MonServerMsg, { t: 'cmd' }>) => {
     const v = (m.v ?? {}) as Record<string, unknown>;
+    // The viewer this is about, even if they're on a new socket since the call started.
+    const key = hubRef.current?.keyOf(m.from, v.vid) ?? m.from;
     if (m.c === 'soothe') {
       const kind = (SOOTHE_OPTIONS.find((o) => o.id === v.kind)?.id ?? 'shush') as SootheKind;
       const minutes = Math.min(120, Math.max(1, Number(v.minutes) || 30));
@@ -877,22 +977,22 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       setSoothing(null);
       sockRef.current?.send({ t: 'event', kind: 'soothe', msg: `${m.by} stopped the soothing sounds` });
     } else if (m.c === 'quality') {
-      void hubRef.current?.setQuality(m.from, (['hd', 'sd', 'audio'].includes(String(v.q)) ? v.q : 'hd') as Quality);
+      void hubRef.current?.setQuality(key, (['hd', 'sd', 'audio'].includes(String(v.q)) ? v.q : 'hd') as Quality);
     } else if (m.c === 'flip') {
       flip();
     } else if (m.c === 'talk') {
-      if (v.on) talkersRef.current.set(m.from, m.by);
-      else talkersRef.current.delete(m.from);
-      setTalkers([...talkersRef.current.values()]);
+      if (v.on) talkersRef.current.set(key, { who: m.by, sid: m.from });
+      else talkersRef.current.delete(key);
+      setTalkers([...new Set([...talkersRef.current.values()].map((t) => t.who))]);
       earsRef.current?.setPlayback(talkersRef.current.size > 0);
       // Their voice comes out of this speaker — don't mistake it for the baby.
       // The heartbeat keeps extending this while anyone is still talking.
       earsRef.current?.suppress(v.on ? 3000 : 2000);
     } else if (m.c === 'video') {
-      const c = callersRef.current.get(m.from) ?? { stream: null, who: m.by, on: false };
+      const c = callersRef.current.get(key) ?? { stream: null, who: m.by, on: false };
       c.on = Boolean(v.on);
       c.who = m.by;
-      callersRef.current.set(m.from, c);
+      callersRef.current.set(key, c);
       setCaller(pickCaller());
       if (c.on) {
         setDim(false);
@@ -901,20 +1001,31 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     }
   };
 
-  const setRelay = (on: boolean) => {
-    window.clearInterval(relayTimerRef.current);
-    if (!on) return;
-    const canvas = document.createElement('canvas');
-    relayTimerRef.current = window.setInterval(() => {
-      const v = videoRef.current;
-      if (!v || v.readyState < 2 || privacyRef.current) return;
-      const w = 480;
-      const h = Math.round((v.videoHeight / Math.max(1, v.videoWidth)) * w) || 270;
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d')?.drawImage(v, 0, 0, w, h);
-      canvas.toBlob((b) => b && sockRef.current?.sendBinary(b), 'image/jpeg', 0.6);
-    }, 1000);
+  /**
+   * The relay picture, for viewers who can't get the direct one (their
+   * network blocks it, it's still connecting, or the direct slots are full):
+   * one small video stream (WebCodecs, 10–15 fps) with the nursery's sound,
+   * through the room to all of them — JPEG for browsers that can't decode it.
+   * Frames are skipped rather than queued behind a slow upload, and nothing
+   * at all is sent while the video is paused for privacy.
+   */
+  const setRelay = (want: RelayWant) => {
+    let enc = relayRef.current;
+    if (!enc && want.n > 0) {
+      enc = new RelayEncoder({
+        source: () => videoRef.current,
+        send: (buf, max) => !!sockRef.current?.sendBinary(buf, max),
+        buffered: () => sockRef.current?.bufferedAmount() ?? 0,
+        paused: () => privacyRef.current,
+        open: () => !!sockRef.current?.open,
+      });
+      relayRef.current = enc;
+    }
+    setRelayViewers(want.n);
+    if (!enc) return;
+    enc.setWant(want);
+    // The microphone feeds the relay's sound only while someone is on it.
+    earsRef.current?.setRelayTap(enc.active ? (pcm, rate) => relayRef.current?.pushSound(pcm, rate) : null);
   };
 
   const togglePrivacy = () => {
@@ -970,7 +1081,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             {phase === 'starting' ? 'Opening the camera…' : err ? 'Try again' : 'Allow camera & microphone'}
           </Btn>
           <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>
-            <Icon name="shield" size={12} /> Live only. Nothing is recorded or stored — the picture goes straight to your family’s devices, encrypted.
+            <Icon name="shield" size={12} /> Live only — nothing is recorded or stored. The picture and sound go device-to-device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, not end-to-end encrypted.
           </p>
         </div>
       </div>
@@ -1128,6 +1239,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   // ---- running
   const talkLine = talkers.length ? `${talkers.join(' & ')} ${talkers.length > 1 ? 'are' : 'is'} talking` : null;
+  // Viewers on the relay picture aren't "connecting" — they're watching through the server
+  // (those only bridging while their direct picture connects still are, but count as through it).
+  const watching = watchersNote({ viewers: viewers.length, direct: p2pCount, onRelay: viewers.filter((v) => v.relay).length, relayed: relayViewers, jpeg: relayMode === 'jpeg', sound: relayMode === 'sound' });
+  const busy = (hubRef.current?.pressure ?? 0) > 0;
   return (
     <div className={cx('cam-run', dim && 'dimmed')} onPointerDown={touch}>
       {showCaller ? (
@@ -1224,8 +1339,15 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           <Icon name="users" size={14} />
           {viewers.length === 0
             ? 'No one is watching right now — alerts still go out'
-            : <>Watching: {viewers.map((v) => v.label || v.name).join(', ')}{p2pCount < viewers.length ? ' · connecting…' : ''}</>}
+            : <>Watching: {viewers.map((v) => v.label || v.name).join(', ')}{watching}</>}
         </div>
+        {busy && (
+          <div className="cam-busy" role="status">
+            <Icon name="gauge" size={14} />
+            <span>This phone is busy, so viewers get a smaller picture.{sceneOn ? '' : ' Plugging it in and closing other apps helps.'}</span>
+            {sceneOn && <button className="cam-busy-act" onClick={toggleScene}>Turn off Smart vision</button>}
+          </div>
+        )}
         <div className="cam-controls">
           {lenses.length > 1 && (
             <button className="cam-round" onClick={flip} aria-label="Flip camera"><Icon name="flip" size={20} /><span>Flip</span></button>

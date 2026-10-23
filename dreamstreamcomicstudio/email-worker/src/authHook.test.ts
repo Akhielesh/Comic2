@@ -9,6 +9,7 @@ import {
   WEBHOOK_TOLERANCE_SECONDS,
   buildVerifyUrl,
   isLiveRedirect,
+  streamStudioBrand,
   maskEmail,
   parseSignatureHeader,
   planAuthEmails,
@@ -302,6 +303,13 @@ describe('planAuthEmails', () => {
     expect(isLiveRedirect(`${APP}/lively`)).toBe(false);
     expect(isLiveRedirect(`${APP}/?next=/live`)).toBe(false);
     expect(isLiveRedirect('not a url')).toBe(false);
+    // Stream Studio's own host is the live app wherever it lands.
+    expect(isLiveRedirect('https://stream.dreamstreamstudio.ai/?after=monitor')).toBe(true);
+  });
+
+  it('brands Stream Studio emails with its address: /live as before, its own host once switched on', () => {
+    expect(streamStudioBrand(`${APP}/`, false)).toEqual({ productName: 'Stream Studio', appUrl: `${APP}/live` });
+    expect(streamStudioBrand(`${APP}/`, true)).toEqual({ productName: 'Stream Studio', appUrl: 'https://stream.dreamstreamstudio.ai' });
   });
 
   it('falls back to site_url for the verify base and never doubles /auth/v1', () => {

@@ -7,14 +7,16 @@ import {
   EXPECTED_LIVE_WORKER_BASE,
   formatSmokeReport,
   parseSmokeScope,
+  buildSmokeTargets,
   DEFAULT_SMOKE_TARGETS,
   runLiveSmoke,
   smokeTargetsForScope,
   type SmokeTarget
 } from './liveSmoke';
+import { STREAM_HOST_ON } from '../../shared/streamHost';
 
 const LIVE_BUNDLE_TARGET: SmokeTarget = {
-  name: 'stream studio bundle',
+  name: 'Stream Studio bundle',
   url: 'https://dreamstreamstudio.ai/live.html',
   kind: 'live-bundle'
 };
@@ -82,14 +84,32 @@ describe('live smoke target scopes', () => {
   it('no longer expects content from comic2.pages.dev — it only redirects to the custom domain', () => {
     for (const target of DEFAULT_SMOKE_TARGETS.filter((t) => t.url.includes('comic2.pages.dev'))) {
       expect(target.kind).toBe('redirect');
-      expect(target.redirectTo?.startsWith(`${CANONICAL_ORIGIN}/`)).toBe(true);
+      expect(target.redirectTo?.startsWith(STREAM_HOST_ON ? 'https://stream.dreamstreamstudio.ai/' : `${CANONICAL_ORIGIN}/`)).toBe(true);
     }
   });
 
   it('maps CLI flags to the temporary launch smoke scope', () => {
     expect(parseSmokeScope(['--temporary-launch'])).toBe('temporary-launch');
     expect(parseSmokeScope(['--scope=temporary'])).toBe('temporary-launch');
+    expect(parseSmokeScope(['--stream-host'])).toBe('stream-host');
     expect(parseSmokeScope([])).toBe('all');
+  });
+
+  it('checks Stream Studio’s own host on demand before the switch, and every run after it', () => {
+    const S = 'https://stream.dreamstreamstudio.ai';
+    const pre = smokeTargetsForScope('stream-host', buildSmokeTargets(false), false);
+    expect(pre.map((t) => t.url)).toEqual([`${S}/`, `${S}/`, `${S}/live.html?e=smokeprobe`, `${S}/live-api/api/events/smokeprobe`, `${S}/api/health`]);
+    expect(pre.find((t) => t.kind === 'redirect')?.redirectTo).toBe(`${S}/?e=smokeprobe`);
+    // Switch off: the everyday run leaves the new host alone and expects the old redirects.
+    const off = smokeTargetsForScope('all', buildSmokeTargets(false), false);
+    expect(off.some((t) => t.url.startsWith(S))).toBe(false);
+    expect(off.find((t) => t.name === 'www redirects to the custom domain')?.redirectTo).toBe(`${CANONICAL_ORIGIN}/live?e=smokeprobe`);
+    // Switch on: the new host is part of every run and old addresses must land on it.
+    const on = smokeTargetsForScope('all', buildSmokeTargets(true), true);
+    expect(on.filter((t) => t.url.startsWith(S))).toHaveLength(5);
+    expect(on.find((t) => t.name === 'www redirects to the custom domain')?.redirectTo).toBe(`${S}/?e=smokeprobe`);
+    expect(on.find((t) => t.name === 'Pages host redirects to the custom domain')?.redirectTo).toBe(`${S}/?e=smokeprobe`);
+    expect(on.find((t) => t.name === 'old Stream Studio address moves to its host')?.redirectTo).toBe(`${S}/?e=smokeprobe`);
   });
 });
 

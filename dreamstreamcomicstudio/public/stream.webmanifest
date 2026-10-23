@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "Stream Studio — Live & Baby Monitor",
+  "short_name": "Stream Studio",
+  "description": "Go live from your browser, and a private, never-recording baby monitor.",
+  "start_url": "/#/monitor",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f2ea",
+  "theme_color": "#f4f2ea",
+  "icons": [
+    { "src": "/stream-studio.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

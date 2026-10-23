@@ -3,6 +3,11 @@
 // Downloads mid-stream and stalled the tab). Every option streams from the
 // disk-backed recording, so even hour-long masters save without a RAM spike.
 //
+// Free first (ADR 0007): Google Drive and this device cost nobody anything and the
+// file is yours to keep. The 7-day copy on our servers is the one option that uses
+// our storage (and your upload), so it's an explicit opt-in below them, with its
+// size and the account's 10 GB allowance shown before anything uploads.
+//
 // Google Drive has two routes:
 //  - Connected (Google's API, drive.file scope): uploads straight into
 //    "DreamStream Recordings" in the user's Drive, resumable, with progress
@@ -13,19 +18,32 @@ import React, { useEffect, useRef, useState } from 'react';
 import { openAuth, useAccount } from '../account';
 import { uploadRecording } from '../api';
 import {
+  CloudCopyError,
+  fetchCloudCopyQuota,
+  fitsQuota,
+  fmtFreeDay,
+  quotaLine,
+  quotaPct,
+  type CloudCopyErrorCode,
+  type CloudCopyQuota,
+} from '../cloudCopy';
+import {
   DRIVE_PRIVACY_NOTE,
   DriveError,
   connectDrive,
   driveErrorMessage,
   getDriveStatus,
   openConsentWindow,
+  peekDriveStatus,
   saveRecordingToDrive,
   useDriveStatus,
   type DriveErrorCode,
 } from '../driveUpload';
 import { addMyRecording } from '../events';
+import { CLOUD_COPY_DRIVE_TIP, CLOUD_COPY_HEAD, FREE_CHIP, allowanceLevel, cloudCopyNotice } from '../costCopy';
+import { addSave, type SaveDest } from '../usage/ledger';
 import { fmtBytes, fmtDuration } from '../metrics';
-import { loadPrefs, savePrefs, type StudioPrefs } from '../prefs';
+import { cloudCopyNoticePending, loadPrefs, markCloudCopyNoticeSeen, savePrefs, type StudioPrefs } from '../prefs';
 import { discardOpfsRecording, removeUnsaved, type FinishedRecording } from '../recorder';
 import {
   DRIVE_UPLOAD_URL,
@@ -111,6 +129,14 @@ type DriveUp =
   | { state: 'done'; link: string; folderUrl?: string; email?: string }
   | { state: 'error'; code: DriveErrorCode; message: string };
 
+type CloudUp =
+  | { state: 'idle' }
+  | { state: 'up'; frac: number }
+  | { state: 'done' }
+  /** The allowance said no — retrying won't help; the free options will. */
+  | { state: 'full'; message: string; freesAt: number | null }
+  | { state: 'err'; code: CloudCopyErrorCode; message: string };
+
 /** "about 3 min left" — only once there's enough signal to be honest about it. */
 export function etaText(sent: number, total: number, elapsedMs: number): string {
   if (sent <= 0 || elapsedMs < 2500) return 'starting…';
@@ -139,7 +165,14 @@ export function SaveSheet({
   const [busy, setBusy] = useState<string | null>(null);
   const [saved, setSaved] = useState<string[]>([]);
   const [driveName, setDriveName] = useState<string | null>(null);
-  const [cloud, setCloud] = useState<{ state: 'idle' | 'up' | 'done' | 'err'; frac: number }>({ state: 'idle', frac: 0 });
+  const [cloud, setCloud] = useState<CloudUp>({ state: 'idle' });
+  /** undefined = still asking the server; null = unknown (the server decides at upload). */
+  const [quota, setQuota] = useState<CloudCopyQuota | null | undefined>(undefined);
+  /** Set in Customize → Recording ("Also keep a 7-day cloud copy") — the host's own choice. */
+  const [autoCloud] = useState(() => !!hostKey && loadPrefs().cloudRecordings);
+  const [cloudNotice] = useState(() => !!hostKey && cloudCopyNoticePending());
+  const autoCloudStarted = useRef(false);
+  const copyBytes = rec.data.size || rec.bytes;
   const [gdrive, setGdrive] = useState<DriveUp>({ state: 'idle' });
   const [remember, setRemember] = useState(loadPrefs().saveTarget !== 'ask');
   const phone = isPhoneLike();
@@ -162,11 +195,38 @@ export function SaveSheet({
 
   useEffect(() => {
     void getDriveFolder().then((d) => setDriveName(d?.name ?? null));
-    // "Keep a cloud copy" preference: start the 7-day upload right away.
-    if (hostKey && loadPrefs().cloudRecordings) toCloud();
     return () => driveAbort.current?.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The 7-day copy's meter: one read of this account's usage when the sheet opens
+  // (an explicit moment, never a timer). Signed out → no copy without signing in.
+  useEffect(() => {
+    if (!hostKey || account.status === 'loading') return;
+    if (account.status === 'signed_out') {
+      setQuota(null);
+      return;
+    }
+    let alive = true;
+    // With this recording's size: an unfinished earlier try of it isn't counted twice.
+    void fetchCloudCopyQuota(rec.eventId, hostKey, copyBytes).then((q) => alive && setQuota(q));
+    return () => {
+      alive = false;
+    };
+  }, [hostKey, rec.eventId, account.status, copyBytes]);
+
+  // Nothing uploads to our servers unless the host chose it. Hosts who turned on "Also
+  // keep a 7-day cloud copy" get it right away — unless it can't fit, which is said instead.
+  useEffect(() => {
+    if (!autoCloud || autoCloudStarted.current || quota === undefined) return;
+    autoCloudStarted.current = true;
+    if (fitsQuota(quota, copyBytes)) toCloud();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCloud, quota]);
+
+  // "Cloud copies are now opt-in" is said once per device.
+  useEffect(() => {
+    if (cloudNotice) markCloudCopyNoticeSeen();
+  }, [cloudNotice]);
 
   // Remembered "Google Drive" + connected: start uploading as soon as we know.
   useEffect(() => {
@@ -188,8 +248,10 @@ export function SaveSheet({
     return () => window.removeEventListener('beforeunload', warn);
   }, [driveActive]);
 
-  const finish = (where: string, target: Target, deleteNow: boolean) => {
+  const finish = (where: string, target: Target, deleteNow: boolean, dest: SaveDest = target === 'drive' ? 'drive' : 'device') => {
     setSaved((s) => [...s, where]);
+    // This device's Usage card: "Saved to Google Drive 6.2 GB · yours to keep".
+    addSave(dest, rec.data.size || rec.bytes);
     addMyRecording({ eventId: rec.eventId, title: rec.title, file: name, bytes: rec.bytes, at: Date.now() });
     if (remember) savePrefs({ ...loadPrefs(), saveTarget: target });
     push(`Saved · ${where}`, { icon: 'check', duration: 3200 });
@@ -237,7 +299,9 @@ export function SaveSheet({
         onProgress: (sent, total) =>
           setGdrive((g) => (g.state === 'uploading' ? { ...g, sent, total } : { state: 'uploading', sent, total, startedAt: Date.now() })),
       });
-      const email = (await getDriveStatus().catch(() => null))?.email;
+      // The connection's email is already known — asking again could wake the backend
+      // after a long upload (≤ 1 backend wake per Drive save; ADR 0007 C11).
+      const email = peekDriveStatus()?.email ?? drive?.email;
       setGdrive({ state: 'done', link: file.webViewLink, folderUrl: file.folderUrl, email });
       finish(`Google Drive · DreamStream Recordings/${file.name || name}`, 'drive', true);
     } catch (e) {
@@ -289,12 +353,12 @@ export function SaveSheet({
       }
       if (canShare) {
         const ok = await shareFile(rec.data, name, rec.title);
-        if (ok) finish('Shared (choose Drive in the menu)', 'drive', false);
+        if (ok) finish('Shared (choose Drive in the menu)', 'drive', false, 'device');
         return;
       }
       downloadFile(rec.data, name);
       window.open(DRIVE_UPLOAD_URL, '_blank', 'noopener');
-      finish('Downloads → drag it into the Drive tab that just opened', 'drive', false);
+      finish('Downloads → drag it into the Drive tab that just opened', 'drive', false, 'device');
     });
 
   const toDownload = () =>
@@ -318,11 +382,36 @@ export function SaveSheet({
       durMs: rec.durMs,
       onProgress: (frac) => setCloud({ state: 'up', frac }),
     })
-      .then(() => {
-        setCloud({ state: 'done', frac: 1 });
-        push('Cloud copy stored — downloadable from the recap for 7 days', { icon: 'check' });
+      .then((res) => {
+        setCloud({ state: 'done' });
+        addSave('cloud', copyBytes);
+        // The server counted this copy when it started (in place of any unfinished earlier
+        // try of it); fall back to doing the same locally.
+        setQuota(
+          (q) =>
+            res?.quota ??
+            (q ? { ...q, usedBytes: q.usedBytes - (q.retryBytes ?? 0) + copyBytes, copies: q.copies + (q.retryBytes ? 0 : 1), retryBytes: undefined } : q),
+        );
+        push('7-day copy stored — download it from the recap on any device', { icon: 'check' });
+        // At 80% and 100% of the 10 GB, say so in the app (ADR 0007 B7) — Drive and this device stay free.
+        const now = res?.quota ?? (quota ? { ...quota, usedBytes: quota.usedBytes - (quota.retryBytes ?? 0) + copyBytes } : null);
+        const note = now && cloudCopyNotice(allowanceLevel(now.usedBytes, now.limitBytes), now.usedBytes, now.limitBytes);
+        if (note) push(note, { icon: 'info', duration: 8000 });
       })
-      .catch(() => setCloud({ state: 'err', frac: 0 }))
+      .catch((e) => {
+        if (e instanceof CloudCopyError && e.isLimit) {
+          setCloud({ state: 'full', message: e.message, freesAt: e.freesAt });
+          const { usedBytes, limitBytes } = e;
+          if (usedBytes != null && limitBytes != null) {
+            // The server's "used" already leaves out an unfinished try this one would replace.
+            setQuota((q) => ({ copies: q?.copies ?? 0, nextFreeAt: q?.nextFreeAt ?? null, usedBytes, limitBytes }));
+          }
+        } else if (e instanceof CloudCopyError) {
+          setCloud({ state: 'err', code: e.code, message: e.message });
+        } else {
+          setCloud({ state: 'err', code: 'failed', message: 'Upload failed — your recording is still safe on this device.' });
+        }
+      })
       .finally(() => {
         uploadingRef.current = false;
       });
@@ -391,13 +480,14 @@ export function SaveSheet({
             note: undefined,
           };
 
-  const opts: { id: string; icon: string; title: string; sub: string; note?: string; onClick: () => void; show: boolean; primary?: boolean }[] = [
+  const opts: { id: string; icon: string; title: string; sub: string; note?: string; onClick: () => void; show: boolean; primary?: boolean; free: keyof typeof FREE_CHIP }[] = [
     {
       id: 'gdrive',
       icon: 'cloud',
       ...driveApiOpt,
       show: apiOffered,
       primary: apiConnected,
+      free: 'drive',
     },
     {
       id: 'picker',
@@ -407,6 +497,7 @@ export function SaveSheet({
       onClick: toPicker,
       show: canPickSaveLocation(),
       primary: !apiConnected,
+      free: 'device',
     },
     {
       id: 'drive',
@@ -415,6 +506,7 @@ export function SaveSheet({
       sub: fallback.sub,
       onClick: toDriveFolder,
       show: true,
+      free: 'drive',
     },
     {
       id: 'share',
@@ -423,6 +515,7 @@ export function SaveSheet({
       sub: 'AirDrop, Photos, Files, messaging apps',
       onClick: toShare,
       show: canShare && phone,
+      free: 'device',
     },
     {
       id: 'download',
@@ -431,8 +524,11 @@ export function SaveSheet({
       sub: 'To your browser’s Downloads folder',
       onClick: toDownload,
       show: true,
+      free: 'device',
     },
   ];
+  const cloudFits = fitsQuota(quota, copyBytes);
+  const limitGb = Math.round((quota?.limitBytes ?? 0) / 1024 ** 3);
 
   const retryable: DriveErrorCode[] = ['network', 'server', 'stalled', 'rate_limited', 'session_expired', 'bad_request'];
   const pct = gdrive.state === 'uploading' && gdrive.total > 0 ? Math.min(100, (gdrive.sent / gdrive.total) * 100) : 0;
@@ -546,6 +642,7 @@ export function SaveSheet({
               <span className="save-opt-text">
                 <b>{busy === o.id ? 'Saving…' : o.title}</b>
                 <small>{o.sub}</small>
+                <small className="save-free" style={{ color: 'var(--green)', fontWeight: 600 }}>{FREE_CHIP[o.free]}</small>
                 {o.note && (
                   <small className="save-privacy">
                     <Icon name="shield" size={12} />
@@ -565,25 +662,77 @@ export function SaveSheet({
         )}
 
         {hostKey && (
-          <div className="save-cloud">
-            <div className="row" style={{ gap: 10 }}>
-              <Icon name="globe" size={16} className="faint" />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <b>7-day cloud copy</b>
-                <div className="faint" style={{ fontSize: 12 }}>
-                  {cloud.state === 'done' ? 'Stored — download it from the recap on any device.' : cloud.state === 'err' ? 'Upload failed — your device copy is safe.' : 'Grab it later from any device; auto-deleted after 7 days.'}
+          <>
+            <div className="save-label" style={{ marginTop: 16 }}>{CLOUD_COPY_HEAD}</div>
+            {/* One tip, outside the copy's own box: the copy itself is never called free. */}
+            {apiConnected && cloud.state === 'idle' && saved.length === 0 && <div className="save-hint" style={{ marginTop: 0, marginBottom: 6 }}>{CLOUD_COPY_DRIVE_TIP}</div>}
+            <section className="save-cloud" aria-label="7-day copy on our servers">
+              <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                <Icon name="globe" size={16} className="faint" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <b>7-day copy · {fmtBytes(copyBytes)}</b>
+                  <div className="faint" style={{ fontSize: 12 }}>
+                    {cloud.state === 'done'
+                      ? `Stored — download it from the recap on any device · ${quotaLine(quota)}`
+                      : cloud.state === 'full' || cloud.state === 'err'
+                        ? quotaLine(quota)
+                        : `A download link for any device, deleted after 7 days. Uses our storage and ${fmtBytes(copyBytes)} of your upload · ${quotaLine(quota)}`}
+                  </div>
                 </div>
+                {cloud.state === 'done' ? (
+                  <span className="pill pill-ok">Stored</span>
+                ) : cloud.state === 'up' ? (
+                  <span className="mono faint" style={{ fontSize: 12 }}>{Math.round(cloud.frac * 100)}%</span>
+                ) : cloud.state === 'full' ? null : account.status === 'signed_out' ? (
+                  <Btn variant="soft" size="sm" onClick={() => openAuth('signin', 'Sign in to keep a 7-day copy of your recording')}>Sign in</Btn>
+                ) : cloudFits ? (
+                  <Btn variant="soft" size="sm" icon={cloud.state === 'err' ? 'refresh' : undefined} onClick={toCloud} disabled={quota === undefined}>
+                    {cloud.state === 'err' ? 'Try again' : 'Keep a 7-day copy'}
+                  </Btn>
+                ) : null}
               </div>
-              {cloud.state === 'idle' || cloud.state === 'err' ? (
-                <Btn variant="soft" size="sm" icon="refresh" onClick={toCloud}>{cloud.state === 'err' ? 'Retry' : 'Upload'}</Btn>
-              ) : cloud.state === 'done' ? (
-                <span className="pill pill-ok">Done</span>
-              ) : (
-                <span className="mono faint" style={{ fontSize: 12 }}>{Math.round(cloud.frac * 100)}%</span>
+              {quota && cloud.state !== 'up' && (
+                <div style={{ marginTop: 8 }}>
+                  <Meter value={quotaPct(quota)} tone={quotaPct(quota) >= 80 ? 'amber' : 'accent'} height={4} />
+                </div>
               )}
-            </div>
-            {cloud.state === 'up' && <div style={{ marginTop: 8 }}><Meter value={cloud.frac * 100} tone="accent" height={5} /></div>}
-          </div>
+              {cloud.state === 'up' && <div style={{ marginTop: 8 }}><Meter value={cloud.frac * 100} tone="accent" height={5} /></div>}
+              {(cloud.state === 'idle' || cloud.state === 'err') && cloudFits && !!quota?.retryBytes && (
+                <div className="save-hint">
+                  {fmtBytes(quota.retryBytes)} of that is an unfinished try of this recording. Starting it again replaces that try, so it isn’t counted twice.
+                </div>
+              )}
+              {cloud.state !== 'full' && cloud.state !== 'done' && cloud.state !== 'up' && !cloudFits && (
+                <div className="save-hint" role="status">
+                  Your {limitGb} GB of 7-day copies doesn’t have room for this one. Google Drive and this device are free, and the file is yours to keep
+                  {quota?.nextFreeAt ? ` — or wait: the oldest copy expires ${fmtFreeDay(quota.nextFreeAt)}` : ''}.
+                </div>
+              )}
+              {cloud.state === 'full' && (
+                <div className="save-hint" role="alert">
+                  {cloud.message}
+                  {cloud.freesAt ? ` Space frees up ${fmtFreeDay(cloud.freesAt)}.` : ''}
+                </div>
+              )}
+              {cloud.state === 'err' && (
+                <div className="save-hint" role="alert">
+                  {cloud.message}
+                  {cloud.code === 'sign_in_required' && (
+                    <>
+                      {' '}
+                      <button type="button" className="linkish" onClick={() => openAuth('signin', 'Sign in to keep a 7-day copy of your recording')}>Sign in</button>
+                    </>
+                  )}
+                </div>
+              )}
+              {autoCloud && (cloud.state === 'up' || cloud.state === 'done') && (
+                <div className="save-hint">Started because “Also keep a 7-day cloud copy” is on in Customize → Recording.</div>
+              )}
+              {cloudNotice && !autoCloud && cloud.state === 'idle' && (
+                <div className="save-hint">7-day copies are now made only when you choose one. To copy every recording again, turn it on in Customize → Recording.</div>
+              )}
+            </section>
+          </>
         )}
 
         <label className="save-remember">

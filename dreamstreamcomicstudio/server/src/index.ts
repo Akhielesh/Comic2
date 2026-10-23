@@ -49,6 +49,7 @@ import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
 import { authEmailRouter } from './routes/authEmail.js';
+import { authHandoffRouter } from './routes/authHandoff.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
 import { adminCostsRouter } from './routes/adminCosts.js';
@@ -292,6 +293,9 @@ app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).
 // Your access to every studio (both apps read the same answer).
 app.use('/api/account/studios', systemRateLimit, accountStudiosRouter);
+// Sign-in handoff between DreamStream and Stream Studio (stream.dreamstreamstudio.ai): a one-time
+// link for the caller's own account. Has its own per-account limiter (10/min).
+app.use('/api/auth/handoff', authHandoffRouter);
 app.use('/api/account', systemRateLimit, accountRouter);
 // Account connectors (authenticated): catalog, connect, sync, disconnect, query, dashboard.
 app.use('/api/connectors', systemRateLimit, connectorsRouter);

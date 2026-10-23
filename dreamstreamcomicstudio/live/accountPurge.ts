@@ -6,8 +6,9 @@
  * next person on a shared device. Device preferences that aren't personal
  * (theme, camera lens, tours seen, guest passes for share links) stay.
  *
- * No imports on purpose: the main app's sign-out calls this too.
+ * Only a dependency-free import on purpose: the main app's sign-out calls this too.
  */
+import { isStreamHost } from '../shared/streamHost';
 
 /** The account whose data is on this device. */
 export const OWNER_KEY = 'ds-live-owner';
@@ -21,8 +22,12 @@ const EXACT = [
   'ds-calls-seen',
   OWNER_KEY,
 ];
-/** Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue. */
-const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-'];
+/**
+ * Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue —
+ * and this device's usage (live/usage/): a nursery's relay data a parent read, last nights,
+ * the month's ledger, hosted meetings, notices shown.
+ */
+const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-', 'ds-usage-'];
 
 export function purgeLiveAccountData(): void {
   try {
@@ -33,10 +38,12 @@ export function purgeLiveAccountData(): void {
     }
     for (const k of doomed) localStorage.removeItem(k);
   } catch { /* storage unavailable */ }
-  // Baby-monitor alerts and call rings must stop reaching this device.
+  // Baby-monitor alerts and call rings must stop reaching this device. (The alert worker's
+  // scope is the app's path: '/' on Stream Studio's own host, '/live' here — live/host.ts.)
   try {
+    const scope = typeof location !== 'undefined' && isStreamHost(location.hostname) ? '/' : '/live';
     void navigator.serviceWorker
-      ?.getRegistration('/live')
+      ?.getRegistration(scope)
       .then((reg) => reg?.pushManager.getSubscription())
       .then((sub) => sub?.unsubscribe())
       .catch(() => undefined);

@@ -15,6 +15,7 @@
 import type { AccountAccess, StudioAccess, StudioId, StudioStatus } from '../../../shared/studioAccess.js';
 import { resolveName } from '../../../shared/accountName.js';
 import { resolveAccessProfile } from './rbac.js';
+import { STREAM_HOST_ON, streamAppHref } from '../../../shared/streamHost.js';
 
 export type { AccountAccess, StudioAccess, StudioId, StudioStatus };
 import { getSupabaseAdmin } from './supabase.js';
@@ -28,17 +29,22 @@ export interface AccessInputs {
   nurseries: number;
 }
 
-const STUDIOS: Record<StudioId, { label: string; tagline: string; href: string }> = {
+// Main-app studios are paths on the main app; Stream Studio's are written the old way and go
+// through shared/streamHost.ts, so with STREAM_HOST_ON they point at stream.dreamstreamstudio.ai.
+const studiosFor = (streamHostOn: boolean): Record<StudioId, { label: string; tagline: string; href: string }> => ({
   comic_studio: { label: 'Comic Studio', tagline: 'Write, draw and publish comics with AI', href: '/?view=dashboard' },
   chat_studio: { label: 'Chat Studio', tagline: 'The assistant, with your connected apps', href: '/?view=chat' },
-  stream_studio: { label: 'Stream Studio', tagline: 'Go live from your browser', href: '/live' },
-  baby_monitor: { label: 'Baby monitor & family calls', tagline: 'A private nursery camera, the baby tracker and FaceTime-style calls', href: '/live#/monitor' },
-};
+  stream_studio: { label: 'Stream Studio', tagline: 'Go live from your browser', href: streamAppHref('/live', streamHostOn) },
+  baby_monitor: { label: 'Baby monitor & family calls', tagline: 'A private nursery camera, the baby tracker and FaceTime-style calls', href: streamAppHref('/live#/monitor', streamHostOn) },
+});
 
 const ASK = { label: 'Ask an admin for access', href: 'mailto:contact@dreamstreamstudio.ai?subject=Studio%20access' };
 
 /** Pure: the access picture from what the database says. */
-export function computeStudioAccess(i: AccessInputs): { confined: boolean; studios: StudioAccess[] } {
+export function computeStudioAccess(i: AccessInputs, opts: { streamHostOn?: boolean } = {}): { confined: boolean; studios: StudioAccess[] } {
+  const streamHostOn = opts.streamHostOn ?? STREAM_HOST_ON;
+  const STUDIOS = studiosFor(streamHostOn);
+  const live = (legacy: string) => streamAppHref(legacy, streamHostOn);
   const rows = new Map(i.productRows.map((r) => [r.product, r.active]));
   const confined = rows.size > 0;
   // No rows: open beta, everything. Rows: exactly the active ones.
@@ -62,7 +68,7 @@ export function computeStudioAccess(i: AccessInputs): { confined: boolean; studi
       ? make('stream_studio', 'locked', revoked('stream_studio') ? 'Access was turned off for this account' : 'Not part of your account yet', ASK)
       : member
         ? make('stream_studio', 'open', i.streamMember ? 'Unlocked' : 'Unlocks on your first visit (early account)')
-        : make('stream_studio', 'needs_code', 'One step: your welcome code', { label: 'Enter welcome code', href: '/live#/settings' }),
+        : make('stream_studio', 'needs_code', 'One step: your welcome code', { label: 'Enter welcome code', href: live('/live#/settings') }),
   );
 
   // The baby monitor, tracker and calls ride on Stream Studio membership.
@@ -70,10 +76,10 @@ export function computeStudioAccess(i: AccessInputs): { confined: boolean; studi
     !streamOk
       ? make('baby_monitor', 'locked', 'Comes with Stream Studio', ASK)
       : !member
-        ? make('baby_monitor', 'needs_code', 'Comes with Stream Studio — enter your welcome code', { label: 'Enter welcome code', href: '/live#/settings' })
+        ? make('baby_monitor', 'needs_code', 'Comes with Stream Studio — enter your welcome code', { label: 'Enter welcome code', href: live('/live#/settings') })
         : i.nurseries > 0
           ? make('baby_monitor', 'open', `${i.nurseries} ${i.nurseries === 1 ? 'nursery' : 'nurseries'}`)
-          : make('baby_monitor', 'open', 'Create a nursery or ask a parent to add you', { label: 'Set up a nursery', href: '/live#/monitor' }),
+          : make('baby_monitor', 'open', 'Create a nursery or ask a parent to add you', { label: 'Set up a nursery', href: live('/live#/monitor') }),
   );
   return { confined, studios };
 }
