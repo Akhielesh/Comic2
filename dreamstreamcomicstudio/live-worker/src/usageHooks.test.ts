@@ -17,7 +17,7 @@ vi.mock('./webpush', async (orig) => ({
   sendWebPush: async () => 'sent',
 }));
 
-import { EventRoom, eventUsage, type EventMeta } from './eventRoom';
+import { EventRoom, eventUsage, SEG_SAVE_EVERY, type EventMeta } from './eventRoom';
 import liveWorker, { type Env } from './index';
 import { MonitorRoom, type MonEnv } from './monitorRoom';
 import { type RingingRec } from './directCalls';
@@ -381,13 +381,15 @@ function event() {
         } else for (const [kk, vv] of Object.entries(k)) (writes.push(kk), store.set(kk, structuredClone(vv)));
       },
       delete: async (k: string) => store.delete(k),
+      deleteAll: async () => store.clear(),
       setAlarm: async () => undefined,
       getAlarm: async () => null,
+      deleteAlarm: async () => undefined,
     },
     getWebSockets: () => sockets,
     acceptWebSocket: (ws: FakeWS) => void sockets.push(ws),
   };
-  const points: { indexes?: string[]; blobs?: string[] }[] = [];
+  const points: { indexes?: string[]; blobs?: string[]; doubles?: number[] }[] = [];
   const room = new EventRoom(state as never, {
     ALLOWED_ORIGINS: '*',
     LIVE_BUCKET: { list: async () => ({ objects: [], truncated: false }), delete: async () => undefined },
@@ -410,24 +412,28 @@ async function liveEvent() {
   return { ...e, hostKey, host, ingest };
 }
 
-describe('EventRoom usage — segments ride the existing putMeta', () => {
+describe('EventRoom usage — segments ride the meta (written every SEG_SAVE_EVERY segments)', () => {
   it('adds segment bytes to the private meta totals with no extra write, and never shows them publicly', async () => {
     clock();
     const e = await liveEvent();
-    await e.ingest(1, 1_000_000); // (logs "first segment received", as before)
+    await e.ingest(1, 1_000_000); // the first segment writes the meta (codec, firstSeq) at once
+    expect((e.store.get('meta') as EventMeta).use).toMatchObject({ segBytes: 1_000_000, segCount: 1 });
     const writes = e.writes.length;
     await e.ingest(2, 2_000_000);
-    expect(e.writes.slice(writes)).toEqual(['meta']); // one row per segment, as before — usage rides it
-    expect((e.store.get('meta') as EventMeta).use).toMatchObject({ segBytes: 3_000_000, segCount: 2 });
+    expect(e.writes.slice(writes)).toEqual([]); // no row for this segment: its usage waits in memory + the host's socket
     const pub = (await (await e.call('/meta')).json()) as Record<string, unknown>;
     expect(pub).not.toHaveProperty('use');
-    expect(pub.latestSeq).toBe(2);
+    expect(pub.latestSeq).toBe(2); // …and every reader sees it
+    for (let seq = 3; seq <= SEG_SAVE_EVERY + 1; seq++) await e.ingest(seq, 1_000_000);
+    // The meta (with the usage) is written once per SEG_SAVE_EVERY segments.
+    expect(e.writes.slice(writes).filter((k) => k === 'meta')).toHaveLength(1);
+    expect((e.store.get('meta') as EventMeta).use).toMatchObject({ segBytes: 12_000_000, segCount: SEG_SAVE_EVERY + 1 });
   });
 
   it('writes the event’s usage hourly from the alarm, and an end inside the hour loses nothing', async () => {
     const c = clock();
     const e = await liveEvent();
-    // A fresh room: its first alarm (30 s in) writes what the segments and viewers added so far.
+    // A fresh room: its first alarm (here 30 s in) writes what the segments and viewers added so far.
     await e.ingest(1, 500_000);
     const viewer = new FakeWS();
     viewer.serializeAttachment({ sid: 'v', name: 'v', role: 'viewer' });
@@ -449,9 +455,12 @@ describe('EventRoom usage — segments ride the existing putMeta', () => {
     await e.room.alarm();
     row = month(e.store);
     expect(row?.counters.broadcast).toMatchObject({ segBytes: 1_200_000, segCount: 2 });
+    const points = e.points.length;
+    // The 7-day sweep: everything was already counted, so it adds no point, and then the room's rows go.
     c.advance(6 * 24 * H);
     await e.room.alarm();
-    expect(month(e.store)?.counters.broadcast?.segBytes).toBe(1_200_000);
+    expect(e.points.slice(points).filter((p) => p.indexes?.[0] === 'broadcast')).toEqual([]);
+    expect(e.store.size).toBe(0);
   });
 
   it('a meeting that never went live writes no usage row at all', async () => {
