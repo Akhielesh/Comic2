@@ -309,9 +309,21 @@ export interface MonRtc {
   full?: boolean;
   /** Camera → viewer: its relay (TURN) credential was renewed — restart ICE onto it (only the viewer offers). */
   re?: 1;
+  /** Camera → viewer, with its answer: send quality and screen state on the data channel (rtc.ts ViewerDcMsg). */
+  dcc?: 1;
 }
 
 export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'video';
+
+/** The nursery's relay data this month (live-worker/src/monitorFair.ts; owner decision 2026-10-22: 10 GB). */
+export interface FairState {
+  month: string;
+  level: 'ok' | 'warn' | 'out';
+  usedGb: number;
+  ofGb: number;
+  measured: boolean;
+  resets: number;
+}
 
 export type MonServerMsg =
   | {
@@ -332,7 +344,19 @@ export type MonServerMsg =
       /** Ask for fresh relay credentials (`{t:'ice'}`) in this many ms; absent: STUN only, nothing to refresh. */
       iceMs?: number;
       vapid: string | null;
+      /** What this room can do (ADR 0006 Phase 0): 'view' = it takes `{t:'view'}` and sends cameras `live_want`. */
+      caps?: string[];
+      /** The nursery's relay data this month (absent: a room from before fair use). */
+      fair?: FairState;
+      /** Viewers: the cameras on this device's network (their direct picture comes first). */
+      near?: string[];
     }
+  /** Camera: does anyone need its status from the room every 2 s (statusCadence.ts)? */
+  | { t: 'live_want'; on: boolean }
+  /** The nursery's relay data level changed: at 'out', pictures that need a relay are sound only. */
+  | { t: 'fair'; relay: FairState }
+  /** Viewers: which cameras are on this device's network now. */
+  | { t: 'near'; near: string[] }
   /** Fresh relay credentials, answering `{t:'ice'}`. */
   | { t: 'ice'; servers: RTCIceServer[]; iceMs?: number }
   | { t: 'presence'; cams: CamPresence[]; viewers: ViewerPresence[] }
@@ -354,7 +378,7 @@ export type MonServerMsg =
   | { t: 'tell'; c: 'feedback' | 'talk_gain'; v: { factor?: number; db?: number; freq?: number }; from: string }
   | { t: 'cmd'; c: MonCmd; v: unknown; from: string; by: string }
   /** Viewers on this camera's relay picture, and how many decode each codec (jpeg = none). Older rooms send only n. */
-  | { t: 'relay_want'; n: number; avc?: number; vp8?: number; vp9?: number; jpeg?: number }
+  | { t: 'relay_want'; n: number; avc?: number; vp8?: number; vp9?: number; jpeg?: number; v?: number }
   /** A relay viewer needs a key frame (it subscribed, fell behind, or its decoder failed). */
   | { t: 'relay_key' }
   | { t: 'settings'; settings: MonSettings }

@@ -4,12 +4,19 @@
  * consistent, living right next to the alert engine that writes it.
  *
  *   mon_events     every log line (sounds, vision, noise, care logs, people…)
- *   mon_minutes    per-camera, per-minute measurements (dB, motion, light, state)
+ *   mon_blocks     per-camera minute measurements (dB, motion, light, state), packed one
+ *                  row per camera-HOUR (ADR 0006 WS-9): a night of 720 minutes is 12 rows,
+ *                  each upserted once per ~5-minute batch — not 720 rows with two indexes
  *   mon_sleep      sleep sessions and their summaries
  *   mon_incidents  alerts that need a person: open → acknowledged → resolved
  *
  * Never stores audio or video. Retention: events & incidents 90 days,
- * minutes 31 days, sleep sessions ~13 months.
+ * minutes 31 days (whole hour blocks: at most an hour more), sleep sessions ~13 months.
+ *
+ * What a write costs (Cloudflare bills every row written, and every index entry as a row):
+ * an event is 4 rows (table, primary key, 2 indexes); an hour block upsert is 1 (WITHOUT
+ * ROWID: the primary key is the table). The legacy per-minute table (3 rows a minute, plus
+ * 3 more when it aged out) is converted once into blocks and dropped.
  */
 
 /** The slice of Durable Object `SqlStorage` the store uses (sql.js in tests). */
@@ -106,12 +113,8 @@ const SCHEMA = [
     dev TEXT, who TEXT, secs INTEGER, conf INTEGER, db REAL, incident TEXT, meta TEXT)`,
   `CREATE INDEX IF NOT EXISTS mon_events_at ON mon_events(at)`,
   `CREATE INDEX IF NOT EXISTS mon_events_kind_at ON mon_events(kind, at)`,
-  `CREATE TABLE IF NOT EXISTS mon_minutes (
-    dev TEXT NOT NULL, m INTEGER NOT NULL,
-    laeq REAL, lmax REAL, l10 REAL, l50 REAL, l90 REAL, lpk REAL, cal INTEGER NOT NULL DEFAULT 0,
-    motion REAL, mmax REAL, crib REAL, outside REAL, light REAL, state INTEGER, sounds TEXT, visit INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (dev, m))`,
-  `CREATE INDEX IF NOT EXISTS mon_minutes_m ON mon_minutes(m)`,
+  // `h` = the hour's start (epoch ms); `d` = that hour's minutes, packed (packBlock).
+  `CREATE TABLE IF NOT EXISTS mon_blocks (dev TEXT NOT NULL, h INTEGER NOT NULL, d TEXT NOT NULL, PRIMARY KEY (dev, h)) WITHOUT ROWID`,
   `CREATE TABLE IF NOT EXISTS mon_sleep (
     id TEXT PRIMARY KEY, start INTEGER NOT NULL, end_at INTEGER, onset INTEGER, kind TEXT NOT NULL, source TEXT NOT NULL,
     asleep_min INTEGER NOT NULL DEFAULT 0, awake_min INTEGER NOT NULL DEFAULT 0, wakings INTEGER NOT NULL DEFAULT 0,
@@ -174,6 +177,78 @@ function toMinute(r: Record<string, unknown>): MinuteRow {
   };
 }
 
+export const HOUR_MS = 60 * 60_000;
+const MINUTE_MS = 60_000;
+export const hourOf = (m: number) => Math.floor(m / HOUR_MS) * HOUR_MS;
+
+/** One minute, packed: the numbers in a fixed order (append only), then the sounds when any were heard. */
+type Packed = (number | null | Record<string, number>)[];
+const FIELDS = ['laeq', 'lmax', 'l10', 'l50', 'l90', 'lpk', 'cal', 'motion', 'mmax', 'crib', 'outside', 'light', 'state', 'visit'] as const;
+
+export function packMinute(r: MinuteRow): Packed {
+  const out: Packed = FIELDS.map((k) => (r[k] == null ? null : Number(r[k])));
+  if (r.sounds && Object.keys(r.sounds).length) out.push(r.sounds);
+  return out;
+}
+
+export function unpackMinute(dev: string, m: number, p: unknown): MinuteRow | null {
+  if (!Array.isArray(p)) return null;
+  const num = (i: number) => (typeof p[i] === 'number' ? (p[i] as number) : null);
+  const sounds = p[FIELDS.length] && typeof p[FIELDS.length] === 'object' ? (p[FIELDS.length] as Record<string, number>) : {};
+  return {
+    dev, m,
+    laeq: num(0), lmax: num(1), l10: num(2), l50: num(3), l90: num(4), lpk: num(5), cal: num(6) ?? 0,
+    motion: num(7), mmax: num(8), crib: num(9), outside: num(10), light: num(11), state: num(12), visit: num(13) ?? 0,
+    sounds,
+  };
+}
+
+/** An hour block's minutes: `{ "<minute of the hour>": packed }`. */
+function readBlock(d: unknown): Record<string, Packed> {
+  if (typeof d !== 'string' || !d) return {};
+  try {
+    const v = JSON.parse(d) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, Packed>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function blockRows(dev: string, h: number, d: unknown): MinuteRow[] {
+  const out: MinuteRow[] = [];
+  for (const [k, p] of Object.entries(readBlock(d))) {
+    const i = Number(k);
+    if (!Number.isInteger(i) || i < 0 || i > 59) continue;
+    const r = unpackMinute(dev, h + i * MINUTE_MS, p);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+/** 5-minute timeline buckets — `[t, worst state rank (1–5), crying]` — as the viewers' 24 h strip draws them. */
+export type TimelineBucket = [number, number, number];
+export const TL_BUCKET_MS = 5 * 60_000;
+
+/**
+ * The timeline from the minute rows (it used to be its own 7-day blob, rewritten every 15 s):
+ * each bucket keeps the WORST state any of its minutes saw (crying beats calm), and how much
+ * crying was heard (seconds ÷ 2, the scale of the old 2-second status count).
+ */
+export function timelineOf(rows: MinuteRow[]): TimelineBucket[] {
+  const by = new Map<number, TimelineBucket>();
+  for (const r of rows) {
+    const t = Math.floor(r.m / TL_BUCKET_MS) * TL_BUCKET_MS;
+    const s = Math.max(1, Math.min(5, Math.round(r.state ?? 1)));
+    const cry = Math.round((r.sounds?.cry ?? 0) / 2);
+    const b = by.get(t);
+    if (b) {
+      b[1] = Math.max(b[1], s);
+      b[2] += cry;
+    } else by.set(t, [t, s, cry]);
+  }
+  return [...by.values()].sort((a, b) => a[0] - b[0]);
+}
+
 function toIncident(r: Record<string, unknown>): IncidentRow {
   return {
     id: String(r.id),
@@ -218,6 +293,24 @@ export class MonitorStore {
 
   init(): void {
     for (const s of SCHEMA) this.q(s);
+    this.migrateLegacyMinutes();
+  }
+
+  /**
+   * Once: the per-minute table (from before the hour blocks) becomes blocks, then is dropped —
+   * so no read ever has to look in two places, and its 31 days of rows don't each cost a
+   * deleted row (×3 with its indexes) as they age out. Only runs while that table exists.
+   */
+  private migrateLegacyMinutes(): void {
+    if (!this.q(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mon_minutes'`).length) return;
+    const now = Date.now();
+    // A day at a time (≤ 1,440 rows per camera), so no step holds a month of rows in memory.
+    // Re-running after an interruption is harmless: a block upsert replaces the same minutes.
+    for (let from = hourOf(now - RETAIN.minutes); from <= now + HOUR_MS; from += 24 * HOUR_MS) {
+      const rows = this.q(`SELECT * FROM mon_minutes WHERE m >= ? AND m < ?`, from, from + 24 * HOUR_MS).map(toMinute);
+      if (rows.length) this.putMinutes(rows);
+    }
+    this.q(`DROP TABLE mon_minutes`);
   }
 
   /* -------------------------------------------------------------- events */
@@ -276,24 +369,55 @@ export class MonitorStore {
   /* ------------------------------------------------------------- minutes */
 
   putMinute(r: MinuteRow): void {
-    this.q(
-      `INSERT OR REPLACE INTO mon_minutes (dev, m, laeq, lmax, l10, l50, l90, lpk, cal, motion, mmax, crib, outside, light, state, sounds, visit)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      r.dev, r.m, r.laeq, r.lmax, r.l10, r.l50, r.l90, r.lpk, r.cal, r.motion, r.mmax, r.crib, r.outside, r.light, r.state,
-      JSON.stringify(r.sounds ?? {}), r.visit,
-    );
+    this.putMinutes([r]);
+  }
+
+  /**
+   * Write a batch of minutes: one upsert per camera-hour they touch (a 5-minute batch is one
+   * row written, two when it straddles the hour). A minute already stored is replaced.
+   * Returns how many blocks were written.
+   */
+  putMinutes(rows: MinuteRow[]): number {
+    const groups = new Map<string, { dev: string; h: number; rows: MinuteRow[] }>();
+    for (const r of rows) {
+      if (!r?.dev || !Number.isFinite(r.m)) continue;
+      const h = hourOf(r.m);
+      const k = `${r.dev}\u0000${h}`;
+      const g = groups.get(k);
+      if (g) g.rows.push(r);
+      else groups.set(k, { dev: r.dev, h, rows: [r] });
+    }
+    for (const g of groups.values()) {
+      const cur = readBlock(this.q(`SELECT d FROM mon_blocks WHERE dev = ? AND h = ?`, g.dev, g.h)[0]?.d);
+      for (const r of g.rows) cur[String(Math.floor((r.m - g.h) / MINUTE_MS))] = packMinute(r);
+      this.q(`INSERT INTO mon_blocks (dev, h, d) VALUES (?,?,?) ON CONFLICT(dev, h) DO UPDATE SET d = excluded.d`, g.dev, g.h, JSON.stringify(cur));
+    }
+    return groups.size;
   }
 
   minutes(from: number, to: number, dev?: string): MinuteRow[] {
-    return (dev
-      ? this.q(`SELECT * FROM mon_minutes WHERE dev = ? AND m >= ? AND m < ? ORDER BY m ASC LIMIT 50000`, dev, from, to)
-      : this.q(`SELECT * FROM mon_minutes WHERE m >= ? AND m < ? ORDER BY m ASC, dev ASC LIMIT 50000`, from, to)
-    ).map(toMinute);
+    const blocks = dev
+      ? this.q(`SELECT dev, h, d FROM mon_blocks WHERE dev = ? AND h >= ? AND h < ? ORDER BY h ASC LIMIT 2000`, dev, hourOf(from), to)
+      : this.q(`SELECT dev, h, d FROM mon_blocks WHERE h >= ? AND h < ? ORDER BY h ASC LIMIT 4000`, hourOf(from), to);
+    const out: MinuteRow[] = [];
+    for (const b of blocks) for (const r of blockRows(String(b.dev), Number(b.h), b.d)) if (r.m >= from && r.m < to) out.push(r);
+    out.sort((a, b) => a.m - b.m || (a.dev < b.dev ? -1 : a.dev > b.dev ? 1 : 0));
+    return out.slice(0, 50000);
+  }
+
+  /** The newest minute a camera reported (null: none kept). */
+  lastMinute(dev: string): number | null {
+    const b = this.q(`SELECT h, d FROM mon_blocks WHERE dev = ? ORDER BY h DESC LIMIT 1`, dev)[0];
+    if (!b) return null;
+    const rows = blockRows(dev, Number(b.h), b.d);
+    return rows.length ? Math.max(...rows.map((r) => r.m)) : null;
   }
 
   /** Device ids that reported minutes since a time, busiest first. */
   activeDevs(since: number): string[] {
-    return this.q(`SELECT dev, COUNT(*) AS c FROM mon_minutes WHERE m >= ? GROUP BY dev ORDER BY c DESC`, since).map((r) => String(r.dev));
+    const n = new Map<string, number>();
+    for (const r of this.minutes(since, Date.now() + HOUR_MS)) n.set(r.dev, (n.get(r.dev) ?? 0) + 1);
+    return [...n.entries()].sort((a, b) => b[1] - a[1]).map(([d]) => d);
   }
 
   /* ----------------------------------------------------------- incidents */
@@ -375,7 +499,8 @@ export class MonitorStore {
   purge(now: number): void {
     this.q(`DELETE FROM mon_events WHERE at < ?`, now - RETAIN.events);
     this.q(`DELETE FROM mon_incidents WHERE at < ?`, now - RETAIN.incidents);
-    this.q(`DELETE FROM mon_minutes WHERE m < ?`, now - RETAIN.minutes);
+    // Whole hours only: a block goes once its last minute is past retention.
+    this.q(`DELETE FROM mon_blocks WHERE h <= ?`, now - RETAIN.minutes - HOUR_MS);
     this.q(`DELETE FROM mon_sleep WHERE start < ?`, now - RETAIN.sleep);
   }
 

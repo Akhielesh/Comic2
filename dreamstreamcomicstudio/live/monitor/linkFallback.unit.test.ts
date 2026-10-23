@@ -187,3 +187,31 @@ describe('linkFallback: the instant picture', () => {
     expect(stepFallback(s, { t: 'hello' }).fx).toEqual([on('crib', true)]);
   });
 });
+
+describe('linkFallback: on the camera’s network, the direct picture first (feature doc §7 C3)', () => {
+  it('no instant picture through the server for a viewer near the camera', () => {
+    const { s, fx } = run([{ t: 'near', on: true }, { t: 'cam', dev: 'crib' }, { t: 'link', state: 'connecting' }], initialFallback(true));
+    expect(fx).toEqual([]);
+    expect(s.pending).toBe(false);
+    // Even if a stale timer fires.
+    expect(stepFallback({ ...s, pending: true }, { t: 'instant_due' }).fx).toEqual([]);
+  });
+
+  it('the relay still steps in if the direct picture really fails', () => {
+    const { s, fx } = run([{ t: 'near', on: true }, { t: 'cam', dev: 'crib' }, { t: 'link', state: 'connecting' }, { t: 'link', state: 'failed' }], initialFallback(true));
+    expect(fx).toEqual([on('crib'), { t: 'retry_in', ms: 30_000 }]);
+    expect(s.relay).toBe(true);
+  });
+
+  it('learning it mid-connect drops a scheduled or running instant picture', () => {
+    let r = run([{ t: 'cam', dev: 'crib' }, { t: 'link', state: 'connecting' }], initialFallback(true));
+    expect(r.fx).toEqual([{ t: 'instant_in', ms: INSTANT_DELAY_MS }]);
+    r = run([{ t: 'near', on: true }], r.s);
+    expect(r.fx).toEqual([{ t: 'instant_clear' }]);
+    r = run([{ t: 'near', on: false }, { t: 'instant_due' }], r.s);
+    expect(r.fx).toEqual([{ t: 'instant_in', ms: INSTANT_DELAY_MS }, on('crib', true)]);
+    r = run([{ t: 'near', on: true }], r.s);
+    expect(r.fx).toEqual([{ t: 'relay_off' }]);
+    expect(r.s).toMatchObject({ relay: false, early: false });
+  });
+});

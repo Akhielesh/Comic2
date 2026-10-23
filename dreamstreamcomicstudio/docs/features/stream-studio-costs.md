@@ -749,9 +749,9 @@ Baselines come from Phase A. Targets are provisional until 7 days of data exist.
 |---|---|---|---|
 | C1 | Recordings Drive or device first (1) | `live/prefs.ts:71` (default `false`; bump the prefs version so existing explicit choices are kept), `SaveSheet.tsx:165-166`, `live/config.ts:48`, `live-worker/src/index.ts` `op=init` quota (WS-7), `userLine.ts` rolling 10 GB | Automatic R2 uploads = **0**; R2 recording storage ≤ 2 GB-month at current scale |
 | C2 | Push, not poll (6) | `live/views/EventPage.tsx:47`, `SoundLevelCard.tsx:61`, `WeekCard.tsx:64` | Invite page ≤ **12 requests per waiting tab-hour** (from 240); **0** history queries while hidden |
-| C3 | LAN first and ICE fixes (5) | `live/monitor/rtc.ts:43-52` + peers (WS-6), `linkFallback.ts:77`, a `monitorRoom.ts` same-network boolean (WS-9) | ≥ **95%** of same-Wi-Fi viewer sessions on `lan` within 5 s; **0** instant-relay frames to same-network viewers |
-| C4 | MonitorRoom diet (3) | ADR 0006 WS-6 / WS-9 | Per active nursery-day: DO requests ≤ **1,000**, rows ≤ **1,800**, DO duration ≤ **40 GB-s** (ADR acceptance, 7-day median) |
-| C5 | Hidden → sound only, relay cap 400 kbps (4) | ADR 0006 WS-6 | **0** video minutes sent to hidden viewers. **Server-relayed video minutes per monitored night: median ≤ 5, p90 ≤ 60.** Our-server share of monitor viewer-minutes ≤ **10%** |
+| C3 | LAN first and ICE fixes (5) | `live/monitor/rtc.ts:43-52` + peers (WS-6), `linkFallback.ts:77`, a `monitorRoom.ts` same-network boolean (WS-9) | ≥ **95%** of same-Wi-Fi viewer sessions on `lan` within 5 s; **0** instant-relay frames to same-network viewers. **Status: built 2026-10-23** (see the C3–C5 note below) |
+| C4 | MonitorRoom diet (3) | ADR 0006 WS-6 / WS-9 | Per active nursery-day: DO requests ≤ **1,000**, rows ≤ **1,800**, DO duration ≤ **40 GB-s** (ADR acceptance, 7-day median). **Status: built 2026-10-23**; a simulated night: 542 / 1,040 / 3.6 (from 4,261 / 11,898 / 63) |
+| C5 | Hidden → sound only, relay cap 400 kbps (4) | ADR 0006 WS-6 | **0** video minutes sent to hidden viewers. **Server-relayed video minutes per monitored night: median ≤ 5, p90 ≤ 60.** Our-server share of monitor viewer-minutes ≤ **10%**. **Status: built 2026-10-23** (hidden past a 20 s grace = sound only) |
 | C6 | TURN guardrails (2), then set the TURN secrets | `live-worker/src/ice.ts` (WS-4), `monitorRoom.ts`, `callRoom.ts`, `eventRoom.ts` callers | **0** credentials shared across rooms (test); ≥ **95%** of TURN egress attributable to an identifier; credential TTL ≤ 4 h. **Status: built 2026-10-22** (branch `impl/costs-turn`; the secrets were already set, so this ships as a fix). See the note below |
 | C7 | Relay-path caps (8) | `live/calls/callMesh.ts:111`, `live/studio/rtc.ts` | TURN GB per relayed 1:1 call-hour ≤ **0.4** (from ≈ 0.68). **Status: built 2026-10-22** (same branch); the target holds by construction, to be confirmed against Cloudflare's per-identifier `egressBytes` once Phase A queries them |
 | C8 | TURN on the side that receives less (7) | `ice.ts` + room "who gets TURN first" | After a 1 h lab test: TURN egress per relayed monitor viewer-hour ≤ **15 MB** (from ≈ 310 MB) |
@@ -895,10 +895,124 @@ failed check is never cached; the cache is dropped when Google refuses the grant
 The save sheet reads the account email from the known status after an upload instead of asking again, so one save session
 is the status check plus the upload-session call: ≤ 1 container wake.
 
-**C3's IPv6 fix is not in this change.** `classifyPath` (`live/monitor/rtc.ts:47-52`, WS-6) treats any `host` candidate as
-Home Wi-Fi, so two phones on carrier IPv6 (global addresses, host candidates) show "Home Wi-Fi" and get the LAN upload budget.
-The fix: a host candidate counts as local only when its address is private (RFC 1918, `fc00::/7`, `fe80::/10`, an mDNS
-`.local` name); a global IPv6 host candidate is `internet`. It needs a `rtc.unit.test.ts` case for each.
+**C3's IPv6 fix** was left out of that change; it is in C3 below.
+
+#### Status: C3, C4, C5 and the relay-data rule (implemented on `impl/costs-monitor-diet`, 2026-10-23)
+
+**Measured.** `live-worker/src/monitorRoom.night.test.ts` runs a 12 h night second by second against the real
+`MonitorRoom` on real SQLite: one camera, two viewers who are hidden most of the night, two cries (one answered, one
+escalated in a variant), a sleep report, a Wi-Fi blip on every device, and the room losing its memory after every 10 s
+without an event (1,057 times), as hibernation does. It counts what Cloudflare bills, erring high: the apps' 25 s pings at
+20:1 even though the runtime answers them; every `setAlarm`, KV put and delete, SQL row and index entry as a row written;
+20 ms of 128 MB active time per wake. "Before" is the same harness run against 87082ad's room with that day's apps.
+
+| One night (12 h camera + 1 h after) | Before (87082ad) | After | C4 target (per active nursery-day) |
+|---|---|---|---|
+| DO requests | 4,261 | **542** (283 of them pings that may be free) | ≤ 1,000 |
+| Rows written | 11,898 | **1,040** (482 `setAlarm`, 385 SQL, 173 KV) | ≤ 1,800 |
+| Alarm wakes | 2,880 | **216** (≈ 17 an hour; ADR: ≤ 60) | — |
+| DO duration (proxy) | 63 GB-s | **3.6 GB-s** | ≤ 40 GB-s |
+| Statuses sent to the room | 21,588 | **364** | — |
+
+The test asserts the targets, the saving against "before", and that nothing was lost: all 720 minutes of history, the same
+log lines and pushes as before, no false "camera offline", a phone that dies reported within 105 s with its last minutes
+kept, an unanswered cry escalated on time. An app from before this change still works against the new room (same history
+and alerts; rows 1,087), but its status every 2 s keeps requests at 1,382 until the camera app updates. The 7-day production
+median (ADR 0006 acceptance) is still to be read from the Cost centre once deployed.
+
+**C4 — MonitorRoom diet (ADR 0006 WS-9; `monitorRoom.ts`, `monitorStore.ts`). Done.**
+- **Watchdog = a dead man's switch.** Proof of life is the camera's last message (`lb`, on its socket's attachment) or its
+  last keepalive ping (`getWebSocketAutoResponseTimestamp`, which needs no wake). The alarm sits 105 s after it; a camera
+  message pushes it later only when it is within 30 s (`WATCH_PUSH_MS`, tuned on the night: a row a minute or so, a few
+  wakes an hour). When it goes off it reads the real proof: 75 s of silence → "stopped responding" (log, incident, push to
+  everyone), else it sets itself again. A camera that speaks again logs "is responding again" and the incident closes (it
+  used to stay open until the phone rejoined). The alarm is planned from what is really due (`nextAlarmAt`: sign-in
+  timeouts, the watchdog, cameras that dropped, incident escalations, a sleep session's end, calls), or deleted. No
+  15 s alarm, no `tl` blob, no `trackBucket`/`saveBucket`.
+- **Safety trade, stated:** a camera whose socket stays half-open is reported 75–105 s after its last sign of life (it was
+  45–60 s). A socket that closes is still reported 20 s later; viewers on screen notice a frozen picture in 6 s on their own.
+- **Minute rows in hour blocks** (`mon_blocks(dev, h, d) WITHOUT ROWID`, one row per camera-hour, upserted per batch: 1 row
+  written, not 3 a minute plus 3 more when each ages out). The old table is turned into blocks once, a day at a time, and
+  dropped (no 31 days of double reads, no 66k-row deletes). Retention deletes whole blocks (minutes are kept up to an hour
+  longer than 31 days).
+- **Batched writes, nothing lost.** The phone still sends its unacknowledged rows every minute; viewers' live charts get each
+  new minute at once. The room writes them once 5 are waiting or the oldest is 6 min old — and at once when they would move
+  the sleep tracker (a dry run on a copy: "fell asleep" is never late), when an alert is raised, when the camera is reported
+  not responding, says goodbye or its socket closes, or when the rows would make its attachment too big. Until then they ride
+  the camera socket's attachment (it survives hibernation; every history read and the 24 h strip include them) and the phone
+  keeps them until `stats_ok`, which is sent only for written rows. `sleepSm` is written once per batch; `sleepDev` only when
+  another camera takes over.
+- **Status on change.** The camera (`live/monitor/statusCadence.ts`, wired in `MonitorCamera.tsx`) sends the baby's state, a
+  pause, the detector, talk/call at once; other news (sound category, battery step, visit, …) within 10 s; otherwise a
+  keepalive every 2 min (≤ 30 an hour idle, the ADR's WS-6 test); every 2 s only while the room says `live_want: true` —
+  a viewer is on screen without the camera's data channel (connecting, or on the relay), or a viewer app from before this
+  change is connected. After every reconnect the camera starts at 2 s until told otherwise (old rooms never tell). The data
+  channel keeps its 2 s status. A new viewer sees a live camera as confirmed by its last ping, not its last status.
+- **Hibernation, reasoned through.** What matters lives in storage (history, incidents, sleep, settings, push lists) or on
+  the sockets' attachments: the camera's proof of life, its "not responding" flag, privacy pause, waiting minutes, the
+  `live_want` and relay-data level it was told, its goodbye; a viewer's screen state and same-network hash. Memory holds only
+  caches and pace limiters a wake rebuilds (the last status — the camera resends it within 2 s when someone needs it — relay
+  windows, sound-flood gaps). A helper that updates attachments always works on the object its socket's handler holds
+  (`live`), so neither overwrites the other.
+- **Fewer writes for the same things:** the nursery's name only when it changed (it was written on every connect), the
+  goodbye on the socket instead of a KV row and its delete, one-off migrations behind a `schema` number (a KV key, not
+  `PRAGMA user_version`, which Durable Objects may not allow), the 6-hourly purge, the day's activity mark and the hourly
+  usage write on writes that happen anyway, sign-in timeouts folded into the next due alarm.
+- Tests: `monitorRoom.night.test.ts` (above), `monitorRoom.diet.test.ts` (watchdog with pings only, silent camera 75–105 s
+  and back, across hibernation, ≤ 10 `setAlarm` for 300 statuses; batching, acks, bye/close/alert flushes, sleep at once, the
+  timeline from minutes, the one-off migration; `live_want` on/off and for old apps), the existing `monitorRoom*.test.ts`.
+
+**C5 — hidden viewers get sound only; relay cap 400 kbps. Done.**
+- The viewer says at once whether its screen is shown (`live/monitor/viewGate.ts`; picture-in-picture counts as shown):
+  `{t:'view', vis, dc, dev?}` to the room on change, `{t:'vis'}` to the camera on the data channel. A phone that locks may be
+  frozen a moment later, so the *receivers* apply the 20 s grace: a glance away keeps the picture.
+- Direct picture: the camera (`CameraHub`) takes the picture away from a viewer hidden for 20 s and brings it back at once;
+  sound and the data channel's alerts carry on. Through our server: the room forwards a hidden viewer only the sound, and
+  tells the camera how many relay viewers get the picture (`relay_want.v`); with none, the camera encodes no picture at all
+  and sends sound in 200 ms messages (`relay.ts`, "· N through the server (sound only)"). Back on screen, the picture starts
+  on a key frame. Its "through our server" picture clock stops while it is hidden.
+- Relay cap: TURN-relayed picture `RELAY_CAP` 400 kbps / 15 fps / ½ size (`rtc.ts`, was 650 / 20); the server relay's
+  encoder tops out at 400 kbps / 15 fps (`RELAY_RUNGS`, was 450).
+- The viewer's quality choice goes on the data channel to cameras that say `dcc` in their answer (no message through the
+  room); a screen shown again gets 8 s for fresh status before an old one reads "offline".
+- Target: **0 video minutes to hidden viewers** past the 20 s grace (tests: `monitorRoom.diet.test.ts` routing,
+  `rtc.unit.test.ts` camera). The production medians (server-relayed video minutes per night, our-server share) wait for
+  Phase B's path reports.
+
+**C3 — LAN first and ICE fixes. Done.**
+- **IPv6 / "Home Wi-Fi" fix** (`classifyPath`, `rtc.ts`): Home Wi-Fi only when both ends are on the home network — a private
+  address (RFC 1918, link-local, `fc00::/7`, `fe80::/10`) or an mDNS name — or the same global IPv6 /64 (one home's
+  network). A host candidate alone no longer counts: two phones on carrier IPv6, or on carrier NAT (100.64/10), are
+  `internet`. A host candidate whose address the browser hides still counts as local.
+- **Same-network hint** (`live-worker/src/monitorFair.ts`): the room hashes each socket's public network (IPv4 address, IPv6
+  /64) with the nursery id into that socket's attachment — never stored, logged or sent — and tells viewers only which
+  cameras are on their network (`hello.near`, `{t:'near'}`). Such a viewer gets **no instant picture through our server**:
+  the client doesn't ask (`linkFallback.ts`), and the room holds any instant subscription it gets anyway (older apps). If the
+  direct picture really fails, the relay still steps in (10 s give-up, unchanged).
+- `iceCandidatePoolSize: 1` on monitor peers; an `online` event restarts ICE at once (only between negotiations).
+- Targets: **0 instant-relay frames to same-network viewers** (test); ≥ 95% of same-Wi-Fi sessions on `lan` within 5 s is to
+  be read from Phase B's path reports.
+
+**Relay data used up → sound only + the direct / Home Wi-Fi picture (owner decision 2026-10-22). Done (server side and the
+viewer's honest state).**
+- `relayDataState` (`monitorFair.ts`): the nursery's TURN bytes this month (the usage row plus what is owed) against 10 GB;
+  `ok` / `warn` (80%) / `out` (100%), reset each month. Every monitor socket is told its level in `hello.fair` and `{t:'fair'}`
+  on change (its attachment remembers what it was told).
+- At `out`: the camera sends no picture to viewers reached through a TURN relay (`CameraHub.setRelayDataOut`); the room
+  forwards relay viewers sound only (and `relay_want.v` drops). The direct and Home Wi-Fi picture, all sound and every alert
+  carry on, and nobody is moved onto the not-end-to-end server relay instead. The viewer says: "Relay data is used up, so the
+  picture pauses on networks that block direct video. Sound and alerts are unchanged. On the same Wi-Fi as the camera, the
+  picture stays." Nobody is charged.
+- What it counts, honestly: viewers' own TURN byte reports (Phase B's `{t:'use'}`), each clamped to what a monitor viewer can
+  really receive (2 Mbps for the socket's age, so one viewer can't use up a nursery's month by saying so), or relay minutes ×
+  the monitor relay rate until bytes arrive. The room can't read Cloudflare's per-credential TURN figure; that stays the
+  control total in Admin → Costs. Until Phase B's reports flow, the level stays `ok`.
+- Not built: the parents' choice "Picture through our server" at 100% (§4.7 — it needs a control in `NurserySettings.tsx`);
+  the 80% notice (Phase B7); the 16 h/day server-picture limit (not enforced yet).
+
+**Not done here (follow-ups):** ICE candidate batching (75 ms windows) and ICE restarts over the data channel (WS-6); `eid`
+idempotency and the VAPID isolate cache (WS-9); `STREAM_ESTIMATES.turnBytesPerMinute.monitor` in `shared/stream/usage.ts`
+still assumes the old 0.69 Mbps relay cap (≈ 0.45 Mbps now).
 
 **Overall Phase C success measures** (Cost centre, 30 days):
 - Stream Studio marginal cost $0 at current scale.
