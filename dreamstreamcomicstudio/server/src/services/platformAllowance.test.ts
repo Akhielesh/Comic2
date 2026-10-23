@@ -167,6 +167,13 @@ describe('tryReserveAllowance (atomic RPC wrapper)', () => {
     });
   });
 
+  it('never lets caller metadata mark metered spend as platform overhead (platformPaid is stripped)', async () => {
+    const rpc = fakeRpc();
+    await tryReserveAllowance({ userId: 'u', reservationId: 'r2', estimateUsd: 0.05, event: { ...event, metadata: { platformPaid: true, route: '/x' } } });
+    const sent = (rpc.tryReserve.mock.calls[0] as unknown[])[0] as { event: { metadata: Record<string, unknown> } };
+    expect(sent.event.metadata).toEqual({ route: '/x' });
+  });
+
   it('reports newly crossed thresholds once', async () => {
     let pct = 25;
     fakeRpc({ tryReserve: vi.fn(async () => ({ governed: true, allowed: true, pct_used: pct, pct_left: 100 - pct })) });

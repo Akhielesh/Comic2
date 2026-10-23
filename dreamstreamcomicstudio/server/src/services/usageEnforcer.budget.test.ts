@@ -24,9 +24,22 @@ vi.mock('./costEstimator.js', () => ({
     operation,
     ...explicit
   }),
-  estimateCharge: vi.fn(async (seed: { metadata?: { estimateUsd?: number } }) => {
-    const usd = seed.metadata?.estimateUsd ?? 0.5;
-    return { currency: 'USD', ctPerUsd: 10_000, markup: 1.3, estimatedProviderCostUsd: usd, estimatedBillableUsd: usd * 1.3, estimatedCt: Math.round(usd * 13_000), lines: [] };
+  // Prices by model like the real estimator: `:free` models are $0 on their own catalog row;
+  // 'mystery-model' is unknown and fell back to some other $0 row.
+  estimateCharge: vi.fn(async (seed: { model?: string; metadata?: { estimateUsd?: number } }) => {
+    const free = /:free$/.test(seed.model || '');
+    const unpriced = seed.model === 'mystery-model';
+    const usd = free || unpriced ? 0 : (seed.metadata?.estimateUsd ?? 0.5);
+    return {
+      currency: 'USD',
+      ctPerUsd: 10_000,
+      markup: 1.3,
+      estimatedProviderCostUsd: usd,
+      estimatedBillableUsd: usd * 1.3,
+      estimatedCt: Math.round(usd * 13_000),
+      lines: [],
+      modelPricing: { model: unpriced ? 'some-other-row' : seed.model }
+    };
   }),
   buildSettleEstimateFromUsage: vi.fn(async (_seed: unknown, usage?: { providerCostUsd?: number }) => {
     const usd = usage?.providerCostUsd ?? 0;
@@ -234,6 +247,31 @@ describe('usage budget gate (reserveForOperation)', () => {
     expect(notices).toHaveLength(1);
     expect(notices[0].message).toContain('30%');
     expect(notices[0].message).not.toMatch(/\$/);
+  });
+
+  it('a client-chosen model (X-Gemini-Model / body.model) cannot lower the hold below the model actually called', async () => {
+    db.budgets.set('tester-1', 0.05);
+    db.events.push({ userId: 'tester-1', reservationId: 'old', costUsd: 0.05, status: 'SETTLED', createdAt: Date.now() });
+    const spoofHeader = makeReq({ header: (n: string) => (/^x-gemini-model$/i.test(n) ? 'cheap/model:free' : undefined) });
+    const viaHeader = await reserveForOperation({ req: spoofHeader, operation: 'text.analyze_script', provider: 'openrouter', fallbackModel: 'paid/model' });
+    expect(viaHeader.allowed).toBe(false);
+    const spoofBody = makeReq({ body: { model: 'cheap/model:free' } });
+    const viaBody = await reserveForOperation({ req: spoofBody, operation: 'chat.completion', provider: 'openrouter', fallbackModel: 'paid/model' });
+    expect(viaBody.allowed).toBe(false);
+    expect(ledger.reserveUsageTokens).not.toHaveBeenCalled();
+    // A model that really is free still runs when the usage is used up (nothing is spent).
+    const free = await reserveForOperation({ req: makeReq(), operation: 'chat.completion', provider: 'openrouter', fallbackModel: 'cheap/model:free' });
+    expect(free.allowed).toBe(true);
+  });
+
+  it('an unknown model priced at $0 by a fallback row holds a floor, so a used-up budget still stops it', async () => {
+    db.budgets.set('tester-1', 0.05);
+    const first = await reserveForOperation({ req: makeReq(), operation: 'chat.completion', provider: 'openrouter', fallbackModel: 'mystery-model' });
+    expect(first.allowed).toBe(true);
+    expect(db.events.at(-1)?.costUsd).toBeGreaterThan(0);
+    db.events.push({ userId: 'tester-1', reservationId: 'old', costUsd: 0.05, status: 'SETTLED', createdAt: Date.now() });
+    const second = await reserveForOperation({ req: makeReq(), operation: 'chat.completion', provider: 'openrouter', fallbackModel: 'mystery-model' });
+    expect(second.allowed).toBe(false);
   });
 
   it('metering off: no budget, legacy wallet path', async () => {

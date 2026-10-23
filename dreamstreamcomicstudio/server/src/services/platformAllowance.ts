@@ -396,6 +396,16 @@ export type BudgetReserveOutcome =
   | { kind: 'denied'; pctUsed: number; pctLeft: number }
   | { kind: 'unavailable' };
 
+/**
+ * Metered spend is never platform overhead: `metadata.platformPaid` (safety checks, the asset
+ * library) excludes a cost-event row from the budget, so it must never ride along on a metered call.
+ */
+export const withoutPlatformPaid = (metadata?: Record<string, unknown> | null): Record<string, unknown> => {
+  if (!metadata || typeof metadata !== 'object') return {};
+  const { platformPaid: _dropped, ...rest } = metadata;
+  return rest;
+};
+
 /** Last percent seen per user, so 30/70/90 notices fire once when a reserve crosses them. */
 const lastPctCache = new TtlCache<number>(6 * 60 * 60_000, 5000);
 
@@ -427,7 +437,7 @@ export const tryReserveAllowance = async (input: {
         model: input.event.model,
         estimated_ct: Math.max(0, Math.floor(Number(input.event.estimatedCt) || 0)),
         billable_usd: Math.max(0, Number(input.event.billableUsd) || 0),
-        metadata: input.event.metadata || {}
+        metadata: withoutPlatformPaid(input.event.metadata)
       }
     });
   } catch (err) {

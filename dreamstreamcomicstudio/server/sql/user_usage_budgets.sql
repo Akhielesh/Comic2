@@ -194,7 +194,9 @@ begin
     v_billable,
     false,
     'RESERVED',
-    (case when jsonb_typeof(v_event->'metadata') = 'object' then v_event->'metadata' else '{}'::jsonb end)
+    -- A metered call is never platform overhead: drop any `platformPaid` flag so caller metadata
+    -- can't exclude this row from the user's spend.
+    ((case when jsonb_typeof(v_event->'metadata') = 'object' then v_event->'metadata' else '{}'::jsonb end) - 'platformPaid')
       || jsonb_build_object('usageBudget', true),
     now()
   );

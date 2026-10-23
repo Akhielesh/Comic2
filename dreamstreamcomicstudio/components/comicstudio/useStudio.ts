@@ -26,7 +26,7 @@
 //   - The owner's publication view is fetched lazily and refreshed when the doc's mirror changes.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { applyOps, type DocOp, type StudioAction } from '../../shared/comic/ops';
+import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
 import type { StreamRequest, StudioFocus } from '../../shared/comic/events';
 import {
   mapAssetRefs,
@@ -133,6 +133,8 @@ const MAX_FOCUS_LINES = 80;
 export const TYPED_UNDO_RE = /^\s*undo( that| it)?\s*[.!]?\s*$/i;
 /** Window event the Share sheet listens for (share/ShareButton.tsx OPEN_SHARE_EVENT). */
 const OPEN_SHARE_EVENT = 'ds:open-share';
+/** Every board tab (an `open_tab` chip naming anything else is ignored). */
+const STUDIO_TABS: ReadonlySet<string> = new Set<BoardTab>(['story', 'cast', 'style', 'pages', 'media', 'languages', 'read']);
 
 /**
  * Offline fallback only: guess "own key" from the latest image spend. The server's caps.byok is
@@ -560,12 +562,21 @@ export function useStudio(projectId: string): ComicStudioController {
   // Director edits (ops.origin === 'director') become undo entries, inverse computed against the
   // exact base each batch applied to; the batches of one reply merge, so "undo" undoes the reply.
   // Skipped on the render of a project switch (load_start clears the inbox).
+  // A reply with a batch that could not be undone exactly stops merging: its later batches become
+  // their own entries, so "undo" never claims to undo a reply it can only partly undo.
+  const brokenRepliesRef = useRef(new Set<string>());
   const undoInbox = state.undoInbox;
   useEffect(() => {
     if (!undoInbox.length || switching) return;
     for (const b of undoInbox) {
-      const group = b.streamId ? `reply:${b.streamId}` : undefined;
-      undoRef.current.record(makeUndoEntry(b.before, b.ops, { origin: 'director', label: b.label, rev: b.rev, at: b.at, ...(group ? { group } : {}) }));
+      const reply = b.streamId ? `reply:${b.streamId}` : undefined;
+      const group = reply && !brokenRepliesRef.current.has(reply) ? reply : undefined;
+      const entry = makeUndoEntry(b.before, b.ops, { origin: 'director', label: b.label, rev: b.rev, at: b.at, ...(group ? { group } : {}) });
+      if (entry) undoRef.current.record(entry);
+      else if (reply && b.ops.some((op) => CLIENT_PATCHABLE_OPS.has(op?.op))) {
+        if (brokenRepliesRef.current.size > 200) brokenRepliesRef.current.clear();
+        brokenRepliesRef.current.add(reply);
+      }
     }
     dispatch({ type: 'undo_inbox_drain', upToRev: undoInbox[undoInbox.length - 1].rev });
   }, [undoInbox, switching]);
@@ -588,13 +599,24 @@ export function useStudio(projectId: string): ComicStudioController {
       if (messageInFlightRef.current || !stateRef.current.base) return;
       messageInFlightRef.current = true;
       const streamId = localId('stream');
-      dispatch({
-        type: 'message_pending',
-        message: { id: localId('pending'), text: clean, attachments: files, at: Date.now(), status: 'sending', streamId }
-      });
-      const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
       const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
       const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
+      dispatch({
+        type: 'message_pending',
+        message: {
+          id: localId('pending'),
+          text: clean,
+          attachments: files,
+          // Kept so "Try again" re-sends exactly this message (uploads, targets, what it was about).
+          ...(inbox.length ? { inboxPaths: inbox } : {}),
+          ...(targets ? { attachmentTargets: targets } : {}),
+          ...(focus ? { focus } : {}),
+          at: Date.now(),
+          status: 'sending',
+          streamId
+        }
+      });
+      const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
       const generation = generationRef.current;
       try {
         await runStream(
@@ -619,7 +641,12 @@ export function useStudio(projectId: string): ComicStudioController {
     const pending = stateRef.current.pendingMessage;
     if (!pending || pending.status !== 'failed' || messageInFlightRef.current) return;
     dispatch({ type: 'message_dismiss' });
-    void send(pending.text, pending.attachments);
+    void send(pending.text, {
+      attachments: pending.attachments,
+      ...(pending.inboxPaths?.length ? { inboxPaths: pending.inboxPaths } : {}),
+      ...(pending.attachmentTargets?.length ? { attachmentTargets: pending.attachmentTargets } : {}),
+      ...(pending.focus ? { focus: pending.focus } : {})
+    });
   }, [send]);
 
   const dismissPendingMessage = useCallback(() => dispatch({ type: 'message_dismiss' }), []);
@@ -882,7 +909,8 @@ export function useStudio(projectId: string): ComicStudioController {
           if (typeof action.pageId === 'string' && action.pageId) openPage(action.pageId);
           return;
         case 'open_tab':
-          if (typeof action.tab === 'string') setTab(action.tab);
+          // Chips come from the model: only a real board tab moves the board.
+          if (typeof action.tab === 'string' && STUDIO_TABS.has(action.tab)) setTab(action.tab);
           return;
         case 'open_share': {
           // The mounted Share button opens its sheet on this event (and may preventDefault to say

@@ -824,6 +824,13 @@ const buildLimitExceeded = (
   };
 };
 
+/** `metadata.platformPaid` excludes a cost event from the usage budget — never on metered spend. */
+const withoutPlatformPaidMeta = (metadata?: Record<string, unknown>): Record<string, unknown> => {
+  if (!metadata || typeof metadata !== 'object') return {};
+  const { platformPaid: _dropped, ...rest } = metadata;
+  return rest;
+};
+
 /** Wallet-neutral usage state for reservations that never touched the token wallet. */
 const walletSkippedUsageState = (): UsageLimitState => {
   const at = now();
@@ -1224,7 +1231,8 @@ export const settleReservation = async (input: {
         actual_ct: actualCt,
         provider_cost_usd: providerCostUsd,
         billable_usd: billableUsd,
-        metadata: { ...(input.metadata || {}), walletSkipped: true }
+        // Never let settle metadata mark metered spend as platform overhead (budget-excluded).
+        metadata: { ...withoutPlatformPaidMeta(input.metadata), walletSkipped: true }
       });
     }
 

@@ -238,6 +238,7 @@ describe('billingLedger — usage-budget paths (P1-LIMITS)', () => {
       operation: 'comic.image.page',
       provider: 'openrouter',
       model: 'nb',
+      metadata: { surface: 'comic_studio_v4', platformPaid: true },
       walletSkipped: true
     });
     expect(settled).toMatchObject({ actualCt: 650, reservationReleased: true });
@@ -245,6 +246,8 @@ describe('billingLedger — usage-budget paths (P1-LIMITS)', () => {
     const update = sb.calls.find((c) => c.table === 'generation_cost_events' && c.op === 'update');
     expect(update?.filters).toEqual([['reservation_id', reservationId], ['user_id', 'user-a']]);
     expect(update?.payload).toMatchObject({ status: 'SETTLED', provider_cost_usd: makeEstimate(650).estimatedProviderCostUsd });
+    // Metered spend can never be re-labelled platform overhead (which the budget skips).
+    expect((update?.payload as { metadata: Record<string, unknown> }).metadata).toEqual({ surface: 'comic_studio_v4', walletSkipped: true });
 
     installFakeSupabase();
     await releaseReservation({ userId: 'user-a', reservationId, estimatedCt: 700, reason: 'render failed', walletSkipped: true });

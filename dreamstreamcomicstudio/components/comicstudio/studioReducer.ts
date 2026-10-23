@@ -20,7 +20,7 @@
 // outside a stream (an upload answer) apply through `server_ops` with the same revision guard.
 
 import { applyOps, type DocOp } from '../../shared/comic/ops';
-import type { OpsOrigin, StudioEvent } from '../../shared/comic/events';
+import type { AttachmentTarget, OpsOrigin, StudioEvent, StudioFocus } from '../../shared/comic/events';
 import { getRender, renderTargetKey, type AssetRef, type ComicDoc, type Msg, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
 import type { ActivityItem, BoardTab, PendingAttachment } from './types';
 
@@ -102,6 +102,8 @@ export interface StreamInfo {
   startedAt: number;
   /** Last `error` event this stream delivered. */
   errored?: string;
+  /** Its server code (COOLDOWN, CONTENT_POLICY, …). */
+  erroredCode?: string;
 }
 
 /** A user message shown immediately, until the server's `message` op for it lands. */
@@ -112,7 +114,13 @@ export interface PendingUserMessage {
   at: number;
   status: 'sending' | 'failed';
   error?: string;
+  /** Server code of the failure (COOLDOWN, CONTENT_POLICY, …) so the bubble can tailor its hint. */
+  code?: string;
   streamId?: string;
+  /** What "Try again" re-sends besides the text (SendOptions). */
+  inboxPaths?: string[];
+  attachmentTargets?: AttachmentTarget[];
+  focus?: StudioFocus;
 }
 
 export interface OptimisticPatch {
@@ -508,11 +516,12 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
     case 'error': {
       const message = (event.message || '').trim() || 'Something went wrong in the studio.';
       const stream = state.streams[streamId];
+      const code = typeof event.code === 'string' && event.code ? event.code : null;
       return {
         ...state,
         error: message,
-        errorCode: typeof event.code === 'string' && event.code ? event.code : null,
-        streams: stream ? { ...state.streams, [streamId]: { ...stream, errored: message } } : state.streams
+        errorCode: code,
+        streams: stream ? { ...state.streams, [streamId]: { ...stream, errored: message, ...(code ? { erroredCode: code } : {}) } } : state.streams
       };
     }
     case 'done':
@@ -543,7 +552,8 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
   // text on screen as "not sent" (with retry) instead of silently losing it.
   if (stream.kind === 'message' && pendingMessage && pendingMessage.streamId === action.streamId) {
     if (failure) {
-      pendingMessage = { ...pendingMessage, status: 'failed', error: failure };
+      const code = action.error ? action.code : stream.erroredCode;
+      pendingMessage = { ...pendingMessage, status: 'failed', error: failure, ...(code ? { code } : {}) };
       if (error === failure) error = null; // shown on the bubble instead
     } else if (action.aborted) {
       pendingMessage = { ...pendingMessage, status: 'failed', error: 'Stopped before it was sent.' };

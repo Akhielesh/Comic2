@@ -34,7 +34,19 @@ describe('formatCostForUser', () => {
     expect(ctx).toEqual(DOLLAR_CONTEXT);
     expect(formatCostForUser(0.05, ctx)).toBe('$0.05');
     expect(costContextFromAllowance(normalizeAllowanceStatus({ enabled: true, governed: false, pctUsed: 0 }))).toEqual(DOLLAR_CONTEXT);
-    expect(costContextFromAllowance(null)).toEqual(DOLLAR_CONTEXT);
+    // Metering off (the server says no limit applies) → real prices.
+    expect(costContextFromAllowance(normalizeAllowanceStatus({ enabled: false, governed: false, pctUsed: 0 }))).toEqual(DOLLAR_CONTEXT);
+  });
+
+  it('never shows dollars before the status is known or while it cannot be read', () => {
+    for (const status of [null, undefined, normalizeAllowanceStatus({ enabled: false, governed: true, pctUsed: 0, pctLeft: 100 })]) {
+      const ctx = costContextFromAllowance(status);
+      expect(ctx).toEqual({ governed: true, pctPerUsd: null });
+      expect(formatCostForUser(0.2, ctx)).toBe('uses a little of your usage');
+      expect(formatCostForUser(0.2, ctx)).not.toMatch(/\$/);
+    }
+    // …but an own-key call always shows its real price.
+    expect(costContextFromAllowance(null, { byok: true })).toEqual(DOLLAR_CONTEXT);
   });
 
   it('stays honest (no invented number) when the share is unknown', () => {

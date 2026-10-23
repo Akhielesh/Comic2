@@ -124,10 +124,10 @@ export const USAGE_EXHAUSTED_COPY =
   "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up (reply to your welcome email), or add your own API key in Settings → API keys to keep going.";
 
 // ---------------------------------------------------------------------------
-// Shared status store — the settings panel (60s poll) and the chat banner
-// (5min poll) render from ONE module-level status, so a change made on either
-// surface (e.g. switching byokFallbackMode) shows up everywhere immediately.
-// The polls remain purely as refresh sources feeding this store.
+// Shared status store — the settings panel, the chat banner and every usage meter
+// render from ONE module-level status, so a change made on any surface (e.g.
+// switching byokFallbackMode) shows up everywhere immediately. It is refreshed on
+// mount, on window focus and after a spend (refreshAllowanceStatus) — never polled.
 // ---------------------------------------------------------------------------
 
 type AllowanceListener = (status: AllowanceStatus) => void;

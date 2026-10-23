@@ -13,14 +13,17 @@
 //     adjacent ops on the same target are compacted so a long scrub stays one small request.
 //   - All director batches of one reply (one stream) merge into one entry: "undo" undoes the reply.
 //   - Entries whose target no longer exists (or that would change nothing) are skipped.
-//   - A rejected save drops its entry; a failed undo/redo puts the entry back.
+//   - A rejected save drops its entry; a failed undo/redo puts the entry back (unless a newer edit
+//     was recorded meanwhile — replaying it out of order would corrupt the doc, so it is dropped).
+//   - A change that cannot be undone exactly (contract §6: render_use with no previous image, a
+//     purged page delete) is not recorded at all — never a partial "Undid: …".
 //
 // The pure stack functions are exported (and unit-tested); the hook only holds them per project.
 
 import { useCallback, useRef, useState } from 'react';
 import type { ComicDoc } from '../../shared/comic/doc';
 import { applyOp, CLIENT_PATCHABLE_OPS, type DocOp } from '../../shared/comic/ops';
-import { describeOps, inverseOps } from '../../shared/comic/undo';
+import { describeOps, inverseOps, isUndoable } from '../../shared/comic/undo';
 
 export const UNDO_LIMIT = 100;
 export const COALESCE_WINDOW_MS = 600;
@@ -193,6 +196,13 @@ export function makeUndoEntry(before: ComicDoc, ops: readonly DocOp[], opts: Mak
   const list = ops.filter((op) => op && typeof op === 'object' && typeof op.op === 'string');
   const forward = compactOps(list.filter((op) => CLIENT_PATCHABLE_OPS.has(op.op)));
   if (!forward.length) return null;
+  // Contract §6: a change that cannot be undone EXACTLY (render_use with no previous image, a purged
+  // page delete) is not undoable — never record a partial undo that would claim "Undid: …".
+  let cur = before;
+  for (const op of list) {
+    if (CLIENT_PATCHABLE_OPS.has(op.op) && !isUndoable(cur, [op])) return null;
+    cur = applyOp(cur, op);
+  }
   const inverse = compactOps(sendableOps(inverseOps(before, list)));
   if (!inverse.length) return null;
   return {
@@ -267,11 +277,22 @@ export function takeRedo(stacks: UndoStacks, usable?: (e: UndoEntry) => boolean)
   return { stacks: { undo: entry ? [...stacks.undo, entry] : stacks.undo, redo: rest }, entry, skipped };
 }
 
-/** Undo the move of an entry whose undo (`to: 'undo'`) or redo (`to: 'redo'`) failed to save. */
+/**
+ * Undo the move of an entry whose undo (`to: 'undo'`) or redo (`to: 'redo'`) failed to save.
+ * Only while history has not moved on: once a newer edit was recorded (it clears redo / sits above
+ * the entry), putting the entry back on top would replay it out of order — it is dropped instead.
+ */
 export function returnEntry(stacks: UndoStacks, entry: UndoEntry, to: 'undo' | 'redo'): UndoStacks {
   const undo = stacks.undo.filter((e) => e.id !== entry.id);
   const redo = stacks.redo.filter((e) => e.id !== entry.id);
-  return to === 'undo' ? { undo: [...undo, entry], redo } : { undo, redo: [...redo, entry] };
+  if (to === 'undo') {
+    // A failed undo: the entry sits in redo until a new edit clears it.
+    return redo.length !== stacks.redo.length ? { undo: [...undo, entry], redo } : stacks;
+  }
+  // A failed redo: the entry is back on top of undo unless something newer was pushed above it.
+  const top = stacks.undo[stacks.undo.length - 1];
+  if (top?.id === entry.id) return { undo, redo: [...redo, entry] };
+  return undo.length !== stacks.undo.length ? { undo, redo } : stacks;
 }
 
 /** Remove one entry from both stacks (its undo/redo can never be saved). */

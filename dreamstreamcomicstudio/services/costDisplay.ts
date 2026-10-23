@@ -26,14 +26,17 @@ export const standardPageProviderUsd = (): number => tierPagePrice('standard', t
 
 /**
  * Build the display context from the usage status. `byok` (the call runs on the user's own key)
- * always shows real prices: it doesn't touch their usage.
+ * always shows real prices: it doesn't touch their usage. Dollars otherwise need a POSITIVE
+ * answer that no limit applies (`governed: false` — admins, exempt accounts, metering off): a
+ * status that hasn't loaded yet or couldn't be read never shows a governed user a dollar
+ * figure — the quote stays in usage terms until the share is known.
  */
 export const costContextFromAllowance = (
   status: AllowanceStatus | null | undefined,
   opts: { byok?: boolean } = {}
 ): CostDisplayContext => {
-  if (opts.byok || !showsUsageMeter(status)) return DOLLAR_CONTEXT;
-  const perPage = status.friendlyUnits?.pctPerStandardPage;
+  if (opts.byok || status?.governed === false) return DOLLAR_CONTEXT;
+  const perPage = showsUsageMeter(status) ? status.friendlyUnits?.pctPerStandardPage : null;
   const pageUsd = standardPageProviderUsd();
   return {
     governed: true,

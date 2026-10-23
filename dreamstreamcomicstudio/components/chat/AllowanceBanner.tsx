@@ -68,11 +68,14 @@ export const AllowanceBanner: React.FC = () => {
 
   const left = formatPctLeft(status.pctLeft);
   const units = status.friendlyUnits?.label;
+  // The hard stop must be readable in full on a 320 px phone (it carries the two ways forward),
+  // so it wraps instead of truncating, and its "API keys" path stays visible on every width.
+  const hardStop = threshold >= 100;
 
   return (
     <div
       role="status"
-      className={`flex items-center gap-2.5 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${toneClasses}`}
+      className={`flex gap-2.5 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${hardStop ? 'items-start sm:items-center' : 'items-center'} ${toneClasses}`}
     >
       {tone === 'info' ? (
         <Gauge className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" />
@@ -80,7 +83,10 @@ export const AllowanceBanner: React.FC = () => {
         <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${tone === 'rose' ? 'text-rose-500' : 'text-amber-500'}`} />
       )}
 
-      <span className="min-w-0 flex-1 truncate" title={threshold >= 100 && !showConsent ? USAGE_EXHAUSTED_COPY : undefined}>
+      <span
+        className={`min-w-0 flex-1 ${hardStop ? 'leading-snug' : 'truncate'}`}
+        title={hardStop && !showConsent ? USAGE_EXHAUSTED_COPY : undefined}
+      >
         {showConsent ? (
           <>
             <span className="font-semibold">You've used all of your DreamStream usage.</span> Continue with your own key?{' '}
@@ -107,6 +113,7 @@ export const AllowanceBanner: React.FC = () => {
 
       {showConsent && (
         <button
+          type="button"
           onClick={() => void consent()}
           disabled={saving}
           className="shrink-0 rounded-full bg-rose-600 px-2.5 py-0.5 text-[11px] font-semibold text-white transition-all duration-200 hover:bg-rose-700 disabled:opacity-50 coarse:min-h-11 coarse:px-3"
@@ -115,12 +122,14 @@ export const AllowanceBanner: React.FC = () => {
         </button>
       )}
       <button
+        type="button"
         onClick={openApiSettings}
-        className="hidden shrink-0 text-[11px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-all duration-200 hover:text-[var(--ds-ink)] hover:underline sm:inline"
+        className={`shrink-0 text-[11px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-all duration-200 hover:text-[var(--ds-ink)] hover:underline coarse:min-h-11 coarse:px-1 ${hardStop ? 'inline-flex items-center' : 'hidden sm:inline-flex sm:items-center'}`}
       >
         API keys
       </button>
       <button
+        type="button"
         onClick={dismiss}
         aria-label="Dismiss usage alert"
         className="inline-flex shrink-0 items-center justify-center rounded-md p-0.5 text-[var(--ds-muted)] transition-all duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] coarse:h-11 coarse:w-11"
