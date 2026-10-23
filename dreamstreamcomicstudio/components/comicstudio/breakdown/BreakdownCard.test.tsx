@@ -115,6 +115,53 @@ describe('filmstrip', () => {
     for (const row of container.querySelectorAll('.flex-wrap')) expect(row.className).not.toMatch(/\bw-\[/);
   });
 
+  it('out-of-flow tile text (the sr-only spoken names) stays inside the scrolling strip: tiles are positioned', () => {
+    // P2-GATE breakdown-strip-sronly-overflow: Tailwind `sr-only` is position:absolute, so its containing block is
+    // its nearest POSITIONED ancestor. When none sat inside the overflow-x-auto strip, that was the page itself:
+    // the strip did not clip the far tiles' hidden names and the document grew to 2063 px at a 1440 px viewport
+    // (1715 px at 360 px). jsdom has no layout, so the containing block is found from the positioning classes.
+    const cls = (el: Element) => el.getAttribute('class') ?? '';
+    const POSITIONED = /(?:^|\s)(?:relative|absolute|fixed|sticky)(?:\s|$)/;
+    const OUT_OF_FLOW = /(?:^|\s)(?:sr-only|absolute|fixed)(?:\s|$)/;
+    const containingBlock = (el: Element): Element | null => {
+      for (let a = el.parentElement; a; a = a.parentElement) if (POSITIONED.test(cls(a))) return a;
+      return null;
+    };
+    const check = (label: string) => {
+      const list = screen.getByRole('list', { name: /Pages in this book/ });
+      const items = within(list).getAllByRole('listitem');
+      const floating = [...list.querySelectorAll('*')].filter((el) => OUT_OF_FLOW.test(cls(el)));
+      // every tile carries its spoken name, so this check can never pass on an empty set
+      const spoken = floating.filter((el) => /(?:^|\s)sr-only(?:\s|$)/.test(cls(el)));
+      expect(spoken.length, `${label}: one spoken name per tile`).toBe(items.length);
+      for (const el of floating) {
+        const cb = containingBlock(el);
+        const what = `${label}: <${el.tagName.toLowerCase()} class="${cls(el)}">${(el.textContent || '').slice(0, 40)}`;
+        expect(cb, `${what} has a positioned ancestor`).not.toBeNull();
+        expect(list.contains(cb), `${what} is placed (and clipped) inside the strip, not against the page`).toBe(true);
+      }
+      // the hidden name scrolls with its own tile
+      for (const el of spoken) expect(el.closest('li')!.contains(containingBlock(el)), `${label}: inside its tile`).toBe(true);
+    };
+
+    let r = renderCard(bd());
+    check('easy plan');
+    r.unmount();
+    r = renderCard(bd(), makeFakeStudio(), true);
+    check('compact');
+    r.unmount();
+    // Pro status view with drawn art (thumbnails are <img>, the names carry "drawn"); then the cost view.
+    r = renderCard(bd({ view: 'status' }), makeFakeStudio({ doc: drawnDoc(), mode: 'pro' }));
+    check('pro status');
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Breakdown view' })).getByRole('radio', { name: /Cost/ }));
+    check('pro cost');
+    r.unmount();
+    // Governed wording ("a little of your usage to draw") rides in the same spoken span.
+    resetUsageStatus();
+    renderCard(bd(), makeFakeStudio({ mode: 'pro' }));
+    check('governed');
+  });
+
   it('compact tiles are 96 px', () => {
     renderCard(bd(), makeFakeStudio(), true);
     for (const li of within(screen.getByRole('list', { name: /Pages in this book/ })).getAllByRole('listitem')) expect(li.style.width).toBe('96px');

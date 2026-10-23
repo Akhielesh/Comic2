@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
-import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex } from './BookTimeline';
+import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex, stripScrollDelta } from './BookTimeline';
 import { computeAccessibleName } from 'dom-accessibility-api';
 import { clipThumbWidth } from './TimelineClip';
 
@@ -232,6 +232,96 @@ describe('BookTimeline', () => {
     expect(dragShift(1, 0, 2, 60)).toBe(-64);
     expect(dragShift(1, 2, 0, 60)).toBe(64);
     expect(dragShift(2, 0, 1, 60)).toBe(0);
+  });
+
+  describe('keeps the page being edited in view by scrolling only its own strip (gate: editor-tools-sheet-header-scrolled-away)', () => {
+    /** jsdom has no layout: give an element a horizontal box (viewport coordinates). */
+    const box = (el: Element, left: number, right: number) => {
+      (el as HTMLElement).getBoundingClientRect = () => ({ left, right, width: right - left, top: 0, bottom: 64, height: 64, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+    };
+    let intoView: ReturnType<typeof vi.fn>;
+    let restore: () => void;
+    beforeEach(() => {
+      // jsdom has no scrollIntoView: install a spy so any call — the bug — is seen.
+      const proto = Element.prototype as unknown as Record<string, unknown>;
+      const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView');
+      const prev = proto.scrollIntoView;
+      intoView = vi.fn();
+      proto.scrollIntoView = intoView;
+      restore = () => {
+        if (had) proto.scrollIntoView = prev;
+        else delete proto.scrollIntoView;
+      };
+    });
+    afterEach(() => restore());
+
+    it('scrolls the strip sideways to the page; never scrollIntoView, so no ancestor (the phone tools sheet and its aside) moves', () => {
+      const studio = makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages' });
+      // As on a phone: the compact strip inside the tools aside inside the sheet's clipped root.
+      const tree = (s: typeof studio) => (
+        <div data-testid="sheet-root" style={{ overflow: 'hidden', height: 208 }}>
+          <aside data-testid="tools-aside" style={{ overflowY: 'auto' }}>
+            <BookTimeline studio={s} compact />
+          </aside>
+        </div>
+      );
+      const { rerender } = render(tree(studio));
+      const scroller = screen.getByRole('listbox').parentElement as HTMLElement;
+      // A 300 px strip at the left edge; page 3 is off to the right, page 1 in view, the cover too.
+      box(scroller, 0, 300);
+      Object.defineProperty(scroller, 'clientWidth', { value: 300, configurable: true });
+      box(optionNamed(/^Cover,/), 6, 66);
+      box(optionNamed(/^Page 1,/), 70, 130);
+      box(optionNamed(/^Page 2,/), 134, 194);
+      box(optionNamed(/^Page 3,/), 500, 560);
+
+      rerender(tree({ ...studio, focusedPageId: 'pg_3' }));
+      expect(intoView).not.toHaveBeenCalled();
+      // jsdom has no Element.scrollTo: the strip's scrollLeft is set directly — 560 − (300 − 4 px margin).
+      expect(scroller.scrollLeft).toBe(264);
+      expect(screen.getByTestId('sheet-root').scrollTop).toBe(0);
+      expect(screen.getByTestId('tools-aside').scrollTop).toBe(0);
+
+      // Back to page 1 (now off to the left), where scrollTo exists: one smooth sideways scroll of the strip.
+      const scrollTo = vi.fn();
+      (scroller as unknown as { scrollTo: unknown }).scrollTo = scrollTo;
+      box(optionNamed(/^Page 1,/), -194, -134);
+      rerender(tree({ ...studio, focusedPageId: 'pg_1' }));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo).toHaveBeenCalledWith({ left: 264 - 198, behavior: 'smooth' });
+
+      // A page already fully in view: nothing scrolls.
+      rerender(tree({ ...studio, focusedPageId: 'pg_2' }));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(intoView).not.toHaveBeenCalled();
+      expect(screen.getByTestId('sheet-root').scrollTop).toBe(0);
+      expect(screen.getByTestId('tools-aside').scrollTop).toBe(0);
+    });
+
+    it('the dock strip too: opening a page scrolls only the strip, never the studio around it', () => {
+      window.localStorage.setItem(DOCK_OPEN_KEY, '1');
+      const studio = makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages' });
+      const { rerender } = render(<BookTimeline studio={studio} reorderActivation="immediate" />);
+      const scroller = screen.getByRole('listbox').parentElement as HTMLElement;
+      box(scroller, 0, 300);
+      Object.defineProperty(scroller, 'clientWidth', { value: 300, configurable: true });
+      box(optionNamed(/^Page 3,/), 400, 460);
+      rerender(<BookTimeline studio={{ ...studio, focusedPageId: 'pg_3' }} reorderActivation="immediate" />);
+      expect(intoView).not.toHaveBeenCalled();
+      expect(scroller.scrollLeft).toBe(164);
+    });
+
+    it('nearest-edge maths with a 4 px margin; a clip wider than the view shows its start', () => {
+      const view = { left: 0, right: 300 };
+      expect(stripScrollDelta(view, { left: 10, right: 70 })).toBe(0);
+      expect(stripScrollDelta(view, { left: 4, right: 296 })).toBe(0);
+      expect(stripScrollDelta(view, { left: 500, right: 560 })).toBe(264);
+      expect(stripScrollDelta(view, { left: -60, right: 0 })).toBe(-64);
+      expect(stripScrollDelta(view, { left: 100, right: 500 })).toBe(96);
+      expect(stripScrollDelta(view, { left: -100, right: 400 })).toBe(-104);
+      // No layout (hidden strip, jsdom): never scroll.
+      expect(stripScrollDelta({ left: 0, right: 0 }, { left: 500, right: 560 })).toBe(0);
+    });
   });
 
   it('the dock’s Media shortcut appears only once the comic has an image (no dead button before)', () => {

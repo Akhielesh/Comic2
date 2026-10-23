@@ -652,7 +652,11 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         {tiles.map((t) => {
           const on = t.key === selected?.key;
           return (
-            <li key={t.key} className="shrink-0 snap-start" style={{ width: tileW }}>
+            // `relative`: each tile is the containing block of its `sr-only` (position:absolute) name text.
+            // Without it that text is placed against the page, not the scrolling strip, so the strip
+            // does not clip it and the last tile's text widens the whole document (P2-GATE
+            // breakdown-strip-sronly-overflow).
+            <li key={t.key} className="relative shrink-0 snap-start" style={{ width: tileW }}>
               <button
                 type="button"
                 ref={(el) => {

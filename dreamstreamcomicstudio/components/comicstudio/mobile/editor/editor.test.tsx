@@ -157,6 +157,28 @@ describe('EditorToolsSheet (mobile.md §4.3 page editor tools)', () => {
     now.mockRestore();
   });
 
+  it('sheet: the root never scrolls, so the header (grabber, title, Close) stays at its top over the tools (gate: editor-tools-sheet-header-scrolled-away)', () => {
+    sheet({ detent: 'peek', avail: 636 });
+    const region = screen.getByRole('region', { name: 'Page tools sheet' });
+    const header = region.querySelector<HTMLElement>('[data-sheet-header]')!;
+    expect(region.firstElementChild).toBe(header);
+    expect(within(header).getByRole('button', { name: 'Close page tools' })).toBeInTheDocument();
+    // overflow: clip: not a scroll container, so a scrollIntoView()/focus() inside the tools can't scroll it
+    // (an overflow: hidden box can be scrolled by script — that pushed the header out at 360×740).
+    expect(region.className).toMatch(/\boverflow-clip\b/);
+    // Where `clip` is unsupported (overflow: hidden fallback), a scroll that reaches the root snaps back.
+    region.scrollTop = 44;
+    fireEvent.scroll(region);
+    expect(region.scrollTop).toBe(0);
+    // The tools aside itself still scrolls freely (only it scrolls).
+    const aside = within(region).getByRole('complementary', { name: 'Page tools' });
+    expect(aside.className).toMatch(/\boverflow-y-auto\b/);
+    aside.scrollTop = 300;
+    fireEvent.scroll(aside);
+    expect(aside.scrollTop).toBe(300);
+    expect(region.scrollTop).toBe(0);
+  });
+
   it('sheet: tablets cannot dismiss it; a closed sheet renders nothing', () => {
     const { unmount } = sheet({ dismissible: false });
     expect(screen.queryByRole('button', { name: 'Close page tools' })).toBeNull();

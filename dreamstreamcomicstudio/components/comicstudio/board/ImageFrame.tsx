@@ -211,16 +211,23 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
   );
 };
 
-/** A small corner badge over art ("1:1, not 4:5", "From older photos"). */
+/**
+ * A small corner badge over art ("1:1, not 4:5", "From older photos"). The pill is the flex box; the
+ * text sits in its own `min-w-0 truncate` span, because text directly inside a flex container is an
+ * anonymous flex item and `text-overflow` never applies to it — a long badge on a narrow card would be
+ * clipped mid-word with no ellipsis (layoutLint `flex-truncate`). The vertical padding lives on the
+ * text span so its clip box keeps room for descenders at `leading-none` ("From older photos").
+ */
 export const FrameBadge: React.FC<{ children: React.ReactNode; tone?: 'warn' | 'info'; title?: string }> = ({ children, tone = 'info', title }) => (
   <span
     title={title}
+    data-frame-badge=""
     className={cx(
-      'inline-flex min-w-0 max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none shadow-sm',
+      'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 text-[10px] font-semibold leading-none shadow-sm',
       tone === 'warn' ? 'bg-amber-500/90 text-white' : 'bg-[var(--ds-surface-strong)] text-[var(--ds-ink)]'
     )}
   >
-    {children}
+    <span className="min-w-0 truncate py-0.5">{children}</span>
   </span>
 );
 

@@ -175,6 +175,12 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
     setDragH(null);
   };
 
+  // The root clips but must NEVER scroll: its header (grabber, title, Close) sits at its top and only the
+  // tools aside scrolls. `overflow: clip` makes it no scroll container at all, so a scrollIntoView() or
+  // focus() deep in the tools can't scroll it the way it can an `overflow: hidden` box (gate:
+  // editor-tools-sheet-header-scrolled-away). Tailwind emits .overflow-clip after .overflow-hidden, so
+  // `hidden` is only the fallback where `clip` is unsupported (Safari < 16); there, onScroll undoes any
+  // programmatic scroll that reaches the root.
   return (
     <div
       role="region"
@@ -182,10 +188,19 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
       data-tools="sheet"
       data-detent={detent}
       className={cx(
-        'absolute inset-x-0 bottom-0 z-[6] mx-auto flex w-full max-w-[720px] flex-col overflow-hidden rounded-t-[var(--sheet-radius,20px)] border border-b-0 border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_-8px_30px_rgba(0,0,0,0.14)]',
+        'absolute inset-x-0 bottom-0 z-[6] mx-auto flex w-full max-w-[720px] flex-col overflow-hidden overflow-clip rounded-t-[var(--sheet-radius,20px)] border border-b-0 border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_-8px_30px_rgba(0,0,0,0.14)]',
         dragH === null && 'transition-[height] duration-200 ease-out motion-reduce:transition-none'
       )}
       style={{ height }}
+      onScroll={(e) => {
+        // Only the root's own scroll (React's onScroll doesn't bubble; the aside scrolls freely).
+        const root = e.currentTarget;
+        if (e.target !== root) return;
+        if (root.scrollTop || root.scrollLeft) {
+          root.scrollTop = 0;
+          root.scrollLeft = 0;
+        }
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Escape' && detent !== 'peek') {
           e.stopPropagation();

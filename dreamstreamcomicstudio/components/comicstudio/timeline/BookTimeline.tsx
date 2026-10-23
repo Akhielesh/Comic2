@@ -94,6 +94,20 @@ export const dragShift = (j: number, from: number, over: number, width: number):
   return 0;
 };
 
+/**
+ * How far to scroll the strip sideways so a clip is fully in view: the `inline: 'nearest'` rule, with a
+ * small margin so the focus ring stays visible; 0 when it already is. A clip wider than the view shows
+ * its start. Both boxes are left/right edges in the same (viewport) coordinates.
+ */
+export const stripScrollDelta = (view: { left: number; right: number }, clip: { left: number; right: number }, margin = CLIP_GAP): number => {
+  if (!(view.right - view.left > 2 * margin)) return 0;
+  const lo = view.left + margin;
+  const hi = view.right - margin;
+  if (clip.left < lo) return clip.left - lo;
+  if (clip.right > hi) return Math.min(clip.right - hi, clip.left - lo);
+  return 0;
+};
+
 /** Index the dragged clip lands on: how many other page clips' centres lie left of its centre. */
 export const dropIndex = (slots: { left: number; width: number }[], from: number, dx: number): number => {
   const f = slots[from];
@@ -161,11 +175,22 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
     return () => clearTimeout(t);
   }, [notice]);
 
-  // Keep the page being edited in view.
+  // Keep the page being edited in view by scrolling the strip itself, sideways, and nothing else.
+  // Never scrollIntoView(): it scrolls every scrollable ancestor too. On a phone this strip sits in the
+  // page-tools sheet, where it scrolled the tools away from "Edit with AI" and pushed the sheet's header
+  // (grabber, title, Close) out of the sheet (gate: editor-tools-sheet-header-scrolled-away).
   useEffect(() => {
     const el = studio.focusedPageId ? itemEls.current.get(studio.focusedPageId) : undefined;
-    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
-  }, [studio.focusedPageId, reduceMotion, open]);
+    const scroller = scrollerRef.current;
+    if (!el || !scroller || !scroller.contains(el)) return;
+    const left = scroller.getBoundingClientRect().left + scroller.clientLeft;
+    const r = el.getBoundingClientRect();
+    const delta = stripScrollDelta({ left, right: left + scroller.clientWidth }, { left: r.left, right: r.right });
+    if (!delta) return;
+    const target = scroller.scrollLeft + delta;
+    if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ left: target, behavior: reduceMotion ? 'auto' : 'smooth' });
+    else scroller.scrollLeft = target;
+  }, [studio.focusedPageId, reduceMotion, open, stripShown]);
 
   // While a clip is lifted, a finger drag must move the clip, not scroll the strip (non-passive).
   useEffect(() => {
