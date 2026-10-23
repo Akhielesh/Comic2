@@ -319,6 +319,11 @@ export const PLATFORM_MARKUP = 1.3;
 export const QC_USD_PER_PAGE = 0.003;
 /** Writer/director text spend for planning a page (strong model). */
 export const PLAN_USD_PER_PAGE = 0.012;
+/** Writer call that proposes style directions when render_style_options has none (provider cost; P2-AMEND —
+ *  single source for jobs.ts and the StylePanel quote). */
+export const STYLE_DIRECTIONS_USD = 0.015;
+/** The style-directions writer line as quoted to this user (markup unless BYOK), rounded like estimateJobs. */
+export const styleDirectionsUsd = (byok = false): number => Math.round(STYLE_DIRECTIONS_USD * (byok ? 1 : PLATFORM_MARKUP) * 10000) / 10000;
 
 export const imagePriceUsd = (spec: ImageModelSpec, resolution: Resolution): number => {
   const direct = spec.priceUsd[resolution];

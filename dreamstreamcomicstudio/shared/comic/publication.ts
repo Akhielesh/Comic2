@@ -151,3 +151,23 @@ export interface PublicPublicationInfo {
 }
 /** GET /api/comic/public/s/:slug (edge). urls: every path in `doc` → public object URL. */
 export interface PublicComicPayload { publication: PublicPublicationInfo; doc: ComicDoc; urls: Record<string, string> }
+
+/** One reader language of GET /api/comic/public/:id (P2-AMEND, from P1-ROUTES; contract §14.1). The source first. */
+export interface ReaderLanguage {
+  code: string;
+  endonym: string;
+  english: string;
+  /** Every line translated and current (always true for the source). */
+  complete: boolean;
+  isSource: boolean;
+}
+/**
+ * GET /api/comic/public/:id (contract §14.1, as amended). The owner gets a sanitized private preview
+ * ('private, no-store', Vary: Authorization); anyone else gets a live PUBLIC publication only ('no-store', so an
+ * unpublish takes effect at once). `lang` is set when `?lang=` named a published edition (doc is localized).
+ */
+export type PublicComicByIdResponse =
+  | { doc: ComicDoc; urls: Record<string, string>; languages: ReaderLanguage[]; preview: true; lang?: string }
+  | { doc: ComicDoc; urls: Record<string, string>; publication: PublicPublicationInfo; languages: ReaderLanguage[]; lang?: string };
+/** The one canonical 404 body for unlisted, private, missing and malformed ids (sent with no-store). */
+export const PUBLIC_COMIC_NOT_FOUND = { error: { message: "This comic isn't available.", code: 'NOT_FOUND' } } as const;

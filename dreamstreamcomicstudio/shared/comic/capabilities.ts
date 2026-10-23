@@ -32,6 +32,30 @@ export interface StudioCaps {
   ratingCeiling: ContentRating;
   /** UI hint for admin-only consoles (server re-checks requireAdmin). */
   admin: boolean;
+  /** Optional usage snapshot (P2-AMEND, from P1-LIMITS). Never dollars: governed users see "usage left" only.
+   *  Absent = unknown; UsageSlot fetches /api/usage/allowance itself, so nothing depends on it. */
+  usage?: StudioUsage;
+}
+
+/** "Usage left" for the header meter and quotes (percentages only — no USD ever reaches a governed user). */
+export interface StudioUsage {
+  /** The account runs on the platform allowance (not BYOK, not admin). */
+  governed: boolean;
+  /** 0..100. */
+  pctLeft: number;
+  exhausted: boolean;
+  /** Share of the allowance one Standard page costs (0..100), or null when unknown. */
+  pctPerStandardPage: number | null;
+}
+
+/** A well-formed StudioUsage (numbers clamped to 0..100) or undefined. */
+export function sanitizeStudioUsage(value: unknown): StudioUsage | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.governed !== 'boolean' || typeof v.pctLeft !== 'number' || !Number.isFinite(v.pctLeft)) return undefined;
+  const pct = (n: number) => Math.min(100, Math.max(0, n));
+  const per = typeof v.pctPerStandardPage === 'number' && Number.isFinite(v.pctPerStandardPage) ? pct(v.pctPerStandardPage) : null;
+  return { governed: v.governed, pctLeft: pct(v.pctLeft), exhausted: v.exhausted === true, pctPerStandardPage: per };
 }
 
 export const DEFAULT_CAPS: StudioCaps = {

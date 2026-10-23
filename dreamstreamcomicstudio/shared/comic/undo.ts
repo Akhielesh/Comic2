@@ -6,6 +6,9 @@
 //
 // Equality is "wire equality" (R4): shallow-merge ops store `null` for cleared keys and every consumer
 // treats null as unset, so an undone doc may carry `key: null` where the original had no key.
+//
+// Every inverse op is itself CLIENT-PATCHABLE (P2-AMEND), so an undo can always be sent as a `patch`.
+// Server-only ops (render, message, plan_input_hash, …) have no inverse: a batch holding one is not undoable.
 
 import {
   bookOf,
@@ -251,7 +254,8 @@ const invertOne = (doc: ComicDoc, op: DocOp): DocOp[] | null => {
       if (!prev) return [{ op: 'edition', lang: op.lang, patch: null }];
       if (op.patch !== null) return [{ op: 'edition', lang: op.lang, patch: { register: prev.register } }];
       const restore: DocOp[] = [{ op: 'edition', lang: op.lang, patch: { register: prev.register } }];
-      if (Object.keys(prev.lines).length) restore.push({ op: 'translations', lang: op.lang, lines: prev.lines });
+      // Client-patchable per-line restores (contract §6; the batch 'translations' op is server-only).
+      for (const [lineId, t] of Object.entries(prev.lines)) restore.push({ op: 'translation', lang: op.lang, lineId, patch: t });
       if (prev.cover?.title) restore.push({ op: 'edition_text', lang: op.lang, field: 'cover.title', value: prev.cover.title });
       if (prev.cover?.tagline) restore.push({ op: 'edition_text', lang: op.lang, field: 'cover.tagline', value: prev.cover.tagline });
       if (prev.brief?.title) restore.push({ op: 'edition_text', lang: op.lang, field: 'brief.title', value: prev.brief.title });

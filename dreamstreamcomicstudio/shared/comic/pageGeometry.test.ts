@@ -1,12 +1,11 @@
 // shared/comic/pageGeometry.ts is the one copy of the page-blueprint geometry (contract §11.1).
-//   1. The board's pageLayout.ts is now a re-export (same functions, not copies).
-//   2. Golden: the server twins (vision.ts estimatePanelBoxes, prompts.ts parseLayout /
-//      synthesizeLayout) still agree with it, so P2-SERVER can switch them over safely.
+// The board's pageLayout.ts is a re-export (same functions, not copies).
+// The golden check against the server twins (vision.ts estimatePanelBoxes, prompts.ts parseLayout /
+// synthesizeLayout) lives in server/src/comic/pageGeometry.parity.test.ts, so the client typecheck
+// never pulls server code (P2-AMEND moved it).
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import * as board from '../../components/comicstudio/board/pageLayout';
-import { estimatePanelBoxes as serverBoxes } from '../../server/src/comic/vision';
-import { parseLayout as serverParse, synthesizeLayout as serverSynth } from '../../server/src/comic/prompts';
 import type { Page, Panel, PanelSize } from './doc';
 import * as geo from './pageGeometry';
 
@@ -61,27 +60,24 @@ describe('pageGeometry is the single source', () => {
   });
 });
 
-describe('golden: the server twins agree (gate for P2-SERVER switching vision.ts / prompts.ts)', () => {
-  it('parseLayout and synthesizeLayout match', () => {
+describe('blueprints the board and the server both feed in', () => {
+  it('estimatePanelBoxes gives one box per panel inside the page, for every blueprint, kind and direction', () => {
     for (const [layout, sizes] of LAYOUTS) {
-      expect(geo.parseLayout(layout)).toEqual(serverParse(layout));
-      for (const kind of ['comic', 'manga', 'webtoon', 'strip', 'storybook'] as const) {
-        for (const readingDirection of ['ltr', 'rtl'] as const) {
-          expect(geo.synthesizeLayout(panelsOf(sizes), { kind, readingDirection })).toBe(serverSynth(panelsOf(sizes), { kind, readingDirection }));
-        }
-      }
-    }
-  });
-
-  it('estimatePanelBoxes matches for every blueprint, kind and direction', () => {
-    const doc = makeSampleDoc();
-    const pages = [...doc.pages, ...LAYOUTS.map(([layout, sizes]) => pageOf(layout, sizes))];
-    for (const page of pages) {
+      const page = pageOf(layout, sizes);
       for (const kind of ['comic', 'webtoon', 'strip'] as const) {
         for (const readingDirection of ['ltr', 'rtl'] as const) {
-          expect(geo.estimatePanelBoxes(page, { kind, readingDirection })).toEqual(serverBoxes(page, { kind, readingDirection }));
+          const boxes = geo.estimatePanelBoxes(page, { kind, readingDirection });
+          expect(boxes).toHaveLength(sizes.length);
+          for (const b of boxes) {
+            expect(b.x).toBeGreaterThanOrEqual(0);
+            expect(b.y).toBeGreaterThanOrEqual(0);
+            expect(b.x + b.w).toBeLessThanOrEqual(1 + 1e-9);
+            expect(b.y + b.h).toBeLessThanOrEqual(1 + 1e-9);
+          }
+          expect(board.estimatePanelBoxes(page, { kind, readingDirection })).toEqual(boxes);
         }
       }
+      expect(typeof geo.synthesizeLayout(panelsOf(sizes), { kind: 'comic', readingDirection: 'ltr' })).toBe('string');
     }
   });
 });

@@ -921,7 +921,7 @@ describe('v5 §16.4 op invariants', () => {
 
 describe('v5 §16.5 sets', () => {
   it('server-only ops are never client-patchable', () => {
-    for (const op of ['pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations', 'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication'] as const) {
+    for (const op of ['pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations', 'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash'] as const) {
       expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
       expect(SERVER_ONLY_OPS).toContain(op);
     }
@@ -1004,5 +1004,240 @@ describe('v5 §16.9 models', () => {
     expect(ASPECT_TOLERANCE).toBe(0.03);
     expect(aspectFromSize(2048, 2048)).toBe('1:1');
     expect(aspectFromSize(1856, 2304)).toBe('4:5');
+  });
+});
+
+// ── P2-AMEND: the wave-2 contract amendments (additive; old docs load unchanged; hashes pinned above) ──
+
+import { ERROR_DETAIL_LIMITS, normalizeErrorDetail, type RenderErrorDetail } from './doc';
+import { PLAN_INPUT_HASH_MAX, type BookPatch, type RefPatch } from './ops';
+import { inverseOps, isUndoable } from './undo';
+import { STREAM_ERROR_CODES, isStreamErrorCode } from './events';
+import { STYLE_DIRECTIONS_USD, styleDirectionsUsd } from './models';
+import { sanitizeStudioUsage, DEFAULT_CAPS } from './capabilities';
+import { publishableText } from './safety';
+import { versionList } from './book';
+import { PUBLIC_COMIC_NOT_FOUND, type ReaderLanguage } from './publication';
+
+describe('P2-AMEND RenderState.errorDetail (P1-JOBS / wm-plan shape)', () => {
+  const detail: RenderErrorDetail = { code: '429', provider: 'OpenRouter', at: 1_761_000_000_000, text: 'OpenRouter · 429 · upstream Google · 17:42 UTC' };
+  const page1 = { kind: 'page' as const, id: 'pg_1' };
+
+  it('normalizeErrorDetail keeps only well-formed details, clips the strings and is idempotent', () => {
+    expect(normalizeErrorDetail(detail)).toEqual(detail);
+    expect(normalizeErrorDetail({ ...detail, provider: 7 })).toEqual({ code: '429', at: detail.at, text: detail.text });
+    for (const bad of [null, 'OpenRouter · 503', [], { code: 1, at: 1, text: 'x' }, { code: 'x', at: 'yesterday', text: 'x' }, { code: 'x', at: 1 }, { code: ' ', at: 1, text: 'x' }]) {
+      expect(normalizeErrorDetail(bad)).toBeUndefined();
+    }
+    const long = normalizeErrorDetail({ code: 'C'.repeat(99), provider: 'P'.repeat(99), at: 1, text: 'T'.repeat(999) })!;
+    expect([long.code.length, long.provider!.length, long.text.length]).toEqual([ERROR_DETAIL_LIMITS.code, ERROR_DETAIL_LIMITS.provider, ERROR_DETAIL_LIMITS.text]);
+    expect(normalizeErrorDetail(long)).toEqual(long);
+    // One line, and idempotent even when the clip lands on a space (trim happens after the clip).
+    const edge = normalizeErrorDetail({ code: ' 429\n', provider: 'Open\tRouter\u0000', at: 1, text: `${'a'.repeat(ERROR_DETAIL_LIMITS.text - 1)} tail\nmore` })!;
+    expect(edge).toEqual({ code: '429', provider: 'Open Router', at: 1, text: 'a'.repeat(ERROR_DETAIL_LIMITS.text - 1) });
+    expect(normalizeErrorDetail(edge)).toEqual(edge);
+    expect(normalizeErrorDetail({ code: '\n\t', at: 1, text: 'x' })).toBeUndefined();
+    expect(normalizeErrorDetail({ code: 'x', provider: ' \n ', at: 1, text: 'x' })).toEqual({ code: 'x', at: 1, text: 'x' });
+  });
+
+  it('normalizeDoc keeps a valid detail on a failed render and drops a malformed one (old string shape too)', () => {
+    const raw = makeSampleDoc();
+    raw.pages[5].render = { ...raw.pages[5].render, status: 'failed', error: 'The provider is busy.', errorDetail: detail };
+    raw.pages[4].render = { ...raw.pages[4].render, errorDetail: 'OpenRouter · 503' as unknown as RenderErrorDetail };
+    const doc = normalizeDoc(raw);
+    expect(doc.pages[5].render.errorDetail).toEqual(detail);
+    expect('errorDetail' in doc.pages[4].render).toBe(false);
+    expect(normalizeDoc(doc)).toEqual(doc);
+    // The hashes never read it.
+    expect(doc.pages.map((p) => pageSpecHash(doc, p))).toEqual(makeSampleDoc().pages.map((p) => pageSpecHash(makeSampleDoc(), p)));
+  });
+
+  it('is set with error and cleared whenever error is cleared (also over the wire, where undefined → null)', () => {
+    let doc = normalizeDoc(makeSampleDoc());
+    doc = applyOp(doc, { op: 'render', target: page1, patch: { status: 'failed', error: 'Busy', errorDetail: detail, updatedAt: 1 } });
+    expect(doc.pages[0].render.errorDetail).toEqual(detail);
+    // A patch that leaves the error alone keeps the detail.
+    expect(applyOp(doc, { op: 'render', target: page1, patch: { attempts: 2 } }).pages[0].render.errorDetail).toEqual(detail);
+    // Retry: error cleared → detail cleared (server side and after encodeStudioEvent).
+    const retry: DocOp = { op: 'render', target: page1, patch: { status: 'queued', error: undefined, updatedAt: 2 } };
+    expect('errorDetail' in applyOp(doc, retry).pages[0].render).toBe(false);
+    const wire = (JSON.parse(encodeStudioEvent({ type: 'ops', rev: 1, ops: [retry] })) as { ops: DocOp[] }).ops[0];
+    expect('errorDetail' in applyOp(doc, wire).pages[0].render).toBe(false);
+    // A new error without a detail never inherits the stale one; a status change away from failed drops it.
+    expect('errorDetail' in applyOp(doc, { op: 'render', target: page1, patch: { status: 'failed', error: 'Other' } }).pages[0].render).toBe(false);
+    expect('errorDetail' in applyOp(doc, { op: 'render', target: page1, patch: { status: 'rendering' } }).pages[0].render).toBe(false);
+    // A detail without an error is never stored; a malformed one is never stored.
+    const fresh = normalizeDoc(makeSampleDoc());
+    expect('errorDetail' in applyOp(fresh, { op: 'render', target: { kind: 'page', id: 'pg_2' }, patch: { errorDetail: detail } }).pages[1].render).toBe(false);
+    expect(
+      'errorDetail' in applyOp(fresh, { op: 'render', target: page1, patch: { status: 'failed', error: 'x', errorDetail: { code: 9 } as unknown as RenderErrorDetail } }).pages[0].render
+    ).toBe(false);
+    // Switching to a saved version clears error and detail together.
+    const used = applyOp(doc, { op: 'render_use', target: page1, path: doc.pages[0].render.history[0].path, at: 3 });
+    expect(used.pages[0].render.error).toBeUndefined();
+    expect('errorDetail' in used.pages[0].render).toBe(false);
+  });
+});
+
+describe('P2-AMEND ops: plan_input_hash, RefPatch null, book null, render_use adopt, archive parentPath', () => {
+  it('plan_input_hash (server-only): a string sets doc.planInputHash, null deletes it, junk is a no-op', () => {
+    const doc = normalizeDoc(makeSampleDoc());
+    const set = applyOp(doc, { op: 'plan_input_hash', hash: 'abc123' });
+    expect(set.planInputHash).toBe('abc123');
+    expect(applyOp(set, { op: 'plan_input_hash', hash: 'abc123' })).toBe(set);
+    expect('planInputHash' in applyOp(set, { op: 'plan_input_hash', hash: null })).toBe(false);
+    expect(applyOp(doc, { op: 'plan_input_hash', hash: null })).toBe(doc);
+    for (const bad of ['', 'x'.repeat(PLAN_INPUT_HASH_MAX + 1), 42]) expect(applyOp(doc, { op: 'plan_input_hash', hash: bad as string })).toBe(doc);
+    expect(normalizeDoc(set).planInputHash).toBe('abc123');
+    expect(CLIENT_PATCHABLE_OPS.has('plan_input_hash')).toBe(false);
+    expect(SERVER_ONLY_OPS).toContain('plan_input_hash');
+    expect(inverseOps(doc, [{ op: 'plan_input_hash', hash: 'abc123' }])).toEqual([]);
+    expect(isUndoable(doc, [{ op: 'plan_input_hash', hash: 'abc123' }])).toBe(false);
+  });
+
+  it('ref_patch null clears a key (label/note/crop); a null path is ignored', () => {
+    const doc = richDoc();
+    const owner = { kind: 'character' as const, id: 'ch_maya' };
+    const patch: RefPatch = { label: null, note: null, crop: null, path: null as unknown as string };
+    const next = applyOp(doc, { op: 'ref_patch', owner, path: 'u/proj/refs/maya2.jpg', patch });
+    const ref = next.cast.find((c) => c.id === 'ch_maya')!.refs.find((r) => r.path === 'u/proj/refs/maya2.jpg')!;
+    expect(ref).toBeDefined();
+    expect('label' in ref).toBe(false);
+    expect('note' in ref).toBe(false);
+    expect(ref.w).toBe(doc.cast.find((c) => c.id === 'ch_maya')!.refs.find((r) => r.path === 'u/proj/refs/maya2.jpg')!.w);
+  });
+
+  it('book patch: blurb/credits null clear them, and the undo of a first blurb round-trips', () => {
+    const doc = richDoc();
+    const cleared = applyOp(doc, { op: 'book', patch: { blurb: null, credits: null } satisfies BookPatch });
+    expect('blurb' in cleared.book!).toBe(false);
+    expect('credits' in cleared.book!).toBe(false);
+    const before = normalizeDoc(makeSampleDoc());
+    const ops: DocOp[] = [{ op: 'book', patch: { blurb: 'New blurb', credits: ['Me'] } }];
+    const after = applyOps(before, ops, 5);
+    const undone = applyOps(after, inverseOps(before, ops), 6);
+    expect(undone.book).toEqual(before.book);
+  });
+
+  it('render_use adopt is a UI flag the reducer ignores', () => {
+    const doc = richDoc();
+    const path = doc.pages[0].render.history[0].path;
+    const a = applyOp(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path, at: 9, adopt: true });
+    const b = applyOp(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path, at: 9 });
+    expect(a).toEqual(b);
+  });
+
+  it('archived versions keep parentPath (fit_render once-per-original survives archiving)', () => {
+    let doc = normalizeDoc(makeSampleDoc());
+    const target = { kind: 'page' as const, id: 'pg_1' };
+    for (let i = 0; i < MAX_RENDER_HISTORY + 2; i += 1) {
+      doc = applyOp(doc, { op: 'render', target, patch: { status: 'ready', asset: { path: `edit_${i}.webp`, source: 'generated', at: 100 + i }, parentPath: `src_${i}.webp`, origin: 'edit', updatedAt: 100 + i } });
+    }
+    const archived = archiveOf(doc).filter((a) => a.path.startsWith('edit_'));
+    expect(archived.length).toBeGreaterThan(0);
+    for (const a of archived) expect(a.parentPath).toBe(a.path.replace('edit_', 'src_'));
+  });
+});
+
+describe('P2-AMEND undo: every inverse is client-patchable', () => {
+  it('removing an edition restores its lines with per-line translation ops (never the server-only batch op)', () => {
+    const before = richDoc();
+    const ops: DocOp[] = [{ op: 'edition', lang: 'hi', patch: null }];
+    const inverse = inverseOps(before, ops);
+    expect(inverse.some((o) => o.op === 'translations')).toBe(false);
+    expect(inverse.filter((o) => o.op === 'translation').map((o) => (o as Extract<DocOp, { op: 'translation' }>).lineId)).toEqual(Object.keys(before.i18n!.editions.hi.lines));
+    const undone = applyOps(applyOps(before, ops, 8), inverse, 9);
+    expect(undone.i18n!.editions.hi).toEqual(before.i18n!.editions.hi);
+  });
+
+  it('a mixed batch of every patchable op inverts to patchable ops only', () => {
+    const before = richDoc();
+    const ops: DocOp[] = [
+      { op: 'brief', patch: { logline: 'New' } },
+      { op: 'character_remove', id: 'ch_maya' },
+      { op: 'line', pageId: 'pg_1', panelId: 'pg_1_p1', id: 'pg_1_l1', patch: null },
+      { op: 'page_delete', id: 'pg_2', deletedAt: 10 },
+      { op: 'book', patch: { blurb: 'x' } },
+      { op: 'edition', lang: 'hi', patch: null },
+      { op: 'ref_transfer', from: { kind: 'inbox' }, to: { kind: 'style' }, path: 'u/proj/refs/inbox1.jpg' },
+      { op: 'letter_style', patch: { presetId: 'manga' } }
+    ];
+    const inverse = inverseOps(before, ops);
+    expect(inverse.length).toBeGreaterThan(ops.length);
+    for (const op of inverse) expect(CLIENT_PATCHABLE_OPS.has(op.op), op.op).toBe(true);
+  });
+});
+
+describe('P2-AMEND events, models, caps, safety text, versions, public payload', () => {
+  it('stream error codes include FORBIDDEN (restricted accounts), BUSY and COOLDOWN', () => {
+    for (const c of ['FORBIDDEN', 'BUSY', 'COOLDOWN', 'CONTENT_POLICY', 'NOT_AVAILABLE']) expect(isStreamErrorCode(c), c).toBe(true);
+    expect(isStreamErrorCode('SOMETHING_NEW')).toBe(false);
+    expect(new Set(STREAM_ERROR_CODES).size).toBe(STREAM_ERROR_CODES.length);
+  });
+
+  it('the style-directions writer cost is one shared number (markup unless BYOK)', () => {
+    expect(STYLE_DIRECTIONS_USD).toBe(0.015);
+    expect(styleDirectionsUsd(true)).toBe(0.015);
+    expect(styleDirectionsUsd()).toBeCloseTo(0.015 * PLATFORM_MARKUP, 6);
+  });
+
+  it('StudioCaps.usage is optional, percentage-only and sanitized', () => {
+    expect(DEFAULT_CAPS.usage).toBeUndefined();
+    expect(sanitizeStudioUsage({ governed: true, pctLeft: 140, exhausted: false, pctPerStandardPage: -3 })).toEqual({ governed: true, pctLeft: 100, exhausted: false, pctPerStandardPage: 0 });
+    expect(sanitizeStudioUsage({ governed: true, pctLeft: 0, exhausted: true, pctPerStandardPage: 'x' })).toEqual({ governed: true, pctLeft: 0, exhausted: true, pctPerStandardPage: null });
+    expect(sanitizeStudioUsage({ governed: 'yes', pctLeft: 1 })).toBeUndefined();
+    expect(sanitizeStudioUsage(null)).toBeUndefined();
+    // No dollar keys can ride along.
+    expect(Object.keys(sanitizeStudioUsage({ governed: false, pctLeft: 50, exhausted: false, pctPerStandardPage: 2, usd: 4.2, budgetUsd: 10 })!).sort()).toEqual(['exhausted', 'governed', 'pctLeft', 'pctPerStandardPage']);
+  });
+
+  it('publishableText covers every published author text, and docs without them keep their exact text', () => {
+    const plain = normalizeDoc(makeSampleDoc((d) => { delete d.style.name; }));
+    // The pre-amendment formula: docs without the extra author texts keep their exact text (and cached text-check hash).
+    const lines = plain.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines.map((l) => l.text)));
+    const legacy = [plain.brief.title, plain.brief.logline, plain.cover.title, plain.cover.tagline, ...plain.cast.map((c) => c.name), ...lines]
+      .map((t) => (t || '').trim())
+      .filter(Boolean)
+      .join('\n');
+    const plainText = publishableText(plain);
+    expect(plainText).toBe(legacy);
+    const doc = applyOps(plain, [
+      { op: 'page', id: 'pg_2', patch: { chapterTitle: 'CHAPTER-TEXT' } },
+      { op: 'book', patch: { blurb: 'BLURB-TEXT', credits: ['CREDIT-TEXT'] } },
+      { op: 'reader', patch: { credits: 'ENDCARD-TEXT', dedication: 'DEDICATION-TEXT' } },
+      { op: 'style', patch: { name: 'STYLE-NAME' } }
+    ], 3);
+    const words = publishableText(doc);
+    for (const t of ['CHAPTER-TEXT', 'BLURB-TEXT', 'CREDIT-TEXT', 'ENDCARD-TEXT', 'DEDICATION-TEXT', 'STYLE-NAME']) expect(words).toContain(t);
+    expect(words.startsWith(plainText)).toBe(true);
+  });
+
+  it('versionList numbers v1 = oldest across current, history and archive (one path once)', () => {
+    let doc = normalizeDoc(makeSampleDoc());
+    const target = { kind: 'page' as const, id: 'pg_1' };
+    for (let i = 0; i < MAX_RENDER_HISTORY + 3; i += 1) {
+      const at = 2_000_000_000_000 + i; // newer than every sample asset
+      doc = applyOp(doc, { op: 'render', target, patch: { status: 'ready', asset: { path: `v_${String(i).padStart(2, '0')}.webp`, source: 'generated', at }, updatedAt: at } });
+    }
+    const list = versionList(doc, target);
+    expect(list.map((v) => v.n)).toEqual(list.map((_, i) => i + 1));
+    expect(list.filter((v) => v.current)).toHaveLength(1);
+    expect(list[list.length - 1]).toMatchObject({ current: true, path: 'v_10.webp' });
+    expect(list.some((v) => v.archived)).toBe(true);
+    expect(new Set(list.map((v) => v.path)).size).toBe(list.length);
+    const ats = list.map((v) => v.version.at || 0);
+    expect([...ats].sort((a, b) => a - b)).toEqual(ats);
+    expect(versionList(doc, { kind: 'page', id: 'nope' })).toEqual([]);
+  });
+
+  it('GET /public/:id shapes: one canonical 404 body; ReaderLanguage fields', () => {
+    expect(PUBLIC_COMIC_NOT_FOUND).toEqual({ error: { message: "This comic isn't available.", code: 'NOT_FOUND' } });
+    const lang: ReaderLanguage = { code: 'te', endonym: 'తెలుగు', english: 'Telugu', complete: false, isSource: false };
+    expect(Object.keys(lang).sort()).toEqual(['code', 'complete', 'endonym', 'english', 'isSource']);
+  });
+
+  it('translate lineIds have a shared cap', () => {
+    expect(DOC_LIMITS.translateLineIds).toBe(200);
+    expect(isSpendAction({ type: 'translate', languages: ['te'], lineIds: ['pg_1_l1'] })).toBe(true);
   });
 });

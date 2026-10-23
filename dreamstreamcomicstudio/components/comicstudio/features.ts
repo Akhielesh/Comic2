@@ -1,8 +1,9 @@
-// Feature registry (contract §13.2; created by P0-C, FROZEN after wave 0).
+// Feature registry (contract §13.2; created by P0-C; wave 2: P2-AMEND registered `usage`).
 //
-// Imports exactly the ten client feature indexes and folds their `FeatureModule`s into the
-// registries the hotspot files read (CardRenderer, BoardPane, ComicStudio header,
-// AdminConsole). A wave-1 package fills its own `<feature>/index.ts`; nothing here changes.
+// Imports the client feature indexes (the ten wave-0 folders plus `usage`, P1-LIMITS' "usage left"
+// meter at header order 220) and folds their `FeatureModule`s into the registries the hotspot files
+// read (CardRenderer, BoardPane, ComicStudio header, AdminConsole). A feature package fills its own
+// `<feature>/index.ts`; a NEW feature folder is added here once, at the end (lowest precedence).
 //
 // The registries are built lazily on first read (not at import time), so a feature module
 // that imports a hotspot file — directly or through a component — never sees a
@@ -32,6 +33,7 @@ import { feature as i18n } from './i18n/index';
 import { feature as immersive } from './immersive/index';
 import { feature as library } from './library/index';
 import { feature as mobile } from './mobile/index';
+import { feature as usage } from './usage/index';
 
 export type {
   AdminSectionRegistration,
@@ -66,7 +68,8 @@ export const BUILTIN_TAB_ORDER: Readonly<Partial<Record<StudioTab, number>>> = {
 /**
  * Merge positions of the built-in header controls. A slot with `order` o renders after every
  * built-in whose position is ≤ o (e.g. 250 sits between the spend chip and Read; < 100 comes
- * first; ≥ 900 comes after the More menu).
+ * first; ≥ 900 comes after the More menu). Registered today: share 10, mode/savings (mobile),
+ * usage 220 (after the spend chip and savings, before Read).
  */
 export const BUILTIN_HEADER_ORDER = { quality: 100, spend: 200, read: 300, more: 900 } as const;
 
@@ -81,7 +84,7 @@ let cache: Registries | null = null;
 
 /** Every feature module, in precedence order. */
 export const featureModules = (): readonly FeatureModule[] =>
-  [breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile].map((m) => m || {});
+  [breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage].map((m) => m || {});
 
 const byOrder = <T extends { order: number }>(list: T[]): T[] =>
   list

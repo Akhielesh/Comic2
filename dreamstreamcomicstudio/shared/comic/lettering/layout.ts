@@ -19,7 +19,7 @@ import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.
 import { panelBoxesFor } from '../pageGeometry.js';
 import { fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, type FitResult } from '../textLayout.js';
 import { FONT_REGISTRY, fontByFamily, fontString, resolveLetteringFont } from './fonts.js';
-import { placeBalloons, safeAreaBox } from './place.js';
+import { placeBalloonsDetailed, safeAreaBox } from './place.js';
 import { bubbleGeometry, hashSeed, resolveTailStyle, type BubbleGeometry } from './shapes.js';
 import {
   DEFAULT_LETTERING,
@@ -70,6 +70,11 @@ export interface LetterPlan {
   linkTo?: string;
   outOfSafeArea: boolean; // inspector warning
   overflow: boolean; // text did not fit even at the floor (never clipped)
+  /** Absolute tail tip (page units) after the render-time page fit; absent when the balloon has no tail (P2-AMEND). */
+  tip?: { x: number; y: number };
+  /** A software-placed line that could not avoid an overlap / face / the safe area (the editor's free-fix chip).
+   *  Set only when true (P2-AMEND). */
+  crowded?: boolean;
 }
 
 /** Page width in plan units. */
@@ -417,9 +422,10 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
 
   // Lines without a stored balloon: deterministic placement around everything already on the page.
   const placed = new Map<string, Balloon>();
+  let crowded: ReadonlySet<string> = new Set<string>();
   if (items.some((it) => !stored.has(it.line.id))) {
     const qc = page.render?.qc;
-    const balloons = placeBalloons({
+    const result = placeBalloonsDetailed({
       page,
       boxes,
       aspect: asp,
@@ -432,7 +438,8 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
       keep: 'all',
       lang: doc.format?.language
     });
-    for (const b of balloons) if (!stored.has(b.lineId)) placed.set(b.lineId, b);
+    for (const b of result.balloons) if (!stored.has(b.lineId)) placed.set(b.lineId, b);
+    crowded = new Set(result.crowded.filter((id) => !stored.has(id)));
   }
 
   const lineIds = new Set(items.map((it) => it.line.id));
@@ -510,6 +517,8 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     };
     if (rotate || skewX) plan.transform = { rotate, skewX, cx: r2(x + w / 2), cy: r2(y + h / 2) };
     if (b.linkTo && b.linkTo !== line.id && lineIds.has(b.linkTo)) plan.linkTo = b.linkTo;
+    if (tip) plan.tip = { x: r2(tip.x), y: r2(tip.y) };
+    if (crowded.has(line.id)) plan.crowded = true;
     plans.push(plan);
   });
   plans.sort((a, b) => a.z - b.z || a.order - b.order);

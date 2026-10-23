@@ -170,6 +170,43 @@ export interface RenderVersion extends AssetRef, VersionMeta {
   starred?: boolean;
 }
 
+/**
+ * Sanitized provider facts of a failed render (P2-AMEND, from P1-JOBS / wm-plan). `text` is one line such as
+ * 'OpenRouter · 429 · upstream Google · 17:42 UTC' — never a response body, a prompt or a key.
+ * Set together with RenderState.error; cleared whenever `error` is cleared (applyOp enforces it).
+ */
+export interface RenderErrorDetail {
+  /** Short machine code: an HTTP status ('429') or a StudioErrorCode. ≤ 40 chars. */
+  code: string;
+  /** Provider / route label ('OpenRouter', 'Gemini'). ≤ 60 chars. */
+  provider?: string;
+  /** When it failed (epoch ms). */
+  at: number;
+  /** One sanitized line for the Details row. ≤ 160 chars. */
+  text: string;
+}
+export const ERROR_DETAIL_LIMITS = { code: 40, provider: 60, text: 160 } as const;
+
+/** One clipped line: control characters and runs of whitespace become one space; trimmed AFTER the clip, so a
+ *  second pass is a no-op (idempotent even when the clip lands on a space). */
+const oneLine = (s: string, max: number): string =>
+  s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim();
+
+/** A valid RenderErrorDetail (one line per string, clipped to ERROR_DETAIL_LIMITS) or undefined. Idempotent. */
+export const normalizeErrorDetail = (value: unknown): RenderErrorDetail | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.code !== 'string' || typeof v.text !== 'string') return undefined;
+  if (typeof v.at !== 'number' || !Number.isFinite(v.at)) return undefined;
+  const code = oneLine(v.code, ERROR_DETAIL_LIMITS.code);
+  const text = oneLine(v.text, ERROR_DETAIL_LIMITS.text);
+  if (!code || !text) return undefined;
+  const out: RenderErrorDetail = { code, at: v.at, text };
+  const provider = typeof v.provider === 'string' ? oneLine(v.provider, ERROR_DETAIL_LIMITS.provider) : '';
+  if (provider) out.provider = provider;
+  return out;
+};
+
 export interface RenderState extends VersionMeta {
   status: RenderStatus;
   asset?: AssetRef;
@@ -177,6 +214,8 @@ export interface RenderState extends VersionMeta {
   history: RenderVersion[];
   model?: string;
   error?: string;
+  /** Provider facts behind `error` (only while `error` is set). Dropped from public snapshots. */
+  errorDetail?: RenderErrorDetail;
   attempts?: number;
   updatedAt?: number;
   /** PUBLIC SNAPSHOT ONLY: art withheld from readers. Never set on a live doc. */
@@ -193,6 +232,8 @@ export interface ArchivedVersion extends AssetRef {
   origin?: VersionOrigin;
   aspect?: AspectRatio;
   starred?: boolean;
+  /** Edits: the version it was made from (kept from VersionMeta so fit_render's once-per-original check survives archiving). */
+  parentPath?: string;
 }
 
 /** A deleted page, restorable (Undo / Media → Deleted). */
@@ -363,7 +404,9 @@ export interface Balloon {
   z?: number;
   /** Never moved by auto-layout or dragged; implies pinned. */
   locked?: boolean;
-  /** Linked balloon: draw a connector neck to the balloon of this lineId (same panel, no cycles). */
+  /** Linked balloon: draw a connector neck to the balloon of this lineId (same panel, no cycles).
+   *  Direction (P2-AMEND): `linkTo` points to the PREVIOUS line in reading order — a chain l1←l2←l3
+   *  is drawn as one group; unlinking a balloon clears the links at both of its ends. */
   linkTo?: string;
 }
 
@@ -749,7 +792,13 @@ const asArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const asRender = (value: unknown): RenderState => {
   const r = (value && typeof value === 'object' ? value : {}) as Partial<RenderState>;
-  return { ...r, status: r.status || 'none', history: asArray<RenderVersion>(r.history) };
+  const out: RenderState = { ...r, status: r.status || 'none', history: asArray<RenderVersion>(r.history) };
+  if (out.errorDetail !== undefined) {
+    const detail = normalizeErrorDetail(out.errorDetail);
+    if (detail) out.errorDetail = detail;
+    else delete out.errorDetail;
+  }
+  return out;
 };
 
 /** Every RefLabel (local copy: doc.ts may not import refs.ts — §2 cycle rule). */

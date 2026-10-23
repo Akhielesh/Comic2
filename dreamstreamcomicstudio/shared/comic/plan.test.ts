@@ -1,13 +1,46 @@
 // shared/comic/plan.ts: the one target/estimate core (contract §11.2).
-// The parity cases pin quoteRenderPages to the server gate's own estimateSpendAction, so the
-// chat card, the board and the gate can never disagree about what "draw" would cost.
+// The parity cases that pin quoteRenderPages to the server gate's own estimateSpendAction live in
+// server/src/comic/plan.parity.test.ts (P2-AMEND moved them so the client typecheck never pulls
+// server code); this file covers the shared behaviour on client-side fixtures.
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
-import { LOW_QC_SCORE as SERVER_LOW_QC_SCORE, estimateSpendAction } from '../../server/src/comic/jobs';
-import { plannedDoc } from '../../server/src/comic/orchestrator.fakes';
-import { normalizeDoc, pageSpecHash, type ComicDoc, type QualityTier } from './doc';
+import { createEmptyDoc, emptyRender, normalizeDoc, pageSpecHash, type ComicDoc, type Page } from './doc';
 import { estimateJobs } from './models';
 import { LOW_QC_SCORE, coverNeedsDraw, missingSheetsFor, pageTargets, quoteRenderPages, sheetTargets, spendByTarget, summarizeBook, unitPrice } from './plan';
+
+/** Same shape as server/src/comic/orchestrator.fakes.ts plannedDoc(): "Spice Run", 2 cast, 1 place, 3 planned pages. */
+function plannedDoc(id = 'proj-1'): ComicDoc {
+  const doc = createEmptyDoc(id, 'Spice Run', 1_700_000_000_000);
+  doc.brief = { ...doc.brief, logline: 'A courier races through a spice market.', premise: 'Maya must deliver a stolen recipe.', genre: 'adventure', tone: 'fun' };
+  doc.style = { ...doc.style, status: 'drafted', name: 'Ligne claire', spec: 'Clean even outlines, flat bright colors, detailed backgrounds.' };
+  doc.cast = [
+    { id: 'c_maya', name: 'Maya', tier: 'lead', look: { summary: 'Young courier with a red scarf', hair: 'black bob' }, refs: [], sheet: emptyRender() },
+    { id: 'c_arjun', name: 'Arjun', tier: 'support', look: { summary: 'Bearded spice vendor in a green kurta' }, refs: [], sheet: emptyRender() }
+  ];
+  doc.places = [{ id: 'pl_market', name: 'Spice Market', look: 'Narrow lanes, sacks of turmeric', refs: [], sheet: emptyRender() }];
+  const page = (n: number, castIds: string[]): Page => ({
+    id: `pg_${n}`,
+    n,
+    summary: `Page ${n} beat`,
+    layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+    panels: [1, 2, 3].map((k) => ({
+      id: `pn_${n}_${k}`,
+      n: k,
+      size: k === 1 ? 'wide' : 'medium',
+      shot: k === 1 ? 'establishing' : 'medium',
+      action: `Action ${n}.${k}`,
+      castIds,
+      placeId: 'pl_market',
+      lines: k === 2 ? [{ id: `ln_${n}_${k}`, kind: 'speech', speakerId: castIds[0], text: `Line on page ${n}` }] : []
+    })),
+    render: emptyRender(),
+    balloons: []
+  });
+  doc.pages = [page(1, ['c_maya']), page(2, ['c_maya', 'c_arjun']), page(3, ['c_arjun'])];
+  doc.planStatus = 'draft';
+  doc.settings = { ...doc.settings, confirm: 'never' };
+  return doc;
+}
 
 const fixtures = (): Record<string, ComicDoc> => {
   const sample = normalizeDoc(makeSampleDoc());
@@ -28,35 +61,6 @@ const fixtures = (): Record<string, ComicDoc> => {
   mixed.settings = { ...mixed.settings, imageModelOverride: 'flux-3' };
   return { sample, planned, drawn, mixed };
 };
-
-const tiers: QualityTier[] = ['draft', 'standard', 'pro'];
-
-describe('quoteRenderPages === the server gate (estimateSpendAction render_pages)', () => {
-  for (const [name, doc] of Object.entries(fixtures())) {
-    it(`matches on the ${name} fixture for every tier, payer, subset and force`, () => {
-      const cases: { pageIds?: string[]; force?: boolean; includeCover?: boolean }[] = [
-        {},
-        { force: true },
-        { pageIds: [doc.pages[0].id] },
-        { pageIds: [doc.pages[0].id], force: true },
-        { pageIds: doc.pages.slice(1).map((p) => p.id) },
-        { includeCover: true },
-        { includeCover: true, force: true },
-        { pageIds: [doc.pages[0].id], includeCover: true }
-      ];
-      for (const tier of tiers) {
-        for (const byok of [false, true]) {
-          const d: ComicDoc = { ...doc, settings: { ...doc.settings, quality: tier } };
-          for (const c of cases) {
-            const gate = estimateSpendAction(d, { type: 'render_pages', ...c }, byok);
-            const q = quoteRenderPages(d, { ...c, byok, tier, modelOverride: d.settings.imageModelOverride });
-            expect({ usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines }).toEqual(gate);
-          }
-        }
-      }
-    });
-  }
-});
 
 describe('the money rule', () => {
   it('never quotes a ready, current page without force', () => {
@@ -150,7 +154,7 @@ describe('summarizeBook', () => {
     expect(s.totals.toDrawUsd).toBe(quoteRenderPages(sample, { byok: false, tier: sample.settings.quality }).usd);
     expect(s.pricing).toMatchObject({ pageUsd: perPage, tier: sample.settings.quality, byok: false, locked: false });
     expect(s.cover.quoteUsd).toBe(unitPrice(sample, 'cover', { byok: false }).usd);
-    expect(LOW_QC_SCORE).toBe(SERVER_LOW_QC_SCORE);
+    expect(LOW_QC_SCORE).toBe(0.45); // equality with jobs.ts: server/src/comic/plan.parity.test.ts
   });
 
   it('scopes to a subset and flags off-aspect art and missing references', () => {

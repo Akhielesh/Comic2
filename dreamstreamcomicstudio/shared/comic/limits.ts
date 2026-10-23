@@ -36,6 +36,7 @@ export const DOC_LIMITS = {
   bookBlurbChars: 600,
   bookCredits: 8,
   bookCreditChars: 120,
+  translateLineIds: 200, // SpendAction 'translate' lineIds (per-line re-translate)
   docBytesWarn: 2_000_000, // session logs comic_doc_bytes above this
   docBytesMax: 6_000_000 // session refuses commits that would exceed this (409 LIMIT)
 } as const;

@@ -30,6 +30,7 @@ import {
   getRender,
   letterStyleOf,
   mapAssetRefs,
+  normalizeErrorDetail,
   pickBook,
   pickReader,
   readerOf,
@@ -89,8 +90,14 @@ import { isPublicationMirror, type PublishRequest, type PublicationMirror, type 
 import type { SafetyVerdict } from './safety.js';
 
 export type AssetMetaPatch = { safety?: SafetyVerdict | null; variants?: AssetVariant[] | null };
-export type RefPatch = Partial<Pick<RefAsset,
-  'label' | 'note' | 'caption' | 'subject' | 'quality' | 'dhash' | 'path' | 'w' | 'h' | 'original' | 'crop' | 'variants'>>;
+/** Keys a ref_patch may touch. `null` clears a key (applyOp deletes it); `path`, `w` and `h` can never be cleared
+ *  (a ref always keeps its object and size; applyOp ignores a null path). */
+export type RefPatchKey = 'label' | 'note' | 'caption' | 'subject' | 'quality' | 'dhash' | 'path' | 'w' | 'h' | 'original' | 'crop' | 'variants';
+export type RefPatch = { [K in RefPatchKey]?: K extends 'path' | 'w' | 'h' ? RefAsset[K] : RefAsset[K] | null };
+/** `book` op patch: blurb/credits may be null (cleared; the undo inverse of a first blurb sends null). */
+export type BookPatch = Partial<Omit<BookSettings, 'blurb' | 'credits'>> & { blurb?: string | null; credits?: string[] | null };
+/** Longest doc.planInputHash the plan_input_hash op stores. */
+export const PLAN_INPUT_HASH_MAX = 128;
 export type DocSafetyPatch = {
   text?: DocSafety['text'] | null;
   publish?: DocSafety['publish'] | null;
@@ -148,11 +155,13 @@ export type DocOp =
    *  unreferenced (undo of insert/duplicate). Otherwise purge is ignored and the page goes to trash. */
   | { op: 'page_delete'; id: string; deletedAt: number; purge?: boolean }
   | { op: 'page_restore'; id: string; n?: number }
-  | { op: 'book'; patch: Partial<BookSettings> }
+  | { op: 'book'; patch: BookPatch }
   | { op: 'reader'; patch: Partial<ReaderSettings> }
 
   // ── Versions ──
-  | { op: 'render_use'; target: RenderTarget; path: string; at: number }
+  /** adopt: UI confirmation flag (ref / attachment / sheet art onto a page or cover). The server strips it
+   *  after checking it; applyOp ignores it. */
+  | { op: 'render_use'; target: RenderTarget; path: string; at: number; adopt?: boolean }
   | { op: 'version_star'; path: string; starred: boolean }
 
   // ── Assets (server-only) ──
@@ -177,7 +186,12 @@ export type DocOp =
 
   // ── Safety & publication (server-only) ──
   | { op: 'safety'; patch: DocSafetyPatch }
-  | { op: 'publication'; value: PublicationMirror | null };
+  | { op: 'publication'; value: PublicationMirror | null }
+
+  // ── Planning (server-only) ──
+  /** Writer input fingerprint (jobs.planPages commits planInputHashOf(after) with the pages op): a string sets
+   *  doc.planInputHash, null deletes it. Not undoable (server-only). */
+  | { op: 'plan_input_hash'; hash: string | null };
 
 type Quoted = { quotedUsd?: number };
 /** Spend actions — the ones that may be gated. A confirmed action whose fresh estimate exceeds
@@ -190,8 +204,9 @@ export type SpendAction =
   | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean } & Quoted)
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
-  /** Translation (writer-class translator + automated linguist review, always). */
-  | ({ type: 'translate'; languages: string[]; pageIds?: string[]; force?: boolean; overwriteEdits?: boolean } & Quoted);
+  /** Translation (writer-class translator + automated linguist review, always). lineIds (≤ DOC_LIMITS.translateLineIds):
+   *  only these lines — the per-line "Re-translate line" (i18n.md §10.1). */
+  | ({ type: 'translate'; languages: string[]; pageIds?: string[]; lineIds?: string[]; force?: boolean; overwriteEdits?: boolean } & Quoted);
 
 export type StudioAction =
   | SpendAction
@@ -252,7 +267,7 @@ export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op'
 /** Server-only (contract test asserts none of these is patchable). */
 export const SERVER_ONLY_OPS: readonly DocOp['op'][] = [
   'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations',
-  'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication'
+  'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash'
 ];
 
 /** Ids the server accepts for new entities (jobs.ts SAFE_ID). */
@@ -295,6 +310,7 @@ const toArchived = (v: RenderVersion | AssetRef, targetKey: string, label: strin
   if (rv.costUsd !== undefined) out.costUsd = rv.costUsd;
   if (rv.origin !== undefined) out.origin = rv.origin;
   if (rv.aspect !== undefined) out.aspect = rv.aspect;
+  if (rv.parentPath !== undefined) out.parentPath = rv.parentPath;
   if (rv.starred) out.starred = true;
   return out;
 };
@@ -325,8 +341,32 @@ const pushArchive = (doc: ComicDoc, entries: ArchivedVersion[]): ComicDoc => {
 
 interface RenderPatchResult { render: RenderState; overflow: RenderVersion[] }
 
+/**
+ * errorDetail lives only beside `error` (P2-AMEND): it is dropped when the merged render has no error, when the
+ * patch sets a new error without a detail, or when the patch moves the render to a non-failed status without one.
+ * (Ops travel as JSON with undefined → null, so `error: undefined` arrives as `error: null` on the client.)
+ */
+const withErrorDetail = (render: RenderState, patch: Partial<RenderState>): RenderState => {
+  if (render.errorDetail === undefined) return render;
+  const own = 'errorDetail' in patch && patch.errorDetail !== undefined && patch.errorDetail !== null;
+  const detail = own ? normalizeErrorDetail(patch.errorDetail) : render.errorDetail;
+  const keep =
+    !!detail &&
+    !!render.error &&
+    (own || (!('error' in patch) && (patch.status === undefined || patch.status === 'failed')));
+  if (keep) return detail === render.errorDetail ? render : { ...render, errorDetail: detail };
+  const out = { ...render };
+  delete out.errorDetail;
+  return out;
+};
+
 /** §5.3.1 — one code path for render / character.sheet / place.sheet / style_option.render patches. */
 const patchRender = (prev: RenderState | undefined, patch: Partial<RenderState>, page?: Page): RenderPatchResult => {
+  const result = patchRenderRaw(prev, patch, page);
+  return { ...result, render: withErrorDetail(result.render, patch) };
+};
+
+const patchRenderRaw = (prev: RenderState | undefined, patch: Partial<RenderState>, page?: Page): RenderPatchResult => {
   const base = prev || emptyRender();
   const nextAsset = patch.asset;
   if (!nextAsset || !nextAsset.path || nextAsset.path === base.asset?.path) {
@@ -572,6 +612,7 @@ const applyRenderUse = (doc: ComicDoc, op: Extract<DocOp, { op: 'render_use' }>)
     updatedAt: op.at
   };
   delete render.error;
+  delete render.errorDetail;
   let next = setRender(doc, op.target, render);
   if (page) {
     const balloons = restoredBalloons(page, chosenBalloons);
@@ -1281,6 +1322,16 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
         return next;
       }
       return isPublicationMirror(op.value) ? { ...doc, publication: op.value } : doc;
+    }
+    case 'plan_input_hash': {
+      if (op.hash === null) {
+        if (doc.planInputHash === undefined) return doc;
+        const next = { ...doc };
+        delete next.planInputHash;
+        return next;
+      }
+      if (typeof op.hash !== 'string' || !op.hash || op.hash.length > PLAN_INPUT_HASH_MAX || op.hash === doc.planInputHash) return doc;
+      return { ...doc, planInputHash: op.hash };
     }
     default:
       return doc;

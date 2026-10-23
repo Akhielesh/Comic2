@@ -33,7 +33,7 @@ export type StudioEvent =
   | { type: 'activity'; id: string; label: string; phase: 'start' | 'end'; ok?: boolean; cost?: 'free' | 'text' | 'image' }
   /** Signed, short-lived URLs for storage paths referenced by the doc. */
   | { type: 'urls'; urls: Record<string, string> }
-  /** Codes include CONTENT_POLICY, COOLDOWN, LIMIT, NOT_READY, CONFLICT, NOT_AVAILABLE (additive strings). */
+  /** `code` is one of STREAM_ERROR_CODES (additive strings; clients must tolerate unknown codes). */
   | { type: 'error'; message: string; code?: string }
   | { type: 'done'; rev: number; spentUsd: number; savedUsd?: number };
 
@@ -48,6 +48,25 @@ export type StreamRequest =
       focus?: StudioFocus;
     }
   | { kind: 'action'; action: StudioAction };
+
+/**
+ * Known `error` event codes (contract §7). FORBIDDEN (P2-AMEND, from P1-ROUTES) = a restricted account was refused
+ * a spend, approve_gate, upload, publish, update_publication or regenerate_link; BUSY = another turn holds the
+ * project; COOLDOWN = a short safety break. The list is additive: never switch on it exhaustively.
+ */
+export const STREAM_ERROR_CODES = [
+  'CONTENT_POLICY',
+  'COOLDOWN',
+  'BUSY',
+  'FORBIDDEN',
+  'LIMIT',
+  'NOT_READY',
+  'CONFLICT',
+  'NOT_AVAILABLE'
+] as const;
+export type StreamErrorCode = (typeof STREAM_ERROR_CODES)[number];
+export const isStreamErrorCode = (code: unknown): code is StreamErrorCode =>
+  typeof code === 'string' && (STREAM_ERROR_CODES as readonly string[]).includes(code);
 
 export const STREAM_EVENT_NAMES: ReadonlyArray<StudioEvent['type']> = [
   'hello',

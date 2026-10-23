@@ -1,6 +1,7 @@
-// The in-memory fakes implement the WHOLE AssetStore contract (§12.5) so wave-1 feature
-// tests run before P1-STORAGE lands; the real stores expose the same surface (v5 methods
-// answer NOT_AVAILABLE until then).
+// The in-memory fakes implement the WHOLE AssetStore contract (§12.5) so feature tests run without
+// storage; the real stores expose the same surface, and since P1-STORAGE landed the real v5 methods
+// enforce the storage guards themselves (P2-AMEND replaced the wave-0 NOT_AVAILABLE assertion).
+import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { createMemoryAssetStore, createSupabaseAssetStore } from './assets.js';
 import { fakeAssetStore } from './orchestrator.fakes.js';
@@ -19,11 +20,27 @@ describe('AssetStore conformance', () => {
     }
   });
 
-  it('the real stores answer NOT_AVAILABLE for the v5 methods (no I/O)', async () => {
+  it('the real memory store enforces the upload and lane guards (magic bytes, no SVG/HTML, min edge, pub/library only)', async () => {
     const mem = createMemoryAssetStore();
-    for (const m of V5_METHODS) {
-      await expect((mem[m] as (...a: unknown[]) => Promise<unknown>)()).rejects.toMatchObject({ code: 'NOT_AVAILABLE', status: 501 });
-    }
+    const KEY = 'a'.repeat(22);
+    // Uploads: contents decide, never the claimed type.
+    await expect(mem.encodeUploadBuffer(Buffer.from('x'), 'image/png')).rejects.toMatchObject({ status: 415 });
+    await expect(mem.encodeUploadBuffer(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), 'image/svg+xml')).rejects.toMatchObject({ status: 415 });
+    await expect(mem.encodeUploadBuffer(Buffer.from('<html><script>alert(1)</script></html>'), 'image/png')).rejects.toMatchObject({ status: 415 });
+    const tiny = await sharp({ create: { width: 60, height: 60, channels: 3, background: '#336699' } }).png().toBuffer();
+    await expect(mem.encodeUploadBuffer(tiny, 'image/png')).rejects.toMatchObject({ status: 422 });
+    const png = await sharp({ create: { width: 300, height: 200, channels: 3, background: '#336699' } }).png().toBuffer();
+    expect(await mem.encodeUploadBuffer(png, 'image/png')).toMatchObject({ mime: 'image/webp', w: 300, h: 200 });
+    // Lanes: only a publication folder can be removed; quarantine is never a copy source; writes go to pub/ or library/ only.
+    await expect(mem.removePrefix('u/x/')).rejects.toMatchObject({ status: 400 });
+    await expect(mem.removePrefix(`pub/${KEY}/`)).resolves.toBe(0);
+    await expect(mem.copyObject('q/u/x/p/y/img/a.webp', `pub/${KEY}/a.webp`)).rejects.toMatchObject({ status: 400 });
+    await expect(mem.putObject('u/x/p/y/img/a.webp', png, 'image/png')).rejects.toMatchObject({ status: 400 });
+    await expect(mem.putObject(`pub/${KEY}/og.webp`, png, 'image/webp')).rejects.toMatchObject({ status: 415 });
+    await expect(mem.putObject(`pub/${KEY}/og.png`, png, 'image/png')).resolves.toBeUndefined();
+    // Free, local measurements.
+    expect(await mem.dHash(png)).toMatch(/^[0-9a-f]{16}$/);
+    expect(await mem.measureRef(png)).toMatchObject({ dhash: expect.stringMatching(/^[0-9a-f]{16}$/) });
   });
 });
 

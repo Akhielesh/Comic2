@@ -1,5 +1,8 @@
 // Feature registries (contract §13.2): registered cards, tabs and header slots render through
 // the hotspot files, in order, and built-ins can never be displaced.
+//
+// Six feature modules are mocked to exercise the folding rules; the others (lettering, refs, safety,
+// immersive, usage) are the REAL wave-1 modules, so their registrations appear in the merged lists.
 
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -109,12 +112,16 @@ import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
 
 describe('features registry', () => {
   it('folds feature modules: built-ins win, first registration wins, sorted by order', () => {
-    expect(registeredCardTypes()).toEqual(['breakdown']);
+    // breakdown (mock) wins over timeline's duplicate; refs is the real P1-REFS card.
+    expect(registeredCardTypes()).toEqual(['breakdown', 'refs']);
     expect(registeredCard('notice')).toBeUndefined();
     expect(BUILTIN_CARD_TYPES.has('recap')).toBe(true);
     expect(registeredTabs().map((t) => t.id)).toEqual(['languages', 'media']);
-    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'share']);
-    expect(registeredAdminSections().map((s) => s.id)).toEqual(['library']);
+    // usage (real, P1-LIMITS) sits at 220: after the mocked mode/broken slots, before the mocked share (250).
+    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'share']);
+    expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
+    // Admin sections keep feature order: safety (real) before library (mock).
+    expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library']);
   });
 });
 

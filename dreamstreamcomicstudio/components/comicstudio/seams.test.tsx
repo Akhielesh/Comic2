@@ -1,8 +1,9 @@
-// Wave-0 client seams (contract §13.3, build plan §10): every feature index registers nothing,
-// and every cross-package stub has its final props with inert, safe behaviour.
+// Client seams (contract §13.2–§13.3), as wired after wave 1 (P2-AMEND rewrote the wave-0 "inert stub"
+// assertions): the real feature registries, and every cross-package component rendering its real UI
+// with the props the wave-0 seams fixed — honest empty states, no fetch beyond the documented one.
 
-import { describe, expect, it, vi } from 'vitest';
-import { render, renderHook, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { useContext } from 'react';
 import { STYLE_PRESETS } from '../../shared/comic/stylePresets';
 import type { AssetRef, Card } from '../../shared/comic/doc';
@@ -17,7 +18,7 @@ import { PresetThumb } from './library/procedural/PresetThumb';
 import { EmptyArt, type EmptyArtVariant } from './library/procedural/EmptyArt';
 import { BubblePreview } from './library/procedural/BubblePreview';
 import { LibraryImage } from './library/LibraryImage';
-import { useComicLibrary } from './library/useComicLibrary';
+import { __resetComicLibraryForTests, useComicLibrary } from './library/useComicLibrary';
 import { VersionStack } from './timeline/VersionStack';
 import { BookTimeline } from './timeline/BookTimeline';
 import { LetteringSvg } from './lettering/LetteringSvg';
@@ -31,37 +32,82 @@ import { ImmersiveReader } from './immersive/ImmersiveReader';
 import { RefsDrawer } from './refs/RefsDrawer';
 import { BreakdownCard } from './breakdown/BreakdownCard';
 
-describe('feature indexes (wave 0)', () => {
-  it('are ten empty modules, so every registry is empty and the UI is unchanged', () => {
-    expect(featureModules()).toHaveLength(10);
-    for (const mod of featureModules()) expect(mod).toEqual({});
-    expect(registeredCardTypes()).toEqual([]);
-    expect(registeredTabs()).toEqual([]);
-    expect(registeredHeaderSlots()).toEqual([]);
-    expect(registeredAdminSections()).toEqual([]);
+afterEach(() => {
+  vi.unstubAllGlobals();
+  __resetComicLibraryForTests();
+});
+
+describe('feature registries (real wave-1 modules)', () => {
+  it('fold the eleven feature modules into cards, tabs, header slots and admin sections', () => {
+    expect(featureModules()).toHaveLength(11);
+    // Feature order = precedence: breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage.
+    expect(registeredCardTypes()).toEqual(['breakdown', 'versions', 'refs', 'publish', 'share', 'translation', 'style_presets']);
+    expect(registeredTabs().map((t) => [t.id, t.order])).toEqual([['media', 500], ['languages', 800]]);
+    // share 10 → mode 60 → savings 210 → usage 220 (P1-LIMITS' meter, registered by P2-AMEND).
+    expect(registeredHeaderSlots().map((h) => [h.id, h.order])).toEqual([['share', 10], ['mode', 60], ['savings', 210], ['usage', 220]]);
+    expect(registeredAdminSections().map((a) => a.id)).toEqual(['comic-safety', 'library']);
+    for (const reg of [...registeredTabs(), ...registeredHeaderSlots(), ...registeredAdminSections()]) expect(typeof reg.Component).toBe('function');
   });
 });
 
-describe('inert component stubs', () => {
-  it('render nothing until their wave-1 owner lands', () => {
+describe('cross-package components render their real UI', () => {
+  it('versions, timeline, rating, share, refs drawer and breakdown show honest content for the sample comic', () => {
     const studio = makeFakeStudio();
-    const doc = makeSampleDoc();
     const card = { type: 'breakdown', id: 'b1' } as Extract<Card, { type: 'breakdown' }>;
-    const { container } = render(
+    render(
       <>
         <VersionStack studio={studio} target={{ kind: 'cover' }} />
         <BookTimeline studio={studio} compact reorderActivation="longpress" />
-        <LetteringSvg plans={[]} aspect={2 / 3} ariaHidden />
-        <CoverTitleLayer doc={doc} aspect={2 / 3} />
         <RatingBadge rating="PG" />
         <ShareButton studio={studio} compact />
-        <ReaderLanguagePicker current="en" options={[{ code: 'en', label: 'English' }]} onChange={vi.fn()} />
-        <ImmersiveReader doc={doc} urlFor={studio.urlFor} intro={false} onExit={vi.fn()} />
         <RefsDrawer studio={studio} owner={{ kind: 'style' }} open onClose={vi.fn()} />
         <BreakdownCard card={card} message={{ id: 'm', role: 'assistant', text: '', at: 1 }} studio={studio} compact />
       </>
     );
+    // An undrawn cover has nothing to pick from — and says so.
+    expect(screen.getByText(/Cover isn.t drawn yet/)).toBeInTheDocument();
+    // The timeline lists the cover, every page and the free "Add page" clip.
+    const timeline = screen.getByRole('listbox', { name: 'Book timeline' });
+    expect(within(timeline).getByRole('option', { name: /^Cover/ })).toBeInTheDocument();
+    expect(within(timeline).getByRole('option', { name: /^Page 1/ })).toBeInTheDocument();
+    expect(within(timeline).getByRole('option', { name: /Add page/ })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Rated PG' })).toBeInTheDocument();
+    // Compact share button: a 44 px icon button that names the current visibility.
+    const share = screen.getByRole('button', { name: /^Share/ });
+    expect(share).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(share.className).toMatch(/\bw-11\b/);
+    // The refs drawer opens with its honest empty state and the privacy line.
+    expect(screen.getByRole('dialog', { name: 'Your style references' })).toBeInTheDocument();
+    expect(screen.getByText(/Your photos stay private to you/)).toBeInTheDocument();
+    // The breakdown card prices what is left to draw before anything is drawn.
+    const breakdown = screen.getByRole('region', { name: 'Page breakdown' });
+    expect(within(breakdown).getByText(/Nothing is drawn until you approve/)).toBeInTheDocument();
+  });
+
+  it('render nothing when there is nothing to show (no plans, painted cover title, one language)', () => {
+    const doc = makeSampleDoc();
+    const { container } = render(
+      <>
+        <LetteringSvg plans={[]} aspect={2 / 3} ariaHidden />
+        <CoverTitleLayer doc={doc} aspect={2 / 3} />
+        <ReaderLanguagePicker current="en" options={[{ code: 'en', label: 'English' }]} onChange={vi.fn()} />
+      </>
+    );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('ImmersiveReader portals a full-screen reader into document.body', () => {
+    const studio = makeFakeStudio();
+    const doc = makeSampleDoc();
+    const onExit = vi.fn();
+    const { container, unmount } = render(<ImmersiveReader doc={doc} urlFor={studio.urlFor} intro={false} onExit={onExit} />);
+    expect(container).toBeEmptyDOMElement();
+    const reader = screen.getByRole('dialog', { name: /^Reading / });
+    expect(container.contains(reader)).toBe(false);
+    expect(document.body.contains(reader)).toBe(true);
+    expect(onExit).not.toHaveBeenCalled();
+    unmount();
+    expect(screen.queryByRole('dialog', { name: /^Reading / })).toBeNull();
   });
 
   it('SafetyVeil passes children through, but a blocked asset never becomes an <img>', () => {
@@ -83,16 +129,20 @@ describe('inert component stubs', () => {
     expect(screen.getByRole('img', { name: 'Image withheld' })).toBeInTheDocument();
   });
 
-  it('LibraryImage shows its fallback; useComicLibrary is unavailable (no fetch)', () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+  it('LibraryImage keeps its procedural fallback; a failed library fetch is "unavailable" (one fetch, no cookies)', async () => {
+    const fetchSpy = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    vi.stubGlobal('fetch', fetchSpy);
     render(<LibraryImage id="style.noir-ink" fallback={<span>procedural</span>} />);
     expect(screen.getByText('procedural')).toBeInTheDocument();
     const { result } = renderHook(() => useComicLibrary());
-    expect(result.current.status).toBe('unavailable');
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
     expect(result.current.byKind('style_preview')).toEqual([]);
     expect(result.current.preview('noir-ink')).toBeUndefined();
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
+    expect(screen.getByText('procedural')).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]).toEqual([expect.stringContaining('/api/comic/public/library'), expect.objectContaining({ credentials: 'omit' })]);
   });
 
   it('procedural art renders plain SVG / swatches', () => {
@@ -116,7 +166,7 @@ describe('inert component stubs', () => {
     expect(bubble.container.querySelector('rect')).toHaveAttribute('fill', '#fff6c8');
   });
 
-  it('AdaptiveSheet is today’s PopSheet; TouchCanvas is a passthrough with scale 1', () => {
+  it('AdaptiveSheet presents a labelled dialog; TouchCanvas is a zoomable canvas at rest (scale 1)', () => {
     render(
       <AdaptiveSheet open onClose={vi.fn()} label="Inspector" presentation="bottom" detents={['half']} title="Lettering">
         <p>sheet body</p>
@@ -125,16 +175,19 @@ describe('inert component stubs', () => {
     expect(screen.getByRole('dialog', { name: 'Inspector' })).toHaveTextContent('sheet body');
 
     const Probe = () => <span>scale {useContext(ZoomContext).scale}</span>;
-    const { container } = render(
+    render(
       <TouchCanvas maxScale={4} oneFingerPan="whenZoomed">
         <Probe />
       </TouchCanvas>
     );
-    expect(container.innerHTML).toBe('<span>scale 1</span>');
+    const canvas = screen.getByRole('group', { name: 'Zoomable page' });
+    expect(canvas).toHaveAttribute('data-zoom', '1.00');
+    expect(canvas).toHaveAttribute('tabindex', '0');
+    expect(within(canvas).getByText('scale 1')).toBeInTheDocument();
   });
 });
 
-describe('form factor (stub classifier)', () => {
+describe('form factor classifier', () => {
   it('splits from 720 px; phones in landscape get the rail; two horizontal segments are dual-screen', () => {
     expect(classifyViewport({ w: 390, h: 844, coarse: true }).layout).toBe('single');
     expect(classifyViewport({ w: 719, h: 900, coarse: true }).layout).toBe('single');
@@ -155,8 +208,8 @@ describe('form factor (stub classifier)', () => {
   });
 });
 
-describe('script fonts (stub)', () => {
-  it('ensureFontsFor resolves without loading anything; families come from the registry', async () => {
+describe('script fonts', () => {
+  it('ensureFontsFor resolves (jsdom has no FontFaceSet: nothing to wait for); families come from the registry', async () => {
     await expect(ensureFontsFor(['te'], ['dialogue'], 'నమస్తే')).resolves.toEqual({ degraded: false });
     expect(cssFontFamily('te', 'dialogue')).toContain('"Noto Sans Telugu"');
     expect(cssFontFamily('xx-unknown', 'sfx')).toContain('"DSL Comic Neue"');
