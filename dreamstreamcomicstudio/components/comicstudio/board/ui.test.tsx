@@ -75,6 +75,8 @@ describe('touch sizes (token-level, mobile.md §2.4)', () => {
     expect(screen.getByRole('button', { name: 'Not now' }).className).toContain('tap-target');
     expect(screen.getByRole('button', { name: 'Close' }).className).toContain('coarse:h-11');
     expect(screen.getByRole('radio', { name: 'A' }).className).toContain('coarse:min-h-[44px]');
+    // Icon-only segments (the pane switcher) are 44 wide on touch too, not just 44 tall.
+    expect(screen.getByRole('radio', { name: 'A' }).className).toContain('coarse:min-w-[44px]');
   });
 });
 

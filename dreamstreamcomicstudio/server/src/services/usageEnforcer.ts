@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { Request } from 'express';
 import type { BillingProvider, LimitExceededDetails, ReservationState, TokenEstimateRequest, TokenEstimateResponse } from '../../../shared/types/billing.js';
 import { isTextProvider, type ProviderId } from '../../../shared/providers.js';
+import { hasFreeSuffix } from '../../../shared/pricing.js';
 import type { CapabilityNotice } from '../../../apiTypes.js';
 import {
   reserveUsageTokens,
@@ -36,6 +37,12 @@ declare module 'express-serve-static-core' {
     allowanceNotices?: CapabilityNotice[];
   }
 }
+
+// The authenticated user (middleware/auth.ts augments Request with it). Read through one
+// structural helper so this module also typechecks where that augmentation isn't in scope
+// (the client tsconfig reaches it via shared/comic/plan.test.ts → comic/jobs.ts).
+type WithAuthUser = { user?: { id: string; email?: string } };
+const userIdOf = (req: Request): string | undefined => (req as Request & WithAuthUser).user?.id;
 
 const resolveProviderFromOperation = (operation: string): BillingProvider => {
   const normalized = operation.toLowerCase();
@@ -112,7 +119,7 @@ export const reserveForOperation = async (input: {
     }
   | { allowed: false; details: LimitExceededDetails }
 > => {
-  if (!input.req.user?.id) {
+  if (!userIdOf(input.req)) {
     return {
       allowed: false as const,
       details: {
@@ -139,7 +146,7 @@ export const reserveForOperation = async (input: {
     };
   }
 
-  const userId = input.req.user.id;
+  const userId = userIdOf(input.req)!;
   const provider = input.provider || resolveProviderFromOperation(input.operation);
   const byok = hasByokForProvider(input.req, provider);
   const model = resolveModelFromRequest(input.req, input.fallbackModel);
@@ -167,6 +174,7 @@ export const reserveForOperation = async (input: {
       metadata: input.metadata
     });
     estimate = await estimateCharge(seed);
+    if (budgetChecked) estimate = await budgetEstimateFor(seed, estimate, model, input.fallbackModel);
   } catch (err) {
     if (!budgetChecked) throw err;
     return budgetRefusal(input.req, userId, provider, { kind: 'unavailable' }, err);
@@ -244,6 +252,47 @@ export const reserveForOperation = async (input: {
     seed,
     provider,
     model
+  };
+};
+
+/** Hold for a paid call whose price we can't verify (the catalog matched another row at $0). */
+export const UNVERIFIED_PRICE_FLOOR_USD = 0.001;
+
+/**
+ * The estimate the usage budget reserves. Two rules keep a governed user from walking past an
+ * exhausted budget with a $0 estimate (the database gate lets $0 calls through, so `:free`
+ * models keep working):
+ *  1. The priced model comes from the X-Gemini-Model header / body.model, which the CLIENT
+ *     controls — every call site passes the model it actually calls as `fallbackModel`, so the
+ *     hold is never lower than that model's estimate.
+ *  2. A $0 estimate only stands for a verified-free model (`:free` suffix, or its own catalog row
+ *     at $0). An unknown model that fell back to some other $0 row holds a small floor instead;
+ *     settle records the real cost either way.
+ */
+const budgetEstimateFor = async (
+  seed: ReturnType<typeof buildEstimateFromRequestBody>,
+  estimate: TokenEstimateResponse,
+  model: string,
+  fallbackModel: string
+): Promise<TokenEstimateResponse> => {
+  const called = String(fallbackModel || '').trim();
+  let best = estimate;
+  let calledEstimate = estimate;
+  if (called && called !== model.trim()) {
+    calledEstimate = await estimateCharge({ ...seed, model: called });
+    if (calledEstimate.estimatedProviderCostUsd > best.estimatedProviderCostUsd) best = calledEstimate;
+  }
+  if (best.estimatedProviderCostUsd > 0) return best;
+  const calledModel = called || model.trim();
+  const verifiedFree = hasFreeSuffix(calledModel) || calledEstimate.modelPricing?.model === calledModel;
+  if (verifiedFree) return best;
+  const markup = Number.isFinite(best.markup) && best.markup > 0 ? best.markup : 1;
+  const billable = UNVERIFIED_PRICE_FLOOR_USD * markup;
+  return {
+    ...best,
+    estimatedProviderCostUsd: UNVERIFIED_PRICE_FLOOR_USD,
+    estimatedBillableUsd: Number(billable.toFixed(6)),
+    estimatedCt: Math.ceil(billable * (best.ctPerUsd || 10_000))
   };
 };
 
@@ -328,7 +377,7 @@ export const settleReservedOperation = async (input: {
   metadata?: Record<string, unknown>;
 }) => {
   const reservation = input.req.usageReservation;
-  if (!input.req.user?.id || !reservation) {
+  if (!userIdOf(input.req) || !reservation) {
     return null;
   }
 
@@ -337,7 +386,7 @@ export const settleReservedOperation = async (input: {
   });
 
   const settled = await settleReservation({
-    userId: input.req.user.id,
+    userId: userIdOf(input.req)!,
     reservationId: reservation.reservationId,
     estimatedCt: reservation.estimated.estimatedCt,
     actual,
@@ -352,7 +401,7 @@ export const settleReservedOperation = async (input: {
 
   // The settled row now carries the real provider cost; the next status read sees it. The
   // 30/70/90% notices were raised atomically at reserve time (percent-only).
-  if (reservation.governed) invalidateAllowanceStatus(input.req.user.id);
+  if (reservation.governed) invalidateAllowanceStatus(userIdOf(input.req)!);
 
   return settled;
 };
@@ -374,12 +423,12 @@ export const releaseReservedOperation = async (input: {
   metadata?: Record<string, unknown>;
 }) => {
   const reservation = input.req.usageReservation;
-  if (!input.req.user?.id || !reservation || reservation.byokBypass) {
+  if (!userIdOf(input.req) || !reservation || reservation.byokBypass) {
     return;
   }
 
   await releaseReservation({
-    userId: input.req.user.id,
+    userId: userIdOf(input.req)!,
     reservationId: reservation.reservationId,
     estimatedCt: reservation.estimated.estimatedCt,
     reason: input.reason,
@@ -390,7 +439,7 @@ export const releaseReservedOperation = async (input: {
     metadata: input.metadata,
     walletSkipped: reservation.walletSkipped
   });
-  if (reservation.governed) invalidateAllowanceStatus(input.req.user.id);
+  if (reservation.governed) invalidateAllowanceStatus(userIdOf(input.req)!);
 };
 
 export const formatLimitErrorResponse = (details: LimitExceededDetails) => ({
@@ -404,8 +453,22 @@ export const attachBillingToPayload = <T extends Record<string, unknown>>(
   payload: T,
   reservation: ReservationState | undefined,
   settled: Awaited<ReturnType<typeof settleReservedOperation>>
-): T & { billing?: { reservationId?: string; byokBypass?: boolean; estimated?: TokenEstimateResponse; settled?: Record<string, unknown> } } => {
+): T & { billing?: { reservationId?: string; byokBypass?: boolean; governed?: boolean; estimated?: TokenEstimateResponse; settled?: Record<string, unknown> } } => {
   if (!reservation) return payload;
+
+  // Governed users never see dollars for their usage (P1-LIMITS): their responses carry no
+  // estimate/settlement amounts — the usage meter (GET /api/usage/allowance) shows percent left.
+  if (reservation.governed) {
+    return {
+      ...payload,
+      billing: {
+        reservationId: reservation.reservationId,
+        byokBypass: false,
+        governed: true,
+        settled: settled ? { reservationReleased: settled.reservationReleased } : undefined
+      }
+    };
+  }
 
   return {
     ...payload,

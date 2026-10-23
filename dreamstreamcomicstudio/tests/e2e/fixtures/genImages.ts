@@ -13,7 +13,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 
 const MAX_SIDE = 4096;
-export const QA_IMAGE_RE = /\/qa-assets\/([a-z0-9][a-z0-9_.-]{0,60})-(\d{2,5})x(\d{2,5})\.png$/i;
+export const QA_IMAGE_RE = /\/qa-assets\/([a-z0-9][a-z0-9_-]{0,60})-(\d{2,5})x(\d{2,5})\.png$/i;
 
 export const fixtureCacheDir = (): string =>
   path.join(process.env.QA_ARTIFACTS_RESOLVED || path.resolve(process.cwd(), 'node_modules/.cache/comic-qa'), 'fixtures');

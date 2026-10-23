@@ -67,7 +67,17 @@ test.describe('layout scanner', () => {
     );
     const f = await scanLayout(p, { checks: ['collision'] });
     expect(f).toHaveLength(1);
-    expect(f[0].detail).toMatch(/Overlapping label/);
+    expect(f[0].label).toBe('Overlapping label one <> Overlapping label two');
+  });
+
+  test('hit-area pseudo-elements are not text spill', async ({ page: p }) => {
+    await p.setContent(page(`<style>.tap-target{position:relative}.tap-target::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%)}</style><main><button class="tap-target" style="font-size:12px">1</button></main>`));
+    expect(await scanLayout(p, { checks: ['spill'] })).toEqual([]);
+  });
+
+  test('a listbox scrolled inside a strip is not an offscreen popover', async ({ page: p }) => {
+    await p.setContent(page(`<main><div style="overflow-x:auto;width:300px"><div role="listbox" aria-label="Timeline" style="width:2000px;display:flex">pages</div></div></main>`));
+    expect(await scanLayout(p, { checks: ['popover'] })).toEqual([]);
   });
 
   test('popovers outside the viewport', async ({ page: p }) => {
@@ -101,6 +111,7 @@ test.describe('layout scanner', () => {
       page(`<style>.tap{position:relative}.tap::after{content:"";position:absolute;inset:-10px}</style><main style="padding:40px">
         <button aria-label="Tiny" style="width:24px;height:24px;margin:30px">x</button>
         <button aria-label="Expanded" class="tap" style="width:28px;height:28px;margin:30px;border:0">y</button>
+        <button aria-label="Round" style="width:44px;height:44px;border-radius:50%;margin:30px;border:0">o</button>
         <div style="position:relative;margin:30px"><button aria-label="Big" style="width:60px;height:60px">z</button><span style="position:absolute;left:44px;top:0;width:20px;height:20px;background:red;display:block">!</span></div>
       </main>`)
     );

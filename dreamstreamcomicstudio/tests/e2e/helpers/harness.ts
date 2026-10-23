@@ -52,6 +52,8 @@ export class QaHarness {
   readonly pageErrors: string[] = [];
   hingeResult: HingeResult = { mode: 'none', band: null };
   safeAreaOn = false;
+  /** The fixture of the last open() (allowlist entries can be scoped to it). */
+  fixture = 'heist-12p';
   private routed = false;
 
   constructor(
@@ -96,6 +98,7 @@ export class QaHarness {
     if (opts.hinge !== false && this.device.hinge) this.hingeResult = await emulateHinge(this.page, this.device);
     const params = new URLSearchParams();
     const merged: QaQuery = { still: true, ...q };
+    this.fixture = merged.fixture || 'heist-12p';
     for (const [k, v] of Object.entries(merged)) {
       if (v === undefined || v === null || v === false) continue;
       params.set(k, v === true ? '1' : String(v));
@@ -160,7 +163,7 @@ export class QaHarness {
 
   /** Layout + touch assertions at this step, triaged against the allowlist (soft). */
   async check(surface: string, scene: string, opts: CleanOptions = {}): Promise<Finding[]> {
-    return expectLayoutClean(this.page, this.testInfo, { surface, scene }, {
+    return expectLayoutClean(this.page, this.testInfo, { surface, scene, fixture: this.fixture }, {
       device: this.device,
       safeArea: this.safeAreaOn ? this.device.safeArea : null,
       hinge: this.hingeResult.band,

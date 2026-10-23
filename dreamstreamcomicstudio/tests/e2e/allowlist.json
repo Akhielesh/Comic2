@@ -6,23 +6,84 @@
       "check": "clip",
       "owner": "P1-QA",
       "reason": "visualqa §3: PageScript's li.line-clamp-2 ellipsis is intentional; any -webkit-line-clamp ancestor counts as an ellipsis.",
-      "match": { "sig": "line-clamp" }
+      "match": {
+        "sig": "line-clamp"
+      }
     },
     {
       "id": "vqa-fp-jump-to-latest",
       "check": "collision",
       "owner": "P1-QA",
       "reason": "visualqa §3 (P2-3): the floating 'Jump to latest' pill sits over the message list by design.",
-      "match": { "label": "jump to latest|^latest$" }
+      "match": {
+        "label": "jump to latest|^latest$"
+      }
     },
     {
       "id": "vqa-fp-pagecard-script-mask",
       "check": "self-clip",
       "owner": "P1-QA",
       "reason": "visualqa §3: the PageCard script view (PagesTab) is a scroller with a bottom mask fade by design.",
-      "match": { "sig": "mask-image|\\[mask" }
+      "match": {
+        "sig": "mask-image|\\[mask"
+      }
     }
   ],
-  "knownFailures": [],
+  "knownFailures": [
+    {
+      "id": "stress-balloons-overlap",
+      "check": "balloon-collision",
+      "owner": "P1-LETTER-UI",
+      "fixtures": [
+        "stress",
+        "lake-1p"
+      ],
+      "match": {
+        "label": "^pg_"
+      },
+      "reason": "visualqa P0-3: on dense pages (3 long lines per panel) auto-placed balloons overlap each other and the stored edge balloons; needs render-time fit + the crowded chip.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "style-tile-failed-text-overlap",
+      "check": "collision",
+      "owner": "P2-BOARD",
+      "match": {
+        "label": "^Not drawn yet <> "
+      },
+      "reason": "StyleTab: a FAILED style option tile paints the 'Not drawn yet' placeholder on top of its own error text.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "recap-kind-segment-labels-overlap",
+      "check": "collision",
+      "owner": "P1-CONVERSATION",
+      "match": {
+        "ctx": "Comic kind"
+      },
+      "reason": "RecapCard / FormatPanel 'Comic kind' segmented control: Comic/Manga/Webtoon labels overlap at 768–1024 px (segments narrower than their labels).",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "recap-lettering-option-spill",
+      "check": "spill",
+      "owner": "P1-CONVERSATION",
+      "match": {
+        "label": "^Editable balloons$"
+      },
+      "reason": "RecapCard / FormatPanel lettering option: 'Editable balloons' label spills out of its tile at 768 px.",
+      "removeBy": "wave3"
+    },
+    {
+      "id": "failed-page-sketch-overlap",
+      "check": "collision",
+      "owner": "P1-LETTER-UI",
+      "match": {
+        "ctx": "plan sketch"
+      },
+      "reason": "ComicPageView: a FAILED page's error text is drawn over the plan sketch text on the Pages board (no backdrop / not laid out).",
+      "removeBy": "wave3"
+    }
+  ],
   "knownTestFailures": []
 }

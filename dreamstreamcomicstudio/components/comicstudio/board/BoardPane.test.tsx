@@ -7,6 +7,8 @@ vi.mock('../features', async (importOriginal) => ({ ...(await importOriginal<typ
 
 import { BoardPane } from './BoardPane';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { openLayers, resetBackStack } from '../mobile/backStack';
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);
@@ -98,6 +100,16 @@ describe('BoardPane', () => {
     expect(studio.openPage).toHaveBeenCalledWith(null);
   });
 
+  it('Read: the reader owns the only scroller (no nested scrolling inside the board)', () => {
+    const { rerender } = render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'read' })} />);
+    const panel = screen.getByRole('tabpanel');
+    expect(panel).toHaveAttribute('data-board-scroll', 'reader');
+    expect(panel.className).toContain('overflow-hidden');
+    expect(panel.className).not.toContain('overflow-y-auto');
+    rerender(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'story' })} />);
+    expect(screen.getByRole('tabpanel').className).toContain('overflow-y-auto');
+  });
+
   it('shows skeletons while loading and a retry on a load error', () => {
     const { unmount } = render(<BoardPane studio={makeStudio(null, { loading: true })} />);
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
@@ -107,5 +119,88 @@ describe('BoardPane', () => {
     expect(screen.getByRole('alert')).toHaveTextContent("This comic doesn't exist");
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(studio.refresh).toHaveBeenCalled();
+  });
+});
+
+describe('BoardPane on a phone (visualqa P1-6, P1-7; mobile.md §3.1)', () => {
+  const PHONE = formFactorFor({ w: 360, h: 740, coarse: true });
+  const gated = () =>
+    makeSampleDoc((d) => {
+      d.gate = {
+        id: 'gate_9',
+        action: { type: 'render_pages' },
+        title: 'Draw the remaining 5 pages in the painted style',
+        summary: '5 pages',
+        estimateUsd: 1.31,
+        imageCount: 5,
+        model: 'nano-banana-2.1-a-very-long-model-identifier-for-layout-tests',
+        createdAt: SAMPLE_NOW,
+        status: 'open',
+        reason: 'policy'
+      };
+    });
+  const atPhone = (studio: ReturnType<typeof makeStudio>) =>
+    render(
+      <FormFactorProvider value={PHONE}>
+        <BoardPane studio={studio} />
+      </FormFactorProvider>
+    );
+
+  afterEach(() => resetBackStack());
+
+  it('the spend gate is ONE compact line pinned above the scroller; details on demand; still answerable', () => {
+    const studio = makeStudio(gated());
+    atPhone(studio);
+    const banner = screen.getByRole('region', { name: 'Waiting for your approval' });
+    expect(banner).toHaveAttribute('data-gate-banner', 'compact');
+    // Pinned: it sits outside (above) the scrolling tab panel, so it never scrolls away.
+    expect(screen.getByRole('tabpanel').contains(banner)).toBe(false);
+    expect(within(banner).getByText('Draw the remaining 5 pages in the painted style').className).toContain('truncate');
+    expect(within(banner).queryByText(/very-long-model-identifier/)).toBeNull();
+    fireEvent.click(within(banner).getByRole('button', { name: /Show details/ }));
+    expect(within(banner).getByText(/5 images on nano-banana-2\.1-a-very-long-model-identifier/).className).toContain('[overflow-wrap:anywhere]');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Approve' }));
+    expect(studio.act).toHaveBeenCalledWith({ type: 'approve_gate', gateId: 'gate_9' });
+  });
+
+  it('the tab strip scrolls inside itself with snap, keeps the active chip in view, and drops inactive badges below 380 px', () => {
+    const spy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = spy;
+    try {
+      const studio = makeStudio(makeSampleDoc(), { tab: 'pages' });
+      const { rerender } = atPhone(studio);
+      const strip = screen.getByRole('tablist', { name: 'Board' });
+      expect(strip).toHaveAttribute('data-tab-strip');
+      expect(strip.className).toContain('overflow-x-auto');
+      expect(strip.className).toContain('snap-x');
+      expect(strip.className).toContain('min-w-0');
+      // Inactive Cast loses its badge at 360; the active Pages tab keeps "1/6".
+      expect(screen.getByRole('tab', { name: 'Cast' })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /Pages/ })).toHaveTextContent('1/6');
+      for (const t of screen.getAllByRole('tab')) expect(t.className).toContain('coarse:min-h-[44px]');
+      expect(spy).toHaveBeenCalled();
+      spy.mockClear();
+      rerender(
+        <FormFactorProvider value={PHONE}>
+          <BoardPane studio={{ ...studio, tab: 'read' }} />
+        </FormFactorProvider>
+      );
+      expect(spy).toHaveBeenCalledWith({ inline: 'nearest', block: 'nearest' });
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('leaves a dock slot at the foot of the board for the book timeline', () => {
+    atPhone(makeStudio(makeSampleDoc()));
+    const dock = document.querySelector('[data-board-dock]');
+    expect(dock).not.toBeNull();
+    expect(screen.getByRole('tabpanel').compareDocumentPosition(dock as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the back gesture closes the page editor before it leaves the studio', () => {
+    atPhone(makeStudio(makeSampleDoc(), { focusedPageId: 'pg_5' }));
+    expect(openLayers()).toContain('page-editor');
   });
 });

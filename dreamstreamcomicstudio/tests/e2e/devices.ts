@@ -89,8 +89,9 @@ export const COMIC_DEVICES: ComicDevice[] = [
     name: 'iphone-se',
     engine: 'webkit',
     os: 'ios',
-    viewport: se.viewport,
-    deviceScaleFactor: se.deviceScaleFactor,
+    // iPhone SE 2nd/3rd gen (Playwright's 'iPhone SE' descriptor is the 320×568 first generation).
+    viewport: { width: 375, height: 667 },
+    deviceScaleFactor: 2,
     isMobile: true,
     hasTouch: true,
     userAgent: se.userAgent,

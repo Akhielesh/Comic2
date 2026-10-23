@@ -128,7 +128,7 @@ const cloneRequestForCall = (req: Request, args: ReserveArgs, byok: boolean): Re
 
 export function createBillingHooks(req: Request, projectId: string, deps: BillingDeps = {}): BillingHooks {
   const enabled = deps.enabled ?? METERING_ENABLED;
-  if (!enabled || !req?.user?.id) return noopBillingHooks;
+  if (!enabled || !(req as Request & { user?: { id: string } })?.user?.id) return noopBillingHooks;
 
   const reserveFn = deps.reserve || reserveForOperation;
   const settleFn = deps.settle || settleReservedOperation;

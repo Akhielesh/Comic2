@@ -404,3 +404,7 @@ end $$;
 -- select has_function_privilege('authenticated', 'public.usage_budget_try_reserve(uuid,text,numeric,jsonb)', 'execute'); -- false
 -- select has_table_privilege('authenticated', 'public.user_usage_budgets', 'select');                                  -- false
 -- select public.usage_budget_status('17933bae-dcc5-49b9-bcf5-9658e3953a84', 10);                                     -- governed, pct
+-- Metering integrity: clients must not be able to write their own cost events (only a SELECT policy may exist):
+-- select policyname, cmd, roles from pg_policies where schemaname = 'public' and tablename = 'generation_cost_events';
+-- Stranded holds (ignored by the budget after 20 min; safe to mark released):
+-- select count(*) from public.generation_cost_events where status = 'RESERVED' and created_at < now() - interval '20 minutes';

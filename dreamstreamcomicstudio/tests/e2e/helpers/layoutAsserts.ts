@@ -202,7 +202,19 @@ function detect(args: DetectArgs) {
         if (/(hidden|clip)/.test(s.overflowX) && dx > 1 && s.textOverflow !== 'ellipsis') push('self-clip', el, `x by ${dx}px, no ellipsis`);
         else if (/(hidden|clip)/.test(s.overflowY) && dy > 2 && !truncatesByDesign(el)) push('self-clip', el, `y by ${dy}px, no line clamp`);
       }
-      if (on('spill') && s.overflowX === 'visible' && dx > 2 && s.display !== 'inline' && !truncatesByDesign(el)) push('spill', el, `spills ${dx}px`);
+      if (on('spill') && s.overflowX === 'visible' && dx > 2 && s.display !== 'inline' && !truncatesByDesign(el)) {
+        // Measure the TEXT, not scrollWidth: hit-area pseudo-elements (.tap-target::after) widen
+        // scrollWidth without any text leaving the box.
+        const box = el.getBoundingClientRect();
+        let over = 0;
+        for (const n of Array.from(el.childNodes)) {
+          if (n.nodeType !== 3 || !(n.textContent || '').trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          for (const rr of Array.from(range.getClientRects())) over = Math.max(over, rr.right - box.right, box.left - rr.left);
+        }
+        if (over > 2) push('spill', el, `text spills ${Math.round(over)}px`);
+      }
     }
   }
 
@@ -307,14 +319,15 @@ function detect(args: DetectArgs) {
         const key = sig(A.el) + '|' + sig(B.el);
         if (seen.has(key)) continue;
         seen.add(key);
+        // Symmetric: an allowlist regex on sig/label matches either side of the pair.
         out.push({
           check: 'collision',
-          sig: sig(A.el),
-          label: labelOf(A.el),
+          sig: `${sig(A.el)} <> ${sig(B.el)}`,
+          label: `${labelOf(A.el).slice(0, 40)} <> ${labelOf(B.el).slice(0, 40)}`,
           ctx: ctxOf(A.el),
-          testid: testidOf(A.el),
+          testid: testidOf(A.el) || testidOf(B.el),
           rect: rectOf(A.el),
-          detail: `overlaps ${sig(B.el)} "${labelOf(B.el).slice(0, 40)}" by ${Math.round(best.frac * 100)}%`
+          detail: `overlap ${Math.round(best.frac * 100)}% of the smaller; B in ${ctxOf(B.el)}`
         });
       }
     }
@@ -324,6 +337,17 @@ function detect(args: DetectArgs) {
   if (on('popover')) {
     for (const el of Array.from(document.querySelectorAll('[role="dialog"],[role="menu"],[role="listbox"],[role="tooltip"]'))) {
       if (!visible(el) || dormant(el)) continue;
+      // A listbox/menu that lives INSIDE a scroller (a timeline strip, a chip row) is scrolled content, not a popover.
+      let scrolled = false;
+      for (let a = el.parentElement; a && a !== de; a = a.parentElement) {
+        const s = cs(a);
+        if (/(auto|scroll)/.test(s.overflowX) || /(auto|scroll)/.test(s.overflowY)) {
+          scrolled = true;
+          break;
+        }
+        if (s.position === 'fixed') break;
+      }
+      if (scrolled) continue;
       const r = el.getBoundingClientRect();
       if (r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1) push('popover', el, `box ${Math.round(r.left)},${Math.round(r.top)}→${Math.round(r.right)},${Math.round(r.bottom)} in ${vw}x${vh}`);
     }
@@ -417,11 +441,18 @@ function detect(args: DetectArgs) {
       const owns = (hit: Element | null) => !!hit && (hit === el || el.contains(hit) || (hit.closest('label') as HTMLLabelElement | null)?.control === el);
       if (!owns(document.elementFromPoint(cx, cy))) continue; // covered (sheet, popover, scrolled under chrome)
       let stolen: string | null = null;
+      // A 44 px target owns the points 21 px out along both axes and 15 px out on the diagonals (15·√2 ≈ 21):
+      // a 44 px square AND a 44 px circle (rounded-full) pass; anything smaller, or a neighbour/badge
+      // sitting on the target, does not.
       for (const [dx, dy] of [
-        [-21, -21],
-        [21, -21],
-        [-21, 21],
-        [21, 21]
+        [-21, 0],
+        [21, 0],
+        [0, -21],
+        [0, 21],
+        [-15, -15],
+        [15, -15],
+        [-15, 15],
+        [15, 15]
       ]) {
         const hit = document.elementFromPoint(cx + dx, cy + dy);
         if (!owns(hit)) {
@@ -452,15 +483,28 @@ function detect(args: DetectArgs) {
 
   if (on('safe-area') && args.safeArea) {
     const sa = args.safeArea;
+    // Content that SCROLLS may pass under the notch / home indicator (the user scrolls it out);
+    // fixed chrome may not. So only controls outside a scroller on that axis are checked.
+    const inScroller = (el: Element, axis: 'x' | 'y') => {
+      for (let a = el.parentElement; a && a !== de; a = a.parentElement) {
+        const s = cs(a);
+        const ov = axis === 'y' ? s.overflowY : s.overflowX;
+        const more = axis === 'y' ? a.scrollHeight > a.clientHeight + 1 : a.scrollWidth > a.clientWidth + 1;
+        if (/(auto|scroll)/.test(ov) && more) return true;
+      }
+      return false;
+    };
     for (const el of interactive) {
       if (!visible(el)) continue;
       const r = el.getBoundingClientRect();
       if (!inViewport(r) || cs(el).pointerEvents === 'none') continue;
+      const sy = inScroller(el, 'y');
+      const sx = inScroller(el, 'x');
       const bands: string[] = [];
-      if (sa.top && r.top < sa.top - 1 && r.bottom > 0) bands.push(`top ${sa.top}`);
-      if (sa.bottom && r.bottom > vh - sa.bottom + 1 && r.top < vh) bands.push(`bottom ${sa.bottom}`);
-      if (sa.left && r.left < sa.left - 1 && r.right > 0) bands.push(`left ${sa.left}`);
-      if (sa.right && r.right > vw - sa.right + 1 && r.left < vw) bands.push(`right ${sa.right}`);
+      if (!sy && sa.top && r.top < sa.top - 1 && r.bottom > 0) bands.push(`top ${sa.top}`);
+      if (!sy && sa.bottom && r.bottom > vh - sa.bottom + 1 && r.top < vh) bands.push(`bottom ${sa.bottom}`);
+      if (!sx && sa.left && r.left < sa.left - 1 && r.right > 0) bands.push(`left ${sa.left}`);
+      if (!sx && sa.right && r.right > vw - sa.right + 1 && r.left < vw) bands.push(`right ${sa.right}`);
       if (bands.length) push('safe-area', el, `inside the ${bands.join(' + ')}px inset`);
     }
   }

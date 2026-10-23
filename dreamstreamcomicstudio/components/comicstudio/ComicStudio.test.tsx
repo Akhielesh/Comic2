@@ -15,16 +15,19 @@ vi.mock('../studio/kit/useMediaQuery', () => ({ useIsWide: () => state.wide, use
 // (e.g. the plan card's page list) so they only exercise the shell.
 vi.mock('./features', async (importOriginal) => ({ ...(await importOriginal<typeof import('./features')>()), registeredCard: () => undefined }));
 vi.mock('./immersive/ImmersiveReader', () => ({
-  ImmersiveReader: ({ onExit, intro }: { onExit: () => void; intro: boolean }) => (
+  ImmersiveReader: ({ onExit, intro, onImageError }: { onExit: () => void; intro: boolean; onImageError?: () => void }) => (
     <div role="dialog" aria-label="Full-screen reader" data-intro={String(intro)}>
       <button type="button" onClick={onExit}>
         Close reader
+      </button>
+      <button type="button" onClick={() => onImageError?.()}>
+        Simulate image error
       </button>
     </div>
   )
 }));
 
-import { ComicStudio, ComicStudioShell, SPLIT_STORAGE_KEY, SpendBreakdown, spendKindsShown } from './ComicStudio';
+import { ComicStudio, ComicStudioShell, READER_REFRESH_MS, SPLIT_STORAGE_KEY, SpendBreakdown, spendKindsShown } from './ComicStudio';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
 import type { FormFactor } from './mobile/formFactor';
@@ -294,6 +297,24 @@ describe('ComicStudio on phones (single)', () => {
       await new Promise((r) => setTimeout(r, 30));
     });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Full-screen reader' })).toBeNull());
+  });
+
+  it('a broken page image in the reader re-signs URLs at most once per 30 s (never an error → refresh loop)', async () => {
+    const studio = makeFakeStudio();
+    mountAt(PHONE, studio);
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Read/ }));
+    const reader = await screen.findByRole('dialog', { name: 'Full-screen reader' });
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(t0);
+    try {
+      for (let i = 0; i < 4; i += 1) fireEvent.click(within(reader).getByRole('button', { name: 'Simulate image error' }));
+      expect(studio.refresh).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(t0 + READER_REFRESH_MS + 1);
+      fireEvent.click(within(reader).getByRole('button', { name: 'Simulate image error' }));
+      expect(studio.refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('Read stays unavailable until a page is drawn (and says why)', () => {

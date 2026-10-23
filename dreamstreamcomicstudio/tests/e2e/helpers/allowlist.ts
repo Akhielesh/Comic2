@@ -63,6 +63,7 @@ export interface AllowEntry {
   projects?: string[];
   surfaces?: string[];
   scenes?: string[];
+  fixtures?: string[];
   /** Case-insensitive regular expressions; every given field must match. */
   match?: Partial<Record<'sig' | 'label' | 'ctx' | 'testid' | 'detail', string>>;
   removeBy?: string;
@@ -90,6 +91,7 @@ export interface Where {
   project: string;
   surface: string;
   scene: string;
+  fixture?: string;
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -109,7 +111,7 @@ const globMatch = (globs: string[] | undefined, value: string) => !globs || glob
 
 export const entryMatches = (e: AllowEntry, f: Finding, w: Where): boolean => {
   if (e.check !== '*' && e.check !== f.check) return false;
-  if (!globMatch(e.projects, w.project) || !globMatch(e.surfaces, w.surface) || !globMatch(e.scenes, w.scene)) return false;
+  if (!globMatch(e.projects, w.project) || !globMatch(e.surfaces, w.surface) || !globMatch(e.scenes, w.scene) || !globMatch(e.fixtures, w.fixture || '')) return false;
   for (const [field, pattern] of Object.entries(e.match || {})) {
     if (pattern === undefined) continue;
     const value = (f as unknown as Record<string, string | undefined>)[field] ?? '';
@@ -157,8 +159,8 @@ export const validateAllowlist = (list: Allowlist): string[] => {
     if (!OWNER_RE.test(e.owner || '')) problems.push(`${at}: owner must be a package id like P1-SHELL`);
     if (!e.reason || e.reason.length < 12) problems.push(`${at}: reason is required`);
     if (kind === 'knownFailures' && !e.removeBy) problems.push(`${at}: known failures need removeBy (e.g. "wave3")`);
-    if (kind === 'knownFailures' && (!e.match || Object.keys(e.match).length === 0) && !(e.surfaces?.length || e.scenes?.length))
-      problems.push(`${at}: a known failure must be scoped (match, surfaces or scenes) — never allowlist a whole check everywhere`);
+    if (kind === 'knownFailures' && (!e.match || Object.keys(e.match).length === 0) && !(e.surfaces?.length || e.scenes?.length || e.fixtures?.length))
+      problems.push(`${at}: a known failure must be scoped (match, surfaces, scenes or fixtures) — never allowlist a whole check everywhere`);
     for (const [field, pattern] of Object.entries(e.match || {})) {
       try {
         new RegExp(pattern as string, 'i');

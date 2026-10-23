@@ -302,7 +302,14 @@ const adminCache = new TtlCache<boolean>(60_000, 2000);
  * Admins are exempt from the usage budget. Bootstrap owner emails + active `user_roles` admin
  * rows (cached 60 s). A failed role lookup counts as NOT admin, so the user stays governed.
  */
-export const isUsageExemptAdmin = async (req: Request): Promise<boolean> => {
+/** Structural view of an Express request (auth + requireAdmin augment Request with these). */
+type UsageRequest = {
+  user?: { id: string; email?: string };
+  accessProfile?: { isAdmin?: boolean };
+};
+
+export const isUsageExemptAdmin = async (reqIn: Request | UsageRequest): Promise<boolean> => {
+  const req = reqIn as UsageRequest;
   if (req?.accessProfile) return req.accessProfile.isAdmin === true;
   const userId = req?.user?.id;
   if (!userId) return false;

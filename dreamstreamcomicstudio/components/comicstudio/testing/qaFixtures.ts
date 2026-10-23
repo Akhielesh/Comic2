@@ -49,7 +49,7 @@ export const QA_VARIANT_WIDTHS = [480, 1080] as const;
 
 /** `qa/<seed>-<w>x<h>.png` ⇄ its parts (the harness renders an image from the name alone). */
 export const qaImagePath = (seed: string, w: number, h: number): string => `qa/${seed}-${Math.round(w)}x${Math.round(h)}.png`;
-const IMAGE_NAME_RE = /^(?:.*\/)?([a-z0-9][a-z0-9_.-]{0,60})-(\d{2,5})x(\d{2,5})\.png$/i;
+const IMAGE_NAME_RE = /^(?:qa\/|\/qa-assets\/)?([a-z0-9][a-z0-9_-]{0,60})-(\d{2,5})x(\d{2,5})\.png$/i;
 export const parseQaImagePath = (path: string): { seed: string; w: number; h: number; file: string } | null => {
   const m = IMAGE_NAME_RE.exec(path);
   if (!m) return null;

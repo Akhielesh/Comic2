@@ -75,6 +75,8 @@ const ImmersiveReader = React.lazy(() => import('./immersive/ImmersiveReader').t
 
 /** Below this width the phone header moves the spend chip into the ⋯ menu (the title keeps ≥ 100 px). */
 export const SPEND_CHIP_MIN_WIDTH = 360;
+/** The full-screen reader re-signs image URLs after an image error at most this often. */
+export const READER_REFRESH_MS = 30_000;
 
 // ── Header pieces ────────────────────────────────────────────────────────────
 
@@ -796,6 +798,16 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
     showBoard();
   }, [phone, canRead, setTab, showBoard]);
   useBackLayer(readerOpen, () => setReaderOpen(false), 'reader');
+  // A page image that fails (an expired signed URL) asks for fresh URLs — at most once per
+  // READER_REFRESH_MS. A genuinely broken image must never become an error → refresh → reload →
+  // error loop that hammers /api and keeps the sleeping backend awake.
+  const lastReaderRefresh = useRef(0);
+  const onReaderImageError = useCallback(() => {
+    const now = Date.now();
+    if (now - lastReaderRefresh.current < READER_REFRESH_MS) return;
+    lastReaderRefresh.current = now;
+    void refreshRef.current();
+  }, []);
   const readerFailed = useCallback(() => {
     setReaderOpen(false);
     setTab('read');
@@ -959,7 +971,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
               </div>
             }
           >
-            <ImmersiveReader doc={doc} urlFor={studio.urlFor} intro onExit={() => setReaderOpen(false)} onImageError={() => void studio.refresh()} />
+            <ImmersiveReader doc={doc} urlFor={studio.urlFor} intro onExit={() => setReaderOpen(false)} onImageError={onReaderImageError} />
           </Suspense>
         </SlotBoundary>
       )}

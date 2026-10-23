@@ -112,6 +112,8 @@ declare global {
   interface Window {
     __qaOps?: QaOp[];
     __qa?: QaRuntimeInfo;
+    /** The controller's CURRENT doc (after every patch), for spec assertions. */
+    __qaDoc?: () => ComicDoc | null;
   }
 }
 
@@ -252,6 +254,7 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
   const [doc, setDoc] = useState<ComicDoc | null>(init.doc);
   const docRef = useRef(doc);
   docRef.current = doc;
+  if (typeof window !== 'undefined') window.__qaDoc = () => docRef.current;
   const [tab, setTabState] = useState<StudioTab>(init.tab || 'pages');
   const [focusedPageId, setFocused] = useState<string | null>(init.focusedPageId ?? null);
   const [mode, setModeState] = useState<StudioMode>(init.mode || 'easy');

@@ -244,3 +244,16 @@ describe('usage budget gate (reserveForOperation)', () => {
     expect(ledger.reserveUsageTokens.mock.calls[0][0].skipWalletLimits).toBeUndefined();
   });
 });
+
+describe('attachBillingToPayload', () => {
+  it('sends governed users no dollar amounts; admins/own key keep the real figures', async () => {
+    const { attachBillingToPayload } = await import('./usageEnforcer.js');
+    const estimated = { estimatedProviderCostUsd: 0.05, estimatedBillableUsd: 0.065, estimatedCt: 650 } as never;
+    const settled = { actualCt: 650, billableUsd: 0.065, providerCostUsd: 0.05, reservationReleased: true } as never;
+    const governed = attachBillingToPayload({ ok: true }, { reservationId: 'r', byokBypass: false, estimated, usage: {} as never, governed: true }, settled);
+    expect(governed.billing).toEqual({ reservationId: 'r', byokBypass: false, governed: true, settled: { reservationReleased: true } });
+    expect(JSON.stringify(governed)).not.toMatch(/usd|cost/i);
+    const admin = attachBillingToPayload({ ok: true }, { reservationId: 'r', byokBypass: false, estimated, usage: {} as never }, settled);
+    expect(admin.billing?.settled).toMatchObject({ providerCostUsd: 0.05 });
+  });
+});

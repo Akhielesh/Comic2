@@ -118,6 +118,15 @@ describe('StudioLayout', () => {
     expect(mounts).toBe(1);
   });
 
+  it('events inside an adopted pane fire once (React handles the portal host inside its own root)', () => {
+    const onClick = vi.fn();
+    render(
+      <StudioLayout ff={formFactorFor({ w: 820, h: 1180, coarse: true })} chat={<button type="button" onClick={onClick}>tap</button>} board={<p>board</p>} view="chat" navItems={nav()} onBack={vi.fn()} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'tap' }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
   it('readSplit ignores garbage and falls back', () => {
     window.localStorage.setItem(SPLIT_STORAGE_KEY, '{"bad":1}');
     expect(readSplit([40, 60])).toEqual([40, 60]);

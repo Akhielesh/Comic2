@@ -350,7 +350,13 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
         role="tabpanel"
         aria-labelledby={`board-tab-${tab}`}
         tabIndex={-1}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus:outline-none"
+        data-board-scroll={tab === 'read' ? 'reader' : 'board'}
+        className={cx(
+          'min-h-0 flex-1 overscroll-contain focus:outline-none',
+          // Read: the reader owns the ONLY scroller (visualqa P1-6) — no nested scrolling, and on a phone
+          // the page art shows on first view. Its root fills this box instead of forcing a min height.
+          tab === 'read' ? 'flex flex-col overflow-hidden [&>div]:min-h-0' : 'overflow-y-auto'
+        )}
       >
         {tab === 'story' && <StoryTab studio={studio} doc={doc} />}
         {tab === 'cast' && <CastTab studio={studio} doc={doc} />}
