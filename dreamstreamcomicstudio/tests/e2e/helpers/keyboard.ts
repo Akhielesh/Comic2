@@ -10,6 +10,9 @@ import type { Page } from '@playwright/test';
 import type { ComicDevice } from '../devices';
 
 export const KEYBOARD_HEIGHT = 336;
+/** Landscape phones: the system keyboard is ~200 px tall (336 would leave a 343 px iPhone 7 px of view). */
+export const KEYBOARD_HEIGHT_LANDSCAPE = 200;
+export const keyboardHeightFor = (d: ComicDevice): number => (d.viewport.width > d.viewport.height && d.kind === 'phone' ? KEYBOARD_HEIGHT_LANDSCAPE : KEYBOARD_HEIGHT);
 
 /** iOS: install the controllable visualViewport BEFORE page.goto. Harmless on other projects. */
 export async function installVisualViewportStub(page: Page): Promise<void> {
@@ -63,7 +66,7 @@ export type KeyboardMode = 'ios-visual-viewport' | 'android-resize';
 export const keyboardModeFor = (d: ComicDevice): KeyboardMode => (d.os === 'ios' ? 'ios-visual-viewport' : 'android-resize');
 
 /** Open the on-screen keyboard (focus the field first). Returns the visible bottom edge in CSS px. */
-export async function openKeyboard(page: Page, d: ComicDevice, height = KEYBOARD_HEIGHT): Promise<{ mode: KeyboardMode; visibleBottom: number }> {
+export async function openKeyboard(page: Page, d: ComicDevice, height = keyboardHeightFor(d)): Promise<{ mode: KeyboardMode; visibleBottom: number }> {
   const mode = keyboardModeFor(d);
   if (mode === 'android-resize') {
     await page.setViewportSize({ width: d.viewport.width, height: d.viewport.height - height });

@@ -18,6 +18,8 @@ on:
     branches: [Dreamstrream-v1]
     paths:
       - 'dreamstreamcomicstudio/comics-edge/**'
+      # The page half of the AI-agent gate is bundled from the API Worker's detector.
+      - 'dreamstreamcomicstudio/api-proxy/src/agent-gate.ts'
       - '.github/workflows/deploy-comics-edge.yml'
   workflow_dispatch:
 

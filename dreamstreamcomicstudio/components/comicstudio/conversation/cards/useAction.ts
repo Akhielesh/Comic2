@@ -1,8 +1,10 @@
 // Run studio actions from a card while tracking which controls are in flight, so a
 // clicked button shows a spinner and can't be double-fired. Different keys may run at the
 // same time (retrying one page while another page's retry is still drawing).
-// A failing action stops the rest of its sequence (never "approve failed, draw anyway") and
-// never surfaces as an unhandled rejection — the controller already shows the error calmly.
+// An action that THROWS stops the rest of its sequence and never surfaces as an unhandled
+// rejection. Note: the controller's `act` reports stream failures in the status line and
+// resolves (it does not throw), so a sequence continues past a refused or gated step — keep
+// sequences to steps that are safe on their own (each spend carries its own quote).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StudioAction } from '../../../../shared/comic/ops';

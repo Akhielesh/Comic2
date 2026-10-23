@@ -15,7 +15,7 @@ import { deviceByName, type ComicDevice } from '../devices';
 import { qaImageBytes, QA_IMAGE_RE } from '../fixtures/genImages';
 import { expectLayoutClean, type CleanOptions, type Finding } from './layoutAsserts';
 import { knownTestFailure } from './allowlist';
-import { emulateHinge, setSafeAreas, type HingeResult } from './safeArea';
+import { emulateHinge, pageSeesSegments, setSafeAreas, stubSegments, type HingeResult } from './safeArea';
 import { installVisualViewportStub } from './keyboard';
 
 export { expect };
@@ -34,6 +34,10 @@ export type QaQuery = Partial<{
   rtl: boolean;
   public: 'ok' | 'not-found' | 'error' | 'slow';
   img: 'png' | 'svg';
+  /** '0': the author turned downloads off (allowDownload=false). */
+  download: '0' | '1';
+  /** The reader has a share link (endCard.shareUrl). */
+  share: boolean;
   still: boolean;
 }>;
 
@@ -97,7 +101,7 @@ export class QaHarness {
   async open(q: QaQuery = {}, opts: OpenOptions = {}): Promise<void> {
     await this.route();
     if (opts.keyboardStub) await installVisualViewportStub(this.page);
-    if (opts.hinge !== false && this.device.hinge) this.hingeResult = await emulateHinge(this.page, this.device);
+    if (opts.hinge !== false && this.device.hinge && this.hingeResult.mode === 'none') this.hingeResult = await emulateHinge(this.page, this.device);
     const params = new URLSearchParams();
     const merged: QaQuery = { still: true, ...q };
     this.fixture = merged.fixture || 'heist-12p';
@@ -105,8 +109,18 @@ export class QaHarness {
       if (v === undefined || v === null || v === false) continue;
       params.set(k, v === true ? '1' : String(v));
     }
-    await this.page.goto(`/qa/comic-qa.html?${params.toString()}`, { waitUntil: 'domcontentloaded' });
+    const url = `/qa/comic-qa.html?${params.toString()}`;
+    await this.page.goto(url, { waitUntil: 'domcontentloaded' });
     await this.page.waitForSelector('html[data-qa-ready]', { state: 'attached', timeout: 45_000 });
+    // The CDP display-feature override is accepted by builds that do not yet expose it to pages
+    // (no viewport-segment media queries, no window.viewport.segments): fall back to the shim, once.
+    if (this.device.hinge && opts.hinge !== false && this.hingeResult.mode === 'cdp' && this.hingeResult.band && !(await pageSeesSegments(this.page))) {
+      await stubSegments(this.page, this.device, this.hingeResult.band);
+      this.hingeResult = { mode: 'stub', band: this.hingeResult.band };
+      await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+      await this.page.waitForSelector('html[data-qa-ready]', { state: 'attached', timeout: 45_000 });
+    }
+    if (this.device.hinge && !this.testInfo.annotations.some((a) => a.type === 'hinge')) this.testInfo.annotations.push({ type: 'hinge', description: this.hingeResult.mode });
     const crash = await this.page.evaluate(() => document.querySelector('[data-qa-crash]')?.getAttribute('data-qa-crash') ?? null);
     if (crash) throw new Error(`QA surface crashed: ${crash}`);
     this.safeAreaOn = opts.safeArea ?? this.device.coarse;
@@ -137,7 +151,7 @@ export class QaHarness {
 
   /** The studio root's data-layout. */
   async layout(): Promise<string | null> {
-    return this.page.evaluate(() => document.querySelector('.gesture-root[data-layout]')?.getAttribute('data-layout') ?? null);
+    return this.page.evaluate(() => document.querySelector('.gesture-root[data-layout]:not([data-testid="immersive-reader"])')?.getAttribute('data-layout') ?? null);
   }
 
   async ops(): Promise<Array<{ kind: string; payload?: unknown; at: number }>> {

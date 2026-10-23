@@ -132,10 +132,40 @@ test.describe('layout scanner', () => {
     expect(f.map((x) => x.label).sort()).toEqual(['Jump', 'Left']);
   });
 
+  test('a target half scrolled out of its scroller is skipped; one cut by a fixed overflow:hidden box is not', async ({ page: p }) => {
+    await p.setContent(
+      page(`<main style="padding:20px">
+        <div style="height:100px;overflow-y:auto;width:200px"><div style="height:50px"></div><button aria-label="Half" style="width:60px;height:60px;display:block">h</button><div style="height:300px"></div></div>
+        <div style="height:30px;overflow:hidden;width:200px;margin-top:40px"><button aria-label="Cut" style="width:60px;height:60px;display:block;margin-top:-6px">c</button></div>
+      </main>`)
+    );
+    const f = await scanLayout(p, { checks: ['hit-target'] });
+    expect(f.map((x) => x.label)).toEqual(['Cut']);
+  });
+
+  test('a small target flush against the screen edge is still measured', async ({ page: p }) => {
+    await p.setContent(
+      page(`<main>
+        <button aria-label="Corner" style="position:fixed;right:0;top:0;width:24px;height:24px;border:0">x</button>
+        <button aria-label="Edge ok" style="position:fixed;left:0;bottom:0;width:48px;height:48px;border:0">o</button>
+        <button aria-label="Scrolled away" style="position:fixed;left:200px;top:-30px;width:24px;height:24px">s</button>
+      </main>`)
+    );
+    const f = await scanLayout(p, { checks: ['hit-target'] });
+    expect(f.map((x) => x.label)).toEqual(['Corner']);
+  });
+
   test('hover-only controls on touch', async ({ page: p }) => {
-    await p.setContent(page(`<main><div style="opacity:0.2"><button aria-label="Delete">del</button></div><div style="opacity:0;pointer-events:none"><button aria-label="Hidden">h</button></div></main>`));
+    await p.setContent(
+      page(`<main><div style="opacity:0.2"><button aria-label="Delete">del</button></div><div style="opacity:0;pointer-events:none"><button aria-label="Hidden">h</button></div>
+        <div style="position:relative;width:120px;height:80px;background:#ddd"><button aria-label="Remove photo" style="position:absolute;right:2px;top:2px;width:44px;height:44px;opacity:0">x</button></div>
+        <div style="position:relative;width:120px;height:80px"><button aria-label="Covered" style="position:absolute;inset:0;opacity:0">c</button><div style="position:absolute;inset:0;background:#eee"></div></div>
+        <label style="position:relative;display:inline-block;padding:12px">Upload<input type="file" aria-label="Upload" style="position:absolute;inset:0;opacity:0"></label></main>`)
+    );
     const f = await scanLayout(p, { checks: ['hover-only'] });
-    expect(f.map((x) => x.label)).toEqual(['Delete']);
+    // Translucent (0.2) and invisible-but-tappable (opacity 0, on top) fail; pointer-events:none, a covered
+    // invisible button and a styled file-input overlay do not.
+    expect(f.map((x) => x.label).sort()).toEqual(['Delete', 'Remove photo']);
   });
 
   test('safe areas and the hinge', async ({ page: p }) => {

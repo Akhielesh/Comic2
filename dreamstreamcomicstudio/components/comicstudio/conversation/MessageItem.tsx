@@ -9,7 +9,8 @@ import type { AssetRef, Msg } from '../../../shared/comic/doc';
 import { ChatMarkdown } from '../../chat/ChatMarkdown';
 import type { PendingAttachment } from '../types';
 import type { ComicStudioController } from '../useStudio';
-import { CardRenderer } from './cards/CardRenderer';
+import { CARD_TYPES, CardRenderer } from './cards/CardRenderer';
+import { registeredCard } from '../features';
 import { NextStepChips, chipsFor } from './cards/NextStepChips';
 import { cx } from './ui';
 
@@ -167,8 +168,10 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
   // The latest reply always offers a next move: its own nextSteps, else old suggestions, else
   // a free client-side step ("See the pages" / "Read it") so the conversation never dead-ends.
   const chips = showSuggestions ? chipsFor(msg, studio.doc, { fallback: true }) : [];
-  // Never silent: a committed reply with no words and no cards still says something.
-  const silent = !text && !streaming && cards.length === 0;
+  // Never silent: a committed reply with no words and nothing this client can show (no cards, or
+  // only card types it doesn't know yet) still says something.
+  const shown = cards.filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)));
+  const silent = !text && !streaming && shown.length === 0;
   return (
     <div className="flex min-w-0 gap-3 pr-2 studio-reveal" data-role="assistant">
       <DirectorMark className="mt-0.5" />

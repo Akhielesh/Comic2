@@ -80,7 +80,7 @@ import {
   type StudioState
 } from './studioReducer';
 import { useStudioMode } from './useStudioMode';
-import { isNoopOn, makeUndoEntry, useUndo, type UndoEntry } from './useUndo';
+import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from './useUndo';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -112,6 +112,8 @@ export const MANUAL_TAB_HOLD_MS = 20_000;
 const SIGN_DEBOUNCE_MS = 600;
 /** Give up re-signing a path after this many failed attempts (until reload). */
 const MAX_SIGN_ATTEMPTS = 3;
+/** More than MAX_SIGN_ATTEMPTS image load failures of one path within this window = a broken file. */
+const IMG_ERROR_WINDOW_MS = 120_000;
 /** Coalesce rapid edits (steppers, toggles) into one save. */
 const PATCH_DEBOUNCE_MS = 150;
 const MAX_PATCH_OPS = 200;
@@ -266,9 +268,11 @@ export function useStudio(projectId: string): ComicStudioController {
     }
   }, []);
 
-  const say = useCallback((n: Omit<StudioNotice, 'id' | 'at'>) => {
+  const say = useCallback((n: Omit<StudioNotice, 'id' | 'at'>): string => {
     noticeSeq = (noticeSeq + 1) % 1e9;
-    setNotice({ ...n, id: `notice_${noticeSeq}`, at: Date.now() });
+    const id = `notice_${noticeSeq}`;
+    setNotice({ ...n, id, at: Date.now() });
+    return id;
   }, []);
   const clearNotice = useCallback(() => setNotice(null), []);
 
@@ -428,7 +432,11 @@ export function useStudio(projectId: string): ComicStudioController {
     const ops = batch.flatMap((b) => b.ops);
     patchInFlightRef.current = true;
     const result = await runStream('patch', { kind: 'action', action: { type: 'patch', ops } }, { actionType: 'patch' });
-    if (generation !== generationRef.current) return; // project switched; queue already reset
+    if (generation !== generationRef.current) {
+      // Project switched; the queue was already reset. Still settle these callers' promises.
+      batch.forEach((b) => b.resolve());
+      return;
+    }
     patchInFlightRef.current = false;
     guarded(generation)({
       type: 'patch_settled',
@@ -531,21 +539,39 @@ export function useStudio(projectId: string): ComicStudioController {
       const doc = viewRef.current;
       if (!doc || !stateRef.current.base) return false;
       const api = undoRef.current;
-      const usable = (e: UndoEntry) => !isNoopOn(doc, dir === 'undo' ? e.inverse : e.forward);
+      const opsOf = (e: UndoEntry) => (dir === 'undo' ? e.inverse : e.forward);
+      // An entry whose image is still drawing is not "gone": skipping it would silently drop it and
+      // undo an OLDER edit instead. Keep the stack as it is and say why nothing happened.
+      const pending = dir === 'undo' ? api.stacks().undo : api.stacks().redo;
+      for (let i = pending.length - 1; i >= 0; i -= 1) {
+        const ops = opsOf(pending[i]);
+        if (waitsOnDrawing(doc, ops)) {
+          say({ kind: 'info', text: `That image is still drawing — ${dir === 'undo' ? 'undo' : 'redo'} it once the drawing finishes.` });
+          return false;
+        }
+        if (!isNoopOn(doc, ops)) break;
+      }
+      const usable = (e: UndoEntry) => !isNoopOn(doc, opsOf(e));
       const entry = dir === 'undo' ? api.takeUndo(usable) : api.takeRedo(usable);
       if (!entry) {
         if (announce) say({ kind: 'info', text: dir === 'undo' ? 'Nothing to undo yet — free edits from this session can be undone here.' : 'Nothing to redo.' });
         return false;
       }
-      void enqueuePatch(dir === 'undo' ? entry.inverse : entry.forward, {
+      let noticeId: string | null = null;
+      void enqueuePatch(opsOf(entry), {
         record: null,
         onFailed: (retryable) => {
           if (retryable) undoRef.current.putBack(entry, dir);
           else undoRef.current.discard(entry.id);
+          // The change was rolled back: never leave "Undid: …" on screen next to the save error.
+          if (noticeId && mountedRef.current) {
+            const id = noticeId;
+            setNotice((cur) => (cur && cur.id === id ? null : cur));
+          }
         }
       });
       if (announce) {
-        say(
+        noticeId = say(
           dir === 'undo'
             ? { kind: 'undo', text: `Undid: ${entry.label}.`, action: 'redo' }
             : { kind: 'redo', text: `Redid: ${entry.label}.`, action: 'undo' }
@@ -740,6 +766,8 @@ export function useStudio(projectId: string): ComicStudioController {
   const signAttemptsRef = useRef(new Map<string, number>());
   /** Paths the server declined to sign (not allow-listed / missing): a variant falls back to its original. */
   const unsignableRef = useRef(new Set<string>());
+  /** <img> load failures per path within IMG_ERROR_WINDOW_MS (a broken file vs. an expired link). */
+  const loadErrorsRef = useRef(new Map<string, { n: number; first: number }>());
   const signTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flushSigning = useCallback(async () => {
@@ -791,6 +819,7 @@ export function useStudio(projectId: string): ComicStudioController {
     signingRef.current.clear();
     signAttemptsRef.current.clear();
     unsignableRef.current.clear();
+    loadErrorsRef.current.clear();
   }, [projectId]);
 
   /** Path → AssetRef with variants, rebuilt lazily once per doc (for urlFor(pathString, {width})). */
@@ -852,7 +881,19 @@ export function useStudio(projectId: string): ComicStudioController {
       const entries = stateRef.current.urls;
       const path = Object.keys(entries).find((p) => entries[p].url === src);
       if (!path) return;
+      // A file that keeps failing right after a fresh signature is broken (e.g. a size variant that
+      // was never stored), not expired: re-signing it forever would hit /urls in a loop. Bounded.
+      const now = Date.now();
+      const prev = loadErrorsRef.current.get(path);
+      const rec = prev && now - prev.first < IMG_ERROR_WINDOW_MS ? { n: prev.n + 1, first: prev.first } : { n: 1, first: now };
+      loadErrorsRef.current.set(path, rec);
       dispatch({ type: 'urls_invalidate', paths: [path] });
+      if (rec.n > MAX_SIGN_ATTEMPTS) {
+        // Stop re-signing it; urlFor falls back from a broken variant to its original.
+        unsignableRef.current.add(path);
+        signAttemptsRef.current.set(path, MAX_SIGN_ATTEMPTS);
+        return;
+      }
       requestSign(path);
     };
     document.addEventListener('error', onError, true);

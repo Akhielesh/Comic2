@@ -9,6 +9,7 @@
   //   /api/*          → service binding API → dreamstream-api, request passed through unchanged
   //                     (agent gate, rate limits, CF-Connecting-IP forwarding all stay there)
   //   other suites    → /live*, /models, /share/*, /studio.html → 302 to the apex (MAIN_ORIGIN)
+  //   AI agents       → pages 302 to /api/agent-gate (api-proxy/src/agent-gate.ts, bundled in)
   //   everything else → fetched from PAGES_ORIGIN with X-Forwarded-Host = PUBLIC_HOST, Location
   //                     headers mapped back to PUBLIC_HOST, Comic Studio <head> branding on HTML
   //                     (except /c/*, which the share Pages Function owns), security headers.

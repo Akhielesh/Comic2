@@ -3,8 +3,10 @@
 # Builds the QA entry (qa/comic-qa.html, QA_BUILD=1 → dist-qa/, never part of the production build)
 # and runs the Playwright layout harness (dreamstreamcomicstudio/tests/e2e) at 360×740, 768×1024,
 # 1024×768 and 1440×900 on Chromium: no horizontal overflow, no visible collisions, balloons inside
-# the page, the editor aside inside its dialog, the phone board ≥ 45 % of the height, one <main>.
-# Known failures are allowlisted per owner package in tests/e2e/allowlist.json (empty by wave 3).
+# the page, the editor aside inside its dialog, the phone board ≥ 45 % of the height, one <main> —
+# plus the component scenes (breakdown card, refs drawer + upload queue, timeline, procedural art in
+# both themes) and the scanner's own self-tests. Known failures are allowlisted per owner package in
+# tests/e2e/allowlist.json (empty for new components by wave 3).
 #
 # The harness is offline by construction (fixtures are synthetic, sharp-generated; every external
 # request is blocked), so no secrets are needed. The Supabase values below are FAKE placeholders

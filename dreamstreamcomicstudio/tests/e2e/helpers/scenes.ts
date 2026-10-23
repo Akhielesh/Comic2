@@ -57,9 +57,21 @@ export async function openSpend(qa: QaHarness): Promise<boolean> {
   return clickIfVisible(qa.testInfo, 'Spend chip', p.getByRole('button', { name: /^spent|spend|\$\d/i }));
 }
 
+/**
+ * Open the Quality sheet: the header button ("Quality: Standard") on tablets and desktops; on phones
+ * it lives in the ⋯ menu (visualqa P0-4 — the phone Quality popover is exactly what broke in v4, so
+ * it must be measured there too, not skipped).
+ */
 export async function openQuality(qa: QaHarness): Promise<boolean> {
   const p = qa.page;
-  return clickIfVisible(qa.testInfo, 'Quality', p.getByRole('button', { name: /quality/i }), p.getByTitle('Quality', { exact: true }));
+  const header = p.getByRole('button', { name: /^quality:/i }).first();
+  if (await header.isVisible().catch(() => false)) {
+    await header.click();
+    return true;
+  }
+  if (!(await openMoreMenu(qa))) return false;
+  await qa.settle(300);
+  return clickIfVisible(qa.testInfo, 'Quality', p.getByRole('menuitem', { name: /^quality/i }));
 }
 
 export async function openComposerOptions(qa: QaHarness): Promise<boolean> {

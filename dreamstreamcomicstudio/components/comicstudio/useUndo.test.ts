@@ -23,6 +23,7 @@ import {
   takeRedo,
   takeUndo,
   useUndo,
+  waitsOnDrawing,
   type UndoEntry
 } from './useUndo';
 
@@ -217,6 +218,18 @@ describe('op helpers', () => {
     expect(isNoopOn(doc, [{ op: 'page', id: 'pg_1', patch: { summary: 'new' } }])).toBe(false);
     expect(sameWire({ a: 1, b: null }, { a: 1 })).toBe(true);
     expect(sameWire([1, 2], [1, 2, 3])).toBe(false);
+  });
+
+  it('waitsOnDrawing flags version switches and page deletes/duplicates on an image that is still drawing', () => {
+    const doc = sample(); // pg_3 is queued; pg_1 is ready; style option so_b is rendering
+    expect(waitsOnDrawing(doc, [{ op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path: 'x', at: 0 }])).toBe(true);
+    expect(waitsOnDrawing(doc, [{ op: 'render_use', target: { kind: 'style_option', id: 'so_b' }, path: 'x', at: 0 }])).toBe(true);
+    expect(waitsOnDrawing(doc, [{ op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path: 'x', at: 0 }])).toBe(false);
+    expect(waitsOnDrawing(doc, [{ op: 'page', id: 'pg_2', patch: { summary: 'a' } }, { op: 'page_delete', id: 'pg_3', deletedAt: 0, purge: true }])).toBe(true);
+    expect(waitsOnDrawing(doc, [{ op: 'page_duplicate', id: 'pg_3', newId: 'pg_9' }])).toBe(true);
+    expect(waitsOnDrawing(doc, [{ op: 'page_delete', id: 'gone', deletedAt: 0 }])).toBe(false);
+    // …and isNoopOn alone would have called it "nothing to do" (the reason it must be checked first).
+    expect(isNoopOn(doc, [{ op: 'page_delete', id: 'pg_3', deletedAt: 0, purge: true }])).toBe(true);
   });
 
   it('normalizeUndoLabel strips an Undo prefix and lowercases a capitalised word', () => {

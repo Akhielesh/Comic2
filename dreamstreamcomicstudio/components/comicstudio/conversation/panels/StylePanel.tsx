@@ -83,27 +83,33 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
 
   return (
     <div className="space-y-4 p-4">
-      <div className="flex flex-col gap-2 sm:flex-row">
+      {/* Wraps by the panel's own width (it also opens inside the recap card): the buttons take
+          their own rows when narrow, and the long label wraps inside its button instead of
+          spilling out of a fixed-height pill. */}
+      <div className="flex flex-wrap gap-2">
         <PrimaryButton
-          className="sm:flex-1"
+          className="!h-auto min-h-9 flex-1 basis-[13rem] py-2 text-left leading-snug coarse:min-h-11"
           disabled={exploring}
           onClick={() => {
             void act({ type: 'render_style_options', quotedUsd: quote });
             onDone();
           }}
         >
-          <Sparkles className="h-3.5 w-3.5" aria-hidden />
-          {exploring ? 'Drawing style options…' : `Explore ${STYLE_DIRECTION_COUNT} directions for my story`}
-          {!exploring && <span className="font-normal opacity-80">· ≈ {formatUsd(quote)}</span>}
+          <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0">
+            {exploring ? 'Drawing style options…' : `Explore ${STYLE_DIRECTION_COUNT} directions for my story`}
+            {!exploring && <span className="whitespace-nowrap font-normal opacity-80"> · ≈ {formatUsd(quote)}</span>}
+          </span>
         </PrimaryButton>
         <GhostButton
+          className="!h-auto min-h-9 flex-1 basis-[9rem] py-2 leading-snug coarse:min-h-11"
           onClick={() => {
             onDescribeOwn();
             onDone();
           }}
         >
-          <PenLine className="h-3.5 w-3.5" aria-hidden />
-          Describe your own…
+          <PenLine className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0">Describe your own…</span>
         </GhostButton>
       </div>
 

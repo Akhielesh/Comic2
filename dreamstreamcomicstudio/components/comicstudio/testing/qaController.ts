@@ -44,6 +44,10 @@ export interface QaParams {
   still: boolean;
   /** surface=kit: the component scene (qa/KitScenes.tsx validates the name). */
   kit: string | null;
+  /** The author's allowDownload toggle for readers and the public payload (`download=0` turns it off). */
+  allowDownload: boolean;
+  /** `share=1`: the reader gets a share link (endCard.shareUrl), as on a published comic. */
+  share: boolean;
 }
 
 const TABS: readonly StudioTab[] = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'];
@@ -69,7 +73,9 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     // Under Playwright the PNG fixtures are served by a route; opened by hand, SVG data URLs need no server.
     img: pick(q.get('img'), ['png', 'svg'] as const, env.webdriver ? 'png' : 'svg'),
     still: q.get('still') === '1',
-    kit: /^[a-z][a-z-]{0,31}$/.test(q.get('kit') || '') ? q.get('kit') : null
+    kit: /^[a-z][a-z-]{0,31}$/.test(q.get('kit') || '') ? q.get('kit') : null,
+    allowDownload: q.get('download') !== '0',
+    share: q.get('share') === '1'
   };
 };
 

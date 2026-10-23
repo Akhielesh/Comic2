@@ -13,6 +13,7 @@ to their comics — see `services/productHost.ts` and `components/comicshost/`).
 | `comic.dreamstreamstudio.ai/*` | `301` to `comics.` (same path + query); any other host (workers.dev) → `302` |
 | `/api`, `/api/*` | `env.API.fetch(request)` — the original request, untouched (agent gate, rate limits and client-IP forwarding stay in `dreamstream-api`) |
 | `/live*`, `/models`, `/share/*`, `/studio.html` | `302` to the main site (other products; separate session) |
+| a page asked for by an AI agent (UA, `Signature-Agent`, or Cloudflare's verified-bot category) | `302` to `/api/agent-gate?from=…`, like `functions/_middleware.ts` on the apex. The edge runs this page gate itself because the Pages middleware only sees the edge's subrequest, whose `request.cf` has no verified-bot category. Crawl-policy files (`/robots.txt`, `/llms.txt`, `/.well-known/*`), `/agents` and static files stay open. Detection is `api-proxy/src/agent-gate.ts`, shared (the deploy workflow also runs when it changes). |
 | everything else | fetched from `PAGES_ORIGIN` (same path + query) with `X-Forwarded-Host: comics.dreamstreamstudio.ai`, so the Pages middleware serves instead of redirecting to the apex |
 
 On top of that:

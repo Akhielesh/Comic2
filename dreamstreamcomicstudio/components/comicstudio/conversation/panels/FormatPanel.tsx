@@ -92,7 +92,7 @@ export const LETTERING_OPTIONS: { value: LetteringMode; title: string; blurb: st
 ];
 
 /** Number field with a local draft so it can be cleared and retyped; commits on blur/Enter. */
-const PageCountInput: React.FC<{ value: number; onCommit: (n: number) => void }> = ({ value, onCommit }) => {
+const PageCountInput: React.FC<{ id: string; value: number; onCommit: (n: number) => void }> = ({ id, value, onCommit }) => {
   const [draft, setDraft] = React.useState(String(value));
   React.useEffect(() => setDraft(String(value)), [value]);
   const commit = () => {
@@ -107,7 +107,7 @@ const PageCountInput: React.FC<{ value: number; onCommit: (n: number) => void }>
   };
   return (
     <input
-      id="comicstudio-page-count"
+      id={id}
       type="number"
       inputMode="numeric"
       min={MIN_PAGES}
@@ -134,6 +134,8 @@ export interface FormatPanelProps {
 
 export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = false }) => {
   const format = doc.format;
+  // Unique per instance: the panel can be open in the composer and inside a recap card at once.
+  const pageCountId = `comicstudio-page-count-${React.useId().replace(/[^\w-]/g, '')}`;
   // The values a staling change replaced, so "Switch back" can restore them for free.
   const [undoStale, setUndoStale] = React.useState<Partial<Pick<Format, StalingKey>> | null>(null);
   const drawn = drawnCurrentPages(doc);
@@ -186,22 +188,33 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
 
       <div>
         <SectionLabel>Kind</SectionLabel>
-        <Segmented
-          label="Comic kind"
-          value={format.kind}
-          onChange={(kind) => set(kindPatch(format, kind))}
-          options={KIND_OPTIONS.map((k) => ({
-            value: k.value,
-            label: (
-              <>
-                {/* Phones: the full word at a smaller size beats an icon + "Webto". */}
-                <span className="hidden sm:inline-flex">{k.icon}</span>
-                <span className="text-[11px] sm:text-[12px]">{k.label}</span>
-              </>
-            ),
-            title: k.label
-          }))}
-        />
+        {/* A wrapping tile grid, not a 5-way segmented bar: this panel also opens inside the
+            recap card (≈210 px wide on a phone), where five fixed segments made "Storybook"
+            and "Webtoon" run into each other. Tiles size to the container, never the viewport. */}
+        <div role="radiogroup" aria-label="Comic kind" className="grid grid-cols-[repeat(auto-fill,minmax(4.25rem,1fr))] gap-1">
+          {KIND_OPTIONS.map((k) => {
+            const on = format.kind === k.value;
+            return (
+              <button
+                key={k.value}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                title={k.label}
+                onClick={() => set(kindPatch(format, k.value))}
+                className={cx(
+                  'flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl border px-1.5 py-1.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]',
+                  on
+                    ? 'border-[#D97757]/50 bg-[#D97757]/10 text-[var(--ds-ink)]'
+                    : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                )}
+              >
+                <span className={on ? 'text-[var(--ds-accent)]' : ''}>{k.icon}</span>
+                <span className="w-full truncate text-[11.5px] font-medium">{k.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div>
@@ -238,7 +251,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
       </div>
 
       <div>
-        <SectionLabel htmlFor="comicstudio-page-count">Pages</SectionLabel>
+        <SectionLabel htmlFor={pageCountId}>Pages</SectionLabel>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]">
             <button
@@ -250,7 +263,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
             >
               <Minus className="h-3.5 w-3.5" />
             </button>
-            <PageCountInput value={format.pageCount} onCommit={(n) => set({ pageCount: n })} />
+            <PageCountInput id={pageCountId} value={format.pageCount} onCommit={(n) => set({ pageCount: n })} />
             <button
               type="button"
               aria-label="More pages"

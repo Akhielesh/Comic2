@@ -5,16 +5,21 @@
 // `failureFacts` reads the optional `RenderState.errorDetail` (sanitized provider facts and the
 // exact failure time) when the server sets it, and falls back to `error` + `updatedAt`.
 
-export type FailureKind = 'rate_limited' | 'busy' | 'timeout' | 'safety' | 'declined' | 'network' | 'key' | 'stopped' | 'unknown';
+export type FailureKind = 'rate_limited' | 'busy' | 'timeout' | 'safety' | 'declined' | 'network' | 'key' | 'limit' | 'stopped' | 'unknown';
 
+// Order matters: the studio's own sentences come first (server imageClient/billing copy — e.g.
+// "took longer than 120s and was stopped" is a timeout, not a stop; "at capacity … add your own
+// key" is a busy service, not a key problem), then generic provider vocabulary.
 const RULES: [FailureKind, RegExp][] = [
-  ['stopped', /\b(cancel(?:l?ed)?|stopped|aborted by (?:the )?user)\b/i],
-  ['rate_limited', /\b429\b|rate[ -]?limit|too many requests|throttl|quota|resource[_ ]exhausted|cool(?:ing)?[ -]?down/i],
-  ['key', /\b40[123]\b|api key|\bkey\b.*(?:invalid|rejected|missing)|unauthori[sz]ed|billing|credits?\b|insufficient|payment/i],
-  ['safety', /safety|content[ _-]?policy|prohibited|blocked|moderation|not allowed|pg-?13/i],
-  ['declined', /refus|declin|could not (?:comply|generate)|no image (?:was )?returned|empty (?:image|response)/i],
-  ['timeout', /time[sd]?[ -]?out|timeout|deadline|took too long/i],
-  ['busy', /\b50[0234]\b|overload|unavailable|busy|capacity|upstream|provider (?:error|down)|bad gateway/i],
+  ['stopped', /^\s*cancel(?:l)?ed\b|\b(?:cancel(?:l)?ed|stopped|aborted) by (?:the )?user\b/i],
+  ['timeout', /time[sd]?[ -]?out|timeout|deadline|took (?:too )?long(?:er)?\b/i],
+  ['safety', /safety|content[ _-]?policy|content rules|prohibited|moderation|not allowed|pg-?13|\bblocked\b/i],
+  ['limit', /used (?:all of )?(?:your|this month['’]s)\b|generation limit|usage limit|overage cap|included (?:credits|generation allowance)|enough credits|payment method/i],
+  ['rate_limited', /\b429\b|rate[ -]?limit|too many requests|throttl|resource[_ ]exhausted|cool(?:ing)?[ -]?down/i],
+  ['busy', /\b50[0234]\b|overload|unavailable|(?:not|n['’]t) available|busy|capacity|upstream|provider (?:error|down)|bad gateway|temporar|couldn['’]t check/i],
+  ['key', /\b40[123]\b|api key|\bkey\b.*(?:invalid|rejected|missing|quota|credits|limit)|rejected (?:the |your )?(?:platform )?key|unauthori[sz]ed|billing|credits?\b|insufficient|payment/i],
+  ['rate_limited', /quota/i],
+  ['declined', /refus|declin|could not (?:comply|generate)|no image (?:was )?returned|without (?:a |an )?(?:picture|image)|empty (?:image|response)|rejected the request/i],
   ['network', /network|fetch failed|econn|socket|connection|offline|dns/i]
 ];
 
@@ -34,6 +39,7 @@ const REASON: Record<FailureKind, string> = {
   declined: 'the model declined',
   network: 'connection dropped',
   key: 'key or billing issue',
+  limit: 'usage limit reached',
   stopped: 'stopped',
   unknown: 'didn’t finish'
 };

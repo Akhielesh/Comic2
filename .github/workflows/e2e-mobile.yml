@@ -4,7 +4,8 @@
 # with QA_BUILD=1: 14 device projects (phones, a Fold cover/unfolded/dual-screen, iPads, desktop) +
 # the WCAG reflow-320 project + the 4 layout-smoke viewports + the harness self-tests. Specs: studio
 # layout per form factor, keyboard-safe composer, Enter rule, Back gesture, balloon touch editing,
-# reader per form factor, public reader + shared-link acceptance, axe a11y, PWA, perf (pixel-8).
+# reader per form factor, public reader + shared-link acceptance (read-only, p=, allowDownload),
+# component scenes, axe a11y, PWA, perf on pixel-8 (variants, ≥ 55 fps p90 page turns, CLS, images).
 # The iOS/iPadOS projects emulate the devices on Chromium (CI installs Chromium only); run them on
 # WebKit with the `webkit` input. ~25–40 minutes, free on a public repo; the per-PR check is
 # layout-smoke.yml.
@@ -72,8 +73,10 @@ jobs:
         env:
           PROJECTS: ${{ inputs.projects || '*' }}
         run: |
+          set -f  # project globs ('*', 'ipad-*') must reach Playwright, not the shell
           args=()
           for p in $PROJECTS; do args+=(--project "$p"); done
+          set +f
           extra=()
           if [ "$QA_SCREENSHOTS" = "1" ]; then extra+=(-- --update-snapshots=missing); fi
           node scripts/layout-smoke.mjs "${args[@]}" "${extra[@]}"

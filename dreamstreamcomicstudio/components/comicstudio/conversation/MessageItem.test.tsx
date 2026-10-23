@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { ClientAction, Msg, NextStep } from '../../../shared/comic/doc';
 import { AssistantMessage } from './MessageItem';
-import { chipUsd, chipsFor, fallbackNextSteps, priceBadge, stepToRun } from './cards/NextStepChips';
+import { chipLabel, chipUsd, chipsFor, fallbackNextSteps, freeTitle, priceBadge, stepToRun } from './cards/NextStepChips';
 import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
 
 const msg = (text: string, extra: Partial<Msg> = {}): Msg => ({ id: 'a1', role: 'assistant', text, at: 1, ...extra });
@@ -126,6 +126,12 @@ describe('AssistantMessage — next-step chips', () => {
     expect(screen.getByText(/Done — the board shows the latest/)).toBeInTheDocument();
   });
 
+  it('never silent: a reply whose only card this client cannot show still says something', () => {
+    const unknown = { type: 'hologram_card', id: 'x1' } as unknown as NonNullable<Msg['cards']>[number];
+    render(<AssistantMessage msg={msg('', { cards: [unknown] })} studio={makeFakeStudio()} />);
+    expect(screen.getByText(/Done — the board shows the latest/)).toBeInTheDocument();
+  });
+
   it('helpers: price badge, chip precedence and fallbacks', () => {
     expect(priceBadge(0)).toBe('Free');
     expect(priceBadge(0.0655)).toBe('≈$0.07');
@@ -167,6 +173,29 @@ describe('AssistantMessage — next-step chips', () => {
     expect(screen.getByRole('group', { name: 'Next steps' })).not.toHaveTextContent('Free');
     fireEvent.click(screen.getByRole('button', { name: 'Draw the cover' }));
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'render_cover', quotedUsd: 0 }));
+  });
+
+  it('client chips are free by construction; a label that spells out its price reads it once', () => {
+    expect(chipUsd({ label: 'Read it', client: { type: 'open_reader' } })).toBe(0);
+    expect(chipLabel('Fit to 4:5 (Free)', 'Free')).toBe('Fit to 4:5');
+    expect(chipLabel('Draw 2 pages · ≈$0.14', '≈$0.14')).toBe('Draw 2 pages');
+    expect(chipLabel('Sugar-free version', 'Free')).toBe('Sugar-free version');
+    expect(chipLabel('Fit to 4:5 (Free)', undefined)).toBe('Fit to 4:5 (Free)');
+    expect(chipLabel('(Free)', 'Free')).toBe('(Free)');
+    // "no AI cost" is only claimed for pure software work
+    expect(freeTitle({ label: 'Read it', client: { type: 'open_reader' } })).toMatch(/no AI cost/);
+    expect(freeTitle({ label: 'Fit', action: { type: 'fit_render', target: { kind: 'cover' } }, usd: 0 })).toMatch(/no AI cost/);
+    expect(freeTitle({ label: 'Check again', action: { type: 'safety_recheck', target: { kind: 'cover' } }, usd: 0 })).toBe('Free — no charge to you');
+    expect(freeTitle({ label: 'Add a page', say: 'Add a page', usd: 0 })).toBe('Free — no charge to you');
+    const studio = dispatchingStudio();
+    const server: NextStep[] = [
+      { label: 'Read it', client: { type: 'open_reader' } },
+      { label: 'Fit to 4:5 (Free)', action: { type: 'fit_render', target: { kind: 'cover' }, mode: 'auto' }, usd: 0 }
+    ];
+    render(<AssistantMessage msg={msg('Ok.', { nextSteps: server })} showSuggestions studio={studio} />);
+    expect(screen.getByRole('button', { name: 'Read it, free' })).toBeInTheDocument();
+    const fit = screen.getByRole('button', { name: 'Fit to 4:5, free' });
+    expect(fit.textContent?.match(/Free/g)).toHaveLength(1);
   });
 
   it('a running action chip never freezes the others (a render streams for minutes)', async () => {

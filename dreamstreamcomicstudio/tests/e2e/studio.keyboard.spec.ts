@@ -63,11 +63,14 @@ test.describe('composer above the on-screen keyboard', () => {
       expect.soft(rects.kbOpen, 'html.kb-open while the keyboard is up').toBe(true);
       expect.soft(rects.tabbarShown, 'tab bar hides with the keyboard').toBe(false);
     }
+    expect.soft(rects.dockTop, 'the composer dock ([data-composer-dock]) is on the page').not.toBeNull();
     if (rects.lastBottom !== null && rects.dockTop !== null) expect.soft(rects.lastBottom, 'last message ends above the composer').toBeLessThanOrEqual(rects.dockTop + 1);
 
     // A composer sheet opens ABOVE the keyboard.
     const opener = page.getByRole('button', { name: /comic options|add images or a script/i }).first();
-    if (await opener.isVisible().catch(() => false)) {
+    const canOpen = await opener.isVisible().catch(() => false);
+    expect.soft(canOpen, 'a composer sheet opener is visible with the keyboard up').toBe(true);
+    if (canOpen) {
       await opener.click();
       await qa.settle(400);
       const sheetBottom = await page.evaluate(() => {
@@ -75,6 +78,7 @@ test.describe('composer above the on-screen keyboard', () => {
         const last = dialogs[dialogs.length - 1];
         return last ? last.getBoundingClientRect().bottom : null;
       });
+      expect.soft(sheetBottom, 'the composer sheet opened').not.toBeNull();
       if (sheetBottom !== null) expect.soft(sheetBottom, 'composer sheet sits above the keyboard').toBeLessThanOrEqual(visibleBottom + 2);
     }
     await closeKeyboard(page, device);

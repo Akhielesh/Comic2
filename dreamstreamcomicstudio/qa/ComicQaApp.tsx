@@ -9,7 +9,7 @@
 //                    &kit=breakdown|refs|refs-drawer|timeline|art     (surface=kit; qa/KitScenes.tsx)
 //                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
 //                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…
-//                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1
+//                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
 //
 // Contract with the specs (tests/e2e):
 //   html[data-qa-ready]   set once the surface mounted and fonts loaded
@@ -69,7 +69,7 @@ const installNetworkShim = (params: QaParams) => {
         const payload = publicPayload(params);
         if (pub[1]) {
           return json(200, {
-            publication: { slug: pub[2], title: payload.doc.brief.title, allowDownload: true, languages: [payload.doc.format.language], showCreator: false, publishedAt: payload.doc.updatedAt },
+            publication: { slug: pub[2], title: payload.doc.brief.title, allowDownload: params.allowDownload, languages: [payload.doc.format.language], showCreator: false, publishedAt: payload.doc.updatedAt },
             ...payload
           });
         }
@@ -147,7 +147,9 @@ const Reader: React.FC<{ params: QaParams; classic: boolean }> = ({ params, clas
           urlFor={studio.urlFor}
           initialPage={params.page ?? undefined}
           intro={false}
-          allowDownload
+          allowDownload={params.allowDownload}
+          // share=1: a published comic's link (same origin, never fetched — only handed to the share sheet).
+          endCard={params.share ? { shareUrl: `${window.location.origin}/c/qa-${params.fixture}` } : undefined}
           onExit={() => recordQaOp('client', { type: 'exit_reader' })}
         />
       </main>

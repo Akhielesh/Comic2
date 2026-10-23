@@ -268,7 +268,7 @@ describe('Pages proxy', () => {
 
   it('maps Location headers from the Pages origin and the apex back to the public host', async () => {
     const { call } = setup(() => new Response(null, { status: 302, headers: { location: `${PAGES}/api/agent-gate?from=%2F` } }));
-    const res = await call(`${PUBLIC}/`, { headers: { 'user-agent': 'GPTBot/1.0' } });
+    const res = await call(`${PUBLIC}/`, { headers: { 'user-agent': 'Mozilla/5.0 Test' } });
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe(`${PUBLIC}/api/agent-gate?from=%2F`);
     expectSecurityHeaders(res);
@@ -292,6 +292,74 @@ describe('Pages proxy', () => {
     const res = await call(`${PUBLIC}/`, { method: 'HEAD' });
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache');
+  });
+});
+
+describe('agent gate (page half)', () => {
+  const withCf = (req: Request, cf: Record<string, unknown>): Request => {
+    Object.defineProperty(req, 'cf', { value: cf });
+    return req;
+  };
+
+  it('sends AI agents asking for a page to the check-in without touching Pages', async () => {
+    const { call, pagesFetch } = setup();
+    for (const [path, from] of [
+      ['/', '/'],
+      ['/?view=studio&id=p1', '/'],
+      ['/c/Ab3dEf6hIj9kLm2nP', '/c/Ab3dEf6hIj9kLm2nP'],
+      ['/auth/callback', '/auth/callback']
+    ]) {
+      const res = await call(`${PUBLIC}${path}`, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; GPTBot/1.2)' } });
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('location') || '');
+      expect(location.origin).toBe(PUBLIC);
+      expect(location.pathname).toBe('/api/agent-gate');
+      expect(location.searchParams.get('from')).toBe(from);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('x-robots-tag')).toMatch(/noai/);
+      expectSecurityHeaders(res);
+    }
+    const webdriver = await call(`${PUBLIC}/?via=webdriver`, { headers: { 'user-agent': 'Mozilla/5.0 HeadlessChrome/120' } });
+    expect(new URL(webdriver.headers.get('location') || '').searchParams.get('via')).toBe('webdriver');
+    expect(pagesFetch).not.toHaveBeenCalled();
+  });
+
+  it('catches a verified AI bot by its Cloudflare category, which the Pages middleware cannot see through the proxy', async () => {
+    const { pagesFetch, env } = setup();
+    const edge = createEdge({ fetch: pagesFetch, HTMLRewriter: FakeHtmlRewriter });
+    const req = withCf(new Request(`${PUBLIC}/`, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; SomeNewAssistant/1.0)' } }), {
+      verifiedBotCategory: 'AI Assistant'
+    });
+    const res = await edge.fetch(req, env);
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get('location') || '').pathname).toBe('/api/agent-gate');
+    expect(pagesFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps people, search engines, link previews, crawl-policy files and static files open', async () => {
+    const { call, pagesCalls } = setup();
+    const cases: [string, string][] = [
+      ['/', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'],
+      ['/', 'Mozilla/5.0 (compatible; Googlebot/2.1)'],
+      ['/c/Ab3dEf6hIj9kLm2nP', 'Mozilla/5.0 (compatible; Discordbot/2.0)'],
+      ['/robots.txt', 'GPTBot/1.2'],
+      ['/llms.txt', 'ClaudeBot/1.0'],
+      ['/.well-known/security.txt', 'GPTBot/1.2'],
+      ['/assets/app-1a2b.js', 'GPTBot/1.2'],
+      ['/icons/comics-og.png', 'GPTBot/1.2'],
+      ['/comics.webmanifest', 'GPTBot/1.2']
+    ];
+    for (const [path, ua] of cases) {
+      const res = await call(`${PUBLIC}${path}`, { headers: { 'user-agent': ua } });
+      expect(res.headers.get('location') || '').not.toContain('/api/agent-gate');
+    }
+    expect(pagesCalls.map((c) => new URL(c.url).pathname)).toEqual(cases.map(([path]) => path));
+  });
+
+  it('leaves /api to the API Worker, which runs its own (api-scope) gate', async () => {
+    const { call, apiCalls } = setup();
+    await call(`${PUBLIC}/api/health`, { headers: { 'user-agent': 'GPTBot/1.2' } });
+    expect(apiCalls).toHaveLength(1);
   });
 });
 

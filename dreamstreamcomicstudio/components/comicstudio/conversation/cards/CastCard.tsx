@@ -9,11 +9,11 @@
 
 import React from 'react';
 import { AlertTriangle, Check, Users } from 'lucide-react';
-import { castKindOf, type Card, type Character } from '../../../../shared/comic/doc';
+import type { Card, Character } from '../../../../shared/comic/doc';
 import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
 import { CardShell, GhostButton, cx, plural } from '../ui';
-import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount } from './castVisual';
+import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount, kindOf } from './castVisual';
 import { useAction } from './useAction';
 
 type CastCardData = Extract<Card, { type: 'cast' }>;
@@ -41,7 +41,7 @@ const needsSheet = (c: Character) => c.tier !== 'extra' && c.sheet.status !== 'r
 /** "Lead · cat burglar · Sheet ready" / "Companion · ×3 · No sheet yet". */
 export const castStatusLine = (c: Character): string => {
   const n = groupCount(c);
-  const kind = castKindOf(c);
+  const kind = kindOf(c);
   const label = castRoleLabel(c);
   const parts = [label];
   if (c.role) parts.push(c.role);

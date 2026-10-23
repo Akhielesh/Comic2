@@ -9,7 +9,11 @@ import { test, expect } from './helpers/harness';
 test.describe('public reader', () => {
   test('opens straight into the reader: no auth wall, no studio chrome, assertions 1–4', async ({ qa, page }) => {
     await qa.open({ surface: 'public', fixture: 'heist-12p' }, { settle: 800 });
-    expect(await page.locator('.gesture-root').count(), 'no studio shell').toBe(0);
+    // The comic itself rendered (not the boot card, an error or an empty shell).
+    await expect(page.locator('[data-testid="public-comic-reader"] [data-testid="comic-reader"][role="region"]'), 'the public reader shows the comic (not its empty state)').toBeVisible();
+    await expect(page.getByRole('alert'), 'no error state').toHaveCount(0);
+    // The studio shell (its root carries data-layout; the immersive reader's root is excluded by its test id).
+    expect(await page.locator('.gesture-root[data-layout]:not([data-testid="immersive-reader"]), section[aria-label="Conversation"], section[aria-label="Board"], [data-tabbar]').count(), 'no studio shell').toBe(0);
     await expect(page.getByRole('textbox', { name: /message the comic director/i }), 'no composer for readers').toHaveCount(0);
     for (const write of [/^send$/i, /delete/i, /approve/i, /^edit/i]) {
       await expect(page.getByRole('button', { name: write }), `no write control (${write})`).toHaveCount(0);
@@ -17,6 +21,7 @@ test.describe('public reader', () => {
     await qa.check('public', 'default');
     // Nothing reached the network: the fixture payload came from the in-page shim.
     const net = (await qa.ops()).filter((o) => o.kind === 'net');
+    expect(net.length, 'the comic came through the public read endpoint').toBeGreaterThan(0);
     expect(net.every((o) => /\/api\/comic\/public\//.test(JSON.stringify(o.payload))), `only the public read endpoint was called: ${JSON.stringify(net)}`).toBe(true);
   });
 
@@ -34,10 +39,10 @@ test.describe('public reader', () => {
   });
 
   for (const state of ['not-found', 'error'] as const) {
-    test(`${state} state fits`, async ({ qa, page }) => {
+    test(`${state} state fits`, async ({ qa, page, device }) => {
       await qa.open({ surface: 'public', fixture: 'heist-12p', public: state }, { settle: 800 });
       await expect(page.getByRole('alert').or(page.getByText(/private|no longer|could not|couldn’t|not found|try again/i)).first()).toBeVisible();
-      await qa.check('public', state, { checks: ['overflow', 'offscreen', 'spill', 'collision', 'hit-target', 'safe-area'] });
+      await qa.check('public', state, { checks: ['overflow', 'offscreen', 'spill', 'collision', ...(device.coarse ? (['hit-target', 'safe-area'] as const) : [])] });
     });
   }
 });

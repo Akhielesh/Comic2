@@ -71,6 +71,32 @@ export const isMainProductPath = (pathname: string): boolean =>
   pathname === '/models/' ||
   pathname.startsWith('/share/');
 
+/** Crawl-policy files and the check-in alias stay reachable for every client (as in
+ *  functions/_middleware.ts, which answers `/agents` itself). */
+export const isAgentOpenPath = (pathname: string): boolean =>
+  pathname === '/robots.txt' ||
+  pathname === '/llms.txt' ||
+  pathname.startsWith('/.well-known/') ||
+  pathname === '/agents' ||
+  pathname === '/agents/';
+
+/** Static files (hashed bundles, icons, manifests, model files, anything with a file extension
+ *  other than .html). public/_routes.json keeps the Pages middleware off these, so the edge's
+ *  page gate skips them too. SPA routes (`/`, `/auth/callback`, `/c/<slug>`) have no extension. */
+export const isStaticFilePath = (pathname: string): boolean => {
+  if (pathname.startsWith('/assets/') || pathname.startsWith('/icons/') || pathname.startsWith('/models/')) return true;
+  const last = pathname.slice(pathname.lastIndexOf('/') + 1);
+  const dot = last.lastIndexOf('.');
+  return dot > 0 && last.slice(dot + 1).toLowerCase() !== 'html';
+};
+
+/**
+ * The page half of the AI-agent gate runs HERE for the comics host: the Pages middleware only sees
+ * the edge's subrequest, whose `request.cf` (Cloudflare's verified-bot category) describes this
+ * Worker, not the visitor — so the edge checks the original request itself.
+ */
+export const shouldGatePage = (pathname: string): boolean => !isAgentOpenPath(pathname) && !isStaticFilePath(pathname);
+
 /** The legacy reader link `/?view=read&id=<id>`: the Pages middleware injects that comic's preview
  *  head, which generic branding must not overwrite. */
 export const isLegacyReaderLink = (url: URL): boolean =>

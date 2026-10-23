@@ -42,22 +42,32 @@ test.describe('studio layout', () => {
 
   test('header: quality, spend, more and settings', async ({ qa, page }) => {
     await qa.open({ surface: 'studio', fixture: 'heist-12p' });
-    if (await openQuality(qa)) {
+    // Every one of these is reachable on every layout (phones: Quality via ⋯); a missing control is a
+    // failure, not a silently skipped step.
+    const quality = await openQuality(qa);
+    expect.soft(quality, 'Quality is reachable (header, or ⋯ on phones)').toBe(true);
+    if (quality) {
       await qa.settle(400);
       await qa.check('studio', 'quality');
       await closeTopLayer(page);
     }
-    if (await openSpend(qa)) {
+    const spend = await openSpend(qa);
+    expect.soft(spend, 'the spend chip is reachable').toBe(true);
+    if (spend) {
       await qa.settle(400);
       await qa.check('studio', 'spend');
       await closeTopLayer(page);
     }
-    if (await openMoreMenu(qa)) {
+    const more = await openMoreMenu(qa);
+    expect.soft(more, 'the ⋯ menu is reachable').toBe(true);
+    if (more) {
       await qa.settle(400);
       await qa.check('studio', 'more');
       await closeTopLayer(page);
     }
-    if (await openSettings(qa)) {
+    const settings = await openSettings(qa);
+    expect.soft(settings, 'Settings is reachable').toBe(true);
+    if (settings) {
       await qa.settle(500);
       await qa.check('studio', 'settings');
     }

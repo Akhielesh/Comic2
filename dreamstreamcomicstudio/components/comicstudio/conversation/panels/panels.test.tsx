@@ -48,7 +48,32 @@ describe('FormatPanel — tell before staling', () => {
   });
 });
 
+describe('FormatPanel — fits narrow containers (recap card)', () => {
+  it('the kind choice is a wrapping tile grid sized by the container, never a fixed 5-way bar', () => {
+    const doc = makeSampleDoc();
+    const patch = vi.fn();
+    render(<FormatPanel doc={doc} patch={patch} />);
+    const group = screen.getByRole('radiogroup', { name: 'Comic kind' });
+    expect(group.className).toMatch(/grid-cols-\[repeat\(auto-fill,minmax\(/);
+    const radios = within(group).getAllByRole('radio');
+    expect(radios).toHaveLength(5);
+    for (const r of radios) expect(r.querySelector('span.truncate')).not.toBeNull();
+    expect(within(group).getByRole('radio', { name: 'Comic' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(within(group).getByRole('radio', { name: 'Manga' }));
+    expect(patch).toHaveBeenLastCalledWith([{ op: 'format', patch: { kind: 'manga', readingDirection: 'rtl' } }]);
+  });
+});
+
 describe('StylePanel — library tiles', () => {
+  it('the long "Explore" label wraps inside its button instead of spilling out of a fixed height', () => {
+    const doc = makeSampleDoc();
+    doc.style = { ...doc.style, options: [] };
+    render(<StylePanel doc={doc} patch={vi.fn()} act={vi.fn()} onDescribeOwn={vi.fn()} onDone={vi.fn()} />);
+    const explore = screen.getByRole('button', { name: /Explore 3 directions/ });
+    expect(explore.className).toMatch(/!h-auto/);
+    expect(explore.parentElement!.className).toMatch(/\bflex-wrap\b/);
+  });
+
   it('every preset tile shows preview art (library image or procedural fallback) and picks instantly', () => {
     const doc = makeSampleDoc();
     const patch = vi.fn();

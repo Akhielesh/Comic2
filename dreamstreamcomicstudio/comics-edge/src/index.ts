@@ -13,12 +13,15 @@
  *   /api, /api/*              → env.API.fetch(request): the original request, untouched, so the
  *                               API Worker's agent gate, rate limits and IP forwarding still apply
  *   /live*, /models, /share/*, /studio.html → 302 to the main site (other products, own session)
+ *   AI agents asking a page   → 302 /api/agent-gate (the page half of the gate; the Pages
+ *                               middleware cannot see request.cf through this proxy)
  *   everything else           → the Pages origin, same path + query, X-Forwarded-Host set (the
  *                               Pages middleware serves instead of redirecting to the apex),
  *                               Location mapped back here, Comic Studio <head> on HTML except /c/*
  * Every response gets HSTS (no includeSubDomains), nosniff, Referrer-Policy, a minimal
  * Permissions-Policy and frame-ancestors 'none' (except embeds and share pages).
  */
+import { detectAgent } from '../../api-proxy/src/agent-gate';
 import { brandHtml, type RewriterCtor } from './brand';
 import {
   ALIAS_HOSTS,
@@ -32,6 +35,7 @@ import {
   resolveConfig,
   rewriteLocation,
   shouldBrandHtml,
+  shouldGatePage,
   type EdgeConfig
 } from './policy';
 
@@ -105,6 +109,21 @@ const unavailable = (pathname: string, cfg: EdgeConfig): Response => {
   const headers = new Headers({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '10' });
   applySecurityHeaders(headers, pathname);
   return new Response(html, { status: 502, headers });
+};
+
+/** AI agents asking for a page go to the check-in (same answer as functions/_middleware.ts). */
+const agentGate = (url: URL, cfg: EdgeConfig): Response => {
+  const target = new URL('/api/agent-gate', `https://${cfg.publicHost}`);
+  target.searchParams.set('from', url.pathname);
+  if (url.searchParams.get('via') === 'webdriver') target.searchParams.set('via', 'webdriver');
+  const headers = new Headers({
+    location: target.toString(),
+    'cache-control': 'no-store',
+    vary: 'user-agent',
+    'x-robots-tag': 'noindex, nofollow, noarchive, nosnippet, noai, noimageai'
+  });
+  applySecurityHeaders(headers, url.pathname);
+  return new Response(null, { status: 302, headers });
 };
 
 const apiUnavailable = (pathname: string): Response => {
@@ -202,6 +221,10 @@ export const createEdge = (deps: EdgeDeps) => ({
     }
 
     if (isMainProductPath(url.pathname)) return redirect(`${cfg.mainOrigin}${pathAndQuery(url)}`, 302, url.pathname);
+
+    // The Pages middleware cannot see the visitor's verified-bot category through this proxy
+    // (its request.cf describes the edge's subrequest), so the page gate runs here first.
+    if (shouldGatePage(url.pathname) && detectAgent(request, 'page')) return agentGate(url, cfg);
 
     return proxyToPages(request, url, cfg, deps);
   }

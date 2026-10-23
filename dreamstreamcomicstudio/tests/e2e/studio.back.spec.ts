@@ -12,8 +12,9 @@ test.describe('Back closes the top layer', () => {
     await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
     await qa.toBoard();
     const open = page.getByRole('button', { name: /open page 1 in the editor/i }).first();
-    test.skip(!(await open.isVisible().catch(() => false)), 'no page card to open on this layout');
-    await open.click();
+    // Every layout shows the Pages grid here: a missing page card is a regression, never a skip.
+    await expect(open, 'page 1 has an "open in the editor" control').toBeVisible();
+    await open.click({ timeout: 10_000 });
     const editor = page.getByRole('dialog', { name: /page 1 editor/i });
     await expect(editor).toBeVisible();
     await page.goBack();
@@ -23,7 +24,7 @@ test.describe('Back closes the top layer', () => {
 
   test('settings sheet closes on Back, then the editor', async ({ qa, page }) => {
     await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
-    test.skip(!(await openSettings(qa)), 'settings not reachable on this layout');
+    expect(await openSettings(qa), 'Settings is reachable on every layout').toBe(true);
     const sheet = page.getByRole('dialog', { name: /comic settings/i });
     await expect(sheet).toBeVisible();
     await page.goBack();
@@ -32,13 +33,12 @@ test.describe('Back closes the top layer', () => {
     // Second layer: the editor, opened after the sheet closed, is the new top layer.
     await qa.toBoard();
     const open = page.getByRole('button', { name: /open page 1 in the editor/i }).first();
-    if (await open.isVisible().catch(() => false)) {
-      await open.click();
-      const editor = page.getByRole('dialog', { name: /page 1 editor/i });
-      await expect(editor).toBeVisible();
-      await page.goBack();
-      await expect(editor).toBeHidden({ timeout: 5_000 });
-      expect(await stillInStudio(page)).toBe(true);
-    }
+    await expect(open, 'page 1 has an "open in the editor" control').toBeVisible();
+    await open.click({ timeout: 10_000 });
+    const editor = page.getByRole('dialog', { name: /page 1 editor/i });
+    await expect(editor).toBeVisible();
+    await page.goBack();
+    await expect(editor).toBeHidden({ timeout: 5_000 });
+    expect(await stillInStudio(page)).toBe(true);
   });
 });

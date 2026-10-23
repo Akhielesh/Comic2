@@ -97,7 +97,7 @@ const count = (keyOf) => {
 };
 const fresh = rows.filter((r) => r.status === 'NEW');
 const lines = [];
-lines.push(`## Comic Studio layout ${has('--full') ? 'matrix' : 'smoke'}`);
+lines.push(`## Comic Studio layout ${has('--full') || projects.includes('*') ? 'matrix' : 'smoke'}`);
 lines.push('');
 lines.push(`Playwright exit code **${code}** · ${rows.length} findings: **${fresh.length} new**, ${rows.length - fresh.length} allowlisted.`);
 lines.push('');
@@ -123,6 +123,23 @@ if (owners.length) {
   lines.push('');
   for (const [k, n] of owners) lines.push(`- ${k}: ${n}`);
   lines.push('');
+}
+// Known failures that matched nothing in a FULL run are stale: they would silently swallow a future
+// regression, so list them for removal (a smoke run covers too few scenes to judge).
+if ((has('--full') || projects.includes('*')) && rows.length) {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(APP, 'tests/e2e/allowlist.json'), 'utf8'));
+    const used = new Set(rows.map((r) => r.allowId).filter(Boolean));
+    const stale = (list.knownFailures || []).filter((e) => !used.has(e.id));
+    if (stale.length) {
+      lines.push('### Allowlist entries that matched nothing in this run (fixed? remove them)');
+      lines.push('');
+      for (const e of stale) lines.push(`- \`${e.id}\` (${e.owner}): ${String(e.reason).slice(0, 100)}`);
+      lines.push('');
+    }
+  } catch {
+    /* the summary is a convenience */
+  }
 }
 lines.push(`Report: \`${path.relative(APP, path.join(artifacts, 'report', 'index.html'))}\` · findings: \`${path.relative(APP, findingsFile)}\``);
 const summary = lines.join('\n') + '\n';

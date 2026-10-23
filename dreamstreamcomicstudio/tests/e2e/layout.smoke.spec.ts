@@ -36,12 +36,12 @@ test.describe('layout smoke @smoke', () => {
       await qa.scroll(scroller, 'top');
       await qa.check('studio', 'conversation-top', opts);
     }
+    // The stress fixture always carries the open spend gate (qaFixtures: "Draw all twenty pages…").
     const gate = page.getByText(/Draw all twenty pages/i).first();
-    if (await gate.count()) {
-      await gate.scrollIntoViewIfNeeded().catch(() => undefined);
-      await qa.settle(250);
-      await qa.check('studio', 'conversation-gate', opts);
-    }
+    await expect(gate, 'the stress fixture shows its open gate').toBeAttached();
+    await gate.scrollIntoViewIfNeeded().catch(() => undefined);
+    await qa.settle(250);
+    await qa.check('studio', 'conversation-gate', opts);
   });
 
   test('streaming reply', async ({ qa }) => {
@@ -80,7 +80,8 @@ test.describe('layout smoke @smoke', () => {
     test(`page editor: balloon selected (${mode} inspector)`, async ({ qa, page }) => {
       await qa.open({ surface: 'editor', fixture: 'heist-12p', page: 1, mode });
       const balloon = page.locator('[data-testid="balloon-hit"]').first();
-      test.skip(!(await balloon.isVisible().catch(() => false)), 'no editable balloon on this page');
+      // heist-12p page 1 is lettered: no balloon here is a regression, never a skip.
+      await expect(balloon, 'page 1 has an editable balloon').toBeVisible();
       await balloon.focus();
       await qa.settle(350);
       await expect.soft(page.locator('[data-testid="lettering-inspector"]').first(), 'selecting a balloon shows the lettering inspector').toBeVisible();
@@ -103,7 +104,9 @@ test.describe('layout smoke @smoke', () => {
 
   test('composer sheets', async ({ qa }) => {
     await qa.open({ surface: 'studio', fixture: 'stress' });
-    if (await openComposerOptions(qa)) {
+    const opened = await openComposerOptions(qa);
+    expect.soft(opened, 'the composer options are reachable').toBe(true);
+    if (opened) {
       await qa.settle(400);
       await qa.check('studio', 'composer-options', opts);
       await closeTopLayer(qa.page);
@@ -112,24 +115,21 @@ test.describe('layout smoke @smoke', () => {
 
   test('header sheets and settings', async ({ qa, page }) => {
     await qa.open({ surface: 'studio', fixture: 'stress', tab: 'pages' });
-    if (await openQuality(qa)) {
-      await qa.settle(400);
-      await qa.check('studio', 'header-quality', opts);
-      await closeTopLayer(page);
-    }
-    if (await openSpend(qa)) {
-      await qa.settle(400);
-      await qa.check('studio', 'header-spend', opts);
-      await closeTopLayer(page);
-    }
-    if (await openMoreMenu(qa)) {
-      await qa.settle(400);
-      await qa.check('studio', 'header-more', opts);
-      await closeTopLayer(page);
-    }
-    if (await openSettings(qa)) {
-      await qa.settle(600);
-      await qa.check('studio', 'settings', opts);
+    // visualqa P0-4 (Quality / Spending popovers off-screen on phones): every sheet must be reached and
+    // measured on every viewport — phones reach Quality through ⋯.
+    const steps: Array<[string, () => Promise<boolean>, number]> = [
+      ['header-quality', () => openQuality(qa), 400],
+      ['header-spend', () => openSpend(qa), 400],
+      ['header-more', () => openMoreMenu(qa), 400],
+      ['settings', () => openSettings(qa), 600]
+    ];
+    for (const [scene, open, settle] of steps) {
+      const opened = await open();
+      expect.soft(opened, `${scene} is reachable`).toBe(true);
+      if (!opened) continue;
+      await qa.settle(settle);
+      await qa.check('studio', scene, opts);
+      if (scene !== 'settings') await closeTopLayer(page);
     }
   });
 

@@ -92,7 +92,20 @@ export const chipUsd = (step: NextStep): number | undefined => {
   const own = priceOf(step.usd);
   const quoted = isSpendStep(step) ? priceOf((step.action as { quotedUsd?: unknown }).quotedUsd) : undefined;
   if (own !== undefined && quoted !== undefined) return Math.max(own, quoted);
+  // Client steps (open the reader, a tab, undo…) never reach the server: free by construction,
+  // so "Read it" is badged the same whether or not the server priced it.
+  if (own === undefined && quoted === undefined && step.client && !step.action) return 0;
   return own ?? quoted;
+};
+
+/**
+ * The label as shown next to its badge: a server label that already spells out the price
+ * ("Fit to 4:5 (Free)", "Draw 2 pages · ≈$0.14") loses that suffix, so the price reads once.
+ */
+export const chipLabel = (label: string, badge: string | undefined): string => {
+  if (!badge) return label;
+  const trimmed = label.replace(/(?:\s*\((?:free|≈\s*\$[\d.,]+)\)|\s+[·•–—-]\s*(?:free|≈\s*\$[\d.,]+))\s*$/i, '').trim();
+  return trimmed || label;
 };
 
 /**
@@ -103,6 +116,19 @@ export const chipUsd = (step: NextStep): number | undefined => {
 export const stepToRun = (step: NextStep): NextStep => {
   if (!isSpendStep(step) || priceOf((step.action as { quotedUsd?: unknown }).quotedUsd) !== undefined) return step;
   return { ...step, action: { ...step.action!, quotedUsd: priceOf(step.usd) ?? 0 } as NextStep['action'] };
+};
+
+/** Actions the editor does in software (no model call at all) — the ones that earn "no AI cost". */
+const SOFTWARE_ACTIONS: ReadonlySet<string> = new Set([
+  'patch', 'fit_render', 'restore_render', 'show_breakdown', 'approve_plan', 'pick_style', 'cancel', 'decline_gate', 'ref_crop'
+]);
+
+/** The trust line on a "Free" badge: only work done purely in software claims "no AI cost". */
+export const freeTitle = (step: NextStep): string => {
+  if (step.client && !step.action) return 'Free — done by the editor, no AI cost';
+  const a = step.action as { type?: string; useVision?: boolean } | undefined;
+  if (a?.type && (SOFTWARE_ACTIONS.has(a.type) || (a.type === 'relayout_balloons' && !a.useVision))) return 'Free — done by the editor, no AI cost';
+  return 'Free — no charge to you';
 };
 
 /** Text chips go to the director, so they wait while a turn is streaming. */
@@ -143,6 +169,7 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
         const key = `${chip.step.label}:${i}`;
         const usd = chipUsd(chip.step);
         const badge = priceBadge(usd);
+        const label = chipLabel(chip.step.label, badge);
         const busy = pending.has(key);
         // Text chips wait for the director; a second text chip waits for the first one's turn.
         const disabled = busy || (sendsText(chip) && (studio.messageBusy || chips.some((c, j) => sendsText(c) && pending.has(`${c.step.label}:${j}`))));
@@ -152,11 +179,11 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
             onClick={() => void tap(chip, key)}
             disabled={disabled}
             aria-busy={busy || undefined}
-            aria-label={badge ? `${chip.step.label}, ${badge === 'Free' ? 'free' : `about ${formatUsd(usd!)}`}` : undefined}
+            aria-label={badge ? `${label}, ${badge === 'Free' ? 'free' : `about ${formatUsd(usd!)}`}` : undefined}
             className="min-w-0"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />}
-            <span className="min-w-0 [overflow-wrap:anywhere]">{chip.step.label}</span>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
             {badge && (
               <span
                 className={cx(
@@ -165,10 +192,10 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
                 )}
                 title={
                   badge === 'Free'
-                    ? chip.step.action || chip.step.client
-                      ? 'Free — done by the editor, no AI cost'
-                      : 'Free'
-                    : 'Estimate — tapping is your OK, and the price is re-checked before anything is drawn'
+                    ? freeTitle(chip.step)
+                    : isSpendStep(chip.step)
+                      ? 'Estimate — tapping is your OK, and the price is re-checked before anything is drawn'
+                      : 'Estimate — I’ll confirm the price with you before anything is drawn'
                 }
                 aria-hidden
               >

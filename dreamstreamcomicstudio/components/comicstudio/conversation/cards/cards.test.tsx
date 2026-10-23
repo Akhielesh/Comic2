@@ -270,6 +270,14 @@ describe('CastCard', () => {
     expect(castStatusLine(ducklings({ count: 1 }))).toBe('Companion · animal · No sheet yet');
   });
 
+  it('an unknown kind (newer server, bad write) reads as a person instead of breaking the card', () => {
+    const doc = makeSampleDoc();
+    doc.cast = [...doc.cast, ducklings({ id: 'c_odd', name: 'Glorp', kind: 'hologram' as never, count: 1 })];
+    renderCard({ type: 'cast', id: 'card_c', characterIds: ['c_odd'] }, doc);
+    expect(screen.queryByText(/couldn’t be shown/)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Glorp, Companion/ })).toBeInTheDocument();
+  });
+
   it('draws missing sheets for leads and supports only, with the quote', () => {
     const studio = renderCard({ type: 'cast', id: 'card_c', characterIds: ['c_maya', 'c_arjun', 'c_vendor'] });
     fireEvent.click(screen.getByRole('button', { name: /Draw 1 sheet/ }));

@@ -194,10 +194,11 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon.
               </p>
               {comicsHref ? (
-                <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
+                // mt-3/-mb-3 offset the 44px hit areas so the label lines up with the sibling cards' CTAs.
+                <div className="mt-3 -mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                   <a
                     href={comicsHref}
-                    className="inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
+                    className="inline-flex min-h-[44px] items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
                   >
                     Explore Comic Studio <ArrowRight size={16} />
                   </a>

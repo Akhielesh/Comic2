@@ -12,7 +12,8 @@
 //   - Drags and slider scrubs with the same `coalesce` key within 600 ms merge into one entry, and
 //     adjacent ops on the same target are compacted so a long scrub stays one small request.
 //   - All director batches of one reply (one stream) merge into one entry: "undo" undoes the reply.
-//   - Entries whose target no longer exists (or that would change nothing) are skipped.
+//   - Entries whose target no longer exists (or that would change nothing) are skipped — but an entry
+//     waiting on an image that is still drawing is kept (the caller asks the user to try again).
 //   - A rejected save drops its entry; a failed undo/redo puts the entry back (unless a newer edit
 //     was recorded meanwhile — replaying it out of order would corrupt the doc, so it is dropped).
 //   - A change that cannot be undone exactly (contract §6: render_use with no previous image, a
@@ -21,7 +22,7 @@
 // The pure stack functions are exported (and unit-tested); the hook only holds them per project.
 
 import { useCallback, useRef, useState } from 'react';
-import type { ComicDoc } from '../../shared/comic/doc';
+import { getRender, type ComicDoc } from '../../shared/comic/doc';
 import { applyOp, CLIENT_PATCHABLE_OPS, type DocOp } from '../../shared/comic/ops';
 import { describeOps, inverseOps, isUndoable } from '../../shared/comic/undo';
 
@@ -166,6 +167,26 @@ export const isNoopOn = (doc: ComicDoc, ops: readonly DocOp[]): boolean => {
   const next = ops.reduce((d, op) => applyOp(d, op), doc);
   return next === doc || sameWire({ ...next, updatedAt: 0 }, { ...doc, updatedAt: 0 });
 };
+
+const isDrawing = (r: { status?: unknown } | undefined): boolean => !!r && (r.status === 'queued' || r.status === 'rendering');
+
+/**
+ * True when `ops` touch an image that is queued or drawing right now (applyOp leaves `render_use`,
+ * `page_delete` and `page_duplicate` alone while the target is busy, and the server answers 409).
+ * Such an entry is not "gone": it applies once the drawing finishes, so it must not be skipped.
+ */
+export const waitsOnDrawing = (doc: ComicDoc, ops: readonly DocOp[]): boolean =>
+  ops.some((op) => {
+    switch (op?.op) {
+      case 'render_use':
+        return !!op.target && typeof op.target === 'object' && isDrawing(getRender(doc, op.target));
+      case 'page_delete':
+      case 'page_duplicate':
+        return isDrawing(doc.pages.find((p) => p.id === op.id)?.render);
+      default:
+        return false;
+    }
+  });
 
 /** "Undo Move balloon" / "Move balloon" → "move balloon" (the UI prefixes "Undo"). */
 export const normalizeUndoLabel = (label: string | undefined): string | undefined => {

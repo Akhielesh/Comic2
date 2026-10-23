@@ -10,7 +10,7 @@
 // Deep links (?view=studio&id=…, ?view=read…), auth callbacks, invites and the ?next= hand-back
 // keep their existing handling: the boot only applies to a load with no intent of its own.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isComicsHost } from '../../services/productHost';
 import { OFF_HOST_VIEWS, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
 
@@ -42,6 +42,10 @@ const snapshotBoot = (): boolean => {
   return shouldBootToDashboard({ pathname, search, hash });
 };
 
+// The boot decision runs before paint, so a signed-in visitor never sees one frame of the landing
+// on the way to their comics. (useEffect on the server, where layout effects do not run.)
+const useBeforePaint = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
 export function useComicsHost({ view, setView, signedIn, ready, hostname, navigate }: UseComicsHostOptions): ComicsHostBoot {
   const active = isComicsHost(hostname);
   // Read the URL during the FIRST render, before App's URL-sync effect rewrites ?view=/&id=.
@@ -49,7 +53,7 @@ export function useComicsHost({ view, setView, signedIn, ready, hostname, naviga
   const bootDecidedRef = useRef(false);
   const leaving = active && OFF_HOST_VIEWS.has(view);
 
-  useEffect(() => {
+  useBeforePaint(() => {
     if (!active || !ready || bootDecidedRef.current) return;
     bootDecidedRef.current = true; // decided once per load: later "home" clicks show the landing
     if (signedIn && view === 'home' && bootEligible) setView('dashboard');

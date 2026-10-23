@@ -437,7 +437,23 @@ function detect(args: DetectArgs) {
       const r = el.getBoundingClientRect();
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
-      if (cx - 22 < 0 || cy - 22 < 0 || cx + 22 > vw || cy + 22 > vh) continue; // not fully on screen: scrolled away
+      // Not fully on screen: scrolled away (the user scrolls it into view first). A target that sits
+      // flush against the screen edge IS measured (probes past the edge are skipped below): a 24 px
+      // corner icon must not escape the check just because it hugs the viewport.
+      if (r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1) continue;
+      // Partly scrolled out of its scroller (or a dialog's clip): the user scrolls it into view first.
+      let clipped = false;
+      for (let a = el.parentElement; a && a !== de; a = a.parentElement) {
+        const s = cs(a);
+        if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
+        const ar = a.getBoundingClientRect();
+        if ((s.overflowY !== 'visible' && (cy - 22 < ar.top - 1 || cy + 22 > ar.bottom + 1)) || (s.overflowX !== 'visible' && (cx - 22 < ar.left - 1 || cx + 22 > ar.right + 1))) {
+          // Only a SCROLLING ancestor excuses it; a fixed-size overflow:hidden box clipping a target is a real defect.
+          if (/(auto|scroll)/.test(s.overflowY) || /(auto|scroll)/.test(s.overflowX)) clipped = true;
+          break;
+        }
+      }
+      if (clipped) continue;
       const owns = (hit: Element | null) => !!hit && (hit === el || el.contains(hit) || (hit.closest('label') as HTMLLabelElement | null)?.control === el);
       if (!owns(document.elementFromPoint(cx, cy))) continue; // covered (sheet, popover, scrolled under chrome)
       // Floating chrome (a fixed/sticky bar, or a pill in a pointer-events:none overlay such as "Jump to
@@ -465,7 +481,11 @@ function detect(args: DetectArgs) {
         [-15, 15],
         [15, 15]
       ]) {
-        const hit = document.elementFromPoint(cx + dx, cy + dy);
+        const px = cx + dx;
+        const py = cy + dy;
+        // Past the screen edge: the bezel bounds the finger there (and elementFromPoint returns null).
+        if (px < 0 || py < 0 || px >= vw || py >= vh) continue;
+        const hit = document.elementFromPoint(px, py);
         if (!owns(hit) && !(hit && floating(hit))) {
           stolen = `probe (${dx},${dy}) → ${hit ? sig(hit) : 'nothing'}`;
           break;
@@ -487,7 +507,16 @@ function detect(args: DetectArgs) {
       if (s.pointerEvents === 'none') continue;
       const op = effOpacity(el);
       const parentVisible = !el.parentElement || cs(el.parentElement).visibility === 'visible';
-      if (op < 0.6 && op > 0) push('hover-only', el, `effective opacity ${op.toFixed(2)} until hover/focus`);
+      // opacity 0 counts too: `opacity-0 group-hover:opacity-100` is THE hover-only pattern (invisible
+      // on touch, yet it still takes the tap). Native form inputs at opacity 0 are the usual styled
+      // file/checkbox overlay under a visible label, so only those are exempt at exactly 0.
+      const overlayInput = op === 0 && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+      // An invisible control that something else covers never gets the tap; one on top does.
+      const takesTap = () => {
+        const hit = document.elementFromPoint(Math.min(vw - 1, Math.max(0, r.left + r.width / 2)), Math.min(vh - 1, Math.max(0, r.top + r.height / 2)));
+        return !!hit && (hit === el || el.contains(hit));
+      };
+      if (op < 0.6 && !overlayInput && (op > 0 || takesTap())) push('hover-only', el, `effective opacity ${op.toFixed(2)} until hover/focus${op === 0 ? ' (invisible but still tappable)' : ''}`);
       else if (s.visibility === 'hidden' && parentVisible) push('hover-only', el, 'visibility:hidden until hover/focus');
     }
   }
@@ -522,10 +551,34 @@ function detect(args: DetectArgs) {
 
   if (on('hinge') && args.hinge) {
     const { start, end } = args.hinge;
+    // What the user can actually see of a control: its box clipped by every overflow ancestor (a chip
+    // scrolled half out of a pane's strip does not reach across the fold).
+    const visibleBox = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      let left = r.left;
+      let right = r.right;
+      let top = r.top;
+      let bottom = r.bottom;
+      for (let a = el.parentElement; a && a !== de; a = a.parentElement) {
+        const s = cs(a);
+        if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
+        const ar = a.getBoundingClientRect();
+        if (s.overflowX !== 'visible') {
+          left = Math.max(left, ar.left);
+          right = Math.min(right, ar.right);
+        }
+        if (s.overflowY !== 'visible') {
+          top = Math.max(top, ar.top);
+          bottom = Math.min(bottom, ar.bottom);
+        }
+      }
+      return { left, right, top, bottom };
+    };
     for (const el of interactive) {
       if (!visible(el)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.left < end - 1 && r.right > start + 1 && inViewport(r)) push('hinge', el, `straddles the fold at ${start}–${end}`);
+      const v = visibleBox(el);
+      if (v.right - v.left < 2 || v.bottom - v.top < 2 || !(v.bottom > 0 && v.right > 0 && v.top < vh && v.left < vw)) continue;
+      if (v.left < end - 1 && v.right > start + 1) push('hinge', el, `straddles the fold at ${start}–${end} (visible ${Math.round(v.left)}–${Math.round(v.right)})`);
     }
     const chat = document.querySelector('section[aria-label="Conversation"]');
     const board = document.querySelector('section[aria-label="Board"]');
@@ -542,7 +595,7 @@ function detect(args: DetectArgs) {
     if (navShown && navs.length === 0) out.push({ check: 'landmarks', sig: 'nav', label: 'tab bar or rail without a nav landmark', ctx: '' });
   }
   if (on('layout-class') && args.expectLayout) {
-    const root = document.querySelector('.gesture-root[data-layout]') || document.querySelector('[data-layout]');
+    const root = document.querySelector('.gesture-root[data-layout]:not([data-testid="immersive-reader"])') || document.querySelector('[data-layout]');
     const got = root?.getAttribute('data-layout') || 'none';
     if (got !== args.expectLayout) out.push({ check: 'layout-class', sig: root ? sig(root) : 'none', label: `data-layout=${got}`, ctx: '', detail: `expected ${args.expectLayout}` });
   }
@@ -576,12 +629,15 @@ export async function runAxe(page: Page, opts: { include?: string; exclude?: str
   for (const v of res.violations) {
     if (v.impact !== 'serious' && v.impact !== 'critical') continue;
     for (const node of v.nodes.slice(0, 12)) {
+      // Colour checks: lead with the measured pair so allowlist entries can match the token, not prose.
+      const data = (node.any?.[0]?.data || {}) as { fgColor?: string; bgColor?: string; contrastRatio?: number; expectedContrastRatio?: string };
+      const pair = data.fgColor && data.bgColor ? `${data.fgColor} on ${data.bgColor} = ${data.contrastRatio} (needs ${data.expectedContrastRatio}); ` : '';
       out.push({
         check: 'axe',
         sig: v.id,
         label: String(node.target.join(' ')).slice(0, 120),
-        ctx: (node.html || '').replace(/\s+/g, ' ').slice(0, 120),
-        detail: `${v.impact}: ${v.help}${node.failureSummary ? ` — ${node.failureSummary.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`
+        ctx: (node.html || '').replace(/\s+/g, ' ').slice(0, 160),
+        detail: `${v.impact}: ${pair}${v.help}${node.failureSummary ? ` — ${node.failureSummary.replace(/\s+/g, ' ').slice(0, 160)}` : ''}`
       });
     }
   }

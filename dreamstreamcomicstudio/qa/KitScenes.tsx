@@ -266,7 +266,7 @@ const ArtScene: React.FC<{ params: QaParams }> = ({ params }) => {
 /** The kit surface: one scene per URL, inside a scrolling <main>. */
 export const KitSurface: React.FC<{ params: QaParams; scene: KitScene }> = ({ params, scene }) => (
   <div style={{ height: '100dvh', width: '100%', overflow: 'hidden', background: 'var(--ds-canvas)' }}>
-    <main id="qa-main" aria-label={`QA kit: ${scene}`} data-kit={scene} style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 'calc(var(--sa-top, 0px) + 12px) 12px calc(var(--sa-bottom, 0px) + 24px)', display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <main id="qa-main" aria-label={`QA kit: ${scene}`} data-kit={scene} style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 'calc(var(--sa-top, 0px) + 12px) calc(var(--sa-right, 0px) + 12px) calc(var(--sa-bottom, 0px) + 24px) calc(var(--sa-left, 0px) + 12px)', display: 'flex', flexDirection: 'column', gap: 20 }}>
       {scene === 'breakdown' && <BreakdownScene params={params} />}
       {scene === 'refs' && <RefsScene params={params} />}
       {scene === 'refs-drawer' && <RefsDrawerScene params={params} />}

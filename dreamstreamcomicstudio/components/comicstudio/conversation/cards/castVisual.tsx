@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { Bot, Car, Ghost, Package, PawPrint, ToyBrick, User, type LucideIcon } from 'lucide-react';
-import { castKindOf, isCompanion, type AssetRef, type CastKind, type Character } from '../../../../shared/comic/doc';
+import { CAST_KINDS, castKindOf, isCompanion, type AssetRef, type CastKind, type Character } from '../../../../shared/comic/doc';
 import { cx } from '../ui';
 
 export const KIND_NAME: Record<CastKind, string> = {
@@ -29,6 +29,15 @@ const KIND_ICON: Record<CastKind, LucideIcon> = {
   object: Package
 };
 
+/**
+ * The character's kind, safe to look up: normalizeDoc does not validate `kind`, so a value from a
+ * newer server (or a bad tool write) reads as a person instead of crashing the card.
+ */
+export const kindOf = (c: Character): CastKind => {
+  const k = castKindOf(c);
+  return (CAST_KINDS as readonly string[]).includes(k) ? k : 'person';
+};
+
 /** The lucide glyph for a cast kind (person is the plain silhouette). */
 export const KindIcon: React.FC<{ kind?: CastKind; className?: string }> = ({ kind = 'person', className }) => {
   const Icon = KIND_ICON[kind] || User;
@@ -48,13 +57,13 @@ export const groupCount = (c: Character): number | undefined => {
 export const castRoleLabel = (c: Character): string => {
   if (c.tier === 'lead') return 'Lead';
   if (isCompanion(c)) return 'Companion';
-  if (c.tier === 'extra') return castKindOf(c) === 'object' ? 'Prop' : 'Extra';
+  if (c.tier === 'extra') return kindOf(c) === 'object' ? 'Prop' : 'Extra';
   return 'Support';
 };
 
 /** Spoken description for screen readers: "Ducklings, group of 3 animals, Companion". */
 export const castAriaLabel = (c: Character): string => {
-  const kind = castKindOf(c);
+  const kind = kindOf(c);
   const n = groupCount(c);
   const what = kind === 'person' ? (n ? `group of ${n}` : '') : n ? `group of ${n} ${KIND_NAME[kind].toLowerCase()}s` : KIND_NAME[kind].toLowerCase();
   return [c.name || 'Unnamed', what, castRoleLabel(c)].filter(Boolean).join(', ');
@@ -80,7 +89,7 @@ export const CastAvatar: React.FC<{
   showCount?: boolean;
   className?: string;
 }> = ({ character: c, urlFor, size = 40, busy, showCount = true, className }) => {
-  const kind = castKindOf(c);
+  const kind = kindOf(c);
   const url = c.sheet.status === 'ready' && c.sheet.asset ? urlFor(c.sheet.asset) : c.refs[0] ? urlFor(c.refs[0]) : undefined;
   const n = groupCount(c);
   const badge = Math.max(14, Math.round(size * 0.42));

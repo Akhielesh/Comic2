@@ -290,6 +290,92 @@ describe('user edits', () => {
     expect(result.current.doc!.pages[0].render.asset?.path).toBe('u/proj/pages/p1.png');
     await settle(result);
   });
+
+  it('an undo waiting on an image that is still drawing is kept (never skipped to an older edit)', async () => {
+    const { result } = await setup();
+    await act(async () => {
+      await result.current.patch([{ op: 'page', id: 'pg_2', patch: { summary: 'Older edit' } }], { label: 'Edit page' });
+    });
+    await act(async () => {
+      await result.current.act({ type: 'restore_render', target: { kind: 'page', id: 'pg_1' }, path: 'u/proj/pages/p1.png.old' });
+    });
+    await settle(result);
+    // A redraw of page 1 starts (server-only render op): the version switch can't be undone right now.
+    directorQueue.push({ ops: [{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'rendering' } }] });
+    await act(async () => {
+      await result.current.send('redraw page 1');
+    });
+    const sentBefore = patchRequests().length;
+    act(() => result.current.undo());
+    expect(result.current.notice).toMatchObject({ kind: 'info', text: expect.stringMatching(/still drawing/) });
+    expect(result.current.undoLabel).toBe('switch versions'); // kept, and the older edit was not undone
+    expect(result.current.doc!.pages[1].summary).toBe('Older edit');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 220));
+    });
+    expect(patchRequests()).toHaveLength(sentBefore);
+    // The drawing finished: now the same undo applies.
+    directorQueue.push({ ops: [{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready' } }] });
+    await act(async () => {
+      await result.current.send('thanks');
+    });
+    act(() => result.current.undo());
+    expect(result.current.doc!.pages[0].render.asset?.path).toBe('u/proj/pages/p1.png');
+    expect(result.current.undoLabel).toBe('edit page');
+    await settle(result);
+  });
+
+  it('a typed undo whose save is refused takes its "Undid" notice back', async () => {
+    const { result } = await setup();
+    await act(async () => {
+      await result.current.patch([{ op: 'page', id: 'pg_2', patch: { summary: 'Beat' } }], { label: 'Edit page' });
+    });
+    await settle(result);
+    rejectNextPatch = { code: 'BAD_REQUEST', message: 'That page changed — nothing was changed.' };
+    await act(async () => {
+      await result.current.send('undo');
+    });
+    expect(result.current.notice).toMatchObject({ kind: 'undo', text: 'Undid: edit page.' });
+    await waitFor(() => expect(result.current.error).toMatch(/Couldn't save your change/));
+    expect(result.current.notice).toBeNull();
+    expect(result.current.doc!.pages[1].summary).toBe('Beat'); // rolled back to what the server has
+    expect(result.current.canUndo).toBe(false); // not retryable: dropped, never replayed out of order
+    expect(result.current.canRedo).toBe(false);
+  });
+});
+
+describe('signed URLs', () => {
+  it('stops re-signing a file that keeps failing to load and falls back from a broken variant to the original', async () => {
+    const doc = normalizeDoc(
+      makeSampleDoc((d) => {
+        d.pages[0].render.asset = { ...d.pages[0].render.asset!, variants: [{ path: 'u/proj/pages/p1.480.webp', w: 480, h: 720 }] };
+      })
+    );
+    const { result } = await setup({ doc, urls: { 'u/proj/pages/p1.png': 'https://cdn/p1', 'u/proj/pages/p1.480.webp': 'https://cdn/p1-480?v=0' } });
+    vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(1);
+    const asset = result.current.doc!.pages[0].render.asset!;
+    expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1-480?v=0');
+    let n = 0;
+    api.signStudioUrls.mockImplementation(async (_id: string, paths: string[]) => Object.fromEntries(paths.map((p) => [p, `https://cdn/p1-480?v=${++n}`])));
+    const img = document.createElement('img');
+    document.body.appendChild(img);
+    for (let i = 0; i < 6; i += 1) {
+      img.src = result.current.urlFor(asset, { width: 300 })!;
+      if (img.src === 'https://cdn/p1') break;
+      const calls = api.signStudioUrls.mock.calls.length;
+      act(() => {
+        img.dispatchEvent(new Event('error'));
+      });
+      if (i < 3) await waitFor(() => expect(api.signStudioUrls.mock.calls.length).toBe(calls + 1), { timeout: 2000 });
+    }
+    img.remove();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 700)); // past the signing debounce
+    });
+    // Three re-signs (an expired link is renewed), then the broken variant is dropped for the original.
+    expect(api.signStudioUrls).toHaveBeenCalledTimes(3);
+    expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1');
+  });
 });
 
 // ── Caps, variants, client actions, publication ──────────────────────────────
