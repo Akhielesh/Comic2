@@ -1,0 +1,74 @@
+/* ============================================================================
+   Usage & cost (ADR 0007 Phase B): the monthly Usage card, the "What this costs
+   DreamStream (est.)" expander, path lines before an action and receipts after.
+   Calm and quiet: free is green, through-our-servers is plain, allowances amber
+   at 80% and red at 100%. Theme tokens only (light + dark).
+   ========================================================================== */
+
+.usage-card { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
+.usage-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.usage-head b { font-size: 14.5px; }
+.usage-head .faint { font-size: 12px; }
+
+.usage-group { display: grid; gap: 2px; }
+.usage-group-title { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding-bottom: 4px; border-bottom: 1px solid var(--line-soft); }
+.usage-free .usage-group-title { color: var(--green); }
+
+.usage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+.usage-row:last-child { border-bottom: 0; }
+.usage-row-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13.5px; }
+.usage-row-label small { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.usage-row-value { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.usage-pct { color: var(--muted); margin-left: 4px; }
+.usage-meter { grid-column: 1 / -1; margin-top: 4px; }
+.usage-allow.is-warn .usage-pct { color: var(--amber); }
+.usage-allow.is-full .usage-pct { color: var(--live); }
+.usage-notice { grid-column: 1 / -1; display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; padding: 8px 10px; border-radius: var(--r-sm); background: var(--amber-wash); color: var(--text); }
+.usage-allow.is-full .usage-notice { background: var(--live-wash); }
+.usage-notice svg { flex: none; margin-top: 2px; }
+
+.usage-empty, .usage-none, .usage-note { margin: 4px 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.usage-empty { color: var(--green); }
+.usage-night { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; font-size: 13px; }
+.usage-tip { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 9px 11px; border-radius: var(--r-sm); background: var(--green-wash); font-size: 12.5px; line-height: 1.45; }
+.usage-tip svg { flex: none; margin-top: 2px; color: var(--green); }
+.usage-foot { margin: 0; font-size: 11.5px; line-height: 1.45; }
+
+/* What this costs DreamStream (est.) — folded away, never a charge. */
+.usage-cost { border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--panel-2); padding: 0 12px; font-size: 12.5px; }
+.usage-cost > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 0; cursor: pointer; list-style: none; }
+.usage-cost > summary::-webkit-details-marker { display: none; }
+.usage-cost > summary::before { content: '▸'; color: var(--muted); margin-right: 2px; }
+.usage-cost[open] > summary::before { content: '▾'; }
+.usage-cost-title { flex: 1; font-weight: 600; }
+.usage-cost-est { color: var(--muted); font-variant-numeric: tabular-nums; }
+.usage-cost p { margin: 0 0 8px; color: var(--muted); line-height: 1.45; }
+.usage-cost-lines { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
+.usage-cost-lines li { display: flex; justify-content: space-between; gap: 10px; }
+.usage-cost-foot { font-size: 11.5px; }
+
+/* Before an action: the path and who pays, on the verb. */
+.cost-line { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--green); font-weight: 600; }
+.cost-line.servers { color: var(--muted); }
+.rc-cost { margin: 2px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+/* Receipts. */
+.delivery-card .delivery-line { margin: 0; font-size: 13px; line-height: 1.5; }
+.delivery-card .delivery-who { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.delivery-card .usage-cost { margin-top: 10px; }
+
+@media (max-width: 520px) {
+  .usage-card { padding: 14px 12px; }
+  .usage-row { grid-template-columns: minmax(0, 1fr); }
+  .usage-row-value { white-space: normal; }
+}
+
+/* Nursery settings → Usage: last night's receipt, the month folded away. */
+.ns-usage { display: grid; gap: 8px; }
+.usage-open > summary { cursor: pointer; font-size: 13px; color: var(--accent-ink); padding: 4px 0; }
+.usage-open[open] > summary { margin-bottom: 8px; }
+
+/* Quick start: the path line sits between the body and the call to action. */
+.quick-card { grid-template-areas: 'icon title' 'icon body' 'icon cost' 'icon cta'; }
+.qc-cost { grid-area: cost; margin-top: 2px; line-height: 1.4; }
+.gv-path { display: inline-flex; }

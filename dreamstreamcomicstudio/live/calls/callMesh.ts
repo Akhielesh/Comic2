@@ -254,6 +254,8 @@ export interface MeshOptions {
   iceMs?: number | null;
   /** The relay credentials are due: ask the room for fresh ones (`{t:'call_ice'}`); they come back through setIce. */
   refreshIce?: () => void;
+  /** Each stats report the quality check already takes (usage metering: relay bytes received). */
+  onStats?: (stats: RTCStatsReport, pc: RTCPeerConnection) => void;
 }
 
 export class CallMesh {
@@ -778,6 +780,9 @@ export class CallMesh {
       if (p.state !== 'connected') continue;
       try {
         const stats = await p.pc.getStats();
+        try {
+          this.opts.onStats?.(stats, p.pc);
+        } catch { /* display only */ }
         let lost = 0;
         let got = 0;
         let rtt: number | null = null;

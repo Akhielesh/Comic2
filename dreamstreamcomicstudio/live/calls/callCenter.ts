@@ -56,6 +56,9 @@ import {
   type PersonRec,
   type UserLineMsg,
 } from './types';
+import { callReceipt, type CallReceipt } from '../costCopy';
+import { callPathOf, SessionMeter } from '../usage/sessionMeter';
+import { acceptAccountUsage, accountLineUp, setAccountLine } from '../usage/usageClient';
 
 interface Line {
   nid: string;
@@ -103,6 +106,9 @@ interface Active {
   /** The last connection outcome told to the room (telemetry). */
   reported: string | null;
   rejoinAt: number;
+  /** Minutes per path and relay bytes, for the end-of-call receipt (usage/sessionMeter.ts). */
+  meter?: SessionMeter | null;
+  receipt?: CallReceipt | null;
 }
 
 export interface Ringing {
@@ -139,6 +145,8 @@ export interface ActiveView {
   busy: boolean;
   /** Relay test mode (?relay=1): media may only go through the relay. */
   relayTest: boolean;
+  /** How the call went, once it's over and it connected: "12 min · direct · free". */
+  receipt: CallReceipt | null;
 }
 
 export interface CallsSnapshot {
@@ -551,12 +559,21 @@ class CallCenter {
     if (!uid || this.ul || !this.on || this.suspended) return;
     const line: Line = { nid: 'me', sock: null as unknown as MonitorSocket, connected: false, me: null, nursery: null, ice: [], iceAt: 0, helloAt: 0, vapid: null };
     this.ul = line;
+    // The Usage card reads this month's account usage over this line (usage/usageClient.ts).
+    setAccountLine((msg) => {
+      if (this.ul !== line || !line.connected) return false;
+      line.sock.send(msg);
+      return true;
+    });
     line.sock = openUserLineSocket<UserLineMsg>(
       uid,
       (m) => this.onMeMsg(line, m),
       (st) => {
         line.connected = st === 'connected';
-        if (st === 'closed' && this.ul === line) this.ul = null;
+        if (st === 'closed' && this.ul === line) {
+          this.ul = null;
+          setAccountLine(null);
+        }
         this.emit();
       },
     );
@@ -576,6 +593,7 @@ class CallCenter {
         line.vapid = m.vapid;
         line.iceAt = now;
         line.helloAt = now;
+        accountLineUp(); // a Usage card that asked while the line was connecting
         this.uid = m.you.uid;
         this.favs = m.favs ?? [];
         this.blocked = m.blocked ?? [];
@@ -639,6 +657,9 @@ class CallCenter {
       case 'call_log':
         this.log.set(m.rec.id, this.directRec(m.rec));
         this.emit();
+        return;
+      case 'usage':
+        acceptAccountUsage(m);
         return;
     }
   }
@@ -1472,6 +1493,7 @@ class CallCenter {
     a.call = call;
     if (!a.mesh) {
       const id = call.id;
+      const meter = (a.meter ??= new SessionMeter());
       a.mesh = new CallMesh({
         me: me.uid,
         ice: a.ice ?? line.ice,
@@ -1482,6 +1504,7 @@ class CallCenter {
         onChange: () => this.onMesh(a),
         warm: () => this.takeWarm(id),
         refreshIce: () => line.sock.send({ t: 'call_ice', id }),
+        onStats: (stats, pc) => meter.observe(stats, pc),
       });
     }
     const awayBefore = new Set(a.mesh.views.filter((p) => p.away).map((p) => p.uid));
@@ -1492,6 +1515,7 @@ class CallCenter {
   private onMesh(a: Active): void {
     if (this.active !== a || !a.mesh) return;
     if (this.since == null && a.mesh.connectedCount > 0) this.since = Date.now();
+    a.meter?.setPath(callPathOf(a.mesh.views));
     this.report(a);
     this.emit();
   }
@@ -1510,6 +1534,10 @@ class CallCenter {
     const a = this.active;
     if (!a || a.ended) return;
     a.ended = ended;
+    if (a.meter) {
+      a.meter.setPath(null);
+      a.receipt = callReceipt(a.meter.totals(), a.outgoing);
+    }
     a.mesh?.close();
     a.mesh = null;
     for (const t of a.local.getTracks()) t.stop();
@@ -1567,6 +1595,7 @@ class CallCenter {
         why: state === 'failed' ? failed?.why ?? null : null,
         busy: !!a.mesh?.busy,
         relayTest: a.relayOnly,
+        receipt: a.receipt ?? null,
       };
     }
     return {

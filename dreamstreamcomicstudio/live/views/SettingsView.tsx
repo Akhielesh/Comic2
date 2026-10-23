@@ -27,9 +27,12 @@ import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
 import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui/primitives';
 import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, syncMyEvents, type StudioAccess } from '../sync';
+import { cloudCopySettingDesc } from '../costCopy';
+import { AccountUsageCard } from './settings/UsageCard';
 
 const SET_CATS = [
   { id: 'account', label: 'Account & sync', icon: 'user' },
+  { id: 'usage', label: 'Usage', icon: 'gauge' },
   { id: 'scenes', label: 'Scenes', icon: 'layers' },
   { id: 'camera', label: 'Camera & looks', icon: 'video' },
   { id: 'chat', label: 'Chat & reactions', icon: 'chat' },
@@ -62,8 +65,27 @@ function Row({ title, desc, children }: { title: string; desc?: string; children
   );
 }
 
+/** `#/settings?s=usage` opens a section directly (Help links to Usage). */
+function sectionFromHash(): string | null {
+  try {
+    const q = location.hash.indexOf('?');
+    const s = q === -1 ? null : new URLSearchParams(location.hash.slice(q + 1)).get('s');
+    return s && SET_CATS.some((c) => c.id === s) ? s : null;
+  } catch {
+    return null;
+  }
+}
+
 export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
-  const [cat, setCat] = useState('account');
+  const [cat, setCat] = useState(() => sectionFromHash() ?? 'account');
+  useEffect(() => {
+    const on = () => {
+      const s = sectionFromHash();
+      if (s) setCat(s);
+    };
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
   const [prefs, setPrefsState] = useState<StudioPrefs>(loadPrefs);
   const [account, setAccount] = useState<StudioAccess | null>(null);
   const live = useAccount();
@@ -271,6 +293,17 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               </Row>
             </>
           )}
+          {cat === 'usage' && (
+            <>
+              <div className="set-head"><h2 className="serif">Usage</h2></div>
+              <p className="set-intro">
+                What you used this month. Most of Stream Studio is free — it runs on your devices, your Wi-Fi and
+                direct links. What goes through our servers is shown here with its fair-use allowance. You’re never
+                charged. It loads when you open this page.
+              </p>
+              <AccountUsageCard signedIn={live.status === 'member'} />
+            </>
+          )}
           {cat === 'recording' && (
             <>
               <div className="set-head"><h2 className="serif">Recording &amp; saving</h2></div>
@@ -380,7 +413,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               <Row title="Record at higher bitrate" desc="Master copy at ~2.5× the stream on computers (phones always record at stream quality to stay smooth).">
                 <Toggle on={prefs.recordHighBitrate} onChange={(v) => set('recordHighBitrate', v)} label="Record at higher bitrate" />
               </Row>
-              <Row title="Also keep a 7-day cloud copy" desc="Uploads in the background after each recording so you can grab it later from any device. Auto-deleted after 7 days.">
+              <Row title="Also keep a 7-day cloud copy" desc={`Uploads after each recording so you can grab it later from any device. ${cloudCopySettingDesc(preset, prefs.recordHighBitrate)}`}>
                 <Toggle on={prefs.cloudRecordings} onChange={(v) => set('cloudRecordings', v)} label="Cloud recordings" />
               </Row>
             </>

@@ -1,9 +1,9 @@
 # Stream Studio costs: what we spend, who sees it, and how we keep it near $0
 
-- **Status:** Phase A (metering and the owner view) is **implemented** — see
-  [Implementation status](#implementation-status-2026-10-22) below. Phases B and C are still the plan. The owner
-  answered §8 on 2026-10-22 (recorded there). The decision record is
-  [ADR 0007](../decisions/0007-stream-studio-cost-transparency-and-frugality.md).
+- **Status:** Phase A (metering and the owner view) and Phase B (what users see) are **implemented** — see
+  [Implementation status](#implementation-status-2026-10-22) and [Phase B status](#phase-b--what-users-see-implemented-2026-10-23)
+  below. Phase C is partly built (C1, C2, C6, C7, C11). The owner answered §8 on 2026-10-22 (recorded there). The decision
+  record is [ADR 0007](../decisions/0007-stream-studio-cost-transparency-and-frugality.md).
 - **Date:** 2026-10-22.
 - **Code refs:** branch `claude/dreams-streaming-baby-monitor-z2kkae` at `ad30d1c`. Every line ref was checked at `b6bf72e`;
   the later merge touched none of the referenced files. Paths are relative to `dreamstreamcomicstudio/`.
@@ -36,7 +36,7 @@
 | A7 | `.github/workflows/stream-cost-watch.yml`, `scripts/ops/streamCostWatch.mjs` (+ test) | Daily at 06:17 UTC; reads Cloudflare only (never the backend); opens / updates / closes one `stream-cost-watch` issue **only when the alert set changes**; no secret → a logged no-op. **Fails safe:** a dataset that doesn't answer (or answers without the account or the field) is "couldn't measure", never zero — every alert it feeds keeps its last state, the issue says what is missing, it never closes or says "All clear" while anything is unmeasured, and the run goes red. |
 | A8 | `COST_RUNBOOK.md` §1/§7/§9, `baby-monitor.md` | DO rows, server relay and TURN lines; the relay cost claim corrected (≈ $0.16 per all-night relay viewer-month, not $1.7). |
 
-**Read paths for Phase B** (no UI yet): `UserLine` `{t:'usage_get'}` → `{t:'usage', usage: UsageMonth, allowances}`
+**Read paths for Phase B** (now used by the Usage card, below): `UserLine` `{t:'usage_get'}` → `{t:'usage', usage: UsageMonth, allowances}`
 (the member's own month); `MonitorRoom` `{t:'q', q:'usage'}` → `{t:'r', q:'usage', usage, allowances}` for **parents only**
 (caregivers, viewers and guests get `error: 'forbidden'`). `MonitorRoom` already accepts the Phase B `{t:'use'}` report from
 viewers: cumulative, deduplicated in the attachment, clamped to the socket's age, never "through our server" minutes
@@ -58,12 +58,42 @@ budget alert at $10. Deploying the live Worker creates the `stream_usage` datase
   TURN is the account total and call TURN GB is estimated from minutes on the relay path.
 - Monitor viewers don't report their Home Wi-Fi / Direct / relay minutes until Phase B, so the room knows only its own
   our-server minutes: the our-server share and the relay-creep alert stay off (shown "—"), and "Minutes on free paths"
-  counts calls and meetings only, until reports arrive.
+  counts calls and meetings only, until reports arrive. *(Phase B ships those reports; app versions from before it still
+  send none.)*
 - Per-active-nursery-day figures (cost per nursery-month, the ADR 0006 KPIs, hibernation and write-diet alerts, the
   scale projection) count only days that carry the rooms' activity marks; before the first marks they show "—".
 - Month-end projections count at least 3 days of the month as elapsed (`PROJECTION_MIN_DAYS`), so one night on the 1st
   isn't extrapolated ×100 into a false monthly alert; the TURN-leak rule (500 GB before the 15th) uses actual GB.
 - Counters are accurate estimates, **not billing-grade** — Stream Studio does not charge users.
+
+## Phase B — what users see (implemented 2026-10-23)
+
+Branch `impl/costs-users`, on top of wave 1 (`87082ad`). Comic Studio's cost patterns, translated to a studio where most
+things are free: the path and who pays on the verb, a pill while live, a receipt after, a calm monthly card. Every word is
+in **one module, `live/costCopy.ts`**, and its rules (§4.8) are tests.
+
+| Step | Where | What it does |
+|---|---|---|
+| B1 | `live/usage/sessionMeter.ts` (+ `sessionMeter.unit.test.ts`) | Minutes per path (Home Wi-Fi · Direct · relay · our server) from path changes the app already knows, and TURN `bytesReceived` on the selected pair **only when our own candidate is the relay** (what Cloudflare bills), fed by `getStats()` reads that already run: the monitor viewer's 20 s path check (`ViewerLink.onStats`, a 2-line hook in `live/monitor/rtc.ts`), the call mesh's 3 s quality check (`MeshOptions.onStats`) and the studio links' 15 s path check (`PeerLink.onStats` / `HostPeers.onStats`). **No timer of its own**: the monitor screen's existing 5 s tick drives it. Monitor viewers send cumulative `{t:'use', minutes:{lan,direct,turn}, turnBytes}` on a path change (≥ 1 min apart), every 15 min and on `pagehide`, with a new baseline per socket; never our-server minutes (the room measures those). A frozen page (no tick for 3 min) isn't counted. Calls and meetings keep their meter on the device (receipts, recap). `usage/monitorUsage.ts`, `usage/studioUsage.ts`, `usage/ledger.ts` (this device's nights per nursery, its month, hosted meetings — localStorage only, bounded, never sent). |
+| B2 | `live/costCopy.ts` (+ `costCopy.unit.test.ts`) | Every string of §4: pills and tooltips, pre-action lines, receipts, the Usage card, tips, fair-use notices, "What this costs DreamStream (est.)". The test enforces §4.8 over every string the module can produce **and the Help entries**: no "free" in any clause about our relay, servers or storage (a broadcast is "free for you", said with "through our servers"); never "end-to-end" for the server relay except "not end-to-end"; `$` figures, `fmtUsdEst`/`approxUsd`/`listValueUsd` only in `costCopy.ts` and `usage/CostExpander.tsx` (a source scan of `live/`); no "charge / bill / pay" outside the expander except "you aren't charged"; no copy that says sound or alerts stop. |
+| B3 | `QuickStart.tsx`, `StudioView.tsx` (+ `meetingUi.tsx` `ReadyCheck cost`), `SaveSheet.tsx`, `SettingsView.tsx` | Instant meeting: **"Direct between you and your guests — free."** (tooltip: an encrypted relay carries it for someone whose network blocks direct video). Go live now: **"Through our servers · free for you · replay kept 24 h."** (the doc's "Free · through our servers" reworded so "free" never sits next to our servers). Ready check: "Your viewers watch through our servers — free for you. You upload ≈ 1.2 GB an hour at 720p." Go live buttons carry the same line; the Invite sheet says the meeting is direct and free. Save sheet keeps wave 1's copy (now from `costCopy`), adds the Drive tip while Drive is connected, and counts each save in this device's Usage. Settings → Recording's toggle: "Off unless you turn it on. Each recorded hour at 720p uses ≈ 2.9 GB of your upload and our storage — kept 7 days, up to 10 GB per account. Google Drive and this device are free…". |
+| B4 | `MonitorViewer.tsx`, `CallScreen.tsx`, `PeopleCard.tsx`, `GuestView.tsx`, `components/rails.tsx`, `meetingUi.tsx`, `StudioView.tsx` | Pills **"Home Wi-Fi · free"**, **"Direct · free"**, **"Through our relay · encrypted"** (tooltip adds "Relay data this month: 2.1 GB of 10 GB" once a parent's device has read it — no request of its own), **"Through our server"** (fps suffix kept; "Camera full · through our server"; the privacy tooltip unchanged). Calls: "4:12 · Direct · free". People: "· through our server". Studio: each guest row and Invite seat says its path; the guest's own screen has a path pill; the live viewer count's tooltip says "Live · through our servers · free for you, up to 200 viewers". |
+| B5 | `SummaryView.tsx` (+ `usage/recap.ts`), `CallHost.tsx`, `NurserySettings.tsx` | Recap **Delivery** block: "1 h 02 m · peak 20 viewers · ≈ 1.2 GB stored for 24 h · ≈ 23 GB delivered", "Through our servers · free for you", a hosted meeting's "3 guests · 45 min on camera · all direct · free · this device", and the folded "What this costs DreamStream (est.)" (an hour to 20 viewers: "under $0.01 at list price"). Stored is from the encoder's own telemetry, delivered from the room's viewer-minutes — from what `/stats` already returns. The empty cloud-copy card no longer points to a setting. Call end toast: "12 min · direct · free", "12 min · encrypted relay · 0.14 GB of your relay data", or for the person called "… counts toward the caller's relay data". Nursery settings → Usage: "Last night: 10 h · all direct · free" (this device), and with a relay "98% direct (free) · 12 min through our relay" — "free" never next to the relayed part. |
+| B6 | `live/views/settings/UsageCard.tsx` (+ test), `SettingsView.tsx` section `usage` (`#/settings?s=usage`), `NurserySettings.tsx` | **Loads once when opened, over sockets already open, no timers** (tested: no `setInterval`/`setTimeout` in the card; an hour on screen asks nothing more). Account: UserLine `{t:'usage_get'}` (asked when the line says hello if it was still connecting) plus the cloud-copy quota read the save sheet already makes. Nursery (parents): MonitorRoom `{t:'q', q:'usage'}` inside a folded section, asked only when unfolded; caregivers and viewers see "Only the nursery's parents see its usage." Free next to through-our-servers, allowance meters (relay data vs 10 GB, 7-day copies vs 10 GB, picture through our server "up to 16 h a day · sound and alerts are never limited"), `≈` wherever relay data is estimated from minutes, at most one tip, the empty state, and the folded expander (list price, dated, "You aren't charged"). A fixture test checks the card shows the server's month counters as they are. |
+| B7 | `usage/usageClient.ts`, `CallHost.tsx`, `MonitorViewer.tsx`, `SaveSheet.tsx`, the card | In-app only (never email or push), once per level per month per device: after a relayed call you placed (one look at your month), when a parent opens the monitor (one look, at most twice a day), when a 7-day copy finishes past 80%, and on the card's meters (amber at 80%, red at 100%). The 100% relay notice says what is true today ("the baby monitor's sound and alerts are never limited"); the owner's "sound only + direct / Home Wi-Fi picture" wording (`RELAY_OUT_MONITOR`) is shown only once the room enforces it (`relayNotice(…, { pictureFallback: true })`). |
+| Help | `components/Guide.tsx` | A "Usage & what's free" Help section (what's free, where to see usage, fair use, "Am I charged?", using less of our servers), a how-to guide with an "Open Usage" button, and the welcome tour's Customize step mentions Usage. `privacyCopy.unit.test.ts` stays green. |
+
+**Targets, as tests:**
+- 100% of server-paid actions show a path line first: `costCopy.unit.test.ts` rule 4 (Quick start, Studio ready check and Go live, Save sheet order, Settings toggle) and `QuickStart.test.tsx`.
+- Client-reported path minutes vs the room's: `sessionMeter.unit.test.ts` simulates a 10 h night of path changes through the room's own clamp and per-socket dedupe (`live-worker/src/usageMeter.ts`): every path and the relay bytes within **±5%**, resends never double count, ≤ 5 messages an hour. With two socket drops the room never exceeds the device, loses at most the unsent ≤ 15 min per drop, and the total stays within ±5%.
+- The Usage card equals the server's month counters (`UsageCard.test.tsx`) and asks nothing on a timer.
+
+**Known limits (honest):**
+- Calls' relay data is **≈ from minutes**: the call rooms don't take client TURN bytes, and `STREAM_ESTIMATES.turnBytesPerMinute.call` (`shared/stream/usage.ts`) still assumes 1.5 Mbps — since C7 a relayed 1:1 call is capped at 700 kbps, so the call estimate reads about 2× high (it is labelled ≈). Fix belongs with that file's owner.
+- A socket drop loses the minutes not yet reported on it (≤ 15 min). Display only; enforcement never uses client reports.
+- "Last night" is this device's own watching: the rooms keep months, not nights.
+- Not wired here (WS-6 files): `CAMERA_FAMILY_LINE` on the camera setup screen and the camera's "N through the server" count; the picture's relay-data fallback itself (C5).
+- The Playwright pass (P2P blocked → "Through our server" and the card's server minutes rise) hasn't been run.
 
 ---
 

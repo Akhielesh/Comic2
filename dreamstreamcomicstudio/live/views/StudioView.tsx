@@ -21,6 +21,8 @@ import { ProgramAudioMixer, takePrimedAudioContext } from '../studio/audioMixer'
 import { HostPeers, sanitizeIceServers, type GuestLink } from '../studio/rtc';
 import { IceClock } from '../rtcIce';
 import { CameraIssue, InviteSheet, ReadyCheck, type ReadyPhase } from '../studio/meetingUi';
+import { BROADCAST_TIP, GO_LIVE_LINE, studioViewersLine } from '../costCopy';
+import { MeetingMeter } from '../usage/studioUsage';
 import { shareOrCopy, takeStudioIntent } from '../quickStart';
 import {
   SegmentedRecorder,
@@ -111,6 +113,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const compRef = useRef<ProgramCompositor | null>(null);
   const mixerRef = useRef<ProgramAudioMixer | null>(null);
   const hostPeersRef = useRef<HostPeers | null>(null);
+  /** On-camera guests' minutes per path, for the recap (usage/studioUsage.ts; this device only). */
+  const meetingMeterRef = useRef(new MeetingMeter());
   const guestNamesRef = useRef(new Map<string, string>());
   const tileVideosRef = useRef(new Map<string, HTMLVideoElement>());
   const socketRef = useRef<RoomSocket | null>(null);
@@ -327,6 +331,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       const syncGuests = () => {
         const list = peers.guests();
         setGuests(list);
+        meetingMeterRef.current.sync(list);
         const mixer = mixerRef.current;
         const seen = new Set<string>();
         const tiles: ProgramTile[] = [];
@@ -372,6 +377,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         comp.setRemoteTiles(tiles);
       };
       peers.onChange = syncGuests;
+      peers.onStats = (sid, r, pc) => meetingMeterRef.current.observe(sid, r, pc);
       hostPeersRef.current = peers;
       setMediaReady(true);
       setCamStarting(false);
@@ -625,6 +631,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       // "unsaved" for recovery instead of being silently lost.
       void localRecRef.current?.stop();
       void wakeRef.current.disable();
+      meetingMeterRef.current.save(eventId);
       hostPeersRef.current?.closeAll();
       mixerRef.current?.close();
       for (const v of tileVideosRef.current.values()) v.srcObject = null;
@@ -676,6 +683,14 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   useEffect(() => {
     if (viewers > 0) setShareLive(false);
   }, [viewers]);
+
+  // The recap's "guests: all direct · free" line: saved when it ends and when the page goes.
+  useEffect(() => {
+    const save = () => meetingMeterRef.current.save(eventId);
+    if (status === 'ended') save();
+    window.addEventListener('pagehide', save);
+    return () => window.removeEventListener('pagehide', save);
+  }, [status, eventId]);
 
   // Lobby alerts (someone knocked).
   useEffect(() => {
@@ -1235,6 +1250,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       micOk={!!audioTrackRef.current}
       roomOk={roomReady}
       quality={`${preset.id} · needs ≥ ${preset.minUplinkMbps} Mbps upload`}
+      cost={studioViewersLine(preset)}
       phase={ready.phase}
       count={ready.count}
       getMicLevel={micLevel}
@@ -1408,7 +1424,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         {sockStatus === 'reconnecting'
           ? <Pill tone="warn" icon="refresh">Reconnecting…</Pill>
           : <Pill tone={healthy ? 'ok' : 'warn'} icon="signal">{healthy ? 'Healthy' : 'Degraded'}</Pill>}
-        {!meetingIdle && <Pill tone="neutral" icon="eye">{viewers}/{maxViewers}</Pill>}
+        {!meetingIdle && <span title={BROADCAST_TIP}><Pill tone="neutral" icon="eye">{viewers}/{maxViewers}</Pill></span>}
         <div className="t-sep" />
         {!meetingIdle && <IconBtn name="share" label="Share watch link" onClick={() => void shareWatch()} />}
         <Btn
@@ -1425,11 +1441,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         <HelpButton />
         {meetingIdle && (
           <>
-            <Btn variant="ghost" icon="broadcast" onClick={goLive} disabled={!mime || !mixed} data-tour="studio-golive" title={mixed ? 'Broadcast this meeting to viewers' : 'Waiting for your camera'}>Go live with this meeting</Btn>
+            <Btn variant="ghost" icon="broadcast" onClick={goLive} disabled={!mime || !mixed} data-tour="studio-golive" title={mixed ? `Broadcast this meeting to viewers. ${GO_LIVE_LINE}` : 'Waiting for your camera'}>Go live with this meeting</Btn>
             <Btn variant="danger" icon="stop" onClick={() => void endMeeting()}>End meeting</Btn>
           </>
         )}
-        {status === 'idle' && !isMeeting && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime || !mixed} data-tour="studio-golive" title={mixed ? undefined : 'Waiting for your camera'}>Go live</Btn>}
+        {status === 'idle' && !isMeeting && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime || !mixed} data-tour="studio-golive" title={mixed ? GO_LIVE_LINE : 'Waiting for your camera'}>Go live</Btn>}
         {(isLive || status === 'paused') && <Btn variant="danger" icon="stop" onClick={() => void endStream()}>End stream</Btn>}
         {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime || !mixed}>Go live again</Btn>}
         {status === 'ended' && <Btn variant="subtle" icon="chart" onClick={() => nav.summary(eventId, hostKey)}>View recap</Btn>}

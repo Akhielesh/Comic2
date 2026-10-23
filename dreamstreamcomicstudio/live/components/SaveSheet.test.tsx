@@ -39,6 +39,7 @@ import { connectDrive, DriveError, getDriveStatus, openConsentWindow, saveRecord
 import { discardOpfsRecording } from '../recorder';
 import { cloudCopyNoticePending, savePrefs, loadPrefs } from '../prefs';
 import { SaveSheet } from './SaveSheet';
+import { deviceMonth } from '../usage/ledger';
 
 const rec = (): FinishedRecording => ({
   data: new Blob([new Uint8Array(4096)], { type: 'video/webm' }),
@@ -331,5 +332,32 @@ describe('SaveSheet — free first, the 7-day copy only when chosen (ADR 0007 C1
     await screen.findByRole('link', { name: /Open in Drive/ });
     expect(screen.getByText(/DreamStream Recordings · me@example\.com/)).toBeInTheDocument();
     expect(getDriveStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('SaveSheet — usage (ADR 0007 Phase B)', () => {
+  it('a 7-day copy that takes the account past 80% says so in the app; this device’s Usage counts it', async () => {
+    h.quota = quotaOf(7.5);
+    vi.mocked(uploadRecording).mockResolvedValue({ key: 'k', quota: quotaOf(8.4) });
+    const { push } = renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    fireEvent.click(keep);
+    await waitFor(() => expect(cloudRow()).toHaveTextContent('Stored'));
+    expect(push).toHaveBeenCalledWith('8.4 GB of your 10 GB of 7-day copies is in use. Google Drive and this device are free, and the file is yours to keep.', { icon: 'info', duration: 8000 });
+    expect(deviceMonth().saves.cloud).toBe(4096);
+  });
+
+  it('under 80%: no notice; a save to this device is counted as free in this device’s Usage', async () => {
+    h.quota = quotaOf(1);
+    vi.mocked(uploadRecording).mockResolvedValue({ key: 'k', quota: quotaOf(1.5) });
+    const { push } = renderSheet({ hostKey: 'hk' });
+    const keep = await screen.findByRole('button', { name: /Keep a 7-day copy/ });
+    await waitFor(() => expect(keep).not.toBeDisabled());
+    fireEvent.click(keep);
+    await waitFor(() => expect(cloudRow()).toHaveTextContent('Stored'));
+    expect(push).not.toHaveBeenCalledWith(expect.stringContaining('of 7-day copies is in use'), expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: /To your browser’s Downloads folder/ }));
+    await waitFor(() => expect(deviceMonth().saves.device).toBe(4096));
   });
 });

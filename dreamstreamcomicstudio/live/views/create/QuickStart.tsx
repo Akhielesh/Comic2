@@ -2,6 +2,7 @@
 // and "Go live now". Everything else (schedule, invite page, quality, access, cap,
 // recording) waits under Advanced.
 import React from 'react';
+import { GO_LIVE_LINE, GO_LIVE_LINE_TIP, MEETING_LINE, MEETING_LINE_TIP } from '../../costCopy';
 import { MAX_GUESTS } from '../../protocol';
 import type { QuickKind } from '../../quickStart';
 import { Icon } from '../../ui/icons';
@@ -14,6 +15,11 @@ interface CardDef {
   icon: string;
   title: string;
   body: (maxViewers: number) => string;
+  /** The path and who pays, on the verb — said before anything starts (ADR 0007 D4). */
+  cost: string;
+  costTip: string;
+  /** It goes through our servers (still free for you). */
+  servers: boolean;
   cta: string;
 }
 
@@ -24,6 +30,9 @@ const CARDS: CardDef[] = [
     icon: 'users',
     title: 'Instant meeting',
     body: () => `Invite up to ${MAX_GUESTS} people on camera. Private — nothing is broadcast unless you go live.`,
+    cost: MEETING_LINE,
+    costTip: MEETING_LINE_TIP,
+    servers: false,
     cta: 'Start meeting',
   },
   {
@@ -32,6 +41,9 @@ const CARDS: CardDef[] = [
     icon: 'broadcast',
     title: 'Go live now',
     body: (n) => `Broadcast to up to ${n} viewers. They join with just a name.`,
+    cost: GO_LIVE_LINE,
+    costTip: GO_LIVE_LINE_TIP,
+    servers: true,
     cta: 'Go live',
   },
 ];
@@ -88,6 +100,10 @@ export function QuickStart({
               <span className="qc-icon" aria-hidden><Icon name={c.icon} size={22} /></span>
               <span className="qc-title">{c.title}</span>
               <span className="qc-body">{c.body(maxViewers)}</span>
+              <span className={cx('qc-cost cost-line', c.servers && 'servers')} title={c.costTip}>
+                <Icon name={c.servers ? 'globe' : 'check'} size={12} />
+                {c.cost}
+              </span>
               <span className="qc-cta">
                 {mine ? <span className="qc-spin" aria-hidden /> : null}
                 {mine ? QUICK_BUSY_COPY[c.kind] : c.cta}

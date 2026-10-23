@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { shareSummary, type InviteTab } from '../../monitor/invite';
 import { ROLE_INFO, type MonRole, type ShareInfo, type ViewerPresence } from '../../monitor/protocol';
+import { PATH_TIP, VIEWER_VIA_SERVER } from '../../costCopy';
 import { Icon } from '../../ui/icons';
 import { Btn } from '../../ui/primitives';
 
@@ -47,7 +48,7 @@ export function PeopleCard({
               {v.sid === me?.sid ? ' (you)' : ''}
               {v.guest && <span className="pill-guest sm">Guest</span>}
             </span>
-            <span className="faint">{v.dn} · {ROLE_INFO[v.role].label}{v.relay ? ' · via our server' : ''}</span>
+            <span className="faint" title={v.relay ? PATH_TIP.server : undefined}>{v.dn} · {ROLE_INFO[v.role].label}{v.relay ? VIEWER_VIA_SERVER : ''}</span>
           </div>
         ))}
       </div>

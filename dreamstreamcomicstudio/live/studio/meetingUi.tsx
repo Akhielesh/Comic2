@@ -5,6 +5,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../ui/icons';
 import { Btn, cx, initials, redactUrlSearchParams } from '../ui/primitives';
 import type { GuestLink } from './rtc';
+import { MEETING_LINE, PATH_PILL } from '../costCopy';
+import { streamPathOf } from '../usage/sessionMeter';
 
 /* ------------------------------------------------------------ invite sheet */
 
@@ -89,7 +91,7 @@ export function InviteSheet({
             const g = guests[i];
             const linked = g?.state === 'connected';
             return (
-              <span key={g?.sid ?? `seat-${i}`} className={cx('seat', g && 'is-taken', linked && 'is-live')} title={g ? g.name : 'Open seat'}>
+              <span key={g?.sid ?? `seat-${i}`} className={cx('seat', g && 'is-taken', linked && 'is-live')} title={g ? (linked && g.path ? `${g.name} · ${PATH_PILL[streamPathOf(g.path) ?? 'direct']}` : g.name) : 'Open seat'}>
                 {g ? initials(g.name) : <Icon name="user" size={13} />}
               </span>
             );
@@ -103,7 +105,7 @@ export function InviteSheet({
         <div className="sheet-foot">
           <span className="muted" style={{ fontSize: 12.5, flex: 1 }}>
             {meeting
-              ? 'Private — nothing is broadcast. Go live any time to stream this meeting to viewers.'
+              ? `Private — nothing is broadcast. ${MEETING_LINE} Go live any time to stream this meeting to viewers.`
               : 'Guests appear in your program in Grid, Spotlight or Sidebar. No account needed.'}
           </span>
           <Btn variant="ghost" onClick={onClose}>Done</Btn>
@@ -139,6 +141,7 @@ export function ReadyCheck({
   micOk,
   roomOk,
   quality,
+  cost,
   phase,
   count,
   getMicLevel,
@@ -150,6 +153,8 @@ export function ReadyCheck({
   micOk: boolean;
   roomOk: boolean;
   quality: string;
+  /** Who carries the broadcast and what it uses, said before going live (costCopy.ts). */
+  cost?: string;
   phase: ReadyPhase;
   count: number;
   getMicLevel: () => number;
@@ -175,6 +180,7 @@ export function ReadyCheck({
         {row(roomOk ? true : null, 'Room', roomOk ? 'Connected' : 'Connecting…')}
         {row(true, 'Quality', quality)}
       </ul>
+      {cost && <p className="rc-cost">{cost}</p>}
       <div className="rc-foot">
         {phase === 'counting' && (
           <>

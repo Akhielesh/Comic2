@@ -15,6 +15,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAccount } from '../../account';
 import { answerFromHash, callCenter, takeAnswerProof, useCalls, type Ringing } from '../../calls/callCenter';
 import { chime, startRing, unlockCallAudio } from '../../calls/ringtone';
+import { callReceiptText } from '../../costCopy';
+import { dueRelayNotice, requestAccountUsage } from '../../usage/usageClient';
 import { Icon } from '../../ui/icons';
 import { Avatar, cx, gradFor, type PushToast } from '../../ui/primitives';
 import { CallScreen } from './CallScreen';
@@ -183,6 +185,23 @@ export function CallHost({ push, suspended }: { push: PushToast; suspended: bool
     if (a?.state === 'connected' && prev !== 'connected') chime('connected');
     if (a?.state === 'ended' && prev && prev !== 'ended') chime('ended');
   }, [a?.state]);
+
+  // The receipt when a call that connected ends: "12 min · direct · free" (ADR 0007 D4).
+  // After a relayed call you placed, one look at your month says if relay data is at 80% / 100%.
+  const receipt = a?.state === 'ended' ? a.receipt : null;
+  const uid = account.userId;
+  const saidRef = useRef<unknown>(null);
+  useEffect(() => {
+    // Once per call (push isn't a stable function, so it can't be what re-runs this).
+    if (!receipt || saidRef.current === receipt) return;
+    saidRef.current = receipt;
+    push(callReceiptText(receipt), { icon: receipt.path === 'turn' ? 'globe' : 'check', duration: 5000 });
+    if (receipt.path !== 'turn' || !receipt.outgoing || !uid) return;
+    void requestAccountUsage().then((u) => {
+      const n = u && dueRelayNotice('account', uid, u.usage, u.allowances.relayDataGb);
+      if (n) push(n.text, { icon: 'alert', duration: 9000 });
+    });
+  }, [receipt, uid, push]);
 
   // The tab title flashes while ringing in the background.
   useEffect(() => {

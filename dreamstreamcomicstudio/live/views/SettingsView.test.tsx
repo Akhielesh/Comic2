@@ -90,3 +90,32 @@ describe('SettingsView — one account name', () => {
     expect(loadPrefs().hostName).toBe('DJ Ada');
   });
 });
+
+describe('SettingsView — Usage (ADR 0007 Phase B6)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    location.hash = '';
+  });
+
+  it('opens straight to Usage from Help (#/settings?s=usage) and loads the card there', async () => {
+    acct.current = { status: 'member', userId: 'u1', email: 'ada@example.com', name: 'Ada Lovelace' };
+    location.hash = '#/settings?s=usage';
+    render(<SettingsView nav={nav} push={vi.fn()} />);
+    expect(await screen.findByRole('heading', { name: 'Usage' })).toBeTruthy();
+    expect(screen.getByText(/You’re never charged\. It loads when you open this page\./)).toBeTruthy();
+    expect(screen.getByLabelText('Usage this month')).toBeTruthy();
+  });
+
+  it('is in the list of sections, and its card asks nothing while signed out', async () => {
+    acct.current = { status: 'signed_out' };
+    render(<SettingsView nav={nav} push={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Usage' }));
+    expect(await screen.findByText(/Sign in to see your calls and 7-day copies here/)).toBeTruthy();
+  });
+
+  it('the 7-day copy toggle says what it uses before it is turned on', () => {
+    location.hash = '#/settings?s=recording';
+    render(<SettingsView nav={nav} push={vi.fn()} />);
+    expect(screen.getByText(/Each recorded hour at .* uses ≈ .* GB of your upload and our storage — kept 7 days, up to 10 GB per account/)).toBeTruthy();
+  });
+});

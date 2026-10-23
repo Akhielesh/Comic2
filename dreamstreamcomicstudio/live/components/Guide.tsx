@@ -23,7 +23,7 @@ export const TOURS: Record<TourId, TourStep[]> = {
     { target: 'nav-create', title: 'Meet or go live', body: 'One tap starts an instant meeting (people you invite join on camera) or a live stream; schedule one with an invite page under Advanced. Hosting needs a free account (with your welcome code); joining or watching never does.' },
     { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
     { target: 'nav-calls', title: 'Calls', body: 'FaceTime-style video and voice calls with your family — or anyone on Stream Studio, found by name. One person or up to four at once.' },
-    { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys.' },
+    { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys — and Usage: what was free this month, and what went through our servers.' },
     { target: 'account', title: 'Your account', body: 'Sign in or create an account here. New accounts need the welcome code you were given — it’s checked securely on our server.' },
     { target: 'help', title: 'Help is always here', body: 'Open Help anytime to search answers or replay a tour for the screen you’re on.' },
   ],
@@ -358,6 +358,18 @@ export const GUIDES: HowTo[] = [
     ],
   },
   {
+    id: 'usage', title: 'See what’s free — and what uses our servers', icon: 'gauge', mins: 1, screens: ['watch', 'calls', 'nursery'],
+    intro: 'Most of Stream Studio runs on your own devices and costs nobody anything. Each screen says which way it goes, and Usage adds up your month. You’re never charged.',
+    steps: [
+      { title: 'Read the pill', body: '“Home Wi-Fi · free” and “Direct · free”: straight between your devices. “Through our relay · encrypted”: your network blocks direct links, so an encrypted relay forwards it and it uses relay data. “Through our server”: the baby monitor’s picture passed along by our server, in memory only and never stored.' },
+      { title: 'Open Usage', body: 'Customize → Usage shows this month: what was free — and what went through our servers, with your relay data and 7-day copies against their fair-use allowance. It loads when you open it — come back for newer numbers.' },
+      { title: 'Your nursery’s month', body: 'Parents: Nursery settings → Usage shows last night (“Last night: 10 h · all direct · free”) and the nursery’s month for everyone who watches it.' },
+      { title: 'Stay free', body: 'Keep the camera phone on the same Wi-Fi as yours (Home Wi-Fi uses no internet at all), save recordings to Google Drive or this device instead of a 7-day copy, and choose Audio only when you just want to listen.' },
+      { title: 'Fair use', body: 'Relay data: 10 GB a month for the calls you place and 10 GB for each nursery’s viewers — Direct and Home Wi-Fi never count. 7-day copies: 10 GB at a time. You’re told in the app at 80% and 100%; the baby monitor’s sound and alerts are never limited.' },
+    ],
+    actions: [{ label: 'Open Usage', hash: '#/settings?s=usage' }],
+  },
+  {
     id: 'fix-camera', title: 'Fix: the camera won’t start', icon: 'alert', mins: 1, screens: ['camera'],
     intro: 'Almost always permissions, an in-app browser, or another app holding the camera.',
     steps: [
@@ -471,6 +483,17 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Block someone or choose who can call me', a: 'When someone outside your family calls, tap “Decline & block” — their calls never reach you again, and they can’t tell. Calls → Who can call you: everyone on Stream Studio, or only people in your nurseries; unblock anyone from the Blocked list there.', tags: 'block unblock privacy who can call me family only spam' },
       { q: 'A call won’t connect', a: 'After a few seconds the call says “Still connecting…”, and if it can’t connect it tells you why: your network or theirs is blocking calls, or your two networks can’t reach each other directly. Switching one of you between Wi-Fi and mobile data usually fixes it — the call retries on its own when the network changes, or tap Try again (Audio only needs less of the connection). A call carries on through short network blips, and on iPhone it plays on the loudspeaker.', tags: 'call not connecting connecting stuck spinner no audio no video failed lag frozen speaker earpiece' },
       { q: 'Is it a medical device?', a: 'No. It watches and listens; it does not monitor breathing, temperature or safe sleep. Always follow safe-sleep guidance.' },
+    ],
+  },
+  {
+    section: 'Usage & what’s free',
+    icon: 'gauge',
+    items: [
+      { q: 'What’s free, and what goes through your servers?', a: 'Free: anything straight between your devices — the baby monitor on Home Wi-Fi or Direct, calls and meetings that connect directly — and recordings saved to Google Drive or this device. Through our servers: a broadcast’s viewers (free for you), a 7-day copy, an encrypted relay when a network blocks direct links, and the baby monitor’s picture through our server (in memory only, never stored). The pill on each screen says which way it’s going right now.', tags: 'cost free relay server turn direct home wifi usage data' },
+      { q: 'Where do I see my usage?', a: 'Customize → Usage: this month, what was free — next to what went through our servers, with your relay data and 7-day copies against their allowance. Parents also see each nursery’s month — and last night — in Nursery settings → Usage. It loads when you open it; nothing is checked in the background.', tags: 'usage meter month allowance settings nursery last night' },
+      { q: 'Fair use: the allowances', a: 'Relay data: 10 GB a month for the calls you place, and 10 GB a month for each nursery’s viewers — Direct and Home Wi-Fi never count. The baby monitor’s picture through our server: up to 16 hours a day per nursery. 7-day copies: 10 GB at a time (space frees up as copies expire). You’re told in the app at 80% and 100% — never by email. The baby monitor’s sound and alerts are never limited.', tags: 'fair use limit allowance relay data 10 GB cloud copy quota 80% 100%' },
+      { q: 'Am I charged?', a: 'No. Stream Studio doesn’t charge for any of this. “What this costs DreamStream (est.)” in Usage and in a recap shows our own cost at list price, for transparency — an estimate, never a bill.', tags: 'price charge bill pay cost money dollars' },
+      { q: 'Use less of our servers', a: 'Put the camera phone on the same Wi-Fi as your phone — Home Wi-Fi uses no internet at all and keeps working if it drops. Save recordings to Google Drive or this device instead of a 7-day copy. Just listening? Audio only sends no picture. Calls between phones on the same Wi-Fi go straight between them.', tags: 'save data tips frugal mobile data cellular' },
     ],
   },
   {

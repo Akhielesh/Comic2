@@ -14,6 +14,8 @@ import { failureText, type PeerView } from '../../calls/callMesh';
 import { MAX_IN_CALL } from '../../calls/types';
 import { listPeople, type NurseryPerson } from '../../monitor/client';
 import { openInvite } from '../../monitor/invite';
+import { callPathSuffix, PATH_TIP } from '../../costCopy';
+import { callPathOf } from '../../usage/sessionMeter';
 import { Icon } from '../../ui/icons';
 import { Avatar, cx, type PushToast } from '../../ui/primitives';
 
@@ -218,8 +220,8 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
     : a.state === 'slow' ? 'Still connecting…'
     : a.state === 'failed' ? 'Couldn’t connect'
     : a.since ? clock(now - a.since) : '';
-  const lan = others.length > 0 && others.every((p) => p.path === 'lan');
-  const relayed = a.state === 'connected' && others.some((p) => p.path === 'relay');
+  // How the call travels right now, in the same words as everywhere (costCopy.ts).
+  const livePath = a.state === 'connected' ? callPathOf(others) : null;
   const waiting = a.state !== 'connected';
   const failed = a.state === 'failed';
 
@@ -279,7 +281,7 @@ export function CallScreen({ a, push }: { a: ActiveView; push: PushToast }) {
           <b>{title}</b>
           <span>
             {a.call?.video === false && a.state !== 'ended' ? 'Audio · ' : ''}{status}
-            {lan && a.state === 'connected' ? ' · Home Wi-Fi' : relayed ? ' · via relay' : ''}
+            {livePath && <span title={PATH_TIP[livePath]}>{callPathSuffix(livePath)}</span>}
           </span>
         </div>
         {a.relayTest && a.state !== 'ended' && <span className="call-relay-tag" title="Relay test mode (?relay=1): media may only go through the relay server">Relay test</span>}
