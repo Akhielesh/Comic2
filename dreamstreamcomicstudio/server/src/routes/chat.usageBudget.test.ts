@@ -43,9 +43,16 @@ vi.mock('../services/modelStats.js', () => ({
     }
   }
 }));
+// The legacy plan list: allows everything unless a test adds a model to `policy.deny`.
+const policy = vi.hoisted(() => ({ deny: new Set<string>() }));
 vi.mock('../services/modelAccessPolicy.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/modelAccessPolicy.js')>()),
-  assertModelAllowedForUser: async () => ({})
+  assertModelAllowedForUser: async (input: { requestedModel?: string }) => {
+    if (input.requestedModel && policy.deny.has(input.requestedModel)) {
+      throw Object.assign(new Error('Model not allowed on this plan.'), { status: 403, publicCode: 'MODEL_NOT_ALLOWED' });
+    }
+    return {};
+  }
 }));
 const memory = vi.hoisted(() => ({ remembered: [] as unknown[] }));
 vi.mock('../services/userMemory.js', async (importOriginal) => ({
@@ -322,6 +329,7 @@ beforeEach(() => {
   engine.costUsd = undefined;
   engine.swarm.mockReset();
   stats.throwOnce = false;
+  policy.deny.clear();
   seeds.list = [];
   images.gemini.mockClear();
   catalog.free = true;
@@ -863,6 +871,26 @@ describe('gate S9 — the real engine’s provider usage drives the settle', () 
     expect(catalogEntryFor(rows, 'vendor/pricey:free')).toBeUndefined();
     expect(catalogEntryFor(rows, 'vendor/unknown')).toBeUndefined();
     expect(catalogEntryFor(rows, '')).toBeUndefined();
+  });
+
+  it('review (MODEL_NOT_ALLOWED decision): a pin outside the legacy plan list is advisory — held at its live price, settled at real cost, never free', async () => {
+    policy.deny.add('vendor/pricey');
+    const user = freshUser();
+    engine.script = [{ costUsd: 0.42 }];
+    const r = await post('/api/chat', ask('Explain recursion with an example', { model: 'vendor/pricey' }), { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    expect(engine.providerCalls[0].model).toBe('vendor/pricey');
+    const ev = turnEvents(user)[0];
+    expect(ev.holdUsd).toBeGreaterThan(0.15);
+    expect(ev).toMatchObject({ status: 'SETTLED' });
+    expect(ev.costUsd).toBeCloseTo(0.42, 9);
+    // …and a governed user whose usage can't cover it is re-planned onto a free model instead.
+    engine.providerCalls = [];
+    const poor = freshUser();
+    db.budgets.set(poor, 0.1);
+    const r2 = await post('/api/chat', ask('Explain recursion with an example', { model: 'vendor/pricey' }), { 'x-test-user': poor });
+    expect(r2.status).toBe(200);
+    expect(engine.providerCalls.some((c) => c.model === 'vendor/pricey')).toBe(false);
   });
 
   it('a governed user whose usage can’t cover a pricey pin gets a free model instead — never the unpriced pin', async () => {
