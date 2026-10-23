@@ -1841,11 +1841,16 @@ chatRouter.post('/', async (req, res, next) => {
     if ('details' in gate) return res.status(402).json({ error: formatLimitErrorResponse(gate.details) });
     const { p, reserve } = gate;
 
+    // Once the settle has started, the catch below never releases: releasing is a status flip with
+    // no guard, so a throw after a successful settle (building/sending the payload) would erase a
+    // real turn's spend. A failed settle leaves the hold counting for its window (and is logged).
+    let settleStarted = false;
     try {
       const result = await runChat(runChatParams(p));
       if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
         markModelDown(p.model);
       }
+      settleStarted = true;
       const settled = reserve
         ? await settleReservedOperation({
             req,
@@ -1863,7 +1868,7 @@ chatRouter.post('/', async (req, res, next) => {
       recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
       res.json(reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
     } catch (error) {
-      if (reserve) {
+      if (reserve && !settleStarted) {
         await settleSpentOrRelease({
           req,
           error,
@@ -1874,6 +1879,8 @@ chatRouter.post('/', async (req, res, next) => {
           reason: 'chat_request_failed',
           metadata: { route: req.path, historyLength: p.messages.length }
         });
+      } else if (reserve) {
+        logger.error('chat_after_settle_failed', { route: req.path, message: (error as Error)?.message });
       }
       throw error;
     }
@@ -1929,6 +1936,8 @@ const streamChatTurn = async (
   const heartbeat = startHeartbeat(res);
   const metadata = { route: req.path, historyLength: p.messages.length, ...(opts.swarm ? { swarm: true } : {}) };
 
+  // Once the settle has started, never release (see POST /).
+  let settleStarted = false;
   try {
     const result = await runChat({
       ...runChatParams(p),
@@ -1952,6 +1961,7 @@ const streamChatTurn = async (
       markModelDown(p.model);
     }
 
+    settleStarted = true;
     const settled = reserve
       ? await settleReservedOperation({
           req,
@@ -1969,7 +1979,7 @@ const streamChatTurn = async (
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
-    if (reserve) {
+    if (reserve && !settleStarted) {
       await settleSpentOrRelease({
         req,
         error,
@@ -1980,6 +1990,8 @@ const streamChatTurn = async (
         reason: 'chat_request_failed',
         metadata
       }).catch((err) => logger.error('chat_hold_cleanup_failed', { message: (err as Error)?.message }));
+    } else if (reserve) {
+      logger.error('chat_after_settle_failed', { route: req.path, message: (error as Error)?.message });
     }
     send('error', { message: safeClientMessage(error, 'The request failed. Please try again.') });
   } finally {
@@ -2042,6 +2054,8 @@ chatRouter.post('/swarm', async (req, res, next) => {
   send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
   const heartbeat = startHeartbeat(res);
 
+  // Once the settle has started, never release (see POST /).
+  let settleStarted = false;
   try {
     const result = await runSwarm({
       provider: p.resolved.provider,
@@ -2060,6 +2074,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
       onProgress: (trace) => send('trace', trace)
     });
 
+    settleStarted = true;
     const settled = reserve
       ? await settleReservedOperation({
           req,
@@ -2091,7 +2106,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
-    if (reserve) {
+    if (reserve && !settleStarted) {
       await settleSpentOrRelease({
         req,
         error,
@@ -2102,6 +2117,8 @@ chatRouter.post('/swarm', async (req, res, next) => {
         reason: 'swarm_request_failed',
         metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
       }).catch((err) => logger.error('chat_hold_cleanup_failed', { message: (err as Error)?.message }));
+    } else if (reserve) {
+      logger.error('chat_after_settle_failed', { route: req.path, message: (error as Error)?.message });
     }
     send('error', { message: safeClientMessage(error, 'The swarm failed. Please try again.') });
   } finally {

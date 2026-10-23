@@ -192,6 +192,22 @@ describe('POST /api/recipes/run — a recipe’s pinned model is resolved, check
     expect(runner.runRecipe.mock.calls[0][0].model).toBe(picker);
   });
 
+  it('review: a failure after the run settled never releases the settled hold', async () => {
+    // The final payload can't be serialized (stand-in for any failure after the settle).
+    runner.runRecipe.mockImplementationOnce(async (input: { model: string }) => ({
+      text: 'Recipe done.',
+      model: input.model,
+      artifacts: [],
+      activities: [],
+      structured: { n: BigInt(1) },
+      usage: { promptTokens: 10, candidatesTokens: 10, totalTokens: 20, providerCostUsd: 0.01 }
+    }));
+    const r = await run({ recipe: { title: 'x', prompt: 'go' }, messages });
+    expect(r.text).toContain('event: error');
+    expect(enforcer.settle).toHaveBeenCalledTimes(1);
+    expect(enforcer.release).not.toHaveBeenCalled();
+  });
+
   it('settles on the usage the run reports (S9)', async () => {
     await run({ recipe: { title: 'x', prompt: 'go' }, messages });
     expect(enforcer.settle.mock.calls[0][0].usage).toMatchObject({ providerCostUsd: 0.01 });

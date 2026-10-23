@@ -32,7 +32,17 @@ vi.mock('../ai/tools/mcpClient.js', async (importOriginal) => ({
   buildMcpTools: async () => []
 }));
 vi.mock('../services/customAgents.js', () => ({ loadCustomAgentDefinitions: async () => [] }));
-vi.mock('../services/modelStats.js', () => ({ recordModelUsage: () => undefined }));
+// `stats.throwOnce` makes the (post-settle) usage-stats call throw once — a stand-in for any
+// failure after the turn was already settled (building or sending the payload).
+const stats = vi.hoisted(() => ({ throwOnce: false }));
+vi.mock('../services/modelStats.js', () => ({
+  recordModelUsage: () => {
+    if (stats.throwOnce) {
+      stats.throwOnce = false;
+      throw new Error('stats store down');
+    }
+  }
+}));
 vi.mock('../services/modelAccessPolicy.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/modelAccessPolicy.js')>()),
   assertModelAllowedForUser: async () => ({})
@@ -311,6 +321,7 @@ beforeEach(() => {
   engine.fail = false;
   engine.costUsd = undefined;
   engine.swarm.mockReset();
+  stats.throwOnce = false;
   seeds.list = [];
   images.gemini.mockClear();
   catalog.free = true;
@@ -764,6 +775,23 @@ describe('gate S9 — the real engine’s provider usage drives the settle', () 
       expect(ev).toHaveLength(1);
       expect(ev[0]).toMatchObject({ status: 'SETTLED' });
       expect(ev[0].costUsd).toBeCloseTo(0.3, 9);
+    }
+  });
+
+  it('review: a failure AFTER the turn settled never flips the settled row to RELEASED (/, /stream, /swarm)', async () => {
+    engine.swarm.mockResolvedValue({ text: 'Team answer.', model: 'google/gemini-2.5-flash', usage: { providerCostUsd: 0.25 } });
+    for (const path of ['/api/chat', '/api/chat/stream', '/api/chat/swarm']) {
+      const user = freshUser();
+      engine.script = [{ costUsd: 0.25 }];
+      stats.throwOnce = true;
+      const r = await post(path, ask('Explain how tides work'), { 'x-test-user': user });
+      if (path === '/api/chat') expect(r.status).toBeGreaterThanOrEqual(500);
+      else expect(sseEvents(r.text).map((e) => e.event)).toContain('error');
+      expect(stats.throwOnce).toBe(false); // the post-settle failure really happened
+      const ev = turnEvents(user);
+      expect(ev).toHaveLength(1);
+      expect(ev[0]).toMatchObject({ status: 'SETTLED' });
+      expect(ev[0].costUsd).toBeCloseTo(0.25, 9);
     }
   });
 

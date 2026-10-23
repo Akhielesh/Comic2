@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { catalogHoldFloorUsd, chatPricedModels, preparedInputTokens, prepareChat, settleSpentOrRelease } from './chat.js';
 import { safeClientMessage } from '../ai/providers/errors.js';
+import { logger } from '../lib/logger.js';
 import { TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import { BUILTIN_RECIPES, getBuiltinRecipe } from '../ai/recipes/library.js';
@@ -188,6 +189,9 @@ recipesRouter.post('/run', async (req, res, next) => {
   const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   send('meta', { model: p.model, recipe: { id: recipe.id, title: recipe.title }, source: p.resolved.provider });
 
+  // Once the settle has started, the catch never releases (a release after a successful settle
+  // would erase the run's real spend — see routes/chat.ts POST /).
+  let settleStarted = false;
   try {
     const result = await runRecipe({
       recipe,
@@ -207,6 +211,7 @@ recipesRouter.post('/run', async (req, res, next) => {
       onProgress: (trace) => send('trace', trace)
     });
 
+    settleStarted = true;
     const settled =
       reserve && reserve.allowed
         ? await settleReservedOperation({
@@ -239,7 +244,7 @@ recipesRouter.post('/run', async (req, res, next) => {
     send('final', finalPayload);
     res.end();
   } catch (error) {
-    if (reserve && reserve.allowed) {
+    if (reserve && reserve.allowed && !settleStarted) {
       await settleSpentOrRelease({
         req,
         error,
@@ -250,6 +255,8 @@ recipesRouter.post('/run', async (req, res, next) => {
         reason: 'recipe_run_failed',
         metadata: { route: req.path, recipe: recipe.id }
       }).catch(() => undefined);
+    } else if (reserve && reserve.allowed) {
+      logger.error('recipe_after_settle_failed', { route: req.path, message: (error as Error)?.message });
     }
     send('error', { message: safeClientMessage(error, 'The recipe failed. Please try again.') });
     res.end();
@@ -304,6 +311,7 @@ recipesRouter.post('/distill', async (req, res, next) => {
     return next(err);
   }
 
+  let settleStarted = false;
   try {
     const result = await distillRecipe({
       goal,
@@ -317,6 +325,7 @@ recipesRouter.post('/distill', async (req, res, next) => {
     });
 
     if (reserve && reserve.allowed) {
+      settleStarted = true;
       await settleReservedOperation({
         req,
         operation: 'chat.completion',
@@ -335,7 +344,7 @@ recipesRouter.post('/distill', async (req, res, next) => {
       proposedRecipe: result.proposedRecipe
     });
   } catch (error) {
-    if (reserve && reserve.allowed) {
+    if (reserve && reserve.allowed && !settleStarted) {
       await settleSpentOrRelease({
         req,
         error,
@@ -346,6 +355,8 @@ recipesRouter.post('/distill', async (req, res, next) => {
         reason: 'distill_failed',
         metadata: { route: req.path, distill: true }
       }).catch(() => undefined);
+    } else if (reserve && reserve.allowed) {
+      logger.error('recipe_after_settle_failed', { route: req.path, message: (error as Error)?.message });
     }
     res.status(500).json({ error: { message: safeClientMessage(error, 'Distillation failed. Please try again.') } });
   }
