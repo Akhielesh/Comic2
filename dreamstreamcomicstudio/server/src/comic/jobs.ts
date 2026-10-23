@@ -901,7 +901,9 @@ const describeSpend = (doc: ComicDoc, action: SpendAction): SpendPlan => {
       return { what: `a translation (${(action.languages || []).join(', ')})`, title: 'Translate?', kind: 'page' };
     case 'recheck_page': {
       const page = findPage(doc, action.pageId);
-      return { what: `a re-check of page ${page?.n ?? '?'} (the art is read again, then its balloons are re-laid)`, title: `Re-check page ${page?.n ?? '?'}?`, kind: 'page' };
+      // in_art comics have their words painted in: the re-check only renews the page check (QC).
+      const after = doc.format.lettering === 'in_art' ? 'its page check is renewed' : 'its balloons are re-laid';
+      return { what: `a re-check of page ${page?.n ?? '?'} (the art is read again, then ${after})`, title: `Re-check page ${page?.n ?? '?'}?`, kind: 'page' };
     }
     default:
       return { what: 'images', title: 'Spend?', kind: 'page' };
@@ -1284,8 +1286,9 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   const spent = round4(Math.max(0, ctx.session.doc.spend.totalUsd - spentBefore));
   const qc = findPage(ctx.session.doc, page.id)?.render.qc;
   const faces = qc?.keepOut?.some((k) => k.kind === 'face');
+  const overlay = ctx.session.doc.format.lettering !== 'in_art';
   const message = out.visionRan
-    ? `Re-checked page ${page.n} (${cost(spent || estimate.usd)}) and re-laid its balloons around the art${faces ? ', keeping faces clear' : ''}.${typeof qc?.score === 'number' ? ` Page check score: ${qc.score.toFixed(2)}.` : ''}`
+    ? `Re-checked page ${page.n} (${cost(spent || estimate.usd)})${overlay ? ` and re-laid its balloons around the art${faces ? ', keeping faces clear' : ''}` : ''}.${typeof qc?.score === 'number' ? ` Page check score: ${qc.score.toFixed(2)}.` : ''}`
     : out.visionError?.code === 'BILLING_DENIED'
       ? // Usage left / a spending limit said no: say THAT (its message is already in the user's terms), not "try later".
         `${out.visionError.userMessage.replace(/[.!]?\s*$/, '.')} Page ${page.n}'s balloons were re-laid from the stored layout instead — nothing was spent.`
