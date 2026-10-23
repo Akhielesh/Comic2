@@ -59,6 +59,7 @@ import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
 import { safeNext } from './services/safeNext';
+import { shouldDetectSessionInUrl } from './services/localOwner';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
 // first-paint bundle — the floating assistant isn't needed for initial render.
 const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
@@ -588,9 +589,11 @@ const App: React.FC = () => {
     const authError = searchParams.get('error_description') || hashParams.get('error_description');
     // A sign-in handoff from Stream Studio says where to go next: straight there once verified.
     const nextAfterAuth = searchParams.get('next');
+    // Tokens in a URL sign the browser in: only our own sign-in landing pages act on them
+    // (services/localOwner.ts), never an arbitrary page someone links to.
     const hasAuthIntent =
       url.pathname === '/auth/callback' ||
-      Boolean(code || tokenHash || accessToken || authError);
+      (shouldDetectSessionInUrl(url) && Boolean(code || tokenHash || accessToken || authError));
 
     if (!hasAuthIntent) return;
 

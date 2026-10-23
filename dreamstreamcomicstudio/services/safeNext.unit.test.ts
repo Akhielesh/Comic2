@@ -16,6 +16,8 @@ describe('safeNext', () => {
       '//evil.com', '/\\evil.com', '\\\\evil.com', 'https://evil.com/', 'javascript:alert(1)', 'evil.com',
       // Regression: the browser drops tab/newline/CR, so these became //evil.com.
       '/\t/evil.com', '/\n/evil.com', '/\r/evil.com', '/%09/evil.com'.replace('%09', '\t'),
+      // Regression: dot segments normalise to a protocol-relative '//evil.com'.
+      '/.//evil.com', '/..//evil.com', '/%2e//evil.com', '/a/..//evil.com', '/././/evil.com',
       '', null, undefined,
     ]) expect(safeNext(p as string, O, true)).toBeNull();
   });

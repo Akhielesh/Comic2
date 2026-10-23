@@ -10,6 +10,7 @@ import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
 import { purgeLiveAccountData } from '../live/accountPurge';
+import { clearLocalOwner, ownedByAnotherAccount, setLocalOwner } from '../services/localOwner';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 
 type AuthContextType = {
@@ -94,6 +95,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         // Reconcile cloud <-> local exactly once per signed-in user.
         const onSignedIn = (userId: string) => {
+            // SECURITY: this device's keys/settings belong to another account (a session for a
+            // different user appeared without a sign-out — e.g. a link carrying someone else's
+            // tokens). Purge them BEFORE the login sync, which would otherwise upload them into
+            // this account's cloud snapshot.
+            if (ownedByAnotherAccount(userId)) {
+                syncedUserRef.current = null;
+                purgeLocalAccountData();
+            }
+            setLocalOwner(userId);
             userIdRef.current = userId;
             void registerDevice(userId);
             if (syncedUserRef.current !== userId) {
@@ -148,6 +158,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const clearLocalAuthState = () => {
         setUser(null);
         setSession(null);
+        purgeLocalAccountData();
+    };
+
+    // Hoisted: the sign-in handler in the effect above also calls it.
+    function purgeLocalAccountData() {
         // SECURITY: purge ALL BYOK keys + usage from the multi-key store so a shared device
         // never leaks the previous user's secrets, usage, or live provider balance after
         // sign-out (clearAllKeys also wipes every legacy single-key slot, incl. flux).
@@ -162,7 +177,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // Stream Studio (/live) keeps its own copy of the name, events, nursery data and
         // an alert subscription — wipe those too, so it never shows the last person.
         purgeLiveAccountData();
-    };
+        clearLocalOwner();
+    }
 
     const signOut = async () => {
         clearLocalAuthState();

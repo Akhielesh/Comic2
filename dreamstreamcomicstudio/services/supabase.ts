@@ -1,5 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
+import { adoptStoredSessionOwner, shouldDetectSessionInUrl } from './localOwner';
 
 // These will be populated by the user in .env.local
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -112,11 +113,17 @@ if (!supabaseUrl || !supabaseAnonKey) {
     console.warn('Missing Supabase URL or Anon Key. Authentication will not work.');
 }
 
+// Before supabase-js reads any tokens out of the URL: record which account already owns this
+// device's local data, so a session for another account can't inherit it (services/localOwner).
+adoptStoredSessionOwner(typeof window === 'undefined' ? null : authStorage.getItem(SUPABASE_AUTH_STORAGE_KEY));
+
 export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
     auth: {
         persistSession: true,
         storageKey: SUPABASE_AUTH_STORAGE_KEY,
-        storage: authStorage
+        storage: authStorage,
+        // Tokens in a URL sign the browser in, so only our own sign-in landing pages read them.
+        detectSessionInUrl: (url: URL) => shouldDetectSessionInUrl(url)
     }
 });
 
