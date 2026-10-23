@@ -10,7 +10,7 @@
 //           GET  /runs/:id              run view
 //           POST /runs/:id/step {n≤3}   advance ≤ n assets synchronously (client-driven; idempotent)
 //           POST /runs/:id/cancel
-//           POST /assets/:id/{publish,reject,regenerate}
+//           POST /assets/:id/{publish,reject {note?, unpublish?},regenerate}
 //           POST /assets/purge-candidates {dryRun?}
 //
 // The build is CLIENT-DRIVEN (decisions-final #4): no background job, so the container's
@@ -272,7 +272,14 @@ export function createLibraryAdminRouter(source?: DepsSource): Router {
 
   router.post('/assets/:id/publish', handle("That asset couldn't be published.", async (req, res) => res.json(await publishAsset(deps(), String(req.params.id), bodyOf(req).rev, adminIdOf(req)))));
 
-  router.post('/assets/:id/reject', handle("That asset couldn't be rejected.", async (req, res) => res.json(await rejectAsset(deps(), String(req.params.id), bodyOf(req).note, adminIdOf(req)))));
+  router.post(
+    '/assets/:id/reject',
+    handle("That asset couldn't be rejected.", async (req, res) => {
+      const body = bodyOf(req);
+      // unpublish: true also takes down the live image (a takedown), not just the candidate in review.
+      res.json(await rejectAsset(deps(), String(req.params.id), body.note, adminIdOf(req), { unpublish: body.unpublish === true }));
+    })
+  );
 
   router.post(
     '/assets/:id/regenerate',

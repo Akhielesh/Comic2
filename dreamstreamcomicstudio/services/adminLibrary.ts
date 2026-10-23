@@ -56,8 +56,12 @@ export const cancelLibraryRun = (runId: string): Promise<LibraryRunView> => post
 export const publishLibraryAsset = (id: string, rev?: number): Promise<LibraryEntryView> =>
   post<{ rev?: number }, LibraryEntryView>(`${BASE}/assets/${enc(id)}/publish`, rev === undefined ? {} : { rev });
 
-export const rejectLibraryAsset = (id: string, note?: string): Promise<LibraryEntryView> =>
-  post<{ note?: string }, LibraryEntryView>(`${BASE}/assets/${enc(id)}/reject`, note ? { note } : {});
+/** Reject the current candidate; `unpublish` also takes the live image down (a takedown). */
+export const rejectLibraryAsset = (id: string, note?: string, opts: { unpublish?: boolean } = {}): Promise<LibraryEntryView> =>
+  post<{ note?: string; unpublish?: boolean }, LibraryEntryView>(`${BASE}/assets/${enc(id)}/reject`, {
+    ...(note ? { note } : {}),
+    ...(opts.unpublish ? { unpublish: true } : {})
+  });
 
 export const regenerateLibraryAsset = (id: string, opts: { note?: string; budgetUsd?: number } = {}): Promise<LibraryStartResult> =>
   post<{ note?: string; budgetUsd?: number; confirm: true }, LibraryStartResult>(`${BASE}/assets/${enc(id)}/regenerate`, { ...opts, confirm: true });
