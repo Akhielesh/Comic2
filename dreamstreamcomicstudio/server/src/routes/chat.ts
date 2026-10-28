@@ -844,6 +844,34 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
 /** The answer size a chat hold assumes (one long answer); settlement records the real size. */
 export const CHAT_HOLD_OUTPUT_TOKENS = 2_048;
 
+// ── Tool-round allowance (governed per-turn cap, owner decision: conservative) ──────────────────
+// A turn with tools can run up to 9 model⇄tool rounds (ai/chat.ts MAX_TOOL_ITERATIONS), each
+// re-sending the whole context plus every tool result so far, and a round can run paid meta-tools.
+// The route holds ONCE, so the hold now covers the first call plus a bounded number of rounds, and
+// the engine stops offering tools once the turn's metered spend exceeds the hold (TurnBudget) —
+// the overshoot is at most one round's model call. Settlement records the real size either way.
+
+/** Tool rounds a chat hold covers beyond the first call (a third of the engine's maximum). */
+export const CHAT_HOLD_TOOL_ROUNDS = 3;
+/** Prompt tokens a typical tool result adds to every later round (a third of the CHAT_TOOL_OUTPUT_MAX cap). */
+export const CHAT_HOLD_TOOL_RESULT_TOKENS = Math.ceil(CHAT_TOOL_OUTPUT_MAX / 4 / 3);
+/** Completion tokens a tool-calling round emits (its tool-call arguments). */
+export const CHAT_HOLD_TOOL_CALL_TOKENS = 512;
+
+/**
+ * The tokens a chat hold is sized for: one call of `inputTokens` and one long answer — plus, when
+ * the turn has tools, CHAT_HOLD_TOOL_ROUNDS rounds (round k re-sends the context and k tool
+ * results, and emits its tool-call arguments).
+ */
+export const chatHoldTokens = (p: { tools?: unknown[] }, inputTokens: number): { inputTokens: number; outputTokens: number } => {
+  if (!p.tools?.length) return { inputTokens, outputTokens: CHAT_HOLD_OUTPUT_TOKENS };
+  const rounds = CHAT_HOLD_TOOL_ROUNDS;
+  return {
+    inputTokens: inputTokens * (1 + rounds) + (CHAT_HOLD_TOOL_RESULT_TOKENS * rounds * (rounds + 1)) / 2,
+    outputTokens: CHAT_HOLD_OUTPUT_TOKENS + CHAT_HOLD_TOOL_CALL_TOKENS * rounds
+  };
+};
+
 const IMAGE_PART_CHARS = 4_000;
 const ATTACHMENT_INLINE_CHARS = 8_000;
 const ATTACHMENTS_INLINE_TOTAL_CHARS = 24_000;
@@ -983,6 +1011,23 @@ export const settleSpentOrRelease = async (input: {
 
 type ChatReservation = Extract<Awaited<ReturnType<typeof reserveForOperation>>, { allowed: true }>;
 
+/**
+ * The per-turn spend cap of a GOVERNED turn — the usage budget reserved its hold (non-admin,
+ * non-BYOK, platform-paid). ai/chat.ts stops offering tools once the turn's metered spend,
+ * priced exactly the way the settle prices it (buildSettleEstimateFromUsage: the reported cost, or
+ * the tokens at the model's price), exceeds the hold. Admins, BYOK and signed-out turns get none.
+ */
+export const turnBudgetFor = (reserve: ChatReservation | null, p: Pick<PreparedChat, 'model'>): TurnBudget | undefined => {
+  const reservation = reserve?.reservation;
+  if (!reservation?.governed || reservation.byokBypass) return undefined;
+  const holdUsd = Number(reservation.estimated?.estimatedProviderCostUsd);
+  if (!Number.isFinite(holdUsd) || holdUsd < 0) return undefined;
+  return {
+    holdUsd,
+    spentUsd: async (usage) => (await buildSettleEstimateFromUsage({ ...reserve!.seed, model: p.model }, usage)).estimatedProviderCostUsd
+  };
+};
+
 export type ChatGate =
   | {
       ok: true;
@@ -1060,10 +1105,11 @@ const copyHoldBack = (req: any, view: any) => {
 const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<string, unknown>) => {
   const view = p.freeModelsOnly ? pricedAs(req, p.model) : req;
   const priced = chatPricedModels(p);
-  // Sized from the prepared context (not the first 8,000 body characters) and floored at the live
-  // catalog price of every model the call may be billed for.
-  const inputTokens = preparedInputTokens(p);
-  const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], inputTokens, CHAT_HOLD_OUTPUT_TOKENS);
+  // Sized from the prepared context (not the first 8,000 body characters) plus the bounded
+  // tool-round allowance, and floored at the live catalog price of every model the call may be
+  // billed for.
+  const hold = chatHoldTokens(p, preparedInputTokens(p));
+  const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], hold.inputTokens, hold.outputTokens);
   const reserve = await reserveForOperation({
     req: view,
     operation: 'chat.completion',
@@ -1071,8 +1117,8 @@ const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<strin
     // Price the hold at the most expensive model OpenRouter may route to (free primary, paid
     // fallback): an exhausted governed user must never pass at $0.
     pricedModels: chatPricedModels(p),
-    inputTokens,
-    outputTokens: CHAT_HOLD_OUTPUT_TOKENS,
+    inputTokens: hold.inputTokens,
+    outputTokens: hold.outputTokens,
     ...(floorUsd ? { estimateFloorUsd: floorUsd } : {}),
     provider: p.resolved.provider,
     stage: 'chat',
@@ -1864,7 +1910,7 @@ chatRouter.post('/', async (req, res, next) => {
     // real turn's spend. A failed settle leaves the hold counting for its window (and is logged).
     let settleStarted = false;
     try {
-      const result = await runChat(runChatParams(p));
+      const result = await runChat(runChatParams(p, reserve));
       if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
         markModelDown(p.model);
       }
@@ -1958,7 +2004,7 @@ const streamChatTurn = async (
   let settleStarted = false;
   try {
     const result = await runChat({
-      ...runChatParams(p),
+      ...runChatParams(p, reserve),
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });
         else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
