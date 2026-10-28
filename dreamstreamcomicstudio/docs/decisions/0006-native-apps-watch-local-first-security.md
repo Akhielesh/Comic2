@@ -809,28 +809,34 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - `/home/user/Comic2/.github/workflows/scorecard.yml` (new)
 
 **Tasks:**
-- [ ] `_middleware.ts`: wrap every `next()` response and set the security headers.
+- [x] `_middleware.ts`: wrap every `next()` response and set the security headers.
   - For `/live*`, an **enforced** CSP (the D6.5 policy as listed in the security study, adding `worker-src 'self' blob:` and the `report-to csp` endpoint).
   - For every other page, `Content-Security-Policy-Report-Only`.
   - Keep the redirect and agent-gate behaviour byte-for-byte.
-  - Ship as Report-Only everywhere for 48 h behind `const ENFORCE_LIVE = false`, then flip it.
-- [ ] `functions/csp-report.ts`: accept `application/reports+json` and `csp-report` bodies, count by directive and blocked origin, log no URLs with query strings, return 204.
-- [ ] `public/_headers`: under `/*`, add HSTS, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy` for static assets and `live-sw.js`.
-- [ ] `index.html`:
+  - Ship as Report-Only everywhere for 48 h behind `const ENFORCE_LIVE = false`, then flip it. *(The flip is §5 step 4, after 48 h of clean reports.)*
+- [x] `functions/csp-report.ts`: accept `application/reports+json` and `csp-report` bodies, count by directive and blocked origin, log no URLs with query strings, return 204.
+- [x] `public/_headers`: under `/*`, add HSTS, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy` for static assets and `live-sw.js`.
+- [x] `index.html`:
   - Delete the `aistudiocdn.com` importmap.
   - Add `integrity` and `crossorigin` to the jsPDF 2.5.1 and html2canvas 1.4.1 cdnjs tags (bundling is a later task).
   - Hash the inline splash watchdog script into the CSP.
-- [ ] `live.html`: no inline scripts left without a CSP hash.
-- [ ] `yamnet.worker.ts`: remove `FALLBACK_URL` (Hugging Face). Keep the self-hosted, hash-checked model.
-- [ ] `package.json`:
+- [x] `live.html`: no inline scripts left without a CSP hash.
+- [x] `yamnet.worker.ts`: remove `FALLBACK_URL` (Hugging Face). Keep the self-hosted, hash-checked model.
+- [x] `package.json`:
   - `onnxruntime-web` → 1.30.0.
   - `@supabase/supabase-js` → ≥ 2.118 (needed by WS-5's MFA APIs).
   - `npm audit fix` for proxy-addr, react-router, sharp and adm-zip.
   - Commit the lockfile.
-- [ ] Workflows: pin every action by SHA; add top-level `permissions: contents: read`; reference Environments for deploy secrets. Add Dependabot with a 7-day cooldown, CODEOWNERS (`.github/workflows/** @owner`), and the Scorecard workflow.
-- [ ] `security.txt`: contact address and policy URL.
+- [x] Workflows: pin every action by SHA; add top-level `permissions: contents: read`; reference Environments for deploy secrets. Add Dependabot with a 7-day cooldown, CODEOWNERS (`.github/workflows/** @owner`), and the Scorecard workflow.
+- [x] `security.txt`: contact address and policy URL.
 
 **Done when:** headers are verified with `curl -I` on a preview deploy, the 48 h report log is clean, and `npm audit --omit=dev` shows 0 critical and 0 high.
+
+*Status 2026-10-28 (WS-1 built; branch `impl/p0-ws1`):*
+- *The live policy adds two sources the security study's draft lacked, both found in the built bundle: `script-src blob:` (the sound engine's and the relay player's AudioWorklets load from `blob:` URLs, and `addModule` is governed by `script-src` — without it the enforced policy would have cut off cry detection) and `connect-src` for both of our hosts. `tests/edge/liveCsp.built.test.ts` serves `dist/` through the real middleware with the policy enforced and checks every tag, every reachable chunk's external origins, workers, worklets, WebAssembly and the live Worker, Supabase and Drive endpoints against the header. HSTS, nosniff, `Referrer-Policy: strict-origin`, Permissions-Policy, COOP and `X-Frame-Options: DENY` are enforced on Stream Studio from the first deploy; only the CSP waits for `ENFORCE_LIVE`. `/` stays Report-Only (no COOP or framing change there yet).*
+- *Counts land in an Analytics Engine dataset bound as `CSP_REPORTS` once the owner binds it; until then, bounded log lines (1st, 10th, 100th … of each kind).*
+- *`npm audit --omit=dev`: 0 vulnerabilities. `@huggingface/transformers` stays on 4.2.0 (with `overrides` lifting its Node-only `sharp` and `onnxruntime-node` past their advisories): 4.3.x bundles an ONNX Runtime whose asyncify `.wasm` is 25.6 MiB, over Pages' 25 MiB file limit. The built-page test fails any build with a file over the limit.*
+- *Headers verified with `curl -I` against `wrangler pages dev dist` (local); the preview-deploy check and the 48 h report window need a deploy.*
 
 #### WS-2 Shared contracts (seed `packages/monitor-core`)
 **Owns:** all of it is new:

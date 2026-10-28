@@ -28,19 +28,12 @@
     <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
     <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <!-- PDF Generation Libraries (export-only; deferred so a slow/blocked CDN can't
-         stall first paint — they're not needed until the user exports a PDF). -->
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0"
-  }
-}
-</script>
+         stall first paint — they're not needed until the user exports a PDF).
+         Pinned by Subresource Integrity (the SHA-512 cdnjs publishes for these exact
+         files): if the CDN ever served different bytes, the browser refuses to run them.
+         tests/edge/supplyChain.test.ts keeps every external script pinned. -->
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   body {
     background-color: #3B82F6;
@@ -102,18 +95,26 @@
         <div class="slow">
           This is taking longer than usual.
           <br />
-          <button type="button" onclick="window.location.reload()">Reload</button>
+          <button type="button" id="app-splash-reload">Reload</button>
         </div>
       </div>
     </div>
+    <!-- Watchdog: if the app JS hasn't mounted (splash still present) after a while —
+         e.g. a chunk/CDN failed to load — surface a styled Reload prompt instead of an
+         indefinite spinner. Harmless once React has replaced #root. This is the page's
+         ONLY inline script and the CSP allows it by its SHA-256
+         (INDEX_INLINE_SCRIPT_HASHES in functions/_middleware.ts): change one byte and
+         tests/edge/securityHeaders.test.ts prints the new hash. The Reload button is wired
+         here, not with an inline onclick, so the policy never needs 'unsafe-inline'. -->
     <script>
-      // Watchdog: if the app JS hasn't mounted (splash still present) after a while —
-      // e.g. a chunk/CDN failed to load — surface a styled Reload prompt instead of an
-      // indefinite spinner. Harmless once React has replaced #root.
-      setTimeout(function () {
-        var slow = document.querySelector('#app-splash .slow');
-        if (slow) slow.style.display = 'block';
-      }, 12000);
+      (function () {
+        var reload = document.getElementById('app-splash-reload');
+        if (reload) reload.addEventListener('click', function () { window.location.reload(); });
+        setTimeout(function () {
+          var slow = document.querySelector('#app-splash .slow');
+          if (slow) slow.style.display = 'block';
+        }, 12000);
+      })();
     </script>
   <script type="module" src="/index.tsx"></script>
 </body>

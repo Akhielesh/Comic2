@@ -1,0 +1,10 @@
+# DreamStream Studio (dreamstreamstudio.ai, including Stream Studio and its baby monitor).
+# Found a security problem? Please tell us privately, not in a public issue or post.
+# How we handle reports: the Policy link below. RFC 9116.
+Contact: mailto:support@dreamstreamstudio.ai
+Contact: https://github.com/Akhielesh/Comic2/security/advisories/new
+Expires: 2027-10-01T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://dreamstreamstudio.ai/.well-known/security.txt
+Canonical: https://stream.dreamstreamstudio.ai/.well-known/security.txt
+Policy: https://github.com/Akhielesh/Comic2/security/policy
