@@ -189,16 +189,41 @@ describe('render_use allow-list', () => {
     });
     expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path: 'u/user-1/p/proj-1/img/p1-v0.webp', at: 1 })).toMatchObject({ at: NOW });
   });
-  it('another page’s art (or a deleted page’s) is fine without adopt; a photo/attachment/sheet needs adopt:true (stripped)', () => {
+  it('another page’s art (or a deleted page’s) is fine without adopt; a photo/sheet needs adopt:true (stripped)', () => {
     const doc = fixture();
     expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path: 'u/user-1/p/proj-1/img/p1-v2.webp', at: 1 })).toMatchObject({ path: 'u/user-1/p/proj-1/img/p1-v2.webp' });
     expect(run(doc, { op: 'render_use', target: { kind: 'cover' }, path: 'u/user-1/p/proj-1/img/gone.webp', at: 1 })).toMatchObject({ target: { kind: 'cover' } });
-    for (const path of ['u/user-1/p/proj-1/ref/maya.webp', 'u/user-1/p/proj-1/img/attach.webp', 'u/user-1/p/proj-1/img/maya-sheet.webp']) {
+    for (const path of ['u/user-1/p/proj-1/ref/maya.webp', 'u/user-1/p/proj-1/img/maya-sheet.webp']) {
       rejects(() => run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: 1 }), 400);
       const ok = run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: 1, adopt: true });
       expect(ok).toEqual({ op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: NOW });
       expect('adopt' in ok).toBe(false);
     }
+  });
+  // P2-GATE (F3/F5 seam): "Use for page" applies the publish boundary too (publication/snapshot.ts
+  // isServerArt). An `upload` in the PUBLIC img lane — a chat attachment saved by the old upload path, or a
+  // legacy import pointing a ref at any owned img path — would be refused at Publish ("brought in from
+  // outside the studio"); the studio now refuses it at adoption, with the same remedy, instead of letting
+  // the user find out on the readiness sheet. Server-made img art and private-lane uploads still adopt.
+  it('adopt refuses an `upload` in this comic’s public img lane now (what Publish would refuse later), with the Media remedy', () => {
+    const doc = fixture();
+    const attachment = 'u/user-1/p/proj-1/img/attach.webp';
+    expect(assetIndex(doc).get(attachment)?.asset.source).toBe('upload');
+    for (const target of [{ kind: 'page', id: 'pg_3' }, { kind: 'cover' }]) {
+      const err = rejects(() => run(doc, { op: 'render_use', target, path: attachment, at: 1, adopt: true }), 400, 'BAD_REQUEST');
+      expect(err.message).toMatch(/outside the studio/);
+      expect(err.message).toMatch(/upload it again in Media/i);
+    }
+    // The same path as server-made art (a generated sheet, a derived fit) is fine.
+    doc.conversation = [{ id: 'm1', role: 'user', text: 'here', at: 1, attachments: [{ path: attachment, source: 'generated', at: 3 }] }];
+    expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path: attachment, at: 1, adopt: true })).toMatchObject({ path: attachment });
+    // A private-lane upload (Media) and the library were always publishable, so they still adopt.
+    doc.style = { ...doc.style, refs: [{ path: 'library/v1/hero/2.webp', source: 'upload', at: 2 }] };
+    for (const path of ['u/user-1/p/proj-1/ref/maya.webp', 'library/v1/hero/2.webp']) {
+      expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: 1, adopt: true })).toMatchObject({ path });
+    }
+    // Switching between a page's own versions never asks about provenance.
+    expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_1' }, path: 'u/user-1/p/proj-1/img/p1-v1.webp', at: 1 })).toMatchObject({ at: NOW });
   });
   // S6: only images the server made for THIS comic (its img/ref lanes, or the platform library) can
   // become page or cover art. Legacy-imported refs live in client-writable lanes (<uid>/file,
@@ -215,9 +240,9 @@ describe('render_use allow-list', () => {
       expect(err.message).toMatch(/upload it again/i);
       rejects(() => run(doc, { op: 'render_use', target: { kind: 'cover' }, path, at: 1, adopt: true }), 400, 'BAD_REQUEST');
     }
-    // This comic's own lanes and the platform library still adopt.
+    // This comic's own publishable lanes and the platform library still adopt.
     doc.style = { ...doc.style, refs: [{ path: 'library/v1/hero/2.webp', source: 'upload', at: 2 }] };
-    for (const path of ['u/user-1/p/proj-1/ref/maya.webp', 'u/user-1/p/proj-1/img/attach.webp', 'library/v1/hero/2.webp']) {
+    for (const path of ['u/user-1/p/proj-1/ref/maya.webp', 'u/user-1/p/proj-1/img/maya-sheet.webp', 'library/v1/hero/2.webp']) {
       expect(run(doc, { op: 'render_use', target: { kind: 'page', id: 'pg_3' }, path, at: 1, adopt: true })).toMatchObject({ path });
     }
   });
@@ -286,5 +311,21 @@ describe('assetIndex', () => {
     expect(roles('u/user-1/p/proj-1/img/gone.webp')).toEqual(['art']);
     expect(idx.get('u/user-1/p/proj-1/img/p1-v0.webp')?.versioned).toBe(true);
     expect(idx.get('u/user-1/p/proj-1/img/gone.webp')?.versioned).toBe(false);
+  });
+});
+
+// P2-GATE L5: free text is cleaned where it enters (./text.ts), so the live doc never holds a NUL or a lone
+// surrogate (jsonb rejects both) and a clip never splits an emoji — the live doc and its stored copy hash alike.
+describe('free text entering through the timeline sanitizers is jsonb-safe', () => {
+  it('page_insert summary/layout/chapter title: NUL and lone surrogates gone, whole emoji kept, no split pair at the clip', () => {
+    const doc = fixture();
+    const out = run(doc, {
+      op: 'page_insert',
+      id: 'pg_new',
+      after: 3,
+      patch: { summary: ' The fox 🦊 runs\u0000 home \uD83C', layout: `${'x'.repeat(999)}🦊`, chapterTitle: 'Act\uDC00 One' }
+    });
+    expect(out.patch).toEqual({ summary: 'The fox 🦊 runs home', layout: 'x'.repeat(999), chapterTitle: 'Act One' });
+    expect(JSON.stringify(out)).not.toMatch(/\\u0000|\\ud83c"|\\udc00/i);
   });
 });

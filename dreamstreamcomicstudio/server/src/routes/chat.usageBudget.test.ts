@@ -96,8 +96,8 @@ vi.mock('../services/modelCatalog.js', async (importOriginal) => {
 // The chat engine is REAL (gate S9: it is what sums every provider call's reported usage into the
 // settle). `engine.calls` records each route-level runChat call (what the route asked for);
 // `engine.providerCalls` records every model call the engine makes — where money would be spent.
-type Call = { model: string; fallbackModel?: string; fallbackModels?: string[]; webSearch?: boolean; systemOverride?: string; tools?: { name: string }[] };
-type ProviderCall = { model: string; fallbackModel?: string; models?: string[]; webSearch?: boolean; freeOnly?: boolean };
+type Call = { model: string; fallbackModel?: string; fallbackModels?: string[]; webSearch?: boolean; systemOverride?: string; tools?: { name: string }[]; budget?: unknown };
+type ProviderCall = { model: string; fallbackModel?: string; models?: string[]; webSearch?: boolean; freeOnly?: boolean; toolsOffered?: boolean };
 type Scripted = { toolCall?: string; costUsd?: number; fail?: boolean; empty?: boolean };
 const engine = vi.hoisted(() => ({
   calls: [] as Call[],
@@ -119,7 +119,8 @@ vi.mock('../ai/chat.js', async (importOriginal) => {
         fallbackModels: params.fallbackModels,
         webSearch: params.webSearch,
         systemOverride: params.systemOverride,
-        tools: params.tools
+        tools: params.tools,
+        budget: (params as { budget?: unknown }).budget
       });
       return actual.runChat(params);
     }
@@ -127,9 +128,17 @@ vi.mock('../ai/chat.js', async (importOriginal) => {
 });
 vi.mock('../ai/gateway.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ai/gateway.js')>();
-  type Req = { model: string; fallbackModel?: string; models?: string[]; webSearch?: boolean; freeOnly?: boolean; messages: { role: string; content: unknown }[] };
+  type Req = { model: string; fallbackModel?: string; models?: string[]; webSearch?: boolean; freeOnly?: boolean; tools?: unknown[]; messages: { role: string; content: unknown }[] };
   const reply = (req: Req) => {
-    engine.providerCalls.push({ model: req.model, fallbackModel: req.fallbackModel, models: req.models, webSearch: req.webSearch, freeOnly: req.freeOnly });
+    engine.providerCalls.push({
+      model: req.model,
+      fallbackModel: req.fallbackModel,
+      models: req.models,
+      webSearch: req.webSearch,
+      freeOnly: req.freeOnly,
+      // Whether this call could start a tool round (the governed per-turn cap withdraws tools).
+      toolsOffered: Array.isArray(req.tools) && req.tools.length > 0
+    });
     const step = engine.script.shift();
     if (engine.fail || step?.fail) throw new Error('provider down');
     const free = /:free$/.test(req.model);
@@ -215,7 +224,9 @@ vi.mock('../middleware/accountKeys.js', () => ({ hasAccountKeyFor: vi.fn(async (
 vi.mock('../services/rbac.js', () => ({ isBootstrapAdminEmail: () => false, getUserRoles: vi.fn(async () => []) }));
 
 const allowance = await import('../services/platformAllowance.js');
-const { chatRouter, freeModelsOnlyPlan, localChatTitle, noFreeModelDetails, chatPricedModels } = await import('./chat.js');
+const { chatRouter, freeModelsOnlyPlan, localChatTitle, noFreeModelDetails, chatPricedModels, chatHoldTokens, CHAT_HOLD_OUTPUT_TOKENS, CHAT_HOLD_TOOL_ROUNDS } =
+  await import('./chat.js');
+const { TOOL_BUDGET_NOTICE } = await import('../ai/chat.js');
 const { recipesRouter } = await import('./recipes.js');
 const { errorHandler } = await import('../middleware/errors.js');
 const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
@@ -926,5 +937,89 @@ describe('gate S9 — the real engine’s provider usage drives the settle', () 
       expect(c.fallbackModel).toBeUndefined();
       expect(c.freeOnly).toBe(true);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Governed per-turn tool cap (gate follow-up, owner decision: conservative). One hold covers a
+// bounded tool-round allowance; once the turn's metered spend exceeds it, the engine runs no further
+// tool round and answers calmly from what it has. Admins and BYOK turns carry no cap.
+describe('governed per-turn tool cap — one hold, a bounded tool allowance, then answer from what is known', () => {
+  const ask = (content: string) => ({ messages: [{ role: 'user', content }] });
+  const turnEvents = (user: string) => db.events.filter((e) => e.userId === user && e.operation === 'chat.completion');
+  const capNotice = (notices: { message?: string }[] | undefined) => (notices || []).find((n) => n.message === TOOL_BUDGET_NOTICE);
+  /** Round 1 alone costs far more than any one-turn hold here, and the model then asks for a tool. */
+  const overspend = () => [{ toolCall: 'no_such_tool', costUsd: 5 }, { costUsd: 0.01 }];
+
+  it('governed (POST / and /stream): the round past the hold is not run, the answer comes tool-less with a calm note, the spend settles', async () => {
+    for (const path of ['/api/chat', '/api/chat/stream']) {
+      const user = freshUser();
+      engine.providerCalls = [];
+      engine.calls = [];
+      engine.script = overspend();
+      const r = await post(path, ask('Explain how tides work'), { 'x-test-user': user });
+      expect(r.status).toBe(200);
+      const payload = path === '/api/chat' ? r.json : sseEvents(r.text).find((e) => e.event === 'final')!.data;
+      expect(payload.text).toBe('Here is your answer.');
+      // The route handed the engine the hold as its budget …
+      const budget = engine.calls[0].budget as { holdUsd?: number } | undefined;
+      expect(budget?.holdUsd).toBeGreaterThan(0);
+      // … so only the first call could start a tool round; the closing call offered none.
+      expect(engine.providerCalls[0].toolsOffered).toBe(true);
+      expect(engine.providerCalls[1].toolsOffered).toBe(false);
+      expect(engine.providerCalls.filter((c) => c.toolsOffered)).toHaveLength(1);
+      expect(capNotice(payload.notices)?.message).toBe(TOOL_BUDGET_NOTICE);
+      expect(r.text).not.toMatch(/\$\d/);
+      const ev = turnEvents(user);
+      expect(ev).toHaveLength(1);
+      expect(ev[0].status).toBe('SETTLED');
+      expect(ev[0].costUsd).toBeCloseTo(5.01, 9);
+    }
+  });
+
+  it('admins and BYOK are unchanged: no budget, the next round still offers tools, no note', async () => {
+    for (const headers of [{ 'x-test-admin': '1' }, { 'x-test-byok': '1' }]) {
+      engine.providerCalls = [];
+      engine.calls = [];
+      engine.script = overspend();
+      const r = await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': freshUser(), ...headers });
+      expect(r.status).toBe(200);
+      expect(engine.calls[0].budget).toBeUndefined();
+      expect(engine.providerCalls.filter((c) => c.toolsOffered)).toHaveLength(2);
+      expect(capNotice(r.json.notices)).toBeUndefined();
+    }
+  });
+
+  it('governed within the hold: tool rounds keep running (no needless stop)', async () => {
+    engine.script = [{ toolCall: 'no_such_tool', costUsd: 0.0001 }, { costUsd: 0.0001 }];
+    const r = await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': freshUser() });
+    expect(r.status).toBe(200);
+    expect(engine.providerCalls.filter((c) => c.toolsOffered)).toHaveLength(2);
+    expect(capNotice(r.json.notices)).toBeUndefined();
+  });
+
+  it('an exhausted governed user on free models ($0 hold, $0 reported) keeps the keyless tools', async () => {
+    const user = freshUser();
+    exhaust(user);
+    engine.script = [{ toolCall: 'no_such_tool', costUsd: 0 }, { costUsd: 0 }];
+    const r = await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    expect((engine.calls[0].budget as { holdUsd?: number } | undefined)?.holdUsd).toBe(0);
+    expect(engine.providerCalls.filter((c) => c.toolsOffered)).toHaveLength(2);
+    expect(capNotice(r.json.notices)).toBeUndefined();
+  });
+
+  it('the hold of a turn with tools includes the bounded tool-round allowance', async () => {
+    await post('/api/chat', ask('Explain how tides work'), { 'x-test-user': freshUser() });
+    const seed = seeds.list.find((x) => x.operation === 'chat.completion')!;
+    const sized = chatHoldTokens({ tools: [{}] }, 1_000);
+    expect(seed.outputTokens).toBe(sized.outputTokens);
+    expect(seed.outputTokens).toBeGreaterThan(CHAT_HOLD_OUTPUT_TOKENS);
+    // No tools: one call and one answer. Tools: the first call plus CHAT_HOLD_TOOL_ROUNDS rounds,
+    // each re-sending the context — a bounded share of the engine's 9-round maximum.
+    expect(chatHoldTokens({ tools: [] }, 1_000)).toEqual({ inputTokens: 1_000, outputTokens: CHAT_HOLD_OUTPUT_TOKENS });
+    expect(sized.inputTokens).toBeGreaterThanOrEqual((1 + CHAT_HOLD_TOOL_ROUNDS) * 1_000);
+    expect(CHAT_HOLD_TOOL_ROUNDS).toBeGreaterThan(0);
+    expect(CHAT_HOLD_TOOL_ROUNDS).toBeLessThan(9);
   });
 });

@@ -744,6 +744,23 @@ describe('sanitizePatchOps', () => {
     expect(ops[6]).toEqual({ op: 'panel', pageId: 'pg_1', id: 'pn_1_1', patch: { castIds: ['c_new'], placeId: undefined } });
   });
 
+  // P2-GATE L5: text is cleaned where it enters (str → sanitize/text.ts), so the live doc never holds a
+  // NUL or a lone surrogate (jsonb rejects both, and a stored copy that differs from the live doc would
+  // hash differently after a reload) — and a clip never splits an emoji.
+  it('drops NULs and lone surrogates from free text at the door, keeps whole emoji, never splits a pair at the clip', () => {
+    const ops = sanitizePatchOps(doc, [
+      { op: 'brief', patch: { title: ' Spice\u0000 Run \uD83C', logline: 'A fox 🦊 races\uDC00', themes: ['\u0000', 'home 🏁', '\uD800'], notes: [`${'n'.repeat(499)}🦊`] } },
+      { op: 'note_add', text: '\uDC00call\u0000 the vet' },
+      { op: 'character', id: 'c_new2', patch: { name: 'Na\u0000ni', role: 'guide \uD83E' } }
+    ]);
+    expect(ops[0]).toEqual({ op: 'brief', patch: { title: 'Spice Run', logline: 'A fox 🦊 races', themes: ['home 🏁'], notes: ['n'.repeat(499)] } });
+    expect(ops[1]).toEqual({ op: 'note_add', text: 'call the vet' });
+    expect(ops[2]).toEqual({ op: 'character', id: 'c_new2', patch: { name: 'Nani', role: 'guide' } });
+    expect(JSON.stringify(ops)).not.toMatch(/\\u0000|\\ud8[0-9a-f]{2}"|\\udc00/i);
+    // A note that is only unstorable characters is "no note" (never an empty entry).
+    expect(() => sanitizePatchOps(doc, [{ op: 'note_add', text: '\u0000\uD83C' }])).toThrow('Invalid note');
+  });
+
   it.each([
     [{ op: 'render', target: { kind: 'cover' }, patch: { status: 'ready' } }, "can't be changed directly"],
     [{ op: 'spend', entry: {} }, "can't be changed directly"],

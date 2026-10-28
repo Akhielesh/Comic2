@@ -33,11 +33,11 @@ const block: CoverTextBlock = {
   dir: 'ltr'
 };
 
-/** A fixed-width measure: enough for the plan to lay a title out without a canvas. */
+/** A fixed-width measure (page units, W = 1000): enough for the plan to lay a title out without a canvas. */
 const measure: Measure = (text: string, font: string) => {
   const m = /(\d+(?:\.\d+)?)px/.exec(font);
   const px = m ? Number(m[1]) : 16;
-  return { width: text.length * px * 0.55, ascent: px * 0.8, descent: px * 0.2 };
+  return text.length * px * 0.55;
 };
 
 describe('coverBlockNodes', () => {
@@ -51,7 +51,7 @@ describe('coverBlockNodes', () => {
 describe('coverTitleNodes', () => {
   it('a painted (in-art) cover draws nothing: no nodes, no text, no markup', () => {
     const doc = makeSampleDoc((d) => {
-      d.cover = { ...d.cover, lettering: 'painted' };
+      d.cover = { ...d.cover, lettering: 'in_art', title: 'The Saffron Thief' };
     });
     expect(coverTitleNodes(doc, 2 / 3, measure)).toEqual([]);
     expect(coverTitleText(doc, 2 / 3, measure)).toBe('');
@@ -60,8 +60,7 @@ describe('coverTitleNodes', () => {
 
   it('an overlay cover draws its title through blockNodes, in plan units', () => {
     const doc = makeSampleDoc((d) => {
-      d.cover = { ...d.cover, lettering: 'overlay' };
-      d.title = 'The Saffron Thief';
+      d.cover = { ...d.cover, lettering: 'overlay', title: 'The Saffron Thief' };
     });
     const nodes = coverTitleNodes(doc, 2 / 3, measure);
     expect(nodes.length).toBeGreaterThan(0);

@@ -64,6 +64,11 @@ describe('sanitizeReaderPatch', () => {
   it('strips control and bidi-override characters from text', () => {
     expect(cleanReaderText('For\u0000 Mia‮ and​ Leo')).toBe('For Mia and Leo');
   });
+
+  it('drops lone surrogates (jsonb rejects them) and keeps whole emoji', () => {
+    expect(cleanReaderText('For Mia \uD83C and Leo \uDC00🦊')).toBe('For Mia and Leo 🦊');
+    expect(sanitizeReaderPatch({ credits: 'Art: Maya \uD83E' })).toEqual({ credits: 'Art: Maya' });
+  });
 });
 
 describe('through sanitizePatchOps (the UI path)', () => {

@@ -329,7 +329,11 @@ describe('Ideogram on the platform key: governed users get the everyday list onl
     // A caller-chosen id the route does not know: it would run Ideogram's default version while the
     // hold and the settle were priced at the cheap id the caller sent.
     ['a cheap-priced foreign id', { modelId: 'pixazo/flux-1-schnell' }],
-    ['an everyday Gemini id', { modelId: 'gemini-nano-banana-2.1' }]
+    ['an everyday Gemini id', { modelId: 'gemini-nano-banana-2.1' }],
+    // Unlike /openrouter there is no `:free` skip here (Ideogram has no free variant), and the
+    // pricing helper would hold `:free`/`:FREE` at $0 while Ideogram ran its default version.
+    ['a `:free` spelling of an Ideogram id', { modelId: 'ideogram/ideogram-v2:free' }],
+    ['an upper-case `:FREE` spelling', { modelId: 'ideogram/ideogram-v2:FREE' }]
   ])('governed tester, %s: refused honestly before any hold or provider call', async (_label, body) => {
     const res = await post('/ideogram', body);
     expect(res.status).toBe(403);
@@ -373,6 +377,18 @@ describe('Ideogram on the platform key: governed users get the everyday list onl
     expect(meter.reserveForOperation).not.toHaveBeenCalled();
     expect(providers.ideogram).not.toHaveBeenCalled();
   });
+
+  it.each(['ideogram/ideogram-v2:free', 'ideogram/ideogram-v2-turbo:FREE'])(
+    '…nor at a free-looking spelling (%s): no $0 hold for a call Ideogram would run at its default version',
+    async (modelId) => {
+      usage.admin = true;
+      const res = await post('/ideogram', { modelId });
+      expect(res.status).toBe(403);
+      expect((await res.json()).error.message).toBe(IDEOGRAM_UNKNOWN_MODEL_MESSAGE);
+      expect(meter.reserveForOperation).not.toHaveBeenCalled();
+      expect(providers.ideogram).not.toHaveBeenCalled();
+    }
+  );
 
   it('the caller’s own Ideogram key is never gated (governed or not, any model id)', async () => {
     ownKey();

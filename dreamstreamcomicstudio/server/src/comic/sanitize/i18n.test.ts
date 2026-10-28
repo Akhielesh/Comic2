@@ -94,3 +94,25 @@ describe('i18n sanitizers (contract §5.4)', () => {
     expect(() => sanitizePatchOps(doc, [{ op: 'translations', lang: 'te', lines: {} } as DocOp], CTX)).toThrow();
   });
 });
+
+// P2-GATE L5: translations and glossary text are cleaned where they enter (sanitize/text.ts): no NUL or
+// lone surrogate reaches the live doc (jsonb rejects both), and a clip never splits an emoji.
+describe('i18n free text is jsonb-safe at the door', () => {
+  it('translation: NUL and a lone surrogate are dropped, whole emoji stay; a NUL-only text is "empty"', () => {
+    const doc = withTe();
+    const op = sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: ' కొత్త\u0000ది 🦊 \uD83C' } }, CTX);
+    expect(op.patch?.text).toBe('కొత్తది 🦊');
+    expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: '\u0000\uDC00' } }, CTX), 400);
+  });
+
+  it('glossary: term, note and forms are cleaned and clipped without splitting a pair', () => {
+    const doc = withTe();
+    const op = sanitizeGlossaryTerm.sanitize(
+      doc,
+      { op: 'glossary_term', id: 'gl_t_9', patch: { term: `${'m'.repeat(79)}🦊`, kind: 'place', policy: 'translate', note: 'see\u0000 map \uD800', forms: { te: 'చంద్ర\uDC00 🦊' } } },
+      CTX
+    );
+    expect(op.patch).toMatchObject({ term: 'm'.repeat(79), note: 'see map', forms: { te: 'చంద్ర 🦊' } });
+    expectCode(() => sanitizeGlossaryTerm.sanitize(doc, { op: 'glossary_term', id: 'gl_t_8', patch: { term: '\u0000' } }, CTX), 400);
+  });
+});

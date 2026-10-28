@@ -195,3 +195,131 @@ describe('L2: a free-models-only turn never retries on a paid model', () => {
     expect(fake.requests.map((q) => q.model)).toEqual(['free/a:free', TEXT_FALLBACK]);
   });
 });
+
+// ── Governed per-turn tool cap (gate follow-up, owner decision: conservative) ──────────────────
+// The route holds ONCE for a turn, but a turn can run up to 9 tool rounds (each re-sending the whole
+// context, each possibly running paid meta-tools). With a TurnBudget the engine prices what the
+// turn has spent before every tool round; past the hold the asked-for tools are not run, the model
+// answers once more without tools from what it has, and a calm percent-free notice says so.
+describe('governed per-turn tool cap (RunChatParams.budget)', () => {
+  const toolCall = (id: string, costUsd?: number, promptTokens = 1_000) => () => ({
+    text: '',
+    toolCalls: [{ id, name: 'run_agent_swarm', arguments: '{}' }],
+    usage: { promptTokens, completionTokens: 10, ...(costUsd === undefined ? {} : { costUsd }) }
+  });
+  const answer = (text: string, costUsd?: number, promptTokens = 2_100) => () => ({
+    text,
+    usage: { promptTokens, completionTokens: 50, ...(costUsd === undefined ? {} : { costUsd }) }
+  });
+  type Msg = { role: string; tool_call_id?: string; content: unknown };
+  const toolMessages = (req: GenerateTextRequest) => (req.messages as unknown as Msg[]).filter((m) => m.role === 'tool');
+
+  it('past the hold: the asked-for tools are not run, the model answers tool-less from what it has, the notice is calm', async () => {
+    fake.steps = [toolCall('c1', 0.3), toolCall('c2', 0.3, 2_000), answer('What I found so far.', 0.1)];
+    const tool = probeTool({ promptTokens: 10, candidatesTokens: 1, totalTokens: 11, providerCostUsd: 0 });
+    const rounds: TurnBudgetRound[] = [];
+    const r = await runChat({ ...base, tools: [tool], budget: { holdUsd: 0.5, onRound: (x) => rounds.push(x) } });
+    // Round 1 ran ($0.30 ≤ $0.50); round 2 did not ($0.60 > $0.50).
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(fake.requests).toHaveLength(3);
+    expect(fake.requests[0].tools).toBeDefined();
+    expect(fake.requests[2].tools).toBeUndefined();
+    // The provider needs a result for every requested call: the skipped one says it was not run.
+    const tools = toolMessages(fake.requests[2]);
+    expect(tools.map((m) => m.tool_call_id)).toEqual(['c1', 'c2']);
+    expect(tools[0].content).toContain('the agents answered');
+    expect(tools[1].content).toBe(TOOL_BUDGET_TOOL_RESULT);
+    expect(r.text).toBe('What I found so far.');
+    expect(r.usage.providerCostUsd).toBeCloseTo(0.7, 9);
+    const notice = r.notices?.find((n) => n.tool === 'usage_budget');
+    expect(notice?.message).toBe(TOOL_BUDGET_NOTICE);
+    expect(notice?.message).not.toMatch(/\$\d|usd|cost|budget|limit/i);
+    expect(rounds).toEqual([
+      { round: 1, spentUsd: expect.closeTo(0.3, 9), holdUsd: 0.5, stop: false },
+      { round: 2, spentUsd: expect.closeTo(0.6, 9), holdUsd: 0.5, stop: true }
+    ]);
+  });
+
+  it('a meta-tool’s nested spend counts toward the cap', async () => {
+    fake.steps = [toolCall('c1', 0.1), toolCall('c2', 0.1), answer('Done.', 0.1)];
+    const tool = probeTool({ promptTokens: 1_000, candidatesTokens: 100, totalTokens: 1_100, providerCostUsd: 0.5 });
+    const rounds: TurnBudgetRound[] = [];
+    const r = await runChat({ ...base, tools: [tool], budget: { holdUsd: 0.5, onRound: (x) => rounds.push(x) } });
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(fake.requests).toHaveLength(3);
+    expect(rounds[1]).toMatchObject({ round: 2, spentUsd: expect.closeTo(0.7, 9), stop: true });
+    expect(r.usage.providerCostUsd).toBeCloseTo(0.8, 9);
+  });
+
+  it('no budget (admins, BYOK, signed-out): every round runs exactly as before', async () => {
+    fake.steps = [toolCall('c1', 0.3), toolCall('c2', 0.3), answer('Full answer.', 0.1)];
+    const tool = probeTool();
+    const r = await runChat({ ...base, tools: [tool] });
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(fake.requests).toHaveLength(3);
+    expect(fake.requests[2].tools).toBeDefined();
+    expect(r.text).toBe('Full answer.');
+    expect(r.notices?.find((n) => n.tool === 'usage_budget')).toBeUndefined();
+  });
+
+  it('calls that report no cost are priced through the caller’s hook (the settle’s pricing)', async () => {
+    fake.steps = [toolCall('c1', undefined, 1_000), toolCall('c2', undefined, 2_000), answer('Priced answer.', undefined)];
+    const tool = probeTool();
+    const rounds: TurnBudgetRound[] = [];
+    const r = await runChat({
+      ...base,
+      tools: [tool],
+      budget: { holdUsd: 0.0015, spentUsd: (u) => (u.promptTokens || 0) * 1e-6, onRound: (x) => rounds.push(x) }
+    });
+    // 1,000 prompt tokens → $0.001 (≤ hold, ran); 3,000 → $0.003 (> hold, stopped).
+    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(rounds.map((x) => x.stop)).toEqual([false, true]);
+    expect(rounds[1].spentUsd).toBeCloseTo(0.003, 9);
+    expect(r.text).toBe('Priced answer.');
+    expect(r.usage.providerCostUsd).toBeUndefined();
+  });
+
+  it('a pricing hook that throws never breaks the turn — the reported cost decides', async () => {
+    fake.steps = [toolCall('c1', 0.6), answer('From what I had.', 0.1)];
+    const tool = probeTool();
+    const r = await runChat({
+      ...base,
+      tools: [tool],
+      budget: {
+        holdUsd: 0.5,
+        spentUsd: () => {
+          throw new Error('pricing down');
+        }
+      }
+    });
+    expect(tool.execute).not.toHaveBeenCalled();
+    expect(fake.requests).toHaveLength(2);
+    expect(r.text).toBe('From what I had.');
+  });
+
+  it('a $0 hold on a free turn ($0 reported) never stops the keyless tools', async () => {
+    fake.steps = [toolCall('c1', 0), toolCall('c2', 0), answer('Free answer.', 0)];
+    const tool = probeTool();
+    const r = await runChat({ ...base, model: 'free/a:free', fallbackModel: undefined, noPaidRetry: true, tools: [tool], budget: { holdUsd: 0 } });
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+    expect(r.text).toBe('Free answer.');
+    expect(r.notices?.find((n) => n.tool === 'usage_budget')).toBeUndefined();
+  });
+
+  it('JSON-tools loop (direct providers): the same cap, one tool-less closing answer', async () => {
+    fake.steps = [
+      () => ({ text: '{"name":"run_agent_swarm","arguments":{}}', usage: { promptTokens: 500, completionTokens: 20, costUsd: 0.6 } }),
+      () => ({ text: 'JSON answer from what I had.', usage: { promptTokens: 700, completionTokens: 60, costUsd: 0.1 } })
+    ];
+    const tool = probeTool();
+    const r = await runChat({ ...base, provider: 'anthropic', model: 'claude-x', fallbackModel: undefined, tools: [tool], budget: { holdUsd: 0.5 } });
+    expect(tool.execute).not.toHaveBeenCalled();
+    expect(fake.requests).toHaveLength(2);
+    const last = (fake.requests[1].messages as unknown as Msg[]).at(-1)!;
+    expect(last.role).toBe('user');
+    expect(String(last.content)).toContain(TOOL_BUDGET_TOOL_RESULT);
+    expect(r.text).toBe('JSON answer from what I had.');
+    expect(r.notices?.find((n) => n.tool === 'usage_budget')?.message).toBe(TOOL_BUDGET_NOTICE);
+    expect(r.usage.providerCostUsd).toBeCloseTo(0.7, 9);
+  });
+});

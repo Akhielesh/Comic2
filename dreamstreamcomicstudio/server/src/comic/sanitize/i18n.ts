@@ -55,12 +55,12 @@ const findLine = (doc: ComicDoc, id: unknown): Line => {
   throw bad('That line no longer exists.');
 };
 
-/** Source-normalized AND storable (no NUL or lone surrogate — jsonb; see ./text.ts). */
-const text = (raw: string): string => storableText(normalizeSource(raw));
+/** Storable (no NUL or lone surrogate — jsonb; see ./text.ts) THEN source-normalized, so the trim sees the cleaned text. */
+const text = (raw: string): string => normalizeSource(storableText(raw));
 
 const cleanText = (raw: unknown): string => {
   if (typeof raw !== 'string') throw bad('Send the translated text.');
-  const text = storableText(normalizeSource(raw));
+  const text = normalizeSource(storableText(raw));
   if (!text) throw bad('Type the translation, or remove it.');
   if (text.length > DOC_LIMITS.translationChars) throw bad(`A translation can be at most ${DOC_LIMITS.translationChars} characters.`);
   return text;
