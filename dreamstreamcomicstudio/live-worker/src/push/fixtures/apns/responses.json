@@ -1,0 +1,116 @@
+{
+  "about": "APNs HTTP/2 responses for push/apns.ts and push/probe.ts. `recorded` cases were captured from Apple's servers on 2026-10-28 with curl --http2 (no provider token, a dummy all-zero 64-hex device token, topic ai.dreamstreamstudio.streamstudio where sent); their apns-id values are the ones Apple returned. `documented` cases follow Apple's 'Handling notification responses from APNs' (status, reason, and the 410 timestamp) and cannot be recorded without a real provider key and device (their apns-id values are illustrative): re-record them in Phase 1 with the owner's key. `expect` is the outcome apns.ts must map each to.",
+  "cases": [
+    {
+      "name": "sandbox, no provider token (the Phase 0 probe's pass signal)",
+      "source": "recorded",
+      "request": { "method": "POST", "url": "https://api.sandbox.push.apple.com/3/device/0000000000000000000000000000000000000000000000000000000000000000", "headers": { "apns-push-type": "alert", "apns-topic": "ai.dreamstreamstudio.streamstudio" } },
+      "response": { "status": 403, "headers": { "apns-id": "BEB26349-5C0C-CE80-467D-9F2E56DD7880" }, "body": "{\"reason\":\"MissingProviderToken\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "production, no provider token",
+      "source": "recorded",
+      "request": { "method": "POST", "url": "https://api.push.apple.com/3/device/0000000000000000000000000000000000000000000000000000000000000000", "headers": {} },
+      "response": { "status": 403, "headers": { "apns-id": "66D18E74-BD5C-18DC-1994-D55D0BCD57F4" }, "body": "{\"reason\":\"MissingProviderToken\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "a provider token APNs can't verify",
+      "source": "recorded",
+      "request": { "method": "POST", "url": "https://api.sandbox.push.apple.com/3/device/0000000000000000000000000000000000000000000000000000000000000000", "headers": { "authorization": "bearer abc.def.ghi", "apns-topic": "ai.x" } },
+      "response": { "status": 403, "headers": { "apns-id": "0DD7A5B7-8EA0-7A72-2C1A-D4C6E3BACA1D" }, "body": "{\"reason\":\"InvalidProviderToken\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "wrong method",
+      "source": "recorded",
+      "request": { "method": "GET", "url": "https://api.sandbox.push.apple.com/3/device/0000000000000000000000000000000000000000000000000000000000000000", "headers": {} },
+      "response": { "status": 405, "headers": { "apns-id": "475E17B6-D592-9B95-DC06-781AECDED3D8" }, "body": "{\"reason\":\"MethodNotAllowed\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "delivered",
+      "source": "documented",
+      "response": { "status": 200, "headers": { "apns-id": "EC1BF194-B3B2-424A-89A7-4D7F1E6A6E41", "apns-unique-id": "3A1F7C38-7E2B-4A35-9A55-6C1D0B3E9F11" }, "body": "" },
+      "expect": "ok"
+    },
+    {
+      "name": "the app was uninstalled (410 Unregistered, with the time APNs confirmed it)",
+      "source": "documented",
+      "response": { "status": 410, "headers": { "apns-id": "9A0B6B3E-1C1D-4A2F-8E8B-7B2F0C9D1E21" }, "body": "{\"reason\":\"Unregistered\",\"timestamp\":1761600000000}" },
+      "expect": "gone"
+    },
+    {
+      "name": "the token expired (410 ExpiredToken)",
+      "source": "documented",
+      "response": { "status": 410, "headers": { "apns-id": "0B7C5F3A-7E52-4C83-9E0E-2B1D2F7C6A10" }, "body": "{\"reason\":\"ExpiredToken\"}" },
+      "expect": "gone"
+    },
+    {
+      "name": "an invalid token, or one minted for the other APNs environment",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "apns-id": "C2E3B4A1-55D6-4F7E-8A9B-0C1D2E3F4A5B" }, "body": "{\"reason\":\"BadDeviceToken\"}" },
+      "expect": "gone"
+    },
+    {
+      "name": "another app's token",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "apns-id": "D3F4C5B2-66E7-4081-9BAC-1D2E3F4A5B6C" }, "body": "{\"reason\":\"DeviceTokenNotForTopic\"}" },
+      "expect": "gone"
+    },
+    {
+      "name": "our collapse id is wrong (a request bug, not a dead token)",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "apns-id": "E4A5D6C3-77F8-4192-ABCD-2E3F4A5B6C7D" }, "body": "{\"reason\":\"BadCollapseId\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "the key may not push to this topic",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "apns-id": "F5B6E7D4-88A9-42A3-BCDE-3F4A5B6C7D8E" }, "body": "{\"reason\":\"TopicDisallowed\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "the provider token is older than an hour",
+      "source": "documented",
+      "response": { "status": 403, "headers": { "apns-id": "A6C7F8E5-99BA-43B4-CDEF-4A5B6C7D8E9F" }, "body": "{\"reason\":\"ExpiredProviderToken\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "payload over 4 KB",
+      "source": "documented",
+      "response": { "status": 413, "headers": { "apns-id": "B7D8A9F6-AACB-44C5-DEF0-5B6C7D8E9FA0" }, "body": "{\"reason\":\"PayloadTooLarge\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "too many pushes to one device",
+      "source": "documented",
+      "response": { "status": 429, "headers": { "apns-id": "C8E9BAA7-BBDC-45D6-EF01-6C7D8E9FA0B1" }, "body": "{\"reason\":\"TooManyRequests\"}" },
+      "expect": "retry"
+    },
+    {
+      "name": "provider token refreshed too often",
+      "source": "documented",
+      "response": { "status": 429, "headers": { "apns-id": "D9FACBB8-CCED-46E7-F012-7D8E9FA0B1C2" }, "body": "{\"reason\":\"TooManyProviderTokenUpdates\"}" },
+      "expect": "retry"
+    },
+    {
+      "name": "APNs internal error",
+      "source": "documented",
+      "response": { "status": 500, "headers": { "apns-id": "EA0BDCC9-DDFE-47F8-0123-8E9FA0B1C2D3" }, "body": "{\"reason\":\"InternalServerError\"}" },
+      "expect": "retry"
+    },
+    {
+      "name": "APNs unavailable",
+      "source": "documented",
+      "response": { "status": 503, "headers": { "apns-id": "FB1CEDDA-EE0F-4809-1234-9FA0B1C2D3E4" }, "body": "{\"reason\":\"ServiceUnavailable\"}" },
+      "expect": "retry"
+    }
+  ],
+  "http1": {
+    "about": "What APNs sends back to an HTTP/1.1 client (recorded 2026-10-28, curl --http1.1 --http0.9): not an HTTP/1 response at all but HTTP/2 frames — SETTINGS, then GOAWAY with the debug text 'Unexpected HTTP/1.x request'. A Worker fetch that can't speak h2 surfaces this as a thrown error or a non-APNs response without apns-id; probe.ts must call it a fail.",
+    "source": "recorded",
+    "rawHex": "00001e0400000000000001000010000003000000c8000500004000000600001f400008000000000000750700000000007fffffff00000001556e657870656374656420485454502f312e7820726571756573743a20504f5354202f332f6465766963652f3030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303020"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  // Throwaway Worker for the ADR 0006 Phase 0 APNs HTTP/2 probe (probeWorker.ts).
+  // Deployed, called and deleted by /.github/workflows/apns-probe.yml. Its own name,
+  // workers.dev only: NO routes, NO bindings — it must never touch dreamstream-live.
+  // By hand (from live-worker/):
+  //   printf 'OPS_KEY=%s\n' "$(openssl rand -hex 24)" > /tmp/probe.env
+  //   npx wrangler deploy -c src/push/probe.wrangler.jsonc --secrets-file /tmp/probe.env
+  //   OPS_KEY=… node scripts/apnsProbe.mjs --url https://dreamstream-apns-probe.<subdomain>.workers.dev/probe
+  //   npx wrangler delete dreamstream-apns-probe -c src/push/probe.wrangler.jsonc --force
+  "name": "dreamstream-apns-probe",
+  "main": "probeWorker.ts",
+  "compatibility_date": "2026-01-01",
+  "workers_dev": true,
+  "preview_urls": false
+}

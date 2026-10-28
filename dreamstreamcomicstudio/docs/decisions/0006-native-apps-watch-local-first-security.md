@@ -858,15 +858,15 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - `live-worker/src/push/apns.ts`, `fcm.ts`, `envelope.ts`, `router.ts`, `probe.ts`, `vapidCache.ts`, `*.test.ts` (all new)
 
 **Tasks:**
-- [ ] `webpush.ts`: export the aes128gcm `encryptPayload(p256dh, auth, bytes)` and the ES256 JWT signer for reuse. Behaviour unchanged.
-- [ ] `apns.ts`: provider JWT (ES256, cached for 50 min), `sendApns({token, type: 'alert'|'liveactivity'|'voip'|'widgets', topic, priority, collapseId, expiration, payload})`. Map APNs reasons to `gone | retry | fatal`.
-- [ ] `fcm.ts`: service-account RS256 JWT → OAuth token (cached 55 min); `sendFcm({token, data, androidPriority, ttl, collapseKey, apns?})`; map `UNREGISTERED` to `gone`.
-- [ ] `envelope.ts`: `sealForDevice(sub, json)` → `{e}` using RFC 8291 for both web and native; ciphertext ≤ 1 KB.
-- [ ] `router.ts`: `type PushSub = {kind:'webpush'|'apns'|'apns-la'|'apns-voip'|'fcm', dev, uid, token|sub, enc?}`; `deliver(sub, msg)` returns `ok | gone | retry`; `msg.replace` for the acknowledgement replacement push (collapse ID / tag).
-- [ ] `probe.ts`: the sandbox probe described in D3; returns `{status, apnsId, body}`.
-- [ ] `vapidCache.ts`: module-scope cache for `KEY_HOLDER` keys, so a DO only refetches when its isolate is cold.
+- [x] `webpush.ts`: export the aes128gcm `encryptPayload(p256dh, auth, bytes)` and the ES256 JWT signer for reuse. Behaviour unchanged. *(Done 2026-10-28: `encryptPayload` (with optional RFC 8188 padding) and `signJwtES256`; the RFC 8291 vector still matches byte for byte and `sendWebPush` is tested unchanged.)*
+- [x] `apns.ts`: provider JWT (ES256, cached for 50 min), `sendApns({token, type: 'alert'|'liveactivity'|'voip'|'widgets', topic, priority, collapseId, expiration, payload})`. Map APNs reasons to `gone | retry | fatal`. *(Done 2026-10-28: `iat` aligned to a 50-minute window so isolates agree; one fresh-token retry on `ExpiredProviderToken`; a 410 dated before the token's registration doesn't prune it.)*
+- [x] `fcm.ts`: service-account RS256 JWT → OAuth token (cached 55 min); `sendFcm({token, data, androidPriority, ttl, collapseKey, apns?})`; map `UNREGISTERED` to `gone`. *(Done 2026-10-28: also `SENDER_ID_MISMATCH` and an `INVALID_ARGUMENT` naming `message.token`; a payload error never prunes; a 401 retries once with a fresh OAuth token.)*
+- [x] `envelope.ts`: `sealForDevice(sub, json)` → `{e}` using RFC 8291 for both web and native; ciphertext ≤ 1 KB. *(Done 2026-10-28: padded to 128-byte steps; reference decoder `openEnvelope`; golden vector `live-worker/src/push/fixtures/envelope-v1.json` for the NSE and Android decoders.)*
+- [x] `router.ts`: `type PushSub = {kind:'webpush'|'apns'|'apns-la'|'apns-voip'|'fcm', dev, uid, token|sub, enc?}`; `deliver(sub, msg)` returns `ok | gone | retry`; `msg.replace` for the acknowledgement replacement push (collapse ID / tag). *(Done 2026-10-28: dormant — native kinds make no request until their secrets and tokens exist; `apns-voip` waits for `PUSH_VOIP=1`; Live Activity state in clear is cut to the coarse enum; `replacementOf`, `deliverAll`, `parsePushSub`, `routerFromEnv`. WS-9/WS-10 wire it in.)*
+- [x] `probe.ts`: the sandbox probe described in D3; returns `{status, apnsId, body}`. *(Done 2026-10-28: plus verdict, decision and the D3 line; `handleApnsProbe` for WS-7's ops route. Runnable now without WS-7: the manual "APNs HTTP/2 probe" workflow deploys a throwaway Worker (`push/probeWorker.ts`), runs `live-worker/scripts/apnsProbe.mjs` against it, records the result in the job summary and an `apns-probe` artifact, and deletes the Worker (pinned wrangler, `production-deploy` Environment; a test keeps it to that one throwaway Worker). A Node HTTP/2 control from the build container passed on 2026-10-28 (403 `MissingProviderToken` with `apns-id`); the production result is still to be recorded in D3.)*
+- [x] `vapidCache.ts`: module-scope cache for `KEY_HOLDER` keys, so a DO only refetches when its isolate is cold. *(Done 2026-10-28: concurrent callers share one fetch; a failure is never cached.)*
 
-**Done when:** tests pass against recorded APNs and FCM HTTP fixtures, including the 410 and `UNREGISTERED` paths.
+**Done when:** tests pass against recorded APNs and FCM HTTP fixtures, including the 410 and `UNREGISTERED` paths. *(2026-10-28: green. The no-credential responses were recorded from Apple and Google; the 410, `UNREGISTERED` and other paths that need a real key and device follow the providers' documented bodies and are marked `documented` in `push/fixtures/` — re-record them with the owner's keys in Phase 1.)*
 
 #### WS-4 Identity, SQL and email
 **Owns:**
