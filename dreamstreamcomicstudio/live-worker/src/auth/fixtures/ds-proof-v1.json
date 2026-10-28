@@ -1,0 +1,22 @@
+{
+  "_note": "DS-Proof v1 golden vector (ADR 0006 D4.4; live-worker/src/auth/deviceToken.ts). TEST KEY ONLY: published on purpose, never trusted anywhere. ECDSA signatures are randomised, so implementations reproduce `message` and `bodyHash` byte for byte and must VERIFY `header`; their own signatures will differ.",
+  "testPrivateJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "omMgV-2i55nDYuknKMZomH_Twbe9p4mLQwW4j7kYpCo",
+    "y": "342rfvTqoK0fAXO3UyAzXQZrijBV4NZ2iaNwEHYbjcA",
+    "d": "zttjj0nFK6yRlxkeBwuJG4IgmMdhUbrPDgLk4twuGis"
+  },
+  "publicRaw": "BKJjIFftoueZw2LpJyjGaJh_08G3vaeJi0MFuI-5GKQq342rfvTqoK0fAXO3UyAzXQZrijBV4NZ2iaNwEHYbjcA",
+  "jkt": "Am5bUpvOzQazstjPV669dofAc0GMNJg48gZeI975IgA",
+  "request": {
+    "method": "POST",
+    "path": "/api/monitor/9d9d9d9d-1111-4222-8333-444455556666/act",
+    "body": "{\"a\":\"ack\",\"inc\":\"inc_42\",\"id\":\"0f0f0f0f-1111-4222-8333-444455556666\"}"
+  },
+  "ts": 1800000000,
+  "nonce": "bm9uY2UtZm9yLXRoZS1maXh0dXJl",
+  "bodyHash": "XuRalAiMOz6rMWWvvw6DJ8DlgZAaADE64NE0yYfYrao",
+  "message": "ds-proof-v1\nPOST\n/api/monitor/9d9d9d9d-1111-4222-8333-444455556666/act\n1800000000\nbm9uY2UtZm9yLXRoZS1maXh0dXJl\nXuRalAiMOz6rMWWvvw6DJ8DlgZAaADE64NE0yYfYrao",
+  "header": "v1.1800000000.bm9uY2UtZm9yLXRoZS1maXh0dXJl.BKJjIFftoueZw2LpJyjGaJh_08G3vaeJi0MFuI-5GKQq342rfvTqoK0fAXO3UyAzXQZrijBV4NZ2iaNwEHYbjcA.sMY0VarJr5cGih0Oz-pIpxAd3SkybzDVBELqPFxfE-hEbnxPpXPI5KIJ0tE6dmvthyprD52Hbu0mtLMNdctudw"
+}

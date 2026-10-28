@@ -35,6 +35,12 @@ import { turnstileConfigured, verifyTurnstile } from '../services/turnstile.js';
 // Every answer after step 2 is final — the client never falls back on it (a fallback would
 // just hit Supabase's limit). /resend, /recovery and /magiclink never reveal whether an
 // account exists. Logs mask addresses and never contain tokens or links.
+//
+// Also here (ADR 0006 WS-4):
+//   * sign-up refuses passwords known from data breaches (Pwned Passwords, k-anonymity: only
+//     the first 5 hex characters of the password's SHA-1 leave the server). Fails open.
+//   * POST /secure — the "Not you? Secure my account" link from a new-sign-in email: ends every
+//     session (live_secure_account, server/sql/live_security_v2.sql) and mails a reset link.
 
 export const authEmailRouter = Router();
 
@@ -165,6 +171,70 @@ export const parseSignupInput = (
   if (/^[a-z0-9_]{1,40}$/.test(source)) data.signup_source = source;
 
   return { ok: true, value: { app: parseApp(body.app), after: parseAfter(body.after), password, data } };
+};
+
+// ── Breached passwords (Have I Been Pwned, k-anonymity) ─────────────────────────
+
+const PWNED_RANGE_URL = 'https://api.pwnedpasswords.com/range/';
+const PWNED_TIMEOUT_MS = 2500;
+export const BREACHED_PASSWORD_MESSAGE =
+  'This password has appeared in a known data breach, so it’s easy for others to guess. Please choose a different one.';
+
+let pwnedFetcher: typeof fetch = (input, init) => fetch(input, init);
+/** Tests only: where the range API is fetched from. */
+export const setPwnedFetcher = (f?: typeof fetch): void => {
+  pwnedFetcher = f ?? ((input, init) => fetch(input, init));
+};
+
+/**
+ * How often this password appears in known breaches (0 = never), or null when the check
+ * couldn't run. Only the first 5 hex characters of its SHA-1 are sent, with the padding header
+ * so even the response size says nothing; the password itself never leaves this process.
+ */
+export async function pwnedPasswordCount(password: string, opts: { fetcher?: typeof fetch; timeoutMs?: number } = {}): Promise<number | null> {
+  const sha1 = crypto.createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
+  const prefix = sha1.slice(0, 5);
+  const suffix = sha1.slice(5);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? PWNED_TIMEOUT_MS);
+  try {
+    const res = await (opts.fetcher ?? pwnedFetcher)(`${PWNED_RANGE_URL}${prefix}`, {
+      headers: { 'Add-Padding': 'true', 'User-Agent': 'DreamStream-Studio-signup' },
+      signal: ctrl.signal
+    });
+    if (!res.ok) return null;
+    for (const line of (await res.text()).split('\n')) {
+      const [suf, count] = line.trim().split(':');
+      if (suf && suf.toUpperCase() === suffix) {
+        const n = Number(count);
+        return Number.isFinite(n) && n > 0 ? n : 0; // padding rows carry a count of 0
+      }
+    }
+    return 0;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** On unless PWNED_PASSWORDS_CHECK=off; off under the test runner unless forced on. */
+export const breachedPasswordCheckOn = (): boolean => {
+  const v = (process.env.PWNED_PASSWORDS_CHECK || '').toLowerCase();
+  if (v === 'off' || v === 'false' || v === '0') return false;
+  if (v === 'on' || v === 'true' || v === '1') return true;
+  return process.env.NODE_ENV !== 'test';
+};
+
+/** True only when the password is known to be breached. Fails open (with a log line). */
+const breachedPassword = async (password: string): Promise<boolean> => {
+  if (!breachedPasswordCheckOn()) return false;
+  const n = await pwnedPasswordCount(password);
+  if (n == null) {
+    console.warn('[auth-email] breached-password check unavailable — allowing this sign-up');
+    return false;
+  }
+  return n > 0;
 };
 
 // ── Pipeline steps ───────────────────────────────────────────────────────────────
@@ -383,6 +453,9 @@ authEmailRouter.post('/signup', async (req, res, next) => {
     const admin = await emailReady();
     if (!admin) return unavailable(res);
 
+    // Before the captcha, so a refused password doesn't spend the person's token.
+    if (await breachedPassword(input.password)) return fail(res, 400, 'breached_password', BREACHED_PASSWORD_MESSAGE);
+
     // Live sign-ups have no captcha widget; a welcome ticket (minted only by a correct,
     // rate-limited welcome code) stands in for it.
     const gate = await captchaGate(req, () => input.app === 'live' && isValidLiveTicket(admin, input.data.live_ticket));
@@ -550,6 +623,93 @@ authEmailRouter.post('/magiclink', async (req, res, next) => {
     }
     const sent = await deliver(req, 'magiclink', { email, app: 'main', origin, props: data?.properties, userId: account.userId });
     return sent ? res.json({ ok: true }) : fail(res, 502, 'send_failed', SEND_FAILED_MESSAGE);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/email/secure — { token } from a new-sign-in email's "Not you? Secure my
+// account" link (email-worker/src/securityAlert.ts). No captcha and no session: the one-time
+// token (7 days, single use, only its hash stored) proves the mailbox. Steps:
+//   1. live_secure_account (service role): spends the token, ends EVERY session of the account
+//      (each device must sign in again; refresh tokens die with them), revokes devices added
+//      since that sign-in, records a 'secured' event;
+//   2. mails a password-reset link to the account's address (same throttle as /recovery).
+// The answer says honestly what happened; a reset email that couldn't go out is reported, and
+// the app then offers "Forgot password".
+authEmailRouter.post('/secure', async (req, res, next) => {
+  try {
+    const raw = bodyOf(req).token;
+    const token = typeof raw === 'string' ? raw.trim() : '';
+    if (!/^[A-Za-z0-9_-]{20,128}$/.test(token)) {
+      return fail(res, 400, 'invalid_token', 'This link isn’t valid — open it straight from the email.');
+    }
+    let admin: SupabaseClient;
+    try {
+      admin = getSupabaseAdmin();
+    } catch {
+      return fail(res, 503, 'unavailable', 'We can’t secure your account right now. Please try again in a minute.');
+    }
+
+    const { data, error } = await admin.rpc('live_secure_account', { p_token: token });
+    if (error) {
+      console.error(`[auth-email] secure: live_secure_account failed (${(error as LinkError).code ?? '?'})`);
+      return fail(res, 503, 'unavailable', 'We can’t secure your account right now. Please try again in a minute.');
+    }
+    const r = (data ?? {}) as {
+      ok?: boolean;
+      error?: string;
+      secured_at?: string;
+      sessions_ended?: number;
+      devices_revoked?: unknown[];
+      email?: string | null;
+      user_id?: string | null;
+      email_hint?: string | null;
+    };
+    if (!r.ok) {
+      if (r.error === 'used') {
+        return fail(res, 409, 'used', 'This link was already used — your account was secured then. To change your password now, use “Forgot password”.', {
+          securedAt: r.secured_at ?? null
+        });
+      }
+      if (r.error === 'expired') {
+        return fail(res, 410, 'expired', 'This link has expired. Sign in and use “Sign out everywhere”, or use “Forgot password”.');
+      }
+      return fail(res, 400, 'invalid_token', 'This link isn’t valid — open it straight from the email.');
+    }
+
+    const sessionsEnded = typeof r.sessions_ended === 'number' ? r.sessions_ended : null;
+    const devicesRevoked = Array.isArray(r.devices_revoked) ? r.devices_revoked.length : 0;
+    const email = readEmail(r.email);
+    let resetEmail: 'sent' | 'throttled' | 'unavailable' | 'failed' = 'unavailable';
+    if (email && (await emailReady())) {
+      const limit = await checkThrottle(email);
+      if (limit) {
+        resetEmail = 'throttled';
+      } else {
+        const { origin, redirectTo } = linkTarget(req);
+        const { data: link, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo } });
+        if (linkError) {
+          console.error(`[auth-email] secure → ${maskEmail(email)}: generateLink failed (${(linkError as LinkError).status ?? '?'})`);
+          resetEmail = 'failed';
+        } else {
+          const sent = await deliver(req, 'secure', { email, app: 'main', origin, props: link?.properties, userId: r.user_id ?? null });
+          resetEmail = sent ? 'sent' : 'failed';
+        }
+      }
+    }
+    console.log(
+      `[auth-email] secure: account secured${email ? ` (${maskEmail(email)})` : ''} — sessions ended: ${sessionsEnded ?? '?'}, devices revoked: ${devicesRevoked}, reset email: ${resetEmail}`
+    );
+    return res.json({
+      ok: true,
+      // -1: the database couldn't end the sessions — never claim it did.
+      sessionsEnded: sessionsEnded != null && sessionsEnded >= 0 ? sessionsEnded : null,
+      signedOutEverywhere: sessionsEnded != null && sessionsEnded >= 0,
+      devicesRevoked,
+      resetEmail,
+      emailHint: r.email_hint ?? null
+    });
   } catch (err) {
     next(err);
   }
