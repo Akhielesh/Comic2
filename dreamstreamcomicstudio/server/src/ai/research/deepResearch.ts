@@ -100,35 +100,61 @@ Rules:
 - Lead with signal; no filler, no "as an AI" preamble, no restating the question.`
 );
 
-const mergeUsage = (parts: ApiUsage[]): ApiUsage => {
-  const out: ApiUsage = {};
-  const keys: (keyof ApiUsage)[] = [
-    'promptTokens',
-    'candidatesTokens',
-    'totalTokens',
-    'estimatedTokens',
-    'promptChars',
-    'providerCostUsd'
-  ];
-  for (const key of keys) {
+// Combine token/cost usage across the planner and the synthesis so billing settles on the
+// research run's true footprint. The exact `providerCostUsd` is kept only when EVERY part reported
+// one — a partial sum would be settled as if it were the whole bill; otherwise what was reported
+// survives as `partialProviderCostUsd`, the floor the settle never goes below (ai/usage.ts).
+const mergeUsage = (parts: ApiUsage[]): MeteredUsage => {
+  const out: MeteredUsage = {};
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  for (const key of ['promptTokens', 'candidatesTokens', 'totalTokens', 'estimatedTokens', 'promptChars'] as const) {
     let sum = 0;
     let any = false;
     for (const p of parts) {
-      const v = p[key];
-      if (typeof v === 'number') {
+      const v = num(p[key]);
+      if (v !== undefined) {
         sum += v;
         any = true;
       }
     }
-    if (any) (out as Record<string, number>)[key as string] = sum;
+    if (any) out[key] = sum;
   }
+  let reported = 0;
+  let complete = parts.length > 0;
+  for (const p of parts) {
+    const cost = num(p.providerCostUsd);
+    if (cost !== undefined) {
+      reported += cost;
+      continue;
+    }
+    complete = false;
+    const partial = num((p as MeteredUsage).partialProviderCostUsd);
+    if (partial !== undefined) reported += partial;
+  }
+  const rounded = Math.round(reported * 1e9) / 1e9;
+  if (complete) out.providerCostUsd = rounded;
+  else if (rounded > 0) out.partialProviderCostUsd = rounded;
   return out;
 };
 
-export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResearchResult> => {
+/** Add what a failed call had already spent (ai/usage.ts spentUsageOf) to the run's usage parts. */
+const pushSpent = (parts: ApiUsage[], err: unknown) => {
+  const spent = spentUsageOf(err);
+  if (spent) parts.push(spent);
+};
+
+/** True when a merged usage holds anything worth settling. */
+const hasUsage = (u: MeteredUsage): boolean =>
+  (u.providerCostUsd ?? 0) > 0 || (u.partialProviderCostUsd ?? 0) > 0 || (u.totalTokens ?? 0) > 0 || (u.estimatedTokens ?? 0) > 0;
+
+/**
+ * The research run. `usageParts` collects the planner's and the synthesis' usage (a failed
+ * planner's spend included) and is shared with the exported wrapper, so a throw after the first
+ * model call still carries the spend to the chat turn's settle.
+ */
+const runDeepResearchWith = async (p: DeepResearchParams, usageParts: ApiUsage[]): Promise<DeepResearchResult> => {
   const cfg = DEPTH[p.depth ?? 'standard'] ?? DEPTH.standard;
   const topic = p.topic.trim();
-  const usageParts: ApiUsage[] = [];
   const toolEvents: ChatToolEvent[] = [];
   const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
   const baseReq = {
@@ -162,8 +188,9 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
         .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
         .map((q) => q.trim());
     }
-  } catch {
-    /* fall back to the bare topic below */
+  } catch (err) {
+    // A planner that failed after spending (e.g. its timeout retry) still bills; the bare topic is searched.
+    pushSpent(usageParts, err);
   }
   questions = questions.slice(0, cfg.questions);
   if (!questions.length) questions = [topic];
@@ -323,4 +350,21 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
     trace: trace(),
     report
   };
+};
+
+/**
+ * Run a deep-research investigation. `result.usage` sums every model call the run made (the
+ * planner — even when it failed after spending — and the synthesis). If the run throws after
+ * spending (the synthesis failed), the error carries the merged spend (ai/usage.ts spentUsageOf),
+ * so the chat turn settles it instead of releasing its hold over real spend.
+ */
+export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResearchResult> => {
+  const usageParts: ApiUsage[] = [];
+  try {
+    return await runDeepResearchWith(p, usageParts);
+  } catch (err) {
+    pushSpent(usageParts, err);
+    const spent = mergeUsage(usageParts);
+    throw hasUsage(spent) ? withSpentUsage(err, spent) : err;
+  }
 };
