@@ -65,6 +65,7 @@
           "w": 1
         },
         "db": 62,
+        "dbt": 1792637219000,
         "cam": {
           "on": 2,
           "bat": 31,
@@ -130,6 +131,7 @@
         "ms": 1792637160000,
         "sl": null,
         "db": 40,
+        "dbt": 1792637220000,
         "cam": {
           "on": 2,
           "bat": 80,
@@ -174,6 +176,7 @@
         "ms": 1792637160000,
         "sl": null,
         "db": 40,
+        "dbt": 1792637220000,
         "cam": {
           "on": 1,
           "bat": 80,
@@ -212,6 +215,7 @@
         "ms": 1792636920000,
         "sl": null,
         "db": null,
+        "dbt": null,
         "cam": {
           "on": 0,
           "bat": null,
@@ -238,12 +242,173 @@
         "ms": 1792637220000,
         "sl": null,
         "db": null,
+        "dbt": null,
         "cam": {
           "on": 0,
           "bat": null,
           "chg": null,
           "pz": null,
           "ls": 0
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "two-cameras-mood-began-when-the-last-reached-it",
+      "now": 1792637220000,
+      "room": {
+        "name": "Twins",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637218000,
+            "since": 1792633620000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          },
+          {
+            "online": true,
+            "at": 1792637219000,
+            "since": 1792637219000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Twins",
+        "m": "calm",
+        "ms": 1792637219000,
+        "sl": null,
+        "db": 40,
+        "dbt": 1792637218000,
+        "cam": {
+          "on": 2,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637219000
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "minute-laeq-is-the-level",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637219000,
+            "since": 1792633620000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 71
+              }
+            },
+            "minute": {
+              "laeq": 43.6,
+              "at": 1792637195000
+            }
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "calm",
+        "ms": 1792633620000,
+        "sl": null,
+        "db": 44,
+        "dbt": 1792637195000,
+        "cam": {
+          "on": 1,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637219000
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "stale-minute-row-gives-way-to-status-leq",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637219000,
+            "since": 1792633620000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 47.2
+              }
+            },
+            "minute": {
+              "laeq": 43.6,
+              "at": 1792636980000
+            }
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "calm",
+        "ms": 1792633620000,
+        "sl": null,
+        "db": 47,
+        "dbt": 1792637219000,
+        "cam": {
+          "on": 1,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637219000
         },
         "al": null,
         "du": null,
@@ -314,6 +479,7 @@
         "ms": 1792637160000,
         "sl": null,
         "db": 40,
+        "dbt": 1792637220000,
         "cam": {
           "on": 1,
           "bat": 80,
@@ -385,6 +551,7 @@
         "ms": 1792637160000,
         "sl": null,
         "db": 40,
+        "dbt": 1792637220000,
         "cam": {
           "on": 1,
           "bat": 80,
@@ -447,6 +614,7 @@
         "ms": 1792637160000,
         "sl": null,
         "db": 40,
+        "dbt": 1792637220000,
         "cam": {
           "on": 1,
           "bat": 80,

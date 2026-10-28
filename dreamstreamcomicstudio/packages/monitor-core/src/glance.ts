@@ -168,6 +168,12 @@ export interface GlanceFacts {
   sl: GlanceSleep | null;
   /** LAeq dB(A); null without a sound meter. */
   db: number | null;
+  /**
+   * When the room got that level (ms; null with `db`). It is how `nextBump` tells a new
+   * measurement from a re-check on the same facts: a dB band moves only on measurements.
+   * Never in a glance.
+   */
+  dbt: number | null;
   cam: { on: number; bat: number | null; chg: boolean | null; pz: Pause | null; ls: number };
   al: GlanceAlert | null;
   /** The uid stays here (for `me`); it never reaches a glance. */
@@ -195,6 +201,13 @@ export interface GlanceCamInput {
     call?: string | null;
     spl?: { leq: number } | null;
   } | null;
+  /**
+   * Its latest minute row (protocol.ts `MinuteRow.laeq`) and when the room got it (ms). While
+   * fresh (`MINUTE_FRESH_MS`) it is the level a glance shows, rather than the status's
+   * 1-second Leq: it is what a parent means by "how loud is the room", a cough is averaged
+   * into its minute, and it arrives every minute, so a band change is confirmed by measurements.
+   */
+  minute?: { laeq: number | null; at: number } | null;
 }
 
 /** An incident (protocol.ts `Incident`, only the fields a glance needs). */
@@ -216,6 +229,9 @@ export interface GlanceRoomInput {
   incidents?: readonly GlanceIncidentInput[];
   duty?: { uid: string; name: string; until: number } | null;
 }
+
+/** A camera's minute row is its current level for this long (rows come every minute; one may be late). */
+export const MINUTE_FRESH_MS = 3 * 60_000;
 
 /** A resolved alert stays on the glance this long ("Resolved · 02:47"), then drops off. */
 export const RESOLVED_SHOWN_MS = 30 * 60_000;
@@ -258,9 +274,14 @@ const PAUSES: readonly Pause[] = ['privacy', 'interrupted', 'hidden'];
 
 /**
  * The facts from what a room (or an app) knows. With several cameras: the worst mood wins
- * (its camera also gives the dB); the lowest battery is shown; the picture counts as paused
- * only when every online camera is paused. No camera at all is `unknown`; cameras that have
- * all stopped answering are `offline`.
+ * (its camera also gives the dB: its minute LAeq while fresh, else its status's 1-second
+ * Leq, with when the room got it), and it began when the last camera to reach it did — a twin
+ * settling an hour after her sister is when the nursery settled; the lowest battery is shown;
+ * the picture counts as paused only when every online camera is paused. No camera at all is
+ * `unknown`; cameras that have all stopped answering are `offline`.
+ *
+ * `ms` is the best a snapshot can say. Which camera held the mood before is history, which
+ * `nextBump` keeps: it dates a mood it saw begin, and keeps a shown mood's start.
  */
 export function glanceFacts(room: GlanceRoomInput, now: number): GlanceFacts {
   const online = room.cams.filter((c) => c.online);
@@ -268,6 +289,7 @@ export function glanceFacts(room: GlanceRoomInput, now: number): GlanceFacts {
   let m: Mood;
   let ms: number;
   let db: number | null = null;
+  let dbt: number | null = null;
   let primary: GlanceCamInput | null = null;
   if (!room.cams.length) {
     m = 'unknown';
@@ -282,8 +304,16 @@ export function glanceFacts(room: GlanceRoomInput, now: number): GlanceFacts {
     const st = primary!.st;
     // A state this contract doesn't know (a newer camera) reads as "waiting", never as a bad glance.
     m = st && (BABY_STATES as readonly string[]).includes(st.state) ? st.state : 'unknown';
-    ms = Math.min(now, primary!.since ?? primary!.at ?? now);
-    db = st?.spl && Number.isFinite(st.spl.leq) ? Math.round(st.spl.leq) : null;
+    const top = rankOf(primary!);
+    ms = Math.min(now, Math.max(...online.filter((c) => rankOf(c) === top).map((c) => c.since ?? c.at)));
+    const row = primary!.minute;
+    if (row && typeof row.laeq === 'number' && Number.isFinite(row.laeq) && now - row.at <= MINUTE_FRESH_MS) {
+      db = Math.round(row.laeq);
+      dbt = Math.min(now, row.at);
+    } else if (st?.spl && Number.isFinite(st.spl.leq)) {
+      db = Math.round(st.spl.leq);
+      dbt = Math.min(now, primary!.at);
+    }
   }
   let bat: number | null = null;
   let chg: boolean | null = null;
@@ -313,6 +343,7 @@ export function glanceFacts(room: GlanceRoomInput, now: number): GlanceFacts {
     ms,
     sl,
     db,
+    dbt,
     cam: { on: online.length, bat, chg, pz, ls },
     al: pickAlert(room.incidents, now),
     du: duty ? { uid: duty.uid, nm: duty.name, u: duty.until } : null,

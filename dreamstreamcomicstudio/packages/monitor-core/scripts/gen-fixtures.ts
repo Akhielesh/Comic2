@@ -41,10 +41,13 @@ import {
   type EcJwk,
   type FactsPatch,
   type FrameHeader,
+  type GlanceCamInput,
   type GlanceFacts,
+  type GlanceIncidentInput,
   type GlanceRoomInput,
   type GlanceRoomState,
   type GlanceViewer,
+  type SleepPhase,
 } from '../src/index';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
@@ -77,6 +80,7 @@ const baseFacts = (over: Partial<GlanceFacts> = {}): GlanceFacts => ({
   ms: T - 102 * MIN,
   sl: { p: 'asleep', s: T - 102 * MIN, min: 102, w: 1 },
   db: 34,
+  dbt: T - 31_000,
   cam: { on: 1, bat: 72, chg: true, pz: null, ls: T - 1_000 },
   al: null,
   du: { uid: DAD, nm: 'Dad', u: T + 4 * H },
@@ -120,6 +124,7 @@ const composeCases: ComposeCase[] = [
         m: 'offline',
         ms: T - 4 * MIN,
         db: null,
+        dbt: null,
         cam: { on: 0, bat: null, chg: null, pz: null, ls: T - 4 * MIN },
         al: { id: 'i12', k: 'offline', sev: 'urgent', at: T - 2 * MIN, st: 'open', by: null },
       }),
@@ -134,7 +139,7 @@ const composeCases: ComposeCase[] = [
   },
   {
     name: 'waiting-for-camera',
-    state: { nid: NID, q: 1, at: T, facts: { nm: 'Nursery', m: 'unknown', ms: T, sl: null, db: null, cam: { on: 0, bat: null, chg: null, pz: null, ls: 0 }, al: null, du: null, so: null, tk: null } },
+    state: { nid: NID, q: 1, at: T, facts: { nm: 'Nursery', m: 'unknown', ms: T, sl: null, db: null, dbt: null, cam: { on: 0, bat: null, chg: null, pz: null, ls: 0 }, al: null, du: null, so: null, tk: null } },
     viewer: { uid: MOM, role: 'parent' },
   },
   {
@@ -149,6 +154,7 @@ const composeCases: ComposeCase[] = [
         ms: T - 1,
         sl: { p: 'settling', s: T - 1, min: 9999, w: 99 },
         db: 104,
+        dbt: T,
         cam: { on: 3, bat: 100, chg: false, pz: 'interrupted', ls: T },
         al: { id: 'incident-0123456789-0123456789-01234567890', k: 'crib_out_of_zone_long', sev: 'urgent', at: T, st: 'acked', by: 'Grandma Josephine Alexandra' },
         du: { uid: MOM, nm: 'Grandma Josephine Alexandra', u: T + 24 * H },
@@ -208,6 +214,22 @@ const factsCases: FactsCase[] = [
     room: { name: 'Nursery', cams: [{ online: false, at: T - 5 * MIN, since: null, st: null }], duty: { uid: DAD, name: 'Dad', until: T - 1 } },
   },
   { name: 'no-camera-is-unknown', now: T, room: { name: 'Nursery', cams: [] } },
+  {
+    name: 'two-cameras-mood-began-when-the-last-reached-it',
+    now: T,
+    room: { name: 'Twins', cams: [{ online: true, at: T - 2_000, since: T - H, st: st('calm') }, { online: true, at: T - 1_000, since: T - 1_000, st: st('calm') }] },
+  },
+  {
+    name: 'minute-laeq-is-the-level',
+    // A door shut this second (71 dB); the minute averaged it in.
+    now: T,
+    room: { name: 'Nursery', cams: [{ online: true, at: T - 1_000, since: T - H, st: st('calm', { spl: { leq: 71 } }), minute: { laeq: 43.6, at: T - 25_000 } }] },
+  },
+  {
+    name: 'stale-minute-row-gives-way-to-status-leq',
+    now: T,
+    room: { name: 'Nursery', cams: [{ online: true, at: T - 1_000, since: T - H, st: st('calm', { spl: { leq: 47.2 } }), minute: { laeq: 43.6, at: T - 4 * MIN } }] },
+  },
   {
     name: 'alert-order-unanswered-first',
     now: T,
@@ -284,11 +306,20 @@ function genDecode() {
 /* ------------------------------------------------------------ the night */
 
 /**
- * A full night in one nursery, 19:00 → 07:00, with what a real one has: a white-noise
- * machine, two crying wakes answered by different parents (talk, soothing, a feed), a fuss
- * that settles by itself, brief stirs, a dog outside, a camera phone left unplugged then
- * charged, a duty hand-over, a Wi-Fi blip, morning, the camera stopped. Observations are
- * what the room learns: each status change, and the minute's LAeq each minute.
+ * A full night in one nursery, 19:00 → 07:00, as the room hears it (WS-9 room/glanceState.ts):
+ * each camera's status at once when its state changes and otherwise every 2 minutes (the
+ * statusCadence keepalive, with the parent watching over the data channel), its minute row
+ * every minute, and the room's own sleep phases, alerts and duty. Every input is one
+ * observation: the change it makes to `glanceFacts(room, now)`.
+ *
+ * What a real night has: a white-noise machine, two crying wakes answered by different parents
+ * (talk, soothing), a fuss that settles by itself, brief stirs, a dog outside, a duty hand-over,
+ * a Wi-Fi blip, morning, the cameras stopped. From 22:00 a second camera: Dad's old Android
+ * phone on the dresser, beside the crib camera (an iPhone in Safari, which gives no battery
+ * reading); it joins at 17 %, drops under 10 % and is plugged in after midnight. Two cameras
+ * bring the cases that once cost a bump per gap: a restless half hour (22:30) that the crib
+ * camera hears as stirring 20 s, settled 5 s, while the dresser stays calm; and the 04:00 cry
+ * in bursts while the dresser sees her stirring.
  */
 function genNight() {
   const t0 = Date.UTC(2026, 9, 21, 19, 0, 0);
@@ -296,69 +327,16 @@ function genNight() {
     const day = hh < 12 ? 24 : 0;
     return ((hh + day - 19) * 3600 + mm * 60 + ss) * 1000;
   };
-  const obs: [number, FactsPatch][] = [];
-  const add = (t: number, p: FactsPatch) => obs.push([t, p]);
+  const END = at(7, 0);
+  type St = NonNullable<GlanceCamInput['st']>;
+  /** A camera as the room knows it, plus when it last sent a status and whether it is out of reach. */
+  type Cam = GlanceCamInput & { last: number; away?: boolean };
+  type Mood = St['state'];
 
-  const initial: GlanceFacts = {
-    nm: 'Maya’s room',
-    m: 'calm',
-    ms: t0,
-    sl: { p: 'idle', s: t0, min: 0, w: 0 },
-    db: 38,
-    cam: { on: 1, bat: 46, chg: false, pz: null, ls: t0 },
-    al: null,
-    du: { uid: MOM, nm: 'Mom', u: t0 + at(1, 0) },
-    so: null,
-    tk: null,
-  };
-
-  // Sleep phases (with the session's wakings).
-  const sleep: [number, 'idle' | 'settling' | 'asleep' | 'awake', number][] = [
-    [at(19, 5), 'settling', 0], [at(19, 22), 'asleep', 0],
-    [at(21, 30, 40), 'awake', 1], [at(21, 38), 'settling', 1], [at(21, 52), 'asleep', 1],
-    [at(4, 0, 40), 'awake', 2], [at(4, 25), 'settling', 2], [at(4, 38), 'asleep', 2],
-    [at(5, 21), 'awake', 3], [at(5, 24), 'settling', 3], [at(5, 36), 'asleep', 3],
-    [at(6, 30, 30), 'awake', 4],
-  ];
-  // Moods (each with its own since).
-  const moods: [number, GlanceFacts['m']][] = [
-    [at(21, 30), 'crying'], [at(21, 35, 40), 'fussing'], [at(21, 36, 30), 'stirring'], [at(21, 37, 10), 'calm'],
-    [at(23, 10), 'stirring'], [at(23, 10, 10), 'calm'], // a 10 s stir: never shown
-    [at(23, 40), 'stirring'], [at(23, 40, 40), 'calm'],
-    [at(0, 55), 'stirring'], [at(0, 55, 50), 'calm'], // Mom plugs the camera phone in
-    [at(3, 15), 'noisy'], [at(3, 15, 25), 'calm'], // a dog outside
-    [at(4, 0), 'crying'], [at(4, 5), 'fussing'], [at(4, 7, 30), 'calm'],
-    [at(5, 20), 'fussing'], [at(5, 23), 'stirring'], [at(5, 23, 40), 'calm'],
-    [at(6, 30), 'awake'],
-  ];
-  // Everything else that changes.
-  const cry1 = { id: 'inc-2130', k: 'cry', sev: 'urgent' as const, at: t0 + at(21, 30, 20) };
-  const cry2 = { id: 'inc-0400', k: 'cry', sev: 'urgent' as const, at: t0 + at(4, 0, 20) };
-  const off = { id: 'inc-0211', k: 'offline', sev: 'urgent' as const, at: t0 + at(2, 11, 35) };
-  const events: [number, FactsPatch][] = [
-    [at(21, 30, 20), { al: { ...cry1, st: 'open', by: null } }],
-    [at(21, 31, 5), { al: { ...cry1, st: 'acked', by: 'Mom' } }],
-    [at(21, 31, 30), { tk: 'Mom' }],
-    [at(21, 32, 10), { tk: null }],
-    [at(21, 32, 15), { so: 'Shush' }],
-    [at(21, 38), { al: { ...cry1, st: 'resolved', by: 'Mom' } }],
-    [at(21, 47, 15), { so: null }],
-    [at(1, 0), { du: { uid: DAD, nm: 'Dad', u: t0 + at(7, 0) } }],
-    [at(0, 56), { cam: { chg: true } }],
-    [at(2, 11, 35), { m: 'offline', ms: t0 + at(2, 10), db: null, cam: { on: 0 }, al: { ...off, st: 'open', by: null } }],
-    [at(2, 12, 20), { m: 'calm', ms: t0 + at(2, 12, 20), db: 52, cam: { on: 1 }, al: { ...off, st: 'resolved', by: null } }],
-    [at(4, 0, 20), { al: { ...cry2, st: 'open', by: null } }],
-    [at(4, 1, 30), { al: { ...cry2, st: 'acked', by: 'Dad' } }],
-    [at(4, 9), { al: { ...cry2, st: 'resolved', by: 'Dad' } }],
-    [at(7, 0), { m: 'unknown', ms: t0 + at(7, 0), db: null, sl: null, cam: { on: 0, bat: null, chg: null } }],
-  ];
-
-  // Minute LAeq: white noise from 19:05 (≈52 dB), crying, the dog, the morning.
-  const noise = (min: number): number | null => {
+  // Minute LAeq at the crib: white noise from 19:05 (≈ 52 dB), the cries, the dog, the morning.
+  const noise = (min: number): number => {
     const t = min * MIN;
     if (t < at(19, 5)) return 38;
-    if (t >= at(2, 10) && t < at(2, 12, 20)) return null; // camera away
-    if (t >= at(7, 0)) return null;
     const cry = (s: number, lv: number[]) => (t >= s && t < s + lv.length * MIN ? lv[Math.floor((t - s) / MIN)] : null);
     const c1 = cry(at(21, 30), [68, 71, 69, 72, 67, 61, 55]);
     if (c1 != null) return c1;
@@ -371,42 +349,186 @@ function genNight() {
     if (t >= at(6, 30)) return 54; // babbling
     return 52 + ((min * 7919) % 5) - 2; // 50–54
   };
-  // Battery: unplugged, −4.5 %/h; charging from 00:56 at +15 %/h.
-  const battery = (t: number): number => {
-    if (t < at(0, 56)) return Math.round(46 - (4.5 * t) / H);
-    return Math.min(100, Math.round(46 - (4.5 * at(0, 56)) / H + (15 * (t - at(0, 56))) / H));
+  // The 1-second Leq a status carries: the minute's level, give or take a cough.
+  const second = (t: number): number => noise(Math.floor(t / MIN)) + (((t / 1000) * 7919) % 9) - 4;
+  // The dresser phone: 17 % at 22:00, −4 %/h; plugged in at 00:56, +15 %/h.
+  const dresserBattery = (t: number): number => {
+    const plugged = at(0, 56);
+    if (t < plugged) return Math.round(17 - (4 * (t - at(22, 0))) / H);
+    return Math.min(100, Math.round(17 - (4 * (plugged - at(22, 0))) / H + (15 * (t - plugged)) / H));
   };
 
-  // Sleep at any moment: the latest phase change, and the minutes asleep so far this night.
-  const sleepAt = (t: number): GlanceFacts['sl'] => {
-    let p: 'idle' | 'settling' | 'asleep' | 'awake' = 'idle';
-    let s = t0;
-    let w = 0;
+  const fresh = (): St => ({ state: 'calm', battery: null, charging: null, soothing: null, paused: null, talk: null, call: null, spl: null });
+  const crib: Cam = { online: true, at: t0, since: t0, st: { ...fresh(), spl: { leq: 38 } }, minute: null, last: 0 };
+  // Until its first status the room knows only that its socket is there.
+  const dresser: Cam = { online: true, at: t0 + at(22, 0), since: null, st: null, minute: null, last: at(22, 0) };
+  const sleepPhases: [number, SleepPhase, number][] = [
+    [at(19, 5), 'settling', 0], [at(19, 22), 'asleep', 0],
+    [at(21, 30, 40), 'awake', 1], [at(21, 38), 'settling', 1], [at(21, 52), 'asleep', 1],
+    [at(4, 0, 40), 'awake', 2], [at(4, 25), 'settling', 2], [at(4, 38), 'asleep', 2],
+    [at(5, 21), 'awake', 3], [at(5, 24), 'settling', 3], [at(5, 36), 'asleep', 3],
+    [at(6, 30, 30), 'awake', 4],
+  ];
+  const sleepAt = (t: number): NonNullable<GlanceRoomInput['sleep']> => {
+    let phase: SleepPhase = 'idle';
+    let since = t0;
+    let wakings = 0;
     let asleepSince: number | null = null;
     let asleepMs = 0;
-    for (const [ts, ph, wk] of sleep) {
+    for (const [ts, ph, wk] of sleepPhases) {
       if (ts > t) break;
       if (asleepSince != null) asleepMs += ts - asleepSince;
       asleepSince = ph === 'asleep' ? ts : null;
-      p = ph;
-      s = t0 + ts;
-      w = wk;
+      phase = ph;
+      since = t0 + ts;
+      wakings = wk;
     }
     if (asleepSince != null) asleepMs += t - asleepSince;
-    return { p, s, min: Math.floor(asleepMs / MIN), w };
+    return { phase, since, asleepMin: Math.floor(asleepMs / MIN), wakings };
+  };
+  const incidents: GlanceIncidentInput[] = [];
+  const room: GlanceRoomInput = { name: 'Maya’s room', cams: [crib], sleep: sleepAt(0), incidents, duty: { uid: MOM, name: 'Mom', until: t0 + at(1, 0) } };
+
+  const initial = glanceFacts(room, t0);
+  let facts = initial;
+  const obs: [number, FactsPatch][] = [];
+  /** One input heard at `t`: what it changed in the facts. */
+  const observe = (t: number) => {
+    const next = glanceFacts(room, t0 + t);
+    const patch: Record<string, unknown> = {};
+    for (const k of Object.keys(next) as (keyof GlanceFacts)[]) {
+      if (k === 'cam') {
+        const cam: Record<string, unknown> = {};
+        for (const c of Object.keys(next.cam) as (keyof GlanceFacts['cam'])[]) if (next.cam[c] !== facts.cam[c]) cam[c] = next.cam[c];
+        if (Object.keys(cam).length) patch.cam = cam;
+      } else if (JSON.stringify(next[k]) !== JSON.stringify(facts[k])) patch[k] = next[k];
+    }
+    obs.push([t, patch as FactsPatch]);
+    facts = next;
+  };
+  /** A camera's status reaches the room (a change, or its keepalive). */
+  const status = (t: number, c: Cam, change: Partial<St> = {}) => {
+    const st: St = { ...(c.st ?? fresh()), ...change, spl: { leq: second(t) - (c === dresser ? 3 : 0) } };
+    if (!c.st || st.state !== c.st.state) c.since = t0 + t;
+    if (c === dresser) {
+      st.battery = dresserBattery(t);
+      st.charging = t >= at(0, 56);
+    }
+    c.st = st;
+    c.at = t0 + t;
+    c.last = t;
+    observe(t);
+  };
+  const room$ = (t: number, f: () => void) => {
+    f();
+    observe(t);
   };
 
-  for (let min = 0; min < 12 * 60; min++) {
-    const t = min * MIN;
-    if (t >= at(2, 10) && t < at(2, 12, 20)) continue; // the camera is away: nothing arrives
-    // The minute's row (LAeq) and what the camera's keepalive carries.
-    add(t, { db: noise(min), sl: sleepAt(t), cam: { ls: t0 + t, bat: battery(t) } });
+  // What happens, in order: [time, what].
+  const script: [number, () => void][] = [];
+  const mood = (c: Cam, t: number, state: Mood) => script.push([t, () => status(t, c, { state })]);
+  // The crib camera's moods.
+  for (const [t, m] of [
+    [at(21, 30), 'crying'], [at(21, 35, 40), 'fussing'], [at(21, 36, 30), 'stirring'], [at(21, 37, 10), 'calm'],
+    [at(23, 10), 'stirring'], [at(23, 10, 10), 'calm'], // a 10 s stir: never shown
+    [at(23, 40), 'stirring'], [at(23, 40, 40), 'calm'],
+    [at(0, 55), 'stirring'], [at(0, 55, 50), 'calm'], // Mom plugs the dresser phone in
+    [at(3, 15), 'noisy'], [at(3, 15, 25), 'calm'], // a dog outside
+    [at(4, 5), 'fussing'], [at(4, 7, 30), 'calm'],
+    [at(5, 20), 'fussing'], [at(5, 23), 'stirring'], [at(5, 23, 40), 'calm'],
+    [at(6, 30), 'awake'],
+  ] as [number, Mood][]) mood(crib, t, m);
+  // Restless half an hour: the crib camera hears her stir 20 s, settle 5 s; the dresser doesn't.
+  for (let t = at(22, 30); t < at(23, 0); t += 25_000) {
+    mood(crib, t, 'stirring');
+    mood(crib, t + 20_000, 'calm');
   }
-  for (const [ts] of sleep) add(ts, { sl: sleepAt(ts) });
-  for (const [ts, m] of moods) add(ts, { m, ms: t0 + ts });
-  for (const e of events) add(e[0], e[1]);
-  // Stable order: by time, then minute rows before the events that share their second.
-  obs.sort((a, b) => a[0] - b[0]);
+  // The 04:00 cry, in bursts with a breath between; the dresser sees her stirring.
+  for (let t = at(4, 0); t < at(4, 5); t += 25_000) {
+    mood(crib, t, 'crying');
+    if (t + 20_000 < at(4, 5)) mood(crib, t + 20_000, 'calm');
+  }
+  mood(dresser, at(4, 0, 10), 'stirring');
+  mood(dresser, at(4, 7, 40), 'calm');
+  mood(dresser, at(6, 30, 20), 'awake');
+  // Talk and soothing come with the crib camera's status.
+  script.push([at(21, 31, 30), () => status(at(21, 31, 30), crib, { talk: 'Mom' })]);
+  script.push([at(21, 32, 10), () => status(at(21, 32, 10), crib, { talk: null })]);
+  script.push([at(21, 32, 15), () => status(at(21, 32, 15), crib, { soothing: 'Shush' })]);
+  script.push([at(21, 47, 15), () => status(at(21, 47, 15), crib, { soothing: null })]);
+  // The dresser camera joins: its socket first, its first status two seconds later.
+  script.push([at(22, 0), () => room$(at(22, 0), () => room.cams.push(dresser))]);
+  script.push([at(22, 0, 2), () => status(at(22, 0, 2), dresser)]);
+  // Mom plugs it in (charging is news to the room within 10 s).
+  script.push([at(0, 56), () => status(at(0, 56), dresser)]);
+  // Sleep phases and the alerts, from the room itself. Its sleep tracker runs on the crib
+  // camera's minute rows, so a phase on the minute comes with that row; one between rows
+  // (woken by a cry) comes on its own.
+  for (const [t] of sleepPhases) if (t % MIN) script.push([t, () => room$(t, () => (room.sleep = sleepAt(t)))]);
+  const alert = (t: number, i: GlanceIncidentInput) =>
+    script.push([t, () => room$(t, () => {
+      const k = incidents.findIndex((x) => x.id === i.id);
+      if (k >= 0) incidents[k] = i;
+      else incidents.push(i);
+    })]);
+  const cry1 = { id: 'inc-2130', kind: 'cry', sev: 'urgent' as const, at: t0 + at(21, 30, 20) };
+  const off = { id: 'inc-0211', kind: 'offline', sev: 'urgent' as const, at: t0 + at(2, 11, 35) };
+  const cry2 = { id: 'inc-0400', kind: 'cry', sev: 'urgent' as const, at: t0 + at(4, 0, 20) };
+  alert(at(21, 30, 20), { ...cry1, status: 'open' });
+  alert(at(21, 31, 5), { ...cry1, status: 'acked', ack_by: 'Mom', ack_at: t0 + at(21, 31, 5) });
+  alert(at(21, 38), { ...cry1, status: 'resolved', ack_by: 'Mom', resolved_at: t0 + at(21, 38) });
+  alert(at(4, 0, 20), { ...cry2, status: 'open' });
+  alert(at(4, 1, 30), { ...cry2, status: 'acked', ack_by: 'Dad', ack_at: t0 + at(4, 1, 30) });
+  alert(at(4, 9), { ...cry2, status: 'resolved', ack_by: 'Dad', resolved_at: t0 + at(4, 9) });
+  script.push([at(1, 0), () => room$(at(1, 0), () => (room.duty = { uid: DAD, name: 'Dad', until: t0 + at(7, 0) }))]);
+  // Wi-Fi blip: from 02:10 nothing arrives; at 02:11:35 the room calls both cameras offline (and
+  // opens an alert); at 02:12:20 they are back.
+  script.push([at(2, 10), () => {
+    crib.away = true;
+    dresser.away = true;
+  }]);
+  script.push([at(2, 11, 35), () => room$(at(2, 11, 35), () => {
+    crib.online = false;
+    dresser.online = false;
+    incidents.push({ ...off, status: 'open' });
+  })]);
+  script.push([at(2, 12, 20), () => {
+    for (const c of [crib, dresser]) {
+      c.online = true;
+      c.away = false;
+      c.since = t0 + at(2, 12, 20); // a new socket: the room dates its state from now
+    }
+    incidents[incidents.findIndex((x) => x.id === off.id)] = { ...off, status: 'resolved', resolved_at: t0 + at(2, 12, 20) };
+    status(at(2, 12, 20), crib);
+  }]);
+  script.push([at(2, 12, 21), () => status(at(2, 12, 21), dresser)]);
+  // Morning: both cameras stopped, the night over.
+  script.push([END, () => room$(END, () => {
+    room.cams = [];
+    room.sleep = null;
+  })]);
+  script.sort((a, b) => a[0] - b[0]); // stable: same-second events stay in the order written
+
+  let next = 0;
+  for (let t = 0; t <= END; t += 1_000) {
+    while (next < script.length && script[next][0] === t) script[next++][1]();
+    // Minute rows: the crib camera on the minute, the dresser on the half minute.
+    for (const c of room.cams as Cam[]) {
+      if (!c.online || c.away || !c.st) continue;
+      const off30 = c === dresser ? 30_000 : 0;
+      if (t % MIN !== off30) continue;
+      c.minute = { laeq: noise(Math.floor(t / MIN)) - (c === dresser ? 3 : 0), at: t0 + t };
+      if (c === crib) room.sleep = sleepAt(t); // the room's sleep tracker runs on the crib's rows
+      observe(t);
+    }
+    // Keepalives (and the dresser's battery news: a 5 % step goes within 10 s).
+    for (const c of room.cams as Cam[]) {
+      if (!c.online || c.away || !c.st || c.last === t) continue;
+      const stepped = c === dresser && Math.floor(dresserBattery(t) / 5) !== Math.floor((c.st.battery ?? 0) / 5) && t - c.last >= 10_000;
+      if (t - c.last >= 120_000 || stepped) status(t, c);
+    }
+  }
+  if (next !== script.length) throw new Error('night: script events left over');
 
   const endMs = at(7, 30);
   const { bumps } = replayObservations(t0, initial, obs, endMs);
@@ -415,7 +537,7 @@ function genNight() {
     null,
     [
       '{',
-      `  "about": "A recorded-style night, 19:00 → 07:00: replay with replayObservations(t0, initial, observations, endMs). Every port of nextBump must give exactly these bumps; ADR 0006 caps a night at 60.",`,
+      `  "about": "A recorded-style night, 19:00 → 07:00, one nursery with a second camera from 22:00, as the room hears it: statuses on change and every 2 minutes, minute rows every minute. Replay with replayObservations(t0, initial, observations, endMs). Every port of nextBump must give exactly these bumps; ADR 0006 caps a night at 60.",`,
       `  "t0": ${t0},`,
       `  "endMs": ${endMs},`,
       `  "initial": ${JSON.stringify(initial)},`,
@@ -432,7 +554,7 @@ function genNight() {
       '',
     ].join('\n'),
   );
-  console.log(`night: ${bumps.length} bumps`);
+  console.log(`night: ${obs.length} observations, ${bumps.length} bumps`);
 }
 
 /* ================================================================= sealed */

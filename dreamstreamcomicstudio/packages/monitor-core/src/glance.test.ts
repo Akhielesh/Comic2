@@ -120,6 +120,7 @@ const facts = (over: Partial<GlanceFacts> = {}): GlanceFacts => ({
   ms: T - 60_000,
   sl: null,
   db: 40,
+  dbt: T,
   cam: { on: 1, bat: 80, chg: true, pz: null, ls: T },
   al: null,
   du: { uid: 'u-dad', nm: 'Dad', u: T + 3_600_000 },
@@ -200,6 +201,18 @@ describe('glanceFacts edge cases', () => {
     const f = glanceFacts({ name: 'N', cams: [{ online: true, at: T, since: T, st: { state: 'teething' as never } }] }, T);
     expect(f.m).toBe('unknown');
     expect(parseGlance(composeGlance(room(f), { role: 'parent' }))).not.toBeNull();
+  });
+
+  it('with several cameras the mood began when the last of them reached it', () => {
+    const calmSince = (a: number, b: number | null, atB = T) =>
+      glanceFacts({ name: 'Twins', cams: [{ online: true, at: T - 5_000, since: a, st: { state: 'calm' } }, { online: true, at: atB, since: b, st: { state: 'calm' } }] }, T).ms;
+    // One twin calm for an hour, the other settled a second ago: the nursery settled a second ago.
+    expect(calmSince(T - 3_600_000, T - 1_000)).toBe(T - 1_000);
+    // Without `since`, a camera's last status stands in for it.
+    expect(calmSince(T - 3_600_000, null, T - 2_000)).toBe(T - 2_000);
+    // A quieter camera doesn't date the worst mood.
+    const f = glanceFacts({ name: 'Twins', cams: [{ online: true, at: T, since: T - 1_000, st: { state: 'calm' } }, { online: true, at: T, since: T - 60_000, st: { state: 'stirring' } }] }, T);
+    expect([f.m, f.ms]).toEqual(['stirring', T - 60_000]);
   });
 
   it('a mood can’t start in the future, and battery stays within 0–100', () => {

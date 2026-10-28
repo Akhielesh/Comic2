@@ -7,8 +7,8 @@ same bytes.
 
 | File | What it is |
 |---|---|
-| `src/glance.ts` | Glance v1: types, `glanceFacts` (what a room knows → nursery-wide facts), `composeGlance` (facts → one device's glance, ≤ 512 B), the `can` bitmask, ETag / 304, `parseGlance` |
-| `src/glanceBump.ts` | `nextBump`: when the sequence `q` bumps (mood, sleep, dB band, alerts, duty, soothing, talk, camera, battery), `replayObservations` |
+| `src/glance.ts` | Glance v1: types, `glanceFacts` (what a room knows — each camera's status, `since`, minute LAeq — → nursery-wide facts), `composeGlance` (facts → one device's glance, ≤ 512 B), the `can` bitmask, ETag / 304, `parseGlance` |
+| `src/glanceBump.ts` | `nextBump`: when the sequence `q` bumps (mood, sleep, dB band, alerts, duty, soothing, talk, camera, battery), dating moods it saw begin and moving the dB band only on measurements; `replayObservations` |
 | `src/sealed.ts` | The Nursery Media Key: device keys and `devId`, NMK wraps, relay frame seal/open with replay and age checks, sealed signaling, the `dev_hello` signature, the LAN name |
 | `src/eid.ts` | Event ids (`<dev>:<seq>`), a minter that never repeats, first-arrival dedupe |
 | `src/wire.ts` | The protocol v2 delta: `CAPS`, close codes and what to do after each, re-auth / kick / act / members contracts and validators, key and signaling messages, the push envelope |
@@ -35,7 +35,7 @@ same bytes.
 |---|---|
 | `glance/decode.json` | accept every `valid` JSON (absent and null optionals alike; unknown fields ignored) and reject every `invalid` one |
 | `glance/compose.json` | decode each `json` into its `glance` (only TypeScript composes) |
-| `glance/night-*.json` | (the Phase 4 hub only) replay to exactly `expect.bumps` |
+| `glance/night-*.json` | (the Phase 4 hub only) replay to exactly `expect.bumps` — a night with two cameras, as the room hears it |
 | `sealed/devid.json` | derive each `devId` from its `sigPub` |
 | `sealed/wrap.json` | re-wrap with the given ephemeral key and IV to the exact `blob`; unwrap to `nmk`; fail every `reject` |
 | `sealed/frame.json` | seal to the exact `sealed` bytes; open them; fail every `reject` with its reason |

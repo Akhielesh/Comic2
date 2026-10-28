@@ -8,19 +8,28 @@
  * | Mood rises to fussing or above; camera offline / back / none   | at once                     |
  * | Any other mood change                                          | after 15 s of stability     |
  * | Sleep phase                                                    | at once                     |
- * | dB band (`dbb`); the dB number alone never bumps               | after 30 s sustained        |
+ * | dB band (`dbb`); the dB number alone never bumps               | after 30 s sustained (below)|
  * | Alert opened, answered or resolved; duty; soothing; talk       | at once                     |
  * | Cameras online count; picture paused / resumed                 | at once                     |
- * | Battery crossing 20 % or 10 %                                  | at once                     |
+ * | Battery crossing 20 % or 10 %, or first seen under 20 %        | at once                     |
  * | Nursery renamed                                                | at once                     |
  *
  * Refinements (recorded in the ADR's WS-2 notes):
  * - Between bumps the published glance is frozen: a bump publishes a snapshot of every
- *   current fact, and pending changes are cleared because they are now shown. Same `q`,
- *   same content (only `at` differs), so an ETag on `q` is honest.
+ *   current fact — except a mood still waiting out its 15 s and a dB band not yet confirmed,
+ *   which stay as shown and keep waiting (an alert opening in a breath between cries shows
+ *   "crying"). Same `q`, same content (only `at` differs), so an ETag on `q` is honest.
  * - The dB band has 2 dB of hysteresis around each edge, and the battery 3 points on the
  *   way up, so a fan at 55 dB or a phone hovering at 20 % doesn't flap.
+ * - "Sustained" is measured: a new band shows when a level taken 30 s or more after the first
+ *   one in it is still in it, with none outside it between (`GlanceFacts.dbt` says when each
+ *   was taken). A re-check on the same facts is not a measurement, so a single loud second
+ *   heard at a 2-minute keepalive is never shown. The level going away (no meter) shows 30 s
+ *   after it went.
  * - A resolved alert ageing out of the glance (after 30 min) waits for the next bump.
+ * - A mood is dated from when this function saw it begin, never earlier: with several
+ *   cameras the facts' `ms` is one camera's, so a twin stirring or crying on and off waits
+ *   out every gap exactly as one camera does. A shown mood keeps its start across bumps.
  * - Safety first: nothing here ever delays crying, fussing, an alert or a camera going
  *   offline — those are immediate whatever else is pending.
  *
@@ -59,6 +68,8 @@ export interface BumpState {
   bb: BatteryBucket | null;
   /** Changes waiting out their stability window: the new value and since when it has held. */
   pend: { m?: { v: Mood; since: number }; dbb?: { v: DbBand | null; since: number } };
+  /** When `nextBump` last ran (news or a re-check). A mood it hadn't seen by then began after it. */
+  seen: number;
 }
 
 export interface BumpStep {
@@ -74,7 +85,7 @@ export interface BumpStep {
 
 /** The first published state (a room's first sight of its facts). `lastQ`: the persisted `q`, if any. */
 export function startBump(facts: GlanceFacts, now: number, lastQ = 0): BumpState {
-  return { q: lastQ + 1, at: now, facts, dbb: dbBand(facts.db), bb: batteryBucket(facts.cam.bat, null), pend: {} };
+  return { q: lastQ + 1, at: now, facts, dbb: dbBand(facts.db), bb: batteryBucket(facts.cam.bat, null), pend: {}, seen: now };
 }
 
 /** The published state, ready for `composeGlance`. */
@@ -117,12 +128,22 @@ export function nextBump(prev: BumpState, next: GlanceFacts, now: number): BumpS
   if (next.nm !== shown.nm) reasons.push('name');
   if (next.cam.on !== shown.cam.on || (next.cam.pz ?? null) !== (shown.cam.pz ?? null)) reasons.push('camera');
 
+  // When the mood now in the facts began, if it isn't the one shown. A mood already waiting keeps
+  // its start. A new one is dated by the facts only if that is after the last step, which saw
+  // another mood; otherwise it began now. With several cameras `ms` is one camera's (a sibling
+  // stirring for an hour) and the nursery's mood changed when this status came in, so a twin
+  // crying or stirring on and off waits out every gap exactly as one camera does.
+  let since = now;
   if (next.m !== shown.m) {
+    const was = prev.pend.m;
+    if (was && was.v === next.m) since = was.since;
+    else {
+      const claimed = Number.isFinite(next.ms) ? Math.min(next.ms, now) : now;
+      since = claimed > prev.seen ? claimed : now;
+    }
     const urgent = offlineish(next.m) || offlineish(shown.m) || (MOOD_RANK[next.m] >= MOOD_RANK.fussing && MOOD_RANK[next.m] > MOOD_RANK[shown.m]);
     if (urgent) reasons.push('urgent');
     else {
-      const was = prev.pend.m;
-      const since = was && was.v === next.m ? was.since : Number.isFinite(next.ms) ? Math.min(next.ms, now) : now;
       pend.m = { v: next.m, since };
       if (now - since >= BUMP_RULES.moodStableMs) reasons.push('mood');
     }
@@ -133,9 +154,13 @@ export function nextBump(prev: BumpState, next: GlanceFacts, now: number): BumpS
   const dbb = dbBandFrom(next.db, prev.dbb);
   if (dbb !== prev.dbb) {
     const was = prev.pend.dbb;
-    const since = was && was.v === dbb ? was.since : now;
+    // When this level was taken: the same facts re-checked bring the same time, so only a
+    // later measurement still in the band moves it. No level isn't a measurement: it holds from
+    // when it was first seen.
+    const taken = dbb == null ? now : next.dbt ?? now;
+    const since = was && was.v === dbb ? was.since : taken;
     pend.dbb = { v: dbb, since };
-    if (now - since >= BUMP_RULES.dbbSustainMs) reasons.push('db');
+    if (taken - since >= BUMP_RULES.dbbSustainMs) reasons.push('db');
   }
 
   if (alertKey(next.al) !== alertKey(shown.al)) {
@@ -148,26 +173,46 @@ export function nextBump(prev: BumpState, next: GlanceFacts, now: number): BumpS
   if ((next.tk ?? null) !== (shown.tk ?? null)) reasons.push('talk');
 
   const bb = batteryBucket(next.cam.bat, prev.bb);
-  // Battery appearing or disappearing comes with a camera change; only a crossing bumps.
-  if (bb != null && prev.bb != null && bb !== prev.bb) reasons.push('battery');
+  // A crossing bumps, and so does a battery first seen under an edge: an Android phone joining
+  // at 8 % next to an iPhone camera that gives no reading is as much news as one dropping to
+  // it. First seen at 20 % or more, or going away (that comes with a camera change), is quiet.
+  if (bb != null && bb !== prev.bb && (prev.bb != null || bb < 2)) reasons.push('battery');
 
   if (reasons.length) {
+    // A bump publishes every current fact but two: a mood still waiting out its 15 s and a dB
+    // band not yet confirmed stay as shown, and keep waiting. An alert opening in a breath
+    // between cries is no reason to show "calm", nor a hand-over to show a cough as the level.
+    // The level going away is no measurement to confirm: it goes (an offline glance has no dB).
+    const holdM = pend.m && !reasons.includes('mood') ? pend.m : undefined;
+    const holdDb = pend.dbb && pend.dbb.v != null && !reasons.includes('db') ? pend.dbb : undefined;
+    const facts: GlanceFacts = {
+      ...next,
+      // The mood's start as shown: kept while the mood is the one already shown (a second twin
+      // starting to cry doesn't make it "crying for 10 s"), else when the new one began.
+      ...(holdM || next.m === shown.m ? { m: shown.m, ms: shown.ms } : { ms: since }),
+      ...(holdDb ? { db: shown.db, dbt: shown.dbt } : {}),
+    };
+    const held: BumpState['pend'] = { ...(holdM ? { m: holdM } : {}), ...(holdDb ? { dbb: holdDb } : {}) };
     return {
-      state: { q: prev.q + 1, at: now, facts: next, dbb, bb, pend: {} },
+      state: { q: prev.q + 1, at: now, facts, dbb: holdDb ? prev.dbb : dbb, bb, pend: held, seen: now },
       bumped: true,
       reasons,
-      recheckAt: null,
+      recheckAt: dueAt(held),
     };
   }
-  const due = [pend.m ? pend.m.since + BUMP_RULES.moodStableMs : Infinity, pend.dbb ? pend.dbb.since + BUMP_RULES.dbbSustainMs : Infinity];
-  const recheckAt = Math.min(...due);
   return {
     // The battery bucket follows quietly (e.g. 55 % → 40 %: same bucket, nothing to show).
-    state: { ...prev, bb: bb ?? prev.bb, pend },
+    state: { ...prev, bb: bb ?? prev.bb, pend, seen: now },
     bumped: false,
     reasons,
-    recheckAt: Number.isFinite(recheckAt) ? recheckAt : null,
+    recheckAt: dueAt(pend),
   };
+}
+
+/** When a pending change is due. A band waits for its next measurement, not a re-check; only "no level" is due by time. */
+function dueAt(pend: BumpState['pend']): number | null {
+  const due = Math.min(pend.m ? pend.m.since + BUMP_RULES.moodStableMs : Infinity, pend.dbb && pend.dbb.v == null ? pend.dbb.since + BUMP_RULES.dbbSustainMs : Infinity);
+  return Number.isFinite(due) ? due : null;
 }
 
 /* ----------------------------------------------------------------- replay */

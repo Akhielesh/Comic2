@@ -61,6 +61,20 @@ describe('close codes', () => {
     expect(closeKind(1006, '')).toBe('other');
   });
 
+  it('a role refusal is "forbidden" whatever its code: never "removed", which forgets the nursery', () => {
+    // MonitorRoom.reject closes every refusal but auth and full with 4004: a viewer opening
+    // camera mode, a guest trying it, a caregiver demoted to viewer while running the camera.
+    expect(closeKind(4004, 'forbidden')).toBe('forbidden');
+    expect(closeKind(4004, 'Forbidden')).toBe('forbidden');
+    expect(CLOSE_ADVICE[closeKind(4004, 'forbidden')]).toBe('stop');
+    // 4004 still means removed or revoked when it says so (or says nothing).
+    expect(closeKind(4004, 'removed')).toBe('removed');
+    expect(closeKind(4004, 'revoked')).toBe('revoked');
+    expect(closeKind(4004, '')).toBe('removed');
+    // A reason only counts on a room's own codes.
+    expect(closeKind(1008, 'forbidden')).toBe('other');
+  });
+
   it('round-trips every kind and advises each one', () => {
     const kinds = Object.keys(CLOSE_ADVICE).filter((k) => k !== 'other') as Exclude<CloseKind, 'other'>[];
     for (const k of kinds) {

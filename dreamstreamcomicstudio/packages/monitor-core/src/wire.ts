@@ -6,7 +6,8 @@
  *
  * Shapes reconciled with what shipped after the ADR was written (noted in its WS-2 section):
  * - Close codes: the rooms already used 4003 for "full"/"forbidden" and 4008 for a retired
- *   stale line. The reason string tells them apart; `closeKind` does it for clients.
+ *   stale line, and MonitorRoom closes a role refusal with 4004 'forbidden'. The reason string
+ *   tells them apart; `closeKind` does it for clients, reason first for 'forbidden'.
  * - Fresh relay credentials ship as `{t:'ice', servers, iceMs}` (asked for with `{t:'ice'}`),
  *   which replaces the planned `ice_refresh`.
  * - `dev_hello` carries the `ts` its signature covers; `key_req` carries the device's
@@ -52,7 +53,10 @@ export const CLOSE = {
   AUTH: 4001,
   /** MFA needed (`mfa_required`), the room is full (`full`) or the role can't do this (`forbidden`). */
   FORBIDDEN: 4003,
-  /** Removed from the nursery, or this session or device was revoked. */
+  /**
+   * Removed from the nursery, or this session or device was revoked. (MonitorRoom also closes
+   * a role refusal with 4004 'forbidden': that is `forbidden`, see `closeKind`.)
+   */
   REMOVED: 4004,
   /** Another socket took this camera's place. */
   REPLACED: 4005,
@@ -87,9 +91,15 @@ export type CloseKind =
   | 'expired' | 'auth' | 'mfa_required' | 'full' | 'forbidden' | 'removed' | 'revoked'
   | 'replaced' | 'ended' | 'promoted' | 'rate_limited' | 'stale' | 'recheck' | 'other';
 
-/** What a room's close means, from its code and reason. */
+/**
+ * What a room's close means, from its code and reason. A 'forbidden' reason wins over the
+ * code: MonitorRoom closes a role refusal ("your role can watch but not run the camera", a
+ * guest trying camera mode, a caregiver demoted while running it) with 4004, and a client
+ * that read that as "removed" would forget a nursery its person still belongs to.
+ */
 export function closeKind(code: number, reason = ''): CloseKind {
   const r = String(reason || '').toLowerCase();
+  if (r === CLOSE_REASON.forbidden && code >= 4000 && code <= 4999) return 'forbidden';
   switch (code) {
     case CLOSE.AUTH:
       return r === CLOSE_REASON.expired ? 'expired' : 'auth';
