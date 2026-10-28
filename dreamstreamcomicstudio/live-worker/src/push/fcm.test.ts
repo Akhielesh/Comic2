@@ -56,6 +56,12 @@ describe('FCM error → outcome, against every recorded and documented response'
     expect(fcmErrorOutcome(404, { error: { status: 'NOT_FOUND', message: 'Project not found' } }).outcome).toBe('fatal');
   });
 
+  it('a sender mismatch is our config (wrong Firebase project), never a prune — whatever else the body says', () => {
+    const mismatch = (extra: object[] = []) => ({ error: { code: 403, status: 'PERMISSION_DENIED', details: [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'SENDER_ID_MISMATCH' }, ...extra] } });
+    expect(fcmErrorOutcome(403, mismatch())).toEqual({ outcome: 'config', errorCode: 'SENDER_ID_MISMATCH' });
+    expect(fcmErrorOutcome(400, mismatch([{ '@type': 'type.googleapis.com/google.rpc.BadRequest', fieldViolations: [{ field: 'message.token' }] }])).outcome).toBe('config');
+  });
+
   it('reads Retry-After on quota errors', async () => {
     const quota = fx.send.find((c) => c.errorCode === 'QUOTA_EXCEEDED')!;
     const { fetcher } = google(() => quota.response);

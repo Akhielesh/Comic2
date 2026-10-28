@@ -54,10 +54,10 @@
       "expect": "gone"
     },
     {
-      "name": "another app's token",
+      "name": "the token isn't for our apns-topic (a wrong APNS_BUNDLE or watch bundle answers this for every token) — config, never prunes",
       "source": "documented",
       "response": { "status": 400, "headers": { "apns-id": "D3F4C5B2-66E7-4081-9BAC-1D2E3F4A5B6C" }, "body": "{\"reason\":\"DeviceTokenNotForTopic\"}" },
-      "expect": "gone"
+      "expect": "config"
     },
     {
       "name": "our collapse id is wrong (a request bug, not a dead token)",
@@ -66,10 +66,22 @@
       "expect": "fatal"
     },
     {
-      "name": "the key may not push to this topic",
+      "name": "the key may not push to this topic — config, never prunes",
       "source": "documented",
       "response": { "status": 400, "headers": { "apns-id": "F5B6E7D4-88A9-42A3-BCDE-3F4A5B6C7D8E" }, "body": "{\"reason\":\"TopicDisallowed\"}" },
-      "expect": "fatal"
+      "expect": "config"
+    },
+    {
+      "name": "the apns-topic is invalid — config, never prunes",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "apns-id": "0A1B2C3D-4E5F-4061-8273-94A5B6C7D8E9" }, "body": "{\"reason\":\"BadTopic\"}" },
+      "expect": "config"
+    },
+    {
+      "name": "no apns-topic was sent — config, never prunes",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "apns-id": "1B2C3D4E-5F60-4172-8384-A5B6C7D8E9FA" }, "body": "{\"reason\":\"MissingTopic\"}" },
+      "expect": "config"
     },
     {
       "name": "the provider token is older than an hour",

@@ -63,14 +63,14 @@
       "errorCode": "INVALID_ARGUMENT"
     },
     {
-      "name": "a token from another Firebase project",
+      "name": "a token from another Firebase project (what a service account from the wrong project gets for every token) — config, never prunes",
       "source": "documented",
       "response": {
         "status": 403,
         "headers": { "content-type": "application/json; charset=UTF-8" },
         "body": "{\"error\":{\"code\":403,\"message\":\"SenderId mismatch\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"SENDER_ID_MISMATCH\"}]}}"
       },
-      "expect": "gone",
+      "expect": "config",
       "errorCode": "SENDER_ID_MISMATCH"
     },
     {

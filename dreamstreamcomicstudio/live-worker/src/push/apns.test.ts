@@ -67,6 +67,15 @@ describe('APNs reason → outcome, against every recorded and documented respons
     expect(apnsReasonOutcome(502)).toBe('retry');
     expect(apnsReasonOutcome(400)).toBe('fatal');
   });
+
+  it('only an answer about the token prunes; a topic that does not match the token is config, whatever the status', () => {
+    expect(apnsReasonOutcome(400, 'BadDeviceToken')).toBe('gone');
+    expect(apnsReasonOutcome(410, 'Unregistered')).toBe('gone');
+    for (const reason of ['DeviceTokenNotForTopic', 'TopicDisallowed', 'BadTopic', 'MissingTopic']) {
+      expect(apnsReasonOutcome(400, reason), reason).toBe('config');
+      expect(apnsReasonOutcome(410, reason), `410 ${reason}`).toBe('config');
+    }
+  });
 });
 
 describe('sendApns request', () => {

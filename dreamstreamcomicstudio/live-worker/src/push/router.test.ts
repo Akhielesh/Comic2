@@ -5,7 +5,7 @@ import { resetApnsTokens, type ApnsConfig } from './apns';
 import { openEnvelope } from './envelope';
 import { fcmConfigFromEnv, resetFcmTokens, type FcmConfig } from './fcm';
 import { resetImportedKeys } from './keys';
-import { accepts, coarseLaState, collapseFor, deliver, deliverAll, deliverReport, parsePushSub, replacementOf, routerFromEnv, subKey, type PushMsg, type PushSub, type RouterCtx } from './router';
+import { accepts, coarseLaState, collapseFor, deliver, deliverAll, deliverReport, parsePushSub, replacementOf, routerFromEnv, subKey, type PushFaultLine, type PushMsg, type PushSub, type RouterCtx } from './router';
 import { recordingFetch, testDeviceKeys, testP8, testServiceAccount, type FixtureResponse, type RecordedCall } from './testKit';
 
 const NID = '8f14e45f-ceea-467f-a0e6-1b7c2e9d0a11';
@@ -32,8 +32,11 @@ let device: { p256dh: string; auth: string; d: string };
 let apns: ApnsConfig;
 let fcm: FcmConfig;
 let vapid: VapidKeys;
+/** What the router logged (ctx.log) in this test. */
+let faults: PushFaultLine[];
 
 beforeEach(async () => {
+  faults = [];
   resetApnsTokens();
   resetFcmTokens();
   resetImportedKeys();
@@ -58,7 +61,7 @@ function providers(answer: (call: RecordedCall, n: number) => FixtureResponse = 
   return recordingFetch((call) => (call.url.includes('oauth2.googleapis.com') ? OAUTH : answer(call, n++)));
 }
 const sent = (calls: RecordedCall[]) => calls.filter((c) => !c.url.includes('oauth2'));
-const ctxWith = (fetcher: typeof fetch, over: Partial<RouterCtx> = {}): RouterCtx => ({ apns, fcm, vapid: async () => vapid, fetcher, now: () => NOW, sleep: async () => undefined, ...over });
+const ctxWith = (fetcher: typeof fetch, over: Partial<RouterCtx> = {}): RouterCtx => ({ apns, fcm, vapid: async () => vapid, fetcher, now: () => NOW, sleep: async () => undefined, log: (l) => faults.push(l), ...over });
 
 /** What a provider can read: the request body with the sealed `e` values blanked (ciphertext can contain any letters). */
 function expectNoLeaks(body: string, words: string[]): void {
@@ -124,6 +127,26 @@ describe('dormant until native tokens and secrets exist', () => {
     const body = JSON.parse(sent(calls)[0].body);
     expect(body.call).toBe('c1');
     expect(sent(calls)[0].headers['apns-push-type']).toBe('voip');
+  });
+});
+
+describe('a message-shape bug of ours never prunes a token', () => {
+  it('a call message with no call id keeps the VoIP token, sends nothing and logs push_fatal', async () => {
+    const { fetcher, calls } = providers();
+    const webOnly: PushMsg = { type: 'call', sev: 'urgent', web: { kind: 'call', call: 'c1', title: 'Mom is calling' }, ttlSec: 30 };
+    expect(accepts(subs.voip(), webOnly)).toBe(true);
+    expect(await deliverReport(subs.voip(), webOnly, ctxWith(fetcher, { voip: true }))).toMatchObject({ outcome: 'retry', transport: 'apns', reason: 'bad_message', fatal: true });
+    expect(await deliverReport(subs.voip(), { ...webOnly, call: { id: '' } }, ctxWith(fetcher, { voip: true }))).toMatchObject({ outcome: 'retry', reason: 'bad_message' });
+    const { gone } = await deliverAll([subs.voip(), subs.voip()], webOnly, ctxWith(fetcher, { voip: true }));
+    expect(gone).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(faults.map((f) => `${f.evt}:${f.kind}:${f.reason}`)).toEqual(Array(4).fill('push_fatal:apns-voip:bad_message'));
+  });
+
+  it('a VoIP token that is itself malformed still prunes', async () => {
+    const { fetcher, calls } = providers();
+    expect(await deliver({ ...subs.voip(), token: 'zz' }, { ...cry(), type: 'call', call: { id: 'c1' } }, ctxWith(fetcher, { voip: true }))).toBe('gone');
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -211,6 +234,88 @@ describe('APNs alerts', () => {
     const { fetcher, calls } = providers();
     expect(await deliverReport(subs.apns(), cry(), ctxWith(fetcher, { iosVia: 'fcm' }))).toMatchObject({ outcome: 'retry', reason: 'ios_via_fcm' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('config errors never prune: one wrong secret or var must not wipe the registry', () => {
+  it('APNs DeviceTokenNotForTopic (a wrong APNS_BUNDLE) keeps every iPhone and watch token, and logs push_config', async () => {
+    const { fetcher, calls } = providers(() => ({ status: 400, headers: { 'apns-id': 'A' }, body: '{"reason":"DeviceTokenNotForTopic"}' }));
+    const three = [subs.apns(), subs.apns({ token: 'cd'.repeat(32), dev: 'devC' }), subs.apns({ token: 'ef'.repeat(32), dev: 'devW', plat: 'watchos' })];
+    const { reports, gone } = await deliverAll(three, cry(), ctxWith(fetcher, { apns: { ...apns, bundle: 'ai.dreamstream.typo' } }));
+    expect(sent(calls)).toHaveLength(3);
+    expect(gone).toHaveLength(0);
+    for (const r of reports) expect(r.report).toMatchObject({ outcome: 'retry', transport: 'apns', status: 400, reason: 'DeviceTokenNotForTopic', fatal: true, config: true });
+    // One line per device, saying which bundle we sent as — and nothing that identifies the device or the family.
+    expect(faults).toHaveLength(3);
+    const line = { evt: 'push_config', kind: 'apns', transport: 'apns', status: 400, reason: 'DeviceTokenNotForTopic', bundle: 'ai.dreamstream.typo' };
+    expect(faults.filter((f) => !f.plat)).toEqual([line, line]);
+    expect(faults.filter((f) => f.plat)).toEqual([{ ...line, plat: 'watchos' }]);
+    const logged = JSON.stringify(faults);
+    for (const secret of [APNS_TOKEN, 'cd'.repeat(32), 'ef'.repeat(32), 'u1', 'devC', 'devW', 'Maya']) expect(logged.includes(secret), secret).toBe(false);
+  });
+
+  it('FCM SENDER_ID_MISMATCH (a service account from another Firebase project) keeps every Android and Wear token, and logs push_config', async () => {
+    const other = fcmConfigFromEnv({ FCM_SA_JSON: (await testServiceAccount('other-project')).json })!;
+    const { fetcher, calls } = providers(() => ({
+      status: 403,
+      body: '{"error":{"code":403,"message":"SenderId mismatch","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"SENDER_ID_MISMATCH"}]}}',
+    }));
+    const two = [subs.fcm(), subs.fcm({ token: `${FCM_TOKEN}x`, dev: 'devWear', plat: 'wearos' })];
+    const { reports, gone } = await deliverAll(two, cry(), ctxWith(fetcher, { fcm: other }));
+    expect(sent(calls)).toHaveLength(2);
+    expect(gone).toHaveLength(0);
+    for (const r of reports) expect(r.report).toMatchObject({ outcome: 'retry', transport: 'fcm', status: 403, reason: 'SENDER_ID_MISMATCH', fatal: true, config: true });
+    expect(faults.map((f) => `${f.evt}:${f.project}:${f.plat}`).sort()).toEqual(['push_config:other-project:android', 'push_config:other-project:wearos']);
+    expect(JSON.stringify(faults).includes(FCM_TOKEN)).toBe(false);
+  });
+
+  it('an iPhone Live Activity on the FCM fallback: a sender mismatch keeps it too', async () => {
+    const { fetcher } = providers(() => ({
+      status: 403,
+      body: '{"error":{"code":403,"status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"SENDER_ID_MISMATCH"}]}}',
+    }));
+    const rep = await deliverReport(subs.la({ fcm: FCM_TOKEN }), { type: 'la', sev: 'info', ttlSec: 60, la: { event: 'update', state: { m: 'calm', ms: 1 } } }, ctxWith(fetcher, { iosVia: 'fcm' }));
+    expect(rep).toMatchObject({ outcome: 'retry', transport: 'fcm', config: true });
+  });
+
+  it('a Live Activity token and a topic mismatch: kept too', async () => {
+    const { fetcher } = providers(() => ({ status: 400, headers: { 'apns-id': 'A' }, body: '{"reason":"TopicDisallowed"}' }));
+    const rep = await deliverReport(subs.la(), { type: 'la', sev: 'info', ttlSec: 60, la: { event: 'update', state: { m: 'calm', ms: 1 } } }, ctxWith(fetcher));
+    expect(rep).toMatchObject({ outcome: 'retry', config: true, reason: 'TopicDisallowed' });
+    expect(faults.map((f) => `${f.evt}:${f.kind}`)).toEqual(['push_config:apns-la']);
+  });
+
+  it('with no ctx.log, a fault is one JSON console.error line', async () => {
+    const { fetcher } = providers(() => ({ status: 400, headers: { 'apns-id': 'A' }, body: '{"reason":"DeviceTokenNotForTopic"}' }));
+    const lines: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => void lines.push(a.map(String).join(' '));
+    try {
+      expect(await deliver(subs.apns(), cry(), ctxWith(fetcher, { log: undefined }))).toBe('retry');
+    } finally {
+      console.error = orig;
+    }
+    expect(lines.map((l) => JSON.parse(l))).toEqual([{ evt: 'push_config', kind: 'apns', transport: 'apns', status: 400, reason: 'DeviceTokenNotForTopic', bundle: 'ai.dreamstreamstudio.streamstudio' }]);
+  });
+
+  it('a logger that throws never breaks delivery', async () => {
+    const { fetcher } = providers(() => ({ status: 400, headers: { 'apns-id': 'A' }, body: '{"reason":"BadTopic"}' }));
+    const rep = await deliverReport(subs.apns(), cry(), ctxWith(fetcher, { log: () => { throw new Error('log sink down'); } }));
+    expect(rep).toMatchObject({ outcome: 'retry', config: true, reason: 'BadTopic' });
+  });
+
+  it('our request errors are logged as push_fatal (kept, not config); dead tokens, busy providers and dormant kinds log nothing', async () => {
+    const ours = providers(() => ({ status: 400, headers: { 'apns-id': 'A' }, body: '{"reason":"BadCollapseId"}' })).fetcher;
+    expect(await deliverReport(subs.apns(), cry(), ctxWith(ours))).toMatchObject({ outcome: 'retry', fatal: true, reason: 'BadCollapseId' });
+    expect((await deliverReport(subs.apns(), cry(), ctxWith(ours))).config).toBeUndefined();
+    expect(faults.map((f) => f.evt)).toEqual(['push_fatal', 'push_fatal']);
+    faults = [];
+    const dead = providers(() => ({ status: 410, headers: { 'apns-id': 'A' }, body: '{"reason":"Unregistered"}' })).fetcher;
+    expect(await deliver(subs.apns(), cry(), ctxWith(dead))).toBe('gone');
+    const busy = providers(() => ({ status: 503, headers: { 'apns-id': 'A' }, body: '{"reason":"ServiceUnavailable"}' })).fetcher;
+    expect(await deliver(subs.apns(), cry(), ctxWith(busy))).toBe('retry');
+    expect(await deliver(subs.fcm(), cry(), { fetcher: busy, log: (l) => faults.push(l) })).toBe('retry');
+    expect(faults).toEqual([]);
   });
 });
 

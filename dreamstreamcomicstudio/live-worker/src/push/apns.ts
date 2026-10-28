@@ -14,8 +14,9 @@
  *   (`TooManyProviderTokenUpdates`). An `ExpiredProviderToken` answer mints a fresh
  *   one and retries once.
  * - **Outcomes:** each documented APNs reason maps to `gone` (prune the token),
- *   `retry` (keep it; provider busy) or `fatal` (our request or credentials are wrong —
- *   keep it, fix the config). See `apnsReasonOutcome`.
+ *   `retry` (keep it; provider busy), `fatal` (our request or credentials are wrong —
+ *   keep it) or `config` (the token isn't for our topic — a wrong bundle id; keep it and
+ *   alert). Only an answer about the token itself prunes. See `apnsReasonOutcome`.
  * - **Privacy:** nothing here composes text. The router puts only generic words, the
  *   urgency, an opaque incident id and the sealed envelope `e` into the payload.
  */
@@ -102,18 +103,23 @@ export function isApnsToken(t: unknown): t is string {
   return typeof t === 'string' && /^[0-9a-fA-F]{64,200}$/.test(t);
 }
 
-const GONE_REASONS = new Set(['BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered', 'ExpiredToken']);
+const GONE_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'ExpiredToken']);
+/** The token and our `apns-topic` don't match: what a wrong `APNS_BUNDLE` (or watch bundle) gets for every token. */
+const CONFIG_REASONS = new Set(['DeviceTokenNotForTopic', 'TopicDisallowed', 'BadTopic', 'MissingTopic']);
 const RETRY_REASONS = new Set(['TooManyRequests', 'TooManyProviderTokenUpdates', 'InternalServerError', 'ServiceUnavailable', 'Shutdown', 'IdleTimeout']);
 
 /**
  * APNs status + reason → outcome (Apple, "Handling notification responses from APNs").
  *  - gone: 410 (Unregistered, ExpiredToken); 400 BadDeviceToken (invalid, or minted for the
- *    other environment) and DeviceTokenNotForTopic (another app's token).
+ *    other environment — each sub carries its own `env`, so no setting of ours causes it).
+ *  - config: DeviceTokenNotForTopic, TopicDisallowed, BadTopic, MissingTopic. The token
+ *    may be fine; our topic is wrong, and it would be wrong for every device. Never prunes.
  *  - retry: 429, 500, 503, and anything 5xx.
- *  - fatal: every other 4xx — our payload, headers, topic or provider token is wrong.
+ *  - fatal: every other 4xx — our payload, headers or provider token is wrong.
  */
 export function apnsReasonOutcome(status: number, reason?: string): SendOutcome {
   if (status === 200) return 'ok';
+  if (reason && CONFIG_REASONS.has(reason)) return 'config';
   if (status === 410) return 'gone';
   if (reason && GONE_REASONS.has(reason)) return 'gone';
   if (status === 429 || status >= 500 || (reason && RETRY_REASONS.has(reason))) return 'retry';

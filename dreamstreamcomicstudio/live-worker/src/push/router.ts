@@ -10,7 +10,14 @@
  * A room builds one transport-neutral `PushMsg` and calls `deliver(sub, msg, ctx)` per
  * subscription. The answer is `ok | gone | retry`: prune on `gone`, keep on anything else.
  * `deliverReport` says more (which transport, the provider's status and reason, and
- * whether the failure was ours — `fatal` — for logs).
+ * whether the failure was ours — `fatal`, and `config` when the provider says the token
+ * isn't for our app or project).
+ *
+ * **Only a dead token prunes.** `gone` means the provider said this token is invalid or
+ * unregistered. A wrong topic, bundle or Firebase project (`config`), a bad payload or a
+ * refused key (`fatal`) would fail the same way for every device, so the token is kept
+ * and the router logs one `push_config` / `push_fatal` line per send (`ctx.log`; no token,
+ * no uid, no names) — the owner fixes the config and the next alert gets through.
  *
  * **Dormant until native tokens exist.** Native kinds need both a registered token and
  * the provider secrets; without them they answer `retry` with reason `unconfigured`
@@ -39,6 +46,7 @@ import { isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type
 import { apnsAlertPayload, apnsConfigFromEnv, apnsLiveActivityPayload, isApnsToken, sendApns, type ApnsConfig, type ApnsEnv, type ApnsResult, type Interruption } from './apns';
 import { EnvelopeError, normalizePushKeys, sealForDevice, validPushKeys, type PushInner, type PushKeys } from './envelope';
 import { fcmConfigFromEnv, isFcmToken, sendFcm, type FcmConfig, type FcmResult } from './fcm';
+import type { SendOutcome } from './types';
 
 export type PushKind = 'webpush' | 'apns' | 'apns-la' | 'apns-voip' | 'fcm';
 export const PUSH_KINDS: readonly PushKind[] = ['webpush', 'apns', 'apns-la', 'apns-voip', 'fcm'];
@@ -120,6 +128,23 @@ export interface RouterCtx {
   sleep?: (ms: number) => Promise<void>;
   /** Quick re-sends for an urgent native alert after a transient failure (default 1). */
   urgentRetries?: number;
+  /** Where a failure of ours (`fatal` / `config`) is reported. Default: one JSON `console.error` line. */
+  log?: (line: PushFaultLine) => void;
+}
+
+/** What the router logs when a send failed on our side. Never a token, uid, name or payload. */
+export interface PushFaultLine {
+  /** `push_config`: the token isn't for our topic/project (fix APNS_BUNDLE / FCM_SA_JSON). `push_fatal`: our request or key. */
+  evt: 'push_config' | 'push_fatal';
+  kind: PushKind;
+  transport: DeliverReport['transport'];
+  status?: number;
+  reason?: string;
+  plat?: PushSub['plat'];
+  env?: ApnsEnv;
+  /** The bundle id we sent as (APNs), or the Firebase project (FCM): what to compare with the app. */
+  bundle?: string;
+  project?: string;
 }
 
 export type DeliverOutcome = 'ok' | 'gone' | 'retry';
@@ -129,10 +154,12 @@ export interface DeliverReport {
   transport: 'webpush' | 'apns' | 'fcm' | 'none';
   /** Provider HTTP status (0 = no answer). */
   status?: number;
-  /** Provider reason / error code, or ours: unconfigured, dormant, not_applicable, no_vapid, endpoint_not_allowed. */
+  /** Provider reason / error code, or ours: unconfigured, dormant, not_applicable, no_vapid, endpoint_not_allowed, bad_message, internal. */
   reason?: string;
-  /** Our request or credentials were wrong (kept, not pruned — fix the config). */
+  /** Our side was wrong: the request, the credentials or the config (kept, never pruned). */
   fatal?: boolean;
+  /** The provider says the token isn't for our app or project — a wrong bundle id or Firebase project. Kept, never pruned, logged as `push_config`. */
+  config?: boolean;
   /** The device got the sealed envelope (false = generic text only). */
   sealed?: boolean;
   /** Provider requests made (1 + quick re-sends). */
@@ -302,22 +329,45 @@ export async function deliver(s: PushSub, m: PushMsg, ctx: RouterCtx = {}): Prom
 /** `deliver`, with the details a room logs. Never throws. */
 export async function deliverReport(s: PushSub, m: PushMsg, ctx: RouterCtx = {}): Promise<DeliverReport> {
   if (!accepts(s, m)) return { outcome: 'retry', transport: 'none', reason: 'not_applicable' };
+  let rep: DeliverReport;
   try {
-    switch (s.kind) {
-      case 'webpush':
-        return await viaWebPush(s, m, ctx);
-      case 'apns':
-        return await viaApnsAlert(s, m, ctx);
-      case 'apns-voip':
-        return await viaApnsVoip(s, m, ctx);
-      case 'apns-la':
-        return await viaLiveActivity(s, m, ctx);
-      case 'fcm':
-        return await viaFcm(s, m, ctx);
-    }
+    rep = await dispatch(s, m, ctx);
   } catch {
     // A bug here must never take the alert path down with it.
     return { outcome: 'retry', transport: 'none', reason: 'internal' };
+  }
+  if (rep.fatal) logFault(s, rep, ctx);
+  return rep;
+}
+
+function dispatch(s: PushSub, m: PushMsg, ctx: RouterCtx): Promise<DeliverReport> {
+  switch (s.kind) {
+    case 'webpush':
+      return viaWebPush(s, m, ctx);
+    case 'apns':
+      return viaApnsAlert(s, m, ctx);
+    case 'apns-voip':
+      return viaApnsVoip(s, m, ctx);
+    case 'apns-la':
+      return viaLiveActivity(s, m, ctx);
+    case 'fcm':
+      return viaFcm(s, m, ctx);
+  }
+}
+
+/** One log line for a failure of ours: what failed and against which bundle/project — never the token or who it belongs to. */
+function logFault(s: PushSub, rep: DeliverReport, ctx: RouterCtx): void {
+  const line: PushFaultLine = { evt: rep.config ? 'push_config' : 'push_fatal', kind: s.kind, transport: rep.transport };
+  if (rep.status != null) line.status = rep.status;
+  if (rep.reason) line.reason = rep.reason;
+  if (s.plat) line.plat = s.plat;
+  if (s.env) line.env = s.env;
+  if (rep.transport === 'apns' && ctx.apns) line.bundle = ctx.apns.bundle;
+  if (rep.transport === 'fcm' && ctx.fcm) line.project = ctx.fcm.projectId;
+  try {
+    (ctx.log ?? ((l: PushFaultLine) => console.error(JSON.stringify(l))))(line);
+  } catch {
+    /* logging must never break delivery */
   }
 }
 
@@ -378,15 +428,21 @@ function fromApns(r: ApnsResult, s: PushSub, tries: number, sealed: boolean): De
   else if (r.outcome === 'gone') {
     // Re-registered after APNs last saw the token dead: it's a live token now, keep it.
     rep.outcome = s.at != null && r.invalidSince != null && s.at > r.invalidSince ? 'retry' : 'gone';
-  } else if (r.outcome === 'fatal') rep.fatal = true;
+  } else markOurs(rep, r.outcome);
   return rep;
 }
 
 function fromFcm(r: FcmResult, tries: number, sealed: boolean): DeliverReport {
   const rep: DeliverReport = { outcome: r.outcome === 'ok' ? 'ok' : r.outcome === 'gone' ? 'gone' : 'retry', transport: 'fcm', status: r.status, tries, sealed };
   if (r.errorCode) rep.reason = r.errorCode;
-  if (r.outcome === 'fatal') rep.fatal = true;
+  markOurs(rep, r.outcome);
   return rep;
+}
+
+/** `fatal` and `config` are ours: kept (outcome stays `retry`), flagged, logged by `deliverReport`. */
+function markOurs(rep: DeliverReport, o: SendOutcome): void {
+  if (o === 'fatal' || o === 'config') rep.fatal = true;
+  if (o === 'config') rep.config = true;
 }
 
 const unconfigured = (transport: DeliverReport['transport'], reason = 'unconfigured'): DeliverReport => ({ outcome: 'retry', transport, reason });
@@ -434,11 +490,14 @@ async function viaApnsVoip(s: PushSub, m: PushMsg, ctx: RouterCtx): Promise<Deli
   // A VoIP push the app doesn't hand to CallKit at once gets the app's VoIP pushes cut off: off until Phase 1.1.
   if (!ctx.voip) return unconfigured('apns', 'dormant');
   if (!ctx.apns || ctx.iosVia === 'fcm') return unconfigured('apns');
-  if (!s.token || !isApnsToken(s.token) || !m.call) return { outcome: 'gone', transport: 'apns', reason: 'MalformedToken' };
+  if (!s.token || !isApnsToken(s.token)) return { outcome: 'gone', transport: 'apns', reason: 'MalformedToken' };
+  // A call message without a call id is our bug, not the token's: keep the token, flag it (logged as push_fatal).
+  const callId = m.call?.id;
+  if (typeof callId !== 'string' || !callId) return { outcome: 'retry', transport: 'apns', reason: 'bad_message', fatal: true };
   const now = (ctx.now ?? Date.now)();
   // The call id (to fetch the call) and, sealed, who is calling — CallKit needs a name at once.
   const e = await envelopeFor(s, innerOf(m));
-  const payload: Record<string, unknown> = { call: m.call.id };
+  const payload: Record<string, unknown> = { call: callId };
   if (e) payload.e = e;
   const res = await sendApns({ token: s.token, type: 'voip', priority: 10, collapseId: await collapseFor(m), expiration: Math.floor(now / 1000) + m.ttlSec, payload, env: s.env }, ctx.apns, { fetcher: ctx.fetcher, now });
   return fromApns(res, s, 1, !!e);

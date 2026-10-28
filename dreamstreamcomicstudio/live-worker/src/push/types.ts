@@ -1,15 +1,20 @@
 /**
  * What every push transport reports, and the small helpers they share.
  *
- *  - `ok`    delivered to the provider.
- *  - `gone`  the token/subscription is dead for good (uninstalled, expired, another app's
- *            or project's): the caller prunes it.
- *  - `retry` not delivered now, but nothing is wrong with the token (provider busy,
- *            network, throttled): keep it.
- *  - `fatal` our request or our credentials are wrong (bad payload, bad key, wrong
- *            topic): keep the token, log it, fix the config. Never prunes.
+ *  - `ok`     delivered to the provider.
+ *  - `gone`   this token is dead for good (uninstalled, expired, invalid): the caller
+ *             prunes it. Only an answer about the token itself is `gone`.
+ *  - `retry`  not delivered now, but nothing is wrong with the token (provider busy,
+ *             network, throttled): keep it.
+ *  - `fatal`  our request or our credentials are wrong (bad payload, bad key): keep the
+ *             token, log it, fix the code or the secret. Never prunes.
+ *  - `config` the provider says the token and our app or project don't match (APNs topic,
+ *             FCM sender project). A wrong `APNS_BUNDLE` or a service account from another
+ *             Firebase project looks exactly like this, for every device at once, so it is
+ *             our deployment, not the token: keep it, raise an alert, fix the config.
+ *             Never prunes.
  */
-export type SendOutcome = 'ok' | 'gone' | 'retry' | 'fatal';
+export type SendOutcome = 'ok' | 'gone' | 'retry' | 'fatal' | 'config';
 
 export interface SendOpts {
   /** Injected for tests; the Worker's global `fetch` otherwise. */

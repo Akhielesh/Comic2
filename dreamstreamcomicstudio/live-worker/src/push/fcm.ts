@@ -9,10 +9,13 @@
  *   share one exchange. A 401 from FCM drops the cached token and retries once.
  * - **Messages:** data-only and high priority for alerts — the app decrypts `e` and builds
  *   the notification itself, so Google sees no text. `collapse_key` = incident id.
- * - **Outcomes:** `UNREGISTERED` and `SENDER_ID_MISMATCH` (and an INVALID_ARGUMENT that names
- *   the token) are `gone`; quota and availability errors are `retry`; anything else about our
- *   request or credentials is `fatal` and never prunes a token. A payload bug can't wipe the
- *   registry: only an error that names the token prunes it.
+ * - **Outcomes:** `UNREGISTERED` (and an INVALID_ARGUMENT that names the token) is `gone`;
+ *   quota and availability errors are `retry`; `SENDER_ID_MISMATCH` is `config` — the token
+ *   belongs to another Firebase project than our service account's, which is what pasting a
+ *   service account from the wrong project looks like for every device at once; anything
+ *   else about our request or credentials is `fatal`. Neither prunes: a payload bug or one
+ *   wrong secret can't wipe the registry. Only an error about the token itself prunes it
+ *   (Firebase's token guidance: UNREGISTERED and a token-related INVALID_ARGUMENT).
  */
 import { importPkcs8, signJwtRS256 } from './keys';
 import { DEFAULT_SEND_TIMEOUT_MS, errText, retryAfterSec, timeoutSignal, type SendOpts, type SendOutcome } from './types';
@@ -180,8 +183,10 @@ export function fcmErrorOutcome(status: number, body: unknown): { outcome: SendO
   const code = fcmCode ?? err?.status;
   switch (fcmCode) {
     case 'UNREGISTERED':
-    case 'SENDER_ID_MISMATCH':
       return { outcome: 'gone', errorCode: fcmCode };
+    case 'SENDER_ID_MISMATCH':
+      // Our service account's project didn't issue this token: our config, not a dead token.
+      return { outcome: 'config', errorCode: fcmCode };
     case 'INVALID_ARGUMENT':
       return { outcome: namesToken ? 'gone' : 'fatal', errorCode: fcmCode };
     case 'QUOTA_EXCEEDED':
