@@ -1,8 +1,20 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
-import { runChat, isStudyIntent, isTripIntent, isTrivialChat, isFastLaneChat, CHAT_SYSTEM_PROMPT, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
+import {
+  runChat,
+  isStudyIntent,
+  isTripIntent,
+  isTrivialChat,
+  isFastLaneChat,
+  CHAT_SYSTEM_PROMPT,
+  type ChatReasoningLevel,
+  type ChatAttachmentInput,
+  type TurnBudget
+} from '../ai/chat.js';
 import { spentUsageOf } from '../ai/usage.js';
+import { CHAT_TOOL_OUTPUT_MAX } from '../ai/tools/capToolOutput.js';
+import { buildSettleEstimateFromUsage } from '../services/costEstimator.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool, DELEGATE_TOOL_NAME } from '../ai/agents/delegateTool.js';
@@ -789,7 +801,11 @@ export const chatPricedModels = (p: {
   return Array.from(new Set(chain));
 };
 
-const runChatParams = (p: PreparedChat) => ({
+/**
+ * The engine params of a chat turn. `reserve` is the turn's hold: for a GOVERNED hold it becomes
+ * the engine's per-turn spend cap (turnBudgetFor); admins, BYOK and signed-out turns pass none.
+ */
+const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) => ({
   provider: p.resolved.provider,
   apiKey: p.resolved.apiKey,
   model: p.model,
@@ -814,7 +830,9 @@ const runChatParams = (p: PreparedChat) => ({
   // …and the engine's own timeout / empty-answer retry never switches to a paid model either.
   noPaidRetry: Boolean(p.freeModelsOnly),
   fallbackModels: p.fallbackModels,
-  timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+  timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
+  // Governed per-turn cap: no further tool round once the metered spend exceeds the hold.
+  budget: turnBudgetFor(reserve, p)
 });
 
 // ── Hold sizing (S9) ────────────────────────────────────────────────────────────────────────────

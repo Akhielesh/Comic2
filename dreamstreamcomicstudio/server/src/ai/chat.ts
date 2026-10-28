@@ -12,7 +12,7 @@ import { logCapabilityNotice } from './capabilities.js';
 import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { markModelDown } from './autoRouter.js';
-import { buildUsage, createUsageMeter, withSpentUsage, type UsageMeter } from './usage.js';
+import { buildUsage, createUsageMeter, withSpentUsage, type MeteredUsage, type UsageMeter } from './usage.js';
 import type { AIProviderId, GenerateTextResult } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
@@ -88,6 +88,47 @@ export const parseToolArguments = (
  *  done, so typical turns are unaffected. */
 const MAX_TOOL_ITERATIONS = 9;
 
+/**
+ * Per-turn spend cap for a GOVERNED turn (non-admin, non-BYOK, platform-paid — see
+ * routes/chat.ts turnBudgetFor). The route holds ONCE per turn, but a turn can run up to
+ * MAX_TOOL_ITERATIONS tool rounds, each re-sending the whole context and possibly running paid
+ * meta-tools (swarm, delegate, deep research) — so one hold could be overshot many times over.
+ * Before every tool round the engine prices what the turn has already spent; once that exceeds
+ * the hold, the tools the model just asked for are NOT run (each gets an honest "not run"
+ * result), the model is called once more WITHOUT tools to answer calmly from what it has, and a
+ * percent-free notice says so. A turn without a budget (admins, BYOK, signed-out) is unchanged.
+ */
+export interface TurnBudget {
+  /** The provider cost (USD) this turn reserved; tool rounds stop once the metered spend exceeds it. */
+  holdUsd: number;
+  /**
+   * Prices the turn's metered usage so far the way the settle will (the provider-reported cost,
+   * or the caller's token pricing for calls that reported none). Without it the reported cost
+   * decides — exact on OpenRouter, the only provider with native tools. A hook that throws
+   * falls back to the reported cost; the decision is never lower than it.
+   */
+  spentUsd?: (usage: MeteredUsage) => number | Promise<number>;
+  /** Observability (and tests): the decision taken before each tool round. */
+  onRound?: (round: TurnBudgetRound) => void;
+}
+
+export interface TurnBudgetRound {
+  /** The 1-based tool round the decision was taken for. */
+  round: number;
+  spentUsd: number;
+  holdUsd: number;
+  /** True when the round was not run and the turn answered from what it had. */
+  stop: boolean;
+}
+
+/** The calm note on a reply whose tool rounds stopped at the turn's usage allowance (never dollars). */
+export const TOOL_BUDGET_NOTICE =
+  'This reply stopped its live lookups to stay within your usage for one turn, so it is based on what was gathered so far. Ask a follow-up to keep going.';
+
+/** The model-facing result for a tool call that was not run because the turn's allowance is used up. */
+export const TOOL_BUDGET_TOOL_RESULT =
+  'Not run: this turn has used its allowance for live tools. Answer the user now from what you already have, say briefly what you could not check, and do not call any more tools.';
+
 export interface RunChatParams {
   provider: AIProviderId;
   /** Resolved key for the chosen provider (BYOK header or platform env). */
@@ -117,6 +158,12 @@ export interface RunChatParams {
    * provider is told not to fall back to one.
    */
   noPaidRetry?: boolean;
+  /**
+   * Governed per-turn spend cap (see TurnBudget): once the turn's metered spend exceeds the hold
+   * the route reserved, no further tool round runs and the model answers from what it has.
+   * Unset for admins, BYOK and signed-out turns.
+   */
+  budget?: TurnBudget;
   /** Ordered fallback chain (≤3) → OpenRouter routes past dead/rate-limited models. */
   fallbackModels?: string[];
   timeoutMs?: number;
@@ -787,6 +834,28 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
 
   const lastUserSeed = (): string => lastUserTextOf(params.messages);
 
+  // Governed per-turn cap (TurnBudget): may this turn still run a tool round? Decided on the
+  // meter's running total — every provider call so far plus nested meta-tool spend — priced the
+  // way the settle prices it when the caller supplied that pricing.
+  const reportedUsd = (u: MeteredUsage): number => u.providerCostUsd ?? u.partialProviderCostUsd ?? 0;
+  const toolRoundAllowed = async (round: number): Promise<boolean> => {
+    const budget = params.budget;
+    if (!budget) return true;
+    const usage = meter.usage(lastUserSeed());
+    let spentUsd = reportedUsd(usage);
+    if (budget.spentUsd) {
+      try {
+        const priced = Number(await budget.spentUsd(usage));
+        if (Number.isFinite(priced)) spentUsd = Math.max(spentUsd, priced);
+      } catch {
+        /* the reported cost decides */
+      }
+    }
+    const stop = spentUsd > budget.holdUsd;
+    budget.onRound?.({ round, spentUsd, holdUsd: budget.holdUsd, stop });
+    return !stop;
+  };
+
   // --- JSON tool-protocol loop (non-OpenRouter providers) -------------------------
   // Mirrors the native loop below, but the model signals tool calls as JSON text rather
   // than `tool_calls`. Kept as a self-contained branch so the native path is untouched.
@@ -805,6 +874,17 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
         break;
       }
       convo.push({ role: 'assistant', content: r.text || '' });
+      if (!(await toolRoundAllowed(i + 1))) {
+        // The turn's metered spend already exceeds its hold (governed cap): this call is not run.
+        // The model gets an honest "not run" result and one tool-less closing answer.
+        convo.push({ role: 'user', content: formatToolResult(call.name, TOOL_BUDGET_TOOL_RESULT) });
+        addNotice({ tool: 'usage_budget', level: 'info', message: TOOL_BUDGET_NOTICE });
+        const closing = metered(await provider.generateText({ ...baseReq, messages: convo }, ctx), convo);
+        lastModel = closing.model || lastModel;
+        if (closing.citations) citations.push(...closing.citations);
+        final = stripToolCallJson(closing.text || '') || (closing.text || '');
+        break;
+      }
       const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
       // Announce the tool as it STARTS so the client can show the agent working live.
       params.onToolEvent?.({ phase: 'start', tool: call.name, query, index: 0, iteration: i });
@@ -887,6 +967,20 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
         function: { name: c.name, arguments: c.arguments }
       }))
     });
+
+    if (!(await toolRoundAllowed(iterations))) {
+      // The turn's metered spend already exceeds its hold (governed cap): the tools just asked
+      // for are NOT run. The provider requires a result per call, so each gets an honest "not
+      // run" result; the model is then asked once more WITHOUT tools to answer from what it has,
+      // and the percent-free notice tells the user why the reply stops here.
+      for (const call of result.toolCalls) {
+        messages.push({ role: 'tool', tool_call_id: call.id, content: TOOL_BUDGET_TOOL_RESULT });
+      }
+      addNotice({ tool: 'usage_budget', level: 'info', message: TOOL_BUDGET_NOTICE });
+      params.onReset?.();
+      result = await callModelResilient(messages, false);
+      break;
+    }
 
     // Run all tool calls for this turn concurrently (they're independent), then
     // append their results in the original call order. This cuts latency sharply

@@ -65,7 +65,8 @@ describe('coverTitleNodes', () => {
     const nodes = coverTitleNodes(doc, 2 / 3, measure);
     expect(nodes.length).toBeGreaterThan(0);
     expect(nodes.every((n) => n.tag === 'g')).toBe(true);
-    expect(coverTitleText(doc, 2 / 3, measure)).toContain('The Saffron Thief');
+    // The plan applies the style's text case (upper here).
+    expect(coverTitleText(doc, 2 / 3, measure)).toMatch(/the saffron thief/i);
     expect(coverTitleSvgMarkup(doc, 2 / 3, measure)).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" class="cover-title" viewBox="0 0 1000 1500"/);
   });
 });
