@@ -1,0 +1,13 @@
+{
+  "about": "lanName = hex(HMAC-SHA256(NMK_e, \"lan\")[0:8]) — the mDNS instance name (Phase 4).",
+  "cases": [
+    {
+      "nmk": "Uvbs4Sw4tzmzrly-wHk1-04galwvVY3RT1DjcpecD3o",
+      "name": "5dcd3e14daf1664d"
+    },
+    {
+      "nmk": "p7wflkF6zWMpJGFTs306YyijuR4rUu4uwTymbl0BG6I",
+      "name": "af3c8d48a326a44d"
+    }
+  ]
+}

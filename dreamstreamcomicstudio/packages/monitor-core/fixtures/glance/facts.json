@@ -1,0 +1,464 @@
+{
+  "about": "glanceFacts(room, now) → facts: what a room or an app knows, as the nursery-wide glance facts.",
+  "cases": [
+    {
+      "name": "two-cameras-worst-mood-lowest-battery",
+      "now": 1792637220000,
+      "room": {
+        "name": "Twins",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637218000,
+            "since": 1792635420000,
+            "st": {
+              "state": "calm",
+              "battery": 90,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 35.4
+              }
+            }
+          },
+          {
+            "online": true,
+            "at": 1792637219000,
+            "since": 1792637200000,
+            "st": {
+              "state": "fussing",
+              "battery": 31,
+              "charging": false,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 61.6
+              }
+            }
+          }
+        ],
+        "sleep": {
+          "phase": "asleep",
+          "since": 1792626420000,
+          "asleepMin": 180.4,
+          "wakings": 1
+        },
+        "duty": {
+          "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+          "name": "Mom",
+          "until": 1792640820000
+        }
+      },
+      "facts": {
+        "nm": "Twins",
+        "m": "fussing",
+        "ms": 1792637200000,
+        "sl": {
+          "p": "asleep",
+          "s": 1792626420000,
+          "min": 180,
+          "w": 1
+        },
+        "db": 62,
+        "cam": {
+          "on": 2,
+          "bat": 31,
+          "chg": false,
+          "pz": null,
+          "ls": 1792637219000
+        },
+        "al": null,
+        "du": {
+          "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+          "nm": "Mom",
+          "u": 1792640820000
+        },
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "one-of-two-paused-is-not-paused",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637220000,
+            "since": 1792637160000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": "privacy",
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          },
+          {
+            "online": true,
+            "at": 1792637220000,
+            "since": 1792637160000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "calm",
+        "ms": 1792637160000,
+        "sl": null,
+        "db": 40,
+        "cam": {
+          "on": 2,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637220000
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "all-paused-and-soothing",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637220000,
+            "since": 1792637160000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": " Rain ",
+              "paused": "interrupted",
+              "talk": "Mom",
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "calm",
+        "ms": 1792637160000,
+        "sl": null,
+        "db": 40,
+        "cam": {
+          "on": 1,
+          "bat": 80,
+          "chg": true,
+          "pz": "interrupted",
+          "ls": 1792637220000
+        },
+        "al": null,
+        "du": null,
+        "so": "Rain",
+        "tk": "Mom"
+      }
+    },
+    {
+      "name": "cameras-gone-is-offline-expired-duty",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": false,
+            "at": 1792636920000,
+            "since": null,
+            "st": null
+          }
+        ],
+        "duty": {
+          "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+          "name": "Dad",
+          "until": 1792637219999
+        }
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "offline",
+        "ms": 1792636920000,
+        "sl": null,
+        "db": null,
+        "cam": {
+          "on": 0,
+          "bat": null,
+          "chg": null,
+          "pz": null,
+          "ls": 1792636920000
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "no-camera-is-unknown",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": []
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "unknown",
+        "ms": 1792637220000,
+        "sl": null,
+        "db": null,
+        "cam": {
+          "on": 0,
+          "bat": null,
+          "chg": null,
+          "pz": null,
+          "ls": 0
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "alert-order-unanswered-first",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637220000,
+            "since": 1792637160000,
+            "st": {
+              "state": "crying",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          }
+        ],
+        "incidents": [
+          {
+            "id": "a",
+            "at": 1792636920000,
+            "kind": "cry",
+            "sev": "urgent",
+            "status": "acked",
+            "ack_by": "Dad"
+          },
+          {
+            "id": "b",
+            "at": 1792636980000,
+            "kind": "moved",
+            "sev": "warn",
+            "status": "open"
+          },
+          {
+            "id": "c",
+            "at": 1792637040000,
+            "kind": "loud",
+            "sev": "info",
+            "status": "open"
+          },
+          {
+            "id": "d",
+            "at": 1792637160000,
+            "kind": "zone",
+            "sev": "urgent",
+            "status": "resolved",
+            "resolved_at": 1792637220000
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "crying",
+        "ms": 1792637160000,
+        "sl": null,
+        "db": 40,
+        "cam": {
+          "on": 1,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637220000
+        },
+        "al": {
+          "id": "b",
+          "k": "moved",
+          "sev": "warn",
+          "at": 1792636980000,
+          "st": "open",
+          "by": null
+        },
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "resolved-shown-for-30-minutes",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637220000,
+            "since": 1792637160000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          }
+        ],
+        "incidents": [
+          {
+            "id": "old",
+            "at": 1792630020000,
+            "kind": "cry",
+            "sev": "urgent",
+            "status": "resolved",
+            "ack_by": "Mom",
+            "resolved_at": 1792635360000
+          },
+          {
+            "id": "recent",
+            "at": 1792633620000,
+            "kind": "cry",
+            "sev": "urgent",
+            "status": "resolved",
+            "ack_by": "Dad",
+            "resolved_at": 1792635480000
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "calm",
+        "ms": 1792637160000,
+        "sl": null,
+        "db": 40,
+        "cam": {
+          "on": 1,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637220000
+        },
+        "al": {
+          "id": "recent",
+          "k": "cry",
+          "sev": "urgent",
+          "at": 1792633620000,
+          "st": "resolved",
+          "by": "Dad"
+        },
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    },
+    {
+      "name": "resolved-ages-out",
+      "now": 1792637220000,
+      "room": {
+        "name": "Nursery",
+        "cams": [
+          {
+            "online": true,
+            "at": 1792637220000,
+            "since": 1792637160000,
+            "st": {
+              "state": "calm",
+              "battery": 80,
+              "charging": true,
+              "soothing": null,
+              "paused": null,
+              "talk": null,
+              "call": null,
+              "spl": {
+                "leq": 40
+              }
+            }
+          }
+        ],
+        "incidents": [
+          {
+            "id": "old",
+            "at": 1792630020000,
+            "kind": "cry",
+            "sev": "urgent",
+            "status": "resolved",
+            "ack_by": "Mom",
+            "resolved_at": 1792635360000
+          }
+        ]
+      },
+      "facts": {
+        "nm": "Nursery",
+        "m": "calm",
+        "ms": 1792637160000,
+        "sl": null,
+        "db": 40,
+        "cam": {
+          "on": 1,
+          "bat": 80,
+          "chg": true,
+          "pz": null,
+          "ls": 1792637220000
+        },
+        "al": null,
+        "du": null,
+        "so": null,
+        "tk": null
+      }
+    }
+  ]
+}

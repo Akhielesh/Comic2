@@ -1,0 +1,129 @@
+{
+  "about": "sealFrame / openFrame. header (22, big-endian) = ver u8 | e u32 | cam u16 | seq u64 | ts u48 | flags u8; sealed = header ‖ AES-256-GCM(frameKey, salt ‖ seq, body, aad = header ‖ UTF-8(nid)); frameKey ‖ salt = HKDF-SHA256(NMK_e, salt = empty, info = \"frame|\" + camDev, 36).",
+  "frameKeyHex": "242745dc71e1bc658560de555203845d92478f7fa22a32be0304ef2dfcd1ab74",
+  "saltHex": "2cd78600",
+  "cases": [
+    {
+      "name": "jpeg-key-frame",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "nmkEpoch": 1,
+      "hdr": {
+        "e": 1,
+        "cam": 0,
+        "seq": 1792609200000000,
+        "ts": 1792609200000,
+        "flags": 1
+      },
+      "headerHex": "0100000001000000065e5e5a964c0001a15fd5a78001",
+      "nonceHex": "2cd7860000065e5e5a964c00",
+      "body": "_9j_4AAQSkZJRgAB_9k",
+      "sealed": "AQAAAAEAAAAGXl5alkwAAaFf1aeAAd-1agneJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg"
+    },
+    {
+      "name": "sound-chunk",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "nmkEpoch": 1,
+      "hdr": {
+        "e": 1,
+        "cam": 1,
+        "seq": 1792609200000001,
+        "ts": 1792609200040,
+        "flags": 0
+      },
+      "headerHex": "0100000001000100065e5e5a964c0101a15fd5a7a800",
+      "nonceHex": "2cd7860000065e5e5a964c01",
+      "body": "AA0aJzRBTltodYKPnKm2w9Dd6vcEER4rOEVSX2x5hpOgrbrH1OHu-w",
+      "sealed": "AQAAAAEAAQAGXl5alkwBAaFf1aeoACvGxFF8kkWZlL-wSnYOVXzJmDa0M9ZbYEF4vExsMibrREogfAdBZSS-kVHtwPBeTrvwczprhn45"
+    },
+    {
+      "name": "empty-body",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "nmkEpoch": 1,
+      "hdr": {
+        "e": 1,
+        "cam": 0,
+        "seq": 1792609200000002,
+        "ts": 1792609200080,
+        "flags": 0
+      },
+      "headerHex": "0100000001000000065e5e5a964c0201a15fd5a7d000",
+      "nonceHex": "2cd7860000065e5e5a964c02",
+      "body": "",
+      "sealed": "AQAAAAEAAAAGXl5alkwCAaFf1afQABodJrzlu6SpAGCFz5fMb-c"
+    }
+  ],
+  "reject": [
+    {
+      "name": "other-nursery",
+      "sealed": "AQAAAAEAAAAGXl5alkwAAaFf1aeAAd-1agneJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg",
+      "ctx": {
+        "nid": "00000000-0000-4000-8000-000000000000",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "reason": "auth"
+    },
+    {
+      "name": "other-camera",
+      "sealed": "AQAAAAEAAAAGXl5alkwAAaFf1aeAAd-1agneJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "iVdpLzUw2Cgkmr30usGh8Z"
+      },
+      "reason": "auth"
+    },
+    {
+      "name": "header-seq-edited",
+      "sealed": "AQAAAAEAAAAGXl5alkwBAaFf1aeAAd-1agneJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "reason": "auth"
+    },
+    {
+      "name": "header-flags-edited",
+      "sealed": "AQAAAAEAAAAGXl5alkwAAaFf1aeAAN-1agneJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "reason": "auth"
+    },
+    {
+      "name": "ciphertext-flipped",
+      "sealed": "AQAAAAEAAAAGXl5alkwAAaFf1aeAAd-1agjeJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "reason": "auth"
+    },
+    {
+      "name": "unknown-version",
+      "sealed": "AAAAAAEAAAAGXl5alkwAAaFf1aeAAd-1agneJ_CNCBiAhzm0LXnjmL8m4N5y7DX0cjuKOg",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "reason": "format"
+    },
+    {
+      "name": "truncated",
+      "sealed": "AQAAAAEAAAAGXl5alkwAAaFf1aeAAd-1agneJ_CN",
+      "ctx": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "camDev": "Pc-8NnpwUqWczWkTBOEIP5"
+      },
+      "reason": "format"
+    }
+  ]
+}
