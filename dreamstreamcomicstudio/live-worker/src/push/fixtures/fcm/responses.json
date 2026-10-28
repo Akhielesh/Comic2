@@ -1,0 +1,158 @@
+{
+  "about": "FCM HTTP v1 and Google OAuth responses for push/fcm.ts. `recorded` cases were captured from Google's servers on 2026-10-28 (fcm.googleapis.com/v1/projects/dreamstream-test/messages:send with no or a bogus bearer token; oauth2.googleapis.com/token with an unsigned assertion). `documented` cases follow Firebase's 'FCM error codes' (ErrorCode enum and the google.rpc error envelope) and need a real service account and device to record: re-record them in Phase 1 with the owner's Firebase project. `expect` is the outcome fcm.ts must map each to; for 401 cases fcm.ts first drops its OAuth token and retries once.",
+  "send": [
+    {
+      "name": "no credentials",
+      "source": "recorded",
+      "response": {
+        "status": 401,
+        "headers": { "content-type": "application/json; charset=UTF-8", "www-authenticate": "Bearer realm=\"https://accounts.google.com/\"" },
+        "body": "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.\",\n    \"status\": \"UNAUTHENTICATED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"CREDENTIALS_MISSING\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"method\": \"google.firebase.fcm.v1.FcmService.SendMessage\",\n          \"service\": \"fcm.googleapis.com\"\n        }\n      }\n    ]\n  }\n}\n"
+      },
+      "expect": "fatal",
+      "errorCode": "UNAUTHENTICATED"
+    },
+    {
+      "name": "an access token Google refuses (revoked or expired)",
+      "source": "recorded",
+      "response": {
+        "status": 401,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\n  \"error\": {\n    \"code\": 401,\n    \"message\": \"Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.\",\n    \"status\": \"UNAUTHENTICATED\"\n  }\n}\n"
+      },
+      "expect": "fatal",
+      "errorCode": "UNAUTHENTICATED"
+    },
+    {
+      "name": "delivered",
+      "source": "documented",
+      "response": { "status": 200, "headers": { "content-type": "application/json; charset=UTF-8" }, "body": "{\"name\":\"projects/dreamstream-test/messages/0:1761617640123456%31bd1c9631bd1c96\"}" },
+      "expect": "ok"
+    },
+    {
+      "name": "the app was uninstalled (UNREGISTERED)",
+      "source": "documented",
+      "response": {
+        "status": 404,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":404,\"message\":\"Requested entity was not found.\",\"status\":\"NOT_FOUND\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"UNREGISTERED\"}]}}"
+      },
+      "expect": "gone",
+      "errorCode": "UNREGISTERED"
+    },
+    {
+      "name": "a malformed registration token (INVALID_ARGUMENT naming message.token)",
+      "source": "documented",
+      "response": {
+        "status": 400,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":400,\"message\":\"The registration token is not a valid FCM registration token\",\"status\":\"INVALID_ARGUMENT\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"INVALID_ARGUMENT\"},{\"@type\":\"type.googleapis.com/google.rpc.BadRequest\",\"fieldViolations\":[{\"field\":\"message.token\",\"description\":\"The registration token is not a valid FCM registration token\"}]}]}}"
+      },
+      "expect": "gone",
+      "errorCode": "INVALID_ARGUMENT"
+    },
+    {
+      "name": "our payload is wrong (INVALID_ARGUMENT naming a data field) — must NOT prune",
+      "source": "documented",
+      "response": {
+        "status": 400,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":400,\"message\":\"Invalid value at 'message.data[0].value' (TYPE_STRING), 1\",\"status\":\"INVALID_ARGUMENT\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.BadRequest\",\"fieldViolations\":[{\"field\":\"message.data[0].value\",\"description\":\"Invalid value at 'message.data[0].value' (TYPE_STRING), 1\"}]}]}}"
+      },
+      "expect": "fatal",
+      "errorCode": "INVALID_ARGUMENT"
+    },
+    {
+      "name": "a token from another Firebase project (what a service account from the wrong project gets for every token) — config, never prunes",
+      "source": "documented",
+      "response": {
+        "status": 403,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":403,\"message\":\"SenderId mismatch\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"SENDER_ID_MISMATCH\"}]}}"
+      },
+      "expect": "config",
+      "errorCode": "SENDER_ID_MISMATCH"
+    },
+    {
+      "name": "the service account lacks the sender role",
+      "source": "documented",
+      "response": {
+        "status": 403,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":403,\"message\":\"Permission 'cloudmessaging.messages.create' denied on resource '//cloudresourcemanager.googleapis.com/projects/dreamstream-test' (or it may not exist).\",\"status\":\"PERMISSION_DENIED\"}}"
+      },
+      "expect": "fatal",
+      "errorCode": "PERMISSION_DENIED"
+    },
+    {
+      "name": "over quota, with Retry-After",
+      "source": "documented",
+      "response": {
+        "status": 429,
+        "headers": { "content-type": "application/json; charset=UTF-8", "retry-after": "30" },
+        "body": "{\"error\":{\"code\":429,\"message\":\"Quota exceeded for quota metric 'Send requests'.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"QUOTA_EXCEEDED\"}]}}"
+      },
+      "expect": "retry",
+      "errorCode": "QUOTA_EXCEEDED"
+    },
+    {
+      "name": "FCM unavailable",
+      "source": "documented",
+      "response": {
+        "status": 503,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":503,\"message\":\"The service is currently unavailable.\",\"status\":\"UNAVAILABLE\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"UNAVAILABLE\"}]}}"
+      },
+      "expect": "retry",
+      "errorCode": "UNAVAILABLE"
+    },
+    {
+      "name": "FCM internal error",
+      "source": "documented",
+      "response": {
+        "status": 500,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":500,\"message\":\"Internal error encountered.\",\"status\":\"INTERNAL\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"INTERNAL\"}]}}"
+      },
+      "expect": "retry",
+      "errorCode": "INTERNAL"
+    },
+    {
+      "name": "the APNs key in Firebase is wrong (THIRD_PARTY_AUTH_ERROR) — config, not the token",
+      "source": "documented",
+      "response": {
+        "status": 401,
+        "headers": { "content-type": "application/json; charset=UTF-8" },
+        "body": "{\"error\":{\"code\":401,\"message\":\"Auth error from APNS or Web Push Service\",\"status\":\"UNAUTHENTICATED\",\"details\":[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"THIRD_PARTY_AUTH_ERROR\"}]}}"
+      },
+      "expect": "fatal",
+      "errorCode": "THIRD_PARTY_AUTH_ERROR"
+    }
+  ],
+  "oauth": [
+    {
+      "name": "token issued",
+      "source": "documented",
+      "response": { "status": 200, "headers": { "content-type": "application/json; charset=utf-8" }, "body": "{\"access_token\":\"ya29.c.test-access-token\",\"expires_in\":3599,\"token_type\":\"Bearer\"}" },
+      "expect": "ok"
+    },
+    {
+      "name": "an assertion Google rejects",
+      "source": "recorded",
+      "response": { "status": 400, "headers": { "content-type": "application/json; charset=UTF-8" }, "body": "{\"error\":\"invalid_scope\",\"error_description\":\"Invalid OAuth scope or ID token audience provided.\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "a deleted or disabled service-account key",
+      "source": "documented",
+      "response": { "status": 400, "headers": { "content-type": "application/json; charset=UTF-8" }, "body": "{\"error\":\"invalid_grant\",\"error_description\":\"Invalid JWT Signature.\"}" },
+      "expect": "fatal"
+    },
+    {
+      "name": "token endpoint unavailable",
+      "source": "documented",
+      "response": { "status": 503, "headers": { "content-type": "application/json; charset=UTF-8" }, "body": "{\"error\":\"temporarily_unavailable\"}" },
+      "expect": "retry"
+    }
+  ]
+}
