@@ -1,4 +1,5 @@
-FROM node:20-slim
+# Node 22: @supabase/supabase-js ≥ 2.118 requires it (see Dockerfile.cloudflare).
+FROM node:22-slim
 
 WORKDIR /app
 

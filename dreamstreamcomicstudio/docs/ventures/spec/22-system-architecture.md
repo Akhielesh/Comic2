@@ -255,7 +255,7 @@ Durable Object path is the target that fixes multi-device sync and instant revoc
 | Sandboxed execution | Cloudflare Containers (Sandbox SDK) | ✅ | `@cloudflare/sandbox` 0.4.x, `standard-3` |
 | Coordination / scheduling | Cloudflare Durable Objects + Alarms | 📋 | `VentureDO`, `UserCoordinatorDO` (target) |
 | Durable pipelines | Cloudflare Workflows | 📋 | Per-goal build (target A4) |
-| API runtime | Node 20 + Express 4 | ✅ | Railway, Dockerfile, `/api/health` |
+| API runtime | Node 22 + Express 4 | ✅ | Railway, Dockerfile, `/api/health` |
 | Background jobs | BullMQ 5 + ioredis | ✅ | `comicforge:worker`; ventures worker mirrors it |
 | Broker / shared state | Redis | ✅ | Queues now; shared rate limit/caps (F2) target |
 | System-of-record | Supabase Postgres + RLS | ✅ | Owner-isolation `auth.uid() = user_id` |

@@ -5,8 +5,9 @@
 # scans — so no CI ran on PRs. Those workflows are also a scheduled verification +
 # auto-fix + auto-merge/auto-revert system that needs secrets and has write access;
 # they are intentionally NOT activated here. This file only validates that the app
-# typechecks, builds, and passes its unit tests on every PR. No secrets, no write
-# permissions, no auto-merge.
+# typechecks, builds, and passes its unit tests on every PR, and that the backend
+# bundle boots on the Node its container image runs (job `server-boot`, shared with
+# deploy-api-proxy.yml). No secrets, no write permissions, no auto-merge.
 #
 # The Supabase env values below are FAKE placeholders (not secrets): the client in
 # services/supabase.ts throws at import if the URL is empty, so a syntactically valid
@@ -55,3 +56,9 @@ jobs:
         run: npm run build
       - name: Unit tests
         run: npm test -- --run
+
+  # Boots the esbuild-bundled backend on Dockerfile.cloudflare's Node and waits for
+  # /api/health (see server-boot.yml). deploy-api-proxy.yml runs the same job before
+  # every rollout. No secrets.
+  server-boot:
+    uses: ./.github/workflows/server-boot.yml

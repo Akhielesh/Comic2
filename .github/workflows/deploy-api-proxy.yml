@@ -39,7 +39,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Bundle the backend exactly as the image does and boot it on the image's Node before
+  # anything rolls out: a server that can't start (a dependency that needs a newer Node
+  # than the image, an import the runtime stage can't satisfy) stops here instead of
+  # crash-looping every container. No secrets, no Environment (server-boot.yml).
+  server-boot:
+    uses: ./.github/workflows/server-boot.yml
+
   deploy-worker:
+    needs: server-boot
     runs-on: ubuntu-latest
     # Deploy secrets belong to this Environment (ADR 0006 owner action #7).
     environment: production-deploy

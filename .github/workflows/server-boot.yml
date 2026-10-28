@@ -1,0 +1,52 @@
+# Boots the backend the way it ships, before it ships. Called by ci.yml (every PR and
+# push to Dreamstrream-v1) and by deploy-api-proxy.yml, whose deploy job waits for it.
+#
+# The container runs an esbuild bundle of server/src/index.ts on Dockerfile.cloudflare's
+# Node, which can differ from the Node the unit tests run on: a dependency that needs a
+# newer Node than the image (supabase-js >= 2.118 needs 22; realtime-js throws at import
+# without a native WebSocket) passes typecheck and the unit tests, then crash-loops every
+# instance after the deploy. This job reads the Node major from the Dockerfile's FROM
+# lines, bundles with the Dockerfile's own esbuild command, gives the bundle only the
+# runtime stage's packages, boots it, waits for GET /api/health and stops it with SIGTERM
+# (dreamstreamcomicstudio/scripts/ci/bootServerBundle.mjs).
+#
+# No secrets: placeholder config only, and Supabase points at 127.0.0.1:9, so nothing the
+# server does at boot leaves the runner.
+
+name: server-boot
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  server-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Read the backend image's Node major
+        id: image
+        run: |
+          majors="$(sed -nE 's/^FROM[[:space:]]+node:([0-9]+).*/\1/p' Dockerfile.cloudflare | sort -u)"
+          if [ -z "$majors" ] || [ "$(printf '%s\n' "$majors" | wc -l)" -ne 1 ]; then
+            echo "::error file=dreamstreamcomicstudio/Dockerfile.cloudflare::every stage must be FROM node:<one major>; found: ${majors:-none}"
+            exit 1
+          fi
+          echo "node=$majors" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ steps.image.outputs.node }}
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+      # Same install as the Dockerfile's build stage.
+      - run: npm ci --ignore-scripts
+      - name: Bundle the server like Dockerfile.cloudflare and boot it on the image's Node
+        run: node scripts/ci/bootServerBundle.mjs
