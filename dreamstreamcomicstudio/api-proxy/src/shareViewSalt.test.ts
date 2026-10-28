@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EnvDb } from './backendEnv';
 import { resetShareViewSaltCache, resolveShareViewSalt, withShareViewSalt } from './shareViewSalt';
 
 const SALT = 'a'.repeat(40);
@@ -7,7 +8,8 @@ const fakeDb = (rows: { value?: unknown }[] | Error) => {
     if (rows instanceof Error) throw rows;
     return { results: rows };
   });
-  return { db: { prepare: vi.fn(() => ({ all })) }, all };
+  const db = { prepare: vi.fn(() => ({ all })) } as unknown as EnvDb;
+  return { db, all };
 };
 
 describe('SHARE_VIEW_SALT resolution', () => {
@@ -41,7 +43,7 @@ describe('SHARE_VIEW_SALT resolution', () => {
     const env = { SHARE_VIEW_SALT: SALT, OTHER: 'x' };
     expect(await withShareViewSalt(env)).toBe(env);
     const { db } = fakeDb([{ value: SALT }]);
-    const filled = await withShareViewSalt({ BACKEND_ENV: db, OTHER: 'x' });
+    const filled = await withShareViewSalt<{ BACKEND_ENV: EnvDb; OTHER: string; SHARE_VIEW_SALT?: string }>({ BACKEND_ENV: db, OTHER: 'x' });
     expect(filled.SHARE_VIEW_SALT).toBe(SALT);
     expect(filled.OTHER).toBe('x');
     resetShareViewSaltCache();
