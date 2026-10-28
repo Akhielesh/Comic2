@@ -1,0 +1,75 @@
+{
+  "about": "Every Glance v1 decoder must accept each `valid` json (absent and null optionals mean none; unknown fields ignored) and reject each `invalid` one.",
+  "valid": [
+    {
+      "name": "minimal",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"unknown\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "nulls-mean-none",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":2,\"at\":2,\"m\":\"calm\",\"ms\":1,\"sl\":null,\"db\":null,\"cam\":{\"on\":1,\"bat\":null,\"chg\":null,\"pz\":null,\"ls\":2},\"al\":null,\"du\":null,\"so\":null,\"tk\":null,\"can\":20}"
+    },
+    {
+      "name": "unknown-fields-ignored",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":3,\"at\":3,\"m\":\"noisy\",\"ms\":2,\"cam\":{\"on\":1,\"ls\":3,\"future\":true},\"can\":127,\"x\":{\"y\":1},\"src\":\"lan\"}"
+    },
+    {
+      "name": "full",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":812,\"at\":1792637220000,\"m\":\"crying\",\"ms\":1792637178000,\"sl\":{\"p\":\"awake\",\"s\":1792637180000,\"min\":102,\"w\":2},\"db\":68,\"dbb\":2,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"al\":{\"id\":\"i9\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1792637190000,\"st\":\"open\"},\"du\":{\"nm\":\"Dad\",\"me\":true,\"u\":1792651620000},\"can\":127}"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "version-2",
+      "json": "{\"v\":2,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "no-cam",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"can\":0}"
+    },
+    {
+      "name": "unknown-mood",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"hungry\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "can-out-of-range",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":128}"
+    },
+    {
+      "name": "band-out-of-range",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"db\":40,\"dbb\":4,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "fractional-q",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1.5,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "negative-q",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":-1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "alert-without-id",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"crying\",\"ms\":1,\"cam\":{\"on\":1,\"ls\":1},\"al\":{\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1,\"st\":\"open\"},\"can\":0}"
+    },
+    {
+      "name": "bad-alert-status",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"crying\",\"ms\":1,\"cam\":{\"on\":1,\"ls\":1},\"al\":{\"id\":\"i\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1,\"st\":\"snoozed\"},\"can\":0}"
+    },
+    {
+      "name": "name-too-long",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0}"
+    },
+    {
+      "name": "battery-over-100",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":1,\"bat\":101,\"ls\":1},\"can\":0}"
+    },
+    {
+      "name": "server-never-sends-unknown-src",
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":1,\"at\":1,\"m\":\"calm\",\"ms\":1,\"cam\":{\"on\":0,\"ls\":0},\"can\":0,\"src\":\"mesh\"}"
+    },
+    {
+      "name": "not-an-object",
+      "json": "[1]"
+    }
+  ]
+}

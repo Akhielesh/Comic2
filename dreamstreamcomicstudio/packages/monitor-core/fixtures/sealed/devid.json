@@ -1,0 +1,20 @@
+{
+  "about": "devId = base64url(SHA-256(sigPub as the 65-byte uncompressed point))[0:22].",
+  "cases": [
+    {
+      "name": "camera",
+      "sigPub": "BMioyxeg7Rm1PDLpO8G1ne4ZppnDPxi9SqazyuKKPykbSpWJPdcULiM052-byaswfayTSsgXWpRu9sqd9OdZmPg",
+      "devId": "Pc-8NnpwUqWczWkTBOEIP5"
+    },
+    {
+      "name": "viewer",
+      "sigPub": "BB9DzhHapSEejt_BdOn4UldkrO3WEsIdbeLOkSj5XHPDBmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+      "devId": "iVdpLzUw2Cgkmr30usGh8Z"
+    },
+    {
+      "name": "watch",
+      "sigPub": "BH-FxvMpuCgygUSz0vEkg84UTyvvG4zT_Za3BHYZlx78rYgkHIufPT8-eF-lyTraDFu3jvsxY3vlDyLR7mzaYRQ",
+      "devId": "xChXvGvKV1QBh75jW_7Btb"
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "about": "dev_hello: ECDSA P-256/SHA-256 (r ‖ s, 64 bytes) by sigPub over UTF-8(input). Verify only (signatures are randomised). Each `reject` must fail.",
+  "cases": [
+    {
+      "name": "viewer-hello",
+      "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+      "nonce": "n0nce-from-hello",
+      "input": "ds-hello|7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f|n0nce-from-hello|1792609200500|BFHR1UjvPQL8Cq_yakvs1l9_Nc4SD9NNrubzfys2cAqE5y13byFQUaftqy1EtphowUOFduIij1YAnAXsgo3coSI",
+      "devId": "iVdpLzUw2Cgkmr30usGh8Z",
+      "sigPub": "BB9DzhHapSEejt_BdOn4UldkrO3WEsIdbeLOkSj5XHPDBmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+      "ecdhPub": "BFHR1UjvPQL8Cq_yakvs1l9_Nc4SD9NNrubzfys2cAqE5y13byFQUaftqy1EtphowUOFduIij1YAnAXsgo3coSI",
+      "ts": 1792609200500,
+      "sig": "cetlsp4do3eIsZiiptZXKQmE8LglLJ2LtttjMMT34DaP4qUXFmXrw_g-H3F8rp7gcuy9ErinETt7T6_lSJj2JQ"
+    }
+  ],
+  "reject": [
+    {
+      "name": "swapped-ecdh-key",
+      "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+      "nonce": "n0nce-from-hello",
+      "devId": "iVdpLzUw2Cgkmr30usGh8Z",
+      "sigPub": "BB9DzhHapSEejt_BdOn4UldkrO3WEsIdbeLOkSj5XHPDBmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+      "ecdhPub": "BDftORy8YCzjJDLYKgD-w6oWChI6dVXCD6_DjXVWATS4jarGFFPEa_gk5A-EJOY56UY2rVTxwh3TIVkjkdyU2lg",
+      "ts": 1792609200500,
+      "sig": "cetlsp4do3eIsZiiptZXKQmE8LglLJ2LtttjMMT34DaP4qUXFmXrw_g-H3F8rp7gcuy9ErinETt7T6_lSJj2JQ"
+    },
+    {
+      "name": "other-nonce",
+      "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+      "nonce": "n0nce-replayed",
+      "devId": "iVdpLzUw2Cgkmr30usGh8Z",
+      "sigPub": "BB9DzhHapSEejt_BdOn4UldkrO3WEsIdbeLOkSj5XHPDBmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+      "ecdhPub": "BFHR1UjvPQL8Cq_yakvs1l9_Nc4SD9NNrubzfys2cAqE5y13byFQUaftqy1EtphowUOFduIij1YAnAXsgo3coSI",
+      "ts": 1792609200500,
+      "sig": "cetlsp4do3eIsZiiptZXKQmE8LglLJ2LtttjMMT34DaP4qUXFmXrw_g-H3F8rp7gcuy9ErinETt7T6_lSJj2JQ"
+    },
+    {
+      "name": "devid-not-the-key-hash",
+      "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+      "nonce": "n0nce-from-hello",
+      "devId": "Pc-8NnpwUqWczWkTBOEIP5",
+      "sigPub": "BB9DzhHapSEejt_BdOn4UldkrO3WEsIdbeLOkSj5XHPDBmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+      "ecdhPub": "BFHR1UjvPQL8Cq_yakvs1l9_Nc4SD9NNrubzfys2cAqE5y13byFQUaftqy1EtphowUOFduIij1YAnAXsgo3coSI",
+      "ts": 1792609200500,
+      "sig": "cetlsp4do3eIsZiiptZXKQmE8LglLJ2LtttjMMT34DaP4qUXFmXrw_g-H3F8rp7gcuy9ErinETt7T6_lSJj2JQ"
+    }
+  ]
+}

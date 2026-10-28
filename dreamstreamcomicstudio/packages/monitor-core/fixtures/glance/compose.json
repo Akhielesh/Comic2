@@ -1,0 +1,785 @@
+{
+  "about": "composeGlance(state, viewer) → glance. Decoders must parse `json` into `glance`; `bytes` ≤ 512.",
+  "cases": [
+    {
+      "name": "calm-asleep-parent",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 811,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "calm",
+          "ms": 1792631100000,
+          "sl": {
+            "p": "asleep",
+            "s": 1792631100000,
+            "min": 102,
+            "w": 1
+          },
+          "db": 34,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 72,
+            "chg": true,
+            "pz": null,
+            "ls": 1792637219000
+          },
+          "al": null,
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "role": "parent"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 811,
+        "at": 1792637220000,
+        "m": "calm",
+        "ms": 1792631100000,
+        "sl": {
+          "p": "asleep",
+          "s": 1792631100000,
+          "min": 102,
+          "w": 1
+        },
+        "db": 34,
+        "dbb": 0,
+        "cam": {
+          "on": 1,
+          "bat": 72,
+          "chg": true,
+          "ls": 1792637219000
+        },
+        "du": {
+          "nm": "Dad",
+          "me": false,
+          "u": 1792651620000
+        },
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":811,\"at\":1792637220000,\"m\":\"calm\",\"ms\":1792631100000,\"sl\":{\"p\":\"asleep\",\"s\":1792631100000,\"min\":102,\"w\":1},\"db\":34,\"dbb\":0,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"du\":{\"nm\":\"Dad\",\"me\":false,\"u\":1792651620000},\"can\":127}",
+      "bytes": 309,
+      "etag": "\"811.127\""
+    },
+    {
+      "name": "crying-open-on-duty",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 812,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "crying",
+          "ms": 1792637178000,
+          "sl": {
+            "p": "awake",
+            "s": 1792637180000,
+            "min": 102,
+            "w": 2
+          },
+          "db": 68,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 72,
+            "chg": true,
+            "pz": null,
+            "ls": 1792637219000
+          },
+          "al": {
+            "id": "i9",
+            "k": "cry",
+            "sev": "urgent",
+            "at": 1792637190000,
+            "st": "open",
+            "by": null
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+        "role": "caregiver"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 812,
+        "at": 1792637220000,
+        "m": "crying",
+        "ms": 1792637178000,
+        "sl": {
+          "p": "awake",
+          "s": 1792637180000,
+          "min": 102,
+          "w": 2
+        },
+        "db": 68,
+        "dbb": 2,
+        "cam": {
+          "on": 1,
+          "bat": 72,
+          "chg": true,
+          "ls": 1792637219000
+        },
+        "al": {
+          "id": "i9",
+          "k": "cry",
+          "sev": "urgent",
+          "at": 1792637190000,
+          "st": "open"
+        },
+        "du": {
+          "nm": "Dad",
+          "me": true,
+          "u": 1792651620000
+        },
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":812,\"at\":1792637220000,\"m\":\"crying\",\"ms\":1792637178000,\"sl\":{\"p\":\"awake\",\"s\":1792637180000,\"min\":102,\"w\":2},\"db\":68,\"dbb\":2,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"al\":{\"id\":\"i9\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1792637190000,\"st\":\"open\"},\"du\":{\"nm\":\"Dad\",\"me\":true,\"u\":1792651620000},\"can\":127}",
+      "bytes": 382,
+      "etag": "\"812.127.d\""
+    },
+    {
+      "name": "crying-open-push",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 812,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "crying",
+          "ms": 1792637178000,
+          "sl": {
+            "p": "awake",
+            "s": 1792637180000,
+            "min": 102,
+            "w": 2
+          },
+          "db": 68,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 72,
+            "chg": true,
+            "pz": null,
+            "ls": 1792637219000
+          },
+          "al": {
+            "id": "i9",
+            "k": "cry",
+            "sev": "urgent",
+            "at": 1792637190000,
+            "st": "open",
+            "by": null
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+        "role": "caregiver",
+        "forPush": true
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 812,
+        "at": 1792637220000,
+        "m": "crying",
+        "ms": 1792637178000,
+        "sl": {
+          "p": "awake",
+          "s": 1792637180000,
+          "min": 102,
+          "w": 2
+        },
+        "db": 68,
+        "dbb": 2,
+        "cam": {
+          "on": 1,
+          "bat": 72,
+          "chg": true,
+          "ls": 1792637219000
+        },
+        "al": {
+          "id": "i9",
+          "k": "cry",
+          "sev": "urgent",
+          "at": 1792637190000,
+          "st": "open"
+        },
+        "du": {
+          "nm": "Dad",
+          "me": true,
+          "u": 1792651620000
+        },
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"q\":812,\"at\":1792637220000,\"m\":\"crying\",\"ms\":1792637178000,\"sl\":{\"p\":\"awake\",\"s\":1792637180000,\"min\":102,\"w\":2},\"db\":68,\"dbb\":2,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"al\":{\"id\":\"i9\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1792637190000,\"st\":\"open\"},\"du\":{\"nm\":\"Dad\",\"me\":true,\"u\":1792651620000},\"can\":127}",
+      "bytes": 361,
+      "etag": "\"812.127.d\""
+    },
+    {
+      "name": "acked-viewer",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 813,
+        "at": 1792637240000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "crying",
+          "ms": 1792637178000,
+          "sl": {
+            "p": "awake",
+            "s": 1792637180000,
+            "min": 102,
+            "w": 2
+          },
+          "db": 68,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 72,
+            "chg": true,
+            "pz": null,
+            "ls": 1792637219000
+          },
+          "al": {
+            "id": "i9",
+            "k": "cry",
+            "sev": "urgent",
+            "at": 1792637190000,
+            "st": "acked",
+            "by": "Dad"
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": "Shush",
+          "tk": "Dad"
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000003",
+        "role": "viewer"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 813,
+        "at": 1792637240000,
+        "m": "crying",
+        "ms": 1792637178000,
+        "sl": {
+          "p": "awake",
+          "s": 1792637180000,
+          "min": 102,
+          "w": 2
+        },
+        "db": 68,
+        "dbb": 2,
+        "cam": {
+          "on": 1,
+          "bat": 72,
+          "chg": true,
+          "ls": 1792637219000
+        },
+        "al": {
+          "id": "i9",
+          "k": "cry",
+          "sev": "urgent",
+          "at": 1792637190000,
+          "st": "acked",
+          "by": "Dad"
+        },
+        "du": {
+          "nm": "Dad",
+          "me": false,
+          "u": 1792651620000
+        },
+        "so": "Shush",
+        "tk": "Dad",
+        "can": 20
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":813,\"at\":1792637240000,\"m\":\"crying\",\"ms\":1792637178000,\"sl\":{\"p\":\"awake\",\"s\":1792637180000,\"min\":102,\"w\":2},\"db\":68,\"dbb\":2,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"al\":{\"id\":\"i9\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1792637190000,\"st\":\"acked\",\"by\":\"Dad\"},\"du\":{\"nm\":\"Dad\",\"me\":false,\"u\":1792651620000},\"so\":\"Shush\",\"tk\":\"Dad\",\"can\":20}",
+      "bytes": 418,
+      "etag": "\"813.20\""
+    },
+    {
+      "name": "guest-caregiver",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 812,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "crying",
+          "ms": 1792637178000,
+          "sl": {
+            "p": "awake",
+            "s": 1792637180000,
+            "min": 102,
+            "w": 2
+          },
+          "db": 68,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 72,
+            "chg": true,
+            "pz": null,
+            "ls": 1792637219000
+          },
+          "al": {
+            "id": "i9",
+            "k": "cry",
+            "sev": "urgent",
+            "at": 1792637190000,
+            "st": "open",
+            "by": null
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "role": "caregiver",
+        "guest": true
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 812,
+        "at": 1792637220000,
+        "m": "crying",
+        "ms": 1792637178000,
+        "sl": {
+          "p": "awake",
+          "s": 1792637180000,
+          "min": 102,
+          "w": 2
+        },
+        "db": 68,
+        "dbb": 2,
+        "cam": {
+          "on": 1,
+          "bat": 72,
+          "chg": true,
+          "ls": 1792637219000
+        },
+        "al": {
+          "id": "i9",
+          "k": "cry",
+          "sev": "urgent",
+          "at": 1792637190000,
+          "st": "open"
+        },
+        "du": {
+          "nm": "Dad",
+          "me": false,
+          "u": 1792651620000
+        },
+        "can": 31
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":812,\"at\":1792637220000,\"m\":\"crying\",\"ms\":1792637178000,\"sl\":{\"p\":\"awake\",\"s\":1792637180000,\"min\":102,\"w\":2},\"db\":68,\"dbb\":2,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"al\":{\"id\":\"i9\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1792637190000,\"st\":\"open\"},\"du\":{\"nm\":\"Dad\",\"me\":false,\"u\":1792651620000},\"can\":31}",
+      "bytes": 382,
+      "etag": "\"812.31\""
+    },
+    {
+      "name": "watch-grant-narrows-parent",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 812,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "crying",
+          "ms": 1792637178000,
+          "sl": {
+            "p": "awake",
+            "s": 1792637180000,
+            "min": 102,
+            "w": 2
+          },
+          "db": 68,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 72,
+            "chg": true,
+            "pz": null,
+            "ls": 1792637219000
+          },
+          "al": {
+            "id": "i9",
+            "k": "cry",
+            "sev": "urgent",
+            "at": 1792637190000,
+            "st": "open",
+            "by": null
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "role": "parent",
+        "deviceCan": 21
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 812,
+        "at": 1792637220000,
+        "m": "crying",
+        "ms": 1792637178000,
+        "sl": {
+          "p": "awake",
+          "s": 1792637180000,
+          "min": 102,
+          "w": 2
+        },
+        "db": 68,
+        "dbb": 2,
+        "cam": {
+          "on": 1,
+          "bat": 72,
+          "chg": true,
+          "ls": 1792637219000
+        },
+        "al": {
+          "id": "i9",
+          "k": "cry",
+          "sev": "urgent",
+          "at": 1792637190000,
+          "st": "open"
+        },
+        "du": {
+          "nm": "Dad",
+          "me": false,
+          "u": 1792651620000
+        },
+        "can": 21
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":812,\"at\":1792637220000,\"m\":\"crying\",\"ms\":1792637178000,\"sl\":{\"p\":\"awake\",\"s\":1792637180000,\"min\":102,\"w\":2},\"db\":68,\"dbb\":2,\"cam\":{\"on\":1,\"bat\":72,\"chg\":true,\"ls\":1792637219000},\"al\":{\"id\":\"i9\",\"k\":\"cry\",\"sev\":\"urgent\",\"at\":1792637190000,\"st\":\"open\"},\"du\":{\"nm\":\"Dad\",\"me\":false,\"u\":1792651620000},\"can\":21}",
+      "bytes": 382,
+      "etag": "\"812.21\""
+    },
+    {
+      "name": "offline-battery-low",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 820,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "offline",
+          "ms": 1792636980000,
+          "sl": {
+            "p": "asleep",
+            "s": 1792631100000,
+            "min": 102,
+            "w": 1
+          },
+          "db": null,
+          "dbt": null,
+          "cam": {
+            "on": 0,
+            "bat": null,
+            "chg": null,
+            "pz": null,
+            "ls": 1792636980000
+          },
+          "al": {
+            "id": "i12",
+            "k": "offline",
+            "sev": "urgent",
+            "at": 1792637100000,
+            "st": "open",
+            "by": null
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000002",
+            "nm": "Dad",
+            "u": 1792651620000
+          },
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "role": "parent"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 820,
+        "at": 1792637220000,
+        "m": "offline",
+        "ms": 1792636980000,
+        "sl": {
+          "p": "asleep",
+          "s": 1792631100000,
+          "min": 102,
+          "w": 1
+        },
+        "cam": {
+          "on": 0,
+          "ls": 1792636980000
+        },
+        "al": {
+          "id": "i12",
+          "k": "offline",
+          "sev": "urgent",
+          "at": 1792637100000,
+          "st": "open"
+        },
+        "du": {
+          "nm": "Dad",
+          "me": false,
+          "u": 1792651620000
+        },
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":820,\"at\":1792637220000,\"m\":\"offline\",\"ms\":1792636980000,\"sl\":{\"p\":\"asleep\",\"s\":1792631100000,\"min\":102,\"w\":1},\"cam\":{\"on\":0,\"ls\":1792636980000},\"al\":{\"id\":\"i12\",\"k\":\"offline\",\"sev\":\"urgent\",\"at\":1792637100000,\"st\":\"open\"},\"du\":{\"nm\":\"Dad\",\"me\":false,\"u\":1792651620000},\"can\":127}",
+      "bytes": 354,
+      "etag": "\"820.127\""
+    },
+    {
+      "name": "paused-privacy-hysteresis-band",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 9,
+        "at": 1792637220000,
+        "dbb": 1,
+        "facts": {
+          "nm": "Maya’s room",
+          "m": "awake",
+          "ms": 1792631100000,
+          "sl": null,
+          "db": 56,
+          "dbt": 1792637189000,
+          "cam": {
+            "on": 1,
+            "bat": 18,
+            "chg": false,
+            "pz": "privacy",
+            "ls": 1792637218000
+          },
+          "al": null,
+          "du": null,
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "role": "parent"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Maya’s room",
+        "q": 9,
+        "at": 1792637220000,
+        "m": "awake",
+        "ms": 1792631100000,
+        "db": 56,
+        "dbb": 1,
+        "cam": {
+          "on": 1,
+          "bat": 18,
+          "chg": false,
+          "pz": "privacy",
+          "ls": 1792637218000
+        },
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Maya’s room\",\"q\":9,\"at\":1792637220000,\"m\":\"awake\",\"ms\":1792631100000,\"db\":56,\"dbb\":1,\"cam\":{\"on\":1,\"bat\":18,\"chg\":false,\"pz\":\"privacy\",\"ls\":1792637218000},\"can\":127}",
+      "bytes": 223,
+      "etag": "\"9.127\""
+    },
+    {
+      "name": "waiting-for-camera",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 1,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "Nursery",
+          "m": "unknown",
+          "ms": 1792637220000,
+          "sl": null,
+          "db": null,
+          "dbt": null,
+          "cam": {
+            "on": 0,
+            "bat": null,
+            "chg": null,
+            "pz": null,
+            "ls": 0
+          },
+          "al": null,
+          "du": null,
+          "so": null,
+          "tk": null
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "role": "parent"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "Nursery",
+        "q": 1,
+        "at": 1792637220000,
+        "m": "unknown",
+        "ms": 1792637220000,
+        "cam": {
+          "on": 0,
+          "ls": 0
+        },
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"Nursery\",\"q\":1,\"at\":1792637220000,\"m\":\"unknown\",\"ms\":1792637220000,\"cam\":{\"on\":0,\"ls\":0},\"can\":127}",
+      "bytes": 155,
+      "etag": "\"1.127\""
+    },
+    {
+      "name": "long-names-clipped-worst-case",
+      "state": {
+        "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "q": 9007199254,
+        "at": 1792637220000,
+        "facts": {
+          "nm": "The Very Long Name Of A Nursery Upstairs 🌙",
+          "m": "crying",
+          "ms": 1792637219999,
+          "sl": {
+            "p": "settling",
+            "s": 1792637219999,
+            "min": 9999,
+            "w": 99
+          },
+          "db": 104,
+          "dbt": 1792637220000,
+          "cam": {
+            "on": 3,
+            "bat": 100,
+            "chg": false,
+            "pz": "interrupted",
+            "ls": 1792637220000
+          },
+          "al": {
+            "id": "incident-0123456789-0123456789-01234567890",
+            "k": "crib_out_of_zone_long",
+            "sev": "urgent",
+            "at": 1792637220000,
+            "st": "acked",
+            "by": "Grandma Josephine Alexandra"
+          },
+          "du": {
+            "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+            "nm": "Grandma Josephine Alexandra",
+            "u": 1792723620000
+          },
+          "so": "Ocean waves with heartbeat",
+          "tk": "Grandpa Bartholomew Jones"
+        }
+      },
+      "viewer": {
+        "uid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "role": "parent"
+      },
+      "glance": {
+        "v": 1,
+        "n": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+        "nm": "The Very…",
+        "q": 9007199254,
+        "at": 1792637220000,
+        "m": "crying",
+        "ms": 1792637219999,
+        "sl": {
+          "p": "settling",
+          "s": 1792637219999,
+          "min": 9999,
+          "w": 99
+        },
+        "db": 104,
+        "dbb": 3,
+        "cam": {
+          "on": 3,
+          "bat": 100,
+          "chg": false,
+          "pz": "interrupted",
+          "ls": 1792637220000
+        },
+        "al": {
+          "id": "incident-0123456789-",
+          "k": "crib_out_of_zon…",
+          "sev": "urgent",
+          "at": 1792637220000,
+          "st": "acked",
+          "by": "Grandma…"
+        },
+        "du": {
+          "nm": "Grandma J…",
+          "me": true,
+          "u": 1792723620000
+        },
+        "so": "Ocean wa…",
+        "tk": "Grandpa…",
+        "can": 127
+      },
+      "json": "{\"v\":1,\"n\":\"7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f\",\"nm\":\"The Very…\",\"q\":9007199254,\"at\":1792637220000,\"m\":\"crying\",\"ms\":1792637219999,\"sl\":{\"p\":\"settling\",\"s\":1792637219999,\"min\":9999,\"w\":99},\"db\":104,\"dbb\":3,\"cam\":{\"on\":3,\"bat\":100,\"chg\":false,\"pz\":\"interrupted\",\"ls\":1792637220000},\"al\":{\"id\":\"incident-0123456789-\",\"k\":\"crib_out_of_zon…\",\"sev\":\"urgent\",\"at\":1792637220000,\"st\":\"acked\",\"by\":\"Grandma…\"},\"du\":{\"nm\":\"Grandma J…\",\"me\":true,\"u\":1792723620000},\"so\":\"Ocean wa…\",\"tk\":\"Grandpa…\",\"can\":127}",
+      "bytes": 512,
+      "etag": "\"9007199254.127.d\""
+    }
+  ]
+}
