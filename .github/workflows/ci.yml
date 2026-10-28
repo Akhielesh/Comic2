@@ -5,8 +5,9 @@
 # scans — so no CI ran on PRs. Those workflows are also a scheduled verification +
 # auto-fix + auto-merge/auto-revert system that needs secrets and has write access;
 # they are intentionally NOT activated here. This file only validates that the app
-# typechecks, builds, and passes its unit tests on every PR. No secrets, no write
-# permissions, no auto-merge.
+# typechecks, builds, and passes its unit tests on every PR, and that the backend
+# bundle boots on the Node its container image runs (job `server-boot`, shared with
+# deploy-api-proxy.yml). No secrets, no write permissions, no auto-merge.
 #
 # The Supabase env values below are FAKE placeholders (not secrets): the client in
 # services/supabase.ts throws at import if the URL is empty, so a syntactically valid
@@ -33,8 +34,10 @@ jobs:
       VITE_SUPABASE_URL: https://placeholder.supabase.co
       VITE_SUPABASE_ANON_KEY: placeholder-anon-key
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           # Node 22 (active LTS): pdfjs-dist@6 requires node >=22.13 (it powers the
           # browser-side PDF script import; on Node 20 it throws at runtime, which only
@@ -42,7 +45,9 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: dreamstreamcomicstudio/package-lock.json
-      - run: npm ci
+      # --ignore-scripts: no dependency's install script runs in CI. The build and the tests
+      # need none (sharp and esbuild ship prebuilt platform packages).
+      - run: npm ci --ignore-scripts
       - name: Typecheck (client + server)
         run: |
           npm run typecheck
@@ -51,3 +56,9 @@ jobs:
         run: npm run build
       - name: Unit tests
         run: npm test -- --run
+
+  # Boots the esbuild-bundled backend on Dockerfile.cloudflare's Node and waits for
+  # /api/health (see server-boot.yml). deploy-api-proxy.yml runs the same job before
+  # every rollout. No secrets.
+  server-boot:
+    uses: ./.github/workflows/server-boot.yml

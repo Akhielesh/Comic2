@@ -1,17 +1,19 @@
-# App-wide security headers (Comic Studio v5, contract §14.2).
-# The CSP ships REPORT-ONLY first: the SPA still has an inline importmap and inline
-# scripts, and third-party surfaces (maps, embeds, model CDNs) must be inventoried from
-# real violation reports before anything is enforced. The share/reader route /c/* gets
-# an ENFORCED CSP from its Pages Function (_headers never applies to Function responses).
-# `report-uri /api/csp-report` is deliberately NOT set yet: until the edge handler for
-# that path exists in the dreamstream-api Worker, reports would be forwarded to the
-# backend container and wake it (CLAUDE.md "keep it sleepable"). The owner of the edge
-# route appends "; report-uri /api/csp-report" to the policy below when it lands.
-# Until then violations show in the browser console only.
+# Baseline security headers for STATIC files (ADR 0006 WS-1): /assets/*, /live-sw.js,
+# /models/*, manifests, icons. Cloudflare doesn't promise to apply this file to a Pages
+# Function's response, and every page load (/, /live, the Stream Studio host) runs through
+# functions/_middleware.ts — so the pages' CSP, Permissions-Policy, COOP and framing rules
+# are set THERE, per app (Stream Studio vs the comic / chat app), overriding anything from
+# here, with reports going to the /csp-report Function (never /api/*, so the backend
+# container stays asleep).
+#
+# No CSP here on purpose: a module worker (the YAMNet sound model at /assets/yamnet.worker-*.js)
+# takes its CSP from its own script response, so a policy on /* would reach inside the worker.
+# HSTS has no `preload` until the owner confirms every subdomain serves HTTPS (owner action #6).
 /*
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://aistudiocdn.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: payment=(), usb=(), serial=(), hid=()
 
 # Installable-app manifest: revalidate so name/icon/shortcut changes reach installs.
 /app.webmanifest

@@ -1,0 +1,49 @@
+# Dependabot (ADR 0006 WS-1, supply chain).
+#
+# Version updates wait out a COOLDOWN: a release must have been public for a week (two for a
+# major) before we are offered it. Most malicious or broken npm releases are found and pulled
+# within days, so we let them be. SECURITY updates are not held back by the cooldown.
+#
+# Every update is a pull request that runs CI (typecheck, build, unit tests — including the
+# built-page CSP proof and the Pages 25 MiB file check) and needs the code owner's review
+# (.github/CODEOWNERS). Nothing merges itself.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /dreamstreamcomicstudio
+      - /dreamstreamcomicstudio/api-proxy
+      - /dreamstreamcomicstudio/live-worker
+      - /dreamstreamcomicstudio/email-worker
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: '05:17'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps
+    labels: [dependencies]
+
+  # SHA-pinned actions: Dependabot bumps the SHA and the `# vX.Y.Z` comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: '05:17'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+    labels: [dependencies]
