@@ -376,6 +376,14 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Account and session protections for the baby monitor (2026-10-28, ADR 0006 Phase 0):** the
+  live server now checks sign-in tokens itself (faster, and a revoked session stops working
+  everywhere), people who turned on two-step verification must use it for nursery actions, and
+  removing a guest ends only that guest's pass (the parents' log says the removed person still
+  knows the link, and a new passcode keeps them out). Ready to switch on once the database update
+  is applied: "there was a new sign-in" emails, every nursery action refusing a signed-out or
+  revoked session, and per-device sign-in tokens for the coming phone and watch apps. Passwords
+  found in known breaches are refused at sign-up.
 - **Stricter browser protections and a newer runtime (2026-10-28, ADR 0006 Phase 0):** Stream
   Studio pages now send HSTS, nosniff, a strict referrer policy, a permissions policy, COOP and
   no-framing headers, plus a Content Security Policy in report-only mode (switched to enforced

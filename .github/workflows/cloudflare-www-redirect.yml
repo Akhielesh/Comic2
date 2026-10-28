@@ -2,17 +2,14 @@ name: Cloudflare www redirect
 
 # Keeps www.dreamstreamstudio.ai → dreamstreamstudio.ai a 301 that keeps the path + query
 # (dreamstreamcomicstudio/scripts/ops/cloudflare_www_redirect.py — idempotent, touches only
-# the www redirect). Runs when the script changes on production and on demand.
+# the www redirect). On demand only: the owner set the rule by hand on 2026-10-22 (verified:
+# 301, path + query kept), and the deploy token has no Single Redirect permission, so running it
+# on every change only produced red runs. Run it if the rule ever needs restoring.
 # Uses CLOUDFLARE_API_TOKEN, which needs Zone → Single Redirect → Edit (plus Zone → Read;
 # Page Rules → Edit only if a legacy www forwarding Page Rule exists). If the token lacks
 # them the job fails with a message naming the missing permission.
 
 on:
-  push:
-    branches: [Dreamstrream-v1]
-    paths:
-      - 'dreamstreamcomicstudio/scripts/ops/cloudflare_www_redirect.py'
-      - '.github/workflows/cloudflare-www-redirect.yml'
   workflow_dispatch:
 
 permissions:
