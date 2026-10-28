@@ -212,7 +212,9 @@ describe('InviteSheet — share a link', () => {
   it('opens on the link when one is on; a new passcode keeps the link; Turn off asks first', async () => {
     open();
     const sock = await connect(linkOn());
-    expect(screen.getByRole('tab', { name: /Share a link/ }).getAttribute('aria-selected')).toBe('true');
+    // The link tab is picked by an effect once the share state lands — wait for it rather than
+    // asserting on the very next tick (it raced under CI load).
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Share a link/ }).getAttribute('aria-selected')).toBe('true'));
     expect(screen.getByText(/Passcode hidden/)).toBeTruthy();
     expect(screen.getByText(/Watch & listen · ends .* · 1 of 10 guests · made by Alice/)).toBeTruthy();
     expect(screen.getByText(/2 of 20 people · link: 1 of 10 guests/)).toBeTruthy();
