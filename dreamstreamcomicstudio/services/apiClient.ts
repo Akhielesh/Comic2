@@ -2,7 +2,7 @@ import { buildApiUrl } from './clientConfig';
 import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
 import { getActiveKeyValue } from './apiKeys';
 import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourceForStage } from './modelSelection';
-import { supabase } from './supabase';
+import { isStoredSession, supabase } from './supabase';
 import { isFreeOnly } from './freeOnlyMode';
 import { isProviderEnabled, allowedSourcesHeader } from './sourceGovernance';
 import { PROVIDERS_ORDERED } from '../shared/providers';
@@ -11,10 +11,27 @@ import { isRetryableError } from './apiErrors';
 import { appStatus } from './appStatus';
 
 let cachedAccessToken: string | undefined;
+/** The account `cachedAccessToken` belongs to. */
+let cachedUserId: string | undefined;
 
-// Keep token fresh in memory to avoid redundant storage reads
-supabase.auth.onAuthStateChange((_event, session) => {
+// Keep token fresh in memory to avoid redundant storage reads. Only this tab's own session:
+// supabase-js announces another tab's sign-in here without storing it, and with "Remember me"
+// off that session was never this tab's — its token must not ride on this tab's requests.
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event !== 'SIGNED_OUT' && !isStoredSession(session)) {
+    // Another tab's session. A DIFFERENT account's means that tab took this device over and this
+    // tab steps aside (contexts/AuthContext forgets its stored session): the token cached here is
+    // for an account this tab no longer acts as, so it goes — the next request reads whatever
+    // this tab has stored now (nothing), instead of riding on the old account for the rest of
+    // the page's life. The same account's (its token refresh) changes nothing.
+    if (cachedAccessToken && session?.user?.id && session.user.id !== cachedUserId) {
+      cachedAccessToken = undefined;
+      cachedUserId = undefined;
+    }
+    return;
+  }
   cachedAccessToken = session?.access_token;
+  cachedUserId = session?.user?.id;
 });
 
 const getGeminiKey = () => {
@@ -98,6 +115,7 @@ const getAuthToken = async (): Promise<string | undefined> => {
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) {
     cachedAccessToken = session.access_token;
+    cachedUserId = session.user?.id;
   }
   return session?.access_token;
 };

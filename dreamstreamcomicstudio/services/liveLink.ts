@@ -22,6 +22,7 @@ import {
   type StreamReturnScreen,
 } from '../shared/streamHost';
 import { buildApiUrl } from './clientConfig';
+import { SIGN_IN_NONCE_PARAM, isSignInNonce, markSignInStarted } from './pendingSignIn';
 
 /** A slow (sleeping) backend shouldn't hold a click for long: past this, use the plain link. */
 const HANDOFF_TIMEOUT_MS = 6000;
@@ -54,7 +55,12 @@ const isMainUrl = (href: string): boolean => {
  * Null when signed out, refused, too slow or anything unexpected — callers fall back to a plain link.
  * Only ever returns a URL on one of our two hosts.
  */
-export async function requestHandoff(to: 'live' | 'main', path?: string, timeoutMs = HANDOFF_TIMEOUT_MS): Promise<string | null> {
+export async function requestHandoff(
+  to: 'live' | 'main',
+  path?: string,
+  timeoutMs = HANDOFF_TIMEOUT_MS,
+  opts: { /** The RECEIVING app's sign-in nonce, when it started this crossing (echoed into the link as `sn`). */ sn?: string | null } = {}
+): Promise<string | null> {
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   try {
@@ -65,14 +71,19 @@ export async function requestHandoff(to: 'live' | 'main', path?: string, timeout
     const res = await fetch(buildApiUrl('/api/auth/handoff'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify(path ? { to, path } : { to }),
+      body: JSON.stringify({ to, ...(path ? { path } : {}), ...(isSignInNonce(opts.sn) ? { sn: opts.sn } : {}) }),
       signal: ctrl?.signal,
     });
     if (!res.ok) return null;
     const body = (await res.json().catch(() => null)) as { url?: unknown } | null;
     const url = typeof body?.url === 'string' ? body.url : null;
     if (!url) return null;
-    return (to === 'live' ? isStreamUrl(url) : isMainUrl(url)) ? url : null;
+    if (!(to === 'live' ? isStreamUrl(url) : isMainUrl(url))) return null;
+    // No sign-in intent is recorded here: the link opens on the OTHER host, which keeps its own
+    // storage and can't see it — while a record left on this origin would be a standing pass for
+    // any link opened here. The receiving app asks "Finish signing in?" once (services/pendingSignIn;
+    // /api/auth/handoff echoes a receiving app's own nonce, `sn`, for crossings it starts itself).
+    return url;
   } catch {
     return null;
   } finally {
@@ -129,13 +140,32 @@ function carriedScreen(href: string): StreamReturnScreen | '' | null {
  */
 export async function openLiveApp(legacy = '/live', opts: { replace?: boolean; on?: boolean } = {}): Promise<void> {
   const on = opts.on ?? STREAM_HOST_ON;
-  const plain = liveAppUrl(legacy, on);
+  // A hand-back from Stream Studio ("Continue with DreamStream") carries the nonce of the sign-in
+  // THAT host started (`?sn=`): it goes into the handoff request, never into the address.
+  const { href: plain, sn } = splitHandoffNonce(liveAppUrl(legacy, on));
   if (!on || onStreamHost()) return navigate(plain, opts.replace);
   return once(async () => {
     const screen = carriedScreen(plain);
-    const url = screen === null ? null : await requestHandoff('live', screen ? `#/${screen}` : '');
+    const url = screen === null ? null : await requestHandoff('live', screen ? `#/${screen}` : '', undefined, { sn });
     navigate(url ?? plain, opts.replace);
   });
+}
+
+/**
+ * `?sn=<nonce>` out of a Stream Studio address: the nonce (when it is one) and the address
+ * without it. An address that carries none is returned exactly as given.
+ */
+function splitHandoffNonce(href: string): { href: string; sn: string | null } {
+  let url: URL;
+  try {
+    url = new URL(href, `${STREAM_ORIGIN}/`);
+  } catch {
+    return { href, sn: null };
+  }
+  const raw = url.searchParams.get(SIGN_IN_NONCE_PARAM);
+  if (raw === null) return { href, sn: null };
+  url.searchParams.delete(SIGN_IN_NONCE_PARAM);
+  return { href: url.href, sn: isSignInNonce(raw) ? raw : null };
 }
 
 /**
@@ -151,6 +181,12 @@ export function followLiveLink(e: React.MouseEvent<HTMLElement>, legacy = '/live
 /**
  * Open a DreamStream page from Stream Studio ('/', '/?view=chat'). On the Stream Studio host,
  * signed in ⇒ arrive signed in (handoff); otherwise the plain link.
+ *
+ * Sign-in intents live per origin, so a handoff the RECEIVING app didn't start — this one, and
+ * openLiveApp's from DreamStream — stops at its "Finish signing in?" step once (one tap, the
+ * person's own account named by the link). Only the hand-back started by continueWithDreamStream
+ * carries the receiving host's nonce and completes without asking. Re-check this before flipping
+ * STREAM_HOST_ON.
  */
 export async function openMainApp(path = '/', opts: { replace?: boolean; on?: boolean } = {}): Promise<void> {
   const plain = mainAppUrl(path);
@@ -168,6 +204,12 @@ export async function openMainApp(path = '/', opts: { replace?: boolean; on?: bo
  * the given screen. Only the screen travels — never a viewer, studio or guest key.
  */
 export function continueWithDreamStream(screen?: StreamReturnScreen | ''): void {
-  const back = `${STREAM_ORIGIN}/${screen ? `#/${screen}` : ''}`;
+  // The sign-in this starts comes back HERE as a handoff link, so the intent is recorded on this
+  // host — the one that receives the link — and its nonce travels along: DreamStream hands it to
+  // /api/auth/handoff, which echoes it into the link, and that link (only) completes here without
+  // asking. Recorded on Stream Studio's own host only: anywhere else the link would land on
+  // another origin, and a record here would be a standing pass for any link opened here.
+  const sn = onStreamHost() ? markSignInStarted('handoff') : null;
+  const back = `${STREAM_ORIGIN}/${sn ? `?${SIGN_IN_NONCE_PARAM}=${sn}` : ''}${screen ? `#/${screen}` : ''}`;
   navigate(`${MAIN_ORIGIN}/?next=${encodeURIComponent(back)}`);
 }

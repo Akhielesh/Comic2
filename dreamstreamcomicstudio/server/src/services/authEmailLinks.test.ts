@@ -9,6 +9,7 @@ import {
   parseAfter,
   parseApp,
   parseMainHandoffPath,
+  parseSignInNonce,
   parseStreamHandoffPath,
   pickLinkOrigin,
   streamAppBase
@@ -171,6 +172,24 @@ describe('small parsers', () => {
     expect(linksToLiveApp('live', 'signup')).toBe(true);
     expect(linksToLiveApp('live', 'recovery')).toBe(false);
     expect(linksToLiveApp('main', 'signup')).toBe(false);
+  });
+
+  it('a sign-in nonce is echoed only when it looks like one (never anything that could change the link)', () => {
+    const sn = '6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5';
+    expect(parseSignInNonce(sn)).toBe(sn);
+    for (const bad of [undefined, 42, '', 'short', 'x&next=//evil.example', 'a'.repeat(65), `${sn}#frag`]) expect(parseSignInNonce(bad)).toBeUndefined();
+    expect(buildAuthLink({ app: 'main', origin: APP, hashedToken: 'h', verificationType: 'recovery', signInNonce: sn })).toBe(
+      `${APP}/auth/callback?token_hash=h&type=recovery&sn=${sn}`
+    );
+    expect(buildAuthLink({ app: 'live', origin: APP, hashedToken: 'h', verificationType: 'signup', after: 'monitor', streamHostOn: false, signInNonce: sn })).toBe(
+      `${APP}/live?after=monitor&token_hash=h&type=signup&sn=${sn}`
+    );
+    expect(buildAuthLink({ app: 'main', origin: APP, hashedToken: 'h', verificationType: 'magiclink', signInNonce: 'nope' })).toBe(
+      `${APP}/auth/callback?token_hash=h&type=magiclink`
+    );
+    expect(buildHandoffLink({ to: 'main', mainOrigin: APP, hashedToken: 'h', verificationType: 'magiclink', next: '/', signInNonce: sn })).toBe(
+      `${APP}/auth/callback?token_hash=h&type=magiclink&sn=${sn}&next=%2F`
+    );
   });
 
   it('masks addresses for logs', () => {

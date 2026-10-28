@@ -28,9 +28,9 @@ import { useIsAdmin } from './hooks/useIsAdmin';
 import { useProductAccess, PRODUCT_LABELS, type ProductId } from './services/productAccess';
 import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
-import { supabase } from './services/supabase';
 import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
 import { setPendingChatModel } from './services/chatStorage';
+import { getLocalOwner } from './services/localOwner';
 import { captureInviteCodeFromUrl, clearPendingInviteCode, getPendingInviteCode, redeemInvite } from './services/invites';
 import { persistUiState } from './services/viewState';
 import { isSettingsTab, type SettingsTab } from './components/settingsTabs';
@@ -59,6 +59,7 @@ import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
 import { safeNext } from './services/safeNext';
+import { useAuthLinkCallback } from './hooks/useAuthLinkCallback';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
 // first-paint bundle — the floating assistant isn't needed for initial render.
 const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
@@ -109,9 +110,6 @@ const hasPendingNext = (): boolean => {
   }
 };
 
-
-type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
-type AuthCallbackFlow = 'magiclink' | 'recovery' | 'signup' | 'unknown';
 
 type PendingReaderTarget = {
   id: string;
@@ -207,9 +205,6 @@ const App: React.FC = () => {
   const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
   const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
-  const [authCallbackStatus, setAuthCallbackStatus] = useState<AuthCallbackStatus>('idle');
-  const [authCallbackMessage, setAuthCallbackMessage] = useState<string | null>(null);
-  const [authCallbackFlow, setAuthCallbackFlow] = useState<AuthCallbackFlow>('unknown');
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
@@ -264,7 +259,7 @@ const App: React.FC = () => {
     if (authLoading) return;
     // An emailed or handoff sign-in link finishes in the /auth/callback handler, which
     // follows its own `next` once the link is verified.
-    if (window.location.pathname === '/auth/callback') return;
+    if (window.location.pathname.replace(/\/+$/, '') === '/auth/callback') return;
     const params = new URLSearchParams(window.location.search);
     // Only a path on this site (normalised) or, with its own host, Stream Studio's address.
     const next = safeNext(params.get('next'));
@@ -354,17 +349,6 @@ const App: React.FC = () => {
     url.searchParams.delete('view');
     url.searchParams.delete('id');
     window.history.pushState({}, '', url);
-  };
-
-  const clearAuthUrlArtifacts = () => {
-    const url = new URL(window.location.href);
-    const authParams = ['code', 'type', 'token_hash', 'error', 'error_description', 'flow', 'next'];
-    authParams.forEach((key) => url.searchParams.delete(key));
-    if (url.hash) url.hash = '';
-    if (url.pathname === '/auth/callback') {
-      url.pathname = '/';
-    }
-    window.history.replaceState({}, '', url);
   };
 
   const handleBackToHome = () => {
@@ -477,7 +461,7 @@ const App: React.FC = () => {
   // reads the param before the sync effect can rewrite it. Path/param-managed routes are skipped.
   useEffect(() => {
     const path = window.location.pathname;
-    if (path.startsWith('/share/') || path === '/models' || path === '/auth/callback') return;
+    if (path.startsWith('/share/') || path === '/models' || path.replace(/\/+$/, '') === '/auth/callback') return;
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'read') return; // reader deep-link handled separately
     const v = params.get('view');
@@ -572,88 +556,13 @@ const App: React.FC = () => {
     checkKey();
   }, [systemDiagnostics?.geminiKeyPresent, systemDiagnostics?.pixazoKeyPresent]);
 
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash);
-    const searchParams = url.searchParams;
-    const code = searchParams.get('code');
-    const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash');
-    const rawType = searchParams.get('type') || hashParams.get('type') || 'magiclink';
-    const type: AuthCallbackFlow =
-      rawType === 'recovery' || rawType === 'signup' || rawType === 'magiclink'
-        ? rawType
-        : 'unknown';
-    const accessToken = hashParams.get('access_token');
-    const refreshToken = hashParams.get('refresh_token');
-    const authError = searchParams.get('error_description') || hashParams.get('error_description');
-    // A sign-in handoff from Stream Studio says where to go next: straight there once verified.
-    const nextAfterAuth = searchParams.get('next');
-    const hasAuthIntent =
-      url.pathname === '/auth/callback' ||
-      Boolean(code || tokenHash || accessToken || authError);
-
-    if (!hasAuthIntent) return;
-
-    let active = true;
-    const handleCallback = async () => {
-      setAuthCallbackStatus('verifying');
-      setAuthCallbackMessage(null);
-      setAuthCallbackFlow(type || 'unknown');
-      setCurrentView('auth-callback');
-
-      try {
-        if (authError) throw new Error(decodeURIComponent(authError));
-
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) throw error;
-        } else if (tokenHash) {
-          const verifyType =
-            rawType === 'recovery' || rawType === 'signup' || rawType === 'email_change'
-              ? rawType
-              : 'magiclink';
-          const { error } = await supabase.auth.verifyOtp({
-            type: verifyType,
-            token_hash: tokenHash
-          });
-          if (error) throw error;
-        } else if (accessToken && refreshToken) {
-          const { error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken
-          });
-          if (error) throw error;
-        } else {
-          throw new Error('Invalid callback link. Please request a new one.');
-        }
-
-        if (!active) return;
-        const dest = type !== 'recovery' ? safeNext(nextAfterAuth) : null;
-        if (dest && !isStreamUrl(dest)) {
-          window.location.replace(dest);
-          return;
-        }
-        setAuthCallbackStatus('success');
-        setAuthCallbackFlow(type || 'magiclink');
-        setAuthCallbackMessage(
-          type === 'recovery'
-            ? 'Recovery link verified. Continue to set a new password.'
-            : 'Authentication successful.'
-        );
-      } catch (err: any) {
-        if (!active) return;
-        setAuthCallbackStatus('error');
-        setAuthCallbackMessage(err?.message || 'Failed to verify link.');
-      } finally {
-        clearAuthUrlArtifacts();
-      }
-    };
-
-    void handleCallback();
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Sign-in links (/auth/callback, or the Site URL fallback '/'): a link this browser asked for
+  // completes at once; any other link asks "Finish signing in?" first (hooks/useAuthLinkCallback).
+  const authLink = useAuthLinkCallback({
+    onOpen: () => setCurrentView('auth-callback'),
+    // "Not now": the link is dropped and whoever was signed in stays signed in.
+    onDecline: () => setCurrentView(user ? 'dashboard' : 'home'),
+  });
 
   useEffect(() => {
     const userId = user?.id;
@@ -776,18 +685,16 @@ const App: React.FC = () => {
   }, [needsDobCompletion]);
 
   const handleAuthCallbackContinue = () => {
-    if (authCallbackStatus === 'error') {
+    if (authLink.status === 'error') {
       setCurrentView('auth');
-      setAuthCallbackStatus('idle');
-      setAuthCallbackMessage(null);
+      authLink.reset();
       return;
     }
 
-    if (authCallbackFlow === 'recovery') {
+    if (authLink.flow === 'recovery') {
       setOpenSecurityPasswordReset(true);
       openSettings('security', 'home');
-      setAuthCallbackStatus('idle');
-      setAuthCallbackMessage(null);
+      authLink.reset();
       return;
     }
 
@@ -799,8 +706,7 @@ const App: React.FC = () => {
       setCurrentView('dashboard');
     }
 
-    setAuthCallbackStatus('idle');
-    setAuthCallbackMessage(null);
+    authLink.reset();
   };
 
   const handleNavigate = (view: string, id?: string) => {
@@ -1030,8 +936,7 @@ const App: React.FC = () => {
     setNeedsDobCompletion(false);
     setHasPromptedDobThisSession(false);
     setOpenSecurityPasswordReset(false);
-    setAuthCallbackStatus('idle');
-    setAuthCallbackMessage(null);
+    authLink.reset();
     setPendingReaderTarget(null);
     setPendingStudioTarget(null);
     setCurrentView('home');
@@ -1195,10 +1100,17 @@ const App: React.FC = () => {
 
           {effectiveView === 'auth-callback' && (
             <AuthCallbackPage
-              status={authCallbackStatus === 'idle' ? 'verifying' : authCallbackStatus}
-              message={authCallbackMessage || undefined}
-              flowType={authCallbackFlow}
+              status={authLink.status === 'idle' ? 'verifying' : authLink.status}
+              message={authLink.message || undefined}
+              flowType={authLink.flow}
+              email={authLink.email}
+              currentEmail={user?.email ?? null}
+              // Signed out here, but an account's data is still on this device (its session ended
+              // with its tab): the step must still say that continuing removes it.
+              otherAccountOnDevice={!user && !!getLocalOwner()}
               onContinue={handleAuthCallbackContinue}
+              onConfirm={authLink.confirm}
+              onDecline={authLink.decline}
             />
           )}
 
@@ -1217,7 +1129,9 @@ const App: React.FC = () => {
           )}
 
           {effectiveView === 'chat' && (
-            <AIChatPlatform projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
+            // Keyed by account: a session for another account (another tab, a confirmed link)
+            // remounts the chat with THAT account's rows and memory — never A's chats under B.
+            <AIChatPlatform key={user?.id ?? 'signed-out'} projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
           )}
 
           {effectiveView === 'ventures' && (
@@ -1309,6 +1223,8 @@ const App: React.FC = () => {
 
           {effectiveView === 'settings' && (
             <AccountSettings
+              // Keyed by account: settings held from mount are never saved into another account.
+              key={user?.id ?? 'signed-out'}
               onClose={() => {
                 if (settingsReturnView === 'reader' && !activeProjectId) {
                   setCurrentView('dashboard');

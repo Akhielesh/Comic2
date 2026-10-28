@@ -531,6 +531,18 @@ describe('no enumeration, no account creation', () => {
     expect(lastSend().params.actionUrl).toBe(`${APP}/auth/callback?token_hash=hash-magiclink&type=magiclink`);
   });
 
+  it('puts the requesting browser’s sign-in nonce in the link (and drops a malformed one)', async () => {
+    const sn = '0f2b6a1c-3d4e-4f50-8a9b-c0d1e2f3a4b5';
+    addUser('ada@example.com', true);
+    await post('/magiclink', { email: 'ada@example.com', sn });
+    expect(lastSend().params.actionUrl).toBe(`${APP}/auth/callback?token_hash=hash-magiclink&type=magiclink&sn=${sn}`);
+    await post('/recovery', { email: 'ada@example.com', sn: '"><script>' });
+    expect(lastSend().params.actionUrl).toBe(`${APP}/auth/callback?token_hash=hash-recovery&type=recovery`);
+    addUser('bob@example.com', false);
+    await post('/resend', { email: 'bob@example.com', app: 'live', after: 'settings', sn });
+    expect(lastSend().params.actionUrl).toBe(`${APP}/live?after=settings&token_hash=hash-signup&type=signup&sn=${sn}`);
+  });
+
   it('reports send failures honestly instead of claiming success', async () => {
     addUser('ada@example.com', true);
     h.sendEmail.mockResolvedValueOnce({ ok: false, error: 'boom' });

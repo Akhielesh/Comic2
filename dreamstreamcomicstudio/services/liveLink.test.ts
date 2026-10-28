@@ -19,9 +19,10 @@ beforeEach(() => {
   linkNav.replace = (u) => void went.push(`replace ${u}`);
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body)) as { to: string; path?: string };
+    const body = JSON.parse(String(init.body)) as { to: string; path?: string; sn?: string };
     const after = body.path?.replace('#/', '') || '';
-    return new Response(JSON.stringify({ ok: true, url: `${STREAM}/?token_hash=t&type=magiclink${after ? `&after=${after}` : ''}` }), { status: 200 });
+    // Like the route: the receiving app's nonce is echoed into the link.
+    return new Response(JSON.stringify({ ok: true, url: `${STREAM}/?token_hash=t&type=magiclink${body.sn ? `&sn=${body.sn}` : ''}${after ? `&after=${after}` : ''}` }), { status: 200 });
   });
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -90,6 +91,39 @@ describe('links to Stream Studio from DreamStream', () => {
     await openLiveApp('/live#/monitor/abc/watch', { on: true });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(went).toEqual([`assign ${STREAM}/?e=evt_1`, `assign ${STREAM}/#/monitor/abc/watch`]);
+  });
+
+  it('a handoff leaves no sign-in intent on the sending origin (it would wave through any link opened here)', async () => {
+    localStorage.clear();
+    resetCrossing();
+    await openLiveApp('/live#/monitor', { on: true, replace: true });
+    expect(went).toEqual([`replace ${STREAM}/?token_hash=t&type=magiclink&after=monitor`]);
+    expect(localStorage.getItem('ds.pendingSignIn')).toBeNull();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, url: 'https://evil.example/?token_hash=t' }), { status: 200 }));
+    expect(await requestHandoff('live', '')).toBeNull();
+    expect(localStorage.getItem('ds.pendingSignIn')).toBeNull();
+  });
+
+  it('the hand-back from Stream Studio ("Continue with DreamStream") carries that host’s nonce into the handoff, so it completes there without asking; the plain fallback drops it', async () => {
+    const sn = 'c0ffee00-1111-4222-8333-444455556666';
+    resetCrossing();
+    await openLiveApp(`${STREAM}/?sn=${sn}#/monitor`, { on: true, replace: true });
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({ to: 'live', path: '#/monitor', sn });
+    expect(went).toEqual([`replace ${STREAM}/?token_hash=t&type=magiclink&sn=${sn}&after=monitor`]);
+    // Signed out here: the plain address, without the nonce (nothing to complete).
+    h.token = null;
+    resetCrossing();
+    await openLiveApp(`${STREAM}/?sn=${sn}#/monitor`, { on: true });
+    expect(went[1]).toBe(`assign ${STREAM}/#/monitor`);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Something that only looks like a nonce is neither sent nor kept.
+    h.token = 'access-1';
+    resetCrossing();
+    await openLiveApp(`${STREAM}/?sn=${encodeURIComponent('<script>')}`, { on: true });
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body))).toEqual({ to: 'live' });
+    expect(went[2]).toBe(`assign ${STREAM}/?token_hash=t&type=magiclink`);
+    // No sign-in intent is recorded on THIS origin by any of it.
+    expect(localStorage.getItem('ds.pendingSignIn')).toBeNull();
   });
 
   it('gives up on a slow backend and uses the plain link', async () => {

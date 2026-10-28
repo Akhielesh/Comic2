@@ -47,6 +47,20 @@ export const setProviderEnabled = (provider: ApiKeyProvider, on: boolean): void 
   write(map);
 };
 
+/**
+ * Forget every explicit choice (account switch / sign-out purge): the map belongs to the account
+ * and is synced in its snapshot, so the next account must never inherit — or upload — it.
+ */
+export const clearGovernanceMap = (): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(STORAGE);
+    window.dispatchEvent(new CustomEvent(SOURCE_GOVERNANCE_CHANGED));
+  } catch {
+    /* ignore */
+  }
+};
+
 /** The full governance map (explicit user choices only) — synced in the account snapshot. */
 export const getGovernanceMap = (): GovernanceMap => read();
 

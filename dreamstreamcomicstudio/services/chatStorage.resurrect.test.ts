@@ -27,10 +27,16 @@ import {
   createEmptySession,
   createChatProject
 } from './chatStorage';
+import { setLocalOwner } from './localOwner';
+
+const OWNER = '11111111-1111-4111-8111-111111111111';
 
 beforeEach(() => {
   pushSessionMock.mockClear();
   pushProjectMock.mockClear();
+  // Signed in: rows are tagged with (and pushed only for) the device's owner (chatStorage.owner.test.ts).
+  localStorage.clear();
+  setLocalOwner(OWNER);
 });
 
 describe('deleted chats/projects never resurrect via a late fire-and-forget save', () => {
@@ -51,6 +57,7 @@ describe('deleted chats/projects never resurrect via a late fire-and-forget save
     const s = createEmptySession();
     await saveChatSession(s);
     expect(pushSessionMock).toHaveBeenCalledTimes(1);
+    expect(pushSessionMock.mock.calls[0][0]).toMatchObject({ id: s.id, ownerUserId: OWNER });
   });
 
   it('saveChatProject is a no-op after the project was deleted this session', async () => {

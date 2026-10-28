@@ -1,16 +1,20 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { getAuthRedirectUrl, isSessionExpiredByInactivity, supabase, touchLastActivity } from '../services/supabase';
+import { forgetTabSession, getAuthRedirectUrl, isSessionExpiredByInactivity, isStoredSession, supabase, touchLastActivity } from '../services/supabase';
 import { clearUserScopedSettings, setSettingsChangeListener } from '../services/appSettings';
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
-import { setChatDataChangeListener } from '../services/chatStorage';
+import { setChatDataChangeListener, setChatSessionUser } from '../services/chatStorage';
+import { appStatus } from '../services/appStatus';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
-import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
+import { SOURCE_GOVERNANCE_CHANGED, clearGovernanceMap } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
-import { syncOnLogin, schedulePush } from '../services/cloudSync';
-import { purgeLiveAccountData } from '../live/accountPurge';
+import { cancelScheduledPush, syncOnLogin, schedulePush } from '../services/cloudSync';
+import { purgeLiveAccountData, takeOverDevice } from '../live/accountPurge';
+import { clearLocalOwner, getLocalOwner, setLocalOwner } from '../services/localOwner';
+import { clearPendingInviteCode } from '../services/invites';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
+import { clearSignInIntents } from '../services/pendingSignIn';
 
 type AuthContextType = {
     user: User | null;
@@ -22,6 +26,13 @@ type AuthContextType = {
     resendVerificationEmail: () => Promise<{ success: boolean; message: string }>;
     changePassword: (newPassword: string) => Promise<{ success: boolean; message: string }>;
 };
+
+/**
+ * Shown (in the app's status bar) to a tab that stepped aside because another account signed in
+ * on this device in another tab — see the "Remember me" off handling in AuthProvider.
+ */
+export const OTHER_TAB_SIGN_IN_NOTICE =
+    'Signed in as another account in another tab. This tab was signed out so the two accounts’ data stay apart — continue in that tab, or sign in again here.';
 
 const AuthContext = createContext<AuthContextType>({
     user: null,
@@ -68,6 +79,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const syncedUserRef = useRef<string | null>(null);
 
     const applyAuthState = (nextSession: Session | null) => {
+        // Chat rows are tagged by THIS tab's account (not the device-wide owner marker, which
+        // another tab can move to a different account while this one keeps running).
+        setChatSessionUser(nextSession?.user?.id ?? null);
         setSession((prev) => (isSameSession(prev, nextSession) ? prev : nextSession));
         setUser((prev) => {
             const nextUser = nextSession?.user ?? null;
@@ -94,6 +108,38 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         // Reconcile cloud <-> local exactly once per signed-in user.
         const onSignedIn = (userId: string) => {
+            const incoming = userId.toLowerCase();
+            const previous = getLocalOwner();
+            if (previous !== incoming) {
+                // SECURITY: this device's account data isn't the incoming account's. Either another
+                // account owns it (a session for someone else appeared without a sign-out: another
+                // tab, a link) or NOBODY does — left over from a session that ended without a
+                // sign-out (a not-remembered session gone with the browser, before the owner marker
+                // existed). Signed-out visitors can't add keys or settings (Settings is a protected
+                // view), so ownerless data is always someone's leftovers, and the first account to
+                // sign in — possibly through a link the visitor was talked into confirming — must not
+                // inherit or upload it. Its owner's cloud copy restores it on their next sign-in.
+                // Stop every push aimed at the old data FIRST — the purge fires change events
+                // (clearModelSelection → MODEL_SELECTION_CHANGED) and a push queued for the old id
+                // would otherwise upload its chat memory / agents with the new session's token —
+                // then purge, before the login sync could merge any of it into this account.
+                userIdRef.current = null;
+                syncedUserRef.current = null;
+                cancelScheduledPush();
+                purgeMainAccountData();
+                if (previous) {
+                    // A real switch: a one-time invite captured for the previous account must not be
+                    // redeemed by this one. (On a first sign-in it stays: that's the invite flow.)
+                    clearPendingInviteCode();
+                    // Stream Studio's copy stays only if this account already owns it — anything
+                    // else (the previous account's, or data with no owner) goes.
+                    takeOverDevice(userId);
+                }
+            }
+            // Untagged chat rows (from before ownership tags) are NOT claimed here: only the account
+            // whose session was stored at boot claims them (localOwner.adoptStoredSessionOwner).
+            // Anyone else gets back what the cloud says is theirs (chatStorage.syncFromCloud).
+            setLocalOwner(incoming);
             userIdRef.current = userId;
             void registerDevice(userId);
             if (syncedUserRef.current !== userId) {
@@ -102,37 +148,84 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             }
         };
 
-        // Check active session. Sessions idle for 30+ days sign out here
-        // (the only automatic sign-out — reloads and new tabs stay seamless).
+        // Sessions idle for 30+ days sign out on this visit (the only automatic sign-out — reloads
+        // and new tabs stay seamless). The verdict is taken ONCE, before anything can touch the
+        // activity clock; while that sign-out is pending, session events are ignored, so the
+        // login sync never starts for a session that is about to go (its pull could land after
+        // the sign-out purge and write the account's keys back with no owner).
+        let inactivitySignOutPending = isSessionExpiredByInactivity();
+
         supabase.auth.getSession().then(({ data: { session } }) => {
-            if (session && isSessionExpiredByInactivity()) {
+            if (session && inactivitySignOutPending) {
                 applyAuthState(null);
                 setLoading(false);
-                void supabase.auth.signOut({ scope: 'local' });
+                void supabase.auth
+                    .signOut({ scope: 'local' })
+                    .catch(() => undefined)
+                    .finally(() => {
+                        inactivitySignOutPending = false;
+                    });
                 return;
             }
+            inactivitySignOutPending = false;
             touchLastActivity();
             applyAuthState(session);
             setLoading(false);
             if (session?.user) onSignedIn(session.user.id);
         });
 
-        // Listen for changes (login, logout, refresh)
+        // Listen for changes (login, logout, refresh, recovery, profile updates)
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-            applyAuthState(session);
-            setLoading(false);
-            if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
-                touchLastActivity(); // any authenticated activity resets the 30-day idle clock
-                onSignedIn(session.user.id);
-            }
             if (event === 'SIGNED_OUT') {
+                inactivitySignOutPending = false;
+                applyAuthState(session);
+                setLoading(false);
                 userIdRef.current = null;
                 syncedUserRef.current = null;
                 // Purge on EVERY sign-out path (incl. Stream Studio's and the
                 // inactivity policy), not just our own buttons — a shared
                 // device must never keep the previous user's keys.
                 clearLocalAuthState();
+                return;
             }
+            if (inactivitySignOutPending) return; // this session is being signed out (see above)
+            // supabase-js announces every auth event to every tab without storing the session
+            // there. With "Remember me" off each tab keeps its own session, so a session another
+            // tab announced is not this tab's: acting on it would flip this tab to that account and
+            // purge this one's data (and its own refresh would flip the other tab back). With
+            // "Remember me" on, storage is shared, so a real switch matches and is handled.
+            if (session && !isStoredSession(session)) {
+                // The same account's event (its token refresh, say) is nothing to act on. A
+                // DIFFERENT account's means that account took this device over in the other tab:
+                // it purged what was here and the device's data is its now. This tab must stop
+                // acting as its old account — every key, setting or chat it still wrote would land
+                // in the new account's data and go up with its next sync. So it steps aside: no
+                // purge (the other tab did it), no supabase sign-out (that would broadcast
+                // SIGNED_OUT and sign the other tab out too); its own stored session is forgotten,
+                // so neither a reload nor a token refresh brings the old account back here to take
+                // the device over again — and the person is told why.
+                const current = userIdRef.current;
+                if (current && session.user?.id && session.user.id.toLowerCase() !== current.toLowerCase()) {
+                    userIdRef.current = null;
+                    syncedUserRef.current = null;
+                    cancelScheduledPush();
+                    forgetTabSession();
+                    applyAuthState(null);
+                    setLoading(false);
+                    appStatus.report('warn', OTHER_TAB_SIGN_IN_NOTICE, { source: 'auth' });
+                }
+                return;
+            }
+            applyAuthState(session);
+            setLoading(false);
+            if (!session?.user) return;
+            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
+                touchLastActivity(); // any authenticated activity resets the 30-day idle clock
+            }
+            // EVERY event that carries a session takes the ownership step — PASSWORD_RECOVERY
+            // (a recovery link), USER_UPDATED, MFA_CHALLENGE_VERIFIED included — so a session for
+            // another account can never inherit this device's data without the purge.
+            onSignedIn(session.user.id);
         });
 
         return () => {
@@ -148,6 +241,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const clearLocalAuthState = () => {
         setUser(null);
         setSession(null);
+        purgeLocalAccountData();
+    };
+
+    // Hoisted: the sign-in handler in the effect above calls these.
+    /** The main app's account-scoped data on this device (keys, settings, model choices). */
+    function purgeMainAccountData() {
+        // A push still queued for the account being purged must never run.
+        cancelScheduledPush();
         // SECURITY: purge ALL BYOK keys + usage from the multi-key store so a shared device
         // never leaks the previous user's secrets, usage, or live provider balance after
         // sign-out (clearAllKeys also wipes every legacy single-key slot, incl. flux).
@@ -157,12 +258,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // that other account's cloud snapshot.
         clearUserScopedSettings();
         clearModelSelection();
+        // The provider on/off choices are synced with the account like the rest.
+        clearGovernanceMap();
         // Retired Code Studio's model pin (ADR 0005); still cleared so no old copy lingers.
         try { localStorage.removeItem('dreamstream_studio_model'); } catch { /* storage unavailable */ }
+        // Chat history (IndexedDB) is scoped by owner instead of wiped: the next account never
+        // sees or pushes it, and it is back when its owner signs in (services/chatStorage).
+    }
+
+    /** Sign-out: everything account-scoped goes, Stream Studio's copy too, and the owner marker. */
+    function purgeLocalAccountData() {
+        purgeMainAccountData();
+        // Nothing here waits for an emailed link any more: the next link asks, whoever it is for.
+        clearSignInIntents();
         // Stream Studio (/live) keeps its own copy of the name, events, nursery data and
         // an alert subscription — wipe those too, so it never shows the last person.
         purgeLiveAccountData();
-    };
+        clearLocalOwner();
+    }
 
     const signOut = async () => {
         clearLocalAuthState();

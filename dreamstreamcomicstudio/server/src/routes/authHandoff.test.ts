@@ -108,6 +108,15 @@ describe('POST /api/auth/handoff', () => {
     expect((await post({ to: 'main' }, { origin: 'http://localhost:3000' })).json.url).toBe('http://localhost:3000/auth/callback?token_hash=secret-hash&type=magiclink&next=%2F');
   });
 
+  it('echoes the receiving app’s sign-in nonce (only a well-formed one)', async () => {
+    const sn = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+    expect((await post({ to: 'live', path: '#/monitor', sn }, { origin: APP })).json.url).toBe(
+      `${STREAM}/?token_hash=secret-hash&type=magiclink&sn=${sn}&after=monitor`
+    );
+    expect((await post({ to: 'main', sn }, { origin: STREAM })).json.url).toBe(`${APP}/auth/callback?token_hash=secret-hash&type=magiclink&sn=${sn}&next=%2F`);
+    expect((await post({ to: 'live', sn: 'x&next=//evil.example' }, { origin: APP })).json.url).toBe(`${STREAM}/?token_hash=secret-hash&type=magiclink`);
+  });
+
   it('refuses unknown destinations and paths (no open redirect)', async () => {
     for (const body of [{}, { to: 'evil' }, { to: 'live', path: 'https://evil.example/' }, { to: 'live', path: '/live#/studio?k=x' }, { to: 'main', path: '//evil.example' }, { to: 'main', path: 'https://evil.example' }, { to: 'main', path: '/share/abc' }]) {
       const r = await post(body, { origin: APP });

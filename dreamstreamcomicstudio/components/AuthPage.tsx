@@ -5,6 +5,7 @@ import { WaitlistForm } from './WaitlistForm';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
+import { clearSignInIntents } from '../services/pendingSignIn';
 
 // New registrations are invite-only for now: existing accounts can still sign in,
 // while everyone else can leave their email to request access. Flip this to true
@@ -247,7 +248,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     throw new Error("Verify your email first. Use the resend button below if needed.");
                 }
 
-                // Success
+                // Success. Signed in with a password: nothing here waits for an emailed link any
+                // more (a reset asked for earlier, say), so no link opened later may skip the
+                // "Finish signing in?" step on the strength of that request.
+                clearSignInIntents();
                 setPendingVerificationEmail(null);
                 onLoginSuccess();
             } else if (mode === 'magic-link') {
