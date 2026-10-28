@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker, { type BackendNamespace } from './proxy';
 import { buildBackendEnv, loadBackendEnv, type EnvDb } from './backendEnv';
 import { detectAgent } from './agent-gate';
+import { resetShareViewSaltCache } from './shareViewSalt';
 import { createOnRequest, onRequest } from '../../functions/_middleware';
 import { STREAM_HOST_ON } from '../../shared/streamHost';
 
@@ -320,6 +321,57 @@ describe('backend routing', () => {
     const { ns, seen } = fakeContainer(async () => new Response('x'));
     expect((await call('/api/projects', { ua: 'GPTBot/1.2' }, { BACKEND: ns }).res).status).toBe(403);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('share routes: SHARE_VIEW_SALT fallback', () => {
+  const SLUG = 'Ab3dEf6hIj9kLm2nP';
+  const SUPA = 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co';
+  const SALT = 'd'.repeat(40);
+  const shareEnv = (extra: Record<string, unknown>) => ({
+    VITE_SUPABASE_URL: SUPA,
+    VITE_SUPABASE_ANON_KEY: 'anon',
+    PUBLIC_EVENT_RL: { limit: vi.fn(async () => ({ success: true })) },
+    ...extra,
+  });
+  const d1 = (rows: { value: string }[]) => {
+    const all = vi.fn(async () => ({ results: rows }));
+    return { db: { prepare: vi.fn(() => ({ all })) }, all };
+  };
+  const view = (workerEnv: Record<string, unknown>) =>
+    call(`/api/comic/public/s/${SLUG}/event`, { method: 'POST', ua: HUMAN, body: '{"type":"view"}', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.9' } }, workerEnv);
+
+  it('tracks a view with the salt from the D1 backend_env row when no Worker secret is set, and only share paths read D1', async () => {
+    resetShareViewSaltCache();
+    const supa = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', supa);
+    const { db, all } = d1([{ value: SALT }]);
+    const { ns } = fakeContainer(async () => new Response('container'));
+    const { res, waits } = view(shareEnv({ BACKEND_ENV: db, BACKEND: ns }));
+    expect((await res).status).toBe(204);
+    await Promise.all(waits);
+    expect(all).toHaveBeenCalledTimes(1);
+    expect(supa).toHaveBeenCalledTimes(1);
+    expect(String((supa.mock.calls[0] as unknown[])[0])).toBe(`${SUPA}/rest/v1/rpc/comic_publication_track`);
+    await call('/api/health', { ua: HUMAN }, shareEnv({ BACKEND_ENV: db, BACKEND: ns })).res;
+    expect(all).toHaveBeenCalledTimes(1); // cached, and never consulted for non-share paths
+  });
+
+  it('a Worker secret wins over D1, and without either the view is accepted but not tracked', async () => {
+    resetShareViewSaltCache();
+    const supa = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', supa);
+    const { db, all } = d1([{ value: 'e'.repeat(40) }]);
+    const { res, waits } = view(shareEnv({ BACKEND_ENV: db, SHARE_VIEW_SALT: SALT }));
+    expect((await res).status).toBe(204);
+    await Promise.all(waits);
+    expect(all).not.toHaveBeenCalled();
+    expect(supa).toHaveBeenCalledTimes(1);
+    resetShareViewSaltCache();
+    const none = view(shareEnv({ BACKEND_ENV: d1([]).db }));
+    expect((await none.res).status).toBe(204);
+    await Promise.all(none.waits);
+    expect(supa).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -93,7 +93,8 @@
   // Shared-comic edge read path (src/publicComic.ts, src/cspReport.ts; P1-PUBLISH). Workers Rate
   // Limiting bindings — per Cloudflare location, keyed by client IP + route class. Not secrets.
   // The only secret these routes use is SHARE_VIEW_SALT (≥ 32 chars; viewer hash + tracking HMAC):
-  //   wrangler secret put SHARE_VIEW_SALT   — and the SAME value in Supabase
+  //   wrangler secret put SHARE_VIEW_SALT   — or a D1 backend_env row of the same name (the Worker
+  //   secret wins; src/shareViewSalt.ts) — and the SAME value in Supabase
   //   comic_publication_config(key='view_salt'). Without it analytics are simply off.
   "ratelimits": [
     { "name": "PUBLIC_COMIC_RL", "namespace_id": "4101", "simple": { "limit": 120, "period": 60 } },
