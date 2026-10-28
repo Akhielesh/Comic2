@@ -11,6 +11,8 @@
 
 import { useEffect, useState } from 'react';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '@/services/authEmail';
+import { completeLinkSignIn, inFrame, peekLinkAccount, readLinkTokens, type LinkAccount, type LinkFailure, type LinkTokens } from '@/services/authLink';
+import { clearSignInIntents, consumeSignInIntent } from '@/services/pendingSignIn';
 import { claimDevice } from './accountPurge';
 import type { AccountNameResult } from '@/services/accountName';
 import { STREAM_RETURN_SCREENS } from '@/shared/streamHost';
@@ -248,74 +250,152 @@ export function confirmRedirectUrl(): string {
   return `${location.origin}${LIVE_APP_PATH}${after}`;
 }
 
-/** `handoff`: a one-time sign-in link from DreamStream (type=magiclink), not an email confirmation. */
-export type AuthReturn = { confirmed: true; handoff?: boolean } | { error: 'expired' | 'failed'; message?: string; handoff?: boolean };
+/**
+ * `handoff`: a one-time sign-in link from DreamStream (type=magiclink), not an email confirmation.
+ * `framed`: the link loaded inside another page's frame — it never signs in there (clickjacking).
+ */
+export type AuthReturnResult =
+  | { confirmed: true; handoff?: boolean }
+  | { error: 'expired' | 'failed' | 'framed'; message?: string; handoff?: boolean };
 
 /**
- * Back from an email link: verify it (or let supabase-js adopt the session from
- * the URL), explain a dead link, and land on the screen the user started from.
- * Link shapes:
+ * A sign-in link this browser didn't ask for: nothing has happened yet. The app asks
+ * "Finish signing in?" — `proceed` signs in (and cleans the URL), `dismiss` drops the link and
+ * leaves whoever is signed in exactly as they were.
+ */
+export interface AuthReturnConfirm {
+  confirm: true;
+  /**
+   * The account the link signs in to, when that can be known before signing in (older
+   * #access_token links: the auth server is asked). Resolves later — the question never waits
+   * for it — and to null when it can't be known.
+   */
+  email: Promise<string | null>;
+  handoff?: boolean;
+  proceed: () => Promise<AuthReturnResult>;
+  dismiss: () => void;
+}
+
+/** This page load came back from a sign-in link (`?after=…` or link tokens): the app holds its tour. */
+export function hasAuthReturn(href: string = location.href): boolean {
+  try {
+    const url = new URL(href);
+    return !!url.searchParams.get('after') || !!readLinkTokens(url);
+  } catch {
+    return false;
+  }
+}
+
+export type AuthReturn = AuthReturnResult | AuthReturnConfirm;
+
+type LinkType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email';
+const LINK_TYPES: readonly string[] = ['signup', 'invite', 'magiclink', 'recovery', 'email'];
+
+/** Sign in with the link's tokens and describe the outcome the way the app shows it. */
+async function finishLink(tokens: LinkTokens, type: LinkType, handoff: boolean, account: () => Promise<LinkAccount>): Promise<AuthReturnResult> {
+  const tag = handoff ? { handoff } : {};
+  // A fragment token the auth server already refuses can't sign in, and setSession would drop
+  // the session this browser has on the way: report it as expired without trying.
+  if (tokens.kind === 'session' && (await account()).dead) return { error: 'expired', ...tag };
+  const sb = await supa();
+  // On success the auth call stores the session and fires SIGNED_IN, which refreshes the account.
+  const failure: LinkFailure | null = sb
+    ? (await completeLinkSignIn(sb.auth, tokens, type)).error
+    : { message: '' };
+  if (!failure) return { confirmed: true, ...tag };
+  // A fragment-token link that produced no session reads as "didn't work" (as before).
+  if (tokens.kind === 'session') return { error: 'failed', ...tag };
+  if (failure.code === 'otp_expired' || failure.status === 403 || /expired|invalid/i.test(failure.message || '')) {
+    // Already used (opening it twice) or too old.
+    return { error: 'expired', ...tag };
+  }
+  return { error: 'failed', ...(failure.message ? { message: failure.message } : {}), ...tag };
+}
+
+/**
+ * Back from an email link: verify it, explain a dead link, and land on the screen the user
+ * started from. Link shapes:
  *   ?after=…&token_hash=…&type=signup    — sent by our backend; verified here.
  *   ?token_hash=…&type=magiclink&after=… — the sign-in handoff from DreamStream
  *                                          (POST /api/auth/handoff); verified here too.
- *   #access_token=…                      — older links (Supabase / the auth hook).
- * The token never stays in the address bar or history.
+ *   #access_token=…&refresh_token=…      — older links (Supabase / the auth hook).
+ *   ?code=…                              — a PKCE code (needs this browser's code verifier).
+ * SECURITY: supabase-js no longer adopts sessions from the URL (detectSessionInUrl: false), and
+ * a link signs this browser in automatically only when it carries the nonce of a sign-in started
+ * in this browser (`&sn=…`, services/pendingSignIn). Any other link returns
+ * `{ confirm: true, proceed, dismiss }` so the app can ask first — an attacker's link for their
+ * own account never signs a visitor in silently. Inside a frame no link signs in at all. The
+ * token never stays in the address bar or history once the choice is made.
  * Returns null on an ordinary page load.
  */
 export async function consumeAuthReturn(): Promise<AuthReturn | null> {
   const url = new URL(location.href);
   const after = url.searchParams.get('after');
-  const tokenHash = url.searchParams.get('token_hash');
-  const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
-  const hasTokens = hash.has('access_token');
-  const errorCode = hash.get('error_code') || hash.get('error');
-  if (!after && !tokenHash && !hasTokens && !errorCode) return null;
+  const tokens = readLinkTokens(url);
+  if (!after && !tokens) return null;
 
-  let result: AuthReturn | null = null;
-  if (errorCode) {
-    result = /expired|access_denied/i.test(errorCode)
-      ? { error: 'expired' }
-      : { error: 'failed', message: hash.get('error_description') || undefined };
-  } else if (tokenHash) {
-    const sb = await supa();
-    // Our links say type=signup (confirmations) or magiclink (the handoff); accept the other
-    // one-time-link types verifyOtp knows.
-    const rawType = url.searchParams.get('type') || 'signup';
-    const handoff = rawType === 'magiclink';
-    type LinkType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email';
-    const type: LinkType = ['signup', 'invite', 'magiclink', 'recovery', 'email'].includes(rawType) ? (rawType as LinkType) : 'signup';
-    let failure: { message?: string; code?: string; status?: number } | null = null;
-    if (!sb) failure = { message: '' };
-    else {
-      try {
-        failure = (await sb.auth.verifyOtp({ token_hash: tokenHash, type })).error;
-      } catch (e) {
-        failure = { message: (e as Error)?.message };
-      }
-    }
-    // On success verifyOtp stores the session and fires SIGNED_IN, which refreshes the account.
-    if (!failure) {
-      result = handoff ? { confirmed: true, handoff } : { confirmed: true };
-    } else if (failure.code === 'otp_expired' || failure.status === 403 || /expired|invalid/i.test(failure.message || '')) {
-      // Already used (opening it twice) or too old.
-      result = handoff ? { error: 'expired', handoff } : { error: 'expired' };
-    } else {
-      result = { error: 'failed', message: failure.message || undefined, ...(handoff ? { handoff } : {}) };
-    }
-  } else if (hasTokens) {
-    const sb = await supa();
-    // getSession() waits for the client to finish reading the tokens from the URL.
-    const session = sb ? (await sb.auth.getSession().catch(() => null))?.data.session : null;
-    result = session ? { confirmed: true } : { error: 'failed' };
+  const clean = () => {
+    const now = new URL(location.href);
+    for (const key of ['after', 'token_hash', 'type', 'code', 'error', 'error_code', 'error_description', 'sn']) now.searchParams.delete(key);
+    const screen = after && RETURN_SCREENS.has(after) ? `#/${after}` : '';
+    history.replaceState(null, '', `${now.pathname}${now.search}${screen}`);
+  };
+
+  if (!tokens) {
+    clean();
+    return null;
   }
-  url.searchParams.delete('after');
-  if (tokenHash) {
-    url.searchParams.delete('token_hash');
-    url.searchParams.delete('type');
+  if (tokens.kind === 'error') {
+    clean();
+    // The sign-in this link belonged to is over: no record stays behind for a later link to use.
+    clearSignInIntents();
+    // Only the error code: error_description is free text anyone can put in a link.
+    return tokens.code && /expired|access_denied/i.test(tokens.code) ? { error: 'expired' } : { error: 'failed' };
   }
-  const screen = after && RETURN_SCREENS.has(after) ? `#/${after}` : '';
-  history.replaceState(null, '', `${url.pathname}${url.search}${screen}`);
-  return result;
+  // Framed by another page: never sign in here, not even after a click (clickjacking).
+  if (inFrame()) {
+    clean();
+    return { error: 'framed' };
+  }
+
+  // Our links say type=signup (confirmations) or magiclink (the handoff); accept the other
+  // one-time-link types verifyOtp knows.
+  const rawType = tokens.kind === 'token_hash' ? tokens.type || 'signup' : 'signup';
+  const handoff = tokens.kind === 'token_hash' && rawType === 'magiclink';
+  const type: LinkType = LINK_TYPES.includes(rawType) ? (rawType as LinkType) : 'signup';
+  // Who the link's access token belongs to (fragment tokens only) — asked once, lazily.
+  let accountLookup: Promise<LinkAccount> | null = null;
+  const account = (): Promise<LinkAccount> =>
+    (accountLookup ??= import('@/services/supabase')
+      .then((m) => peekLinkAccount(m.lookupAccessTokenEmail, tokens))
+      .catch(() => ({ email: null, dead: false })));
+  const run = async (): Promise<AuthReturnResult> => {
+    const result = await finishLink(tokens, type, handoff, account);
+    clean();
+    if ('error' in result) clearSignInIntents(); // a link that failed is over
+    return result;
+  };
+
+  // This browser asked for exactly this sign-in (the link carries its nonce): finish it now.
+  if (consumeSignInIntent(url)) return run();
+
+  // Nobody here asked for it: the app asks first — at once; the email fills in when known.
+  let settled = false;
+  return {
+    confirm: true,
+    email: tokens.kind === 'session' ? account().then((found) => found.email) : Promise.resolve(null),
+    ...(handoff ? { handoff } : {}),
+    proceed: () => {
+      settled = true;
+      return run();
+    },
+    dismiss: () => {
+      if (settled) return;
+      settled = true;
+      clean();
+      clearSignInIntents(); // "Not now": whatever was pending is dropped with the link
+    },
+  };
 }
 
 /* ---------------------------------------------------------- actions */
@@ -331,6 +411,9 @@ export async function signIn(email: string, password: string): Promise<{ ok: boo
     const msg = /invalid login/i.test(error.message) ? 'Email or password is incorrect.' : error.message;
     return { ok: false, error: msg };
   }
+  // Signed in with a password: nothing here waits for an emailed link any more, so no link
+  // opened later may skip the "Finish signing in?" step on the strength of an old request.
+  clearSignInIntents();
   await refreshAccount();
   return { ok: true };
 }

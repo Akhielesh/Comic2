@@ -18,6 +18,18 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
+# Sign-in links land on these pages (the main app's /auth/callback, Stream Studio at /live).
+# Another site must never frame them: a framed "Finish signing in?" step could hide a disguised
+# Continue button (clickjacking). The pages refuse to sign in inside a frame too (services/authLink).
+# /live* also covers the live app's files, where these headers are harmless.
+/auth/callback*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
+/live*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+
 # Installable-app manifest: revalidate so name/icon/shortcut changes reach installs.
 /app.webmanifest
   Cache-Control: public, max-age=0, must-revalidate

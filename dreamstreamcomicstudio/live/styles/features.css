@@ -125,6 +125,8 @@
 
 /* --------------------------------------------------------------- tours */
 .tour-root { position: fixed; inset: 0; z-index: 140; }
+/* "Finish signing in?" must never sit under a tour (LiveApp also holds the tour while it's open). */
+.sheet-scrim.link-confirm-scrim { z-index: 145; }
 .tour-scrim { position: absolute; inset: 0; background: rgba(15, 13, 11, .55); }
 .tour-hole {
   position: fixed; border-radius: 12px; pointer-events: none;

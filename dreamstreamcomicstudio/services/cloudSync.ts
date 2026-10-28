@@ -49,6 +49,7 @@ import { applyGovernanceMap, getGovernanceMap, type GovernanceMap } from './sour
 import { getChatMemory, setChatMemory, MAX_CHAT_MEMORY_CHARS } from './chatStorage';
 import { listCustomAgents, replaceCustomAgents, parseMemoryItems, formatMemoryItems } from './chatAgents';
 import type { CustomAgentDef } from '../apiTypes';
+import { isLocalOwner } from './localOwner';
 
 interface CloudSnapshot {
   version: 1 | 2;
@@ -182,6 +183,10 @@ export const pullCloudSnapshot = async (): Promise<CloudSnapshot | null> => {
 
 /** Push the current local config to the account (server encrypts at rest). */
 export const pushCloudSnapshot = async (userId: string): Promise<void> => {
+  // SECURITY: only the account that owns this device's local data may receive it. A push
+  // queued for an account that has since signed out or been switched away from would
+  // otherwise upload one account's keys / chat memory with the next account's token.
+  if (!isLocalOwner(userId)) return;
   try {
     const snapshot = buildLocalSnapshot(userId);
     await put('/api/account/settings', { data: snapshot });
@@ -191,10 +196,10 @@ export const pushCloudSnapshot = async (userId: string): Promise<void> => {
 };
 
 /** Refresh which providers have a key stored on the account (metadata, no secrets). */
-const refreshAccountKeyMeta = async (): Promise<void> => {
+const refreshAccountKeyMeta = async (userId: string): Promise<void> => {
   try {
     const res = await get<{ ok: boolean; keys: AccountKeyMeta[] }>('/api/account/byok');
-    if (res?.ok && Array.isArray(res.keys)) setAccountKeyMeta(res.keys);
+    if (res?.ok && Array.isArray(res.keys) && isLocalOwner(userId)) setAccountKeyMeta(res.keys);
   } catch {
     /* metadata is a display nicety — never block sync on it */
   }
@@ -206,9 +211,14 @@ const refreshAccountKeyMeta = async (): Promise<void> => {
  */
 export const syncOnLogin = async (userId: string): Promise<void> => {
   try {
-    void refreshAccountKeyMeta();
+    if (!isLocalOwner(userId)) return;
+    void refreshAccountKeyMeta(userId);
 
     const cloud = await pullCloudSnapshot();
+    // The pull is a network round trip: the device may have signed out or switched accounts
+    // meanwhile. Then this account's snapshot must not be written into local storage (it
+    // would sit there with no owner, or under someone else's), nor local data pushed to it.
+    if (!isLocalOwner(userId)) return;
     const local = buildLocalSnapshot(userId);
 
     if (!cloud) {
@@ -246,6 +256,12 @@ export const syncOnLogin = async (userId: string): Promise<void> => {
 // ---- Debounced push wiring -----------------------------------------------------
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Drop a debounced push that hasn't run yet (an account switch: it was queued for the old one). */
+export const cancelScheduledPush = (): void => {
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = null;
+};
 
 /** Schedule a debounced cloud push for the given user (coalesces rapid edits). */
 export const schedulePush = (userId: string) => {

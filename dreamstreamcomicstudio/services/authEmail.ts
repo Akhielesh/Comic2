@@ -11,7 +11,9 @@
  * run into Supabase's limit, and the captcha token may already be spent.
  */
 
+import { STREAM_HOST_ON, isStreamHost } from '../shared/streamHost';
 import { buildApiUrl } from './clientConfig';
+import { SIGN_IN_NONCE_PARAM, newSignInNonce, recordSignInStarted } from './pendingSignIn';
 
 export type AuthEmailKind = 'signup' | 'resend' | 'recovery' | 'magiclink';
 
@@ -75,7 +77,29 @@ export const interpretAuthEmailResponse = (
  *  mailer: its mail isn't from dreamstreamstudio.ai and it allows ~2 emails/hour. */
 export const EMAIL_SERVICE_DOWN = 'We couldn’t reach our email service just now — please try again in a minute.';
 
-/** POST /api/auth/email/{kind}. Never throws. */
+/**
+ * Does a link for `app` ('main' | 'live', the request's `app` field) open on THIS origin
+ * (`hostname`)? Main-app links — password reset, magic link, main sign-up — always land on the
+ * main app (its /auth/callback). Stream Studio's land at /live on the apex while STREAM_HOST_ON is
+ * off, and on its own host once it is on (server/src/services/authEmailLinks.ts). A sign-in intent
+ * is recorded only where the link lands: another origin has its own storage and could never see
+ * it, while a record left here would be a standing pass for any link opened here.
+ */
+export const authLinkLandsHere = (app: unknown, hostname: string | null | undefined, streamHostOn: boolean = STREAM_HOST_ON): boolean => {
+  const onStream = isStreamHost(hostname);
+  if (app === 'live') return streamHostOn ? onStream : !onStream;
+  return !onStream;
+};
+
+/**
+ * POST /api/auth/email/{kind}. Never throws.
+ *
+ * Every kind sends a link that signs a browser in when it comes back (sign-up confirmation,
+ * resend, password reset, magic link). The request carries a fresh nonce (`sn`) that our backend
+ * puts in the link, and a sent email records it here (services/pendingSignIn) — when the link
+ * lands on this origin (authLinkLandsHere): opened in this browser, that link — and only that
+ * link — completes without a "Finish signing in?" step. A link for the other origin asks once.
+ */
 export async function requestAuthEmail(
   kind: AuthEmailKind,
   body: Record<string, unknown>,
@@ -83,13 +107,14 @@ export async function requestAuthEmail(
 ): Promise<AuthEmailResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AUTH_EMAIL_TIMEOUT_MS);
+  const nonce = newSignInNonce();
   try {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (opts.accessToken) headers.authorization = `Bearer ${opts.accessToken}`;
     const res = await fetch(buildApiUrl(`/api/auth/email/${kind}`), {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, [SIGN_IN_NONCE_PARAM]: nonce }),
       signal: controller.signal
     });
     let parsed: unknown = null;
@@ -98,7 +123,11 @@ export async function requestAuthEmail(
     } catch {
       parsed = null;
     }
-    return interpretAuthEmailResponse(res.status, parsed, res.headers.get('retry-after'));
+    const result = interpretAuthEmailResponse(res.status, parsed, res.headers.get('retry-after'));
+    if (result.status === 'ok' && authLinkLandsHere(body.app, typeof location !== 'undefined' ? location.hostname : null)) {
+      recordSignInStarted(kind, nonce, Date.now(), typeof body.email === 'string' ? body.email : undefined);
+    }
+    return result;
   } catch {
     return UNREACHABLE;
   } finally {
