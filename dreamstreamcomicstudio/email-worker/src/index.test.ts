@@ -143,8 +143,45 @@ const security = async (env: Env, p: string, o: { secret?: string; t?: number; t
 };
 
 describe('POST /security (new sign-in alert)', () => {
-  it('emails the account: what signed in, when, from which network — and the one-time “Not you?” link', async () => {
+  it('says plainly that there was a new sign-in — never that the device is one we haven’t seen (we don’t know that)', async () => {
+    for (const page of [undefined, 'on']) {
+      const { env, sent } = makeEnv({ SECURITY_HOOK_SECRET: HOOK, SECURE_ACCOUNT_PAGE: page });
+      expect((await security(env, pgPayload())).status).toBe(200);
+      for (const body of [sent[0].html!, sent[0].text!]) {
+        expect(body).toMatch(/there was a new sign-in to your DreamStream Studio account/);
+        expect(body).not.toMatch(/haven.t seen|new device|unrecognised device|unknown device/i);
+      }
+    }
+  });
+
+  it('until the “Not you?” page exists, sends people to Settings → Security instead — no dead button, no token', async () => {
     const { env, sent } = makeEnv({ SECURITY_HOOK_SECRET: HOOK });
+    expect(await security(env, pgPayload())).toEqual({ status: 200, json: { ok: true, messageId: 'm1' } });
+    const m = sent[0];
+    expect(m.subject).toBe('New sign-in to your DreamStream Studio account');
+    const settings = `${APP}/?view=settings&amp;tab=security`;
+    expect(m.html).toContain(settings);
+    expect(m.text).toContain(`${APP}/?view=settings&tab=security`);
+    for (const body of [m.html!, m.text!]) {
+      expect(body).toContain('Chrome on macOS');
+      expect(body).toContain('28 Oct 2026, 21:05 UTC');
+      expect(body).toContain('Settings → Security');
+      expect(body).toMatch(/change your password/i);
+      expect(body).toContain('Sign out everywhere');
+      expect(body).toContain('Forgot password?');
+      // Nothing that leads to the page that doesn't exist yet, and no promise it would keep.
+      expect(body).not.toContain('#/secure');
+      expect(body).not.toContain(TOKEN);
+      expect(body).not.toMatch(/Not you\? Secure my account|works once|two-step/);
+    }
+    // Anything but "on" keeps the button off.
+    const odd = makeEnv({ SECURITY_HOOK_SECRET: HOOK, SECURE_ACCOUNT_PAGE: 'yes please' });
+    await security(odd.env, pgPayload());
+    expect(odd.sent[0].html).not.toContain('#/secure');
+  });
+
+  it('once the page has shipped (SECURE_ACCOUNT_PAGE=on): what signed in, when, from which network — and the one-time “Not you?” link', async () => {
+    const { env, sent } = makeEnv({ SECURITY_HOOK_SECRET: HOOK, SECURE_ACCOUNT_PAGE: 'on' });
     expect(await security(env, pgPayload())).toEqual({ status: 200, json: { ok: true, messageId: 'm1' } });
     const m = sent[0];
     expect(m.to).toBe('ada@example.com');

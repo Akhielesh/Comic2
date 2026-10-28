@@ -4,14 +4,19 @@
 --
 -- APPLY ORDER / RE-APPLY RULE
 -- ---------------------------
--- * Apply AFTER server/sql/live_accounts_and_monitor.sql. This file redefines four of its
---   functions (live_me, monitor_my_role, monitor_set_member, monitor_remove_member) with the
---   session and MFA checks added. If live_accounts_and_monitor.sql is ever re-applied, apply
---   THIS file again straight after it, or those checks silently disappear.
--- * Idempotent: safe to run twice (the WS-4 "done when").
+-- * Apply AFTER server/sql/live_accounts_and_monitor.sql. This file redefines EVERY member RPC
+--   of that file — live_me, live_join, live_update_profile, live_search_people, monitor_list,
+--   monitor_create, monitor_update, monitor_delete, monitor_people, monitor_member_ids,
+--   monitor_my_role, monitor_set_member, monitor_remove_member — with the session and MFA
+--   checks added (only live_welcome_check, which runs before an account exists, is left as it
+--   is). If live_accounts_and_monitor.sql is ever re-applied, apply THIS file again straight
+--   after it, or those checks silently disappear.
+-- * Idempotent: safe to run twice (the WS-4 "done when"). Checked by the psql harness:
+--   node server/sql/tests/harness.mjs (member_rpc_guards.test.sql fails if a live_*/monitor_*
+--   function callable by signed-in clients skips the check).
 -- * Nothing here changes behaviour for anyone until they enrol a TOTP factor (WS-5's UI), except
---   that a token whose session was revoked ("Sign out everywhere", "Not you?") stops working in
---   live_me / monitor_my_role / membership changes right away instead of at its expiry.
+--   that a token whose session was revoked ("Sign out everywhere", "Not you?", a password
+--   reset) stops working in every member RPC right away instead of at its expiry.
 --
 -- AFTER APPLYING (owner, ADR 0006 owner actions #3, #4, #5)
 -- --------------------------------------------------------
@@ -25,6 +30,10 @@
 --    Postgres function public.live_access_token_hook.
 -- Without 1–2 the hook still adds the `ds_mfa` claim and records sign-ins (Settings shows
 -- them); it just sends no email. Without pg_net (Database → Extensions) the same.
+-- The emails are safe to switch on before WS-5's "Not you?" page (#/secure) exists: until the
+-- email Worker's SECURE_ACCOUNT_PAGE var is "on", they carry no "Not you? Secure my account"
+-- button — they send the person to Settings → Security (change password, sign out everywhere)
+-- on the main site instead. Set SECURE_ACCOUNT_PAGE only once that page has shipped.
 --
 -- Security model (same conventions as live_accounts_and_monitor.sql)
 -- -------------------------------------------------------------------
@@ -457,6 +466,10 @@ $$;
 -- Not emailed: token refreshes (an existing session — including every session alive when the
 -- hook is first switched on), anonymous sign-ins, an account's very first session (its
 -- sign-up), and more than 5 alerts an hour per account (recorded, not sent).
+-- Deliberately NOT skipped: a sign-in whose browser and (masked) network match an earlier one.
+-- User-agent strings are shared by millions and a /24 by a whole household or carrier, so that
+-- would silence exactly the intruder a baby monitor most needs to catch — someone on the same
+-- Wi-Fi. The email therefore says "a new sign-in", never "a device we haven't seen".
 create or replace function public.live__note_session(p_uid uuid, p_sid uuid, p_method text)
 returns void
 language plpgsql
@@ -785,6 +798,325 @@ begin
 end;
 $$;
 
+-- The rest of the member RPCs: everything else that reads or changes a nursery, its people,
+-- the caller's profile or the people directory. Same bodies (and signatures, so CREATE OR
+-- REPLACE keeps the grants) as live_accounts_and_monitor.sql; the session check runs first, so
+-- a phished password (aal1 of someone with a second factor) or a token whose session was
+-- ended can't delete, rename or list a nursery, add one, read the family's names and labels,
+-- rename the account, or search the directory. Signed-out callers get the old answers.
+
+create or replace function public.live_join(p_ticket text default null, p_code text default null, p_display_name text default null)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_name text;
+  v_via text;
+  v_bucket text;
+  v_ok boolean;
+  v_ticket_hash text;
+begin
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'not_signed_in');
+  end if;
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if public.live__is_member(v_uid) then
+    return jsonb_build_object('ok', true, 'profile', public.live__profile_json(v_uid));
+  end if;
+
+  v_name := left(coalesce(nullif(trim(p_display_name), ''), public.live__default_name(v_uid)), 40);
+
+  if p_ticket is not null and char_length(p_ticket) between 16 and 128 then
+    v_ticket_hash := encode(extensions.digest(p_ticket, 'sha256'), 'hex');
+    update public.live_welcome_tickets
+       set used_by = v_uid, used_at = now()
+     where token_hash = v_ticket_hash and used_at is null and expires_at > now();
+    if found then
+      v_via := 'welcome_code';
+    end if;
+  end if;
+
+  if v_via is null and p_code is not null then
+    v_bucket := 'user:' || v_uid::text;
+    if public.live__throttled(v_bucket) or public.live__throttled('ip:' || public.live__client_ip_hash()) then
+      return jsonb_build_object('ok', false, 'error', 'too_many_attempts');
+    end if;
+    v_ok := public.live__verify_code(p_code);
+    insert into public.live_welcome_attempts (bucket, ok) values (v_bucket, v_ok);
+    if not v_ok then
+      return jsonb_build_object('ok', false, 'error', 'invalid_code');
+    end if;
+    v_via := 'welcome_code';
+  end if;
+
+  if v_via is null and public.live__legacy_eligible(v_uid) then
+    v_via := 'legacy';
+  end if;
+
+  if v_via is null then
+    return jsonb_build_object('ok', false, 'error', 'welcome_code_required');
+  end if;
+
+  insert into public.live_profiles (user_id, display_name, verified_via)
+  values (v_uid, v_name, v_via)
+  on conflict (user_id) do nothing;
+  return jsonb_build_object('ok', true, 'profile', public.live__profile_json(v_uid));
+end;
+$$;
+
+create or replace function public.live_update_profile(p_display_name text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_name text := left(trim(coalesce(p_display_name, '')), 40);
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if v_uid is null or not public.live__is_member(v_uid) then
+    return jsonb_build_object('ok', false, 'error', 'not_member');
+  end if;
+  if char_length(v_name) = 0 then
+    return jsonb_build_object('ok', false, 'error', 'name_required');
+  end if;
+  update public.live_profiles set display_name = v_name, updated_at = now() where user_id = v_uid;
+  return jsonb_build_object('ok', true, 'profile', public.live__profile_json(v_uid));
+end;
+$$;
+
+-- Find people by name (members only, names only — never emails).
+create or replace function public.live_search_people(p_query text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_q text := lower(trim(coalesce(p_query, '')));
+  v_like text;
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if v_uid is null or not public.live__is_member(v_uid) then
+    return jsonb_build_object('ok', false, 'error', 'not_member');
+  end if;
+  if char_length(v_q) < 2 then
+    return jsonb_build_object('ok', true, 'people', '[]'::jsonb);
+  end if;
+  v_q := left(v_q, 40);
+  v_like := replace(replace(replace(v_q, '\', '\\'), '%', '\%'), '_', '\_');
+  return jsonb_build_object('ok', true, 'people', coalesce((
+    select jsonb_agg(jsonb_build_object('user_id', r.user_id, 'display_name', r.display_name))
+    from (
+      select lp.user_id, lp.display_name
+      from public.live_profiles lp
+      where lp.user_id <> v_uid
+        and lp.search_name like '%' || v_like || '%'
+      order by (lp.search_name like v_like || '%') desc, lp.search_name
+      limit 12
+    ) r
+  ), '[]'::jsonb));
+end;
+$$;
+
+create or replace function public.monitor_list()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if v_uid is null or not public.live__is_member(v_uid) then
+    return jsonb_build_object('ok', false, 'error', 'not_member');
+  end if;
+  return jsonb_build_object('ok', true, 'nurseries', coalesce((
+    select jsonb_agg(public.monitor__nursery_json(m.nursery_id, v_uid) order by n.created_at)
+    from public.monitor_members m
+    join public.monitor_nurseries n on n.id = m.nursery_id
+    where m.user_id = v_uid
+  ), '[]'::jsonb));
+end;
+$$;
+
+create or replace function public.monitor_create(p_name text, p_baby_name text default null, p_label text default null)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_id uuid;
+  v_name text := left(trim(coalesce(p_name, '')), 60);
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if v_uid is null or not public.live__is_member(v_uid) then
+    return jsonb_build_object('ok', false, 'error', 'not_member');
+  end if;
+  if char_length(v_name) = 0 then
+    return jsonb_build_object('ok', false, 'error', 'name_required');
+  end if;
+  if (select count(*) from public.monitor_nurseries where owner_id = v_uid) >= 5 then
+    return jsonb_build_object('ok', false, 'error', 'limit_reached');
+  end if;
+  insert into public.monitor_nurseries (owner_id, name, baby_name)
+  values (v_uid, v_name, nullif(left(trim(coalesce(p_baby_name, '')), 40), ''))
+  returning id into v_id;
+  insert into public.monitor_members (nursery_id, user_id, role, label, added_by)
+  values (v_id, v_uid, 'parent', nullif(left(trim(coalesce(p_label, '')), 30), ''), v_uid);
+  return jsonb_build_object('ok', true, 'nursery', public.monitor__nursery_json(v_id, v_uid));
+end;
+$$;
+
+create or replace function public.monitor_update(p_nursery uuid, p_name text, p_baby_name text default null)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_name text := left(trim(coalesce(p_name, '')), 60);
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if public.monitor__role(p_nursery, v_uid) is distinct from 'parent' then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+  if char_length(v_name) = 0 then
+    return jsonb_build_object('ok', false, 'error', 'name_required');
+  end if;
+  update public.monitor_nurseries
+     set name = v_name, baby_name = nullif(left(trim(coalesce(p_baby_name, '')), 40), ''), updated_at = now()
+   where id = p_nursery;
+  return jsonb_build_object('ok', true, 'nursery', public.monitor__nursery_json(p_nursery, v_uid));
+end;
+$$;
+
+create or replace function public.monitor_delete(p_nursery uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  delete from public.monitor_nurseries where id = p_nursery and owner_id = v_uid;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+create or replace function public.monitor_people(p_nursery uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if public.monitor__role(p_nursery, v_uid) is null then
+    return jsonb_build_object('ok', false, 'error', 'forbidden');
+  end if;
+  return jsonb_build_object('ok', true, 'people', coalesce((
+    select jsonb_agg(jsonb_build_object(
+      'user_id', m.user_id,
+      'display_name', coalesce(lp.display_name, 'Member'),
+      'role', m.role,
+      'label', m.label,
+      'is_owner', m.user_id = n.owner_id,
+      'is_me', m.user_id = v_uid
+    ) order by (m.user_id = n.owner_id) desc, m.created_at)
+    from public.monitor_members m
+    join public.monitor_nurseries n on n.id = m.nursery_id
+    left join public.live_profiles lp on lp.user_id = m.user_id
+    where m.nursery_id = p_nursery
+  ), '[]'::jsonb));
+end;
+$$;
+
+-- Current member ids — lets the room drop sockets of people just removed. A refusal (`ok`
+-- false, with or without `error`) is never read as "nobody is a member": the room re-checks
+-- roles instead of cutting anyone off (monitorRoom.onMembersChanged).
+create or replace function public.monitor_member_ids(p_nursery uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+begin
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if public.monitor__role(p_nursery, v_uid) is null then
+    return jsonb_build_object('ok', false);
+  end if;
+  return jsonb_build_object('ok', true, 'ids', coalesce((
+    select jsonb_agg(m.user_id) from public.monitor_members m
+    where m.nursery_id = p_nursery
+      and exists (select 1 from public.live_profiles lp where lp.user_id = m.user_id)
+  ), '[]'::jsonb));
+end;
+$$;
+
 -- ================================================================== grants
 do $$
 declare
@@ -802,9 +1134,18 @@ begin
     execute format('revoke all on function %s from public, anon, authenticated', f);
   end loop;
 
-  -- Signed-in callers.
+  -- Signed-in callers (every one checks the session first).
   foreach f in array array[
     'public.live_me()',
+    'public.live_join(text, text, text)',
+    'public.live_update_profile(text)',
+    'public.live_search_people(text)',
+    'public.monitor_list()',
+    'public.monitor_create(text, text, text)',
+    'public.monitor_update(uuid, text, text)',
+    'public.monitor_delete(uuid)',
+    'public.monitor_people(uuid)',
+    'public.monitor_member_ids(uuid)',
     'public.monitor_my_role(uuid)',
     'public.monitor_set_member(uuid, uuid, text, text)',
     'public.monitor_remove_member(uuid, uuid)',

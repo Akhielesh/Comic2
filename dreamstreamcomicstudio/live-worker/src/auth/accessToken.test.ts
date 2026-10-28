@@ -212,11 +212,59 @@ describe('admitMember (role cache + aal2)', () => {
     expect(await admitMember({ token: await sign({ ds_mfa: true }), nid: NID, env, store, now: NOW, fetcher: sb.fetcher })).toEqual({ ok: false, code: CLOSE.MFA_REQUIRED, reason: 'mfa_required' });
     expect(sb.count('monitor_my_role')).toBe(0);
     expect(await admitMember({ token: await sign({}), nid: NID, env, store, now: NOW, fetcher: sb.fetcher })).toMatchObject({ ok: false, code: 4003 });
-    // …and from the cache afterwards.
+    // …and again afterwards: a cached factor against an aal1 token is re-asked, never refused from memory alone.
     expect(await admitMember({ token: await sign({}), nid: NID, env, store, now: NOW + 1000, fetcher: sb.fetcher })).toMatchObject({ ok: false, code: 4003 });
+    expect(sb.count('monitor_my_role')).toBe(2);
     expect(await admitMember({ token: await sign({ aal: 'aal2' }), nid: NID, env, store, now: NOW + 2000, fetcher: sb.fetcher })).toMatchObject({ ok: true, mfa: true, id: { mfa: true } });
     const told = fakeSupabase({ keys: [k1.jwk], my_role: role({ ok: false, error: 'mfa_required' }) });
     expect(await admitMember({ token: await sign({}), nid: NID, env, store: new MemoryRoleStore(), now: NOW, fetcher: told.fetcher })).toMatchObject({ ok: false, code: 4003 });
+  });
+
+  it('a cached "has a second factor" never locks anyone out: the fresh claim wins, and a disagreement asks Supabase', async () => {
+    // Ada turned two-step sign-in off an hour ago; the room still remembers her with it on.
+    const remembered = { uid: UID, role: 'parent' as const, label: 'Mom', name: 'Ada', mfa: true, at: NOW - 3600_000 };
+    const nowOff = fakeSupabase({ keys: [k1.jwk], my_role: role(parent) });
+    let store = new MemoryRoleStore();
+    store.put(remembered);
+    // Her new aal1 token says ds_mfa: false (signed by Supabase just now): she's in, and Supabase confirms it once.
+    expect(await admitMember({ token: await sign({ ds_mfa: false }), nid: NID, env, store, now: NOW, fetcher: nowOff.fetcher })).toMatchObject({
+      ok: true,
+      role: 'parent',
+      mfa: false,
+      id: { mfa: false },
+      checked: 'rpc',
+    });
+    expect(nowOff.count('monitor_my_role')).toBe(1);
+    expect(store.get(UID)).toMatchObject({ mfa: false, at: NOW });
+    // …and from then on the cache agrees: no more round trips.
+    expect(await admitMember({ token: await sign({ ds_mfa: false }), nid: NID, env, store, now: NOW + 60_000, fetcher: nowOff.fetcher })).toMatchObject({ ok: true, checked: 'cache' });
+    expect(nowOff.count('monitor_my_role')).toBe(1);
+
+    // Hook off (no ds_mfa claim): the stale cache doesn't refuse either — Supabase is asked.
+    store = new MemoryRoleStore();
+    store.put(remembered);
+    const hookOff = fakeSupabase({ keys: [k1.jwk], my_role: role(parent) });
+    expect(await admitMember({ token: await sign({}), nid: NID, env, store, now: NOW, fetcher: hookOff.fetcher })).toMatchObject({ ok: true, mfa: false, checked: 'rpc' });
+    expect(hookOff.count('monitor_my_role')).toBe(1);
+
+    // Still on (Supabase says so): 4003 — Supabase's answer, not the cache's.
+    store = new MemoryRoleStore();
+    store.put(remembered);
+    const stillOn = fakeSupabase({ keys: [k1.jwk], my_role: role({ ok: false, error: 'mfa_required' }) });
+    expect(await admitMember({ token: await sign({}), nid: NID, env, store, now: NOW, fetcher: stillOn.fetcher })).toEqual({ ok: false, code: CLOSE.MFA_REQUIRED, reason: 'mfa_required' });
+    expect(stillOn.count('monitor_my_role')).toBe(1);
+    // The cache entry survives (she's still a parent), so an aal2 token is let straight in.
+    expect(await admitMember({ token: await sign({ aal: 'aal2', ds_mfa: true }), nid: NID, env, store, now: NOW + 1000, fetcher: stillOn.fetcher })).toMatchObject({ ok: true, checked: 'cache', mfa: true });
+
+    // Supabase down: the token's own claim decides; with no claim, "try again" — never 4003 from memory, never in unchecked.
+    const down = fakeSupabase({ keys: [k1.jwk], my_role: role({}, 503) });
+    store = new MemoryRoleStore();
+    store.put(remembered);
+    expect(await admitMember({ token: await sign({ ds_mfa: false }), nid: NID, env, store, now: NOW, fetcher: down.fetcher })).toMatchObject({ ok: true, checked: 'stale', mfa: false });
+    expect(await admitMember({ token: await sign({}), nid: NID, env, store, now: NOW, fetcher: down.fetcher })).toEqual({ ok: false, code: CLOSE.TRY_AGAIN, reason: 'unavailable' });
+    // An aal2 token never needed the answer.
+    expect(await admitMember({ token: await sign({ aal: 'aal2' }), nid: NID, env, store, now: NOW, fetcher: down.fetcher })).toMatchObject({ ok: true, checked: 'cache' });
+    expect(down.count('monitor_my_role')).toBe(2);
   });
 
   it('closes removed members and revoked sessions with 4004, expired tokens with 4001, and forgets the removed', async () => {

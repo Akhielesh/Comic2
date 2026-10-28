@@ -15,6 +15,7 @@ import {
   guestCanBits,
   guestCaps,
   passcodeProblem,
+  removalNotice,
   sameString,
   type RateLimiterLike,
 } from './monitorGuests';
@@ -140,7 +141,7 @@ describe('GuestAccess', () => {
     const jo = await g.join({ code: a.share.code, pass: PASS, name: 'Jo' }, 1);
     const sam = await g.join({ code: a.share.code, pass: PASS, name: 'Sam' }, 2);
     if (!jo.ok || !sam.ok) throw new Error('join');
-    expect(g.removeGuest(jo.guest.id, 3)).toMatchObject({ id: jo.guest.id, name: 'Jo', newLink: { pass: null } });
+    expect(g.removeGuest(jo.guest.id, 3)).toEqual({ id: jo.guest.id, name: 'Jo', newLink: null });
     expect(g.removeGuest(jo.guest.id, 3)).toBeNull();
     expect(await g.verify(jo.token, 4)).toBeNull();
     expect(await g.verify(sam.token, 4)).not.toBeNull();
@@ -355,79 +356,128 @@ describe('GuestAccess storage upgrade', () => {
   });
 });
 
-describe('GuestAccess: removing a guest changes the link (ADR 0006 F3)', () => {
+describe('GuestAccess: removing a guest', () => {
   const NEW = 'cedar-heron-otter-17';
 
-  it('the removed guest can’t rejoin with the link and passcode they have; everyone else keeps watching', async () => {
+  it('ends only that guest’s pass: the link keeps working for everyone else, including people who haven’t opened it yet', async () => {
     const { g } = make();
     const { share } = await g.createShare({ pass: PASS, role: 'caregiver', days: 7, by: 'Mom' }, 0);
     const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
     const sam = await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 2);
     if (!jo.ok || !sam.ok) throw new Error('join');
-    g.addRequest({ uid: 'u-sam', account: 'Sam', name: 'Sam', guest_id: sam.guest.id }, 3);
 
     const r = g.removeGuest(jo.guest.id, 10);
-    expect(r).toMatchObject({ id: jo.guest.id, name: 'Jo', newLink: { pass: null } });
-    const info = g.info(11);
-    expect(r!.newLink.code).toBe(info.code);
-    expect(info.code).not.toBe(share.code);
-    expect(info.code).toMatch(/^[A-Za-z0-9_-]{22}$/);
-    // Same link otherwise: role, end date, passcode date, the other guest and their request.
-    expect(info).toMatchObject({ on: true, role: 'caregiver', expires_at: share.expires_at, pass_at: 0 });
-    expect(info.guests.map((x) => x.name)).toEqual(['Sam']);
-    expect(info.requests.map((x) => x.uid)).toEqual(['u-sam']);
-    expect(await g.verify(sam.token, 12)).not.toBeNull();
-    expect(await g.verify(jo.token, 12)).toBeNull();
-
-    // The old link is dead — for the removed guest and anyone they pass it to.
-    expect(await g.join({ code: share.code, pass: PASS, name: 'Jo again' }, 13)).toEqual({ ok: false, reason: 'off' });
-    // The parent's new link works with the passcode family already knows.
-    expect((await g.join({ code: info.code!, pass: PASS, name: 'Grandpa' }, 14)).ok).toBe(true);
-    // Turning the link off still signs everyone out, moved passes included.
-    const out = g.revokeShare(20);
-    expect(out).toHaveLength(2);
-    expect(out).toContain(sam.guest.id);
-    expect(await g.verify(sam.token, 21)).toBeNull();
+    expect(r).toEqual({ id: jo.guest.id, name: 'Jo', newLink: null });
+    expect(await g.verify(jo.token, 11)).toBeNull();
+    expect(await g.verify(sam.token, 11)).not.toBeNull();
+    // Same link: code, role, end date, passcode.
+    expect(g.info(11)).toMatchObject({ on: true, code: share.code, role: 'caregiver', expires_at: share.expires_at, pass_at: 0 });
+    // Grandma opens the link from the family chat afterwards: she gets in.
+    expect((await g.join({ code: share.code, pass: PASS, name: 'Grandma' }, 12)).ok).toBe(true);
+    // The parents are told plainly what that means (the log line, ≤ 240 characters).
+    const said = removalNotice('Mom', r!);
+    expect(said).toMatch(/^Mom removed guest Jo/);
+    expect(said).toMatch(/still works for everyone else/);
+    expect(said).toMatch(/set a new passcode if Jo shouldn’t rejoin/);
+    expect(said).not.toMatch(/turned off|new link/);
+    expect(removalNotice('M'.repeat(40), { ...r!, name: 'J'.repeat(30) }).length).toBeLessThanOrEqual(240);
   });
 
-  it('can change the passcode too, with one made up for the parent to share', async () => {
-    const { sql, g } = make();
-    const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: null, by: 'Mom' }, 0);
-    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
-    const sam = await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 2);
-    if (!jo.ok || !sam.ok) throw new Error('join');
-    const prep = await g.preparePasscode('auto', ['Aria', 'Maple room']);
-    expect(passcodeProblem(prep.pass, ['Aria'])).toBeNull();
-    expect(prep.pass).not.toMatch(/maple/);
-    const r = g.removeGuest(jo.guest.id, 10, { pass: prep });
-    expect(r!.newLink.pass).toBe(prep.pass);
-    const code = g.info(11).code!;
-    expect(g.info(11).pass_at).toBe(10);
-    expect(await g.join({ code, pass: PASS, name: 'Jo' }, 12)).toMatchObject({ ok: false, reason: 'wrong' });
-    expect((await g.join({ code, pass: prep.pass, name: 'Grandpa' }, 13)).ok).toBe(true);
-    expect(await g.verify(sam.token, 14)).not.toBeNull();
-    expect(JSON.stringify(sql.exec('SELECT * FROM mon_shares').toArray())).not.toContain(prep.pass);
-    // A passcode the parent chose works the same way.
-    const own = await g.preparePasscode(NEW);
-    g.removeGuest(sam.guest.id, 20, { pass: own });
-    expect((await g.join({ code: g.info(21).code!, pass: NEW, name: 'Kim' }, 22)).ok).toBe(true);
-  });
-
-  it('a join checked against the old link before a removal isn’t issued after it', async () => {
+  it('making a guest a member never changes the link (their guest pass simply ends)', async () => {
     const { g } = make();
     const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: null, by: 'Mom' }, 0);
-    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
-    if (!jo.ok) throw new Error('join');
-    const c = await g.check({ code: share.code, pass: PASS, name: 'Jo again' }, 5);
-    if (!c.ok) throw new Error(c.reason);
-    g.removeGuest(jo.guest.id, 6);
-    expect(await g.issue(c, { name: c.name }, 7)).toEqual({ ok: false, reason: 'off' });
+    const sam = await g.join({ code: share.code, pass: PASS, name: 'Uncle Sam' }, 1);
+    const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 2);
+    if (!sam.ok || !jo.ok) throw new Error('join');
+    g.addRequest({ uid: 'u-sam', account: 'Sam', name: 'Uncle Sam', guest_id: sam.guest.id }, 3);
+    // What the room does when Supabase now lists Sam as a member (monitorRoom.onMembersChanged).
+    for (const p of g.resolveRequests(new Set(['u-parent', 'u-sam']), 4)) g.removeGuest(p.guest_id, 4);
+    expect(await g.verify(sam.token, 5)).toBeNull();
+    expect(await g.verify(jo.token, 5)).not.toBeNull();
+    expect(g.info(5).code).toBe(share.code);
+    expect((await g.join({ code: share.code, pass: PASS, name: 'Grandma' }, 6)).ok).toBe(true);
+  });
+
+  describe('with `rotate` (opt-in, ADR 0006 F3: for when the parents are shown the new link)', () => {
+    it('the removed guest can’t rejoin with the link and passcode they have; guests already watching stay', async () => {
+      const { g } = make();
+      const { share } = await g.createShare({ pass: PASS, role: 'caregiver', days: 7, by: 'Mom' }, 0);
+      const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
+      const sam = await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 2);
+      if (!jo.ok || !sam.ok) throw new Error('join');
+      g.addRequest({ uid: 'u-sam', account: 'Sam', name: 'Sam', guest_id: sam.guest.id }, 3);
+
+      const r = g.removeGuest(jo.guest.id, 10, { rotate: true });
+      expect(r).toMatchObject({ id: jo.guest.id, name: 'Jo', newLink: { pass: null } });
+      const info = g.info(11);
+      expect(r!.newLink!.code).toBe(info.code);
+      expect(info.code).not.toBe(share.code);
+      expect(info.code).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      // Same link otherwise: role, end date, passcode date, the other guest and their request.
+      expect(info).toMatchObject({ on: true, role: 'caregiver', expires_at: share.expires_at, pass_at: 0 });
+      expect(info.guests.map((x) => x.name)).toEqual(['Sam']);
+      expect(info.requests.map((x) => x.uid)).toEqual(['u-sam']);
+      expect(await g.verify(sam.token, 12)).not.toBeNull();
+      expect(await g.verify(jo.token, 12)).toBeNull();
+
+      // The old link is dead — for the removed guest and anyone they pass it to (and anyone who
+      // hadn't opened it yet: the parents are told they need the new one).
+      expect(await g.join({ code: share.code, pass: PASS, name: 'Jo again' }, 13)).toEqual({ ok: false, reason: 'off' });
+      const said = removalNotice('Mom', r!);
+      expect(said).toMatch(/^Mom removed guest Jo and changed the share link/);
+      expect(said).toMatch(/needs the new link/);
+      // The parent's new link works with the passcode family already knows.
+      expect((await g.join({ code: info.code!, pass: PASS, name: 'Grandpa' }, 14)).ok).toBe(true);
+      // Turning the link off still signs everyone out, moved passes included.
+      const out = g.revokeShare(20);
+      expect(out).toHaveLength(2);
+      expect(out).toContain(sam.guest.id);
+      expect(await g.verify(sam.token, 21)).toBeNull();
+    });
+
+    it('can change the passcode too, with one made up for the parent to share', async () => {
+      const { sql, g } = make();
+      const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: null, by: 'Mom' }, 0);
+      const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
+      const sam = await g.join({ code: share.code, pass: PASS, name: 'Sam' }, 2);
+      if (!jo.ok || !sam.ok) throw new Error('join');
+      const prep = await g.preparePasscode('auto', ['Aria', 'Maple room']);
+      expect(passcodeProblem(prep.pass, ['Aria'])).toBeNull();
+      expect(prep.pass).not.toMatch(/maple/);
+      // A new passcode implies a new link.
+      const r = g.removeGuest(jo.guest.id, 10, { pass: prep });
+      expect(r!.newLink!.pass).toBe(prep.pass);
+      expect(removalNotice('Mom', r!)).toMatch(/changed the share link and passcode.*needs the new link and passcode/);
+      const code = g.info(11).code!;
+      expect(code).not.toBe(share.code);
+      expect(g.info(11).pass_at).toBe(10);
+      expect(await g.join({ code, pass: PASS, name: 'Jo' }, 12)).toMatchObject({ ok: false, reason: 'wrong' });
+      expect((await g.join({ code, pass: prep.pass, name: 'Grandpa' }, 13)).ok).toBe(true);
+      expect(await g.verify(sam.token, 14)).not.toBeNull();
+      expect(JSON.stringify(sql.exec('SELECT * FROM mon_shares').toArray())).not.toContain(prep.pass);
+      // A passcode the parent chose works the same way.
+      const own = await g.preparePasscode(NEW);
+      g.removeGuest(sam.guest.id, 20, { rotate: true, pass: own });
+      expect((await g.join({ code: g.info(21).code!, pass: NEW, name: 'Kim' }, 22)).ok).toBe(true);
+    });
+
+    it('a join checked against the old link before the removal isn’t issued after it', async () => {
+      const { g } = make();
+      const { share } = await g.createShare({ pass: PASS, role: 'viewer', days: null, by: 'Mom' }, 0);
+      const jo = await g.join({ code: share.code, pass: PASS, name: 'Jo' }, 1);
+      if (!jo.ok) throw new Error('join');
+      const c = await g.check({ code: share.code, pass: PASS, name: 'Jo again' }, 5);
+      if (!c.ok) throw new Error(c.reason);
+      g.removeGuest(jo.guest.id, 6, { rotate: true });
+      expect(await g.issue(c, { name: c.name }, 7)).toEqual({ ok: false, reason: 'off' });
+    });
   });
 
   it('nothing to rotate without a link', () => {
     const { g } = make();
     expect(g.rotateLink(0)).toBeNull();
     expect(g.removeGuest('nobody', 0)).toBeNull();
+    expect(g.removeGuest('nobody', 0, { rotate: true })).toBeNull();
   });
 });
 

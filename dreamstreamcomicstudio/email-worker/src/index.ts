@@ -14,8 +14,10 @@
 //                      pure verify + payload→email logic lives in ./authHook.ts (unit-tested).
 //   POST /security    — new-sign-in alerts from Supabase's access-token hook (pg_net),
 //                      HMAC-signed with SECURITY_HOOK_SECRET (x-ds-signature, ±5 min).
-//                      "New sign-in to your account" + "Not you? Secure my account". The
-//                      pure verify/parse/render lives in ./securityAlert.ts.
+//                      "New sign-in to your account" + what to do if it wasn't you ("Not
+//                      you? Secure my account" once SECURE_ACCOUNT_PAGE=on; until then,
+//                      Settings → Security). The pure verify/parse/render lives in
+//                      ./securityAlert.ts.
 //   GET  /health      — liveness probe.
 //
 // Templates live in ../../shared/email (shared with the app + preview script) so the inbox
@@ -75,6 +77,12 @@ export interface Env {
   SUPABASE_AUTH_HOOK_SECRET?: string;
   /** Shared with the database (Vault `SECURITY_HOOK_SECRET`). Empty ⇒ /security is disabled. */
   SECURITY_HOOK_SECRET?: string;
+  /**
+   * "on" once the live app's "Not you?" page (#/secure, ADR 0006 WS-5) has shipped: sign-in
+   * alerts then carry the one-time "Not you? Secure my account" button. Anything else (the
+   * default): they send people to Settings → Security instead, never to a page that isn't there.
+   */
+  SECURE_ACCOUNT_PAGE?: string;
 
   // ── Vars (wrangler.jsonc `vars`) ──
   /** Verified sender, e.g. notifications@dreamstreamstudio.ai. */
@@ -239,7 +247,7 @@ async function handleSecurity(req: Request, env: Env): Promise<Response> {
   const alert = parseSignInAlert(p);
   if (!alert) return json({ error: 'invalid payload' }, 400);
   const brand = resolveBrand(brandFromEnv(env));
-  const rendered = renderSignInAlert(alert, brand);
+  const rendered = renderSignInAlert(alert, brand, { securePage: env.SECURE_ACCOUNT_PAGE === 'on' });
   const [, domain] = env.EMAIL_FROM.split('@');
   const from: EmailAddress = { email: `no-reply@${(domain || 'dreamstreamstudio.ai').trim()}`, name: env.EMAIL_FROM_NAME || brand.productName };
   try {

@@ -14,9 +14,18 @@
 // the signature covers those bytes and a timestamp (±5 minutes), so a captured request can't
 // be replayed later or pointed at another address.
 //
-// The email offers "Not you? Secure my account": a one-time link (7 days) into the live app,
-// whose landing page posts the token to the backend (POST /api/auth/email/secure) — which ends
-// every session, revokes devices added since, and emails a password-reset link.
+// What the email asks someone to do if it wasn't them depends on what exists:
+//   * securePage (the Worker's SECURE_ACCOUNT_PAGE = "on", set once WS-5's #/secure page has
+//     shipped): "Not you? Secure my account" — a one-time link (7 days) into the live app, whose
+//     landing page posts the token to the backend (POST /api/auth/email/secure), which ends every
+//     session, revokes devices added since, and emails a password-reset link.
+//   * otherwise (today): no such button — a button to a page that doesn't exist would leave
+//     someone whose account was taken over with nothing. It sends them to the main site's
+//     Settings → Security, which exists: change the password and "Sign out everywhere" (or
+//     "Forgot password?" on the sign-in page if they're locked out). The token in the payload
+//     is simply not shown; it lapses after 7 days.
+// Either way it says "a new sign-in", never "a device we haven't seen": the database emails every
+// genuinely new session and doesn't know whether the browser or network is familiar.
 
 import { button, escapeHtml, heading, infoBox, linkFallback, muted, paragraph, wrapHtml } from '../../shared/email/layout';
 import type { BrandConfig } from '../../shared/email/theme';
@@ -181,50 +190,81 @@ export function secureAccountUrl(token: string, appUrl: string = MAIN_ORIGIN, st
   return streamHostOn ? toStreamUrl(path) : `${(appUrl || MAIN_ORIGIN).replace(/\/+$/, '')}${path}`;
 }
 
+/** Where account security lives today: the main site's Settings → Security (password, sign out everywhere). */
+export function securitySettingsUrl(appUrl: string = MAIN_ORIGIN): string {
+  return `${(appUrl || MAIN_ORIGIN).replace(/\/+$/, '')}/?view=settings&tab=security`;
+}
+
 export interface RenderedSecurityEmail {
   subject: string;
   html: string;
   text: string;
 }
 
-export function renderSignInAlert(a: SignInAlert, brand: BrandConfig): RenderedSecurityEmail {
+export interface SignInAlertOptions {
+  /** The live app's "Not you?" page (#/secure) exists: offer the one-time secure-my-account link. */
+  securePage?: boolean;
+}
+
+export function renderSignInAlert(a: SignInAlert, brand: BrandConfig, opts: SignInAlertOptions = {}): RenderedSecurityEmail {
   const device = describeDevice(a.ua);
   const when = formatWhen(a.at);
   const how = describeMethod(a.method);
-  const link = secureAccountUrl(a.token, brand.appUrl);
   const hi = a.name ? `Hi ${a.name},` : 'Hi,';
   const subject = `New sign-in to your ${brand.productName} account`;
+  const intro = `there was a new sign-in to your ${brand.productName} account.`;
   const rows: [string, string][] = [
     ['Device', device],
     ['When', when],
     ...(a.ip ? ([['Network', `${a.ip} (approximate — not a location)`]] as [string, string][]) : []),
     ...(how ? ([['How', how]] as [string, string][]) : []),
   ];
+
+  // If it wasn't them: the one-time link when its page exists, otherwise the settings that do.
+  const secure = opts.securePage === true;
+  const link = secure ? secureAccountUrl(a.token, brand.appUrl) : securitySettingsUrl(brand.appUrl);
+  const ifNotHtml = secure
+    ? paragraph(
+        '<strong>If it wasn’t</strong>, secure your account now. It signs you out on every device (yours included), removes any devices added since this sign-in, and emails you a link to choose a new password.',
+      ) + button('Not you? Secure my account', link, 'blue')
+    : paragraph(
+        `<strong>If it wasn’t</strong>, change your password now, then choose <strong>Sign out everywhere</strong> — both are in Settings → Security on ${escapeHtml(brand.productName)}. Signing out everywhere ends every session, including the one that just signed in. If you can’t sign in, use <strong>Forgot password?</strong> on the sign-in page.`,
+      ) + button('Open security settings', link, 'blue');
+  const footHtml = secure
+    ? muted('The link works once, for 7 days. We will never ask for your password by email. Turning on two-step sign-in (Settings → Security) stops a stolen password from being enough.')
+    : muted('We will never ask for your password by email.');
   const content =
     heading('New sign-in') +
-    paragraph(`${escapeHtml(hi)} your ${escapeHtml(brand.productName)} account was just signed in to on a device we haven’t seen before.`) +
+    paragraph(`${escapeHtml(hi)} ${escapeHtml(intro)}`) +
     infoBox(rows.map(([k, v]) => `<strong>${escapeHtml(k)}:</strong> ${escapeHtml(v)}`).join('<br/>')) +
     paragraph('<strong>If this was you</strong>, there’s nothing to do.') +
-    paragraph(
-      '<strong>If it wasn’t</strong>, secure your account now. It signs you out on every device (yours included), removes any devices added since this sign-in, and emails you a link to choose a new password.',
-    ) +
-    button('Not you? Secure my account', link, 'blue') +
+    ifNotHtml +
     linkFallback(link) +
-    muted('The link works once, for 7 days. We will never ask for your password by email. Turning on two-step sign-in (Settings → Security) stops a stolen password from being enough.');
+    footHtml;
   const html = wrapHtml({ brand, preheader: `${device} · ${when}. If this was you, there’s nothing to do.`, content, essential: true, noReply: true });
+  const ifNotText = secure
+    ? [
+        "If it wasn't, secure your account now. It signs you out on every device (yours included), removes any devices added since this sign-in, and emails you a link to choose a new password:",
+        link,
+        '',
+        'The link works once, for 7 days. We will never ask for your password by email.',
+      ]
+    : [
+        `If it wasn't, change your password now, then choose Sign out everywhere — both are in Settings → Security on ${brand.productName}. Signing out everywhere ends every session, including the one that just signed in:`,
+        link,
+        '',
+        "If you can't sign in, use Forgot password? on the sign-in page. We will never ask for your password by email.",
+      ];
   const text = [
     subject,
     '',
-    `${hi} your ${brand.productName} account was just signed in to on a device we haven't seen before.`,
+    `${hi} ${intro}`,
     '',
     ...rows.map(([k, v]) => `${k}: ${v}`),
     '',
     "If this was you, there's nothing to do.",
     '',
-    "If it wasn't, secure your account now. It signs you out on every device (yours included), removes any devices added since this sign-in, and emails you a link to choose a new password:",
-    link,
-    '',
-    'The link works once, for 7 days. We will never ask for your password by email.',
+    ...ifNotText,
     '',
     `This is a required ${brand.productName} account notification.`,
   ].join('\n');

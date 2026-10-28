@@ -36,7 +36,7 @@
 import { iceFields, iceFor, revokeIce, STUN, type IceGrant, type TurnBill } from './ice';
 import { audioOnly, bareJpeg, KIND_AUDIO, KIND_JPEG, KIND_VIDEO, KIND_VIDEO_AUDIO, readHead, seqDiff, type RelayHead } from './relayWire';
 import { CallBook, LOG_CAP as CALL_LOG_CAP, missedBy, RING_MS, toRecord, type Call, type CallRecord, type CallStat } from './familyCalls';
-import { GuestAccess, LOCK_MS, passcodeProblem, type GuestRole } from './monitorGuests';
+import { GuestAccess, LOCK_MS, passcodeProblem, removalNotice, type GuestRole } from './monitorGuests';
 import { sanitizeTrack, TrackerStore, type TrackRow } from './trackerStore';
 import { clockTime, isValidTz, localIso, localParts, MonitorStore, packMinute, timelineOf, unpackMinute, type IncidentRow, type MinuteRow, type Severity, type SleepRow, type StoredEvent } from './monitorStore';
 import { MONITOR_TURN_BPS, netTag, relayDataState, type FairState } from './monitorFair';
@@ -2922,10 +2922,11 @@ export class MonitorRoom {
   private async onGuestRemove(a: Attach, msg: Record<string, unknown>): Promise<void> {
     if (a.role !== 'parent' || a.guest) return;
     const id = clip(msg.id, 20);
-    const g = this.guests.guests(Date.now()).find((x) => x.id === id);
-    if (!g || !this.guests.removeGuest(id, Date.now())) return;
+    // Ends this guest's pass only: the link keeps working for everyone else who has it.
+    const r = this.guests.removeGuest(id, Date.now());
+    if (!r) return;
     this.kickGuests([id]);
-    await this.addLog({ kind: 'people', msg: `${a.name} removed guest ${g.name}`, by: a.name });
+    await this.addLog({ kind: 'people', msg: removalNotice(a.name, r), by: a.name });
     this.sendShareInfo();
   }
 

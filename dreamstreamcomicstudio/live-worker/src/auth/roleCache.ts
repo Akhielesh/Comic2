@@ -8,7 +8,10 @@
  *      told membership changed (`drop`), and every 6 hours.
  *   3. Two-step sign-in is enforced for anyone with a verified factor: an aal1 token is refused
  *      with 4003 (`mfa_required`), from the token's `ds_mfa` claim or, without the hook, from the
- *      role check's `mfa` answer (live_security_v2.sql).
+ *      role check's `mfa` answer (live_security_v2.sql). The cache never refuses on its own: a
+ *      fresh claim beats it, and a cached "has a factor" against an aal1 token only sends the
+ *      question back to Supabase — so someone who turned two-step sign-in off isn't locked out
+ *      for up to 6 hours by the room's memory.
  *   4. A socket may stay open until its token's `exp + 120 s` (`closeAt`); a `reauth` with a
  *      fresh token — same person — moves that on.
  *
@@ -168,11 +171,19 @@ export async function admitMember(o: AdmitOptions): Promise<Admission> {
 
   const cached = o.store.get(id.uid);
   const ok = (e: RoleEntry, checked: 'cache' | 'rpc' | 'stale'): Admission => {
+    // Supabase's answer just now is the truth; otherwise the token's signed claim beats our
+    // memory of it (they may have turned two-step sign-in off since), and the cache only fills
+    // in when the hook is off.
+    const mfa = checked === 'rpc' ? e.mfa : (id.mfa ?? e.mfa);
     // Without the token claim (hook off), Supabase's own answer still demands aal2.
-    if (e.mfa && id.aal !== 'aal2') return fail('mfa_required');
-    return { ok: true, id: { ...id, mfa: id.mfa ?? e.mfa }, role: e.role, label: e.label, name: e.name, mfa: e.mfa, checked, closeAt: closeAtFor(id.exp) };
+    if (mfa && id.aal !== 'aal2') return fail('mfa_required');
+    return { ok: true, id: { ...id, mfa }, role: e.role, label: e.label, name: e.name, mfa, checked, closeAt: closeAtFor(id.exp) };
   };
-  if (cached && !o.recheck && now - cached.at < ROLE_TTL_MS) return ok(cached, 'cache');
+  // A cached "has a second factor" against an aal1 token is never a reason to refuse on its own
+  // (the claim already said no, or there is none): it only means "ask Supabase", which knows.
+  // So a stale cache can cost a round trip, never lock someone out.
+  const doubt = (e: RoleEntry): boolean => e.mfa && id.aal !== 'aal2';
+  if (cached && !o.recheck && now - cached.at < ROLE_TTL_MS && !doubt(cached)) return ok(cached, 'cache');
 
   const res = await callRpc<{ ok?: boolean; error?: string; user_id?: string; role?: string; label?: string | null; display_name?: string | null; mfa?: boolean }>(
     o.env,
@@ -183,7 +194,12 @@ export async function admitMember(o: AdmitOptions): Promise<Admission> {
   );
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) return fail('invalid');
-    return cached ? ok(cached, 'stale') : fail('unavailable');
+    if (!cached) return fail('unavailable');
+    // Outage: a known member keeps their cached role. If the cache doubts an aal1 token, the
+    // token's own claim settles it (ok() prefers it); with no claim to go on, "try again
+    // shortly" — neither a 4003 from memory nor letting a possibly-phished password in.
+    if (doubt(cached) && id.mfa == null) return fail('unavailable');
+    return ok(cached, 'stale');
   }
   const d = res.data || {};
   if (d.error === 'session_revoked') return fail('revoked');

@@ -20,10 +20,15 @@
  *   sessions  a successful join gets a 256-bit token, stored only as SHA-256.
  *             Guests expire with the link (or after 90 days), and a parent can
  *             remove one, or turn the link off to remove them all at once.
- *   removal   removing a guest also replaces the link's secret code (F3: the
- *             removed person can't rejoin with the link they have); everyone
- *             else stays signed in. Pass a prepared passcode to change that too —
- *             `preparePasscode('auto')` makes a new one to show the parent once.
+ *   removal   removing a guest ends their pass now; the link, its passcode and
+ *             everyone else's passes are untouched — so family who haven't opened
+ *             the link yet still can, and the removed person, who knows the link
+ *             and passcode, could too (removalNotice says so to the parents).
+ *             `rotate` (ADR 0006 F3) also gives the link a new secret code, and a
+ *             prepared passcode changes that too (`preparePasscode('auto')` makes
+ *             one to show the parent once): opt-in, only where the parents are
+ *             shown the new link to pass on, since anyone holding the old one is
+ *             told it was turned off.
  *   changes   a parent can set a new passcode on the same link (guests stay
  *             signed in unless they choose otherwise) and extend the link —
  *             existing passes are extended with it, never past 90 days.
@@ -213,10 +218,29 @@ export interface PreparedPass {
 }
 
 /** What removing a guest changed: the link's new code, and the new passcode if one was set. */
+/** What removing a guest changed. */
 export interface RemovedGuest {
   id: string;
   name: string;
-  newLink: { code: string; pass: string | null };
+  /**
+   * The link's new code — and the new passcode, if one was set — when the removal changed the
+   * link (`rotate`). null: the link is as it was, still working for everyone who has it.
+   */
+  newLink: { code: string; pass: string | null } | null;
+}
+
+/**
+ * The parents' log line for a removal, honest about what it did and didn't do (≤ 240
+ * characters, the log's limit, with the longest names).
+ */
+export function removalNotice(by: string | null | undefined, r: Pick<RemovedGuest, 'name' | 'newLink'>): string {
+  const who = (by || '').trim().slice(0, 40) || 'A parent';
+  const name = r.name.trim().slice(0, 30) || 'a guest';
+  if (!r.newLink) {
+    return `${who} removed guest ${name} — their pass has ended. The link still works for everyone else; set a new passcode if ${name} shouldn’t rejoin with it.`;
+  }
+  const what = r.newLink.pass ? 'link and passcode' : 'link';
+  return `${who} removed guest ${name} and changed the share ${what}. Guests already watching stay; anyone joining from now on needs the new ${what}.`;
 }
 
 /* ------------------------------------------------------------- crypto */
@@ -676,17 +700,23 @@ export class GuestAccess {
   }
 
   /**
-   * Remove one guest: their pass ends now, and the link gets a new code so they can't simply
-   * rejoin with the link and passcode they have (F3). Pass `pass` (from preparePasscode) to
-   * change the passcode too — the removed person knows the old one. Everyone else keeps
-   * watching. Null when there's no such guest.
+   * Remove one guest: their pass ends now. Nothing else changes — the link, its passcode and
+   * every other guest's pass keep working, so removing one person never locks out family who
+   * hold the link but haven't opened it yet. (Making a guest a member goes this way too.)
+   *
+   * `rotate` (ADR 0006 F3) also gives the link a new code so the removed person can't rejoin
+   * with the one they have, and `pass` (from preparePasscode, implies `rotate`) a new passcode
+   * — but then everyone holding the old link is told it was turned off, so only rotate where
+   * the parents are shown the new link to pass on (WS-6's "Link and passcode changed").
+   * Guests already watching keep their passes either way. Null when there's no such guest.
    */
-  removeGuest(id: string, now: number, o: { pass?: PreparedPass } = {}): RemovedGuest | null {
+  removeGuest(id: string, now: number, o: { rotate?: boolean; pass?: PreparedPass } = {}): RemovedGuest | null {
     const g = this.guests(now).find((x) => x.id === id);
     if (!g) return null;
     this.sql.exec('UPDATE mon_guests SET revoked_at = ? WHERE id = ?', now, id);
-    const r = this.rotateLink(now, o);
-    return { id: g.id, name: g.name, newLink: { code: r?.code ?? '', pass: r?.pass ?? null } };
+    if (!o.rotate && !o.pass) return { id: g.id, name: g.name, newLink: null };
+    const r = this.rotateLink(now, { pass: o.pass });
+    return { id: g.id, name: g.name, newLink: r ? { code: r.code, pass: r.pass } : null };
   }
 
   /* --------------------------------------------- guests with an account */
