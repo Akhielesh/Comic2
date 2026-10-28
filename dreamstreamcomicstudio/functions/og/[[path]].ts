@@ -4,12 +4,20 @@
  * /api/ is disallowed there). Streams the public object from the FIXED Supabase host — the path
  * is validated against a strict pattern first, so nothing user-supplied ever reaches the URL
  * beyond an opaque key + content-hashed file name. No redirects followed; JPEG only; ≤ 2 MB.
+ *
+ * Caching: the file name is content-hashed, so a long cache would be safe for freshness — but a
+ * moderation hold deletes pub/<key>/ (the takedown), and anything already cached would keep
+ * showing the held image for the cache's whole lifetime. So the image is cached for OG_MAX_AGE_SEC
+ * (5 minutes) only: link-preview crawlers fetch once anyway, and a takedown is honoured within
+ * minutes everywhere between here and the viewer. A missing object answers 404 no-store.
  */
 import { supabaseOrigin, type SupabaseEnv } from '../_shared/supabaseRpc';
 
 const OG_FILE_RE = /^\/og\/([A-Za-z0-9]{22})\/(og-[a-z0-9]{2,12}-[0-9a-f]{12}\.jpg)$/;
 const MAX_BYTES = 2 * 1024 * 1024;
 const BUCKET = 'comic-assets';
+/** Shared + browser cache lifetime of a served OG image: bounds how long a taken-down image can linger. */
+export const OG_MAX_AGE_SEC = 300;
 
 interface OgContext {
   request: Request;
@@ -33,7 +41,7 @@ export async function handleOg(request: Request, env: OgContext['env'], fetchImp
     if (length > MAX_BYTES) return notFound();
     const headers = new Headers({
       'content-type': 'image/jpeg',
-      'cache-control': 'public, max-age=86400',
+      'cache-control': `public, max-age=${OG_MAX_AGE_SEC}, s-maxage=${OG_MAX_AGE_SEC}`,
       'x-content-type-options': 'nosniff',
       'cross-origin-resource-policy': 'cross-origin',
       'content-security-policy': "default-src 'none'; sandbox"

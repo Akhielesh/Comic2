@@ -16,6 +16,7 @@ import { COMICS_ORIGIN } from '../../../../services/productHost.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import { getReadiness } from '../publication/publication.js';
 import { drawnPages } from '../publication/snapshot.js';
+import { safetyDeps } from '../safety/deps.js';
 import type { DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 
@@ -24,11 +25,36 @@ const langName = (l: string) => languageSpec(l)?.english || l;
 
 const isLive = (doc: ComicDoc) => !!doc.publication && doc.publication.status === 'live' && !!doc.publication.slug;
 
+/**
+ * The LIVE moderation hold on this comic, read the way the Share sheet's publish reads it
+ * (publishWithOutcome → projects.is_forced_private). The doc mirror keeps saying 'suspended' after a
+ * moderator lifts a hold — the row stays suspended until the owner republishes — so the mirror alone
+ * can never decide. null = couldn't tell (lookup failed, no row, or not this user's comic): the
+ * caller refuses honestly rather than guess either way.
+ */
+async function liveHold(ctx: StudioContext): Promise<boolean | null> {
+  try {
+    const info = await safetyDeps().store.projectInfo(ctx.projectId);
+    if (!info || info.ownerUserId !== ctx.userId) return null;
+    return info.isForcedPrivate;
+  } catch {
+    return null;
+  }
+}
+
+const PAUSED_MESSAGE = 'This comic is paused by moderation, so it cannot be published right now. Tell the user plainly; do not retry.';
+const UNKNOWN_HOLD_MESSAGE =
+  "Couldn't check whether the moderation pause on this comic has been lifted, so it can't be published from here right now. Tell the user plainly; they can try again in a moment or from the Share sheet.";
+
 /** "Published: unlisted · /c/Ab3…" for the DOC SUMMARY (never the full slug in the prompt). */
 export function publicationSummary(doc: ComicDoc): string[] {
   const m = doc.publication;
   if (!m) return ['Published: no (private). Offer publish_comic (unlisted) when every planned page is drawn.'];
-  if (m.status === 'suspended') return ['Published: paused by moderation — readers see "This link isn\'t active". Do not offer to publish.'];
+  if (m.status === 'suspended') {
+    return [
+      'Published: paused by moderation — readers see "This link isn\'t active". Only if the user asks to publish again, call publish_comic: it checks whether the pause was lifted (a fresh publish, new link) and refuses otherwise.'
+    ];
+  }
   const langs = m.languages.map(langName).join(', ');
   return [`Published: ${m.visibility} · /c/${(m.slug || '').slice(0, 3)}… · ${langs}. Later edits stay private until the user taps "Update" (publish_comic offers it).`];
 }
@@ -91,7 +117,13 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       const d = doc();
       const visibility = args.visibility === 'public' ? 'public' : args.visibility === 'unlisted' ? 'unlisted' : null;
       if (!visibility) throw toolArgError('visibility must be "unlisted" or "public".');
-      if (d.publication?.status === 'suspended') return 'This comic is paused by moderation, so it cannot be published right now. Tell the user plainly; do not retry.';
+      if (d.publication?.status === 'suspended') {
+        // Same rule as the Share sheet (publishWithOutcome): the live hold decides, never the mirror alone.
+        const held = await liveHold(ctx);
+        if (held === null) return UNKNOWN_HOLD_MESSAGE;
+        if (held) return PAUSED_MESSAGE;
+        // Lifted: the row is still suspended, so this is a fresh publish (new link), not an update.
+      }
       const languages = readLanguages(d, args.languages);
       const request: PublishRequest = { visibility };
       if (languages) request.languages = languages;

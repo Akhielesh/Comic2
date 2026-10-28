@@ -6,47 +6,17 @@
 
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { Measure } from '../../../shared/comic/lettering/layout';
-import { planCoverTitle, type CoverTextBlock } from '../lettering/CoverTitleLayer';
-import { nodesToMarkup, paintOf, type SvgNode } from '../lettering/svgMarkup';
+import { blockNodes, planCoverTitle, type CoverTextBlock } from '../lettering/CoverTitleLayer';
+import { nodesToMarkup, type SvgNode } from '../lettering/svgMarkup';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const FONT_RE = /^(italic\s+)?(\d{3})\s+([\d.]+)px\s+(.*)$/;
 
-/** Drawing nodes for one block (same order as CoverTitleLayer: shadow copy, then fill with outline). */
-export function coverBlockNodes(blk: CoverTextBlock): SvgNode[] {
-  const fill = paintOf(blk.style.textColor) ?? { color: '#ffffff', opacity: 1 };
-  const stroke = blk.style.textStroke ? paintOf(blk.style.textStroke.color) : null;
-  const shadow = blk.style.shadow ? paintOf(blk.style.shadow.color) : null;
-  const m = FONT_RE.exec(blk.font);
-  const base: SvgNode['attrs'] = {
-    'font-family': m?.[4] ?? 'sans-serif',
-    'font-size': blk.fontSize,
-    'font-weight': m ? Number(m[2]) : 400,
-    'font-style': m?.[1] ? 'italic' : undefined,
-    'text-anchor': blk.anchor,
-    direction: blk.dir === 'rtl' ? 'rtl' : undefined
-  };
-  const texts = (attrs: SvgNode['attrs']): SvgNode[] => blk.lines.map((line, i) => ({ tag: 'text', attrs: { ...base, ...attrs, x: blk.x, y: blk.ys[i] }, text: line }));
-  const out: SvgNode[] = [];
-  if (shadow && blk.style.shadow) {
-    out.push({
-      tag: 'g',
-      attrs: { transform: `translate(${r2(blk.style.shadow.dx * blk.fontSize)} ${r2(blk.style.shadow.dy * blk.fontSize)})`, opacity: shadow.opacity < 1 ? shadow.opacity : undefined },
-      children: texts({ fill: shadow.color })
-    });
-  }
-  out.push({
-    tag: 'g',
-    attrs: { 'fill-opacity': fill.opacity < 1 ? fill.opacity : undefined, lang: blk.lang },
-    children: texts({
-      fill: fill.color,
-      ...(stroke && blk.style.textStroke
-        ? { stroke: stroke.color, 'stroke-opacity': stroke.opacity < 1 ? stroke.opacity : undefined, 'stroke-width': r2(blk.style.textStroke.width * blk.fontSize), 'stroke-linejoin': 'round', 'paint-order': 'stroke' }
-        : {})
-    })
-  });
-  return out;
-}
+/**
+ * Drawing nodes for one block: shadow copy, then fill with outline. The ONE definition lives in
+ * CoverTitleLayer (`blockNodes`) and the screen draws it too, so the PNG/PDF/print/motion cover can
+ * never drift from the board and the reader (P2-EXPORT #4; the old copy here is gone).
+ */
+export const coverBlockNodes: (blk: CoverTextBlock) => SvgNode[] = blockNodes;
 
 /** The cover title + tagline as drawing nodes in plan units (page width 1000); [] for a painted cover. */
 export function coverTitleNodes(doc: ComicDoc, aspect: number, measure: Measure): SvgNode[] {

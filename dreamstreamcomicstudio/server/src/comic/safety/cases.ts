@@ -416,17 +416,57 @@ export const caseView = (c: SafetyCase, names: Record<string, string> = {}): Cas
 
 export const CASE_URL_TTL_SEC = 300;
 
-/** A 5-minute signed URL for a case's image (quarantine first), audited. */
+/**
+ * The evidence behind a reader report whose pub/ copy is gone: a hold (removePublicationObjects) or
+ * a withhold takes every published copy down, but the case still names only that copy. The owner's
+ * source it was made from is found by the hash in the copy's name (liveSourceOfPubPath) — in the
+ * vault when it was withheld, otherwise still live. undefined when the comic can't be opened or the
+ * source is no longer in it (redrawn and gone): then there is nothing left to show.
+ */
+async function evidenceSourceOfCopy(c: SafetyCase, copy: string): Promise<string | undefined> {
+  const deps = safetyDeps();
+  const owner = c.ownerUserId || (await deps.store.projectInfo(c.projectId).catch(() => null))?.ownerUserId;
+  if (!owner) return undefined;
+  const session = await deps.liveSession(c.projectId, owner);
+  const source = session ? liveSourceOfPubPath(session.doc, copy) : undefined;
+  if (!source) return undefined;
+  return (await deps.store.quarantineFor(source).catch(() => null)) || source;
+}
+
+/**
+ * A 5-minute signed URL for a case's image, audited. The vault copy first, then the object the case
+ * names; when that was a published copy that has since been taken down, the owner's source it was
+ * made from (held or live), so a moderator can still review the reported image. null = nothing left
+ * to show — never a dead link. The audit says which evidence was shown ('target' or 'source').
+ */
 export async function caseAssetUrl(actorId: string, caseId: string): Promise<{ url: string; expiresAt: number } | null> {
   const deps = safetyDeps();
   const c = await deps.store.getCase(caseId);
   if (!c) return null;
-  const path = c.target?.quarantinePath || (c.target?.path ? (await deps.store.quarantineFor(c.target.path).catch(() => null)) || c.target.path : null);
-  if (!path) return null;
+  const target = c.target?.quarantinePath || (c.target?.path ? (await deps.store.quarantineFor(c.target.path).catch(() => null)) || c.target.path : null);
+  if (!target) return null;
   const assets = await deps.assets();
-  const urls = await assets.signUrls([path], { ttlSec: CASE_URL_TTL_SEC }).catch(() => ({}) as Record<string, string>);
-  const url = urls[path];
-  await deps.audit({ actorId, action: 'comic.safety.asset_view', targetType: 'comic_safety_case', targetId: caseId, detail: { projectId: c.projectId, quarantined: path.startsWith('q/') } });
+  // Production signs only objects that exist (Storage answers a per-path error for a missing one).
+  const sign = async (path: string): Promise<string | undefined> =>
+    (await assets.signUrls([path], { ttlSec: CASE_URL_TTL_SEC }).catch(() => ({}) as Record<string, string>))[path];
+  let path = target;
+  let evidence: 'target' | 'source' = 'target';
+  let url = await sign(target);
+  if (!url && isPublicationPath(target)) {
+    const source = await evidenceSourceOfCopy(c, target);
+    if (source) {
+      path = source;
+      evidence = 'source';
+      url = await sign(source);
+    }
+  }
+  await deps.audit({
+    actorId,
+    action: 'comic.safety.asset_view',
+    targetType: 'comic_safety_case',
+    targetId: caseId,
+    detail: { projectId: c.projectId, quarantined: path.startsWith('q/'), evidence }
+  });
   return url ? { url, expiresAt: deps.now() + CASE_URL_TTL_SEC * 1000 } : null;
 }
 

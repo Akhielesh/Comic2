@@ -45,6 +45,14 @@ const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChang
   </label>
 );
 
+/**
+ * The server's readiness words for a cover that has NO publishable art yet (publication.ts STATUS_WORD).
+ * Any other word on a cover entry describes art that exists but that publishing would refuse — today
+ * "uses an image from outside the studio — redraw it or upload the image again" (OUTSIDE_IMAGE_STATUS) —
+ * and the row repeats it instead of claiming there is no cover.
+ */
+const NO_COVER_ART_WORDS: ReadonlySet<string> = new Set(['not drawn yet', 'waiting to draw', 'drawing now', "didn't draw"]);
+
 export function readinessRows(r: PublishReadiness | undefined, doc: ComicDoc): Array<{ ok: boolean | 'warn'; text: string }> {
   const rows: Array<{ ok: boolean | 'warn'; text: string }> = [];
   const planned = r?.plannedPages ?? doc.pages.length;
@@ -52,7 +60,10 @@ export function readinessRows(r: PublishReadiness | undefined, doc: ComicDoc): A
   rows.push({ ok: drawn > 0 && drawn === planned ? true : drawn > 0 ? 'warn' : false, text: `${drawn} of ${plural(planned, 'page')} drawn${drawn < planned && drawn > 0 ? ' — undrawn pages are left out' : ''}` });
   const missingPages = (r?.missing || []).filter((m) => m.kind === 'page');
   for (const m of missingPages.slice(0, 4)) rows.push({ ok: 'warn', text: `Page ${m.n}: ${m.status}` });
-  if (r && !r.missing.some((m) => m.kind === 'cover')) rows.push({ ok: true, text: 'Cover ready' });
+  const coverMissing = r?.missing.find((m) => m.kind === 'cover');
+  const coverWord = typeof coverMissing?.status === 'string' ? coverMissing.status.trim() : '';
+  if (r && !coverMissing) rows.push({ ok: true, text: 'Cover ready' });
+  else if (coverWord && !NO_COVER_ART_WORDS.has(coverWord)) rows.push({ ok: 'warn', text: `Cover ${coverWord}` });
   else rows.push({ ok: 'warn', text: 'No cover yet — the preview uses page 1' });
   if (r?.stalePages.length) rows.push({ ok: 'warn', text: `${r.stalePages.length === 1 ? 'Page' : 'Pages'} ${r.stalePages.join(', ')} changed since drawing (the drawn version is published)` });
   if (r?.safety.status === 'blocked') rows.push({ ok: false, text: `Page ${r.safety.blockedPages.join(', ')} ${r.safety.blockedPages.length === 1 ? "doesn't" : "don't"} fit the content rules` });
