@@ -65,6 +65,7 @@ import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePreset
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, describeUncast, findUncastBeings } from './castScan.js';
 import { costFormatterFor } from './costText.js';
+import { clipText, enteredText, storableText } from './sanitize/text.js';
 import {
   ASPECT_RATIOS,
   COLOR_MODES,
@@ -206,7 +207,8 @@ export const pushNextSteps = (turn: DirectorTurn, steps: NextStep[] = []) => {
 // ── Arg helpers ──────────────────────────────────────────────────────────────
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const text = (v: unknown, max = 2000): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+/** Director-written text as it enters the doc (P2-GATE L5): jsonb-safe (sanitize/text.ts), whitespace collapsed, clipped without splitting a pair. */
+const text = (v: unknown, max = 2000): string => (typeof v === 'string' ? clipText(storableText(v).replace(/\s+/g, ' ').trim(), max) : '');
 const int = (v: unknown): number | undefined => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : Number.NaN;
   return Number.isFinite(n) ? Math.round(n) : undefined;
@@ -338,7 +340,8 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   const fromStore = !script;
   if (fromStore) script = stored;
   if (!script) throw argError('No source text: pass text, set useMessage:true to save the user’s message, or ask the user to paste their script.');
-  script = script.slice(0, MAX_SOURCE_CHARS);
+  // Kept as typed (line breaks, spacing); only what jsonb rejects goes, and the clip never splits a pair (P2-GATE L5).
+  script = clipText(storableText(script), MAX_SOURCE_CHARS);
   if (!fromStore) ctx.session.commit([{ op: 'source', patch: { script, updatedAt: Date.now() } }], { origin: 'director', label: 'Save the script' });
 
   const words = (script.match(/\S+/g) || []).length;
@@ -1130,7 +1133,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         for (const raw of args.lines.slice(0, 6)) {
           if (!isObject(raw)) continue;
           const kind = LINE_KINDS.includes(raw.kind as LineKind) ? (raw.kind as LineKind) : 'speech';
-          const lineText = typeof raw.text === 'string' ? raw.text.trim().slice(0, 600) : '';
+          const lineText = typeof raw.text === 'string' ? enteredText(raw.text, 600) : '';
           if (!lineText) continue;
           const line: Wanted = { kind, text: lineText };
           if (SPOKEN.has(kind)) {

@@ -2,6 +2,10 @@
 // set, what was recorded for it and everything that uses it, and the free actions — put it on a
 // page or the cover, use it as a reference, make it the style board, star it, restore a deleted
 // page, compare with the current version, download it. Nothing here spends money.
+//
+// "Use for this page" / "Use as cover" are offered only for images the server would accept as page
+// art for THIS comic (pageArtRefusal mirrors its render_use rule); anything else gets a calm line
+// with the remedy instead of a button that ends in a refusal.
 
 import React, { useId, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, RotateCcw, SplitSquareHorizontal, Star } from 'lucide-react';
@@ -27,6 +31,40 @@ import { CompareView } from './CompareView';
 import type { TimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
+
+// ── Page/cover use: the server's render_use rule, mirrored ──────────────────────────────────────
+// server/src/comic/sanitize/timeline.ts isServerArtForComic + publication/snapshot.ts isServerArt.
+const laneSegment = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '-');
+const escapeRe = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const LIBRARY_PATH_RE = /^library\/[^/]+(?:\/[^/]+)+$/;
+const IMG_LANE_RE = /^u\/[^/]+\/p\/[^/]+\/img\/[^/]+$/;
+
+/** A legacy reference (<uid>/<file>, u/<uid>/tmp/…, another comic's lane): the server refuses it as page art. */
+export const OLDER_COMIC_LINE = 'This photo came from an older comic — upload it again in Media to use it on a page.';
+/** An `upload` in this comic's public img lane (a legacy import): the publish boundary refuses it. */
+export const OUTSIDE_STUDIO_LINE = 'This image was brought in from outside the studio — upload it again in Media to use it on a page.';
+
+/**
+ * Why this image can't go on a page or the cover of THIS comic (null: it can). The server's render_use
+ * rule, mirrored so the buttons never offer what it would refuse:
+ *  - art the server already drew for the book (a page, cover or deleted-page version) is always fine;
+ *  - otherwise the image must be server art for this comic — the platform library, or this comic's own
+ *    lanes u/<owner>/p/<doc.id>/(img|ref)/<file>. The owner segment stays the server's to pin (the
+ *    client doesn't know the uid); the doc id is what tells this book's lane from an older comic's;
+ *  - and never an `upload` in the public img lane (a legacy import; publication isServerArt says no).
+ * Legacy refs live in <uid>/<file>, u/<uid>/tmp/… or another comic's lane, so they get OLDER_COMIC_LINE.
+ */
+export const pageArtRefusal = (item: Pick<MediaItem, 'path' | 'role' | 'source'>, doc: Pick<ComicDoc, 'id'>): string | null => {
+  if (isArtRole(item.role)) return null;
+  const path = item.path;
+  if (typeof path !== 'string' || !path || path.includes('..')) return OLDER_COMIC_LINE;
+  if (LIBRARY_PATH_RE.test(path)) return null;
+  if (!doc?.id) return OLDER_COMIC_LINE;
+  const lane = new RegExp(`^u/[A-Za-z0-9_-]+/p/${escapeRe(laneSegment(doc.id))}/(?:img|ref)/[A-Za-z0-9_@.-]+$`);
+  if (!lane.test(path)) return OLDER_COMIC_LINE;
+  if (IMG_LANE_RE.test(path) && item.source === 'upload') return OUTSIDE_STUDIO_LINE;
+  return null;
+};
 
 const ROLE_LABEL: Record<MediaItem['role'], string> = {
   page: 'Page art',
@@ -89,7 +127,11 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
     onIndex(Math.max(0, Math.min(items.length - 1, index + d)));
   };
 
+  // Offered as page/cover art only when the server would accept it (the buttons are hidden otherwise;
+  // this guard keeps a stale click honest too).
+  const refusal = pageArtRefusal(item, doc);
   const putOn = (target: RenderTarget, label: string, confirmed = false) => {
+    if (refusal) return setNote(refusal);
     const render = getRender(doc, target);
     if (!render) return setNote(`${label} is no longer in the book.`);
     if (isBusyRender(render)) return setNote(`${label} is still drawing — use the image when it's done.`);
@@ -231,7 +273,11 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
             </button>
           ) : (
             <>
-              {pages.length > 0 && (
+              {refusal ? (
+                <p data-testid="page-art-refusal" className="text-[12.5px] leading-5 text-[var(--ds-muted)] [overflow-wrap:anywhere]">
+                  {refusal}
+                </p>
+              ) : pages.length > 0 && (
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <label className="sr-only" htmlFor={pageSelId}>
                     Page to put this image on

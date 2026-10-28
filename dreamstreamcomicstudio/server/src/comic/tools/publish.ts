@@ -52,7 +52,7 @@ export function publicationSummary(doc: ComicDoc): string[] {
   if (!m) return ['Published: no (private). Offer publish_comic (unlisted) when every planned page is drawn.'];
   if (m.status === 'suspended') {
     return [
-      'Published: paused by moderation — readers see "This link isn\'t active". Only if the user asks to publish again, call publish_comic: it checks whether the pause was lifted (a fresh publish, new link) and refuses otherwise.'
+      'Published: paused by moderation — readers see "This link isn\'t active". Only if the user asks to publish again, call publish_comic: it checks whether the pause was lifted (a fresh publish that brings the same link back) and refuses otherwise.'
     ];
   }
   const langs = m.languages.map(langName).join(', ');
@@ -122,7 +122,7 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
         const held = await liveHold(ctx);
         if (held === null) return UNKNOWN_HOLD_MESSAGE;
         if (held) return PAUSED_MESSAGE;
-        // Lifted: the row is still suspended, so this is a fresh publish (new link), not an update.
+        // Lifted: the row is still suspended, so this is a fresh publish (same link, fresh copies), not an update.
       }
       const languages = readLanguages(d, args.languages);
       const request: PublishRequest = { visibility };

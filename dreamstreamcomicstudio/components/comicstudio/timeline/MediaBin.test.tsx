@@ -8,6 +8,8 @@ import { applyOps } from '../../../shared/comic/ops';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
 import { richDoc } from './__fixtures__/richDoc';
 import { MediaBin } from './MediaBin';
+import { OLDER_COMIC_LINE, OUTSIDE_STUDIO_LINE, pageArtRefusal } from './MediaPreview';
+import type { MediaItem } from './bookModel';
 import { feature } from './index';
 import { VersionsCard } from './VersionsCard';
 import { MediaTab } from './MediaTab';
@@ -103,7 +105,7 @@ describe('MediaBin', () => {
     const dialog = screen.getByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Page to put this image on'), { target: { value: 'pg_2' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Use for this page' }));
-    expect(studio.patch.mock.calls[0][0]).toEqual([{ op: 'render_use', target: { kind: 'page', id: 'pg_2' }, path: 'u/x/p/attach.webp', at: expect.any(Number), adopt: true }]);
+    expect(studio.patch.mock.calls[0][0]).toEqual([{ op: 'render_use', target: { kind: 'page', id: 'pg_2' }, path: 'u/x/p/proj_1/ref/attach.webp', at: expect.any(Number), adopt: true }]);
     // ←/→ walks the filtered set; a square version asks before going on the 4:5 cover.
     studio.patch.mockClear();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
@@ -173,5 +175,64 @@ describe('MediaBin', () => {
     setup(empty);
     expect(screen.getByText('No images yet')).toBeInTheDocument();
     expect(screen.getByText('Archive 0/300')).toBeInTheDocument();
+  });
+});
+
+describe('MediaPreview — page/cover use follows the server’s render_use rule (gate follow-up)', () => {
+  it('a reference that is not server art for this comic gets a calm line instead of Use for this page / Use as cover', () => {
+    const { studio } = setup();
+    // richDoc's MAYA reference keeps a legacy-shaped path (u/x/p/ref-maya.webp — not this comic's lane).
+    fireEvent.click(tile(/^MAYA references/));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByRole('button', { name: 'Use for this page' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Use as cover' })).toBeNull();
+    expect(within(dialog).queryByLabelText('Page to put this image on')).toBeNull();
+    expect(within(dialog).getByTestId('page-art-refusal')).toHaveTextContent(OLDER_COMIC_LINE);
+    // Everything else about it still works: a reference elsewhere, the style board, download.
+    expect(within(dialog).getByLabelText('Use as a reference for')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Set as style board' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download' })).toBeInTheDocument();
+    expect(studio.patch).not.toHaveBeenCalled();
+  });
+
+  it('this comic’s own uploads (its ref lane) and server-drawn versions keep both buttons', () => {
+    setup();
+    fireEvent.click(tile(/^Chat uploads/));
+    const d1 = screen.getByRole('dialog');
+    expect(within(d1).getByRole('button', { name: 'Use for this page' })).toBeInTheDocument();
+    expect(within(d1).getByRole('button', { name: 'Use as cover' })).toBeInTheDocument();
+    expect(within(d1).queryByTestId('page-art-refusal')).toBeNull();
+    fireEvent.click(within(d1).getByRole('button', { name: 'Close' }));
+    fireEvent.click(tile(/^Page 1, v2/));
+    const d2 = screen.getByRole('dialog');
+    expect(within(d2).getByRole('button', { name: 'Use as cover' })).toBeInTheDocument();
+    expect(within(d2).queryByTestId('page-art-refusal')).toBeNull();
+  });
+
+  it('pageArtRefusal mirrors isServerArtForComic (+ the publish boundary’s isServerArt)', () => {
+    const doc = richDoc(); // id proj_1
+    const item = (path: string, role: MediaItem['role'] = 'ref', source: MediaItem['source'] = 'upload') => ({ path, role, source });
+    // Server art for this comic: the library, this comic's ref lane (uploads re-encoded by the server), its generated img lane.
+    expect(pageArtRefusal(item('library/photos/sky.webp'), doc)).toBeNull();
+    expect(pageArtRefusal(item('u/x/p/proj_1/ref/photo.webp'), doc)).toBeNull();
+    expect(pageArtRefusal(item('u/x/p/proj_1/img/gen-1.webp', 'style_option', 'generated'), doc)).toBeNull();
+    expect(pageArtRefusal(item('u/x/p/proj_1/img/sheet.webp', 'sheet', 'derived'), doc)).toBeNull();
+    // Art the server already drew for the book (a version of a page / cover / deleted page) is always fine.
+    expect(pageArtRefusal(item('u/x/p/p1-v2.webp', 'page', 'generated'), doc)).toBeNull();
+    expect(pageArtRefusal(item('u/x/p/trashed.webp', 'deleted_page', 'generated'), doc)).toBeNull();
+    // A legacy import: an `upload` in this comic's PUBLIC img lane — the publish boundary refuses it.
+    expect(pageArtRefusal(item('u/x/p/proj_1/img/legacy.webp'), doc)).toBe(OUTSIDE_STUDIO_LINE);
+    // Not this comic's lane: another comic's, the classic <uid>/<file> lane, the client tmp lane, a bare library root, a traversal.
+    expect(pageArtRefusal(item('u/x/p/other_2/ref/photo.webp'), doc)).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item('u/x/p/other_2/img/gen.webp', 'style_option', 'generated'), doc)).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item('x/photo.webp'), doc)).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item('u/x/tmp/photo.webp'), doc)).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item('library/sky.webp'), doc)).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item('u/x/p/proj_1/ref/../img/x.webp'), doc)).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item(''), doc)).toBe(OLDER_COMIC_LINE);
+    // The doc id is matched the way the server builds the lane (laneSegment: anything odd → '-'), never as a regex.
+    expect(pageArtRefusal(item('u/x/p/proj-1/ref/photo.webp'), { id: 'proj.1' })).toBeNull();
+    expect(pageArtRefusal(item('u/x/p/projX1/ref/photo.webp'), { id: 'proj.1' })).toBe(OLDER_COMIC_LINE);
+    expect(pageArtRefusal(item('u/x/p/proj_1/ref/photo.webp'), { id: '' })).toBe(OLDER_COMIC_LINE);
   });
 });

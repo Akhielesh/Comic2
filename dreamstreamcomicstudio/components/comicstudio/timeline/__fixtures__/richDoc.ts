@@ -27,7 +27,10 @@ export const richDoc = (): ComicDoc => {
     { ...A('p1-v1', 10), targetKey: 'page:pg_1', label: 'Page 1', archivedAt: 25 },
     { ...A('gone-old', 5), targetKey: 'page:pg_x', label: 'Deleted page 9', archivedAt: 6 }
   ];
-  doc.conversation = [{ id: 'm', role: 'user', text: 'here', at: 1, attachments: [{ path: 'u/x/p/attach.webp', source: 'upload', at: 2 }] }];
+  // A v5 chat attachment lands in THIS comic's private ref lane (assets saveRef → u/<uid>/p/<doc.id>/ref/…),
+  // so it is server art for the comic and may become page art. The refs above keep legacy-shaped paths
+  // (not this comic's lane): the media bin offers them as references only.
+  doc.conversation = [{ id: 'm', role: 'user', text: 'here', at: 1, attachments: [{ path: `u/x/p/${doc.id}/ref/attach.webp`, source: 'upload', at: 2 }] }];
   doc.trash = [{ page: { ...doc.pages[2], id: 'pg_t', render: { status: 'ready', asset: A('trashed', 7), history: [] } }, fromN: 4, deletedAt: 8 }];
   doc.spend = {
     ...doc.spend,

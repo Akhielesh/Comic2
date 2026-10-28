@@ -133,7 +133,7 @@ import {
 } from './types.js';
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
-import { enteredText } from './sanitize/text.js';
+import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
 
 // ── Limits & constants ───────────────────────────────────────────────────────
@@ -206,8 +206,9 @@ const LOOK_FIELDS = ['summary', 'age', 'gender', 'build', 'face', 'hair', 'eyes'
 // ── Small helpers ────────────────────────────────────────────────────────────
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+/** One-line text as it enters the doc or a prompt (P2-GATE L5): jsonb-safe (sanitize/text.ts), whitespace collapsed, clipped without splitting a pair. */
 const clean = (value: unknown, max = TEXT_LIMIT): string =>
-  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
+  typeof value === 'string' ? clipText(storableText(value).replace(/\s+/g, ' ').trim(), max) : '';
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const isBusy = (render?: RenderState) => render?.status === 'queued' || render?.status === 'rendering';
@@ -3392,7 +3393,7 @@ const restoredRef = (item: unknown, path: string, now: number): AssetRef => {
   const w = dim(raw.w);
   const h = dim(raw.h);
   const label = typeof raw.label === 'string' && (REF_LABELS as readonly string[]).includes(raw.label) ? raw.label : undefined;
-  const note = typeof raw.note === 'string' ? raw.note.replace(/\s+/g, ' ').trim().slice(0, 140) : '';
+  const note = clean(raw.note, 140);
   return {
     path,
     source: 'upload',
@@ -3508,7 +3509,8 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         out.push({ op: 'settings', patch: sanitizeSettingsPatch(raw.patch) });
         break;
       case 'source': {
-        const patch = pick(raw.patch, { script: clearable((v) => (typeof v === 'string' ? v.slice(0, LONG_TEXT_LIMIT) : undefined)) }, 'source');
+        // The script is kept as typed (line breaks, spacing); only what jsonb rejects goes, and the clip never splits a pair.
+        const patch = pick(raw.patch, { script: clearable((v) => (typeof v === 'string' ? clipText(storableText(v), LONG_TEXT_LIMIT) : undefined)) }, 'source');
         out.push({ op: 'source', patch: { ...patch, updatedAt: Date.now() } });
         break;
       }
@@ -3630,7 +3632,8 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           {
             kind: (v) => oneOf(v, LINE_KINDS),
             speakerId: (v) => (v === null || v === '' ? null : typeof v === 'string' && castIds.has(v) ? v : undefined),
-            text: (v) => (typeof v === 'string' ? v.slice(0, 600) : undefined)
+            // Balloon text as typed (no trim: the editor owns spacing), jsonb-safe, clipped without splitting a pair.
+            text: (v) => (typeof v === 'string' ? clipText(storableText(v), 600) : undefined)
           },
           'line'
         );
