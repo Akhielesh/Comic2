@@ -42,7 +42,8 @@ vi.mock('./gateway.js', () => {
   };
 });
 
-const { runChat } = await import('./chat.js');
+const { runChat, TOOL_BUDGET_NOTICE, TOOL_BUDGET_TOOL_RESULT } = await import('./chat.js');
+type TurnBudgetRound = import('./chat.js').TurnBudgetRound;
 const { spentUsageOf } = await import('./usage.js');
 const { TEXT_FALLBACK } = await import('./autoRouter.js');
 

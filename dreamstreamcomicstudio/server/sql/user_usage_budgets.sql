@@ -409,7 +409,10 @@ end $$;
 -- select has_function_privilege('authenticated', 'public.usage_budget_try_reserve(uuid,text,numeric,jsonb)', 'execute'); -- false
 -- select has_table_privilege('authenticated', 'public.user_usage_budgets', 'select');                                  -- false
 -- select public.usage_budget_status('17933bae-dcc5-49b9-bcf5-9658e3953a84', 10);                                     -- governed, pct
--- Metering integrity: clients must not be able to write their own cost events (only a SELECT policy may exist):
+-- Metering integrity: clients must not be able to read or write cost events. After
+-- billing_ledger_client_lockdown.sql NO client policy or grant may exist on generation_cost_events
+-- (the ledger is service-role only; usage_budget_status is the client's only window) — expect zero rows:
 -- select policyname, cmd, roles from pg_policies where schemaname = 'public' and tablename = 'generation_cost_events';
+-- select grantee, privilege_type from information_schema.role_table_grants where table_name = 'generation_cost_events' and grantee in ('anon', 'authenticated');
 -- Stranded holds (ignored by the budget after 20 min; safe to mark released):
 -- select count(*) from public.generation_cost_events where status = 'RESERVED' and created_at < now() - interval '20 minutes';

@@ -17,6 +17,7 @@ import type { DocOp } from '../../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import type { OpSanitizer } from '../extensions.js';
 import { StudioError } from '../types.js';
+import { storableText } from './text.js';
 
 type ReaderOp = Extract<DocOp, { op: 'reader' }>;
 
@@ -30,11 +31,13 @@ const CLEAR = null as unknown as undefined;
 const bad = (message: string) => new StudioError('BAD_REQUEST', message, { status: 400 });
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** Trim, drop control characters, collapse runs of spaces (line breaks become spaces). */
+/** Trim, drop control characters and lone surrogates (jsonb), collapse runs of spaces (line breaks become spaces). */
 export const cleanReaderText = (v: string): string =>
-  v
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
+  storableText(
+    v
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
+  )
     .replace(/\s+/g, ' ')
     .trim();
 

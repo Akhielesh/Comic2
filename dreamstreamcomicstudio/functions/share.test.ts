@@ -305,7 +305,8 @@ describe('/og/<key>/<file>.jpg', () => {
     const ok = await handleOg(get(`/og/${KEY}/og-en-0123456789ab.jpg`), {}, fetchImpl as unknown as typeof fetch);
     expect(ok.status).toBe(200);
     expect(ok.headers.get('content-type')).toBe('image/jpeg');
-    expect(ok.headers.get('cache-control')).toContain('max-age=86400');
+    // P2-GATE L11: a takedown deletes pub/<key>/og-*.jpg, so the OG image is short-cached (functions/og.test.ts).
+    expect(ok.headers.get('cache-control')).toBe('public, max-age=300, s-maxage=300');
     expect(ok.headers.get('x-content-type-options')).toBe('nosniff');
     expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toBe(`https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/pub/${KEY}/og-en-0123456789ab.jpg`);
     fetchImpl.mockClear();

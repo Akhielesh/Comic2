@@ -27,7 +27,9 @@ import { SAFE_ID_RE, type DocOp } from '../../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { canServeToOwner } from '../../../../shared/comic/safety.js';
 import type { OpSanitizer, SanitizeCtx } from '../extensions.js';
+import { isServerArt } from '../publication/snapshot.js';
 import { StudioError } from '../types.js';
+import { enteredText } from './text.js';
 
 type Op<K extends DocOp['op']> = Extract<DocOp, { op: K }>;
 
@@ -69,9 +71,10 @@ const pageCapError = (cap: number) => limit(`A comic can have up to ${cap} pages
 /** Busy wording shared by delete / duplicate / version swaps (the UI shows it verbatim). */
 const busyMessage = (label: string, what: string) => `${label} is still drawing — ${what} when it's done.`;
 
+/** Free text as it enters the doc: no NUL or lone surrogate (jsonb), trimmed, clipped without splitting a pair. */
 const str = (v: unknown, max: number, what: string): string => {
   if (typeof v !== 'string') throw bad(`Invalid ${what}.`);
-  return v.trim().slice(0, max);
+  return enteredText(v, max);
 };
 
 // ── Render targets and the asset index ───────────────────────────────────────
@@ -300,6 +303,8 @@ export const isServerArtForComic = (path: string, doc: Pick<ComicDoc, 'id'>, use
 };
 
 const OUTSIDE_IMAGE_MESSAGE = 'That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.';
+/** This comic's own lane, but an `upload` in the public img lane: the publish boundary (isServerArt) refuses it, so say so now. */
+const UNPUBLISHABLE_IMAGE_MESSAGE = 'That image was brought in from outside the studio, so it can’t go on a page as it is — upload it again in Media first.';
 
 const renderUse: OpSanitizer<Op<'render_use'>> = {
   op: 'render_use',
@@ -319,8 +324,11 @@ const renderUse: OpSanitizer<Op<'render_use'>> = {
     if (target.kind === 'page' || target.kind === 'cover') {
       const key = target.kind === 'cover' ? 'cover' : `page:${target.id}`;
       const ownVersion = render.asset?.path === op.path || render.history.some((v) => v.path === op.path) || archiveOf(doc).some((a) => a.path === op.path && a.targetKey === key);
-      // Anything new to this page/cover must be an image the server made for this comic (S6).
+      // Anything new to this page/cover must be an image the server made for this comic (S6) — and one
+      // the publish boundary accepts (publication/snapshot.ts isServerArt: never an `upload` in the public
+      // img lane), so "Use for page" refuses now what Publish would refuse later, with the same remedy.
       if (!ownVersion && !isServerArtForComic(op.path, doc, ctx?.userId)) throw bad(OUTSIDE_IMAGE_MESSAGE);
+      if (!ownVersion && !isServerArt(entry.asset)) throw bad(UNPUBLISHABLE_IMAGE_MESSAGE);
       // A photo, attachment, sheet or style option becoming page/cover art must be an explicit "Use as page".
       if (!ownVersion && !entry.roles.has('art') && (op as { adopt?: unknown }).adopt !== true) {
         throw bad('Use “Use for page” in Media to put that image on a page.');

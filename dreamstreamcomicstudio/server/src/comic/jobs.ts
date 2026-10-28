@@ -133,6 +133,7 @@ import {
 } from './types.js';
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
+import { enteredText } from './sanitize/text.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
 
 // ── Limits & constants ───────────────────────────────────────────────────────
@@ -3205,7 +3206,8 @@ async function relayoutBalloons(ctx: StudioContext, pageId: string, opts: RunAct
 
 // ── Patch validation ─────────────────────────────────────────────────────────
 
-const str = (v: unknown, max = TEXT_LIMIT): string | undefined => (typeof v === 'string' ? v.trim().slice(0, max) : undefined);
+/** Free text as it enters the doc: no NUL or lone surrogate (jsonb — see sanitize/text.ts), trimmed, clipped without splitting a pair. */
+const str = (v: unknown, max = TEXT_LIMIT): string | undefined => (typeof v === 'string' ? enteredText(v, max) : undefined);
 const strList = (v: unknown, maxItems = 40, max = 400): string[] | undefined =>
   Array.isArray(v) ? v.map((x) => str(x, max)).filter((x): x is string => !!x).slice(0, maxItems) : undefined;
 const oneOf = <T extends string>(v: unknown, list: readonly T[]): T | undefined => (typeof v === 'string' && (list as readonly string[]).includes(v) ? (v as T) : undefined);

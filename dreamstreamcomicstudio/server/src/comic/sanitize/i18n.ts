@@ -20,6 +20,7 @@ import type { DocOp } from '../../../../shared/comic/ops.js';
 import { editionTextSource } from '../../../../shared/comic/translationPlan.js';
 import type { OpSanitizer } from '../extensions.js';
 import { StudioError } from '../types.js';
+import { clipText, storableText } from './text.js';
 
 type Op<K extends DocOp['op']> = Extract<DocOp, { op: K }>;
 
@@ -54,9 +55,12 @@ const findLine = (doc: ComicDoc, id: unknown): Line => {
   throw bad('That line no longer exists.');
 };
 
+/** Source-normalized AND storable (no NUL or lone surrogate — jsonb; see ./text.ts). */
+const text = (raw: string): string => storableText(normalizeSource(raw));
+
 const cleanText = (raw: unknown): string => {
   if (typeof raw !== 'string') throw bad('Send the translated text.');
-  const text = normalizeSource(raw);
+  const text = storableText(normalizeSource(raw));
   if (!text) throw bad('Type the translation, or remove it.');
   if (text.length > DOC_LIMITS.translationChars) throw bad(`A translation can be at most ${DOC_LIMITS.translationChars} characters.`);
   return text;
@@ -142,8 +146,8 @@ export const sanitizeGlossaryTerm: OpSanitizer<Op<'glossary_term'>> = {
     const raw = op.patch as Record<string, unknown>;
     const patch: Partial<GlossaryTerm> = {};
     if (raw.term !== undefined) {
-      if (typeof raw.term !== 'string' || !normalizeSource(raw.term)) throw bad('A glossary term needs its original wording.');
-      patch.term = normalizeSource(raw.term).slice(0, TERM_CHARS);
+      if (typeof raw.term !== 'string' || !text(raw.term)) throw bad('A glossary term needs its original wording.');
+      patch.term = clipText(text(raw.term), TERM_CHARS);
     }
     if (!prev && !patch.term) throw bad('A new glossary term needs its original wording.');
     if (!prev && glossary.length >= DOC_LIMITS.glossaryTerms) throw limit(`The glossary holds up to ${DOC_LIMITS.glossaryTerms} terms.`);
@@ -157,7 +161,7 @@ export const sanitizeGlossaryTerm: OpSanitizer<Op<'glossary_term'>> = {
     }
     if (raw.note !== undefined) {
       if (raw.note === null || raw.note === '') patch.note = undefined;
-      else if (typeof raw.note === 'string') patch.note = normalizeSource(raw.note).slice(0, NOTE_CHARS);
+      else if (typeof raw.note === 'string') patch.note = clipText(text(raw.note), NOTE_CHARS);
       else throw bad('Glossary notes are text.');
     }
     if (raw.refId !== undefined) {
@@ -171,7 +175,7 @@ export const sanitizeGlossaryTerm: OpSanitizer<Op<'glossary_term'>> = {
         const spec = languageSpec(k);
         if (!spec || spec.code !== k || sameLanguage(k, doc.format.language)) throw bad(`Unknown glossary language “${k.slice(0, 20)}”.`);
         if (v === null || v === '') forms[k] = null;
-        else if (typeof v === 'string' && normalizeSource(v)) forms[k] = normalizeSource(v).slice(0, TERM_CHARS);
+        else if (typeof v === 'string' && text(v)) forms[k] = clipText(text(v), TERM_CHARS);
         else throw bad('Glossary forms are text.');
       }
       patch.forms = forms as Record<string, string>;
