@@ -51,3 +51,29 @@ jobs:
         run: npm run build
       - name: Unit tests
         run: npm test -- --run
+
+  # The Workers' strict typecheck (@cloudflare/workers-types, no DOM lib): the same `npm ci` + `tsc`
+  # the deploy workflows run right before `wrangler deploy`. api-proxy bundles services/productHost.ts
+  # and shared/comic/doc.ts, which the client typecheck above checks with the DOM lib, so a `window`
+  # or `globalThis.crypto` read that is fine for the client turned the backend deploy red AFTER merge
+  # (gate F7). Here it fails the pull request instead. Read-only; needs no secrets.
+  workers-typecheck:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [api-proxy, comics-edge]
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio/${{ matrix.worker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/${{ matrix.worker }}/package-lock.json
+      - name: Install worker dependencies
+        run: npm ci
+      - name: Typecheck worker (${{ matrix.worker }})
+        run: npx tsc -p tsconfig.json
