@@ -1030,6 +1030,11 @@ describe('MonitorRoom guests (share link + passcode)', () => {
     expect(jo.closed).toBe(4004);
     expect(sam.closed).toBeNull();
     expect((await guestSocket(a.token, 'viewer', 'jo2')).closed).toBe(4004);
+    // Only Jo's pass ended: the link is the same, and family who haven't opened it yet still get in.
+    expect((mom.msgs('share').at(-1)!.share as { code: string }).code).toBe(code);
+    expect((await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Grandma' })).status).toBe(200);
+    // The parents are told what removal does and doesn't do.
+    expect(mom.logs().some((e) => /removed guest Jo — their pass has ended\. The link still works for everyone else; set a new passcode if Jo shouldn’t rejoin/.test(e.msg))).toBe(true);
 
     await say(mom, { t: 'share_off' });
     expect(sam.closed).toBe(4004);
@@ -1396,6 +1401,9 @@ describe('MonitorRoom: guests who have an account (share link → member)', () =
     expect(after.requests).toEqual([]);
     expect(after.guests.map((x) => x.name).sort()).toEqual(['Jo', 'Kim']);
     expect(mom.logs().some((e) => /made Uncle Sam a member/.test(e.msg))).toBe(true);
+    // Making a guest a member never changes the link: anyone else holding it still gets in.
+    expect((after as unknown as { code: string }).code).toBe(code);
+    expect((await joinHttp(room, { code, pass: 'blue-otter-42', name: 'Grandma' })).status).toBe(200);
     // Bob's access didn't change: his live picture isn't restarted.
     expect(bob.msgs('roles_changed')).toHaveLength(rolesBefore);
     // The old guest pass is gone for good.

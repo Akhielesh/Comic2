@@ -6,7 +6,14 @@
  * resolve `auth.uid()` from the verified JWT and answer membership/role
  * questions. An invalid or expired token is rejected by Supabase itself (401),
  * so a forged token can never authorize anything here.
+ *
+ * `verifyAccessToken` (bottom of the file) also checks tokens locally against
+ * Supabase's published signing keys — still no secret held here — so rooms can
+ * re-authenticate sockets without a database round trip.
  */
+
+import { getSigningKey } from './auth/jwks';
+import { parseJwt, verifySignature, type Alg } from './auth/jose';
 
 export interface SupabaseEnv {
   SUPABASE_URL?: string;
@@ -104,4 +111,120 @@ async function tokenKey(token: string): Promise<string> {
 /** Test hook. */
 export function clearMemberCache(): void {
   memberCache.clear();
+}
+
+/* ------------------------------------------------- local token verification */
+// ADR 0006 D5.4 / D9 #17: verify Supabase access tokens here, against the project's published
+// signing keys (./auth/jwks.ts), so re-auth and socket admission cost no database round trip.
+//
+//   ES256 / RS256 with a known `kid`  → checked locally (signature, exp, iss, aud, role, sub).
+//   HS256 (the legacy shared secret), no JWKS, or JWKS unreachable
+//                                     → asked of Supabase (live_me with the token), as before.
+//
+// What local verification can't see: a session revoked since the token was issued (sign out
+// everywhere, "Not you?"). Such a token stays valid until its `exp` (20 min, owner setting) and
+// can no longer be refreshed, so rooms close the socket at `exp + 120 s` (EXPIRY_GRACE_MS) and
+// re-ask Supabase every 6 h (./auth/roleCache.ts). The RPC path does see revocation
+// (live_security_v2.sql → `session_revoked`).
+
+
+/** Clock skew we tolerate on `exp`/`iat` (seconds). */
+export const CLOCK_SKEW_S = 30;
+/** Rooms close a socket this long after its token's `exp` unless it re-authenticates. */
+export const EXPIRY_GRACE_MS = 120_000;
+
+export type Aal = 'aal1' | 'aal2';
+
+/** A verified Supabase access token, reduced to what rooms use. */
+export interface AccessIdentity {
+  uid: string;
+  /** The auth session (`session_id`) — what "sign out everywhere" ends. */
+  sid: string | null;
+  /** Expiry, epoch seconds. */
+  exp: number;
+  aal: Aal;
+  /**
+   * Has a verified second factor (the `ds_mfa` claim from live_access_token_hook, or
+   * Supabase's answer on the RPC path). null = unknown (hook not enabled yet): ask the
+   * room's role check, which knows.
+   */
+  mfa: boolean | null;
+  /** How it was verified. */
+  via: 'jwks' | 'rpc';
+}
+
+export type VerifyFailure = 'malformed' | 'expired' | 'invalid' | 'revoked' | 'mfa_required' | 'unavailable';
+export type VerifyResult = { ok: true; id: AccessIdentity } | { ok: false; reason: VerifyFailure; uid?: string };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const audIncludes = (aud: unknown, want: string): boolean => (Array.isArray(aud) ? aud.includes(want) : aud === want);
+
+/** True when this identity must finish two-step sign-in first (a verified factor, aal1 token). */
+export const mfaProblem = (id: Pick<AccessIdentity, 'mfa' | 'aal'>): boolean => id.mfa === true && id.aal !== 'aal2';
+
+/**
+ * Admin actions (share links, adding members, export, approving a device) need `aal2` from
+ * anyone who has a second factor. Someone without one can't step up — the nudge to turn it on
+ * is the app's job — so for them the answer is "no step-up needed".
+ */
+export const stepUpNeeded = (id: Pick<AccessIdentity, 'mfa' | 'aal'>): boolean => mfaProblem(id);
+
+function claimsOf(payload: Record<string, unknown>): { uid: string; sid: string | null; exp: number; aal: Aal; mfa: boolean | null } | null {
+  const uid = typeof payload.sub === 'string' && UUID_RE.test(payload.sub) ? payload.sub.toLowerCase() : null;
+  const exp = typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? Math.floor(payload.exp) : null;
+  if (!uid || exp == null) return null;
+  const sid = typeof payload.session_id === 'string' && UUID_RE.test(payload.session_id) ? payload.session_id.toLowerCase() : null;
+  return { uid, sid, exp, aal: payload.aal === 'aal2' ? 'aal2' : 'aal1', mfa: typeof payload.ds_mfa === 'boolean' ? payload.ds_mfa : null };
+}
+
+/**
+ * Verify a Supabase access token. Never throws. `unavailable` means "couldn't tell right now"
+ * (Supabase unreachable on the RPC path) — callers must not treat it as signed out.
+ */
+export async function verifyAccessToken(
+  token: string,
+  env: SupabaseEnv,
+  opts: { now?: number; fetcher?: typeof fetch } = {},
+): Promise<VerifyResult> {
+  const now = opts.now ?? Date.now();
+  const fetcher = opts.fetcher ?? fetch;
+  const jwt = parseJwt(token);
+  if (!jwt) return { ok: false, reason: 'malformed' };
+  const claims = claimsOf(jwt.payload);
+  if (!claims) return { ok: false, reason: 'malformed' };
+  if (claims.exp + CLOCK_SKEW_S <= Math.floor(now / 1000)) return { ok: false, reason: 'expired', uid: claims.uid };
+
+  const alg = jwt.header.alg;
+  const kid = typeof jwt.header.kid === 'string' ? jwt.header.kid : '';
+  if ((alg === 'ES256' || alg === 'RS256') && kid) {
+    const found = await getSigningKey(env, kid, alg as Alg, now, fetcher);
+    if ('key' in found) {
+      if (!(await verifySignature(alg as Alg, found.key, jwt.signature, jwt.signingInput))) return { ok: false, reason: 'invalid' };
+      const p = jwt.payload;
+      const iss = env.SUPABASE_URL ? `${env.SUPABASE_URL.replace(/\/+$/, '')}/auth/v1` : null;
+      if (iss && p.iss !== iss) return { ok: false, reason: 'invalid' };
+      if (!audIncludes(p.aud, 'authenticated') || p.role !== 'authenticated') return { ok: false, reason: 'invalid' };
+      if (typeof p.iat === 'number' && p.iat - CLOCK_SKEW_S > Math.floor(now / 1000)) return { ok: false, reason: 'invalid' };
+      return { ok: true, id: { ...claims, via: 'jwks' } };
+    }
+    // A kid Supabase doesn't list (after a refetch): not a token it signed.
+    if ('missing' in found) return { ok: false, reason: 'invalid' };
+    // JWKS unreachable: fall through to asking Supabase.
+  } else if (alg !== 'HS256') {
+    // `none`, or anything we don't verify: never accepted, never forwarded.
+    return { ok: false, reason: 'invalid' };
+  }
+
+  // Legacy HS256 or JWKS unavailable: Supabase verifies the token (and the session) for us.
+  const res = await callRpc<{ signed_in?: boolean; user_id?: string; error?: string; mfa?: boolean }>(env, token, 'live_me', {}, fetcher);
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'invalid' };
+    return { ok: false, reason: 'unavailable' };
+  }
+  const d = res.data || {};
+  if (d.error === 'session_revoked') return { ok: false, reason: 'revoked', uid: claims.uid };
+  if (typeof d.user_id !== 'string' || d.user_id.toLowerCase() !== claims.uid) return { ok: false, reason: 'invalid' };
+  if (d.error === 'mfa_required') return { ok: false, reason: 'mfa_required', uid: claims.uid };
+  return { ok: true, id: { ...claims, mfa: typeof d.mfa === 'boolean' ? d.mfa : claims.mfa, via: 'rpc' } };
 }

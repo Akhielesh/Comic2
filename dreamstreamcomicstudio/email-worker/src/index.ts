@@ -12,6 +12,12 @@
 //                      GoTrue email (signup, magic link/OTP, recovery, invite, email change,
 //                      reauthentication, security notifications) into branded mail. The
 //                      pure verify + payload→email logic lives in ./authHook.ts (unit-tested).
+//   POST /security    — new-sign-in alerts from Supabase's access-token hook (pg_net),
+//                      HMAC-signed with SECURITY_HOOK_SECRET (x-ds-signature, ±5 min).
+//                      "New sign-in to your account" + what to do if it wasn't you ("Not
+//                      you? Secure my account" once SECURE_ACCOUNT_PAGE=on; until then,
+//                      Settings → Security). The pure verify/parse/render lives in
+//                      ./securityAlert.ts.
 //   GET  /health      — liveness probe.
 //
 // Templates live in ../../shared/email (shared with the app + preview script) so the inbox
@@ -19,6 +25,7 @@
 
 import {
   renderEmail,
+  resolveBrand,
   isEmailTemplateName,
   isMarketing,
   senderRoleFor,
@@ -27,6 +34,7 @@ import {
   type EmailTemplateName,
   type RenderedEmail
 } from '../../shared/email';
+import { parseSignInAlert, renderSignInAlert, verifySecuritySignature } from './securityAlert';
 import {
   brandForSend,
   maskEmail,
@@ -67,6 +75,14 @@ export interface Env {
   EMAIL_HMAC_SECRET: string;
   /** Supabase auth-hook signing secret (`v1,whsec_…`). Empty ⇒ /auth-hook is disabled. */
   SUPABASE_AUTH_HOOK_SECRET?: string;
+  /** Shared with the database (Vault `SECURITY_HOOK_SECRET`). Empty ⇒ /security is disabled. */
+  SECURITY_HOOK_SECRET?: string;
+  /**
+   * "on" once the live app's "Not you?" page (#/secure, ADR 0006 WS-5) has shipped: sign-in
+   * alerts then carry the one-time "Not you? Secure my account" button. Anything else (the
+   * default): they send people to Settings → Security instead, never to a page that isn't there.
+   */
+  SECURE_ACCOUNT_PAGE?: string;
 
   // ── Vars (wrangler.jsonc `vars`) ──
   /** Verified sender, e.g. notifications@dreamstreamstudio.ai. */
@@ -211,6 +227,40 @@ async function handleAuthHook(req: Request, env: Env): Promise<Response> {
   return json({ ok: true, sent: results.length });
 }
 
+// ── Supabase access-token hook → new-sign-in alert ─────────────────────────────
+async function handleSecurity(req: Request, env: Env): Promise<Response> {
+  if (!env.SECURITY_HOOK_SECRET) return json({ error: 'security alerts disabled' }, 503);
+  const raw = await req.text();
+  if (raw.length > 32 * 1024) return json({ error: 'too large' }, 413);
+  let p: unknown;
+  try {
+    p = (JSON.parse(raw) as { p?: unknown }).p;
+  } catch {
+    return json({ error: 'invalid json' }, 400);
+  }
+  if (typeof p !== 'string') return json({ error: 'invalid body' }, 400);
+  const verdict = await verifySecuritySignature(env.SECURITY_HOOK_SECRET, req.headers.get('x-ds-signature'), p);
+  if (!verdict.ok) {
+    console.warn(`[security] rejected request: ${verdict.reason}`);
+    return json({ error: 'invalid signature' }, 401);
+  }
+  const alert = parseSignInAlert(p);
+  if (!alert) return json({ error: 'invalid payload' }, 400);
+  const brand = resolveBrand(brandFromEnv(env));
+  const rendered = renderSignInAlert(alert, brand, { securePage: env.SECURE_ACCOUNT_PAGE === 'on' });
+  const [, domain] = env.EMAIL_FROM.split('@');
+  const from: EmailAddress = { email: `no-reply@${(domain || 'dreamstreamstudio.ai').trim()}`, name: env.EMAIL_FROM_NAME || brand.productName };
+  try {
+    const messageId = await dispatch(env, alert.email, rendered, { from });
+    // Never the token or the whole address in logs.
+    console.log(`[security] sign-in alert → ${maskEmail(alert.email)} (${messageId})`);
+    return json({ ok: true, messageId });
+  } catch (err) {
+    console.error(`[security] send failed → ${maskEmail(alert.email)}: ${(err as Error)?.message || err}`);
+    return json({ error: 'send failed' }, 502);
+  }
+}
+
 // ── Backend /send ──────────────────────────────────────────────────────────────
 async function handleSend(req: Request, env: Env): Promise<Response> {
   const body = await req.text();
@@ -260,6 +310,9 @@ export default {
     }
     if (req.method === 'POST' && url.pathname === '/auth-hook') {
       return handleAuthHook(req, env);
+    }
+    if (req.method === 'POST' && url.pathname === '/security') {
+      return handleSecurity(req, env);
     }
     return json({ error: 'not found' }, 404);
   }
