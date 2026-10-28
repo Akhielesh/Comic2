@@ -325,7 +325,7 @@ describe('free text entering through the timeline sanitizers is jsonb-safe', () 
       after: 3,
       patch: { summary: ' The fox 🦊 runs\u0000 home \uD83C', layout: `${'x'.repeat(999)}🦊`, chapterTitle: 'Act\uDC00 One' }
     });
-    expect(out.patch).toEqual({ summary: 'The fox 🦊 runs home', layout: 'x'.repeat(999), chapterTitle: 'Act One' });
+    expect(out).toEqual({ op: 'page_insert', id: 'pg_new', after: 3, patch: { summary: 'The fox 🦊 runs home', layout: 'x'.repeat(999), chapterTitle: 'Act One' } });
     expect(JSON.stringify(out)).not.toMatch(/\\u0000|\\ud83c"|\\udc00/i);
   });
 });

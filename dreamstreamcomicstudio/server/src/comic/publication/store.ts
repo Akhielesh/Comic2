@@ -358,12 +358,13 @@ export function mirrorState(
     if (m.publicCover && m.publicCover.startsWith('pub/')) state.coverImageId = m.publicCover;
     else delete state.coverImageId;
     // S4: nothing a public reader could sign or show besides that copy. coverImageUrl, panels[].imageUrl/
-    // imageId and styleVariants[] are owner-written (the v4 editor), so a public listing row never carries
-    // them — the gallery, profile and image proxy then have no private path to fall back to. The owner's own
-    // state is untouched (the doc mirror restores these on the next private save).
+    // imageId and styleVariants[] are owner-written (the classic editor's listing state), so a public listing
+    // row never carries them — the gallery, profile and image proxy then have no private path to fall back
+    // to. Only keys that are present are emptied (a clean row gains none); the owner's own state is untouched
+    // (the doc mirror restores these on the next private save).
     delete state.coverImageUrl;
-    state.panels = [];
-    state.styleVariants = [];
+    if (state.panels !== undefined) state.panels = [];
+    if (state.styleVariants !== undefined) state.styleVariants = [];
     state.stylePrompt = '';
     // The gallery blurb is the PUBLISHED logline (it passed the gate), never a later live edit.
     if (m.listing) state.overview = String(m.listing.overview || '').slice(0, 600);

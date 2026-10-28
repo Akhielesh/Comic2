@@ -224,8 +224,17 @@ vi.mock('../middleware/accountKeys.js', () => ({ hasAccountKeyFor: vi.fn(async (
 vi.mock('../services/rbac.js', () => ({ isBootstrapAdminEmail: () => false, getUserRoles: vi.fn(async () => []) }));
 
 const allowance = await import('../services/platformAllowance.js');
-const { chatRouter, freeModelsOnlyPlan, localChatTitle, noFreeModelDetails, chatPricedModels, chatHoldTokens, CHAT_HOLD_OUTPUT_TOKENS, CHAT_HOLD_TOOL_ROUNDS } =
-  await import('./chat.js');
+const {
+  chatRouter,
+  freeModelsOnlyPlan,
+  localChatTitle,
+  noFreeModelDetails,
+  chatPricedModels,
+  chatHoldTokens,
+  turnBudgetFor,
+  CHAT_HOLD_OUTPUT_TOKENS,
+  CHAT_HOLD_TOOL_ROUNDS
+} = await import('./chat.js');
 const { TOOL_BUDGET_NOTICE } = await import('../ai/chat.js');
 const { recipesRouter } = await import('./recipes.js');
 const { errorHandler } = await import('../middleware/errors.js');
@@ -1021,5 +1030,21 @@ describe('governed per-turn tool cap — one hold, a bounded tool allowance, the
     expect(sized.inputTokens).toBeGreaterThanOrEqual((1 + CHAT_HOLD_TOOL_ROUNDS) * 1_000);
     expect(CHAT_HOLD_TOOL_ROUNDS).toBeGreaterThan(0);
     expect(CHAT_HOLD_TOOL_ROUNDS).toBeLessThan(9);
+  });
+
+  it('turnBudgetFor: only a governed hold becomes a cap; spend reads the reported cost, else the settle’s pricing', async () => {
+    const seed = { provider: 'openrouter', model: 'vendor/pricey', operation: 'chat.completion' };
+    const reservation = { reservationId: 'r1', byokBypass: false, governed: true, walletSkipped: true, estimated: { estimatedProviderCostUsd: 0.25 }, usage: {} };
+    const reserve = (over: Record<string, unknown>) =>
+      ({ allowed: true, reservation: { ...reservation, ...over }, seed, provider: 'openrouter', model: 'vendor/pricey' }) as never;
+    const p = { model: 'vendor/pricey' };
+    expect(turnBudgetFor(null, p)).toBeUndefined(); // signed-out: no hold
+    expect(turnBudgetFor(reserve({ governed: false }), p)).toBeUndefined(); // admin / exempt
+    expect(turnBudgetFor(reserve({ byokBypass: true, governed: false }), p)).toBeUndefined(); // own key
+    const budget = turnBudgetFor(reserve({}), p)!;
+    expect(budget.holdUsd).toBe(0.25);
+    expect(await budget.spentUsd!({ providerCostUsd: 0.4, totalTokens: 10 })).toBe(0.4);
+    // No reported cost: priced the way the settle prices it (the mocked estimator: $0.01 for a paid model).
+    expect(await budget.spentUsd!({ promptTokens: 100, candidatesTokens: 10, totalTokens: 110 })).toBeCloseTo(0.01, 9);
   });
 });

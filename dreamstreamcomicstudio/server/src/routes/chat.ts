@@ -1024,7 +1024,12 @@ export const turnBudgetFor = (reserve: ChatReservation | null, p: Pick<PreparedC
   if (!Number.isFinite(holdUsd) || holdUsd < 0) return undefined;
   return {
     holdUsd,
-    spentUsd: async (usage) => (await buildSettleEstimateFromUsage({ ...reserve!.seed, model: p.model }, usage)).estimatedProviderCostUsd
+    // The provider-reported cost is exact and free to read (OpenRouter reports one on every call);
+    // only a turn whose calls reported none is priced like the settle (a pricing-table lookup).
+    spentUsd: async (usage) =>
+      typeof usage.providerCostUsd === 'number'
+        ? usage.providerCostUsd
+        : (await buildSettleEstimateFromUsage({ ...reserve!.seed, model: p.model }, usage)).estimatedProviderCostUsd
   };
 };
 
