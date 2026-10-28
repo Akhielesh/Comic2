@@ -20,6 +20,7 @@ const EXACT = [
   'ds-live-my-recordings',
   'ds-call-ring',
   'ds-calls-seen',
+  'ds-live-welcome-ticket', // a one-time welcome ticket: redeemed by whoever signs in next
   OWNER_KEY,
 ];
 /**
@@ -65,6 +66,25 @@ export function claimDevice(userId: string | null): boolean {
   }
   if (!owner && userId) setOwner(userId);
   return false;
+}
+
+/**
+ * The main app switched this device to `userId` (another account was signed in here): Stream
+ * Studio's data stays only when `userId` already owns it. Data with NO owner goes too — on a
+ * switch it can't be told apart from the previous account's — where claimDevice would hand it
+ * over. Returns true when something was purged.
+ */
+export function takeOverDevice(userId: string): boolean {
+  let owner: string | null = null;
+  try {
+    owner = localStorage.getItem(OWNER_KEY);
+  } catch {
+    return false;
+  }
+  if (owner === userId) return false;
+  purgeLiveAccountData();
+  setOwner(userId);
+  return true;
 }
 
 function setOwner(userId: string): void {

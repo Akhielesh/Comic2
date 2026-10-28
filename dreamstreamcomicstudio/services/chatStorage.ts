@@ -4,10 +4,23 @@
 // cache in db.ts) so the feature is self-contained and survives reloads without
 // requiring a Supabase migration. Per-user "memory" (durable facts the user wants
 // the AI to remember across chats) is kept in localStorage, keyed by user id.
+//
+// SECURITY — rows are scoped to their owner. The database is shared by everyone who signs in
+// on this browser, so every session/project is tagged with `ownerUserId` when saved: the account
+// signed in on THIS tab (setChatSessionUser, kept current by contexts/AuthContext), or — when no
+// tab account is known — the account that owns this device's data (services/localOwner). Listing
+// and loading show only that account's rows; rows from before the tags existed belong to the
+// account that claimed this device's unowned data (localOwner.getUnownedDataOwner). Cloud sync
+// pushes only rows owned by the signed-in user. After an account switch the previous owner's
+// rows stay on the device, hidden and never pushed — they come back when that account signs in
+// again. Tagging by the TAB's account matters with "Remember me" off (one session per tab):
+// when another tab switches the device to account B, a tab still running as A keeps tagging
+// what A writes as A's — never as B's, whose next sync would upload it.
 
 import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage, ChatArtifact, CapabilityNotice } from '../apiTypes';
 import type { ModelSourceId } from './modelSelection';
 import { pullAll, pushSession, pushProject, removeRemote } from './chatSync';
+import { getLocalOwner, getUnownedDataOwner } from './localOwner';
 
 const DB_NAME = 'dreamstream_chat';
 const DB_VERSION = 2;
@@ -26,6 +39,8 @@ export interface ChatProject {
   color: string;
   createdAt: number;
   updatedAt: number;
+  /** The account this project belongs to (set on save while signed in). */
+  ownerUserId?: string;
 }
 
 export interface ChatAttachment {
@@ -132,6 +147,8 @@ export interface ChatSession {
   parentSessionId?: string;
   /** Project (folder) this chat belongs to; null/undefined = unfiled. */
   projectId?: string | null;
+  /** The account this chat belongs to (set on save while signed in). */
+  ownerUserId?: string;
 }
 
 // Open the IndexedDB. Hardened so it can NEVER hang the caller: a timeout and an
@@ -210,10 +227,64 @@ const normalizeSession = (s: ChatSession): ChatSession => ({
   turns: Array.isArray(s.turns) ? s.turns : []
 });
 
+// --- Ownership ------------------------------------------------------------------
+
+type Owned = { ownerUserId?: string | null };
+
+// The account signed in on THIS tab. contexts/AuthContext sets it with every session change
+// (null when signed out). Rows are shown, tagged and pushed for this account rather than for the
+// device-wide owner marker, which another tab may have moved to a different account meanwhile.
+let chatSessionUser: string | null = null;
+
+/** Record the account signed in on this tab (AuthContext), or null when nobody is. */
+export const setChatSessionUser = (userId: string | null | undefined): void => {
+  chatSessionUser = typeof userId === 'string' && userId ? userId.toLowerCase() : null;
+};
+
+/** Whose rows this tab shows, tags and pushes: its signed-in account, else the device's owner. */
+const currentUser = (): string | null => chatSessionUser ?? getLocalOwner();
+
+/** The account a stored row belongs to: its tag, or — untagged, from before tags — the claimant. */
+const rowOwner = (row: Owned): string | null =>
+  (typeof row.ownerUserId === 'string' && row.ownerUserId ? row.ownerUserId.toLowerCase() : null) ?? getUnownedDataOwner();
+
+/** Rows handed out carry their resolved owner, so a later save never re-tags them. */
+const withResolvedOwner = <T extends Owned>(row: T): T => {
+  const owner = rowOwner(row);
+  return owner && row.ownerUserId !== owner ? { ...row, ownerUserId: owner } : row;
+};
+
+/** Shown to this tab's account (or the device's owner; signed out on an unowned device: only rows nobody owns). */
+const isVisible = (row: Owned): boolean => rowOwner(row) === currentUser();
+
+/**
+ * Tag a row on save: it keeps the owner it was loaded with (rows handed out carry it — a late
+ * save after an account switch stays with the old account); a new row belongs to this tab's
+ * account. (Never the unowned-data claimant: that only resolves rows already stored untagged.)
+ */
+const tagForSave = <T extends Owned>(row: T): { row: T; owner: string | null } => {
+  const tagged = typeof row.ownerUserId === 'string' && row.ownerUserId ? row.ownerUserId.toLowerCase() : null;
+  const owner = tagged ?? currentUser();
+  return { row: owner ? { ...row, ownerUserId: owner } : row, owner };
+};
+
+/** True when a chat (by its `ownerUserId`) belongs to `userId` — an untagged chat belongs to no one. */
+export const isChatOwnedBy = (owner: string | null | undefined, userId: string | null | undefined): boolean =>
+  !!owner && !!userId && owner.toLowerCase() === userId.toLowerCase();
+
+/** Only this tab's account's rows ever go up (chatSync re-checks against the session's user). */
+const pushable = (owner: string | null): boolean => !!owner && owner === currentUser();
+
+const listAllSessionRows = async (): Promise<ChatSession[]> =>
+  (await runTransaction<ChatSession[]>('readonly', (store) => store.getAll())) || [];
+
+const listAllProjectRows = async (): Promise<ChatProject[]> =>
+  (await runTransaction<ChatProject[]>('readonly', (store) => store.getAll(), PROJECTS_STORE)) || [];
+
 export const listChatSessions = async (): Promise<ChatSession[]> => {
   try {
-    const all = await runTransaction<ChatSession[]>('readonly', (store) => store.getAll());
-    return (all || []).map(normalizeSession).sort((a, b) => b.updatedAt - a.updatedAt);
+    const all = await listAllSessionRows();
+    return all.filter(isVisible).map(withResolvedOwner).map(normalizeSession).sort((a, b) => b.updatedAt - a.updatedAt);
   } catch {
     return [];
   }
@@ -222,7 +293,7 @@ export const listChatSessions = async (): Promise<ChatSession[]> => {
 export const getChatSession = async (id: string): Promise<ChatSession | undefined> => {
   try {
     const s = await runTransaction<ChatSession | undefined>('readonly', (store) => store.get(id));
-    return s ? normalizeSession(s) : undefined;
+    return s && isVisible(s) ? normalizeSession(withResolvedOwner(s)) : undefined;
   } catch {
     return undefined;
   }
@@ -235,12 +306,13 @@ export const saveChatSession = async (session: ChatSession): Promise<void> => {
   // syncs it back to every device. Same tombstone syncFromCloud already trusts; a genuinely
   // new chat gets a fresh uuid, so it can never collide with a deleted id.
   if (deletedThisSession.has(session.id)) return;
+  const { row, owner } = tagForSave(session);
   try {
-    await runTransaction('readwrite', (store) => store.put(session));
+    await runTransaction('readwrite', (store) => store.put(row));
   } catch {
     /* best-effort persistence */
   }
-  void pushSession(session).catch(() => {});
+  if (pushable(owner)) void pushSession(row).catch(() => {});
 };
 
 // Session-lifetime tombstones: ids deleted in THIS browsing session. Cloud sync now runs
@@ -255,7 +327,9 @@ export const wasDeletedThisSession = (id: string): boolean => deletedThisSession
 export const deleteChatSession = async (id: string): Promise<void> => {
   deletedThisSession.add(id);
   try {
-    await runTransaction('readwrite', (store) => store.delete(id));
+    // Only the current owner's chat (a stale screen after an account switch can't delete another's).
+    const existing = await runTransaction<ChatSession | undefined>('readonly', (store) => store.get(id));
+    if (!existing || isVisible(existing)) await runTransaction('readwrite', (store) => store.delete(id));
   } catch {
     /* ignore */
   }
@@ -266,8 +340,8 @@ export const deleteChatSession = async (id: string): Promise<void> => {
 
 export const listChatProjects = async (): Promise<ChatProject[]> => {
   try {
-    const all = await runTransaction<ChatProject[]>('readonly', (store) => store.getAll(), PROJECTS_STORE);
-    return (all || []).sort((a, b) => a.createdAt - b.createdAt);
+    const all = await listAllProjectRows();
+    return all.filter(isVisible).map(withResolvedOwner).sort((a, b) => a.createdAt - b.createdAt);
   } catch {
     return [];
   }
@@ -277,23 +351,33 @@ export const saveChatProject = async (project: ChatProject): Promise<void> => {
   // Same resurrection guard as saveChatSession — a late save mustn't re-create a project
   // the user deleted this session (deleteChatProject already tombstones the id).
   if (deletedThisSession.has(project.id)) return;
+  const { row, owner } = tagForSave(project);
   try {
-    await runTransaction('readwrite', (store) => store.put(project), PROJECTS_STORE);
+    await runTransaction('readwrite', (store) => store.put(row), PROJECTS_STORE);
   } catch {
     /* ignore */
   }
-  void pushProject(project).catch(() => {});
+  if (pushable(owner)) void pushProject(row).catch(() => {});
+};
+
+/** `{ ownerUserId }` of this tab's account (else the device's owner), or nothing (nobody). */
+const currentOwnerTag = (): { ownerUserId?: string } => {
+  const owner = currentUser();
+  return owner ? { ownerUserId: owner } : {};
 };
 
 export const createChatProject = (name: string, icon: string, color: string): ChatProject => {
   const now = Date.now();
-  return { id: crypto.randomUUID(), name: name.trim() || 'New project', icon, color, createdAt: now, updatedAt: now };
+  // Owned from birth: a save that lands after an account switch stays with the creator.
+  return { id: crypto.randomUUID(), name: name.trim() || 'New project', icon, color, createdAt: now, updatedAt: now, ...currentOwnerTag() };
 };
 
 /** Delete a project. Its chats are reassigned to "unfiled" (projectId = null). */
 export const deleteChatProject = async (id: string): Promise<void> => {
   deletedThisSession.add(id);
   try {
+    const existing = await runTransaction<ChatProject | undefined>('readonly', (store) => store.get(id), PROJECTS_STORE);
+    if (existing && !isVisible(existing)) return; // another account's project
     await runTransaction('readwrite', (store) => store.delete(id), PROJECTS_STORE);
     const sessions = await listChatSessions();
     await Promise.all(
@@ -314,38 +398,68 @@ export const deleteChatProject = async (id: string): Promise<void> => {
 export const syncFromCloud = async (): Promise<void> => {
   const remote = await pullAll();
   if (!remote) return;
-  const [localSessions, localProjects] = await Promise.all([listChatSessions(), listChatProjects()]);
-  const localS = new Map(localSessions.map((s) => [s.id, s]));
-  const localP = new Map(localProjects.map((p) => [p.id, p]));
+  const owner = remote.userId.toLowerCase();
+  // This device's chat data belongs to whoever owns it now (services/localOwner). If that
+  // isn't the signed-in user (mid-switch, another tab's session), touch nothing.
+  if (getLocalOwner() !== owner) return;
+  let allSessions: ChatSession[] = [];
+  let allProjects: ChatProject[] = [];
+  try {
+    [allSessions, allProjects] = await Promise.all([listAllSessionRows(), listAllProjectRows()]);
+  } catch {
+    /* IndexedDB unavailable: nothing local to reconcile */
+  }
+  const rawS = new Map(allSessions.map((s) => [s.id, s]));
+  const rawP = new Map(allProjects.map((p) => [p.id, p]));
+  const mineS = allSessions.filter((s) => rowOwner(s) === owner);
+  const mineP = allProjects.filter((p) => rowOwner(p) === owner);
 
-  // Remote → local: write newer remote rows into IndexedDB (without re-pushing).
-  // Rows deleted during this browsing session are never re-inserted, even if the pull
-  // snapshot predates the delete — otherwise a just-deleted chat resurrects everywhere.
+  // Remote → local: write newer remote rows into IndexedDB (without re-pushing), tagged as
+  // this account's. Rows deleted during this browsing session are never re-inserted, even if
+  // the pull snapshot predates the delete — otherwise a just-deleted chat resurrects
+  // everywhere. A local row with the same id that belongs to another account is left alone.
+  // An untagged row nobody claimed (from before ownership tags) is replaced by this account's
+  // cloud copy: the cloud proves the chat is this account's, and it already holds the content.
+  const unclaimed = (row: Owned) => rowOwner(row) === null;
   for (const rs of remote.sessions) {
     if (deletedThisSession.has(rs.id)) continue;
-    const l = localS.get(rs.id);
+    const l = rawS.get(rs.id);
+    if (l && unclaimed(l)) {
+      const row: ChatSession = { ...rs, ownerUserId: owner };
+      try { await runTransaction('readwrite', (store) => store.put(row)); } catch { /* ignore */ }
+      continue;
+    }
+    if (l && rowOwner(l) !== owner) continue;
     if (!l || (rs.updatedAt || 0) > (l.updatedAt || 0)) {
-      try { await runTransaction('readwrite', (store) => store.put(rs)); } catch { /* ignore */ }
+      const row: ChatSession = { ...rs, ownerUserId: owner };
+      try { await runTransaction('readwrite', (store) => store.put(row)); } catch { /* ignore */ }
     }
   }
   for (const rp of remote.projects) {
     if (deletedThisSession.has(rp.id)) continue;
-    const l = localP.get(rp.id);
+    const l = rawP.get(rp.id);
+    if (l && unclaimed(l)) {
+      const row: ChatProject = { ...rp, ownerUserId: owner };
+      try { await runTransaction('readwrite', (store) => store.put(row), PROJECTS_STORE); } catch { /* ignore */ }
+      continue;
+    }
+    if (l && rowOwner(l) !== owner) continue;
     if (!l || (rp.updatedAt || 0) > (l.updatedAt || 0)) {
-      try { await runTransaction('readwrite', (store) => store.put(rp), PROJECTS_STORE); } catch { /* ignore */ }
+      const row: ChatProject = { ...rp, ownerUserId: owner };
+      try { await runTransaction('readwrite', (store) => store.put(row), PROJECTS_STORE); } catch { /* ignore */ }
     }
   }
 
-  // Local → remote: push newer local rows up.
+  // Local → remote: push this account's newer rows up — never another account's.
   const remoteS = new Map(remote.sessions.map((s) => [s.id, s]));
   const remoteP = new Map(remote.projects.map((p) => [p.id, p]));
-  for (const ls of localSessions) {
+  for (const ls of mineS) {
     const r = remoteS.get(ls.id);
-    if (!r || (ls.updatedAt || 0) > (r.updatedAt || 0)) void pushSession(ls).catch(() => {});
+    if (!r || (ls.updatedAt || 0) > (r.updatedAt || 0)) void pushSession(normalizeSession(withResolvedOwner(ls))).catch(() => {});
   }
-  for (const lp of localProjects) {
+  for (const lp of mineP) {
     const r = remoteP.get(lp.id);
-    if (!r || (lp.updatedAt || 0) > (r.updatedAt || 0)) void pushProject(lp).catch(() => {});
+    if (!r || (lp.updatedAt || 0) > (r.updatedAt || 0)) void pushProject(withResolvedOwner(lp)).catch(() => {});
   }
 };
 
@@ -369,6 +483,9 @@ export const createEmptySession = (overrides: Partial<ChatSession> = {}): ChatSe
     turns: [],
     createdAt: now,
     updatedAt: now,
+    // Owned from birth: a chat on screen when another tab switches accounts — still streaming,
+    // still editable — keeps saving as its creator's, never the new account's.
+    ...currentOwnerTag(),
     ...overrides
   };
 };
@@ -403,6 +520,8 @@ export const branchSession = (source: ChatSession, throughTurnId: string): ChatS
     mcpServers: [...(source.mcpServers || [])],
     systemPrompt: source.systemPrompt,
     turns,
+    // A branch belongs to whoever owns the chat it came from (not to whoever is signed in now).
+    ...(source.ownerUserId ? { ownerUserId: source.ownerUserId } : {}),
     parentSessionId: source.id,
     createdAt: now,
     updatedAt: now

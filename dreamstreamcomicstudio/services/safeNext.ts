@@ -16,6 +16,11 @@ export function safeNext(p: string | null | undefined, origin: string = location
   } catch {
     return null;
   }
-  if (p.startsWith('/') && !p.startsWith('//')) return url.origin === origin ? url.pathname + url.search + url.hash : null;
+  if (p.startsWith('/') && !p.startsWith('//')) {
+    // Check the NORMALISED path too: dot segments ('/.//evil.com', '/a/..//evil.com') parse to a
+    // pathname of '//evil.com', which a browser then reads as another host.
+    if (url.origin !== origin || url.pathname.startsWith('//')) return null;
+    return url.pathname + url.search + url.hash;
+  }
   return allowStream && isStreamUrl(p) ? url.href : null;
 }

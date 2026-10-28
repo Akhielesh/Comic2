@@ -143,6 +143,14 @@ describe('public/_headers and public/_routes.json', () => {
     expect(all).toMatch(/^Permissions-Policy: /m);
   });
 
+  it('never lets another site frame the sign-in link pages (a framed "Continue" could be disguised)', () => {
+    for (const pattern of ['/auth/callback*', '/live*']) {
+      const b = block(pattern);
+      expect(b, pattern).toContain('X-Frame-Options: DENY');
+      expect(b, pattern).toMatch(/^Content-Security-Policy: frame-ancestors 'none'$/m);
+    }
+  });
+
   it('isolates no page cross-origin (Code Studio and its /studio.html were removed)', () => {
     expect(headers).not.toContain('Cross-Origin-Embedder-Policy');
   });

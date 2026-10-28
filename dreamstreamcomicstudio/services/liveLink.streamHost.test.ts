@@ -8,6 +8,7 @@ vi.mock('./supabase', () => ({
 }));
 
 const { continueWithDreamStream, linkNav, mainAppUrl, onStreamHost, openLiveApp, openMainApp, resetCrossing } = await import('./liveLink');
+const { PENDING_SIGN_IN_KEY, consumeSignInIntent } = await import('./pendingSignIn');
 
 const APP = 'https://dreamstreamstudio.ai';
 const went: string[] = [];
@@ -62,12 +63,21 @@ describe('on the Stream Studio host', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('"Continue with DreamStream" carries only the screen back', () => {
+  it('"Continue with DreamStream" starts the sign-in HERE (the host the handoff returns to) and carries only the screen and that nonce back', () => {
+    localStorage.clear();
     continueWithDreamStream('settings');
+    const [first] = JSON.parse(localStorage.getItem(PENDING_SIGN_IN_KEY) || '[]') as { nonce: string; kind: string }[];
+    expect(first).toMatchObject({ kind: 'handoff' });
     continueWithDreamStream('');
+    const [, second] = JSON.parse(localStorage.getItem(PENDING_SIGN_IN_KEY) || '[]') as { nonce: string; kind: string }[];
+    expect(second.nonce).not.toBe(first.nonce);
     expect(went).toEqual([
-      `${APP}/?next=${encodeURIComponent('https://stream.dreamstreamstudio.ai/#/settings')}`,
-      `${APP}/?next=${encodeURIComponent('https://stream.dreamstreamstudio.ai/')}`,
+      `${APP}/?next=${encodeURIComponent(`https://stream.dreamstreamstudio.ai/?sn=${first.nonce}#/settings`)}`,
+      `${APP}/?next=${encodeURIComponent(`https://stream.dreamstreamstudio.ai/?sn=${second.nonce}`)}`,
     ]);
+    // DreamStream hands the nonce to /api/auth/handoff, which echoes it into the link: back here,
+    // that link — and only that link — completes without asking.
+    expect(consumeSignInIntent(`https://stream.dreamstreamstudio.ai/?token_hash=h&type=magiclink&sn=${second.nonce}&after=settings`)).toBe(true);
+    expect(consumeSignInIntent('https://stream.dreamstreamstudio.ai/?token_hash=h&type=magiclink&after=settings')).toBe(false);
   });
 });

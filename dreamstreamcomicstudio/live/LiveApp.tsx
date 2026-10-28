@@ -9,10 +9,12 @@
 //                            #/account, #/monitor[/NURSERY[/camera|/watch|/invite]],
 //                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls)
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
-import { consumeAuthReturn, openAuth, signOutEverywhereLocal, useAccount } from './account';
+import { consumeAuthReturn, hasAuthReturn, openAuth, signOutEverywhereLocal, useAccount, type AuthReturn, type AuthReturnConfirm } from './account';
+import { OWNER_KEY as LIVE_OWNER_KEY } from './accountPurge';
 import { getEvent } from './api';
 import { AuthSheetHost } from './components/AuthSheet';
 import { GuideHost, openHelp, useFirstVisitTour, type TourId } from './components/Guide';
+import { LinkConfirmSheet } from './components/LinkConfirmSheet';
 import { sweepDiscardedRecordings } from './components/SaveSheet';
 import { findMyEvent } from './events';
 import type { Nav } from './nav';
@@ -211,6 +213,15 @@ function AccountButton({ onSettings, push, compact }: { onSettings: () => void; 
   );
 }
 
+/** Some account's Stream Studio data is on this device (its session may have ended with its tab). */
+function hasOtherAccountData(): boolean {
+  try {
+    return !!localStorage.getItem(LIVE_OWNER_KEY);
+  } catch {
+    return false;
+  }
+}
+
 function WelcomeTour({ ready }: { ready: boolean }) {
   useFirstVisitTour('welcome', ready);
   return null;
@@ -221,6 +232,13 @@ export function LiveApp() {
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
   const [railOpen, setRailOpen] = useState(true);
   const [push, toastNode] = useToasts();
+  // A sign-in link this browser didn't ask for waits here for "Continue" / "Not now".
+  const [linkConfirm, setLinkConfirm] = useState<AuthReturnConfirm | null>(null);
+  // This load came back from a sign-in link: nothing else (the first-visit tour) may cover the
+  // question or the result until it's settled — from the very first render, before the
+  // (async) check has answered.
+  const [authPending, setAuthPending] = useState(hasAuthReturn);
+  const account = useAccount();
   const calls = useCalls();
   // Missed family calls since Calls was last opened.
   const missed = useMemo(() => {
@@ -254,20 +272,33 @@ export function LiveApp() {
     };
   }, []);
 
-  // Back from a confirmation email: adopt the session, land where the user started.
+  // Back from a confirmation email: sign in, land where the user started. A link this browser
+  // didn't ask for asks first (LinkConfirmSheet) — it never signs anyone in silently.
+  const settleAuthReturn = (r: AuthReturn | null) => {
+    if (!r) {
+      setAuthPending(false);
+      return;
+    }
+    if ('confirm' in r) {
+      setLinkConfirm(r);
+      return;
+    }
+    setAuthPending(false);
+    setRoute(parseRoute());
+    if ('confirmed' in r) push(r.handoff ? 'Signed in with your DreamStream account' : 'Email confirmed — you’re signed in', { icon: 'sparkles' });
+    else if (r.error === 'framed') {
+      openAuth('signin', 'For your security, sign-in links only work in their own tab — open the link again in a new tab.');
+    } else if (r.handoff) {
+      openAuth('signin', 'That sign-in link has expired or was already used — sign in here, or continue with DreamStream.');
+    } else if (r.error === 'expired') {
+      openAuth('signin', 'That link has expired or was already used. If you tapped it once already, your email is confirmed — just sign in.');
+    } else {
+      // (r.message is the auth server's answer — never text from the link itself.)
+      openAuth('signin', `That link didn’t work${r.message ? ` (${r.message})` : ''}. Sign in — we’ll send a fresh link if it’s still needed.`);
+    }
+  };
   useEffect(() => {
-    void consumeAuthReturn().then((r) => {
-      if (!r) return;
-      setRoute(parseRoute());
-      if ('confirmed' in r) push(r.handoff ? 'Signed in with your DreamStream account' : 'Email confirmed — you’re signed in', { icon: 'sparkles' });
-      else if (r.handoff) {
-        openAuth('signin', 'That sign-in link has expired or was already used — sign in here, or continue with DreamStream.');
-      } else if (r.error === 'expired') {
-        openAuth('signin', 'That link has expired or was already used. If you tapped it once already, your email is confirmed — just sign in.');
-      } else {
-        openAuth('signin', `That link didn’t work${r.message ? ` (${r.message})` : ''}. Sign in — we’ll send a fresh link if it’s still needed.`);
-      }
-    });
+    void consumeAuthReturn().then(settleAuthReturn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -437,9 +468,27 @@ export function LiveApp() {
         </nav>
       )}
 
-      {route.view === 'dashboard' && <WelcomeTour ready />}
+      {route.view === 'dashboard' && <WelcomeTour ready={!authPending && !linkConfirm} />}
       <CallHost push={push} suspended={route.view === 'monitor-camera'} />
       <AuthSheetHost push={push} />
+      {linkConfirm && (
+        <LinkConfirmSheet
+          link={linkConfirm}
+          currentEmail={account.status === 'signed_out' ? undefined : account.email}
+          otherAccountOnDevice={account.status === 'signed_out' && hasOtherAccountData()}
+          onContinue={async () => {
+            const result = await linkConfirm.proceed();
+            setLinkConfirm(null);
+            settleAuthReturn(result);
+          }}
+          onDecline={() => {
+            linkConfirm.dismiss();
+            setLinkConfirm(null);
+            setAuthPending(false);
+            setRoute(parseRoute());
+          }}
+        />
+      )}
       <InviteHost push={push} />
       <GuideHost screenTour={screenTour} />
       {toastNode}

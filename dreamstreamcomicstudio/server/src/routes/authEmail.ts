@@ -8,6 +8,7 @@ import {
   maskEmail,
   parseAfter,
   parseApp,
+  parseSignInNonce,
   pickLinkOrigin,
   type AuthApp
 } from '../services/authEmailLinks.js';
@@ -312,7 +313,9 @@ const deliver = async (
       origin: opts.origin,
       after: opts.after,
       hashedToken: opts.props?.hashed_token || '',
-      verificationType: type
+      verificationType: type,
+      // The requesting browser's nonce: in that browser the link completes without a confirm step.
+      signInNonce: parseSignInNonce(bodyOf(req).sn)
     });
   } catch (err) {
     console.error(`[auth-email] ${route} → ${maskEmail(opts.email)}: cannot build link (${(err as Error).message})`);

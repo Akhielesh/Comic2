@@ -86,7 +86,8 @@ describe('Stream Studio pages (/live and the stream host)', () => {
   it('ships the live policy Report-Only (plus Trusted Types report-only) while ENFORCE_LIVE is off', async () => {
     const { go } = harness({ enforceLive: false });
     const res = await go('https://stream.dreamstreamstudio.ai/');
-    expect(res.headers.get('content-security-policy')).toBeNull();
+    // Enforced while the switch is off: only the sign-in page's frame block (auth hotfix), nothing else.
+    expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
     const [policy, tt] = parsePolicies(res.headers.get('content-security-policy-report-only')!);
     expect(policy.get('frame-ancestors')).toEqual(["'none'"]);
     expect(policy.get('object-src')).toEqual(["'none'"]);
@@ -106,9 +107,27 @@ describe('Stream Studio pages (/live and the stream host)', () => {
     expect(res.headers.get('content-security-policy-report-only')).toMatch(/^require-trusted-types-for 'script'/);
   });
 
+  it('sign-in landing pages are never framed — and the frame block never replaces the live policy', async () => {
+    // Regression (merge of the auth hotfix with these headers): the frame block used to be stamped on first,
+    // so withSecurityHeaders kept it as the page's own policy and the enforced live CSP never applied.
+    for (const enforceLive of [false, true]) {
+      const { go } = harness({ enforceLive, streamHostOn: true });
+      for (const u of ['https://dreamstreamstudio.ai/auth/callback', 'https://stream.dreamstreamstudio.ai/', 'https://dreamstreamstudio.ai/live.html?legacy=1']) {
+        const res = await go(u);
+        expect(res.headers.get('x-frame-options'), u).toBe('DENY');
+        const policy = parsePolicy(res.headers.get('content-security-policy')!);
+        expect(policy.get('frame-ancestors'), u).toEqual(["'none'"]);
+        if (enforceLive && !u.includes('/auth/callback')) expect(policy.has('upgrade-insecure-requests'), u).toBe(true);
+      }
+    }
+  });
+
   it('the shipped switch is honoured by the exported handler', async () => {
     const res = await onRequest({ request: new Request('https://dreamstreamstudio.ai/live', { headers: { 'user-agent': HUMAN } }), next: async () => html() });
-    expect(res.headers.has('content-security-policy')).toBe(ENFORCE_LIVE);
+    // Off: only the frame block is enforced; on: the whole live policy (which keeps frame-ancestors 'none').
+    const enforced = parsePolicy(res.headers.get('content-security-policy')!);
+    expect(enforced.has('upgrade-insecure-requests')).toBe(ENFORCE_LIVE);
+    expect(enforced.get('frame-ancestors')).toEqual(["'none'"]);
     expect(res.headers.get('content-security-policy-report-only')).toBeTruthy();
   });
 

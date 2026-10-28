@@ -4,6 +4,10 @@
 // applied) or the user is signed out, every call is a safe no-op and the chat keeps
 // working from local IndexedDB. Once the table exists, sessions/projects follow the
 // user across devices (last-write-wins by updatedAt).
+//
+// SECURITY: a row goes up only into the account that owns it. chatStorage tags every row with
+// `ownerUserId`; push() refuses a row whose owner isn't the signed-in user (or that has no
+// owner at all), so one account's chats can never be uploaded with another account's session.
 
 import { supabase } from './supabase';
 import type { ChatSession, ChatProject } from './chatStorage';
@@ -23,7 +27,7 @@ const keyFor = (kind: 'session' | 'project', id: string) => `${kind}:${id}`;
 
 export const isChatSyncAvailable = (): boolean => available;
 
-export const pullAll = async (): Promise<{ sessions: ChatSession[]; projects: ChatProject[] } | null> => {
+export const pullAll = async (): Promise<{ userId: string; sessions: ChatSession[]; projects: ChatProject[] } | null> => {
   if (!available) return null;
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
@@ -39,13 +43,20 @@ export const pullAll = async (): Promise<{ sessions: ChatSession[]; projects: Ch
     if (row.kind === 'session' && row.data) sessions.push(row.data as ChatSession);
     else if (row.kind === 'project' && row.data) projects.push(row.data as ChatProject);
   }
-  return { sessions, projects };
+  return { userId: user.id, sessions, projects };
+};
+
+/** The account a local row belongs to (chatStorage tags rows on save). */
+const ownerOf = (data: unknown): string | null => {
+  const owner = data && typeof data === 'object' ? (data as { ownerUserId?: unknown }).ownerUserId : null;
+  return typeof owner === 'string' && owner ? owner.toLowerCase() : null;
 };
 
 const push = async (kind: 'session' | 'project', id: string, data: unknown, updatedAt?: number): Promise<void> => {
   if (!available) return;
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
+  if (ownerOf(data) !== user.id.toLowerCase()) return; // another account's row (or untagged): never pushed
   const { error } = await supabase.from(TABLE).upsert(
     {
       key: keyFor(kind, id),

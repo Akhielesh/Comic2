@@ -32,7 +32,7 @@ function Sink({ stream, mirror, muted, className }: { stream: MediaStream | null
     if (!v) return;
     if (v.srcObject !== stream) {
       v.srcObject = stream;
-      if (stream) v.play().catch(() => undefined);
+      if (stream) v.play()?.catch(() => undefined);
     }
   }, [stream]);
   return (
