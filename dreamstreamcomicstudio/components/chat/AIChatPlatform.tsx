@@ -98,6 +98,7 @@ import {
   deriveSessionTitle,
   getChatMemory,
   getLastActiveChatSessionId,
+  isChatOwnedBy,
   listChatProjects,
   listChatSessions,
   saveChatProject,
@@ -767,8 +768,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // FIRST exchange — the previous "every other, skip the first" throttle meant something the
   // user said up front (name, location, what they're building) wasn't remembered until later.
   // It's cheap (a small, fast model call) and best-effort.
-  const updateMemoryInBackground = (priorTurns: ChatTurn[], answerText: string) => {
+  const updateMemoryInBackground = (priorTurns: ChatTurn[], answerText: string, chatOwner: string | undefined) => {
     if (!user?.id || !answerText.trim()) return;
+    // Facts learned from a chat go into its OWNER's memory only: a chat still on screen after
+    // another tab switched this browser to a different account must not teach that account.
+    if (!isChatOwnedBy(chatOwner, user.id)) return;
     const recent: ChatRequestMessage[] = priorTurns
       .filter((t) => !t.error)
       .slice(-5)
@@ -1004,7 +1008,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
-      updateMemoryInBackground(baseTurns, res.text || '');
+      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId);
     } catch (err) {
       if (controller.signal.aborted) {
         // Stopped mid-run: settle the live agent trace so its card doesn't spin forever.

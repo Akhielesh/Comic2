@@ -6,6 +6,7 @@ import {
   LINK_ORIGIN_ALLOWLIST,
   buildHandoffLink,
   parseMainHandoffPath,
+  parseSignInNonce,
   parseStreamHandoffPath,
   pickLinkOrigin
 } from '../services/authEmailLinks.js';
@@ -19,7 +20,7 @@ import { getSupabaseAdmin } from '../services/supabase.js';
 // app you're leaving asks for a fresh one-time sign-in link for YOUR account and opens it on the
 // other side, which verifies it (verifyOtp) into a session of its own:
 //
-//   body {to:'live'|'main', path?}  →  {ok:true, url}
+//   body {to:'live'|'main', path?, sn?}  →  {ok:true, url}   (sn: the receiving app's sign-in nonce, echoed)
 //     to 'live':  https://stream.dreamstreamstudio.ai/?token_hash=…&type=magiclink[&after=<screen>]
 //     to 'main':  https://dreamstreamstudio.ai/auth/callback?token_hash=…&type=magiclink&next=</ or /?view=…>
 //
@@ -104,7 +105,10 @@ export function createAuthHandoffRouter(opts: AuthHandoffOptions = {}): Router {
           hashedToken: props.hashed_token,
           verificationType: props.verification_type || 'magiclink',
           after: screen,
-          next: nextPath
+          next: nextPath,
+          // Only the app that receives the link can have recorded this nonce, so it lets the link
+          // through there without a confirm step — never anywhere else (services/pendingSignIn).
+          signInNonce: parseSignInNonce(body.sn)
         });
       } catch (err) {
         console.warn(`[auth-handoff] ${who(user.id)} → ${to}: ${(err as Error).message}`);

@@ -43,6 +43,22 @@ export const parseApp = (value: unknown): AuthApp => (value === 'live' ? 'live' 
 
 export const parseAfter = (value: unknown): LiveReturnScreen | undefined => parseStreamScreen(value);
 
+/**
+ * The sign-in nonce a browser sends with its request (`sn`): a random value it keeps to itself
+ * and expects back in the link (services/pendingSignIn.ts on the client). A link carrying it
+ * completes without a "Finish signing in?" step in that browser — and only there, so an
+ * attacker's link for their own account can never skip the question. Same shape as the client's.
+ */
+const SIGN_IN_NONCE_RE = /^[A-Za-z0-9-]{16,64}$/;
+export const parseSignInNonce = (value: unknown): string | undefined =>
+  typeof value === 'string' && SIGN_IN_NONCE_RE.test(value) ? value : undefined;
+
+/** `&sn=<nonce>` for a link, or nothing. */
+const nonceParam = (nonce: string | null | undefined): string => {
+  const sn = parseSignInNonce(nonce);
+  return sn ? `&sn=${sn}` : '';
+};
+
 /** `https://Example.com/path` → `https://example.com`; null for anything that isn't http(s). */
 const originOf = (raw: string): string | null => {
   if (!raw || raw.includes('*')) return null;
@@ -93,6 +109,8 @@ export interface AuthLinkInput {
   after?: string | null;
   /** STREAM_HOST_ON — a parameter so tests can run both sides of the switch. */
   streamHostOn?: boolean;
+  /** The requesting browser's sign-in nonce (parseSignInNonce), echoed as `&sn=`. */
+  signInNonce?: string;
 }
 
 /** http://localhost:3000 and friends: a developer's own machine (AUTH_LINK_ORIGINS). */
@@ -114,11 +132,11 @@ export const streamAppBase = (origin: string, streamHostOn: boolean = STREAM_HOS
  *     with STREAM_HOST_ON:                        https://stream.dreamstreamstudio.ai/?after=…&token_hash=…&type=signup
  * Throws on an unexpected verification type or a missing token — never emails a dead link.
  */
-export const buildAuthLink = ({ app, origin, hashedToken, verificationType, after, streamHostOn = STREAM_HOST_ON }: AuthLinkInput): string => {
+export const buildAuthLink = ({ app, origin, hashedToken, verificationType, after, streamHostOn = STREAM_HOST_ON, signInNonce }: AuthLinkInput): string => {
   if (!isAuthLinkType(verificationType)) throw new Error(`unsupported verification type "${verificationType}"`);
   if (!hashedToken) throw new Error('missing hashed token');
   const base = origin.replace(/\/+$/, '');
-  const token = `token_hash=${encodeURIComponent(hashedToken)}&type=${verificationType}`;
+  const token = `token_hash=${encodeURIComponent(hashedToken)}&type=${verificationType}${nonceParam(signInNonce)}`;
   if (app === 'live' && verificationType === 'signup') {
     const screen = parseAfter(after);
     return `${streamAppBase(base, streamHostOn)}?${screen ? `after=${screen}&` : ''}${token}`;
@@ -175,6 +193,8 @@ export interface HandoffLinkInput {
   after?: StreamReturnScreen | '';
   /** to 'main': the path (parseMainHandoffPath). */
   next?: string;
+  /** The receiving app's sign-in nonce, when it started the crossing (parseSignInNonce). */
+  signInNonce?: string;
 }
 
 /**
@@ -183,10 +203,10 @@ export interface HandoffLinkInput {
  *   to 'main':  {main}/auth/callback?token_hash=…&type=magiclink&next=</ or /?view=…>
  * Both origins are fixed (never the request's), so this can't be turned into an open redirect.
  */
-export const buildHandoffLink = ({ to, mainOrigin, hashedToken, verificationType, after, next }: HandoffLinkInput): string => {
+export const buildHandoffLink = ({ to, mainOrigin, hashedToken, verificationType, after, next, signInNonce }: HandoffLinkInput): string => {
   if (!isAuthLinkType(verificationType)) throw new Error(`unsupported verification type "${verificationType}"`);
   if (!hashedToken) throw new Error('missing hashed token');
-  const token = `token_hash=${encodeURIComponent(hashedToken)}&type=${verificationType}`;
+  const token = `token_hash=${encodeURIComponent(hashedToken)}&type=${verificationType}${nonceParam(signInNonce)}`;
   if (to === 'live') {
     const screen = parseStreamScreen(after);
     return `${STREAM_ORIGIN}/?${token}${screen ? `&after=${screen}` : ''}`;

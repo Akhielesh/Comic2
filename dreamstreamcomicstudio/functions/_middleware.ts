@@ -68,6 +68,27 @@ const moved = (location: string, extra: Record<string, string> = {}) =>
   new Response(null, { status: 301, headers: { location, ...extra } });
 
 /**
+ * Sign-in links land on the live app and on the main app's /auth/callback, and a framed "Finish
+ * signing in?" step could hide a disguised Continue button (clickjacking): those pages are never
+ * served to a frame. (public/_headers says the same for /auth/callback* and /live* on the apex,
+ * but _headers need not apply to a response that passed through this Function — _routes.json
+ * routes every page here — so the Function sets them itself.)
+ */
+const FRAME_BLOCK: Record<string, string> = { 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'" };
+
+/** A page sign-in links land on, on the main host: /auth/callback (trailing slashes too) or the live app's old addresses. */
+function isSignInLandingPath(pathname: string): boolean {
+  return pathname.replace(/\/+$/, '') === '/auth/callback' || isLegacyLivePath(pathname);
+}
+
+/** `res` with `extra` headers set; everything else about it is kept. */
+function withHeaders(res: Response, extra: Record<string, string>): Response {
+  const headers = new Headers(res.headers);
+  for (const [name, value] of Object.entries(extra)) headers.set(name, value);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+/**
  * Serve live.html for a Stream Studio page. Pages' pretty URLs answer /live.html with a 308 to
  * /live, so ask for /live first. A redirect from the asset server is never passed on (that's how
  * a rewrite turns into a loop): try the other name, then fail plainly.
@@ -77,7 +98,7 @@ async function serveLiveApp(request: Request, url: URL, env: PagesContext['env']
   if (!assets) return next();
   for (const path of ['/live', '/live.html']) {
     const res = await assets.fetch(new Request(new URL(path, url.origin).toString(), { method: request.method, headers: request.headers }));
-    if (!REDIRECT_STATUSES.has(res.status)) return res;
+    if (!REDIRECT_STATUSES.has(res.status)) return withHeaders(res, FRAME_BLOCK);
   }
   return new Response('Stream Studio is unavailable right now — please try again in a minute.', {
     status: 503,
@@ -139,6 +160,8 @@ export function createOnRequest({ streamHostOn }: MiddlewareOptions) {
 
     // Stream Studio's host: every page is the live app (its screens are #routes).
     if (onStreamHost && isPage && isAppPage(url.pathname)) return serveLiveApp(request, url, env, next);
+    // The apex pages sign-in links land on: served as before, never to a frame.
+    if (isPage && isSignInLandingPath(url.pathname)) return withHeaders(await next(), FRAME_BLOCK);
     return next();
   };
 }

@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LOCAL_OWNER_KEY,
   adoptStoredSessionOwner,
+  claimUnownedData,
   clearLocalOwner,
   getLocalOwner,
+  getUnownedDataOwner,
+  isLocalOwner,
   ownedByAnotherAccount,
   setLocalOwner,
-  shouldDetectSessionInUrl,
   userIdFromStoredSession
 } from './localOwner';
 
@@ -54,18 +56,42 @@ describe('localOwner', () => {
     expect(getLocalOwner()).toBe(A);
   });
 
-  it('reads tokens from the URL only on our own sign-in landing pages', () => {
-    const at = (path: string, origin = 'https://dreamstreamstudio.ai') => shouldDetectSessionInUrl(new URL(`${origin}${path}#access_token=x`));
-    expect(at('/auth/callback')).toBe(true);
-    expect(at('/auth/callback/')).toBe(true);
-    expect(at('/')).toBe(true); // Supabase Site URL fallback
-    expect(at('/live')).toBe(true); // Stream Studio on the main host
-    expect(at('/live.html')).toBe(true);
-    expect(at('/', 'https://stream.dreamstreamstudio.ai')).toBe(true);
-    expect(at('/c/aB3dE5fG7hJ9kL1mN')).toBe(false); // share links
-    expect(at('/c/aB3dE5fG7hJ9kL1mN/embed')).toBe(false);
-    expect(at('/models')).toBe(false);
-    expect(at('/share/x')).toBe(false);
-    expect(at('/auth/callbackx')).toBe(false);
+  it('a full storage never leaves a stale owner behind: the signed-in account is kept in memory', () => {
+    setLocalOwner(A);
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    try {
+      setLocalOwner(B);
+      expect(getLocalOwner()).toBe(B);
+      expect(localStorage.getItem(LOCAL_OWNER_KEY)).toBeNull(); // A's marker is gone, not left stale
+    } finally {
+      setItem.mockRestore();
+    }
+    setLocalOwner(A); // storage works again
+    expect(getLocalOwner()).toBe(A);
+    expect(localStorage.getItem(LOCAL_OWNER_KEY)).toBe(A);
+    clearLocalOwner();
+    expect(getLocalOwner()).toBeNull();
+  });
+
+  it('isLocalOwner matches only the current owner (case-insensitively)', () => {
+    expect(isLocalOwner(A)).toBe(false);
+    setLocalOwner(A);
+    expect(isLocalOwner(A)).toBe(true);
+    expect(isLocalOwner(A.toUpperCase())).toBe(true);
+    expect(isLocalOwner(B)).toBe(false);
+    expect(isLocalOwner(null)).toBe(false);
+  });
+
+  it('data from before ownership tags is claimed once — the boot session’s account or the first owner — never by a later one', () => {
+    expect(getUnownedDataOwner()).toBeNull();
+    adoptStoredSessionOwner(JSON.stringify({ user: { id: A } }));
+    expect(getUnownedDataOwner()).toBe(A);
+    clearLocalOwner(); // A signs out
+    claimUnownedData(B); // B signs in on the same device
+    expect(getUnownedDataOwner()).toBe(A);
+    claimUnownedData('junk');
+    expect(getUnownedDataOwner()).toBe(A);
   });
 });

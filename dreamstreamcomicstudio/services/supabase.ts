@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { adoptStoredSessionOwner, shouldDetectSessionInUrl } from './localOwner';
+import { adoptStoredSessionOwner } from './localOwner';
 
 // These will be populated by the user in .env.local
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -113,8 +113,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
     console.warn('Missing Supabase URL or Anon Key. Authentication will not work.');
 }
 
-// Before supabase-js reads any tokens out of the URL: record which account already owns this
-// device's local data, so a session for another account can't inherit it (services/localOwner).
+// Before any session can change: record which account already owns this device's local data
+// (installs from before the marker existed), so a session for another account can't inherit it
+// (services/localOwner). authStorage's self-healing read finds the session in either storage —
+// localStorage ("Remember me") or sessionStorage (not remembered).
 adoptStoredSessionOwner(typeof window === 'undefined' ? null : authStorage.getItem(SUPABASE_AUTH_STORAGE_KEY));
 
 export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
@@ -122,10 +124,87 @@ export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
         persistSession: true,
         storageKey: SUPABASE_AUTH_STORAGE_KEY,
         storage: authStorage,
-        // Tokens in a URL sign the browser in, so only our own sign-in landing pages read them.
-        detectSessionInUrl: (url: URL) => shouldDetectSessionInUrl(url)
+        // SECURITY: never adopt a session from the address bar on our own. Tokens in a URL sign
+        // the browser in, and anyone can make such a link for their own account. The pages our
+        // links land on (App's /auth/callback, Stream Studio's consumeAuthReturn) read them
+        // explicitly and sign in only when this browser asked to — or after the visitor
+        // confirms (services/authLink.ts, services/pendingSignIn.ts).
+        detectSessionInUrl: false
     }
 });
+
+/**
+ * Who an access token belongs to (the "Finish signing in?" step names the account), asked of the
+ * auth server. A plain request: nothing is stored, and this browser's own session is never
+ * touched — supabase.auth.getUser(jwt) would sign the current session out when the token's
+ * session no longer exists, which a crafted link could use to sign someone out.
+ * `dead`: the server refused the token (401/403 — expired, or its session is gone). Such a link
+ * can't sign in, and trying (setSession) would drop the session this browser has, so callers
+ * report it as expired instead. A network failure or timeout is NOT dead — just unknown.
+ */
+export const lookupAccessTokenEmail = async (accessToken: string, timeoutMs = 8000): Promise<{ email: string | null; dead: boolean }> => {
+    const unknown = { email: null, dead: false };
+    if (!supabaseUrl || !supabaseAnonKey || !accessToken) return unknown;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+        const res = await fetch(`${String(supabaseUrl).replace(/\/+$/, '')}/auth/v1/user`, {
+            headers: { apikey: supabaseAnonKey, authorization: `Bearer ${accessToken}` },
+            signal: controller?.signal
+        });
+        if (!res.ok) return { email: null, dead: res.status === 401 || res.status === 403 };
+        const body = (await res.json().catch(() => null)) as { email?: unknown } | null;
+        return { email: typeof body?.email === 'string' && body.email ? body.email : null, dead: false };
+    } catch {
+        return unknown;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+};
+
+/**
+ * Is `session` the one THIS tab holds? supabase-js announces every auth event to every tab of the
+ * origin (BroadcastChannel) without storing the session there. With "Remember me" off each tab
+ * keeps its own session in sessionStorage, so a sign-in announced by another tab is not this
+ * tab's: acting on it would flip this tab to that account (and purge this one's local data).
+ * With "Remember me" on, storage is shared, so a real switch matches and is handled.
+ *
+ * Compared by access token against the session stored for this tab (either storage, read
+ * without the self-healing move). When nothing readable is stored (a signed-out tab, blocked
+ * storage) or there is no session to compare, it can't tell and answers true — callers then
+ * behave exactly as before. Sign-outs are not sessions and are always honoured by callers.
+ */
+export const isStoredSession = (session: { access_token?: string | null } | null | undefined): boolean => {
+    if (!session?.access_token || typeof window === 'undefined') return true;
+    const mode = getAuthPersistMode();
+    const raw =
+        safeStorageGet(getModeStorage(mode), SUPABASE_AUTH_STORAGE_KEY) ??
+        safeStorageGet(getModeStorage(mode === 'local' ? 'session' : 'local'), SUPABASE_AUTH_STORAGE_KEY);
+    if (raw == null) return true;
+    try {
+        const stored = JSON.parse(raw) as { access_token?: unknown; currentSession?: { access_token?: unknown } } | null;
+        const token = stored?.access_token ?? stored?.currentSession?.access_token;
+        return typeof token !== 'string' || token === session.access_token;
+    } catch {
+        return true;
+    }
+};
+
+/**
+ * Forget the session THIS tab stores — without signing out. Another tab switched this device to
+ * another account ("Remember me" off: each tab keeps its own session in sessionStorage), so this
+ * tab must stop acting as its old account (contexts/AuthContext). supabase.auth.signOut would
+ * broadcast SIGNED_OUT to every tab and sign the other account out as well; removing the stored
+ * session touches only this tab: supabase-js reads the session from storage on every getSession
+ * and refresh, so from here on this tab has none (its requests carry no token, a reload lands
+ * signed out instead of resuming the old account and taking the device back). Nothing is
+ * announced to anyone. Only the per-tab store is cleared: a shared "Remember me" session in
+ * localStorage is every tab's, and never differs from an announced one in the first place.
+ */
+export const forgetTabSession = (): void => {
+    if (typeof window === 'undefined') return;
+    safeStorageRemove(window.sessionStorage, SUPABASE_AUTH_STORAGE_KEY);
+};
 
 /* ----------------------- session inactivity policy ----------------------- */
 

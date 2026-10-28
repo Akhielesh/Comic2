@@ -13,12 +13,14 @@ import { SW_SCOPE } from './monitor/push';
 import { confirmRedirectUrl, consumeAuthReturn } from './account';
 import { viewerUrl, guestUrl, studioUrl } from './nav';
 import { LIVE_LEGAL_LINKS } from './ui/legalLinks';
+import { markSignInStarted } from '@/services/pendingSignIn';
 
 const go = (path: string) => history.replaceState(null, '', path);
 const S = 'https://stream.dreamstreamstudio.ai';
 
 beforeEach(() => {
   verifyOtp.mockReset();
+  localStorage.clear();
   go('/');
 });
 
@@ -44,10 +46,22 @@ describe('on stream.dreamstreamstudio.ai', () => {
     expect(confirmRedirectUrl()).toBe(`${S}/`);
   });
 
-  it('finishes a handoff link at the root and leaves no token behind', async () => {
+  it('finishes a link carrying a sign-in this host started at the root, leaving no token (or nonce) behind', async () => {
+    verifyOtp.mockResolvedValue({ data: { session: { access_token: 't' } }, error: null });
+    // The intent lives on the RECEIVING host — here a handoff whose nonce /api/auth/handoff echoed.
+    const sn = markSignInStarted('handoff');
+    go(`/?token_hash=h&type=magiclink&sn=${sn}&after=monitor`);
+    expect(await consumeAuthReturn()).toEqual({ confirmed: true, handoff: true });
+    expect(location.href).toBe(`${S}/#/monitor`);
+  });
+
+  it('a handoff started on another host (its own storage) asks once before signing in here', async () => {
     verifyOtp.mockResolvedValue({ data: { session: { access_token: 't' } }, error: null });
     go('/?token_hash=h&type=magiclink&after=monitor');
-    expect(await consumeAuthReturn()).toEqual({ confirmed: true, handoff: true });
+    const r = await consumeAuthReturn();
+    expect(r).toMatchObject({ confirm: true, handoff: true });
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(r && 'confirm' in r ? await r.proceed() : null).toEqual({ confirmed: true, handoff: true });
     expect(location.href).toBe(`${S}/#/monitor`);
   });
 

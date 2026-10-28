@@ -334,9 +334,12 @@ function NightLine({ night }: { night: ReturnType<typeof nightSummary> }) {
  * Nursery settings → Usage (parents): last night's receipt from this device straight away
  * (no request), and the nursery's month folded away — read once when it's opened.
  */
-export function NurseryUsage({ query, nid }: { query: QueryLike | null; nid: string }) {
+export function NurseryUsage({ query, nid, now: nowProp }: { query: QueryLike | null; nid: string; now?: number }) {
   const [open, setOpen] = useState(false);
-  const night = useMemo(() => nightSummary(nid), [nid]);
+  // `now` is a prop like NurseryUsageCard's, so a test can pin the clock instead of depending on
+  // the real date (the receipt is "last night" relative to it).
+  const [now] = useState(() => nowProp ?? Date.now());
+  const night = useMemo(() => nightSummary(nid, now), [nid, now]);
   return (
     <div className="ns-usage">
       <NightLine night={night} />

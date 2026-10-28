@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { interpretAuthEmailResponse, requestAuthEmail } from './authEmail';
+import { PENDING_SIGN_IN_KEY, consumeSignInIntent, hasFreshSignInIntent } from './pendingSignIn';
 
 // The fallback contract (server: POST /api/auth/email/*):
 //   unreachable (→ old direct Supabase call) ONLY when the backend isn't there or says
@@ -85,7 +86,8 @@ describe('requestAuthEmail', () => {
     expect(url).toMatch(/\/api\/auth\/email\/resend$/);
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer jwt');
-    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@b.co' });
+    // …plus the nonce our backend puts in the link (services/pendingSignIn).
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@b.co', sn: expect.stringMatching(/^[A-Za-z0-9-]{16,64}$/) });
   });
 
   it('is unreachable on a network error or a non-JSON page', async () => {
@@ -107,5 +109,29 @@ describe('requestAuthEmail', () => {
     const pending = requestAuthEmail('recovery', { email: 'a@b.co' });
     await vi.advanceTimersByTimeAsync(20_000);
     expect(await pending).toEqual({ status: 'unreachable' });
+  });
+
+  it('a sent email records the nonce its link carries — only that link completes without a confirm step', async () => {
+    localStorage.clear();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, code: 'too_soon', message: 'wait' }), { status: 429 })));
+    await requestAuthEmail('magiclink', { email: 'a@b.co' });
+    expect(hasFreshSignInIntent()).toBe(false); // nothing was sent
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
+    await requestAuthEmail('magiclink', { email: 'a@b.co' });
+    expect(hasFreshSignInIntent()).toBe(false);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await requestAuthEmail('magiclink', { email: 'a@b.co' });
+    expect(hasFreshSignInIntent()).toBe(true);
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as { sn: string };
+    // The record remembers the address the link went to, beside its nonce and kind.
+    expect(JSON.parse(localStorage.getItem(PENDING_SIGN_IN_KEY) || '[]')).toEqual([expect.objectContaining({ nonce: sent.sn, kind: 'magiclink', email: 'a@b.co' })]);
+    // A link without that nonce (an attacker's own link) is not waved through…
+    expect(consumeSignInIntent('https://dreamstreamstudio.ai/auth/callback?token_hash=x&type=magiclink')).toBe(false);
+    await requestAuthEmail('magiclink', { email: 'a@b.co' });
+    const second = JSON.parse(String((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body)) as { sn: string };
+    expect(second.sn).not.toBe(sent.sn);
+    // …the link this request produced is.
+    expect(consumeSignInIntent(`https://dreamstreamstudio.ai/auth/callback?token_hash=x&type=magiclink&sn=${second.sn}`)).toBe(true);
   });
 });

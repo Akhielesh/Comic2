@@ -113,6 +113,31 @@ describe('Pages middleware', () => {
       expect(await res.text()).toBe('app');
     }
   });
+
+  it('never serves the apex pages sign-in links land on to a frame — the Function sets the headers itself (_headers may not reach a response that passed through it)', async () => {
+    const page = async () => new Response('app', { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+    const go = (path: string, streamHostOn = false, ua = HUMAN) =>
+      createOnRequest({ streamHostOn })({ request: new Request(`https://dreamstreamstudio.ai${path}`, { headers: { 'user-agent': ua } }), next: page });
+    for (const path of ['/auth/callback', '/auth/callback/', '/auth/callback?token_hash=h&type=magiclink', '/auth/callback#access_token=x', '/live', '/live/', '/live.html?e=evt_1', '/live?after=monitor&token_hash=h&type=signup']) {
+      const res = await go(path);
+      expect(res.status, path).toBe(200);
+      expect(await res.text()).toBe('app'); // served as before…
+      expect(res.headers.get('x-frame-options'), path).toBe('DENY'); // …never to a frame
+      expect(res.headers.get('content-security-policy'), path).toBe("frame-ancestors 'none'");
+      expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8'); // the page's own headers stay
+      expect(res.headers.get('cache-control')).toBe('no-store');
+    }
+    // Switch on: /auth/callback stays on the apex and keeps them (the live app moved to its host, which sets its own).
+    const cb = await go('/auth/callback?code=c', true);
+    expect(cb.status).toBe(200);
+    expect(cb.headers.get('x-frame-options')).toBe('DENY');
+    expect((await go('/live?after=monitor', true)).status).toBe(301);
+    // Other pages and files are untouched; AI agents still go to the check-in first.
+    for (const path of ['/', '/models', '/auth/callbacks', '/auth/callback.txt', '/assets/index.js', '/api/health']) {
+      expect((await go(path)).headers.get('x-frame-options'), path).toBeNull();
+    }
+    expect((await go('/auth/callback', false, 'GPTBot/1.2')).status).toBe(302);
+  });
 });
 
 describe('Stream Studio host (stream.dreamstreamstudio.ai)', () => {
@@ -156,6 +181,19 @@ describe('Stream Studio host (stream.dreamstreamstudio.ai)', () => {
       expect(next).not.toHaveBeenCalled();
       // Asked for /live first (pretty URL), never the redirecting /live.html.
       expect(assets.mock.calls.every((c) => new URL((c[0] as Request).url).pathname === '/live')).toBe(true);
+    }
+  });
+
+  it('refuses to be framed: the live app (where sign-in links land) is served with frame-blocking headers', async () => {
+    for (const on of [false, true]) {
+      const { go } = setup(on);
+      for (const path of ['/', '/?token_hash=h&type=signup&after=monitor', '/auth/callback?token_hash=h&type=magiclink']) {
+        const res = await go(`${STREAM}${path}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('x-frame-options'), path).toBe('DENY');
+        expect(res.headers.get('content-security-policy'), path).toBe("frame-ancestors 'none'");
+        expect(res.headers.get('content-type')).toBe('text/html'); // the asset's own headers stay
+      }
     }
   });
 
