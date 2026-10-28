@@ -193,6 +193,20 @@ const assertRestorePair = (quarantinePath: unknown, originalPath: unknown): void
 
 const HOLD_GONE_MESSAGE = "That image is no longer in the safety hold, so it can't be restored.";
 
+/**
+ * Objects a hold may never move (P2-GATE, defence in depth): a platform-library image is shared by
+ * every comic that picked it, and a publication copy is the live link's file. quarantine() copies
+ * its source to q/ and then DELETES the source and its size variants, and restoreQuarantined refuses
+ * both lanes as destinations — so a hold there could never be undone and would break other comics or
+ * the link. Both stores refuse them, whoever the caller is: safety marks such an image X in the one
+ * comic instead (cases.ts), and a publication's copies come down through removePublicationObjects.
+ */
+const assertQuarantinable = (path: string): void => {
+  if (isLibraryPath(path) || path.startsWith('pub/')) {
+    throw new StudioError('BAD_REQUEST', 'A shared platform image or a published copy can’t be moved to the safety hold.', { status: 400 });
+  }
+};
+
 /** Size-variant path for an asset path: `<base>_w480.webp` (any source extension is dropped). */
 export const variantPathFor = (path: string, width: number): string => `${path.replace(/\.[A-Za-z0-9]{1,5}$/, '')}_w${width}.webp`;
 
@@ -1273,6 +1287,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
   const quarantine: AssetStore['quarantine'] = async (path, reason) => {
     if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
     if (path.startsWith('q/')) return { quarantinePath: path };
+    assertQuarantinable(path);
     const owner = pathOwner(path);
     // Deterministic: a retried quarantine finds its own copy instead of making another.
     const quarantinePath = quarantinePathFor(path);
@@ -1666,6 +1681,7 @@ export function createMemoryAssetStore(): MemoryAssetStore {
     async quarantine(path, reason) {
       if (!isSafeStoragePath(path)) throw new StudioError('BAD_REQUEST', 'Invalid image path.', { status: 400 });
       if (path.startsWith('q/')) return { quarantinePath: path };
+      assertQuarantinable(path);
       const quarantinePath = quarantinePathFor(path);
       const data = files.get(path);
       if (!data && !files.has(quarantinePath)) throw new StudioError('NOT_FOUND', 'That image is missing from storage.', { status: 404 });

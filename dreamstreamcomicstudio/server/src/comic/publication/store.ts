@@ -13,6 +13,7 @@ import { SLUG_RE } from '../../../../shared/comic/publication.js';
 import { isContentRating, type ContentRating } from '../../../../shared/comic/safety.js';
 import { logger } from '../../lib/logger.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
+import { jsonbSafe, jsonbSafeText } from '../store.js';
 import { StudioError } from '../types.js';
 import type { PublicationRow, PublicationStore, StatsRow } from './index.js';
 
@@ -29,6 +30,7 @@ export interface PublicationBackend extends PublicationStore {
    * title/logline) becomes the row's name and state.overview, so the gallery shows what passed
    * the publish gate — never a later, unreviewed edit of the live doc. `contentRating` mirrors the
    * frozen publish-time rating to projects.content_rating (the gallery's "Kids-friendly" filter).
+   * While public, the row carries no owner-written image URLs (coverImageUrl, panels, styleVariants).
    */
   mirrorProject(args: MirrorArgs): Promise<void>;
   /** Public @username (never email or real name), only for showCreator. */
@@ -197,7 +199,9 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
     async upsert(row) {
       // Owner-scoped update first; insert only when this owner has no row. Never re-homes a row:
       // an insert that collides on project_id (someone else's row) is refused.
-      const payload = rowToDb(row);
+      // jsonb-safe (P2-GATE L5): a NUL or half an emoji anywhere in the snapshot, card or safety
+      // would make Postgres refuse the whole row (22P05 / 22P02) and so fail the publish.
+      const payload = rowToDb(jsonbSafe(row));
       const db = admin();
       const collision = (error: unknown) => pgCode(error) === '23505' && /slug|asset_key/i.test(`${(error as PgError).message || ''}`);
       const { data: hit, error } = await db.from('comic_publications').update(payload).eq('project_id', row.projectId).eq('user_id', row.userId).select('id');
@@ -271,9 +275,11 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
       const { data, error } = await db.from('projects').select('state').eq('id', projectId).eq('user_id', userId).maybeSingle();
       if (error) throw unavailable(error, 'save');
       if (!data) throw new StudioError('NOT_FOUND', "That comic doesn't exist or you don't have access to it.", { status: 404 });
-      const state = mirrorState(isRecord((data as { state?: unknown }).state) ? ((data as { state: Record<string, unknown> }).state) : {}, { isPublic, shareSlug, publicCover, publishedAt, listing });
+      // jsonb-safe: the published title/blurb and the stored state it is merged into (a NUL or lone
+      // surrogate in either would make the mirror — and so the publish — fail).
+      const state = jsonbSafe(mirrorState(isRecord((data as { state?: unknown }).state) ? ((data as { state: Record<string, unknown> }).state) : {}, { isPublic, shareSlug, publicCover, publishedAt, listing }));
       const patch: Record<string, unknown> = { is_public: isPublic, state };
-      if (isPublic && listing) patch.name = listingName(listing.name);
+      if (isPublic && listing) patch.name = jsonbSafeText(listingName(listing.name));
       const rating = ratingColumn(contentRating);
       if (rating !== undefined) patch.content_rating = rating;
       let { error: updateError } = await db.from('projects').update(patch).eq('id', projectId).eq('user_id', userId);
@@ -351,6 +357,13 @@ export function mirrorState(
     // The gallery cover is the opaque published copy, never a live draft path.
     if (m.publicCover && m.publicCover.startsWith('pub/')) state.coverImageId = m.publicCover;
     else delete state.coverImageId;
+    // S4: nothing a public reader could sign or show besides that copy. coverImageUrl, panels[].imageUrl/
+    // imageId and styleVariants[] are owner-written (the v4 editor), so a public listing row never carries
+    // them — the gallery, profile and image proxy then have no private path to fall back to. The owner's own
+    // state is untouched (the doc mirror restores these on the next private save).
+    delete state.coverImageUrl;
+    state.panels = [];
+    state.styleVariants = [];
     state.stylePrompt = '';
     // The gallery blurb is the PUBLISHED logline (it passed the gate), never a later live edit.
     if (m.listing) state.overview = String(m.listing.overview || '').slice(0, 600);
@@ -424,7 +437,8 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
       if (row.status === 'live' && (!row.slug || !row.assetKey || !row.snapshot)) throw new Error('comic_publications_live_complete');
       if (row.slug && !SLUG_RE.test(row.slug)) throw new Error('comic_publications_slug_shape');
       ids += 1;
-      rows.set(row.projectId, cloneJson({ ...row, id: prev?.id || row.id || `pub-${ids}` }));
+      // Same rule as production: what is stored is jsonb-safe (tests store what production stores).
+      rows.set(row.projectId, cloneJson(jsonbSafe({ ...row, id: prev?.id || row.id || `pub-${ids}` })));
       store.upserts += 1;
     },
     async stats(id, days) {
@@ -444,8 +458,8 @@ export function createMemoryPublicationStore(): MemoryPublicationStore {
       const p = projects.get(projectId);
       if (!p || p.userId !== userId) throw new StudioError('NOT_FOUND', 'missing', { status: 404 });
       p.isPublic = isPublic && !p.forcedPrivate;
-      p.state = mirrorState(p.state, { isPublic, shareSlug, publicCover, publishedAt, listing });
-      if (isPublic && listing) p.name = listingName(listing.name);
+      p.state = jsonbSafe(mirrorState(p.state, { isPublic, shareSlug, publicCover, publishedAt, listing }));
+      if (isPublic && listing) p.name = jsonbSafeText(listingName(listing.name));
       const rating = ratingColumn(contentRating);
       if (rating !== undefined) p.contentRating = rating;
     },

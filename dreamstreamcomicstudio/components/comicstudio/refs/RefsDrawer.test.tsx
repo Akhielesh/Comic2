@@ -145,6 +145,11 @@ describe('RefsDrawer', () => {
     expect(studio.act).not.toHaveBeenCalled();
     const cta = screen.getByRole('button', { name: /Make the sheet/ });
     expect(cta.textContent).toMatch(/Make the sheet ≈ \$0\.\d\d$/);
+    // The sentence beside the button has a real flex basis, so a long button wraps below it
+    // instead of squeezing the text into a sliver (the CI layout smoke caught a 42 px column).
+    const sentence = screen.getByText(/One drawn model sheet keeps/);
+    expect(sentence.className).toMatch(/\bbasis-56\b/);
+    expect(sentence.className).not.toMatch(/\bflex-1\b/);
     fireEvent.click(cta);
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_sheets', characterIds: ['ch_maya'] });
     fireEvent.click(screen.getByRole('radio', { name: 'Sheet only' }));

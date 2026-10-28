@@ -343,7 +343,9 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
 
       {hint && (hint.missing || hint.changed) && character && (
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#D97757]/30 bg-[#D97757]/[0.06] p-3">
-          <p className="min-w-0 flex-1 text-[13px] text-[var(--ds-ink)]">
+          {/* A real flex basis (not flex-1's 0) so a long button wraps below the sentence instead of
+              squeezing it into a sliver — the CI smoke caught the text spilling at 768–1440 px. */}
+          <p className="min-w-0 grow basis-56 text-[13px] text-[var(--ds-ink)]">
             {hint.changed
               ? `New photos since ${name}'s sheet was drawn. It stays as it is until you redraw it.`
               : `One drawn model sheet keeps ${name} the same on every page.`}
