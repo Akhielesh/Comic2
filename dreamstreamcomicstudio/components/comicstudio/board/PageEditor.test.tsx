@@ -431,16 +431,61 @@ describe('PageEditor — prices, versions, aspect and safety (P2-EDITOR)', () =>
   });
 
   it('safety: a blocked take is a tile with Redraw safer (a safe forced redraw) and Check again', () => {
+    // An admin (not governed): the veil's price reads in dollars, like the editor's own Redraw.
+    allowance.status = {
+      enabled: true,
+      governed: false,
+      pctUsed: 0,
+      pctLeft: 100,
+      exhausted: false,
+      crossed: [],
+      resetsAt: null,
+      friendlyUnits: null,
+      usePlatformAllowance: true,
+      byokFallbackMode: 'ask',
+      byokAvailable: false
+    };
     const doc = makeSampleDoc((d) => {
       d.pages[0].render.asset = { ...d.pages[0].render.asset!, safety: { assessed: 'X', at: 1 } };
     });
     const { studio } = openAt(null, doc);
     const stage = screen.getByTestId('editor-canvas-area');
     expect(stage.querySelector('img')).toBeNull();
-    fireEvent.click(within(stage).getByRole('button', { name: 'Redraw safer' }));
+    // Priced like Redraw (it is this page's forced render): admins and own keys read the price — the
+    // same figure the editor's own Redraw shows.
+    const redraw = within(stage).getByRole('button', { name: /^Redraw safer · \$\d/ });
+    expect(screen.getByRole('button', { name: /Try another take/ }).textContent).toContain(redraw.textContent!.split(' · ')[1]);
+    fireEvent.click(redraw);
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_1'], force: true, safe: true });
     fireEvent.click(within(stage).getByRole('button', { name: 'Check again' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'safety_recheck', target: { kind: 'page', id: 'pg_1' } });
+  });
+
+  it('safety: Redraw safer on the veil carries its price in usage terms for governed users (never dollars)', () => {
+    allowance.status = {
+      enabled: true,
+      governed: true,
+      pctUsed: 10,
+      pctLeft: 90,
+      exhausted: false,
+      crossed: [],
+      resetsAt: null,
+      friendlyUnits: { standardPages: 100, draftPages: 300, pctPerStandardPage: 1, label: '' },
+      usePlatformAllowance: true,
+      byokFallbackMode: 'ask',
+      byokAvailable: false
+    };
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].render.asset = { ...d.pages[0].render.asset!, safety: { assessed: 'X', at: 1 } };
+    });
+    const { studio } = openAt(null, doc);
+    const redraw = within(screen.getByTestId('editor-canvas-area')).getByRole('button', { name: /^Redraw safer · / });
+    expect(redraw).toHaveTextContent(/% of your usage/);
+    expect(redraw.textContent).not.toMatch(/\$/);
+    // The same quote the editor's own Redraw shows.
+    expect(screen.getByRole('button', { name: /Try another take/ }).textContent).toContain(redraw.textContent!.split(' · ')[1]);
+    fireEvent.click(redraw);
+    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_1'], force: true, safe: true });
   });
 
   it('safety: a blocked take cannot be marked up, AI-edited or fitted — the tools say why (no paid call is ever offered on it)', () => {

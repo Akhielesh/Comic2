@@ -33,6 +33,7 @@ import { ReaderLanguagePicker } from './i18n/ReaderLanguagePicker';
 import { nextLanguage, readStoredReaderLang, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
 import { readerString } from './i18n/readerStrings';
 import { ImmersiveReader } from './immersive/ImmersiveReader';
+import { ExportError } from './export/errors';
 import { publicExportLanguage, publicExportLanguages } from './export/publicLanguages';
 import { EmptyArt } from './library/procedural/EmptyArt';
 import { useFormFactor } from './mobile/useFormFactor';
@@ -115,6 +116,13 @@ export const downloadDoneText = (
   }
   return res.notice ? `${text} ${res.notice}` : text;
 };
+
+/**
+ * A calm line for a download that failed: an export's own message (ExportError) is written for the
+ * reader; anything else (a network TypeError, a decoder crash) never shows raw.
+ */
+export const downloadFailedText = (err: unknown): string =>
+  err instanceof ExportError && err.message.trim() ? `Couldn’t prepare the download: ${err.message.trim()}` : 'Couldn’t prepare the download. Please try again.';
 
 const englishName = (code: string) => languageSpec(code)?.english || code;
 
@@ -264,15 +272,17 @@ const ReaderShell: React.FC<ShellProps> = ({
   const nameDownloadLang = exportable.length > 1 || !readingExportable;
   const [downloading, setDownloading] = useState<DownloadKind | null>(null);
   const safeUrlFor = useCallback((a?: AssetRef | string | null) => (a && typeof a === 'object' && !canServeToOwner(a) ? undefined : urlFor(a)), [urlFor]);
+  // Resolves the line it showed, so a reader drawn over this notice (the immersive reader, the embed's
+  // full-screen view) can repeat it.
   const download = useCallback(
-    async (kind: DownloadKind) => {
-      if (!doc || downloading || !allowDownload) return;
+    async (kind: DownloadKind): Promise<string | undefined> => {
+      if (!doc || downloading || !allowDownload) return undefined;
       setDownloading(kind);
       setNotice(kind === 'pdf' ? 'Preparing the PDF…' : kind === 'zip' ? 'Preparing the page images…' : 'Preparing every language…');
       try {
         let res: Parameters<typeof downloadDoneText>[1];
         if (mode === 'slug') {
-          if (!publication || !urls) throw new Error('the comic is still loading.');
+          if (!publication || !urls) throw new ExportError('the comic is still loading.');
           const { downloadPublicComic } = await import('./export/publicDownload');
           res = kind === 'pdf' ? await downloadPublicComic({ publication, doc, urls }, 'pdf', { lang }) : await downloadPublicComic({ publication, doc, urls }, kind, { lang });
         } else if (kind === 'pdf') {
@@ -283,9 +293,13 @@ const ReaderShell: React.FC<ShellProps> = ({
           const { exportPngZip } = await import('./export/zipExport');
           res = await exportPngZip(doc, safeUrlFor, { lang });
         }
-        setNotice(downloadDoneText(kind, res, kind !== 'zip_all' && nameDownloadLang && downloadLang ? englishName(downloadLang) : undefined));
+        const text = downloadDoneText(kind, res, kind !== 'zip_all' && nameDownloadLang && downloadLang ? englishName(downloadLang) : undefined);
+        setNotice(text);
+        return text;
       } catch (err) {
-        setNotice(`Couldn’t prepare the download: ${(err as Error)?.message || 'please try again.'}`);
+        const text = downloadFailedText(err);
+        setNotice(text);
+        return text;
       } finally {
         setDownloading(null);
       }
@@ -311,8 +325,10 @@ const ReaderShell: React.FC<ShellProps> = ({
             : [])
         ]
       : [];
-  // The readers' own built-in PDF (the immersive end card, the embed's menu) exports the language on
-  // screen: offer it only when that language is one the author published.
+  // The readers' download buttons (the immersive HUD and end card, the embed's menu) are offered only
+  // when the language on screen is one the author published — and they never run the readers' own
+  // built-in PDF (which draws from display URLs): they call `download('pdf')` above, so a share link's
+  // file always comes from downloadPublicComic (pub/ images, published languages only).
   const builtInDownload = allowDownload && (mode === 'project' || readingExportable);
   const moreItems: ReaderMenuItem[] = canReport
     ? [{ id: 'report', label: 'Report this comic', icon: <Flag className="h-4 w-4" aria-hidden />, onSelect: () => setReportOpen(true) }]
@@ -514,8 +530,9 @@ const ReaderShell: React.FC<ShellProps> = ({
         chrome={embed || compact ? 'auto-hide' : 'docked'}
         immersiveEntry
         onShare={embed && shareUrl ? () => void shareNow() : undefined}
-        // The embed has no header menu: its ⋯ Download goes through the same gated public download.
-        onDownload={embed && builtInDownload ? () => void download('pdf') : undefined}
+        // The embed has no header menu: its ⋯ Download goes through the same gated public download (its
+        // full-screen reader repeats the returned line over this page's notice).
+        onDownload={embed && builtInDownload ? () => download('pdf') : undefined}
         onReport={
           embed && canReport
             ? (n) => {
@@ -597,6 +614,8 @@ const ReaderShell: React.FC<ShellProps> = ({
           initialGuided={immersive.guided}
           initialPanel={immersive.panel}
           allowDownload={builtInDownload}
+          // The host's gated download replaces the immersive reader's built-in PDF (onDownload wins).
+          onDownload={builtInDownload ? () => download('pdf') : undefined}
           syncUrl={mode === 'slug'}
           onImageError={onImageError}
           onPageChange={onPageChange}

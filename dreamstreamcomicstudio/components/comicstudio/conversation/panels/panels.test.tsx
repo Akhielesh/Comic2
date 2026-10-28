@@ -4,7 +4,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { pageSpecHash, type ComicDoc } from '../../../../shared/comic/doc';
 import { STYLE_PRESETS } from '../../../../shared/comic/stylePresets';
 import { FormatPanel, drawnCurrentPages, isStalingChange, redrawQuoteUsd } from './FormatPanel';
-import { StylePanel, presetOps } from './StylePanel';
+import { StylePanel, presetOps, type StylePanelProps } from './StylePanel';
+import type { StudioActOutcome, StudioController } from '../../types';
 import { QualityPanel } from './QualityPanel';
 import { makeSampleDoc, resetUsageStatus, showDollarPrices } from '../testing/fixtures';
 
@@ -88,6 +89,25 @@ describe('StylePanel — library tiles', () => {
     const target = STYLE_PRESETS.find((p) => p.id !== doc.style.presetId)!;
     fireEvent.click(screen.getByRole('radio', { name: new RegExp(target.name) }));
     expect(patch).toHaveBeenCalledWith(presetOps(doc, target));
+  });
+});
+
+describe('StylePanel — takes the live controller’s act (gate F8/L8)', () => {
+  it('accepts studio.act as is — it resolves a StudioActOutcome — and fires Explore through it', async () => {
+    // Compile-time pin: StudioController['act'] (Promise<StudioActOutcome | void>) must be assignable to
+    // the panel's prop (StudioComposer and RecapCard pass studio.act straight in); `npm run typecheck`
+    // failed here while the prop was typed Promise<void> | void.
+    const outcome: StudioActOutcome = { ok: true, aborted: false, retryable: false, gated: false };
+    const act: StudioController['act'] = vi.fn(async () => outcome);
+    const doc = makeSampleDoc();
+    doc.style = { ...doc.style, options: [] };
+    const props: StylePanelProps = { doc, patch: vi.fn(), act, onDescribeOwn: vi.fn(), onDone: vi.fn() };
+    const onDone = props.onDone as ReturnType<typeof vi.fn>;
+    render(<StylePanel {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /Explore 3 directions/ }));
+    expect(act).toHaveBeenCalledWith(expect.objectContaining({ type: 'render_style_options' }));
+    expect(onDone).toHaveBeenCalled();
+    await expect((act as ReturnType<typeof vi.fn>).mock.results[0].value).resolves.toBe(outcome);
   });
 });
 

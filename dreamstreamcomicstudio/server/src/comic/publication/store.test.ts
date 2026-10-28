@@ -3,7 +3,8 @@
 // projects.content_rating (service role; the gallery's "Kids-friendly (G/PG)" filter reads it).
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
-import { createSupabasePublicationStore, type MirrorArgs } from './store.js';
+import type { ComicDoc } from '../../../../shared/comic/doc.js';
+import { createMemoryPublicationStore, createSupabasePublicationStore, mirrorState, rowFromDb, type MirrorArgs } from './store.js';
 
 interface Update {
   table: string;
@@ -117,5 +118,93 @@ describe('moderation maintenance reads (L11)', () => {
     expect(calls.filter(([m]) => m === 'eq')).toEqual([['eq', ['project_id', 'p-1']]]);
     const missing = recordingAdmin({ data: null, error: { code: '42P01' } });
     await expect(createSupabasePublicationStore({ admin: missing.admin }).getByProject!('p-1')).resolves.toBeNull();
+  });
+});
+
+// ── P2-GATE follow-ups: owner-written listing images, jsonb-safe writes ─────────────────────────
+describe('mirrorState: a public v4 listing row never carries owner-written image URLs (S4)', () => {
+  const ownerWritten = () => ({
+    studioVersion: 4,
+    shareSlug: 'old',
+    coverImageId: 'u/u-1/p/p-1/img/draft-cover.webp',
+    coverImageUrl: 'https://x.test/owner-picked.jpg',
+    panels: [{ id: 'p1', imageUrl: 'https://x.test/panel.jpg', imageId: 'u/u-1/p/p-1/img/panel.webp' }],
+    styleVariants: [{ id: 's1', imageUrl: 'https://x.test/style.jpg', imageId: 'u/u-1/p/p-1/img/style.webp' }],
+    stylePrompt: 'private spec',
+    overview: 'live draft text'
+  });
+
+  it('going public: the cover is the opaque published copy only; coverImageUrl, panels and styleVariants are gone', () => {
+    const state = mirrorState(ownerWritten(), { isPublic: true, shareSlug: 'Ab3dEf6hIj9kLm2nP', publicCover: 'pub/Ab3dEf6hIj9kLm2nOp5qRs/cover-0123456789ab.webp', publishedAt: 5, listing: { name: 'Spice Run', overview: 'Published blurb' } });
+    expect(state).toMatchObject({ coverImageId: 'pub/Ab3dEf6hIj9kLm2nOp5qRs/cover-0123456789ab.webp', panels: [], styleVariants: [], stylePrompt: '', overview: 'Published blurb', studioVersion: 4 });
+    expect('coverImageUrl' in state).toBe(false);
+    // Nothing a public reader could sign or show is left besides the published copy.
+    expect(JSON.stringify(state)).not.toMatch(/x\.test|draft-cover|panel\.webp|style\.webp/);
+  });
+
+  it('the memory store applies the same rule; leaving public never touches the owner’s private state', async () => {
+    const store = createMemoryPublicationStore();
+    store.seedProject('p-1', 'u-1');
+    store.projects.get('p-1')!.state = ownerWritten();
+    await store.mirrorProject({ ...base, publicCover: 'pub/Ab3dEf6hIj9kLm2nOp5qRs/cover-0123456789ab.webp' });
+    const pub = store.projects.get('p-1')!.state;
+    expect(pub.panels).toEqual([]);
+    expect(pub.styleVariants).toEqual([]);
+    expect('coverImageUrl' in pub).toBe(false);
+    store.projects.get('p-1')!.state = ownerWritten();
+    await store.mirrorProject({ ...base, isPublic: false, shareSlug: null, publicCover: null, listing: undefined });
+    expect(store.projects.get('p-1')!.state).toMatchObject({ coverImageUrl: 'https://x.test/owner-picked.jpg', panels: [{ id: 'p1' }], styleVariants: [{ id: 's1' }] });
+  });
+});
+
+/** PostgREST stand-in for upsert: update(...).eq().eq().select() finds no row, so insert(payload) runs. */
+function writeAdmin() {
+  const writes: { kind: 'update' | 'insert'; table: string; payload: Record<string, unknown> }[] = [];
+  const client = {
+    from(table: string) {
+      return {
+        update(payload: Record<string, unknown>) {
+          writes.push({ kind: 'update', table, payload });
+          const q = { eq: () => q, select: async () => ({ data: [], error: null }), then: (ok: (v: { error: unknown }) => unknown) => Promise.resolve({ error: null }).then(ok) };
+          return q;
+        },
+        insert: async (payload: Record<string, unknown>) => (writes.push({ kind: 'insert', table, payload }), { error: null }),
+        select() {
+          const q = { eq: () => q, maybeSingle: async () => ({ data: { state: { panels: [{ imageUrl: 'https://x.test/\u0000p.jpg' }] } }, error: null }) };
+          return q;
+        }
+      };
+    }
+  };
+  return { admin: () => client as unknown as SupabaseClient, writes };
+}
+
+describe('jsonb-safe publication writes (P2-GATE L5)', () => {
+  const BAD = /[\u0000]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it('upsert: a NUL or half an emoji anywhere in the snapshot, card or settings never reaches Postgres (and whole emoji survive)', async () => {
+    const row = rowFromDb({ id: 'x', project_id: 'p-1', user_id: 'u-1', status: 'live', visibility: 'unlisted', slug: 'Ab3dEf6hIj9kLm2nP', asset_key: 'Ab3dEf6hIj9kLm2nOp5qRs', languages: ['en'], card: {}, safety: {} });
+    const snapshot = { id: 'p-1', brief: { title: 'Spice\u0000 Run \uD83C', logline: 'A fox 🦊 races\uDC00' }, pages: [{ id: 'pg_1', panels: [{ lines: [{ text: 'Run!\u0000' }] }] }], ['k\uD800ey']: 1 } as unknown as ComicDoc;
+    const { admin, writes } = writeAdmin();
+    await createSupabasePublicationStore({ admin }).upsert({ ...row, snapshot, card: { title: 'Spice\u0000 Run', alt: 'cover \uDBFF' } as never, safety: { note: 'x\u0000' } });
+    expect(writes.map((w) => w.kind)).toEqual(['update', 'insert']);
+    for (const w of writes) {
+      const json = JSON.stringify(w.payload);
+      expect(BAD.test(JSON.parse(json).snapshot.brief.title)).toBe(false);
+      expect(json).not.toMatch(/\\u0000|\\ud8[0-9a-f]{2}(?!\\udc)|\\udbff/i);
+      expect((w.payload.snapshot as ComicDoc).brief.logline).toContain('🦊');
+      expect((w.payload.snapshot as ComicDoc).pages[0].panels[0].lines[0].text).toBe('Run!');
+    }
+    // The caller's row is never mutated (copy-on-write).
+    expect(snapshot.brief.title).toBe('Spice\u0000 Run \uD83C');
+  });
+
+  it('mirrorProject: the listing name, blurb and existing state are jsonb-safe too', async () => {
+    const { admin, writes } = writeAdmin();
+    await createSupabasePublicationStore({ admin }).mirrorProject({ ...base, isPublic: false, listing: undefined });
+    await createSupabasePublicationStore({ admin }).mirrorProject({ ...base, listing: { name: 'Spice\u0000 Run \uD83C', overview: 'Blurb\uDC00 🦊' } });
+    for (const w of writes) expect(JSON.stringify(w.payload)).not.toMatch(/\\u0000|\\ud8[0-9a-f]{2}(?!\\udc)|\\udc00/i);
+    expect(writes[1].payload).toMatchObject({ name: 'Spice Run �' });
+    expect((writes[1].payload.state as Record<string, unknown>).overview).toBe('Blurb� 🦊');
   });
 });

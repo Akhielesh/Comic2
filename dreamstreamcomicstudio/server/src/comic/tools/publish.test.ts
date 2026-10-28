@@ -8,6 +8,8 @@ import * as publication from '../publication/publication.js';
 import { createMemoryPublicationStore } from '../publication/store.js';
 import { PUBLISH_ACTIONS } from '../actions/publish.js';
 import { publicationSummary, publishToolGroup } from './publish.js';
+import { configureSafety } from '../safety/deps.js';
+import { installSafetyFakes, resetSafety } from '../safety/testkit.js';
 
 const drawn = (): ComicDoc => {
   const doc = plannedDoc('proj-1');
@@ -82,6 +84,59 @@ describe('publish tool group', () => {
     expect(turn.cards.map((c) => (c.type === 'publish' ? c.mode : c.type))).toEqual(['unpublish', 'regenerate']);
     expect(publicationSummary(doc)[0]).toMatch(/^Published: public · \/c\/Ab3…/);
     expect(publicationSummary(doc)[0]).not.toContain('Ab3dEf6hIj9kLm2nP');
+  });
+});
+
+// P2-GATE: the doc mirror keeps saying 'suspended' after a moderator lifts a hold (the row stays
+// suspended until the owner republishes). The REST/UI publish checks the live hold flag
+// (publishWithOutcome → projectFlags), so the director must too — never the mirror alone.
+describe('publish_comic after a moderation pause', () => {
+  const suspendedDoc = (): ComicDoc => {
+    const doc = drawn();
+    doc.publication = { visibility: 'unlisted', status: 'suspended', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };
+    return doc;
+  };
+  afterEach(() => resetSafety());
+
+  it('while the hold is on: refuses, shows no card', async () => {
+    const fakes = installSafetyFakes();
+    fakes.store.projects.set('proj-1', { ownerUserId: 'user-1', isForcedPrivate: true });
+    const { tools, turn } = toolsFor(suspendedDoc());
+    expect(await tools.publish_comic.execute({ visibility: 'unlisted' })).toMatch(/paused by moderation/);
+    expect(turn.cards).toEqual([]);
+  });
+
+  it('once a moderator lifted the hold: offers the Publish card like the Share sheet does (a fresh publish, not an update)', async () => {
+    const fakes = installSafetyFakes();
+    fakes.store.projects.set('proj-1', { ownerUserId: 'user-1', isForcedPrivate: false });
+    const { tools, turn } = toolsFor(suspendedDoc());
+    const text = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    expect(text).toMatch(/Publish card shown/);
+    expect(text).toMatch(/NOT published yet/);
+    expect(turn.cards).toEqual([expect.objectContaining({ type: 'publish', mode: 'publish', status: 'pending', request: { visibility: 'unlisted' } })]);
+    // The summary no longer forbids the offer outright: publish_comic itself checks the hold.
+    expect(publicationSummary(suspendedDoc())[0]).toMatch(/publish_comic.*checks/);
+  });
+
+  it("can't tell (lookup failed, no row, someone else's project): stays refused, honestly", async () => {
+    const fakes = installSafetyFakes();
+    configureSafety({
+      store: Object.assign(Object.create(fakes.store), {
+        projectInfo: async () => {
+          throw Object.assign(new Error('connection failure'), { code: '08006' });
+        }
+      })
+    });
+    const failing = toolsFor(suspendedDoc());
+    expect(await failing.tools.publish_comic.execute({ visibility: 'unlisted' })).toMatch(/couldn.t check/i);
+    expect(failing.turn.cards).toEqual([]);
+
+    const none = installSafetyFakes();
+    const missing = toolsFor(suspendedDoc());
+    expect(await missing.tools.publish_comic.execute({ visibility: 'unlisted' })).toMatch(/couldn.t check/i);
+    none.store.projects.set('proj-1', { ownerUserId: 'someone-else', isForcedPrivate: false });
+    expect(await missing.tools.publish_comic.execute({ visibility: 'unlisted' })).toMatch(/couldn.t check/i);
+    expect(missing.turn.cards).toEqual([]);
   });
 });
 

@@ -34,10 +34,16 @@ const providers = vi.hoisted(() => ({
     imageDataUrl: 'data:image/png;base64,CCCC',
     model: 'google/gemini-nano-banana-2.1',
     usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, costUsd: 0.04 }
+  })),
+  ideogram: vi.fn(async (_key: string, args: { modelId?: string }) => ({
+    dataUrl: 'data:image/png;base64,DDDD',
+    model: args?.modelId || 'ideogram/ideogram-v2',
+    timings: { apiMs: 5 }
   }))
 }));
 vi.mock('../ai/image.js', () => ({ generateGeminiImage: providers.gemini }));
 vi.mock('../ai/flux.js', () => ({ generateFluxImage: providers.flux }));
+vi.mock('../ai/ideogram.js', () => ({ generateIdeogramImage: providers.ideogram }));
 vi.mock('../ai/gateway.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ai/gateway.js')>()),
   getProvider: () => ({ generateImage: providers.openrouter }),
@@ -108,7 +114,15 @@ vi.mock('../services/platformAllowance.js', async (importOriginal) => ({
   getAllowanceStatus: vi.fn(async () => usage.status)
 }));
 
-const { imageRouter, resolveImageModelAccess, freeDailyCapApplies, publicImageUsage, IMAGE_MODEL_USAGE_MESSAGE } = await import('./image.js');
+const {
+  imageRouter,
+  resolveImageModelAccess,
+  freeDailyCapApplies,
+  publicImageUsage,
+  IMAGE_MODEL_USAGE_MESSAGE,
+  IDEOGRAM_MODEL_USAGE_MESSAGE,
+  IDEOGRAM_UNKNOWN_MODEL_MESSAGE
+} = await import('./image.js');
 const { errorHandler } = await import('../middleware/errors.js');
 const { resolveStageModel } = await import('../ai/stageModels.js');
 
@@ -154,6 +168,7 @@ beforeEach(() => {
   providers.gemini.mockClear();
   providers.flux.mockClear();
   providers.openrouter.mockClear();
+  providers.ideogram.mockClear();
   storage.persistGeneratedImage.mockClear();
 });
 
@@ -298,6 +313,83 @@ describe('S12: the legacy OpenRouter route gates platform-funded image models li
     expect(providers.openrouter).not.toHaveBeenCalled();
     policy.plan = 'pro';
     expect((await post('/openrouter', { model: 'google/gemini-3-pro-image' })).status).toBe(200);
+  });
+});
+
+describe('Ideogram on the platform key: governed users get the everyday list only (owner decision)', () => {
+  const ownKey = () => {
+    meter.byok = true;
+    meter.reservation = { ...governedReservation(), byokBypass: true, governed: false, walletSkipped: false };
+  };
+
+  it.each([
+    ['no model sent (the route default)', {}],
+    ['Ideogram V2', { modelId: 'ideogram/ideogram-v2' }],
+    ['Ideogram V2 Turbo', { modelId: 'ideogram/ideogram-v2-turbo' }],
+    // A caller-chosen id the route does not know: it would run Ideogram's default version while the
+    // hold and the settle were priced at the cheap id the caller sent.
+    ['a cheap-priced foreign id', { modelId: 'pixazo/flux-1-schnell' }],
+    ['an everyday Gemini id', { modelId: 'gemini-nano-banana-2.1' }]
+  ])('governed tester, %s: refused honestly before any hold or provider call', async (_label, body) => {
+    const res = await post('/ideogram', body);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error.code).toBe('MODEL_NOT_ALLOWED_FOR_PLAN');
+    expect(json.error.message).toBe(IDEOGRAM_MODEL_USAGE_MESSAGE);
+    expect(json.error.message).not.toMatch(/plan|\$/i);
+    expect(meter.reserveForOperation).not.toHaveBeenCalled();
+    expect(providers.ideogram).not.toHaveBeenCalled();
+    expect(meter.settleReservedOperation).not.toHaveBeenCalled();
+    expect(meter.releaseReservedOperation).not.toHaveBeenCalled();
+  });
+
+  it('a usage lookup that fails closes to the everyday list (refused, nothing spent)', async () => {
+    const { getAllowanceStatus } = await import('../services/platformAllowance.js');
+    vi.mocked(getAllowanceStatus).mockRejectedValueOnce(new Error('status down'));
+    const res = await post('/ideogram', { modelId: 'ideogram/ideogram-v2' });
+    expect(res.status).toBe(403);
+    expect(providers.ideogram).not.toHaveBeenCalled();
+  });
+
+  it('allow_pro rows, exempt rows and admins run the Ideogram models this route knows', async () => {
+    usage.status = { enabled: true, governed: true, allowPro: true };
+    expect((await post('/ideogram', { modelId: 'ideogram/ideogram-v2-turbo' })).status).toBe(200);
+    usage.status = { enabled: true, governed: false, allowPro: false };
+    expect((await post('/ideogram', {})).status).toBe(200);
+    usage.status = { enabled: true, governed: true, allowPro: false };
+    usage.admin = true;
+    expect((await post('/ideogram', { modelId: 'ideogram/ideogram-v2' })).status).toBe(200);
+    expect(providers.ideogram).toHaveBeenCalledTimes(3);
+    expect(meter.reserveForOperation).toHaveBeenCalledTimes(3);
+  });
+
+  it('…but even they cannot price a platform Ideogram call at a foreign model id', async () => {
+    usage.admin = true;
+    const res = await post('/ideogram', { modelId: 'pixazo/flux-1-schnell' });
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error.message).toBe(IDEOGRAM_UNKNOWN_MODEL_MESSAGE);
+    expect(json.error.details.allowedModels).toEqual(expect.arrayContaining(['ideogram/ideogram-v2', 'ideogram/ideogram-v2-turbo']));
+    expect(meter.reserveForOperation).not.toHaveBeenCalled();
+    expect(providers.ideogram).not.toHaveBeenCalled();
+  });
+
+  it('the caller’s own Ideogram key is never gated (governed or not, any model id)', async () => {
+    ownKey();
+    expect((await post('/ideogram', { modelId: 'ideogram/ideogram-v2' })).status).toBe(200);
+    expect((await post('/ideogram', { modelId: 'some/other-id' })).status).toBe(200);
+    expect(providers.ideogram).toHaveBeenCalledTimes(2);
+  });
+
+  it('metering off (legacy plan gate): a free plan is refused on the platform key, a paid plan runs', async () => {
+    usage.metering = false;
+    const res = await post('/ideogram', { modelId: 'ideogram/ideogram-v2' });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('MODEL_NOT_ALLOWED_FOR_PLAN');
+    expect(providers.ideogram).not.toHaveBeenCalled();
+    policy.plan = 'pro';
+    expect((await post('/ideogram', { modelId: 'ideogram/ideogram-v2' })).status).toBe(200);
+    expect(providers.ideogram).toHaveBeenCalledTimes(1);
   });
 });
 

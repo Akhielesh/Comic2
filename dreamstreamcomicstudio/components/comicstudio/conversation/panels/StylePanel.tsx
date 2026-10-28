@@ -15,6 +15,7 @@ import { stylePreviewId } from '../../../../shared/comic/library';
 import { LibraryImage } from '../../library/LibraryImage';
 import { PresetThumb } from '../../library/procedural/PresetThumb';
 import { useCostFormat } from '../cost';
+import type { StudioActOutcome } from '../../types';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
 
 /** Ops that make a preset the (drafted) style. A locked board from another look is dropped. */
@@ -58,7 +59,8 @@ export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, w
 export interface StylePanelProps {
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
-  act: (action: StudioAction) => Promise<void> | void;
+  /** `studio.act` as is: it resolves the action's outcome, which the panel never reads (it fires and moves on). */
+  act: (action: StudioAction) => Promise<StudioActOutcome | void> | void;
   /** Prefill the composer so the user can describe a look in their own words. */
   onDescribeOwn: () => void;
   /** Close the panel (after an action that moves the conversation on). */

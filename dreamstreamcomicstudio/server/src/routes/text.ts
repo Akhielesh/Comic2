@@ -11,7 +11,7 @@ import {
   continuityAudit
 } from '../ai/text.js';
 import { TEXT_MODEL, NVIDIA_TEXT_MODEL } from '../config.js';
-import { pickTextModel, type CostPref } from '../ai/autoRouter.js';
+import { pickTextModel, TEXT_FALLBACK, type CostPref } from '../ai/autoRouter.js';
 import { resolveStageModel, type PipelineStage } from '../ai/stageModels.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import type { ChatMessage } from '../ai/providers/types.js';
@@ -46,6 +46,21 @@ const assertTextModelAccess = async (
 };
 
 type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'gemini' | 'nvidia' };
+
+/**
+ * Every model a /api/text/* pipeline call may be billed for (usage budget). These routes run
+ * through ai/client.ts, whose gateway text client ALWAYS sends a provider-level retry model —
+ * TEXT_FALLBACK (a paid model) on an OpenRouter key, NVIDIA_TEXT_MODEL on an NVIDIA key — and the
+ * provider retries on it when the primary fails (a busy `:free` model 429s/404s routinely). The
+ * hold is priced at the most expensive of them (reserveForOperation `pricedModels`), so a `:free`
+ * primary held at $0 can never fall through to the paid retry unreserved, and an exhausted
+ * governed user is refused before anything is spent. The Gemini SDK path has no retry model.
+ */
+export const textPricedModels = (provider: TextProvider['provider'], model: string): string[] | undefined => {
+  const retryModel = provider === 'openrouter' ? TEXT_FALLBACK : provider === 'nvidia' ? NVIDIA_TEXT_MODEL : undefined;
+  if (!retryModel) return undefined;
+  return Array.from(new Set([model, retryModel].map((m) => String(m || '').trim()).filter(Boolean)));
+};
 
 // Text generation routes through OpenRouter or NVIDIA Build (both OpenAI-compatible, via the
 // gateway shim in ai/client.ts) when their key is present, otherwise the legacy Gemini path.
@@ -125,6 +140,7 @@ textRouter.post('/analyze-script', async (req, res, next) => {
       operation: 'text.analyze_script',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'script',
@@ -185,6 +201,7 @@ textRouter.post('/story-outline', async (req, res, next) => {
       operation: 'text.story_outline',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_outline',
@@ -240,6 +257,7 @@ textRouter.post('/story-draft', async (req, res, next) => {
       operation: 'text.story_draft',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_draft',
@@ -299,6 +317,7 @@ textRouter.post('/story-tool', async (req, res, next) => {
       operation: 'text.story_tool',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_tool',
@@ -357,6 +376,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
       operation: 'text.extract_world',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'world',
@@ -440,6 +460,7 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
       operation: 'text.panel_breakdown',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: typeof req.body?.stage === 'string' ? req.body.stage : 'preview',
@@ -512,6 +533,7 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
       operation: 'text.continuity_audit',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'continuity_audit',
@@ -571,6 +593,7 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
       operation: 'text.continuity_summary',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'continuity_summary',

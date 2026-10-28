@@ -8,8 +8,14 @@ export const COMICS_ALIAS_HOSTS: readonly string[] = ['comic.dreamstreamstudio.a
 export const COMICS_ORIGIN = `https://${COMICS_HOST}`;
 export const MAIN_ORIGIN = 'https://dreamstreamstudio.ai';
 
-const currentHostname = (): string =>
-  typeof window === 'undefined' ? '' : String(window.location?.hostname || '');
+// Read through globalThis rather than the DOM `window` global: this module is also bundled into the
+// api-proxy and comics-edge Workers, whose strict typecheck (workers-types, no DOM lib) has no
+// `window`. Same behaviour: no window ⇒ '' (SSR, Node, Workers); otherwise its location's hostname.
+type HostWindow = { location?: { hostname?: string } };
+const currentHostname = (): string => {
+  const win = (globalThis as { window?: HostWindow }).window;
+  return typeof win === 'undefined' ? '' : String(win.location?.hostname || '');
+};
 
 const normalizeHost = (hostname: string): string => hostname.trim().toLowerCase().replace(/\.$/, '');
 

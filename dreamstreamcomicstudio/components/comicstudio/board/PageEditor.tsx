@@ -920,6 +920,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     ? {
         rating,
         onRedrawSafer: () => fire('safer', () => studio.act({ type: 'render_pages', pageIds: [sourcePage.id], force: true, safe: true })),
+        // A safe redraw is this page's forced render: the same quote as Redraw, in this user's terms
+        // (governed users read a share of their usage, never dollars).
+        redrawPrice: cost(renderPrice),
         onCheckAgain: () => fire('recheck', () => studio.act({ type: 'safety_recheck', target })),
         onChangeRating: () => closeEditorTo('story')
       }

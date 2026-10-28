@@ -948,7 +948,9 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
   doc.cast = asArray<Character>(input.cast).map((c) => ({
     ...c,
     tier: c.tier || 'support',
-    look: { summary: '', ...(c.look || {}) },
+    // Object.assign, not a spread literal: same keys and order (no hash churn), and no TS2783 under the
+    // Workers' strict typecheck (Character.look always carries `summary`, so the spread would overwrite it).
+    look: Object.assign({ summary: '' }, c.look || {}),
     refs: normalizeRefs(c.refs),
     sheet: asRender(c.sheet)
   }));
@@ -1376,9 +1378,8 @@ let idCounter = 0;
 /** Short unique id (prefix_random). Safe on server and client. Never called inside applyOp (R5). */
 export const newId = (prefix: string): string => {
   idCounter = (idCounter + 1) % 1679616;
-  const rand =
-    typeof globalThis.crypto !== 'undefined' && 'randomUUID' in globalThis.crypto
-      ? globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 10)
-      : Math.random().toString(36).slice(2, 12);
+  // Typed locally: workers-types (the api-proxy Worker's strict typecheck) has no `globalThis.crypto`.
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  const rand = typeof c !== 'undefined' && 'randomUUID' in c ? c.randomUUID!().replace(/-/g, '').slice(0, 10) : Math.random().toString(36).slice(2, 12);
   return `${prefix}_${rand}${idCounter.toString(36)}`;
 };

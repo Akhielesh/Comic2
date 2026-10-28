@@ -11,6 +11,8 @@ import type { ComicDoc } from '../../shared/comic/doc';
 import type { PublicComicPayload } from '../../shared/comic/publication';
 import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
 import { pageImageCache } from './immersive/pageImageCache';
+import { markIntroPlayed } from './immersive/readerPrefs';
+import { ExportError } from './export/errors';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 
 const api = vi.hoisted(() => ({
@@ -234,13 +236,57 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
   });
 
   it('an export that refuses (too big for the device) says why, and the reader keeps working', async () => {
-    zipMock.exportPngZip.mockRejectedValue(new Error('This book has too many pages to zip on this device (it would need about 900 MB of memory). Download the PDF instead — it keeps every page in one smaller file — or use a computer.'));
+    // The real refusal (zipExport → zipTooBigMessage) is an ExportError, whose message is written for the reader.
+    zipMock.exportPngZip.mockRejectedValue(
+      new ExportError('This book has too many pages to zip on this device (it would need about 900 MB of memory). Download the PDF instead — it keeps every page in one smaller file — or use a computer.', 'too_big')
+    );
     api.loadPublicComicBySlug.mockResolvedValue(payload());
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Download page images (.zip)' }));
     expect(await screen.findByText(/Couldn’t prepare the download: This book has too many pages to zip on this device/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Start reading/ })).toBeEnabled();
+  });
+
+  it('a download that fails for any other reason says so calmly — never the raw error', async () => {
+    pdfMock.exportComicPdf.mockRejectedValue(new TypeError('Failed to fetch https://public.test/pub/x/p1.webp (net::ERR_CONNECTION_RESET)'));
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download PDF' }));
+    expect(await screen.findByText('Couldn’t prepare the download. Please try again.')).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to fetch|ERR_CONNECTION_RESET/)).toBeNull();
+  });
+
+  it('the full-screen reader’s Download is the gated public download (pub/ images only), never its built-in PDF from display URLs', async () => {
+    pdfMock.exportComicPdf.mockResolvedValue({ fileName: 'x.pdf', pages: 6, failed: [], skipped: [] });
+    const p = payload();
+    markIntroPlayed(p.doc.id);
+    api.loadPublicComicBySlug.mockResolvedValue(p);
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Start reading/ }));
+    const dialog = await screen.findByTestId('immersive-reader');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }));
+    await waitFor(() => expect(pdfMock.exportComicPdf).toHaveBeenCalledTimes(1));
+    // downloadPublicComic's resolver: only pub/<22-char key>/ objects through the edge's https URL —
+    // the reader's display resolver would hand back any absolute URL as is.
+    const urlFor = pdfMock.exportComicPdf.mock.calls[0][1] as (a: unknown) => string | undefined;
+    expect(urlFor('https://evil.example/x.png')).toBeUndefined();
+    expect(urlFor({ path: 'u/someone/private.png', source: 'generated', at: 0 })).toBeUndefined();
+    expect(urlFor({ path: `pub/${KEY}/p1.webp`, source: 'generated', at: 0 })).toBe(`https://public.test/pub/${KEY}/p1.webp`);
+    // The full-screen reader covers the page's notice, so it repeats the host's line itself.
+    await waitFor(() => expect(within(dialog).getByText('Downloaded the PDF.')).toBeInTheDocument());
+  });
+
+  it('the full-screen reader offers no Download when the author turned downloads off', async () => {
+    const p = payload({ allowDownload: false });
+    markIntroPlayed(p.doc.id);
+    api.loadPublicComicBySlug.mockResolvedValue(p);
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Start reading/ }));
+    const dialog = await screen.findByTestId('immersive-reader');
+    expect(within(dialog).queryByRole('button', { name: /PDF|Download/i })).toBeNull();
+    expect(pdfMock.exportComicPdf).not.toHaveBeenCalled();
   });
 
   it('the embed’s Download goes through the same gated public download', async () => {

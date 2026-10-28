@@ -751,6 +751,46 @@ describe('v5: quarantine, remove and the publication primitives', () => {
     expect(fake.bucket(PRIV).has(quarantinePath)).toBe(true);
   });
 
+  // P2-GATE (defence in depth): quarantine copies to q/ and DELETES the source and its variants. A
+  // platform-library image is shared by every comic that picked it, and a publication copy is the
+  // live link's file; restoreQuarantined refuses both as destinations, so a hold there could never
+  // be undone. The store itself refuses them, whoever the caller is.
+  it('quarantine refuses platform-library and publication sources: nothing is copied, deleted or registered', async () => {
+    const { fake, store } = v5Store();
+    const lib = 'library/v1/hero/2.webp';
+    const pub = `pub/${KEY22}/p1-0123456789ab.webp`;
+    const shared = [lib, 'library/v1/hero/2@320.webp', 'library/v1/hero/2_w480.webp', pub, `pub/${KEY22}/p1-0123456789ab-w480.webp`];
+    for (const p of shared) fake.bucket(PUB).set(p, { data: Buffer.from('shared-bytes') });
+    for (const p of [lib, pub, 'pub/short/p1-0123456789ab.webp']) {
+      await expect(store.quarantine(p, 'blocked:violence')).rejects.toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+    }
+    for (const p of shared) expect(fake.bucket(PUB).get(p)?.data.toString()).toBe('shared-bytes');
+    expect(fake.bucket(PRIV).size).toBe(0);
+    expect(fake.calls.copy).toEqual([]);
+    expect(fake.calls.remove).toEqual([]);
+    expect(fake.rows.filter((r) => r.source === 'quarantine')).toEqual([]);
+
+    // The memory store (tests, local tooling) has the same guard.
+    const mem = createMemoryAssetStore();
+    mem.put(lib, 'data:image/webp;base64,U0hBUkVE');
+    mem.put(pub, 'data:image/webp;base64,U0hBUkVE');
+    for (const p of [lib, pub]) {
+      await expect(mem.quarantine(p, 'blocked')).rejects.toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+      expect(mem.files.has(p)).toBe(true);
+    }
+    expect(mem.quarantined).toEqual([]);
+
+    // The safety layer's only entry point answers "not held" (null) and records nothing.
+    const fakes = installSafetyFakes({ assets: store });
+    try {
+      expect(await quarantineAsset(store, { path: lib, projectId: PROJECT, userId: USER, categories: ['graphic_gore'] })).toBeNull();
+      expect(fakes.store.quarantine.size).toBe(0);
+      expect(fake.bucket(PUB).has(lib)).toBe(true);
+    } finally {
+      resetSafety();
+    }
+  });
+
   it('quarantine drops every cached preview size of the original (no stale preview reaches the director or safety)', async () => {
     const { fake, store } = v5Store();
     const path = `u/${USER}/p/${PROJECT}/ref/flagged.webp`;

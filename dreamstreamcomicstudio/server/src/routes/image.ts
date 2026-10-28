@@ -22,6 +22,7 @@ import {
   assertModelAllowedForTier,
   createFreeNanoBananaLimitError,
   resolvePlanTierForUser,
+  toEffectiveTier,
   tryConsumeFreeNanoBananaUsage
 } from '../services/modelAccessPolicy.js';
 import { getAllowanceStatus, isUsageExemptAdmin, meteringEnabled } from '../services/platformAllowance.js';
@@ -292,6 +293,55 @@ const assertOpenRouterImageModelAllowed = async (req: Request, effectiveModel: s
   if (isOpenRouterFreeVariant(effectiveModel)) return;
   const access = await resolveImageModelAccess(req, { byok: false });
   assertImageModelAllowed(access, openRouterImageGateId(effectiveModel));
+};
+
+/**
+ * The Ideogram models the platform route can actually run: ai/ideogram.ts maps exactly these ids to
+ * an Ideogram model version (any other id silently runs the default version while the hold and the
+ * settle are priced at whatever id the caller sent).
+ */
+const IDEOGRAM_ROUTE_MODELS: ReadonlySet<string> = new Set([IDEOGRAM_MODEL_ID, 'ideogram/ideogram-v2', 'ideogram/ideogram-v2-turbo']);
+
+/** The honest refusal for a governed user asking for Ideogram on the platform key. */
+export const IDEOGRAM_MODEL_USAGE_MESSAGE =
+  "Ideogram isn't part of your included usage yet — Nano Banana works great, or add your own Ideogram key in Settings → API keys to use it.";
+
+/** The refusal for a model id the Ideogram route does not run (any caller on the platform key). */
+export const IDEOGRAM_UNKNOWN_MODEL_MESSAGE = "That model isn't available on Ideogram here — pick Ideogram V2 or V2 Turbo.";
+
+const ideogramModelRefusal = (access: ImageModelAccess, requestedModel: string, message: string) => {
+  const error = new Error(message) as Error & { status?: number; publicCode?: string; details?: Record<string, unknown> };
+  error.status = 403;
+  error.publicCode = 'MODEL_NOT_ALLOWED_FOR_PLAN';
+  error.details = {
+    scope: 'image',
+    ...(access.mode === 'plan' ? { planTier: String(access.planTier || 'free').toLowerCase() } : { reason: 'usage_budget' }),
+    requestedModel,
+    allowedModels: message === IDEOGRAM_UNKNOWN_MODEL_MESSAGE ? [...IDEOGRAM_ROUTE_MODELS] : []
+  };
+  return error;
+};
+
+/**
+ * The model gate for a platform-funded Ideogram call (owner decision, conservative): the caller's
+ * own Ideogram key is never gated (the platform pays nothing; BYOK never counts). On the platform
+ * key, governed users get the everyday list only — Ideogram is not on it — so they get the honest
+ * refusal; admins, exempt and `allow_pro` rows (or a paid plan while the legacy plan gate applies)
+ * may run the Ideogram models this route knows, and nothing else. Checked BEFORE any hold or
+ * provider call, so a refusal costs nothing.
+ */
+const assertIdeogramModelAllowed = async (req: Request, modelId: string): Promise<void> => {
+  if (hasByokForProvider(req, 'ideogram')) return;
+  const access = await resolveImageModelAccess(req, { byok: false });
+  const pro = access.mode === 'plan' ? toEffectiveTier(access.planTier) === 'pro' : access.pro;
+  if (!pro) {
+    throw ideogramModelRefusal(
+      access,
+      modelId,
+      access.mode === 'usage' ? IDEOGRAM_MODEL_USAGE_MESSAGE : 'Selected model is not available for this plan tier.'
+    );
+  }
+  if (!IDEOGRAM_ROUTE_MODELS.has(modelId)) throw ideogramModelRefusal(access, modelId, IDEOGRAM_UNKNOWN_MODEL_MESSAGE);
 };
 
 /**
@@ -704,6 +754,9 @@ imageRouter.post('/ideogram', checkLimits('ideogram'), async (req, res, next) =>
     const resolvedModel = typeof modelId === 'string' && modelId.trim() ? modelId.trim() : IDEOGRAM_MODEL_ID;
 
     const payload = await withIdempotency(req, res, 'image:ideogram', async () => {
+      // The model gate runs before any hold or provider call (platform key only).
+      await assertIdeogramModelAllowed(req, resolvedModel);
+
       const reserve = await reserveForOperation({
         req,
         operation: 'image.ideogram.generate',

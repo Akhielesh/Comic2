@@ -520,6 +520,71 @@ describe('a moderator withhold on a reader report reaches the source image', () 
     expect(session.doc.pages[0].render.asset?.safety?.quarantined).toBeUndefined();
     expect(await gateStatus(session)).toBe('blocked');
   });
+
+  // P2-GATE: a hold takes the published copies down (removePublicationObjects), and so does a
+  // withhold. A reader report names only the pub/ copy, so its evidence must still be reviewable:
+  // the moderator sees the owner's own image the copy was made from — from the vault once held.
+  describe('caseAssetUrl after the published copy is gone', () => {
+    /** Production signs only objects that exist (Storage answers a per-path error for a missing one). */
+    const signExistingOnly = () => {
+      assets.signUrls = async (paths, opts) => {
+        assets.signed.push([...paths]);
+        assets.signedTtl.push(opts?.ttlSec);
+        return Object.fromEntries(paths.filter((p) => assets.files.has(p)).map((p) => [p, `https://signed.test/${p}`]));
+      };
+    };
+    const reportOn = async (copy: string) =>
+      fakes.store.openCase({ kind: 'report', projectId: PROJECT, ownerUserId: OWNER, reporterId: 'r1', target: { page: 1, pageId: 'pg_1', path: copy }, reason: 'violent' });
+
+    it('the copy still exists: it is what the reader saw, signed for 5 minutes (the comic is not opened)', async () => {
+      signExistingOnly();
+      const copy = publishedFrom(SRC);
+      const opened = await reportOn(copy);
+      const liveSession = vi.fn(async () => null);
+      configureSafety({ liveSession });
+      expect(await caseAssetUrl('mod-1', opened.id!)).toMatchObject({ url: `https://signed.test/${copy}` });
+      expect(assets.signedTtl.at(-1)).toBe(300);
+      expect(liveSession).not.toHaveBeenCalled();
+    });
+
+    it('taken down by the hold: falls back to the live source image', async () => {
+      signExistingOnly();
+      fakes.sessions.set(PROJECT, newSession(liveDoc(SRC), undefined, OWNER));
+      const copy = publishedFrom(SRC);
+      const opened = await reportOn(copy);
+      await assets.remove([copy]); // removePublicationObjects at hold time
+      const out = await caseAssetUrl('mod-1', opened.id!);
+      expect(out).toMatchObject({ url: `https://signed.test/${SRC}` });
+      expect(assets.signedTtl.at(-1)).toBe(300);
+      expect(fakes.audits.at(-1)).toMatchObject({ action: 'comic.safety.asset_view', actorId: 'mod-1', detail: { projectId: PROJECT, quarantined: false, evidence: 'source' } });
+    });
+
+    it('withheld: the source is in the vault, so the quarantined object is shown', async () => {
+      signExistingOnly();
+      const session = newSession(liveDoc(SRC), undefined, OWNER);
+      fakes.sessions.set(PROJECT, session);
+      const copy = publishedFrom(SRC);
+      const opened = await reportOn(copy);
+      await resolveCase('mod-1', opened.id!, { action: 'withhold', reason: 'gore' });
+      expect(assets.files.has(copy)).toBe(false);
+      const q = fakes.store.quarantine.get(SRC)!;
+      expect(q).toMatch(/^q\//);
+      const out = await caseAssetUrl('mod-1', opened.id!);
+      expect(out).toMatchObject({ url: `https://signed.test/${q}` });
+      expect(fakes.audits.at(-1)).toMatchObject({ action: 'comic.safety.asset_view', detail: { quarantined: true, evidence: 'source' } });
+    });
+
+    it('nothing left to show (redrawn and gone, or the comic does not open): null, never a dead link', async () => {
+      signExistingOnly();
+      const copy = publishedFrom(SRC);
+      const opened = await reportOn(copy);
+      await assets.remove([copy]);
+      expect(await caseAssetUrl('mod-1', opened.id!)).toBeNull(); // no live session
+      fakes.sessions.set(PROJECT, newSession(liveDoc(REDRAWN), undefined, OWNER));
+      expect(await caseAssetUrl('mod-1', opened.id!)).toBeNull(); // the source is no longer in the comic
+      expect(fakes.audits.at(-1)).toMatchObject({ action: 'comic.safety.asset_view' });
+    });
+  });
 });
 
 // L11: a hold suspends the publication; its pub/<key>/ objects must stop answering direct URLs.
