@@ -116,6 +116,11 @@ describe('publish_comic after a moderation pause', () => {
     expect(turn.cards).toEqual([expect.objectContaining({ type: 'publish', mode: 'publish', status: 'pending', request: { visibility: 'unlisted' } })]);
     // The summary no longer forbids the offer outright: publish_comic itself checks the hold.
     expect(publicationSummary(suspendedDoc())[0]).toMatch(/publish_comic.*checks/);
+    // publishWithOutcome keeps a suspended row's slug (only the asset key is fresh), so nothing here may
+    // promise the user a NEW link — the director would repeat it.
+    expect(publicationSummary(suspendedDoc())[0]).not.toMatch(/new link/i);
+    expect(publicationSummary(suspendedDoc())[0]).toMatch(/same link/i);
+    expect(text).not.toMatch(/new link/i);
   });
 
   it("can't tell (lookup failed, no row, someone else's project): stays refused, honestly", async () => {

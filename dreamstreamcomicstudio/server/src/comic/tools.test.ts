@@ -231,6 +231,29 @@ describe('plan tools', () => {
     expect(await call('edit_panel_text', { page: 3, panel: 2, lines: [{ kind: 'speech', speaker: 'Nobody', text: 'x' }] })).toMatch(/^Error: Unknown speaker/);
     expect(await call('edit_panel_text', { page: 3, panel: 9, lines: [] })).toBe('Error: Page 3 has panels 1–3.');
   });
+
+  // P2-GATE L5 (gate review follow-up): what the director writes into the doc is cleaned where it
+  // enters (sanitize/text.ts) like every client edit — no NUL or lone surrogate reaches the live doc
+  // (jsonb rejects both), whole emoji / ZWJ / combining marks stay, and a clip never splits a pair.
+  it('director text is jsonb-safe at the door: brief fields, balloon lines and the saved script', async () => {
+    expect(await call('update_brief', { title: ' Spice\u0000 Run \uD83C', themes: ['\uDC00', 'home 🏁 ‍ గ్'] })).toMatch(/^Brief updated: title, themes\./);
+    expect(ctx.session.doc.brief).toMatchObject({ title: 'Spice Run', themes: ['home 🏁 ‍ గ్'] });
+
+    const out = await call('edit_panel_text', {
+      page: 3,
+      panel: 2,
+      lines: [
+        { kind: 'speech', speaker: 'maya', text: `${'y'.repeat(599)}🦊` },
+        { kind: 'caption', text: 'Mean\u0000while… \uD83C' }
+      ]
+    });
+    expect(out).toMatch(/^Page 3 panel 2 now has 2 lines/);
+    expect(ctx.session.doc.pages[2].panels[1].lines.map((l) => l.text)).toEqual(['y'.repeat(599), 'Meanwhile…']);
+
+    expect(await call('save_source', { text: 'A short\u0000 premise \uD83C about a heist 🦊.' })).toBe('Saved the source (7 words).');
+    expect(ctx.session.doc.source.script).toBe('A short premise  about a heist 🦊.');
+    expect(JSON.stringify(ctx.session.doc)).not.toMatch(/\\u0000|\\ud8[0-9a-f]{2}"|\\udc00/i);
+  });
 });
 
 describe('spend tools', () => {

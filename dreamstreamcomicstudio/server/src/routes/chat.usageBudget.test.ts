@@ -1032,7 +1032,7 @@ describe('governed per-turn tool cap — one hold, a bounded tool allowance, the
     expect(CHAT_HOLD_TOOL_ROUNDS).toBeLessThan(9);
   });
 
-  it('turnBudgetFor: only a governed hold becomes a cap; spend reads the reported cost, else the settle’s pricing', async () => {
+  it('turnBudgetFor: only a governed hold becomes a cap (an unreadable one fails closed); spend reads the reported cost, else the settle’s pricing', async () => {
     const seed = { provider: 'openrouter', model: 'vendor/pricey', operation: 'chat.completion' };
     const reservation = { reservationId: 'r1', byokBypass: false, governed: true, walletSkipped: true, estimated: { estimatedProviderCostUsd: 0.25 }, usage: {} };
     const reserve = (over: Record<string, unknown>) =>
@@ -1041,6 +1041,9 @@ describe('governed per-turn tool cap — one hold, a bounded tool allowance, the
     expect(turnBudgetFor(null, p)).toBeUndefined(); // signed-out: no hold
     expect(turnBudgetFor(reserve({ governed: false }), p)).toBeUndefined(); // admin / exempt
     expect(turnBudgetFor(reserve({ byokBypass: true, governed: false }), p)).toBeUndefined(); // own key
+    // A governed hold the route cannot read fails closed — a $0 allowance, never "no cap".
+    expect(turnBudgetFor(reserve({ estimated: {} }), p)?.holdUsd).toBe(0);
+    expect(turnBudgetFor(reserve({ estimated: { estimatedProviderCostUsd: Number.NaN } }), p)?.holdUsd).toBe(0);
     const budget = turnBudgetFor(reserve({}), p)!;
     expect(budget.holdUsd).toBe(0.25);
     expect(await budget.spentUsd!({ providerCostUsd: 0.4, totalTokens: 10 })).toBe(0.4);

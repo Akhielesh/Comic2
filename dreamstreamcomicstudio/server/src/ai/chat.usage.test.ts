@@ -306,6 +306,45 @@ describe('governed per-turn tool cap (RunChatParams.budget)', () => {
     expect(r.notices?.find((n) => n.tool === 'usage_budget')).toBeUndefined();
   });
 
+  it('a hold the engine cannot read (NaN / negative) fails closed: a $0 allowance, never "no cap"', async () => {
+    for (const holdUsd of [Number.NaN, -1]) {
+      fake.steps = [toolCall('c1', 0.001), answer('From what I had.', 0.001)];
+      fake.requests = [];
+      const tool = probeTool();
+      const rounds: TurnBudgetRound[] = [];
+      const r = await runChat({ ...base, tools: [tool], budget: { holdUsd, onRound: (x) => rounds.push(x) } });
+      expect(tool.execute).not.toHaveBeenCalled();
+      expect(fake.requests).toHaveLength(2);
+      expect(fake.requests[1].tools).toBeUndefined();
+      expect(rounds).toEqual([{ round: 1, spentUsd: expect.closeTo(0.001, 9), holdUsd: 0, stop: true }]);
+      expect(r.text).toBe('From what I had.');
+    }
+  });
+
+  it('parallel tool calls in the round past the cap: none runs, each gets the "not run" result, one closing answer', async () => {
+    fake.steps = [
+      () => ({
+        text: '',
+        toolCalls: [
+          { id: 'a', name: 'run_agent_swarm', arguments: '{}' },
+          { id: 'b', name: 'run_agent_swarm', arguments: '{}' }
+        ],
+        usage: { promptTokens: 100, completionTokens: 10, costUsd: 0.6 }
+      }),
+      answer('Closing.', 0.1)
+    ];
+    const tool = probeTool();
+    const r = await runChat({ ...base, tools: [tool], budget: { holdUsd: 0.5 } });
+    expect(tool.execute).not.toHaveBeenCalled();
+    expect(fake.requests).toHaveLength(2);
+    expect(fake.requests[1].tools).toBeUndefined();
+    const tools = toolMessages(fake.requests[1]);
+    expect(tools.map((m) => m.tool_call_id)).toEqual(['a', 'b']);
+    expect(tools.every((m) => m.content === TOOL_BUDGET_TOOL_RESULT)).toBe(true);
+    expect(r.text).toBe('Closing.');
+    expect(r.usage.providerCostUsd).toBeCloseTo(0.7, 9);
+  });
+
   it('JSON-tools loop (direct providers): the same cap, one tool-less closing answer', async () => {
     fake.steps = [
       () => ({ text: '{"name":"run_agent_swarm","arguments":{}}', usage: { promptTokens: 500, completionTokens: 20, costUsd: 0.6 } }),

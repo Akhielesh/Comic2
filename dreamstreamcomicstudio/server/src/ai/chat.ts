@@ -99,7 +99,10 @@ const MAX_TOOL_ITERATIONS = 9;
  * percent-free notice says so. A turn without a budget (admins, BYOK, signed-out) is unchanged.
  */
 export interface TurnBudget {
-  /** The provider cost (USD) this turn reserved; tool rounds stop once the metered spend exceeds it. */
+  /**
+   * The provider cost (USD) this turn reserved; tool rounds stop once the metered spend exceeds
+   * it. A hold that cannot be read (NaN, negative) counts as $0 — fails closed, never "no cap".
+   */
   holdUsd: number;
   /**
    * Prices the turn's metered usage so far the way the settle will (the provider-reported cost,
@@ -851,8 +854,11 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
         /* the reported cost decides */
       }
     }
-    const stop = spentUsd > budget.holdUsd;
-    budget.onRound?.({ round, spentUsd, holdUsd: budget.holdUsd, stop });
+    // A hold the engine cannot read (NaN, negative) fails CLOSED: it is a $0 allowance, never
+    // "no cap" — a governed turn must not run paid tool rounds on a malformed budget.
+    const holdUsd = Number.isFinite(budget.holdUsd) && budget.holdUsd > 0 ? budget.holdUsd : 0;
+    const stop = spentUsd > holdUsd;
+    budget.onRound?.({ round, spentUsd, holdUsd, stop });
     return !stop;
   };
 

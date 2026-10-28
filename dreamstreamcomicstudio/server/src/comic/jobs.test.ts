@@ -761,6 +761,21 @@ describe('sanitizePatchOps', () => {
     expect(() => sanitizePatchOps(doc, [{ op: 'note_add', text: '\u0000\uD83C' }])).toThrow('Invalid note');
   });
 
+  // P2-GATE L5 (gate review follow-up): the entry points str() did not cover follow the same rule —
+  // balloon text (`line`: clipped at 600 without splitting a pair) and the pasted script (`source`:
+  // kept as typed, line breaks and spacing included; only a NUL or a lone surrogate goes).
+  it('line text and the source script are jsonb-safe at the door too, and a clip never leaves half a pair', () => {
+    const ops = sanitizePatchOps(doc, [
+      { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text: `\u0000${'x'.repeat(599)}🦊` } },
+      { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text: 'Hi\u0000 there \uD83C 🦊 ‍ గ్' } },
+      { op: 'source', patch: { script: 'PAGE 1\n\n  Maya\u0000 runs \uDC00🦊 హలో\n' } }
+    ]);
+    expect(ops[0]).toEqual({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text: 'x'.repeat(599) } });
+    expect(ops[1]).toEqual({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text: 'Hi there  🦊 ‍ గ్' } });
+    expect((ops[2] as { patch: { script: string } }).patch.script).toBe('PAGE 1\n\n  Maya runs 🦊 హలో\n');
+    expect(JSON.stringify(ops)).not.toMatch(/\\u0000|\\ud8[0-9a-f]{2}"|\\udc00/i);
+  });
+
   it.each([
     [{ op: 'render', target: { kind: 'cover' }, patch: { status: 'ready' } }, "can't be changed directly"],
     [{ op: 'spend', entry: {} }, "can't be changed directly"],
@@ -786,6 +801,17 @@ describe('sanitizePatchOps', () => {
 });
 
 describe('suggestNextSteps', () => {
+  // P2-GATE L5 (gate review follow-up): jobs.ts clean() is jsonb-safe too, so a premise that holds only
+  // what Postgres rejects counts as "no idea yet" — the same answer the stored doc would give after a reload.
+  it('a premise of only a NUL and a lone surrogate is no idea at all', () => {
+    const noise = plannedDoc();
+    noise.brief = { title: 'x', notes: [], premise: '\u0000 \uD83C' };
+    noise.cast = [];
+    noise.pages = [];
+    noise.planStatus = 'none';
+    expect(suggestNextSteps(noise)).toContain('Paste a script');
+  });
+
   it('follows the forward motion', () => {
     const empty = plannedDoc();
     empty.brief = { title: 'x', notes: [] };

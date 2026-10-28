@@ -1020,8 +1020,10 @@ type ChatReservation = Extract<Awaited<ReturnType<typeof reserveForOperation>>, 
 export const turnBudgetFor = (reserve: ChatReservation | null, p: Pick<PreparedChat, 'model'>): TurnBudget | undefined => {
   const reservation = reserve?.reservation;
   if (!reservation?.governed || reservation.byokBypass) return undefined;
-  const holdUsd = Number(reservation.estimated?.estimatedProviderCostUsd);
-  if (!Number.isFinite(holdUsd) || holdUsd < 0) return undefined;
+  const raw = Number(reservation.estimated?.estimatedProviderCostUsd);
+  // A governed hold the route cannot read fails CLOSED — a $0 allowance (no paid tool round), never
+  // "no cap". Unreachable with the enforcer's own estimates; kept so a malformed one cannot open it.
+  const holdUsd = Number.isFinite(raw) && raw > 0 ? raw : 0;
   return {
     holdUsd,
     // The provider-reported cost is exact and free to read (OpenRouter reports one on every call);

@@ -1,9 +1,10 @@
 // Public profile (gate S4 parity with PublicGallery): a published Comic Studio (v4) comic opens its
 // read-only share link /c/<slug> and shows ONLY its public cover (the frozen pub/ copy) — never an
 // owner-written cover, panel or style URL, and no draft image id is ever signed for it. Classic comics
-// keep their covers and the in-app reader.
+// keep their covers and the in-app reader. The publish gate's rating (Project.contentRating, from the
+// server-set projects.content_rating column) shows only beside a real publication's slug.
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '../types';
 
@@ -59,9 +60,10 @@ const ownerWritten = {
 
 beforeEach(() => {
   projects.value = [
-    project('v4-1', 'The Lake', { studioVersion: 4, shareSlug: SLUG, publicCover: `pub/${KEY}/cover-1080.webp`, ...ownerWritten }, { coverImage: 'https://evil.test/x.jpg' }),
-    project('v4-2', 'No Cover Yet', { studioVersion: 4, shareSlug: 'BbCdEfGhIjKlMnOpQ', ...ownerWritten }, { coverImage: 'https://evil.test/x.jpg' }),
-    project('classic-1', 'Old Classic', { coverImageId: 'img-classic-1', panels: [{ id: 'p', imageUrl: 'https://cdn.test/classic-p1.png' }] })
+    project('v4-1', 'The Lake', { studioVersion: 4, shareSlug: SLUG, publicCover: `pub/${KEY}/cover-1080.webp`, ...ownerWritten }, { coverImage: 'https://evil.test/x.jpg', contentRating: 'PG' }),
+    project('v4-2', 'No Cover Yet', { studioVersion: 4, shareSlug: 'BbCdEfGhIjKlMnOpQ', ...ownerWritten }, { coverImage: 'https://evil.test/x.jpg', contentRating: 'PG-13' }),
+    // A classic row with the column set (it never went through the v4 publish gate): no badge.
+    project('classic-1', 'Old Classic', { coverImageId: 'img-classic-1', panels: [{ id: 'p', imageUrl: 'https://cdn.test/classic-p1.png' }] }, { contentRating: 'G' })
   ];
 });
 afterEach(() => vi.clearAllMocks());
@@ -127,5 +129,28 @@ describe('PublicProfile — released comics', () => {
     expect(db.getImageUrl).not.toHaveBeenCalled();
     fireEvent.click(flipped);
     expect(onNavigate).toHaveBeenCalledWith('reader', 'v4-x');
+  });
+
+  it('shows the publish gate’s rating only on a published v4 comic (same gate as the gallery)', async () => {
+    render(<PublicProfile username="mira" onNavigate={vi.fn()} />);
+    const lake = await screen.findByRole('link', { name: 'Read The Lake' });
+    expect(within(lake).getByRole('img', { name: 'Rated PG' })).toBeInTheDocument();
+    // A publication without a public cover still carries its badge (the slug is the gate, not the art).
+    expect(within(screen.getByRole('link', { name: 'Read No Cover Yet' })).getByRole('img', { name: 'Rated PG-13' })).toBeInTheDocument();
+    // The classic row's column is not honoured: it never went through the v4 gate.
+    expect(within(screen.getByRole('link', { name: 'Read Old Classic' })).queryByRole('img', { name: /^Rated / })).toBeNull();
+    expect(screen.getAllByRole('img', { name: /^Rated / }).map((el) => el.getAttribute('aria-label'))).toEqual(['Rated PG', 'Rated PG-13']);
+  });
+
+  it('a rated v4 row without its share slug (not a real publication) shows no badge', async () => {
+    // An owner can flip the studio marker or drop the slug on their own row; the column alone proves nothing.
+    projects.value = [
+      project('v4-x', 'Flipped', { studioVersion: 4, ...ownerWritten }, { contentRating: 'G' }),
+      project('v3-x', 'Marker Off', { studioVersion: 3, shareSlug: SLUG, ...ownerWritten }, { contentRating: 'G' })
+    ];
+    render(<PublicProfile username="mira" onNavigate={vi.fn()} />);
+    await screen.findByRole('link', { name: 'Read Flipped' });
+    expect(screen.getByRole('link', { name: 'Read Marker Off' })).toHaveAttribute('href', '/?view=read&id=v3-x');
+    expect(screen.queryByRole('img', { name: /^Rated / })).toBeNull();
   });
 });

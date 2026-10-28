@@ -9,6 +9,7 @@ import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { SHARE_PATH } from '../shared/comic/publication';
 import { publicCoverUrl, shareSlugOf } from './PublicGallery';
+import { RatingBadge } from './comicstudio/safety/RatingBadge';
 import { SmartImage } from './common/SmartImage';
 
 /**
@@ -245,6 +246,14 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                                                     Read Comic
                                                 </span>
                                             </div>
+                                            {/* The publish gate's rating — only for a real publication (a v4 row with its server-mirrored
+                                                share slug), the same gate as the gallery: the column is server-set, but a row that no
+                                                longer reads as a publication shows its art outside the gate and gets no badge. */}
+                                            {slug && project.contentRating && (
+                                                <div className="absolute left-2 top-2">
+                                                    <RatingBadge rating={project.contentRating} />
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="p-4">
                                             <h3 className="font-display text-lg truncate mb-1">{project.name}</h3>
