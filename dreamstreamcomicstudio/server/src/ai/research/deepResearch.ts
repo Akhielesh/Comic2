@@ -21,6 +21,7 @@ import { fetchReadable } from './readable.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
 import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { composePersona } from '../persona.js';
+import { spentUsageOf, withSpentUsage, type MeteredUsage } from '../usage.js';
 import type { ChatMessage, AIProviderId } from '../providers/types.js';
 import type {
   ApiUsage,

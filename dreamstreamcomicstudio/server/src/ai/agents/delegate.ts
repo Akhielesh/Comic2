@@ -11,7 +11,7 @@
 import { runChat } from '../chat.js';
 import type { ChatMessage, AIProviderId } from '../providers/types.js';
 import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
-import { buildUsage } from '../usage.js';
+import { buildUsage, spentUsageOf, withSpentUsage, type MeteredUsage } from '../usage.js';
 import { composePersona, withAgentPersona } from '../persona.js';
 import { verifyFindings, verificationBlock, type AgentFinding } from './verify.js';
 import type {
@@ -80,22 +80,59 @@ const dedupeCitations = (citations: ChatCitation[]): ChatCitation[] => {
   return out;
 };
 
-const mergeUsage = (parts: ApiUsage[]): ApiUsage => {
-  const out: ApiUsage = {};
-  const keys: (keyof ApiUsage)[] = ['promptTokens', 'candidatesTokens', 'totalTokens', 'estimatedTokens', 'promptChars', 'providerCostUsd'];
-  for (const key of keys) {
+// Combine token/cost usage across every helper and the aggregator so billing settles on the
+// delegation's true footprint. The exact `providerCostUsd` is kept only when EVERY part reported
+// one — a partial sum would be settled as if it were the whole bill; otherwise what was reported
+// survives as `partialProviderCostUsd`, the floor the settle never goes below (ai/usage.ts).
+const mergeUsage = (parts: ApiUsage[]): MeteredUsage => {
+  const out: MeteredUsage = {};
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  for (const key of ['promptTokens', 'candidatesTokens', 'totalTokens', 'estimatedTokens', 'promptChars'] as const) {
     let sum = 0;
     let any = false;
     for (const p of parts) {
-      const v = p[key];
-      if (typeof v === 'number') { sum += v; any = true; }
+      const v = num(p[key]);
+      if (v !== undefined) {
+        sum += v;
+        any = true;
+      }
     }
-    if (any) (out as Record<string, number>)[key as string] = sum;
+    if (any) out[key] = sum;
   }
+  let reported = 0;
+  let complete = parts.length > 0;
+  for (const p of parts) {
+    const cost = num(p.providerCostUsd);
+    if (cost !== undefined) {
+      reported += cost;
+      continue;
+    }
+    complete = false;
+    const partial = num((p as MeteredUsage).partialProviderCostUsd);
+    if (partial !== undefined) reported += partial;
+  }
+  const rounded = Math.round(reported * 1e9) / 1e9;
+  if (complete) out.providerCostUsd = rounded;
+  else if (rounded > 0) out.partialProviderCostUsd = rounded;
   return out;
 };
 
-export const runDelegation = async (params: RunDelegationParams): Promise<RunDelegationResult> => {
+/** Add what a failed call had already spent (ai/usage.ts spentUsageOf) to the run's usage parts. */
+const pushSpent = (parts: ApiUsage[], err: unknown) => {
+  const spent = spentUsageOf(err);
+  if (spent) parts.push(spent);
+};
+
+/** True when a merged usage holds anything worth settling. */
+const hasUsage = (u: MeteredUsage): boolean =>
+  (u.providerCostUsd ?? 0) > 0 || (u.partialProviderCostUsd ?? 0) > 0 || (u.totalTokens ?? 0) > 0 || (u.estimatedTokens ?? 0) > 0;
+
+/**
+ * The delegation run. `usageParts` collects every part's usage (each helper, failed ones
+ * included, and the aggregator) and is shared with the exported wrapper, so a throw after the
+ * first model call still carries the spend to the chat turn's settle.
+ */
+const runDelegationWith = async (params: RunDelegationParams, usageParts: ApiUsage[]): Promise<RunDelegationResult> => {
   const priorMessages = params.messages?.slice(-12) ?? [];
   const userMemory = params.systemPrompt?.trim();
   const subtasks = params.subtasks.map((s) => s.trim()).filter(Boolean).slice(0, MAX_SUBTASKS);
@@ -111,7 +148,6 @@ export const runDelegation = async (params: RunDelegationParams): Promise<RunDel
   const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
   const webGrounded = params.provider === 'openrouter';
 
-  const usageParts: ApiUsage[] = [];
   const citations: ChatCitation[] = [];
   const notices: CapabilityNotice[] = [];
 
@@ -136,6 +172,8 @@ export const runDelegation = async (params: RunDelegationParams): Promise<RunDel
         if (r.notices) notices.push(...r.notices);
         return { id, name, task, text: r.text || '', citations: r.citations || [], status: 'done' };
       } catch (err) {
+        // What the failed helper had already spent still bills.
+        pushSpent(usageParts, err);
         notices.push({ tool: 'delegate_tasks', level: 'warn', message: `Helper ${i + 1} failed: ${(err as Error)?.message || 'unknown error'}` });
         return { id, name, task, text: '', citations: [], status: 'error' };
       }
@@ -196,4 +234,21 @@ export const runDelegation = async (params: RunDelegationParams): Promise<RunDel
     usage: usageParts.length ? mergeUsage(usageParts) : buildUsage(params.goal, synthRes.text, undefined),
     trace
   };
+};
+
+/**
+ * Run a delegation. `result.usage` sums every model call the run made (each helper, failed ones
+ * included, and the aggregator). If the run throws after spending (the aggregation failed), the
+ * error carries the merged spend (ai/usage.ts spentUsageOf), so the chat turn settles it instead
+ * of releasing its hold over real spend.
+ */
+export const runDelegation = async (params: RunDelegationParams): Promise<RunDelegationResult> => {
+  const usageParts: ApiUsage[] = [];
+  try {
+    return await runDelegationWith(params, usageParts);
+  } catch (err) {
+    pushSpent(usageParts, err);
+    const spent = mergeUsage(usageParts);
+    throw hasUsage(spent) ? withSpentUsage(err, spent) : err;
+  }
 };
