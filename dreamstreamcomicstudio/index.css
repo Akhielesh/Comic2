@@ -1049,6 +1049,68 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
   }
 }
 
+/* ---- Wave 5 base rules (Atlas acd9fdfc) ---- */
+/* Reduced motion, extended as Atlas did: hover nudges written as transition-transform land without
+   travelling, and Tailwind's own loops hold still (a spinner's icon and label still say "loading").
+   Comic Studio has no tailwindcss-animate, so Atlas's animate-in / animate-out rules have nothing to
+   match here. */
+@media (prefers-reduced-motion: reduce) {
+  [data-ds-skin="atlas"] .transition-transform { transition-duration: 0s !important; }
+  [data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-bounce) { animation: none; }
+}
+/* Skeletons: the kit's .studio-shimmer is a slate (blue-grey) block — hue decorating. Under the skin
+   it is Atlas's: the muted block with a page-colour glint in light, lifted with ink in dark (the
+   muted step on a card measured 1.1:1 there). Its motion and reduced-motion rule are unchanged. */
+[data-ds-skin="atlas"] .studio-shimmer {
+  background-color: var(--ds-skeleton);
+  background-image: linear-gradient(100deg, transparent 30%, var(--ds-skeleton-glint) 50%, transparent 70%);
+}
+/* Toasts (studioDesign TOAST*): a time-left bar that drains as one compositor animation over
+   --ds-toast-duration (set inline per toast), held while the toast carries data-paused (set with its
+   dismiss clock, not CSS :hover, which sticks to a tapped toast on touch); arrival on the enter curve,
+   a quicker exit. Under reduced motion the toast still leaves on time; its bar just does not drain on
+   screen, and it appears and leaves without travelling (pair .ds-toast-exit with a removal timer:
+   no animationend fires then). */
+@keyframes ds-toast-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ds-toast-out {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+[data-ds-skin="atlas"] .ds-toast-countdown {
+  transform-origin: left center;
+  animation: ds-toast-countdown var(--ds-toast-duration, 4s) linear forwards;
+}
+[data-ds-skin="atlas"] .ds-toast[data-paused] .ds-toast-countdown { animation-play-state: paused; }
+[data-ds-skin="atlas"] .ds-toast-enter { animation: ds-toast-in var(--ds-motion-enter) var(--ds-ease-enter) backwards; }
+[data-ds-skin="atlas"] .ds-toast-exit { animation: ds-toast-out var(--ds-motion-exit) var(--ds-ease) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  [data-ds-skin="atlas"] .ds-toast-countdown { display: none; }
+  [data-ds-skin="atlas"] :is(.ds-toast-enter, .ds-toast-exit) { animation: none; }
+}
+/* The inverse surface (studioDesign INVERSE_SURFACE): the inverted ink panel — a black CTA or brand
+   panel on white. In dark it would be a white slab, the brightest thing on a page someone chose to
+   keep dark, so there it is a raised dark surface with a light rim: the ink tokens are swapped back
+   inside it, which carries every child written for the inverted panel along. The page focus colour
+   is the panel's own colour there, so focus inside it draws in the page colour. */
+[data-ds-skin="atlas"] .ds-inverse-surface { --ds-focus: var(--ds-canvas); }
+[data-ds-skin="atlas"] .ds-inverse-surface :focus-visible { outline-color: var(--ds-canvas); }
+.dark[data-ds-skin="atlas"] .ds-inverse-surface,
+.dark [data-ds-skin="atlas"] .ds-inverse-surface {
+  --ds-ink: #161616;
+  --ds-canvas: #fafafa;
+  --ds-accent: #161616;
+  --ds-on-accent: #fafafa;
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 55%);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.1), var(--ds-shadow-panel);
+}
+
 /* ==== ATLAS SKIN · TRANSITIONAL ACCENT SHIM (generated: node scripts/design/atlas-skin-shim.mjs) ==== */
 /* Phase D0 of docs/design/atlas-skin.md. The files below still hard-code the terracotta literal in
    Tailwind utilities; under the Atlas skin those exact classes become the accent (ink), accent-soft,

@@ -19,7 +19,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { ATLAS_PRELOAD_FONTS, DS_NO_TRANSITIONS_CLASS, DS_THEME_TRANSITION_CLASS } from '../../services/dsSkin';
-import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, tokenBlocks } from './cssTokens';
+import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, tokenBlocks, topLevelSplit } from './cssTokens';
 
 const ROOT = APP_ROOT;
 const css = indexCss;
@@ -462,6 +462,17 @@ describe('Atlas skin — base rules and the cross-fade', () => {
     for (const r of rules) expect(r.body, r.selector).not.toMatch(/transition-property:[^;]*--ds-/);
   });
 
+  it('every rule in the skin section is scoped to the attribute (nothing outside the skin changes)', () => {
+    const start = css.indexOf('ATLAS SKIN — `[data-ds-skin="atlas"]`');
+    expect(start).toBeGreaterThan(0);
+    const section = parseRules(css.slice(css.lastIndexOf('/* ===', start)));
+    const unscoped = section
+      .filter((r) => r.selector !== '@font-face' && !r.parents.some((p) => p.startsWith('@keyframes')))
+      .flatMap((r) => topLevelSplit(r.selector).filter((item) => !item.includes('[data-ds-skin="atlas"]')).map((item) => `${item} (${r.parents.join(' / ') || 'top level'})`));
+    expect(unscoped).toEqual([]);
+    expect(section.length).toBeGreaterThan(80);
+  });
+
   it('nothing in the skin section targets html by element, and the reader room stays content', () => {
     for (const r of rules) {
       if (!r.selector.includes('data-ds-skin')) continue;
@@ -469,3 +480,55 @@ describe('Atlas skin — base rules and the cross-fade', () => {
     }
   });
 });
+
+describe('Atlas skin — wave 5 base rules (motion, skeletons, toasts, the inverse surface)', () => {
+  const REDUCE = '@media (prefers-reduced-motion: reduce)';
+  const find = (selector: string, parents: string[] = []) =>
+    rules.find((r) => r.selector === selector && r.parents.join('|') === parents.join('|'));
+
+  it('reduced motion: hover nudges land without travelling, Tailwind spinners and pings hold still (skin only)', () => {
+    expect(find('[data-ds-skin="atlas"] .transition-transform', [REDUCE])?.body).toBe('transition-duration: 0s !important;');
+    expect(find('[data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-bounce)', [REDUCE])?.body).toBe('animation: none;');
+    // Never outside the skin.
+    expect(rules.some((r) => /^\.(transition-transform|animate-spin)$/.test(r.selector) && r.parents.includes(REDUCE))).toBe(false);
+  });
+
+  it('skeletons (.studio-shimmer) take the Atlas block and glint under the skin: no slate hue, lifted in dark', () => {
+    const sk = find('[data-ds-skin="atlas"] .studio-shimmer');
+    expect(sk?.body).toContain('background-color: var(--ds-skeleton)');
+    expect(sk?.body).toContain('background-image: linear-gradient(100deg, transparent 30%, var(--ds-skeleton-glint) 50%, transparent 70%)');
+    // Motion is the existing rule's (and stays off under reduced motion there).
+    expect(sk?.body).not.toMatch(/animation/);
+  });
+
+  it('toasts: a time-left bar that drains on the compositor, holds with the dismiss clock and hides under reduced motion', () => {
+    expect(rules.some((r) => r.parents[0] === '@keyframes ds-toast-countdown')).toBe(true);
+    const bar = find('[data-ds-skin="atlas"] .ds-toast-countdown');
+    expect(bar?.body).toContain('transform-origin: left center');
+    expect(bar?.body).toContain('animation: ds-toast-countdown var(--ds-toast-duration, 4s) linear forwards');
+    expect(find('[data-ds-skin="atlas"] .ds-toast[data-paused] .ds-toast-countdown')?.body).toBe('animation-play-state: paused;');
+    expect(find('[data-ds-skin="atlas"] .ds-toast-countdown', [REDUCE])?.body).toBe('display: none;');
+  });
+
+  it('toasts arrive on the enter curve and leave quicker; neither moves under reduced motion', () => {
+    expect(find('[data-ds-skin="atlas"] .ds-toast-enter')?.body).toBe('animation: ds-toast-in var(--ds-motion-enter) var(--ds-ease-enter) backwards;');
+    expect(find('[data-ds-skin="atlas"] .ds-toast-exit')?.body).toBe('animation: ds-toast-out var(--ds-motion-exit) var(--ds-ease) forwards;');
+    expect(find('[data-ds-skin="atlas"] :is(.ds-toast-enter, .ds-toast-exit)', [REDUCE])?.body).toBe('animation: none;');
+    // The keyframes end on `transform: none` / leave no transform behind on arrival.
+    expect(rules.find((r) => r.parents[0] === '@keyframes ds-toast-in' && r.selector === 'to')?.body).toContain('transform: none');
+  });
+
+  it('the inverse surface stays a raised dark panel in dark (ink tokens swapped back inside), and its focus is visible', () => {
+    const dark = find('.dark[data-ds-skin="atlas"] .ds-inverse-surface, .dark [data-ds-skin="atlas"] .ds-inverse-surface');
+    expect(dark?.body).toContain('--ds-ink: #161616');
+    expect(dark?.body).toContain('--ds-canvas: #fafafa');
+    expect(dark?.body).toContain('--ds-accent: #161616');
+    expect(dark?.body).toContain('--ds-on-accent: #fafafa');
+    expect(dark?.body).toContain('box-shadow: 0 0 0 1px rgb(255 255 255 / 0.1), var(--ds-shadow-panel)');
+    expect(find('[data-ds-skin="atlas"] .ds-inverse-surface')?.body).toBe('--ds-focus: var(--ds-canvas);');
+    expect(find('[data-ds-skin="atlas"] .ds-inverse-surface :focus-visible')?.body).toBe('outline-color: var(--ds-canvas);');
+    // The swapped panel is still readable: paper ink on the raised dark panel.
+    expect(contrastRatio('#fafafa', '#161616')).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
