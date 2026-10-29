@@ -31,6 +31,7 @@ import {
   letterStyleOf,
   mapAssetRefs,
   normalizeErrorDetail,
+  normalizeImageModelLock,
   pickBook,
   pickReader,
   readerOf,
@@ -54,6 +55,7 @@ import {
   type Format,
   type Gate,
   type GlossaryTerm,
+  type ImageModelLock,
   type LanguageEdition,
   type Line,
   type Msg,
@@ -62,13 +64,17 @@ import {
   type Place,
   type ReaderSettings,
   type RefAsset,
+  type RedrawScope,
   type RefOwner,
   type RenderState,
   type RenderTarget,
   type RenderVersion,
   type Settings,
   type Source,
+  type Spend,
   type SpendEntry,
+  type SpendKind,
+  type SpendModelTotal,
   type StyleBible,
   type StyleOption,
   type TextTranslation,
@@ -192,7 +198,13 @@ export type DocOp =
   // ── Planning (server-only) ──
   /** Writer input fingerprint (jobs.planPages commits planInputHashOf(after) with the pages op): a string sets
    *  doc.planInputHash, null deletes it. Not undoable (server-only). */
-  | { op: 'plan_input_hash'; hash: string | null };
+  | { op: 'plan_input_hash'; hash: string | null }
+
+  // ── Image model lock (server-only; models.md §3) ──
+  /** Set or replace the lock. Committed in the SAME batch as the first comic image (origin 'first_render'),
+   *  on the next image commit of a legacy doc ('migrated'), or by `change_image_model` ('user_change').
+   *  A malformed lock is a no-op (R6). Never undoable; never client-patchable. */
+  | { op: 'image_model'; lock: ImageModelLock };
 
 type Quoted = { quotedUsd?: number };
 /** Spend actions — the ones that may be gated. A confirmed action whose fresh estimate exceeds
@@ -241,7 +253,11 @@ export type StudioAction =
   | { type: 'accept_translation_issue'; lang: string; lineId: string; useSuggestion: boolean }
   | { type: 'library_save'; target: { kind: 'character' | 'place'; id: string } | { kind: 'style' }; name?: string } // wave 3
   | { type: 'library_use'; itemId: string } // wave 3
-  | { type: 'import_classic_cast'; projectId: string; names?: string[] }; // wave 3, owner's own data only
+  | { type: 'import_classic_cast'; projectId: string; names?: string[] } // wave 3, owner's own data only
+  /** models.md §3.4 item 7: the ONLY path that changes doc.imageModel after the lock. `ack: true` is the user's
+   *  confirm ("consistency can be affected"); `quotedUsd` is the redraw quote shown (re-gated on drift). Non-spend:
+   *  a redraw it triggers runs as a separate render_* action carrying that quote. */
+  | { type: 'change_image_model'; modelId: string; redraw: RedrawScope; quotedUsd: number; ack: true };
 
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page'
@@ -253,7 +269,8 @@ export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   'fit_render', 'show_breakdown', 'use_preset', 'ref_crop',
   'publish', 'update_publication', 'unpublish', 'regenerate_link', 'decline_publish',
   'safety_recheck', 'swap_source_language', 'accept_translation_issue',
-  'library_save', 'library_use', 'import_classic_cast'
+  'library_save', 'library_use', 'import_classic_cast',
+  'change_image_model'
 ]);
 
 export const isSpendAction = (action: StudioAction): action is SpendAction => SPEND_ACTION_TYPES.has(action.type);
@@ -273,7 +290,7 @@ export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op'
 /** Server-only (contract test asserts none of these is patchable). */
 export const SERVER_ONLY_OPS: readonly DocOp['op'][] = [
   'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations',
-  'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash'
+  'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'image_model'
 ];
 
 /** Ids the server accepts for new entities (jobs.ts SAFE_ID). */
@@ -307,6 +324,53 @@ const withoutMeta = (r: RenderState): RenderState => {
   return out as unknown as RenderState;
 };
 const isBlockedAsset = (a?: AssetRef) => !!a?.safety && (a.safety.assessed === 'X' || !!a.safety.quarantined);
+
+// ── Spend running totals (models.md §3.3) ────────────────────────────────────
+
+/** Spend kinds that are one image call each. */
+export const IMAGE_SPEND_KINDS: ReadonlySet<SpendKind> = new Set<SpendKind>(['style', 'sheet', 'page', 'edit', 'cover']);
+/** An entry that stands for a provider image call (a $0 software reuse carrying savedUsd is not one). */
+export const isImageCallEntry = (e: SpendEntry): boolean =>
+  IMAGE_SPEND_KINDS.has(e.kind) && typeof e.model === 'string' && !!e.model && !(e.usd === 0 && (e.savedUsd ?? 0) > 0);
+
+export type SpendTotals = { byModel: Record<string, SpendModelTotal>; byTarget: Record<string, number>; failed: { count: number; usd: number } };
+
+/** Add one entry to the totals (new objects; the input is never mutated). */
+export const addSpendTotals = (totals: SpendTotals, entry: SpendEntry): SpendTotals => {
+  const usd = Number.isFinite(entry.usd) ? Math.max(0, entry.usd) : 0;
+  const failed = entry.outcome === 'failed';
+  const out: SpendTotals = { byModel: { ...totals.byModel }, byTarget: { ...totals.byTarget }, failed: { ...totals.failed } };
+  if (isImageCallEntry(entry)) {
+    const prev = out.byModel[entry.model!] || { usd: 0, images: 0, failed: 0 };
+    out.byModel[entry.model!] = { usd: round4(prev.usd + usd), images: prev.images + (failed ? 0 : 1), failed: prev.failed + (failed ? 1 : 0) };
+  }
+  if (typeof entry.target === 'string' && entry.target) out.byTarget[entry.target] = round4((out.byTarget[entry.target] || 0) + usd);
+  if (failed) out.failed = { count: out.failed.count + 1, usd: round4(out.failed.usd + usd) };
+  return out;
+};
+
+/** Totals rebuilt from a list of entries (exact only when the list is the doc's complete history). */
+export const spendTotalsFromEntries = (entries: SpendEntry[]): SpendTotals =>
+  [...entries].reverse().reduce((t, e) => addSpendTotals(t, e), { byModel: {}, byTarget: {}, failed: { count: 0, usd: 0 } } as SpendTotals);
+
+/** The stored totals of a spend (absent keys = empty), or null when the doc has none and its history is already
+ *  capped (a rebuild would not be exact; modelInsights labels such docs "(recent n)"). */
+const spendTotalsOf = (spend: Spend): SpendTotals | null => {
+  if (spend.byModel !== undefined || spend.byTarget !== undefined || spend.failed !== undefined) {
+    return { byModel: spend.byModel ?? {}, byTarget: spend.byTarget ?? {}, failed: spend.failed ?? { count: 0, usd: 0 } };
+  }
+  return spend.entries.length < MAX_SPEND_ENTRIES ? spendTotalsFromEntries(spend.entries) : null;
+};
+
+/** Only non-empty totals are written (legacy docs and chat-only spends gain no keys). */
+const totalsPatch = (t: SpendTotals | null): Pick<Spend, 'byModel' | 'byTarget' | 'failed'> => {
+  if (!t) return {};
+  return {
+    ...(Object.keys(t.byModel).length ? { byModel: t.byModel } : {}),
+    ...(Object.keys(t.byTarget).length ? { byTarget: t.byTarget } : {}),
+    ...(t.failed.count > 0 ? { failed: t.failed } : {})
+  };
+};
 
 /** Lean archive entry (no qc/balloons). */
 const toArchived = (v: RenderVersion | AssetRef, targetKey: string, label: string, archivedAt: number): ArchivedVersion => {
@@ -1253,14 +1317,17 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
       const usd = Number.isFinite(op.entry.usd) ? Math.max(0, op.entry.usd) : 0;
       const byKind = { ...doc.spend.byKind, [op.entry.kind]: round4((doc.spend.byKind[op.entry.kind] || 0) + usd) };
       const saved = Number.isFinite(op.entry.savedUsd) && (op.entry.savedUsd as number) > 0 ? (op.entry.savedUsd as number) : 0;
+      const entry: SpendEntry = { ...op.entry, usd };
+      const prior = spendTotalsOf(doc.spend);
       return {
         ...doc,
         spend: {
           ...doc.spend,
           totalUsd: round4(doc.spend.totalUsd + usd),
           byKind,
-          entries: [{ ...op.entry, usd }, ...doc.spend.entries].slice(0, MAX_SPEND_ENTRIES),
-          ...(saved ? { savedUsd: round4((doc.spend.savedUsd ?? 0) + saved) } : {})
+          entries: [entry, ...doc.spend.entries].slice(0, MAX_SPEND_ENTRIES),
+          ...(saved ? { savedUsd: round4((doc.spend.savedUsd ?? 0) + saved) } : {}),
+          ...totalsPatch(prior ? addSpendTotals(prior, entry) : null)
         }
       };
     }
@@ -1363,6 +1430,10 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
         return next;
       }
       return isPublicationMirror(op.value) ? { ...doc, publication: op.value } : doc;
+    }
+    case 'image_model': {
+      const lock = normalizeImageModelLock(op.lock);
+      return lock ? { ...doc, imageModel: lock } : doc;
     }
     case 'plan_input_hash': {
       if (op.hash === null) {

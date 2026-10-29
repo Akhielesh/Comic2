@@ -935,7 +935,8 @@ describe('v5 §16.5 sets', () => {
       approve_gate: true, decline_gate: true, pick_style: true, plan_pages: true, approve_plan: true, patch: true, restore_render: true,
       relayout_balloons: true, cancel: true, fit_render: true, show_breakdown: true, use_preset: true, ref_crop: true, publish: true,
       update_publication: true, unpublish: true, regenerate_link: true, decline_publish: true, safety_recheck: true,
-      swap_source_language: true, accept_translation_issue: true, library_save: true, library_use: true, import_classic_cast: true
+      swap_source_language: true, accept_translation_issue: true, library_save: true, library_use: true, import_classic_cast: true,
+      change_image_model: true // W-M M0-CONTRACT (models.md §3.3)
     };
     for (const t of Object.keys(all)) expect(Number(SPEND_ACTION_TYPES.has(t)) + Number(NON_SPEND_ACTION_TYPES.has(t)), t).toBe(1);
     expect(SPEND_ACTION_TYPES.size + NON_SPEND_ACTION_TYPES.size).toBe(Object.keys(all).length);

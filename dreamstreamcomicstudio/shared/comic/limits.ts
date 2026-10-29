@@ -37,6 +37,7 @@ export const DOC_LIMITS = {
   bookCredits: 8,
   bookCreditChars: 120,
   translateLineIds: 200, // SpendAction 'translate' lineIds (per-line re-translate)
+  modelChanges: 20, // ImageModelLock.changes kept (newest first; models.md §3.3)
   docBytesWarn: 2_000_000, // session logs comic_doc_bytes above this
   docBytesMax: 6_000_000 // session refuses commits that would exceed this (409 LIMIT)
 } as const;
