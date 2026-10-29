@@ -1157,7 +1157,8 @@ const factsView = (f: LabResultFacts): LabFactsView => {
   return rest;
 };
 
-/** The provider's first answer, in words, when the lab stopped the transport's second attempt. */
+/** The provider's first answer, in words, when the lab stopped the transport's second attempt — or, for a check tied
+ *  to one endpoint, why its only call was stopped before it was sent (nothing reached the provider). */
 const firstAnswerCopy = (cap: ProviderCapture): { code: string; message: string } => {
   if (cap.skippedTransport !== undefined) {
     return {
