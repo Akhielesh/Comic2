@@ -138,7 +138,7 @@ export const ModelStatusBanner: React.FC<{ studio: StudioController; compact: bo
             {down
               ? ` — ${who} isn't serving it right now${reason ? ` (${reason})` : ''}. New images wait, so nothing is charged.`
               : ` — ${who} is answering slowly or failing sometimes${reason ? ` (${reason})` : ''}. Images may take longer or need a retry.`}{' '}
-            <span className="whitespace-nowrap text-[var(--ds-muted)]">
+            <span className="text-[var(--ds-muted)]">
               {since ? `Since ${since} · ` : ''}
               {sourceLine(worst, now)}
             </span>
