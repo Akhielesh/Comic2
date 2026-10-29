@@ -2823,8 +2823,14 @@ class RenderRun {
     const { ctx, session } = this;
     let prepared = initial;
     let safe = !!job.safe;
-    // The lock invariant comes first: a mismatching job makes no reservation and no provider call.
-    this.assertLockedModel(job, prepared.compiled.spec);
+    // The lock invariant comes first: a mismatching job makes no reservation and no provider call. Its "Drawing…"
+    // activity ends with the failure (the live status line never keeps drawing after the job failed).
+    try {
+      this.assertLockedModel(job, prepared.compiled.spec);
+    } catch (err) {
+      end(false);
+      throw err;
+    }
     const picked = imageRouteFor(prepared.compiled.spec, ctx.keys);
     if (!picked) {
       end(false);
@@ -3375,8 +3381,11 @@ class RenderRun {
     }
   ): number {
     const { compiled } = prepared;
-    // A breaker refusal never reached a provider: not an attempt, only a 'blocked' call row (below).
-    const paused = !a.ok && isRoutePausedError(a.raw);
+    // A breaker refusal that cost nothing never reached a provider: not an attempt, only a 'blocked' call row (below).
+    // One that carries money an earlier attempt on that route already spent (e.g. a charged text-only answer
+    // before the refused retry) is a failed, billed attempt: the ledger settles it, so the comic records it too.
+    const refused = !a.ok && isRoutePausedError(a.raw);
+    const paused = refused && !(a.providerUsd > 0);
     const usd = chargedUsd(a.providerUsd, a.byok);
     const info = a.ok ? undefined : imageFailureInfo(a.raw);
     const route: ImageRoute = a.result?.route ?? info?.route ?? picked.route;
@@ -3426,7 +3435,7 @@ class RenderRun {
       refs,
       outcome: paused ? 'blocked' : a.ok ? 'ok' : 'failed',
       ...(typeof status === 'number' && Number.isFinite(status) && status > 0 ? { httpStatus: status } : {}),
-      ...(a.ok ? {} : { errorCode: paused ? 'ROUTE_PAUSED' : a.error?.code || 'PROVIDER_ERROR' }),
+      ...(a.ok ? {} : { errorCode: refused ? 'ROUTE_PAUSED' : a.error?.code || 'PROVIDER_ERROR' }),
       providerCostUsd: a.reported,
       billedUsd: paused ? 0 : usd,
       byok: a.byok,

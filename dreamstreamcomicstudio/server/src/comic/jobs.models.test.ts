@@ -14,6 +14,7 @@ import { fakeImageCalls, fakeImages, newSession, plannedDoc, testContext, type T
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
 import { StudioError, type ImageRequest, type StudioKeys } from './types.js';
 import { fakeModelHealth } from './models/health.fakes.js';
+import { routePausedError } from './models/health.js';
 import { makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic.js';
 import { analyzePageRender } from './vision.js';
 
@@ -135,6 +136,13 @@ describe('model lock (models.md §3.4)', () => {
     expect(page2.error).toMatch(/locked to Nano Banana Pro/);
     expect(error).toHaveBeenCalledWith('comic_model_lock_violation', expect.objectContaining({ model: 'nano-banana-2.1', locked: 'nano-banana-pro' }));
     expect(MODEL_LOCKED).toBe('MODEL_LOCKED');
+    // Every "Drawing…" activity that started also ended — page 2's with ok:false (the live line stops drawing).
+    const acts = ctx.events.filter((e): e is Extract<typeof e, { type: 'activity' }> => e.type === 'activity' && e.cost === 'image');
+    const starts = acts.filter((e) => e.phase === 'start');
+    expect(starts.map((e) => e.label)).toEqual(['Drawing pages 1–2', 'Drawing page 1', 'Drawing page 2']);
+    for (const s of starts) expect(acts.some((e) => e.id === s.id && e.phase === 'end')).toBe(true);
+    const page2Act = starts.find((e) => e.label === 'Drawing page 2')!;
+    expect(acts.find((e) => e.id === page2Act.id && e.phase === 'end')).toMatchObject({ ok: false });
   });
 
   it('a lock on a model the registry no longer lists fails honestly (H) — never re-pointed, no call', async () => {
@@ -257,6 +265,31 @@ describe('per-attempt recording (models.md §3.4 item 9)', () => {
     expect(session.doc.spend.failed).toEqual({ count: 1, usd: 0 });
     expect(session.doc.spend.byModel?.['nano-banana-2.1']).toMatchObject({ images: 0, failed: 1 });
     expect(ctx.callsFake.rows).toEqual([expect.objectContaining({ outcome: 'failed', errorCode: 'PROVIDER_ERROR', providerCostUsd: null, billedUsd: 0 })]);
+  });
+
+  it('a breaker refusal that already carries spend from an earlier attempt is recorded as a billed failed attempt', async () => {
+    const images = fakeImages(() =>
+      Object.assign(routePausedError({ route: 'openrouter', model: 'google/gemini-nano-banana-2.1', nickname: 'Nano Banana 2.1' }), { spentUsd: 0.02 })
+    );
+    const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    const billed = Math.round(0.02 * 1.3 * 10000) / 10000;
+    expect(ctx.billingFake.settled).toEqual([expect.objectContaining({ costUsd: 0.02 })]); // the ledger charges it…
+    // …and the comic shows it: a failed SpendEntry, the failed totals, byModel and a billed 'failed' call row.
+    expect(session.doc.spend.entries).toEqual([expect.objectContaining({ outcome: 'failed', usd: billed, model: 'nano-banana-2.1' })]);
+    expect(session.doc.spend.totalUsd).toBeCloseTo(billed, 4);
+    expect(session.doc.spend.failed).toEqual({ count: 1, usd: billed });
+    expect(session.doc.spend.byModel?.['nano-banana-2.1']).toMatchObject({ failed: 1 });
+    expect(ctx.callsFake.rows).toEqual([expect.objectContaining({ outcome: 'failed', errorCode: 'ROUTE_PAUSED', providerCostUsd: 0.02, billedUsd: billed })]);
+  });
+
+  it('a breaker refusal that cost nothing stays a $0 blocked call row with no spend entry', async () => {
+    const images = fakeImages(() => routePausedError({ route: 'openrouter', model: 'google/gemini-nano-banana-2.1', nickname: 'Nano Banana 2.1' }));
+    const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(session.doc.spend.entries).toEqual([]);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    expect(ctx.callsFake.rows).toEqual([expect.objectContaining({ outcome: 'blocked', errorCode: 'ROUTE_PAUSED', billedUsd: 0 })]);
   });
 
   it('recording failures never fail the job', async () => {
