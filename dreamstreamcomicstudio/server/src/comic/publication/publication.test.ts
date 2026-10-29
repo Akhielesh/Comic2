@@ -727,6 +727,22 @@ describe('publish', () => {
     expect((await getPublicationView(ctx)).readiness.languages.map((l) => [l.lang, l.requested])).toEqual([['en', true], ['hi', true]]);
   });
 
+  it('"publish it in Hindi": a request naming only editions starts readers in the first one named, though the original is published too', async () => {
+    setup(withReviewedEdition(richDoc(), 'hi'));
+    const first = await publish(ctx, { visibility: 'unlisted', languages: ['hi'] });
+    expect([first.languages, first.defaultLang]).toEqual([['en', 'hi'], 'hi']);
+    // The sheet's Update resends the published list (the original named): the live default stands.
+    const update = await publish(ctx, { visibility: 'unlisted', languages: first.languages });
+    expect(update.defaultLang).toBe('hi');
+    // Dropping the default edition falls back to the original.
+    expect((await publish(ctx, { visibility: 'unlisted', languages: ['en'] })).defaultLang).toBe('en');
+    // A first publish naming the original starts readers in it, unless the request picks another.
+    await unpublish(ctx);
+    expect((await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'] })).defaultLang).toBe('en');
+    expect((await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'hi' })).defaultLang).toBe('hi');
+    expect(store.rows.get('proj-1')!.defaultLang).toBe('hi');
+  });
+
   it('card patch ops update only the publish card in its message', () => {
     const doc = ctx.session.doc;
     ctx.session.commit([{ op: 'message', msg: { id: 'm9', role: 'assistant', text: 'x', at: 1, cards: [{ type: 'publish', id: 'c1', mode: 'publish', status: 'pending' }, { type: 'notice', id: 'n', tone: 'info', text: 'y' }] } }]);

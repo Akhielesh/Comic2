@@ -107,7 +107,7 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       properties: {
         visibility: { type: 'string', enum: ['unlisted', 'public'] },
         languages: { type: 'array', items: { type: 'string' }, description: 'Editions to publish: finished translations beside the original, which is always published.' },
-        default_language: { type: 'string' },
+        default_language: { type: 'string', description: 'The edition readers start in. Omitted: languages that leave out the original start readers in an edition they name (the live default if named, else the first); otherwise the live default stays, else the original.' },
         start_page: { type: 'integer', minimum: 1 },
         allow_download: { type: 'boolean' }
       },

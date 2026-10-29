@@ -759,7 +759,16 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
         details: { languages: incomplete }
       });
     }
-    const defaultLang = req.defaultLang && languages.some((l) => sameLanguage(l, req.defaultLang)) ? languages.find((l) => sameLanguage(l, req.defaultLang))! : live?.defaultLang && languages.includes(live.defaultLang) ? live.defaultLang : languages[0];
+    // The edition readers start in: the request's, else the live one, else the first. A request that names
+    // editions but not the original ("publish it in Hindi") gets the original added above, yet its default
+    // stays among the editions it named (the live default if it is one of them, else the first named).
+    const named = req.languages?.length && !req.languages.some((l) => sameLanguage(l, source)) ? req.languages : null;
+    const pool = named ? languages.filter((l) => named.some((n) => sameLanguage(n, l))) : languages;
+    const defaultLang =
+      (req.defaultLang && languages.find((l) => sameLanguage(l, req.defaultLang))) ||
+      (live?.defaultLang && pool.find((l) => sameLanguage(l, live.defaultLang!))) ||
+      pool[0] ||
+      languages[0];
 
     // Pages: drawn and not excluded; nothing mid-render.
     const exclude = new Set(req.excludePageIds || []);

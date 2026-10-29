@@ -245,6 +245,27 @@ describe('ShareSheet', () => {
     expect(screen.queryByRole('button', { name: 'Update published version' })).toBeNull();
   });
 
+  it('a published translation that went stale can be dropped from the sheet: "Edit languages…", untick it, Update publishes the original alone', async () => {
+    const studio = studioWith(
+      view({
+        behind: true,
+        languages: ['en', 'hi'],
+        readiness: { ...view().readiness, ok: false, languages: [{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: false, blocking: ['3 lines changed since translating.'], requested: true }] }
+      })
+    );
+    studio.doc!.i18n = { editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    vi.mocked(api.publishComic).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Edit languages/ }));
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).toBeChecked();
+    expect(hindi).not.toBeDisabled();
+    fireEvent.click(hindi);
+    fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.publishComic).mock.calls[0][1]).toMatchObject({ visibility: 'unlisted', languages: ['en'] });
+  });
+
   it('the preview mock shows the FROZEN card with its rating (what chat apps render), never the live, unpublished text', () => {
     const previewFigure = () => screen.getByText('This is what people see before they tap.').closest('figure') as HTMLElement;
     const studio = studioWith(view({ behind: true, rating: 'PG', card: { title: 'The Saffron Thief', description: 'A courier races through a spice market.' } }));

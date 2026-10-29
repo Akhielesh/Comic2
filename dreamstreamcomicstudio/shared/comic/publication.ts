@@ -63,6 +63,11 @@ export interface PublishRequest {
    * whether or not it is named here. Default [format.language].
    */
   languages?: string[];
+  /**
+   * The edition readers start in (one of the published languages). Absent: when `languages` leaves out
+   * the original, an edition it names (the live default if named, else the first); otherwise the live
+   * default if still published, else the original.
+   */
   defaultLang?: string;
   startPage?: number | null;
   allowDownload?: boolean; // default TRUE (addendum)
