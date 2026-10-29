@@ -296,7 +296,12 @@ function StackedSpeechBubbles({ blocks, compact }: { blocks: DialogueBlock[]; co
                 if (block.kind === 'narration') return <NarrationBox key={block.id} text={block.text} compact={compact} />;
                 // Same side rule as the overlay, so a conversation keeps its left/right rhythm.
                 const side = block.side || (idx % 2 === 0 ? 'left' : 'right');
-                return <SpeechBubble key={block.id} block={{ ...block, side }} compact={compact} tail="up" clamp={false} />;
+                // A flex row so each bubble is as wide as its words (up to 85%), not a full-width bar.
+                return (
+                    <div key={block.id} className={`flex ${side === 'right' ? 'justify-end' : side === 'center' ? 'justify-center' : 'justify-start'}`}>
+                        <SpeechBubble block={{ ...block, side }} compact={compact} tail="up" clamp={false} />
+                    </div>
+                );
             })}
         </div>
     );

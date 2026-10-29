@@ -1,9 +1,10 @@
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles, MoreHorizontal, Library, LayoutDashboard, Info, Rows3, LogIn } from 'lucide-react';
 import { PanelDialogue } from './PanelDialogue';
 import { derivePanelTitle } from '../services/panelDescription';
+import { readerDialogueBlocks } from '../services/dialogueUtils';
 import { loadReaderState, saveReaderState } from '../services/db';
 
 import { ReviewModal } from './modals/ReviewModal';
@@ -28,6 +29,14 @@ import {
 // phones and tablets; the width test covers narrow desktop windows.
 const PHONE_QUERY = '(pointer: coarse), (max-width: 639.98px)';
 const CHROME_AUTO_HIDE_MS = 2500;
+// Page Flip on phones: the dialogue goes UNDER the art (never beside it, where it ran off-screen) and the art gets
+// the rest of the page region. The dialogue may take at most this share of the region's height (less in landscape,
+// so the art stays large), and scrolls inside itself beyond that.
+const FLIP_DIALOGUE_MAX_SHARE = 0.4;
+const FLIP_DIALOGUE_MAX_SHARE_SHORT = 0.35;
+const FLIP_SHORT_REGION_PX = 480;
+const FLIP_GAP_PX = 8;
+const FLIP_DIALOGUE_MAX_W = 576;
 const PHONE_BTN =
   'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
 const PHONE_MENU_ITEM =
@@ -401,6 +410,45 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     mq.addEventListener('change', on);
     return () => mq.removeEventListener('change', on);
   }, []);
+  // Phone Page Flip geometry, measured (percentage heights do not chain reliably through the flip page).
+  const [flipRegion, setFlipRegion] = useState<HTMLDivElement | null>(null);
+  const [flipBox, setFlipBox] = useState<{ w: number; h: number } | null>(null);
+  const [flipDialogue, setFlipDialogue] = useState<HTMLDivElement | null>(null);
+  const [flipDialogueH, setFlipDialogueH] = useState(0);
+  useLayoutEffect(() => {
+    if (!flipRegion) {
+      setFlipBox(null);
+      return;
+    }
+    const read = () => {
+      const cs = window.getComputedStyle(flipRegion);
+      const w = Math.floor(flipRegion.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
+      const h = Math.floor(flipRegion.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0));
+      if (w <= 0 || h <= 0) return;
+      setFlipBox((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    ro.observe(flipRegion);
+    return () => ro.disconnect();
+  }, [flipRegion]);
+  useLayoutEffect(() => {
+    if (!flipDialogue) {
+      setFlipDialogueH(0);
+      return;
+    }
+    const read = () => setFlipDialogueH(Math.ceil(flipDialogue.offsetHeight));
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    ro.observe(flipDialogue);
+    return () => ro.disconnect();
+  }, [flipDialogue]);
+  const flipDialogueMax = flipBox
+    ? Math.round(flipBox.h * (flipBox.h < FLIP_SHORT_REGION_PX ? FLIP_DIALOGUE_MAX_SHARE_SHORT : FLIP_DIALOGUE_MAX_SHARE))
+    : null;
+  const flipArtMaxH = flipBox ? Math.max(80, flipBox.h - (flipDialogue ? Math.min(flipDialogueH, flipDialogueMax ?? 0) + FLIP_GAP_PX : 0)) : null;
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
@@ -465,6 +513,10 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	    });
 	    return list;
 	  }, [project.state.coverImageUrl, project.state.panels, project.state.pageStudio?.pages]);
+  const flipHasDialogue = useMemo(() => {
+    const panel = pages[pageIndex]?.panel;
+    return !!panel && textLayout !== 'none' && readerDialogueBlocks(panel).length > 0;
+  }, [pages, pageIndex, textLayout]);
 
   // Preload nearby page images so a flip (forward OR back) never flashes blank.
   useEffect(() => {
@@ -1036,7 +1088,49 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 )}
-                {pages.length > 0 ? (
+                {pages.length > 0 && phoneUi ? (
+                  // Phones: the art on top, its dialogue UNDER it (never beside it, off-screen), the art sized to what
+                  // the dialogue leaves; the dialogue scrolls inside itself past its share of the height.
+                  <div
+                    ref={setFlipRegion}
+                    data-testid="flip-region"
+                    className="flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 select-none"
+                    onTouchStart={onTouchStart}
+                    onTouchEnd={onTouchEnd}
+                  >
+                    <div
+                      key={pageIndex}
+                      data-testid="flip-page"
+                      className={`flex max-h-full w-full flex-col items-center ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
+                      style={{ gap: FLIP_GAP_PX }}
+                    >
+                      <div data-testid="flip-art" className={`relative inline-flex max-w-full shrink-0 ${fxOn ? 'comic-halftone' : ''}`}>
+                        {pages[pageIndex]?.imageUrl ? (
+                          <img
+                            src={pages[pageIndex].imageUrl}
+                            alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : pages[pageIndex]?.type === 'page' ? `${project.name} page ${pageIndex + 1}` : 'Comic cover'}
+                            className="block max-h-full max-w-full w-auto h-auto object-contain border-2 border-black shadow-comic bg-white"
+                            style={flipBox && flipArtMaxH ? { maxWidth: flipBox.w, maxHeight: flipArtMaxH } : undefined}
+                          />
+                        ) : (
+                          <div className="w-[70vw] max-w-md min-h-[200px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black rounded">
+                            {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
+                          </div>
+                        )}
+                      </div>
+                      {flipHasDialogue && (
+                        <div
+                          ref={setFlipDialogue}
+                          data-testid="flip-dialogue"
+                          className="w-full shrink-0 overflow-y-auto overscroll-contain"
+                          style={{ maxWidth: FLIP_DIALOGUE_MAX_W, maxHeight: flipDialogueMax ?? `${FLIP_DIALOGUE_MAX_SHARE * 100}%` }}
+                        >
+                          <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="below" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : pages.length > 0 ? (
                   // The page region flexes to fill remaining height; the page itself is bounded
                   // by BOTH max-h-full and max-w-full so it always scales to fit the viewport on
                   // either axis — never oversized, never leaving dead space.
