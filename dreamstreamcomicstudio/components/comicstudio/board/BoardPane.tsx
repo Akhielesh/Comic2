@@ -87,7 +87,12 @@ export const boardTabsFor = (doc: ComicDoc, caps: StudioCaps, active?: StudioTab
 };
 
 /** An open spend approval, mirrored on the board so a click here can be answered here. */
-export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean }> = ({ studio, compact = false }) => {
+export const GateBanner: React.FC<{
+  studio: StudioController;
+  compact?: boolean;
+  /** A short board (a landscape phone): the one-line banner drops its outer spacing (one 44 px row). */
+  dense?: boolean;
+}> = ({ studio, compact = false, dense = false }) => {
   const gate = studio.doc?.gate;
   const { busyKey, fire } = useClickGuard(4000);
   const [details, setDetails] = useState(false);
@@ -116,7 +121,7 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
         role="region"
         aria-label="Waiting for your approval"
         data-gate-banner="compact"
-        className="mx-2 mt-2 shrink-0 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 px-2.5 py-1.5 text-[var(--ds-ink)]"
+        className={cx('mx-2 shrink-0 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 px-2.5 text-[var(--ds-ink)]', dense ? 'mt-1 py-0' : 'mt-2 py-1.5')}
       >
         <div className="flex min-w-0 items-center gap-2">
           <button
@@ -330,12 +335,15 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
     (rootSize.width > 0 ? rootSize.width < GATE_COMPACT_BELOW_PX : ff.widthClass === 'compact') ||
     (rootSize.height > 0 ? rootSize.height < GATE_COMPACT_BELOW_H_PX : ff.heightClass === 'compact');
   const hideInactiveBadges = ff.width < TAB_BADGES_MIN_WIDTH;
+  // A landscape phone (~343 px tall, of which the shell keeps ~140): the board's own chrome — the tab row
+  // and the one-line gate — loses its outer padding, so the panel under them is not a 35 px slit.
+  const denseChrome = ff.heightClass === 'compact';
   const mask = clip.start && clip.end ? FADE_MASK.both : clip.end ? FADE_MASK.end : clip.start ? FADE_MASK.start : '';
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board data-board-frozen={focused ? 'true' : undefined}>
       <FrozenWhileEditing frozen={!!focused}>
-        <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 py-1.5 sm:px-4 sm:py-2', HAIRLINE)}>
+        <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 sm:px-4', denseChrome ? 'py-0.5' : 'py-1.5 sm:py-2', HAIRLINE)} data-board-tabs={denseChrome ? 'dense' : undefined}>
           <span className="hidden text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] md:inline">Board</span>
           <div
             ref={stripRef}
@@ -376,7 +384,7 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
             })}
           </div>
         </div>
-        <GateBanner studio={studio} compact={gateCompact} />
+        <GateBanner studio={studio} compact={gateCompact} dense={denseChrome} />
         <div
           ref={scrollRef}
           onScroll={onScroll}
