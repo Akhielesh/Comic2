@@ -1064,14 +1064,17 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
 
     // A Stop from an earlier turn no longer applies to this request: clear it BEFORE any
     // upload, so a Stop pressed from now on — during the upload or during the turn — cancels
-    // THIS request instead of being undone later. The turn signal and its res.on('close')
-    // are set up here too, so a disconnect mid-upload aborts the turn even before the stream
-    // is open (the listener would otherwise be registered after 'close' had already fired).
+    // THIS request instead of being undone later. The turn signal is per request so a Stop that
+    // lands mid-upload is honored once the stream opens (below).
+    // A dropped connection is NOT a Stop: a phone's network blip or an app switch closes the
+    // socket, but the user still wants their answer. The turn finishes and commits its reply
+    // (bounded by the director's tool rounds and the model timeout), the client's resync picks
+    // it up, and only the writes to the dead socket are skipped (`send` checks the socket).
     if (session.abort.signal.aborted) session.resetAbort();
     const sessionSignal = session.abort.signal;
     const turnAbort = new AbortController();
     res.on('close', () => {
-      if (!res.writableEnded) turnAbort.abort();
+      if (!res.writableEnded) logger.info('comic_stream_client_gone', { requestId: req.requestId, projectId: session.projectId, ...shape });
     });
 
     // Refusals that persist nothing: busy → cooldown → restricted account.
@@ -1140,9 +1143,10 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     send({ type: 'hello', rev: session.doc.rev, turnId: newId('turn') });
     const unsubscribe = session.subscribe(send);
 
-    // The director loop stops when the user cancels OR closes the tab; renders only on cancel.
-    // A Stop that landed during the upload already aborted turnAbort's source signal above, so
-    // honor it now instead of resetting it; otherwise listen for a Stop during the turn.
+    // The director loop and the queued renders stop only when the user presses Stop (closing the
+    // tab stops nothing, see above). A Stop that landed during the upload already aborted
+    // turnAbort's source signal above, so honor it now instead of resetting it; otherwise listen
+    // for a Stop during the turn.
     const onSessionAbort = () => turnAbort.abort();
     if (sessionSignal.aborted) turnAbort.abort();
     else sessionSignal.addEventListener('abort', onSessionAbort, { once: true });

@@ -350,18 +350,23 @@ describe('POST /projects/:id/stream', () => {
     expect(store.docs.get('proj-1')!.doc.conversation.map((m) => m.text)).toEqual(['one', 'First done.']);
   });
 
-  it('a client disconnect aborts the director loop (not the session) and still persists', async () => {
+  it('a client disconnect is not a Stop: the director turn finishes, commits its reply and persists', async () => {
     seed();
     let markWaiting!: () => void;
     const waiting = new Promise<void>((r) => (markWaiting = r));
-    let sawAbort!: () => void;
-    const aborted = new Promise<void>((r) => (sawAbort = r));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let abortedDuringCall = false;
     llm.script.director = [
       async (req) => {
         markWaiting();
-        await new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }));
-        sawAbort();
-        return new StudioError('CANCELLED', 'Cancelled.');
+        // Like the real client: an aborted signal ends the call; otherwise the answer arrives.
+        await Promise.race([held, new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }))]);
+        if (req.signal!.aborted) {
+          abortedDuringCall = true;
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+        return { text: 'Here is the plan.' };
       }
     ];
     const client = new AbortController();
@@ -372,13 +377,19 @@ describe('POST /projects/:id/stream', () => {
       signal: client.signal
     }).then((r) => r.text()).catch(() => 'closed');
     await waiting;
+    // The phone's network blinks (or the app is backgrounded): the socket closes mid-turn.
     client.abort();
-    await aborted;
     await pending;
     await new Promise((r) => setTimeout(r, 30));
+    // Before the fix this was a Stop: the model call was cancelled and no reply was ever committed.
+    expect(abortedDuringCall).toBe(false);
+    release();
+    const docOf = () => store.docs.get('proj-1')!.doc;
+    for (let i = 0; i < 100 && docOf().conversation.length < 2; i += 1) await new Promise((r) => setTimeout(r, 20));
     const session = peekStudioSession('proj-1')!;
-    expect(session.abort.signal.aborted).toBe(false);
-    expect(store.docs.get('proj-1')!.doc.conversation.map((m) => m.role)).toEqual(['user']);
+    expect(session.abort.signal.aborted).toBe(false); // the session was never stopped
+    expect(docOf().conversation.map((m) => m.text)).toEqual(['draw something', 'Here is the plan.']);
+    expect(docOf().conversation[1].text).not.toContain('(stopped)');
   });
 
   it('stores image attachments and turns a long text file into the source script', async () => {
