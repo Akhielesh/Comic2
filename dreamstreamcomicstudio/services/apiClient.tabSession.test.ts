@@ -78,4 +78,15 @@ describe('apiClient bearer token — follows this tab’s own session', () => {
     // Never the other tab's token either.
     expect((fetchMock.mock.calls as unknown as [string, RequestInit][]).some((c) => JSON.stringify(c[1].headers).includes('tab-2-token-b'))).toBe(false);
   });
+
+  it('a signed-out tab with "Remember me" off (nothing stored): the sign-in another tab announced is not adopted — requests stay anonymous', async () => {
+    h.stored = null;
+    await get('/api/x');
+    expect(lastAuth()).toBeUndefined();
+    // What the real isStoredSession answers for such a tab: not its session.
+    h.isStored.mockImplementationOnce(() => false);
+    h.emit('SIGNED_IN', { access_token: 'the-link-tabs-token', user: { id: 'user-b' } });
+    await get('/api/x');
+    expect(lastAuth()).toBeUndefined();
+  });
 });

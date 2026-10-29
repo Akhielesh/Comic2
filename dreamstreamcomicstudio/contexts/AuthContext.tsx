@@ -34,6 +34,13 @@ type AuthContextType = {
 export const OTHER_TAB_SIGN_IN_NOTICE =
     'Signed in as another account in another tab. This tab was signed out so the two accounts’ data stay apart — continue in that tab, or sign in again here.';
 
+/**
+ * Shown to a signed-out tab that hears another tab sign in while "Remember me" is off (the tab
+ * that asked for a magic link, once the link's tab signed in): that session is that tab's alone.
+ */
+export const SIGNED_IN_IN_OTHER_TAB_NOTICE =
+    'Signed in in another tab. With “Remember me” off each tab signs in on its own — continue there, or sign in here.';
+
 /** A login sync whose read of the account snapshot failed is run again once after this pause. */
 const LOGIN_SYNC_RETRY_MS = 5_000;
 
@@ -237,6 +244,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                     applyAuthState(null);
                     setLoading(false);
                     appStatus.report('warn', OTHER_TAB_SIGN_IN_NOTICE, { source: 'auth' });
+                } else if (!current && event === 'SIGNED_IN') {
+                    // A signed-out tab with "Remember me" off (nothing stored here): another tab
+                    // signed in — the tab a magic link opened in, say. That session is that tab's
+                    // alone; this one stays signed out, and says why. (Its own sign-ins store the
+                    // session before the event, so they match and are applied as ever.)
+                    appStatus.report('info', SIGNED_IN_IN_OTHER_TAB_NOTICE, { source: 'auth' });
                 }
                 return;
             }
