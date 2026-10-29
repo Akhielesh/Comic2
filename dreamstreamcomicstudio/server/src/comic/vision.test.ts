@@ -4,9 +4,13 @@ import { createEmptyDoc, emptyRender, type Balloon, type Box, type ComicDoc, typ
 import {
   MAX_BALLOON_W,
   MIN_BALLOON_W,
+  PANEL_CHECK_TOKENS,
   VISION_SCHEMA,
   analyzePageRender,
   balloonWidth,
+  beatProblems,
+  qcOffPanelSpeakerIds,
+  readMissingSpeakers,
   compareLettering,
   coordinateScale,
   estimateBalloonHeight,
@@ -686,3 +690,328 @@ describe('shared placement engine (P2-SERVER: lettering.md §6.6 / §9)', () => 
   });
 });
 
+
+// ── A3: honest panel checks (plan §4.3 Ship 1) ──────────────────────────────
+
+/** Minimal JSON-schema check for the strict subset VISION_SCHEMA uses (object/array/integer/number/string/boolean/enum). */
+const conforms = (node: Record<string, unknown>, value: unknown, path = '$'): string[] => {
+  switch (node.type) {
+    case 'object': {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [`${path}: not an object`];
+      const props = node.properties as Record<string, Record<string, unknown>>;
+      const v = value as Record<string, unknown>;
+      return [
+        ...(node.required as string[]).filter((k) => !(k in v)).map((k) => `${path}.${k}: required`),
+        ...Object.keys(v).filter((k) => !(k in props)).map((k) => `${path}.${k}: not allowed`),
+        ...Object.entries(props).flatMap(([k, child]) => (k in v ? conforms(child, v[k], `${path}.${k}`) : []))
+      ];
+    }
+    case 'array':
+      return Array.isArray(value) ? value.flatMap((item, i) => conforms(node.items as Record<string, unknown>, item, `${path}[${i}]`)) : [`${path}: not an array`];
+    case 'integer':
+      return Number.isInteger(value) ? [] : [`${path}: not an integer`];
+    case 'number':
+      return typeof value === 'number' ? [] : [`${path}: not a number`];
+    case 'boolean':
+      return typeof value === 'boolean' ? [] : [`${path}: not a boolean`];
+    case 'string':
+      return typeof value === 'string' && (!node.enum || (node.enum as string[]).includes(value)) ? [] : [`${path}: bad string`];
+    default:
+      return [`${path}: unknown type ${String(node.type)}`];
+  }
+};
+
+/** One suggested balloon per line, so a reply never needs the (paid) repair round. */
+const balloonsFor = (...ids: string[]) => ids.map((lineId, i) => ({ lineId, x: 0.1, y: 0.05 + i * 0.12, w: 0.2, tailX: -1, tailY: -1 }));
+
+describe('A3 honest panel checks: beats, crosses, drawn boxes (plan §4.3)', () => {
+  const twoPanel = (shot2: Panel['shot'] = 'medium', cast2 = ['maya']) =>
+    page(
+      [
+        panel(1, ['maya', 'arjun'], [line('l1', 'speech', 'You are late.', 'arjun'), line('l2', 'speech', 'The monsoon is early.', 'maya'), line('l3', 'caption', 'Crawford Market.')]),
+        panel(2, cast2, [line('l4', 'thought', 'Run.', 'maya')], { shot: shot2 })
+      ],
+      { layout: 'Row 1: one wide panel. Row 2: one wide panel.' }
+    );
+  const top = { x: 0.03, y: 0.03, w: 0.94, h: 0.46 };
+  const bottom = { x: 0.03, y: 0.52, w: 0.94, h: 0.45 };
+  const v2Reply = (over: Record<string, unknown> = {}) => ({
+    panels: [
+      { n: 1, box: top, beat: 1, crosses: false },
+      { n: 2, box: bottom, beat: 2, crosses: true }
+    ],
+    issues: [],
+    textFound: [],
+    extraOrMissingCharacters: [],
+    score: 0.98,
+    balloons: balloonsFor('l1', 'l2', 'l3', 'l4'),
+    safety: { rating: 'G', categories: [], notes: [] },
+    keepOut: [],
+    heads: [],
+    ...over
+  });
+  const v1Reply = { panels: [{ n: 1, box: top }, { n: 2, box: bottom }], issues: [], textFound: [], extraOrMissingCharacters: [], score: 0.9, balloons: balloonsFor('l1', 'l2', 'l3', 'l4') };
+
+  it('schema round trip: panels require beat and crosses; a conforming reply becomes stored, JSON-stable checks', async () => {
+    const item = (VISION_SCHEMA.properties.panels as { items: { required: string[]; properties: Record<string, { type: string }> } }).items;
+    expect(item.required).toEqual(['n', 'box', 'beat', 'crosses']);
+    expect(item.properties.beat.type).toBe('integer');
+    expect(item.properties.crosses.type).toBe('boolean');
+
+    const reply = v2Reply();
+    expect(conforms(VISION_SCHEMA as Record<string, unknown>, reply)).toEqual([]);
+    expect(conforms(VISION_SCHEMA as Record<string, unknown>, v1Reply)).toContain('$.panels[0].beat: required'); // the model is asked for them
+
+    const { llm, calls } = fakeLlm([{ json: reply, text: JSON.stringify(reply) }]);
+    const out = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm });
+    expect(calls).toHaveLength(1);
+    expect(out.qc).toMatchObject({ beats: [1, 2], crosses: [2], drawnBoxes: [top, bottom], boxesFrom: 'vision', panelBoxes: [top, bottom], score: 0.98 });
+    expect(out.qc.missingSpeakers).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(out.qc))).toEqual(out.qc);
+    const system = String(calls[0].messages[0].content);
+    expect(system).toContain('beat: the number of the script panel whose action this drawn panel shows best');
+    expect(system).toContain('crosses: true when the art');
+  });
+
+  it('old (v1) replies without beat/crosses still normalize: no repair round, nothing invented', async () => {
+    const { llm, calls } = fakeLlm([{ json: v1Reply }]);
+    const out = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm });
+    expect(calls).toHaveLength(1);
+    expect(out.qc.score).toBe(0.9);
+    expect(out.qc.issues).toEqual([]);
+    expect(out.qc.panelBoxes).toEqual([top, bottom]);
+    expect(out.qc.drawnBoxes).toEqual([top, bottom]);
+    expect(out.qc.boxesFrom).toBe('vision');
+    expect('beats' in out.qc).toBe(false);
+    expect('crosses' in out.qc).toBe(false);
+  });
+
+  it('a count mismatch keeps the drawn boxes and marks panelBoxes as an estimate', async () => {
+    const three = { ...v1Reply, panels: [{ n: 1, box: top }, { n: 2, box: { x: 0.03, y: 0.52, w: 0.45, h: 0.45 } }, { n: 3, box: { x: 0.52, y: 0.52, w: 0.45, h: 0.45 } }] };
+    const { llm } = fakeLlm([{ json: three }]);
+    const pg = twoPanel();
+    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm });
+    expect(out.qc.issues[0]).toBe('Expected 2 panels but the page shows 3.');
+    expect(out.qc.score).toBe(0.6);
+    expect(out.qc.panelBoxes).toEqual(estimatePanelBoxes(pg));
+    expect(out.qc.boxesFrom).toBe('estimate');
+    expect(out.qc.drawnBoxes).toEqual(three.panels.map((p) => p.box));
+
+    // No usable reply at all: the estimate is labelled as one, and nothing claims to be drawn.
+    const none = fakeLlm([{ text: 'no' }, { text: 'still no' }]);
+    const fallback = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm: none.llm });
+    expect(fallback.qc.boxesFrom).toBe('estimate');
+    expect(fallback.qc.drawnBoxes).toBeUndefined();
+  });
+
+  it('a beat permutation is reported, never re-assigned: boxes stay in reading order and lines stay in their panels', async () => {
+    const reply = v2Reply({
+      panels: [
+        { n: 1, box: top, beat: 2, crosses: false },
+        { n: 2, box: bottom, beat: 1, crosses: false }
+      ]
+    });
+    const { llm } = fakeLlm([{ json: reply }]);
+    const out = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm });
+    expect(out.qc.beats).toEqual([2, 1]);
+    expect(out.qc.crosses).toEqual([]);
+    expect(out.qc.panelBoxes).toEqual([top, bottom]);
+    expect(out.qc.issues).toEqual(["Panel 1's picture looks like panel 2's moment.", "Panel 2's picture looks like panel 1's moment."]);
+    expect(out.qc.score).toBe(0.98); // reported, not scored here (check v2 adds the caps)
+    for (const b of out.balloons) within(b, b.lineId === 'l4' ? bottom : top);
+  });
+
+  it('beats: only stored when every drawn panel answered; a beat past the plan means none; undrawn moments are named', async () => {
+    const partial = v2Reply({ panels: [{ n: 1, box: top, beat: 1, crosses: false }, { n: 2, box: bottom, beat: 1.5, crosses: false }] });
+    const a = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: partial }]).llm });
+    expect(a.qc.beats).toBeUndefined();
+
+    const past = v2Reply({ panels: [{ n: 1, box: top, beat: 1, crosses: false }, { n: 2, box: bottom, beat: 7, crosses: false }] });
+    const b = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: past }]).llm });
+    expect(b.qc.beats).toEqual([1, 0]);
+    expect(b.qc.issues).toContain("Panel 2's moment may not be drawn in any panel.");
+  });
+
+  it('crosses: only stored when every drawn panel answered (a panel left out never reads as "does not cross")', async () => {
+    const partial = v2Reply({ panels: [{ n: 1, box: top, beat: 1, crosses: true }, { n: 2, box: bottom, beat: 2 }] });
+    const a = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: partial }]).llm });
+    expect(a.qc.crosses).toBeUndefined();
+    expect(a.qc.beats).toEqual([1, 2]);
+    const none = v2Reply({ panels: [{ n: 1, box: top, beat: 1, crosses: false }, { n: 2, box: bottom, beat: 2 }] });
+    const b = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: none }]).llm });
+    expect('crosses' in b.qc).toBe(false);
+    const all = v2Reply({ panels: [{ n: 1, box: top, beat: 1, crosses: false }, { n: 2, box: bottom, beat: 2, crosses: false }] });
+    const c = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: all }]).llm });
+    expect(c.qc.crosses).toEqual([]);
+  });
+
+  it('beatProblems: permutation vs undrawn moments; nothing when the counts differ', () => {
+    expect(beatProblems([1, 2, 3], 3)).toEqual({ permutation: false, swapped: [], undrawn: [] });
+    expect(beatProblems([1, 3, 2], 3)).toEqual({ permutation: true, swapped: [{ panel: 2, shows: 3 }, { panel: 3, shows: 2 }], undrawn: [] });
+    expect(beatProblems([1, 1, 0], 3)).toEqual({ permutation: false, swapped: [], undrawn: [2, 3] });
+    expect(beatProblems([2, 1], 3)).toEqual({ permutation: false, swapped: [], undrawn: [] });
+    expect(beatProblems(undefined, 3)).toEqual({ permutation: false, swapped: [], undrawn: [] });
+  });
+
+  it('asks for about 20 more output tokens per panel', async () => {
+    const { llm, calls } = fakeLlm([{ json: v1Reply }]);
+    await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm });
+    // 2 200 base + 4 lines × 80 + 2 panels × (20 checks + 90 overlay marks)
+    expect(calls[0].maxTokens).toBe(2_200 + 4 * 80 + 2 * PANEL_CHECK_TOKENS + 2 * 90);
+    expect(PANEL_CHECK_TOKENS).toBe(20);
+  });
+});
+
+describe('A3 missing speakers (structured; off-panel voices never reported)', () => {
+  const pageWith = (shot2: Panel['shot'], cast2: string[]) =>
+    page([
+      panel(1, ['arjun'], [line('l1', 'speech', 'You are late.', 'arjun')]),
+      panel(2, cast2, [line('l2', 'speech', 'The monsoon is early, and so are they.', 'maya')], { shot: shot2 })
+    ]);
+  const replyWith = (notes: string[], over: Record<string, unknown> = {}) => ({
+    panels: [
+      { n: 1, box: { x: 0.03, y: 0.03, w: 0.94, h: 0.46 }, beat: 1, crosses: false },
+      { n: 2, box: { x: 0.03, y: 0.52, w: 0.94, h: 0.45 }, beat: 2, crosses: false }
+    ],
+    issues: [],
+    textFound: [],
+    extraOrMissingCharacters: notes,
+    score: 0.95,
+    balloons: balloonsFor('l1', 'l2'),
+    ...over
+  });
+
+  it('a non-POV speaker the art left out is structured and caps the score at 0.75', async () => {
+    const { llm } = fakeLlm([{ json: replyWith(['Panel 2: MAYA missing from the art']) }]);
+    const out = await analyzePageRender({ doc: doc(), page: pageWith('medium', ['maya']), dataUrl: 'data:x', llm });
+    expect(out.qc.missingSpeakers).toEqual([{ panel: 2, castId: 'maya' }]);
+    expect(out.qc.score).toBe(0.75);
+    expect(out.qc.issues).toContain('Panel 2: MAYA missing from the art');
+  });
+
+  it('a POV speaker is an off-panel voice: never reported, never a score cap, and the inspector is told', async () => {
+    const pg = pageWith('pov', ['maya']);
+    const { llm, calls } = fakeLlm([{ json: replyWith(['Panel 2: MAYA missing from the art']) }]);
+    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm });
+    expect(out.qc.missingSpeakers).toBeUndefined();
+    expect(out.qc.issues).toEqual([]);
+    expect(out.qc.score).toBe(0.95);
+    const script = (calls[0].messages[1].content as { type: string; text?: string }[])[1].text!;
+    expect(script).toContain('Off-panel voices (heard, may be out of frame — never missing): MAYA.');
+    expect(script).toContain('l2 — MAYA (speech, off-panel):');
+    expect(String(calls[0].messages[0].content)).toContain('Speakers the script marks as off-panel voices are heard, not drawn — never report them missing.');
+  });
+
+  it('insert/establishing shots and speakers the panel does not list are off-panel too; plain panels are unchanged', () => {
+    const lines = [line('a', 'speech', 'Hi.', 'maya'), line('b', 'caption', 'Later.'), line('c', 'shout', 'Hey!', 'arjun')];
+    expect([...qcOffPanelSpeakerIds(panel(1, ['maya', 'arjun'], lines, { shot: 'insert' }))]).toEqual(['maya', 'arjun']);
+    expect([...qcOffPanelSpeakerIds(panel(1, ['maya', 'arjun'], lines, { shot: 'establishing' }))]).toEqual(['maya', 'arjun']);
+    expect([...qcOffPanelSpeakerIds(panel(1, ['maya'], lines))]).toEqual(['arjun']);
+    expect([...qcOffPanelSpeakerIds(panel(1, ['maya', 'arjun'], lines))]).toEqual([]);
+    // Ship 2's direction.offPanel is honoured when present.
+    expect([...qcOffPanelSpeakerIds({ ...panel(1, ['maya', 'arjun'], lines), direction: { offPanel: ['maya'] } } as Panel)]).toEqual(['maya']);
+    expect(visionSpecText(doc(), page([panel(1, ['maya', 'arjun'], lines)]))).not.toContain('Off-panel');
+  });
+
+  it('a speaker the same reply located in that panel (heads) is not missing; listed non-speakers stay plain notes', async () => {
+    // The same note without heads is a missing speaker…
+    const unlocated = replyWith(['Panel 2: MAYA missing']);
+    const before = await analyzePageRender({ doc: doc(), page: pageWith('medium', ['maya']), dataUrl: 'data:x', llm: fakeLlm([{ json: unlocated }]).llm });
+    expect(before.qc.missingSpeakers).toEqual([{ panel: 2, castId: 'maya' }]);
+    // …but not when the same reply put MAYA's head in panel 2.
+    const located = replyWith(['Panel 2: MAYA missing'], { heads: [{ panel: 2, name: 'MAYA', head: { x: 0.5, y: 0.6 }, mouth: { x: 0.5, y: 0.62 } }] });
+    const a = await analyzePageRender({ doc: doc(), page: pageWith('medium', ['maya']), dataUrl: 'data:x', llm: fakeLlm([{ json: located }]).llm });
+    expect(a.qc.missingSpeakers).toBeUndefined();
+    expect(a.qc.heads).toEqual([expect.objectContaining({ panel: 2, characterId: 'maya' })]);
+
+    const listed = replyWith(['Panel 2: ARJUN missing']);
+    const b = await analyzePageRender({ doc: doc(), page: pageWith('medium', ['maya', 'arjun']), dataUrl: 'data:x', llm: fakeLlm([{ json: listed }]).llm });
+    expect(b.qc.boxesFrom).toBe('vision');
+    expect(b.qc.missingSpeakers).toBeUndefined();
+    expect(b.qc.issues).toEqual(['Panel 2: ARJUN missing']);
+    expect(b.qc.score).toBe(0.75);
+  });
+
+  it('a note about a hand, a scarf or a prop is not that character missing; only character notes are read', async () => {
+    const pg = page([
+      panel(1, ['maya', 'arjun'], [line('l1', 'speech', 'You are late.', 'arjun'), line('l2', 'speech', 'The monsoon is early.', 'maya')]),
+      panel(2, ['maya'], [line('l3', 'speech', 'Run.', 'maya')])
+    ]);
+    const attribute = [
+      "Panel 1: Arjun's left hand is missing a finger.",
+      "Panel 1: Maya's red scarf is missing.",
+      'Panel 1: Maya’s bangles are not visible.',
+      'Panel 1: the lantern Arjun should hold is not visible.',
+      'Panel 1: Arjun is missing a finger.',
+      'Panel 1: Arjun is not shown holding the lantern.',
+      'Panel 1: Maya is not drawn in her blue jacket.',
+      'Panel 2: hand missing - Maya',
+      "Panel 2: no Maya's umbrella."
+    ];
+    for (const note of attribute) expect(readMissingSpeakers(pg, doc().cast, [note]).missingSpeakers, note).toEqual([]);
+    // What a note says about the character itself still counts.
+    const said = [
+      ['Panel 2: MAYA missing', [{ panel: 2, castId: 'maya' }]],
+      ['Panel 2: Maya is not visible in the panel.', [{ panel: 2, castId: 'maya' }]],
+      ['Panel 1: missing: ARJUN', [{ panel: 1, castId: 'arjun' }]],
+      ['Panel 2: no Maya in the art', [{ panel: 2, castId: 'maya' }]],
+      ['Panel 2: MAYA (speaking) missing', [{ panel: 2, castId: 'maya' }]],
+      ['Panel 2 shows no Maya', [{ panel: 2, castId: 'maya' }]],
+      ['Panel 1: Arjun and Maya are both absent', [{ panel: 1, castId: 'arjun' }, { panel: 1, castId: 'maya' }]],
+      ["Panel 1: Arjun and Maya aren't drawn.", [{ panel: 1, castId: 'arjun' }, { panel: 1, castId: 'maya' }]],
+      ["Panel 1: 'ARJUN' — not drawn (he speaks l1)", [{ panel: 1, castId: 'arjun' }]]
+    ] as const;
+    for (const [note, want] of said) expect(readMissingSpeakers(pg, doc().cast, [note]).missingSpeakers, note).toEqual(want);
+
+    // End to end, on an in-art page (no heads veto there): the anatomy issue stays an issue and no
+    // speaker is reported missing (the notice would otherwise offer "Redraw panel 1 with ARJUN").
+    const inArt = doc((d) => (d.format.lettering = 'in_art'));
+    const reply = {
+      panels: [
+        { n: 1, box: { x: 0.03, y: 0.03, w: 0.94, h: 0.46 }, beat: 1, crosses: false },
+        { n: 2, box: { x: 0.03, y: 0.52, w: 0.94, h: 0.45 }, beat: 2, crosses: false }
+      ],
+      issues: ["Panel 1: Arjun's left hand is missing a finger."],
+      textFound: ['You are late.', 'The monsoon is early.', 'Run.'],
+      extraOrMissingCharacters: ["Panel 1: Maya's red scarf is missing."],
+      score: 0.9
+    };
+    const out = await analyzePageRender({ doc: inArt, page: pg, dataUrl: 'data:x', llm: fakeLlm([{ json: reply }]).llm });
+    expect(out.qc.missingSpeakers).toBeUndefined();
+    expect(out.qc.issues).toEqual(["Panel 1: Arjun's left hand is missing a finger.", "Panel 1: Maya's red scarf is missing."]);
+    expect(out.qc.score).toBe(0.75);
+  });
+
+  it('a real problem in a pov panel is never excused: issues are not filtered, and a note about more than the voice stays', async () => {
+    const pg = pageWith('pov', ['maya']);
+    const reply = replyWith(['Panel 2: MAYA missing; an extra man stands at the stall'], { issues: ["Panel 2: Maya's right hand is missing two fingers."] });
+    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm: fakeLlm([{ json: reply }]).llm });
+    expect(out.qc.missingSpeakers).toBeUndefined();
+    expect(out.qc.issues).toEqual(["Panel 2: Maya's right hand is missing two fingers.", 'Panel 2: MAYA missing; an extra man stands at the stall']);
+    expect(out.qc.score).toBe(0.75);
+    // The off-panel voice's own note alone is still dropped (findings R8), and the issue still stays.
+    const alone = replyWith(['Panel 2: MAYA missing from the art (she speaks l2)'], { issues: ["Panel 2: Maya's right hand is missing two fingers."] });
+    const b = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm: fakeLlm([{ json: alone }]).llm });
+    expect(b.qc.issues).toEqual(["Panel 2: Maya's right hand is missing two fingers."]);
+    expect(b.qc.score).toBe(0.95);
+  });
+
+  it('readMissingSpeakers: longest name wins, several names per note, phrasing variants, extras ignored', () => {
+    const cast = [
+      { id: 'ravi', name: 'Ravi', tier: 'support', look: { summary: '' }, refs: [], sheet: emptyRender() },
+      { id: 'ravik', name: 'Ravi Kumar', tier: 'lead', look: { summary: '' }, refs: [], sheet: emptyRender() },
+      { id: 'meera', name: 'Meera', tier: 'lead', look: { summary: '' }, refs: [], sheet: emptyRender() }
+    ] as ComicDoc['cast'];
+    const pg = page([
+      panel(1, ['ravi', 'ravik', 'meera'], [line('a', 'speech', 'One.', 'ravi'), line('b', 'speech', 'Two.', 'ravik'), line('c', 'whisper', 'Three.', 'meera')]),
+      panel(2, ['meera'], [line('d', 'speech', 'Four.', 'meera')])
+    ]);
+    expect(readMissingSpeakers(pg, cast, ['Panel 1: RAVI KUMAR is not visible']).missingSpeakers).toEqual([{ panel: 1, castId: 'ravik' }]);
+    expect(readMissingSpeakers(pg, cast, ['Panel 1: Ravi and Meera are missing', 'Meera does not appear in panel 2']).missingSpeakers).toEqual([
+      { panel: 1, castId: 'ravi' },
+      { panel: 1, castId: 'meera' },
+      { panel: 2, castId: 'meera' }
+    ]);
+    expect(readMissingSpeakers(pg, cast, ['Panel 2: an extra unnamed man beside Meera', 'MEERA missing']).missingSpeakers).toEqual([]);
+  });
+});

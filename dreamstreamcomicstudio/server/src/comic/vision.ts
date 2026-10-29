@@ -16,7 +16,7 @@
 // corner, w = its width as a fraction of the page width; tailX/tailY = the tail tip.
 // Height is derived from the text by the renderer; estimateBalloonHeight() mirrors it.
 
-import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, Page, QcReport, SpeakerMark } from '../../../shared/comic/doc.js';
+import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, LineKind, Page, Panel, QcReport, ShotType, SpeakerMark } from '../../../shared/comic/doc.js';
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
 import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
@@ -283,7 +283,11 @@ export const MAX_MARKS_PER_PANEL = 4;
 export const VISION_RATINGS = ['G', 'PG', 'PG-13', 'X'] as const;
 
 export const VISION_SCHEMA = strict({
-  panels: { type: 'array', items: strict({ n: { type: 'integer' }, box: strict({ x: num, y: num, w: num, h: num }) }) },
+  /** beat: the script panel whose moment this drawn panel shows (0 = none); crosses: art breaks over its border (plan §4.3). */
+  panels: {
+    type: 'array',
+    items: strict({ n: { type: 'integer' }, box: strict({ x: num, y: num, w: num, h: num }), beat: { type: 'integer' }, crosses: { type: 'boolean' } })
+  },
   issues: { type: 'array', items: { type: 'string' } },
   textFound: { type: 'array', items: { type: 'string' } },
   extraOrMissingCharacters: { type: 'array', items: { type: 'string' } },
@@ -330,9 +334,11 @@ const visionSystemPrompt = (doc: ComicDoc, tag: string): string => {
     '',
     'COORDINATES: every number is a fraction of the full page between 0 and 1 (not pixels, not 0–1000) — x from the left edge (0) to the right edge (1), y from the top (0) to the bottom (1). A box {x, y, w, h} has x, y at its top-left corner.',
     '',
-    `1. panels: the rectangle inside each panel border, in reading order (${rtl ? 'right-to-left, top-to-bottom' : 'left-to-right, top-to-bottom'}), n from 1. For borderless panels use the bounds of the art block.`,
+    `1. panels: the rectangle inside each panel border, in reading order (${rtl ? 'right-to-left, top-to-bottom' : 'left-to-right, top-to-bottom'}), n from 1. For borderless panels use the bounds of the art block. ` +
+      'beat: the number of the script panel whose action this drawn panel shows best — it may differ from n when a moment landed in another panel; 0 when it shows none of them. ' +
+      'crosses: true when the art (a figure, an effect, a prop) breaks out over this panel\'s border into the gutter or a neighbouring panel, else false.',
     '2. issues: short, concrete problems versus the script — wrong panel count, a named character missing from or added to a panel, a character drawn with a different face, hair or outfit than elsewhere on the page, two characters merged or swapped, anatomy errors (extra fingers, broken limbs), garbled or unreadable art. Example: "Panel 3: Maya\'s scarf changed from red to blue." [] when the page is clean.',
-    '3. extraOrMissingCharacters: per-panel notes such as "Panel 2: ARJUN missing" or "Panel 4: an extra unnamed man in the foreground" ([] when every panel shows exactly its listed characters; unnamed background figures the action calls for are fine).',
+    '3. extraOrMissingCharacters: per-panel notes such as "Panel 2: ARJUN missing" or "Panel 4: an extra unnamed man in the foreground" ([] when every panel shows exactly its listed characters; unnamed background figures the action calls for are fine). Speakers the script marks as off-panel voices are heard, not drawn — never report them missing.',
     '4. textFound: every piece of visible text in the art — balloons, captions, signs, sound effects — one entry per text element, transcribed exactly as drawn. [] when there is none.',
     '5. score: 0–1 — how well the page matches its script and holds up as a published page (1 flawless, 0.7 minor issues, below 0.5 should be redrawn).',
     overlay
@@ -347,11 +353,11 @@ const visionSystemPrompt = (doc: ComicDoc, tag: string): string => {
   ].join('\n');
 };
 
-const lineLabel = (doc: ComicDoc, line: Line): string => {
+const lineLabel = (doc: ComicDoc, line: Line, offPanel: ReadonlySet<string> = new Set()): string => {
   const speaker = line.speakerId ? doc.cast.find((c) => c.id === line.speakerId) : undefined;
   if (line.kind === 'caption') return 'CAPTION';
   if (line.kind === 'sfx') return 'SFX';
-  return `${speaker ? upperName(speaker.name) : 'OFF-PANEL'} (${line.kind})`;
+  return `${speaker ? upperName(speaker.name) : 'OFF-PANEL'} (${line.kind}${speaker && offPanel.has(speaker.id) ? ', off-panel' : ''})`;
 };
 
 /** The page script as the inspector sees it: panels, staged cast, every line with its id. */
@@ -383,19 +389,240 @@ export const visionSpecText = (doc: ComicDoc, page: Page): string => {
       })
       .filter(Boolean);
     const action = clean(panel.action);
+    const offPanel = qcOffPanelSpeakerIds(panel);
+    const voices = [...offPanel].map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is ComicDoc['cast'][number] => !!c);
     out.push(
-      `Panel ${panel.n} [${panel.size}, ${panel.shot.replace(/_/g, ' ')}]: ${action.length > 220 ? `${action.slice(0, 219)}…` : action} Characters: ${staged.join(', ') || 'none'}.`
+      `Panel ${panel.n} [${panel.size}, ${panel.shot.replace(/_/g, ' ')}]: ${action.length > 220 ? `${action.slice(0, 219)}…` : action} Characters: ${staged.join(', ') || 'none'}.` +
+        (voices.length ? ` Off-panel voices (heard, may be out of frame — never missing): ${voices.map((c) => upperName(c.name)).join(', ')}.` : '')
     );
     for (const line of panel.lines) {
       if (!clean(line.text)) continue;
-      out.push(`  ${line.id} — ${lineLabel(doc, line)}: ${JSON.stringify(clean(line.text))}`);
+      out.push(`  ${line.id} — ${lineLabel(doc, line, offPanel)}: ${JSON.stringify(clean(line.text))}`);
     }
   }
   return out.join('\n');
 };
 
+// ── Honest panel checks (plan §4.3 Ship 1, §5.1) ─────────────────────────────
+
+/** A speaker who has lines in a panel but, per the page check, is not drawn there (plan §5.1). */
+export interface MissingSpeaker {
+  /** Script panel number (1-based). */
+  panel: number;
+  castId: string;
+}
+
+/**
+ * The Ship 1 additions to QcReport (plan §5.1), typed here until K1 adds them to shared/comic/doc.ts
+ * (K1 then switches this to the shared type). All optional and never hashed; a report without them
+ * is an older check and means "not measured", never "fine".
+ */
+export interface QcPanelChecks {
+  /** Per DRAWN panel in reading order: the script panel number whose moment it shows (0 = none). Only
+   *  stored when the model answered it for every drawn panel. A permutation is reported, never applied. */
+  beats?: number[];
+  /** Drawn panel numbers (1-based, reading order) whose art breaks over their border; [] = none do.
+   *  Absent = not answered (older check). */
+  crosses?: number[];
+  /** The panel rectangles the vision pass measured, in reading order — kept even when their count
+   *  differs from the plan (panelBoxes then holds the estimate). */
+  drawnBoxes?: Box[];
+  /** Speakers with lines in a panel whom the check's character notes read as not drawn there (a
+   *  model's reading: the chat says "may not be drawn"). Off-panel voices (pov, insert, establishing
+   *  shots, or a speaker the panel's cast does not list) are never reported. */
+  missingSpeakers?: MissingSpeaker[];
+  /** Where panelBoxes came from: measured by the vision pass, or estimated from the layout blueprint
+   *  (count mismatch or no usable reading — crops, badges and paste-back must not act on these). */
+  boxesFrom?: 'vision' | 'estimate';
+}
+
+/** A page check result carrying the Ship 1 panel checks. */
+export type CheckedQcReport = QcReport & QcPanelChecks;
+
+/** Shots where a speaker may stay off-panel (heard, not drawn) — plan §3 C6. */
+const OFF_PANEL_SHOTS: ReadonlySet<ShotType> = new Set<ShotType>(['pov', 'insert', 'establishing']);
+/** Line kinds spoken by someone (captions and SFX are not). */
+const VOICE_KINDS: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
+
+/** Cast ids with at least one spoken line (with text) in this panel, in line order. */
+export const panelSpeakerIds = (panel: Pick<Panel, 'lines'>): string[] => [
+  ...new Set(panel.lines.filter((l) => l.speakerId && VOICE_KINDS.has(l.kind) && clean(l.text)).map((l) => l.speakerId as string))
+];
+
+/**
+ * Speakers of this panel who are heard, not necessarily drawn (plan §3 C6): every speaker in a pov,
+ * insert or establishing shot, a speaker the panel's cast does not list, and anyone the panel's
+ * direction marks off-panel (Ship 2 field, read when present). The page check never reports them missing.
+ * This is the QC rule (the looser §3 C6 union, so the check never blames art that followed the shot);
+ * it is deliberately not prompts.ts's `offPanelSpeakerIds(doc, panel)`, the voices the page PROMPT asks
+ * not to draw.
+ */
+export const qcOffPanelSpeakerIds = (panel: Pick<Panel, 'lines' | 'shot' | 'castIds'>): Set<string> => {
+  const direction = (panel as { direction?: { offPanel?: unknown } }).direction;
+  const marked = new Set(Array.isArray(direction?.offPanel) ? direction.offPanel.filter((id): id is string => typeof id === 'string') : []);
+  const castIds = new Set(Array.isArray(panel.castIds) ? panel.castIds : []);
+  return new Set(panelSpeakerIds(panel).filter((id) => OFF_PANEL_SHOTS.has(panel.shot) || !castIds.has(id) || marked.has(id)));
+};
+
+/** Stored per report at most (a runaway reply can't bloat the doc). */
+export const MAX_MISSING_SPEAKERS = 16;
+/** Character notes read for missing speakers, at most (a reply is ≤ 14 notes in practice). */
+const MAX_NOTES_READ = 60;
+/** Characters of one note read for missing speakers (a runaway note can't make the patterns slow). */
+const MAX_NOTE_CHARS = 400;
+/** Extra output tokens per panel for its beat and crosses answers (plan §4.3, inside the same QC call). */
+export const PANEL_CHECK_TOKENS = 20;
+
+// ── Reading "MAYA missing" out of a character note ──
+// A cast name counts only when the "not drawn" phrase is about the NAME itself:
+//   NAME [is|are] <not drawn>   "Panel 2: MAYA missing", "Panel 1: Ravi and Meera are not visible"
+//   <not drawn>[:] NAME         "Panel 2: missing: MAYA"
+//   no NAME                     "Panel 2: no Maya in the art"
+// Never a possessive ("Arjun's left hand is missing a finger", "Maya’s scarf is missing"), a phrase
+// whose subject is another noun ("the lantern Arjun should hold is not visible") or one that takes an
+// object ("Arjun is missing a finger"). A note this does not read stays a plain note.
+
+const TOKEN = '\\u0001[\\uE000-\\uF8FF]\\u0002';
+/** A run of named cast members: "MAYA", "Ravi and Meera", "Ravi, Meera & Arjun". */
+const NAMES = `${TOKEN}(?:(?:\\s*,\\s*(?:(?:and|or)\\s+)?|\\s*&\\s*|\\s+(?:and|or|nor)\\s+)${TOKEN})*`;
+const QUOTE = `["'“”‘’]?`;
+/** "Not drawn", as a vision note says it about a character. */
+const NOT_DRAWN =
+  '(?:missing|absent|omitted|left out|nowhere to be seen|' +
+  "(?:not|(?:isn|aren|wasn|weren)['’]?t) (?:drawn|shown|visible|present|seen|depicted|pictured|there|in (?:the |this )?(?:panel|frame|art|image|picture|scene))|" +
+  "(?:does|do|did)(?:n['’]?t| not) appear|can(?:not|['’]?t) be seen)";
+const PLACE = '(?:in|on|at|within|inside)\\s+(?:(?:the|this|that|any|either|its)\\s+)?(?:panel|frame|art|artwork|image|picture|scene|shot|page|drawing|background|foreground|crowd)\\b';
+/** What may follow "MAYA missing": the note ends, a clause ends, or where she is missing from. */
+const AFTER_BODY = `\\s*(?:$|[.,;:!?()\\[\\]–—]|-\\s|(?:from|of|anywhere|here|there|entirely|completely|altogether|again|too|either|even|though|although|but|despite|while|whereas|yet|and|or|at all)\\b|${PLACE})`;
+const AFTER = `(?=${AFTER_BODY})`;
+/** Where a clause starts ("Panel 2:", a comma, the note's start). */
+const CLAUSE = '(?:^|[:;,.(]\\s*|\\bpanel\\s*#?\\s*\\d{1,2}\\s*[:,–—-]?\\s*)';
+const SUBJECT_RES = [
+  new RegExp(
+    `${NAMES}${QUOTE}(?:\\s*\\([^()\\u0001]{0,60}\\))?(?:\\s*[:–—-]\\s*|\\s+)(?:(?:is|are|was|were|remains?|appears? to be|seems? to be)\\s+)?(?:(?:both|all|still|also|completely|entirely|clearly|simply|actually|totally)\\s+)?${NOT_DRAWN}${AFTER}`,
+    'giu'
+  ),
+  new RegExp(`${CLAUSE}${NOT_DRAWN}(?:\\s+(?:characters?|speakers?|figures?|people))?\\s*[:–—-]?\\s*${QUOTE}${NAMES}${QUOTE}${AFTER}`, 'giu'),
+  new RegExp(`(?:${CLAUSE}|\\s)no\\s+${QUOTE}${NAMES}${QUOTE}(?=\\s*(?:(?:is|are)\\s+)?(?:visible|drawn|shown|present|depicted|in sight|to be seen)\\b|${AFTER_BODY})`, 'giu')
+];
+const TOKEN_RE = /\u0001([\uE000-\uF8FF])\u0002/gu;
+const PANEL_RE = /\bpanel\s*#?\s*(\d{1,2})\b/i;
+const PANEL_REF_RE = /\bpanels?\s*#?\s*\d{1,2}\b/giu;
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Words a note about a missing off-panel voice may carry besides the name (it is then only about that). */
+const NOTE_FILLER = new Set(
+  (
+    'panel panels the and but from art artwork image picture frame scene shot page drawing she they her his their him them ' +
+    'speaks speaking speak spoken says said voice voiced heard hear line lines dialogue balloon balloons only off anywhere here ' +
+    'there this that with entirely completely altogether all still also despite though although even has have who character ' +
+    'characters speaker speakers script should visible shown drawn present its are was were not any either for listed named expected planned'
+  ).split(' ')
+);
+
+/**
+ * The cast members a note says are not drawn (the subjects of its "not drawn" phrase), and whether the
+ * note is about nothing else (`only`: no other noun is left once the panel, the names and the phrase
+ * are taken out, so dropping it as an off-panel voice can't drop a real problem with it).
+ */
+const notDrawnIn = (note: string, cast: Pick<ComicDoc, 'cast'>['cast']): { ids: string[]; only: boolean } => {
+  const named = cast
+    .map((c) => ({ id: c.id, key: nameKey(c.name) }))
+    .filter((c) => c.key.length >= 2)
+    .sort((a, b) => b.key.length - a.key.length)
+    .slice(0, 0x1900); // one private-use token per name
+  // Longest names first, so "Ravi Kumar" never also counts as "Ravi"; a possessive is not a name.
+  let text = note.slice(0, MAX_NOTE_CHARS);
+  named.forEach((c, i) => {
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(c.key).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])(['’]s(?![\\p{L}\\p{N}]))?`, 'giu');
+    text = text.replace(re, (_m, possessive?: string) => (possessive ? ' \u0003 ' : `\u0001${String.fromCharCode(0xe000 + i)}\u0002`));
+  });
+  const ids = new Set<string>();
+  let rest = text;
+  for (const re of SUBJECT_RES) {
+    for (const m of text.matchAll(re)) for (const t of m[0].matchAll(TOKEN_RE)) ids.add(named[t[1].charCodeAt(0) - 0xe000].id);
+    rest = rest.replace(re, ' ');
+  }
+  const left = rest.replace(PANEL_REF_RE, ' ').replace(TOKEN_RE, ' ').match(/[\p{L}\u0003][\p{L}\p{N}'’-]*/gu) || [];
+  const only = left.every((w) => w !== '\u0003' && (w.length < 3 || NOTE_FILLER.has(w.toLowerCase())));
+  return { ids: [...ids], only };
+};
+
+/**
+ * Structure the vision pass's character notes (plan §4.3, density FX8): a note that names a panel and
+ * says a cast member who SPEAKS there is not drawn becomes {panel, castId}. Only the character notes
+ * are read (the issues list is about everything else: a hand, a scarf, a prop). Off-panel voices are
+ * never reported — a note about nothing but them is dropped as `excused` (it must not cap the score:
+ * the art followed the shot, findings R8) — and a speaker the same reply located in that panel (heads)
+ * is not missing. Listed non-speakers stay plain notes (Ship 2 findings).
+ */
+export const readMissingSpeakers = (
+  page: Pick<Page, 'panels'>,
+  cast: Pick<ComicDoc, 'cast'>['cast'],
+  notes: string[],
+  heads: SpeakerMark[] = []
+): { missingSpeakers: MissingSpeaker[]; excused: string[] } => {
+  const found = new Map<string, MissingSpeaker>();
+  const excused: string[] = [];
+  const located = new Set(heads.filter((h) => h.characterId).map((h) => `${h.panel}:${h.characterId}`));
+  // Bounded: a runaway reply can't make us scan thousands of notes against the cast.
+  for (const note of notes.slice(0, MAX_NOTES_READ)) {
+    if (typeof note !== 'string') continue;
+    const panelN = Number(PANEL_RE.exec(note)?.[1]);
+    const panel = page.panels.find((p) => p.n === panelN);
+    if (!panel) continue;
+    const named = notDrawnIn(note, cast);
+    if (!named.ids.length) continue;
+    const speakers = new Set(panelSpeakerIds(panel));
+    const offPanel = qcOffPanelSpeakerIds(panel);
+    if (named.ids.every((id) => offPanel.has(id))) {
+      if (named.only) excused.push(note);
+      continue;
+    }
+    for (const id of named.ids) {
+      if (!speakers.has(id) || offPanel.has(id) || located.has(`${panel.n}:${id}`)) continue;
+      found.set(`${panel.n}:${id}`, { panel: panel.n, castId: id });
+    }
+  }
+  // Reading order: by panel, then by who speaks first in it.
+  const order = (m: MissingSpeaker) => panelSpeakerIds(page.panels.find((p) => p.n === m.panel)!).indexOf(m.castId);
+  const missingSpeakers = [...found.values()].sort((a, b) => a.panel - b.panel || order(a) - order(b)).slice(0, MAX_MISSING_SPEAKERS);
+  return { missingSpeakers, excused };
+};
+
+/**
+ * Beats read against the plan: `swapped` = drawn panels that show another planned panel's moment while
+ * every planned moment is drawn exactly once (a permutation); `undrawn` = planned panels whose moment
+ * no drawn panel shows. Only meaningful when the drawn count equals the plan (else both are empty).
+ */
+export const beatProblems = (
+  beats: readonly number[] | undefined,
+  planned: number
+): { permutation: boolean; swapped: { panel: number; shows: number }[]; undrawn: number[] } => {
+  const none = { permutation: false, swapped: [], undrawn: [] };
+  if (!Array.isArray(beats) || beats.length !== planned || !planned) return none;
+  if (!beats.every((b) => Number.isInteger(b) && b >= 0 && b <= planned)) return none;
+  const shown = new Set(beats.filter((b) => b > 0));
+  const undrawn = Array.from({ length: planned }, (_, i) => i + 1).filter((n) => !shown.has(n));
+  const swapped = beats.map((b, i) => ({ panel: i + 1, shows: b })).filter((s) => s.shows > 0 && s.shows !== s.panel);
+  const permutation = !undrawn.length && swapped.length > 0;
+  return { permutation, swapped: permutation ? swapped : [], undrawn };
+};
+
+/** Plain issue lines for the beats (the page's quality list shows them; never a re-assignment). */
+const beatIssues = (beats: number[] | undefined, planned: number): string[] => {
+  const { swapped, undrawn } = beatProblems(beats, planned);
+  return [
+    ...swapped.slice(0, 3).map((s) => `Panel ${s.panel}'s picture looks like panel ${s.shows}'s moment.`),
+    ...undrawn.slice(0, 3).map((n) => `Panel ${n}'s moment may not be drawn in any panel.`)
+  ];
+};
+
 interface VisionReading {
   panels: Box[];
+  /** Per kept panel: the script panel it shows (undefined = not answered). */
+  beats: (number | undefined)[];
+  /** Per kept panel: art crosses its border (undefined = not answered). */
+  crosses: (boolean | undefined)[];
   issues: string[];
   textFound: string[];
   characterNotes: string[];
@@ -512,9 +739,8 @@ const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page,
   const rawPanels = (Array.isArray(json.panels) ? json.panels : []).filter(isObject);
   const rawBalloons = (Array.isArray(json.balloons) ? json.balloons : []).filter(isObject);
   const numbered = rawPanels.every((p) => Number.isInteger(p.n));
-  const boxes = (numbered ? [...rawPanels].sort((a, b) => (a.n as number) - (b.n as number)) : rawPanels).map((p) =>
-    isObject(p.box) ? p.box : p
-  );
+  const ordered = numbered ? [...rawPanels].sort((a, b) => (a.n as number) - (b.n as number)) : rawPanels;
+  const boxes = ordered.map((p) => (isObject(p.box) ? p.box : p));
   const scale = coordinateScale(
     [
       ...boxes.flatMap((b) => [b.x, b.y, b.w, b.h].map(Number)),
@@ -525,13 +751,22 @@ const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page,
   if (!scale) return { problems: ['Coordinates must be fractions of the page between 0 and 1 (not pixels).'] };
   const ux = (v: unknown) => Number(v) / scale.sx;
   const uy = (v: unknown) => Number(v) / scale.sy;
-  const panels = boxes
-    .map((b) => {
+  // beat / crosses ride along with their own box, so a dropped sliver never shifts them onto a neighbour.
+  // Optional data (older replies have neither): problems with them never trigger a paid repair round.
+  const kept = boxes
+    .map((b, i) => {
       const x = clamp01(ux(b.x));
       const y = clamp01(uy(b.y));
-      return { x, y, w: clamp(ux(b.w), 0, 1 - x), h: clamp(uy(b.h), 0, 1 - y) };
+      const beat = ordered[i].beat;
+      const crosses = ordered[i].crosses;
+      return {
+        box: { x, y, w: clamp(ux(b.w), 0, 1 - x), h: clamp(uy(b.h), 0, 1 - y) },
+        beat: Number.isInteger(beat) && (beat as number) >= 0 ? (beat as number) : undefined,
+        crosses: typeof crosses === 'boolean' ? crosses : undefined
+      };
     })
-    .filter((b) => b.w >= 0.03 && b.h >= 0.03);
+    .filter((p) => p.box.w >= 0.03 && p.box.h >= 0.03);
+  const panels = kept.map((p) => p.box);
   const lineIds = new Set(page.panels.flatMap((p) => p.lines.map((l) => l.id)));
   const seen = new Set<string>();
   const balloons: VisionReading['balloons'] = [];
@@ -554,6 +789,8 @@ const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page,
   const marks = overlay ? normalizeMarks(json, doc, page) : { keepOut: [], heads: [] };
   const reading: VisionReading = {
     panels,
+    beats: kept.map((p) => p.beat),
+    crosses: kept.map((p) => p.crosses),
     issues: strings(json.issues),
     textFound: strings(json.textFound),
     characterNotes: strings(json.extraOrMissingCharacters),
@@ -620,6 +857,8 @@ const dedupe = (items: string[]) => {
 };
 
 const TEXT_BLOCK_NOTE = 'text drawn in the art breaks the content rules';
+/** The QC issue for drawn text that breaks the content rules (the page is then withheld; qcNotice stays quiet). */
+export const TEXT_RULES_ISSUE = 'Some text drawn in the art breaks the content rules — redraw this page safer.';
 const MAX_TEXT_FOUND = 100;
 
 /**
@@ -680,7 +919,7 @@ export async function analyzePageRender(args: {
   dataUrl: string;
   llm: LlmClient;
   signal?: AbortSignal;
-}): Promise<{ qc: QcReport; balloons: Balloon[]; costUsd?: number; model: string; safety?: SafetyVerdict }> {
+}): Promise<{ qc: CheckedQcReport; balloons: Balloon[]; costUsd?: number; model: string; safety?: SafetyVerdict }> {
   const { doc, page } = args;
   const overlay = doc.format.lettering !== 'in_art';
   const opts: LayoutOptions = { doc, readingDirection: doc.format.readingDirection, kind: doc.format.kind, pageAspect: pageAspectForDoc(doc, page) };
@@ -704,7 +943,7 @@ export async function analyzePageRender(args: {
     failure: "The page check didn't return a usable result.",
     fallback: () => null,
     temperature: 0.2,
-    maxTokens: Math.min(8_000, 2_200 + lineCount * 80 + (overlay ? page.panels.length * 90 : 0)),
+    maxTokens: Math.min(8_000, 2_200 + lineCount * 80 + page.panels.length * PANEL_CHECK_TOKENS + (overlay ? page.panels.length * 90 : 0)),
     signal: args.signal
   });
   const checkedAt = Date.now();
@@ -717,6 +956,7 @@ export async function analyzePageRender(args: {
         score: 0.5,
         issues: ['Automatic page check returned no usable result — balloons were placed from the layout; review them.'],
         panelBoxes: estimated,
+        boxesFrom: 'estimate',
         checkedAt,
         ...(result.model ? { model: result.model } : {})
       },
@@ -728,8 +968,21 @@ export async function analyzePageRender(args: {
 
   const n = page.panels.length;
   const countOk = reading.panels.length === n;
+  // panelBoxes stay the estimate on a count mismatch (lettering and every reader use them), but the
+  // measured rectangles are kept as drawnBoxes and the report says which is which (plan §4.3).
   const boxes = countOk ? reading.panels : estimated;
-  const issues: string[] = [...reading.issues, ...reading.characterNotes];
+  const roundBox = (b: Box): Box => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) });
+  // Beats only when answered for every drawn panel; a beat past the plan's last panel shows none of them.
+  const beats = reading.beats.length && reading.beats.every((b) => b !== undefined) ? reading.beats.map((b) => ((b as number) > n ? 0 : (b as number))) : undefined;
+  // Crosses likewise: a panel left unanswered must not read as "does not cross" (B2 acts on []).
+  const crosses = reading.crosses.length && reading.crosses.every((c) => c !== undefined) ? reading.crosses.flatMap((c, i) => (c ? [i + 1] : [])) : undefined;
+  // Speakers the art left out, structured from the character notes only; a character note about
+  // nothing but off-panel voices is dropped (never reported, never a score cap — the art followed the
+  // shot). The issues list is never filtered: a hand, a scarf or a prop there is a real problem.
+  const speakers = readMissingSpeakers(page, doc.cast, reading.characterNotes, reading.heads);
+  const excused = new Set(speakers.excused);
+  const characterNotes = reading.characterNotes.filter((note) => !excused.has(note));
+  const issues: string[] = [...(countOk ? beatIssues(beats, n) : []), ...reading.issues, ...characterNotes];
   // Drawn text is screened before anything reads or stores it ($0).
   const screened = prefilterFoundText(doc, reading.textFound);
   const textFound = screened.kept;
@@ -740,10 +993,10 @@ export async function analyzePageRender(args: {
     score = Math.min(score, 0.6);
   }
   if (screened.blocked) {
-    issues.unshift('Some text drawn in the art breaks the content rules — redraw this page safer.');
+    issues.unshift(TEXT_RULES_ISSUE);
     score = Math.min(score, 0.4);
   }
-  if (reading.characterNotes.length) score = Math.min(score, 0.75);
+  if (characterNotes.length) score = Math.min(score, 0.75);
 
   if (overlay) {
     const stray = textFound.filter((t) => (normalizeLettering(t).match(/\p{L}/gu) || []).length >= 3);
@@ -768,15 +1021,20 @@ export async function analyzePageRender(args: {
   const balloons = overlay
     ? layoutBalloonsFromVision(page, reading.balloons, boxes, { ...opts, keepOut: reading.keepOut, heads: reading.heads, trustBoxes: countOk })
     : [];
-  const qc: QcReport = {
+  const qc: CheckedQcReport = {
     score: round4(clamp(score, 0, 1)),
     issues: dedupe(issues).slice(0, 14),
-    panelBoxes: boxes.map((b) => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) })),
+    panelBoxes: boxes.map(roundBox),
     ...(textFound.length ? { textFound: textFound.slice(0, 60) } : {}),
     checkedAt,
     ...(result.model ? { model: result.model } : {}),
     ...(reading.keepOut.length ? { keepOut: reading.keepOut } : {}),
-    ...(reading.heads.length ? { heads: reading.heads } : {})
+    ...(reading.heads.length ? { heads: reading.heads } : {}),
+    boxesFrom: countOk ? 'vision' : 'estimate',
+    ...(reading.panels.length ? { drawnBoxes: reading.panels.map(roundBox) } : {}),
+    ...(beats ? { beats } : {}),
+    ...(crosses ? { crosses } : {}),
+    ...(speakers.missingSpeakers.length ? { missingSpeakers: speakers.missingSpeakers } : {})
   };
   return { qc, balloons, ...cost, model: result.model, ...(safety ? { safety } : {}) };
 }
