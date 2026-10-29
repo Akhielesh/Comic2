@@ -50,7 +50,10 @@ animates registered properties under `transition: all` — a CSS block would hav
 `transition-all` element *outside* the skin a theme cross-fade. `<html>` gets the transition only
 once the boot code has let the first style pass settle (`data-ds-skin-fade`, two frames later), so
 the boot itself never animates. The apex roots mount with the attribute (nothing to animate from)
-and, with no registration there, the declaration is inert. Off under reduced motion.
+and, with no registration there, the declaration is inert: **on the apex the Comic Studio roots
+have no theme cross-fade** (toggling dark mode inside the studio or the readers on
+`dreamstreamstudio.ai` snaps); it arrives with "unify", when the registration can be page-wide.
+Off under reduced motion.
 
 ## Token mapping
 
@@ -142,8 +145,11 @@ Chat and Comic Studio both import this file, so its strings must keep producing 
 the skin. Every constant is now token-driven with the same defaults: `RADIUS_PANEL` →
 `rounded-[var(--ds-radius-panel)]`, `RADIUS_CONTROL` → `rounded-[var(--ds-radius-control)]`,
 `RADIUS_PILL` → `rounded-[var(--ds-radius-chip)]`, `SHADOW_SOFT` → `shadow-[shadow:var(--ds-shadow-soft)]`,
-`TRANSITION` → `transition-[color,background-color,border-color,box-shadow,opacity,transform]
-duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]`, `GLASS`/`GLASS_STRONG`/`MENU` →
+`TRANSITION` → `transition-all duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]` (still
+`transition-all`: consumers outside the skin animate position with it — the provider switch knob in
+`components/ApiConfiguration.tsx` slides `left-*` — so Atlas's narrow property list,
+`color,background-color,border-color,box-shadow,opacity,transform`, lands in Phase D2 with the
+restyle), `GLASS`/`GLASS_STRONG`/`MENU` →
 `backdrop-blur-[var(--ds-surface-blur)]`, `ACCENT_SOFT_BG` → `bg-[var(--ds-accent-soft)]`. New:
 `ON_ACCENT_TEXT`, `FONT_DISPLAY`, `PRESS`, and the status helpers `TONE_TEXT` / `TONE_SURFACE` /
 `TONE_FILL` / `TONE_CHIP` mirroring Atlas's `tone.ts` (always pair a tone with a word or icon).
@@ -180,7 +186,11 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   the apex; the boot does only what the brief allows.
 - `components/comicstudio/atlasSkinRoots.test.tsx` — the three roots carry the attribute on the apex.
 - The chat tests and the 4-viewport layout smoke (`node scripts/layout-smoke.mjs`) stay green: the
-  skin changes nothing outside its scope.
+  skin changes nothing outside its scope. The smoke runs the scenes **without** `?skin=atlas`, i.e.
+  in the apex case (roots skinned, page not); the page-level skin (fonts, scrollbars, focus outline,
+  shim rules on `<html>`) is only covered by the screenshot script below until the harness owner adds
+  a `QA_SKIN=atlas` env that `tests/e2e/helpers/harness.ts` `open()` appends as `skin=atlas`, plus
+  two smoke projects (`smoke-360x740-atlas`, `smoke-1440x900-atlas`) in `tests/e2e/playwright.config.ts`.
 - **Visual proof:** `node scripts/design/atlas-skin-shots.mjs` captures the studio, board, editor,
   immersive reader and public reader at 1440×900 and 360×740, light and dark, with the skin on, into
   `node_modules/.cache/comic-qa/atlas-skin/` (plus `index.json`), from the offline QA harness.

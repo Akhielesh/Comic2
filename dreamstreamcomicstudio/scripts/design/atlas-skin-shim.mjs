@@ -21,8 +21,36 @@ const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 /** Source roots Tailwind scans for utilities (tailwind.config.cjs `content`). */
 export const SCAN_ROOTS = ['App.tsx', 'components', 'hooks', 'services', 'qa'];
 export const LITERAL = '#D97757';
-/** `[variants:]util-[#D97757][/tint]` — the utility forms Tailwind can emit for the literal. */
+/** `[variants:]util-[#D97757][/tint]` — the plain utility forms the generator maps on its own. */
 export const UTILITY_RE = /[A-Za-z0-9:/().-]*\[#D97757\](?:\/(?:\d{1,3}|\[0?\.\d+\]))?/g;
+const PLAIN_RE = /^[A-Za-z0-9:/().-]*\[#D97757\](?:\/(?:\d{1,3}|\[0?\.\d+\]))?$/;
+/**
+ * Any class token whose arbitrary value carries the literal: the plain forms above, but also a
+ * literal embedded in a larger value (`bg-[linear-gradient(…,#D97757_55%,…)]`) or behind a bracketed
+ * variant (`data-[state=on]:bg-[#D97757]`, `[&_svg]:fill-[#D97757]`), which Tailwind emits under a
+ * different selector. The scan uses this so such a token is listed — and the generator then refuses
+ * to guess a rule for it — instead of being silently skipped while the test reports full coverage.
+ */
+export const CLASS_RE = /[^\s'"`{}$<>]*\[[^\]\s]*#D97757[^\]\s]*\][^\s'"`{}$<>]*/g;
+
+/**
+ * Literals the generator cannot derive a rule for (the literal is not the whole bracket value), each
+ * written by hand: token → the declarations it gets under the skin, plus a note for the block.
+ */
+export const HANDWRITTEN = {
+  // conversation/MessageItem.tsx `DirectorMark`: the terracotta gradient avatar on the Director's
+  // replies becomes a solid ink disc with paper ink and the soft shadow (its `shadow-[…rgba(217,119,87,…)]`
+  // companion is the same hue; overriding --tw-shadow on the same element neutralises it too).
+  'bg-[linear-gradient(135deg,#E8916F_0%,#D97757_55%,#B8573A_100%)]': {
+    note: 'Hand-written: the Director\'s gradient mark (conversation/MessageItem.tsx) — solid ink disc, soft shadow.',
+    decls: {
+      'background-image': 'none',
+      'background-color': 'var(--ds-accent)',
+      color: 'var(--ds-on-accent)',
+      '--tw-shadow': 'var(--ds-shadow-soft)'
+    }
+  }
+};
 
 export function listSourceFiles(root = APP) {
   const out = [];
@@ -42,7 +70,17 @@ export function listSourceFiles(root = APP) {
   return out.sort();
 }
 
-/** Every distinct literal utility in the tree, plus the files that carry the literal in any form. */
+/** The class tokens in one source text whose arbitrary value carries the literal (CLASS_RE). */
+export function scanText(text) {
+  const out = [];
+  for (const m of text.matchAll(CLASS_RE)) {
+    // A template tint (`bg-[#D97757]/${n}`) is not a static utility; its base form is.
+    out.push(m[0].replace(/\/$/, ''));
+  }
+  return out;
+}
+
+/** Every distinct literal class token in the tree, plus the files that carry the literal in any form. */
 export function scanLiteral(root = APP) {
   const utilities = new Set();
   const files = [];
@@ -50,11 +88,7 @@ export function scanLiteral(root = APP) {
     const text = fs.readFileSync(file, 'utf8');
     if (!text.includes(LITERAL)) continue;
     files.push(path.relative(root, file));
-    for (const m of text.matchAll(UTILITY_RE)) {
-      const token = m[0];
-      // A template suffix (`bg-[#D97757]/${n}`) is not a static utility; the base form is.
-      utilities.add(token);
-    }
+    for (const token of scanText(text)) utilities.add(token);
   }
   return { utilities: [...utilities].sort(), files };
 }
@@ -64,9 +98,26 @@ export const escapeClass = (cls) => cls.replace(/[[\]#/:.()%,]/g, (c) => `\\${c}
 
 const TINT_RE = /\/(\d{1,3}|\[(0?\.\d+)\])$/;
 
+/** Split a class token on the `:` variant separators that are outside brackets. */
+const splitVariants = (token) => {
+  const parts = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of token) {
+    if (ch === '[') depth++;
+    else if (ch === ']') depth = Math.max(0, depth - 1);
+    if (ch === ':' && depth === 0) {
+      parts.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  parts.push(cur);
+  return parts;
+};
+
 /** Split `hover:focus:bg-[#D97757]/10` into variants, utility, tint (0–100). */
 export function parseUtility(token) {
-  const parts = token.split(':');
+  const parts = splitVariants(token);
   const util = parts.pop();
   const variants = parts;
   const m = TINT_RE.exec(util);
@@ -93,7 +144,11 @@ export function selectorParts(token) {
   let prefix = '';
   let suffix = '';
   for (const v of variants) {
-    if (PSEUDO[v]) {
+    if (v.includes('[')) {
+      throw new Error(
+        `atlas-skin-shim: the bracketed variant "${v}:" in "${token}" makes Tailwind emit a selector this generator does not model — add a hand-written rule (HANDWRITTEN) for it`
+      );
+    } else if (PSEUDO[v]) {
       suffix += PSEUDO[v];
     } else if (v === 'peer-checked') {
       prefix += '.peer:checked ~ ';
@@ -118,6 +173,12 @@ const mix = (pct) => `color-mix(in srgb, var(--ds-accent) ${pct}%, transparent)`
 
 /** The declaration(s) the utility gets under the skin. */
 export function declarationsFor(token) {
+  if (Object.hasOwn(HANDWRITTEN, token)) return { ...HANDWRITTEN[token].decls };
+  if (!PLAIN_RE.test(token)) {
+    throw new Error(
+      `atlas-skin-shim: "${token}" carries ${LITERAL} inside a larger arbitrary value — the generator cannot derive its rule; add a hand-written one (HANDWRITTEN) and regenerate index.css`
+    );
+  }
   const { variants, kind, tint } = parseUtility(token);
   const hovering = variants.includes('hover') || variants.some((v) => v.startsWith('group-hover'));
   switch (kind) {
@@ -155,11 +216,13 @@ export function renderShim(utilities) {
     '   files themselves. One rule per literal utility found by scripts/design/atlas-skin-shim.mjs;',
     '   tests/config/atlasSkinShim.test.ts fails when a literal utility has no rule here. Solid accent',
     '   fills that pair with `text-white` also get the on-accent text colour (dark Atlas ink is light).',
+    '   A literal inside a larger arbitrary value (a gradient) gets a hand-written rule, marked as such.',
     '   DELETE this whole block (and the generator) when the literal count in that test reaches zero. */'
   ];
   for (const token of utilities) {
     const { prefix, target, suffix } = selectorParts(token);
     const { onAccent, ...decls } = declarationsFor(token);
+    if (Object.hasOwn(HANDWRITTEN, token)) lines.push(`/* ${HANDWRITTEN[token].note} */`);
     lines.push(`[data-ds-skin="atlas"] ${prefix}${target}${suffix} { ${Object.entries(decls).map(([k, v]) => `${k}: ${v};`).join(' ')} }`);
     if (onAccent) lines.push(`[data-ds-skin="atlas"] ${prefix}${target}.text-white${suffix} { color: var(--ds-on-accent); }`);
   }

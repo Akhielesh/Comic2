@@ -267,7 +267,7 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(design.RADIUS_CONTROL).toBe('rounded-[var(--ds-radius-control)]');
     expect(design.RADIUS_PILL).toBe('rounded-[var(--ds-radius-chip)]');
     expect(design.SHADOW_SOFT).toBe('shadow-[shadow:var(--ds-shadow-soft)]');
-    expect(design.TRANSITION).toBe('transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]');
+    expect(design.TRANSITION).toBe('transition-all duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]');
     expect(design.GLASS).toContain('backdrop-blur-[var(--ds-surface-blur)]');
     expect(design.GLASS_STRONG).toContain('backdrop-blur-[var(--ds-surface-blur)]');
     expect(design.ACCENT_SOFT_BG).toBe('bg-[var(--ds-accent-soft)]');
@@ -286,6 +286,19 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
       if (typeof value !== 'string' || name.endsWith('_HEX')) continue;
       expect(value, name).not.toContain('#D97757');
     }
+  });
+
+  it('TRANSITION keeps `transition-all`: consumers outside the skin animate position with it', () => {
+    // components/ApiConfiguration.tsx slides the provider governance switch knob with
+    // `${TRANSITION} left-[18px] / left-0.5`; an explicit property list (colour, shadow, opacity,
+    // transform) would make it snap on the Settings page, which is outside the skin's scope.
+    expect(design.TRANSITION).toMatch(/^transition-all /);
+    expect(design.TRANSITION).not.toMatch(/transition-\[/);
+    const apiConfig = readFileSync(path.join(ROOT, 'components/ApiConfiguration.tsx'), 'utf8');
+    expect(apiConfig).toMatch(/\$\{TRANSITION\} \$\{enabled \? 'left-\[18px\]' : 'left-0\.5'\}/);
+    // Outside the skin the token defaults make this exactly the old `transition-all duration-200`.
+    expect(ROOT_TOKENS.get('--ds-motion-medium')).toBe('200ms');
+    expect(ROOT_TOKENS.get('--ds-ease')).toBe('cubic-bezier(0.4, 0, 0.2, 1)');
   });
 
   it('registers exactly the :root defaults as the cross-fade’s initial values', () => {

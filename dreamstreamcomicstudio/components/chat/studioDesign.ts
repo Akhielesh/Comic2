@@ -128,9 +128,14 @@ export const TONE_CHIP: Record<StatusTone, string> = {
 // Motion
 // ---------------------------------------------------------------------------
 
-/** Standard motion — slight tint or lift on hover, no comic translate-jump (200 ms by default). */
-export const TRANSITION =
-  'transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]';
+/**
+ * Standard motion — slight tint or lift on hover, no comic translate-jump (200 ms by default).
+ * Deliberately `transition-all`, as before the tokens: consumers outside the skin animate
+ * positional properties with it (the provider switch knob in components/ApiConfiguration.tsx
+ * slides `left-*`), and the skin must not change motion outside its scope. Narrowing the
+ * property list to colour/shadow/opacity/transform is Phase D2 work, with the restyle.
+ */
+export const TRANSITION = 'transition-all duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]';
 
 /** Subtle hover lift for floating elements. */
 export const HOVER_LIFT = 'hover:-translate-y-px';

@@ -929,6 +929,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    files themselves. One rule per literal utility found by scripts/design/atlas-skin-shim.mjs;
    tests/config/atlasSkinShim.test.ts fails when a literal utility has no rule here. Solid accent
    fills that pair with `text-white` also get the on-accent text colour (dark Atlas ink is light).
+   A literal inside a larger arbitrary value (a gradient) gets a hand-written rule, marked as such.
    DELETE this whole block (and the generator) when the literal count in that test reaches zero. */
 [data-ds-skin="atlas"] .accent-\[\#D97757\] { accent-color: var(--ds-accent); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\] { background-color: var(--ds-accent); }
@@ -950,6 +951,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.08\] { background-color: var(--ds-accent-soft); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.12\] { background-color: var(--ds-accent-soft); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.14\] { background-color: var(--ds-accent-soft); }
+/* Hand-written: the Director's gradient mark (conversation/MessageItem.tsx) — solid ink disc, soft shadow. */
+[data-ds-skin="atlas"] .bg-\[linear-gradient\(135deg\,\#E8916F_0\%\,\#D97757_55\%\,\#B8573A_100\%\)\] { background-image: none; background-color: var(--ds-accent); color: var(--ds-on-accent); --tw-shadow: var(--ds-shadow-soft); }
 [data-ds-skin="atlas"] .border-\[\#D97757\] { border-color: var(--ds-accent); }
 [data-ds-skin="atlas"] .border-\[\#D97757\]\/30 { border-color: color-mix(in srgb, var(--ds-accent) 30%, transparent); }
 [data-ds-skin="atlas"] .border-\[\#D97757\]\/35 { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
