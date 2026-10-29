@@ -293,6 +293,10 @@ describe('a stale_edited line (the author edited it, then the original changed)'
     });
     expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: first.id, useSuggestion: false });
     expect(studio.patch).not.toHaveBeenCalled(); // the wording did not change, so nothing is re-saved
+    // Merely leaving the field is not a decision: only Enter or the button keeps the wording.
+    studio.act.mockClear();
+    fireEvent.blur(field);
+    expect(studio.act).not.toHaveBeenCalled();
   });
 });
 

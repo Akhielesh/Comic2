@@ -129,7 +129,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         lang={lang}
         dir={dirOf(lang)}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onBlur={() => commit()}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
