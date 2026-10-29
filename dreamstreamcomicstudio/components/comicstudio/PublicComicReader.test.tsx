@@ -369,6 +369,14 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(api.trackPublicEvent).toHaveBeenCalledTimes(1);
   });
 
+  it('a link opened from a share action (?via=) counts its view under that channel and keeps a clean address', async () => {
+    window.history.replaceState(null, '', `/c/${SLUG}?via=whatsapp`);
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    await waitFor(() => expect(api.trackPublicEvent).toHaveBeenCalledWith(SLUG, expect.objectContaining({ type: 'view', channel: 'whatsapp' })));
+    expect(window.location.search).toBe('');
+  });
+
   it('counts "complete" only after reading through to the end, never for a link that opens on the last page', async () => {
     api.loadPublicComicBySlug.mockResolvedValue(payload());
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} start={{ page: 6 }} />);

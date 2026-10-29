@@ -6,7 +6,7 @@
 // "This link isn't active") | error (network; "Couldn't open — Try again").
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { SLUG_RE, type PublicComicPayload, type ShareChannel } from '../../../shared/comic/publication';
+import { parseShareParams, SLUG_RE, type PublicComicPayload, type ShareChannel } from '../../../shared/comic/publication';
 import { loadPublicComicBySlug, trackPublicEvent, type PublicEventType } from '../studioApi';
 
 export interface ShareBoot {
@@ -57,6 +57,28 @@ export function readShareBoot(slug?: string, root: Document | undefined = typeof
   };
 }
 
+/**
+ * The share channel this page was opened from (`?via=<channel>`, sharing.md: analytics only), read once
+ * per page load and allow-listed to SHARE_CHANNELS — the same set the edge accepts. Anything else
+ * (`via=webdriver`, a typo) counts as direct.
+ */
+export function readShareVia(search: string = typeof window === 'undefined' ? '' : window.location.search): ShareChannel | undefined {
+  return parseShareParams(search).via;
+}
+
+/** Drops `via` from the address bar, so a reader who re-shares the bar URL does not pass the channel on. */
+function stripViaFromAddress(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('via')) return;
+    url.searchParams.delete('via');
+    window.history.replaceState(window.history.state, '', url.toString());
+  } catch {
+    /* sandboxed frames may refuse replaceState */
+  }
+}
+
 export type PublicComicStatus = 'loading' | 'ready' | 'not_found' | 'error';
 
 export interface UsePublicComic {
@@ -65,15 +87,19 @@ export interface UsePublicComic {
   data: PublicComicPayload | null;
   error: string | null;
   retry(): void;
-  /** view (once per mount), complete (once), share (every time). Never for the owner. */
+  /** view (once per mount; channel from `?via=` unless given), complete (once), share (every time). Never for the owner. */
   track(type: PublicEventType, channel?: ShareChannel, lang?: string): void;
 }
 
 export function usePublicComic(slug: string, opts: { isOwner?: boolean } = {}): UsePublicComic {
   const [boot] = useState(() => readShareBoot(slug));
+  const [via] = useState(() => readShareVia());
   const [state, setState] = useState<{ status: PublicComicStatus; data: PublicComicPayload | null; error: string | null }>({ status: 'loading', data: null, error: null });
   const [attempt, setAttempt] = useState(0);
   const sent = useRef(new Set<string>());
+
+  // The channel is kept in state; the address bar loses it at once (before any reader URL sync).
+  useEffect(() => stripViaFromAddress(), []);
 
   useEffect(() => {
     if (!SLUG_RE.test(slug)) {
@@ -100,9 +126,10 @@ export function usePublicComic(slug: string, opts: { isOwner?: boolean } = {}): 
         if (sent.current.has(type)) return;
         sent.current.add(type);
       }
-      void trackPublicEvent(slug, { type, ...(channel ? { channel } : {}), ...(lang ? { lang } : {}) });
+      const ch = channel ?? (type === 'view' ? via : undefined);
+      void trackPublicEvent(slug, { type, ...(ch ? { channel: ch } : {}), ...(lang ? { lang } : {}) });
     },
-    [slug, opts.isOwner]
+    [slug, opts.isOwner, via]
   );
 
   return { status: state.status, boot, data: state.data, error: state.error, retry, track };
