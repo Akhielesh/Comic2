@@ -23,6 +23,8 @@ export interface DeepResearchToolContext {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /** Free-only turn (X-Free-Only): no paid model anywhere (DeepResearchParams.noPaidRetry); `fallbackModel` is ignored. */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
 }
 
@@ -58,7 +60,8 @@ export const makeDeepResearchTool = (ctx: DeepResearchToolContext): ChatTool => 
         model: ctx.model,
         priorMessages: ctx.messages,
         systemPrompt: ctx.systemPrompt,
-        fallbackModel: ctx.fallbackModel,
+        fallbackModel: ctx.noPaidRetry ? undefined : ctx.fallbackModel,
+        ...(ctx.noPaidRetry ? { noPaidRetry: true } : {}),
         timeoutMs: ctx.timeoutMs,
         signal
       });

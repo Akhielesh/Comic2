@@ -28,6 +28,13 @@ export interface SwarmToolContext {
   /** User-defined agents to add to the deployable pool. */
   extraAgents?: AgentDefinition[];
   fallbackModel?: string;
+  /**
+   * Free-only turn (X-Free-Only): the swarm runs with no paid model anywhere (RunSwarmParams.noPaidRetry);
+   * `fallbackModel` is ignored.
+   */
+  noPaidRetry?: boolean;
+  /** Free-only: the turn's free chain, carried by the synthesis (RunSwarmParams.fallbackModels). */
+  fallbackModels?: string[];
   timeoutMs?: number;
 }
 
@@ -58,7 +65,8 @@ export const makeSwarmTool = (ctx: SwarmToolContext): ChatTool => ({
         systemPrompt: ctx.systemPrompt,
         clientContext: ctx.clientContext,
         extraAgents: ctx.extraAgents,
-        fallbackModel: ctx.fallbackModel,
+        fallbackModel: ctx.noPaidRetry ? undefined : ctx.fallbackModel,
+        ...(ctx.noPaidRetry ? { noPaidRetry: true, fallbackModels: ctx.fallbackModels } : {}),
         timeoutMs: ctx.timeoutMs,
         signal
       });

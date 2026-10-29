@@ -610,6 +610,12 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const requestAgentIds = new Set(requestCustomAgents.map((a) => a.id));
   const customAgents = [...requestCustomAgents, ...savedAgents.filter((a) => !requestAgentIds.has(a.id))];
 
+  // The agent meta-tools (swarm, deep research, delegation) run their own model calls. A free-only turn
+  // (X-Free-Only) gives them no paid net at all (noPaidRetry: no paid retry, a verified-free worker pick);
+  // otherwise they keep the paid TEXT_FALLBACK net. The swarm's synthesis also gets the free chain.
+  const metaToolNet = freeOnly
+    ? { fallbackModel: undefined, noPaidRetry: true, timeoutMs: TEXT_REQUEST_TIMEOUT_MS }
+    : { fallbackModel: TEXT_FALLBACK, timeoutMs: TEXT_REQUEST_TIMEOUT_MS };
   const metaTools: ChatTool[] = [];
   if (resolved.provider === 'openrouter' && swarmRequested) {
     metaTools.push(
@@ -621,8 +627,8 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         systemPrompt,
         clientContext,
         extraAgents: customAgents,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        ...metaToolNet,
+        ...(freeOnly ? { fallbackModels } : {})
       })
     );
   }
@@ -679,8 +685,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         messages,
         systemPrompt,
         clientContext,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        ...metaToolNet
       })
     );
   }
@@ -702,8 +707,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         messages,
         systemPrompt,
         clientContext,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        ...metaToolNet
       })
     );
   }
@@ -813,9 +817,10 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
  * reserveForOperation prices the hold at the most expensive of them, so a `:free` primary with a
  * paid fallback can never slip past an exhausted budget at $0. Exported for sibling routes that
  * reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid retry, so none is
- * priced. A free-only (X-Free-Only) turn keeps the paid net priced even though its engines no
- * longer send it: the agent meta-tools a chat turn may call (swarm, delegate, deep research) still
- * carry it, and an over-held free turn is released at settle — never charged.
+ * priced. A free-only (X-Free-Only) turn keeps the paid net priced even though neither its engine
+ * nor the agent meta-tools it may call (swarm, delegate, deep research: noPaidRetry) send it any
+ * more — a conservative hold, never an under-reserve; lowering it is a separate, reviewed change. An
+ * over-held free turn settles at its real cost — the hold is never charged.
  */
 export const chatPricedModels = (p: {
   resolved: { provider: string };

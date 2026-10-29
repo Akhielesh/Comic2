@@ -55,6 +55,12 @@ export interface RunDelegationParams {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /**
+   * Free-only (the client's X-Free-Only), as RunSwarmParams.noPaidRetry: no provider-level `fallbackModel`
+   * is sent, every call's own retry stays free (`freeOnly` on the provider request), and the helpers run on
+   * a verified-free model — the caller's own (already priced) model when none is free, never TEXT_FALLBACK.
+   */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -136,16 +142,21 @@ const runDelegationWith = async (params: RunDelegationParams, usageParts: ApiUsa
   const priorMessages = params.messages?.slice(-12) ?? [];
   const userMemory = params.systemPrompt?.trim();
   const subtasks = params.subtasks.map((s) => s.trim()).filter(Boolean).slice(0, MAX_SUBTASKS);
+  const freeOnly = params.noPaidRetry === true;
   const baseReq = {
     provider: params.provider,
     apiKey: params.apiKey,
     timeoutMs: params.timeoutMs,
-    fallbackModel: params.fallbackModel ?? TEXT_FALLBACK,
+    fallbackModel: freeOnly ? undefined : (params.fallbackModel ?? TEXT_FALLBACK),
+    ...(freeOnly ? { noPaidRetry: true } : {}),
     signal: params.signal
   };
   // Helper agents run on a free model and are web-grounded (OpenRouter native search);
   // the user's chosen model is reserved for the aggregation so the final voice/quality holds.
-  const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+  // Free-only never falls back to a paid pick: a verified-free model, else the caller's own model.
+  const workerModel = freeOnly
+    ? await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
+    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
   const webGrounded = params.provider === 'openrouter';
 
   const citations: ChatCitation[] = [];

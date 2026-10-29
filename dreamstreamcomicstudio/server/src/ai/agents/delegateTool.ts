@@ -21,6 +21,8 @@ export interface DelegateToolContext {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /** Free-only turn (X-Free-Only): no paid model anywhere (RunDelegationParams.noPaidRetry); `fallbackModel` is ignored. */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
 }
 
@@ -58,7 +60,8 @@ export const makeDelegateTool = (ctx: DelegateToolContext): ChatTool => ({
         messages: ctx.messages,
         systemPrompt: ctx.systemPrompt,
         clientContext: ctx.clientContext,
-        fallbackModel: ctx.fallbackModel,
+        fallbackModel: ctx.noPaidRetry ? undefined : ctx.fallbackModel,
+        ...(ctx.noPaidRetry ? { noPaidRetry: true } : {}),
         timeoutMs: ctx.timeoutMs,
         signal
       });
