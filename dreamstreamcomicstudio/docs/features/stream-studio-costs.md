@@ -31,7 +31,7 @@
 | A3 | `eventRoom.ts` | Segment bytes/count **ride the existing `putMeta`** (`meta.use`, never public); viewer-minutes and alarm upkeep ride the alarm's existing `stats` write. The flush (janitor alarm, end, recording register) counts what those durable totals gained since a **watermark kept in the usage row**, so an end inside the hour loses nothing — the replay janitor writes it at the latest. Recordings counted once, at the size R2 stored. |
 | A3 | `callRoom.ts`, `userLine.ts`, `index.ts` | A direct call's usage rides the existing `/x/log` to the caller's line only. `UserLine` keeps the account month (`/x/use` for family calls) as a row only — the room that measured a call writes its one Analytics Engine point. The Worker passes `bytes` to `/ingest` and R2's `stored` size on `complete`. |
 | A4 | `live-worker/wrangler.jsonc` | `analytics_engine_datasets: [{ binding: "STREAM_USAGE", dataset: "stream_usage" }]` (optional in code). |
-| A5 | `server/src/services/streamCosts.ts` (+ test), `costCentre.ts` | ≤ 4 GraphQL queries (Workers + DO requests; DO `activeTime` + `rowsWritten`; R2 operations + storage; TURN `egressBytes`) and 1 Analytics Engine SQL query per Cost centre load, month to date, each dataset failing alone. Stream product row = marginal $ (its share of the account's overage, $0 inside the free tiers) + `listValueUsd`; `report.stream` carries per-feature units, path mix, top consumers (nursery name / email in the admin console only), account-wide headroom with month-end projection, per-nursery-day KPIs, scale projection and alerts. `FIXED_COSTS` gains the DO and TURN lines. |
+| A5 | `server/src/services/streamCosts.ts` (+ test), `costCentre.ts` | ≤ 5 GraphQL queries (Workers + DO requests; DO `activeTime` + `rowsWritten`; DO `storedBytes` — added by ADR 0006 WS-8; R2 operations + storage; TURN `egressBytes`) and 1 Analytics Engine SQL query per Cost centre load, month to date (the DO datasets reach 7 days before the 1st for the 7-day medians), each dataset failing alone. Stream product row = marginal $ (its share of the account's overage, $0 inside the free tiers) + `listValueUsd`; `report.stream` carries per-feature units, path mix, top consumers (nursery name / email in the admin console only), account-wide headroom with month-end projection, per-nursery-day KPIs, scale projection and alerts. `FIXED_COSTS` gains the DO and TURN lines. |
 | A6 | `components/admin/costs/StreamCard.tsx`, `CostCentre.tsx` | Admin → Costs → **Stream Studio** tab (kit only: `Surface`, `KpiTile`, `SourceBadge`, `BudgetMeter`, `SortableTable`), a "List value" column in Products, and an alert badge in the header. |
 | A7 | `.github/workflows/stream-cost-watch.yml`, `scripts/ops/streamCostWatch.mjs` (+ test) | Daily at 06:17 UTC; reads Cloudflare only (never the backend); opens / updates / closes one `stream-cost-watch` issue **only when the alert set changes**; no secret → a logged no-op. **Fails safe:** a dataset that doesn't answer (or answers without the account or the field) is "couldn't measure", never zero — every alert it feeds keeps its last state, the issue says what is missing, it never closes or says "All clear" while anything is unmeasured, and the run goes red. |
 | A8 | `COST_RUNBOOK.md` §1/§7/§9, `baby-monitor.md` | DO rows, server relay and TURN lines; the relay cost claim corrected (≈ $0.16 per all-night relay viewer-month, not $1.7). |
@@ -347,12 +347,26 @@ KPIs, in the shape of the ADR 0006 table.
 
 | KPI | Threshold |
 |---|---|
-| DO requests | ≤ 1,000 |
+| DO requests | ≤ 1,000 billed, judged as ≤ 2,600 measured invocations (below) |
 | Rows written | ≤ 1,800 |
 | DO duration | ≤ 40 GB-s |
 | Relay and TURN share of viewer-minutes | reported |
+| TURN GB this month, DO storage, Glance bumps and pushes per night | reported (bumps target ≤ 60) |
 
-The KPIs apply after Phase 0 ships. Before that, the panel shows the baseline.
+The KPIs apply after Phase 0 ships. Before that, the panel shows the baseline. Since ADR 0006 WS-8
+the three budgets are judged on the **7-day median** over the last complete days with activity
+marks (the ADR's acceptance criterion), with the month-to-date average beside it.
+
+**Units.** Cloudflare's GraphQL `durableObjectsInvocationsAdaptiveGroups` counts *invocations*:
+alarms, socket upgrades and every incoming message on a hibernatable socket, each once ("the 20:1
+ratio does not affect Durable Object metrics and analytics"). It can't split messages from alarms.
+So the request KPI and its budget are both in invocations: 2,600, the ADR's 1,000 billed requests at
+the simulated night's mix (216 alarms + 6 upgrades + 1,212 messages = 1,434 invocations for 542
+billed; `PHASE0_DO_INVOCATIONS` in `shared/stream/usage.ts`). At 2,600 a night whose extra traffic
+is all messages bills about 340 requests, one whose extra is all alarms or reconnects about 1,450;
+alarm loops also show in `write_diet` (each re-arm is a row). The simulation assumes the app's
+auto-answered pings invoke nothing (they wake nothing): if the first production week reads several
+times the simulation with no client change, that assumption is wrong — recalibrate.
 
 **9. Alerts.** Each has a threshold and a plain-words cause:
 
@@ -360,7 +374,8 @@ The KPIs apply after Phase 0 ships. Before that, the panel shows the baseline.
 |---|---|
 | Free tier filling | Any allowance projected ≥ 80% (amber) or ≥ 100% (red) by month end |
 | Hibernation broken | DO GB-s per active nursery-day > 40 for 2 days in a row |
-| Write diet regressed | Rows per active nursery-day > 1,800 (after Phase 0) |
+| Write diet regressed | Rows per active nursery-day > 1,800 (7-day median when known; after Phase 0) |
+| Request budget exceeded | DO invocations per active nursery-day > 2,600 — ≈ 1,000 billed requests (7-day median; after Phase 0) |
 | TURN leak | Any one TURN identifier > 20 GB in a day, or account TURN > 500 GB before the 15th |
 | Relay creep | Our-server share of monitor viewer-minutes > 10% over 7 days |
 | R2 near free | R2 stored > 8 GB-month |
@@ -694,6 +709,11 @@ There is no cross-user comparison, ranking or leaderboard for users.
 **Retention**
 - Monthly rows are kept 13 months in the DOs (tiny; for a year-on-year view), then pruned by the existing 6-hour purge.
 - Analytics Engine keeps its own limited retention. The owner view needs at most 90 days.
+- The owner view's one Analytics Engine query returns at most 10,000 rows, newest day first, and the
+  usage points, the daily activity marks and the live Worker's signal counts share them. At the cap
+  the oldest returned day can be cut part-way, so the backend keeps only complete days, says from
+  which day (on both the Stream Studio and Security tabs), and hides the previous-period comparisons
+  it can no longer make (`aeTruncated` in `streamCosts.ts`).
 
 **Honesty:** every estimate is labelled; list prices carry their date; privacy wording stays bound to `privacyCopy.unit.test.ts`.
 
@@ -742,7 +762,8 @@ Each phase ships on its own and is reversible. "Owns" means the file's workstrea
 - **Production, 7 days after deploy:**
   - metering overhead ≤ **1% of DO rows** and ≤ **0.5% of DO requests**, comparing GraphQL before and after;
   - estimated `MonitorRoom` requests within **±15%** of the GraphQL namespace total (calibration);
-  - a Cost centre load adds ≤ 4 GraphQL queries and 1 Analytics Engine query.
+  - a Cost centre load adds ≤ 5 GraphQL queries and 1 Analytics Engine query (plus, since ADR 0006 WS-8, one more
+    Analytics Engine query for the Security tab's CSP counts and five HEAD counts on `security_events`).
 - **Owner check:** the Stream Studio row shows real units with badges, and the headroom meters match the Cloudflare dashboard
   within 5%.
 

@@ -1,6 +1,6 @@
 # Environment Variable Matrix
 
-**Status:** Authoritative env-var → consumer map. **Last verified:** 2026-06-16 (hosting section 2026-10-19).
+**Status:** Authoritative env-var → consumer map. **Last verified:** 2026-06-16 (hosting section 2026-10-19; Stream Studio security and observability rows 2026-10-29, ADR 0006 Phase 0).
 **Companion:** `INFRA_MAP.md`, `COST_RUNBOOK.md`. Central definition: `server/src/config.ts`.
 **Maintain this:** add a row when code starts reading a new env var; mark cost impact.
 
@@ -92,7 +92,8 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 |---|---|---|---|---|
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | billing | ✅ when `BILLING_ENABLED=true` 🔐 | — | **missing from .env.example** |
 | `STRIPE_PRICE_ID*` (×10) | billing | ⭕ | — | Fall back to DB configs |
-| `TURNSTILE_SECRET_KEY` / `VITE_TURNSTILE_SITE_KEY` | bot protection | ⭕ 🔐 | — | No-op until both set |
+| `TURNSTILE_SECRET_KEY` / `VITE_TURNSTILE_SITE_KEY` | bot protection | ⭕ 🔐 | — | No-op until both set. The same Turnstile widget's secret also goes into Supabase → Attack Protection (ADR 0006 owner action #3) |
+| `PWNED_PASSWORDS_CHECK` | `routes/authEmail.ts` (sign-up) | ⭕ | — | k-anonymity Pwned Passwords check at sign-up (first 5 SHA-1 hex characters only, padded; 2.5 s timeout, fails open). On unless `off` (ADR 0006 WS-4) |
 | `ADMIN_EMAILS` | `middleware/rbac.ts` | ✅ 🔐 | — | **Security-critical; missing from .env.example** — controls bootstrap admin |
 | `MCP_OUTBOUND_TOKEN` | `/api/connect` | ⭕ 🔐 | — | **missing from .env.example** |
 | `CONNECTORS_WEBHOOK_TOKEN` / `CONNECTORS_SYNC_COLOR` / `CONNECTORS_APP_RETURN_URL` | connectors | ⭕ 🔐 | — | |
@@ -103,16 +104,19 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
-| `CF_ANALYTICS_API_TOKEN` | `services/costCentre.ts` → `GET /api/admin/costs` | ⭕ 🔐 | — | **Read-only** token with *Account › Account Analytics › Read*. Queries the GraphQL Analytics API (Workers invocations per script, R2 storage). Never logged or returned to the client. Unset ⇒ Admin → Costs shows a setup card; all Supabase-based figures still work |
+| `CF_ANALYTICS_API_TOKEN` | `services/costCentre.ts`, `streamCosts.ts`, `securitySignals.ts` → `GET /api/admin/costs` | ⭕ 🔐 | — | **Read-only** token with *Account › Account Analytics › Read*. Queries the GraphQL Analytics API (Workers invocations per script, R2 storage; Durable Object requests, duration, rows written and storage; TURN) and Analytics Engine SQL (`stream_usage`: usage points, activity marks, the live Worker's signals; `csp_reports`: CSP violation counts). Never logged or returned to the client. Unset ⇒ Admin → Costs shows a setup card; all Supabase-based figures still work. Also a GitHub repository secret for `stream-cost-watch.yml` |
 | `CLOUDFLARE_ACCOUNT_ID` | `services/costCentre.ts` | ⭕ | — | The account tag for the analytics query; both vars must be set (as `dreamstream-api` Worker secrets or D1 `backend_env` rows) |
 | `STREAM_DO_NAMESPACES` | `services/streamCosts.ts` (Admin → Costs → Stream Studio) | ⭕ | — | Non-secret. `MonitorRoom=<id>,EventRoom=<id>,UserLine=<id>,CallRoom=<id>` (32-hex Durable Object namespace ids) — splits measured DO requests / rows / GB-s by room and gives exact per-nursery-day KPIs. Unset ⇒ DO figures are account-wide (labelled so). The same token above also reads the `stream_usage` Analytics Engine dataset. Also a GitHub Actions *variable* for `stream-cost-watch.yml` |
-| `STREAM_PHASE0_SHIPPED` | `services/streamCosts.ts` | ⭕ | — | `1` once ADR 0006 Phase 0 ships: applies the ≤ 1,800 rows per nursery-day "write diet" alert |
+| `STREAM_PHASE0_SHIPPED` | `services/streamCosts.ts` | ⭕ | — | `1` once ADR 0006 Phase 0 ships (Wave 2 deployed): applies the per-nursery-day budget alerts — ≤ 1,800 rows (`write_diet`) and ≤ 2,600 DO invocations as Cloudflare counts them ≈ 1,000 billed requests (`request_diet`), both on the 7-day median. Also a GitHub Actions *variable* for `stream-cost-watch.yml` |
+| `CSP_REPORTS_DATASET` | `services/securitySignals.ts` (Admin → Costs → Security) | ⭕ | — | Non-secret. The Analytics Engine dataset the Pages binding `CSP_REPORTS` writes to; default `csp_reports`. Set only if the binding uses another name (a plain identifier; anything else falls back to the default) |
 
 ## Live / email workers (set on the workers, mirrored on backend)
 
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
+| `SECURITY_HOOK_SECRET` (email Worker) | `email-worker` `POST /security` | ⭕ 🔐 | — | New-sign-in alerts from the Supabase access-token hook (`x-ds-signature`, ±5 min). The same value is the Supabase Vault secret `SECURITY_HOOK_SECRET` and the live Worker secret of that name; `old\|new` while rotating. Unset ⇒ `/security` answers 503 and no alert is sent (sign-ins are unaffected). Runbook §1 |
+| `SECURE_ACCOUNT_PAGE` (email Worker var) | `email-worker` sign-in alert template | ⭕ | — | `on` ⇒ the alert carries the one-time "Not you? Secure my account" button (`/live#/secure/<token>`); anything else ⇒ it points to Settings → Security. Set in `email-worker/wrangler.jsonc` when the `#/secure` page ships (ADR 0006 WS-5) |
 | `AUTH_LINK_ORIGINS` | `services/authEmailLinks.ts` (backend auth emails) | ⭕ | — | Comma-separated **exact** origins auth-email links may point at besides `APP_PUBLIC_URL` (e.g. `http://localhost:3000,http://localhost:7000` for local dev). Default empty. Never wildcards — see `docs/email/SETUP.md` |
 | *(not an env var)* `STREAM_HOST_ON` | `shared/streamHost.ts` — Pages middleware, both apps, backend, email Worker | — | — | **Code constant on purpose** (one switch shipped in one push to every consumer). Moves Stream Studio to `https://stream.dreamstreamstudio.ai`; Stream Studio links in auth emails, the sign-in handoff (`POST /api/auth/handoff`) and the apex `/live*` 301 follow it. See `INFRA_MAP.md` §2a. |
 | `VITE_LIVE_WORKER_URL` | frontend (Stream Studio) | ⭕ | — | |
@@ -142,8 +146,21 @@ the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 | `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | dreamstream-live | ✅ | — | Member checks for creating events + every baby-monitor socket (RPCs run as the caller's JWT) |
 | `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN: $0.05/GB on what Cloudflare sends to the relaying device, after 1 TB/mo free shared by the account) | **Set in production since 2026-10-22.** Relay for baby-monitor video, family/direct calls and Stream Studio guests on strict networks (carrier / symmetric NAT, blocked UDP); STUN-only without them, and those connections fail (with a clear reason). Guardrails (`live-worker/src/ice.ts`, costs doc §7 C6): a credential per room + person + payer (never shared), members ≤ 4 h, guests ≤ 2 h and never past their pass, refreshed by clients before expiry (`iceMs` → `{t:'ice'}` / `{t:'call_ice'}`), revoked when a guest or member is removed, a studio guest is kicked or a direct call ends; each tagged with Cloudflare's `customIdentifier` (`n-`/`a-`/`e-` + HMAC of the nursery / caller account / event) so TURN analytics attribute every byte. Relayed video is capped (calls 700/450 kbps, studio 700/600 kbps/1 Mbps, monitor 650 kbps). Check: a monitor hello / `call_joined` lists `turn.cloudflare.com` plus an `iceMs`; `wrangler tail` shows one `turn_mint` line per credential (tag, scope, ttl — no ids); a `?relay=1` call connects. **Owner:** set a Cloudflare account budget alert at **$10/month** (Billing → budget alerts) as the backstop |
 | `TURN_TAG_SALT` | dreamstream-live | ⭕ 🔐 | — | Optional secret that keys the TURN `customIdentifier` HMAC. Unset: the TURN API token keys it (still non-reversible). Set it before Phase A's per-identifier analytics so tags stay stable if the API token is rotated (a new salt or token changes every tag) |
-| `STREAM_USAGE` (binding) | dreamstream-live | ⭕ | — (10M points/mo included) | Workers Analytics Engine dataset `stream_usage` (`wrangler.jsonc` `analytics_engine_datasets`): ≤ 1 usage point per room per hour (`src/usageMeter.ts`). Optional in code — absent ⇒ no points, the rooms' monthly `use:YYYY-MM` rows still count. Read by Admin → Costs → Stream Studio and the daily `stream-cost-watch` job |
-| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list (includes `https://stream.dreamstreamstudio.ai`, Stream Studio's own host) |
+| `STREAM_USAGE` (binding) | dreamstream-live | ⭕ | — (10M points/mo included) | Workers Analytics Engine dataset `stream_usage` (`wrangler.jsonc` `analytics_engine_datasets`): ≤ 1 usage point per room per hour (`src/usageMeter.ts`), plus the privacy-safe signal counts (`src/signals.ts`: a name, a surface word and a count; ≤ 1 point per minute per isolate per signal; ADR 0006 WS-8). Optional in code — absent ⇒ no points, the rooms' monthly `use:YYYY-MM` rows still count. Read by Admin → Costs (Stream Studio and Security) and the daily `stream-cost-watch` job |
+| `CSP_REPORTS` (binding, **Pages**) | Pages Functions `functions/csp-report.ts` | ⭕ | — | Analytics Engine dataset (default name `csp_reports`) for CSP violation counts — by app, directive and blocked origin, never a URL. Added by the owner in the Pages project's Bindings (owner checklist §6c). Absent ⇒ counts only in bounded log lines |
+| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list (includes `https://stream.dreamstreamstudio.ai`, Stream Studio's own host); from ADR 0006 WS-7 also the WebSocket `Origin` allowlist (an upgrade with no `Origin` — a native app — is allowed) |
+| `DEVICE_TOKEN_JWK` | dreamstream-live | ⭕ 🔐 | — | P-256 private JWK from `scripts/ops/genDeviceTokenKey.mjs` (`{"keys":[new, old]}` while rotating): device grants (30 days) and 10-minute device access tokens with `DS-Proof` (watches, native apps; `src/auth/deviceToken.ts`). Unset ⇒ device enrolment answers 501 |
+| `ACT_TOKEN_KEY` | dreamstream-live | ⭕ 🔐 | — | 32+ characters: single-use "I'm on it" tokens in web pushes (`src/auth/actToken.ts`, 30 min). Unset ⇒ pushes offer no action. One key, no overlap: rotating breaks the last 30 minutes' actions |
+| `SECURITY_HOOK_SECRET` (live Worker) | dreamstream-live | ⭕ 🔐 | — | Same value as the email Worker's: verifies `/x/user/:uid/notify` (the new-device push mirror, ADR 0006 WS-7/WS-10) |
+| `OPS_KEY` | dreamstream-live | ⭕ 🔐 | — | 16+ characters: `POST /api/ops/apns-probe` (`x-ops-key`). Unset ⇒ the route refuses everything |
+| `APNS_KEY_P8` / `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_BUNDLE` / `FCM_SA_JSON` | dreamstream-live | ⭕ 🔐 | — (APNs and FCM are free) | Native push (`src/push/*`, Phase 1). Unset ⇒ native kinds make no request (the router is dormant) |
+| `PUSH_IOS_VIA` / `PUSH_CRITICAL_ALERTS` / `PUSH_LA_SEALED` / `PUSH_VOIP` | dreamstream-live (vars) | ⭕ | — | Non-secret switches (`src/push/router.ts`): `PUSH_IOS_VIA=fcm` if the APNs HTTP/2 probe fails; the others `1` only once Critical Alerts are granted, sealed Live Activity state is proven, and VoIP push ships (Phase 1.1) |
+| `RL_WS` / `RL_GUEST` / `RL_GUEST_NID` / `RL_EVENT` (bindings) | dreamstream-live | ⭕ | — | Workers Rate Limiting (`ratelimits` in `wrangler.jsonc`, ADR 0006 WS-7): 60 upgrades/60 s per address, 10 share-link joins/60 s per address, 30 per nursery, 10 events/60 s per account. Every check fails open. Runbook §3 |
+
+**Supabase-side configuration (not env vars, but set by the owner — `server/sql/live_security_v2.sql`):**
+Vault secret `SECURITY_HOOK_SECRET`; `public.live_private_config` row `security_hook_url` =
+`https://dreamstream-email.akhieleshsrirangam.workers.dev/security`; the *Customize Access Token
+(JWT) Claims* hook → `public.live_access_token_hook`. Owner checklist §4.
 
 ---
 

@@ -7,6 +7,8 @@ import {
   buildStreamSection,
   failedDatasets,
   fetchStreamAnalytics,
+  kpiWindowStartMs,
+  median,
   namespaceLabelsFromEnv,
   parseAeActive,
   parseAeRows,
@@ -45,7 +47,9 @@ const healthyAccount = (query: string): Record<string, unknown> =>
       ? { workersInvocationsAdaptive: [], durableObjectsInvocationsAdaptiveGroups: [] }
       : query.includes('durableObjectsPeriodicGroups')
         ? { durableObjectsPeriodicGroups: [] }
-        : { r2OperationsAdaptiveGroups: [], r2StorageAdaptiveGroups: [] };
+        : query.includes('durableObjectsStorageGroups')
+          ? { durableObjectsStorageGroups: [] }
+          : { r2OperationsAdaptiveGroups: [], r2StorageAdaptiveGroups: [] };
 
 const range30 = () => {
   const r = computeCostRange(30, new Date(NOW));
@@ -79,6 +83,10 @@ const analytics = (over: Partial<StreamAnalytics> = {}): StreamAnalytics => ({
     { bucket: 'dreamstream-live', actionType: 'DeleteObject', requests: 50 }
   ],
   turnEgressBytes: 40e9,
+  doStorage: [
+    { date: '2026-10-19', storedBytes: 0.5e9 },
+    { date: '2026-10-20', storedBytes: 0.6e9 }
+  ],
   ae: [
     row('2026-10-19', 'monitor', 'nursery', N1, { relayFrames: 54_000, minutes: { server: 60, direct: 400, lan: 140 } }),
     row('2026-10-20', 'monitor', 'nursery', N1, { relayFrames: 540_000, minutes: { server: 600 } }),
@@ -94,7 +102,7 @@ const analytics = (over: Partial<StreamAnalytics> = {}): StreamAnalytics => ({
   ...over
 });
 
-describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', () => {
+describe('Stream costs — fetch (≤ 5 GraphQL + 1 Analytics Engine query)', () => {
   it('does nothing without credentials', async () => {
     const fetchImpl = vi.fn();
     const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW - 60 * 86_400_000, creds: null, fetchImpl });
@@ -102,7 +110,7 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('asks four GraphQL datasets month to date and Analytics Engine once, and parses them', async () => {
+  it('asks five GraphQL datasets month to date and Analytics Engine once, and parses them', async () => {
     const seen: { url: string; body: string }[] = [];
     const fetchImpl = vi.fn(async (url: string, init?: { body?: string }) => {
       seen.push({ url, body: String(init?.body) });
@@ -117,6 +125,8 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
         ? { workersInvocationsAdaptive: [{ dimensions: { scriptName: 'dreamstream-live' }, sum: { requests: 5 } }], durableObjectsInvocationsAdaptiveGroups: [{ dimensions: { date: '2026-10-20', namespaceId: 'ABC' }, sum: { requests: 7 } }] }
         : q.query.includes('durableObjectsPeriodicGroups')
           ? { durableObjectsPeriodicGroups: [{ dimensions: { date: '2026-10-20', namespaceId: 'abc' }, sum: { activeTime: 2e6, rowsWritten: 9 } }] }
+          : q.query.includes('durableObjectsStorageGroups')
+            ? { durableObjectsStorageGroups: [{ dimensions: { date: '2026-10-20' }, max: { storedBytes: 4e8 } }] }
           : q.query.includes('r2OperationsAdaptiveGroups')
             ? {
                 r2OperationsAdaptiveGroups: [{ dimensions: { actionType: 'PutObject', bucketName: 'dreamstream-live' }, sum: { requests: 3 } }],
@@ -129,13 +139,15 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
       return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [account] } }, errors: null }) };
     });
     const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW - 60 * 86_400_000, creds: { token: 't', accountId: 'acct' }, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(5);
-    expect(seen.filter((s) => s.url.endsWith('/graphql'))).toHaveLength(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+    expect(seen.filter((s) => s.url.endsWith('/graphql'))).toHaveLength(5);
     expect(seen.find((s) => s.url.includes('/accounts/acct/analytics_engine/sql'))?.body).toContain('FROM stream_usage');
     // Month to date: the queries start on the 1st.
     expect(JSON.parse(seen[0].body).variables).toMatchObject({ start: '2026-10-01T00:00:00.000Z', startDate: '2026-10-01', endDate: '2026-10-21' });
     expect(a.doRequests).toEqual([{ date: '2026-10-20', namespaceId: 'abc', requests: 7 }]);
     expect(a.doPeriodic?.[0]).toMatchObject({ activeTimeUs: 2e6, rowsWritten: 9 });
+    expect(a.doStorage).toEqual([{ date: '2026-10-20', storedBytes: 4e8 }]);
+    expect(a.aeSignals).toEqual([]);
     expect(a.turnEgressBytes).toBe(123);
     expect(a.r2Storage).toEqual([{ bucket: 'dreamstream-live', payloadBytes: 9e9 }]); // latest sample per bucket
     expect(a.ae).toHaveLength(1);
@@ -181,17 +193,81 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
     expect(failedDatasets({ configured: false, nowMs: NOW, aeFromMs: NOW, errors: [] })).toEqual([]);
   });
 
+  it('notices the 10,000-row cap on the whole answer (marks and signals too), keeps only complete days, and hides what it cut', async () => {
+    // A 30-day view asks 60 days. 120 nurseries with a camera on (marks), the Worker's signals and some
+    // relay users fill the cap after 42 days: the oldest returned day is cut part-way, older days are
+    // missing. Only 78 rows a day are usage rows, so the parsed usage alone is far below the cap.
+    const range = range30();
+    const days = Array.from({ length: 42 }, (_, i) => new Date(Date.parse('2026-10-21T00:00:00Z') - i * 86_400_000).toISOString().slice(0, 10));
+    const names = ['kick', 'kick_closed', 'removed_closed', 'mfa_refused', 'session_expired', 'session_revoked', 'reauth_ok', 'rate_limited', 'origin_refused', 'preauth_evicted', 'guest_lockout', 'camera_spoof_refused', 'device_revoked_closed'];
+    const data: Record<string, unknown>[] = [];
+    for (const day of days) {
+      const at = `${day} 00:00:00`;
+      for (let n = 0; n < 120; n++) data.push({ day: at, kind: 'active', scope: 'nursery', scope_id: `nursery-${n}`, account: '' });
+      for (const name of names) for (const surface of ['monitor', 'edge', 'camera']) data.push({ day: at, kind: 'sig', scope: name, scope_id: surface, account: '', d1: 1 });
+      data.push({ day: at, kind: 'sig', scope: 'glance_bump', scope_id: '', account: '', d1: 40 });
+      for (let n = 0; n < 78; n++) {
+        const d: Record<string, unknown> = { day: at, kind: 'monitor', scope: 'nursery', scope_id: `nursery-${n}`, account: '' };
+        usageToDoubles(addUsage(emptyCounters(), { relayFrames: 1000, minutes: { server: 10 } })).forEach((v, i) => (d[`d${i + 1}`] = v));
+        data.push(d);
+      }
+    }
+    while (data.length < AE_ROW_LIMIT) data.push({ ...data[data.length - 1], scope_id: `extra-${data.length}` });
+    expect(data.length).toBe(AE_ROW_LIMIT);
+    const fetchImpl = vi.fn(async (url: string, init?: { body?: string }) =>
+      url.endsWith('/sql')
+        ? { ok: true, status: 200, json: async () => ({ data, rows: data.length }) }
+        : { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [healthyAccount(JSON.parse(String(init?.body)).query)] } } }) }
+    );
+    const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: range.prevFromMs, creds: { token: 't', accountId: 'acct' }, fetchImpl });
+    expect(a.ae!.length).toBeLessThan(AE_ROW_LIMIT); // what the old check looked at
+    expect(a.aeTruncated).toBe(true);
+    // The oldest returned day (Sep 10) may be cut part-way: complete from Sep 11, and nothing older is kept.
+    expect(new Date(a.aeFromMs).toISOString()).toBe('2026-09-11T00:00:00.000Z');
+    expect([...a.ae!, ...a.aeActive!, ...a.aeSignals!].every((r) => r.day >= '2026-09-11')).toBe(true);
+    const s = buildStreamSection({ nowMs: NOW, range, analytics: a });
+    expect(s.notes.some((n) => n.includes('10,000-row cap') && n.includes('2026-09-11'))).toBe(true);
+    expect(s.prevListValueUsd).toBeNull(); // the period before starts Aug 22: not fully read
+    expect(s.notes.some((n) => n.includes('older than Analytics Engine keeps'))).toBe(false); // not the retention note
+    // The Security tab reads the same answer: no "period before" counts from a cut answer, and it says why.
+    const report = buildCostCentreReport(
+      { costEvents: [], ledger: [], providerUsage: [], emails: [], studioRuns: [], subscriptions: [], plans: [], profiles: [], liveProfiles: 0, telemetry: [], modelUsage: [], truncated: [] },
+      { days: 30, now: new Date(NOW), budgetFor: () => null, stream: { analytics: a } }
+    );
+    const sec = report.security!;
+    expect(sec.signals.counted).toBe(true);
+    expect(sec.signals.rows.find((r) => r.id === 'mfa_refused')?.count).toBeGreaterThan(0);
+    expect(sec.signals.rows.every((r) => r.prevCount === null)).toBe(true);
+    expect(sec.notes.some((n) => n.includes('10,000-row cap') && n.includes('no previous-period comparison'))).toBe(true);
+    // Under the cap nothing changes: the period before is read and no cap note appears.
+    const small = await fetchStreamAnalytics({
+      nowMs: NOW,
+      fromMs: range.prevFromMs,
+      creds: { token: 't', accountId: 'acct' },
+      fetchImpl: vi.fn(async (url: string, init?: { body?: string }) =>
+        url.endsWith('/sql')
+          ? { ok: true, status: 200, json: async () => ({ data: data.slice(0, 2000) }) }
+          : { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [healthyAccount(JSON.parse(String(init?.body)).query)] } } }) }
+      )
+    });
+    expect(small.aeTruncated).toBe(false);
+    expect(small.aeFromMs).toBeLessThanOrEqual(range.prevFromMs); // the period before is covered
+    expect(buildStreamSection({ nowMs: NOW, range, analytics: small }).notes.some((n) => n.includes('row cap'))).toBe(false);
+  });
+
   it('maps every alert to the datasets it is evaluated from (unknown ids: all of them)', () => {
     expect(alertDatasets('turn_spend')).toEqual(['turn']);
     expect(alertDatasets('turn_leak')).toEqual(['turn']);
     expect(alertDatasets('free_tier:turnGb')).toEqual(['turn']);
     expect(alertDatasets('free_tier:doRowsWritten')).toEqual(['periodic']);
+    expect(alertDatasets('free_tier:doStoredGb')).toEqual(['storage']);
+    expect(alertDatasets('request_diet')).toEqual(['requests', 'ae']);
     expect(alertDatasets('free_tier:workerRequests')).toEqual(['requests']);
     expect(alertDatasets('r2_near_free')).toEqual(['r2']);
     expect(alertDatasets('hibernation')).toEqual(['periodic', 'ae']);
     expect(alertDatasets('relay_creep')).toEqual(['ae']);
     expect(alertDatasets('email_near_free')).toEqual([]);
-    expect(alertDatasets('something_new')).toEqual(['requests', 'periodic', 'r2', 'turn', 'ae']);
+    expect(alertDatasets('something_new')).toEqual(['requests', 'periodic', 'storage', 'r2', 'turn', 'ae']);
   });
 
   it('builds one Analytics Engine query with every counter, capped at its retention', () => {
@@ -409,6 +485,148 @@ describe('Stream costs — the section (pure)', () => {
     expect(s.alerts).toEqual([]);
     expect(s.notes.some((n) => n.includes('CF_ANALYTICS_API_TOKEN'))).toBe(true);
     expect(streamVerdict(s, formatUsd)).toMatch(/^Not measured yet/);
+  });
+
+  it('early in a month reads the Durable Object days back to a week ago, but bills the allowances from the 1st', () => {
+    const third = Date.parse('2026-11-03T06:17:00Z');
+    expect(new Date(kpiWindowStartMs(third)).toISOString()).toBe('2026-10-27T00:00:00.000Z');
+    expect(new Date(kpiWindowStartMs(NOW)).toISOString()).toBe('2026-10-01T00:00:00.000Z'); // the 1st is earlier
+    const r = computeCostRange(7, new Date(third));
+    const days = ['2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02'];
+    const s = buildStreamSection({
+      nowMs: third,
+      range: { fromMs: r.fromMs, toMs: r.toMs, prevFromMs: r.prevFromMs, days: 7 },
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({
+        nowMs: third,
+        doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 900 })),
+        doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: (20 / 0.128) * 1e6, rowsWritten: 1500 })),
+        aeActive: days.map((d) => mark(d, N1))
+      })
+    });
+    // Month to date: only Nov 1 and 2.
+    expect(s.headroom.find((h) => h.id === 'doRequests')?.used).toBe(1800);
+    expect(s.headroom.find((h) => h.id === 'doRowsWritten')?.used).toBe(3000);
+    // The medians see all four complete days.
+    expect(s.kpis.median7d).toEqual({ days: 4, doRequests: 900, rowsWritten: 1500, gbSeconds: 20 });
+    expect(s.kpis.status).toEqual({ doRequests: 'ok', rowsWritten: 'ok', gbSeconds: 'ok' });
+  });
+
+  it('judges Phase 0 on the 7-day median, not the month-to-date mean one bad night pulls up', () => {
+    const days = ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'];
+    const reqs = [800, 900, 950, 700, 30_000, 850, 990, 1100]; // one reconnect storm on the 17th
+    const s = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      phase0Shipped: true,
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({
+        doRequests: days.map((date, i) => ({ date, namespaceId: MONITOR_NS, requests: reqs[i] })),
+        doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: (12 / 0.128) * 1e6, rowsWritten: 1000 })),
+        aeActive: days.map((d) => mark(d, N1)),
+        ae: []
+      })
+    });
+    // The last 7 complete days: 14th…20th → median of [900, 950, 700, 30000, 850, 990, 1100] = 950.
+    expect(s.kpis.median7d).toMatchObject({ days: 7, doRequests: 950, rowsWritten: 1000, gbSeconds: 12 });
+    expect(s.kpis.doRequests).toBeGreaterThan(4000); // the month-to-date mean
+    expect(s.kpis.status?.doRequests).toBe('ok');
+    expect(s.kpis.budgets).toEqual({ doRequests: 2600, rowsWritten: 1800, gbSeconds: 40 });
+    expect(s.alerts.map((a) => a.id)).not.toContain('request_diet');
+    expect(s.notes.some((n) => n.includes('7-day MEDIAN'))).toBe(true);
+    // A week over budget does fire it.
+    const over = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      phase0Shipped: true,
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({ doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 3000 })), aeActive: days.map((d) => mark(d, N1)), ae: [] })
+    });
+    expect(over.kpis.status?.doRequests).toBe('over');
+    expect(over.alerts.map((a) => a.id)).toContain('request_diet');
+  });
+
+  it('compares the request KPI with a budget in the unit Cloudflare’s analytics count (messages 1:1), both ways', () => {
+    // live-worker/src/monitorRoom.night.test.ts (NIGHT_OUT run): a 12 h night that meets ADR 0006's
+    // billed budget — 216 alarms + 6 upgrades + 1,212 delivered messages (+ 5,180 auto-answered pings)
+    // = 542 billed requests (messages 20:1). Cloudflare's GraphQL invocations count the delivered
+    // messages 1:1: 216 + 6 + 1,212 = 1,434 per nursery-day.
+    const days = ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'];
+    const night = (invocations: number) =>
+      buildStreamSection({
+        nowMs: NOW,
+        range: range30(),
+        phase0Shipped: true,
+        namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+        analytics: analytics({
+          doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: invocations })),
+          doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: (3.6 / 0.128) * 1e6, rowsWritten: 1040 })),
+          aeActive: days.map((d) => mark(d, N1)),
+          ae: []
+        })
+      });
+    const ok = night(216 + 6 + 1212);
+    expect(ok.kpis.median7d).toMatchObject({ days: 7, doRequests: 1434, rowsWritten: 1040 });
+    expect(ok.kpis.status).toEqual({ doRequests: 'ok', rowsWritten: 'ok', gbSeconds: 'ok' });
+    expect(ok.alerts.map((a) => a.id)).not.toContain('request_diet');
+    expect(ok.alerts).toEqual([]);
+    // The other way: a chatty client (status every 2 s from one viewer: +21,600 messages) or a
+    // reconnect / alarm loop pushes the invocations past the budget, and the alert fires.
+    for (const invocations of [216 + 6 + 1212 + 21_600, 216 + 6 + 1212 + 1500]) {
+      const over = night(invocations);
+      expect(over.kpis.status?.doRequests).toBe('over');
+      expect(over.alerts.map((a) => a.id)).toContain('request_diet');
+    }
+  });
+
+  it('reports DO storage as an account-wide level with its own headroom row, and per nursery', () => {
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics({ doStorage: [{ date: '2026-10-20', storedBytes: 6e9 }, { date: '2026-10-19', storedBytes: 1e9 }] }) });
+    const row = s.headroom.find((h) => h.id === 'doStoredGb')!;
+    expect(row).toMatchObject({ label: 'Durable Object storage', used: 6, projected: 6, allowance: 5, overageUsd: 0.2, source: 'measured' });
+    expect(row.note).toMatch(/Account-wide level/);
+    expect(s.kpis.doStoredGb).toBe(6);
+    expect(s.kpis.doStoredMbPerNursery).toBe(3000); // 6 GB over the 2 nurseries active this month
+    expect(s.alerts.map((a) => a.id)).toContain('free_tier:doStoredGb');
+  });
+
+  it('adds TURN GB and the relay share (TURN + our server) once monitor viewers report paths', () => {
+    const reported = analytics({ ae: [row('2026-10-19', 'monitor', 'nursery', N1, { minutes: { server: 100, turn: 100, direct: 600, lan: 200 } })] });
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: reported });
+    expect(s.kpis.relayShare).toBeCloseTo(0.2, 6);
+    expect(s.kpis.serverShare).toBeCloseTo(0.1, 6);
+    expect(s.kpis.turnGbMonthToDate).toBe(40);
+    const unreported = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics({ ae: [row('2026-10-19', 'monitor', 'nursery', N1, { minutes: { server: 60 } })] }) });
+    expect(unreported.kpis.relayShare).toBeNull(); // not 100%
+  });
+
+  it('shows Glance bumps and pushes per nursery-night from the rooms’ signals — unknown until they count', () => {
+    const none = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics() });
+    expect(none.kpis).toMatchObject({ glanceBumpsPerNight: null, pushesPerNight: null });
+    expect(none.notes.some((n) => n.includes('signal counters'))).toBe(true);
+    expect(none.features.find((f) => f.id === 'push')?.units).toEqual([]);
+    const sig = (day: string, name: 'glance_bump' | 'push_sent' | 'push_gone', count: number, surface: '' | 'webpush' = '') => ({ day, name, surface, count });
+    const s = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      analytics: analytics({
+        aeSignals: [sig('2026-10-19', 'glance_bump', 50), sig('2026-10-20', 'glance_bump', 100), sig('2026-10-20', 'push_sent', 9, 'webpush'), sig('2026-10-20', 'push_gone', 1), sig('2026-10-21', 'glance_bump', 999)]
+      })
+    });
+    // Complete marked days: 19th (N1) and 20th (N1, N2) = 3 nursery-nights; today (21st) is partial.
+    expect(s.kpis.glanceBumpsPerNight).toBe(50);
+    expect(s.kpis.pushesPerNight).toBe(3);
+    expect(s.features.find((f) => f.id === 'push')?.units).toEqual([
+      { label: 'Pushes handed to a provider (at least)', value: 9, unit: 'pushes' },
+      { label: 'Targets pruned as gone', value: 1, unit: 'targets' }
+    ]);
+    expect(s.notes.some((n) => n.includes('are floors'))).toBe(true);
+  });
+
+  it('takes a median of the middle values', () => {
+    expect(median([])).toBeNull();
+    expect(median([3, 1, 2])).toBe(2);
+    expect(median([4, 1, 2, 3])).toBe(2.5);
+    expect(median([Number.NaN, 5])).toBe(5);
   });
 
   it('adds the shared email allowance and its alert from email_log', () => {
