@@ -17,9 +17,9 @@
 import type { Balloon, Box, ComicDoc, Line, LineKind, Page } from '../doc.js';
 import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.js';
 import { panelBoxesFor } from '../pageGeometry.js';
-import { fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, type FitResult } from '../textLayout.js';
+import { FIT_FONT_FLOOR, fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, type FitResult } from '../textLayout.js';
 import { FONT_REGISTRY, fontByFamily, fontString, resolveLetteringFont } from './fonts.js';
-import { placeBalloonsDetailed, safeAreaBox } from './place.js';
+import { balloonFootprint, placeBalloonsDetailed, safeAreaBox, settleBalloons, type SettleItem, type SizedLine } from './place.js';
 import { bubbleGeometry, hashSeed, resolveTailStyle, type BubbleGeometry } from './shapes.js';
 import {
   DEFAULT_LETTERING,
@@ -75,6 +75,8 @@ export interface LetterPlan {
   /** A software-placed line that could not avoid an overlap / face / the safe area (the editor's free-fix chip).
    *  Set only when true (P2-AMEND). */
   crowded?: boolean;
+  /** Dense page: this (software-placed) balloon is lettered at this fraction of its size so the page fits. Set only when < 1. */
+  densityScale?: number;
 }
 
 /** Page width in plan units. */
@@ -310,22 +312,34 @@ const geometryFor = (setup: LineSetup, w: number, h: number, tip: { x: number; y
   });
 
 /**
+ * Dense pages: when the page cannot hold every software-placed balloon at full size without overlaps,
+ * the renderer letters those balloons smaller (a letterer's point-size drop) in these steps; the last one
+ * is below the auto-fit floor and only ever reached on a page that is over-full (the crowded chip says
+ * so). Pinned and locked balloons keep the size their owner chose.
+ */
+export const DENSITY_STEPS: readonly number[] = [1, 0.9, FIT_FONT_FLOOR, 0.72];
+
+const densify = (setup: LineSetup, scale: number): LineSetup => (scale >= 1 ? setup : { ...setup, baseSize: r2(setup.baseSize * scale) });
+
+/**
  * plansFor() for placeBalloons from the real plan metrics: the text-box height and the outline bounds
  * (relative to the text box) of `line` at width `w`, as page fractions.
  */
-export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measure: Measure = estimateMeasure): (line: Line, w: number) => { h: number; bounds: Box } {
+export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measure: Measure = estimateMeasure, densityScale = 1): (line: Line, w: number) => SizedLine {
   const H = PLAN_W / (Number.isFinite(aspect) && aspect > 0 ? aspect : 2 / 3);
   const setups = new Map<string, LineSetup>();
   const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
   return (line, w) => {
     let setup = setups.get(line.id);
     if (!setup || setup.line !== line) {
-      setup = lineSetup(doc, line, measure);
+      setup = densify(lineSetup(doc, line, measure), densityScale);
       setups.set(line.id, setup);
     }
     const t = layoutText(setup, measure, { x: 0, y: 0, w, pinned: true }, whole, H);
     const g = geometryFor(setup, t.w, t.h, null);
-    return { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H } };
+    // `tail`: the placement keeps tails out of other balloons; a tail-less style needs no room for one.
+    const tail = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape) !== 'none' && setup.style.shape !== 'none';
+    return { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H }, tail };
   };
 }
 
@@ -419,42 +433,115 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     for (const line of panel.lines || []) if (normalizeLetteringText(line.text)) items.push({ line, panelIndex, panelN: panel.n });
   });
   if (!items.length) return [];
+  const lineIds = new Set(items.map((it) => it.line.id));
 
-  // Lines without a stored balloon: deterministic placement around everything already on the page.
+  // A dense page is tried at full size first. When software-placed balloons still overlap something after
+  // the settle pass, the software-placed balloons are packed again from scratch around the pinned ones
+  // (stored-but-unpinned balloons included: software placed them, software may move them), and if that
+  // is not enough they are lettered a step smaller and the page is planned again.
+  let best: { plans: LetterPlan[]; unresolved: number } | undefined;
+  const repackable = [...stored.values()].some((b) => !b.pinned && !b.locked);
+  for (const scale of DENSITY_STEPS) {
+    for (const keep of repackable ? (['all', 'pinned'] as const) : (['all'] as const)) {
+      const attempt = planAtDensity(doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, scale, keep);
+      if (!best || attempt.unresolved < best.unresolved) best = attempt;
+      if (!attempt.unresolved) return attempt.plans;
+    }
+  }
+  return best?.plans ?? [];
+}
+
+/**
+ * One planning pass at a density scale (1 = the style's size). `keep: 'all'` draws every stored balloon
+ * where it is; `keep: 'pinned'` re-places the unpinned stored ones too (an over-full page's repack).
+ * `unresolved` counts the balloons the settle pass could not clear of overlaps.
+ */
+function planAtDensity(
+  doc: ComicDoc,
+  page: Page,
+  items: readonly { line: Line; panelIndex: number; panelN: number }[],
+  lineIds: ReadonlySet<string>,
+  stored: ReadonlyMap<string, Balloon>,
+  boxes: readonly Box[],
+  rtl: boolean,
+  safe: Box,
+  safeMargin: number,
+  asp: number,
+  H: number,
+  m: Measure,
+  scale: number,
+  keep: 'all' | 'pinned'
+): { plans: LetterPlan[]; unresolved: number } {
+  const repacks = (id: string) => {
+    const b = stored.get(id);
+    return keep === 'pinned' && !!b && !b.pinned && !b.locked;
+  };
+  // Lines without a stored balloon (and, when repacking, the unpinned stored ones): deterministic placement
+  // around everything else on the page.
   const placed = new Map<string, Balloon>();
   let crowded: ReadonlySet<string> = new Set<string>();
-  if (items.some((it) => !stored.has(it.line.id))) {
+  if (items.some((it) => !stored.has(it.line.id) || repacks(it.line.id))) {
     const qc = page.render?.qc;
     const result = placeBalloonsDetailed({
       page,
-      boxes,
+      boxes: [...boxes],
       aspect: asp,
       rtl,
-      plansFor: letteringSizer(doc, page, asp, m),
+      plansFor: letteringSizer(doc, page, asp, m, scale),
       keepOut: qc?.keepOut,
       heads: qc?.heads,
       safeMargin,
       existing: page.balloons || [],
-      keep: 'all',
+      keep,
       lang: doc.format?.language
     });
-    for (const b of result.balloons) if (!stored.has(b.lineId)) placed.set(b.lineId, b);
-    crowded = new Set(result.crowded.filter((id) => !stored.has(id)));
+    for (const b of result.balloons) if (!stored.has(b.lineId) || repacks(b.lineId)) placed.set(b.lineId, b);
+    crowded = new Set(result.crowded.filter((id) => !stored.has(id) || repacks(id)));
   }
 
-  const lineIds = new Set(items.map((it) => it.line.id));
-  const plans: (LetterPlan & { order: number })[] = [];
+  const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
+  const mx = PAGE_FIT_MARGIN * PLAN_W;
+  const my = PAGE_FIT_MARGIN * H;
+
+  // Pass 1: every line's text box at its (stored or placed) balloon, the real outline, the render-time page
+  // fit and the tail tip. Nothing is final yet: the settle pass may still nudge movable balloons.
+  interface Pre {
+    line: Line;
+    panelIndex: number;
+    panelN: number;
+    order: number;
+    setup: LineSetup;
+    b: Balloon;
+    fallback: boolean;
+    movable: boolean;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    t: ReturnType<typeof layoutText>;
+    g0: BubbleGeometry;
+    /** Absolute tail tip (plan units) or null; `tipFollows` when it is the default one derived from the box. */
+    tip: { x: number; y: number } | null;
+    tipFollows: boolean;
+  }
+  const pre: Pre[] = [];
+  const repacked = new Set<string>();
   items.forEach(({ line, panelIndex, panelN }, order) => {
     const fallback = !stored.has(line.id);
-    const src = stored.get(line.id) ?? placed.get(line.id);
+    const again = repacks(line.id) && placed.has(line.id);
+    const src = again ? placed.get(line.id) : stored.get(line.id) ?? placed.get(line.id);
     if (!src) return;
+    if (again) repacked.add(line.id);
     const b = clampStored(src);
-    const setup = lineSetup(doc, line, m);
-    const panelBox = boxes[panelIndex] ?? { x: 0, y: 0, w: 1, h: 1 };
+    const panelBox = boxes[panelIndex] ?? whole;
     const pinned = !!(b.pinned || b.locked);
+    // Dense pages letter the software-placed balloons smaller; a balloon the owner placed keeps its size.
+    const setup = densify(lineSetup(doc, line, m), pinned ? 1 : scale);
     // Captions of rtl comics are anchored at their right (reading-start) edge: they grow leftwards.
     const growLeft = rtl && line.kind === 'caption';
-    const t = layoutText(setup, m, { x: b.x, y: b.y, w: b.w, pinned, growLeft }, panelBox, H);
+    // A software-placed balloon was sized against the whole page by the placement (it may have spilled out
+    // of a full panel): fitting it to its panel again would shrink or overflow text that already fits.
+    const t = layoutText(setup, m, { x: b.x, y: b.y, w: b.w, pinned, growLeft }, fallback || again ? whole : panelBox, H);
     let x = growLeft ? (b.x + b.w) * PLAN_W - t.w : b.x * PLAN_W;
     let y = b.y * H;
     const w = t.w;
@@ -462,8 +549,6 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
 
     // Render-time page fit on the real outline (stored values untouched).
     const g0 = geometryFor(setup, w, h, null);
-    const mx = PAGE_FIT_MARGIN * PLAN_W;
-    const my = PAGE_FIT_MARGIN * H;
     const ox = (lo: number, size: number, start: number, span: number) =>
       size > span - 2 * lo ? start + (span - size) / 2 : clampV(start, lo, span - lo - size);
     const outlineX = ox(mx, g0.bounds.w, x + g0.bounds.x, PLAN_W);
@@ -471,15 +556,56 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     x = outlineX - g0.bounds.x;
     y = outlineY - g0.bounds.y;
 
-    // Tail tip (absolute), then relative to the drawn text box.
+    // Tail tip (absolute): the stored one, else the default below the box for spoken kinds.
     const tailStyle = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape);
     let tip: { x: number; y: number } | null = null;
+    let tipFollows = false;
     if (tailStyle !== 'none' && setup.style.shape !== 'none') {
       if (typeof b.tailX === 'number' && typeof b.tailY === 'number') tip = { x: b.tailX * PLAN_W, y: b.tailY * H };
       else if (SPOKEN.has(line.kind)) {
         tip = { x: clampV(x + w * 0.42, 0, PLAN_W), y: clampV(y + h + 0.04 * H, 0, H) };
+        tipFollows = true;
       }
     }
+    pre.push({ line, panelIndex, panelN, order, setup, b, fallback, movable: !pinned, x, y, w, h, t, g0, tip, tipFollows });
+  });
+
+  // Pass 2: settle — software-placed and unpinned stored balloons slide off pinned ones and each other,
+  // tails included, with the real sizes. Stored values stay as they are; pinned/locked never move.
+  const groupOf = linkGroups(pre.map((p) => ({ id: p.line.id, linkTo: p.b.linkTo })));
+  const settled = settleBalloons(
+    pre.map((p): SettleItem => {
+      const outline = { x: p.x + p.g0.bounds.x, y: p.y + p.g0.bounds.y, w: p.g0.bounds.w, h: p.g0.bounds.h };
+      // A default tail follows the box: its reach is part of the outline instead of a fixed tip.
+      const foot = p.tip && p.tipFollows ? balloonFootprint(outline, p.tip) : outline;
+      const panelBox = boxes[p.panelIndex];
+      return {
+        id: p.line.id,
+        outline: foot,
+        tip: p.tip && !p.tipFollows ? p.tip : null,
+        movable: p.movable,
+        region: panelBox ? { x: panelBox.x * PLAN_W, y: panelBox.y * H, w: panelBox.w * PLAN_W, h: panelBox.h * H } : undefined,
+        group: groupOf.get(p.line.id)
+      };
+    }),
+    { w: PLAN_W, h: H },
+    { margin: { x: mx, y: my }, gap: 0.01 * PLAN_W }
+  );
+  const nudged = new Set<string>();
+  for (const p of pre) {
+    const mv = settled.moves.get(p.line.id);
+    if (!mv || (!mv.dx && !mv.dy)) continue;
+    p.x += mv.dx;
+    p.y += mv.dy;
+    if (p.tip && p.tipFollows) p.tip = { x: clampV(p.x + p.w * 0.42, 0, PLAN_W), y: clampV(p.y + p.h + 0.04 * H, 0, H) };
+    else if (p.tip && mv.tipMoved) p.tip = { x: clampV(p.tip.x + mv.dx, 0, PLAN_W), y: clampV(p.tip.y + mv.dy, 0, H) };
+    nudged.add(p.line.id);
+  }
+
+  // Pass 3: the plans themselves.
+  const plans: (LetterPlan & { order: number })[] = [];
+  for (const p of pre) {
+    const { line, setup, b, x, y, w, h, t, tip } = p;
     const geometry = geometryFor(setup, w, h, tip ? { x: r2(tip.x - x), y: r2(tip.y - y) } : null);
 
     const rotate = typeof setup.style.rotate === 'number' ? setup.style.rotate : 0;
@@ -492,10 +618,10 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     const plan: LetterPlan & { order: number } = {
       lineId: line.id,
       kind: line.kind,
-      panelN,
+      panelN: p.panelN,
       lang: setup.lang,
       dir: setup.spec.dir,
-      fallback,
+      fallback: p.fallback,
       style: setup.style,
       fontId: setup.fontId,
       x: r2(x),
@@ -509,21 +635,43 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
       runs: runsFor(setup, t.lines, { x, y, w }, t.fontSize),
       geometry,
       stroke: setup.stroke,
-      z: typeof b.z === 'number' && Number.isFinite(b.z) ? b.z : order,
+      z: typeof b.z === 'number' && Number.isFinite(b.z) ? b.z : p.order,
       locked: !!b.locked,
       outOfSafeArea,
       overflow: t.overflow,
-      order
+      order: p.order
     };
     if (rotate || skewX) plan.transform = { rotate, skewX, cx: r2(x + w / 2), cy: r2(y + h / 2) };
     if (b.linkTo && b.linkTo !== line.id && lineIds.has(b.linkTo)) plan.linkTo = b.linkTo;
     if (tip) plan.tip = { x: r2(tip.x), y: r2(tip.y) };
-    if (crowded.has(line.id)) plan.crowded = true;
+    // Crowded: the placement could not keep it clean, the settle pass had to move it off another balloon,
+    // or an over-full page re-placed it.
+    if (crowded.has(line.id) || nudged.has(line.id) || repacked.has(line.id)) plan.crowded = true;
+    if (scale < 1 && p.movable) plan.densityScale = scale;
     plans.push(plan);
-  });
+  }
   plans.sort((a, b) => a.z - b.z || a.order - b.order);
-  return plans.map(({ order: _order, ...plan }) => plan);
+  return { plans: plans.map(({ order: _order, ...plan }) => plan), unresolved: settled.unresolved.length };
 }
+
+
+/** Linked balloons (speech chains) by the root of their linkTo chain — they touch by design. */
+const linkGroups = (items: readonly { id: string; linkTo?: string }[]): Map<string, string> => {
+  const ids = new Set(items.map((i) => i.id));
+  const parent = new Map<string, string>();
+  for (const it of items) parent.set(it.id, it.linkTo && it.linkTo !== it.id && ids.has(it.linkTo) ? it.linkTo : it.id);
+  const root = (id: string): string => {
+    let cur = id;
+    for (let i = 0; i < items.length && parent.get(cur) !== cur; i += 1) cur = parent.get(cur) ?? cur;
+    return cur;
+  };
+  const out = new Map<string, string>();
+  for (const it of items) {
+    const r = root(it.id);
+    if (r !== it.id || items.some((o) => o.linkTo === it.id)) out.set(it.id, r);
+  }
+  return out;
+};
 
 /** Convenience for tools/tests: plans for page number n (undefined when the page doesn't exist). */
 export function planLetteringForPage(doc: ComicDoc, n: number, measure: Measure = estimateMeasure): LetterPlan[] | undefined {

@@ -132,6 +132,16 @@ export const fitPageToStage = (stage: { w: number; h: number }, aspect: number, 
   return Math.floor(Math.min(w, h * aspect));
 };
 
+/** The least stage height (px) the phone lettering sheet leaves above itself (a 2:3 page ≈ 145 px wide). */
+export const MIN_STAGE_PX = 240;
+
+/**
+ * Height cap (px) for the phone lettering sheet: everything below the stage's top minus the page's
+ * minimum height, never under 200 px (the sheet scrolls its own content).
+ */
+export const inspectorSheetMaxHeight = (stageTop: number, viewportHeight: number, minStage = MIN_STAGE_PX): number =>
+  Math.max(200, Math.round((Number.isFinite(viewportHeight) ? viewportHeight : 0) - (Number.isFinite(stageTop) ? stageTop : 0) - minStage));
+
 /** Default text for a balloon added from the toolbar (selected in the inline editor, so typing replaces it). */
 const NEW_LINE_TEXT: Record<LineKind, string> = {
   speech: 'Hello!',
@@ -583,6 +593,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const [zoomReset, setZoomReset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [coverInset, setCoverInset] = useState(0);
+  /** Phones: the lettering sheet's height cap, so the page above it keeps at least MIN_STAGE_PX. */
+  const [inspectorMaxH, setInspectorMaxH] = useState<number | undefined>(undefined);
   const ff = useFormFactor();
   const [coach, setCoach] = useState(() => ff.coarse && readFlag(COACH_KEY) !== '1');
   const { busyKey, fire } = useClickGuard(2500);
@@ -699,6 +711,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
   const crowdedIds = [...placements.crowded];
   const overflowIds = plans.filter((p) => p.overflow).map((p) => p.lineId);
+  // Dense page: the renderer lettered the software-placed balloons smaller so nothing overlaps.
+  const dense = plans.filter((p) => typeof p.densityScale === 'number' && p.densityScale < 1);
+  const densityPct = dense.length ? Math.round(Math.min(...dense.map((p) => p.densityScale as number)) * 100) : 100;
   // The balloon menu is the one surface while it is open: the inspector (a second sheet on phones, which
   // would also re-fit the page under the menu) waits until it closes ("Style…" then shows it).
   const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && !menu;
@@ -758,17 +773,24 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
-  // covers, so the whole page — and the selected balloon — stays above it.
+  // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
+  // the page keeps MIN_STAGE_PX: a page squeezed to 100 px has no tappable balloons left (its own content
+  // scrolls instead).
   useLayoutEffect(() => {
     if (!compactInspectorOpen) {
       setCoverInset(0);
+      setInspectorMaxH(undefined);
       return;
     }
     const host = inspectorHostRef.current;
     const stageBox = stageBoxRef.current;
     const sheet = host?.querySelector<HTMLElement>('[data-testid="lettering-inspector"]');
     if (!sheet || !stageBox) return;
-    const measureCover = () => setCoverInset(coveredByBottomSheet(stageBox.getBoundingClientRect().bottom, sheet.getBoundingClientRect().top));
+    const measureCover = () => {
+      const stageRect = stageBox.getBoundingClientRect();
+      setInspectorMaxH(inspectorSheetMaxHeight(stageRect.top, window.innerHeight));
+      setCoverInset(coveredByBottomSheet(stageRect.bottom, sheet.getBoundingClientRect().top));
+    };
     measureCover();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measureCover);
@@ -967,6 +989,17 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Crowded panel{crowdedIds.length > 1 ? ` (${crowdedIds.length})` : ''}</span>
         </button>
       )}
+      {letteringEditable && lettering && dense.length > 0 && (
+        <button
+          type="button"
+          data-testid="density-chip"
+          onClick={() => selection.set(dense.map((p) => p.lineId))}
+          className="tap-target inline-flex min-w-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
+          title="This page is dense: its auto-placed balloons are lettered smaller so none overlap — shorten lines or move some to another page to get the full size back (free)"
+        >
+          <Type className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Dense page · text at {densityPct}%</span>
+        </button>
+      )}
       {letteringEditable && lettering && overflowIds.length > 0 && (
         <button
           type="button"
@@ -1022,7 +1055,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
               setCoach(false);
               writeFlag(COACH_KEY, '1');
             }}
-            className="tap-target shrink-0 rounded-lg px-2 py-1 text-[12px] font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            // A real 44 px box on touch: a ::after hit area here sat under the stage, which took the taps.
+            className="shrink-0 rounded-lg px-2 py-1 text-[12px] font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-11 coarse:min-w-11 coarse:px-3"
           >
             Got it
           </button>
@@ -1093,7 +1127,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   );
 
   // Phones: a slim row above the stage only when there is something to say.
-  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coach || (letteringEditable && lettering && (crowdedIds.length || overflowIds.length)));
+  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coach || (letteringEditable && lettering && (crowdedIds.length || overflowIds.length || dense.length)));
   const phoneRow = phoneRowNeeded ? (
     <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-3 pt-2" data-testid="editor-phone-row">
       {languageRow}
@@ -1128,6 +1162,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 doc={vDoc}
                 page={page}
                 imageUrl={imageUrl}
+                // The editor's hit layer reaches past the art (44 px halos and handles on edge balloons); the
+                // stage (TouchCanvas) clips, the page box must not.
+                className={letteringEditable ? 'overflow-visible' : undefined}
                 editable={letteringEditable}
                 onBalloonChange={onBalloonChange}
                 onLetteringOps={apply}
@@ -1443,6 +1480,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         canPro={canPro}
         anchor={anchor}
         compact={layout.compactInspector}
+        maxHeight={inspectorMaxH}
         onClose={() => setInspectorClosed(true)}
       />
     </div>
@@ -1731,6 +1769,9 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
         >
           <header
             className={cx('flex shrink-0 select-none items-center gap-2 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-1.5 sm:px-3 sm:py-2', layout.fullBleed && 'touch-pan-y')}
+            // Landscape phones: the dialog leaves the right inset to the side sheet (its tab hugs the edge),
+            // so the header pads the notch itself — "Close editor" never sits under it.
+            style={layout.fullBleed && layout.tools === 'side' ? { paddingRight: 'calc(var(--sa-right, 0px) + 0.75rem)' } : undefined}
             {...headerSwipe}
             data-testid="editor-header"
           >

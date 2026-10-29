@@ -18,6 +18,9 @@
 //     drags only after a 220 ms hold ("lift"); travel is measured against the layer's on-screen rect, so
 //     it is right under any zoom. pointercancel reverts (never commits), and so does a SECOND finger: the
 //     drag claims the canvas's GestureArbiter, so TouchCanvas cancels it the moment a pinch starts.
+//   - Touch targets: every balloon carries a 44 screen-px halo (zoom-proof), so a 9 px balloon on a phone
+//     is still a real target; a press on a halo nearer ANOTHER balloon selects that one, so halos never
+//     steal taps. The tail and width handles keep their 44 px hit areas inside the page and apart.
 //   - Long-press (450 ms, still finger), right-click, the Menu key or Shift+F10 open the balloon's action
 //     menu (`onBalloonMenu`). A tap on empty art selects the nearest balloon (22 px) or clears the
 //     selection on RELEASE, so a one-finger pan of a zoomed page never drops the selection.
@@ -104,6 +107,8 @@ export const dragSlopPx = (t: string) => (t === 'touch' ? 10 : t === 'pen' ? 2 :
 const LIFT_MS = 220;
 const SNAP_PX = 6;
 const NEAREST_TAP_PX = 22;
+/** Minimum touch target (screen px) for balloons and handles (HIG 44 pt). */
+const HIT_PX = 44;
 const SPOKEN: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
 
 type DragMode = 'move' | 'tail' | 'width';
@@ -347,6 +352,24 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     return { lox: Math.min(lox, 0, hix), hix: Math.max(hix, 0, lox), loy: Math.min(loy, 0, hiy), hiy: Math.max(hiy, 0, loy) };
   };
 
+  /** The balloon whose outline is nearest a client point (within `nearPx` screen px), or null. */
+  const nearestBalloon = (clientX: number, clientY: number, nearPx: number): string | null => {
+    const rect = layerRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const t = travel(rect, pageWidth, pageHeight);
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    let best: { id: string; d: number } | null = null;
+    for (const p of base.plans) {
+      const o = outlineFractions(p, H);
+      const ox = Math.max(o.x * t.w - px, 0, px - (o.x + o.w) * t.w);
+      const oy = Math.max(o.y * t.h - py, 0, py - (o.y + o.h) * t.h);
+      const dist = Math.hypot(ox, oy);
+      if (dist <= nearPx && (!best || dist < best.d)) best = { id: p.lineId, d: dist };
+    }
+    return best ? best.id : null;
+  };
+
   // ── Drag ──────────────────────────────────────────────────────────────────
   const beginDrag = (e: React.PointerEvent, plan: LetterPlan, mode: DragMode) => {
     if (!editable || (!onBalloonChange && !onOps)) return;
@@ -355,6 +378,16 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     // A second finger is a pinch (TouchCanvas zooms): it never starts a drag of its own.
     if (multiTouch(e)) return;
     const id = plan.lineId;
+    // A press on the balloon's touch halo (outside its outline) that is nearer another balloon belongs to
+    // that balloon: halos overlap on a small page and must never steal a neighbour's tap.
+    if (mode === 'move' && (e.target as HTMLElement | null)?.closest?.('[data-hit-halo]')) {
+      const near = nearestBalloon(e.clientX, e.clientY, NEAREST_TAP_PX);
+      if (near && near !== id) {
+        e.preventDefault();
+        select(near, e.shiftKey);
+        return;
+      }
+    }
     const additive = e.shiftKey && mode === 'move';
     const wasSelected = selectionRef.current.includes(id);
     const touch = e.pointerType === 'touch';
@@ -658,20 +691,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     // Fingers are imprecise (small SFX and whispers stay selectable at fit on a phone); a mouse needs
     // only a few px, so a marquee can start close to a balloon.
     const nearPx = pointer === 'touch' ? NEAREST_TAP_PX : pointer === 'pen' ? 12 : 6;
-    const nearest = (clientX: number, clientY: number): string | null => {
-      if (!rect) return null;
-      const px = clientX - rect.left;
-      const py = clientY - rect.top;
-      let best: { id: string; d: number } | null = null;
-      for (const p of base.plans) {
-        const o = outlineFractions(p, H);
-        const ox = Math.max(o.x * t.w - px, 0, px - (o.x + o.w) * t.w);
-        const oy = Math.max(o.y * t.h - py, 0, py - (o.y + o.h) * t.h);
-        const dist = Math.hypot(ox, oy);
-        if (dist <= nearPx && (!best || dist < best.d)) best = { id: p.lineId, d: dist };
-      }
-      return best ? best.id : null;
-    };
+    const nearest = (clientX: number, clientY: number): string | null => nearestBalloon(clientX, clientY, nearPx);
     if (pointer === 'touch') {
       // A finger on empty art may be the start of a pan (zoomed) or a pinch: decide on RELEASE. A tap
       // selects the nearest balloon or clears the selection; a move or a second finger does nothing here.
@@ -849,6 +869,11 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               <span id={`bd-${page.id}-${id}`} className="sr-only">
                 {describe}
               </span>
+              {coarse && (
+                // Touch: a 44 screen-px halo around even the smallest balloon (divided by the zoom, so it stays
+                // 44 px on screen). beginDrag hands a press on it to the nearest balloon.
+                <span aria-hidden data-hit-halo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: `max(100%, ${HIT_PX / zs}px)`, height: `max(100%, ${HIT_PX / zs}px)` }} />
+              )}
               {p.overflow && (
                 // Visible "text doesn't fit" marker in the editor (the inspector offers the free fix).
                 <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white" />
@@ -863,6 +888,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           tip={planTip(primaryPlan, H, resolvedOf(primaryPlan.lineId))}
           coarse={coarse}
           scale={zs}
+          pageWidth={pageWidth}
+          pageHeight={pageHeight}
           onDrag={(e, mode) => beginDrag(e, primaryPlan, mode)}
           onKey={(e, mode) => onHandleKey(e, primaryPlan, mode)}
         />
@@ -932,6 +959,39 @@ const isCoarsePointer = (): boolean => {
   }
 };
 
+/**
+ * Where the tail dot and the width grip sit (layer px at zoom 1, before the canvas transform). Both are
+ * proxies — drags are relative — so they may be nudged: each keeps its whole 44 px hit area inside the
+ * page (the page box clips nothing in the editor, but the harness and a finger both want the area on the
+ * page), and the grip slides along the balloon's right edge to its top or bottom when the tail dot would
+ * sit on it, so the two never steal each other's taps. Pure; tested.
+ */
+export const handlePositions = (
+  plan: Pick<LetterPlan, 'x' | 'y' | 'w' | 'h'>,
+  H: number,
+  tip: { x: number; y: number } | null,
+  page: { w: number; h: number },
+  scale: number,
+  hitPx = HIT_PX
+): { dot: { x: number; y: number } | null; grip: { x: number; y: number } } => {
+  const hit = hitPx / Math.max(scale, 1e-6);
+  const half = hit / 2;
+  const w = page.w > 0 ? page.w : 1;
+  const h = page.h > 0 ? page.h : 1;
+  const keep = (p: { x: number; y: number }) => ({ x: clamp(p.x, Math.min(half, w / 2), Math.max(w - half, w / 2)), y: clamp(p.y, Math.min(half, h / 2), Math.max(h - half, h / 2)) });
+  const dot = tip ? keep({ x: tip.x * w, y: tip.y * h }) : null;
+  const right = ((plan.x + plan.w) / 1000) * w + 2 / Math.max(scale, 1e-6);
+  const top = (plan.y / H) * h;
+  const bottom = ((plan.y + plan.h) / H) * h;
+  let grip = keep({ x: right, y: (top + bottom) / 2 });
+  if (dot && Math.hypot(grip.x - dot.x, grip.y - dot.y) < hit) {
+    const ends = [keep({ x: right, y: top }), keep({ x: right, y: bottom })];
+    const far = ends.reduce((a, b) => (Math.hypot(b.x - dot.x, b.y - dot.y) > Math.hypot(a.x - dot.x, a.y - dot.y) ? b : a));
+    if (Math.hypot(far.x - dot.x, far.y - dot.y) > Math.hypot(grip.x - dot.x, grip.y - dot.y)) grip = far;
+  }
+  return { dot, grip };
+};
+
 /** Tail + width handles for the primary selection (44 px hit areas on touch; slider roles for AT). */
 const Handles: React.FC<{
   plan: LetterPlan;
@@ -939,17 +999,21 @@ const Handles: React.FC<{
   tip: { x: number; y: number } | null;
   coarse: boolean;
   scale: number;
+  /** Layer size in px at zoom 1 (the page box). */
+  pageWidth: number;
+  pageHeight: number;
   onDrag: (e: React.PointerEvent, mode: DragMode) => void;
   onKey: (e: React.KeyboardEvent, mode: 'tail' | 'width') => void;
-}> = ({ plan, H, tip, coarse, scale, onDrag, onKey }) => {
+}> = ({ plan, H, tip, coarse, scale, pageWidth, pageHeight, onDrag, onKey }) => {
   const dot = (coarse ? 20 : 14) / scale;
   const grip = { w: (coarse ? 10 : 8) / scale, h: (coarse ? 32 : 24) / scale };
-  const hit = 44 / scale;
-  const right = (plan.x + plan.w) / 1000;
-  const midY = (plan.y + plan.h / 2) / H;
+  const hit = HIT_PX / scale;
+  const pw = pageWidth > 0 ? pageWidth : 1;
+  const ph = pageHeight > 0 ? pageHeight : pw / (1000 / H);
+  const pos = handlePositions(plan, H, tip, { w: pw, h: ph }, scale);
   return (
     <>
-      {tip && (
+      {tip && pos.dot && (
         <span
           role="slider"
           aria-label="Tail direction"
@@ -963,7 +1027,7 @@ const Handles: React.FC<{
           onPointerDown={(e) => onDrag(e, 'tail')}
           onKeyDown={(e) => onKey(e, 'tail')}
           className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
-          style={{ left: `${tip.x * 100}%`, top: `${tip.y * 100}%`, width: dot, height: dot }}
+          style={{ left: `${(pos.dot.x / pw) * 100}%`, top: `${(pos.dot.y / ph) * 100}%`, width: dot, height: dot }}
           title="Drag to aim the tail"
         >
           <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ width: hit, height: hit }} />
@@ -982,8 +1046,8 @@ const Handles: React.FC<{
         aria-orientation="horizontal"
         onPointerDown={(e) => onDrag(e, 'width')}
         onKeyDown={(e) => onKey(e, 'width')}
-        className="pointer-events-auto absolute z-[6] -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
-        style={{ left: `calc(${right * 100}% + ${2 / scale}px)`, top: `${midY * 100}%`, width: grip.w, height: grip.h }}
+        className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
+        style={{ left: `${(pos.grip.x / pw) * 100}%`, top: `${(pos.grip.y / ph) * 100}%`, width: grip.w, height: grip.h }}
         title="Drag to resize"
       >
         <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: hit, height: hit }} />

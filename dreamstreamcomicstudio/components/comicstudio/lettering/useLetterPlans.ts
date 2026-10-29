@@ -4,7 +4,8 @@
 // (same sizer, same measure, keep: 'all'), so the editor knows the FULL balloon behind every drawn plan
 // (x/y/w + the tail tip). The first drag or nudge of a never-placed balloon then sends that whole balloon,
 // never a bare {x, y} that the op would complete with a 0.28-wide default (the old "jumping balloon" bug).
-// It also reports which placed lines are `crowded` (could not avoid an overlap): the editor's chip.
+// It also reports which placed lines are `crowded` (could not avoid an overlap, or had to be moved /
+// lettered smaller by the render-time settle): the editor's chip.
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Balloon, ComicDoc, Page } from '../../../shared/comic/doc';
@@ -121,7 +122,14 @@ export function useLetterPlans(doc: ComicDoc, page: Page, aspect: number, opts: 
   const measure = measureForGeneration(generation);
   const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : letteringAspect(doc, page);
   const plans = useMemo(() => planLettering(doc, page, asp, measure), [doc, page, asp, measure]);
-  const placements = useMemo(() => (wantPlacements ? resolvePlacements(doc, page, asp, measure) : NO_PLACEMENTS), [wantPlacements, doc, page, asp, measure]);
+  const placements = useMemo(() => {
+    if (!wantPlacements) return NO_PLACEMENTS;
+    const p = resolvePlacements(doc, page, asp, measure);
+    // The render-time settle (planLettering) may have moved or shrunk balloons the placement itself
+    // thought were fine: those are crowded too (the editor's chip and the inspector's free fixes).
+    for (const plan of plans) if (plan.crowded) p.crowded.add(plan.lineId);
+    return p;
+  }, [wantPlacements, doc, page, asp, measure, plans]);
   useEnsurePlanFonts(plans);
   return { plans, placements, measure, H: 1000 / asp };
 }
