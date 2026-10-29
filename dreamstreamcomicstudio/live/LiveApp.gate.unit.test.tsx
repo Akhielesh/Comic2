@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   openAuth: vi.fn(),
   openInvite: vi.fn(),
   cameraMounts: 0,
+  studioMounts: 0,
+  studioUnmounts: 0,
   /** A stand-in screen that says which it is. */
   stub: (id: string) => () => <div data-testid={id} />,
 }));
@@ -40,7 +42,19 @@ vi.mock('./api', async (importOriginal) => ({
 vi.mock('./views/DashboardView', () => ({ DashboardView: h.stub('dashboard') }));
 vi.mock('./views/CreateView', () => ({ CreateView: h.stub('create') }));
 vi.mock('./views/SettingsView', () => ({ SettingsView: h.stub('settings') }));
-vi.mock('./views/StudioView', () => ({ StudioView: h.stub('studio') }));
+vi.mock('./views/StudioView', () => ({
+  // Counts mounts and teardowns: unmounting the real one stops the camera, closes the room and
+  // drops every viewer and guest — a running broadcast must never be torn down by an account change.
+  StudioView: () => {
+    useEffect(() => {
+      h.studioMounts++;
+      return () => {
+        h.studioUnmounts++;
+      };
+    }, []);
+    return <div data-testid="studio" />;
+  },
+}));
 vi.mock('./views/SummaryView', () => ({ SummaryView: h.stub('summary') }));
 vi.mock('./views/ViewerView', () => ({ ViewerView: h.stub('viewer') }));
 vi.mock('./views/EventPage', () => ({ EventPage: h.stub('event') }));
@@ -74,6 +88,7 @@ const STUDIO_SCREENS: [path: string, testId: string][] = [
   ['/live#/monitor', 'monitor'],
   [`/live#/monitor/${NID}`, 'nursery'],
   [`/live#/monitor/${NID}/camera`, 'monitor-camera'],
+  // (No guest pass on this device: a share-link guest's watch page — LiveApp.gateGuestPass.unit.test.tsx.)
   [`/live#/monitor/${NID}/watch`, 'monitor-watch'],
   ['/live#/calls', 'calls'],
   [`/live#/call/${NID}/abcdef0123456789`, 'calls'],
@@ -94,6 +109,8 @@ beforeEach(() => {
   h.openAuth.mockReset();
   h.openInvite.mockReset();
   h.cameraMounts = 0;
+  h.studioMounts = 0;
+  h.studioUnmounts = 0;
   history.replaceState(null, '', '/live');
 });
 afterEach(() => {
@@ -279,5 +296,76 @@ describe('safety: a running nursery camera is never torn down by a status blip',
     await settle();
     expect(screen.getByTestId('monitor-camera')).toBeInTheDocument();
     expect(h.cameraMounts).toBe(1);
+  });
+});
+
+describe('a running broadcast or meeting is gated on entry only', () => {
+  const STUDIO = '/live?e=ev1#/studio?k=hostkey';
+  const MEMBER: LiveAccount = { status: 'member', userId: 'u1', email: 'ada@example.com', name: 'Ada' };
+
+  for (const [label, after] of [
+    ['signed out in another tab (Comic Studio shares the session)', { status: 'signed_out' }],
+    ['signed out everywhere', { status: 'signed_out', ended: 'revoked' }],
+    ['the two-step code asked for again', { status: 'needs_mfa', userId: 'u1', email: 'ada@example.com', mfa: true }],
+    ['the welcome code asked for', { status: 'needs_code', userId: 'u1', email: 'ada@example.com' }],
+  ] as [string, LiveAccount][]) {
+    it(`${label}: the same studio stays up (no teardown, no remount), with a notice`, async () => {
+      h.account = MEMBER;
+      history.replaceState(null, '', STUDIO);
+      const { rerender } = render(<LiveApp />);
+      expect(await screen.findByTestId('studio')).toBeInTheDocument();
+      h.account = after;
+      rerender(<LiveApp />);
+      await settle();
+      expect(screen.getByTestId('studio')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { level: 1, name: /Sign in to Stream Studio|One more step|Finish signing in/ })).toBeNull();
+      expect([h.studioMounts, h.studioUnmounts]).toEqual([1, 0]);
+      expect(await screen.findByText(/this stream keeps going until you end it/)).toBeInTheDocument();
+      // …and back in: still the same studio.
+      h.account = MEMBER;
+      rerender(<LiveApp />);
+      await settle();
+      expect([h.studioMounts, h.studioUnmounts]).toEqual([1, 0]);
+    });
+  }
+
+  it('leaving it (the stream ended, or Back) applies the gate; coming back to the address asks again', async () => {
+    h.account = MEMBER;
+    history.replaceState(null, '', STUDIO);
+    const { rerender } = render(<LiveApp />);
+    expect(await screen.findByTestId('studio')).toBeInTheDocument();
+    h.account = { status: 'signed_out' };
+    rerender(<LiveApp />);
+    await settle();
+    expect(screen.getByTestId('studio')).toBeInTheDocument();
+    await act(async () => {
+      history.pushState(null, '', '/live?e=ev1#/summary?k=hostkey');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await settle();
+    expect(screen.getByRole('heading', { level: 1, name: 'Sign in to Stream Studio' })).toBeInTheDocument();
+    expect(screen.queryByTestId('summary')).toBeNull();
+    expect(h.studioUnmounts).toBe(1);
+    await act(async () => {
+      history.pushState(null, '', STUDIO);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await settle();
+    expect(screen.getByRole('heading', { level: 1, name: 'Sign in to Stream Studio' })).toBeInTheDocument();
+    expect(screen.queryByTestId('studio')).toBeNull();
+  });
+
+  it('only the host studio: the dashboard, settings and the monitor screens still close on a sign-out', async () => {
+    for (const [path, testId] of STUDIO_SCREENS.filter(([, id]) => id !== 'studio')) {
+      h.account = MEMBER;
+      history.replaceState(null, '', path);
+      const { rerender, unmount } = render(<LiveApp />);
+      expect(await screen.findByTestId(testId)).toBeInTheDocument();
+      h.account = { status: 'signed_out' };
+      rerender(<LiveApp />);
+      await settle();
+      expect([path, !!screen.queryByRole('heading', { level: 1, name: 'Sign in to Stream Studio' })]).toEqual([path, true]);
+      unmount();
+    }
   });
 });

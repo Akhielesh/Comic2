@@ -581,3 +581,63 @@ describe('"Not you? Secure my account"', () => {
     expect(await account.secureAccount('nope')).toMatchObject({ ok: false, code: 'invalid_token' });
   });
 });
+
+describe('only a definite answer changes what Stream Studio lets in (the sign-in gate, live/accessGate.ts)', () => {
+  const FAILED = { message: 'TypeError: Failed to fetch' };
+
+  it('a pre-launch account whose automatic join fails on a blip is not "needs_code" — and joins on the next check', async () => {
+    h.state.me = { member: false, needs_code: false, suggested_name: 'Ada' };
+    h.state.rpcs.live_join = { data: null, error: FAILED };
+    const a = await account.refreshAccount();
+    expect(a.status).not.toBe('needs_code');
+    expect(a).toMatchObject({ status: 'offline', userId: 'u1', email: 'ada@example.com' });
+    h.state.rpcs.live_join = { data: { ok: true, profile: { display_name: 'Ada' } }, error: null };
+    expect((await account.refreshAccount()).status).toBe('member');
+  });
+
+  it('a sign-up’s ticket whose redemption fails on a blip: not "needs_code", and the ticket is kept for the next check', async () => {
+    localStorage.setItem('ds-live-welcome-ticket', 't'.repeat(32));
+    h.state.me = { member: false, needs_code: true };
+    h.state.rpcs.live_join = { data: null, error: FAILED };
+    expect((await account.refreshAccount()).status).toBe('offline');
+    expect(localStorage.getItem('ds-live-welcome-ticket')).toBe('t'.repeat(32));
+    expect(h.rpc).toHaveBeenCalledWith('live_join', expect.objectContaining({ p_ticket: 't'.repeat(32) }));
+  });
+
+  it('the server’s own "no" ({ ok: false }) is definite: needs_code', async () => {
+    h.state.me = { member: false, needs_code: false };
+    h.state.rpcs.live_join = { data: { ok: false, error: 'welcome_code_required' }, error: null };
+    expect((await account.refreshAccount()).status).toBe('needs_code');
+  });
+
+  it('needs_code and needs_mfa survive a failed check for the same account, like a member — a blip never opens the studio', async () => {
+    for (const me of [{ member: false, needs_code: true }, { signed_in: true, member: false, error: 'mfa_required', mfa_required: true, needs_code: false }]) {
+      vi.resetModules();
+      account = await import('./account');
+      h.state.meError = null;
+      h.state.me = me;
+      const want = (await account.refreshAccount()).status;
+      expect(['needs_code', 'needs_mfa']).toContain(want);
+      h.state.meError = FAILED;
+      expect((await account.refreshAccount()).status).toBe(want);
+      h.auth.getSession.mockRejectedValueOnce(new Error('storage unavailable'));
+      expect((await account.refreshAccount()).status).toBe(want);
+      const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+      h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: unreachable } as never);
+      expect((await account.refreshAccount()).status).toBe(want);
+    }
+  });
+
+  it('…but not for a different account signing in: no answer for it yet is "offline"', async () => {
+    h.state.me = { member: false, needs_code: true };
+    expect((await account.refreshAccount()).status).toBe('needs_code');
+    h.state.session = { access_token: 'tok-u2', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u2', email: 'bo@example.com', user_metadata: {} } };
+    h.state.meError = FAILED;
+    expect(await account.refreshAccount()).toMatchObject({ status: 'offline', userId: 'u2' });
+  });
+
+  it('the first check of a page load that fails is still "offline" (let through), as before', async () => {
+    h.state.meError = FAILED;
+    expect((await account.refreshAccount()).status).toBe('offline');
+  });
+});

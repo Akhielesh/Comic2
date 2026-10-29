@@ -51,7 +51,7 @@ import { confirmAndSignOutEverywhere } from './views/account/SecurityPanel';
 import { SecureAccount } from './views/account/SecureAccount';
 import { MfaNudge } from './views/account/MfaNudge';
 import { SignInGate } from './views/account/SignInGate';
-import { gateFor, statusForGate } from './accessGate';
+import { gateFor, holdsGuestPass, statusForGate } from './accessGate';
 import { reconcileLegacyAlerts } from './monitor/push';
 
 export type Route =
@@ -273,8 +273,28 @@ export function LiveApp() {
   const account = useAccount();
   const calls = useCalls();
   // Stream Studio needs a signed-in DreamStream account; links people were sent stay open, and
-  // only a definite answer gates (accessGate.ts). 'open' renders the screen as before.
-  const gate = gateFor(route, statusForGate(account.status, { authPending }));
+  // only a definite answer gates (accessGate.ts). 'open' renders the screen as before. A nursery
+  // share-link guest's pass opens its watch page — read once per address (the join form saves the
+  // pass, then navigates there).
+  const guestPass = useMemo(() => holdsGuestPass(route), [route]);
+  const gateStatus = statusForGate(account.status, { authPending });
+  // The address whose screen is up: a running host studio is gated on entry only (an account change
+  // in another tab never cuts a live broadcast; the gate applies once they leave it — accessGate.ts).
+  const openedRoute = useRef<Route | null>(null);
+  const gate = gateFor(route, gateStatus, { guestPass, running: openedRoute.current === route });
+  useEffect(() => {
+    openedRoute.current = gate === 'open' ? route : null;
+  }, [gate, route]);
+  // Kept up for that reason: say so, once — the stream is theirs to end.
+  const heldFor = gate === 'open' ? gateFor(route, gateStatus, { guestPass }) : 'open';
+  useEffect(() => {
+    if (heldFor === 'sign-in') {
+      push('You’re signed out — this stream keeps going until you end it. Then sign in to get back to Stream Studio.', { icon: 'info', duration: 8000 });
+    } else if (heldFor === 'needs-code' || heldFor === 'needs-mfa') {
+      push('Your account needs one more step before Stream Studio opens again — this stream keeps going until you end it.', { icon: 'info', duration: 8000 });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldFor]);
   // The "Not you?" token: read once from the link, then kept only in memory (the address bar,
   // history and any later copy of the URL never carry it).
   const secureToken = useRef<string | null>(route.view === 'secure' ? route.token : null);

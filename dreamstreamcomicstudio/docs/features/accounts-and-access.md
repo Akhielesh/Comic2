@@ -37,9 +37,10 @@ sheet; **Continue with DreamStream** on Stream Studio's own address) — no dash
 flow, no settings, no events this browser remembers, no tour. **Links people were sent still
 open with just a name.**
 
-One pure module decides it: `live/accessGate.ts` — `LINK_ROUTES` (the links that stay open; change
-the policy there), `gateFor(route, status)` and `statusForGate` (a sign-in link being finished
-holds the splash). `LiveApp` renders the answer in one place with
+One module decides it: `live/accessGate.ts` — `LINK_ROUTES` (the links that stay open; change
+the policy there), `GUEST_PASS_ROUTES` (where a nursery share link leads on to: the watch page,
+open to a device holding a guest pass for that nursery — `holdsGuestPass`), `gateFor(route,
+status, { guestPass })` and `statusForGate` (a sign-in link being finished holds the splash). `LiveApp` renders the answer in one place with
 `live/views/account/SignInGate.tsx`. `live/accessGate.unit.test.ts` checks every route view ×
 every account status.
 
@@ -62,9 +63,10 @@ every account status.
 | `dashboard` | `/` (`/live`) | Sign-in screen |
 | `create`, `settings` | `#/create`, `#/settings`, `#/account` | Sign-in screen |
 | `monitor`, `nursery` | `#/monitor`, `#/monitor/<id>[/invite]` | Sign-in screen (an Invite link opens its sheet once signed in) |
-| `monitor-camera`, `monitor-watch` | `#/monitor/<id>/camera`, `…/watch` | Sign-in screen |
+| `monitor-watch` | `#/monitor/<id>/watch` | **Opens for a share-link guest** — this device holds a guest pass for that nursery (`GUEST_PASS_ROUTES`): the join form sends them here, and so do reopening the share link, a reload and a crying / smoke alert's tap. Without a pass: sign-in screen |
+| `monitor-camera` | `#/monitor/<id>/camera` | Sign-in screen |
 | `calls` | `#/calls`, `#/call/<nursery>/<call>`, `#/call/d/<call>` (a ringing notification) | Sign-in screen |
-| `studio` | `?e=ID#/studio?k=KEY` (older `?e=ID&k=KEY`) | Sign-in screen |
+| `studio` | `?e=ID#/studio?k=KEY` (older `?e=ID&k=KEY`) | Sign-in screen — on entry only (`GATED_ON_ENTRY`): a running studio stays up through a sign-out elsewhere |
 | `summary`, `summary-lookup` | `?e=ID#/summary?k=KEY`, `#/summary/<id>` | Sign-in screen |
 
 - **The baby monitor is never gated out by the network.** Only a definite answer gates
@@ -74,11 +76,23 @@ every account status.
   `live/account.ts`; before, that case read as signed out and cleared the device's Stream Studio
   data). The splash lasts only while the account check runs — the same wait the monitor's own
   account check (`MonitorGate`) already had — and links never wait for it.
+- **A blip never opens the studio either.** A definite "not yet" (`needs_code`, `needs_mfa`)
+  survives a failed check for the same account, exactly like `member` does; `offline` is only
+  for no answer yet this page load (or a different account signing in), or no auth client. And a
+  failed request is never read as "not yet": a pre-launch account (or a sign-up with its ticket)
+  whose automatic `live_join` fails on a blip is `offline`, not asked for a code it doesn't need
+  — only the server's own `{ ok: false }` is `needs_code`.
 - **The address is kept.** After signing in, the screen they were opening opens — a private
   studio link included. "Continue with DreamStream" carries only the screen, so it isn't offered
   from a private event link (the key would be lost).
 - Signed out everywhere ("Sign out everywhere", "Not you?", a password reset) lands on the
   sign-in screen with the "you were signed out" notice.
+- **A running broadcast or meeting is never cut by the gate.** The host studio is gated when it
+  opens (`GATED_ON_ENTRY`); signing out in another tab (Comic Studio shares the session) or being
+  asked for the two-step code again while it runs leaves it up, with a notice ("this stream keeps
+  going until you end it") — unmounting it would stop the camera, close the room and drop every
+  viewer and guest with none of its "you're on air" guards. Leaving it, or a reload, applies the
+  gate. The host key, not the account, runs the stream.
 - The main app's **Open Stream Studio** stays: signed in to DreamStream, you're straight in
   (the same session on `/live`; the one-time handoff link on Stream Studio's own address), or
   asked for the welcome code once; signed out, it lands on this sign-in screen.

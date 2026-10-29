@@ -269,13 +269,7 @@ export async function refreshAccount(): Promise<LiveAccount> {
     set({ status: 'needs_mfa', userId: session.user.id, email, mfa: true, aal: 'aal1' });
     return current;
   }
-  if (me.error || !me.data) {
-    // A blip while already in (a token refresh, a tab coming back): stay in. Signing a running
-    // nursery camera or monitor out of its screen because one request failed would be worse.
-    if (current.status === 'member' && current.userId === session.user.id) return current;
-    set({ status: 'offline', userId: session.user.id, email });
-    return current;
-  }
+  if (me.error || !me.data) return noAnswer(session.user.id, email);
   const mfa = typeof me.data.mfa === 'boolean' ? me.data.mfa : undefined;
   const aal = me.data.aal === 'aal2' ? 'aal2' : me.data.aal === 'aal1' ? 'aal1' : undefined;
   const grace = me.data.mfa_grace === true;
@@ -308,6 +302,10 @@ export async function refreshAccount(): Promise<LiveAccount> {
       set({ status: 'member', userId: session.user.id, email, name: joined.data.profile?.display_name, verifiedVia: joined.data.profile?.verified_via });
       return current;
     }
+    // The join itself failed (no internet, a 5xx): no answer — a pre-launch account or a sign-up
+    // with its ticket is never told it needs a code it doesn't need (the ticket is kept; the next
+    // check joins). The server's own "no" ({ ok: false }) is the definite answer below.
+    if (joined.error || !joined.data) return noAnswer(session.user.id, email);
   }
   set({ status: 'needs_code', userId: session.user.id, email, suggestedName: me.data.suggested_name });
   return current;
@@ -316,14 +314,30 @@ export async function refreshAccount(): Promise<LiveAccount> {
 /** supabase-js's "couldn't reach the auth server" (network down, 502/503/504) — not an answer. */
 const unreachable = (e: unknown): boolean => !!e && typeof e === 'object' && (e as { name?: unknown }).name === 'AuthRetryableFetchError';
 
+/** A definite answer the server gave this page: kept through a blip, like a member's. */
+const DEFINITE: ReadonlySet<AccountStatus> = new Set(['member', 'needs_code', 'needs_mfa']);
+
 /**
- * The session couldn't be read just now. A member stays a member — a running nursery camera or
- * monitor is never signed out of its screen (or gated out of Stream Studio) by a blip — and
- * anyone else is 'offline' (let through, as before), never "signed out".
+ * The session couldn't be read just now. A definite answer stands — a member stays a member (a
+ * running nursery camera or monitor is never signed out of its screen, or gated out of Stream
+ * Studio, by a blip), and an account still owing the welcome code or the two-step code isn't let
+ * into the studio by one either. Anyone else is 'offline' (let through, as before), never
+ * "signed out".
  */
 function stayIn(): LiveAccount {
-  if (current.status === 'member') return current;
+  if (DEFINITE.has(current.status)) return current;
   set({ status: 'offline', ...(current.userId ? { userId: current.userId, email: current.email } : {}) });
+  return current;
+}
+
+/**
+ * The session is fine but the server couldn't answer for it (live_me or the automatic join failed:
+ * a token refresh while the Wi-Fi drops, a tab waking up). The same rule as stayIn, for this
+ * account only: a different account signing in gets no answer of the last one's.
+ */
+function noAnswer(userId: string, email: string | undefined): LiveAccount {
+  if (DEFINITE.has(current.status) && current.userId === userId) return current;
+  set({ status: 'offline', userId, email });
   return current;
 }
 

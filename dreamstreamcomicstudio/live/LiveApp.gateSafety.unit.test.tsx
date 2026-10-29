@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   session: null as Record<string, unknown> | null,
   getSession: null as null | (() => Promise<{ data: { session: unknown }; error: unknown }>),
   me: null as null | (() => Promise<Me>),
+  join: null as null | (() => Promise<Me>),
   authCb: null as AuthCb | null,
   failImport: false,
   cameraMounts: 0,
@@ -36,7 +37,7 @@ vi.mock('@/services/supabase', () => {
         }),
         updateUser: vi.fn(async () => ({ data: {}, error: null })),
       },
-      rpc: vi.fn(async (fn: string) => (fn === 'live_me' && h.me ? h.me() : { data: null, error: null })),
+      rpc: vi.fn(async (fn: string) => (fn === 'live_me' && h.me ? h.me() : fn === 'live_join' && h.join ? h.join() : { data: null, error: null })),
     },
     lookupAccessTokenEmail: vi.fn(),
   };
@@ -83,6 +84,7 @@ beforeEach(async () => {
   h.session = { ...SESSION };
   h.getSession = null;
   h.me = async () => MEMBER;
+  h.join = null;
   h.authCb = null;
   h.failImport = false;
   h.cameraMounts = 0;
@@ -192,5 +194,94 @@ describe('only a definite answer gates', () => {
     expect(await screen.findByRole('heading', { name: 'One more step' })).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.queryByTestId('monitor-camera')).toBeNull();
+  });
+});
+
+describe('a definite "not yet" survives a blip too (only member status did before)', () => {
+  const NEEDS_CODE: Me = { data: { member: false, needs_code: true, suggested_name: 'Ada Lovelace' }, error: null };
+  const NEEDS_MFA: Me = { data: { member: false, error: 'mfa_required' }, error: null };
+  const FAILED: Me = { data: null, error: { message: 'TypeError: Failed to fetch' } };
+  const studioShown = () => !!screen.queryByTestId('dashboard') || screen.queryAllByRole('navigation', { name: 'Main' }).length > 0;
+
+  for (const [label, first, heading] of [
+    ['no welcome code yet', NEEDS_CODE, 'One more step'],
+    ['the two-step code owed', NEEDS_MFA, 'Finish signing in'],
+  ] as [string, Me, string][]) {
+    it(`${label}: an hourly token refresh whose account check fails keeps the gate — never the studio`, async () => {
+      history.replaceState(null, '', '/live');
+      h.me = async () => first;
+      render(<LiveApp />);
+      expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+      h.me = async () => FAILED;
+      await act(async () => h.authCb!('TOKEN_REFRESHED', { access_token: 'tok-2' }));
+      await settle();
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+      expect(studioShown()).toBe(false);
+    });
+
+    it(`${label}: …and so does one whose session read fails or can’t reach the auth server`, async () => {
+      history.replaceState(null, '', '/live');
+      h.me = async () => first;
+      render(<LiveApp />);
+      expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+      h.getSession = async () => {
+        throw new Error('storage unavailable');
+      };
+      await act(async () => h.authCb!('USER_UPDATED', { access_token: 'tok-2' }));
+      await settle();
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+      h.getSession = async () => ({ data: { session: null }, error: UNREACHABLE });
+      await act(async () => h.authCb!('TOKEN_REFRESHED', { access_token: 'tok-3' }));
+      await settle();
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+      expect(studioShown()).toBe(false);
+    });
+  }
+
+  it('the welcome code entered: the next answer lets them in', async () => {
+    history.replaceState(null, '', '/live');
+    h.me = async () => NEEDS_CODE;
+    render(<LiveApp />);
+    expect(await screen.findByRole('heading', { name: 'One more step' })).toBeInTheDocument();
+    h.me = async () => MEMBER;
+    await act(async () => h.authCb!('USER_UPDATED', { access_token: 'tok-2' }));
+    expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
+  });
+
+  it('a different account signing in on this device is asked afresh — nothing carries over', async () => {
+    history.replaceState(null, '', '/live');
+    h.me = async () => NEEDS_CODE;
+    render(<LiveApp />);
+    expect(await screen.findByRole('heading', { name: 'One more step' })).toBeInTheDocument();
+    h.session = { ...SESSION, user: { id: 'u2', email: 'bo@example.com', user_metadata: {} } };
+    h.me = async () => FAILED;
+    await act(async () => h.authCb!('SIGNED_IN', { access_token: 'tok-u2' }));
+    await settle();
+    // No answer for the new account: let through ('offline'), as for any first check that fails.
+    expect(screen.queryByRole('heading', { name: 'One more step' })).toBeNull();
+    expect(screen.getByTestId('dashboard')).toBeInTheDocument();
+  });
+});
+
+describe('an account that needs no code is never asked for one because a request failed', () => {
+  it('a pre-launch account whose automatic join fails on a blip: let through, not "One more step" — and in on the next check', async () => {
+    history.replaceState(null, '', '/live');
+    h.me = async () => ({ data: { member: false, needs_code: false, suggested_name: 'Ada' }, error: null });
+    h.join = async () => ({ data: null, error: { message: 'TypeError: Failed to fetch' } });
+    render(<LiveApp />);
+    expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'One more step' })).toBeNull();
+    h.join = async () => ({ data: { ok: true, profile: { display_name: 'Ada' } }, error: null });
+    await act(async () => h.authCb!('TOKEN_REFRESHED', { access_token: 'tok-2' }));
+    await settle();
+    expect(screen.getByTestId('dashboard')).toBeInTheDocument();
+  });
+
+  it('…while the server’s own "welcome code required" is a definite answer: one more step', async () => {
+    history.replaceState(null, '', '/live');
+    h.me = async () => ({ data: { member: false, needs_code: false }, error: null });
+    h.join = async () => ({ data: { ok: false, error: 'welcome_code_required' }, error: null });
+    render(<LiveApp />);
+    expect(await screen.findByRole('heading', { name: 'One more step' })).toBeInTheDocument();
   });
 });

@@ -4,7 +4,7 @@
 // are sent or land on, through LiveApp's own parseRoute.
 import { describe, expect, it } from 'vitest';
 import type { AccountStatus } from './account';
-import { LINK_ROUTES, gateFor, isLinkRoute, statusForGate, type Gate, type RouteView } from './accessGate';
+import { GATED_ON_ENTRY, GUEST_PASS_ROUTES, LINK_ROUTES, gateFor, holdsGuestPass, isLinkRoute, statusForGate, type Gate, type RouteView } from './accessGate';
 
 // Records, so adding a route view or an account status without deciding its gate fails to compile.
 const VIEWS: Record<RouteView, 'link' | 'studio'> = {
@@ -65,6 +65,65 @@ describe('the links people were sent — one list, open without an account', () 
     const gated = views.filter((v) => !isLinkRoute(v)).sort();
     expect(gated).toEqual(['calls', 'create', 'dashboard', 'monitor', 'monitor-camera', 'monitor-watch', 'nursery', 'settings', 'studio', 'summary', 'summary-lookup']);
     for (const view of gated) expect(gateFor(view, 'signed_out')).toBe('sign-in');
+  });
+});
+
+describe('a nursery share-link guest’s pass — its own watch page, in every account state', () => {
+  it('opens only the watch page (a pass only ever watches)', () => {
+    expect([...GUEST_PASS_ROUTES]).toEqual(['monitor-watch']);
+  });
+
+  it('with a pass, the watch page opens whatever the account says — signed out, loading, no code, code owed', () => {
+    for (const status of statuses) expect(gateFor('monitor-watch', status, { guestPass: true })).toBe('open');
+  });
+
+  it('a pass opens no other studio screen; without one the watch page is gated like the rest', () => {
+    for (const view of views.filter((v) => !isLinkRoute(v) && v !== 'monitor-watch')) {
+      for (const status of statuses) expect([view, status, gateFor(view, status, { guestPass: true })]).toEqual([view, status, STUDIO_GATE[status]]);
+    }
+    for (const status of statuses) expect(gateFor('monitor-watch', status, { guestPass: false })).toBe(STUDIO_GATE[status]);
+  });
+
+  it('holdsGuestPass: this device’s pass for THAT nursery, on its watch page only', async () => {
+    const NID = '11111111-2222-4333-8444-555555555555';
+    const OTHER = '99999999-2222-4333-8444-555555555555';
+    const pass = { token: 'gp-1', name: 'Jo', role: 'viewer', until: Date.now() + 86_400_000, nursery: { name: 'N', baby: null } };
+    const { parseRoute } = await import('./LiveApp');
+    const at = (path: string) => {
+      history.replaceState(null, '', path);
+      return holdsGuestPass(parseRoute());
+    };
+    localStorage.clear();
+    expect(at(`/live#/monitor/${NID}/watch`)).toBe(false);
+    localStorage.setItem(`ds-monitor-guest-${NID}`, JSON.stringify(pass));
+    expect(at(`/live#/monitor/${NID}/watch`)).toBe(true);
+    expect(at(`/live#/monitor/${OTHER}/watch`)).toBe(false);
+    for (const path of [`/live#/monitor/${NID}/camera`, `/live#/monitor/${NID}`, `/live#/monitor/${NID}/invite`, '/live#/monitor', '/live']) {
+      expect([path, at(path)]).toEqual([path, false]);
+    }
+    // A pass that can't still work (past its end by more than any pass lives) opens nothing.
+    localStorage.setItem(`ds-monitor-guest-${NID}`, JSON.stringify({ ...pass, until: Date.now() - 200 * 86_400_000 }));
+    expect(at(`/live#/monitor/${NID}/watch`)).toBe(false);
+    localStorage.clear();
+  });
+});
+
+describe('a running host studio is gated on entry only', () => {
+  it('is the host studio alone', () => {
+    expect([...GATED_ON_ENTRY]).toEqual(['studio']);
+  });
+
+  it('opening it asks for the account; once up, an account change never shuts it', () => {
+    for (const status of statuses) {
+      expect(gateFor('studio', status)).toBe(STUDIO_GATE[status]);
+      expect(gateFor('studio', status, { running: true })).toBe('open');
+    }
+  });
+
+  it('every other studio screen closes on a sign-out as before', () => {
+    for (const view of views.filter((v) => !isLinkRoute(v) && v !== 'studio')) {
+      for (const status of statuses) expect([view, status, gateFor(view, status, { running: true })]).toEqual([view, status, STUDIO_GATE[status]]);
+    }
   });
 });
 
