@@ -323,6 +323,21 @@ describe('preflightImageRun', () => {
     expect(out.ok).toBe(false);
     expect(out.options).toContainEqual({ kind: 'add_key', route: 'gemini', label: `Add a Gemini key to reach ${NB21.nickname} directly` });
     expect(out.options.some((o) => o.kind === 'other_route')).toBe(false);
+    // A key of ANOTHER payer on the other route is never offered as a way round (not even as a button).
+    const mixedKeys: StudioKeys = { openrouter: { key: 'sk-or-user', byok: true }, gemini: { key: 'AIza-platform', byok: false } };
+    const mixed = await h.preflightImageRun({ specs: [NB21], keys: mixedKeys, doc: lockedDoc(), caps: paidCaps });
+    expect(mixed.ok).toBe(false);
+    expect(mixed.useRoute).toBeUndefined();
+    expect(mixed.options.some((o) => o.kind === 'other_route' || o.kind === 'add_key')).toBe(false);
+    // The article reads right for either route.
+    const orOnly = await h.preflightImageRun({ specs: [NB21], keys: { gemini: { key: 'AIza-user', byok: true } }, doc: lockedDoc(), caps: paidCaps });
+    expect(orOnly.ok).toBe(true); // Gemini direct has no public data and nothing observed: unknown never blocks
+    // When the other route is failing for everyone too (shared observations), adding a key would not help.
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'gemini', model: GEM_ID, ok: false, code: 'PROVIDER_ERROR' });
+    const both = await h.preflightImageRun({ specs: [NB21], keys: PLATFORM, doc: lockedDoc(), caps: paidCaps });
+    expect(both.ok).toBe(false);
+    expect(both.options.some((o) => o.kind === 'add_key')).toBe(false);
+    expect(both.options[0]).toEqual({ kind: 'wait_and_retry' });
   });
 
   it('BYOK prices carry no markup; free-plan caps get no switch option; unknown never blocks', async () => {

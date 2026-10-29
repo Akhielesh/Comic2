@@ -495,18 +495,12 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
       const other: ImageRoute = primary.route === 'openrouter' ? 'gemini' : 'openrouter';
       const otherModel = spec.routes[other];
       const otherKey = input.keys[other];
-      if (otherModel) {
-        if (otherKey?.key) {
-          // A key of a DIFFERENT payer (else the preflight would have used it): only the user's own key may be
-          // offered, and only with their click — a platform-paid run never moves onto DreamStream's other key
-          // silently, and a BYOK run never moves onto the platform's.
-          const otherState = health.routes.find((r) => r.route === other)?.state ?? 'unknown';
-          if (otherKey.byok && !primary.key.byok && otherState !== 'down') {
-            options.push({ kind: 'other_route', route: other, label: `Use ${spec.nickname} through your ${ROUTE_LABEL[other]} key` });
-          }
-        } else {
-          options.push({ kind: 'add_key', route: other, label: `Add a ${ROUTE_LABEL[other]} key to reach ${spec.nickname} directly` });
-        }
+      // `other_route` is the SAME payer only (modelHealth.ts): a reachable same-payer alternate that isn't down is
+      // used automatically (useRoute), so a blocked preflight never offers one — a key of another payer is never
+      // switched to here, not even as a button. With NO key for the other route, the user may add their own one,
+      // unless that route is failing for everyone too (our shared observations), where a key would not help.
+      if (otherModel && !otherKey?.key && routeState(other, otherModel, at).state !== 'down') {
+        options.push({ kind: 'add_key', route: other, label: `Add ${other === 'openrouter' ? 'an' : 'a'} ${ROUTE_LABEL[other]} key to reach ${spec.nickname} directly` });
       }
     }
     options.push(...(await switchOptions(spec, input, at)));
