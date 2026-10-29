@@ -82,6 +82,8 @@ import {
   type StudioState
 } from './studioReducer';
 import { useStudioMode } from './useStudioMode';
+import { requestOpenSettings, settingsSectionOf } from './openSettings';
+import { API_KEYS_HREF } from '../usage/UsageMeter';
 import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from './useUndo';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
@@ -1028,6 +1030,14 @@ export function useStudio(projectId: string): ComicStudioController {
             handled = !window.dispatchEvent(new CustomEvent(OPEN_SHARE_EVENT, { cancelable: true }));
           }
           if (!handled) setTab('read');
+          return;
+        }
+        case 'open_settings': {
+          // The mounted shell opens Comic settings (the budget cap focused); the account's API keys live
+          // outside the studio, so an unhandled 'keys' request goes to Settings → API keys.
+          const section = settingsSectionOf(action.section);
+          const handled = requestOpenSettings(section);
+          if (!handled && section === 'keys' && typeof window !== 'undefined') window.location.assign(API_KEYS_HREF);
           return;
         }
         case 'undo':

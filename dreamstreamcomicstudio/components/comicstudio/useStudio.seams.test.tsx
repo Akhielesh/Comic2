@@ -24,6 +24,8 @@ vi.mock('./studioApi', async (importOriginal) => {
 
 import { StudioApiError } from './studioApi';
 import { MODE_STORAGE_KEY, focusFromSelection, resolveStudioMode, useStudio } from './useStudio';
+import { OPEN_SETTINGS_EVENT } from './openSettings';
+import { API_KEYS_HREF } from '../usage/UsageMeter';
 
 let requests: StreamRequest[] = [];
 
@@ -149,6 +151,34 @@ describe('next steps and client actions', () => {
     act(() => result.current.runClientAction({ type: 'undo' })); // nothing to undo yet: a calm notice, no request
     expect(requests).toHaveLength(0);
     expect(result.current.notice).toMatchObject({ kind: 'info', text: expect.stringMatching(/Nothing to undo/) });
+  });
+
+  it('open_settings asks the mounted shell to open Settings at the section; API keys falls back to the account page', async () => {
+    const { result } = await setup();
+    const seen: unknown[] = [];
+    const onOpen = (e: Event) => {
+      seen.push((e as CustomEvent).detail);
+      if ((e as CustomEvent).detail?.section !== 'keys') e.preventDefault();
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    const assign = vi.fn();
+    const realLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, assign } });
+    try {
+      act(() => result.current.runClientAction({ type: 'open_settings', section: 'budget' }));
+      expect(seen).toEqual([{ section: 'budget' }]);
+      expect(assign).not.toHaveBeenCalled();
+      // The shell does not handle the account's API keys: the studio goes to Settings → API keys.
+      act(() => result.current.runClientAction({ type: 'open_settings', section: 'keys' }));
+      expect(assign).toHaveBeenCalledWith(API_KEYS_HREF);
+      // A section from a model-written chip that is not a known one opens the comic settings, nothing else.
+      act(() => result.current.runClientAction({ type: 'open_settings', section: 'billing' } as never));
+      expect(seen.at(-1)).toEqual({});
+      expect(requests).toHaveLength(0);
+    } finally {
+      window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    }
   });
 });
 

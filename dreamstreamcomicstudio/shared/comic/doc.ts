@@ -678,7 +678,10 @@ export type ClientAction =
   | { type: 'undo' }
   | { type: 'set_mode'; mode: StudioMode }
   /** Open the image-model picker (models.md §3.8), optionally pre-highlighting a registry id. */
-  | { type: 'open_model_picker'; suggest?: string };
+  | { type: 'open_model_picker'; suggest?: string }
+  /** Open Settings at a section: 'budget' = this comic's budget cap (the "Raise the budget" chip on a
+   *  budget-cap notice), 'keys' = the account's Settings → API keys. */
+  | { type: 'open_settings'; section?: 'budget' | 'keys' };
 
 /** A tappable chip. Exactly ONE of say | action | client (validated by normalizeDoc + server). */
 export interface NextStep {
