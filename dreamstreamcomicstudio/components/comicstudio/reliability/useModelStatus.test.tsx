@@ -5,6 +5,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HealthState, ModelHealth } from '../../../shared/comic/modelHealth';
 import type { StudioAction } from '../../../shared/comic/ops';
+import type { StudioActOutcome } from '../types';
 import { __resetRetries, armRetry, getRetry } from './retryIntents';
 import { __resetStatusStore, __setStatusFetcherForTests, incidentSince, loadStatus, putStatus } from './statusStore';
 import { STATUS_POLL_MAX_MS, STATUS_POLL_MS, isBack, useAutoRetry, useModelStatus } from './useModelStatus';
@@ -156,7 +157,7 @@ describe('useAutoRetry (wait and retry automatically)', () => {
 
   it('re-sends the blocked action exactly once when the model is back (two runners mounted)', async () => {
     states = { [NB21]: 'down' };
-    const act1 = vi.fn(async () => ({ ok: true, aborted: false, gated: false }));
+    const act1 = vi.fn(async (_a: StudioAction) => ({ ok: true, aborted: false, gated: false }) as unknown as StudioActOutcome);
     const act2 = vi.fn(async () => undefined);
     renderHook(() => useAutoRetry({ act: act1 }));
     renderHook(() => useAutoRetry({ act: act2 }));
@@ -206,7 +207,7 @@ describe('useAutoRetry (wait and retry automatically)', () => {
 
   it('a refused send is recorded as failed (the card offers to try again)', async () => {
     states = { [NB21]: 'down' };
-    const send = vi.fn(async () => ({ ok: false, aborted: false, gated: false }));
+    const send = vi.fn(async (_a: StudioAction) => ({ ok: false, aborted: false, gated: false }) as unknown as StudioActOutcome);
     renderHook(() => useAutoRetry({ act: send }));
     await flush();
     act(() => void armRetry('card_4', NB21, action));

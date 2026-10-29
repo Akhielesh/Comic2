@@ -25,11 +25,12 @@ export const STATE_WORD: Record<HealthState, string> = {
   unknown: 'No live data'
 };
 
-/** Dot tones. The banner and cards stay calm (warning surfaces, never red text). */
+/** Dot tones. Calm on purpose (the owner: no glaring errors): paused and unsteady share the warning tone and are
+ *  told apart by their word (and the unsteady dot's gentle pulse), never by a red mark. */
 export const STATE_TONE: Record<HealthState, StatusTone> = {
   ok: 'success',
   degraded: 'warning',
-  down: 'danger',
+  down: 'warning',
   unknown: 'neutral'
 };
 
