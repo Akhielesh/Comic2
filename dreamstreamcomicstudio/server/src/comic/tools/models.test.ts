@@ -221,6 +221,18 @@ describe('the models tool group (registration, phase gate)', () => {
       wanted(lakeLocked((d) => d.conversation.push({ id: 'm_out', role: 'assistant', text: 'Paused.', at: Date.now() - 60_000, cards: [outageCard()] })), 'ok')
     ).toBe(true);
   });
+
+  it('a model ask keeps the group inside the per-turn budget even when its words also wake the timeline (GROUP_HINTS)', () => {
+    // "switch" makes the timeline group hot; without the models hint, the hot timeline group (8–9 tools on a
+    // 5-page book) took the budget and the 30-tool cap trimmed model_options (models.md §3.8: call model_options).
+    for (const say of ['just switch it to GPT', 'switch to a cheaper model', 'swap the image model for Nano Banana Pro']) {
+      const doc = lakeLocked();
+      const set = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText: say, drawIntent: drawIntentInContext(doc, say) }), toolGroups());
+      expect(set.tools.length, say).toBeLessThanOrEqual(30);
+      expect(set.groups, say).toContain('models');
+      expect(set.tools.map((t) => t.spec.function.name), say).toEqual(expect.arrayContaining(['model_options', 'suggest_model']));
+    }
+  });
 });
 
 describe('model names', () => {
