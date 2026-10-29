@@ -99,6 +99,13 @@ export interface CurrentModel {
   locked: boolean;
   /** The resolution new pages draw at. */
   res: Resolution;
+  /** The comic's model id: the lock's (even one the registry no longer knows), else the tier's. */
+  id: string;
+  /**
+   * false when the lock names a model the registry no longer has: `spec` is then only the tier's stand-in that
+   * resolveImageJob falls back to — never describe the comic's model with its price, characters, id or status.
+   */
+  known: boolean;
 }
 
 /** The model new pages draw on: the lock when there is one (every tier), else the tier / pre-lock override. */
@@ -106,7 +113,7 @@ export const currentImageModel = (doc: ComicDoc): CurrentModel => {
   const lock = deriveLock(doc);
   const job = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, lock);
   const known = !lock || getImageModel(lock.modelId)?.id === job.spec.id;
-  return { spec: job.spec, name: known ? job.spec.nickname : lock!.modelId, locked: !!lock, res: job.resolution };
+  return { spec: job.spec, name: known ? job.spec.nickname : lock!.modelId, locked: !!lock, res: job.resolution, id: known ? job.spec.id : lock!.modelId, known };
 };
 
 /** A page the next drawing would (re)draw: not drawn yet, failed, or out of date. A drawn, current page was the user's call. */
@@ -297,6 +304,8 @@ export interface ModelOptionFacts {
   blocks: string[];
   warns: string[];
   sameFamily: boolean;
+  /** The comic's locked model is no longer in the registry: no price, characters or status are known for it. */
+  unknown?: boolean;
 }
 
 export interface TierFacts {
@@ -363,7 +372,7 @@ const providerFacts = (row?: ModelCatalogRow): string | null => {
 
 function optionFacts(
   spec: ImageModelSpec,
-  i: { doc: ComicDoc; caps: StudioCaps; prices: ServerPriceBook; keys: StudioKeys; row?: ModelCatalogRow; current: ImageModelSpec }
+  i: { doc: ComicDoc; caps: StudioCaps; prices: ServerPriceBook; keys: StudioKeys; row?: ModelCatalogRow; current: { id: string; vendor?: string } }
 ): ModelOptionFacts {
   const byok = byokFor(spec, i.keys);
   const res = pageRes(i.doc, spec);
@@ -448,18 +457,23 @@ export async function buildModelAdvice(ctx: StudioContext, input: { want: ModelW
   const cur = currentImageModel(doc);
   const [rows, prices] = await Promise.all([catalogRows(ctx, doc, caps), createPriceBook({ userId: ctx.userId })]);
   const rowOf = (id: string) => rows?.find((r) => r.id === id);
-  const factsOf = (spec: ImageModelSpec) => optionFacts(spec, { doc, caps, prices, keys: ctx.keys, row: rowOf(spec.id), current: cur.spec });
-  const current = factsOf(cur.spec);
+  const curRef = cur.known ? { id: cur.spec.id, vendor: cur.spec.vendor } : { id: cur.id };
+  const factsOf = (spec: ImageModelSpec) => optionFacts(spec, { doc, caps, prices, keys: ctx.keys, row: rowOf(spec.id), current: curRef });
+  // A lock the registry no longer knows: the tier's stand-in is never described as the comic's model.
+  const current: ModelOptionFacts = cur.known
+    ? factsOf(cur.spec)
+    : { id: cur.id, nickname: cur.name, res: cur.res, perPageUsd: null, characters: 0, providers: null, ranks: null, redrawPagesCoverUsd: 0, redrawAllUsd: 0, blocks: [], warns: [], sameFamily: true, unknown: true };
 
   // Fit-sorted (the catalog's order: blocks last, then quality, price, resilience); registry order without it.
   const ordered = (rows ? rows.map((r) => getImageModel(r.id)) : IMAGE_MODELS).filter((s): s is ImageModelSpec => !!s);
-  const pool = ordered.filter((s) => s.pickable && s.id !== cur.spec.id && s.id !== input.named?.id).map(factsOf);
+  const pool = ordered.filter((s) => s.pickable && s.id !== cur.id && s.id !== input.named?.id).map(factsOf);
   const fits = (f: ModelOptionFacts) => !f.blocks.length;
   const price = (f: ModelOptionFacts) => f.perPageUsd ?? Number.POSITIVE_INFINITY;
   let options: ModelOptionFacts[];
   switch (input.want) {
     case 'cheaper':
-      options = pool.filter((f) => fits(f) && f.perPageUsd !== null && current.perPageUsd !== null && f.perPageUsd < current.perPageUsd).sort((a, b) => price(a) - price(b));
+      // An unlisted current model has no price to beat: the fitting models by price, each with its real number.
+      options = pool.filter((f) => fits(f) && f.perPageUsd !== null && (current.unknown || (current.perPageUsd !== null && f.perPageUsd < current.perPageUsd))).sort((a, b) => price(a) - price(b));
       break;
     case 'characters':
       options = pool.filter((f) => fits(f) && f.characters > current.characters).sort((a, b) => price(a) - price(b));
@@ -470,9 +484,9 @@ export async function buildModelAdvice(ctx: StudioContext, input: { want: ModelW
     default:
       options = [...pool.filter(fits), ...pool.filter((f) => !fits(f))];
   }
-  const named = input.named && input.named.id !== cur.spec.id ? factsOf(input.named) : undefined;
-  const namedIsCurrent = !!input.named && input.named.id === cur.spec.id;
-  const crowd = crowdedPage(doc, cur.spec);
+  const named = input.named && input.named.id !== cur.id ? factsOf(input.named) : undefined;
+  const namedIsCurrent = !!input.named && input.named.id === cur.id;
+  const crowd = cur.known ? crowdedPage(doc, cur.spec) : null;
   const outage = recentOutageCard(doc, input.now ?? Date.now());
   return {
     want: input.want,
@@ -557,7 +571,9 @@ export function describeModelAdvice(a: ModelAdvice, c: CostFormatter): string {
   const cur = a.current;
   const lines: string[] = [];
   lines.push(
-    `CURRENT: ${a.currentName} — ${a.locked ? 'locked for this comic (every page matches)' : 'not locked yet (it locks at the first comic image)'}; ${cur.perPageUsd === null ? 'price per page UNVERIFIED' : `${c.approx(cur.perPageUsd)} per page at ${cur.res} (${basisWords(cur.basis)})`}; holds ${cur.characters} characters per image; ${cur.providers ?? 'provider uptime unknown'}; ${cur.ranks ?? 'not ranked on any public leaderboard'}.${drawnCount(a.drawn) ? ` Drawn with it: ${drawnWords(a.drawn)}.` : ''}`
+    cur.unknown
+      ? `CURRENT: ${a.currentName} — locked for this comic, but the studio no longer lists this model: its price per page, characters held and provider status are UNVERIFIED (say you don't know them).${drawnCount(a.drawn) ? ` Drawn with it: ${drawnWords(a.drawn)}.` : ''}`
+      : `CURRENT: ${a.currentName} — ${a.locked ? 'locked for this comic (every page matches)' : 'not locked yet (it locks at the first comic image)'}; ${cur.perPageUsd === null ? 'price per page UNVERIFIED' : `${c.approx(cur.perPageUsd)} per page at ${cur.res} (${basisWords(cur.basis)})`}; holds ${cur.characters} characters per image; ${cur.providers ?? 'provider uptime unknown'}; ${cur.ranks ?? 'not ranked on any public leaderboard'}.${drawnCount(a.drawn) ? ` Drawn with it: ${drawnWords(a.drawn)}.` : ''}`
   );
   if (a.crowd) lines.push(`PAGE ${a.crowd.n} has ${a.crowd.count} characters; ${a.currentName} keeps up to ${cur.characters} on model per image.`);
   if (a.streak.count >= R5_FAILURES || a.outage) {
@@ -570,7 +586,11 @@ export function describeModelAdvice(a: ModelAdvice, c: CostFormatter): string {
       `SAME MODEL, CHEAPER: ${a.tier.label} draws new pages with ${a.currentName} at ${a.tier.res} for ${c.approx(a.tier.perPageUsd)} per page instead of ${c.approx(a.tier.currentPerPageUsd)} at ${a.tier.currentRes}. Characters stay consistent;${drawnStay(a.drawnRes, a.tier.res).tool} Offer it with suggest_model tier "${a.tier.tier}" (the user taps to confirm).`
     );
   } else if (a.want === 'cheaper') {
-    lines.push(`SAME MODEL: ${a.currentName} is already at its cheapest setting for this comic (${cur.res}).`);
+    lines.push(
+      cur.unknown
+        ? `SAME MODEL: ${a.currentName} is no longer listed, so no cheaper setting for it can be priced.`
+        : `SAME MODEL: ${a.currentName} is already at its cheapest setting for this comic (${cur.res}).`
+    );
   }
   if (a.named) lines.push(`ASKED FOR: ${describeOption(a.named, a.drawn, c)}`);
   if (a.namedIsCurrent) lines.push(`ASKED FOR: ${a.currentName}, which this comic already draws with — nothing to change.`);
@@ -578,7 +598,9 @@ export function describeModelAdvice(a: ModelAdvice, c: CostFormatter): string {
   if (!a.options.length && !a.named) {
     lines.push(
       a.want === 'cheaper'
-        ? 'No other available model draws this comic for less.'
+        ? cur.unknown
+          ? 'No other available model can draw this comic.'
+          : 'No other available model draws this comic for less.'
         : a.want === 'better'
           ? `No available model ranks above ${a.currentName} on the public boards we hold.`
           : a.want === 'characters'
@@ -658,6 +680,8 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
         `The cheapest way that keeps your characters consistent is ${a.tier.label}: the same ${name} at ${a.tier.res}${stay.matches ? ', which matches your drawn pages' : ''}, ${c.approx(a.tier.perPageUsd)} a page instead of ${c.approx(a.tier.currentPerPageUsd)} at ${a.tier.currentRes}.${stay.reply}`
       );
       steps.push(tierStep(a.tier));
+    } else if (cur.unknown) {
+      out.push(`The studio no longer lists ${name}, so I can't price it or a cheaper setting for it.`);
     } else {
       out.push(`You're already on the cheapest setting for ${name} (${cur.res}${cur.perPageUsd !== null ? `, ${c.approx(cur.perPageUsd)} a page` : ''}).`);
     }
@@ -676,7 +700,7 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
   if (!pick) {
     out.push(
       a.want === 'characters'
-        ? `No available model holds more characters than ${name} (${cur.characters} per image), so it stays.`
+        ? `No available model holds more characters than ${name}${cur.unknown ? '' : ` (${cur.characters} per image)`}, so it stays.`
         : a.want === 'better'
           ? `No available model ranks above ${name} on the public leaderboards we hold, so it stays.`
           : `${name} is the only model available for this comic right now.`
@@ -923,7 +947,7 @@ export function guardModelReply(text: string, i: ReplyGuardInput): { text: strin
   let out = text.trim();
   const steps: NextStep[] = [];
   const cur = currentImageModel(i.doc);
-  const claims = out ? falseSwitchClaims(out, cur.spec.id) : [];
+  const claims = out ? falseSwitchClaims(out, cur.id) : [];
   if (claims.length) {
     const kept = sentencesOf(out).filter((s) => !claims.includes(s));
     out = [`Your comic stays on ${cur.name} — only you can change the image model, in the model picker, and switching can affect character consistency.`, ...kept].join(' ').trim();
@@ -973,6 +997,8 @@ export async function modelStatusLine(
   const health = opts.health ?? modelHealth();
   const c = opts.cost ?? costFormatterFor(ctx);
   const cur = currentImageModel(doc);
+  // A lock the registry no longer knows has no routes to read: the MODEL fact (lockUnusable) says so instead.
+  if (!cur.known) return '';
   const streak = upstreamStreak(doc, now);
   const outage = recentOutageCard(doc, now);
   const routes = reachableRoutes(cur.spec, ctx.keys);
@@ -1042,7 +1068,7 @@ export async function modelFactLines(
   try {
     const cur = currentImageModel(doc);
     // A drawn, current crowded page is only news again when the user asks to draw.
-    const crowd = crowdedPage(doc, cur.spec, { pending: (opts.drawIntent ?? 'none') === 'none' });
+    const crowd = cur.known ? crowdedPage(doc, cur.spec, { pending: (opts.drawIntent ?? 'none') === 'none' }) : null;
     if (crowd) {
       lines.push(
         `MODEL FIT: page ${crowd.n} has ${crowd.count} characters but ${cur.name} keeps up to ${cur.spec.refs.characters} on model per image. Before drawing it, say so and suggest a model that holds more (model_options, then the picker chip); never switch.`
@@ -1114,6 +1140,7 @@ function suggestModelTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool 
       if (args.tier !== undefined && args.tier !== null && args.tier !== '') {
         const tier = args.tier as QualityTier;
         if (!TIERS.includes(tier)) throw toolArgError('tier must be "draft", "standard" or "pro".');
+        if (!cur.known) throw toolArgError(`${cur.name} is no longer listed by the studio, so a tier change can't be checked or priced. Offer the picker (suggest_model with no tier).`);
         if (TIERS.indexOf(tier) >= TIERS.indexOf(doc.settings.quality)) {
           throw toolArgError(`${TIER_PRESETS[tier].label} doesn't cost less than ${TIER_PRESETS[doc.settings.quality].label}. Only the user raises quality (the quality chip).`);
         }
@@ -1128,7 +1155,7 @@ function suggestModelTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool 
       if (rawModel || !steps.length) {
         const spec = rawModel ? resolveModelName(rawModel) : undefined;
         if (rawModel && !spec) throw toolArgError(`No image model called "${clip(rawModel, 40)}". Available: ${knownNames()}.`);
-        const suggest = spec && spec.id !== cur.spec.id ? spec.id : undefined;
+        const suggest = spec && spec.id !== cur.id ? spec.id : undefined;
         const label = troubled({ streak: upstreamStreak(doc), outage: recentOutageCard(doc)?.card }) ? 'See other models' : 'See models';
         if (!turn.nextSteps.some((s) => s.client?.type === 'open_model_picker')) steps.push(pickerStep(label, suggest));
         said.push(
@@ -1146,7 +1173,7 @@ export const modelsGroupWanted = (ctx: StudioContext, turn: DirectorTurn, now = 
   if (MODEL_HINT_RE.test(turn.userText || '')) return true;
   const doc = ctx.session.doc;
   const cur = currentImageModel(doc);
-  return !!crowdedPage(doc, cur.spec, { pending: turn.drawIntent === 'none' }) || upstreamStreak(doc, now).count >= R5_FAILURES || !!recentOutageCard(doc, now) || !!lockUnusable(doc, ctx.caps ?? DEFAULT_CAPS);
+  return (cur.known && !!crowdedPage(doc, cur.spec, { pending: turn.drawIntent === 'none' })) || upstreamStreak(doc, now).count >= R5_FAILURES || !!recentOutageCard(doc, now) || !!lockUnusable(doc, ctx.caps ?? DEFAULT_CAPS);
 };
 
 /** Added to the system prompt when the group is active (models.md §3.8, verbatim rule + how to use the tools). */
@@ -1168,7 +1195,7 @@ export const modelsToolGroup: ToolGroup = {
     const cur = currentImageModel(doc);
     const drawn = drawnTargets(doc);
     return [
-      `Image model: ${cur.name}${cur.locked ? ', locked for this comic' : ' (locks at the first comic image)'}; holds ${cur.spec.refs.characters} characters per image${drawnCount(drawn) ? `; drawn with it: ${drawnWords(drawn)}` : ''}.`
+      `Image model: ${cur.name}${cur.locked ? ', locked for this comic' : ' (locks at the first comic image)'}; ${cur.known ? `holds ${cur.spec.refs.characters} characters per image` : 'no longer listed by the studio (price and characters unknown)'}${drawnCount(drawn) ? `; drawn with it: ${drawnWords(drawn)}` : ''}.`
     ];
   },
   activity: {

@@ -356,6 +356,38 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
   });
 });
 
+describe('a lock the registry no longer knows (models.md §3.9)', () => {
+  const RETIRED = 'nano-banana-0.9-retired';
+  const retired = (mutate?: (d: ComicDoc) => void) => lakeLocked((d) => ((d.imageModel = { modelId: RETIRED, lockedAt: 1, origin: 'migrated' }), mutate?.(d)));
+
+  it('is described as unknown — never with the stand-in tier model\'s price, characters, id or status', async () => {
+    setup(retired((d) => d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle')), 'use another model', { caps: BYOK_CAPS, keys: BYOK_KEYS });
+    const out = await call('model_options', { want: 'other' });
+    expect(out).toMatch(/^CURRENT: nano-banana-0\.9-retired — locked for this comic, but the studio no longer lists this model: its price per page, characters held and provider status are UNVERIFIED/);
+    expect(out).not.toMatch(/^CURRENT:[^\n]*holds 4 characters/);
+    // Nano Banana 2.1 (the Draft stand-in) is a real alternative now, with its own numbers and a redraw quote.
+    expect(out).toMatch(/OPTION \d: Nano Banana 2\.1\. ≈ \$0\.04 per page at 1K/);
+    expect(out).not.toContain('PAGE 3 has');
+    expect(modelsToolGroup.summaryLines!(ctx.session.doc, turn)[0]).toBe(
+      'Image model: nano-banana-0.9-retired, locked for this comic; no longer listed by the studio (price and characters unknown); drawn with it: 5 pages, 4 character sheets and the cover.'
+    );
+    // No status read for the stand-in: the MODEL fact says the lock can't be used.
+    const health = fakeModelHealth({ now: LAKE_NOW });
+    health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down');
+    const getModelHealth = vi.spyOn(health, 'getModelHealth');
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW })).toBe('');
+    expect(await modelFactLines(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW })).toEqual([
+      'MODEL: nano-banana-0.9-retired is no longer offered by the studio. Say so and offer the picker (model_options); never pick another model yourself.'
+    ]);
+    expect(getModelHealth).not.toHaveBeenCalled();
+    // A claimed switch to the stand-in is still a false claim; a tier chip can't be checked.
+    const guarded = guardModelReply("I've switched your comic to Nano Banana 2.1.", { doc: ctx.session.doc, outages: [], queued: 0, cost: costFormatter(DOLLAR_VIEW) });
+    expect(guarded.text).toBe('Your comic stays on nano-banana-0.9-retired — only you can change the image model, in the model picker, and switching can affect character consistency.');
+    expect(await call('suggest_model', { tier: 'draft' })).toMatch(/^Error: nano-banana-0\.9-retired is no longer listed by the studio/);
+    expect(await call('suggest_model', { model: 'Nano Banana 2.1' })).toContain('with Nano Banana 2.1 highlighted');
+  });
+});
+
 describe('suggest_model: chips, never a change', () => {
   it('opens the picker with the model highlighted; nothing is committed', async () => {
     setup(lakeLocked(), 'use pro', { caps: BYOK_CAPS, keys: BYOK_KEYS });
