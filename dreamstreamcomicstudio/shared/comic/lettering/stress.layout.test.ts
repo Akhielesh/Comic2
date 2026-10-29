@@ -156,7 +156,8 @@ const readingOrderBreaks = (doc: ComicDoc, page: Page, plans: readonly LetterPla
       if (prev && anchored && !s) {
         const tol = 0.02 * H;
         const sameRow = Math.abs(p.y - prev.y) < tol;
-        if (p.y < prev.y - tol || (sameRow && p.x < prev.x - 0.01)) out.push(`${line.id}: before ${prevLine.id}`);
+        const rtl = doc.format.readingDirection === 'rtl';
+        if (p.y < prev.y - tol || (sameRow && (rtl ? p.x > prev.x + 0.01 : p.x < prev.x - 0.01))) out.push(`${line.id}: before ${prevLine.id}`);
       }
     });
   });
@@ -197,6 +198,16 @@ describe('reading order on every drawn page of the QA fixtures (crowded pages in
       });
     }
   }
+
+  it('right-to-left comics read in order too (heist-12p, lake-1p, deep-40p mirrored)', () => {
+    for (const fixture of ['heist-12p', 'lake-1p', 'deep-40p'] as const) {
+      const doc = makeQaDoc(fixture, { rtl: true });
+      for (const page of drawnPages(doc)) {
+        const plans = planLettering(doc, page, letteringAspect(doc, page), estimateMeasure);
+        expect(readingOrderBreaks(doc, page, plans), `${fixture} rtl ${page.id}`).toEqual([]);
+      }
+    }
+  });
 
   it('the page that used to read its last line first now reads it in its own tier (stress pg_7, pg_19)', () => {
     // 2f8843f4+builder: pg_7_p5_l2 / pg_19_p5_l2 (panel 5, the last one) were drawn in panel 1 at (0.25, 0.30).
