@@ -218,11 +218,27 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   }, [page, drafts]);
   const base = useLetterPlans(doc, page, aspect, { placements: editable });
   const { H } = base;
-  // Drafts re-plan only the page being dragged (fits of the other lines hit the engine's memo).
-  const plans = useMemo(
-    () => (draftPage === page ? base.plans : planLettering(doc, draftPage, aspect, base.measure)),
-    [draftPage, page, base.plans, base.measure, doc, aspect]
-  );
+  // While a finger drags, only the dragged balloons are re-planned: they are pinned, so their plans depend
+  // on nothing else on the page (panel boxes stay, other lines are left out). Every other balloon stays
+  // where it is drawn — no live dodging under the finger — until the drop re-plans the whole page once.
+  // That keeps a drag O(dragged balloons) even on a dense page whose full plan runs the settle passes.
+  const plans = useMemo(() => {
+    if (draftPage === page || !drafts || !drafts.size) return base.plans;
+    const ids = new Set(drafts.keys());
+    const sub: Page = {
+      ...draftPage,
+      panels: draftPage.panels.map((panel) => ({ ...panel, lines: panel.lines.filter((l) => ids.has(l.id)) })),
+      balloons: draftPage.balloons.filter((b) => ids.has(b.lineId))
+    };
+    const moved = new Map(planLettering(doc, sub, aspect, base.measure).map((p) => [p.lineId, p]));
+    return base.plans.map((p) => {
+      const m = moved.get(p.lineId);
+      if (!m) return p;
+      const out: LetterPlan = { ...m, z: p.z };
+      if (p.linkTo) out.linkTo = p.linkTo;
+      return out;
+    });
+  }, [draftPage, page, drafts, base.plans, base.measure, doc, aspect]);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [lifted, setLifted] = useState<string | null>(null);
   const zoom = useZoom();

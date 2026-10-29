@@ -15,7 +15,7 @@ import { estimateMeasure, letteringAspect, planLettering } from '../../../shared
 import { resolveLetteringFont, fontCoversLanguage } from '../../../shared/comic/lettering/fonts';
 import { keepDrawnSizeOps, keptSizes, sameBalloons, tidyOps } from './styleOps';
 import { FontPicker, easyFontsFor, EASY_FONTS } from './FontPicker';
-import { balloonHitRect, handlePositions } from '../board/BalloonLayer';
+import { BalloonLayer, balloonHitRect, handlePositions } from '../board/BalloonLayer';
 import { inspectorSheetMaxHeight, MIN_SHEET_PX, PHONE_SHEET_OPEN_MIN_H, toolsSheetOpenAtStart } from '../board/PageEditor';
 
 const ASPECT = 2 / 3;
@@ -159,5 +159,34 @@ describe('phone lettering sheet height', () => {
     expect(inspectorSheetMaxHeight(76, 667)).toBe(667 - 76 - Math.round(667 * 0.45));
     // A short landscape window: the sheet keeps its minimum and scrolls.
     expect(inspectorSheetMaxHeight(120, 343)).toBe(MIN_SHEET_PX);
+  });
+});
+
+describe('a drag re-plans only the dragged balloon', () => {
+  it('an unpinned neighbour the dragged balloon passes over stays where it is drawn until the drop', () => {
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].balloons = d.pages[0].balloons.map((b) => ({ ...b, pinned: false }));
+    });
+    const page = doc.pages[0];
+    const onBalloonChange = vi.fn();
+    const { container } = render(
+      <div style={{ position: 'relative', width: 600, height: 900 }}>
+        <BalloonLayer doc={doc} page={page} pageWidth={600} pageHeight={900} editable onBalloonChange={onBalloonChange} />
+      </div>
+    );
+    const hit = (id: string) => container.querySelector<HTMLElement>(`[data-testid="balloon-hit"][data-line-id="${id}"]`)!;
+    const [a, b] = [...container.querySelectorAll<HTMLElement>('[data-testid="balloon-hit"]')].map((el) => el.getAttribute('data-line-id')!);
+    const pos = (id: string) => `${hit(id).style.left}|${hit(id).style.top}`;
+    const before = pos(b);
+    // Drag `a` right onto `b` (layer rect is 0×0 in jsdom: travel falls back to the 600×900 page).
+    const pa = { x: parseFloat(hit(a).style.left) * 6, y: parseFloat(hit(a).style.top) * 9 };
+    const pb = { x: parseFloat(hit(b).style.left) * 6, y: parseFloat(hit(b).style.top) * 9 };
+    fireEvent.pointerDown(hit(a), { clientX: pa.x, clientY: pa.y, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(window, { clientX: pb.x, clientY: pb.y });
+    // Mid-drag: `a` moved, `b` did not dodge.
+    expect(pos(b)).toBe(before);
+    expect(hit(a).style.left).not.toBe(`${pa.x / 6}%`);
+    fireEvent.pointerUp(window, { clientX: pb.x, clientY: pb.y });
+    expect(onBalloonChange).toHaveBeenCalledTimes(1);
   });
 });
