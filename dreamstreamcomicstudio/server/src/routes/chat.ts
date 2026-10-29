@@ -215,6 +215,14 @@ type PreparedChat = {
    * no paid agent meta-tools. Set only by freeModelsOnlyPlan().
    */
   freeModelsOnly?: boolean;
+  /**
+   * Free-only mode (the client's `X-Free-Only` header, on by default): the user asked for free
+   * models only, so the turn is offered no paid retry — not the provider-level `fallbackModel`
+   * and not the engine's own timeout / empty-answer retry (the provider request carries
+   * `freeOnly`). Set by prepareChat for OpenRouter turns; the budget re-plan (freeModelsOnly)
+   * stays separate because it also strips the paid web plugin and the paid agent meta-tools.
+   */
+  noPaidRetry?: boolean;
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -734,7 +742,26 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, temperature: chatTemperature, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments, userId: req.user?.id }
+    prepared: {
+      resolved,
+      messages,
+      model,
+      requestedModel,
+      reasoningLevel,
+      webSearch,
+      temperature: chatTemperature,
+      systemPrompt,
+      fallbackModels,
+      dreamstreamContextJson,
+      tools: [...builtinTools, ...metaTools, ...mcpTools],
+      clientContext,
+      customAgents,
+      attachments,
+      userId: req.user?.id,
+      // Free-only must mean no paid retry (services/freeOnlyMode.ts: "the server blocks rather than
+      // silently charging a paid fallback"). Only OpenRouter turns ever carry one.
+      ...(freeOnly && resolved.provider === 'openrouter' ? { noPaidRetry: true } : {})
+    }
   };
 };
 
@@ -781,12 +808,14 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
 
 /**
  * Every model a chat call may end up billed for (usage budget, P1-LIMITS): the OpenRouter
- * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which
- * runChatParams and the swarm always send on OpenRouter — even after a free-only chain).
- * reserveForOperation prices the hold at the most expensive of them, so a `:free` primary with a
- * paid fallback can never slip past an exhausted budget at $0. Exported for sibling routes that
- * reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid retry, so none is
- * priced.
+ * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which the
+ * swarm and /api/recipes always send on OpenRouter, and runChatParams sends unless the turn is
+ * free-only). reserveForOperation prices the hold at the most expensive of them, so a `:free`
+ * primary with a paid fallback can never slip past an exhausted budget at $0. Exported for
+ * sibling routes that reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid
+ * retry, so none is priced. A free-only (X-Free-Only) turn keeps the paid net priced even though
+ * runChatParams no longer sends it: the same prepared chat feeds the swarm and the recipe routes,
+ * whose engines still carry it, and an over-held free turn is released at settle — never charged.
  */
 export const chatPricedModels = (p: {
   resolved: { provider: string };
@@ -825,10 +854,11 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,
-  // The provider-level paid retry is never sent on a free-models-only plan (nothing reserved for it).
-  fallbackModel: p.resolved.provider === 'openrouter' && !p.freeModelsOnly ? TEXT_FALLBACK : undefined,
+  // The provider-level paid retry is never sent on a free-models-only plan (nothing reserved for
+  // it) nor on a free-only turn (the user asked for free models only).
+  fallbackModel: p.resolved.provider === 'openrouter' && !p.freeModelsOnly && !p.noPaidRetry ? TEXT_FALLBACK : undefined,
   // …and the engine's own timeout / empty-answer retry never switches to a paid model either.
-  noPaidRetry: Boolean(p.freeModelsOnly),
+  noPaidRetry: Boolean(p.freeModelsOnly || p.noPaidRetry),
   fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
   // Governed per-turn cap: no further tool round once the metered spend exceeds the hold.
