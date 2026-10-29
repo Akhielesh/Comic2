@@ -58,6 +58,12 @@ const MEMORY_MARKER = /\n?⟦through:([A-Za-z0-9_-]+)⟧\s*$/;
  * moment" and no Try-again chip that would fail identically.
  */
 const NOT_TRANSIENT_FAILURES: ReadonlySet<string> = new Set(['BILLING_DENIED', 'BUDGET_EXCEEDED', 'LIMIT', 'COOLDOWN']);
+/**
+ * The end of a streamed chunk that may still be growing into a dollar amount ("$0." + "12",
+ * "≈ " + "$5"): held back until the next chunk or the end of the round completes it, so a
+ * governed user's live draft is governed the same way as the committed message.
+ */
+const GROWING_AMOUNT_RE = /(?:[≈~]\s?)?<?\$[\d.,]*$|[≈~<]\s?$/;
 
 // ── System prompt (§6.8, director.md §3.11) ──────────────────────────────────
 
@@ -521,11 +527,34 @@ async function directorTurnBody(
 
   const spoken: string[] = [];
   let streamedChars = 0;
+  const emitDelta = (text: string) => session.emit({ type: 'delta', msgId, text });
+  // Governed users never see a dollar amount, not even in the live draft (the committed message
+  // goes through governDollars below): their stream is governed chunk by chunk, holding back a
+  // tail that may still be growing into an amount. A dollar view streams the model's text as is.
+  let held = '';
+  const flushHeld = (final: boolean) => {
+    if (!held) return;
+    let out = held;
+    held = '';
+    if (!final) {
+      const growing = GROWING_AMOUNT_RE.exec(out);
+      if (growing) {
+        held = out.slice(growing.index);
+        out = out.slice(0, growing.index);
+      }
+    }
+    if (out && !ctx.signal.aborted) emitDelta(governDollars(out, cost.view));
+  };
   const onDelta = (t: string) => {
     if (!t || ctx.signal.aborted) return;
-    if (streamedChars === 0 && spoken.length) session.emit({ type: 'delta', msgId, text: '\n\n' });
+    if (streamedChars === 0 && spoken.length) emitDelta('\n\n');
     streamedChars += t.length;
-    session.emit({ type: 'delta', msgId, text: t });
+    if (!cost.governed) {
+      emitDelta(t);
+      return;
+    }
+    held += t;
+    flushHeld(false);
   };
 
   let failure: StudioError | null = null;
@@ -549,6 +578,7 @@ async function directorTurnBody(
         onDelta,
         signal: ctx.signal
       });
+      flushHeld(true);
       const said = (result.text || '').trim();
       if (said) spoken.push(said);
       const calls = allowTools ? result.toolCalls || [] : [];
@@ -607,6 +637,7 @@ async function directorTurnBody(
       logger.warn('comic_director_turn_failed', { projectId: ctx.projectId, code: error.code, message: (err as Error)?.message });
     }
   } finally {
+    flushHeld(true);
     unwatch();
   }
 

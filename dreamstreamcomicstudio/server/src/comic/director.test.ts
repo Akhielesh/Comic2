@@ -741,6 +741,36 @@ describe('P2-SERVER director wiring', () => {
     expect(reply.text).toMatch(/^A new page costs about ≈?<?[\d.]+% of your usage\.$/);
   });
 
+  it('…nor in the live stream: the deltas are governed too, even when an amount is split across chunks', async () => {
+    const session = newSession(plannedDoc());
+    const caps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } };
+    const llm = scriptedLlm({
+      director: [
+        (req) => {
+          // The provider streams "$0." and "12" in separate chunks (the fake then re-emits the full text).
+          req.onDelta?.('The cover would be about $0.');
+          req.onDelta?.('12 — want it?');
+          return { text: 'The cover would be about $0.12 — want it?' };
+        }
+      ]
+    });
+    const ctx = testContext(session, { llm, caps });
+    await runDirectorTurn(ctx, { text: 'how much is the cover?', attachments: [] });
+    const deltas = ctx.events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text);
+    // Without the fix the stream carried the raw "$0.12" until the final message replaced the draft.
+    expect(deltas.join('')).not.toMatch(/\$/);
+    expect(deltas.join('')).toContain('% of your usage — want it?');
+    expect(deltas[0]).toBe('The cover would be about '); // the growing "$0." was held back, not shown
+    const final = session.doc.conversation.at(-1)!.text;
+    expect(final).not.toMatch(/\$/);
+    expect(final).toMatch(/^The cover would be about ≈?<?[\d.]+% of your usage — want it\?$/);
+    // An admin's stream passes through as is, chunk by chunk.
+    const admin = newSession(plannedDoc());
+    const actx = testContext(admin, { llm: scriptedLlm({ director: [{ text: 'About $0.12.' }] }), caps: { ...DEFAULT_CAPS, admin: true } });
+    await runDirectorTurn(actx, { text: 'how much?', attachments: [] });
+    expect(actx.events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text)).toEqual(['About $0.12.']);
+  });
+
   it('…nor on the cards: an ask_user question with prices in its options reads in usage', async () => {
     const session = newSession(plannedDoc());
     const llm = scriptedLlm({
