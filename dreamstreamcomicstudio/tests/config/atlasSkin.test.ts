@@ -24,7 +24,7 @@ import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, tokenBlocks }
 const ROOT = APP_ROOT;
 const css = indexCss;
 const rules = parseRules(css);
-const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(rules);
+const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
 const isReader = (name: string) => name.startsWith('--ds-reader-');
 /** The semantic tokens Phase D0 added (brief item 1); everything else in :root pre-dates the skin. */
 const NEW_TOKENS = [
@@ -35,6 +35,17 @@ const NEW_TOKENS = [
   '--ds-shadow-soft', '--ds-shadow-panel', '--ds-shadow-lift',
   '--ds-motion-fast', '--ds-motion-medium', '--ds-motion-slow', '--ds-motion-panel', '--ds-motion-modal', '--ds-motion-theme',
   '--ds-ease', '--ds-ease-spring', '--ds-tooltip-delay', '--ds-surface-blur'
+];
+/**
+ * The semantic tokens the wave 5 port added (Atlas 07935fcf → acd9fdfc, docs/design/atlas-skin.md
+ * "Wave 5 port"): field edges, the focus colour, overlays, scrims, the dark danger mark, skeletons,
+ * the segmented pill and the enter / exit motion vocabulary.
+ */
+const WAVE5_TOKENS = [
+  '--ds-control-border', '--ds-control-border-hover', '--ds-focus',
+  '--ds-overlay-edge', '--ds-shadow-overlay', '--ds-scrim', '--ds-danger-mark',
+  '--ds-skeleton', '--ds-skeleton-glint', '--ds-segment-pill', '--ds-shadow-segment',
+  '--ds-ease-enter', '--ds-motion-enter', '--ds-motion-exit'
 ];
 // The WCAG helper lives in cssTokens.ts (shared with tokenContrast.test.ts); re-exported for old importers.
 export { contrastRatio };
@@ -90,7 +101,8 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
       '--ds-sidebar': '#0d0d0d',
       '--ds-surface': '#111111',
       '--ds-surface-soft': '#1a1a1a',
-      '--ds-surface-strong': '#161616',
+      '--ds-surface-strong': '#1a1a1a', // wave 5: overlays sit a step above cards (#111111)
+      '--ds-raised': '#1a1a1a',
       '--ds-ink': '#fafafa',
       '--ds-muted': '#a3a3a3',
       '--ds-hairline': 'rgba(255,255,255,0.12)',
@@ -144,8 +156,9 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
 });
 
 describe('Atlas skin — (b) the defaults reproduce today’s look outside the skin (contrast fixes aside)', () => {
-  it('defines every new semantic token in :root (brief item 1)', () => {
+  it('defines every new semantic token in :root (brief item 1, and the wave 5 port)', () => {
     expect(NEW_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
+    expect(WAVE5_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
   });
 
   it('new tokens default to the classes the constants used to spell out', () => {
@@ -173,7 +186,7 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     for (const k of DARK_TOKENS.keys()) expect(ROOT_TOKENS.get(k), `${k} exists in :root`).toBeDefined();
     // (--ds-accent is pre-existing and theme-invariant by design; the new tokens must not add noise.)
     for (const [k, v] of DARK_TOKENS) {
-      if (!NEW_TOKENS.includes(k)) continue;
+      if (!NEW_TOKENS.includes(k) && !WAVE5_TOKENS.includes(k)) continue;
       expect(v, `${k} differs in .dark`).not.toBe(ROOT_TOKENS.get(k));
     }
   });
@@ -221,6 +234,96 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     for (const { name, initialValue } of DS_COLOR_TOKENS) {
       expect(ROOT_TOKENS.get(name), name).toBe(initialValue);
     }
+  });
+});
+
+describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
+  it('dark overlays sit a step above cards: popover and raised surfaces are #1a1a1a (cards stay #111111)', () => {
+    expect(ATLAS_DARK.get('--ds-surface-strong')).toBe('#1a1a1a');
+    expect(ATLAS_DARK.get('--ds-raised')).toBe('#1a1a1a');
+    expect(ATLAS_DARK.get('--ds-surface')).toBe('#111111');
+  });
+
+  it('fields get their own edge (3:1 against the page): ink at 45 %, 60 % on hover', () => {
+    expect(ATLAS_LIGHT.get('--ds-control-border')).toBe('color-mix(in srgb, var(--ds-ink) 45%, transparent)');
+    expect(ATLAS_LIGHT.get('--ds-control-border-hover')).toBe('color-mix(in srgb, var(--ds-ink) 60%, transparent)');
+    // Written against the ink, so the dark skin needs no second copy.
+    expect(ATLAS_DARK.has('--ds-control-border')).toBe(false);
+  });
+
+  it('keyboard focus is the solid ink (the focus colour), the ring token stays Atlas --ring', () => {
+    expect(ATLAS_LIGHT.get('--ds-focus')).toBe('var(--ds-ink)');
+    expect(ATLAS_LIGHT.get('--ds-ring')).toBe('oklch(0.55 0 0)');
+  });
+
+  it('overlays: a lighter edge and a deeper shadow with a top highlight in dark; the scrim dims without blur', () => {
+    expect(ATLAS_LIGHT.get('--ds-overlay-edge')).toBe('rgba(0,0,0,0.08)');
+    expect(ATLAS_LIGHT.get('--ds-shadow-overlay')).toBe('0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)');
+    expect(ATLAS_DARK.get('--ds-overlay-edge')).toBe('rgba(255,255,255,0.14)');
+    expect(ATLAS_DARK.get('--ds-shadow-overlay')).toBe('inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 18px 40px -12px rgb(0 0 0 / 0.75)');
+    expect(ATLAS_LIGHT.get('--ds-scrim')).toBe('rgba(0,0,0,0.40)');
+    expect(ATLAS_DARK.get('--ds-scrim')).toBe('rgba(0,0,0,0.60)');
+  });
+
+  it('the danger mark (dots, bars, status edges) is the brighter Atlas red in dark, the danger hue in light', () => {
+    expect(ATLAS_LIGHT.get('--ds-danger-mark')).toBe('var(--ds-danger)');
+    expect(ATLAS_DARK.get('--ds-danger-mark')).toBe('oklch(0.637 0.237 25.331)');
+  });
+
+  it('skeletons: the muted block with a page-colour glint in light, lifted with ink in dark', () => {
+    expect(ATLAS_LIGHT.get('--ds-skeleton')).toBe('#f4f4f4');
+    expect(ATLAS_LIGHT.get('--ds-skeleton-glint')).toBe('color-mix(in srgb, var(--ds-canvas) 55%, transparent)');
+    expect(ATLAS_DARK.get('--ds-skeleton')).toBe('color-mix(in srgb, var(--ds-ink) 9%, transparent)');
+    expect(ATLAS_DARK.get('--ds-skeleton-glint')).toBe('color-mix(in srgb, var(--ds-ink) 7%, transparent)');
+  });
+
+  it('the segmented pill: paper with a hairline ring in light, the accent step with an inset catch in dark', () => {
+    expect(ATLAS_LIGHT.get('--ds-segment-pill')).toBe('#ffffff');
+    expect(ATLAS_LIGHT.get('--ds-shadow-segment')).toBe('0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.06)');
+    expect(ATLAS_DARK.get('--ds-segment-pill')).toBe('#1f1f1f');
+    expect(ATLAS_DARK.get('--ds-shadow-segment')).toBe('inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.08)');
+  });
+
+  it('the enter / exit vocabulary: long-tail ease-out to arrive, quicker exits', () => {
+    expect(ATLAS_LIGHT.get('--ds-ease-enter')).toBe('cubic-bezier(0.16, 1, 0.3, 1)');
+    expect(ATLAS_LIGHT.get('--ds-motion-enter')).toBe('280ms');
+    expect(ATLAS_LIGHT.get('--ds-motion-exit')).toBe('160ms');
+  });
+
+  it('outside the skin the wave 5 tokens default to what the page paints today', () => {
+    expect(ROOT_TOKENS.get('--ds-control-border')).toBe('var(--ds-hairline)');
+    expect(ROOT_TOKENS.get('--ds-control-border-hover')).toBe('var(--ds-hairline)');
+    expect(ROOT_TOKENS.get('--ds-focus')).toBe('var(--ds-ring)');
+    expect(ROOT_TOKENS.get('--ds-overlay-edge')).toBe('var(--ds-hairline)');
+    expect(ROOT_TOKENS.get('--ds-shadow-overlay')).toBe('var(--ds-shadow-soft)');
+    expect(ROOT_TOKENS.get('--ds-danger-mark')).toBe('var(--ds-danger)');
+    // .studio-shimmer's own slate block and glint, and the board Segmented's raised pill.
+    expect(ROOT_TOKENS.get('--ds-skeleton')).toBe('rgba(148,163,184,0.12)');
+    expect(ROOT_TOKENS.get('--ds-skeleton-glint')).toBe('rgba(148,163,184,0.22)');
+    expect(ROOT_TOKENS.get('--ds-segment-pill')).toBe('var(--ds-raised)');
+    expect(ROOT_TOKENS.get('--ds-shadow-segment')).toBe('0 1px 2px rgba(0,0,0,0.08)');
+    expect(ROOT_TOKENS.get('--ds-scrim')).toBe('rgba(0,0,0,0.40)');
+    expect(DARK_TOKENS.get('--ds-scrim')).toBe('rgba(0,0,0,0.60)');
+    // Nothing outside the skin read the old ones: the defaults equal today's surfaces.
+    expect(DARK_TOKENS.get('--ds-surface-strong')).toBe('rgba(48,48,46,0.97)');
+  });
+
+  it('OS "increase contrast" applies the high-contrast tokens under the skin (light and dark)', () => {
+    expect(Object.fromEntries(ATLAS_LIGHT_MORE)).toEqual({
+      '--ds-hairline': 'rgba(0,0,0,0.32)',
+      '--ds-hairline-soft': 'color-mix(in srgb, var(--ds-hairline) 60%, transparent)', // follows the dark one too
+      '--ds-muted': '#404040',
+      '--ds-ring': '#000000',
+      '--ds-control-border': 'color-mix(in srgb, var(--ds-ink) 70%, transparent)',
+      '--ds-control-border-hover': 'var(--ds-ink)'
+    });
+    expect(Object.fromEntries(ATLAS_DARK_MORE)).toEqual({
+      '--ds-hairline': 'oklch(0.52 0 0)',
+      '--ds-muted': '#d4d4d4',
+      '--ds-ring': '#ffffff'
+    });
+    // Only under the skin: no :root or .dark block in the media query.
+    expect(rules.some((r) => r.parents.includes('@media (prefers-contrast: more)') && /^(:root|\.dark)$/.test(r.selector))).toBe(false);
   });
 });
 

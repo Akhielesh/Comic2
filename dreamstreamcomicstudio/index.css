@@ -472,6 +472,22 @@
   --ds-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
   --ds-tooltip-delay: 300ms;
   --ds-surface-blur: 12px;                   /* = backdrop-blur-md (GLASS) */
+  /* Wave 5 port (Atlas acd9fdfc, docs/design/atlas-skin.md "Wave 5 port"). Nothing outside a skin reads
+     these yet except through the new studioDesign recipes; the defaults are what the page paints today. */
+  --ds-control-border: var(--ds-hairline);       /* a field's edge (FIELD); the skin makes it 3:1 */
+  --ds-control-border-hover: var(--ds-hairline);
+  --ds-focus: var(--ds-ring);                    /* keyboard focus colour (FOCUS_RING, FIELD) */
+  --ds-overlay-edge: var(--ds-hairline);         /* menus, popovers, dialogs, sheets, toasts (OVERLAY) */
+  --ds-shadow-overlay: var(--ds-shadow-soft);
+  --ds-scrim: rgba(0,0,0,0.40);                  /* the dim behind a modal (SCRIM), no blur */
+  --ds-danger-mark: var(--ds-danger);            /* danger as a mark: dots, bars, status edges */
+  --ds-skeleton: rgba(148,163,184,0.12);         /* = .studio-shimmer's own block and glint */
+  --ds-skeleton-glint: rgba(148,163,184,0.22);
+  --ds-segment-pill: var(--ds-raised);           /* = the board Segmented's raised pill */
+  --ds-shadow-segment: 0 1px 2px rgba(0,0,0,0.08);
+  --ds-ease-enter: cubic-bezier(0.16, 1, 0.3, 1); /* long-tail ease-out for entrances */
+  --ds-motion-enter: 280ms;                      /* fades, scale-ins, slide-ins */
+  --ds-motion-exit: 160ms;                       /* anything leaving (quicker than it arrived) */
 }
 .dark {
   --ds-canvas: #262624;
@@ -503,6 +519,7 @@
   --ds-info-text: #93c5fd;
   --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
   --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
+  --ds-scrim: rgba(0,0,0,0.60);
 }
 .dark { color-scheme: dark; }
 
@@ -817,6 +834,24 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1); /* --motion-spring */
   --ds-tooltip-delay: 300ms;
   --ds-surface-blur: 18px;              /* the sticky header's blur (its only frosted glass) */
+  /* Wave 5 (acd9fdfc). Fields: an edge that clears 3:1 against the page (--control-border; the
+     hairline is for cards and dividers). Focus: the solid ink (Atlas draws keyboard focus on every
+     primitive as a 2 px foreground outline; --ds-ring stays its --ring for inset item rings).
+     Overlays: Atlas shadow-lg and border/80, the dark step below. Scrims dim without a blur. */
+  --ds-control-border: color-mix(in srgb, var(--ds-ink) 45%, transparent);
+  --ds-control-border-hover: color-mix(in srgb, var(--ds-ink) 60%, transparent);
+  --ds-focus: var(--ds-ink);
+  --ds-overlay-edge: rgba(0,0,0,0.08);
+  --ds-shadow-overlay: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --ds-scrim: rgba(0,0,0,0.40);
+  --ds-danger-mark: var(--ds-danger);
+  --ds-skeleton: #f4f4f4;                                              /* --muted */
+  --ds-skeleton-glint: color-mix(in srgb, var(--ds-canvas) 55%, transparent);
+  --ds-segment-pill: #ffffff;                                          /* PanelTabs pill: bg-background */
+  --ds-shadow-segment: 0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.06);
+  --ds-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);                      /* --motion-ease-enter */
+  --ds-motion-enter: 280ms;                                            /* --motion-enter-quick */
+  --ds-motion-exit: 160ms;                                             /* --motion-exit */
   /* Chrome type scale. Atlas's body is 14 px (--text-sm) and its large step 16 px; the 11 and
      13 px steps have no Atlas equivalent and stay (Atlas uses 11 px for its own micro labels). */
   --ds-text-xs: 0.6875rem;
@@ -832,8 +867,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-sidebar: #0d0d0d;
   --ds-surface: #111111;
   --ds-surface-soft: #1a1a1a;
-  --ds-surface-strong: #161616;
-  --ds-raised: #141414;
+  --ds-surface-strong: #1a1a1a;         /* wave 5: overlays sit a step above cards (#111111) */
+  --ds-raised: #1a1a1a;
   --ds-ink: #fafafa;
   --ds-muted: #a3a3a3;
   --ds-hairline: rgba(255,255,255,0.12);
@@ -861,6 +896,39 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.4);
   --ds-shadow-panel: 0 16px 36px -16px rgb(0 0 0 / 0.7);
   --ds-shadow-lift: 0 22px 44px -18px rgb(0 0 0 / 0.8);
+  /* Wave 5: a 10 %-black shadow vanishes on black, so overlays get a lighter edge, a 1 px light catch
+     along the top and a deeper shadow (Atlas dark --shadow-lg); the danger MARK is the brighter red
+     (dots and edges; the deep red stays for fills); skeletons lift with ink; the segmented pill is the
+     accent step. */
+  --ds-overlay-edge: rgba(255,255,255,0.14);
+  --ds-shadow-overlay: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 18px 40px -12px rgb(0 0 0 / 0.75);
+  --ds-scrim: rgba(0,0,0,0.60);
+  --ds-danger-mark: oklch(0.637 0.237 25.331);                         /* --destructive-foreground */
+  --ds-skeleton: color-mix(in srgb, var(--ds-ink) 9%, transparent);
+  --ds-skeleton-glint: color-mix(in srgb, var(--ds-ink) 7%, transparent);
+  --ds-segment-pill: #1f1f1f;                                          /* bg-accent */
+  --ds-shadow-segment: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+/* ---- OS "increase contrast" (Atlas wave 5: prefers-contrast: more applies its high-contrast
+   tokens): hairlines become real edges, secondary text darkens, field edges and focus go to full
+   ink. Only under the skin; Atlas's own Settings toggle (.atlas-high-contrast) has no Comic Studio
+   counterpart. ---- */
+@media (prefers-contrast: more) {
+  [data-ds-skin="atlas"] {
+    --ds-hairline: rgba(0,0,0,0.32);
+    --ds-hairline-soft: color-mix(in srgb, var(--ds-hairline) 60%, transparent);
+    --ds-muted: #404040;
+    --ds-ring: #000000;
+    --ds-control-border: color-mix(in srgb, var(--ds-ink) 70%, transparent);
+    --ds-control-border-hover: var(--ds-ink);
+  }
+  .dark[data-ds-skin="atlas"],
+  .dark [data-ds-skin="atlas"] {
+    --ds-hairline: oklch(0.52 0 0);
+    --ds-muted: #d4d4d4;
+    --ds-ring: #ffffff;
+  }
 }
 
 /* ---- Theme cross-fade (Atlas's mechanism) ----

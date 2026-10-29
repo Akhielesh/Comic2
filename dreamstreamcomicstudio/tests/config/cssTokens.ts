@@ -84,18 +84,32 @@ export const dsOnly = (m: Map<string, string>) => new Map([...m].filter(([k]) =>
 export const ATLAS_LIGHT_SELECTOR = '[data-ds-skin="atlas"]';
 export const ATLAS_DARK_SELECTOR = '.dark[data-ds-skin="atlas"], .dark [data-ds-skin="atlas"]';
 
+/** The OS "increase contrast" setting: the skin's high-contrast token overrides live under this at-rule. */
+export const MORE_CONTRAST_MEDIA = '@media (prefers-contrast: more)';
+
 export interface TokenBlocks {
   ROOT_TOKENS: Map<string, string>;
   DARK_TOKENS: Map<string, string>;
   ATLAS_LIGHT: Map<string, string>;
   ATLAS_DARK: Map<string, string>;
+  /** The skin's `@media (prefers-contrast: more)` overrides (Atlas wave 5), light and dark. */
+  ATLAS_LIGHT_MORE: Map<string, string>;
+  ATLAS_DARK_MORE: Map<string, string>;
 }
+/**
+ * The token blocks. The four base blocks are top-level rules only: a block nested in an at-rule
+ * (the high-contrast media query) is a conditional override, read separately.
+ */
 export function tokenBlocks(rules: Rule[]): TokenBlocks {
+  const top = rules.filter((r) => r.parents.length === 0);
+  const more = rules.filter((r) => r.parents.length === 1 && r.parents[0] === MORE_CONTRAST_MEDIA);
   return {
-    ROOT_TOKENS: dsOnly(tokensOf(rules, (s) => s === ':root')),
-    DARK_TOKENS: dsOnly(tokensOf(rules, (s) => s === '.dark')),
-    ATLAS_LIGHT: dsOnly(tokensOf(rules, (s) => s === ATLAS_LIGHT_SELECTOR)),
-    ATLAS_DARK: dsOnly(tokensOf(rules, (s) => s === ATLAS_DARK_SELECTOR))
+    ROOT_TOKENS: dsOnly(tokensOf(top, (s) => s === ':root')),
+    DARK_TOKENS: dsOnly(tokensOf(top, (s) => s === '.dark')),
+    ATLAS_LIGHT: dsOnly(tokensOf(top, (s) => s === ATLAS_LIGHT_SELECTOR)),
+    ATLAS_DARK: dsOnly(tokensOf(top, (s) => s === ATLAS_DARK_SELECTOR)),
+    ATLAS_LIGHT_MORE: dsOnly(tokensOf(more, (s) => s === ATLAS_LIGHT_SELECTOR)),
+    ATLAS_DARK_MORE: dsOnly(tokensOf(more, (s) => s === ATLAS_DARK_SELECTOR))
   };
 }
 

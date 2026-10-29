@@ -47,17 +47,22 @@ import {
 } from './cssTokens';
 
 const rules = parseRules(css);
-const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(rules);
+const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
 
 /**
  * The cascade an element sees, highest priority first. Atlas dark: the `.dark[data-ds-skin]` block
  * (0,2,0) beats the skin's light block, which comes after `.dark` in the file at equal specificity.
+ * The two "more contrast" contexts are the skin under the OS "increase contrast" setting (Atlas wave
+ * 5): the media query's blocks win over their base blocks of the same specificity (they come later),
+ * and the dark base block (0,2,0) still beats the light high-contrast block (0,1,0).
  */
 const CONTEXTS = {
   'default light': [ROOT_TOKENS],
   'default dark': [DARK_TOKENS, ROOT_TOKENS],
   'atlas light': [ATLAS_LIGHT, ROOT_TOKENS],
-  'atlas dark': [ATLAS_DARK, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS]
+  'atlas dark': [ATLAS_DARK, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS],
+  'atlas light more contrast': [ATLAS_LIGHT_MORE, ATLAS_LIGHT, ROOT_TOKENS],
+  'atlas dark more contrast': [ATLAS_DARK_MORE, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS]
 } as const;
 type ContextName = keyof typeof CONTEXTS;
 const isAtlas = (c: ContextName) => c.startsWith('atlas');
@@ -155,7 +160,7 @@ function pairs(): Pair[] {
   for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
     for (const fg of ['--ds-ink', '--ds-muted']) {
       for (const [bg, c] of surfaces(ctx)) {
-        if (isAtlas(ctx) && ATLAS_BASE_PAIRS_ELSEWHERE.has(bg)) continue;
+        if (isAtlas(ctx) && !ctx.endsWith('more contrast') && ATLAS_BASE_PAIRS_ELSEWHERE.has(bg)) continue;
         out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), c), min: 4.5 });
       }
     }
@@ -696,11 +701,47 @@ describe('token contrast — non-text: the focus ring and accent state borders r
 
   it('the focus ring (--ds-ring) is ≥ 3:1 on every backdrop in all four contexts', () => {
     const ring = measureNonText('--ds-ring');
-    expect(ring.length).toBe(4 * NON_TEXT_BACKDROPS.length);
+    expect(ring.length).toBe(Object.keys(CONTEXTS).length * NON_TEXT_BACKDROPS.length);
     expect(ring.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);
     // The old translucent rings really failed (45 % / 50 % terracotta: 1.6 and 2.2:1).
     expect(ratio(over(resolveColor('rgba(217,119,87,0.45)'), token('--ds-canvas', 'default light')), token('--ds-canvas', 'default light'))).toBeLessThan(3);
     expect(ratio(over(resolveColor('rgba(217,119,87,0.50)'), token('--ds-canvas', 'default dark')), token('--ds-canvas', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('the keyboard focus colour (--ds-focus) is ≥ 3:1 on every backdrop in every context (the ink under the skin)', () => {
+    const focus = measureNonText('--ds-focus');
+    expect(focus.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+    for (const ctx of ['atlas light', 'atlas dark'] as const) expect(token('--ds-focus', ctx), ctx).toEqual(token('--ds-ink', ctx));
+  });
+
+  /**
+   * Atlas wave 5: "a field's edge has to clear 3:1 against the page" (--control-border; --border is a
+   * hairline for cards and dividers). Under the skin the field edge and its hover clear 3:1 on every
+   * backdrop, in both themes and under "increase contrast". Outside the skin the token defaults to
+   * today's hairline, which nothing reads yet (FIELD in studioDesign is new).
+   */
+  it('field edges (--ds-control-border, -hover) are ≥ 3:1 on every backdrop under the skin', () => {
+    const atlas = (Object.keys(CONTEXTS) as ContextName[]).filter(isAtlas);
+    expect(atlas.length).toBe(4);
+    for (const fg of ['--ds-control-border', '--ds-control-border-hover']) {
+      const under = measureNonText(fg).filter((p) => atlas.some((c) => p.name.startsWith(`${c}:`)) && p.ratio < 3);
+      expect(under.map((p) => `${p.name} = ${p.ratio.toFixed(2)}`), fg).toEqual([]);
+    }
+    // The card hairline really is below 3:1 — that is why fields get their own edge.
+    expect(ratio(over(token('--ds-hairline', 'atlas light'), token('--ds-canvas', 'atlas light')), token('--ds-canvas', 'atlas light'))).toBeLessThan(3);
+  });
+
+  it('the danger mark (status dots, bars, toast edges) is ≥ 3:1 on the skin pages; in dark it is the brighter red', () => {
+    const atlas = (Object.keys(CONTEXTS) as ContextName[]).filter(isAtlas);
+    for (const ctx of atlas) {
+      const s = surfaces(ctx);
+      for (const bg of ['canvas', 'raised', 'surface/canvas', 'surface-strong/canvas']) {
+        expect(ratio(token('--ds-danger-mark', ctx), s.get(bg)!), `${ctx} on ${bg}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+    // The deep dark danger (destructive fills) is under 3:1 as a mark on the dark page.
+    expect(ratio(token('--ds-danger', 'atlas dark'), token('--ds-canvas', 'atlas dark'))).toBeLessThan(3);
+    expect(luminance(token('--ds-danger-mark', 'atlas dark'))).toBeGreaterThan(luminance(token('--ds-danger', 'atlas dark')));
   });
 
   it('a state border in the readable accent is ≥ 3:1 everywhere', () => {
