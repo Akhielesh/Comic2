@@ -26,6 +26,7 @@ import { logger } from '../../lib/logger.js';
 import { costFormatterFor, type CostFormatter } from '../costText.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup, type ToolGroupId } from '../extensions.js';
 import { imageRouteFor, spendIsByok } from '../jobs.js';
+import { planPageReferences } from '../prompts.js';
 import { createPriceBook, modelCatalog, type QuoteBasis, type ServerPriceBook } from '../models/index.js';
 import { alternateRouteFor, isUpstreamFailureCode, modelHealth, primaryRouteFor, type ModelHealthPort } from '../models/health.js';
 import { joinList, retryNextSteps, sentencesOf } from '../replies.js';
@@ -352,6 +353,31 @@ const byokFor = (spec: ImageModelSpec, keys: StudioKeys): boolean => {
 
 const pageRes = (doc: ComicDoc, spec: ImageModelSpec): Resolution => (spec.resolutions.length ? redrawResolution(doc, spec.id, 'page') : '1K');
 
+/**
+ * Reference images one page job sends on `spec` — exactly what prompts.planPageReferences attaches (cast sheets,
+ * places, the style anchor, the previous page, within the model's caps) — for the busiest page among `ids`, or
+ * among all pages when `ids` is empty. Models that bill per reference (§2.3 step 3) are quoted with it.
+ */
+const pageRefs = (doc: ComicDoc, spec: ImageModelSpec, ids: ReadonlySet<string>): number => {
+  const pages = [...doc.pages].sort((a, b) => a.n - b.n);
+  let most = 0;
+  pages.forEach((p, i) => {
+    if (ids.size && !ids.has(p.id)) return;
+    try {
+      most = Math.max(most, planPageReferences(doc, p, spec, pages[i - 1]).length);
+    } catch {
+      /* a page the planner can't read adds no references */
+    }
+  });
+  return Math.min(most, Math.max(0, spec.refs.total));
+};
+
+/** The pages a new drawing would draw (else every page) and the drawn pages a redraw would redo. */
+const refScopes = (doc: ComicDoc): { pending: Set<string>; drawn: Set<string> } => ({
+  pending: new Set(doc.pages.filter((p) => pendingPage(doc, p)).map((p) => p.id)),
+  drawn: new Set(drawnTargets(doc).pages)
+});
+
 const rankFacts = (row?: ModelCatalogRow): { text: string | null; editRank?: number } => {
   const ranked = (row?.quality || []).filter((q) => typeof q.rank === 'number');
   const lm = ranked.find((q) => q.board === 'lmarena_edit');
@@ -376,18 +402,20 @@ function optionFacts(
 ): ModelOptionFacts {
   const byok = byokFor(spec, i.keys);
   const res = pageRes(i.doc, spec);
+  const scopes = refScopes(i.doc);
   let perPageUsd: number | null = null;
   let basis: QuoteBasis | undefined;
   try {
-    const q = i.prices.jobQuote(spec.id, res, 'page', { byok });
+    const q = i.prices.jobQuote(spec.id, res, 'page', { byok, refs: pageRefs(i.doc, spec, scopes.pending) });
     perPageUsd = typeof q.usd === 'number' && Number.isFinite(q.usd) ? q.usd : null;
     basis = q.basisDetail;
   } catch (err) {
     logger.warn('comic_model_options_quote_failed', { model: spec.id, message: (err as Error)?.message });
   }
+  const redrawRefs = pageRefs(i.doc, spec, scopes.drawn);
   const redraw = (scope: 'pages_cover' | 'all'): number | null => {
     try {
-      const usd = redrawQuote(i.doc, spec.id, scope, i.prices, byok).usd;
+      const usd = redrawQuote(i.doc, spec.id, scope, i.prices, byok, redrawRefs).usd;
       return typeof usd === 'number' && Number.isFinite(usd) ? usd : null;
     } catch {
       return null;
@@ -435,11 +463,13 @@ function cheaperTier(doc: ComicDoc, cur: CurrentModel, current: ModelOptionFacts
   const at = TIERS.indexOf(doc.settings.quality);
   if (current.perPageUsd === null) return undefined;
   const byok = byokFor(cur.spec, keys);
+  // The same references the current per-page price was quoted with (same model, same pages).
+  const refs = pageRefs(doc, cur.spec, refScopes(doc).pending);
   for (const tier of TIERS.slice(0, Math.max(0, at))) {
     const job = resolveImageJob('page', tier, doc.settings.imageModelOverride, lock);
     if (job.spec.id !== cur.spec.id || job.resolution === cur.res) continue;
     try {
-      const usd = prices.jobQuote(cur.spec.id, job.resolution, 'page', { byok }).usd;
+      const usd = prices.jobQuote(cur.spec.id, job.resolution, 'page', { byok, refs }).usd;
       if (typeof usd === 'number' && Number.isFinite(usd) && usd < current.perPageUsd) {
         return { tier, label: TIER_PRESETS[tier].label, res: job.resolution, perPageUsd: usd, currentRes: cur.res, currentPerPageUsd: current.perPageUsd };
       }
@@ -525,8 +555,10 @@ const streakDetail = (st: Pick<UpstreamStreak, 'provider' | 'code'>): string => 
 const basisWords = (b?: QuoteBasis): string => {
   if (!b) return 'no price basis';
   if (b.source === 'observed') return b.scope === 'platform' ? `${b.n ?? 'recent'} recent DreamStream pages` : `your last ${b.n ?? ''} pages`.replace('  ', ' ');
-  if (b.source === 'list') return 'OpenRouter list price';
-  if (b.source === 'registry') return `price list from ${b.factsAsOf ?? 'our registry'}`;
+  // The reference images a page sends, when the model bills them (§2.3 step 3).
+  const refs = b.refs && b.refsUsd ? ` incl. ${plural(b.refs, 'reference image')}` : '';
+  if (b.source === 'list') return `OpenRouter list price${refs}`;
+  if (b.source === 'registry') return `price list from ${b.factsAsOf ?? 'our registry'}${refs}`;
   return 'no price yet';
 };
 

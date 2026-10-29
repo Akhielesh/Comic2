@@ -253,9 +253,11 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
     // GPT Image 2.5: $0.2107 (dated price list) + QC → ≈ $0.21; 4:5 is a block.
     expect(out).toContain("ASKED FOR: GPT Image 2.5 — NOT POSSIBLE for this comic: Not available in Comic Studio yet; Can't draw 4:5 pages.");
     expect(out).toContain('≈ $0.21 per page at 1K (price list from 2026-10-22)');
-    // The fitting option: Nano Banana Pro $0.1344 + QC → ≈ $0.14; redraw 5 pages + cover ≈ $0.82, everything ≈ $1.36 (§3.5 example 1).
-    expect(out).toMatch(/OPTION 1: Nano Banana Pro\. ≈ \$0\.14 per page at 1K \(OpenRouter list price\); holds 5 characters per image; \d providers? · [\d.]+% up \(24 h\); LMArena edit #\d+ \(2026-10-20\)/);
-    expect(out).toContain('Redraw to match: pages + cover ≈ $0.82; everything ≈ $1.36.');
+    // The fitting option: Nano Banana Pro bills $0.0011 per reference image, and a lake page sends 6 (4 cast sheets, the
+    // style board, the previous page — prompts.planPageReferences): $0.1344 + $0.0066 + QC → ≈ $0.14 a page; redraw
+    // 5 pages + cover ≈ $0.86, everything ≈ $1.43 (§3.5 example 1 with its reference line, never the r = 0 figure).
+    expect(out).toMatch(/OPTION 1: Nano Banana Pro\. ≈ \$0\.14 per page at 1K \(OpenRouter list price incl\. 6 reference images\); holds 5 characters per image; \d providers? · [\d.]+% up \(24 h\); LMArena edit #\d+ \(2026-10-20\)/);
+    expect(out).toContain('Redraw to match: pages + cover ≈ $0.86; everything ≈ $1.43.');
     expect(out).toContain('Notes: About 4× the price of Nano Banana 2.1 per page. Same family, still a different model: consistency can be affected.');
     expect(out).toContain('consistency can be affected');
     expect(out).toContain('You cannot switch the model');
@@ -342,7 +344,7 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
     expect(out).toMatch(/OPTION 1: Nano Banana Pro\./);
     const reply = modelAdviceReply(modelAdviceOf(turn)!, costFormatter(DOLLAR_VIEW));
     expect(reply.text).toBe(
-      'Nano Banana 2.1 keeps up to 4 characters on model, and page 3 has 5. Nano Banana Pro holds 5. It costs ≈ $0.14 a page instead of ≈ $0.04, and your 5 drawn pages would look different unless redrawn (≈ $0.82 with the cover). Switching models can affect character consistency. Want to see the options?'
+      'Nano Banana 2.1 keeps up to 4 characters on model, and page 3 has 5. Nano Banana Pro holds 5. It costs ≈ $0.14 a page instead of ≈ $0.04, and your 5 drawn pages would look different unless redrawn (≈ $0.86 with the cover). Switching models can affect character consistency. Want to see the options?'
     );
     expect(reply.steps).toEqual([{ label: 'See models', client: { type: 'open_model_picker', suggest: 'nano-banana-pro' } }]);
   });
@@ -350,8 +352,8 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
   it('platform key: the markup is in every price; a governed user reads usage shares, never dollars', async () => {
     setup(lakeLocked(), 'use nano banana pro', { caps: { ...resolveStudioCaps({ planId: 'creator', byok: false, isAdmin: false }), usage: { governed: false, pctLeft: 100, exhausted: false, pctPerStandardPage: null } } });
     const paid = await call('model_options', { model: 'Nano Banana Pro' });
-    // ($0.1344 + $0.003) × 1.3 = $0.1786 → ≈ $0.18.
-    expect(paid).toContain('ASKED FOR: Nano Banana Pro. ≈ $0.18 per page at 1K');
+    // ($0.1344 + 6 references × $0.0011 + $0.003 QC) × 1.3 = $0.1872 → ≈ $0.19.
+    expect(paid).toContain('ASKED FOR: Nano Banana Pro. ≈ $0.19 per page at 1K (OpenRouter list price incl. 6 reference images)');
     setup(lakeLocked(), 'use nano banana pro', { caps: GOVERNED_CAPS });
     const governed = await call('model_options', { model: 'Nano Banana Pro' });
     expect(governed).not.toMatch(/\$/);
