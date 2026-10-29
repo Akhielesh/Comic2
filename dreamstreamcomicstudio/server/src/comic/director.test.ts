@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyDoc, emptyRender, type Msg } from '../../../shared/comic/doc.js';
+import { createEmptyDoc, emptyRender, type Msg, type Page } from '../../../shared/comic/doc.js';
 import {
   DIRECTOR_SYSTEM_PROMPT,
   HISTORY_WINDOW,
@@ -220,6 +220,49 @@ describe('summaries', () => {
     expect(s).toContain('- p1 [out of date, qc 0.82] Page 1 beat (3 panels)');
     expect(s).toContain('Waiting on approval: Draw the cover? ≈ $0.07 (policy)');
     expect(s.length).toBeLessThan(12_000);
+  });
+
+  it('a big book clips the body, never the tail: settings, spend, the open approval, the focus and the feature lines survive', () => {
+    // At DOC_LIMITS (40 pages × 4 panels, 24 cast with full looks, 14 long notes, 8 places) the full
+    // summary is ~17k chars; without compaction the end — exactly the money/gate/focus lines — was cut.
+    const doc = createEmptyDoc('big-1', 'The Long Voyage');
+    doc.brief = { ...doc.brief, logline: 'A crew of friends sails across a sea of islands to find a lost lighthouse.', premise: 'Lorem ipsum '.repeat(50), notes: Array.from({ length: 14 }, (_, i) => `Note ${i + 1}: ${'keep the tone warm and the jokes gentle, '.repeat(4)}`) };
+    doc.cast = Array.from({ length: 24 }, (_, i) => ({
+      id: `c_${i}`, name: `Crew Member ${i + 1}`, tier: i < 2 ? ('lead' as const) : ('support' as const), role: 'deckhand with a secret past and a loud laugh',
+      look: { summary: `A ${['tall', 'short', 'wiry', 'round'][i % 4]} sailor with ${['braided', 'cropped', 'curly', 'long'][i % 4]} hair, a weathered coat, brass buttons, a scar on the left cheek and bright eyes` },
+      refs: [], sheet: emptyRender()
+    }));
+    doc.places = Array.from({ length: 8 }, (_, i) => ({ id: `pl_${i}`, name: `Island ${i + 1}`, look: 'Rocky shore, a crooked pier, fishing huts and gulls everywhere', refs: [], sheet: emptyRender() }));
+    const page = (n: number): Page => ({
+      id: `pg_${n}`, n, summary: `Page ${n}: the crew lands on island ${n} and meets someone new who changes the plan in a surprising way`, layout: '', balloons: [], render: emptyRender(),
+      panels: [1, 2, 3, 4].map((k) => ({ id: `pn_${n}_${k}`, n: k, size: 'medium' as const, shot: 'medium' as const, action: `Action ${n}.${k}`, castIds: ['c_0'], lines: [{ id: `ln_${n}_${k}`, kind: 'speech' as const, speakerId: 'c_0', text: `Line ${n}.${k}` }] }))
+    });
+    doc.pages = Array.from({ length: 40 }, (_, i) => page(i + 1));
+    doc.planStatus = 'approved';
+    doc.gate = { id: 'gate_1', action: { type: 'render_pages' }, title: 'Draw pages 1–40?', summary: '', estimateUsd: 2.4, imageCount: 40, model: 'Nano Banana 2.1', createdAt: Date.now(), status: 'open', reason: 'policy' };
+    const governed = costFormatter(costViewFor({ ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } }));
+    const out = summarizeDocForDirector(doc, false, ['Undo available: restyle 3 balloons'], {
+      userText: 'make these red',
+      focus: { pageId: 'pg_40', lineIds: ['ln_40_1', 'ln_40_2'], surface: 'page_editor' },
+      cost: governed
+    });
+    expect(out.length).toBeLessThanOrEqual(12_000);
+    // Without the fix these four (and the governed instruction) were sliced off the end.
+    expect(out).toContain('Settings:');
+    expect(out).toContain('Spend so far');
+    expect(out).toContain('never in dollars');
+    expect(out).toContain('Waiting on approval: Draw pages 1–40?');
+    expect(out).toContain('Focus: the user is looking at page 40; selected balloons — p40 panel 1: “Line 40.1” (speech); p40 panel 2: “Line 40.2” (speech)');
+    expect(out).toContain('Undo available: restyle 3 balloons');
+    // The tail is last, and the body was compacted rather than cut mid-line: every page and cast id is still there.
+    expect(out.indexOf('Settings:')).toBeGreaterThan(out.indexOf('- p40 '));
+    expect(out).toContain('- p40 [not drawn]');
+    expect(out).not.toContain('- p40 [not drawn] Page 40');
+    expect(out).toContain('- CREW MEMBER 24 [c_23] support');
+    expect(out).not.toContain('- Note 1:');
+    expect(out).toContain('- Note 14:');
+    // A small book is untouched by the compaction.
+    expect(summarizeDocForDirector(plannedDoc())).toContain('- p1 [not drawn] Page 1 beat (3 panels)');
   });
 
   it('conversationForDirector merges same-role turns, summarizes cards and starts with the user', () => {

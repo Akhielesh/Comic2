@@ -114,6 +114,13 @@ const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
  * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected.
+ *
+ * The summary has a body (story, cast, places, pages) and a tail (feature lines, the user's
+ * focus, the money settings and spend — with the governed "never in dollars" instruction —
+ * the open approval and the open question). The tail is what the model must never lose, so it
+ * is built first and never clipped: when a big book overflows SUMMARY_CHAR_BUDGET, only the body
+ * shrinks — notes to the last 6, cast lines to name/id/tier and page lines to number/status —
+ * and is hard-cut last.
  */
 export function summarizeDocForDirector(
   doc: ComicDoc,
@@ -123,6 +130,33 @@ export function summarizeDocForDirector(
 ): string {
   // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
   const c = opts.cost ?? costFormatter();
+  const f = doc.format;
+
+  const tail: string[] = [];
+  for (const extra of extraLines) if (extra) tail.push(clip(extra, 400));
+  const focus = focusLine(doc, opts.focus);
+  if (focus) tail.push(focus);
+  const set = doc.settings;
+  const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
+  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
+  tail.push(
+    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ${c.approx(tierPagePrice(set.quality, byok))}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
+  );
+  tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
+  if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
+  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
+  if (open) tail.push(open);
+  const tailText = tail.join('\n');
+
+  const room = SUMMARY_CHAR_BUDGET - tailText.length - 1;
+  let body = summaryBody(doc, false);
+  if (body.length > room) body = summaryBody(doc, true);
+  if (body.length > room) body = `${body.slice(0, Math.max(0, room - 1)).trimEnd()}…`;
+  return `${body}\n${tailText}`;
+}
+
+/** The clippable part of the DOC SUMMARY; `compact` is the shorter form used when the book overflows the budget. */
+function summaryBody(doc: ComicDoc, compact: boolean): string {
   const b = doc.brief;
   const f = doc.format;
   const lines: string[] = [`DOC SUMMARY (rev ${doc.rev})`];
@@ -133,7 +167,7 @@ export function summarizeDocForDirector(
     .join('; ');
   if (facts) lines.push(`Story: ${facts}`);
   if (b.themes?.length) lines.push(`Themes: ${b.themes.slice(0, 8).map((t) => clip(t, 60)).join(', ')}`);
-  if (b.notes.length) lines.push(`Notes:\n${b.notes.slice(-14).map((n) => `- ${clip(n, 200)}`).join('\n')}`);
+  if (b.notes.length) lines.push(`Notes:\n${b.notes.slice(compact ? -6 : -14).map((n) => `- ${clip(n, 200)}`).join('\n')}`);
   const sourceWords = (doc.source.script?.match(/\S+/g) || []).length;
   lines.push(`Source: ${sourceWords ? `${sourceWords.toLocaleString('en-US')} words of the user's script/story are saved` : 'none'}`);
   lines.push(
@@ -150,7 +184,9 @@ export function summarizeDocForDirector(
     lines.push(`Cast (${doc.cast.length}):`);
     for (const c of doc.cast.slice(0, 24)) {
       lines.push(
-        `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${c.tier === 'extra' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
+        compact
+          ? `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}`
+          : `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${c.tier === 'extra' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
       );
     }
     if (doc.cast.length > 24) lines.push(`- …and ${doc.cast.length - 24} more`);
@@ -166,7 +202,8 @@ export function summarizeDocForDirector(
     for (const p of [...doc.pages].sort((a, b) => a.n - b.n).slice(0, 40)) {
       const a = p.render.status === 'ready' ? p.render.asset : undefined;
       const shape = a && !aspectMatches(f.pageAspect, a.w, a.h) && a.w && a.h ? `, drawn ${aspectFromSize(a.w, a.h)}` : '';
-      lines.push(`- p${p.n} [${renderWord(p.render.status, isPageStale(doc, p))}${shape}${typeof p.render.qc?.score === 'number' ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}] ${clip(p.summary, 110)} (${p.panels.length} panels)`);
+      const status = `[${renderWord(p.render.status, isPageStale(doc, p))}${shape}${typeof p.render.qc?.score === 'number' ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}]`;
+      lines.push(compact ? `- p${p.n} ${status}` : `- p${p.n} ${status} ${clip(p.summary, 110)} (${p.panels.length} panels)`);
     }
   } else {
     lines.push('Plan: none yet');
@@ -174,22 +211,7 @@ export function summarizeDocForDirector(
   lines.push(
     `Cover: ${renderWord(doc.cover.render.status)}${doc.cover.title ? ` (title “${clip(doc.cover.title, 80)}”)` : ''}${(doc.cover.lettering ?? 'in_art') === 'overlay' ? ', title lettered on top (free edits)' : ''}`
   );
-  for (const extra of extraLines) if (extra) lines.push(clip(extra, 400));
-  const focus = focusLine(doc, opts.focus);
-  if (focus) lines.push(focus);
-
-  const set = doc.settings;
-  const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
-  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
-  lines.push(
-    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ${c.approx(tierPagePrice(set.quality, byok))}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
-  );
-  lines.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
-  if (doc.gate?.status === 'open') lines.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
-  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
-  if (open) lines.push(open);
-  const out = lines.join('\n');
-  return out.length <= SUMMARY_CHAR_BUDGET ? out : `${out.slice(0, SUMMARY_CHAR_BUDGET - 1)}…`;
+  return lines.join('\n');
 }
 
 // ── Conversation window ──────────────────────────────────────────────────────
