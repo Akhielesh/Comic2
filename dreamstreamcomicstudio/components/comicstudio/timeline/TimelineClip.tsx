@@ -187,8 +187,9 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
           </span>
         )}
         {clip.status === 'failed' && (
-          // red-700: white 8.5 px text at ≥ 4.5:1 (red-600/90 measured 4.35:1 — P1-QA timeline-failed-badge-contrast).
-          <span className="absolute inset-x-0 bottom-0 bg-red-700 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
+          // red-700 under white 10 px semibold text: 6.5:1 (red-600/90 under 8.5 px measured 4.35:1 — P1-QA
+          // timeline-failed-badge-contrast). "Failed" fits the narrowest (34 px compact) thumb at this size.
+          <span className="absolute inset-x-0 bottom-0 truncate bg-red-700 text-center text-[10px] font-semibold leading-[14px] text-white" aria-hidden data-clip-badge="failed">
             Failed
           </span>
         )}

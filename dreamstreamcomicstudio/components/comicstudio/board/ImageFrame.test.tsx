@@ -96,3 +96,22 @@ describe('ImageFrame safety', () => {
     expect(onRedrawSafer).toHaveBeenCalled();
   });
 });
+
+// A FAILED tile painted its "Not drawn yet" / initials placeholder under the (opaque) failure card, and
+// a DRAWING tile painted the initials' hint under the "Still drawing · Check again" pill: text under
+// text for the layout scanner, and nothing a reader could use (ui-findings 2026-10-29,
+// style-tile-failed-text-overlap / cast-card-sheet-hint-overlap).
+describe('ImageFrame placeholder under an overlay', () => {
+  it('drops the placeholder while the failure card or the drawing shimmer is up, and shows it again for a render still to come', () => {
+    const placeholder = <div>Not drawn yet</div>;
+    const { rerender } = render(
+      <ImageFrame aspect="4 / 5" alt="Riso style board" render={{ status: 'failed', history: [], error: 'boom', updatedAt: 1 }} placeholder={placeholder} overlay={<div data-testid="ov">failed</div>} />
+    );
+    expect(screen.queryByText('Not drawn yet')).toBeNull();
+    expect(screen.getByTestId('ov')).toBeInTheDocument();
+    rerender(<ImageFrame aspect="4 / 5" alt="Riso style board" render={{ status: 'rendering', history: [], updatedAt: 1 }} placeholder={placeholder} overlay={<div data-testid="ov">drawing</div>} />);
+    expect(screen.queryByText('Not drawn yet')).toBeNull();
+    rerender(<ImageFrame aspect="4 / 5" alt="Riso style board" render={{ status: 'none', history: [] }} placeholder={placeholder} overlay={<div data-testid="ov">planned</div>} />);
+    expect(screen.getByText('Not drawn yet')).toBeInTheDocument();
+  });
+});

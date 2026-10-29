@@ -413,7 +413,7 @@
   --ds-surface-strong: rgba(255,255,255,0.95); /* menus, sticky headers */
   --ds-raised: #ffffff;            /* active segmented pill, raised chips */
   --ds-ink: #1a1915;               /* primary text */
-  --ds-muted: #6e6a60;             /* secondary text */
+  --ds-muted: #67635a;             /* secondary text: ≥ 4.5:1 on every tinted row, well and track (was #6e6a60, 4.1–4.4 on some) */
   --ds-hairline: rgba(0,0,0,0.10); /* standard hairline */
   --ds-hairline-soft: rgba(0,0,0,0.05);
   --ds-well: rgba(0,0,0,0.03);     /* recessed wells */
@@ -422,22 +422,37 @@
   --ds-faint: rgba(0,0,0,0.28);    /* lowest-emphasis ink: placeholders, dots, idle glyphs */
   --ds-accent: #D97757;            /* terracotta — same in both themes */
   --ds-accent-hover: #c2643f;
-  /* Semantic tokens added for the Atlas skin (docs/design/atlas-skin.md). These DEFAULTS reproduce
-     today's look exactly — a skin (`[data-ds-skin="…"]`, end of this file) overrides them as one
-     block. Status hues are always paired with a word or icon; the `-text` variants are the
-     readable (≥ 4.5:1) text mixes, the base ones are for fills and borders. */
-  --ds-on-accent: #ffffff;                   /* text on a solid accent fill */
+  /* Readable accent (tests/config/tokenContrast.test.ts). The brand terracotta measures only ~3:1
+     against the paper, so accent-coloured TEXT (links, counters, "Change" buttons, icons beside
+     text) reads --ds-accent-text: same hue, lower lightness, ≥ 4.5:1 on every paper, glass, well,
+     hover/active and accent-tint surface. Buttons keep the brand: a solid accent fill that CARRIES
+     TEXT (primary buttons, badges, chips) reads --ds-accent-fill (= the brand terracotta) and its
+     label reads --ds-on-accent (ink, 5.6:1; white was 3.1:1); --ds-accent-fill-hover is a hair
+     deeper and still ≥ 4.5:1 under it. The "accent contrast" block below routes the existing
+     utilities to these tokens. (The alternative — a deeper fill under white labels — is a pure
+     token swap: --ds-accent-fill #AE5132, -fill-hover #96462c, --ds-on-accent #ffffff; the test
+     measures whichever pairing is set.) Under the Atlas skin all three are the ink accent. */
+  --ds-accent-text: #A0472A;
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: #d66d4b;
+  /* Semantic tokens added for the Atlas skin (docs/design/atlas-skin.md). Their defaults keep
+     today's look except where a text pairing fell below 4.5:1 (tests/config/tokenContrast.test.ts):
+     the label on an accent fill, and the success/warning text below. A skin
+     (`[data-ds-skin="…"]`, end of this file) overrides them as one block. Status hues are always
+     paired with a word or icon; the `-text` variants are the readable (≥ 4.5:1) text mixes, the
+     base ones are for fills and borders. */
+  --ds-on-accent: #1a1915;                   /* label on a solid accent fill: ink, 5.6:1 on the brand (white was 3.1:1) */
   --ds-accent-soft: rgba(217,119,87,0.10);   /* = bg-[#D97757]/10: active rows, selected chips */
   --ds-active: rgba(0,0,0,0.07);             /* pressed / current-item tint (stronger than hover) */
   --ds-success: #16a34a;
-  --ds-success-text: #15803d;
+  --ds-success-text: #157a3a;                /* green-700 nudged darker: ≥ 4.5:1 on its own 10 % tint */
   --ds-warning: #d97706;
-  --ds-warning-text: #b45309;
+  --ds-warning-text: #a84e0a;                /* amber-700 nudged darker: ≥ 4.5:1 on hover and tint rows */
   --ds-danger: #dc2626;
   --ds-danger-text: #b91c1c;
   --ds-info: #2563eb;
   --ds-info-text: #1d4ed8;
-  --ds-ring: rgba(217,119,87,0.45);          /* focus ring (= ring-[#D97757]/45) */
+  --ds-ring: #c2643f;                        /* focus ring: the accent hover, ≥ 3:1 (non-text) on paper, glass and wells (the old 45 % tint was 1.6:1) */
   --ds-font-sans: Inter, sans-serif;         /* = tailwind `font-sans` */
   --ds-font-display: Inter, sans-serif;      /* headings inherit the body face today */
   --ds-radius-panel: 1rem;                   /* = rounded-2xl */
@@ -466,7 +481,7 @@
   --ds-surface-strong: rgba(48,48,46,0.97);
   --ds-raised: #3a3a37;
   --ds-ink: #eeece8;
-  --ds-muted: #a8a29a;
+  --ds-muted: #b8b2a9;             /* ≥ 4.5:1 on the glass, wells and hover/active tints */
   --ds-hairline: rgba(255,255,255,0.10);
   --ds-hairline-soft: rgba(255,255,255,0.06);
   --ds-well: rgba(255,255,255,0.04);
@@ -475,19 +490,55 @@
   --ds-faint: rgba(255,255,255,0.34);
   --ds-accent: #D97757;
   --ds-accent-hover: #e08a6d;
+  --ds-accent-text: #eda38c;       /* light terracotta: ≥ 4.5:1 on the dark glass and tints */
+  --ds-accent-fill-hover: var(--ds-accent-hover); /* the dark theme's hover lightens: ink on it 6.7:1 */
   --ds-active: rgba(255,255,255,0.09);
   --ds-success: #4ade80;
   --ds-success-text: #4ade80;
   --ds-warning: #fbbf24;
   --ds-warning-text: #fbbf24;
   --ds-danger: #f87171;
-  --ds-danger-text: #f87171;
+  --ds-danger-text: #fb8b8b;       /* red-400 lifted: ≥ 4.5:1 on dark glass and its tint */
   --ds-info: #60a5fa;
   --ds-info-text: #93c5fd;
-  --ds-ring: rgba(217,119,87,0.50);
+  --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
   --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
 }
 .dark { color-scheme: dark; }
+
+/* ---- Accent contrast: route the existing accent utilities to the readable tokens ----
+   tests/config/tokenContrast.test.ts proves the token pairs (≥ 4.5:1, both themes, both skins) and
+   that every accent text / text-bearing fill utility in the tree has a rule here. Until the
+   components spell ACCENT_TEXT / ACCENT_FILL (studioDesign.ts) themselves, these rules keep the
+   brand terracotta for decoration and give text the readable variants:
+   - accent-coloured TEXT (and the icons that inherit it) → --ds-accent-text, including the literal
+     hover terracotta #c2643f (3.84:1 on the paper; no shim rule competes, so it is ink in the skin);
+   - a solid accent fill that carries white / on-accent text → --ds-accent-fill (+ -fill-hover) under
+     --ds-on-accent. By default the fill IS the brand and only the label changes (white → ink); the
+     85 % badge becomes solid so its label never depends on the image under it.
+     `:not(:disabled)` leaves a component's own disabled styling (disabled:bg-…, opacity) alone.
+   Under the Atlas skin the tokens are the skin's accent / on-accent, so the skin paints exactly what
+   it painted before (tokenContrast.test.ts proves it rule by rule); where a rule here outranks a shim
+   rule with a different result, the skin section restores it (the 85 % badge). Specificity, not
+   order, decides:
+   Tailwind emits plain utilities where `@tailwind utilities` sits (above, so a plain-class rule
+   here wins a tie) but APPENDS every variant (hover:, group-hover:, md:, disabled:, …) after this
+   whole file — so the hover / group-hover text forms repeat their class to outrank the variant
+   utility, and the fills are compound selectors (utility + its text colour) that outrank both. */
+.text-\[var\(--ds-accent\)\],
+.text-\[\#D97757\],
+.text-\[\#c2643f\],
+.hover\:text-\[var\(--ds-accent\)\].hover\:text-\[var\(--ds-accent\)\]:hover,
+.hover\:text-\[var\(--ds-accent-hover\)\].hover\:text-\[var\(--ds-accent-hover\)\]:hover,
+.group:hover .group-hover\:text-\[var\(--ds-accent\)\].group-hover\:text-\[var\(--ds-accent\)\],
+.group\/icon:hover .group-hover\/icon\:text-\[var\(--ds-accent\)\].group-hover\/icon\:text-\[var\(--ds-accent\)\] { color: var(--ds-accent-text); }
+.bg-\[var\(--ds-accent\)\].text-white:not(:disabled),
+.bg-\[var\(--ds-accent\)\].text-\[var\(--ds-on-accent\)\]:not(:disabled),
+.bg-\[\#D97757\].text-white:not(:disabled),
+.bg-\[\#D97757\]\/85.text-white:not(:disabled) { background-color: var(--ds-accent-fill); color: var(--ds-on-accent); }
+.hover\:bg-\[var\(--ds-accent-hover\)\].text-white:hover:not(:disabled),
+.hover\:bg-\[var\(--ds-accent-hover\)\].text-\[var\(--ds-on-accent\)\]:hover:not(:disabled),
+.group:hover .group-hover\:bg-\[var\(--ds-accent-hover\)\].text-white:not(:disabled) { background-color: var(--ds-accent-fill-hover); color: var(--ds-on-accent); }
 
 /* ==========================================================================
    Device & layout tokens (Comic Studio v5, contract §13.5). Components only
@@ -734,6 +785,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-accent-hover: #2f2f2f;           /* primary at 85 % over the background */
   --ds-on-accent: #ffffff;              /* --primary-foreground */
   --ds-accent-soft: #efefef;            /* --accent */
+  --ds-accent-text: var(--ds-accent);   /* the readable accent IS the ink accent here (and fades with it) */
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
   --ds-active: rgba(0,0,0,0.07);        /* --menu-active */
   --ds-success: #16a34a;
   --ds-success-text: color-mix(in srgb, var(--ds-success) 60%, var(--ds-ink));
@@ -792,13 +846,15 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-accent-hover: #d6d6d6;
   --ds-on-accent: #0a0a0a;
   --ds-accent-soft: #1f1f1f;
+  --ds-accent-text: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
   --ds-active: #262626;
   --ds-success: oklch(0.5 0.15 142);
   --ds-success-text: color-mix(in srgb, var(--ds-success) 60%, var(--ds-ink));
   --ds-warning: oklch(0.7 0.15 85);
   --ds-warning-text: color-mix(in srgb, var(--ds-warning) 60%, var(--ds-ink));
   --ds-danger: oklch(0.396 0.141 25.723);
-  --ds-danger-text: color-mix(in srgb, var(--ds-danger) 60%, var(--ds-ink));
+  --ds-danger-text: color-mix(in srgb, var(--ds-danger) 55%, var(--ds-ink)); /* 55 %: the deep dark red needs more ink to reach 4.5:1 on hover rows */
   --ds-info: #e5e5e5;
   --ds-info-text: color-mix(in srgb, var(--ds-info) 60%, var(--ds-ink));
   --ds-ring: #8a8a8a;
@@ -865,11 +921,18 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   background-color: var(--ds-ink);
   color: var(--ds-canvas);
 }
-[data-ds-skin="atlas"] :is(.bg-\[var\(--ds-ink\)\], .bg-\[var\(--ds-accent\)\], .bg-\[\#D97757\])::selection,
-[data-ds-skin="atlas"] :is(.bg-\[var\(--ds-ink\)\], .bg-\[var\(--ds-accent\)\], .bg-\[\#D97757\]) *::selection {
+[data-ds-skin="atlas"] :is(.bg-\[var\(--ds-ink\)\], .bg-\[var\(--ds-accent\)\], .bg-\[\#D97757\], .bg-\[var\(--ds-accent-fill\)\])::selection,
+[data-ds-skin="atlas"] :is(.bg-\[var\(--ds-ink\)\], .bg-\[var\(--ds-accent\)\], .bg-\[\#D97757\], .bg-\[var\(--ds-accent-fill\)\]) *::selection {
   background-color: var(--ds-canvas);
   color: var(--ds-ink);
 }
+/* Where the default theme's accent-contrast block (after the default tokens) outranks a skin rule
+   or a token utility with a different result, the skin restores its own paint here
+   (tests/config/tokenContrast.test.ts checks every rule of that block by specificity):
+   - the 85 % accent badge, which the block makes solid: (0,3,0) beats the shim's 85 % (0,2,0);
+   - accent-hover text, which the block reads as the readable accent (= the skin accent, not its hover). */
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/85.text-white:not(:disabled) { background-color: color-mix(in srgb, var(--ds-accent) 85%, transparent); }
+[data-ds-skin="atlas"] .hover\:text-\[var\(--ds-accent-hover\)\].hover\:text-\[var\(--ds-accent-hover\)\]:hover { color: var(--ds-accent-hover); }
 /* WebKit browsers that predate scrollbar-width / scrollbar-color. */
 @supports not (scrollbar-width: thin) {
   [data-ds-skin="atlas"] ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -977,20 +1040,14 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 [data-ds-skin="atlas"] .focus\:border-\[\#D97757\]\/60:focus { border-color: color-mix(in srgb, var(--ds-accent) 60%, transparent); }
 [data-ds-skin="atlas"] .focus\:ring-\[\#D97757\]\/25:focus { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .focus\:ring-\[\#D97757\]\/30:focus { --tw-ring-color: var(--ds-ring); }
-[data-ds-skin="atlas"] .focus\:ring-\[\#D97757\]\/45:focus { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .group\/place:hover .group-hover\/place\:ring-\[\#D97757\]\/40 { --tw-ring-color: var(--ds-ring); }
-[data-ds-skin="atlas"] .group:hover .group-hover\:bg-\[\#D97757\]\/50 { background-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
-[data-ds-skin="atlas"] .group:hover .group-hover\:bg-\[\#D97757\]\/50.text-white { color: var(--ds-on-accent); }
-[data-ds-skin="atlas"] .hover\:bg-\[\#D97757\]\/10:hover { background-color: var(--ds-hover); }
 [data-ds-skin="atlas"] .hover\:bg-\[\#D97757\]\/20:hover { background-color: var(--ds-active); }
 [data-ds-skin="atlas"] .hover\:bg-\[\#D97757\]\/25:hover { background-color: var(--ds-active); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/35:hover { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/40:hover { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/50:hover { border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
-[data-ds-skin="atlas"] .outline-\[\#D97757\] { outline-color: var(--ds-ink); }
 [data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\] { background-color: var(--ds-accent); }
 [data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\].text-white { color: var(--ds-on-accent); }
-[data-ds-skin="atlas"] .ring-\[\#D97757\] { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/25 { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/30 { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/40 { --tw-ring-color: var(--ds-ring); }

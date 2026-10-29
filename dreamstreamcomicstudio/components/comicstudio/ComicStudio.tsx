@@ -42,7 +42,7 @@ import { deriveLock } from '../../shared/comic/modelLock';
 import type { StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
-import { CANVAS_BG, HAIRLINE, TRANSITION } from '../chat/studioDesign';
+import { CANVAS_BG, HAIRLINE, RADIUS_CONTROL, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN } from '../../services/productHost';
 import { BoardPane } from './board/BoardPane';
@@ -70,6 +70,7 @@ import { ModeToggle } from './mobile/ModeToggle';
 import { SavingsBreakdown, savedTotal } from './mobile/SavingsChip';
 import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
 import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
+import { phoneChromeVars } from './mobile/shell/phoneChrome';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -284,6 +285,12 @@ export interface StudioHeaderProps {
   onOpenSettings: () => void;
   paneMode: PaneMode;
   onPaneMode: (mode: PaneMode) => void;
+  /**
+   * Phones on the Board: "Ask" in the header opens the Ask-the-Director sheet (while the director
+   * replies it says so and opens the chat). It used to be a full-width pill pinned above the tab bar —
+   * a third bottom bar that left the board under 45 % of an iPhone's height (P1-QA phone-content).
+   */
+  ask?: { busy: boolean; onAsk: () => void; onViewChat: () => void };
 }
 
 /**
@@ -292,7 +299,7 @@ export interface StudioHeaderProps {
  *  - medium   split below 1024: icon-only quality/Read, Easy/Pro in ⋯, pane switcher
  *  - regular  1024+: today's desktop header (pane switcher on touch tablets)
  */
-export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, onOpenSettings, paneMode, onPaneMode }) => {
+export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, onOpenSettings, paneMode, onPaneMode, ask }) => {
   const [open, setOpen] = useState<HeaderSheet>(null);
   const variant: HeaderVariant = headerVariantFor(ff);
   const compact = variant !== 'regular';
@@ -480,6 +487,25 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
           </button>
         )}
         {slotRange(H.read, H.more)}
+
+        {ask && (
+          <button
+            type="button"
+            onClick={ask.busy ? ask.onViewChat : ask.onAsk}
+            aria-haspopup={ask.busy ? undefined : 'dialog'}
+            title={ask.busy ? 'The director is replying — view the chat' : 'Ask the Director about this board'}
+            className={cx(headerBtn, 'px-3')}
+            data-ask
+          >
+            {ask.busy ? (
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <Sparkles className="h-4 w-4 shrink-0" aria-hidden />
+            )}
+            <span>{ask.busy ? 'Replying' : 'Ask'}</span>{' '}
+            <span className="sr-only">{ask.busy ? '— view the chat' : 'the Director'}</span>
+          </button>
+        )}
 
         <div ref={menuRef} className="relative">
           <button type="button" onClick={() => toggle('menu')} aria-haspopup="menu" aria-expanded={open === 'menu'} aria-label="More" className={headerIconBtn}>
@@ -673,6 +699,9 @@ const PctField: React.FC<{
   );
 };
 
+/** The Atlas small radius (4 px) — the radio's focus ring inside its bordered row. */
+const RADIUS_SM = 'rounded-[var(--ds-radius-sm)]';
+
 export const SettingsPanel: React.FC<{
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
@@ -695,16 +724,19 @@ export const SettingsPanel: React.FC<{
               <div
                 key={o.value}
                 className={cx(
-                  'rounded-xl border px-3 py-2.5 transition-colors',
-                  on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
+                  `${RADIUS_CONTROL} border px-3 py-1 ${TRANSITION}`,
+                  on ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
                 )}
               >
+                {/* The whole row height is the radio (44 px on touch, the row's padding inside the target
+                    instead of around it), with a visible keyboard focus ring. */}
                 <button
                   type="button"
                   role="radio"
                   aria-checked={on}
                   onClick={() => !on && setSettings({ confirm: o.value })}
-                  className="flex w-full items-start gap-2.5 text-left focus-visible:outline-none coarse:min-h-11"
+                  className={`flex min-h-10 w-full items-start gap-2.5 ${RADIUS_SM} py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11`}
+                  data-confirm-option={o.value}
                 >
                   <span
                     aria-hidden
@@ -764,8 +796,8 @@ export const SettingsPanel: React.FC<{
                 aria-checked={on}
                 onClick={() => !on && void patch([{ op: 'format', patch: { lettering: o.value } }])}
                 className={cx(
-                  'rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
-                  on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
+                  `${RADIUS_CONTROL} border px-3 py-2.5 text-left ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`,
+                  on ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
                 )}
               >
                 <span className="block text-[13px] font-semibold text-[var(--ds-ink)]">{o.title}</span>
@@ -794,8 +826,9 @@ export const SettingsPanel: React.FC<{
 
 // ── Loading / fatal ──────────────────────────────────────────────────────────
 
-const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean }> = ({ onBack, wide }) => (
-  <div role="status" className={`flex h-full min-h-0 w-full flex-col ${CANVAS_BG}`} aria-busy="true" aria-label="Opening your comic">
+/** `chrome`: the phone portrait header size (phoneChrome.ts), so the header doesn't jump when the comic arrives. */
+const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean; chrome?: React.CSSProperties }> = ({ onBack, wide, chrome }) => (
+  <div role="status" className={`flex h-full min-h-0 w-full flex-col ${CANVAS_BG}`} style={chrome} aria-busy="true" aria-label="Opening your comic">
     <header className="flex shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-3" style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}>
       <button type="button" onClick={onBack} aria-label="Back to your projects" className={headerIconBtn}>
         <ArrowLeft className="h-4 w-4" />
@@ -843,31 +876,6 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
       </div>
     </div>
   </main>
-);
-
-// ── Phone board: "Ask the Director…" ─────────────────────────────────────────
-
-/** The composer collapsed to one 44 px pill at the foot of the phone Board (mobile.md §3.1). */
-const AskDirectorPill: React.FC<{ busy: boolean; onAsk: () => void; onViewChat: () => void; insetBottom: boolean }> = ({ busy, onAsk, onViewChat, insetBottom }) => (
-  <div
-    // Hidden while the keyboard is up (editing a board field): the field gets the room.
-    className="shrink-0 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-strong)] px-3 pt-1.5 backdrop-blur-xl [html.kb-open_&]:hidden"
-    style={{ paddingBottom: insetBottom ? 'max(0.375rem, var(--sa-bottom-eff, 0px))' : '0.375rem' }}
-    data-ask-pill
-  >
-    <button
-      type="button"
-      onClick={busy ? onViewChat : onAsk}
-      className={`press mx-auto flex h-11 w-full max-w-xl items-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-4 text-left text-[14px] text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`}
-    >
-      {busy ? (
-        <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />
-      ) : (
-        <Sparkles className="h-4 w-4 shrink-0 text-[var(--ds-accent)]" aria-hidden />
-      )}
-      <span className="min-w-0 flex-1 truncate">{busy ? 'The director is replying — view the chat' : 'Ask the Director…'}</span>
-    </button>
-  </div>
 );
 
 // ── Shell ────────────────────────────────────────────────────────────────────
@@ -1028,7 +1036,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
     if (studio.loadError) {
       return <FatalError message={studio.loadError} onRetry={() => void studio.refresh()} onBack={onBack} retrying={studio.refreshing} />;
     }
-    return <StudioSkeleton onBack={onBack} wide={!phone} />;
+    return <StudioSkeleton onBack={onBack} wide={!phone} chrome={phoneChromeVars(ff.layout)} />;
   }
 
   const pagesRendering = renderingPageCount(doc);
@@ -1050,7 +1058,8 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
       id: 'board',
       label: 'Board',
       icon: <LayoutGrid className="h-5 w-5" aria-hidden />,
-      badge: progress.total ? `${progress.ready}/${progress.total}` : undefined,
+      // Shown as words ("6 of 12"), so the spoken name starts with exactly what the tab shows.
+      badge: progress.total ? `${progress.ready} of ${progress.total}` : undefined,
       badgeLabel: progress.total ? `${progress.ready} of ${plural(progress.total, 'page')} ready` : undefined,
       dot: pagesRendering > 0 ? 'pulse' : undefined,
       current: view === 'board' && !readerOpen,
@@ -1067,42 +1076,38 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
     }
   ];
 
-  const renderingPill =
-    boardHiddenFromChat && pagesRendering > 0 ? (
-      <div className="mb-2 flex justify-center">
-        <button
-          type="button"
-          onClick={() => {
-            setTab('pages');
-            showBoard();
-          }}
-          className="press inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_2px_10px_rgba(0,0,0,0.08)] animate-scale-in coarse:min-h-[44px] coarse:px-4"
-        >
-          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />
-          <span className="truncate">
-            {plural(pagesRendering, 'page')} rendering · <span className="text-[var(--ds-accent)]">View</span>
-          </span>
-        </button>
-      </div>
-    ) : undefined;
+  // The board is out of sight while pages draw: the activity line's status opens it (one status row;
+  // it replaced the separate "N pages rendering · View" pill above the composer).
+  const viewRenders =
+    boardHiddenFromChat && pagesRendering > 0
+      ? () => {
+          setTab('pages');
+          showBoard();
+        }
+      : undefined;
 
   const chat = (
-    <ConversationPane studio={chatStudio} aboveComposer={renderingPill} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
+    <ConversationPane studio={chatStudio} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
   );
 
   const board = (
-    <section aria-label="Board" className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-[var(--ds-well)]">
+    <section
+      aria-label="Board"
+      className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-[var(--ds-well)]"
+      // Phones in landscape have no tab bar under the board: keep its bottom controls out of the
+      // home-indicator inset (portrait: the tab bar pads itself; tablets: the timeline dock does).
+      style={phone && !tabBar ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
+    >
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <BoardPane studio={studio} />
       </div>
-      {phone && <AskDirectorPill busy={studio.messageBusy} onAsk={openAsk} onViewChat={() => setView('chat')} insetBottom={!tabBar} />}
     </section>
   );
 
   return (
     <div
       className={`gesture-root relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden font-sans ${CANVAS_BG} text-[var(--ds-ink)]`}
-      style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)' }}
+      style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)', ...phoneChromeVars(ff.layout) }}
       data-layout={ff.layout}
       // Comic Studio renders in the Atlas design language wherever it is mounted (the comics host
       // sets the same attribute on <html>; on the apex this root is the skin's boundary).
@@ -1126,6 +1131,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
         onOpenSettings={() => setSettingsOpen(true)}
         paneMode={paneMode}
         onPaneMode={setPaneMode}
+        ask={phone && view === 'board' && !readerOpen ? { busy: studio.messageBusy, onAsk: openAsk, onViewChat: () => setView('chat') } : undefined}
       />
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
 

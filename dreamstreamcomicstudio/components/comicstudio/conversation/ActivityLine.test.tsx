@@ -1,6 +1,8 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { vi } from 'vitest';
+import { labelInName } from '../mobile/testing/labelInName';
 import { ActivityLine, activityCost, savedSince } from './ActivityLine';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
 import type { ActivityItem } from '../types';
@@ -13,6 +15,18 @@ const item = (id: string, label: string, cost?: 'free' | 'text' | 'image'): Acti
   ({ id, label, phase: 'start', at: 1, ...(cost ? { cost } : {}) }) as ActivityItem;
 
 describe('ActivityLine', () => {
+  it('with the board out of sight, the status itself opens it ("Drawing page 3… View") — one row, its name says what it shows', () => {
+    const onView = vi.fn();
+    render(<ActivityLine studio={makeFakeStudio({ busy: true, activity: [item('a', 'Drawing page 3', 'image')] })} onView={onView} />);
+    const view = screen.getByRole('button', { name: 'Drawing page 3… View the pages' });
+    expect(view.closest('[role="status"]')).not.toBeNull();
+    expect(labelInName(view).ok).toBe(true);
+    fireEvent.click(view);
+    expect(onView).toHaveBeenCalledTimes(1);
+    // Touch: a real 44 px target.
+    expect(view.className).toContain('coarse:min-h-[44px]');
+  });
+
   it('is hidden when nothing is happening', () => {
     const { container } = render(<ActivityLine studio={makeFakeStudio()} />);
     expect(container).toBeEmptyDOMElement();

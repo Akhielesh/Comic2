@@ -26,7 +26,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController, StudioTab } from '../types';
 import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
-import { HAIRLINE } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, HAIRLINE, RADIUS_PANEL } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -36,7 +36,7 @@ import { StoryTab } from './StoryTab';
 import { StyleTab } from './StyleTab';
 import { pageProgress } from './boardModel';
 import { useCostFormat } from './costFormat';
-import { GhostButton, PrimaryButton, cx, useClickGuard, useElementSize } from './ui';
+import { GhostButton, PrimaryButton, cx, edgeFadeMask, useClickGuard, useEdgeClip, useElementSize } from './ui';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { useBackLayer } from '../mobile/backStack';
 import { BookTimeline } from '../timeline/BookTimeline';
@@ -87,7 +87,12 @@ export const boardTabsFor = (doc: ComicDoc, caps: StudioCaps, active?: StudioTab
 };
 
 /** An open spend approval, mirrored on the board so a click here can be answered here. */
-export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean }> = ({ studio, compact = false }) => {
+export const GateBanner: React.FC<{
+  studio: StudioController;
+  compact?: boolean;
+  /** A short board (a landscape phone): the one-line banner drops its outer spacing (one 44 px row). */
+  dense?: boolean;
+}> = ({ studio, compact = false, dense = false }) => {
   const gate = studio.doc?.gate;
   const { busyKey, fire } = useClickGuard(4000);
   const [details, setDetails] = useState(false);
@@ -116,7 +121,7 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
         role="region"
         aria-label="Waiting for your approval"
         data-gate-banner="compact"
-        className="mx-2 mt-2 shrink-0 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 px-2.5 py-1.5 text-[var(--ds-ink)]"
+        className={cx('mx-2 shrink-0 border border-[var(--ds-hairline)] px-2.5 text-[var(--ds-ink)]', RADIUS_PANEL, ACCENT_SOFT_BG, dense ? 'mt-1 py-0' : 'mt-2 py-1.5')}
       >
         <div className="flex min-w-0 items-center gap-2">
           <button
@@ -124,7 +129,7 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
             onClick={() => setDetails((d) => !d)}
             aria-expanded={details}
             title={`${gate.title} · ${price} · ${images}${overBudget}`}
-            className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-[44px]"
+            className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]"
           >
             <span className="min-w-0 truncate font-semibold">{gate.title}</span>
             <span className="min-w-0 max-w-[45%] shrink-0 truncate tabular-nums text-[var(--ds-muted)]">· {price}</span>
@@ -148,7 +153,7 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
       role="region"
       aria-label="Waiting for your approval"
       data-gate-banner="full"
-      className="mx-3 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 px-3 py-2.5 sm:mx-4"
+      className={cx('mx-3 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border border-[var(--ds-hairline)] px-3 py-2.5 sm:mx-4', RADIUS_PANEL, ACCENT_SOFT_BG)}
     >
       <div className="min-w-0 flex-1 text-[12.5px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">
         <span className="font-semibold">{gate.title}</span>
@@ -161,35 +166,6 @@ export const GateBanner: React.FC<{ studio: StudioController; compact?: boolean 
       {buttons}
     </div>
   );
-};
-
-/** Sideways-scrolling rows: which edges are clipped (for the "there is more" fade). */
-const useEdgeClip = (ref: React.RefObject<HTMLElement | null>, deps: React.DependencyList) => {
-  const [clip, setClip] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
-  const measure = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const start = el.scrollLeft > 2;
-    const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
-    setClip((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
-  }, [ref]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measure, ...deps]);
-  return { clip, measure };
-};
-
-const FADE_MASK = {
-  both: '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]',
-  end: '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]',
-  start: '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
 };
 
 /** A feature surface docked in the board (the book timeline): a crash hides it, never the board. */
@@ -330,12 +306,15 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
     (rootSize.width > 0 ? rootSize.width < GATE_COMPACT_BELOW_PX : ff.widthClass === 'compact') ||
     (rootSize.height > 0 ? rootSize.height < GATE_COMPACT_BELOW_H_PX : ff.heightClass === 'compact');
   const hideInactiveBadges = ff.width < TAB_BADGES_MIN_WIDTH;
-  const mask = clip.start && clip.end ? FADE_MASK.both : clip.end ? FADE_MASK.end : clip.start ? FADE_MASK.start : '';
+  // A landscape phone (~343 px tall, of which the shell keeps ~140): the board's own chrome — the tab row
+  // and the one-line gate — loses its outer padding, so the panel under them is not a 35 px slit.
+  const denseChrome = ff.heightClass === 'compact';
+  const mask = edgeFadeMask(clip);
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board data-board-frozen={focused ? 'true' : undefined}>
       <FrozenWhileEditing frozen={!!focused}>
-        <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 py-1.5 sm:px-4 sm:py-2', HAIRLINE)}>
+        <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 sm:px-4', denseChrome ? 'py-0.5' : 'py-1.5 sm:py-2', HAIRLINE)} data-board-tabs={denseChrome ? 'dense' : undefined}>
           <span className="hidden text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] md:inline">Board</span>
           <div
             ref={stripRef}
@@ -376,7 +355,7 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
             })}
           </div>
         </div>
-        <GateBanner studio={studio} compact={gateCompact} />
+        <GateBanner studio={studio} compact={gateCompact} dense={denseChrome} />
         <div
           ref={scrollRef}
           onScroll={onScroll}

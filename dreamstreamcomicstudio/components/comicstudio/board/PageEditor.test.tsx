@@ -222,7 +222,7 @@ describe('PageEditor', () => {
     fireEvent.keyDown(balloon, { key: 'ArrowUp' });
     expect(studio.patch).toHaveBeenCalledWith(
       [{ op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l2', patch: { x: 0.06, y: 0.495, pinned: true } }],
-      { undo: true, label: 'Move balloon', coalesce: 'balloon:pg_1:pg_1_l2' }
+      { undo: true, label: 'Move balloon', coalesce: 'balloon:move:pg_1:pg_1_l2' }
     );
   });
 
@@ -652,7 +652,9 @@ describe('PageEditor — phones, tablets and foldables (mobile.md §5.6)', () =>
     fireEvent.focus(hitOf('pg_1_l4'));
     expect(screen.getByTestId('lettering-inspector')).toHaveAttribute('data-presentation', 'sheet');
     expect(screen.queryByRole('region', { name: 'Page tools sheet' })).toBeNull();
-    expect(within(screen.getByTestId('editor-canvas-area')).getByRole('group', { name: 'Undo and redo' })).toBeInTheDocument();
+    // Above the sheet, in the stage (not in the canvas area, which may slide up under it).
+    expect(within(screen.getByTestId('editor-undo-float')).getByRole('group', { name: 'Undo and redo' })).toBeInTheDocument();
+    expect(screen.getByTestId('editor-canvas-box').contains(screen.getByTestId('editor-undo-float'))).toBe(true);
   });
 
   it('phone: the image variant follows the page with no sheet over it — opening the inspector never swaps in a smaller file', () => {

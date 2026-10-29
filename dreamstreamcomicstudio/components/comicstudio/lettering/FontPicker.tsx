@@ -9,6 +9,7 @@ import type { FontId, LatinFontId } from '../../../shared/comic/lettering/style'
 import { languageSpec } from '../../../shared/comic/languages';
 import { ensureFonts } from './fontLoader';
 import { cx } from '../board/ui';
+import { RADIUS_PILL } from '../../chat/studioDesign';
 
 const ROLE: Record<LatinFontId, string> = {
   'comic-neue': 'Classic dialogue',
@@ -32,6 +33,18 @@ export const LATIN_FONTS: LatinFontId[] = [
 export const EASY_FONTS: LatinFontId[] = ['comic-neue', 'andika', 'patrick-hand', 'shantell-sans', 'atkinson', 'bangers'];
 
 const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? id;
+
+/**
+ * The Easy chips for a lettering language: the friendly six for Latin-script languages; otherwise every
+ * face that really letters the language — its own script faces (dialogue, legible, SFX) and any registry
+ * face that covers the script (Kalam writes Devanagari) — in that order, no duplicates.
+ */
+export const easyFontsFor = (lang: string): FontId[] => {
+  const spec = languageSpec(lang);
+  if (!spec || spec.script === 'Latn') return EASY_FONTS;
+  const own: FontId[] = [spec.fonts.dialogue, spec.fonts.legible, spec.fonts.sfx];
+  return [...new Set<FontId>([...own, ...LATIN_FONTS.filter((f) => fontCoversLanguage(f, lang))])];
+};
 
 export interface FontPickerProps {
   value: FontId | undefined;
@@ -65,7 +78,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
     const extra = spec && spec.script !== 'Latn' ? [...new Set([spec.fonts.dialogue, spec.fonts.legible, spec.fonts.sfx])].filter((f) => !LATIN_FONTS.includes(f as LatinFontId)) : [];
     return [...extra, ...LATIN_FONTS];
   }, [spec]);
-  const shown = simple ? EASY_FONTS : options;
+  const shown = simple ? easyFontsFor(lang) : options;
 
   // Load the faces for the previews when the list is visible (free; files are cached).
   useEffect(() => {
@@ -87,25 +100,39 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
   };
 
   if (simple) {
+    // A non-Latin comic (Hindi, Telugu, …): Latin-only faces would never be used for its text (the resolver
+    // falls back to the script's own face), so the Easy chips are the faces that CAN letter it, the one in
+    // use is the one checked, and a visible line says why (never a tooltip-only hint — LE-10).
+    const chips = easyFontsFor(lang);
+    const scriptOnly = !!spec && spec.script !== 'Latn';
+    const current = scriptOnly && value ? resolveLetteringFont(value, 'speech', lang).fontId : value;
     return (
-      <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5">
-        {EASY_FONTS.map((f) => (
-          <button
-            key={f}
-            type="button"
-            role="radio"
-            aria-checked={value === f}
-            title={`${labelOf(f)} — ${ROLE[f as LatinFontId]}${note(f) ? ` (${note(f)})` : ''}`}
-            onClick={() => onChange(f)}
-            className={cx(
-              'rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
-              value === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
-            )}
-            style={{ fontFamily: fontFamilyStack(f) }}
-          >
-            {labelOf(f)}
-          </button>
-        ))}
+      <div className="min-w-0 space-y-1">
+        <div role="radiogroup" aria-label={label} aria-describedby={scriptOnly ? `${id}-script` : undefined} className="flex flex-wrap gap-1.5">
+          {chips.map((f) => (
+            <button
+              key={f}
+              type="button"
+              role="radio"
+              aria-checked={current === f}
+              title={`${labelOf(f)} — ${(ROLE as Record<string, string>)[f] ?? `${spec?.english ?? 'Script'} face`}`}
+              onClick={() => onChange(f)}
+              className={cx(
+                RADIUS_PILL,
+                'border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
+                current === f ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
+              )}
+              style={{ fontFamily: fontFamilyStack(f) }}
+            >
+              {labelOf(f)}
+            </button>
+          ))}
+        </div>
+        {scriptOnly && (
+          <p id={`${id}-script`} data-testid="font-script-note" className="text-[11px] leading-snug text-[var(--ds-muted)]">
+            Only faces that can write {spec!.english} are shown — Latin-only faces (Bangers, Comic Neue…) would never be used for its text.
+          </p>
+        )}
       </div>
     );
   }
@@ -128,7 +155,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
         aria-expanded={open}
         aria-labelledby={`${id}-label ${id}-value`}
         onClick={() => setOpen((v) => !v)}
-        className="flex h-9 w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+        className="flex h-9 w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
       >
         <span id={`${id}-value`} className="min-w-0 flex-1 truncate" style={{ fontFamily: value ? fontFamilyStack(value) : undefined }}>
           {value ? labelOf(value) : 'Mixed'}
@@ -186,7 +213,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
                 <span className="shrink-0 rounded-full border border-[var(--ds-hairline)] px-1.5 py-px text-[9.5px] font-medium tabular-nums text-[var(--ds-muted)]" title="Font licence">
                   {meta.license === 'Apache-2.0' ? 'Apache' : 'OFL'}
                 </span>
-                {value === f && <Check className="h-3.5 w-3.5 shrink-0 text-[#D97757]" aria-hidden />}
+                {value === f && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
               </li>
             );
           })}

@@ -14,7 +14,7 @@ import { resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { FONT_REGISTRY, fontCoversLanguage } from '../../../../shared/comic/lettering/fonts.js';
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../../shared/comic/lettering/layout.js';
-import { fitBalloonOnPage, placeBalloonsDetailed, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
+import { fitBalloonOnPage, placeBalloonsWholeWords, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
 import {
   BORDER_STYLES,
   BUBBLE_SHAPES,
@@ -620,7 +620,7 @@ const pageCtx = (doc: ComicDoc, page: Page): PageCtx => {
   const sizer = letteringSizer(doc, page, aspect, estimateMeasure);
   const rtl = doc.format.readingDirection === 'rtl';
   const qc = page.render.qc;
-  const filled = placeBalloonsDetailed({
+  const filled = placeBalloonsWholeWords({
     page, boxes, aspect, rtl, plansFor: sizer, keepOut: qc?.keepOut, heads: qc?.heads, safeMargin, existing: page.balloons, keep: 'all', lang: doc.format.language
   });
   const stored = new Set(page.balloons.map((b) => b.lineId));
@@ -738,7 +738,7 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
             return `Every chosen balloon on page ${page.n} is ${lockedIds.size ? 'locked or ' : ''}placed by you (pinned), so I left them alone. Say "include the ones I moved" to re-letter those too.${recheckNote}`;
           }
           const qc = page.render.qc;
-          const res = placeBalloonsDetailed({
+          const res = placeBalloonsWholeWords({
             page, boxes: pc.boxes, aspect: pc.aspect, rtl: pc.rtl, plansFor: pc.sizer, keepOut: qc?.keepOut, heads: qc?.heads,
             safeMargin: pc.safeMargin, existing: page.balloons, only: targetIds, lang: doc.format.language
           });

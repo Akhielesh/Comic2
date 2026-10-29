@@ -14,7 +14,7 @@ import { dhashDistance, isPhotoLikeness, pickRefs, sheetRefs, sheetRefsChanged }
 import { hashSeed } from './lettering/shapes';
 import { fontString, fontsForDoc, resolveLetteringFont, FONT_REGISTRY } from './lettering/fonts';
 import { estimateMeasure, letteringSizer, planLettering } from './lettering/layout';
-import { fitBalloonOnPage, placeBalloons, placeBalloonsDetailed } from './lettering/place';
+import { fitBalloonOnPage, placeBalloons, placeBalloonsDetailed, placeBalloonsWholeWords } from './lettering/place';
 import { LIBRARY_ID_RE, clampLibraryBudget, libraryStatusForScore, stylePreviewId } from './library';
 import { planTranslation } from './translationPlan';
 
@@ -167,7 +167,7 @@ describe('LetterPlan amendments (P2-AMEND: tip + crowded)', () => {
     for (const p of plans.filter((x) => x.kind === 'caption' || x.kind === 'sfx')) expect(p.tip).toBeUndefined();
   });
 
-  it('crowded mirrors placeBalloonsDetailed for software-placed lines; stored balloons never are', () => {
+  it('crowded mirrors the placement at the density the planner chose for software-placed lines; stored balloons never are', () => {
     const doc = normalizeDoc(makeSampleDoc());
     const page = doc.pages[0];
     for (const p of planLettering(doc, page, 2 / 3, estimateMeasure)) if (!p.fallback) expect(p.crowded).toBeUndefined();
@@ -176,12 +176,15 @@ describe('LetterPlan amendments (P2-AMEND: tip + crowded)', () => {
     const lines = Array.from({ length: 8 }, (_, i) => ({ id: `cr_${i}`, kind: 'speech' as const, text: long }));
     const crowdedPage = { ...page, balloons: [], panels: page.panels.map((pn, i) => (i === page.panels.length - 1 ? { ...pn, lines } : { ...pn, lines: [] })) };
     const plans = planLettering(doc, crowdedPage, 2 / 3, estimateMeasure);
-    const expected = placeBalloonsDetailed({
+    // A crowded page is lettered at a smaller density step (DENSITY_STEPS) when that helps, and a line whose only
+    // spot splits a word is retried in whole words: mirror the same step and the same whole-word placement.
+    const scale = plans.find((p) => p.densityScale)?.densityScale ?? 1;
+    const expected = placeBalloonsWholeWords({
       page: crowdedPage,
       boxes: geo.panelBoxesFor(doc, crowdedPage),
       aspect: 2 / 3,
       rtl: false,
-      plansFor: letteringSizer(doc, crowdedPage, 2 / 3, estimateMeasure),
+      plansFor: letteringSizer(doc, crowdedPage, 2 / 3, estimateMeasure, scale),
       keepOut: crowdedPage.render?.qc?.keepOut,
       heads: crowdedPage.render?.qc?.heads,
       safeMargin: 0.03,

@@ -37,7 +37,7 @@ export const withAlpha = (hex: string, alpha: number): Color => {
 
 // Touch: real 44 px swatches (a 28 px swatch's 44 px ::after overlapped its neighbours' and stole taps).
 const SWATCH_CLS =
-  'relative h-7 w-7 shrink-0 rounded-full border border-[var(--ds-hairline)] shadow-sm transition-transform duration-150 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60 motion-reduce:transition-none motion-reduce:hover:scale-100 coarse:h-11 coarse:w-11 coarse:hover:scale-100';
+  'relative h-7 w-7 shrink-0 rounded-full border border-[var(--ds-hairline)] shadow-sm transition-transform duration-150 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] motion-reduce:transition-none motion-reduce:hover:scale-100 coarse:h-11 coarse:w-11 coarse:hover:scale-100';
 
 /** Checkerboard behind translucent swatches (so 50 % white is visibly see-through). */
 const CHECKER: React.CSSProperties = {
@@ -75,7 +75,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
             aria-pressed={value === 'auto'}
             title="Automatic colour"
             onClick={() => onChange('auto')}
-            className={cx(SWATCH_CLS, 'grid place-items-center bg-[conic-gradient(#e63946,#ffb703,#06d6a0,#3a86ff,#8338ec,#e63946)] text-[9px] font-bold text-white', value === 'auto' && 'ring-2 ring-[#D97757]')}
+            className={cx(SWATCH_CLS, 'grid place-items-center bg-[conic-gradient(#e63946,#ffb703,#06d6a0,#3a86ff,#8338ec,#e63946)] text-[9px] font-bold text-white', value === 'auto' && 'ring-2 ring-[var(--ds-accent)]')}
           >
             <span className="sr-only">Automatic</span>A
           </button>
@@ -90,7 +90,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
               aria-label={`${label}: ${s}`}
               title={s}
               onClick={() => onChange(withAlpha(s, alpha))}
-              className={cx(SWATCH_CLS, selected && 'ring-2 ring-[#D97757]')}
+              className={cx(SWATCH_CLS, selected && 'ring-2 ring-[var(--ds-accent)]')}
               style={{ background: s }}
             />
           );
@@ -101,7 +101,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
             aria-pressed={value === 'none'}
             title="Transparent"
             onClick={() => onChange('none')}
-            className={cx(SWATCH_CLS, value === 'none' && 'ring-2 ring-[#D97757]')}
+            className={cx(SWATCH_CLS, value === 'none' && 'ring-2 ring-[var(--ds-accent)]')}
             style={CHECKER}
           >
             <span className="sr-only">Transparent</span>
@@ -112,7 +112,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
           <button
             type="button"
             onClick={() => setMore(true)}
-            className="rounded-full px-2 py-1 text-[11.5px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]"
+            className="rounded-full px-2 py-1 text-[11.5px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]"
           >
             More…
           </button>
@@ -144,7 +144,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
               if (e.key === 'Enter') commitDraft();
             }}
             spellCheck={false}
-            className="h-7 w-[5.5rem] min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 font-mono text-[12px] text-[var(--ds-ink)] coarse:h-11 coarse:w-[7rem] coarse:text-[16px] focus:border-[#D97757]/50 focus:outline-none"
+            className="h-7 w-[5.5rem] min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 font-mono text-[12px] text-[var(--ds-ink)] coarse:h-11 coarse:w-[7rem] coarse:text-[16px] focus:border-[var(--ds-accent)] focus:outline-none"
           />
           {eyeDropper && (
             <button
@@ -159,7 +159,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
                   /* the user dismissed the eyedropper */
                 }
               }}
-              className="grid h-7 w-7 place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
+              className="grid h-7 w-7 place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:h-11 coarse:w-11"
             >
               <Pipette className="h-3.5 w-3.5" aria-hidden />
             </button>
@@ -179,7 +179,7 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
             step={5}
             value={Math.round(alpha * 100)}
             onChange={(e) => onChange(withAlpha(hex, Number(e.target.value) / 100), { scrub: true })}
-            className="min-w-0 flex-1 accent-[#D97757]"
+            className="min-w-0 flex-1 accent-[var(--ds-accent)]"
           />
           <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-[var(--ds-muted)]">{Math.round(alpha * 100)}%</span>
         </div>

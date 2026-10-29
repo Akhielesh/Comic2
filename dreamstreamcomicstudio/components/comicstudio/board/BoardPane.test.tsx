@@ -290,4 +290,53 @@ describe('BoardPane feature tabs and dock (wave 2)', () => {
     );
     expect(screen.getByRole('region', { name: 'Waiting for your approval' })).toHaveAttribute('data-gate-banner', 'compact');
   });
+
+  it('a landscape phone: the tab row and the one-line gate drop their outer padding (the panel keeps the height)', () => {
+    const doc = makeSampleDoc((d) => {
+      d.gate = { id: 'g_d', action: { type: 'render_pages' }, title: 'Draw 2 pages', summary: '', estimateUsd: 0.1, imageCount: 2, model: 'x', createdAt: SAMPLE_NOW, status: 'open', reason: 'policy' };
+    });
+    const { unmount } = render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <BoardPane studio={makeStudio(doc)} />
+      </FormFactorProvider>
+    );
+    const row = screen.getByRole('tablist', { name: 'Board' }).parentElement as HTMLElement;
+    expect(row).toHaveAttribute('data-board-tabs', 'dense');
+    expect(row.className).toMatch(/\bpy-0\.5\b/);
+    expect(row.className).not.toMatch(/\bsm:py-2\b/);
+    const gate = screen.getByRole('region', { name: 'Waiting for your approval' });
+    expect(gate.className).toMatch(/\bmt-1\b/);
+    expect(gate.className).toMatch(/\bpy-0\b/);
+    unmount();
+    // A portrait phone keeps the roomier spacing.
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 360, h: 740, coarse: true })}>
+        <BoardPane studio={makeStudio(doc)} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('tablist', { name: 'Board' }).parentElement).not.toHaveAttribute('data-board-tabs');
+    expect(screen.getByRole('region', { name: 'Waiting for your approval' }).className).toMatch(/\bmt-2\b/);
+  });
+
+  // Atlas skin rule (review 2026-10-29): restyled chrome is drawn from the --ds-* tokens, never a hue.
+  it('the gate banner (one line and full) is drawn from the skin tokens, never a literal hue or rounded-2xl', () => {
+    const doc = makeSampleDoc((d) => {
+      d.gate = { id: 'g_t', action: { type: 'render_pages' }, title: 'Draw 2 pages', summary: '', estimateUsd: 0.1, imageCount: 2, model: 'x', createdAt: SAMPLE_NOW, status: 'open', reason: 'policy' };
+    });
+    for (const ff of [formFactorFor({ w: 360, h: 740, coarse: true }), formFactorFor({ w: 1440, h: 900, coarse: false })]) {
+      const { unmount } = render(
+        <FormFactorProvider value={ff}>
+          <BoardPane studio={makeStudio(doc)} />
+        </FormFactorProvider>
+      );
+      const gate = screen.getByRole('region', { name: 'Waiting for your approval' });
+      expect(gate.className).toContain('bg-[var(--ds-accent-soft)]');
+      expect(gate.className).toContain('rounded-[var(--ds-radius-panel)]');
+      expect(gate.className).not.toMatch(/rounded-2xl|#D97757/i);
+      // The one-line banner's own details toggle too (the shared Approve / Not now buttons are ui.tsx's).
+      const toggle = within(gate).queryByRole('button', { name: /Show details/ });
+      if (toggle) expect(toggle.className).toContain('ring-[var(--ds-ring)]');
+      unmount();
+    }
+  });
 });

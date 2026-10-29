@@ -289,6 +289,33 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     await waitFor(() => expect(within(dialog).getByText('Downloaded the PDF.')).toBeInTheDocument());
   });
 
+  it('the full-screen reader opened from the inline view (a ?p= deep link → Full screen) offers the same gated Download (publish-share-reader-05)', async () => {
+    pdfMock.exportComicPdf.mockResolvedValue({ fileName: 'x.pdf', pages: 6, failed: [], skipped: [] });
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} start={{ page: 1 }} />);
+    const inline = await screen.findByTestId('comic-reader');
+    // The header carries Download; the inline toolbar adds no second entry for it.
+    expect(await screen.findByRole('button', { name: 'Download' })).toBeInTheDocument();
+    expect(within(inline).queryByRole('button', { name: 'More' })).toBeNull();
+    fireEvent.click(within(inline).getByRole('button', { name: /Full screen/ }));
+    const dialog = await screen.findByTestId('immersive-reader');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }));
+    await waitFor(() => expect(pdfMock.exportComicPdf).toHaveBeenCalledTimes(1));
+    // The share link's gated download (pub/ objects only), never the reader's built-in PDF.
+    const urlFor = pdfMock.exportComicPdf.mock.calls[0][1] as (a: unknown) => string | undefined;
+    expect(urlFor('https://evil.example/x.png')).toBeUndefined();
+    expect(urlFor({ path: `pub/${KEY}/p1.webp`, source: 'generated', at: 0 })).toBe(`https://public.test/pub/${KEY}/p1.webp`);
+  });
+
+  it('the full-screen reader opened from the inline view offers no Download when the author turned downloads off', async () => {
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ allowDownload: false }));
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} start={{ page: 1 }} />);
+    const inline = await screen.findByTestId('comic-reader');
+    fireEvent.click(within(inline).getByRole('button', { name: /Full screen/ }));
+    const dialog = await screen.findByTestId('immersive-reader');
+    expect(within(dialog).queryByRole('button', { name: /PDF|Download/i })).toBeNull();
+  });
+
   it('the full-screen reader offers no Download when the author turned downloads off', async () => {
     const p = payload({ allowDownload: false });
     markIntroPlayed(p.doc.id);

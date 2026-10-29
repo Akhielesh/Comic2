@@ -4,7 +4,10 @@
 import React, { useRef, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { PopSheet, SHEET_GUTTER, SlideOver, clampSheetX, placeSheet } from './PopSheet';
+import { PopSheet, SHEET_GUTTER, SlideOver, clampSheetX, placeSheet, segmentBoundsFor } from './PopSheet';
+import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { sideBySideScreens } from '../mobile/formFactor';
 
 describe('clampSheetX / placeSheet (pure)', () => {
   it('a 366 px sheet right-aligned to a button at x=206 on a 390 phone starts at the 12 px gutter', () => {
@@ -24,6 +27,125 @@ describe('clampSheetX / placeSheet (pure)', () => {
     expect(placeSheet(low, { width: 300, height: 300 }, { width: 390, height: 844 }, 'below', 'start').placement).toBe('above');
     const wide = placeSheet(anchor, { width: 900, height: 100 }, { width: 390, height: 844 }, 'below', 'stretch');
     expect(wide.width).toBeLessThanOrEqual(390 - SHEET_GUTTER * 2);
+  });
+});
+
+describe('dual-screen devices: a popover stays on the screen of its anchor (sheets-span-the-fold)', () => {
+  const SEGS = [
+    { left: 0, right: 441 },
+    { left: 441, right: 882 }
+  ];
+  it('segmentBoundsFor picks the screen under the anchor; one screen → no bounds', () => {
+    expect(segmentBoundsFor({ left: 600, right: 700 }, SEGS)).toEqual({ left: 441, right: 882 });
+    expect(segmentBoundsFor({ left: 40, right: 84 }, SEGS)).toEqual({ left: 0, right: 441 });
+    expect(segmentBoundsFor({ left: 600, right: 700 }, null)).toBeNull();
+    expect(segmentBoundsFor({ left: 600, right: 700 }, [{ left: 0, right: 882 }])).toBeNull();
+  });
+
+  it('the 400 px Quality sheet under a header button at x≈690 lands right of the fold (it spanned 246–646)', () => {
+    const anchor = { left: 600, right: 690, top: 10, bottom: 54 };
+    const vp = { width: 882, height: 1104 };
+    const free = placeSheet(anchor, { width: 400, height: 300 }, vp, 'below', 'end');
+    expect(free.left).toBeLessThan(441); // the old placement crossed the fold
+    const p = placeSheet(anchor, { width: 400, height: 300 }, vp, 'below', 'end', 8, SHEET_GUTTER, segmentBoundsFor(anchor, SEGS));
+    expect(p.left).toBeGreaterThanOrEqual(441 + SHEET_GUTTER);
+    expect(p.left + (p.width ?? 400)).toBeLessThanOrEqual(882 - SHEET_GUTTER);
+    expect(p.maxWidth).toBe(441 - SHEET_GUTTER * 2);
+    // Wider than the screen: it shrinks to the screen, never across the hinge.
+    const wide = placeSheet(anchor, { width: 600, height: 300 }, vp, 'below', 'end', 8, SHEET_GUTTER, { left: 441, right: 882 });
+    expect(wide.width).toBe(441 - SHEET_GUTTER * 2);
+    expect(wide.left).toBe(441 + SHEET_GUTTER);
+  });
+
+  it('AdaptiveSheet passes the side-by-side segments to its popover', () => {
+    const rect = (left: number, width: number) => ({ left, right: left + width, top: 0, bottom: 1104, width, height: 1104, x: left, y: 0, toJSON: () => ({}) }) as DOMRectReadOnly;
+    const ff = formFactorFor({ w: 882, h: 1104, coarse: false, segments: { count: 2, axis: 'horizontal', rects: [rect(0, 441), rect(441, 441)], hinge: { start: 441, end: 441 } } });
+    const Probe: React.FC = () => {
+      const a = useRef<HTMLButtonElement>(null);
+      return (
+        <div>
+          <button ref={a} type="button">
+            Quality
+          </button>
+          <AdaptiveSheet open onClose={() => undefined} label="Quality" anchorRef={a} placement="below" align="end">
+            <p>tiers</p>
+          </AdaptiveSheet>
+        </div>
+      );
+    };
+    const btnRect = { left: 600, right: 690, top: 10, bottom: 54, width: 90, height: 44, x: 600, y: 10, toJSON: () => ({}) } as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(btnRect);
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 400 });
+    try {
+      render(
+        <FormFactorProvider value={ff}>
+          <Probe />
+        </FormFactorProvider>
+      );
+      const sheet = screen.getByRole('dialog', { name: 'Quality' });
+      expect(parseFloat(sheet.style.left)).toBeGreaterThanOrEqual(441 + SHEET_GUTTER);
+      expect(sheet.style.maxWidth).toBe(`${441 - SHEET_GUTTER * 2}px`);
+    } finally {
+      spy.mockRestore();
+      if (original) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', original);
+    }
+  });
+});
+
+describe('dual-screen seen only by the media query (no segment rects)', () => {
+  // useFormFactor reads `(horizontal-viewport-segments: 2)` as { count: 2, axis: 'horizontal', rects: [] }
+  // when the Viewport Segments API is absent: the popover must still keep to one screen.
+  const MQ_ONLY = { count: 2 as const, axis: 'horizontal' as const, rects: [] as DOMRectReadOnly[] };
+
+  it('sideBySideScreens: real rects as spans; no rects → the window halves; one screen or stacked → null', () => {
+    const rect = (left: number, width: number) => ({ left, right: left + width, top: 0, bottom: 1104, width, height: 1104, x: left, y: 0, toJSON: () => ({}) }) as DOMRectReadOnly;
+    expect(sideBySideScreens({ count: 2, axis: 'horizontal', rects: [rect(0, 430), rect(452, 430)] }, 882)).toEqual([
+      { left: 0, right: 430 },
+      { left: 452, right: 882 }
+    ]);
+    expect(sideBySideScreens(MQ_ONLY, 882)).toEqual([
+      { left: 0, right: 441 },
+      { left: 441, right: 882 }
+    ]);
+    expect(sideBySideScreens(MQ_ONLY, 0)).toBeNull();
+    expect(sideBySideScreens({ count: 2, axis: 'vertical', rects: [] }, 882)).toBeNull();
+    expect(sideBySideScreens({ count: 1, axis: null, rects: [] }, 882)).toBeNull();
+  });
+
+  it('AdaptiveSheet keeps the Quality popover right of the fold with no segment rects', () => {
+    const ff = formFactorFor({ w: 882, h: 1104, coarse: false, segments: MQ_ONLY });
+    const Probe: React.FC = () => {
+      const a = useRef<HTMLButtonElement>(null);
+      return (
+        <div>
+          <button ref={a} type="button">
+            Quality
+          </button>
+          <AdaptiveSheet open onClose={() => undefined} label="Quality" anchorRef={a} placement="below" align="end">
+            <p>tiers</p>
+          </AdaptiveSheet>
+        </div>
+      );
+    };
+    const btnRect = { left: 600, right: 690, top: 10, bottom: 54, width: 90, height: 44, x: 600, y: 10, toJSON: () => ({}) } as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(btnRect);
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 400 });
+    try {
+      render(
+        <FormFactorProvider value={ff}>
+          <Probe />
+        </FormFactorProvider>
+      );
+      const sheet = screen.getByRole('dialog', { name: 'Quality' });
+      // Unbounded, the 400 px sheet right-aligned to x=690 would span 290–690, across the fold at 441.
+      expect(parseFloat(sheet.style.left)).toBeGreaterThanOrEqual(441 + SHEET_GUTTER);
+      expect(sheet.style.maxWidth).toBe(`${441 - SHEET_GUTTER * 2}px`);
+    } finally {
+      spy.mockRestore();
+      if (original) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', original);
+    }
   });
 });
 

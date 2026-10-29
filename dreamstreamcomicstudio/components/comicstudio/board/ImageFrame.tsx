@@ -136,6 +136,10 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
   const blocked = !!asset && !canServeToOwner(asset);
   const showImage = !!url && broken !== url && !blocked;
   const waiting = !url && !!asset?.path && !blocked;
+  // While the overlay is the whole story — a failure's opaque card, or the shimmer and its
+  // "Drawing… / Check again" pill — the placeholder under it ("Not drawn yet", the initials + hint)
+  // would only be text under text (ui-findings 2026-10-29), so it is not rendered.
+  const overlayCovers = !!overlay && (render?.status === 'failed' || render?.status === 'queued' || render?.status === 'rendering');
   const img = showImage ? (
     <img
       src={url}
@@ -158,7 +162,7 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
     </div>
   ) : waiting ? (
     <div className="studio-shimmer absolute inset-0" role="img" aria-label={`Loading ${alt}`} />
-  ) : blocked ? null : (
+  ) : blocked || overlayCovers ? null : (
     <div className="absolute inset-0">{placeholder}</div>
   );
   if (asset && (safety || blocked)) {

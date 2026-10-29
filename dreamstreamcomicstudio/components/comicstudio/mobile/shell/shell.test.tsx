@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { formFactorFor } from '../useFormFactor';
 import { StudioLayout, readSplit, SPLIT_STORAGE_KEY } from './StudioLayout';
-import { DISABLED_HINT_MS, MobileTabBar, type StudioNavItem } from './MobileTabBar';
+import { DISABLED_HINT_MS, MobileTabBar, navItemName, type StudioNavItem } from './MobileTabBar';
+import { NavigationRail } from './NavigationRail';
+import { labelInName } from '../testing/labelInName';
 import { PaneSwitcher, readPaneMode, writePaneMode } from './PaneSwitcher';
 import { DualScreen, segmentSizes } from './DualScreen';
 import { CompactHeaderMenu } from './CompactHeaderMenu';
@@ -56,15 +58,35 @@ describe('StudioLayout', () => {
     expect(onBack).toHaveBeenCalled();
   });
 
-  it('tablets split with a resizable gutter that has a 24 px touch strip and a grabber', () => {
+  it('tablets: the touch gutter is its own 24 px strip and the control is a 44 × 64 grab handle in its middle (split-resizer-touch)', () => {
     layout(formFactorFor({ w: 820, h: 1180, coarse: true }));
-    const gutter = screen.getByRole('separator', { name: 'Resize conversation and board' });
-    expect(gutter.className).toContain('w-6');
-    expect(gutter).toHaveAttribute('aria-valuenow', '42');
-    fireEvent.keyDown(gutter, { key: 'ArrowRight' });
-    expect(Number(gutter.getAttribute('aria-valuenow'))).toBeGreaterThan(42);
-    fireEvent.keyDown(gutter, { key: 'Home' });
-    expect(gutter).toHaveAttribute('aria-valuenow', '42');
+    const handle = screen.getByRole('separator', { name: 'Resize conversation and board' });
+    const strip = document.querySelector('[data-split-gutter]') as HTMLElement;
+    // The strip takes its own layout width between the panes (no negative margins over them), so it
+    // never steals a pane's tap; it is not a focusable control (no full-height target into the insets).
+    expect(strip.className).toMatch(/(^| )w-6( |$)/);
+    expect(strip.className).not.toMatch(/-mx-/);
+    expect(strip).not.toHaveAttribute('tabindex');
+    expect(strip).not.toHaveAttribute('role');
+    expect(strip.contains(handle)).toBe(true);
+    // The focusable handle is ≥ 44 px both ways (w-11 = 44, h-16 = 64) and centred vertically, away
+    // from the top/bottom safe-area bands.
+    expect(handle.className).toMatch(/(^| )w-11( |$)/);
+    expect(handle.className).toMatch(/(^| )h-16( |$)/);
+    expect(handle.className).toContain('top-1/2');
+    expect(handle).toHaveAttribute('tabindex', '0');
+    expect(handle).not.toHaveAttribute('data-hit-exempt');
+    expect(handle).toHaveAttribute('aria-valuenow', '42');
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBeGreaterThan(42);
+    fireEvent.keyDown(handle, { key: 'Home' });
+    expect(handle).toHaveAttribute('aria-valuenow', '42');
+    // A drag that starts anywhere on the strip's line resizes (the handle is only the focusable part).
+    vi.spyOn(strip.parentElement!, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 820, 1000) as DOMRect);
+    fireEvent.pointerDown(strip, { clientX: 344, clientY: 900, pointerType: 'touch', button: 0 });
+    fireEvent.pointerMove(window, { clientX: 426, clientY: 900, pointerType: 'touch' });
+    fireEvent.pointerUp(window, { clientX: 426, clientY: 900, pointerType: 'touch' });
+    expect(Number(handle.getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(50);
   });
 
   it('desktop keeps a thin gutter (fine pointer) at 40/60', () => {
@@ -72,6 +94,7 @@ describe('StudioLayout', () => {
     const gutter = screen.getByRole('separator', { name: 'Resize conversation and board' });
     expect(gutter.className).toContain('w-2');
     expect(gutter).toHaveAttribute('aria-valuenow', '40');
+    expect(document.querySelector('[data-split-gutter]')).toBeNull();
   });
 
   it('pane mode collapses one side of the split (inert, not unmounted)', () => {
@@ -153,7 +176,7 @@ describe('MobileTabBar', () => {
     render(
       <MobileTabBar
         items={nav({
-          board: { badge: '2/5', badgeLabel: '2 of 5 pages ready', dot: 'pulse' },
+          board: { badge: '2 of 5', badgeLabel: '2 of 5 pages ready', dot: 'pulse' },
           read: { disabled: true, disabledReason: 'Read opens once a page is drawn' },
           chat: { dot: 'amber' }
         })}
@@ -166,6 +189,27 @@ describe('MobileTabBar', () => {
     expect(screen.getByRole('button', { name: 'Board, 2 of 5 pages ready, drawing' })).toBeInTheDocument();
     const read = screen.getByRole('button', { name: /^Read, Read opens once a page is drawn/ });
     expect(read).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('every item’s accessible name contains exactly what it shows, label then badge (mobile-tabbar-names, WCAG 2.5.3)', () => {
+    const items = nav({
+      board: { badge: '6 of 12', badgeLabel: '6 of 12 pages ready', dot: 'pulse' },
+      read: { disabled: true, disabledReason: 'Read opens once a page is drawn' },
+      chat: { dot: 'accent' }
+    });
+    const { unmount } = render(<MobileTabBar items={items} />);
+    for (const b of screen.getAllByRole('button')) {
+      const r = labelInName(b);
+      expect(r.ok, `"${r.visible}" ⊄ "${r.name}"`).toBe(true);
+    }
+    // The spoken badge is not repeated when it already begins with the visible one.
+    expect(screen.getByRole('button', { name: 'Board, 6 of 12 pages ready, drawing' })).toBeInTheDocument();
+    unmount();
+    // A terse visible badge ("6/12") still lands in the name, ahead of its spoken meaning.
+    render(<NavigationRail items={nav({ board: { badge: '6/12', badgeLabel: '6 of 12 pages ready' } })} onBack={vi.fn()} />);
+    const board = document.querySelector('[data-nav="board"]')!;
+    expect(labelInName(board).ok).toBe(true);
+    expect(navItemName({ label: 'Board', badge: '6/12', badgeLabel: '6 of 12 pages ready' })).toBe('Board 6/12, 6 of 12 pages ready');
   });
 
   it('a tap on an unavailable item says why (touch has no tooltips) and never selects it', () => {

@@ -38,6 +38,7 @@ vi.mock('../export/zipMemory', async (importOriginal) => {
 import { ReaderTab } from './ReaderTab';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 import { teluguEdition } from '../export/__fixtures__/books';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);
@@ -203,5 +204,81 @@ describe('ReaderTab exports', () => {
     render(<ReaderTab studio={makeStudio(doc)} doc={doc} />);
     fireEvent.click(within(openSheet()).getByRole('button', { name: /^All languages \(ZIP\)/ }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Download one language at a time instead/));
+  });
+});
+
+// Phone landscape (ui-findings 2026-10-29, board/read at 734×343): the board pane is ~100 px tall, so the
+// tab's own action row plus the reader toolbar (two rows) left the toolbar clipped under the pane. On a
+// compact-height device the actions fold into the reader's toolbar: one row, every control reachable.
+describe('ReaderTab in phone landscape (compact height)', () => {
+  it('folds its actions into the reader toolbar and drops the browser full-screen button', () => {
+    const doc = makeSampleDoc();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    expect(screen.queryByRole('toolbar', { name: 'Reader actions' })).toBeNull();
+    const toolbar = screen.getByTestId('reader-toolbar');
+    expect(within(toolbar).getByRole('button', { name: 'Read full screen' })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: 'Share & export' })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: 'Reader look' })).toBeInTheDocument();
+    expect(within(toolbar).queryByRole('button', { name: 'Full screen' })).toBeNull();
+  });
+
+  // Review 2026-10-29: in a 127 px pane one notice stacked above the reader left a 16 px page, and a
+  // second (the draft-edition line, a two-line copy error) pushed the folded toolbar out of the pane.
+  it('notices float over the page area at a compact height: the toolbar stays the first row', async () => {
+    ex.print.mockResolvedValue({ pages: 0, skipped: [], failedImages: [], notice: undefined });
+    const doc = makeSampleDoc((d) => {
+      d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    });
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    pickTelugu();
+    fireEvent.click(within(openSheet()).getByRole('button', { name: /^Print/ }));
+    const status = await screen.findByText(/Print view ready/);
+    const draft = screen.getByText(/still shown in English — not translated yet/);
+    const toolbar = screen.getByTestId('reader-toolbar');
+    const overlay = screen.getByTestId('reader-overlay');
+    for (const notice of [status, draft]) {
+      // Laid over the page (absolutely positioned inside the reader), after the toolbar — never above it.
+      expect(overlay).toContainElement(notice);
+      expect(toolbar.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(overlay.className).toMatch(/\babsolute\b/);
+    // The tab's own column holds nothing but the reader (and the closed sheets' anchors).
+    const column = document.querySelector('[data-reader-tab]') as HTMLElement;
+    expect(within(column.firstElementChild as HTMLElement).getByTestId('reader-toolbar')).toBe(toolbar);
+    // The notices keep working there: Dismiss clears the status.
+    fireEvent.click(within(status.closest('[role="status"]') as HTMLElement).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/Print view ready/)).toBeNull();
+    expect(overlay).toContainElement(screen.getByText(/still shown in English/));
+  });
+
+  it('the dense language switch keeps its width in the toolbar (never squeezed to nothing)', () => {
+    const doc = withTelugu();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    const sw = within(screen.getByTestId('reader-toolbar')).getByRole('radiogroup', { name: 'Reading language' });
+    expect(sw.className).toMatch(/\bshrink-0\b/);
+    expect(screen.getByTestId('reader-toolbar-actions')).toContainElement(sw);
+  });
+
+  it('keeps the action row above the reader at regular heights', () => {
+    const doc = makeSampleDoc();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 1024, h: 768, coarse: true })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('toolbar', { name: 'Reader actions' })).toBeInTheDocument();
+    expect(within(screen.getByTestId('reader-toolbar')).queryByRole('button', { name: 'Read full screen' })).toBeNull();
   });
 });

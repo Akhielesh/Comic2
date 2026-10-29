@@ -10,7 +10,7 @@ import type { DocOp } from '../../../shared/comic/ops';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout';
 import { letteringSizer, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
-import { placeBalloonsDetailed, safeAreaBox } from '../../../shared/comic/lettering/place';
+import { placeBalloonsWholeWords, safeAreaBox } from '../../../shared/comic/lettering/place';
 import {
   DEFAULT_LETTERING,
   DEFAULT_SAFE_MARGIN,
@@ -408,7 +408,7 @@ export function fixSafeAreaOps(doc: ComicDoc, page: Page, plans: readonly Letter
 export function tidyOps(doc: ComicDoc, page: Page, aspect: number, measure: Measure): DocOp[] {
   const ls = doc.letterStyle ?? DEFAULT_LETTERING;
   const qc = page.render?.qc;
-  const result = placeBalloonsDetailed({
+  const result = placeBalloonsWholeWords({
     page,
     boxes: panelBoxesFor(doc, page),
     aspect,
@@ -432,8 +432,78 @@ export function tidyOps(doc: ComicDoc, page: Page, aspect: number, measure: Meas
     if (p.linkTo) out.linkTo = p.linkTo;
     return out;
   });
-  if (JSON.stringify(balloons) === JSON.stringify(page.balloons)) return [];
+  // The placer skips lines with no text (and balloons of lines that no longer exist): their stored
+  // balloons are kept as they are — a `balloons` replace without them would delete them (LE-7).
+  const placedIds = new Set(balloons.map((b) => b.lineId));
+  for (const b of page.balloons || []) {
+    if (placedIds.has(b.lineId)) continue;
+    placedIds.add(b.lineId);
+    balloons.push(b);
+  }
+  // Nothing moves when only the stored ORDER differs (the placer returns reading order): no op, so the
+  // toolbar's Tidy is disabled and no empty undo entry is made.
+  if (sameBalloons(balloons, page.balloons || [])) return [];
   return [{ op: 'balloons', pageId: page.id, balloons }];
+}
+
+/** Canonical form of a balloon (keys sorted, absent = undefined) for order-insensitive comparison. */
+const balloonKey = (b: Balloon): string =>
+  JSON.stringify(
+    Object.keys(b)
+      .filter((k) => (b as unknown as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => [k, (b as unknown as Record<string, unknown>)[k]])
+  );
+
+/** The same balloons by lineId (first one per line, like the engine), whatever their stored order. */
+export const sameBalloons = (a: readonly Balloon[], b: readonly Balloon[]): boolean => {
+  const first = (list: readonly Balloon[]) => {
+    const m = new Map<string, string>();
+    for (const x of list) if (!m.has(x.lineId)) m.set(x.lineId, balloonKey(x));
+    return m;
+  };
+  const ma = first(a);
+  const mb = first(b);
+  if (ma.size !== mb.size) return false;
+  for (const [id, k] of ma) if (mb.get(id) !== k) return false;
+  return true;
+};
+
+/**
+ * Dense pages: the engine letters software-placed balloons a step smaller (LetterPlan.densityScale) and a
+ * pinned or locked balloon at its style's size. The style size each of these lines is DRAWN at
+ * (sizeScale × densityScale, two decimals), by line id — what a drag keeps while the balloon moves.
+ */
+export const keptSizes = (plans: readonly LetterPlan[], lineIds?: readonly string[]): Map<string, number> => {
+  const want = lineIds ? new Set(lineIds) : undefined;
+  const out = new Map<string, number>();
+  for (const p of plans) {
+    if (want && !want.has(p.lineId)) continue;
+    if (typeof p.densityScale !== 'number' || !(p.densityScale > 0 && p.densityScale < 1)) continue;
+    const base = Number.isFinite(p.style.sizeScale) && p.style.sizeScale > 0 ? p.style.sizeScale : 1;
+    out.set(p.lineId, Math.round(clamp(base * p.densityScale, 0.5, 3.5) * 100) / 100);
+  }
+  return out;
+};
+
+/**
+ * Pinning a balloon on a dense page (a drag, a nudge, "Keep here", Lock) would letter it at full size: a
+ * line-style size override keeps the size the user sees. One `line_style` op per distinct size; [] when no
+ * line of `lineIds` is lettered smaller.
+ */
+export function keepDrawnSizeOps(page: Page, plans: readonly LetterPlan[], lineIds: readonly string[]): DocOp[] {
+  const by = new Map<number, string[]>();
+  for (const [id, size] of keptSizes(plans, lineIds)) by.set(size, [...(by.get(size) || []), id]);
+  return [...by].map(([sizeScale, ids]) => ({ op: 'line_style', pageId: page.id, lineIds: ids, patch: { sizeScale }, mode: 'merge' }) as DocOp);
+}
+
+/**
+ * Lock, "Keep here" or any other pin from a menu or a panel: `ops` plus, in the original language, the size
+ * override that keeps a dense page's balloon at the size it is drawn at (keepDrawnSizeOps) — one patch, one
+ * undo entry. A translated edition shares the original's line styles, so there it is `ops` alone.
+ */
+export function pinKeepingSizeOps(ops: DocOp[], page: Page, plans: readonly LetterPlan[], lineIds: readonly string[], editionLang?: string): DocOp[] {
+  return editionLang ? ops : [...ops, ...keepDrawnSizeOps(page, plans, lineIds)];
 }
 
 // ── Lines ─────────────────────────────────────────────────────────────────────
@@ -517,7 +587,7 @@ export const textEditOps = (page: Page, lineId: string, text: string): DocOp[] =
 export function resetPositionOps(doc: ComicDoc, page: Page, lineIds: readonly string[], aspect: number, measure: Measure): DocOp[] {
   const ls = doc.letterStyle ?? DEFAULT_LETTERING;
   const qc = page.render?.qc;
-  const result = placeBalloonsDetailed({
+  const result = placeBalloonsWholeWords({
     page,
     boxes: panelBoxesFor(doc, page),
     aspect,
