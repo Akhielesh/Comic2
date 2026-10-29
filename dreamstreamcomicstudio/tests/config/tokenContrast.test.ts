@@ -413,8 +413,12 @@ function selectorList(selector: string): string[] {
 /** Every rule body whose selector list contains `sel` (exact selector item). */
 const bodiesFor = (sel: string) => rules.filter((r) => selectorList(r.selector).includes(sel)).map((r) => r.body);
 
-/** Tailwind's selector for a `[variants:]utility` class token (the variants the tree uses). */
-function utilitySelector(cls: string, compound = ''): string {
+/**
+ * The remap rule's selector for a `[variants:]utility` class token (the variants the tree uses).
+ * Tailwind appends variant utilities AFTER index.css, so a variant form's rule repeats the class
+ * (`double`) to outrank the variant utility it overrides; compound fills outrank it by construction.
+ */
+function utilitySelector(cls: string, compound = '', double = false): string {
   const parts = cls.split(':');
   const util = parts.pop()!;
   let prefix = '';
@@ -426,7 +430,8 @@ function utilitySelector(cls: string, compound = ''): string {
     else throw new Error(`tokenContrast: no selector mapping for the "${v}:" variant in "${cls}" — add a rule to index.css's accent contrast block and here`);
   }
   void util;
-  return `${prefix}.${escapeClass(cls)}${compound}${suffix}`;
+  const own = `.${escapeClass(cls)}`;
+  return `${prefix}${own}${double && parts.length ? own : ''}${compound}${suffix}`;
 }
 
 describe('token contrast — the accent utilities paint the readable tokens', () => {
@@ -435,7 +440,7 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
     expect(found).toContain('text-[var(--ds-accent)]');
     expect(found).toContain('text-[#D97757]');
     for (const cls of found) {
-      expect(bodiesFor(utilitySelector(cls)), cls).toContain('color: var(--ds-accent-text);');
+      expect(bodiesFor(utilitySelector(cls, '', true)), cls).toContain('color: var(--ds-accent-text);');
     }
   });
 

@@ -510,14 +510,17 @@
    - a solid accent fill that carries white / on-accent text → --ds-accent-fill (+ -fill-hover).
      `:not(:disabled)` leaves a component's own disabled styling (disabled:bg-…, opacity) alone.
    Under the Atlas skin the three tokens are the ink accent, so nothing changes there; the skin's
-   own shim (end of file) still wins for the literal utilities. Same specificity as the utility
-   for text (later in the file wins); fills are compound selectors, so no utility order matters. */
+   own shim (end of file) still wins for the literal utilities. Specificity, not order, decides:
+   Tailwind emits plain utilities where `@tailwind utilities` sits (above, so a plain-class rule
+   here wins a tie) but APPENDS every variant (hover:, group-hover:, md:, disabled:, …) after this
+   whole file — so the hover / group-hover text forms repeat their class to outrank the variant
+   utility, and the fills are compound selectors (utility + its text colour) that outrank both. */
 .text-\[var\(--ds-accent\)\],
 .text-\[\#D97757\],
-.hover\:text-\[var\(--ds-accent\)\]:hover,
-.hover\:text-\[var\(--ds-accent-hover\)\]:hover,
-.group:hover .group-hover\:text-\[var\(--ds-accent\)\],
-.group\/icon:hover .group-hover\/icon\:text-\[var\(--ds-accent\)\] { color: var(--ds-accent-text); }
+.hover\:text-\[var\(--ds-accent\)\].hover\:text-\[var\(--ds-accent\)\]:hover,
+.hover\:text-\[var\(--ds-accent-hover\)\].hover\:text-\[var\(--ds-accent-hover\)\]:hover,
+.group:hover .group-hover\:text-\[var\(--ds-accent\)\].group-hover\:text-\[var\(--ds-accent\)\],
+.group\/icon:hover .group-hover\/icon\:text-\[var\(--ds-accent\)\].group-hover\/icon\:text-\[var\(--ds-accent\)\] { color: var(--ds-accent-text); }
 .bg-\[var\(--ds-accent\)\].text-white:not(:disabled),
 .bg-\[var\(--ds-accent\)\].text-\[var\(--ds-on-accent\)\]:not(:disabled),
 .bg-\[\#D97757\].text-white:not(:disabled),
