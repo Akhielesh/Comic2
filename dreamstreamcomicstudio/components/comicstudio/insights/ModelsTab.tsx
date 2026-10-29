@@ -24,6 +24,7 @@ import {
   couldntRefreshCopy,
   lockedLine,
   mixedModelsCopy,
+  newerBuildCopy,
   priceListCopy,
   recentLabel,
   unlockedLine
@@ -201,9 +202,11 @@ const ModelItem: React.FC<{
   row?: ModelCatalogRow;
   state: Loadable<ModelCatalogRow[]>;
   health?: ReturnType<typeof useModelStatus>['byId'][string];
+  /** A quiet notice under the model (the §2.5 "newer build" line for the locked model). */
+  notice?: string;
   money: InsightsMoney;
   now?: number;
-}> = ({ doc, modelId, images, usd, failed, current, defaultOpen, row, state, health, money, now }) => {
+}> = ({ doc, modelId, images, usd, failed, current, defaultOpen, row, state, health, notice, money, now }) => {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
   const sizes = useMemo(() => sizeCosts(doc, modelId), [doc, modelId]);
@@ -220,6 +223,7 @@ const ModelItem: React.FC<{
         {plural(images, 'image')} · {money.spent(usd)}
         {failed > 0 ? ` · ${failed} failed` : ''}
       </p>
+      {notice && <p className={cx('mt-0.5 min-w-0 text-[11.5px] text-[var(--ds-muted)]', WRAP)}>{notice}</p>}
       {sizes.length > 0 && (
         <ul className="mt-0.5 min-w-0 space-y-0.5 text-[11.5px] tabular-nums text-[var(--ds-muted)]" aria-label={`${nickname} by size`}>
           {sizes.map((s) => (
@@ -266,6 +270,11 @@ export const ModelsTab: React.FC<ModelsTabProps> = ({ doc, money, pro, openPicke
     return { modelId: id, images: t?.images ?? 0, usd: t?.usd ?? 0, failed: t?.failed ?? 0 };
   });
   const lockNick = lockId ? (rowFor(rows, lockId)?.nickname ?? nicknameOf(lockId)) : undefined;
+  // models.md §2.5: the lock recorded OpenRouter's dated canonical slug; when the catalog now serves another one,
+  // the provider may have updated the model behind the same id — said quietly under the locked model.
+  const lockRow = lockId ? rowFor(rows, lockId) : undefined;
+  const newerBuild =
+    lock?.canonicalSlug && lockRow?.canonicalSlug && lockRow.canonicalSlug !== lock.canonicalSlug && lockNick ? newerBuildCopy(lockNick, lockRow.canonicalSlug) : undefined;
   const pendingNick = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec.nickname;
   return (
     <div className="min-w-0 space-y-3">
@@ -302,6 +311,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = ({ doc, money, pro, openPicke
                 row={rowFor(rows, m.modelId)}
                 state={catalog}
                 health={status.byId[m.modelId]}
+                notice={m.modelId === lockId ? newerBuild : undefined}
                 money={money}
                 now={now}
               />

@@ -28,6 +28,9 @@ export const LOCK_ICON_LABEL = 'Model locked so every page matches';
 export const CHANGE_MODEL_LINK = 'Change…';
 export const CHOOSE_MODEL_LINK = 'Choose model…';
 
+/** models.md §2.5 / §3.9: OpenRouter's canonical slug for the locked model is no longer the one recorded at lock time. */
+export const newerBuildCopy = (model: string, slug: string): string => `OpenRouter now serves a newer build of ${model} (${slug}). The provider may have updated it.`;
+
 /** models.md §4.2: totals rebuilt from a capped entry list. */
 export const recentLabel = (n: number): string => `(recent ${n})`;
 /** models.md §3.3: a mixed-model legacy book, said plainly. */

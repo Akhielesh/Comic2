@@ -15,7 +15,7 @@ import { LAKE_MODEL, makeLakeComic } from '../../../shared/comic/__fixtures__/la
 import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
 import { costFormat } from '../conversation/cost';
 import { __resetStatusStore } from '../reliability/statusStore';
-import { NOT_RANKED_COPY, NO_OPENROUTER_PRICE_COPY, NO_UPTIME_COPY, PRICE_UNPUBLISHED_COPY } from './copy';
+import { NOT_RANKED_COPY, NO_OPENROUTER_PRICE_COPY, NO_UPTIME_COPY, PRICE_UNPUBLISHED_COPY, newerBuildCopy } from './copy';
 import { insightsMoney } from './insightsModel';
 import { ModelsTab } from './ModelsTab';
 import { __resetInsightsCacheForTests } from './useInsights';
@@ -108,6 +108,28 @@ describe('Models tab — this comic (acceptance)', () => {
     await mount(doc);
     expect(screen.getByText('This comic has images from 2 models.')).toBeInTheDocument();
     expect(item('Nano Banana Pro')).toHaveTextContent('1 image · $0.13');
+  });
+
+  it('the locked model gets the §2.5 "newer build" notice when OpenRouter’s canonical slug changed since the lock', async () => {
+    const locked = (slug?: string) =>
+      makeLakeComic((d) => {
+        d.imageModel = { modelId: LAKE_MODEL, providerModel: 'google/gemini-nano-banana-2.1', ...(slug ? { canonicalSlug: slug } : {}), lockedAt: 1, origin: 'first_render' };
+      });
+    const newer = 'google/gemini-nano-banana-2.1-20261120';
+    const copy = newerBuildCopy('Nano Banana 2.1', newer);
+    expect(copy).toBe(`OpenRouter now serves a newer build of Nano Banana 2.1 (${newer}). The provider may have updated it.`);
+    serve([lakeRow({ canonicalSlug: newer })]);
+    const first = await mount(locked('google/gemini-nano-banana-2.1-20261006'));
+    expect(item('Nano Banana 2.1')).toHaveTextContent(copy);
+    first.unmount();
+    // The same slug, or a lock that recorded none, says nothing.
+    __resetInsightsCacheForTests();
+    serve([lakeRow({ canonicalSlug: newer })]);
+    const same = await mount(locked(newer));
+    expect(document.body).not.toHaveTextContent('newer build');
+    same.unmount();
+    await mount(locked());
+    expect(document.body).not.toHaveTextContent('newer build');
   });
 
   it('Pro has the Model row (§3.7) with the lock line; Change… and Compare models open the picker (client action)', async () => {
