@@ -9,7 +9,7 @@ import { appStatus } from '../services/appStatus';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { SOURCE_GOVERNANCE_CHANGED, clearGovernanceMap } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
-import { cancelScheduledPush, syncOnLogin, schedulePush } from '../services/cloudSync';
+import { cancelScheduledPush, reconcileOnLogin, schedulePush } from '../services/cloudSync';
 import { purgeLiveAccountData, takeOverDevice } from '../live/accountPurge';
 import { clearLocalOwner, getLocalOwner, setLocalOwner } from '../services/localOwner';
 import { clearPendingInviteCode } from '../services/invites';
@@ -33,6 +33,9 @@ type AuthContextType = {
  */
 export const OTHER_TAB_SIGN_IN_NOTICE =
     'Signed in as another account in another tab. This tab was signed out so the two accounts’ data stay apart — continue in that tab, or sign in again here.';
+
+/** A login sync whose read of the account snapshot failed is run again once after this pause. */
+const LOGIN_SYNC_RETRY_MS = 5_000;
 
 const AuthContext = createContext<AuthContextType>({
     user: null,
@@ -77,6 +80,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const [loading, setLoading] = useState(true);
     const userIdRef = useRef<string | null>(null);
     const syncedUserRef = useRef<string | null>(null);
+    const loginSyncRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const applyAuthState = (nextSession: Session | null) => {
         // Chat rows are tagged by THIS tab's account (not the device-wide owner marker, which
@@ -106,6 +110,26 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // restore path fires this event under the applyingSnapshot guard, so no loop).
         window.addEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
 
+        // The login sync reads the account's snapshot before anything is written to it. When that
+        // read fails (a backend still waking up, a network blip, a row the server can't read) it
+        // writes nothing — the account keeps its copy, this device its purged state — and is run
+        // again: once after a short pause, then on the next session event (a token refresh) or a
+        // reload, since a failed sync leaves `syncedUserRef` unset.
+        const runLoginSync = (userId: string, retry: boolean) => {
+            syncedUserRef.current = userId;
+            void reconcileOnLogin(userId).then((outcome) => {
+                if (outcome !== 'failed') return;
+                if (syncedUserRef.current === userId) syncedUserRef.current = null;
+                if (!retry || userIdRef.current !== userId) return;
+                cancelLoginSyncRetry();
+                loginSyncRetryRef.current = setTimeout(() => {
+                    loginSyncRetryRef.current = null;
+                    if (userIdRef.current !== userId || syncedUserRef.current === userId) return;
+                    runLoginSync(userId, false);
+                }, LOGIN_SYNC_RETRY_MS);
+            });
+        };
+
         // Reconcile cloud <-> local exactly once per signed-in user.
         const onSignedIn = (userId: string) => {
             const incoming = userId.toLowerCase();
@@ -125,6 +149,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 // then purge, before the login sync could merge any of it into this account.
                 userIdRef.current = null;
                 syncedUserRef.current = null;
+                cancelLoginSyncRetry();
                 cancelScheduledPush();
                 purgeMainAccountData();
                 if (previous) {
@@ -142,10 +167,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setLocalOwner(incoming);
             userIdRef.current = userId;
             void registerDevice(userId);
-            if (syncedUserRef.current !== userId) {
-                syncedUserRef.current = userId;
-                void syncOnLogin(userId);
-            }
+            if (syncedUserRef.current !== userId) runLoginSync(userId, true);
         };
 
         // Sessions idle for 30+ days sign out on this visit (the only automatic sign-out — reloads
@@ -182,6 +204,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 setLoading(false);
                 userIdRef.current = null;
                 syncedUserRef.current = null;
+                cancelLoginSyncRetry();
                 // Purge on EVERY sign-out path (incl. Stream Studio's and the
                 // inactivity policy), not just our own buttons — a shared
                 // device must never keep the previous user's keys.
@@ -208,6 +231,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 if (current && session.user?.id && session.user.id.toLowerCase() !== current.toLowerCase()) {
                     userIdRef.current = null;
                     syncedUserRef.current = null;
+                    cancelLoginSyncRetry();
                     cancelScheduledPush();
                     forgetTabSession();
                     applyAuthState(null);
@@ -230,6 +254,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         return () => {
             subscription.unsubscribe();
+            cancelLoginSyncRetry();
             setKeysChangeListener(null);
             setSettingsChangeListener(null);
             setChatDataChangeListener(null);
@@ -245,6 +270,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     // Hoisted: the sign-in handler in the effect above calls these.
+    /** Drop a login-sync retry still waiting (a sign-out, a switch: it was for the old account). */
+    function cancelLoginSyncRetry() {
+        if (loginSyncRetryRef.current) clearTimeout(loginSyncRetryRef.current);
+        loginSyncRetryRef.current = null;
+    }
+
     /** The main app's account-scoped data on this device (keys, settings, model choices). */
     function purgeMainAccountData() {
         // A push still queued for the account being purged must never run.
