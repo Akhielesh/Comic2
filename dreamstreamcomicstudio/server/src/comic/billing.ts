@@ -43,7 +43,21 @@ export interface BillingDeps {
   release?: typeof releaseReservedOperation;
   /** Override METERING_ENABLED (tests). */
   enabled?: boolean;
+  /** Base wait before a settle retry (tests pass 0). Default SETTLE_RETRY_DELAY_MS. */
+  settleRetryDelayMs?: number;
 }
+
+/**
+ * A settle that fails leaves a RESERVED row the budget stops counting after 20 minutes
+ * (user_usage_budgets.sql) and nothing revisits — paid spend that silently stops counting.
+ * The provider call already happened, so a failed settle is retried (the ledger's settle is
+ * keyed by reservation id and idempotent on the row that counts) before it is given up on,
+ * and a hold that is given up on is logged with its id and amount so it can be repaired.
+ */
+const SETTLE_ATTEMPTS = 3;
+const SETTLE_RETRY_DELAY_MS = 400;
+
+const wait = (ms: number) => (ms > 0 ? new Promise<void>((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
 
 const noopReservation: BillingReservation = {
   async settle() {
@@ -134,6 +148,7 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
   const reserveFn = deps.reserve || reserveForOperation;
   const settleFn = deps.settle || settleReservedOperation;
   const releaseFn = deps.release || releaseReservedOperation;
+  const retryDelayMs = Math.max(0, deps.settleRetryDelayMs ?? SETTLE_RETRY_DELAY_MS);
   // Same resolution the studio routes with, so BYOK-ness always matches the key used.
   const keys = studioKeysFromRequest(req);
 
@@ -214,30 +229,47 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
             : {}),
           ...(providerCostUsd !== undefined && providerCostUsd > 0 ? { providerCostUsd } : {})
         };
-        try {
-          const settled = await settleFn({
-            req: clone,
-            operation: args.operation,
-            provider: reserved.provider,
-            model: reserved.model,
-            seed,
-            usage,
-            imageUnits,
-            metadata: { ...metadata, providerCostReported: reported !== undefined }
-          });
-          // Surface allowance threshold notices (30/70/90%) on the real request so the
-          // route can drain them with consumeAllowanceNotices(req).
-          const notices = Object.prototype.hasOwnProperty.call(clone, 'allowanceNotices') ? clone.allowanceNotices : undefined;
-          if (notices?.length) req.allowanceNotices = [...(req.allowanceNotices || []), ...notices];
-          return { billableUsd: typeof settled?.billableUsd === 'number' ? settled.billableUsd : undefined };
-        } catch (err) {
-          logger.error('comic_billing_settle_failed', {
-            operation: args.operation,
-            model: args.model,
-            message: (err as Error)?.message
-          });
-          return {};
+        for (let attempt = 1; attempt <= SETTLE_ATTEMPTS; attempt += 1) {
+          try {
+            const settled = await settleFn({
+              req: clone,
+              operation: args.operation,
+              provider: reserved.provider,
+              model: reserved.model,
+              seed,
+              usage,
+              imageUnits,
+              metadata: { ...metadata, providerCostReported: reported !== undefined }
+            });
+            // Surface allowance threshold notices (30/70/90%) on the real request so the
+            // route can drain them with consumeAllowanceNotices(req).
+            const notices = Object.prototype.hasOwnProperty.call(clone, 'allowanceNotices') ? clone.allowanceNotices : undefined;
+            if (notices?.length) req.allowanceNotices = [...(req.allowanceNotices || []), ...notices];
+            return { billableUsd: typeof settled?.billableUsd === 'number' ? settled.billableUsd : undefined };
+          } catch (err) {
+            const reservationId = clone.usageReservation?.reservationId;
+            if (attempt < SETTLE_ATTEMPTS) {
+              logger.warn('comic_billing_settle_retry', { operation: args.operation, model: args.model, reservationId, attempt, message: (err as Error)?.message });
+              await wait(retryDelayMs * attempt);
+              continue;
+            }
+            // Given up: the hold is stranded (it stops counting after 20 minutes). Everything a
+            // repair needs is in this one line — the id, the amount and what it was for.
+            logger.error('comic_billing_settle_failed', {
+              operation: args.operation,
+              model: args.model,
+              reservationId,
+              stranded: true,
+              attempts: attempt,
+              holdUsd: estimateFloorUsd,
+              providerCostUsd,
+              projectId,
+              message: (err as Error)?.message
+            });
+            return {};
+          }
         }
+        return {};
       },
       async release(reason) {
         if (done) return;

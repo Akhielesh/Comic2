@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
+import { logger } from '../lib/logger.js';
 import { billingDenialMessage, createBillingHooks, noopBillingHooks } from './billing.js';
 import type { BillingHooks } from './types.js';
 
@@ -53,7 +54,7 @@ const setup = (over: { reserve?: ReturnType<typeof vi.fn>; settle?: ReturnType<t
   const reserve = over.reserve || vi.fn(async (input: { req: Request }) => allowed(input.req));
   const settle = over.settle || vi.fn(async () => ({ billableUsd: 0.065 }));
   const release = over.release || vi.fn(async () => undefined);
-  const hooks = createBillingHooks(req, 'proj-1', { reserve: reserve as never, settle: settle as never, release: release as never, enabled: true });
+  const hooks = createBillingHooks(req, 'proj-1', { reserve: reserve as never, settle: settle as never, release: release as never, enabled: true, settleRetryDelayMs: 0 });
   return { hooks, reserve, settle, release, req };
 };
 
@@ -205,6 +206,42 @@ describe('createBillingHooks', () => {
     if (!a.ok || !b.ok) throw new Error('expected ok');
     await expect(a.reservation.settle({ costUsd: 0.05 })).resolves.toEqual({});
     await expect(b.reservation.release('x')).resolves.toBeUndefined();
+  });
+
+  it('retries a failed settle (the provider call already happened) before giving up, and never releases', async () => {
+    const settle = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('ledger hiccup'))
+      .mockRejectedValueOnce(new Error('ledger hiccup'))
+      .mockResolvedValueOnce({ billableUsd: 0.065 });
+    const { hooks, release } = setup({ settle });
+    const res = await hooks.reserve(pageArgs);
+    if (!res.ok) throw new Error('expected ok');
+    await expect(res.reservation.settle({ costUsd: 0.05, imageUnits: 1 })).resolves.toEqual({ billableUsd: 0.065 });
+    expect(settle).toHaveBeenCalledTimes(3);
+    expect(release).not.toHaveBeenCalled();
+    // Every attempt settles the SAME reservation (idempotent on the row that counts).
+    const ids = settle.mock.calls.map((c: [{ req: Request & { usageReservation: { reservationId: string } } }]) => c[0].req.usageReservation.reservationId);
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it('logs a stranded hold with its reservation id and amount once the retries are spent', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      const settle = vi.fn(async () => Promise.reject(new Error('ledger offline')));
+      const { hooks } = setup({ settle });
+      const res = await hooks.reserve({ ...pageArgs, resolution: '2K' });
+      if (!res.ok) throw new Error('expected ok');
+      await expect(res.reservation.settle({ costUsd: 0.05, imageUnits: 1 })).resolves.toEqual({});
+      expect(settle).toHaveBeenCalledTimes(3);
+      expect(error).toHaveBeenCalledWith(
+        'comic_billing_settle_failed',
+        expect.objectContaining({ stranded: true, attempts: 3, reservationId: expect.stringMatching(/^r-/), holdUsd: expect.closeTo(0.0504, 6), providerCostUsd: 0.05, projectId: 'proj-1' })
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('forwards allowance threshold notices to the real request', async () => {
