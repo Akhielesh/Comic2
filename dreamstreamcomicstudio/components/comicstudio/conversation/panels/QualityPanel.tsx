@@ -42,6 +42,10 @@ export interface QualityPanelProps {
 export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = false, onDone, caps }) => {
   const current = doc.settings.quality;
   const cost = useCostFormat({ byok, caps });
+  // MERGE ORDER: this display is true only once the server resolves every image job through the same lock
+  // (M1-LOCK-SERVER, models.md §3.4 item 1: jobs.ts `resolveImageJob(kind, tier, override, deriveLock(doc))`). On a
+  // server that still resolves by tier (jobs.ts at ef30a77b), a locked Standard comic switched to Pro would draw on
+  // the tier's model at its price while this panel quotes the locked one. Ship this file with or after that change.
   const lock = deriveLock(doc);
   const override = doc.settings.imageModelOverride;
   const [pending, setPending] = useState<QualityTier | null>(null);
