@@ -33,6 +33,8 @@ const makeLab = (): ModelLab =>
     keys: () => ({ openrouter: { key: 'sk-or-platform-test', byok: false } }),
     prices: async () => registryPriceBook(),
     health: fakeModelHealth({ now: T0 }),
+    // The Images-API endpoint list comes through the lab's deps, so no test reads openrouter.ai's live prices.
+    imageEndpoints: async () => null,
     network: (async (input: RequestInfo | URL, init?: RequestInit) => {
       providerCalls.push(`${init?.method || 'GET'} ${String(input).replace(/^.*\/api\/v1/, '')}`);
       const model = String(JSON.parse(String(init?.body || '{}')).model || '');
