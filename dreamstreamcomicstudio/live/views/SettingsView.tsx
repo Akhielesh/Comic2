@@ -2,7 +2,7 @@
 // alerts and hotkeys. Every control writes StudioPrefs; the Studio reads them
 // when it opens (and pushes slow-mode to the room at go-live).
 import React, { useEffect, useState } from 'react';
-import { openAuth, signOutEverywhereLocal, updateDisplayName, useAccount } from '../account';
+import { openAuth, signOutThisDevice, updateDisplayName, useAccount } from '../account';
 import { LIMIT_CHOICES_MIN, limitLabel } from '../limits';
 import { canPickFolder, forgetDriveFolder, getDriveFolder, pickDriveFolder } from '../saveTargets';
 import {
@@ -29,9 +29,12 @@ import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui
 import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { cloudCopySettingDesc } from '../costCopy';
 import { AccountUsageCard } from './settings/UsageCard';
+import { SecurityPanel, confirmAndSignOutEverywhere } from './account/SecurityPanel';
+import { askForCode } from './account/StepUp';
 
 const SET_CATS = [
   { id: 'account', label: 'Account & sync', icon: 'user' },
+  { id: 'security', label: 'Security', icon: 'shield' },
   { id: 'usage', label: 'Usage', icon: 'gauge' },
   { id: 'scenes', label: 'Scenes', icon: 'layers' },
   { id: 'camera', label: 'Camera & looks', icon: 'video' },
@@ -158,6 +161,27 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
     void pushPrefsToCloud(); // mirrored to the account when signed in
   };
 
+  const [signingOut, setSigningOut] = useState(false);
+  const signOutHere = () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    void signOutThisDevice()
+      .then(() => {
+        setAccount({ signedIn: false, allowed: true, scope: 'full' });
+        push('Signed out on this device', { icon: 'check' });
+      })
+      .finally(() => setSigningOut(false));
+  };
+  const signOutAll = () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    void confirmAndSignOutEverywhere(push)
+      .then((done) => {
+        if (done) setAccount({ signedIn: false, allowed: true, scope: 'full' });
+      })
+      .finally(() => setSigningOut(false));
+  };
+
   const nameDraft = cleanName(displayName);
   const saveName = () => {
     if (!nameDraft || nameDraft === accountName || savingName) return;
@@ -217,22 +241,24 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               </p>
               {live.status === 'loading' ? (
                 <div className="skeleton" style={{ height: 56 }} aria-label="Loading account" />
+              ) : live.status === 'needs_mfa' ? (
+                <Row title="Finish signing in" desc={`${live.email ? `${live.email} has` : 'This account has'} two-step sign-in on: type the code from your authenticator app to finish.`}>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <Btn variant="solid" size="sm" icon="shield" onClick={() => void askForCode(undefined, 'signin')}>Enter code</Btn>
+                    <Btn variant="ghost" size="sm" icon="logout" onClick={signOutHere}>Sign out</Btn>
+                  </div>
+                </Row>
               ) : live.status === 'member' || live.status === 'needs_code' ? (
                 <>
                   <Row title="Signed in" desc={live.email || 'Your Stream Studio account'}>
-                    <Btn
-                      variant="ghost"
-                      size="sm"
-                      icon="logout"
-                      onClick={() => {
-                        void signOutEverywhereLocal().then(() => {
-                          setAccount({ signedIn: false, allowed: true, scope: 'full' });
-                          push('Signed out on this device', { icon: 'check' });
-                        });
-                      }}
-                    >
-                      Sign out
-                    </Btn>
+                    <div className="row" style={{ gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <Btn variant="ghost" size="sm" icon="logout" disabled={signingOut} onClick={signOutHere}>
+                        Sign out of this device
+                      </Btn>
+                      <Btn variant="soft" size="sm" icon="shield" disabled={signingOut} onClick={signOutAll}>
+                        {signingOut ? 'Signing out…' : 'Sign out everywhere'}
+                      </Btn>
+                    </div>
                   </Row>
                   {live.status === 'needs_code' && (
                     <Row title="Unlock Stream Studio" desc="Enter the welcome code you were given to host streams and use the baby monitor.">
@@ -288,9 +314,33 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                   </div>
                 </Row>
               )}
-              <Row title="Security" desc="Your private studio links carry the host key — treat them like passwords. Viewer links are safe to share anywhere. Welcome codes are verified on our server only and repeated wrong guesses are locked out.">
+              <Row title="Private links" desc="Your private studio links carry the host key — treat them like passwords. Viewer links are safe to share anywhere. Welcome codes are verified on our server only and repeated wrong guesses are locked out.">
                 <span />
               </Row>
+            </>
+          )}
+          {cat === 'security' && (
+            <>
+              <div className="set-head"><h2 className="serif">Security</h2></div>
+              <p className="set-intro">
+                Keep your account — and the nurseries it can see — yours: two-step sign-in, the devices signed in to it, and what
+                happened recently. Everything here applies to your whole DreamStream account.
+              </p>
+              {live.status === 'loading' ? (
+                <div className="skeleton" style={{ height: 56 }} aria-label="Loading account" />
+              ) : live.status === 'needs_mfa' ? (
+                <Row title="Finish signing in first" desc="Type the code from your authenticator app, then your security settings appear here.">
+                  <Btn variant="solid" size="sm" icon="shield" onClick={() => void askForCode(undefined, 'signin')}>Enter code</Btn>
+                </Row>
+              ) : live.status === 'member' || live.status === 'needs_code' ? (
+                <SecurityPanel push={push} onSignOutEverywhere={signOutAll} />
+              ) : live.status === 'offline' ? (
+                <div className="banner warn"><Icon name="wifi" size={15} />Can’t reach your account right now — check your connection.</div>
+              ) : (
+                <Row title="Not signed in" desc="Sign in to turn on two-step sign-in and see the devices signed in to your account.">
+                  <Btn variant="solid" size="sm" onClick={() => openAuth('signin')}>Sign in</Btn>
+                </Row>
+              )}
             </>
           )}
           {cat === 'usage' && (

@@ -148,7 +148,51 @@ the Stream Studio data it holds (`live/accountPurge.ts`).
 root (`live/host.ts`); the apex keeps its old manifest and worker. Existing alert subscriptions
 keep receiving pushes, and tapping one opens the new address. To install the app or turn
 alerts on at the new address, add it to the Home Screen again from there and turn "Alerts on
-this device" on there (the help centre says so once the switch is on).
+this device" on there (the help centre says so once the switch is on). A device never gets the
+same alert twice: once the new address covers everything the old subscription alerted for, the
+old one is ended, and signing out on the new address ends it too (an apex bridge page in a
+hidden frame — `docs/infrastructure/INFRA_MAP.md` §2a "Alerts across the two addresses").
+
+## Account security in Stream Studio (ADR 0006 WS-5, 2026-10-29)
+
+Settings → **Security** (`live/views/account/SecurityPanel.tsx`; also in the account menu):
+- **Two-step sign-in** (TOTP, Supabase MFA): add an authenticator app with a QR code or the
+  setup key, confirm with its first code; remove it (needs the code). Once it's on, signing in
+  with the password leaves the account `needs_mfa` until the code is given (`StepUp.tsx`), and
+  admin actions — share links, adding people, export, approving or revoking a device, changing
+  two-step sign-in — ask for the code first when this session hasn't given it
+  (`ensureStepUp(reason)`, exported for the monitor screens). A nudge after creating a nursery
+  suggests turning it on (`MfaNudge.tsx`). The server enforces it (`mfa_required`, socket close
+  4003) once `server/sql/live_security_v2.sql` is applied; until then the app still reads the
+  session's level from Supabase, and the lists below say "Not switched on yet" (a missing RPC).
+- **Your devices** (`live_device_list`, Revoke → `DELETE /live-api/api/devices/:id` with the RPC
+  as fallback) and **recent security events** (`live_security_events`).
+- **Sign out of this device** and **Sign out everywhere**. Everywhere = `POST
+  /live-api/api/me/kick` (closes every open monitor, call line and admin socket of the account;
+  contract: 2xx `{ok: true}` only when every room confirmed) → `signOut({scope:'global'})` →
+  this device wiped. The message after it never claims more than happened (offline: only this
+  device; kick route missing: other devices must sign in again, but an open monitor stays
+  connected until it next reconnects).
+- **Socket re-auth:** every `SIGNED_IN`, `TOKEN_REFRESHED` and `MFA_CHALLENGE_VERIFIED` fires the
+  window event `ds:token` (detail = access token); open room sockets send `{t:'reauth', token}`
+  when the room lists the `reauth` capability, so a socket never outlives its token and a
+  step-up reaches sockets already open.
+- A session ended elsewhere (`session_revoked`) signs this device out and says so once.
+
+**"Not you? Secure my account"** — `#/secure/<token>` (`live/views/account/SecureAccount.tsx`),
+the link in the new-sign-in email (`email-worker/src/securityAlert.ts`). The token is read once
+and taken out of the address bar; one tap posts it to `POST /api/auth/email/secure`, which ends
+every session of the account, signs out devices added since that sign-in and emails a
+password-reset link. If this browser was signed in to that account it is signed out too, and
+its open sockets are closed.
+
+**The flip — `SECURE_ACCOUNT_PAGE`.** The email Worker sends the "Not you?" button only when its
+var `SECURE_ACCOUNT_PAGE` is `on`; otherwise the email points to Settings → Security. It is set
+in `email-worker/wrangler.jsonc` `vars` (with this page, 2026-10-29), so it ships with the next
+email Worker deploy from the same push as the page. Set it there, not in the dashboard: `wrangler
+deploy` replaces dashboard vars with the config's. No email carries a token before the owner
+applies `live_security_v2.sql` and enables the access-token hook (ADR 0006 owner action #4), so
+the order is safe either way. Undo: remove the var (or set any other value) and redeploy.
 
 ## Owner decisions — DECIDED 2026-10-22
 

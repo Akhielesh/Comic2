@@ -150,21 +150,46 @@ export async function pullPrefsFromCloud(): Promise<boolean> {
   }
 }
 
-/** Sign the account out of THIS device only (supabase-js defaults to scope
- *  'global', which would kill the user's sessions on every device — the bug
- *  that made sign-out here look like random suite-wide logouts). Also purge
- *  this browser's event registry: hostKeys must not survive for the next
- *  person on a shared device. */
-export async function signOut(): Promise<void> {
+/**
+ * Sign the account out.
+ *   'local'  — THIS device only (the default: supabase-js on its own defaults to 'global', which
+ *              killed the user's sessions on every device — the bug that made sign-out here look
+ *              like random suite-wide logouts).
+ *   'global' — every session of the account ends (each device must sign in again). Only from the
+ *              explicit "Sign out everywhere" (account.ts signOutEverywhere, after the socket kick).
+ * Either way this device is wiped: name, events (hostKeys must not survive for the next person on
+ * a shared device), nursery data and alert subscriptions — the old dreamstreamstudio.ai/live one
+ * too when we're on Stream Studio's own host (monitor/push.ts retireLegacyAlerts).
+ * `ok`: Supabase confirmed. A 'global' that couldn't reach the server still signs THIS device out
+ * (supabase-js drops the local session) and says `ok: false`, so the app never claims more.
+ */
+export async function signOut(scope: 'local' | 'global' = 'local'): Promise<{ ok: boolean }> {
   const supabase = await client();
-  if (!supabase) return;
-  try {
-    await supabase.auth.signOut({ scope: 'local' });
-  } catch {
-    /* already signed out */
+  let ok = !!supabase;
+  // Whose sign-out this is — the old address's data is wiped only if it's the same account's.
+  let uid: string | null = null;
+  if (supabase) {
+    try {
+      uid = (await supabase.auth.getSession()).data.session?.user.id ?? null;
+    } catch { /* no session to read */ }
+    try {
+      const { error } = await supabase.auth.signOut({ scope });
+      if (error) ok = false;
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      // Belt and braces: whatever happened on the server, nothing of this session stays here.
+      try {
+        if ((await supabase.auth.getSession()).data.session) await supabase.auth.signOut({ scope: 'local' });
+      } catch { /* already gone */ }
+    }
   }
   // Name, events, nursery data, alert subscription: nothing personal stays behind.
   purgeLiveAccountData();
+  // In the background (a hidden frame on the old address; the page stays open after signing out).
+  void import('./monitor/push').then((m) => m.retireLegacyAlerts('signout', uid)).catch(() => undefined);
+  return { ok: scope === 'local' ? true : ok };
 }
 
 /** Debounced settings push — savePrefs schedules this so EVERY write path

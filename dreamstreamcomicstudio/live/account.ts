@@ -16,9 +16,15 @@ import { clearSignInIntents, consumeSignInIntent } from '@/services/pendingSignI
 import { claimDevice } from './accountPurge';
 import type { AccountNameResult } from '@/services/accountName';
 import { STREAM_RETURN_SCREENS } from '@/shared/streamHost';
+import { WORKER_BASE } from './config';
 import { LIVE_APP_PATH } from './host';
 
-export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'member' | 'offline';
+/**
+ * `needs_mfa`: signed in with the password, but the account has two-step sign-in on and this
+ * session hasn't given the code yet (aal1). Nothing member-only works until it has: the StepUp
+ * sheet (views/account/StepUp.tsx) asks for the code.
+ */
+export type AccountStatus = 'loading' | 'signed_out' | 'needs_code' | 'needs_mfa' | 'member' | 'offline';
 
 export interface LiveAccount {
   status: AccountStatus;
@@ -27,6 +33,14 @@ export interface LiveAccount {
   name?: string;
   verifiedVia?: string;
   suggestedName?: string;
+  /** Two-step sign-in is on for this account (a verified authenticator). Unknown when absent. */
+  mfa?: boolean;
+  /**
+   * Signed out because this session was ended somewhere else — "Sign out everywhere", "Not you?
+   * Secure my account", a password reset. The app says so once instead of silently showing
+   * "Sign in".
+   */
+  ended?: 'revoked';
 }
 
 export interface Person {
@@ -144,6 +158,37 @@ export async function accessToken(): Promise<string | null> {
   }
 }
 
+/* ------------------------------------------------------ socket re-auth */
+
+/**
+ * The window event every open room socket listens to (monitor, call line, admin — WS-6's
+ * live/monitor/client.ts): `detail` is the new access token, which the socket sends as
+ * `{t:'reauth', token}` when the room lists the `reauth` capability. Fired on a sign-in, on every
+ * token refresh and when the two-step code upgrades the session to aal2 — so a socket never
+ * outlives its token and an MFA step-up reaches sockets that are already open.
+ */
+export const TOKEN_EVENT = 'ds:token';
+let announced: string | null = null;
+
+export function announceToken(token: string | null | undefined): void {
+  if (!token || token === announced) return;
+  announced = token;
+  try {
+    window.dispatchEvent(new CustomEvent(TOKEN_EVENT, { detail: token }));
+  } catch { /* no window (tests, workers) */ }
+}
+
+/** Where this session's assurance stands: aal1 → aal2 when a code is still owed. Null if unknown. */
+async function assurance(sb: Supa): Promise<{ current: string | null; next: string | null } | null> {
+  try {
+    const { data, error } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error || !data) return null;
+    return { current: data.currentLevel ?? null, next: data.nextLevel ?? null };
+  } catch {
+    return null;
+  }
+}
+
 export async function refreshAccount(): Promise<LiveAccount> {
   const sb = await supa();
   if (!sb) {
@@ -152,8 +197,12 @@ export async function refreshAccount(): Promise<LiveAccount> {
   }
   if (!authSubscribed) {
     authSubscribed = true;
-    sb.auth.onAuthStateChange((event) => {
+    sb.auth.onAuthStateChange((event, session) => {
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'MFA_CHALLENGE_VERIFIED') && session) {
+        announceToken(session.access_token);
+      }
       if (event === 'SIGNED_OUT') {
+        announced = null;
         // Signed out in another tab (e.g. the main app). Without "Remember me" this
         // tab may hold its own copy of the session — drop it so both agree.
         void (async () => {
@@ -182,13 +231,37 @@ export async function refreshAccount(): Promise<LiveAccount> {
   }
   if (claimDevice(session.user.id)) notifyPurged();
   const email = session.user.email ?? undefined;
-  const me = await rpc<{ member?: boolean; needs_code?: boolean; suggested_name?: string; profile?: { display_name?: string; verified_via?: string } }>('live_me');
+  const me = await rpc<{
+    member?: boolean;
+    needs_code?: boolean;
+    suggested_name?: string;
+    error?: string;
+    mfa?: boolean;
+    profile?: { display_name?: string; verified_via?: string };
+  }>('live_me');
+  if (me.data?.error === 'session_revoked') {
+    // Ended elsewhere ("Sign out everywhere", "Not you?", a password reset): this device's copy
+    // of the session is dead weight — drop it and everything the account left here.
+    const { signOut } = await import('./sync');
+    await signOut('local');
+    announced = null;
+    set({ status: 'signed_out', ended: 'revoked' });
+    return current;
+  }
+  // Two-step sign-in is on and this session hasn't given the code (the server says so once
+  // live_security_v2.sql is applied; the session itself says so before that).
+  const aal = await assurance(sb);
+  if (me.data?.error === 'mfa_required' || (aal?.current === 'aal1' && aal.next === 'aal2')) {
+    set({ status: 'needs_mfa', userId: session.user.id, email, mfa: true });
+    return current;
+  }
   if (me.error || !me.data) {
     set({ status: 'offline', userId: session.user.id, email });
     return current;
   }
+  const mfa = typeof me.data.mfa === 'boolean' ? me.data.mfa : aal ? aal.next === 'aal2' : undefined;
   if (me.data.member) {
-    set({ status: 'member', userId: session.user.id, email, name: me.data.profile?.display_name, verifiedVia: me.data.profile?.verified_via });
+    set({ status: 'member', userId: session.user.id, email, name: me.data.profile?.display_name, verifiedVia: me.data.profile?.verified_via, mfa });
     return current;
   }
   // Not a member yet: redeem a pending sign-up ticket, or join as a
@@ -555,22 +628,469 @@ export async function searchPeople(q: string): Promise<Person[]> {
   return r.data?.ok ? (r.data.people ?? []) : [];
 }
 
-export async function signOutEverywhereLocal(): Promise<void> {
+/* ------------------------------------------------------------ sign out */
+
+/**
+ * Sign out of THIS device only: other devices stay signed in. Everything the account left here
+ * goes with it — name, events, nursery data, and this device's alert subscriptions (including an
+ * old one from dreamstreamstudio.ai/live, so a signed-out device gets no baby alerts at all).
+ */
+export async function signOutThisDevice(): Promise<void> {
   const { signOut } = await import('./sync');
-  await signOut();
+  await signOut('local');
+  announced = null;
   set({ status: 'signed_out' });
+}
+
+export interface SignOutEverywhereResult {
+  /**
+   * The live Worker closed every open monitor, call line and admin socket of the account
+   * (POST /api/me/kick answered `{ok: true}`). False: the route isn't there yet or couldn't
+   * reach every room — open sockets then close at their next re-check (exp + 120 s once the
+   * rooms enforce it), and the copy says only that.
+   */
+  kicked: boolean;
+  /** Supabase ended every session (each device must sign in again). False: offline — only this device signed out. */
+  global: boolean;
+}
+
+/**
+ * The live Worker's "close everything this account has open" (ADR 0006 §1, WS-7 kick.ts):
+ * POST /api/me/kick with the caller's bearer token. Contract: 2xx JSON `{ok: true}` only when
+ * every nursery room and the call line confirmed; anything else counts as not kicked.
+ */
+export async function kickMySockets(token: string, timeoutMs = 8000): Promise<boolean> {
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : undefined;
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/me/kick`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: '{}',
+      signal: ctl?.signal,
+    });
+    if (!res.ok) return false;
+    const body = (await res.json().catch(() => null)) as { ok?: unknown } | null;
+    return body?.ok === true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * The real "Sign out everywhere": close every socket the account has open (monitors, call
+ * lines), end every session in Supabase, then wipe this device. The kick goes first — it needs
+ * a token that's still good — and the sign-out happens whatever the kick says.
+ */
+export async function signOutEverywhere(): Promise<SignOutEverywhereResult> {
+  const token = await accessToken();
+  const kicked = token ? await kickMySockets(token) : false;
+  const { signOut } = await import('./sync');
+  const { ok } = await signOut('global');
+  announced = null;
+  set({ status: 'signed_out' });
+  return { kicked, global: ok };
+}
+
+/** What to tell someone after "Sign out everywhere" — never more than happened. */
+export function signOutEverywhereMessage(r: SignOutEverywhereResult): string {
+  if (!r.global) return 'Couldn’t reach the server, so only this device is signed out. Try “Sign out everywhere” again when you’re back online.';
+  if (r.kicked) return 'Signed out everywhere — open monitors and calls on your other devices were disconnected.';
+  return 'Signed out everywhere. Every device has to sign in again; a monitor or call already open elsewhere stays connected until it next reconnects.';
+}
+
+/**
+ * The failure half of an `{ok: true, …} | {ok: false, …}` answer. (A type guard rather than
+ * `if (!r.ok)`: this project compiles without strictNullChecks, where a boolean `ok` doesn't
+ * narrow the union.)
+ */
+export const failed = <T extends { ok: boolean }>(r: T): r is Extract<T, { ok: false }> => r.ok === false;
+
+/* ------------------------------------------------- two-step sign-in (TOTP) */
+
+export interface TotpFactor {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface MfaState {
+  /** Could ask Supabase at all (signed in, online). */
+  ok: boolean;
+  /** At least one verified authenticator: every sign-in needs the code. */
+  on: boolean;
+  factors: TotpFactor[];
+  /** This session's level: 'aal2' once the code was given. */
+  aal: 'aal1' | 'aal2' | null;
+}
+
+export type MfaErrorCode = 'invalid_code' | 'expired' | 'disabled' | 'step_up' | 'too_many' | 'rate_limited' | 'offline' | 'failed';
+
+export interface MfaFailure {
+  ok: false;
+  code: MfaErrorCode;
+  error: string;
+}
+
+const MFA_COPY: Record<MfaErrorCode, string> = {
+  invalid_code: 'That code didn’t match. Type the newest code from your authenticator app — and check your phone sets its clock automatically.',
+  expired: 'That code timed out. Type the newest one from your authenticator app.',
+  disabled: 'Two-step sign-in isn’t switched on for DreamStream accounts yet. Nothing has changed on your account.',
+  step_up: 'Confirm it’s you with a code from your authenticator app first.',
+  too_many: 'You’ve added as many authenticators as an account can have. Remove one first.',
+  rate_limited: 'Too many tries. Wait a minute, then try the newest code.',
+  offline: 'Can’t reach the server — check your connection and try again.',
+  failed: 'That didn’t work — try again in a moment.',
+};
+
+/** A Supabase auth error → what went wrong, in words a parent can act on. */
+export function mfaFailure(e: { code?: string; status?: number; message?: string } | null | undefined): MfaFailure {
+  const code = String(e?.code ?? '');
+  const msg = String(e?.message ?? '');
+  let kind: MfaErrorCode = 'failed';
+  if (code === 'mfa_verification_failed' || /invalid (totp )?code|verification failed/i.test(msg)) kind = 'invalid_code';
+  else if (code === 'mfa_challenge_expired' || /expired/i.test(msg)) kind = 'expired';
+  else if (/not_enabled$/.test(code) || /mfa.*(disabled|not enabled)/i.test(msg)) kind = 'disabled';
+  else if (code === 'insufficient_aal' || /aal2/i.test(msg)) kind = 'step_up';
+  else if (code === 'too_many_enrolled_mfa_factors') kind = 'too_many';
+  else if (e?.status === 429 || /rate limit/i.test(code + msg)) kind = 'rate_limited';
+  else if (/fetch|network|offline/i.test(msg)) kind = 'offline';
+  return { ok: false, code: kind, error: MFA_COPY[kind] };
+}
+
+const sixDigits = (code: string) => code.replace(/\D/g, '').slice(0, 6);
+
+type FactorRow = { id: string; friendly_name?: string; factor_type: string; status: string; created_at: string };
+
+async function factorRows(sb: Supa): Promise<FactorRow[] | null> {
+  try {
+    const { data, error } = await sb.auth.mfa.listFactors();
+    if (error || !data) return null;
+    return (data.all ?? []) as FactorRow[];
+  } catch {
+    return null;
+  }
+}
+
+/** Two-step sign-in for this account: on or off, its authenticators, and this session's level. */
+export async function mfaStatus(): Promise<MfaState> {
+  const sb = await supa();
+  if (!sb) return { ok: false, on: false, factors: [], aal: null };
+  const [rows, aal] = await Promise.all([factorRows(sb), assurance(sb)]);
+  if (!rows) return { ok: false, on: false, factors: [], aal: null };
+  const factors = rows
+    .filter((f) => f.factor_type === 'totp' && f.status === 'verified')
+    .map((f) => ({ id: f.id, name: f.friendly_name || 'Authenticator app', createdAt: f.created_at }));
+  const level = aal?.current === 'aal2' ? 'aal2' : aal?.current === 'aal1' ? 'aal1' : null;
+  return { ok: true, on: factors.length > 0, factors, aal: level };
+}
+
+/** True when an admin action needs the code first: two-step sign-in is on and this session is aal1. */
+export async function stepUpNeeded(): Promise<boolean> {
+  const sb = await supa();
+  if (!sb) return false;
+  const aal = await assurance(sb);
+  return aal?.current === 'aal1' && aal.next === 'aal2';
+}
+
+export interface TotpEnrollment {
+  ok: true;
+  factorId: string;
+  /** An SVG QR code as a data: URL (rendered in an <img>). */
+  qr: string;
+  /** The setup key: typed into an app that can't scan, and the way back after losing the phone. */
+  secret: string;
+  uri: string;
+}
+
+/**
+ * Start adding an authenticator: Supabase creates an unverified factor and the QR code. Half-done
+ * set-ups from before are cleared first (they'd otherwise pile up against the factor limit).
+ * Adding a second authenticator once one is on needs aal2 (code `step_up`).
+ */
+export async function enrollTotp(): Promise<TotpEnrollment | MfaFailure> {
+  const sb = await supa();
+  if (!sb) return mfaFailure({ message: 'offline' });
+  const rows = await factorRows(sb);
+  for (const f of rows ?? []) {
+    if (f.factor_type === 'totp' && f.status === 'unverified') {
+      try {
+        await sb.auth.mfa.unenroll({ factorId: f.id });
+      } catch { /* the server tidies stale ones too */ }
+    }
+  }
+  const verified = (rows ?? []).filter((f) => f.factor_type === 'totp' && f.status === 'verified').length;
+  // Names must be unique per account; the date says which phone is which in the list.
+  const friendlyName = `Authenticator ${verified + 1} · ${new Date().toISOString().slice(0, 10)} ${Math.random().toString(36).slice(2, 6)}`;
+  try {
+    const { data, error } = await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName, issuer: 'DreamStream' });
+    if (error || !data) return mfaFailure(error ?? undefined);
+    return { ok: true, factorId: data.id, qr: data.totp.qr_code, secret: data.totp.secret, uri: data.totp.uri };
+  } catch (e) {
+    return mfaFailure({ message: e instanceof Error ? e.message : 'offline' });
+  }
+}
+
+/** Finish adding an authenticator with its first code. The session becomes aal2 at once. */
+export async function verifyTotp(factorId: string, code: string): Promise<{ ok: true } | MfaFailure> {
+  const sb = await supa();
+  if (!sb) return mfaFailure({ message: 'offline' });
+  const digits = sixDigits(code);
+  if (digits.length !== 6) return { ok: false, code: 'invalid_code', error: 'Type the 6-digit code from your authenticator app.' };
+  try {
+    const { error } = await sb.auth.mfa.challengeAndVerify({ factorId, code: digits });
+    if (error) return mfaFailure(error);
+  } catch (e) {
+    return mfaFailure({ message: e instanceof Error ? e.message : 'offline' });
+  }
+  await refreshAccount();
+  return { ok: true };
+}
+
+/** Abandon a set-up that was never confirmed (the unverified factor goes). */
+export async function cancelTotpEnrollment(factorId: string): Promise<void> {
+  const sb = await supa();
+  try {
+    await sb?.auth.mfa.unenroll({ factorId });
+  } catch { /* nothing to tidy */ }
+}
+
+/**
+ * Remove an authenticator (turning two-step sign-in off when it was the last). Needs aal2 —
+ * whoever has only the password can't switch it off. The session is refreshed afterwards so its
+ * level matches the factors that are left.
+ */
+export async function unenrollTotp(factorId: string): Promise<{ ok: true } | MfaFailure> {
+  const sb = await supa();
+  if (!sb) return mfaFailure({ message: 'offline' });
+  try {
+    const { error } = await sb.auth.mfa.unenroll({ factorId });
+    if (error) return mfaFailure(error);
+    await sb.auth.refreshSession().catch(() => undefined);
+  } catch (e) {
+    return mfaFailure({ message: e instanceof Error ? e.message : 'offline' });
+  }
+  await refreshAccount();
+  return { ok: true };
+}
+
+/**
+ * The second step: a code from the account's authenticator upgrades this session to aal2 — at
+ * sign-in, and before admin actions (share links, adding people, export, approving devices).
+ * Supabase stores the upgraded session and fires MFA_CHALLENGE_VERIFIED, so open sockets get
+ * the aal2 token over `ds:token`. With no authenticator there's nothing to step up to: ok.
+ */
+export async function stepUp(code: string): Promise<{ ok: true } | MfaFailure> {
+  const sb = await supa();
+  if (!sb) return mfaFailure({ message: 'offline' });
+  const digits = sixDigits(code);
+  if (digits.length !== 6) return { ok: false, code: 'invalid_code', error: 'Type the 6-digit code from your authenticator app.' };
+  const rows = await factorRows(sb);
+  if (!rows) return mfaFailure({ message: 'offline' });
+  const factor = rows.find((f) => f.factor_type === 'totp' && f.status === 'verified');
+  if (!factor) return { ok: true };
+  try {
+    const { error } = await sb.auth.mfa.challengeAndVerify({ factorId: factor.id, code: digits });
+    if (error) return mfaFailure(error);
+  } catch (e) {
+    return mfaFailure({ message: e instanceof Error ? e.message : 'offline' });
+  }
+  await refreshAccount();
+  return { ok: true };
+}
+
+/* ------------------------------------------- devices and security history */
+
+/** An account device (phone, browser, watch) from `live_device_list` (server/sql/live_security_v2.sql). */
+export interface MyDevice {
+  id: string;
+  platform: string;
+  name: string;
+  created_at: string;
+  last_seen: string;
+  revoked_at: string | null;
+}
+
+/** One line of the account's security history (`live_security_events`). */
+export interface SecurityEvent {
+  id: number;
+  kind: string;
+  method: string | null;
+  ua: string | null;
+  ip: string | null;
+  at: string;
+  this_session: boolean;
+  active: boolean;
+  secured: boolean;
+  detail: Record<string, unknown> | null;
+}
+
+/**
+ * Why a list couldn't load: `setup` — the security update (live_security_v2.sql) isn't on the
+ * server yet; `mfa_required` — the code is owed first; anything else is a plain failure.
+ */
+export type SecurityListError = 'setup' | 'mfa_required' | 'session_revoked' | 'offline' | 'failed';
+
+const listError = (e: string | null | undefined): SecurityListError =>
+  e === 'setup' || e === 'mfa_required' || e === 'session_revoked' || e === 'offline' ? e : 'failed';
+
+export async function listMyDevices(): Promise<{ ok: true; devices: MyDevice[] } | { ok: false; error: SecurityListError }> {
+  const r = await rpc<{ ok?: boolean; error?: string; devices?: MyDevice[] }>('live_device_list');
+  if (r.error || !r.data) return { ok: false, error: listError(r.error) };
+  if (!r.data.ok) return { ok: false, error: listError(r.data.error) };
+  return { ok: true, devices: r.data.devices ?? [] };
+}
+
+export async function listSecurityEvents(limit = 20): Promise<{ ok: true; events: SecurityEvent[] } | { ok: false; error: SecurityListError }> {
+  const r = await rpc<{ ok?: boolean; error?: string; events?: SecurityEvent[] }>('live_security_events', { p_limit: limit });
+  if (r.error || !r.data) return { ok: false, error: listError(r.error) };
+  if (!r.data.ok) return { ok: false, error: listError(r.data.error) };
+  return { ok: true, events: r.data.events ?? [] };
+}
+
+/**
+ * Sign a device out for good. Through the live Worker first (WS-7 `DELETE /api/devices/:id`: it
+ * revokes in Supabase AND tells every nursery, so its sockets close and its grant stops working);
+ * where that route isn't deployed yet, straight through `live_device_revoke` — a watch's grant
+ * then stops at its next token exchange.
+ */
+export async function revokeMyDevice(id: string): Promise<{ ok: true } | { ok: false; error: SecurityListError | 'not_found' }> {
+  const token = await accessToken();
+  if (token) {
+    try {
+      const res = await fetch(`${WORKER_BASE}/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+      if (res.ok) return { ok: true };
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (body?.error === 'mfa_required') return { ok: false, error: 'mfa_required' };
+      // Anything else (a Worker without the route: 404/405/501): the RPC decides.
+    } catch { /* offline or no route: the RPC decides */ }
+  }
+  const r = await rpc<{ ok?: boolean; error?: string }>('live_device_revoke', { p_device: id });
+  if (r.error || !r.data) return { ok: false, error: listError(r.error) };
+  if (!r.data.ok) return { ok: false, error: r.data.error === 'not_found' ? 'not_found' : listError(r.data.error) };
+  return { ok: true };
+}
+
+/* ------------------------------------------- "Not you? Secure my account" */
+
+/** The one-time token in a new-sign-in email's link (`#/secure/<token>`, email-worker securityAlert.ts). */
+export const SECURE_TOKEN = /^[A-Za-z0-9_-]{20,128}$/;
+
+export interface SecureAccountResult {
+  ok: true;
+  /** Supabase ended every session of the account (false: the database couldn't — never claimed). */
+  signedOutEverywhere: boolean;
+  sessionsEnded: number | null;
+  /** Phones and watches added since that sign-in, now signed out. */
+  devicesRevoked: number;
+  resetEmail: 'sent' | 'throttled' | 'unavailable' | 'failed';
+  /** "a•••@example.com" — where the reset email went. */
+  emailHint: string | null;
+  /** This browser was signed in to that account: it's signed out now too. */
+  thisDevice: boolean;
+  /** Open monitors and calls were closed at once (POST /api/me/kick answered ok). */
+  kicked: boolean;
+}
+
+export interface SecureAccountFailure {
+  ok: false;
+  code: 'used' | 'expired' | 'invalid_token' | 'unavailable' | 'unreachable' | string;
+  message: string;
+}
+
+const RESET_EMAIL = new Set(['sent', 'throttled', 'unavailable', 'failed']);
+
+/**
+ * Redeem the "Not you?" link: POST /api/auth/email/secure {token} (server/src/routes/authEmail.ts)
+ * ends every session of the account, signs out devices added since that sign-in, and emails a
+ * password-reset link. Then, if THIS browser was signed in to that same account — its session is
+ * among the ones just ended, which the auth server can tell us exactly (no guessing from the email
+ * hint) — this browser signs out too, and the token it held a moment ago asks the live Worker to
+ * close the account's open sockets (best effort: honest `kicked`).
+ */
+export async function secureAccount(token: string): Promise<SecureAccountResult | SecureAccountFailure> {
+  if (!SECURE_TOKEN.test(token)) return { ok: false, code: 'invalid_token', message: 'This link isn’t complete — open it straight from the email again.' };
+  const sb = await supa();
+  let localToken: string | null = null;
+  try {
+    localToken = (await sb?.auth.getSession())?.data.session?.access_token ?? null;
+  } catch { /* not signed in here */ }
+
+  let status = 0;
+  let body: Record<string, unknown> | null = null;
+  try {
+    const { buildApiUrl } = await import('@/services/clientConfig');
+    const res = await fetch(buildApiUrl('/api/auth/email/secure'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    status = res.status;
+    body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  } catch {
+    return { ok: false, code: 'unreachable', message: 'Can’t reach DreamStream right now — check your connection and try again. Your link still works.' };
+  }
+  if (!body || body.ok !== true) {
+    const code = typeof body?.code === 'string' ? body.code : status === 404 || status === 405 || !body ? 'unreachable' : `http_${status}`;
+    const message =
+      typeof body?.message === 'string' && body.message
+        ? body.message
+        : 'We couldn’t secure your account just now — please try again in a minute. Your link still works.';
+    return { ok: false, code, message };
+  }
+
+  let thisDevice = false;
+  let kicked = false;
+  if (sb && localToken) {
+    try {
+      const { error } = await sb.auth.getUser(localToken);
+      const e = error as { status?: number; code?: string; message?: string } | null;
+      thisDevice = !!e && (e.status === 401 || e.status === 403 || /session/i.test(`${e.code ?? ''} ${e.message ?? ''}`));
+    } catch { /* can't tell: leave this browser as it is */ }
+    if (thisDevice) {
+      kicked = await kickMySockets(localToken);
+      await signOutThisDevice();
+    }
+  }
+  const sessionsEnded = typeof body.sessionsEnded === 'number' ? body.sessionsEnded : null;
+  return {
+    ok: true,
+    signedOutEverywhere: body.signedOutEverywhere === true,
+    sessionsEnded,
+    devicesRevoked: typeof body.devicesRevoked === 'number' ? body.devicesRevoked : 0,
+    resetEmail: typeof body.resetEmail === 'string' && RESET_EMAIL.has(body.resetEmail) ? (body.resetEmail as SecureAccountResult['resetEmail']) : 'unavailable',
+    emailHint: typeof body.emailHint === 'string' ? body.emailHint : null,
+    thisDevice,
+    kicked,
+  };
 }
 
 /* ------------------------------------------------- auth sheet control */
 
 export type AuthMode = 'signin' | 'create' | 'code' | 'reset';
 let authOpener: ((mode: AuthMode, reason?: string) => void) | null = null;
+let secondStepOpener: (() => void) | null = null;
 
 export function registerAuthOpener(fn: ((mode: AuthMode, reason?: string) => void) | null): void {
   authOpener = fn;
 }
 
-/** Open the in-app sign-in / create-account sheet from anywhere. */
+/** The StepUp sheet (views/account/StepUp.tsx) registers how to ask for the sign-in code. */
+export function registerSecondStepOpener(fn: (() => void) | null): void {
+  secondStepOpener = fn;
+}
+
+/**
+ * Open the in-app sign-in / create-account sheet from anywhere. Someone who has given their
+ * password but still owes the two-step code is asked for the code instead — every "Sign in"
+ * button in the app then finishes the sign-in rather than starting another.
+ */
 export function openAuth(mode: AuthMode = 'signin', reason?: string): void {
+  if (current.status === 'needs_mfa' && secondStepOpener) {
+    secondStepOpener();
+    return;
+  }
   authOpener?.(mode, reason);
 }

@@ -7,9 +7,10 @@
 //   ?e=ID                  → invite page or watch page (meta decides)
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
 //                            #/account, #/monitor[/NURSERY[/camera|/watch|/invite]],
-//                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls)
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
-import { consumeAuthReturn, hasAuthReturn, openAuth, signOutEverywhereLocal, useAccount, type AuthReturn, type AuthReturnConfirm } from './account';
+//                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls),
+//                            #/secure/TOKEN ("Not you? Secure my account" from a new-sign-in email)
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { consumeAuthReturn, hasAuthReturn, openAuth, signOutThisDevice, useAccount, type AuthReturn, type AuthReturnConfirm } from './account';
 import { OWNER_KEY as LIVE_OWNER_KEY } from './accountPurge';
 import { getEvent } from './api';
 import { AuthSheetHost } from './components/AuthSheet';
@@ -45,6 +46,11 @@ import { Icon } from './ui/icons';
 import { LiveLegalLinks } from './ui/legalLinks';
 import { StreamStudioLogo } from './ui/logo';
 import { Avatar, Btn, cx, useToasts, type PushToast } from './ui/primitives';
+import { askForCode, StepUpHost } from './views/account/StepUp';
+import { confirmAndSignOutEverywhere } from './views/account/SecurityPanel';
+import { SecureAccount } from './views/account/SecureAccount';
+import { MfaNudge } from './views/account/MfaNudge';
+import { reconcileLegacyAlerts } from './monitor/push';
 
 export type Route =
   | { view: 'dashboard' | 'create' | 'settings' | 'monitor' | 'calls' }
@@ -53,7 +59,8 @@ export type Route =
   | { view: 'studio' | 'summary'; id: string; k: string }
   | { view: 'guest'; id: string; g: string }
   | { view: 'summary-lookup'; id: string }
-  | { view: 'viewer' | 'event' | 'event-auto'; id: string };
+  | { view: 'viewer' | 'event' | 'event-auto'; id: string }
+  | { view: 'secure'; token: string };
 
 export function parseHashRoute(rawHash: string): { screen: string; params: URLSearchParams } {
   const clean = rawHash.replace(/^#\/?/, '');
@@ -79,6 +86,9 @@ export function parseRoute(): Route {
     return { view: 'event-auto', id: e };
   }
   if (hash === 'create') return { view: 'create' };
+  // The new-sign-in email's "Not you?" link. LiveApp takes the token out of the address bar.
+  const secure = hash.match(/^secure(?:\/([A-Za-z0-9_-]*))?$/);
+  if (secure) return { view: 'secure', token: secure[1] ?? '' };
   if (hash === 'settings' || hash === 'account') return { view: 'settings' };
   if (hash === 'monitor') return { view: 'monitor' };
   // A ringing call's notification lands on Calls; the call itself rings on top.
@@ -163,6 +173,21 @@ const TOUR_FOR: Partial<Record<Route['view'], TourId>> = {
 function AccountButton({ onSettings, push, compact }: { onSettings: () => void; push: PushToast; compact?: boolean }) {
   const account = useAccount();
   const [menu, setMenu] = useState(false);
+  if (account.status === 'needs_mfa') {
+    // Password given, two-step code still owed: finishing is the one thing to do.
+    if (compact) {
+      return <Btn variant="soft" size="sm" icon="shield" onClick={() => void askForCode(undefined, 'signin')} data-tour="account">Enter code</Btn>;
+    }
+    return (
+      <button className="rail-user" data-tour="account" onClick={() => void askForCode(undefined, 'signin')} aria-label="Finish signing in with your two-step code">
+        <span className="avatar avatar-ghost" style={{ width: 32, height: 32 }}><Icon name="shield" size={16} /></span>
+        <div className="ru-txt">
+          <div className="ru-name">Finish signing in</div>
+          <div className="ru-meta">Enter your code</div>
+        </div>
+      </button>
+    );
+  }
   if (account.status !== 'member' && account.status !== 'needs_code') {
     if (compact) {
       return (
@@ -203,10 +228,15 @@ function AccountButton({ onSettings, push, compact }: { onSettings: () => void; 
           )}
           <button role="menuitem" onClick={() => { setMenu(false); onSettings(); }}><Icon name="user" size={15} />Account &amp; sync</button>
           <button role="menuitem" onClick={() => { setMenu(false); openHelp(); }}><Icon name="help" size={15} />Help &amp; tours</button>
+          <button role="menuitem" onClick={() => { setMenu(false); location.hash = '#/settings?s=security'; }}><Icon name="shield" size={15} />Security</button>
           <button role="menuitem" onClick={() => {
             setMenu(false);
-            void signOutEverywhereLocal().then(() => push('Signed out on this device', { icon: 'check' }));
-          }}><Icon name="logout" size={15} />Sign out</button>
+            void signOutThisDevice().then(() => push('Signed out on this device', { icon: 'check' }));
+          }}><Icon name="logout" size={15} />Sign out of this device</button>
+          <button role="menuitem" onClick={() => {
+            setMenu(false);
+            void confirmAndSignOutEverywhere(push);
+          }}><Icon name="shield" size={15} />Sign out everywhere…</button>
         </div>
       )}
     </div>
@@ -240,6 +270,35 @@ export function LiveApp() {
   const [authPending, setAuthPending] = useState(hasAuthReturn);
   const account = useAccount();
   const calls = useCalls();
+  // The "Not you?" token: read once from the link, then kept only in memory (the address bar,
+  // history and any later copy of the URL never carry it).
+  const secureToken = useRef<string | null>(route.view === 'secure' ? route.token : null);
+  useEffect(() => {
+    if (route.view !== 'secure') return;
+    if (route.token) secureToken.current = route.token;
+    if (/^#\/secure\/./.test(location.hash)) history.replaceState(null, '', `${location.pathname}${location.search}#/secure`);
+  }, [route]);
+
+  // Signed out because the account was signed out everywhere (or secured): say so once.
+  const toldRevoked = useRef(false);
+  useEffect(() => {
+    const revoked = account.status === 'signed_out' && account.ended === 'revoked';
+    if (revoked && !toldRevoked.current) {
+      push('You were signed out — your account was signed out on every device. Sign in again to continue.', { icon: 'info', duration: 7000 });
+    }
+    toldRevoked.current = revoked;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.status, account.ended]);
+
+  // On Stream Studio's own host: an alert subscription from dreamstreamstudio.ai/live that this
+  // host now fully covers is ended, so nothing alerts twice (monitor/push.ts). Once per page.
+  const legacyChecked = useRef(false);
+  useEffect(() => {
+    if (account.status !== 'member' || legacyChecked.current) return;
+    legacyChecked.current = true;
+    const uid = account.userId ?? null;
+    window.setTimeout(() => void reconcileLegacyAlerts(uid, { startup: true }), 4000);
+  }, [account.status, account.userId]);
   // Missed family calls since Calls was last opened.
   const missed = useMemo(() => {
     if (route.view === 'calls') return 0;
@@ -366,6 +425,8 @@ export function LiveApp() {
         return <MonitorViewer id={route.nid} nav={nav} push={push} />;
       case 'monitor-join':
         return <MonitorJoin nid={route.nid} code={route.code} nav={nav} push={push} />;
+      case 'secure':
+        return <SecureAccount token={route.token || secureToken.current || ''} nav={nav} />;
       case 'dashboard':
       default:
         return <DashboardView nav={nav} push={push} />;
@@ -373,7 +434,7 @@ export function LiveApp() {
   };
 
   // Full-bleed surfaces own the whole viewport — no side rail.
-  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch', 'monitor-join'].includes(route.view);
+  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch', 'monitor-join', 'secure'].includes(route.view);
   const activeNav =
     route.view === 'create' ? 'create'
     : route.view === 'settings' ? 'settings'
@@ -471,6 +532,8 @@ export function LiveApp() {
       {route.view === 'dashboard' && <WelcomeTour ready={!authPending && !linkConfirm} />}
       <CallHost push={push} suspended={route.view === 'monitor-camera'} />
       <AuthSheetHost push={push} />
+      <StepUpHost push={push} />
+      {(route.view === 'monitor' || route.view === 'nursery') && <MfaNudge onSetUp={() => { location.hash = '#/settings?s=security'; }} />}
       {linkConfirm && (
         <LinkConfirmSheet
           link={linkConfirm}
