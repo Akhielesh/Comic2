@@ -207,6 +207,45 @@ spec said 480 px; the lead accepted 600 px (2026-10-29) because arbitrary `min-[
 not work in this Tailwind config and the ordered screen list (`tests/config/appShell.test.ts`)
 has no 480 px step. Between 480 and 599 px the rows stay stacked, which never overflows.
 
+### 5.1 Model lock, preflight and recording (v5)
+
+One comic, one image model. The table above is what an **unlocked** comic draws with; once it is locked, a
+tier only picks the resolution on the locked model.
+
+- **Lock.** The server locks the comic (`doc.imageModel`, `origin: 'first_render'`) in the same op batch as the
+  first comic image (sheet, place, page, cover or edit; style swatches do not lock). Legacy comics get the lock
+  they were drawn with (`deriveLock`, persisted with the next image commit). Every job resolves through
+  `resolveImageJob(kind, tier, override, lock)` and `jobs.ts` refuses, with no provider call, any job whose model
+  is not the lock (`MODEL_LOCKED`, logged as `comic_model_lock_violation`). Jobs never switch models: not on a 429,
+  an outage, a safety retry or a tier change.
+- **Who can change it.** Only the user, through the picker's confirm (`change_image_model` with `ack`, the redraw
+  scope and the quote they saw). The server re-checks pickable, plan access, transport, fit (4:5 on GPT Image is a
+  block), no active run (409 `RUN_ACTIVE`), the redraw quote (outside 15 % + $0.01 → a requote, nothing switched)
+  and the budget, then writes the lock and a `changes[]` entry and posts the switch notice with "Redraw them" and
+  "Switch back" chips. Before the lock, `settings.imageModelOverride` is only a preference; after it, a settings
+  patch that would change the model is refused (409 `MODEL_LOCKED`). The director has no tool that changes the
+  model and cannot change the tier of a locked comic; it explains options with `model_options` (real prices,
+  characters held, redraw cost) and offers the picker chip (`suggest_model`).
+- **Preflight.** Before any spend reserves money, `preflightImageRun` (`server/src/comic/models/health.ts`)
+  reads the process health port (OpenRouter's free public endpoint status, cached 3 min, plus our own outcomes).
+  When the locked model is down on every route this account can use, nothing starts and nothing is charged: the
+  action answers `blocked` and the conversation gets one `model_outage` card (origin `preflight`) with real
+  alternatives. An upstream 429 mid-run ends with the same card and "Try again" / "See other models" chips; a model
+  this comic can no longer use (access lost, retired, no transport) fails honestly with "See other models".
+- **Prices.** Every quote, gate and reservation in a request reads one PriceBook (`ctx.prices`, built on the first
+  quote and memoised per request): the live OpenRouter price, or our observed median when it is higher, plus QC,
+  × the platform markup unless the user's own key pays.
+- **Recording.** Every image attempt, paid or failed, writes a SpendEntry and a fire-and-forget
+  `comic_image_calls` row (route, provider, resolution, references, outcome, provider-reported cost and model
+  version) and bumps `model_usage_monthly`. Recording never blocks or fails a job; until
+  `server/sql/comic_image_calls_model_version.sql` is applied the row is written without `model_version`.
+- **Model Lab** (Admin → Model Lab, `server/src/comic/models/lab.ts`): the owner's paid checks (D1–D4) run only on
+  an explicit admin click, one provider call per click, under a hard $2 per UTC day cap reserved atomically in the
+  database before the call. A call that reached the provider is also a `comic_image_calls` row.
+- **Tests never reach the network.** `tests/setup.ts` refuses any fetch to a real host and fails the test that tried.
+  Server tests that build a real context install `__setModelHealthForTests(fakeModelHealth())` and pass registry
+  prices (`testContext()` in `orchestrator.fakes.ts` does both).
+
 ## 6. Prompts (the craft)
 
 All prompts are compiled server-side from the doc (`prompts.ts`, pure, unit-tested).
