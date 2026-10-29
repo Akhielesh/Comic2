@@ -1,13 +1,30 @@
 /**
  * Client mirror of the live-worker MonitorRoom protocol (keep in sync with
  * live-worker/src/monitorRoom.ts — the worker compiles separately).
+ *
+ * The ADR 0006 Phase 0 delta (capabilities, close codes, re-auth, key messages, sealed
+ * signaling) lives in packages/monitor-core/src/wire.ts — one source for the web app, the
+ * live Worker and the native apps — and is re-exported here, so monitor code imports one file.
  */
 
 import type { BabyProfile, TrackItem, TrackKind } from './trackTypes';
 import type { SoundCat } from './soundClasses';
 import type { Zone } from './vision';
+import { parseCaps, type Cap, type KeyTarget, type SealedRtc } from '../../packages/monitor-core/src/wire';
 
 export type { Zone };
+export {
+  CAPS, CLOSE, CLOSE_ADVICE, CLOSE_REASON, closeKind, EPOCH_OVERLAP_MS, EXPIRY_GRACE_S, hasCap, isSealedRtc, parseCaps,
+  parseDevHello, parseKeyInit, parseKeyRotate, parseKeyWrap, ROUTES, rtcPolicy, TOKEN_EVENT,
+} from '../../packages/monitor-core/src/wire';
+export type {
+  Cap, CloseAdvice, CloseKind, DevHelloMsg, DevicePlatform, HelloV2Fields, KeyConflictMsg, KeyInitMsg, KeyReqMsg,
+  KeyRotateMsg, KeyRotateReqMsg, KeyTarget, KeyWrapEntry, KeyWrapMsg, LiveWantMsg, MembersRequest, MembersResponse,
+  ReauthMsg, ReauthOkMsg, SealedRtc, ViewMsg, WithEid,
+} from '../../packages/monitor-core/src/wire';
+
+/** What a room can do (`hello.caps`), known capabilities only — an older room lists none. */
+export const helloCaps = (m: { caps?: unknown }): Cap[] => parseCaps(m.caps);
 
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
 export type MonMode = 'camera' | 'viewer';
@@ -90,6 +107,11 @@ export interface CamPresence {
   since: number;
   status: CamStatus | null;
   statusAt: number | null;
+  /**
+   * The camera's device key id (ADR 0006 D6.3), once its `dev_hello` checked out (rooms that
+   * list `e2e1`). Present = this camera seals: its signaling and relay picture are end to end.
+   */
+  devId?: string;
 }
 
 export interface ViewerPresence {
@@ -101,6 +123,40 @@ export interface ViewerPresence {
   relay: boolean;
   /** Joined with the share link + passcode (no account). */
   guest?: boolean;
+  /** This viewer's device key id, once its `dev_hello` checked out (rooms that list `e2e1`). */
+  devId?: string;
+}
+
+/**
+ * Parents' devices list (rooms that list `e2e1`; a WS-6 contract note in ADR 0006 for WS-9):
+ *  - `{t:'q', id, q:'devices'}` → `{t:'r', id, devices: NurseryDevice[]}`;
+ *  - `{t:'q', id, q:'dev_revoke', devId}` → `{t:'r', id, ok: true}` or `{ok: false, error}`: the
+ *    room drops the device and its wraps from the roster, closes its sockets (4004 'revoked'),
+ *    asks a key holder for the next epoch (`key_rotate` to the devices that remain), and logs a
+ *    `security` event every parent sees. Parents only; the second sign-in step when it's on.
+ * The security log is the existing events query: `{q:'events', kinds:['security']}`.
+ */
+export interface DevicesReply {
+  devices: NurseryDevice[];
+}
+export interface DevRevokeReply {
+  ok: boolean;
+  error?: string;
+}
+
+/** A device in the nursery's roster (`mon_devices`), as parents see it (`{t:'q', q:'devices'}`). */
+export interface NurseryDevice {
+  devId: string;
+  name: string;
+  platform: string;
+  /** Whose device: a member's name, a guest's name, or "Camera". */
+  who: string;
+  /** This browser. */
+  me?: boolean;
+  added: number;
+  last_seen: number | null;
+  /** Holds the nursery key now (it was wrapped to it at the current epoch). */
+  keyed?: boolean;
 }
 
 /** Guest access, as parents see it (never the passcode). */
@@ -162,6 +218,11 @@ export interface MonLog {
   db?: number;
   /** The incident this line belongs to. */
   incident?: string;
+  /**
+   * The camera event this line came from (`<dev>:<seq>`, rooms that list `eid`): viewers
+   * alert on whichever copy arrives first — this line or the camera's data channel — once.
+   */
+  eid?: string;
 }
 
 export interface MonSettings {
@@ -287,6 +348,15 @@ export type TimelineBucket = [number, number, number];
 export interface MonRtc {
   sdp?: RTCSessionDescriptionInit;
   ice?: RTCIceCandidateInit | null;
+  /**
+   * Candidates gathered within one 75 ms window, in one message (null = end of candidates).
+   * Sent only to a peer that said `ib` (the room bills every message).
+   */
+  ices?: (RTCIceCandidateInit | null)[];
+  /** With an offer or an answer: this side takes `ices` batches. */
+  ib?: 1;
+  /** With an offer or an answer: this side takes ICE restarts on the `mon` data channel (`{t:'sig'}`). */
+  dcr?: 1;
   hello?: boolean;
   bye?: boolean;
   /**
@@ -344,8 +414,14 @@ export type MonServerMsg =
       /** Ask for fresh relay credentials (`{t:'ice'}`) in this many ms; absent: STUN only, nothing to refresh. */
       iceMs?: number;
       vapid: string | null;
-      /** What this room can do (ADR 0006 Phase 0): 'view' = it takes `{t:'view'}` and sends cameras `live_want`. */
+      /** What this room can do (ADR 0006 Phase 0; wire.ts `CAPS`): 'view' = it takes `{t:'view'}` and sends cameras `live_want`. */
       caps?: string[];
+      /** The access token's expiry (ms): the room closes the socket 120 s after it unless re-authed (`reauth`). */
+      exp?: number;
+      /** A fresh nonce for this socket's `dev_hello` to sign (`e2e1`). */
+      nonce?: string;
+      /** The nursery key's current epoch (`e2e1`; 0 = none yet — a parent or camera device starts one with `key_init`). */
+      e?: number;
       /** The nursery's relay data this month (absent: a room from before fair use). */
       fair?: FairState;
       /** Viewers: the cameras on this device's network (their direct picture comes first). */
@@ -365,7 +441,20 @@ export type MonServerMsg =
   | { t: 'track_del'; id: string }
   | { t: 'track_err'; id?: string; msg: string }
   | { t: 'share_err'; msg: string }
-  | { t: 'rtc'; from: string; d: MonRtc; name?: string; label?: string | null; role?: MonRole }
+  /** Signaling from a peer: sealed (`{e, iv, ct, f}`) between devices that hold the nursery key. */
+  | { t: 'rtc'; from: string; d: MonRtc | SealedRtc; name?: string; label?: string | null; role?: MonRole }
+  /** The room took this socket's fresh token (`reauth`); it now closes at `exp` + 120 s. */
+  | { t: 'reauth_ok'; exp: number }
+  /** Key holder: wrap epoch `e` of the nursery key to this device (sealed.ts `wrapNmk`) and answer `key_wrap`. */
+  | ({ t: 'key_req'; e: number } & KeyTarget)
+  /** This device's own wrap of epoch `e` (stored by the room; the server can't open it). */
+  | { t: 'key_wrap'; devId: string; e: number; blob: string }
+  /** Key holder: someone was removed — make epoch `e` for these devices and answer `key_rotate` with the wraps. */
+  | { t: 'key_rotate'; e: number; devs: KeyTarget[] }
+  /** This device's `key_init` / `key_rotate` lost the compare-and-set: `e` is current. */
+  | { t: 'key_conflict'; e: number }
+  /** Parents: removing a guest changed the share link (and its passcode) — shown once, to pass on to those who should keep it. */
+  | { t: 'share_rotated'; link: { code: string; pass?: string | null }; removed?: string | null }
   | { t: 'status'; dev: string; sid: string; st: CamStatus; at: number }
   | { t: 'log'; entry: MonLog }
   | { t: 'ack'; ref: string; inc?: string | null; by: string; label: string | null; at: number }

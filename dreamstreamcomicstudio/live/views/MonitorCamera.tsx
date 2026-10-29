@@ -6,8 +6,11 @@
 // video/audio go peer-to-peer (end-to-end encrypted) to the family's devices —
 // and, for viewers the direct picture can't reach (a network that blocks it,
 // a full camera, or for a moment while it connects), as one small relay
-// stream through the room (not end-to-end encrypted, never stored;
-// monitor/relay.ts). All
+// stream through the room (never stored; monitor/relay.ts). With a room that
+// hands out the nursery key (ADR 0006 `e2e1`, monitor/keys.ts) that relay
+// stream and the call signaling are sealed with the family's key on this
+// phone (monitor/relayCrypto.ts) — the server passes along what it can't read;
+// without one, the relay is not end-to-end encrypted, as before. All
 // sound and motion analysis — including the AI sound model — runs on this
 // phone; only events and a few numbers go to the room.
 import React, { useEffect, useRef, useState } from 'react';
@@ -15,11 +18,14 @@ import {
   checkBrowser, dropAudioEl, listLenses, mediaErrorText, networkHint, openMedia, openVideoOnly, preferSpeaker, remoteAudioEl,
   setZoom, watchPower, zoomRange, MIC_CONSTRAINTS, type BrowserCheck, type Facing, type Lens, type PowerState, type ZoomRange,
 } from '../monitor/camera';
-import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
+import { CLOSE_TEXT, getDevice, openMonitorSocket, stepUp, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
 import { STATE_INFO, STATE_RANK, type BabyState, type MonServerMsg, type MonSettings, type ViewerPresence } from '../monitor/protocol';
 import { CameraHub, type Quality } from '../monitor/rtc';
 import { sceneIntervalMs } from '../monitor/videoBudget';
 import { NO_WANT, readWant, RelayEncoder, watchersNote, type RelayWant } from '../monitor/relay';
+import { deviceKeys, keysGate, keyStore, NurseryKeys } from '../monitor/keys';
+import { holdCameraLock, RelaySealer } from '../monitor/relayCrypto';
+import { EidMinter } from '../../packages/monitor-core/src/eid';
 import { StatusCadence } from '../monitor/statusCadence';
 import type { BrainEvent } from '../monitor/soundBrain';
 import { SOUND_INFO, type SoundCat } from '../monitor/soundClasses';
@@ -41,6 +47,8 @@ import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { ZoneEditor } from './monitor/ZoneEditor';
 
 const LENS_KEY = 'ds-monitor-lens';
+/** The last event sequence this phone used (eids keep rising even if the clock steps back across reloads). */
+const EID_SEQ_KEY = 'ds-monitor-eid-seq';
 const zonesKey = (nid: string) => `ds-monitor-zones-${nid}`;
 const statsKey = (nid: string) => `ds-monitor-stats-${nid}`;
 /** Minutes kept on the phone while the room is unreachable (6 h). */
@@ -138,10 +146,36 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const talkGovRef = useRef(new LoudnessGovernor(TALK_CEILING_DB));
   const sootheGovRef = useRef(new LoudnessGovernor(SOOTHE_CEILING_DB));
   const bgRef = useRef<number | null>(null);
+  /** Event ids (`<dev>:<seq>`, ADR 0006): the room stores each event once, viewers alert on the first copy. */
+  const eidRef = useRef<EidMinter | null>(null);
+  const nextEid = (): string | undefined => {
+    try {
+      if (!eidRef.current) eidRef.current = new EidMinter(getDevice().id, Number(localStorage.getItem(EID_SEQ_KEY)) || 0);
+      const eid = eidRef.current.next();
+      localStorage.setItem(EID_SEQ_KEY, String(eidRef.current.seq));
+      return eid;
+    } catch {
+      return eidRef.current ? eidRef.current.next() : undefined;
+    }
+  };
+  /** A camera event to the room, with its id (the same one its data-channel copy carries). */
+  const sendEvent = (ev: Record<string, unknown>, eid: string | undefined = nextEid()) => sockRef.current?.send({ t: 'event', ...ev, ...(eid ? { eid } : {}) });
+  /** Ids of sound events that reached viewers directly while the room was away: the room gets the same ones. */
+  const heldEidsRef = useRef(new Map<string, string>());
+  /** This phone's keys for the nursery (null until loaded, or without WebCrypto): sealed signaling and relay. */
+  const keysRef = useRef<NurseryKeys | null>(null);
+  const keysReadyRef = useRef<Promise<NurseryKeys | null> | null>(null);
+  /** The same, for signaling: it never waits on a hung storage for more than a moment. */
+  const keysGateRef = useRef<Promise<NurseryKeys | null>>(Promise.resolve(null));
+  /** Room messages that need the keys wait for them, in order. */
+  const keyChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  /** This tab is the only camera of the nursery on this phone (Web Locks): only then does it seal. */
+  const camLockRef = useRef<{ release: (() => void) | null; held: boolean }>({ release: null, held: false });
+  const sealerRef = useRef<RelaySealer | null>(null);
   // One stable listener (added/removed by identity) — it only touches refs.
   const [onTilt] = useState(() => (e: DeviceOrientationEvent) => {
     for (const ev of visionRef.current.pushTilt(e.beta, e.gamma, Date.now())) {
-      sockRef.current?.send({ t: 'event', kind: 'vision', type: ev.type, via: ev.via });
+      sendEvent({ kind: 'vision', type: ev.type, via: ev.via });
     }
     // Smart vision: a phone looking straight down sees a lying baby as "upright".
     if (e.beta != null && e.gamma != null) sceneWatchRef.current.setContext({ downAngle: downAngle(e.beta, e.gamma, lensRef.current.facing === 'user') });
@@ -184,6 +218,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [zoomVal, setZoomVal] = useState(1);
   const [res, setRes] = useState<string>('');
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
+  /** Why the room connection is waiting (the second sign-in step), while it reconnects. */
+  const [sockNote, setSockNote] = useState<string | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
   const [p2pCount, setP2pCount] = useState(0);
@@ -220,8 +256,40 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [calOpen, setCalOpen] = useState(false);
   const [calInput, setCalInput] = useState('');
   const [, setClock] = useState(0);
+  /** The nursery key changed (arrived, rotated): the status line re-reads it. */
+  const [, setKeyTick] = useState(0);
   const device = getDevice();
   useFirstVisitTour('camera', phase === 'setup');
+
+  // The nursery key (ADR 0006 D6.3): this phone's device keys and the wraps it holds, loaded
+  // while the camera is set up — so the first viewer's signaling is judged with them — and the
+  // lock that makes this tab the nursery's only camera on this phone (only then does it seal).
+  useEffect(() => {
+    let alive = true;
+    const ready = (async () => {
+      const dev = await deviceKeys();
+      if (!dev || !alive) return null;
+      const k = new NurseryKeys({ nid: id, device: dev, store: keyStore(), name: getDevice().name, send: (m) => sockRef.current?.send(m), onChange: () => setKeyTick((n) => n + 1) });
+      await k.load();
+      if (!alive) return null;
+      keysRef.current = k;
+      if (hubRef.current) hubRef.current.seal = k;
+      return k;
+    })().catch(() => null);
+    keysReadyRef.current = ready;
+    keysGateRef.current = keysGate(ready);
+    void holdCameraLock(id).then((release) => {
+      if (!alive) return release?.();
+      camLockRef.current = { release, held: !!release };
+    });
+    return () => {
+      alive = false;
+      keysRef.current?.close();
+      keysRef.current = null;
+      camLockRef.current.release?.();
+      camLockRef.current = { release: null, held: false };
+    };
+  }, [id]);
 
   /* ---------------------------------------------------------- lifecycle */
 
@@ -329,10 +397,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       if (document.visibilityState === 'hidden' && phase === 'running') {
         setHiddenWarn(true);
         // Say so now — a locked phone may stop running this page any second.
-        sockRef.current?.send({ t: 'event', kind: 'paused', why: 'hidden' });
+        sendEvent({ kind: 'paused', why: 'hidden' });
       }
       if (document.visibilityState === 'visible') {
-        if (phase === 'running') sockRef.current?.send({ t: 'event', kind: 'resumed' });
+        if (phase === 'running') sendEvent({ kind: 'resumed' });
         void recover();
       }
     };
@@ -433,8 +501,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     };
     ears.onNoise = (events) => {
       for (const e of events) {
-        sockRef.current?.send({ t: 'event', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated });
-        hubRef.current?.direct({ t: 'ev', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, at: Date.now(), dev: device.id });
+        const eid = nextEid();
+        sendEvent({ kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, cal: ears.meter.calibrated }, eid);
+        hubRef.current?.direct({ t: 'ev', kind: 'noise', type: e.type, phase: e.phase, db: e.db, secs: e.secs, at: Date.now(), dev: device.id, eid });
       }
     };
     ears.onMinute = (lv) => addMinute(lv);
@@ -501,7 +570,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         run.since ??= now;
         if (now - run.since > 5000 && now - run.lastEvent > 10 * 60_000) {
           run.lastEvent = now;
-          sockRef.current?.send({ t: 'event', kind: 'motion' });
+          sendEvent({ kind: 'motion' });
         }
       } else run.since = null;
     };
@@ -541,7 +610,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       setPower(p);
       if (p.charging === false && p.level != null && p.level <= 20 && Date.now() - lastBatteryAlertRef.current > 30 * 60_000) {
         lastBatteryAlertRef.current = Date.now();
-        sockRef.current?.send({ t: 'event', kind: 'battery', pct: p.level });
+        sendEvent({ kind: 'battery', pct: p.level });
       }
     });
     setPhase('setup');
@@ -636,6 +705,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       peersRef.current = n;
       setP2pCount(n);
     };
+    // Holding the nursery key, the camera seals its signaling and refuses unsealed offers.
+    hub.seal = keysRef.current;
     // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
     hub.onIceStale = () => sockRef.current?.send({ t: 'ice' });
     hub.onTalk = (key, s) => {
@@ -666,6 +737,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
     sockRef.current = openMonitorSocket(id, 'camera', onMsg, () => undefined, (st, detail) => {
       setSock(st);
+      setSockNote(st === 'reconnecting' ? detail ?? null : null);
       if (st !== 'connected') {
         authedRef.current = false;
         // Nothing can reach relay viewers now: stop encoding for them (the home Wi-Fi
@@ -774,10 +846,18 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
    * starts still alerts the family, exactly once.
    */
   const sendSound = (e: BrainEvent, replay = false) => {
+    // One id for both copies: a viewer alerts on whichever arrives first, once. A replay after the
+    // room was away reuses the id viewers already had straight from this phone.
+    const held = `${e.cat}:${e.phase}`;
+    const eid = (replay ? heldEidsRef.current.get(held) : undefined) ?? nextEid();
     // Viewers on the same Wi-Fi hear about it directly, room or no room.
-    if (!replay) hubRef.current?.direct({ t: 'ev', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, at: Date.now(), dev: device.id });
-    if (!authedRef.current) return;
-    sockRef.current?.send({ t: 'event', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, via: e.via });
+    if (!replay) hubRef.current?.direct({ t: 'ev', kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, at: Date.now(), dev: device.id, eid });
+    if (!authedRef.current) {
+      if (eid) heldEidsRef.current.set(held, eid);
+      return;
+    }
+    heldEidsRef.current.delete(held);
+    sendEvent({ kind: 'sound', cat: e.cat, phase: e.phase, conf: e.conf, secs: e.secs, via: e.via }, eid);
     if (e.phase === 'start') toldRef.current.add(e.cat);
     else toldRef.current.delete(e.cat);
   };
@@ -792,8 +872,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const sendScene = (e: SceneEvent) => {
     const { type, ...rest } = e as SceneEvent & Record<string, unknown>;
-    sockRef.current?.send({ t: 'event', kind: 'scene', type, ...rest });
-    hubRef.current?.direct({ t: 'ev', kind: 'scene', type, ...(rest as Record<string, string | number | boolean>), at: Date.now(), dev: device.id });
+    const eid = nextEid();
+    sendEvent({ kind: 'scene', type, ...rest }, eid);
+    hubRef.current?.direct({ t: 'ev', kind: 'scene', type, ...(rest as Record<string, string | number | boolean>), at: Date.now(), dev: device.id, eid });
   };
 
   const toggleScene = () => {
@@ -806,8 +887,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   };
 
   const sendVision = (e: VisionEvent) => {
-    hubRef.current?.direct({ t: 'ev', kind: 'vision', type: e.type, at: Date.now(), dev: device.id });
-    sockRef.current?.send({ t: 'event', kind: 'vision', type: e.type, zone: e.zone, name: e.name, secs: e.secs, via: e.via });
+    const eid = nextEid();
+    hubRef.current?.direct({ t: 'ev', kind: 'vision', type: e.type, at: Date.now(), dev: device.id, eid });
+    sendEvent({ kind: 'vision', type: e.type, zone: e.zone, name: e.name, secs: e.secs, via: e.via }, eid);
   };
 
   /** One minute of sound + vision → the history buffer (kept on the phone until the room has it). */
@@ -897,6 +979,14 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         flushStats();
         authedRef.current = true;
         syncSounds();
+        // Rooms that hand out the nursery key: this phone's keys, then its wrap (or the first epoch).
+        void keysReadyRef.current?.then((k) => k?.onHello(m, 'camera'));
+        break;
+      case 'key_req':
+      case 'key_wrap':
+      case 'key_rotate':
+      case 'key_conflict':
+        void keysReadyRef.current?.then((k) => k?.onMessage(m as unknown as { t: string } & Record<string, unknown>));
         break;
       case 'stats_ok':
         statsRef.current = statsRef.current.filter((r) => r.m > m.upto);
@@ -912,7 +1002,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         applySettings(m.settings);
         break;
       case 'rtc':
-        void hubRef.current?.onSignal(m.from, m.d, m.label || m.name || 'Someone');
+        // Judged with the nursery key once it's loaded (a sealed offer opens; a plain one is refused while it holds one).
+        void keysGateRef.current.then(() => hubRef.current?.onSignal(m.from, m.d, m.label || m.name || 'Someone'));
         break;
       case 'peer_gone':
         // Their socket left the room; a call that's still up (same Wi-Fi) carries on.
@@ -971,11 +1062,11 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       sootheRef.current.start(kind, minutes, Number(v.volume) || 0.4);
       setSoothing(sootheRef.current.current);
       earsRef.current?.suppress(4000);
-      sockRef.current?.send({ t: 'event', kind: 'soothe', msg: `${m.by} started ${SOOTHE_OPTIONS.find((o) => o.id === kind)?.label ?? 'soothing sounds'} for ${minutes} min` });
+      sendEvent({ kind: 'soothe', msg: `${m.by} started ${SOOTHE_OPTIONS.find((o) => o.id === kind)?.label ?? 'soothing sounds'} for ${minutes} min` });
     } else if (m.c === 'soothe_stop') {
       sootheRef.current.stop();
       setSoothing(null);
-      sockRef.current?.send({ t: 'event', kind: 'soothe', msg: `${m.by} stopped the soothing sounds` });
+      sendEvent({ kind: 'soothe', msg: `${m.by} stopped the soothing sounds` });
     } else if (m.c === 'quality') {
       void hubRef.current?.setQuality(key, (['hd', 'sd', 'audio'].includes(String(v.q)) ? v.q : 'hd') as Quality);
     } else if (m.c === 'flip') {
@@ -1012,9 +1103,23 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const setRelay = (want: RelayWant) => {
     let enc = relayRef.current;
     if (!enc && want.n > 0) {
+      // Sealed with the nursery key when this phone holds it (relayCrypto.ts): the room forwards
+      // bytes it can't read. A camera that seals but has no key yet sends nothing until it does.
+      const sealer =
+        sealerRef.current ??
+        new RelaySealer({
+          nid: id,
+          devId: () => keysRef.current?.devId ?? null,
+          key: () => (camLockRef.current.held ? keysRef.current?.sealing() ?? null : null),
+          required: () => !!keysRef.current && (keysRef.current.active || keysRef.current.holds()),
+          send: (buf, max) => !!sockRef.current?.sendBinary(buf, max),
+          buffered: () => sockRef.current?.bufferedAmount() ?? 0,
+          onLost: () => relayRef.current?.requestKey(),
+        });
+      sealerRef.current = sealer;
       enc = new RelayEncoder({
         source: () => videoRef.current,
-        send: (buf, max) => !!sockRef.current?.sendBinary(buf, max),
+        send: sealer.send,
         buffered: () => sockRef.current?.bufferedAmount() ?? 0,
         paused: () => privacyRef.current,
         open: () => !!sockRef.current?.open,
@@ -1033,7 +1138,7 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     privacyRef.current = on;
     setPrivacy(on);
     void hubRef.current?.setVideoEnabled(!on);
-    sockRef.current?.send({ t: 'event', kind: 'privacy', on });
+    sendEvent({ kind: 'privacy', on });
     push(on ? 'Video paused — sound monitoring and alerts continue' : 'Video is back on', { icon: on ? 'eyeOff' : 'eye' });
   };
 
@@ -1081,7 +1186,11 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             {phase === 'starting' ? 'Opening the camera…' : err ? 'Try again' : 'Allow camera & microphone'}
           </Btn>
           <p className="faint" style={{ margin: 0, fontSize: 12.5 }}>
-            <Icon name="shield" size={12} /> Live only — nothing is recorded or stored. The picture and sound go device-to-device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, not end-to-end encrypted.
+            <Icon name="shield" size={12} /> Live only — nothing is recorded or stored. The picture and sound go device-to-device, end-to-end encrypted, wherever the network allows.{' '}
+            {/* Holding the family's key, this phone only ever sends the server path sealed (relayCrypto.ts) — say so; otherwise, the plain truth. */}
+            {keysRef.current?.holds()
+              ? 'For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, and end-to-end encrypted with your family’s key — our server passes them along without being able to see or hear them.'
+              : 'For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead: in memory only, never stored, not end-to-end encrypted.'}
           </p>
         </div>
       </div>
@@ -1243,6 +1352,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   // (those only bridging while their direct picture connects still are, but count as through it).
   const watching = watchersNote({ viewers: viewers.length, direct: p2pCount, onRelay: viewers.filter((v) => v.relay).length, relayed: relayViewers, jpeg: relayMode === 'jpeg', sound: relayMode === 'sound' });
   const busy = (hubRef.current?.pressure ?? 0) > 0;
+  // How the picture through our server goes now: sealed with the family's key, plain (a room without the key), or waiting for the key.
+  const relaySeal = relayRef.current?.active ? (sealerRef.current?.mode ?? 'plain') : 'plain';
   return (
     <div className={cx('cam-run', dim && 'dimmed')} onPointerDown={touch}>
       {showCaller ? (
@@ -1279,6 +1390,13 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
           <Icon name="alert" size={15} />
           <span style={{ flex: 1 }}>This page was in the background — phones pause the camera there. Keep Stream Studio open on this phone (the screen can be dark).</span>
           <button className="iconbtn" onClick={() => setHiddenWarn(false)} aria-label="Dismiss"><Icon name="x" size={14} /></button>
+        </div>
+      )}
+      {sock === 'reconnecting' && sockNote === CLOSE_TEXT.mfa_required && (
+        <div className="banner warn cam-warn" role="alert">
+          <Icon name="lock" size={15} />
+          <span style={{ flex: 1 }}>Your nursery asks for the code from your authenticator app before this camera reconnects. Sound detection keeps running on this phone, but alerts can’t reach anyone until it does.</span>
+          <Btn variant="soft" size="sm" onClick={() => void stepUp().then((ok) => ok && sockRef.current?.reconnect())}>Enter code</Btn>
         </div>
       )}
       {interrupted && !privacy && (
@@ -1341,6 +1459,18 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
             ? 'No one is watching right now — alerts still go out'
             : <>Watching: {viewers.map((v) => v.label || v.name).join(', ')}{watching}</>}
         </div>
+        {relayViewers > 0 && relaySeal === 'sealed' && (
+          <div className="cam-watchers cam-e2e" role="status">
+            <Icon name="lock" size={14} />
+            <span>The picture through our server is end-to-end encrypted with your family’s key: the server passes it along without being able to see or hear it, and never stores it.</span>
+          </div>
+        )}
+        {relayViewers > 0 && relaySeal === null && (
+          <div className="cam-watchers cam-e2e" role="status">
+            <Icon name="lock" size={14} />
+            <span>Getting this phone your family’s key — the picture through our server waits for it. Sound alerts are unaffected.</span>
+          </div>
+        )}
         {busy && (
           <div className="cam-busy" role="status">
             <Icon name="gauge" size={14} />

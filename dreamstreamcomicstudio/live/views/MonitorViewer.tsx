@@ -9,14 +9,16 @@
 // and a filterable activity log.
 import React, { useSyncExternalStore, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCues, ALERT_META, alertInfo, type AlertCat, type CuePrefs } from '../monitor/alerts';
-import { getDevice, openMonitorSocket, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
+import { CLOSE_TEXT, getDevice, openMonitorSocket, stepUp, type MonSocketStatus, type MonitorSocket } from '../monitor/client';
 import { openInvite, registerShareChannel, ShareChannel, shareSummary } from '../monitor/invite';
 import { useGuestPass } from './monitor/useGuestPass';
 import { focusLayout } from '../monitor/viewFocus';
 import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type FairState, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
-import { ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
+import { FirstArrival, ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
+import { deviceKeys, E2ePeers, keysGate, KEYS_GATE_MS, keyStore, NurseryKeys } from '../monitor/keys';
+import { RelayOpener } from '../monitor/relayCrypto';
 import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
 import { pageShown, ViewGate } from '../monitor/viewGate';
 import { RelayMeter } from '../monitor/videoBudget';
@@ -38,7 +40,7 @@ import { TrackerSync } from '../monitor/trackerSync';
 import type { TrackKind } from '../monitor/trackTypes';
 import { FOCUS_KEY, MonitorGate } from './MonitorHome';
 import { clearGuest, type GuestPass } from '../monitor/guest';
-import { PeopleCard } from './monitor/PeopleCard';
+import { PeopleCard, type RotatedLink } from './monitor/PeopleCard';
 import { HelpButton, useFirstVisitTour } from '../components/Guide';
 import { NurserySettings } from './monitor/NurserySettings';
 import { SafetyCard } from './monitor/SafetyCard';
@@ -118,6 +120,8 @@ const pushKey = (nid: string) => `ds-monitor-push-${nid}`;
 const TAB_ID = Math.random().toString(36).slice(2, 8);
 /** In-app cue settings, most important first. */
 const camKey = (nid: string) => `ds-monitor-cam-${nid}`;
+/** A camera that seals and a device without the key yet: the direct call waits this long for the key before trying plain. */
+const KEY_WAIT_MS = 6000;
 
 interface ActiveAlert {
   key: string;
@@ -210,9 +214,33 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   /** Minutes per path + relay bytes → `{t:'use'}` and this device's ledger (usage/monitorUsage.ts). */
   const usageRef = useRef<ViewerMeter | null>(null);
   const pressRef = useRef<number | null>(null);
+  /**
+   * End to end (ADR 0006 D6.3): this device's keys for the nursery, the cameras that seal
+   * (remembered: sticky), and the relay opener. A camera that seals is only taken sealed.
+   */
+  const keysRef = useRef<NurseryKeys | null>(null);
+  const keysReadyRef = useRef<Promise<NurseryKeys | null>>(Promise.resolve(null));
+  /** The same, for signaling: it never waits on a hung storage for more than a moment. */
+  const keysGateRef = useRef<Promise<NurseryKeys | null>>(Promise.resolve(null));
+  const e2ePeers = useMemo(() => new E2ePeers(id), [id]);
+  const openerRef = useRef<RelayOpener | null>(null);
+  /** The device key id of the camera we watch, when it seals. */
+  const camKeyRef = useRef<string | null>(null);
+  const camsRef = useRef<CamPresence[]>([]);
+  /** Alerts on first arrival: the camera's data channel or the room's log line, whichever is first (eid). */
+  const arrivalRef = useRef(new FirstArrival());
+  /** The nursery key changed: the direct call may go now, and the relay pill re-reads it. */
+  const [keyTick, setKeyTick] = useState(0);
+  const keyWaitRef = useRef<{ sid: string; since: number } | null>(null);
+  /** This device's keys finished loading (or there are none to load). */
+  const keysSettledRef = useRef(false);
 
   const [reconnectKey, setReconnectKey] = useState(0);
   const [sock, setSock] = useState<MonSocketStatus>('connecting');
+  /** Why the room connection is waiting (the second sign-in step), while it reconnects. */
+  const [sockNote, setSockNote] = useState<string | null>(null);
+  /** Parents: the share link changed after a guest was removed (shown once, with the new passcode). */
+  const [rotated, setRotated] = useState<RotatedLink | null>(null);
   const [closedMsg, setClosedMsg] = useState<string | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
   const [me, setMe] = useState<{ sid: string; uid: string; role: MonRole; name: string; label: string | null } | null>(null);
@@ -317,6 +345,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   if (roomCam) lastCamRef.current = roomCam;
   const cam = roomCam ?? (linkState === 'connected' ? lastCamRef.current : null);
   const camStatus = cam ? status[cam.dev] : undefined;
+  camsRef.current = cams;
+  // The camera seals when the room says so — or it did before on this device (sticky).
+  camKeyRef.current = cam ? e2ePeers.devIdOf(cam.dev, cam.devId) : null;
   /** The camera is up and not paused: a relay picture that stops now is stuck, not resting. */
   const camLiveRef = useRef(false);
   camLiveRef.current = !!camStatus && Date.now() - camStatus.at < 30_000 && !camStatus.st.paused;
@@ -367,6 +398,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   const clearRelayPicture = () => {
     relayMeterRef.current.reset();
     relayDecRef.current?.reset();
+    openerRef.current?.reset();
     const c = relayCanvasRef.current;
     if (c) c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
     setRelayView((v) => (v.has || v.fps || v.stale ? { has: false, fps: 0, stale: false } : v));
@@ -416,7 +448,44 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       syncVideo();
       setHasVideo(!!s && s.getVideoTracks().length > 0);
     };
+    // Sealed signaling with a camera that seals, once this device holds the nursery key.
+    link.camKey = () => camKeyRef.current;
     linkRef.current = link;
+    let alive = true;
+    keysSettledRef.current = false;
+    const keysReady = (async () => {
+      const dev = await deviceKeys();
+      if (!dev || !alive) return null;
+      const k = new NurseryKeys({ nid: id, device: dev, store: keyStore(), name: getDevice().name, send: (m) => sockRef.current?.send(m), onChange: () => setKeyTick((n) => n + 1) });
+      await k.load();
+      if (!alive) return null;
+      keysRef.current = k;
+      link.seal = k;
+      return k;
+    })()
+      .catch(() => null);
+    // The direct call to a camera that seals waits for this (sealed, rather than plain and refused) —
+    // never longer than KEYS_GATE_MS, should a browser's storage hang.
+    const settle = () => {
+      window.clearTimeout(settleTimer);
+      if (!alive || keysSettledRef.current) return;
+      keysSettledRef.current = true;
+      setKeyTick((n) => n + 1);
+    };
+    const settleTimer = window.setTimeout(settle, KEYS_GATE_MS);
+    void keysReady.then(settle);
+    keysReadyRef.current = keysReady;
+    keysGateRef.current = keysGate(keysReady);
+    // The relay picture from a camera that seals: opened here (or dropped — never played as plain).
+    const opener = new RelayOpener({
+      nid: id,
+      camDevId: () => {
+        const dev = fallbackRef.current.dev;
+        return e2ePeers.devIdOf(dev, camsRef.current.find((c) => c.dev === dev)?.devId);
+      },
+      nmk: (e) => keysRef.current?.nmkFor(e) ?? null,
+    });
+    openerRef.current = opener;
 
     // The relay picture (relay.ts): video decoded (or JPEGs drawn) straight onto
     // a canvas — no re-render of this screen per frame — and its sound.
@@ -447,11 +516,15 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     relayDecRef.current = dec;
     if (import.meta.env?.DEV) (globalThis as unknown as { __dsRelay?: unknown }).__dsRelay = dec;
     const onBinary = (data: Blob) => {
-      if (fallbackRef.current.relay) dec.push(data);
+      if (!fallbackRef.current.relay) return;
+      void opener.open(data).then((ab) => {
+        if (ab && fallbackRef.current.relay && relayDecRef.current === dec) dec.push(ab);
+      });
     };
 
     const sockNow = openMonitorSocket(id, 'viewer', (m) => onMsgRef.current(m), onBinary, (s, detail) => {
       setSock(s);
+      setSockNote(s === 'reconnecting' ? detail ?? null : null);
       shareCh.set({ connected: s === 'connected' });
       if (s !== 'connected') tracker.detach();
       if (s !== 'connected') usage.meter.disconnected();
@@ -474,6 +547,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     // A touch only counts as a tap (user activation) on its way up — iPhones go by that.
     window.addEventListener('pointerup', unlock);
     return () => {
+      alive = false;
+      void keysReady.then((k) => k?.close());
+      keysRef.current = null;
+      if (openerRef.current === opener) openerRef.current = null;
       window.clearInterval(tick);
       window.clearTimeout(retryRef.current);
       window.clearTimeout(instantRef.current);
@@ -657,8 +734,16 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
           raise(recent.kind as AlertCat, recent.msg.split(' · ')[0], recent.id, true);
         }
         void restorePush();
+        // Rooms that hand out the nursery key: this device's keys, then its wrap.
+        void keysReadyRef.current.then((k) => k?.onHello(m, m.you.guest ? 'viewer' : m.you.role));
         break;
       }
+      case 'key_req':
+      case 'key_wrap':
+      case 'key_rotate':
+      case 'key_conflict':
+        void keysReadyRef.current.then((k) => k?.onMessage(m as unknown as { t: string } & Record<string, unknown>));
+        break;
       case 'share':
         setShare(m.share);
         shareCh.set({ share: m.share, err: null });
@@ -668,6 +753,15 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       case 'share_err':
         shareCh.set({ err: m.msg });
         break;
+      case 'share_rotated':
+        // Removing a guest changed the link (and its passcode): show the new one to pass on.
+        if (m.link && typeof m.link.code === 'string') {
+          setRotated({ code: m.link.code, pass: typeof m.link.pass === 'string' ? m.link.pass : null, removed: m.removed ?? null });
+          // The notice lives with People (the full view) — shown now, without changing the saved layout.
+          setViewState((v) => (v === 'monitor' ? 'all' : v));
+          push('The share link changed — the new one is under People, ready to pass on', { icon: 'link' });
+        }
+        break;
       case 'presence':
         if (m.cams.length) markSetup(id, 'camera');
         setCams(m.cams);
@@ -676,7 +770,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         setCamSid((cur) => pickCam(m.cams, cur));
         break;
       case 'rtc':
-        void linkRef.current?.onSignal(m.from, m.d);
+        void keysGateRef.current.then(() => linkRef.current?.onSignal(m.from, m.d));
         break;
       case 'status': {
         const old = statusRef.current[m.dev];
@@ -702,8 +796,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       case 'log': {
         const e = m.entry;
         setLog((l) => [...l.slice(-399), e]);
-        if (SOUND_SET.has(e.kind)) raise(e.kind as SoundCat, e.msg.split(' · ')[0], e.id);
-        else if (ROOM_ALERTS.has(e.kind)) raise(e.kind as AlertCat, e.msg.split(' · ')[0], e.id);
+        // The camera's own copy (data channel) may have alerted already: then this one folds in quietly.
+        const quiet = arrivalRef.current.room(e.eid) === 'quiet';
+        if (SOUND_SET.has(e.kind)) raise(e.kind as SoundCat, e.msg.split(' · ')[0], e.id, quiet);
+        else if (ROOM_ALERTS.has(e.kind)) raise(e.kind as AlertCat, e.msg.split(' · ')[0], e.id, quiet);
         else if (e.kind === 'escalated') {
           // Nobody answered: sound the alert again, louder in everyone's ears.
           const inc = incidentsRef.current.find((i) => i.id === e.incident);
@@ -713,7 +809,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         else if (e.kind === 'fuss_end') resolve('fuss', e.secs);
         else if (e.kind === 'offline') raise('offline', e.msg, e.id);
         else if (e.kind === 'online') resolve('offline');
-        else if (e.kind === 'battery') raise('battery', e.msg, e.id);
+        else if (e.kind === 'battery') raise('battery', e.msg, e.id, quiet);
         break;
       }
       case 'ack': {
@@ -797,6 +893,8 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
 
   const pushOnRef = useRef(pushOn);
   pushOnRef.current = pushOn;
+  const alertsRef = useRef(alerts);
+  alertsRef.current = alerts;
   const incidentsRef = useRef(incidents);
   incidentsRef.current = incidents;
   const onMsgRef = useRef(onMsg);
@@ -819,16 +917,23 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       onMsg({ t: 'status', dev: dm.dev, sid: camSid ?? '', st: dm.st as unknown as CamStatus, at: Date.now() });
       return;
     }
-    if (roomUp) return; // the room's log line raises it, with its id
+    // With the room up, its log line raises it — unless both carry the event's id (a room that
+    // lists `eid`): then whichever copy arrives first alerts, once (ADR 0006 D5.1).
+    const firstCopy = !!dm.eid && capsRef.current.includes('eid');
+    if (roomUp && !firstCopy) return;
+    if (dm.eid && !arrivalRef.current.direct(dm.eid)) return; // the room's copy came first
+    // A repeat of an alert still sounding, straight from the camera while the room is up: folded in
+    // quietly (the room spaces its repeats out; the banner already holds the alert).
+    const quiet = (cat: string) => roomUp && alertsRef.current.some((a) => a.cat === cat && !a.ended && Date.now() - a.at < 30_000);
     if (dm.kind === 'sound' && dm.cat && SOUND_SET.has(dm.cat)) {
-      if (dm.phase === 'start') raise(dm.cat as SoundCat, soundHeadline(dm.cat as SoundCat, nursery.baby), null);
+      if (dm.phase === 'start') raise(dm.cat as SoundCat, soundHeadline(dm.cat as SoundCat, nursery.baby), null, quiet(dm.cat));
       else resolve(dm.cat as SoundCat, dm.secs);
     } else if (dm.kind === 'vision' && (dm.type === 'zone' || dm.type === 'crib_out' || dm.type === 'moved')) {
-      raise(dm.type as AlertCat, dm.type === 'zone' ? 'Movement in a danger zone' : dm.type === 'crib_out' ? `Movement outside the crib — ${baby} may be climbing out` : 'The camera was moved', null);
+      raise(dm.type as AlertCat, dm.type === 'zone' ? 'Movement in a danger zone' : dm.type === 'crib_out' ? `Movement outside the crib — ${baby} may be climbing out` : 'The camera was moved', null, quiet(dm.type));
     } else if (dm.kind === 'scene' && dm.type === 'object_near' && dm.sharp && dm.label) {
-      raise('object', `${dm.label[0].toUpperCase()}${dm.label.slice(1)} within ${baby}’s reach`, null);
+      raise('object', `${dm.label[0].toUpperCase()}${dm.label.slice(1)} within ${baby}’s reach`, null, quiet('object'));
     } else if (dm.kind === 'noise' && dm.type === 'very_loud' && dm.phase === 'start') {
-      raise('very_loud', `Very loud noise in the nursery${dm.db ? ` (${Math.round(dm.db)} dB)` : ''}`, null);
+      raise('very_loud', `Very loud noise in the nursery${dm.db ? ` (${Math.round(dm.db)} dB)` : ''}`, null, quiet('very_loud'));
     }
   };
   const onDirectRef = useRef(onDirect);
@@ -860,6 +965,29 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       link.close();
       return;
     }
+    // A camera that seals, and this device's keys are still loading (a moment): wait for them.
+    if (camKeyRef.current && !keysSettledRef.current) return;
+    // A camera that seals refuses a plain offer: a device that doesn't hold the nursery key yet
+    // (just admitted — the camera wraps it within a moment) waits for it, up to KEY_WAIT_MS.
+    const keys = keysRef.current;
+    const waitKey = !!camKeyRef.current && !!keys?.active && !keys.sealing() && link.state !== 'connected';
+    if (waitKey) {
+      if (keyWaitRef.current?.sid !== camSid) keyWaitRef.current = { sid: camSid, since: Date.now() };
+      const left = KEY_WAIT_MS - (Date.now() - keyWaitRef.current.since);
+      if (left > 0) {
+        const t = window.setTimeout(() => setKeyTick((n) => n + 1), left);
+        return () => window.clearTimeout(t);
+      }
+    }
+    // The key arrived after an attempt without it (which a camera holding the key turns away):
+    // call again now, sealed — instead of waiting out the give-up and the back-off.
+    const plainTry = keyWaitRef.current?.sid === camSid && link.target === camSid;
+    if (plainTry && keys?.sealing() && !link.full && (link.state === 'connecting' || link.state === 'failed')) {
+      keyWaitRef.current = null;
+      if (link.state === 'failed') runFallback({ t: 'retry' });
+      else void link.connect(camSid);
+      return;
+    }
     if (link.target !== camSid || link.state === 'closed' || link.state === 'idle') {
       // Same camera back under a new session id, call never dropped: keep it.
       const prevDev = (() => {
@@ -872,6 +1000,9 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       const c0 = cams.find((x) => x.sid === camSid);
       if (link.target && c0 && prevDev === c0.dev && link.retarget(camSid)) return;
       void link.connect(camSid);
+      // Calling a camera that seals without the key: remember it, to call again sealed once it comes.
+      if (camKeyRef.current && !keys?.sealing()) keyWaitRef.current ??= { sid: camSid, since: Date.now() };
+      else if (keyWaitRef.current?.sid === camSid) keyWaitRef.current = null;
       const c = cams.find((x) => x.sid === camSid);
       if (c) {
         try {
@@ -880,7 +1011,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camSid, sock]);
+  }, [camSid, sock, keyTick]);
 
   // Watching a different camera (or none): its own relay subscription, a clean picture.
   const camDev = cam?.dev ?? null;
@@ -1314,11 +1445,23 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
     relaySound: !!relaySrc?.sound,
     blocked: !!relayView.blocked,
   });
+  // End to end through our server (ADR 0006 D6.3): only while sealed pictures from this camera
+  // actually open here — never claimed for a camera or a room that doesn't seal.
+  const relayE2e = !!openerRef.current?.endToEnd();
+  // A camera that seals, and this device has no key for what it sends yet.
+  const relayWaitKey = relayOn && !relayE2e && !!camKeyRef.current && openerRef.current?.lastDrop === 'epoch';
+  const relayHow = relayE2e
+    ? 'end-to-end encrypted with your family’s key: our server passes it along without being able to see or hear it, and never stores it.'
+    : relayWaitKey
+      ? 'the camera seals it with your family’s key, and this device is still getting that key — the picture appears as soon as it has it. Alerts still arrive.'
+      : null;
   const relayTitle = relayEarly
-    ? 'A quick preview through our server while the encrypted direct connection starts — passed along in memory, never stored, not end-to-end encrypted.'
+    ? relayHow
+      ? `A quick preview through our server while the direct connection starts — ${relayHow}`
+      : 'A quick preview through our server while the encrypted direct connection starts — passed along in memory, never stored, not end-to-end encrypted.'
     : `${relayFull
         ? 'The camera phone already sends its picture directly to four people over the internet, so you’re watching through our server instead'
-        : 'Your network blocks a direct connection, so the picture and sound come through our server instead'} — passed along in memory, never stored, but not end-to-end encrypted like a direct connection.${relayNoSound ? ' This browser gets still pictures without live sound; alerts still arrive.' : ''} Direct video is retried in the background.`;
+        : 'Your network blocks a direct connection, so the picture and sound come through our server instead'} — ${relayHow ?? 'passed along in memory, never stored, but not end-to-end encrypted like a direct connection.'}${relayNoSound ? ' This browser gets still pictures without live sound; alerts still arrive.' : ''} Direct video is retried in the background.`;
   const stage = (
     <div className={cx('mv-stage', night && 'night', glow && `glow-${glow}`)} ref={stageRef} data-tour="mv-stage">
       <video ref={videoRef} autoPlay playsInline muted={muted} className={cx(!hasVideo && !relaySrc?.video && 'hidden')} />
@@ -1380,7 +1523,7 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         )}
         {relayOn && cam && (relayView.has || !relayEarly) && (
           <span className={cx('ov-pill mv-relay-pill', relayEarly && 'early')} title={relayTitle} aria-label={relayTitle}>
-            <Icon name={relayEarly ? 'zap' : 'cloud'} size={11} />
+            <Icon name={relayE2e ? 'lock' : relayEarly ? 'zap' : 'cloud'} size={11} />
             <span>{relayEarly ? 'Quick preview' : `${relayFull ? `Camera full · ${PATH_PILL.server.toLowerCase()}` : PATH_PILL.server}${relayFps}`}</span>
             {!relayEarly && relayNoSound && <span className="extra"> · no sound</span>}
           </span>
@@ -1780,6 +1923,13 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         <HelpButton />
       </div>
       {alertStack}
+      {sock === 'reconnecting' && sockNote === CLOSE_TEXT.mfa_required && (
+        <div className="banner warn" role="alert">
+          <Icon name="lock" size={15} />
+          <span style={{ flex: 1 }}>Your nursery asks for the code from your authenticator app before this device reconnects — until then, the room’s alerts can’t reach it.</span>
+          <Btn variant="soft" size="sm" onClick={() => void stepUp().then((ok) => ok && sockRef.current?.reconnect())}>Enter code</Btn>
+        </div>
+      )}
       {sock !== 'connected' && sock !== 'closed' && linkState === 'connected' && (
         <div className={cx('banner mv-offline', netPath === 'lan' ? 'info' : 'warn')}>
           <Icon name="wifi" size={15} />
@@ -1874,6 +2024,11 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
             share={share}
             send={(msg) => sockRef.current?.send(msg)}
             onInvite={(tab) => openInvite(id, tab)}
+            nid={id}
+            nursery={{ name: nursery.name, baby }}
+            rotated={rotated}
+            onRotatedDone={() => setRotated(null)}
+            say={(text) => push(text, { icon: 'check' })}
             onLeave={() => {
               sockRef.current?.send({ t: 'bye' });
               onLeave?.();

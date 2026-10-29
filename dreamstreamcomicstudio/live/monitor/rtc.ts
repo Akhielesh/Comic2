@@ -36,9 +36,100 @@
 import { TalkProcessor } from './voice';
 import { HIDDEN_GRACE_MS } from './viewGate';
 import { applyIce, IceClock, keepRelay, turnRenewed } from '../rtcIce';
+import { EidSeen } from '../../packages/monitor-core/src/eid';
+import { isSealedRtc, type SealedRtc } from '../../packages/monitor-core/src/wire';
 import type { EncLimit, EncStatus, MonRtc } from './protocol';
 
+/**
+ * Signaling to a peer through the room. Between devices that hold the nursery key `d` is sealed
+ * (a `SealedRtc`) — the same callback sends either (`{t:'rtc', to, d}`).
+ */
 export type Signal = (to: string, d: MonRtc) => void;
+/** The same callback, for a sealed `d`. */
+const sendSealed = (signal: Signal, to: string, d: SealedRtc): void => (signal as (to: string, d: MonRtc | SealedRtc) => void)(to, d);
+
+/**
+ * End-to-end signaling (ADR 0006 D6.3; keys.ts `NurseryKeys` implements it): offers, answers
+ * and candidates sealed with the nursery key, so the room forwards what it can't read or change
+ * — the DTLS fingerprints that protect the picture can't be swapped by our server.
+ */
+export interface SignalSeal {
+  /** This device holds a nursery key: sticky — unsealed signaling from a peer that seals is refused. */
+  holds(): boolean;
+  /** Seal for that peer's device (null: no current key). */
+  seal(peerDevId: string, d: MonRtc): Promise<SealedRtc | null>;
+  /** Open sealed signaling addressed to this device (null: refuse it). */
+  open(d: SealedRtc): Promise<{ d: MonRtc; from: string } | null>;
+}
+
+/**
+ * Hands signals on in the order they arrived. Opening a sealed one is asynchronous (WebCrypto),
+ * and two can finish out of order — a candidate opened before the offer it belongs to would be
+ * dropped. Each waits for the ones before it to open (not for them to be applied, as before).
+ */
+export class InOrder {
+  private tail: Promise<unknown> = Promise.resolve();
+  run<T>(p: Promise<T>): Promise<T> {
+    const turn = this.tail.then(() => p);
+    this.tail = turn.catch(() => undefined);
+    return turn;
+  }
+}
+
+/** Candidates gathered within this window travel in one message (ADR 0006 Phase 0: ICE batching). */
+export const ICE_BATCH_MS = 75;
+
+/**
+ * Batches ICE candidates: everything gathered within ICE_BATCH_MS goes together (null — the end
+ * of candidates — goes with the batch it ends). `flush` decides how: one `ices` message to a peer
+ * that takes them, one message per candidate to one that doesn't.
+ */
+export class IceBatch {
+  private buf: (RTCIceCandidateInit | null)[] = [];
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  constructor(private flush: (list: (RTCIceCandidateInit | null)[]) => void, private ms = ICE_BATCH_MS) {}
+
+  add(c: RTCIceCandidateInit | null): void {
+    this.buf.push(c);
+    if (this.timer === undefined) this.timer = setTimeout(() => this.now(), this.ms);
+  }
+
+  /** Send what's waiting now. */
+  now(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.buf.length) this.flush(this.buf.splice(0));
+  }
+
+  clear(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.buf = [];
+  }
+}
+
+/** The candidates in a signal: a batch (`ices`) or one (`ice`). */
+const candidatesOf = (d: MonRtc): RTCIceCandidateInit[] => [...(Array.isArray(d.ices) ? d.ices : []), ...(d.ice ? [d.ice] : [])].filter((c): c is RTCIceCandidateInit => !!c && typeof c === 'object');
+
+/** A signal on the `mon` data channel (ICE restarts once the call is up: nothing through the room). */
+export type DcSignal = { t: 'sig'; d: MonRtc };
+
+/**
+ * Alerts on first arrival (ADR 0006 D5.1): a camera event can reach a viewer twice — straight over
+ * the data channel and as the room's log line — with the same `eid`. Whichever comes first alerts;
+ * the other is folded in quietly. Events without an eid (cameras from before) always count.
+ */
+export class FirstArrival {
+  private seen = new EidSeen(512);
+  /** The camera's own copy (data channel): true = first, alert now. */
+  direct(eid: string | null | undefined): boolean {
+    return this.seen.first(eid);
+  }
+  /** The room's copy: 'raise' when it's the first, 'quiet' when the data channel's copy already alerted. */
+  room(eid: string | null | undefined): 'raise' | 'quiet' {
+    return this.seen.first(eid) ? 'raise' : 'quiet';
+  }
+}
 /** How the media flows: on the home network, across the internet, or through a relay server. */
 export type NetPath = 'lan' | 'internet' | 'relay';
 
@@ -119,7 +210,7 @@ export async function netPath(pc: RTCPeerConnection, onReport?: ((r: RTCStatsRep
 /** Messages on the camera → viewer data channel. */
 export type DirectMsg =
   | { t: 'st'; st: Record<string, unknown>; dev: string }
-  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; label?: string; sharp?: boolean; name?: string; at: number; dev: string };
+  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; label?: string; sharp?: boolean; name?: string; at: number; dev: string; eid?: string };
 export type Quality = 'hd' | 'sd' | 'audio';
 
 /** A parent's face on the nursery screen doesn't need to be HD. */
@@ -403,13 +494,24 @@ interface CamPeer {
   hideTimer: number | undefined;
   /** No picture for now — nobody is looking at it (sound keeps going). */
   off: boolean;
+  /** The viewer's device key id, when its signaling is sealed: everything to it is sealed too. */
+  dk: string | null;
+  /** The viewer takes candidate batches (`ib`) and signaling on the data channel (`dcr`). */
+  ib: boolean;
+  dcr: boolean;
+  ice: IceBatch;
+  /** Sealed sends go out in order. */
+  chain: Promise<void>;
 }
 
 /**
  * Viewer → camera over the data channel (free: it never touches our server), for cameras that
- * said `dcc` in their answer: the picture quality it asks for, and whether its screen is shown.
+ * said `dcc` in their answer: the picture quality it asks for, and whether its screen is shown;
+ * for cameras that said `dcr`, ICE restarts (`sig`) once the call is up.
  */
-export type ViewerDcMsg = { t: 'q'; q: Quality } | { t: 'vis'; on: boolean };
+export type ViewerDcMsg = { t: 'q'; q: Quality } | { t: 'vis'; on: boolean } | DcSignal;
+/** An ICE restart offered on the data channel gets this long for its answer before it goes through the room. */
+export const DC_RESTART_WAIT_MS = 4000;
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
@@ -433,6 +535,12 @@ export class CameraHub {
   /** The relay credentials are due: ask the room for fresh ones (`{t:'ice'}`). */
   onIceStale: (() => void) | null = null;
   private iceClock = new IceClock(() => this.onIceStale?.());
+  /** End-to-end signaling (keys.ts); null: plain, as before. */
+  seal: SignalSeal | null = null;
+  /** Signals refused: unsealed while this camera holds the nursery key, or sealed ones that didn't open. */
+  refused = 0;
+  /** Signals from the room, handed on in arrival order. */
+  private rx = new InOrder();
 
   constructor(
     private signal: Signal,
@@ -543,6 +651,12 @@ export class CameraHub {
     if (this.peers.get(peer.key) !== peer) return;
     if (m.t === 'q' && (m.q === 'hd' || m.q === 'sd' || m.q === 'audio')) void this.setQuality(peer.key, m.q);
     else if (m.t === 'vis') this.setShown(peer, m.on !== false);
+    else if (m.t === 'sig' && m.d && typeof m.d === 'object' && peer.dcr) {
+      // On its own call's channel: only that call (an ICE restart keeps the call id), never a new one.
+      const d = { ...m.d, vid: peer.key, pc: peer.pcId ?? undefined };
+      if (d.sdp?.type === 'offer' && m.d.pc !== peer.pcId) return;
+      void this.handle(peer.sid, d, peer.name, peer.dk);
+    }
   }
 
   /**
@@ -606,11 +720,60 @@ export class CameraHub {
     }
   }
 
+  /**
+   * To one viewer: on its data channel once the call is up (when it takes signaling there —
+   * nothing through the room), else through the room — sealed when its signaling is.
+   */
   private send(peer: CamPeer, d: MonRtc): void {
-    this.signal(peer.sid, peer.pcId ? { ...d, pc: peer.pcId } : d);
+    const msg = peer.pcId ? { ...d, pc: peer.pcId } : d;
+    if (!d.bye && peer.dcr && peer.dc?.readyState === 'open' && peer.pc.connectionState === 'connected') {
+      try {
+        peer.dc.send(JSON.stringify({ t: 'sig', d: msg } satisfies DcSignal));
+        return;
+      } catch { /* closing: through the room */ }
+    }
+    const dk = peer.dk;
+    if (dk && this.seal) {
+      const seal = this.seal;
+      peer.chain = peer.chain.then(async () => {
+        // No current key: nothing — a viewer that seals takes no plain signaling anyway.
+        const sealed = await seal.seal(dk, msg).catch(() => null);
+        if (sealed) sendSealed(this.signal, peer.sid, sealed);
+      });
+      return;
+    }
+    this.signal(peer.sid, msg);
   }
 
-  async onSignal(from: string, d: MonRtc, who = 'Someone'): Promise<void> {
+  /** A viewer's candidates, batched: one message for a viewer that takes batches, one each otherwise. */
+  private sendIce(peer: CamPeer, list: (RTCIceCandidateInit | null)[]): void {
+    if (this.peers.get(peer.key) !== peer) return;
+    if (peer.ib) this.send(peer, { ices: list });
+    else for (const c of list) this.send(peer, { ice: c });
+  }
+
+  /**
+   * Signaling from a viewer through the room. Sealed: opened with the nursery key (or dropped).
+   * Plain: taken only while this camera holds no nursery key — once it does, an unsealed offer
+   * is one the room could have written (sticky end to end, ADR 0006 D6.3).
+   */
+  async onSignal(from: string, raw: MonRtc | SealedRtc, who = 'Someone'): Promise<void> {
+    const seal = this.seal;
+    // Judged now (sticky: a plain one is refused while this camera holds the key), opened in parallel, handled in order.
+    const opened: Promise<{ d: MonRtc; dk: string | null } | null> = isSealedRtc(raw)
+      ? seal
+        ? seal.open(raw).then((o) => (o ? { d: o.d, dk: o.from } : null), () => null)
+        : Promise.resolve(null)
+      : Promise.resolve(seal?.holds() ? null : { d: raw as MonRtc, dk: null });
+    const o = await this.rx.run(opened);
+    if (!o) {
+      this.refused += 1;
+      return;
+    }
+    return this.handle(from, o.d, who, o.dk);
+  }
+
+  private async handle(from: string, d: MonRtc, who: string, dk: string | null): Promise<void> {
     const key = typeof d.vid === 'string' && d.vid ? d.vid.slice(0, 64) : from;
     let peer = this.peers.get(key);
     if (peer) peer.sid = from; // the viewer may be on a new socket
@@ -627,7 +790,10 @@ export class CameraHub {
         peer.ov = d.ov === 1;
         // Direct slots full: no video until we know it's on the home Wi-Fi (admit()).
         peer.held = peer.ov && d.q !== 'audio' && this.internetSlots(peer) >= DIRECT_CAP;
+        peer.ib = d.ib === 1;
+        peer.dcr = d.dcr === 1;
       }
+      if (dk) peer.dk = dk;
       if (d.q === 'hd' || d.q === 'sd' || d.q === 'audio') peer.quality = d.q;
       const { pc } = peer;
       try {
@@ -647,29 +813,34 @@ export class CameraHub {
           await a.sender.replaceTrack(audio);
         }
         await pc.setLocalDescription(await pc.createAnswer());
-        // dcc: this camera takes the viewer's quality and screen state on the data channel.
-        this.send(peer, { sdp: pc.localDescription!.toJSON(), dcc: 1 });
+        // dcc: this camera takes the viewer's quality and screen state on the data channel;
+        // ib: candidate batches; dcr: ICE restarts on the data channel once the call is up.
+        this.send(peer, { sdp: pc.localDescription!.toJSON(), dcc: 1, ib: 1, dcr: 1 });
         await this.applyEncodings();
       } catch {
         // Start clean next time; the viewer falls back to the relay and retries.
         if (this.peers.get(key) === peer) this.close(key);
       }
-    } else if (d.ice !== undefined) {
-      if (peer && d.ice && (!d.pc || !peer.pcId || d.pc === peer.pcId)) await peer.pc.addIceCandidate(d.ice).catch(() => undefined);
+    } else if (d.ice !== undefined || d.ices) {
+      if (!peer || (d.pc && peer.pcId && d.pc !== peer.pcId)) return;
+      for (const c of candidatesOf(d)) await peer.pc.addIceCandidate(c).catch(() => undefined);
     }
   }
 
   private create(key: string, sid: string, pcId: string | null, who: string): CamPeer {
     this.close(key);
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 1 });
-    const peer: CamPeer = { key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '', ov: false, held: false, hidden: false, hideTimer: undefined, off: false };
+    const peer: CamPeer = {
+      key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '', ov: false, held: false, hidden: false, hideTimer: undefined, off: false,
+      dk: null, ib: false, dcr: false, ice: new IceBatch((list) => this.sendIce(peer, list)), chain: Promise.resolve(),
+    };
     pc.ondatachannel = (e) => {
       if (e.channel.label !== 'mon') return;
       peer.dc = e.channel;
       e.channel.onmessage = (ev) => this.onViewerDc(peer, ev.data);
     };
     pc.onicecandidate = (e) => {
-      if (this.peers.get(key) === peer) this.send(peer, { ice: e.candidate ? e.candidate.toJSON() : null });
+      if (this.peers.get(key) === peer) peer.ice.add(e.candidate ? e.candidate.toJSON() : null);
     };
     pc.ontrack = (e) => {
       const stream = e.streams[0] ?? new MediaStream([e.track]);
@@ -796,6 +967,7 @@ export class CameraHub {
     const peer = this.peers.get(key);
     if (!peer) return;
     window.clearTimeout(peer.hideTimer);
+    peer.ice.clear();
     this.peers.delete(key);
     this.onTalk?.(key, null, peer.name);
     this.onCallerVideo?.(key, null, peer.name);
@@ -858,6 +1030,20 @@ export class ViewerLink {
   /** This viewer's screen is shown (picture-in-picture counts): the camera hears it on the data channel. */
   private shown = true;
   private onOnline: (() => void) | null = null;
+  /** End-to-end signaling (keys.ts); null: plain, as before. */
+  seal: SignalSeal | null = null;
+  /** The camera's device key id when it seals (keys.ts `E2ePeers`, sticky); null: a camera that doesn't. */
+  camKey: (() => string | null) | null = null;
+  /** Signals refused: plain ones from a camera that seals, or sealed ones that didn't open. */
+  refused = 0;
+  /** Signals from the room, handed on in arrival order. */
+  private rx = new InOrder();
+  /** The camera takes candidate batches (`ib`) and ICE restarts on the data channel (`dcr`) — it said so in its answer. */
+  private ib = false;
+  private dcr = false;
+  private iceBatch: IceBatch | null = null;
+  private chain: Promise<void> = Promise.resolve();
+  private dcRestartTimer: ReturnType<typeof setTimeout> | undefined;
 
   /**
    * `vid` identifies this viewer (device + tab) across room reconnects, so the
@@ -895,8 +1081,42 @@ export class ViewerLink {
     this.onState?.(s);
   }
 
-  private send(to: string, d: MonRtc): void {
-    this.signal(to, { ...d, pc: this.pcId ?? undefined, vid: this.vid });
+  /** The camera seals its signaling, and so do we (we hold the nursery key). */
+  private sealing(): string | null {
+    const dk = this.camKey?.() ?? null;
+    return dk && this.seal?.holds() ? dk : null;
+  }
+
+  /**
+   * To the camera: on the data channel once the call is up (when it takes signaling there —
+   * nothing through the room), else through the room — sealed when the camera seals and we
+   * hold the key. `room`: through the room whatever the channel.
+   */
+  private send(to: string, d: MonRtc, room = false): void {
+    const msg: MonRtc = { ...d, pc: this.pcId ?? undefined, vid: this.vid };
+    if (!room && !d.bye && this.dcr && this.dc?.readyState === 'open' && this.pc?.connectionState === 'connected') {
+      try {
+        this.dc.send(JSON.stringify({ t: 'sig', d: msg } satisfies DcSignal));
+        return;
+      } catch { /* closing: through the room */ }
+    }
+    const dk = this.sealing();
+    if (dk && this.seal) {
+      const seal = this.seal;
+      this.chain = this.chain.then(async () => {
+        // No current key (the room is on a newer epoch): nothing — the camera would refuse it plain.
+        const sealed = await seal.seal(dk, msg).catch(() => null);
+        if (sealed) sendSealed(this.signal, to, sealed);
+      });
+      return;
+    }
+    this.signal(to, msg);
+  }
+
+  /** Our candidates, batched: one message to a camera that takes batches (or seals), one each otherwise. */
+  private sendIce(to: string, list: (RTCIceCandidateInit | null)[]): void {
+    if (this.ib || this.sealing()) this.send(to, { ices: list });
+    else for (const c of list) this.send(to, { ice: c });
   }
 
   async connect(camSid: string): Promise<void> {
@@ -907,6 +1127,8 @@ export class ViewerLink {
     this.pcId = randomId();
     this.full = false;
     this.dcc = false;
+    this.ib = false;
+    this.dcr = false;
     this.setState('connecting');
     // A candidate gathered ahead (iceCandidatePoolSize): the home Wi-Fi path is tried a moment sooner.
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 1 });
@@ -921,17 +1143,31 @@ export class ViewerLink {
       if (!this.shown) this.sendDc({ t: 'vis', on: false });
     };
     dc.onmessage = (e) => {
+      let m: DirectMsg | DcSignal;
       try {
-        this.onDirect?.(JSON.parse(String(e.data)) as DirectMsg);
-      } catch { /* not ours */ }
+        m = JSON.parse(String(e.data)) as DirectMsg | DcSignal;
+      } catch {
+        return; /* not ours */
+      }
+      // Signaling on the call's own channel (an ICE restart): from the camera, end to end already.
+      if (m.t === 'sig') {
+        if (this.pc === pc && m.d && typeof m.d === 'object') void this.handle(m.d);
+        return;
+      }
+      this.onDirect?.(m);
     };
     const remote = new MediaStream();
     pc.ontrack = (e) => {
       remote.addTrack(e.track);
       this.onStream?.(remote);
     };
+    this.iceBatch?.clear();
+    const batch = new IceBatch((list) => {
+      if (this.pc === pc && this.camSid) this.sendIce(this.camSid, list);
+    });
+    this.iceBatch = batch;
     pc.onicecandidate = (e) => {
-      if (this.pc === pc) this.send(camSid, { ice: e.candidate ? e.candidate.toJSON() : null });
+      if (this.pc === pc) batch.add(e.candidate ? e.candidate.toJSON() : null);
     };
     pc.onconnectionstatechange = () => {
       if (this.pc !== pc) return;
@@ -972,8 +1208,9 @@ export class ViewerLink {
     window.addEventListener?.('online', this.onOnline);
     await pc.setLocalDescription(await pc.createOffer());
     if (this.pc !== pc) return;
-    // ov: if the camera's direct slots are full, we'll watch its relay picture.
-    this.send(camSid, { sdp: pc.localDescription!.toJSON(), q: this.quality, ov: 1 });
+    // ov: if the camera's direct slots are full, we'll watch its relay picture;
+    // ib / dcr: we take candidate batches, and ICE restarts on the data channel.
+    this.send(camSid, { sdp: pc.localDescription!.toJSON(), q: this.quality, ov: 1, ib: 1, dcr: 1 });
   }
 
   /** Re-read which network path the call uses (it can change after an ICE restart). */
@@ -1011,25 +1248,68 @@ export class ViewerLink {
     }
   }
 
+  /**
+   * A fresh ICE negotiation on the same call. While the call is up and the camera takes it, the
+   * offer goes on the data channel (nothing through the room — a relay credential renewed, the
+   * network changed); an answer that doesn't come back in DC_RESTART_WAIT_MS (the channel was
+   * already gone) sends the same offer through the room.
+   */
   private async restartIce(): Promise<void> {
-    if (!this.pc || !this.camSid) return;
+    const pc = this.pc;
+    if (!pc || !this.camSid) return;
     try {
-      await this.pc.setLocalDescription(await this.pc.createOffer({ iceRestart: true }));
-      this.send(this.camSid, { sdp: this.pc.localDescription!.toJSON(), q: this.quality });
+      await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+      const offer = { sdp: pc.localDescription!.toJSON(), q: this.quality };
+      const viaDc = this.dcr && this.dc?.readyState === 'open' && pc.connectionState === 'connected';
+      this.send(this.camSid, offer);
+      clearTimeout(this.dcRestartTimer);
+      if (viaDc) {
+        this.dcRestartTimer = setTimeout(() => {
+          if (this.pc === pc && this.camSid && pc.signalingState === 'have-local-offer') this.send(this.camSid, offer, true);
+        }, DC_RESTART_WAIT_MS);
+      }
     } catch {
       this.setState('failed');
     }
   }
 
-  async onSignal(from: string, d: MonRtc): Promise<void> {
-    if (!this.pc || from !== this.camSid) return;
+  /**
+   * Signaling from the camera through the room. Sealed: opened with the nursery key (or dropped).
+   * Plain: taken unless we hold the key and this camera seals — then it's the room's, not the
+   * camera's (sticky end to end, ADR 0006 D6.3). A camera that doesn't seal (an older app) is
+   * taken as always.
+   */
+  async onSignal(from: string, raw: MonRtc | SealedRtc): Promise<void> {
+    const pc = this.pc;
+    if (!pc || from !== this.camSid) return;
+    const seal = this.seal;
+    // Judged now, opened in parallel, handled in arrival order (an answer before its candidates).
+    let opened: Promise<MonRtc | null>;
+    if (isSealedRtc(raw)) {
+      const dk = this.camKey?.() ?? null;
+      opened = seal ? seal.open(raw).then((o) => (o && (!dk || o.from === dk) ? o.d : null), () => null) : Promise.resolve(null);
+    } else opened = Promise.resolve(this.sealing() ? null : (raw as MonRtc));
+    const d = await this.rx.run(opened);
+    if (!d) {
+      this.refused += 1;
+      return;
+    }
+    if (this.pc !== pc || from !== this.camSid) return;
+    return this.handle(d);
+  }
+
+  private async handle(d: MonRtc): Promise<void> {
+    if (!this.pc) return;
     // Answers, candidates and byes for an older call of ours are stale.
     if (d.pc && d.pc !== this.pcId) return;
     if (d.sdp?.type === 'answer') {
       if (d.dcc === 1) this.dcc = true;
+      if (d.ib === 1) this.ib = true;
+      if (d.dcr === 1) this.dcr = true;
+      clearTimeout(this.dcRestartTimer);
       await this.pc.setRemoteDescription(d.sdp).catch(() => this.setState('failed'));
-    } else if (d.ice) {
-      await this.pc.addIceCandidate(d.ice).catch(() => undefined);
+    } else if (d.ice || d.ices) {
+      for (const c of candidatesOf(d)) await this.pc?.addIceCandidate(c).catch(() => undefined);
     } else if (d.re) {
       // The camera's relay credential was renewed: restart onto it (only we offer).
       if (this.pc.connectionState === 'connected') await this.restartIce();
@@ -1145,6 +1425,9 @@ export class ViewerLink {
     window.clearTimeout(this.connectTimer);
     window.clearInterval(this.watchdog);
     window.clearTimeout(this.pathTimer);
+    clearTimeout(this.dcRestartTimer);
+    this.iceBatch?.clear();
+    this.iceBatch = null;
     if (this.onOnline) window.removeEventListener?.('online', this.onOnline);
     this.onOnline = null;
     this.dc = null;

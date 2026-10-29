@@ -627,8 +627,8 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - [ ] A removed guest cannot rejoin with the old link and passcode. 50 unauthenticated sockets do not stop a member from connecting.
 - [ ] A user with a verified TOTP factor presenting an `aal1` token is refused (close code 4003). Creating share links, adding members, export and device approval all require `aal2`.
 - [ ] A sign-in from a new browser produces an email within **2 minutes**. "Not you?" revokes all sessions, kicks all sockets and starts a password reset.
-- [ ] Relay binary frames seen by the DO contain no JPEG SOI marker (`FF D8`) (test). Replayed or stale frames are dropped. After removal plus 60 s, a removed device cannot decrypt new frames.
-- [ ] Between E2E-capable peers, forwarded `rtc.d` contains no plaintext `sdp` or `candidate` (test), and an unsealed offer to a key-holding camera is refused.
+- [ ] Relay binary frames seen by the DO contain no JPEG SOI marker (`FF D8`) (test). Replayed or stale frames are dropped. After removal plus 60 s, a removed device cannot decrypt new frames. *(Client side built 2026-10-29 (WS-6): `live/monitor/e2e.unit.test.ts` runs the room's header reader and sound-only cut on sealed bytes. The rotation goes live with WS-9's roster.)*
+- [ ] Between E2E-capable peers, forwarded `rtc.d` contains no plaintext `sdp` or `candidate` (test), and an unsealed offer to a key-holding camera is refused. *(Client side built 2026-10-29 (WS-6): `rtc.unit.test.ts` and `e2e.unit.test.ts`. Goes live when WS-9's room lists `e2e1`.)*
 - [ ] 7-day production median per active nursery-day: **DO requests ≤ 1,000, rows written ≤ 1,800, DO duration ≤ 40 GB-s**. Relay share is reported in the cost centre. *(Built 2026-10-23; a simulated 12 h night gives 542 / 1,040 / 3.6 GB-s — `live-worker/src/monitorRoom.night.test.ts`. Production median still to be read.)*
 - [ ] GET `/glance` returns 200 with an ETag, then 304 when unchanged (p95 ≤ 150 ms when warm). `{t:'glance'}` frames are sent only on a bump. Replaying the fixture of a recorded night gives **60 bumps or fewer**. *(Bump rules and the night fixture built 2026-10-28 in `packages/monitor-core`: 57 bumps for a night with a second camera from 22:00, fed at the room's real cadence. The endpoint and the frames are WS-9's.)*
 - [ ] POST `/act` with the same `id` twice gives one acknowledgement. It is role-gated and writes the same log as a WebSocket acknowledgement.
@@ -943,35 +943,50 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - `live/monitor/keys.ts` (new), `live/monitor/relayCrypto.ts` (new), `live/monitor/e2e.unit.test.ts` (new)
 - `live/views/monitor/PeopleCard.tsx`, `live/views/monitor/NurserySettings.tsx`
 
-**Tasks:**
-- [ ] `protocol.ts`: re-export the `wire.ts` types; parse `hello.caps`.
-- [ ] `client.ts`:
-  - Every socket (monitor, line, admin) listens for `ds:token` and sends `reauth` when `caps` includes it.
-  - Handle close codes 4001, 4003 (open StepUp), 4004 ("You were removed") and 4008 (back off), through `closeKind`: 4004 `forbidden` is a role refusal, not a removal.
-  - Membership helpers (`removeMember` and the add/role helpers) call `POST /api/monitor/:nid/members` when `caps` includes `reauth`, otherwise the old RPC plus `members_changed`.
-  - Remove the `members_changed` admin-socket dance once the server lists the capability.
-- [ ] `keys.ts`: device keys (non-extractable ECDSA and ECDH P-256) in IndexedDB `ds-keys`; NMK store per `(nid, e)`; handle `key_req` (wrap with `sealed.wrapNmk`), `key_wrap`, `key_init`, `key_rotate`; send `dev_hello` after `hello`.
-- [ ] `relayCrypto.ts`: thin wrappers over `sealed.sealFrame`/`openFrame` with sequence state.
-- [ ] `MonitorCamera.tsx`:
+**Tasks:** *(All done 2026-10-29 on `impl/p0-ws6`. Everything is capability-gated: against today's rooms, which list none of `reauth`/`eid`/`e2e1`, the clients behave exactly as before.)*
+- [x] `protocol.ts`: re-export the `wire.ts` types; parse `hello.caps`. *(`helloCaps()`; `hello` gains `exp`, `nonce`, `e`; presence gains `devId`; the key, `reauth_ok` and `share_rotated` messages; `MonLog.eid`.)*
+- [x] `client.ts`: *(Tests in `socket.unit.test.ts`.)*
+  - [x] Every socket (monitor, line, admin) listens for `ds:token` and sends `reauth` when `caps` includes it. *(Members only — guests and call rooms hold no token. It also re-auths on its own 45 s before `hello.exp`/`reauth_ok.exp`, so a tab whose token refresh is late never hits the 4001.)*
+  - [x] Handle close codes 4001, 4003 (open StepUp), 4004 ("You were removed") and 4008 (back off), through `closeKind`: 4004 `forbidden` is a role refusal, not a removal. *(4004 `revoked` is "this device was signed out"; only `removed`/`revoked` forget a guest pass. 4008 waits ≥ 20 s. `mfa_required` is never final — a camera that stopped there would go quiet: it asks once, then retries every 30 s and at once on a fresh token, and both screens show "Enter code".)*
+  - [x] Membership helpers (`removeMember` and the add/role helpers) call `POST /api/monitor/:nid/members` when `caps` includes `reauth`, otherwise the old RPC plus `members_changed`. *(Asks for the step-up and retries once on `mfa_required`. Each nursery's caps are remembered on the device, so the nursery list knows them before a socket opens.)*
+  - [x] Remove the `members_changed` admin-socket dance once the server lists the capability. *(Skipped after a change that went through the Worker; still used after an RPC change.)*
+- [x] `keys.ts`: device keys (non-extractable ECDSA and ECDH P-256) in IndexedDB `ds-keys`; NMK store per `(nid, e)`; handle `key_req` (wrap with `sealed.wrapNmk`), `key_wrap`, `key_init`, `key_rotate`; send `dev_hello` after `hello`. *(Stores `device` (record `self`, which WS-5's push.ts reads) and `nmk` (only this device's own wraps). The opened keys stay in memory. Page-only keys when IndexedDB fails. `key_init` and `key_rotate` count as accepted when the room hands back our wrap, refuses with `key_conflict`, or says nothing for 3 s. An older epoch opens for 60 s after a newer one. A device never seals with an epoch older than the room's. A camera that gets no wrap within 10 s starts the next epoch itself.)*
+- [x] `relayCrypto.ts`: thin wrappers over `sealed.sealFrame`/`openFrame` with sequence state. *(`RelaySealer` keeps relay.ts's synchronous send contract and back-pressure. `RelayOpener` checks replay and age with `FrameReplay`. A Web Lock keeps one camera per nursery per browser, so two tabs never share a sequence under one key. See the contract notes below.)*
+- [x] `MonitorCamera.tsx`:
   - [x] The 2 s `startTicker(2000…)` status sender becomes **change-detected plus a keepalive**, and keeps sending every 2 s only while `live_want` is on. Data-channel `st` stays at 2 s. *(Done 2026-10-23, `live/monitor/statusCadence.ts`: urgent news at once, other news within 10 s, keepalive every 2 min so idle is ≤ 30 an hour as the done-when below asks.)*
   - Batch `stats` every 5 min (`stats5`). *(Replaced 2026-10-23 by server-side batching: the room writes the minutes the phone sends every minute in batches, so `stats5` isn't needed — feature doc §7, C3–C5 status.)*
-  - Mint `eid` in `sendSound`/`sendVision`.
-  - Encrypt relay frames when `e2e1` is listed, with JPEG ≤ `SNAPSHOT_MAX − 64`.
-  - Refuse unsealed `rtc` once it holds an NMK.
-- [ ] `MonitorViewer.tsx`:
+  - [x] Mint `eid` in `sendSound`/`sendVision`. *(Every camera event gets one, and the data-channel copy has the same one. The sequence persists across reloads. A sound replayed after the room was away reuses the id the viewers already got directly.)*
+  - [x] Encrypt relay frames when `e2e1` is listed, with JPEG ≤ `SNAPSHOT_MAX − 64`. *(A camera that seals but has no current key sends no picture through the server until it has one. Sound alerts are unaffected. A part too big for the room once sealed (+38 bytes) is dropped like an oversize frame. The camera says when the server path is sealed, both on setup and while running.)*
+  - [x] Refuse unsealed `rtc` once it holds an NMK.
+- [x] `MonitorViewer.tsx`:
   - [x] On `visibilitychange`, send `view`. When hidden, the picture goes (`replaceTrack(null)`) and the relay is sound only; restored when visible. *(Done 2026-10-23: `view` at once, the camera and room apply a 20 s grace; the camera hears it on the data channel, `{t:'vis'}`, not as a quality command, so the viewer's own quality choice stands.)*
-  - Dedupe alerts in `onDirect` against room events by `eid` and alert on first arrival.
-  - Decrypt relay frames.
-- [ ] `rtc.ts`:
+  - [x] Dedupe alerts in `onDirect` against room events by `eid` and alert on first arrival. *(`FirstArrival` in rtc.ts: whichever copy is first alerts, the other folds in quietly, and events without an eid always count. With the room up and no `eid` cap, the room's line alerts as before.)*
+  - [x] Decrypt relay frames. *(A camera that seals is only ever taken sealed. Which cameras seal is remembered per nursery, so a room that stops saying so can't downgrade it. The relay pill shows a lock and "end-to-end encrypted" only while sealed frames actually open. A device still waiting for the key says so, and its direct call waits up to 6 s for the key, then calls again sealed once it arrives. Signaling waits at most 3 s for keys to load from storage, so a storage that hangs can't stop direct video.)*
+- [x] `rtc.ts`:
   - [x] `RELAY_CAP` → `{maxBitrate: 400_000, maxFramerate: 15, scaleResolutionDownBy: 2}`. *(Done 2026-10-23; the server relay's encoder also tops out at 400 kbps.)*
-  - Batch ICE candidates in 75 ms windows.
-  - Seal and open signaling when both sides list `e2e1`.
-  - Send ICE restarts and quality commands over the open `mon` data channel when it is available. *(Quality: done 2026-10-23 for cameras that say `dcc`; ICE restarts: not yet.)*
+  - [x] Batch ICE candidates in 75 ms windows. *(`IceBatch`: one `ices` message per window to a peer that said `ib`, one message per candidate to older peers.)*
+  - [x] Seal and open signaling when both sides list `e2e1`. *(Sticky: a camera that holds the key refuses every unsealed offer. A viewer refuses plain signaling from a camera that seals. Opens run in parallel but are handled in arrival order, so a candidate never overtakes its offer.)*
+  - [x] Send ICE restarts and quality commands over the open `mon` data channel when it is available. *(Quality: done 2026-10-23 for cameras that say `dcc`. ICE restarts 2026-10-29: `{t:'sig', d}` on the channel to peers that said `dcr`. If no answer comes within 4 s, the same offer goes through the room. A data-channel offer for a different call is ignored.)*
   - [x] Apply `ice_refresh` with `pc.setConfiguration`. *(Done by the TURN guardrails, 2026-10-22: `{t:'ice'}` + `applyIce`.)*
-- [ ] `PeopleCard.tsx`: after a guest is removed, show "Link and passcode changed" with a one-tap "Share the new link". Admin actions call WS-5's `StepUp` first.
-- [ ] `NurserySettings.tsx`: a Devices list per nursery (`mon_devices`, Revoke) and a Security log tab (events of kind `security`).
+- [x] `PeopleCard.tsx`: after a guest is removed, show "Link and passcode changed" with a one-tap "Share the new link". Admin actions call WS-5's `StepUp` first. *(On `share_rotated`. The new passcode is shown once and never stored or shared with the link. Invite and "End other sessions" step up first.)*
+- [x] `NurserySettings.tsx`: a Devices list per nursery (`mon_devices`, Revoke) and a Security log tab (events of kind `security`). *(Parents, rooms that list `e2e1` (devices) or `reauth` (log). Revoke needs a confirm and the step-up. Export steps up first and retries once on `mfa_required`. Tests in `NurserySettings.test.tsx` and `PeopleCard.test.tsx`.)*
 
-**Done when:** unit tests cover change-only status (a fake clock gives ≤ 30 sends per hour when idle), sealed signaling round trips, frame seal/open with replay rejection, and eid dedupe. The existing monitor tests stay green.
+**Contract notes (WS-6 → WS-9; additive, nothing frozen changes):**
+- **Relay frame v1 on the existing relay wire.** The 11-byte relayWire header stays in clear, so the room can still route, resync and cut sound for a hidden viewer.
+  - Each part is sealed on its own (`sealFrame`): picture on stream 0, sound on stream 1, one counter across both.
+  - The header's flags bit 1 marks a sealed message. `audioOnly` still works, because it only slices by the u16 length.
+  - A sealed part starts `0x01`, never `FF D8`. The test runs the room's own cut on sealed bytes.
+- **Step-up.** WS-5's sheet is found with `import.meta.glob('../views/account/StepUp.tsx')` and called through its `ensureStepUp(reason)`. Before WS-5 merges the match is empty and actions go ahead, because the server enforces `aal2` anyway. `registerStepUp()` overrides it (tests).
+- **Signaling flags.** In an offer or answer, `ib: 1` means "send me `ices` batches" and `dcr: 1` means "ICE restarts on the data channel". Those restarts arrive as `{t:'sig', d}` on `mon`. Sealed `rtc.d` carries the sender in `f` (wire.ts).
+- **Parents' devices.**
+  - `{t:'q', q:'devices'}` → `{devices: [{devId, name, platform, who, added, last_seen, keyed?}]}`.
+  - `{t:'q', q:'dev_revoke', devId}` → `{ok}` or `{ok:false, error:'mfa_required'|…}`. The room drops the device and its wraps, closes its sockets (4004 `revoked`), asks a holder to `key_rotate`, and logs a `security` event.
+  - The log itself is the existing `{q:'events', kinds:['security']}`.
+- **`share_rotated`** goes to parents' sockets after a guest removal that rotated the link: `{t:'share_rotated', link:{code, pass?}, removed?}`. It is shown once, so WS-9 can pass `{rotate: true, pass: preparePasscode('auto')}` to `removeGuest`.
+- **Mixed versions (for WS-9).**
+  - A room should forward sealed relay messages (flags bit 1) only to sockets whose `dev_hello` verified. A page from before Phase 0 can't open them and would try to decode noise.
+  - The room should tell such a page to reload: a camera holding the key refuses its plain offer, as the sticky rule requires.
+  - It should keep accepting `members_changed` from parents, for changes a client made through the RPC before it learnt the room's caps.
 
 #### WS-7 Edge router and config
 **Owns:**

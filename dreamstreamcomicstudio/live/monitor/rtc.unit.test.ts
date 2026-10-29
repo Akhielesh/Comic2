@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { adapt, CameraHub, classifyPath, encodingFor, LADDER, newAdapt, orderCodecs, readEncStats, summarizeEnc, v6Net, ViewerLink, type EncSample } from './rtc';
+import { adapt, CameraHub, classifyPath, DC_RESTART_WAIT_MS, encodingFor, FirstArrival, ICE_BATCH_MS, LADDER, newAdapt, orderCodecs, readEncStats, summarizeEnc, v6Net, ViewerLink, type EncSample } from './rtc';
 import { HIDDEN_GRACE_MS } from './viewGate';
 import type { MonRtc } from './protocol';
+import { makeDevice, MemoryKeyStore, NurseryKeys } from './keys';
+import { newNmk, wrapNmk } from '../../packages/monitor-core/src/sealed';
+import { isSealedRtc, type SealedRtc } from '../../packages/monitor-core/src/wire';
 
 describe('classifyPath', () => {
   it('home Wi-Fi: host candidates or private addresses on both ends', () => {
@@ -298,8 +301,9 @@ describe('CameraHub: one connection per viewer session', () => {
   it('answers on the call it was offered, preferring H.264, and caps the encoder', async () => {
     await hub.onSignal('s1', offer('p1'), 'Mom');
     expect(FakePC.all).toHaveLength(1);
-    // dcc: this camera takes the viewer's quality and screen state on the data channel.
-    expect(sent.at(-1)).toEqual({ to: 's1', d: { sdp: { type: 'answer', sdp: 'a' }, pc: 'p1', dcc: 1 } });
+    // dcc: this camera takes the viewer's quality and screen state on the data channel;
+    // ib: candidate batches; dcr: ICE restarts on the data channel.
+    expect(sent.at(-1)).toEqual({ to: 's1', d: { sdp: { type: 'answer', sdp: 'a' }, pc: 'p1', dcc: 1, ib: 1, dcr: 1 } });
     const v = FakePC.all[0].transceivers[0];
     expect((v.prefs as { mimeType: string }[])[0].mimeType).toBe('video/H264');
     expect(v.sender.params.encodings[0]).toMatchObject({ maxBitrate: 1_600_000, scaleResolutionDownBy: 1, maxFramerate: 24 });
@@ -352,7 +356,7 @@ describe('CameraHub: one connection per viewer session', () => {
     await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' } });
     await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' } });
     expect(FakePC.all).toHaveLength(1);
-    expect(sent.at(-1)?.d).toEqual({ sdp: { type: 'answer', sdp: 'a' }, dcc: 1 });
+    expect(sent.at(-1)?.d).toEqual({ sdp: { type: 'answer', sdp: 'a' }, dcc: 1, ib: 1, dcr: 1 });
     expect(hub.keyOf('s1')).toBe('s1');
   });
 
@@ -652,5 +656,308 @@ describe('direct-first and sound-only paths (feature doc §7 C3, C5, §4.7)', ()
     expect(sent.filter((m) => m.d.sdp?.type === 'offer')).toHaveLength(1);
     link.close();
     expect(listeners.has('online')).toBe(false);
+  });
+});
+
+/* ------------------------------------------------- ADR 0006 Phase 0 (WS-6) */
+
+const NID = '7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f';
+
+/** A camera's and a viewer's keys for one nursery, holding the same epoch (as the room would hand them out). */
+async function sharedKeys() {
+  const camDev = await makeDevice();
+  const viewDev = await makeDevice();
+  const nmk = newNmk();
+  const keysFor = async (dev: Awaited<ReturnType<typeof makeDevice>>) => {
+    const k = new NurseryKeys({ nid: NID, device: dev, store: new MemoryKeyStore(), name: 'x', send: () => undefined });
+    await k.onMessage({ t: 'key_wrap', devId: dev.devId, e: 1, blob: await wrapNmk(nmk, dev.ecdhPub, { nid: NID, e: 1, devId: dev.devId }) });
+    return k;
+  };
+  return { camDev, viewDev, cam: await keysFor(camDev), view: await keysFor(viewDev) };
+}
+
+const until = async (ok: () => boolean, ms = 2000) => {
+  const t0 = Date.now();
+  while (!ok()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
+describe('sealed signaling (end to end through the room)', () => {
+  let sent: { to: string; d: MonRtc | SealedRtc }[];
+  beforeEach(() => {
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    vi.stubGlobal('MediaStream', class {});
+    vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/VP8' }] }) });
+    FakePC.all = [];
+    sent = [];
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('camera holding the key: an unsealed offer is refused; a sealed one is answered sealed — no SDP or candidate the room can read', async () => {
+    const k = await sharedKeys();
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    hub.seal = k.cam;
+    await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1' });
+    expect(FakePC.all).toHaveLength(0);
+    expect(hub.refused).toBe(1);
+    const offer = await k.view.seal(k.camDev.devId, { sdp: { type: 'offer', sdp: 'v=0 a=fingerprint:sha-256 AB' }, pc: 'p1', vid: 'v1', ib: 1 });
+    await hub.onSignal('s1', offer!);
+    expect(FakePC.all).toHaveLength(1);
+    await until(() => sent.length === 1);
+    expect(isSealedRtc(sent[0].d)).toBe(true);
+    expect(JSON.stringify(sent)).not.toMatch(/sdp|candidate|answer/);
+    const answer = await k.view.open(sent[0].d as SealedRtc);
+    expect(answer!.d).toMatchObject({ sdp: { type: 'answer' }, pc: 'p1', dcc: 1, ib: 1, dcr: 1 });
+    // Its candidates: one sealed batch for the window.
+    const pc = FakePC.all[0];
+    const cand = (c: string) => (pc.onicecandidate as unknown as (e: { candidate: { toJSON(): unknown } }) => void)({ candidate: { toJSON: () => ({ candidate: c }) } });
+    cand('candidate:1 1 udp 1 192.168.1.9 5000 typ host');
+    cand('candidate:2 1 udp 1 81.2.3.4 6000 typ srflx');
+    await new Promise((r) => setTimeout(r, ICE_BATCH_MS + 20));
+    await until(() => sent.length === 2);
+    expect(JSON.stringify(sent[1])).not.toMatch(/candidate|192\.168/);
+    expect((await k.view.open(sent[1].d as SealedRtc))!.d.ices).toHaveLength(2);
+    // A sealed message that doesn't open (tampered) is refused too.
+    const bad = offer as SealedRtc;
+    await hub.onSignal('s1', { ...bad, ct: (bad.ct[0] === 'A' ? 'B' : 'A') + bad.ct.slice(1) });
+    expect(hub.refused).toBe(2);
+    hub.closeAll();
+  });
+
+  it('viewer: seals to a camera that seals; refuses its plain answer (the room’s, not the camera’s); takes an older camera’s as always', async () => {
+    const k = await sharedKeys();
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'dev.tab');
+    link.seal = k.view;
+    link.camKey = () => k.camDev.devId;
+    await link.connect('cam1');
+    await until(() => sent.length === 1);
+    expect(isSealedRtc(sent[0].d)).toBe(true);
+    const offer = (await k.cam.open(sent[0].d as SealedRtc))!;
+    expect(offer.from).toBe(k.viewDev.devId);
+    expect(offer.d).toMatchObject({ sdp: { type: 'offer' }, vid: 'dev.tab', ov: 1, ib: 1, dcr: 1 });
+    const pc = FakePC.all[0];
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'forged' }, pc: offer.d.pc });
+    expect(pc.remote).toBeNull();
+    expect(link.refused).toBe(1);
+    await link.onSignal('cam1', (await k.cam.seal(k.viewDev.devId, { sdp: { type: 'answer', sdp: 'real' }, pc: offer.d.pc }))!);
+    expect(pc.remote).toEqual({ type: 'answer', sdp: 'real' });
+    link.close();
+
+    // A camera that doesn't seal (an older app): plain, as always — even though we hold the key.
+    sent = [];
+    const old = new ViewerLink((to, d) => sent.push({ to, d }), [], 'dev.tab');
+    old.seal = k.view;
+    old.camKey = () => null;
+    await old.connect('cam2');
+    expect((sent[0].d as MonRtc).sdp?.type).toBe('offer');
+    await old.onSignal('cam2', { sdp: { type: 'answer', sdp: 'a' }, pc: (sent[0].d as MonRtc).pc });
+    expect(FakePC.all[1].remote).toEqual({ type: 'answer', sdp: 'a' });
+    old.close();
+  });
+});
+
+describe('sealed signals are handled in the order they arrived', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    vi.stubGlobal('MediaStream', class {});
+    vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/VP8' }] }) });
+    FakePC.all = [];
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A seal whose opens finish when the test says (WebCrypto may finish a later one first). */
+  const slowSeal = (from: string) => {
+    const waits: { go: () => void }[] = [];
+    return {
+      waits,
+      holds: () => true,
+      seal: async () => null,
+      open: (s: SealedRtc) =>
+        new Promise<{ d: MonRtc; from: string }>((resolve) => {
+          const d = JSON.parse(Buffer.from(s.ct, 'base64url').toString()) as MonRtc;
+          waits.push({ go: () => resolve({ d, from }) });
+        }),
+    };
+  };
+  /** Shaped like a sealed signal (the stub seal "opens" it). */
+  const wrap = (d: MonRtc): SealedRtc => ({ e: 1, iv: 'AAAAAAAAAAAAAAAA', ct: Buffer.from(JSON.stringify(d)).toString('base64url'), f: 'x'.repeat(22) });
+
+  it('camera: candidates opened before their offer still wait for it (none dropped)', async () => {
+    const hub = new CameraHub(() => undefined, [], () => ({ video: null, audio: null }));
+    const seal = slowSeal('v'.repeat(22));
+    hub.seal = seal;
+    const a = hub.onSignal('s1', wrap({ sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1' }));
+    const b = hub.onSignal('s1', wrap({ ices: [{ candidate: 'c1' }, { candidate: 'c2' }], pc: 'p1', vid: 'v1' }));
+    await Promise.resolve();
+    seal.waits[1].go(); // the candidates open first
+    await new Promise((r) => setTimeout(r, 5));
+    expect(FakePC.all).toHaveLength(0);
+    seal.waits[0].go();
+    await Promise.all([a, b]);
+    expect(FakePC.all).toHaveLength(1);
+    expect(FakePC.all[0].candidates).toEqual([{ candidate: 'c1' }, { candidate: 'c2' }]);
+    hub.closeAll();
+  });
+
+  it('viewer: an answer opened after its candidates is still applied first', async () => {
+    const sent: { to: string; d: MonRtc | SealedRtc }[] = [];
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'dev.tab');
+    const seal = slowSeal('c'.repeat(22));
+    link.seal = seal;
+    link.camKey = () => null;
+    await link.connect('cam1');
+    const pcId = (sent[0].d as MonRtc).pc;
+    const pc = FakePC.all[0];
+    const order: string[] = [];
+    const setRemote = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (d) => {
+      order.push('answer');
+      return setRemote(d);
+    };
+    const addIce = pc.addIceCandidate.bind(pc);
+    pc.addIceCandidate = async (c) => {
+      order.push('ice');
+      return addIce(c);
+    };
+    const a = link.onSignal('cam1', wrap({ sdp: { type: 'answer', sdp: 'a' }, pc: pcId }));
+    const b = link.onSignal('cam1', wrap({ ices: [{ candidate: 'c1' }], pc: pcId }));
+    await Promise.resolve();
+    seal.waits[1].go();
+    await new Promise((r) => setTimeout(r, 5));
+    seal.waits[0].go();
+    await Promise.all([a, b]);
+    expect(order).toEqual(['answer', 'ice']);
+    link.close();
+  });
+});
+
+describe('ICE candidate batching (75 ms) and ICE restarts on the data channel', () => {
+  let sent: { to: string; d: MonRtc }[];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    vi.stubGlobal('MediaStream', class {});
+    vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/VP8' }] }) });
+    FakePC.all = [];
+    sent = [];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  const cand = (pc: FakePC, c: string | null) =>
+    (pc.onicecandidate as unknown as (e: { candidate: { toJSON(): unknown } | null }) => void)({ candidate: c ? { toJSON: () => ({ candidate: c }) } : null });
+
+  it('camera: a viewer that takes batches gets one message per 75 ms window; an older one, one per candidate', async () => {
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1', ib: 1 });
+    await hub.onSignal('s2', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p2', vid: 'v2' });
+    sent = [];
+    for (const pc of FakePC.all) {
+      cand(pc, 'c1');
+      cand(pc, 'c2');
+      cand(pc, null);
+    }
+    expect(sent).toEqual([]);
+    vi.advanceTimersByTime(ICE_BATCH_MS);
+    expect(sent.filter((m) => m.to === 's1')).toEqual([{ to: 's1', d: { ices: [{ candidate: 'c1' }, { candidate: 'c2' }, null], pc: 'p1' } }]);
+    expect(sent.filter((m) => m.to === 's2').map((m) => m.d.ice)).toEqual([{ candidate: 'c1' }, { candidate: 'c2' }, null]);
+    // Batches it receives are all applied.
+    await hub.onSignal('s1', { ices: [{ candidate: 'x' }, null, { candidate: 'y' }], pc: 'p1', vid: 'v1' });
+    expect(FakePC.all[0].candidates).toEqual([{ candidate: 'x' }, { candidate: 'y' }]);
+    hub.closeAll();
+  });
+
+  it('viewer: one per candidate until the camera says it takes batches, then one per window', async () => {
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    await link.connect('cam1');
+    const pc = FakePC.all[0];
+    const pcId = sent.find((m) => m.d.sdp)!.d.pc;
+    sent = [];
+    cand(pc, 'early1');
+    cand(pc, 'early2');
+    vi.advanceTimersByTime(ICE_BATCH_MS);
+    expect(sent.map((m) => m.d.ice)).toEqual([{ candidate: 'early1' }, { candidate: 'early2' }]);
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'a' }, pc: pcId, dcc: 1, ib: 1, dcr: 1 });
+    sent = [];
+    cand(pc, 'late1');
+    cand(pc, 'late2');
+    vi.advanceTimersByTime(ICE_BATCH_MS);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].d.ices).toEqual([{ candidate: 'late1' }, { candidate: 'late2' }]);
+    link.close();
+  });
+
+  it('viewer: once the call is up, an ICE restart goes on the data channel (nothing through the room); no answer in time — through the room', async () => {
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    await link.connect('cam1');
+    const pc = FakePC.all[0];
+    const pcId = sent.find((m) => m.d.sdp)!.d.pc;
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'a' }, pc: pcId, dcc: 1, ib: 1, dcr: 1 });
+    pc.connect('internet');
+    sent = [];
+    pc.signalingState = 'have-local-offer';
+    // The camera's relay credential was renewed: it asks on the channel, and we restart on it.
+    const say = (m: unknown) => (pc.dc!.onmessage as (e: { data: string }) => void)({ data: JSON.stringify(m) });
+    say({ t: 'sig', d: { re: 1, pc: pcId } });
+    await vi.advanceTimersByTimeAsync(0);
+    const onDc = pc.dc!.sent.map((m) => JSON.parse(m)).filter((m) => m.t === 'sig');
+    expect(onDc).toHaveLength(1);
+    expect(onDc[0].d).toMatchObject({ sdp: { type: 'offer' }, pc: pcId, vid: 'v' });
+    expect(sent).toEqual([]);
+    await vi.advanceTimersByTimeAsync(DC_RESTART_WAIT_MS);
+    expect(sent.filter((m) => m.d.sdp?.type === 'offer')).toHaveLength(1);
+    // The answer on the channel is taken.
+    say({ t: 'sig', d: { sdp: { type: 'answer', sdp: 'restarted' }, pc: pcId } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.remote).toEqual({ type: 'answer', sdp: 'restarted' });
+    // An answer for another call on this channel is ignored.
+    say({ t: 'sig', d: { sdp: { type: 'answer', sdp: 'other' }, pc: 'zzz' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.remote).toEqual({ type: 'answer', sdp: 'restarted' });
+    link.close();
+  });
+
+  it('camera: a restart offered on its call’s channel is answered there — a new call on the channel is not taken', async () => {
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1', dcr: 1, ib: 1 });
+    const pc = FakePC.all[0];
+    const channel = { label: 'mon', readyState: 'open', onmessage: null as ((e: { data: string }) => void) | null, sent: [] as string[], send(m: string) { this.sent.push(m); } };
+    (pc.ondatachannel as (e: { channel: typeof channel }) => void)({ channel });
+    pc.connect('internet');
+    await vi.advanceTimersByTimeAsync(1600);
+    sent = [];
+    channel.onmessage?.({ data: JSON.stringify({ t: 'sig', d: { sdp: { type: 'offer', sdp: 'restart' }, pc: 'p1', vid: 'v1' } }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakePC.all).toHaveLength(1);
+    expect(pc.remote).toEqual({ type: 'offer', sdp: 'restart' });
+    expect(channel.sent.map((m) => JSON.parse(m))).toEqual([{ t: 'sig', d: { sdp: { type: 'answer', sdp: 'a' }, dcc: 1, ib: 1, dcr: 1, pc: 'p1' } }]);
+    expect(sent).toEqual([]);
+    channel.onmessage?.({ data: JSON.stringify({ t: 'sig', d: { sdp: { type: 'offer', sdp: 'new call' }, pc: 'p9', vid: 'v1' } }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakePC.all).toHaveLength(1);
+    expect(pc.remote).toEqual({ type: 'offer', sdp: 'restart' });
+    // The goodbye still goes through the room (the channel closes with the call).
+    hub.closeAll(true);
+    expect(sent.at(-1)).toEqual({ to: 's1', d: { bye: true, pc: 'p1' } });
+  });
+});
+
+describe('alerts on first arrival (eid)', () => {
+  it('whichever copy comes first alerts; the other folds in quietly; events without an eid always count', () => {
+    const f = new FirstArrival();
+    expect(f.direct('cam1:100')).toBe(true);
+    expect(f.room('cam1:100')).toBe('quiet');
+    expect(f.room('cam1:101')).toBe('raise');
+    expect(f.direct('cam1:101')).toBe(false);
+    expect(f.direct(undefined)).toBe(true);
+    expect(f.direct(undefined)).toBe(true);
+    expect(f.room(null)).toBe('raise');
+    expect(f.room('not an eid')).toBe('raise');
   });
 });
