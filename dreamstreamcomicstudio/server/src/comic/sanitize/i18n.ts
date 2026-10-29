@@ -6,7 +6,9 @@
 //
 //   edition          registry tag, never the source; only `register`; creation counts toward the cap (409)
 //   translation      edition + line exist; text 1–600 chars; FORCED {status:'edited', at:now,
-//                    sourceHash: lineSourceHash(current line)}; gloss/issue/model are cleared
+//                    sourceHash: lineSourceHash(current line)}; model is cleared; a gloss (≤ 300) and a
+//                    review issue ({severity, note ≤ 300, suggestion ≤ 600}) the client sends are KEPT —
+//                    an Undo restores them, and they only ever add information or blocking — else cleared
 //   edition_text     edition exists, the source field is non-empty; same forcing with textSourceHash
 //   edition_balloon  edition + line exist; x/y/w/tail clamped 0..1, fontScale 0.7..1.3, pinned boolean
 //   glossary_term    id shape; term ≤ 80; kind/policy enums; forms keys are registry langs (not the
@@ -35,6 +37,9 @@ const POLICIES: readonly GlossaryTerm['policy'][] = ['transliterate', 'translate
 const GLOSSARY_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const TERM_CHARS = 80;
 const NOTE_CHARS = 140;
+const GLOSS_CHARS = 300;
+const ISSUE_NOTE_CHARS = 300;
+const ISSUE_SUGGESTION_CHARS = 600;
 
 /** A registry tag (canonical spelling) that is not the comic's source language. */
 const editionLang = (doc: ComicDoc, raw: unknown): string => {
@@ -68,6 +73,26 @@ const cleanText = (raw: unknown): string => {
 
 const clamp01 = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined);
 
+/** A gloss the client sends back (Undo of an edit): plain text ≤ 300 chars, or nothing. */
+const clientGloss = (raw: unknown): string | undefined => {
+  if (typeof raw !== 'string') return undefined;
+  const text = storableSource(raw);
+  return text ? clipText(text, GLOSS_CHARS) : undefined;
+};
+
+/** A review flag the client sends back (Undo of an edit). It can only ADD blocking (a major issue), never lift it. */
+const clientIssue = (raw: unknown): TextTranslation['issue'] | undefined => {
+  if (!isObj(raw) || typeof raw.note !== 'string') return undefined;
+  const severity = raw.severity;
+  if (severity !== 'major' && severity !== 'minor') return undefined;
+  const note = storableSource(raw.note);
+  if (!note) return undefined;
+  const issue: NonNullable<TextTranslation['issue']> = { severity, note: clipText(note, ISSUE_NOTE_CHARS) };
+  const suggestion = typeof raw.suggestion === 'string' ? storableSource(raw.suggestion) : '';
+  if (suggestion) issue.suggestion = clipText(suggestion, ISSUE_SUGGESTION_CHARS);
+  return issue;
+};
+
 export const sanitizeEdition: OpSanitizer<Op<'edition'>> = {
   op: 'edition',
   sanitize(doc, op) {
@@ -90,9 +115,19 @@ export const sanitizeTranslation: OpSanitizer<Op<'translation'>> = {
     if (op.patch === null) return { op: 'translation', lang, lineId: line.id, patch: null };
     if (!isObj(op.patch)) throw bad('Bad translation change.');
     const text = cleanText(op.patch.text);
-    // Forced: a human edit is always 'edited', stamped now, against the CURRENT source; the old gloss,
-    // issue and model described a different text, so they are cleared.
-    const patch: Partial<TextTranslation> = { text, status: 'edited', at: ctx.now, sourceHash: lineSourceHash(line), gloss: undefined, issue: undefined, model: undefined };
+    // Forced: a human edit is always 'edited' (the client never mints 'reviewed' or a model), stamped now,
+    // against the CURRENT source. The gloss and the review flag are kept when the client sends them (an Undo
+    // brings them back; both only add information or blocking) and cleared otherwise — the old ones
+    // described a different text.
+    const patch: Partial<TextTranslation> = {
+      text,
+      status: 'edited',
+      at: ctx.now,
+      sourceHash: lineSourceHash(line),
+      gloss: clientGloss(op.patch.gloss),
+      issue: clientIssue(op.patch.issue),
+      model: undefined
+    };
     return { op: 'translation', lang, lineId: line.id, patch };
   }
 };

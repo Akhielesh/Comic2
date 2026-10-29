@@ -4,6 +4,8 @@ import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { i18nOf, lineSourceHash, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps, type DocOp } from '../../../../shared/comic/ops.js';
+import { inverseOps } from '../../../../shared/comic/undo.js';
+import { editionReadiness } from '../../../../shared/comic/i18n.js';
 import type { SanitizeCtx } from '../extensions.js';
 import { sixPageKidsDoc } from '../i18n/testing.js';
 import { sanitizePatchOps } from '../jobs.js';
@@ -31,12 +33,15 @@ describe('i18n sanitizers (contract §5.4)', () => {
     for (const op of ['edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term']) expect(opSanitizerFor(op)).toBe(I18N_SANITIZERS.find((s) => s.op === op));
   });
 
-  it('translation: forced {edited, now, current sourceHash}; gloss/issue/model cleared; bounds', () => {
+  it('translation: forced {edited, now, current sourceHash}; model cleared; a sent gloss kept, an unsent one cleared; bounds', () => {
     const doc = withTe();
     const op = sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: '  కొత్తది  ', status: 'reviewed', sourceHash: 'forged', at: 5, gloss: 'x', model: 'y' } }, CTX);
-    expect(op.patch).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]), gloss: undefined, issue: undefined, model: undefined });
+    expect(op.patch).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]), gloss: 'x', issue: undefined, model: undefined });
     const next = applyOps(doc, [op]);
-    expect(i18nOf(next).editions.te.lines.l1).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]) });
+    expect(i18nOf(next).editions.te.lines.l1).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]), gloss: 'x' });
+    // A plain edit (no gloss sent) clears the old gloss, issue and model: they described a different text.
+    const plain = applyOps(doc, [sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'కొత్తది' } }, CTX)]);
+    expect(i18nOf(plain).editions.te.lines.l1).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]) });
     expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x'.repeat(601) } }, CTX), 400);
     expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: '   ' } }, CTX), 400);
     expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'hi', lineId: 'l1', patch: { text: 'x' } }, CTX), 400); // no edition
@@ -85,6 +90,33 @@ describe('i18n sanitizers (contract §5.4)', () => {
     const ops: DocOp[] = Array.from({ length: 200 }, (_, i) => ({ op: 'glossary_term', id: `g${i}`, patch: { term: `t${i}` } }));
     full = applyOps(full, ops);
     expectCode(() => sanitizeGlossaryTerm.sanitize(full, { op: 'glossary_term', id: 'g_new', patch: { term: 'one more' } }, CTX), 409);
+  });
+
+  it('Undo of a translation edit restores the gloss and the review flag (status stays "edited"), so a review-blocked edition stays blocked', () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    const entries: Record<string, { text: string; status: 'reviewed' | 'machine'; sourceHash: string; at: number; gloss?: string; issue?: { severity: 'major'; note: string; suggestion?: string } }> = {};
+    for (const l of lines) entries[l.id] = { text: `తెలుగు ${l.id}`, status: 'reviewed', sourceHash: lineSourceHash(l), at: 1, gloss: `Means: ${l.text}` };
+    entries.l3 = { ...entries.l3, status: 'machine', gloss: undefined, issue: { severity: 'major', note: 'Wrong meaning.', suggestion: 'చూడు, అక్కడ!' } };
+    const before = applyOps(doc, [{ op: 'translations', lang: 'te', lines: entries }]);
+    expect(editionReadiness(before, 'te').publishable).toBe(false); // l3 is flagged (and unreviewed)
+    const edits = sanitizePatchOps(before, [
+      { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'కొత్త l1' } },
+      { op: 'translation', lang: 'te', lineId: 'l3', patch: { text: 'కొత్త l3' } }
+    ], CTX);
+    const edited = applyOps(before, edits);
+    expect(i18nOf(edited).editions.te.lines.l3.issue).toBeUndefined();
+    // Undo: the client inverse carries the full previous entries; the server keeps gloss + issue, forces the rest.
+    const undone = applyOps(edited, sanitizePatchOps(edited, inverseOps(before, edits), CTX));
+    expect(i18nOf(undone).editions.te.lines.l1).toEqual({ text: 'తెలుగు l1', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(lines[0]), gloss: 'Means: Where did the moon go?' });
+    expect(i18nOf(undone).editions.te.lines.l3).toEqual({ text: 'తెలుగు l3', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(lines[2]), issue: { severity: 'major', note: 'Wrong meaning.', suggestion: 'చూడు, అక్కడ!' } });
+    expect(editionReadiness(undone, 'te').publishable).toBe(editionReadiness(before, 'te').publishable);
+    expect(editionReadiness(undone, 'te').issues.map((i) => i.code)).toContain('major_issue');
+    // Bounds: gloss and note are clipped, a malformed issue is dropped, nothing lets the client mint "reviewed".
+    const long = sanitizeTranslation.sanitize(before, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x', gloss: 'g'.repeat(400), issue: { severity: 'minor', note: 'n'.repeat(400), suggestion: 's'.repeat(700) } } }, CTX);
+    expect(long.patch).toMatchObject({ status: 'edited', gloss: 'g'.repeat(300), issue: { severity: 'minor', note: 'n'.repeat(300), suggestion: 's'.repeat(600) } });
+    const bad = sanitizeTranslation.sanitize(before, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x', gloss: '   ', issue: { severity: 'fatal', note: 'n' } as never } }, CTX);
+    expect(bad.patch).toMatchObject({ status: 'edited', gloss: undefined, issue: undefined });
   });
 
   it('through sanitizePatchOps: a client can never mark its own translation "reviewed"', () => {
