@@ -200,3 +200,60 @@ describe('RenderOverlay', () => {
     }
   });
 });
+
+// Device-matrix follow-ups (ui-findings 2026-10-29, P2-BOARD): two adjacent 36 px icon buttons stole
+// each other's 44 px ::after; an icon-only sm button was 42 px wide; unselected segments measured
+// 4.39:1; the overlay's Check again / Retry pills were 15–40 px tall and their ::after was clipped by
+// the frame they sit in.
+describe('touch sizes (device-matrix follow-ups)', () => {
+  it('small icon buttons are a real 44 px square on touch (side by side, neither steals the other’s tap)', () => {
+    render(<IconButton size="sm" label="Show the script">s</IconButton>);
+    const b = screen.getByRole('button', { name: 'Show the script' });
+    expect(b.className).toContain('coarse:h-11');
+    expect(b.className).toContain('coarse:w-11');
+    expect(b.className).not.toContain('tap-target');
+  });
+
+  it('icon-only sm/md buttons keep 44 px of width on touch', () => {
+    render(
+      <>
+        <PrimaryButton size="sm" aria-label="Read full screen">
+          x
+        </PrimaryButton>
+        <GhostButton size="md">Go</GhostButton>
+      </>
+    );
+    expect(screen.getByRole('button', { name: 'Read full screen' }).className).toContain('coarse:min-w-[44px]');
+    expect(screen.getByRole('button', { name: 'Go' }).className).toContain('coarse:min-w-[44px]');
+  });
+
+  it('unselected segments read in ink, not muted (muted on the well is 4.39:1, under AA)', () => {
+    render(
+      <Segmented
+        label="Card size"
+        value="a"
+        onChange={vi.fn()}
+        options={[
+          { value: 'a', label: 'Large' },
+          { value: 'b', label: 'Compact' }
+        ]}
+      />
+    );
+    const off = screen.getByRole('radio', { name: 'Compact' });
+    expect(off.className).not.toContain('text-[var(--ds-muted)]');
+    expect(off.className).toContain('text-[var(--ds-ink)]');
+  });
+
+  it('the overlay’s Check again and Retry are 44 px tall on touch (a real box, not a clipped ::after)', () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    render(
+      <div className="relative">
+        <RenderOverlay status="rendering" since={now - 20 * 60_000} typicalSec={30} onRefresh={vi.fn()} />
+        <RenderOverlay status="failed" error="x" since={now} onRetry={vi.fn()} />
+      </div>
+    );
+    expect(screen.getByRole('button', { name: 'Check again' }).className).toContain('coarse:min-h-[44px]');
+    expect(screen.getByRole('button', { name: /Retry/ }).className).toContain('coarse:min-h-[44px]');
+  });
+});

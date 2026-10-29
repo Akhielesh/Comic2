@@ -49,14 +49,15 @@ export const SectionTitle: React.FC<{ children: React.ReactNode; right?: React.R
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; size?: 'xs' | 'sm' | 'md' };
 
-// Coarse pointers (mobile.md §2.4): sm/md grow to a real 44 px; xs keeps a compact look with a 44 px
+// Coarse pointers (mobile.md §2.4): sm/md grow to a real 44 px — tall AND wide, so an icon-only
+// button (its label hidden on a phone) is never a 42 px target; xs keeps a compact look with a 44 px
 // hit area (`tap-target`). Fine pointers keep today's sizes.
 const sizeCls = (size: ButtonProps['size'] = 'md') =>
   size === 'xs'
     ? 'h-7 px-2.5 text-[11.5px] coarse:h-10 tap-target'
     : size === 'sm'
-      ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:px-3.5'
-      : 'h-9 px-4 text-[13px] coarse:h-11';
+      ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:min-w-[44px] coarse:px-3.5'
+      : 'h-9 px-4 text-[13px] coarse:h-11 coarse:min-w-[44px]';
 
 export const PrimaryButton: React.FC<ButtonProps> = ({ busy, size, className, children, disabled, type, ...rest }) => (
   <button
@@ -108,7 +109,10 @@ export const IconButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
     {...rest}
     className={cx(
       `inline-flex shrink-0 items-center justify-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${TRANSITION} ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-40`,
-      size === 'sm' ? 'h-7 w-7 coarse:h-9 coarse:w-9 tap-target' : 'h-8 w-8 coarse:h-11 coarse:w-11',
+      // Touch: a REAL 44 px square for both sizes. Two small icon buttons side by side (a page card's
+      // "Show the script" + "actions") used to share overlapping 44 px ::after zones and steal each
+      // other's taps; a real box can't.
+      size === 'sm' ? 'h-7 w-7 coarse:h-11 coarse:w-11' : 'h-8 w-8 coarse:h-11 coarse:w-11',
       className
     )}
   >
@@ -195,7 +199,9 @@ export function Segmented<T extends string>({
               `flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING} disabled:opacity-40`,
               // Touch: every segment is a full 44×44 target, icon-only ones too (the header pane switcher).
               size === 'xs' ? 'px-2 py-1 text-[11px] coarse:min-h-[44px] coarse:min-w-[44px]' : 'px-2.5 py-1.5 text-[12px] coarse:min-h-[44px] coarse:min-w-[44px]',
-              on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+              // Unselected segments read in ink at 80 %: muted on the well measured 4.39:1 (axe, under
+              // AA 4.5:1); ink at 80 % over the well is ≥ 8:1 in both themes.
+              on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-ink)] opacity-80 hover:opacity-100'
             )}
           >
             {/* Text labels truncate inside their segment instead of overlapping a neighbour in a narrow row. */}
@@ -539,7 +545,9 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
                     e.stopPropagation();
                     recheck();
                   }}
-                  className={`tap-target rounded-full px-1.5 font-semibold text-[var(--ds-accent)] hover:underline ${FOCUS_RING}`}
+                  // A real 44 px box on touch: the pill sits at the frame's edge, where a ::after zone
+                  // would be clipped by the frame's overflow.
+                  className={`tap-target rounded-full px-1.5 font-semibold text-[var(--ds-accent)] hover:underline coarse:min-h-[44px] coarse:px-2.5 ${FOCUS_RING}`}
                 >
                   Check again
                 </button>
@@ -595,7 +603,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
                   e.stopPropagation();
                   onRetry();
                 }}
-                className={`tap-target inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[40px] ${FOCUS_RING}`}
+                className={`tap-target inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[44px] ${FOCUS_RING}`}
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {retryLabel}
               </button>
@@ -609,7 +617,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
                   e.stopPropagation();
                   setDetailsOpen((v) => !v);
                 }}
-                className={`tap-target rounded-full px-1.5 py-0.5 text-[11.5px] font-medium text-[var(--ds-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
+                className={`tap-target rounded-full px-1.5 py-0.5 text-[11.5px] font-medium text-[var(--ds-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-ink)] coarse:min-h-[44px] ${FOCUS_RING}`}
               >
                 {detailsOpen ? 'Hide details' : 'Details'}
               </button>
@@ -811,6 +819,44 @@ export const useFocusTrap = (ref: React.RefObject<HTMLElement | null>, active: b
     return () => root.removeEventListener('keydown', onKey);
   }, [ref, active]);
 };
+
+/**
+ * Sideways-scrolling rows (the board's tab strip, the reader's compact toolbar): which edges are
+ * clipped, for the "there is more" fade. Re-measures on scroll (call `measure`), on a resize of the row
+ * or of any of its items, and when `deps` change.
+ */
+export const useEdgeClip = (ref: React.RefObject<HTMLElement | null>, deps: React.DependencyList) => {
+  const [clip, setClip] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
+  const measure = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const start = el.scrollLeft > 2;
+    const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
+    setClip((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, [ref]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measure, ...deps]);
+  return { clip, measure };
+};
+
+/** The fade on a sideways-scrolling row's clipped edge(s) — "there is more this way". */
+export const EDGE_FADE_MASK = {
+  both: '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]',
+  end: '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]',
+  start: '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
+};
+
+export const edgeFadeMask = (clip: { start: boolean; end: boolean }): string =>
+  clip.start && clip.end ? EDGE_FADE_MASK.both : clip.end ? EDGE_FADE_MASK.end : clip.start ? EDGE_FADE_MASK.start : '';
 
 /** Element size via ResizeObserver (falls back to one measurement where unavailable, e.g. jsdom). */
 export const useElementSize = <T extends HTMLElement>(): [React.RefCallback<T>, { width: number; height: number }] => {

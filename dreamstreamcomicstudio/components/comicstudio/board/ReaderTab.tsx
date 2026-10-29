@@ -37,9 +37,11 @@ import { ImmersiveReader } from '../immersive/ImmersiveReader';
 import { LanguageSwitch, languageSwitchOptions } from '../i18n/LanguageSwitch';
 import { useReaderLanguage } from '../i18n/readerLanguage';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
+import { useFormFactor } from '../mobile/useFormFactor';
 import { ComicReaderView } from '../reader/ComicReaderView';
 import { ShareSheet } from '../share/ShareSheet';
 import { useShareCapabilities } from '../share/useShareCapabilities';
+import { RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
 import { CLEAR } from './boardModel';
 import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
 
@@ -173,6 +175,11 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const abort = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   const shareCaps = useShareCapabilities();
+  // Phone landscape (ui-findings 2026-10-29, board/read at 734×343): the board pane is ~100 px tall,
+  // so this tab's action row plus the reader's toolbar left the toolbar clipped under the pane. At a
+  // compact height the actions fold into the reader's own toolbar (one row) and the reader's browser
+  // full-screen button steps aside for "Read full screen".
+  const compactH = useFormFactor().heightClass === 'compact';
   // The studio preview offers draft editions too (marked by their percentage), always opens in the
   // comic's own language (never the browser's or a reader's stored choice) and never touches the URL.
   const L = useReaderLanguage({ doc, includeDrafts: true, persist: false, env: STUDIO_LANGUAGE_ENV });
@@ -327,79 +334,111 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
     set(ok ? { kind: 'done', tone: 'success', text: 'Link copied — anyone with it can read (never edit) this comic.' } : { kind: 'error', text: `Couldn’t copy the link. Here it is: ${shareUrl}` });
   };
 
-  return (
-    <div className="flex h-full min-h-0 flex-col" data-reader-tab>
-      {drawn && (
-        <div className="flex min-w-0 shrink-0 items-center gap-1.5 px-3 pt-2" role="toolbar" aria-label="Reader actions">
-          <PrimaryButton size="sm" onClick={() => openFullScreen(false)} aria-label="Read full screen" title="Read full screen (page turns, Guided View, your languages)">
-            <Expand className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Read full screen</span>
-          </PrimaryButton>
-          <span ref={sheetAnchor} className="inline-flex shrink-0">
-            <GhostButton size="sm" onClick={() => setSheetOpen((v) => !v)} aria-haspopup="dialog" aria-expanded={sheetOpen} aria-label="Share & export" disabled={working}>
-              <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Share &amp; export</span>
-            </GhostButton>
-          </span>
-          <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic (free)">
-            <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden /> <span className="hidden md:inline">Reader look</span>
-          </GhostButton>
-          {switchOptions.length > 1 && (
-            <LanguageSwitch className="ml-auto min-w-0 max-w-[60%]" options={switchOptions} value={L.lang} onChange={L.setLang} label="Reading language" />
-          )}
-        </div>
+  // The actions: their own row at regular heights; icon-only inside the reader's toolbar at a compact height.
+  const actions = (dense: boolean) => (
+    <>
+      <PrimaryButton size="sm" onClick={() => openFullScreen(false)} aria-label="Read full screen" title="Read full screen (page turns, Guided View, your languages)">
+        <Expand className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Read full screen</span>
+      </PrimaryButton>
+      <span ref={sheetAnchor} className="inline-flex shrink-0">
+        <GhostButton size="sm" onClick={() => setSheetOpen((v) => !v)} aria-haspopup="dialog" aria-expanded={sheetOpen} aria-label="Share & export" disabled={working}>
+          <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Share &amp; export</span>
+        </GhostButton>
+      </span>
+      <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic (free)">
+        <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden md:inline'}>Reader look</span>
+      </GhostButton>
+      {switchOptions.length > 1 && (
+        // Dense (inside the reader's one-row toolbar): a fixed share of the row, never squeezed to nothing.
+        <LanguageSwitch className={dense ? 'max-w-[9rem] shrink-0' : 'ml-auto min-w-0 max-w-[60%]'} options={switchOptions} value={L.lang} onChange={L.setLang} label="Reading language" />
       )}
-      {L.fallback.length > 0 && (
-        <p className="mx-3 mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-amber-500/[0.08] px-3 py-1.5 text-[12px] text-[var(--ds-ink)]" role="status">
-          <span className="min-w-0">
-            {L.fallback.length} {L.fallback.length === 1 ? 'line is' : 'lines are'} still shown in {languageSpec(source)?.english || source} — not translated yet.
-          </span>
-          <button
-            type="button"
-            onClick={() => studio.setTab('languages')}
-            className="tap-target rounded-lg px-1.5 font-medium text-[var(--ds-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
-          >
-            Open Languages
-          </button>
-        </p>
-      )}
-      {lookOpen && <ReaderLookPanel studio={studio} doc={doc} />}
-      {state.kind !== 'idle' && (
-        <div
-          role={state.kind === 'error' ? 'alert' : 'status'}
-          className={cx(
-            'mx-3 mt-2 flex shrink-0 items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]',
-            state.kind === 'error'
-              ? 'border-red-500/25 bg-red-500/[0.06]'
-              : state.kind === 'done' && state.tone === 'warn'
-                ? 'border-amber-500/30 bg-amber-500/[0.08]'
-                : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
-          )}
+    </>
+  );
+
+  // The draft-edition line and the export status. At a compact height (a landscape phone: a ~127 px pane
+  // with a ~57 px toolbar) one of them stacked above the reader left a 16 px page and two pushed the
+  // toolbar out of the pane — there they float over the bottom of the page area instead (the reader's
+  // `overlay`, on a solid backing so they read over the art), and the toolbar stays the first row.
+  const fallbackNotice =
+    L.fallback.length > 0 ? (
+      <p className={cx('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-amber-500/[0.08] px-3 py-1.5 text-[12px] text-[var(--ds-ink)]', !compactH && 'mx-3 mt-2')} role="status">
+        <span className="min-w-0">
+          {L.fallback.length} {L.fallback.length === 1 ? 'line is' : 'lines are'} still shown in {languageSpec(source)?.english || source} — not translated yet.
+        </span>
+        <button
+          type="button"
+          onClick={() => studio.setTab('languages')}
+          className="tap-target rounded-lg px-1.5 font-medium text-[var(--ds-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
         >
-          <div className="min-w-0 flex-1">
-            <p className="[overflow-wrap:anywhere]">{state.kind === 'working' ? state.label : state.text}</p>
-            {state.kind === 'working' && state.total ? (
-              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--ds-well-strong)]" aria-hidden>
-                <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-300 motion-reduce:transition-none" style={{ width: `${((state.done || 0) / state.total) * 100}%` }} />
-              </div>
-            ) : null}
-          </div>
-          {state.kind === 'working' && abort.current ? (
-            <GhostButton size="xs" onClick={() => abort.current?.abort()}>
-              Cancel
-            </GhostButton>
-          ) : state.kind !== 'working' ? (
-            <button
-              type="button"
-              aria-label="Dismiss"
-              onClick={() => set({ kind: 'idle' })}
-              className="tap-target grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden />
-            </button>
+          Open Languages
+        </button>
+      </p>
+    ) : null;
+  const statusNotice =
+    state.kind !== 'idle' ? (
+      <div
+        role={state.kind === 'error' ? 'alert' : 'status'}
+        className={cx(
+          'flex shrink-0 items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]',
+          !compactH && 'mx-3 mt-2',
+          state.kind === 'error'
+            ? 'border-red-500/25 bg-red-500/[0.06]'
+            : state.kind === 'done' && state.tone === 'warn'
+              ? 'border-amber-500/30 bg-amber-500/[0.08]'
+              : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
+        )}
+      >
+        <div className="min-w-0 flex-1">
+          <p className="[overflow-wrap:anywhere]">{state.kind === 'working' ? state.label : state.text}</p>
+          {state.kind === 'working' && state.total ? (
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--ds-well-strong)]" aria-hidden>
+              <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-300 motion-reduce:transition-none" style={{ width: `${((state.done || 0) / state.total) * 100}%` }} />
+            </div>
           ) : null}
         </div>
+        {state.kind === 'working' && abort.current ? (
+          <GhostButton size="xs" onClick={() => abort.current?.abort()}>
+            Cancel
+          </GhostButton>
+        ) : state.kind !== 'working' ? (
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => set({ kind: 'idle' })}
+            className="tap-target grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        ) : null}
+      </div>
+    ) : null;
+  const floated = (notice: React.ReactNode) => notice && <div className={cx('bg-[var(--ds-surface-strong)]', RADIUS_CONTROL, SHADOW_SOFT)}>{notice}</div>;
+  const overlay = compactH && (fallbackNotice || statusNotice) ? (
+    <>
+      {floated(fallbackNotice)}
+      {floated(statusNotice)}
+    </>
+  ) : undefined;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-reader-tab>
+      {drawn && !compactH && (
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 px-3 pt-2" role="toolbar" aria-label="Reader actions">
+          {actions(false)}
+        </div>
       )}
+      {!compactH && fallbackNotice}
+      {lookOpen && <ReaderLookPanel studio={studio} doc={doc} />}
+      {!compactH && statusNotice}
       <div className="min-h-0 flex-1">
-        <ComicReaderView doc={localized} urlFor={studio.urlFor} autoFocus={false} />
+        <ComicReaderView
+          doc={localized}
+          urlFor={studio.urlFor}
+          autoFocus={false}
+          toolbarExtra={drawn && compactH ? actions(true) : undefined}
+          fullscreenControl={!compactH}
+          overlay={overlay}
+        />
       </div>
 
       <AdaptiveSheet
