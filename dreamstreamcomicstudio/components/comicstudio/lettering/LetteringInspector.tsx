@@ -85,7 +85,7 @@ const WARN_ROW = `flex items-center gap-2 border ${RADIUS_CONTROL} ${TONE_SURFAC
  */
 export const CROWDED_COPY: Record<CrowdedReason, string> = {
   overlap: 'Crowded panel — this balloon overlaps another.',
-  order: 'This page has more words than room: this balloon only fits in an earlier panel, so it is read too soon.',
+  order: 'This panel has more words than room, so this balloon is read out of order. Shorten the text, or give the panel more room.',
   outside: 'No room in its panel — the editor moved it beside the panel so nothing overlaps.',
   moved: 'No room where it was — the editor moved it so nothing overlaps.'
 };

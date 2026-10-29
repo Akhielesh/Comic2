@@ -10,7 +10,7 @@ import type { DocOp } from '../../../shared/comic/ops';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout';
 import { letteringSizer, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
-import { placeBalloonsDetailed, safeAreaBox } from '../../../shared/comic/lettering/place';
+import { placeBalloonsWholeWords, safeAreaBox } from '../../../shared/comic/lettering/place';
 import {
   DEFAULT_LETTERING,
   DEFAULT_SAFE_MARGIN,
@@ -408,7 +408,7 @@ export function fixSafeAreaOps(doc: ComicDoc, page: Page, plans: readonly Letter
 export function tidyOps(doc: ComicDoc, page: Page, aspect: number, measure: Measure): DocOp[] {
   const ls = doc.letterStyle ?? DEFAULT_LETTERING;
   const qc = page.render?.qc;
-  const result = placeBalloonsDetailed({
+  const result = placeBalloonsWholeWords({
     page,
     boxes: panelBoxesFor(doc, page),
     aspect,
@@ -587,7 +587,7 @@ export const textEditOps = (page: Page, lineId: string, text: string): DocOp[] =
 export function resetPositionOps(doc: ComicDoc, page: Page, lineIds: readonly string[], aspect: number, measure: Measure): DocOp[] {
   const ls = doc.letterStyle ?? DEFAULT_LETTERING;
   const qc = page.render?.qc;
-  const result = placeBalloonsDetailed({
+  const result = placeBalloonsWholeWords({
     page,
     boxes: panelBoxesFor(doc, page),
     aspect,
