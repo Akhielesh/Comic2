@@ -102,7 +102,7 @@ The semantic tokens Atlas has that Comic Studio lacked were added to `:root` / `
 | `--ds-overlay-edge` (wave 5) | overlays' `border-border/80`, dark `border-white/[0.14]` | `rgba(0,0,0,0.08)` | `rgba(255,255,255,0.14)` |
 | `--ds-scrim` (wave 5) | modal overlay `bg-black/40 dark:bg-black/60`, no blur | `rgba(0,0,0,0.40)` | `rgba(0,0,0,0.60)` |
 | `--ds-danger-mark` (wave 5) | `bg-destructive dark:bg-destructive-foreground` (dots, status edges) | `var(--ds-danger)` | `oklch(0.637 0.237 25.331)` |
-| `--ds-skeleton` / `-glint` (wave 5) | `.atlas-skeleton`, `.dark .atlas-skeleton` | `#f4f4f4` / canvas at 55 % | ink at 9 % / 7 % |
+| `--ds-skeleton` / `-glint` (wave 5) | `.atlas-skeleton`, `.dark .atlas-skeleton` | ink at 4.5 % (= `--muted` `#f4f4f4` on white, but translucent: `.studio-shimmer` overlays a queued page's wireframe) / canvas at 55 % | ink at 9 % / 7 % |
 | `--ds-segment-pill` (wave 5) | PanelTabs pill `bg-background dark:bg-accent` | `#ffffff` | `#1f1f1f` |
 
 Under the OS **increase contrast** setting (`@media (prefers-contrast: more)`, wave 5) the skin applies

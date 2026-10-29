@@ -266,8 +266,13 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
     expect(ATLAS_DARK.get('--ds-danger-mark')).toBe('oklch(0.637 0.237 25.331)');
   });
 
-  it('skeletons: the muted block with a page-colour glint in light, lifted with ink in dark', () => {
-    expect(ATLAS_LIGHT.get('--ds-skeleton')).toBe('#f4f4f4');
+  it('skeletons: the muted block with a page-colour glint in light, lifted with ink in dark — translucent in both', () => {
+    // .studio-shimmer is an absolute overlay over a page's plan wireframe (a queued page card), so the
+    // block must be translucent: ink at 4.5 % paints Atlas's --muted (#f4f4f4) over the white card
+    // without hiding what is under it (an opaque #f4f4f4 blanked the queued page's shot list).
+    expect(ATLAS_LIGHT.get('--ds-skeleton')).toBe('color-mix(in srgb, var(--ds-ink) 4.5%, transparent)');
+    const overWhite = Math.round(255 * (1 - 0.045) + 10 * 0.045);
+    expect(overWhite).toBe(0xf4);
     expect(ATLAS_LIGHT.get('--ds-skeleton-glint')).toBe('color-mix(in srgb, var(--ds-canvas) 55%, transparent)');
     expect(ATLAS_DARK.get('--ds-skeleton')).toBe('color-mix(in srgb, var(--ds-ink) 9%, transparent)');
     expect(ATLAS_DARK.get('--ds-skeleton-glint')).toBe('color-mix(in srgb, var(--ds-ink) 7%, transparent)');

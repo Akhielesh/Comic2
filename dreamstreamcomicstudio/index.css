@@ -845,7 +845,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-shadow-overlay: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
   --ds-scrim: rgba(0,0,0,0.40);
   --ds-danger-mark: var(--ds-danger);
-  --ds-skeleton: #f4f4f4;                                              /* --muted */
+  --ds-skeleton: color-mix(in srgb, var(--ds-ink) 4.5%, transparent); /* = --muted #f4f4f4 over the white card, but translucent: .studio-shimmer overlays content */
   --ds-skeleton-glint: color-mix(in srgb, var(--ds-canvas) 55%, transparent);
   --ds-segment-pill: #ffffff;                                          /* PanelTabs pill: bg-background */
   --ds-shadow-segment: 0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.06);
