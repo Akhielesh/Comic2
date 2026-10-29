@@ -273,6 +273,11 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
         setError(outcome.error || SWITCH_FAILED);
         return;
       }
+      // The server answered in the conversation: either the switch (the current model and every price-vs-current
+      // change) or its re-quote ("The redraw price changed… review the new price", a blocked answer that still ends
+      // the stream ok). Either way the cached rows are out of date, so its "Review the new price" chip must not
+      // reopen the picker on the prices the server just refused. One catalog read per confirmed switch, no timer.
+      onPricesStale?.();
       onDone();
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : SWITCH_FAILED);

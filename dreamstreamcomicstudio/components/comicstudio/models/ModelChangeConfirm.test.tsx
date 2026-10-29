@@ -130,6 +130,19 @@ describe('C — after the lock', () => {
     expect(onPricesStale).toHaveBeenCalledTimes(1);
   });
 
+  it('a server answer refreshes the cached prices: its re-quote arrives in the conversation (the stream still ends ok), and a switch changes the current model', async () => {
+    // M1-LOCK-SERVER answers a drifted quote with status 'blocked' / CONFLICT, a message and a "Review the new price"
+    // chip (open_model_picker), not with a stream error, so the confirm sees ok: without a refresh that chip reopened
+    // the picker on the same refused prices for up to CATALOG_FRESH_MS.
+    const { act: send, onDone, onPricesStale } = open();
+    fireEvent.click(radio(/Redraw the pages and cover/));
+    await act(async () => fireEvent.click(primary()));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onPricesStale).toHaveBeenCalledTimes(1);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onPricesStale.mock.invocationCallOrder[0]).toBeLessThan(onDone.mock.invocationCallOrder[0]);
+  });
+
   it('a stopped switch is not a success: the dialog stays open and says it may not have gone through', async () => {
     const stopped: StudioActOutcome = { ok: false, aborted: true, retryable: true, gated: false };
     const { act: send, onDone, onPricesStale, dialog } = open();
