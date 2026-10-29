@@ -15,85 +15,15 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { ATLAS_PRELOAD_FONTS, DS_COLOR_TOKENS } from '../../services/dsSkin';
+import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, tokenBlocks } from './cssTokens';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const css = readFileSync(path.join(ROOT, 'index.css'), 'utf8');
-
-// ── A small rule parser: every `selector { declarations }` at any nesting depth ───────────────
-interface Rule {
-  selector: string;
-  body: string;
-  /** The enclosing at-rules, outermost first (e.g. ['@media (prefers-reduced-motion: no-preference)']). */
-  parents: string[];
-}
-const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '');
-const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
-
-function parseRules(source: string): Rule[] {
-  const text = stripComments(source);
-  const rules: Rule[] = [];
-  const stack: string[] = [];
-  let i = 0;
-  let pending = '';
-  while (i < text.length) {
-    const ch = text[i];
-    if (ch === '{') {
-      const selector = norm(pending);
-      pending = '';
-      // Find the matching brace; if the body has nested blocks it is an at-rule / nesting container.
-      let depth = 1;
-      let j = i + 1;
-      while (j < text.length && depth > 0) {
-        if (text[j] === '{') depth += 1;
-        else if (text[j] === '}') depth -= 1;
-        j += 1;
-      }
-      const body = text.slice(i + 1, j - 1);
-      if (body.includes('{')) {
-        stack.push(selector);
-        i += 1; // descend
-        continue;
-      }
-      rules.push({ selector, body: body.trim(), parents: [...stack] });
-      i = j;
-      continue;
-    }
-    if (ch === '}') {
-      stack.pop();
-      pending = '';
-      i += 1;
-      continue;
-    }
-    pending += ch;
-    i += 1;
-  }
-  return rules;
-}
-
+const ROOT = APP_ROOT;
+const css = indexCss;
 const rules = parseRules(css);
-
-/** Merge the custom-property declarations of every rule whose selector matches. */
-function tokensOf(match: (selector: string) => boolean): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const r of rules) {
-    if (!match(r.selector)) continue;
-    for (const decl of r.body.split(';')) {
-      const m = /^\s*(--[\w-]+)\s*:\s*([\s\S]+?)\s*$/.exec(decl);
-      if (m) out.set(m[1], norm(m[2]));
-    }
-  }
-  return out;
-}
-const dsOnly = (m: Map<string, string>) => new Map([...m].filter(([k]) => k.startsWith('--ds-')));
-
-const ROOT_TOKENS = dsOnly(tokensOf((s) => s === ':root'));
-const DARK_TOKENS = dsOnly(tokensOf((s) => s === '.dark'));
-const ATLAS_LIGHT = dsOnly(tokensOf((s) => s === '[data-ds-skin="atlas"]'));
-const ATLAS_DARK = dsOnly(tokensOf((s) => s.startsWith('.dark[data-ds-skin="atlas"]') && s.includes('.dark [data-ds-skin="atlas"]')));
+const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(rules);
 const isReader = (name: string) => name.startsWith('--ds-reader-');
 /** The semantic tokens Phase D0 added (brief item 1); everything else in :root pre-dates the skin. */
 const NEW_TOKENS = [
@@ -105,28 +35,8 @@ const NEW_TOKENS = [
   '--ds-motion-fast', '--ds-motion-medium', '--ds-motion-slow', '--ds-motion-panel', '--ds-motion-modal', '--ds-motion-theme',
   '--ds-ease', '--ds-ease-spring', '--ds-tooltip-delay', '--ds-surface-blur'
 ];
-
-// ── WCAG contrast (sRGB relative luminance) ───────────────────────────────────────────────────
-type Rgb = [number, number, number];
-function parseColor(v: string): Rgb {
-  const hex = /^#([0-9a-f]{6})$/i.exec(v);
-  if (hex) return [parseInt(hex[1].slice(0, 2), 16), parseInt(hex[1].slice(2, 4), 16), parseInt(hex[1].slice(4, 6), 16)];
-  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*1(?:\.0*)?\s*)?\)$/.exec(v);
-  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
-  throw new Error(`contrast check needs an opaque hex/rgb colour, got "${v}"`);
-}
-const lum = ([r, g, b]: Rgb) => {
-  const f = (c: number) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
-};
-export const contrastRatio = (fg: string, bg: string): number => {
-  const a = lum(parseColor(fg));
-  const b = lum(parseColor(bg));
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-};
+// The WCAG helper lives in cssTokens.ts (shared with tokenContrast.test.ts); re-exported for old importers.
+export { contrastRatio };
 
 describe('Atlas skin — (a) every token has a skin override, with the Atlas values', () => {
   it('parses the four token blocks', () => {

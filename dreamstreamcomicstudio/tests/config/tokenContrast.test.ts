@@ -21,67 +21,26 @@
  * stay in atlasSkin.test.ts; this file adds the rest of the surfaces and the accent/status tokens.)
  */
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { escapeClass, listSourceFiles } from '../../scripts/design/atlas-skin-shim.mjs';
+import {
+  APP_ROOT as ROOT,
+  type Rgba,
+  indexCss as css,
+  luminance,
+  oklchToRgb,
+  over,
+  parseRules,
+  ratio,
+  resolveColor,
+  tokenBlocks,
+  topLevelSplit,
+  withAlpha
+} from './cssTokens';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const css = readFileSync(path.join(ROOT, 'index.css'), 'utf8');
-
-// ── index.css: rules and token blocks ──────────────────────────────────────────────────────────
-const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
-interface Rule {
-  selector: string;
-  body: string;
-}
-function parseRules(source: string): Rule[] {
-  const text = source.replace(/\/\*[\s\S]*?\*\//g, '');
-  const out: Rule[] = [];
-  let pending = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '{') {
-      let depth = 1;
-      let j = i + 1;
-      while (j < text.length && depth > 0) {
-        if (text[j] === '{') depth += 1;
-        else if (text[j] === '}') depth -= 1;
-        j += 1;
-      }
-      const body = text.slice(i + 1, j - 1);
-      if (body.includes('{')) {
-        // An at-rule container: descend into it.
-        pending = '';
-        continue;
-      }
-      out.push({ selector: norm(pending), body: body.trim() });
-      pending = '';
-      i = j - 1;
-    } else if (ch === '}') pending = '';
-    else pending += ch;
-  }
-  return out;
-}
 const rules = parseRules(css);
-
-type Tokens = Map<string, string>;
-function tokensOf(match: (selector: string) => boolean): Tokens {
-  const out: Tokens = new Map();
-  for (const r of rules) {
-    if (!match(r.selector)) continue;
-    for (const decl of r.body.split(';')) {
-      const m = /^\s*(--ds-[\w-]+)\s*:\s*([\s\S]+?)\s*$/.exec(decl);
-      if (m) out.set(m[1], norm(m[2]));
-    }
-  }
-  return out;
-}
-const ROOT_TOKENS = tokensOf((s) => s === ':root');
-const DARK_TOKENS = tokensOf((s) => s === '.dark');
-const ATLAS_LIGHT = tokensOf((s) => s === '[data-ds-skin="atlas"]');
-const ATLAS_DARK = tokensOf((s) => s === '.dark[data-ds-skin="atlas"], .dark [data-ds-skin="atlas"]');
+const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(rules);
 
 /**
  * The cascade an element sees, highest priority first. Atlas dark: the `.dark[data-ds-skin]` block
@@ -96,112 +55,17 @@ const CONTEXTS = {
 type ContextName = keyof typeof CONTEXTS;
 const isAtlas = (c: ContextName) => c.startsWith('atlas');
 
-// ── Colour: hex / rgb[a] / oklch / color-mix(in srgb) / var(), alpha compositing, WCAG ratio ────
-interface Rgba {
-  r: number;
-  g: number;
-  b: number;
-  a: number;
-}
-const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
-
-function oklchToRgb(l: number, c: number, hDeg: number): Rgba {
-  const h = (hDeg * Math.PI) / 180;
-  const A = c * Math.cos(h);
-  const B = c * Math.sin(h);
-  const l_ = l + 0.3963377774 * A + 0.2158037573 * B;
-  const m_ = l - 0.1055613458 * A - 0.0638541728 * B;
-  const s_ = l - 0.0894841775 * A - 1.291485548 * B;
-  const [L, M, S] = [l_ ** 3, m_ ** 3, s_ ** 3];
-  const lin = [
-    4.0767416621 * L - 3.3077115913 * M + 0.2309699292 * S,
-    -1.2684380046 * L + 2.6097574011 * M - 0.3413193965 * S,
-    -0.0041960863 * L - 0.7034186147 * M + 1.707614701 * S
-  ];
-  const gam = (v: number) => clamp01(v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055) * 255;
-  return { r: gam(lin[0]), g: gam(lin[1]), b: gam(lin[2]), a: 1 };
-}
-
-/** Split a function's arguments on top-level commas. */
-function args(inner: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let cur = '';
-  for (const ch of inner) {
-    if (ch === '(') depth += 1;
-    if (ch === ')') depth -= 1;
-    if (ch === ',' && depth === 0) {
-      out.push(cur.trim());
-      cur = '';
-    } else cur += ch;
-  }
-  out.push(cur.trim());
-  return out;
-}
-
-/** Resolve a token's value to a colour in one context (var() follows the same cascade). */
-function resolve(value: string, ctx: ContextName, seen: string[] = []): Rgba {
-  const v = value.trim();
-  const ref = /^var\(\s*(--[\w-]+)\s*\)$/.exec(v);
-  if (ref) return resolve(lookup(ref[1], ctx, seen), ctx, [...seen, ref[1]]);
-  if (v === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v);
-  if (hex) {
-    const h = hex[1].length === 3 ? [...hex[1]].map((c) => c + c).join('') : hex[1];
-    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: 1 };
-  }
-  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v);
-  if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: rgb[4] === undefined ? 1 : +rgb[4] };
-  const ok = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(v);
-  if (ok) return oklchToRgb(+ok[1], +ok[2], +ok[3]);
-  const mix = /^color-mix\(\s*in srgb\s*,([\s\S]+)\)$/.exec(v);
-  if (mix) {
-    const [first, second] = args(mix[1]);
-    const pa = /^([\s\S]+?)\s+([\d.]+)%$/.exec(first);
-    const pb = /^([\s\S]+?)\s+([\d.]+)%$/.exec(second);
-    const ca = resolve(pa ? pa[1] : first, ctx, seen);
-    const cb = resolve(pb ? pb[1] : second, ctx, seen);
-    const wa = pa ? +pa[2] / 100 : pb ? 1 - +pb[2] / 100 : 0.5;
-    const wb = 1 - wa;
-    // CSS color-mix interpolates premultiplied components.
-    const a = ca.a * wa + cb.a * wb;
-    if (a === 0) return { r: 0, g: 0, b: 0, a: 0 };
-    const ch = (k: 'r' | 'g' | 'b') => (ca[k] * ca.a * wa + cb[k] * cb.a * wb) / a;
-    return { r: ch('r'), g: ch('g'), b: ch('b'), a };
-  }
-  throw new Error(`tokenContrast: cannot parse the colour "${v}" (${seen.join(' → ') || 'literal'} in ${ctx})`);
-}
-function lookup(name: string, ctx: ContextName, seen: string[] = []): string {
-  if (seen.includes(name)) throw new Error(`tokenContrast: var() cycle ${[...seen, name].join(' → ')}`);
+function lookup(name: string, ctx: ContextName): string {
   for (const block of CONTEXTS[ctx]) {
     const v = block.get(name);
     if (v !== undefined) return v;
   }
   throw new Error(`tokenContrast: ${name} is not defined for ${ctx}`);
 }
-const token = (name: string, ctx: ContextName) => resolve(lookup(name, ctx), ctx, [name]);
-const hexColor = (hex: string): Rgba => resolve(hex, 'default light');
-
-/** Paint `top` over an opaque `under`. */
-const over = (top: Rgba, under: Rgba): Rgba => ({
-  r: top.r * top.a + under.r * (1 - top.a),
-  g: top.g * top.a + under.g * (1 - top.a),
-  b: top.b * top.a + under.b * (1 - top.a),
-  a: 1
-});
-const withAlpha = (c: Rgba, a: number): Rgba => ({ ...c, a: c.a * a });
-const luminance = ({ r, g, b }: Rgba) => {
-  const f = (c: number) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
-};
-const ratio = (fg: Rgba, bg: Rgba) => {
-  const a = luminance(fg);
-  const b = luminance(bg);
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-};
+/** Resolve a value (var() follows the context's cascade). */
+const resolve = (value: string, ctx: ContextName) => resolveColor(value, (n) => lookup(n, ctx));
+const token = (name: string, ctx: ContextName) => resolveColor(lookup(name, ctx), (n) => lookup(n, ctx), [name]);
+const hexColor = (hex: string): Rgba => resolveColor(hex);
 
 // ── The surfaces each text token is used on ────────────────────────────────────────────────────
 const BRAND = '#D97757';
@@ -257,6 +121,13 @@ function statusSurfaces(ctx: ContextName, tone: (typeof TONES)[number]): Map<str
   return s;
 }
 
+/**
+ * Atlas ink / muted on the skin's four base surfaces are asserted by atlasSkin.test.ts (c) (the skin's
+ * own definition); this matrix adds every other surface and context rather than repeating them. The
+ * skin's surfaces are opaque, so `surface/canvas` IS --ds-surface there.
+ */
+const ATLAS_BASE_PAIRS_ELSEWHERE = new Set(['canvas', 'surface/canvas', 'surface-soft/canvas', 'well on canvas']);
+
 interface Pair {
   ctx: ContextName;
   fg: string;
@@ -268,7 +139,10 @@ function pairs(): Pair[] {
   const out: Pair[] = [];
   for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
     for (const fg of ['--ds-ink', '--ds-muted']) {
-      for (const [bg, c] of surfaces(ctx)) out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), c), min: 4.5 });
+      for (const [bg, c] of surfaces(ctx)) {
+        if (isAtlas(ctx) && ATLAS_BASE_PAIRS_ELSEWHERE.has(bg)) continue;
+        out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), c), min: 4.5 });
+      }
     }
     for (const [bg, c] of accentTextSurfaces(ctx)) out.push({ ctx, fg: '--ds-accent-text', bg, ratio: ratio(token('--ds-accent-text', ctx), c), min: 4.5 });
     for (const fill of ['--ds-accent-fill', '--ds-accent-fill-hover']) {
@@ -374,30 +248,8 @@ const SOURCE = listSourceFiles(ROOT)
   .join('\n');
 const classTokens = (re: RegExp) => [...new Set([...SOURCE.matchAll(re)].map((m) => m[0]))].sort();
 
-/** A selector list split on its top-level commas (not inside `:is(…)`, not an escaped `\\,`). */
-function selectorList(selector: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let cur = '';
-  for (let i = 0; i < selector.length; i++) {
-    const ch = selector[i];
-    if (ch === '\\') {
-      cur += ch + (selector[i + 1] ?? '');
-      i += 1;
-      continue;
-    }
-    if (ch === '(') depth += 1;
-    if (ch === ')') depth -= 1;
-    if (ch === ',' && depth === 0) {
-      out.push(cur.trim());
-      cur = '';
-    } else cur += ch;
-  }
-  out.push(cur.trim());
-  return out;
-}
 /** Every rule body whose selector list contains `sel` (exact selector item). */
-const bodiesFor = (sel: string) => rules.filter((r) => selectorList(r.selector).includes(sel)).map((r) => r.body);
+const bodiesFor = (sel: string) => rules.filter((r) => topLevelSplit(r.selector).includes(sel)).map((r) => r.body);
 
 /**
  * The remap rule's selector for a `[variants:]utility` class token (the variants the tree uses).
