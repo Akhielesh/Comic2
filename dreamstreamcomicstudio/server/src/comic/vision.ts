@@ -462,6 +462,8 @@ export const offPanelSpeakerIds = (panel: Pick<Panel, 'lines' | 'shot' | 'castId
 
 /** Stored per report at most (a runaway reply can't bloat the doc). */
 export const MAX_MISSING_SPEAKERS = 16;
+/** Character notes and issues read for missing speakers, at most (a reply is ≤ 14 issues in practice). */
+const MAX_NOTES_READ = 60;
 /** Extra output tokens per panel for its beat and crosses answers (plan §4.3, inside the same QC call). */
 export const PANEL_CHECK_TOKENS = 20;
 
@@ -504,7 +506,8 @@ export const readMissingSpeakers = (
   const found = new Map<string, MissingSpeaker>();
   const excused: string[] = [];
   const located = new Set(heads.filter((h) => h.characterId).map((h) => `${h.panel}:${h.characterId}`));
-  for (const note of notes) {
+  // Bounded: a runaway reply can't make us scan thousands of notes against the cast.
+  for (const note of notes.slice(0, MAX_NOTES_READ)) {
     if (!MISSING_RE.test(note)) continue;
     const panelN = Number(PANEL_RE.exec(note)?.[1]);
     const panel = page.panels.find((p) => p.n === panelN);
