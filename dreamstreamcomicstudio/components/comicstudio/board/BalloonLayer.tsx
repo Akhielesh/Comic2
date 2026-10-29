@@ -371,7 +371,15 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const ops = changes.map((c) => ({ op: 'balloon', pageId: page.id, lineId: c.id, patch: fullPatch(c.id, c.patch) }) as DocOp);
     const keep = keepSizeOps(changes.map((c) => c.id));
     if (onOps && (changes.length > 1 || keep.length || !onBalloonChange)) {
-      onOps([...ops, ...keep], { label, coalesce: `${gesture}:${editionLang ?? 'src'}:${page.id}:${changes.map((c) => c.id).join(',')}` });
+      // One balloon: the same coalesce key the single-change path gets from the page editor, so a run of
+      // nudges stays one undo entry even when only its first step also kept a dense balloon's size.
+      const coalesce =
+        changes.length === 1
+          ? editionLang
+            ? `edition_balloon:${gesture}:${editionLang}:${page.id}:${changes[0].id}`
+            : `balloon:${gesture}:${page.id}:${changes[0].id}`
+          : `${gesture}:${editionLang ?? 'src'}:${page.id}:${changes.map((c) => c.id).join(',')}`;
+      onOps([...ops, ...keep], { label, coalesce });
       return;
     }
     if (!onBalloonChange) return;
@@ -930,6 +938,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           scale={zs}
           pageWidth={pageWidth}
           pageHeight={pageHeight}
+          otherOutlines={plans.filter((p) => p.lineId !== primaryPlan.lineId).map((p) => outlineFractions(p, H))}
           onDrag={(e, mode) => beginDrag(e, primaryPlan, mode)}
           onKey={(e, mode) => onHandleKey(e, primaryPlan, mode)}
         />
@@ -1026,11 +1035,13 @@ export const balloonHitRect = (outline: Box, page: { w: number; h: number }, hit
  * proxies — drags are relative — so they may be nudged:
  *  - each handle's centre stays on the page (its 44 px area may reach 22 px past the edge: the editor
  *    stage keeps 24 px around the page on touch, so nothing clips it);
- *  - on touch (`avoid` = the selected balloon's own 44 px target) neither handle's area overlaps the
- *    balloon's: the dot moves out along the tail's direction (else to the nearest clear side), the grip
- *    just past the balloon's right side — a finger on the balloon moves it, a finger on a handle aims or
- *    resizes, and no probe of one lands on the other;
- *  - the grip slides up or down when the tail dot would sit on it, so the two never steal each other's taps.
+ *  - on touch (`avoid` = the selected balloon's own 44 px target, `others` = every other balloon's)
+ *    neither handle's area overlaps a balloon's target or the other handle: the dot starts out along the
+ *    tail's direction, the grip just past the balloon's right side, and each takes the nearest clear
+ *    spot — a finger on a balloon moves it, a finger on a handle aims or resizes, and no 44 px probe of
+ *    one lands on another;
+ *  - with a mouse (no `avoid`) the dot sits on the tip and the grip on the right edge, and the grip only
+ *    slides up or down when the dot would sit on it.
  * Pure; tested.
  */
 export const handlePositions = (
@@ -1040,69 +1051,79 @@ export const handlePositions = (
   page: { w: number; h: number },
   scale: number,
   hitPx = HIT_PX,
-  avoid: Box | null = null
+  avoid: Box | null = null,
+  others: readonly Box[] = []
 ): { dot: { x: number; y: number } | null; grip: { x: number; y: number } } => {
   const hit = hitPx / Math.max(scale, 1e-6);
   const half = hit / 2;
   const w = page.w > 0 ? page.w : 1;
   const h = page.h > 0 ? page.h : 1;
-  const keep = (p: { x: number; y: number }) => ({ x: clamp(p.x, 0, w), y: clamp(p.y, 0, h) });
   type P = { x: number; y: number };
+  const keep = (p: P): P => ({ x: clamp(p.x, 0, w), y: clamp(p.y, 0, h) });
   const sq = (p: P): Box => ({ x: p.x - half, y: p.y - half, w: hit, h: hit });
   const hits = (a: Box, b: Box) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 0.5 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0.5;
-  const clearOf = (p: P, others: Box[]) => others.every((o) => !hits(sq(p), o));
+  const clearOf = (p: P, blockers: readonly Box[]) => blockers.every((o) => !hits(sq(p), o));
   const dist = (a: P, b: P) => Math.hypot(a.x - b.x, a.y - b.y);
+  /** The clear spot (on the page) nearest `want`: a lattice of quarter-target steps out to 3 targets away. */
+  const nearestClear = (want: P, blockers: readonly Box[]): P | null => {
+    const start = keep(want);
+    if (clearOf(start, blockers)) return start;
+    const step = hit / 4;
+    let best: P | null = null;
+    for (let j = -12; j <= 12; j += 1)
+      for (let i = -12; i <= 12; i += 1) {
+        const c = keep({ x: want.x + i * step, y: want.y + j * step });
+        if ((best && dist(c, want) >= dist(best, want)) || !clearOf(c, blockers)) continue;
+        best = c;
+      }
+    return best;
+  };
   const right = ((plan.x + plan.w) / 1000) * w + 2 / Math.max(scale, 1e-6);
   const top = (plan.y / H) * h;
   const bottom = ((plan.y + plan.h) / H) * h;
   const midY = (top + bottom) / 2;
 
-  let dot: P | null = tip ? keep({ x: tip.x * w, y: tip.y * h }) : null;
-  if (dot && avoid && !clearOf(dot, [avoid])) {
-    const at = dot;
-    const cx = avoid.x + avoid.w / 2;
-    const cy = avoid.y + avoid.h / 2;
-    let dx = at.x - cx;
-    let dy = at.y - cy;
-    if (Math.hypot(dx, dy) < 1e-6) dy = 1;
-    const len = Math.hypot(dx, dy);
-    dx /= len;
-    dy /= len;
-    // Out along the tail's direction until the dot's square clears the balloon's target.
-    const ts = [
-      dx > 1e-6 ? (avoid.x + avoid.w + half - at.x) / dx : Infinity,
-      dx < -1e-6 ? (avoid.x - half - at.x) / dx : Infinity,
-      dy > 1e-6 ? (avoid.y + avoid.h + half - at.y) / dy : Infinity,
-      dy < -1e-6 ? (avoid.y - half - at.y) / dy : Infinity
-    ].filter((t) => t >= 0);
-    const t = Math.min(...ts);
-    const cands: P[] = [];
-    if (Number.isFinite(t)) cands.push(keep({ x: at.x + dx * (t + 1), y: at.y + dy * (t + 1) }));
-    cands.push(
-      keep({ x: at.x, y: avoid.y + avoid.h + half + 1 }),
-      keep({ x: at.x, y: avoid.y - half - 1 }),
-      keep({ x: avoid.x + avoid.w + half + 1, y: at.y }),
-      keep({ x: avoid.x - half - 1, y: at.y })
-    );
-    const ok = cands.filter((c) => clearOf(c, [avoid]));
-    dot = ok.length ? ok.reduce((a, b) => (dist(b, at) < dist(a, at) ? b : a)) : cands[0];
-  }
-
-  const blockers = (): Box[] => [...(avoid ? [avoid] : []), ...(dot ? [sq(dot)] : [])];
-  const gx = avoid ? Math.max(right, avoid.x + avoid.w + half + 1) : right;
-  let grip = keep({ x: gx, y: midY });
-  if (!clearOf(grip, blockers())) {
-    // Up or down the balloon's right side, away from the dot first; the first clear spot wins.
-    const away = dot && dot.y > midY ? -1 : 1;
-    const ys = [top, bottom, midY + away * hit, midY - away * hit, midY + away * 2 * hit, midY - away * 2 * hit];
-    const cands = ys.map((y) => keep({ x: gx, y }));
-    const ok = cands.find((c) => clearOf(c, blockers()));
-    if (ok) grip = ok;
-    else if (dot) {
-      const far = cands.reduce((a, b) => (dist(b, dot!) > dist(a, dot!) ? b : a));
+  if (!avoid) {
+    // Mouse / pen: precise pointers keep the handles where they belong.
+    const dot = tip ? keep({ x: tip.x * w, y: tip.y * h }) : null;
+    let grip = keep({ x: right, y: midY });
+    if (dot && dist(grip, dot) < hit) {
+      const ends = [keep({ x: right, y: top }), keep({ x: right, y: bottom })];
+      const far = ends.reduce((a, b) => (dist(b, dot) > dist(a, dot) ? b : a));
       if (dist(far, dot) > dist(grip, dot)) grip = far;
     }
+    return { dot, grip };
   }
+
+  const targets = [avoid, ...others];
+  let dot: P | null = null;
+  if (tip) {
+    const at = { x: tip.x * w, y: tip.y * h };
+    // Out along the tail's direction until the dot's square clears the balloon's own target.
+    let want = at;
+    if (!clearOf(at, [avoid])) {
+      const cx = avoid.x + avoid.w / 2;
+      const cy = avoid.y + avoid.h / 2;
+      let dx = at.x - cx;
+      let dy = at.y - cy;
+      if (Math.hypot(dx, dy) < 1e-6) dy = 1;
+      const len = Math.hypot(dx, dy);
+      dx /= len;
+      dy /= len;
+      const ts = [
+        dx > 1e-6 ? (avoid.x + avoid.w + half - at.x) / dx : Infinity,
+        dx < -1e-6 ? (avoid.x - half - at.x) / dx : Infinity,
+        dy > 1e-6 ? (avoid.y + avoid.h + half - at.y) / dy : Infinity,
+        dy < -1e-6 ? (avoid.y - half - at.y) / dy : Infinity
+      ].filter((t) => t >= 0);
+      const t = Math.min(...ts);
+      if (Number.isFinite(t)) want = { x: at.x + dx * (t + 1), y: at.y + dy * (t + 1) };
+    }
+    dot = nearestClear(want, targets) ?? nearestClear(want, [avoid]) ?? keep(want);
+  }
+  const gripWant = { x: Math.max(right, avoid.x + avoid.w + half + 1), y: midY };
+  const gripBlockers = dot ? [...targets, sq(dot)] : targets;
+  const grip = nearestClear(gripWant, gripBlockers) ?? nearestClear(gripWant, dot ? [avoid, sq(dot)] : [avoid]) ?? keep(gripWant);
   return { dot, grip };
 };
 
@@ -1116,17 +1137,21 @@ const Handles: React.FC<{
   /** Layer size in px at zoom 1 (the page box). */
   pageWidth: number;
   pageHeight: number;
+  /** The other balloons' outlines (page fractions): touch handles keep off their targets. */
+  otherOutlines: readonly Box[];
   onDrag: (e: React.PointerEvent, mode: DragMode) => void;
   onKey: (e: React.KeyboardEvent, mode: 'tail' | 'width') => void;
-}> = ({ plan, H, tip, coarse, scale, pageWidth, pageHeight, onDrag, onKey }) => {
+}> = ({ plan, H, tip, coarse, scale, pageWidth, pageHeight, otherOutlines, onDrag, onKey }) => {
   const dot = (coarse ? 20 : 14) / scale;
   const grip = { w: (coarse ? 10 : 8) / scale, h: (coarse ? 32 : 24) / scale };
   const hit = HIT_PX / scale;
   const pw = pageWidth > 0 ? pageWidth : 1;
   const ph = pageHeight > 0 ? pageHeight : pw / (1000 / H);
-  // Touch: the handles keep clear of the selected balloon's own 44 px target (a mouse is precise).
+  // Touch: the handles keep clear of the selected balloon's own 44 px target and of every other
+  // balloon's (a mouse is precise).
   const avoid = coarse ? balloonHitRect(outlineFractions(plan, H), { w: pw, h: ph }, hit) : null;
-  const pos = handlePositions(plan, H, tip, { w: pw, h: ph }, scale, HIT_PX, avoid);
+  const others = coarse ? otherOutlines.map((o) => balloonHitRect(o, { w: pw, h: ph }, hit)) : [];
+  const pos = handlePositions(plan, H, tip, { w: pw, h: ph }, scale, HIT_PX, avoid, others);
   return (
     <>
       {tip && pos.dot && (

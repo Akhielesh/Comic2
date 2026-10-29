@@ -136,6 +136,21 @@ export const fitPageToStage = (stage: { w: number; h: number }, aspect: number, 
   return Math.floor(Math.min(w, h * aspect));
 };
 
+/** Phones shorter than this open the editor with the page tools sheet closed (the Tools button opens it). */
+export const PHONE_SHEET_OPEN_MIN_H = 780;
+
+/**
+ * Is the page tools sheet open when the editor opens? The user's last choice on this device wins. With
+ * none, a phone shorter than PHONE_SHEET_OPEN_MIN_H starts with it closed: under the sheet's peek detent a
+ * 660 px phone kept an ~85 px page whose balloons were too small to read or tap. Tablets and taller phones
+ * start with it open, as before.
+ */
+export const toolsSheetOpenAtStart = (flag: string | null, kind: EditorLayout['kind'], viewportHeight: number): boolean => {
+  if (flag === 'open') return true;
+  if (flag === 'closed') return false;
+  return kind !== 'phone' || !(viewportHeight > 0) || viewportHeight >= PHONE_SHEET_OPEN_MIN_H;
+};
+
 /** The least stage height (px) the phone lettering sheet leaves above itself (a 2:3 page ≈ 145 px wide). */
 export const MIN_STAGE_PX = 240;
 /** …and at least this share of the viewport's height: the page and its balloons stay big enough to tap. */
@@ -1732,7 +1747,7 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
   const layout = useMemo(() => editorLayoutFor(ff), [ff]);
   // Survive page turns: the language being edited and where the tools are.
   const [edition, setEdition] = useState<string | null>(null);
-  const [tools, setTools] = useState<ToolsState>(() => ({ open: readFlag(TOOLS_SHEET_KEY) !== 'closed', detent: 'peek', side: true }));
+  const [tools, setTools] = useState<ToolsState>(() => ({ open: toolsSheetOpenAtStart(readFlag(TOOLS_SHEET_KEY), layout.kind, ff.height), detent: 'peek', side: true }));
   const onTools = useCallback((patch: Partial<ToolsState>) => {
     setTools((cur) => {
       const nextState = { ...cur, ...patch };

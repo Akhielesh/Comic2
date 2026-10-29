@@ -16,7 +16,7 @@ import { resolveLetteringFont, fontCoversLanguage } from '../../../shared/comic/
 import { keepDrawnSizeOps, keptSizes, sameBalloons, tidyOps } from './styleOps';
 import { FontPicker, easyFontsFor, EASY_FONTS } from './FontPicker';
 import { balloonHitRect, handlePositions } from '../board/BalloonLayer';
-import { inspectorSheetMaxHeight, MIN_SHEET_PX } from '../board/PageEditor';
+import { inspectorSheetMaxHeight, MIN_SHEET_PX, PHONE_SHEET_OPEN_MIN_H, toolsSheetOpenAtStart } from '../board/PageEditor';
 
 const ASPECT = 2 / 3;
 
@@ -121,11 +121,35 @@ describe('touch handles keep clear of the selected balloon', () => {
     }
   });
 
+  it('neither handle lands on a NEIGHBOUR’s target either (iPhone SE: the grip sat on the next balloon, the dot on the caption below)', () => {
+    const plan = { x: 100, y: 60, w: 250, h: 25 };
+    const outline = { x: 0.09, y: 0.035, w: 0.27, h: 0.03 };
+    const avoid = balloonHitRect(outline, page, 44);
+    // A thought balloon right of it and a caption just below its tail.
+    const neighbours = [balloonHitRect({ x: 0.4, y: 0.035, w: 0.27, h: 0.07 }, page, 44), balloonHitRect({ x: 0.05, y: 0.2, w: 0.25, h: 0.02 }, page, 44)];
+    const pos = handlePositions(plan, H, { x: 0.15, y: 0.17 }, page, 1, 44, avoid, neighbours);
+    for (const b of [avoid, ...neighbours]) {
+      expect(overlaps(sq(pos.dot!), b)).toBe(false);
+      expect(overlaps(sq(pos.grip), b)).toBe(false);
+    }
+    expect(overlaps(sq(pos.dot!), sq(pos.grip))).toBe(false);
+  });
+
   it('without `avoid` (a mouse) the handles sit at the tip and the right edge as before', () => {
     const plan = { x: 400, y: 600, w: 200, h: 100 };
     const pos = handlePositions(plan, H, { x: 0.3, y: 0.9 }, page, 1);
     expect(pos.dot).toEqual({ x: 0.3 * page.w, y: 0.9 * page.h });
     expect(pos.grip.x).toBeCloseTo(0.6 * page.w + 2, 5);
+  });
+});
+
+describe('page tools sheet at start', () => {
+  it('a short phone opens the editor with the tools closed (unless the user left them open); taller ones and tablets open', () => {
+    expect(toolsSheetOpenAtStart(null, 'phone', 659)).toBe(false);
+    expect(toolsSheetOpenAtStart('open', 'phone', 659)).toBe(true);
+    expect(toolsSheetOpenAtStart(null, 'phone', PHONE_SHEET_OPEN_MIN_H)).toBe(true);
+    expect(toolsSheetOpenAtStart('closed', 'phone', 900)).toBe(false);
+    expect(toolsSheetOpenAtStart(null, 'tablet-portrait', 600)).toBe(true);
   });
 });
 
