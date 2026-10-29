@@ -197,5 +197,10 @@ describe('splitHeldBack / heldBackOf / panelBudgetSentence', () => {
     expect(panelBudgetSentence(doc, page, 5)).toBe("That makes panel 6 about 29 words; it holds about 9. That's too much text for this panel.");
     expect(panelBudgetSentence(doc, page, 2)).toBe('That makes panel 3 about 0 words; it holds about 40.');
     expect(panelBudgetSentence(doc, page, 9)).toBeUndefined();
+    // A drawn page letters into its measured panels: a big measured panel 6 holds more.
+    const drawn = p2Shaped();
+    const boxes = drawn.panels.map((_, i) => (i === 5 ? { x: 0.02, y: 0.5, w: 0.96, h: 0.48 } : { x: 0.02, y: 0.02 + i * 0.08, w: 0.3, h: 0.07 }));
+    drawn.render = { status: 'ready', history: [], qc: { model: 'x', score: 1, issues: [], checkedAt: 1, panelBoxes: boxes } } as Page['render'];
+    expect(panelBudgetSentence(docWith(drawn), drawn, 5)).toBe('That makes panel 6 about 29 words; it holds about 40.');
   });
 });

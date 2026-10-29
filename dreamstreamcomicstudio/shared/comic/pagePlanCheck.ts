@@ -13,7 +13,7 @@
 import type { Box, ComicDoc, Page, PanelSize } from './doc.js';
 import { balloonCount, boxArea, fitState, hardFitLimit, needMeter, panelFit, wordBudget, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect, type Measure } from './lettering/layout.js';
-import { estimatePanelBoxes, layoutPanelCount, parseLayout } from './pageGeometry.js';
+import { estimatePanelBoxes, layoutPanelCount, panelBoxesFor, parseLayout } from './pageGeometry.js';
 import { minAreaFor, PANEL_LIMITS, PLAN_POLICY, QUIET_SHOTS, panelCountProblem, panelWords } from './panelRules.js';
 
 export interface PanelFitCheck {
@@ -482,9 +482,12 @@ export function heldBackOf(check: PagePlanCheck): HeldBackPage {
   };
 }
 
-/** "That makes panel 6 about 34 words; it holds about 32." — the director's line-edit report (K1). */
+/**
+ * "That makes panel 6 about 34 words; it holds about 32." — the director's line-edit report (K1). Measured on the
+ * boxes the words are lettered into: a drawn page's measured panels, else its blueprint.
+ */
 export function panelBudgetSentence(doc: ComicDoc, page: Page, panelIndex: number): string | undefined {
-  const check = checkPagePlan(doc, page, { fixLayout: false });
+  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: panelBoxesFor(doc, page) });
   const p = check.panels[panelIndex];
   if (!p) return undefined;
   const base = `That makes panel ${p.n} about ${plural(p.words, 'word')}; it holds about ${p.budget}.`;
