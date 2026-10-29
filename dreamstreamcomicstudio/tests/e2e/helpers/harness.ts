@@ -23,7 +23,7 @@ export { expect };
 export type QaQuery = Partial<{
   surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public' | 'kit';
   /** surface=kit: the component scene (qa/KitScenes.tsx). */
-  kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art';
+  kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art' | 'model-picker' | 'model-confirm';
   fixture: 'lake-1p' | 'heist-12p' | 'deep-40p' | 'webtoon-20p' | 'stress' | 'empty';
   tab: string;
   page: number;

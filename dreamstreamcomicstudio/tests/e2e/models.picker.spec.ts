@@ -15,11 +15,11 @@ import type { QaQuery } from './helpers/harness';
 const KIT = { hinge: null };
 const KIT_AXE = { hinge: null, axe: true };
 
-const scene = (kit: 'model-picker' | 'model-confirm', theme: 'light' | 'dark'): QaQuery => ({ surface: 'kit', kit: kit as unknown as QaQuery['kit'], fixture: 'heist-12p', theme });
+const scene = (kit: 'model-picker' | 'model-confirm', theme: 'light' | 'dark'): QaQuery => ({ surface: 'kit', kit, fixture: 'heist-12p', theme });
 
 /**
  * Measure the topmost modal on its own: everything behind it is hidden for the scan, as the scrim hides it for the
- * user (the scanner treats `role="dialog"` layers as layering but not `role="alertdialog"`; see the wave notes).
+ * user (the scanner also treats `role="alertdialog"` as a layer now; the isolation keeps the modal's own scan exact).
  */
 const isolateModal = async (page: Page) =>
   page.addStyleTag({ content: 'body > *:not([data-model-confirm-layer]) { visibility: hidden !important; }' });

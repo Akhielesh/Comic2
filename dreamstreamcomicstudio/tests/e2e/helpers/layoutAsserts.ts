@@ -313,7 +313,7 @@ function detect(args: DetectArgs) {
         if (!top) continue;
         const aTop = A.el === top || A.el.contains(top) || top.contains(A.el);
         const bTop = B.el === top || B.el.contains(top) || top.contains(B.el);
-        const layer = top.closest('[role="dialog"],[role="menu"],[role="listbox"],[role="tooltip"]');
+        const layer = top.closest('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[role="tooltip"]');
         if (layer && !(layer.contains(A.el) && layer.contains(B.el))) continue; // popover over content
         if (!aTop && !bTop) continue; // both covered by something else
         const key = sig(A.el) + '|' + sig(B.el);
@@ -335,7 +335,7 @@ function detect(args: DetectArgs) {
 
   // ── popovers ───────────────────────────────────────────────────────────────
   if (on('popover')) {
-    for (const el of Array.from(document.querySelectorAll('[role="dialog"],[role="menu"],[role="listbox"],[role="tooltip"]'))) {
+    for (const el of Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[role="tooltip"]'))) {
       if (!visible(el) || dormant(el)) continue;
       // A listbox/menu that lives INSIDE a scroller (a timeline strip, a chip row) is scrolled content, not a popover.
       let scrolled = false;
