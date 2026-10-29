@@ -6,6 +6,7 @@
 
 import React, { useLayoutEffect, useState } from 'react';
 import { PopSheet, type PopSheetProps } from '../../conversation/PopSheet';
+import { sideBySideScreens } from '../formFactor';
 import { useFormFactor } from '../useFormFactor';
 import { BottomSheet } from './BottomSheet';
 import { SideSheet } from './SideSheet';
@@ -90,8 +91,10 @@ export const AdaptiveSheet: React.FC<AdaptiveSheetProps> = ({
       </SideSheet>
     );
   }
-  // Anchored popovers are portalled and viewport-clamped unless the caller pinned a strategy.
-  return <PopSheet {...popSheet} strategy={popSheet.strategy ?? (anchorRef ? 'fixed' : 'absolute')} />;
+  // Anchored popovers are portalled and viewport-clamped unless the caller pinned a strategy; on a
+  // dual-screen device they stay on the screen that holds their anchor (never across the fold) — also
+  // when only the media query saw the two screens (no segment rects: the window's halves).
+  return <PopSheet {...popSheet} strategy={popSheet.strategy ?? (anchorRef ? 'fixed' : 'absolute')} segments={popSheet.segments ?? sideBySideScreens(ff.segments, ff.width)} />;
 };
 
 export default AdaptiveSheet;

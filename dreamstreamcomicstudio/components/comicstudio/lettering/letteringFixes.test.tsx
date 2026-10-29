@@ -157,10 +157,15 @@ describe('dense pages: Lock and "Keep here" keep the drawn size too (one patch w
     expect(ops.some((o: DocOp) => o.op === 'balloon' && o.lineId === target.lineId && (o.patch as { locked?: boolean }).locked === true)).toBe(true);
     expect(sizeOp(ops, target.lineId)).toBeTruthy();
     cleanup();
+    // A translated edition never sends a line style: lock is shared by every language and belongs to the original
+    // (LE-3), so the edition offers it disabled with the reason instead of half-applying it.
     const edition = renderInspector(target.lineId, 'pro', 'hi');
     fireEvent.click(screen.getByRole('tab', { name: /Arrange/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^Lock$/ }));
-    expect(sizeOp(edition.apply.mock.calls.at(-1)![0], target.lineId)).toBeUndefined();
+    const lock = screen.getByRole('button', { name: /^Lock$/ });
+    expect(lock).toBeDisabled();
+    expect(lock.getAttribute('title')).toMatch(/belong to/);
+    fireEvent.click(lock);
+    expect(edition.apply).not.toHaveBeenCalled();
   });
 
   it('the inspector says why honestly: a moved balloon never "overlaps another"; a dense balloon explains its size in visible text', () => {

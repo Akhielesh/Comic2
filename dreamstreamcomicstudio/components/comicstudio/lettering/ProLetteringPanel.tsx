@@ -115,7 +115,20 @@ const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?:
   </button>
 );
 
-export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect, editionLang }) => {
+/**
+ * Editing a translated edition (LE-3 / LE-4): stacking, lock and the connector are SHARED by every
+ * language and belong to the original, so the Arrange tab offers them disabled with the reason instead
+ * of letting a tap half-apply (the edition would freeze the balloon) or do nothing silently. The page
+ * editor passes these through the inspector when it edits an edition.
+ */
+export interface ProLetteringEditionProps {
+  /** The edition being edited (unset = the original language). */
+  editionLang?: string;
+  /** The original's language name ("English") for the hint. */
+  sourceName?: string;
+}
+
+export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditionProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect, editionLang, sourceName }) => {
   const [tab, setTab] = useState<Tab>('text');
   const [scope, setScope] = useState<StyleScope>('kind_comic');
   const ids = lines.map((l) => l.id);
@@ -137,6 +150,10 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
   // Linked at either end (its own connector to the previous line, or the next line's into it).
   const linked = !!one && isLinked(page, one.id);
   const aspect = 1000 / H;
+  const original = sourceName || 'the original';
+  // Shared balloon properties are changed in the original only (the edition's own positions are drags).
+  const sharedLocked = !!editionLang;
+  const inOriginal = sharedLocked ? `Stacking, lock and connectors belong to ${original} — switch to ${original} to change them.` : undefined;
 
   const scopes: { id: StyleScope; label: string; disabled?: boolean }[] = [
     { id: 'selection', label: lines.length > 1 ? 'These balloons' : 'This balloon' },
@@ -319,16 +336,18 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
         {tab === 'arrange' && (
           <>
             <div className="flex flex-wrap gap-1.5">
-              <button type="button" className={BTN} onClick={() => run(zOrderOps(page, ids, 'front', plans, placements.balloons), 'Bring to front')}>
+              <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal} onClick={() => run(zOrderOps(page, ids, 'front', plans, placements.balloons), 'Bring to front')}>
                 <ArrowUpToLine className="h-3.5 w-3.5" aria-hidden /> Front
               </button>
-              <button type="button" className={BTN} onClick={() => run(zOrderOps(page, ids, 'back', plans, placements.balloons), 'Send to back')}>
+              <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal} onClick={() => run(zOrderOps(page, ids, 'back', plans, placements.balloons), 'Send to back')}>
                 <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden /> Back
               </button>
               <button
                 type="button"
                 className={BTN}
                 aria-pressed={locked}
+                disabled={sharedLocked}
+                title={inOriginal}
                 onClick={() =>
                   run(locked ? lockOps(page, ids, false, placements.balloons) : pinKeepingSizeOps(lockOps(page, ids, true, placements.balloons), page, plans, ids, editionLang), locked ? 'Unlock balloon' : 'Lock balloon')
                 }
@@ -339,14 +358,19 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
                 <button
                   type="button"
                   className={BTN}
-                  disabled={!linked && !canLinkToPrevious(page, one.id)}
-                  title={linked ? 'Remove the connector' : 'Join to the previous balloon in this panel with a connector'}
+                  disabled={sharedLocked || (!linked && !canLinkToPrevious(page, one.id))}
+                  title={inOriginal ?? (linked ? 'Remove the connector' : 'Join to the previous balloon in this panel with a connector')}
                   onClick={() => run(linkOps(page, one.id, !linked, placements.balloons), linked ? 'Unlink balloons' : 'Link balloons')}
                 >
                   {linked ? <Link2Off className="h-3.5 w-3.5" aria-hidden /> : <Link2 className="h-3.5 w-3.5" aria-hidden />} {linked ? 'Unlink' : 'Link to previous'}
                 </button>
               )}
             </div>
+            {inOriginal && (
+              <p className="text-[11px] leading-snug text-[var(--ds-muted)]" data-testid="arrange-in-original">
+                {inOriginal}
+              </p>
+            )}
             {one && (
               <Slider
                 label="Balloon width"

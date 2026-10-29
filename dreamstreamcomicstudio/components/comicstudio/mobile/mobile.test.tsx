@@ -274,6 +274,32 @@ describe('SavingsChip (decisions-final #6)', () => {
     );
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(SAVINGS_COPY));
   });
+
+  it('the phone toast is portalled outside the shell, so it carries the phone header size itself (it sat 4 px low)', async () => {
+    const toastFor = async (ff: typeof PHONE) => {
+      const { rerender, unmount } = render(
+        <FormFactorProvider value={ff}>
+          <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
+        </FormFactorProvider>
+      );
+      rerender(
+        <FormFactorProvider value={ff}>
+          <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
+        </FormFactorProvider>
+      );
+      const toast = await waitFor(() => screen.getByRole('status'));
+      const out = { parent: toast.parentElement, header: toast.style.getPropertyValue('--header-h'), top: toast.style.top };
+      unmount();
+      return out;
+    };
+    const portrait = await toastFor(PHONE);
+    expect(portrait.parent).toBe(document.body);
+    expect(portrait.header).toBe('44px');
+    expect(portrait.top).toBe('calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)');
+    // Phones in landscape keep index.css's compact-height header (no override).
+    const landscape = await toastFor(formFactorFor({ w: 852, h: 393, coarse: true }));
+    expect(landscape.header).toBe('');
+  });
 });
 
 describe('mobile feature module', () => {

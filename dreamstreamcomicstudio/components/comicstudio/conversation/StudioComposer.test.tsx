@@ -43,6 +43,7 @@ import { deleteInboxRef } from '../studioApi';
 import { composeInStudio } from './composerBus';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { labelInName } from '../mobile/testing/labelInName';
 import { enterAction, selectionLabel, sendArgs } from './StudioComposer';
 import type { ComicStudioController } from '../useStudio';
 
@@ -352,6 +353,41 @@ const renderAt = (ff: ReturnType<typeof formFactorFor>, studio: ComicStudioContr
       <StudioComposer studio={studio} {...props} />
     </FormFactorProvider>
   );
+
+describe('StudioComposer — option chips say what they show (composer-chip-names, WCAG 2.5.3)', () => {
+  it('each chip’s accessible name contains its visible text', () => {
+    renderAt(TABLET, makeFakeStudio());
+    const chips = within(screen.getByRole('toolbar', { name: 'Comic options' })).getAllByRole('button');
+    expect(chips.length).toBeGreaterThanOrEqual(2);
+    for (const c of chips) {
+      const r = labelInName(c);
+      expect(r.ok, `"${r.visible}" ⊄ "${r.name}"`).toBe(true);
+    }
+  });
+});
+
+describe('StudioComposer — short windows (phones in landscape)', () => {
+  const LANDSCAPE = formFactorFor({ w: 844, h: 390, coarse: true });
+
+  it('the box and its controls share one row (the conversation keeps its height); portrait keeps two rows', () => {
+    const { unmount } = renderAt(LANDSCAPE, makeFakeStudio());
+    expect(LANDSCAPE.layout).toBe('single-rail');
+    const box = screen.getByLabelText('Message the Comic Director');
+    const row = box.closest('[data-composer-row="inline"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.className).toContain('flex');
+    // The Send button and the option chips sit in the same row as the box.
+    expect(row.contains(screen.getByRole('button', { name: 'Send' }))).toBe(true);
+    expect(row.contains(screen.getByRole('toolbar', { name: 'Comic options' }))).toBe(true);
+    expect(box.className).toContain('flex-1');
+    expect(box.className).not.toMatch(/(^| )w-full( |$)/);
+    unmount();
+    renderAt(PHONE, makeFakeStudio());
+    const tall = screen.getByLabelText('Message the Comic Director');
+    expect(tall.closest('[data-composer-row="inline"]')).toBeNull();
+    expect(tall.className).toMatch(/(^| )w-full( |$)/);
+  });
+});
 
 describe('StudioComposer — the Enter rule by pointer', () => {
   it('enterAction: coarse → newline, fine → send, Shift → newline, ⌘/Ctrl → always send, IME → nothing', () => {

@@ -32,6 +32,7 @@ import { requestOpenSettings } from './openSettings';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
 import type { FormFactor } from './mobile/formFactor';
+import { labelInName } from './mobile/testing/labelInName';
 
 const mount = (studio: FakeStudio, onBack = vi.fn()) => {
   state.studio = studio;
@@ -72,6 +73,8 @@ describe('ComicStudio shell', () => {
     const loading = makeFakeStudio({ doc: null, loading: true });
     const { rerender, onBack } = mount(loading);
     expect(screen.getByLabelText('Opening your comic')).toHaveAttribute('aria-busy', 'true');
+    // The page keeps exactly one main landmark while the comic loads (studio-loading-no-main).
+    expect(screen.getAllByRole('main')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Back to your projects' }));
     expect(onBack).toHaveBeenCalled();
 
@@ -88,6 +91,7 @@ describe('ComicStudio shell', () => {
     const studio = makeFakeStudio({ doc: null, loading: false, loadError: "This comic doesn't exist or you don't have access to it." });
     const { onBack } = mount(studio);
     expect(screen.getByRole('alert')).toHaveTextContent("Couldn’t open this comic");
+    expect(screen.getAllByRole('main')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
     expect(studio.refresh).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Back/ }));
@@ -299,16 +303,38 @@ describe('ComicStudio on phones (single)', () => {
     expect(screen.getByLabelText('Message the Comic Director')).toBeInTheDocument();
   });
 
-  it('the Board tab announces page progress; the pill points at renders and switches to the board', () => {
+  it('the Board tab announces page progress; the activity line’s View opens the board (one status row, no extra pill)', () => {
     const doc = makeSampleDoc();
     doc.pages = doc.pages.map((p) => ({ ...p, render: { ...p.render, status: 'rendering' as const } }));
-    const studio = makeFakeStudio({ doc });
+    const studio = makeFakeStudio({ doc, renderingTotal: 3 });
     mountAt(PHONE, studio);
     const nav = screen.getByRole('navigation', { name: 'Studio views' });
     expect(within(nav).getByRole('button', { name: /^Board, 0 of 3 pages ready, drawing/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /3 pages rendering/ }));
+    // The status line above the composer is the only one (the old "3 pages rendering · View" pill is gone).
+    expect(screen.queryByRole('button', { name: /pages rendering/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /View the pages$/ }));
     expect(studio.setTab).toHaveBeenCalledWith('pages');
     expect(pane('board')).not.toHaveAttribute('hidden');
+    // With the board showing there is nothing to point at.
+    expect(screen.queryByRole('button', { name: /View the pages$/ })).toBeNull();
+  });
+
+  it('phone portrait chrome: 44 px header and 52 px tab bar on the studio root (the board and chat keep ≥ 45 %)', () => {
+    mountAt(PHONE, makeFakeStudio());
+    const root = document.querySelector('[data-layout="single"].gesture-root') as HTMLElement;
+    expect(root.style.getPropertyValue('--header-h')).toBe('44px');
+    expect(root.style.getPropertyValue('--tabbar-h')).toBe('52px');
+  });
+
+  it('the loading skeleton uses the same phone header size, so the header does not jump when the comic arrives', () => {
+    const { unmount } = mountAt(PHONE, makeFakeStudio({ doc: null, loading: true }));
+    const skeleton = screen.getByLabelText('Opening your comic');
+    expect(skeleton.style.getPropertyValue('--header-h')).toBe('44px');
+    expect(skeleton.querySelector('header')?.style.height).toBe('var(--header-h, 56px)');
+    unmount();
+    // Tablets and desktop keep index.css's values.
+    mountAt(formFactorFor({ w: 1440, h: 900 }), makeFakeStudio({ doc: null, loading: true }));
+    expect(screen.getByLabelText('Opening your comic').style.getPropertyValue('--header-h')).toBe('');
   });
 
   it('opening a page from a card reveals the board', () => {
@@ -404,11 +430,17 @@ describe('ComicStudio on phones (single)', () => {
     expect(screen.queryByRole('dialog', { name: 'Full-screen reader' })).toBeNull();
   });
 
-  it('"Ask the Director…" on the board opens a composer sheet that closes after sending', () => {
+  it('"Ask" in the board’s header opens a composer sheet that closes after sending (no third bottom bar)', () => {
     const studio = makeFakeStudio();
     mountAt(PHONE, studio);
+    // Chat view: the composer is right there, so no Ask.
+    expect(screen.queryByRole('button', { name: 'Ask the Director' })).toBeNull();
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Board/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Ask the Director…' }));
+    expect(document.querySelector('[data-ask-pill]')).toBeNull();
+    const ask = screen.getByRole('button', { name: 'Ask the Director' });
+    expect(ask.closest('header')).not.toBeNull();
+    expect(labelInName(ask).ok).toBe(true);
+    fireEvent.click(ask);
     const sheet = screen.getByRole('dialog', { name: 'Ask the Director' });
     const box = within(sheet).getByLabelText('Message the Comic Director');
     expect(document.activeElement).toBe(box);
@@ -426,6 +458,22 @@ describe('ComicStudio on phones (single)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Settings/ }));
     expect(screen.getByRole('dialog', { name: 'Comic settings' })).toHaveAttribute('data-sheet', 'bottom');
+  });
+
+  it('Confirm spending: each radio is the whole 44 px row on touch, with a visible focus ring (settings-confirm-spending-rows)', () => {
+    mountAt(PHONE, makeFakeStudio());
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Settings/ }));
+    const group = screen.getByRole('radiogroup', { name: 'Confirm spending' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.length).toBeGreaterThanOrEqual(2);
+    for (const r of radios) {
+      expect(r.className).toContain('coarse:min-h-11');
+      expect(r.className).toContain('focus-visible:ring-2');
+      // The bordered row adds no vertical padding of its own around the 44 px target (it was 37 px inside py-2.5).
+      expect(r.parentElement!.className).not.toMatch(/\bpy-2\.5\b/);
+    }
+    expect(radios.filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(1);
   });
 
   it('below 360 px the spend chip moves into the ⋯ menu so the title keeps its room', () => {

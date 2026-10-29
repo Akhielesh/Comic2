@@ -6,6 +6,7 @@ import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex, stripScrollDelta } from './BookTimeline';
 import { computeAccessibleName } from 'dom-accessibility-api';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { clipThumbWidth } from './TimelineClip';
 
 const setWidth = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
@@ -175,6 +176,24 @@ describe('BookTimeline', () => {
     setup();
     for (const o of options()) expect(o.querySelector('button, [tabindex]:not([tabindex="-1"]), a[href], input')).toBeNull();
     expect(document.querySelector('.bg-red-600\\/90')).toBeNull();
+    // The failed badge: red-700 (white text 6.5:1) at a readable 10 px, never the old 8.5 px.
+    const badge = document.querySelector('[data-clip-badge="failed"]') as HTMLElement;
+    expect(badge).not.toBeNull();
+    expect(badge.className).toContain('bg-red-700');
+    expect(badge.className).toContain('text-[10px]');
+  });
+
+  it('the dock keeps its buttons out of the home-indicator inset on tablets and desktops; phones leave it to the tab bar (timeline-dock-safe-area)', () => {
+    const { container, unmount } = setup();
+    const dock = container.querySelector('section[aria-label="Book timeline"]') as HTMLElement;
+    expect(dock.style.paddingBottom).toBe('var(--sa-bottom, 0px)');
+    unmount();
+    const phone = render(
+      <FormFactorProvider value={formFactorFor({ w: 390, h: 844, coarse: true })}>
+        <BookTimeline studio={makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages' })} />
+      </FormFactorProvider>
+    );
+    expect((phone.container.querySelector('section[aria-label="Book timeline"]') as HTMLElement).style.paddingBottom).toBe('');
   });
 
   it('collapses below lg by default (phones keep the board), remembers the choice, hides in Read', () => {

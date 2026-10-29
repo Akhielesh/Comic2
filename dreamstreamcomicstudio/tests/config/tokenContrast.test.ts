@@ -407,8 +407,6 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   };
   const DECORATIVE: Record<string, string> = {
     'hover:bg-[var(--ds-accent)]': 'chat/AIChatPlatform.tsx: the pane resize handle',
-    'group-focus-visible:bg-[var(--ds-accent)]': 'comicstudio/mobile/shell/StudioLayout.tsx: the split resizer hairline',
-    'group-hover:bg-[#D97757]/50': 'comicstudio/mobile/shell/StudioLayout.tsx: the split resizer hairline',
     'peer-checked:bg-[#D97757]': 'comicstudio/immersive/ReaderSettingsSheet.tsx: a switch track',
     'bg-[#D97757]/60': 'comicstudio/breakdown/BreakdownCard.tsx: a cost bar',
     'bg-[#D97757]/70': 'i18n/LanguageSwitch.tsx, chat/ChatSettingsModal.tsx: a draft dot and a swatch bar'

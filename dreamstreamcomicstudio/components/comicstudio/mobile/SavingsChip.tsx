@@ -20,6 +20,7 @@ import type { StudioController } from '../types';
 import { AdaptiveSheet } from './sheets/AdaptiveSheet';
 import { isPhoneLayout } from './formFactor';
 import { useFormFactor } from './useFormFactor';
+import { phoneChromeVars } from './shell/phoneChrome';
 
 export const SAVINGS_COPY = 'Free — done by the editor, no AI cost';
 const FLASH_MS = 4000;
@@ -110,7 +111,10 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { c
       <div
         role="status"
         className="pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border border-emerald-500/25 bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal"
-        style={{ top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
+        // Portalled to <body>, outside the shell root that sets the phone chrome sizes: apply them here
+        // too, so the toast sits 8 px under the header it belongs to (44 px in phone portrait).
+        style={{ ...phoneChromeVars(ff.layout), top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
+        data-savings-toast
       >
         <span className="flex items-center gap-1.5">
           <Leaf className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
