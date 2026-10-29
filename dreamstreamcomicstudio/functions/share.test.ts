@@ -6,7 +6,8 @@ import { onRequest as middleware } from './_middleware';
 import { handleShare, parseSharePath, type ShareEnv } from './c/[[path]]';
 import { handleOg } from './og/[[path]]';
 import { buildCsp, inlineHashes } from './_shared/csp';
-import { escAttr, injectHead, jsonForScript, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
+import { escAttr, injectHead, jsonForScript, ratedDescription, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
+import { ratedDescription as sharedRatedDescription } from '../shared/comic/publication';
 
 const SLUG = 'Ab3dEf6hIj9kLm2nP';
 const KEY = 'K1234567890abcdefghijk';
@@ -383,5 +384,14 @@ describe('content rating in the share head (L10)', () => {
     const html = await (await middleware({ request: get('/?view=read&id=11111111-1111-4111-8111-111111111111'), next })).text();
     expect(meta(html, 'og:description')).toBe('A baby plays. · Rated PG');
     expect(ld(html).contentRating).toBe('PG');
+  });
+});
+
+describe('the rated description', () => {
+  it('is the one the app and the server use (shared/comic/publication), not a copy', () => {
+    expect(ratedDescription).toBe(sharedRatedDescription);
+    expect(ratedDescription('A lake story', 'PG')).toBe('A lake story · Rated PG');
+    expect(ratedDescription('', 'G')).toBe('Rated G');
+    expect(ratedDescription('No rating')).toBe('No rating');
   });
 });

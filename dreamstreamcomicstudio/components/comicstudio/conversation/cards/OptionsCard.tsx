@@ -124,9 +124,12 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
   const disabled = isAnswered || studio.messageBusy || !studio.doc;
 
   const answer = (ids: string[], text: string) => {
-    if (!text.trim() || disabled) return;
-    setLocalAnswer(ids.length ? ids : [text]);
-    void studio.send(text.trim());
+    const reply = text.trim();
+    if (!reply || disabled) return;
+    setLocalAnswer(ids.length ? ids : [reply]);
+    // Name the card this answers (DIR-8): the server records it on THIS card — a typed answer
+    // too — instead of guessing from the text (two open cards can share a label).
+    void studio.send(reply, typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined);
   };
 
   const toggle = (c: OptionChoice) => setPicked((prev) => (prev.includes(c.id) ? prev.filter((id) => id !== c.id) : [...prev, c.id]));

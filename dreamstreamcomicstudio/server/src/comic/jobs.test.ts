@@ -480,6 +480,8 @@ describe('spend gating', () => {
     expect(gate.reason).toBe('budget');
     expect(gate.summary).toContain('over your $0.05 budget');
     expect(ctx.imagesFake.calls).toHaveLength(0);
+    // The budget gate offers the way to raise the cap, as a chip that opens the comic's settings.
+    expect(session.doc.conversation.at(-1)!.nextSteps).toEqual([{ label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } }]);
     await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true });
     expect(ctx.imagesFake.calls).toHaveLength(1);
   });
@@ -538,7 +540,8 @@ describe('spend gating', () => {
     session.commit([{ op: 'page_delete', id: 'pg_3', deletedAt: Date.now() }], { origin: 'user' });
     await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true, origin: 'user' });
     expect(ctx.imagesFake.calls).toHaveLength(0);
-    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined' });
+    // Closed for a reason the card can name ("Nothing left to draw"), not a plain "Not now".
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined', closedReason: 'nothing_to_draw' });
     const last = session.doc.conversation.at(-1)!;
     expect(last.text).toMatch(/^Page 3 is no longer in the plan\./);
     expect(last.text).toContain('Nothing was spent.');
@@ -1747,6 +1750,8 @@ describe('planPages (v5)', () => {
     expect(last.text).toContain('at its budget cap');
     expect(last.text).toContain('Nothing was spent.');
     expect(last.cards).toContainEqual(expect.objectContaining({ type: 'notice', tone: 'info' }));
+    // …with a "Raise the budget" chip first (it opens the comic's settings at the budget cap).
+    expect(last.nextSteps?.[0]).toEqual({ label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } });
 
     // Under the cap the same click plans as before.
     const under = plannedDoc();

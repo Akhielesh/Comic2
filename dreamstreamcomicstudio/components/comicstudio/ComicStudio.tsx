@@ -71,6 +71,7 @@ import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
+import { useOpenSettingsRequests } from './openSettings';
 
 export { SPLIT_STORAGE_KEY };
 
@@ -889,6 +890,8 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
   const [view, setView] = useState<'chat' | 'board'>('chat');
   const [paneModeState, setPaneModeState] = useState<PaneMode>(() => readPaneMode(ff.widthClass));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A "Raise the budget" chip (ClientAction open_settings) opens Comic settings at the budget cap.
+  useOpenSettingsRequests(() => setSettingsOpen(true));
   const [readerOpen, setReaderOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const composerApi = useRef<StudioComposerHandle | null>(null);

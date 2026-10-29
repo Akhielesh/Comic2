@@ -422,6 +422,22 @@ describe('money: quote, gate, BYOK, cancel, keys', () => {
     expect((await estimateTranslation(ctx, T({ languages: ['Telugu', 'Hindi'] }))).usd).toBe(platform.estimate.usd);
   });
 
+  it('the text quote follows the translator’s key: an own Gemini key beside the platform OpenRouter key still pays the platform markup', () => {
+    const doc = sixPageKidsDoc();
+    const platform = quoteTranslation(doc, { openrouter: { key: 'k', byok: false } }, { languages: ['te'] });
+    // Text routes are OpenRouter-first, so the translator runs on the platform key for this user.
+    const mixed = quoteTranslation(doc, { openrouter: { key: 'k', byok: false }, gemini: { key: 'own', byok: true } }, { languages: ['te'] });
+    expect(mixed.byok).toBe(false);
+    expect(mixed.estimate.usd).toBe(platform.estimate.usd);
+    expect(mixed.perLanguage[0].usd).toBe(platform.perLanguage[0].usd);
+    // An own Gemini key alone runs the translator on it: no markup.
+    const ownGemini = quoteTranslation(doc, { gemini: { key: 'own', byok: true } }, { languages: ['te'] });
+    expect(ownGemini.byok).toBe(true);
+    const done = completionMessage(doc, [{ lang: 'te', usd: 0.02, free: 0 } as never], { openrouter: { key: 'k', byok: false }, gemini: { key: 'own', byok: true } });
+    expect(done.text).toContain('Cost $0.02.');
+    expect(done.text).not.toContain('on your key');
+  });
+
   it('the quote learns from the bill (a repair round and the review included): a run billed above its plan raises the next quote, bounded', async () => {
     const doc = sixPageKidsDoc();
     const keys = { openrouter: { key: 'sk-or-test', byok: false } };

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { castNoun, createEmptyDoc, emptyRender, pageSpecHash, type AssetRef } from '../../../shared/comic/doc.js';
 import { lakeDrawnDoc } from './golden/fixtures.js';
-import { JOB_TIMINGS } from './jobs.js';
+import { JOB_TIMINGS, imageRouteFor, startAction } from './jobs.js';
+import { estimateJobs, formatUsd, resolveImageJob } from '../../../shared/comic/models.js';
 import { newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
 import { GROUP_HINTS, buildDirectorTools, buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
 import type { ToolGroup } from './extensions.js';
@@ -192,6 +193,43 @@ describe('plan tools', () => {
     doc.spend = { ...doc.spend, totalUsd: 1 };
     setup(doc);
     expect(await call('plan_pages', {})).toMatch(/^Error: The comic is at its budget cap/);
+  });
+
+  it('a plan the budget cap blocks (spend in flight) is returned as blocked, never as planned', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, budgetUsd: 1 };
+    doc.spend = { ...doc.spend, totalUsd: 0.99 };
+    setup(doc);
+    // A cover the user approved past the cap is still drawing: its hold counts as pending spend,
+    // so the writer's own cap check (spent + pending ≥ budget) refuses while guardPaidText passes.
+    let release!: () => void;
+    const held = new Promise<undefined>((resolve) => (release = () => resolve(undefined)));
+    ctx.imagesFake.behave = () => held;
+    const started = await startAction(ctx, { type: 'render_cover' }, { confirmed: true, budgetApproved: true, origin: 'user' });
+    expect(started.outcome.status).toBe('started');
+
+    const planned = await call('plan_pages', {});
+    expect(planned).toContain('at its budget cap');
+    expect(planned).not.toContain('The user reviews the plan on the board');
+    const revised = await call('revise_pages', { pages: [2], instructions: 'make it a splash' });
+    expect(revised).toContain('at its budget cap');
+    expect(turn.plannedThisTurn).toBe(false);
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
+
+    release();
+    await ctx.settled();
+  });
+
+  it('a plan refused for drawn pages is not treated as planned', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 } };
+    doc.format = { ...doc.format, pageCount: 5 };
+    setup(doc);
+    const out = await call('plan_pages', {});
+    expect(out).toContain('revise_pages');
+    expect(out).not.toContain('The user reviews the plan on the board');
+    expect(turn.plannedThisTurn).toBe(false);
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
   });
 
   it('revise_pages maps page numbers and validates them', async () => {
@@ -455,6 +493,22 @@ describe('render_pages semantics (bug: re-render of a ready page)', () => {
     expect(ctx.session.doc.gate).toBeNull();
     // Without page numbers too.
     expect(await call('render_pages', {})).toMatch(/^Nothing to draw: every page/);
+  });
+
+  it('an own Gemini key beside the platform OpenRouter key: the cover quote is priced for the key that draws it (as its gate)', async () => {
+    const doc = drawnLake();
+    const keys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'g-own', byok: true } };
+    ctx = testContext(newSession(doc), { keys });
+    turn = createDirectorTurn({ attachments: [], userText: 'generate all pages', drawIntent: 'explicit' });
+    tools = new Map(buildDirectorTools(ctx, turn).map((t) => [t.spec.function.name, t]));
+    const { spec } = resolveImageJob('cover', doc.settings.quality, doc.settings.imageModelOverride);
+    // Precondition: the cover's model draws on the user's own Gemini key (no markup, no usage).
+    expect(imageRouteFor(spec, keys)).toMatchObject({ route: 'gemini', byok: true });
+    const own = estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: true }).usd;
+    const marked = estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: false }).usd;
+    expect(formatUsd(own)).not.toBe(formatUsd(marked));
+    const out = await call('render_pages', { pages: [1] });
+    expect(out).toContain(`The cover isn't drawn yet (≈ ${formatUsd(own)})`);
   });
 
   it('redraw:true without the user asking for another take is refused with an offer', async () => {

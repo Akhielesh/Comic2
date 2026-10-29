@@ -54,3 +54,24 @@ describe('runRecipe failure path', () => {
     expect((await runRecipe({ ...base, recipe: pinned })).usage).toEqual({});
   });
 });
+
+describe('runRecipe in free-only mode (noPaidRetry)', () => {
+  it('no engine gets the paid retry; each is told to stay free', async () => {
+    await runRecipe({ ...base, recipe: pinned, noPaidRetry: true, fallbackModel: 'vendor/paid-net' });
+    await runRecipe({ ...base, recipe: { ...pinned, swarm: true }, noPaidRetry: true });
+    const builtin = getBuiltinRecipe('deep-research-brief')!;
+    await runRecipe({ ...base, recipe: builtin, values: { topic: 'tides' }, noPaidRetry: true });
+    for (const engine of [engines.chat, engines.swarm, engines.research]) {
+      expect(engine.mock.calls[0][0]).toMatchObject({ noPaidRetry: true });
+      expect(engine.mock.calls[0][0].fallbackModel).toBeUndefined();
+    }
+  });
+
+  it('off: every engine keeps the paid net (the caller’s, else TEXT_FALLBACK)', async () => {
+    await runRecipe({ ...base, recipe: pinned });
+    await runRecipe({ ...base, recipe: { ...pinned, swarm: true }, fallbackModel: 'vendor/paid-net' });
+    expect(engines.chat.mock.calls[0][0].fallbackModel).toBeTruthy();
+    expect(engines.chat.mock.calls[0][0].noPaidRetry).toBeUndefined();
+    expect(engines.swarm.mock.calls[0][0].fallbackModel).toBe('vendor/paid-net');
+  });
+});

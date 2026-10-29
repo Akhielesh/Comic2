@@ -404,6 +404,8 @@ describe('studio helpers', () => {
     expect(tabForOps([{ op: 'render', target: { kind: 'sheet', id: 'c' }, patch: {} }])).toBe('cast');
     expect(tabForOps([{ op: 'pages', pages: [] }, { op: 'message', msg: msg('m', 'assistant', 'x') }])).toBe('pages');
     expect(tabForOps([{ op: 'brief', patch: {} }])).toBe('story');
+    // A director's line move switches the board like a line edit does.
+    expect(tabForOps([{ op: 'line_move', pageId: 'p', id: 'l', toPanelId: 'pn', index: 0 }])).toBe('pages');
     expect(tabForOps([{ op: 'spend', entry: { id: 's', at: T, kind: 'page', label: 'x', usd: 1, byok: false, estimated: false } }])).toBeNull();
     expect(tabForOps([{ op: 'format', patch: {} }, { op: 'settings', patch: {} }])).toBeNull();
   });

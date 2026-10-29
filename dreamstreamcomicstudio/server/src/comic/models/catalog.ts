@@ -18,7 +18,16 @@
 import type { ComicDoc, Resolution } from '../../../../shared/comic/doc.js';
 import type { StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { IMAGE_MODELS, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
-import { lockedModelId, modelFit, redrawResolution, type FitReason } from '../../../../shared/comic/modelLock.js';
+import { lockedModelId, modelFit, redrawResolution, type FitReason, type PriceBook } from '../../../../shared/comic/modelLock.js';
+import type {
+  CatalogEndpoint,
+  CatalogPrice,
+  ModelCatalogDetail,
+  ModelCatalogRow,
+  ModelTrends,
+  PriceBasis,
+  TrendRange
+} from '../../../../shared/comic/modelCatalog.js';
 import { logger } from '../../lib/logger.js';
 import { mapEndpointPricing, mergeWithRegistry, registryPrices, type PriceBookSources } from './pricing.js';
 import { NOT_RANKED_COPY, createQualitySource, qualityAsOf, qualityEntriesFor, rankMovesFor, type QualityBoard, type QualityEntry, type QualitySource, type RankMove } from './quality.js';
@@ -40,52 +49,8 @@ import {
 
 // ── Row types (models.md §4.3) ────────────────────────────────────────────────
 
-export type PriceBasis = 'openrouter_endpoint' | 'vendor_table' | 'derived_mp' | 'registry';
-
-export interface CatalogPrice {
-  usd: number | null;
-  basis: PriceBasis;
-  /** Where the number comes from, or the exact §4.6 copy when it is null. */
-  note?: string;
-}
-
-export interface CatalogEndpoint {
-  provider: string;
-  uptime1d: number | null;
-  uptime30m: number | null;
-}
-
-export interface ModelCatalogRow {
-  id: string;
-  nickname: string;
-  providerModel: string;
-  canonicalSlug?: string;
-  openrouterCreated?: string;
-  pickable: boolean;
-  lifecycle: ImageModelSpec['lifecycle'];
-  price: Partial<Record<Resolution, CatalogPrice>>;
-  perRefUsd: number | null;
-  endpoints: CatalogEndpoint[];
-  quality: QualityEntry[];
-  observed: ObservedEntry[];
-  reliability?: ReliabilityEntry;
-  /** When a projectId is passed. */
-  fit?: FitReason[];
-  /** When a projectId is passed: this is the comic's locked (or migrated) model. */
-  current?: boolean;
-  /**
-   * When a projectId is passed and this is not the comic's model: this model's list price per page at the
-   * resolution it would draw this comic's pages at, divided by the current model's (models.md §5.1 acceptance
-   * "Nano Banana Pro (warn: price)"; machine-readable until FitReason gains a 'price' code). Absent when either
-   * price is unknown.
-   */
-  priceVsCurrent?: { currentId: string; ratio: number; res: Resolution };
-  fetchedAt: { catalog?: string; uptime?: string; quality?: string };
-  /** This row's price or uptime refresh failed (or did not finish in time); showing cached data. */
-  stale: boolean;
-  /** The leaderboard refresh failed; the dated snapshot (`fetchedAt.quality`) is shown. Never folded into `stale`. */
-  qualityStale?: boolean;
-}
+// The wire types live in shared/comic/modelCatalog.ts (one contract with the UIs); re-exported, names unchanged.
+export type { CatalogEndpoint, CatalogPrice, ModelCatalogRow, PriceBasis };
 
 // ── OpenRouter shapes (documented fields only; trimmed) ──────────────────────
 
@@ -212,7 +177,7 @@ export const CACHE_SOURCE = { list: 'openrouter_images', endpoints: 'openrouter_
 /** Models we watch but do not offer (models.md §2.2 watch list): endpoints are fetched so a price change shows up. */
 export const WATCH_LIST_IDS = ['microsoft/mai-image-2.6-flash', 'meta/muse-image', 'bytedance-seed/seedream-5-0-flash'];
 export const TREND_RANGES = ['30d', '90d'] as const;
-export type TrendRange = (typeof TREND_RANGES)[number];
+export type { TrendRange };
 export const USAGE_PRODUCT = 'comic_studio';
 /**
  * The platform aggregate (comic_image_model_stats, a scan of everyone's calls in the window) is read at most
@@ -534,58 +499,11 @@ export const canonicalSlugFrom = (endpoints: OrModelEndpoint[] | undefined, id: 
 
 // ── Trends (models.md §4.4) ───────────────────────────────────────────────────
 
-export interface ModelTrends {
-  range: TrendRange;
-  from: string;
-  to: string;
-  /** T2 — your image use by model per month (comic_image_calls, yours) + the platform monthly counters. */
-  t2: {
-    yours: { month: string; modelId: string; images: number }[];
-    platform: MonthlyUsageRow[];
-    source: { yours: string; platform: string };
-  };
-  /** T3 — price changes we recorded (change-only snapshots). */
-  t3: {
-    trackingSince: string | null;
-    changes: { modelId: string; res: Resolution; usd: number | null; basis: PriceBasis; at: string; note?: string | null }[];
-    /** "Tracking since {first fetch}"; null before the first fetch (§4.4: no line before that date). */
-    note: string | null;
-  };
-  /** T4 — leaderboard movement from the history we hold. */
-  t4: { moves: (RankMove & { modelId: string })[]; trackingSince: string | null; asOf?: string; source: string };
-  /** T5 — new on OpenRouter inside the range. */
-  t5: { sinceDays: number; models: { id: string; name: string; created: string }[]; fetchedAt?: string; stale: boolean };
-  /** T6 — reliability: ours (24 h and 7 d) and OpenRouter's uptime, each labelled with its source. */
-  t6: {
-    ours: { modelId: string; window: '24h' | '7d'; calls: number; failed: number; rateLimited: number; scope: 'you' | 'platform' }[];
-    openrouter: { modelId: string; provider: string; day: string; uptime1d: number | null; uptime30m: number | null; fetchedAt: string }[];
-    source: { ours: string; openrouter: string };
-  };
-  /** T7 — most used by DreamStream creators, hidden below 5 distinct users. */
-  t7: { available: boolean; copy?: string; models?: { modelId: string; calls: number; users: number }[]; sinceDays: number };
-}
+export type { ModelTrends };
 
 // ── The catalog ───────────────────────────────────────────────────────────────
 
-/** GET /api/comic/models/:id — the row plus the registry facts and the history we hold (models.md §4.1 L3). */
-export interface ModelCatalogDetail extends ModelCatalogRow {
-  facts: {
-    factsAsOf: string;
-    priceBasis: ImageModelSpec['priceBasis'];
-    refs: ImageModelSpec['refs'];
-    aspects: ImageModelSpec['aspects'];
-    resolutions: ImageModelSpec['resolutions'];
-    fixedQuality?: ImageModelSpec['fixedQuality'];
-    gradeSources?: ImageModelSpec['gradeSources'];
-    replacement?: string;
-  };
-  /** Change-only price snapshots for this model in the last 90 days (T3). */
-  priceHistory: { res: Resolution; usd: number | null; basis: PriceBasis; at: string; note?: string }[];
-  /** Dated leaderboard points we hold (T4); nothing interpolated. */
-  qualityHistory: { board: QualityBoard; asOf: string; rank?: number; score: number }[];
-  /** NOT_RANKED_COPY when no public board lists the model. */
-  qualityNote?: string;
-}
+export type { ModelCatalogDetail };
 
 export interface ModelCatalog {
   rows(opts?: { userId?: string; doc?: ComicDoc; caps?: StudioCaps }): Promise<ModelCatalogRow[]>;
@@ -848,6 +766,15 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     return { currentId: current.id, ratio: Math.round((mine / theirs) * 100) / 100, res };
   };
 
+  /** The prices this catalog shows, as a PriceBook: modelFit's 'price' warning agrees with priceVsCurrent. */
+  const shownPrices = (eps: KeyedView<OrImageEndpoint[]>): PriceBook => ({
+    unit: (modelId, res) => {
+      const model = getImageModel(modelId);
+      return { usd: model ? (pricesFor(model, eps).price[res]?.usd ?? null) : null, basis: 'catalog' };
+    },
+    qcUsd: 0
+  });
+
   const buildRow = (spec: ImageModelSpec, data: Loaded, ctx: { doc?: ComicDoc; caps?: StudioCaps }): ModelCatalogRow => {
     const orId = spec.routes.openrouter;
     const listed = orId ? data.list.value?.byId.get(orId) : undefined;
@@ -873,7 +800,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       quality: qualityEntriesFor(orId, data.q.snapshot),
       observed: observedEntriesFor(data.yours, data.platform, spec.id).filter((o) => ROW_OBSERVED_KINDS.has(o.kind)),
       ...(reliability ? { reliability } : {}),
-      ...(ctx.doc && ctx.caps ? { fit: modelFit(spec, ctx.doc, ctx.caps) } : {}),
+      ...(ctx.doc && ctx.caps ? { fit: modelFit(spec, ctx.doc, ctx.caps, shownPrices(data.eps)) } : {}),
       ...(current !== undefined ? { current } : {}),
       ...(vsCurrent ? { priceVsCurrent: vsCurrent } : {}),
       fetchedAt: {

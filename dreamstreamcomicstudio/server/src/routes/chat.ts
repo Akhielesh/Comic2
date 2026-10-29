@@ -610,6 +610,12 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const requestAgentIds = new Set(requestCustomAgents.map((a) => a.id));
   const customAgents = [...requestCustomAgents, ...savedAgents.filter((a) => !requestAgentIds.has(a.id))];
 
+  // The agent meta-tools (swarm, deep research, delegation) run their own model calls. A free-only turn
+  // (X-Free-Only) gives them no paid net at all (noPaidRetry: no paid retry, a verified-free worker pick);
+  // otherwise they keep the paid TEXT_FALLBACK net. The swarm's synthesis also gets the free chain.
+  const metaToolNet = freeOnly
+    ? { fallbackModel: undefined, noPaidRetry: true, timeoutMs: TEXT_REQUEST_TIMEOUT_MS }
+    : { fallbackModel: TEXT_FALLBACK, timeoutMs: TEXT_REQUEST_TIMEOUT_MS };
   const metaTools: ChatTool[] = [];
   if (resolved.provider === 'openrouter' && swarmRequested) {
     metaTools.push(
@@ -621,8 +627,8 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         systemPrompt,
         clientContext,
         extraAgents: customAgents,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        ...metaToolNet,
+        ...(freeOnly ? { fallbackModels } : {})
       })
     );
   }
@@ -679,8 +685,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         messages,
         systemPrompt,
         clientContext,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        ...metaToolNet
       })
     );
   }
@@ -702,8 +707,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         messages,
         systemPrompt,
         clientContext,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        ...metaToolNet
       })
     );
   }
@@ -808,14 +812,15 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
 
 /**
  * Every model a chat call may end up billed for (usage budget, P1-LIMITS): the OpenRouter
- * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which the
- * swarm and /api/recipes always send on OpenRouter, and runChatParams sends unless the turn is
- * free-only). reserveForOperation prices the hold at the most expensive of them, so a `:free`
- * primary with a paid fallback can never slip past an exhausted budget at $0. Exported for
- * sibling routes that reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid
- * retry, so none is priced. A free-only (X-Free-Only) turn keeps the paid net priced even though
- * runChatParams no longer sends it: the same prepared chat feeds the swarm and the recipe routes,
- * whose engines still carry it, and an over-held free turn is released at settle — never charged.
+ * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which
+ * runChatParams, /swarm and /api/recipes send on OpenRouter unless the turn is free-only).
+ * reserveForOperation prices the hold at the most expensive of them, so a `:free` primary with a
+ * paid fallback can never slip past an exhausted budget at $0. Exported for sibling routes that
+ * reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid retry, so none is
+ * priced. A free-only (X-Free-Only) turn keeps the paid net priced even though neither its engine
+ * nor the agent meta-tools it may call (swarm, delegate, deep research: noPaidRetry) send it any
+ * more — a conservative hold, never an under-reserve; lowering it is a separate, reviewed change. An
+ * over-held free turn settles at its real cost — the hold is never charged.
  */
 export const chatPricedModels = (p: {
   resolved: { provider: string };
@@ -1223,26 +1228,11 @@ const withFreeModelsNotice = <T extends { notices?: CapabilityNotice[] }>(
   payload: T,
   gate: ChatGate,
   servedModel: string | undefined,
-  opts: { swarm?: boolean; freeOnlySwarm?: boolean } = {}
+  opts: { swarm?: boolean } = {}
 ): T => {
-  const notice = freeModelsNotice(gate, servedModel, opts) ?? (opts.freeOnlySwarm ? freeOnlySwarmNotice(servedModel) : null);
+  const notice = freeModelsNotice(gate, servedModel, opts);
   return notice ? { ...payload, notices: [...(payload.notices || []), notice] } : payload;
 };
-
-/**
- * A free-only (X-Free-Only) /swarm request is answered by one free model, because the agent team
- * always keeps a paid retry. Said plainly, so the missing agent traces aren't a mystery.
- */
-const freeOnlySwarmNotice = (servedModel: string | undefined): CapabilityNotice | null =>
-  servedModel && !hasFreeSuffix(servedModel)
-    ? null
-    : {
-        tool: 'free_only',
-        level: 'info',
-        message:
-          'Free-Only mode is on, so one free model answered instead of the agent team — the team keeps a paid model as its backup. Turn Free-Only mode off in Settings to use the agent team.',
-        at: new Date().toISOString()
-      };
 
 // ── Usage budget: background chat helpers ───────────────────────────────────────────────────────
 // Enhance / title / memory / follow-ups (and the server's auto-memory) run paid models on the
@@ -2038,14 +2028,13 @@ const startHeartbeat = (res: any) =>
 /**
  * One streamed chat turn on an already-reserved gate: `delta`/`reasoning`/`reset`/`agent_step`
  * events, then `final` (with billing) or `error`. Shared by /stream and by /swarm when the
- * usage budget re-planned the turn onto free models or the turn is free-only (the agent team
- * always keeps a paid retry).
+ * usage budget re-planned the turn onto free models (which also strips the paid tools).
  */
 const streamChatTurn = async (
   req: any,
   res: any,
   gate: Extract<ChatGate, { ok: true }>,
-  opts: { swarm?: boolean; freeOnlySwarm?: boolean } = {}
+  opts: { swarm?: boolean } = {}
 ): Promise<void> => {
   const { p, reserve } = gate;
   const send = openEventStream(res);
@@ -2152,8 +2141,8 @@ chatRouter.post('/swarm', async (req, res, next) => {
       });
     }
 
-    // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry; synthesis on p.model —
-    // the hold is priced at the whole chain.
+    // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry (none when free-only);
+    // synthesis on p.model — the hold is priced at the whole chain.
     const reserved = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length, swarm: true });
     if ('details' in reserved) return res.status(402).json({ error: formatLimitErrorResponse(reserved.details) });
     gate = reserved;
@@ -2162,12 +2151,11 @@ chatRouter.post('/swarm', async (req, res, next) => {
     return next(err);
   }
 
-  // The agent team always keeps a paid retry (runSwarm's TEXT_FALLBACK), so a free-models-only
-  // turn (the budget re-plan) and a free-only turn (X-Free-Only: no paid retry, ever) are answered
-  // by one free model instead (same SSE events; the client renders a final without traces, and the
-  // reply carries a note saying why).
-  if (gate.p.freeModelsOnly || gate.p.noPaidRetry) {
-    return streamChatTurn(req, res, gate, { swarm: true, freeOnlySwarm: !gate.p.freeModelsOnly });
+  // A free-models-only turn (the budget re-plan) is answered by one free model instead (same SSE
+  // events; the client renders a final without traces, and the reply carries a note saying why).
+  // A free-only turn (X-Free-Only) runs the agent team with no paid model anywhere (noPaidRetry).
+  if (gate.p.freeModelsOnly) {
+    return streamChatTurn(req, res, gate, { swarm: true });
   }
 
   const { p, reserve } = gate;
@@ -2186,7 +2174,10 @@ chatRouter.post('/swarm', async (req, res, next) => {
       systemPrompt: p.systemPrompt,
       clientContext: p.clientContext,
       extraAgents: p.customAgents,
-      fallbackModel: TEXT_FALLBACK,
+      fallbackModel: p.noPaidRetry ? undefined : TEXT_FALLBACK,
+      // Free-only: the prepared free chain rides on the synthesis (one throttled free model falls
+      // through to the next free one, as the single-model answer it replaced did).
+      ...(p.noPaidRetry ? { noPaidRetry: true, fallbackModels: p.fallbackModels } : {}),
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });

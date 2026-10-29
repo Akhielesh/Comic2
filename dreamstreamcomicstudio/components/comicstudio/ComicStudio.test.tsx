@@ -28,6 +28,7 @@ vi.mock('./immersive/ImmersiveReader', () => ({
 }));
 
 import { ComicStudio, ComicStudioShell, READER_REFRESH_MS, SPLIT_STORAGE_KEY, SpendBreakdown, spendKindsShown } from './ComicStudio';
+import { requestOpenSettings } from './openSettings';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
 import type { FormFactor } from './mobile/formFactor';
@@ -214,6 +215,17 @@ describe('ComicStudio shell', () => {
     mount(studio);
     fireEvent.click(within(document.querySelector('header')!).getByRole('button', { name: /^Quality:/ }));
     expect(screen.getByRole('dialog', { name: 'Quality' }).textContent).toMatch(/\$\d/);
+  });
+
+  it('a "Raise the budget" chip opens Comic settings with the budget cap focused', async () => {
+    const studio = makeFakeStudio();
+    mount(studio);
+    expect(screen.queryByRole('dialog', { name: 'Comic settings' })).toBeNull();
+    act(() => {
+      expect(requestOpenSettings('budget')).toBe(true);
+    });
+    const sheet = await screen.findByRole('dialog', { name: 'Comic settings' });
+    await waitFor(() => expect(document.activeElement).toBe(within(sheet).getByLabelText('Budget cap')));
   });
 
   it('settings: confirm policy, threshold, budget cap, lettering and direction all patch the doc', () => {

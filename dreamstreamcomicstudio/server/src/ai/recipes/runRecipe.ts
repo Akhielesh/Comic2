@@ -49,6 +49,11 @@ export interface RunRecipeParams {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /**
+   * Free-only (X-Free-Only): the run is offered no paid retry in any engine — no `fallbackModel`,
+   * `freeOnly` on every provider request, and a free planner/agents pick (RunSwarmParams.noPaidRetry).
+   */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   onDelta?: (delta: { content?: string; reasoning?: string }) => void;
@@ -113,6 +118,10 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
   const model = params.model;
   const temperature = recipe.settings?.temperature;
   const userMemory = params.systemPrompt?.trim();
+  // Free-only: no engine gets the paid retry (each one also sends `freeOnly` to the provider).
+  const freeOnly = params.noPaidRetry === true;
+  const fallbackModel = freeOnly ? undefined : params.fallbackModel || TEXT_FALLBACK;
+  const retry = { fallbackModel, ...(freeOnly ? { noPaidRetry: true } : {}) };
 
   // Effective kickoff message: the templated prompt, or — if the recipe is
   // instructions-only — a minimal nudge so the agent acts on the instructions.
@@ -153,7 +162,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         model,
         priorMessages: params.priorMessages,
         systemPrompt: userMemory,
-        fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+        ...retry,
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         onDelta: params.onDelta,
@@ -190,7 +199,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         messages,
         systemPrompt: swarmSystem || undefined,
         clientContext: params.clientContext,
-        fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+        ...retry,
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         onDelta: params.onDelta,
@@ -234,7 +243,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
       tools: resolveTools(recipe.tools, toolCtxFrom(params.clientContext)),
       temperature,
       maxTokens: 3072,
-      fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+      ...retry,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       onDelta: params.onDelta

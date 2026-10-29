@@ -62,6 +62,19 @@ export interface RunSwarmParams {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /**
+   * Free-only (the client's X-Free-Only): no paid model, ever. No provider-level `fallbackModel`
+   * is sent, every call's own timeout/empty retry stays free (`freeOnly` on the provider request),
+   * and the planner and agents run on a verified-free model — the caller's model when none is free
+   * (the model the route resolved and priced), never the paid TEXT_FALLBACK.
+   */
+  noPaidRetry?: boolean;
+  /**
+   * Free-only: the caller's free chain (OpenRouter `models`), carried by the synthesis so one throttled
+   * free model falls through to the next free one instead of failing the turn. Ignored without
+   * `noPaidRetry` (a paid run keeps its single paid net).
+   */
+  fallbackModels?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
   /** User-defined agents to add to the deployable pool for this run. */
@@ -187,11 +200,13 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   const priorMessages = params.messages.slice(0, -1);
   const userMemory = params.systemPrompt?.trim();
   const toolCtx = toolCtxFrom(params.clientContext);
+  const freeOnly = params.noPaidRetry === true;
   const baseReq = {
     provider: params.provider,
     apiKey: params.apiKey,
     timeoutMs: params.timeoutMs,
-    fallbackModel: params.fallbackModel ?? TEXT_FALLBACK,
+    fallbackModel: freeOnly ? undefined : (params.fallbackModel ?? TEXT_FALLBACK),
+    ...(freeOnly ? { noPaidRetry: true } : {}),
     signal: params.signal
   };
 
@@ -200,8 +215,11 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   for (const a of params.extraAgents || []) pool[a.id] = a;
 
   // Planner + agents run on a free model by default (the swarm is meant to run on
-  // open/free models); synthesis uses the user's chosen model.
-  const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+  // open/free models); synthesis uses the user's chosen model. Free-only never falls back to a
+  // paid pick: a verified-free model, else the caller's own (already priced) model.
+  const workerModel = freeOnly
+    ? await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
+    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
 
   // 1) PLAN
   let plan: { agent: string; task: string }[] = [];
@@ -338,6 +356,7 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   const synthRes = await runChat({
     ...baseReq,
     model: params.model,
+    ...(freeOnly && params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
     messages: synthMessages,
     systemPrompt: synthSystem,
     clientContext: params.clientContext,

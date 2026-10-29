@@ -205,7 +205,7 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
         </p>
       ) : (
         <p className="mt-3 flex items-center gap-1.5 text-[12.5px] text-[var(--ds-muted)]">
-          <CircleSlash className="h-4 w-4 shrink-0" aria-hidden /> Not now — nothing was spent.
+          <CircleSlash className="h-4 w-4 shrink-0" aria-hidden /> {gate.closedReason === 'nothing_to_draw' ? 'Nothing left to draw — nothing was spent.' : 'Not now — nothing was spent.'}
         </p>
       )}
     </CardShell>

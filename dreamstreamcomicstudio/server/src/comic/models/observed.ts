@@ -4,7 +4,7 @@
 // No fetching, no timers, no guesses: when n is too small the entry is simply absent and the UI shows the §4.6 copy.
 
 import type { Resolution } from '../../../../shared/comic/doc.js';
-import type { ImageJobKind } from '../../../../shared/comic/models.js';
+import type { MonthlyUsageRow, ObservedEntry, ObservedKind, ReliabilityEntry } from '../../../../shared/comic/modelCatalog.js';
 import { OBSERVED_MIN_N, OBSERVED_WINDOW, QC_OBSERVED_MIN_N, type ObservedMedian } from './pricing.js';
 
 /** Platform aggregates are shown only above this many distinct users (models.md §4.4 T7, §4.5 S7, AT-9). */
@@ -12,7 +12,8 @@ export const MIN_PLATFORM_USERS = 5;
 export const NOT_ENOUGH_DATA_COPY = 'Not enough data yet';
 export const RELIABILITY_WINDOW_H = 24 as const;
 
-export type ObservedKind = ImageJobKind | 'qc';
+// Wire types (shared/comic/modelCatalog.ts), re-exported with their names.
+export type { MonthlyUsageRow, ObservedEntry, ObservedKind, ReliabilityEntry };
 
 /** One `comic_image_calls` row as the server reads it (camelCase; the SQL file has the column list). */
 export interface ImageCallRow {
@@ -62,34 +63,7 @@ export interface PlatformStatRow {
   lastAt: string | null;
 }
 
-/** `model_usage_monthly` row for product 'comic_studio'. */
-export interface MonthlyUsageRow {
-  month: string;
-  product: string;
-  source: string;
-  model: string;
-  requests: number;
-}
 
-export interface ObservedEntry {
-  kind: ObservedKind;
-  res: Resolution;
-  n: number;
-  medianUsd: number;
-  minUsd: number;
-  maxUsd: number;
-  from: string;
-  to: string;
-  scope: 'you' | 'platform';
-}
-
-export interface ReliabilityEntry {
-  windowH: typeof RELIABILITY_WINDOW_H;
-  calls: number;
-  failed: number;
-  rateLimited: number;
-  scope: 'you' | 'platform';
-}
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 const isNum = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);

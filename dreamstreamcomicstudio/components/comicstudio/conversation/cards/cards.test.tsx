@@ -55,14 +55,14 @@ describe('OptionsCard', () => {
     const studio = renderCard(card);
     expect(screen.getByText('What tone should it have?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Moody noir/ }));
-    expect(studio.send).toHaveBeenCalledWith('Make it moody noir');
+    expect(studio.send).toHaveBeenCalledWith('Make it moody noir', { card: { id: 'card_o', choiceIds: ['a'] } });
     expect(screen.getByRole('button', { name: /Playful/ })).toBeDisabled();
   });
 
   it('falls back to the label when there is no reply', () => {
     const studio = renderCard(card);
     fireEvent.click(screen.getByRole('button', { name: /Playful/ }));
-    expect(studio.send).toHaveBeenCalledWith('Playful');
+    expect(studio.send).toHaveBeenCalledWith('Playful', { card: { id: 'card_o', choiceIds: ['b'] } });
   });
 
   it('multi-select collects picks until Done', () => {
@@ -71,15 +71,31 @@ describe('OptionsCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Epic/ }));
     expect(studio.send).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Done (2)' }));
-    expect(studio.send).toHaveBeenCalledWith('Playful and Epic');
+    expect(studio.send).toHaveBeenCalledWith('Playful and Epic', { card: { id: 'card_o', choiceIds: ['b', 'c'] } });
   });
 
   it('accepts a custom answer', () => {
     const studio = renderCard({ ...card, allowCustom: true });
-    fireEvent.change(screen.getByLabelText('Your own answer'), { target: { value: 'Bittersweet' } });
+    fireEvent.change(screen.getByLabelText('Your own answer'), { target: { value: '  Bittersweet ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send answer' }));
-    expect(studio.send).toHaveBeenCalledWith('Bittersweet');
+    // A typed answer is recorded on the card too (DIR-8), not only matched by its text.
+    expect(studio.send).toHaveBeenCalledWith('Bittersweet', { card: { id: 'card_o', custom: 'Bittersweet' } });
     expect(screen.getByText(/You answered/)).toHaveTextContent('Bittersweet');
+  });
+
+  it('two open cards sharing a label record the one that was tapped', () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc() });
+    const yesNo = (id: string, question: string): Card => ({ type: 'options', id, question, choices: [{ id: `${id}_y`, label: 'Yes' }, { id: `${id}_n`, label: 'No' }] });
+    render(
+      <>
+        <CardRenderer card={yesNo('card_first', 'Keep the rain?')} studio={studio} />
+        <CardRenderer card={yesNo('card_second', 'Add a cat?')} studio={studio} />
+      </>
+    );
+    const first = screen.getByRole('region', { name: 'Keep the rain?' });
+    fireEvent.click(within(first).getByRole('button', { name: /Yes/ }));
+    expect(studio.send).toHaveBeenCalledTimes(1);
+    expect(studio.send).toHaveBeenCalledWith('Yes', { card: { id: 'card_first', choiceIds: ['card_first_y'] } });
   });
 
   it('a server-answered card is disabled and marks the answer; busy turns disable it too', () => {
@@ -127,7 +143,7 @@ describe('OptionsCard', () => {
       // the lettering swatch
       expect(tiles[4].querySelector('svg')).not.toBeNull();
       fireEvent.click(tiles[0]);
-      expect(studio.send).toHaveBeenCalledWith('Four panels');
+      expect(studio.send).toHaveBeenCalledWith('Four panels', { card: { id: 'card_v', choiceIds: ['l4'] } });
       expect(tiles[0]).toHaveAttribute('aria-pressed', 'true');
       expect(tiles[1]).toBeDisabled();
     });
@@ -457,8 +473,13 @@ describe('GateCard', () => {
     expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument();
     unmount();
     const r2 = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, status: 'declined' } }) })} />);
-    expect(screen.getByText(/nothing was spent/)).toBeInTheDocument();
+    expect(screen.getByText(/Not now — nothing was spent\./)).toBeInTheDocument();
     r2.unmount();
+    // Approved after its target vanished (DIR-6): the card names why it closed, not a "Not now" the user never said.
+    const closed = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, status: 'declined', closedReason: 'nothing_to_draw' } }) })} />);
+    expect(screen.getByText(/Nothing left to draw — nothing was spent\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Not now/)).not.toBeInTheDocument();
+    closed.unmount();
     const r3 = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, id: 'gate_2' } }) })} />);
     expect(screen.getByText(/replaced by a newer one/)).toBeInTheDocument();
     r3.unmount();

@@ -258,6 +258,34 @@ describe('client patches', () => {
     expect(safetyPatchScreen(doc, ops, sctx('PG-13'))).toBe(ops);
   });
 
+  it('a client translation gloss or review issue is screened too (a client may now send them)', () => {
+    const doc = plannedDoc();
+    const tr = (patch: Record<string, unknown>): DocOp =>
+      ({ op: 'translation', lang: 'hi', lineId: 'ln_1_2', patch: { text: 'नमस्ते', status: 'edited', sourceHash: 'abcd1234', at: 1, ...patch } }) as DocOp;
+    const refused = (ops: DocOp[], rating: 'G' | 'PG' | 'PG-13' = 'PG-13') => {
+      try {
+        safetyPatchScreen(doc, ops, sctx(rating));
+      } catch (e) {
+        return e as StudioError;
+      }
+      return undefined;
+    };
+    for (const patch of [
+      { gloss: expand('Hello, <SLUR>') },
+      { issue: { severity: 'minor', note: expand('Means <SLUR> here') } },
+      { issue: { severity: 'major', note: 'Wrong register', suggestion: expand('You <SLUR>!') } }
+    ]) {
+      expect(refused([tr(patch)]), JSON.stringify(Object.keys(patch))).toMatchObject({ code: 'CONTENT_POLICY', status: 422 });
+    }
+    // A suggestion is offered as the line's words, so the dialogue rule holds for it…
+    expect(refused([tr({ issue: { severity: 'minor', note: 'Too mild', suggestion: expand('Get out, you <PROFANITY>!') } })], 'PG')).toMatchObject({ status: 409 });
+    // …while a gloss or a review note only explains the words (never published): hard blocks only.
+    const explained = [tr({ gloss: expand('Literally: get out, you <PROFANITY>'), issue: { severity: 'minor', note: expand('Softens “<PROFANITY>”') } })];
+    expect(refused(explained, 'PG')).toBeUndefined();
+    // Enum and hash fields stay unscreened.
+    expect(refused([tr({ status: 'edited', sourceHash: 'ffffffff' })])).toBeUndefined();
+  });
+
   it('screenPatch (async seam) applies the same rules', async () => {
     const ctx = ctxFor(plannedDoc(), 'PG-13');
     await expect(screenPatch(ctx, [linePatch('hello')], 'PG-13')).resolves.toBeUndefined();

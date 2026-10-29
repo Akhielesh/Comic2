@@ -62,7 +62,8 @@ vi.mock('../services/modelCatalog.js', async (importOriginal) => {
 // Every model call the engine makes — where money would be spent. The turn's own calls are told
 // apart from the (documented, separately metered) auto-memory helper by its system prompt.
 type ProviderCall = { model: string; fallbackModel?: string; models?: string[]; freeOnly?: boolean; helper: boolean };
-type Scripted = { timeout?: boolean; costUsd?: number };
+type ToolCall = { id: string; name: string; arguments: string };
+type Scripted = { timeout?: boolean; costUsd?: number; toolCalls?: ToolCall[] };
 const engine = vi.hoisted(() => ({ providerCalls: [] as ProviderCall[], script: [] as Scripted[] }));
 vi.mock('../ai/gateway.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ai/gateway.js')>();
@@ -80,6 +81,7 @@ vi.mock('../ai/gateway.js', async (importOriginal) => {
     if (step?.timeout) throw Object.assign(new Error('The model timed out before answering.'), { status: 504, publicCode: 'MODEL_TIMEOUT' });
     const free = /:free$/.test(req.model);
     const usage = { promptTokens: 10, completionTokens: 10, totalTokens: 20, costUsd: step?.costUsd ?? (free ? 0 : 0.002) };
+    if (step?.toolCalls) return { text: '', model: req.model, usage, toolCalls: step.toolCalls };
     return { text: 'Here is your answer.', model: req.model, usage };
   };
   const provider = {
@@ -97,7 +99,22 @@ vi.mock('../ai/gateway.js', async (importOriginal) => {
   };
   return { ...actual, getProvider: () => provider };
 });
-vi.mock('../ai/agents/orchestrator.js', () => ({ runSwarm: vi.fn() }));
+// A spy over the REAL agent team: tests that need the team's own provider calls run it for real
+// (through the fake gateway above); the others stub its answer.
+vi.mock('../ai/agents/orchestrator.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/agents/orchestrator.js')>();
+  return { ...actual, runSwarm: vi.fn(actual.runSwarm) };
+});
+// The other two agent meta-tools' engines: delegation runs for real through the fake gateway; deep
+// research (web search + page reads) is stubbed — its params are what matter here.
+vi.mock('../ai/agents/delegate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/agents/delegate.js')>();
+  return { ...actual, runDelegation: vi.fn(actual.runDelegation) };
+});
+vi.mock('../ai/research/deepResearch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/research/deepResearch.js')>();
+  return { ...actual, runDeepResearch: vi.fn(actual.runDeepResearch) };
+});
 vi.mock('../ai/image.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ai/image.js')>()),
   generateGeminiImage: vi.fn(async () => ({ dataUrl: 'data:image/png;base64,AAAA' }))
@@ -139,6 +156,10 @@ const { errorHandler } = await import('../middleware/errors.js');
 const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
 const { runSwarm } = await import('../ai/agents/orchestrator.js');
 const swarm = vi.mocked(runSwarm);
+const { runSwarm: realRunSwarm } = await vi.importActual<typeof import('../ai/agents/orchestrator.js')>('../ai/agents/orchestrator.js');
+const delegation = vi.mocked((await import('../ai/agents/delegate.js')).runDelegation);
+const { runDelegation: realRunDelegation } = await vi.importActual<typeof import('../ai/agents/delegate.js')>('../ai/agents/delegate.js');
+const research = vi.mocked((await import('../ai/research/deepResearch.js')).runDeepResearch);
 
 const used = (userId: string) => db.events.filter((e) => e.userId === userId && (e.status === 'SETTLED' || e.status === 'RESERVED')).reduce((s, e) => s + e.costUsd, 0);
 
@@ -185,6 +206,15 @@ beforeEach(() => {
     model: 'meta-llama/llama-3.3-70b-instruct:free',
     usage: { promptTokens: 10, completionTokens: 10, totalTokens: 20, costUsd: 0 }
   }) as unknown as Awaited<ReturnType<typeof runSwarm>>);
+  delegation.mockReset().mockImplementation(realRunDelegation);
+  research.mockReset().mockImplementation(async () => ({
+    text: 'The research brief.',
+    model: 'meta-llama/llama-3.3-70b-instruct:free',
+    report: { sourceCount: 1, readCount: 1 },
+    trace: { goal: 'tides', agents: [] },
+    citations: [],
+    usage: { promptTokens: 10, candidatesTokens: 10, totalTokens: 20, providerCostUsd: 0 }
+  }) as unknown as Awaited<ReturnType<typeof research>>);
   ledger.reserveUsageTokens.mockReset().mockImplementation(async (input: { reservationId?: string; estimate: unknown; governed?: boolean; skipWalletLimits?: boolean; byok?: boolean }) => ({
     allowed: true,
     reservation: {
@@ -225,6 +255,8 @@ const isPaid = (model?: string) => Boolean(model) && !/:free$/.test(String(model
 const turnCalls = () => engine.providerCalls.filter((c) => !c.helper);
 const turnEvents = (user: string) => db.events.filter((e) => e.userId === user && e.operation === 'chat.completion');
 const ASK = { messages: [{ role: 'user', content: 'Explain how tides work in detail' }] };
+/** The free models of this catalog: prepareChat's free chain under free-only (pickTextModelChain, freeOnly, max 2), in its own order. */
+const FREE_CHAIN = ['meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen3-32b:free'];
 
 describe('free-only mode (X-Free-Only, the client default) for a governed user with usage left', () => {
   it('never offers the paid retry: the turn runs on the free chain with freeOnly set, and settles at $0', async () => {
@@ -279,8 +311,9 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     expect(turnEvents(user)[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
   });
 
-  it('/swarm: the agent team (which always carries the paid TEXT_FALLBACK retry) is not run — one free model answers, settled at $0, and the reply says so', async () => {
+  it('/swarm: the agent team runs with no paid model anywhere (planner, agents, synthesis) and settles at $0', async () => {
     const user = freshUser();
+    swarm.mockImplementation(realRunSwarm);
     const res = await fetch(`${base}/api/chat/swarm`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-test-user': user, 'X-Free-Only': 'true' },
@@ -288,12 +321,15 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     });
     const body = await res.text();
     expect(res.status).toBe(200);
-    // Without the fix: runSwarm is called with fallbackModel === TEXT_FALLBACK (planner, agents and
-    // the timeout retry on the paid model, settled against the governed user's usage).
-    expect(swarm).not.toHaveBeenCalled();
+    // Without the fix: the team is swapped for one free model (runSwarm never called) — or, before
+    // that, run with fallbackModel === TEXT_FALLBACK on every call.
+    expect(swarm).toHaveBeenCalledTimes(1);
+    expect(swarm.mock.calls[0][0]).toMatchObject({ noPaidRetry: true, fallbackModel: undefined });
+    expect(body).toContain('event: trace');
     expect(body).toContain('event: final');
     const calls = turnCalls();
-    expect(calls.length).toBeGreaterThan(0);
+    // The planner, at least one agent and the synthesis.
+    expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const c of calls) {
       expect(isPaid(c.model)).toBe(false);
       expect(c.fallbackModel).toBeUndefined();
@@ -302,11 +338,112 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     const events = turnEvents(user);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
-    // Honest about the swap: the reply names why the agent team didn't run, never in dollars.
-    const final = body.split('event: final')[1] || '';
-    expect(final).toMatch(/instead of the agent team/);
-    expect(final).toMatch(/Free-Only mode/);
-    expect(final).not.toMatch(/\$|usd|dollar/i);
+    expect(body).not.toMatch(/instead of the agent team/);
+    // The synthesis (the team's last call) carries the prepared FREE chain, so one throttled free model
+    // falls through to the other free one. Without the fix: `models` undefined on every team call.
+    const chain = swarm.mock.calls[0][0].fallbackModels;
+    expect([...(chain || [])].sort()).toEqual([...FREE_CHAIN].sort());
+    const synth = calls[calls.length - 1];
+    expect(synth.models).toEqual(chain);
+    expect(synth.models?.[0]).toBe(synth.model);
+    expect(synth.models?.some((m) => isPaid(m) || m === TEXT_FALLBACK)).toBe(false);
+  });
+
+  it('/swarm: a slow free model in the team is never retried on the paid model', async () => {
+    const user = freshUser();
+    swarm.mockImplementation(realRunSwarm);
+    // The planner times out (the heuristic plan takes over), then everything else answers.
+    engine.script = [{ timeout: true }];
+    const res = await fetch(`${base}/api/chat/swarm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': user, 'X-Free-Only': 'true' },
+      body: JSON.stringify(ASK)
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('event: final');
+    expect(turnCalls().some((c) => c.model === TEXT_FALLBACK || isPaid(c.model))).toBe(false);
+    // The turn itself settles at $0 (the auto-memory helper is metered on its own, as documented).
+    expect(turnEvents(user)).toEqual([expect.objectContaining({ status: 'SETTLED', costUsd: 0 })]);
+  });
+});
+
+describe('free-only /api/chat turns: the agent meta-tools run free too', () => {
+  const call = (id: string, name: string, args: Record<string, unknown>): ToolCall => ({ id, name, arguments: JSON.stringify(args) });
+  // Matches both the deep-research intent ("deep dive") and the delegation intent ("verify").
+  const RESEARCH_AND_VERIFY = { messages: [{ role: 'user', content: 'Do a deep dive and verify: how do tides work?' }] };
+
+  it('run_agent_swarm (the Swarm toggle) runs the team with no paid model anywhere and settles at $0', async () => {
+    const user = freshUser();
+    swarm.mockImplementation(realRunSwarm);
+    engine.script = [{ toolCalls: [call('c1', 'run_agent_swarm', { goal: 'Brief me on tides' })] }];
+    const r = await post('/api/chat', { ...ASK, tools: ['run_agent_swarm'] }, { 'x-test-user': user, 'X-Free-Only': 'true' });
+    expect(r.status).toBe(200);
+    expect(swarm).toHaveBeenCalledTimes(1);
+    // Without the fix: fallbackModel === TEXT_FALLBACK and no noPaidRetry.
+    expect(swarm.mock.calls[0][0]).toMatchObject({ noPaidRetry: true, fallbackModel: undefined });
+    expect([...(swarm.mock.calls[0][0].fallbackModels || [])].sort()).toEqual([...FREE_CHAIN].sort());
+    const calls = turnCalls();
+    // The turn's two calls plus the team's planner, agent(s) and synthesis.
+    expect(calls.length).toBeGreaterThanOrEqual(5);
+    for (const c of calls) {
+      expect(isPaid(c.model)).toBe(false);
+      expect(c.fallbackModel).toBeUndefined();
+      expect(c.freeOnly).toBe(true);
+    }
+    expect(turnEvents(user)).toEqual([expect.objectContaining({ status: 'SETTLED', costUsd: 0 })]);
+  });
+
+  it('delegate_tasks and deep_research get noPaidRetry and no paid fallback; the helpers run free', async () => {
+    const user = freshUser();
+    engine.script = [
+      {
+        toolCalls: [
+          call('c1', 'deep_research', { topic: 'tides' }),
+          call('c2', 'delegate_tasks', { goal: 'Verify how tides work', subtasks: ['the moon and tides', 'the sun and tides'] })
+        ]
+      }
+    ];
+    const r = await post('/api/chat', RESEARCH_AND_VERIFY, { 'x-test-user': user, 'X-Free-Only': 'true' });
+    expect(r.status).toBe(200);
+    expect(research).toHaveBeenCalledTimes(1);
+    expect(delegation).toHaveBeenCalledTimes(1);
+    // Without the fix: both received fallbackModel === TEXT_FALLBACK and no noPaidRetry.
+    expect(research.mock.calls[0][0]).toMatchObject({ noPaidRetry: true, fallbackModel: undefined });
+    expect(delegation.mock.calls[0][0]).toMatchObject({ noPaidRetry: true, fallbackModel: undefined });
+    const calls = turnCalls();
+    // The turn's two calls plus two helpers and the aggregation.
+    expect(calls.length).toBeGreaterThanOrEqual(5);
+    for (const c of calls) {
+      expect(isPaid(c.model)).toBe(false);
+      expect(c.fallbackModel).toBeUndefined();
+      expect(c.freeOnly).toBe(true);
+    }
+    expect(turnEvents(user)).toEqual([expect.objectContaining({ status: 'SETTLED', costUsd: 0 })]);
+  });
+
+  it('off: the meta-tools keep their paid net', async () => {
+    const user = freshUser();
+    engine.script = [
+      {
+        toolCalls: [
+          call('c1', 'deep_research', { topic: 'tides' }),
+          call('c2', 'delegate_tasks', { goal: 'Verify how tides work', subtasks: ['the moon and tides'] })
+        ]
+      }
+    ];
+    delegation.mockImplementation(async () => ({
+      text: 'Aggregated.',
+      model: 'x',
+      artifacts: [],
+      trace: { goal: 'g', agents: [] },
+      usage: { providerCostUsd: 0 }
+    }) as unknown as Awaited<ReturnType<typeof delegation>>);
+    const r = await post('/api/chat', RESEARCH_AND_VERIFY, { 'x-test-user': user });
+    expect(r.status).toBe(200);
+    expect(research.mock.calls[0][0]).toMatchObject({ fallbackModel: TEXT_FALLBACK });
+    expect(research.mock.calls[0][0].noPaidRetry).toBeUndefined();
+    expect(delegation.mock.calls[0][0]).toMatchObject({ fallbackModel: TEXT_FALLBACK });
+    expect(delegation.mock.calls[0][0].noPaidRetry).toBeUndefined();
   });
 });
 
@@ -331,6 +468,7 @@ describe('free-only OFF (the user opted into paid models): unchanged', () => {
     expect(res.status).toBe(200);
     expect(swarm).toHaveBeenCalledTimes(1);
     expect(swarm.mock.calls[0][0]).toMatchObject({ fallbackModel: TEXT_FALLBACK });
+    expect(swarm.mock.calls[0][0].fallbackModels).toBeUndefined();
     expect(body).toContain('The team answer.');
     expect(body).not.toMatch(/Free-Only mode/);
   });

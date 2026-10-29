@@ -167,3 +167,88 @@ describe('runDelegation never drops nested spend', () => {
     expect((res.usage as { partialProviderCostUsd?: number }).partialProviderCostUsd).toBeCloseTo(0.15, 9);
   });
 });
+
+describe('runSwarm in free-only mode (noPaidRetry)', () => {
+  it('sends no paid retry on any call and never falls back to a paid worker pick', async () => {
+    const { pickTextModel } = await import('../autoRouter.js');
+    // No verified-free model in the catalog: the planner and agents run the caller's own model.
+    vi.mocked(pickTextModel).mockRejectedValueOnce(new Error('no free model'));
+    runChatMock
+      .mockResolvedValueOnce(plan)
+      .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Synthesized.', model: 'user/model', usage: u(0, 100) });
+    await runSwarm({ ...swarmParams, noPaidRetry: true, fallbackModel: 'fallback/model' });
+    expect(vi.mocked(pickTextModel)).toHaveBeenLastCalledWith({ costPref: 'free-only' });
+    expect(runChatMock).toHaveBeenCalledTimes(3);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBeUndefined();
+      expect(req.noPaidRetry).toBe(true);
+      expect(req.model).toBe('user/model');
+    }
+  });
+
+  it('the synthesis carries the caller\'s free chain (fallbackModels), so one throttled free model does not fail the turn', async () => {
+    runChatMock
+      .mockResolvedValueOnce(plan)
+      .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Synthesized.', model: 'free/a:free', usage: u(0, 100) });
+    const chain = ['free/a:free', 'free/b:free'];
+    await runSwarm({ ...swarmParams, model: 'free/a:free', noPaidRetry: true, fallbackModels: chain });
+    const synth = runChatMock.mock.calls[2][0];
+    // Without the fix: no chain on the synthesis call (fallbackModels undefined).
+    expect(synth.fallbackModels).toEqual(chain);
+    expect(synth.fallbackModel).toBeUndefined();
+    expect(synth.noPaidRetry).toBe(true);
+  });
+
+  it('off: the planner/agents keep the free-first pick and every call keeps the paid net', async () => {
+    runChatMock
+      .mockResolvedValueOnce(plan)
+      .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Synthesized.', model: 'user/model', usage: u(0, 100) });
+    await runSwarm({ ...swarmParams, fallbackModels: ['user/model', 'other/model'] });
+    expect(runChatMock.mock.calls.map(([req]) => req.model)).toEqual(['free/worker', 'free/worker', 'user/model']);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBe('fallback/model');
+      expect(req.noPaidRetry).toBeUndefined();
+      // The chain is a free-only fallback; a paid turn keeps its single paid net, as before.
+      expect(req.fallbackModels).toBeUndefined();
+    }
+  });
+});
+
+describe('runDelegation in free-only mode (noPaidRetry)', () => {
+  const params = { provider: 'openrouter' as const, apiKey: 'k', model: 'user/model', goal: 'Compare A and B', subtasks: ['A specs', 'B specs'] };
+
+  it('sends no paid retry on any call and never falls back to a paid helper pick', async () => {
+    const { pickTextModel } = await import('../autoRouter.js');
+    vi.mocked(pickTextModel).mockRejectedValueOnce(new Error('no free model'));
+    runChatMock
+      .mockResolvedValueOnce({ text: 'A is …', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'B is …', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Aggregated.', usage: u(0, 100) });
+    await runDelegation({ ...params, noPaidRetry: true, fallbackModel: 'fallback/model' });
+    // Without the fix: the helpers' pick was free-FIRST (a paid model when none is free), and every call
+    // carried fallbackModel 'fallback/model' with no noPaidRetry.
+    expect(vi.mocked(pickTextModel)).toHaveBeenLastCalledWith({ costPref: 'free-only' });
+    expect(runChatMock).toHaveBeenCalledTimes(3);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBeUndefined();
+      expect(req.noPaidRetry).toBe(true);
+      expect(req.model).toBe('user/model');
+    }
+  });
+
+  it('off: the helpers keep the free-first pick and every call keeps the paid net', async () => {
+    runChatMock
+      .mockResolvedValueOnce({ text: 'A is …', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'B is …', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Aggregated.', usage: u(0, 100) });
+    await runDelegation(params);
+    expect(runChatMock.mock.calls.map(([req]) => req.model)).toEqual(['free/worker', 'free/worker', 'user/model']);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBe('fallback/model');
+      expect(req.noPaidRetry).toBeUndefined();
+    }
+  });
+});

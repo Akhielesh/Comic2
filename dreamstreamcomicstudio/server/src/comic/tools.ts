@@ -75,6 +75,7 @@ import {
   LINE_KINDS,
   QUALITY_TIERS,
   billedLlm,
+  imageRouteFor,
   newTextSpendTracker,
   planPages,
   recordTextSpend,
@@ -535,9 +536,23 @@ function guardPaidText(ctx: StudioContext, turn: DirectorTurn): void {
   turn.paidText += 1;
 }
 
+/**
+ * Whether an image of this kind draws on the user's own key: the route of the model that will draw it,
+ * exactly as its gate prices it (an own Gemini key draws Google models even beside the platform
+ * OpenRouter key). Keys-level when the route can't be resolved.
+ */
+const imageQuoteIsByok = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet'): boolean => {
+  const doc = ctx.session.doc;
+  try {
+    return imageRouteFor(resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride).spec, ctx.keys)?.byok ?? spendIsByok(ctx.keys);
+  } catch {
+    return spendIsByok(ctx.keys);
+  }
+};
+
 const priceOf = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet', count = 1): number => {
   const doc = ctx.session.doc;
-  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: spendIsByok(ctx.keys) }).usd;
+  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: imageQuoteIsByok(ctx, kind) }).usd;
 };
 
 const pageWord = (pages: Page[]) => (pages.length === 1 ? `Page ${pages[0].n}` : `Pages ${joinList(pages.map((p) => String(p.n)))}`);
@@ -1044,6 +1059,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!hasStory) throw argError('Nothing to plan yet — capture the story (brief, cast or source) first.');
         guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions: text(args.instructions, 4000) }, { collectCard: (c) => state.cards.push(c) });
+        // A refused plan (budget cap, drawn pages) is not a plan: nothing for the user to review.
+        if (outcome.status === 'blocked') return outcome.message;
         state.plannedThisTurn = true;
         const cast = castUncastBeings(ctx);
         return `${outcome.message}${cast} The user reviews the plan on the board before any page is drawn.`;
@@ -1064,6 +1081,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!pages.length) throw argError('Pass the page numbers to rewrite.');
         guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions, pageIds: pages.map((p) => p.id) }, { collectCard: (c) => state.cards.push(c) });
+        if (outcome.status === 'blocked') return outcome.message;
         state.plannedThisTurn = true;
         return `${outcome.message}${castUncastBeings(ctx)}`;
       }

@@ -247,6 +247,55 @@ describe('modelFit', () => {
   });
 });
 
+describe('modelFit: the price warning (models.md §5.1 acceptance "Nano Banana Pro (warn: price)")', () => {
+  const paidCaps = resolveStudioCaps({ planId: 'Creator', byok: false, isAdmin: false });
+  /** The registry's list prices (what the server's price book falls back to). */
+  const registryBook: PriceBook = { unit: (id, res) => ({ usd: getImageModel(id)?.priceUsd[res] ?? null, basis: 'registry' }), qcUsd: 0.002 };
+  const priceOf = (fit: ReturnType<typeof modelFit>) => fit.filter((r) => r.code === 'price');
+
+  it('on the lake comic, Nano Banana Pro warns about its price against the current Nano Banana 2.1, per page', () => {
+    const lake = makeLakeComic();
+    expect(lockedModelId(lake)).toBe(LAKE_MODEL);
+    const pro = modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, registryBook);
+    expect(pro.filter((r) => r.severity === 'block')).toEqual([]);
+    expect(priceOf(pro)).toEqual([{ code: 'price', severity: 'warn', text: 'About 4× the price of Nano Banana 2.1 per page' }]);
+    // Standard quality draws 2K pages: 0.1344 / 0.0504.
+    const standard = makeLakeComic((d) => (d.settings = { ...d.settings, quality: 'standard' }));
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, standard, paidCaps, registryBook))).toEqual([
+      { code: 'price', severity: 'warn', text: 'About 2.7× the price of Nano Banana 2.1 per page' }
+    ]);
+  });
+
+  it('only with a price book (existing callers unchanged), never for the current model, a cheaper one or an unknown price', () => {
+    const lake = makeLakeComic();
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps))).toEqual([]);
+    expect(priceOf(modelFit(getImageModel(LAKE_MODEL)!, lake, paidCaps, registryBook))).toEqual([]);
+    expect(priceOf(modelFit(getImageModel('nano-banana-lite')!, lake, paidCaps, registryBook))).toEqual([]);
+    const unknown: PriceBook = { unit: (id, res) => ({ usd: id === LAKE_MODEL ? getImageModel(id)!.priceUsd[res] ?? null : null, basis: 'none' }), qcUsd: 0 };
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, unknown))).toEqual([]);
+    // No lock yet (nothing drawn): no "current" to compare with.
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, createEmptyDoc('d', 'Empty', 1), paidCaps, registryBook))).toEqual([]);
+    // Never a dollar figure in the copy (governed users read it too).
+    for (const r of modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, registryBook)) expect(r.text).not.toMatch(/\$/);
+  });
+
+  it('warns at any ratio whose shown figure reads above 1.0× (no invented threshold); same-price models get none', () => {
+    const lake = makeLakeComic();
+    const current = 0.05;
+    /** Nano Banana Pro priced at `ratio` × the current model, whatever the resolution. */
+    const bookAt = (ratio: number): PriceBook => ({ unit: (id) => ({ usd: id === LAKE_MODEL ? current : current * ratio, basis: 'test' }), qcUsd: 0 });
+    const warnFor = (ratio: number) => priceOf(modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, bookAt(ratio)));
+    // Without the fix: [] (1.2× and 1.4× were under the 1.5× cut-off).
+    expect(warnFor(1.2)).toEqual([{ code: 'price', severity: 'warn', text: 'About 1.2× the price of Nano Banana 2.1 per page' }]);
+    expect(warnFor(1.4)).toEqual([{ code: 'price', severity: 'warn', text: 'About 1.4× the price of Nano Banana 2.1 per page' }]);
+    expect(warnFor(1.05)).toEqual([{ code: 'price', severity: 'warn', text: 'About 1.1× the price of Nano Banana 2.1 per page' }]);
+    // A ratio that would read "About 1×" says nothing new: no warning.
+    expect(warnFor(1)).toEqual([]);
+    expect(warnFor(1.04)).toEqual([]);
+    expect(warnFor(0.8)).toEqual([]);
+  });
+});
+
 describe('registry data (models.md §2.2)', () => {
   it('every spec carries the §3.3 fields and a cited or owned grade', () => {
     for (const spec of IMAGE_MODELS) {
@@ -490,6 +539,20 @@ describe('model_outage card', () => {
     const emptied = normalizeDoc({ ...makeLakeComic(), conversation: [{ ...msg, cards: [{ ...card, options: [{ kind: 'nope' }] } as never, msg.cards![1]] }] });
     expect(emptied.conversation[0].cards).toEqual([msg.cards![1]]);
     expect(normalizeOutageCard({ type: 'model_outage', id: 'x', modelId: '', options: [{ kind: 'wait_and_retry' }] })).toBeUndefined();
+  });
+
+  it('origin and chargedUsd (what the card may say about money) survive normalizeDoc; invalid values are dropped', () => {
+    const preflight = { ...card, origin: 'preflight' as const };
+    const midRun = { ...card, id: 'card_o2', origin: 'mid_run' as const, chargedUsd: 0 };
+    const paidPart = { ...card, id: 'card_o3', origin: 'mid_run' as const, chargedUsd: 0.04 };
+    expect(normalizeOutageCard(preflight)).toEqual(preflight);
+    expect(normalizeOutageCard(midRun)).toEqual(midRun);
+    expect(normalizeOutageCard(paidPart)).toEqual(paidPart);
+    const stored = normalizeDoc({ ...makeLakeComic(), conversation: [{ id: 'm', role: 'assistant', text: 'paused', at: 1, cards: [preflight, midRun, paidPart] }] });
+    expect(stored.conversation[0].cards).toEqual([preflight, midRun, paidPart]);
+    for (const bad of [{ origin: 'later' }, { origin: 1 }, { chargedUsd: -1 }, { chargedUsd: Number.NaN }, { chargedUsd: '0' }, { chargedUsd: Infinity }]) {
+      expect(normalizeOutageCard({ ...card, ...bad }), JSON.stringify(bad)).toEqual(card);
+    }
   });
 
   it('blockedAction is kept only when its type is a StudioAction type; anything else is dropped, the card stays', () => {

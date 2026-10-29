@@ -21,9 +21,11 @@
 // @ts-ignore TS2823
 import snapshotJson from './qualitySnapshot.json' with { type: 'json' };
 import { logger } from '../../lib/logger.js';
+import type { QualityBoard, QualityEntry, QualityHistoryPoint, RankMove } from '../../../../shared/comic/modelCatalog.js';
 import type { CatalogFetch, CatalogStore } from './catalog.js';
 
-export type QualityBoard = 'lmarena_t2i' | 'lmarena_edit' | 'lmarena_multi_image' | 'aa_t2i' | 'aa_edit' | 'design_arena';
+// Wire types (shared/comic/modelCatalog.ts), re-exported with their names.
+export type { QualityBoard, QualityEntry, QualityHistoryPoint, RankMove };
 export const QUALITY_BOARDS: QualityBoard[] = ['lmarena_t2i', 'lmarena_edit', 'lmarena_multi_image', 'aa_t2i', 'aa_edit', 'design_arena'];
 export const LMARENA_BOARDS: QualityBoard[] = ['lmarena_t2i', 'lmarena_edit', 'lmarena_multi_image'];
 
@@ -50,17 +52,6 @@ const MAX_FULL_PAGES = 300;
 const PAGE = 100;
 const MAX_PAGES = 40;
 
-export interface QualityEntry {
-  board: QualityBoard;
-  rank?: number;
-  of?: number;
-  score: number;
-  ci?: [number, number];
-  /** Board publish date / fetch time. */
-  asOf: string;
-  source: string;
-}
-
 export interface QualityBoardEntry {
   rank?: number;
   score: number;
@@ -76,14 +67,6 @@ export interface QualityBoardSnapshot {
   category?: string;
   source: string;
   entries: Record<string, QualityBoardEntry>;
-}
-
-export interface QualityHistoryPoint {
-  asOf: string;
-  rank?: number;
-  score: number;
-  /** The leaderboard entry this point is (a model's variants change over time, e.g. preview → GA). */
-  name?: string;
 }
 
 export interface QualitySnapshot {
@@ -137,14 +120,6 @@ export const qualityAsOf = (snap: QualitySnapshot = bundledQualitySnapshot): str
   const dates = Object.values(snap.boards).map((b) => b?.asOf).filter((d): d is string => typeof d === 'string');
   return dates.length ? dates.sort().at(-1) : snap.generatedAt;
 };
-
-export interface RankMove {
-  board: QualityBoard;
-  from: QualityHistoryPoint;
-  to: QualityHistoryPoint;
-  /** Positive = climbed (rank got smaller). */
-  delta: number;
-}
 
 /**
  * T4: rank movement inside a window from the history we hold (≥ 2 dated points in range). Nothing is

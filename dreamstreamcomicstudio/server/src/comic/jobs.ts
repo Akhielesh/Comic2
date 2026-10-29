@@ -754,6 +754,9 @@ const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards
   commitAs(ctx, [{ op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], 'job');
 };
 
+/** The chip a budget-cap notice carries: opens this comic's settings at the budget cap (ClientAction open_settings). */
+const RAISE_BUDGET_STEP: NextStep = { label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } };
+
 const blocked = (ctx: StudioContext, opts: RunActionOptions, message: string, tone: 'info' | 'warn' | 'error' = 'warn', steps?: NextStep[] | string[]) => {
   deliver(ctx, opts, message, [noticeCard(tone, message)], steps);
   return finished({ status: 'blocked', message });
@@ -869,10 +872,11 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'open' } }], origin);
   };
   // Nothing left to do (the quoted page was deleted, the cover got drawn meanwhile): the gate is
-  // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent".
+  // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent" —
+  // and says why ("Nothing left to draw"), not a "Not now" the user never said.
   const close = () => {
     const cur = ctx.session.doc.gate;
-    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined' } }], origin);
+    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined', closedReason: 'nothing_to_draw' } }], origin);
   };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
@@ -1059,7 +1063,7 @@ function createGate(
           : `Ready when you are: ${price} for ${plan.what}${onModel}.`;
     }
   })();
-  deliver(ctx, opts, text, cards);
+  deliver(ctx, opts, text, cards, reason === 'budget' ? [RAISE_BUDGET_STEP] : undefined);
   const message = (() => {
     switch (reason) {
       case 'budget':
@@ -3078,7 +3082,7 @@ export async function planPages(
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
     const text = 'This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again. Nothing was spent.';
-    deliver(ctx, runOpts, text, [noticeCard('info', text)], nextStepsFor(before, { byok }));
+    deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok })]);
     return { status: 'blocked', message: 'The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings. Nothing was spent.', code: 'BUDGET_EXCEEDED' };
   }
 

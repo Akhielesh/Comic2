@@ -23,11 +23,12 @@ import {
   type AllowanceStatus
 } from '../../services/usageAllowance';
 import { useUsageAllowance } from './useUsageAllowance';
+import { API_KEYS_HREF } from './links';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
-/** Deep link into Settings → API keys (App.tsx restores ?view=settings&tab=settings). */
-export const API_KEYS_HREF = '/?view=settings&tab=settings';
+/** Deep link into Settings → API keys (defined in ./links; re-exported here under the same name). */
+export { API_KEYS_HREF };
 
 /** The exhausted-state sentence — honest about a personal key on file (never "add" a key they already added). */
 export const usageExhaustedCopy = (status: Pick<AllowanceStatus, 'resetsAt' | 'byokAvailable' | 'byokFallbackMode'>): string => {
