@@ -29,6 +29,7 @@ import type { Resolution } from '../../../shared/comic/doc.js';
 import { getImageModel, imagePriceUsd, type ImageRoute } from '../../../shared/comic/models.js';
 import { METERING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { ownKeyPath, usageUnavailableMessage } from '../services/platformAllowance.js';
 import { releaseReservedOperation, reserveForOperation, settleReservedOperation } from '../services/usageEnforcer.js';
 import type { UsagePayload } from '../services/costEstimator.js';
 import { studioKeysFromRequest } from './keys.js';
@@ -82,17 +83,24 @@ const ADD_KEY_HINT = 'add your own key in Settings → API keys';
 
 /** A friendly, actionable sentence for a ledger denial. */
 export const billingDenialMessage = (details?: Partial<LimitExceededDetails> | null): string => {
+  // A key already on file is named, never "add your own key" (UB-6). The fallback mode decides the words.
+  const ownKey = details?.canFallbackToByok ? { canFallbackToByok: true, byokFallbackMode: details.byokFallbackMode ?? 'ask' } : undefined;
   switch (details?.reason) {
     case 'usage_budget_exhausted':
-      // The gate's own percent-only sentence (top-up / own-key path); never a dollar figure.
+      // The gate's own percent-only sentence (top-up / own-key path); never a dollar figure. The key
+      // "takes over from here" only when the usage is known to be used up (else the conservative path).
       return (
         details.message ||
-        "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or add your own API key in Settings → API keys to keep going."
+        `You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or ${
+          ownKey ? ownKeyPath(ownKey, (details.pctLeft ?? 100) < 0.5) : 'add your own API key in Settings → API keys'
+        } to keep going.`
       );
     case 'usage_budget_unavailable':
+      // An unreadable status keeps the account on the platform key, so a key on file never takes over
+      // by itself here: the user switches (usageUnavailableMessage, the same in every mode).
       return (
         details.message ||
-        `We couldn't check your usage just now, so nothing was spent. Please try again in a moment — or ${ADD_KEY_HINT}.`
+        (ownKey ? usageUnavailableMessage(ownKey) : `We couldn't check your usage just now, so nothing was spent. Please try again in a moment — or ${ADD_KEY_HINT}.`)
       );
     case 'platform_allowance_exhausted':
       return "You've used this month's included generation allowance. Add your own key in Settings → API keys, or upgrade.";

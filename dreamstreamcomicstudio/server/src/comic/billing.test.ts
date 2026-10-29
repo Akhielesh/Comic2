@@ -320,6 +320,36 @@ describe('usage budget (P1-LIMITS)', () => {
     }
   });
 
+  it('the fallback copy names a key already on file (UB-6) — never "add your own key" to a user who has one, never a dollar', () => {
+    const exhausted = (o: Record<string, unknown>) => billingDenialMessage({ reason: 'usage_budget_exhausted', ...o });
+    expect(exhausted({ canFallbackToByok: true, byokFallbackMode: 'ask', pctLeft: 0 })).toContain("continue on your own key (it's on file) in Settings → API keys");
+    expect(exhausted({ canFallbackToByok: true, byokFallbackMode: 'never', pctLeft: 0 })).toContain("it's on file, but set to never be used");
+    // 'auto' says the key takes over only when the usage is really used up; unknown ⇒ the conservative sentence.
+    expect(exhausted({ canFallbackToByok: true, byokFallbackMode: 'auto', pctLeft: 0 })).toContain("it's on file and takes over from here");
+    expect(exhausted({ canFallbackToByok: true, byokFallbackMode: 'auto' })).not.toContain('takes over from here');
+    expect(exhausted({ canFallbackToByok: true, byokFallbackMode: 'auto' })).toContain("it's on file");
+    // No mode on the details: the consent path ('ask').
+    expect(exhausted({ canFallbackToByok: true, pctLeft: 0 })).toContain("continue on your own key (it's on file)");
+    // No key on file: unchanged.
+    expect(exhausted({ canFallbackToByok: false, pctLeft: 0 })).toBe(
+      "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or add your own API key in Settings → API keys to keep going."
+    );
+    // An unreadable status: the account keys stay on the platform key, so in every mode the user switches.
+    for (const mode of ['ask', 'auto', 'never'] as const) {
+      const msg = billingDenialMessage({ reason: 'usage_budget_unavailable', canFallbackToByok: true, byokFallbackMode: mode });
+      expect(msg).toContain('nothing was spent');
+      expect(msg).toContain("switch to your own key (it's on file) in Settings → API keys");
+      expect(msg).not.toContain('takes over');
+    }
+    expect(billingDenialMessage({ reason: 'usage_budget_unavailable' })).toContain('add your own key in Settings → API keys');
+    for (const o of [{ canFallbackToByok: true, byokFallbackMode: 'auto', pctLeft: 0 }, { canFallbackToByok: true }]) {
+      expect(exhausted(o)).not.toMatch(/\$|usd|dollar/i);
+      expect(exhausted(o)).not.toMatch(/add your own/i);
+    }
+    // The gate's own sentence still wins.
+    expect(exhausted({ canFallbackToByok: true, message: 'Gate says so.' })).toBe('Gate says so.');
+  });
+
   it('turns an exhausted budget into a BILLING_DENIED notice (never swallowed)', async () => {
     const message = "You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or add your own API key in Settings → API keys to keep going.";
     const reserve = vi.fn(async () => ({ allowed: false, details: { reason: 'usage_budget_exhausted', message } }));
