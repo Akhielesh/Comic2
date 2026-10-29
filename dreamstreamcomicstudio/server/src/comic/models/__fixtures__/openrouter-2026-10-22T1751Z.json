@@ -1,0 +1,2574 @@
+{
+ "fetchedAt": "2026-10-22T17:51:00Z",
+ "imagesModels": {
+  "data": [
+   {
+    "id": "qwen/qwen-image-2.1-turbo",
+    "name": "Qwen: Qwen Image 2.1 Turbo",
+    "created": 1792194104,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "1:2",
+       "1:4",
+       "2:1",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:1",
+       "4:3",
+       "4:5",
+       "5:4",
+       "9:16",
+       "16:9"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 6
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 4
+     },
+     "seed": {
+      "type": "boolean"
+     }
+    },
+    "endpoints": "/api/v1/images/models/qwen/qwen-image-2.1-turbo/endpoints"
+   },
+   {
+    "id": "krea/k3-edit",
+    "name": "Krea: K3 Edit",
+    "created": 1792103728,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "4:3",
+       "3:2",
+       "16:9",
+       "4:5",
+       "2:3",
+       "9:16"
+      ]
+     },
+     "input_references": {
+      "type": "range",
+      "min": 1,
+      "max": 8
+     },
+     "seed": {
+      "type": "boolean"
+     }
+    },
+    "endpoints": "/api/v1/images/models/krea/k3-edit/endpoints"
+   },
+   {
+    "id": "google/gemini-nano-banana-2.1",
+    "name": "Google: Nano Banana 2.1",
+    "created": 1791300825,
+    "architecture": {
+     "input_modalities": [
+      "image",
+      "text"
+     ],
+     "output_modalities": [
+      "image",
+      "text"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K",
+       "4K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "1:4",
+       "1:8",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:1",
+       "4:3",
+       "4:5",
+       "5:4",
+       "8:1",
+       "9:16",
+       "16:9",
+       "21:9"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 14
+     }
+    },
+    "endpoints": "/api/v1/images/models/google/gemini-nano-banana-2.1/endpoints"
+   },
+   {
+    "id": "bytedance-seed/seedream-5-0-flash",
+    "name": "ByteDance Seed: Seedream 5.0 Flash",
+    "created": 1790889880,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "1:2",
+       "2:1",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:3",
+       "4:5",
+       "5:4",
+       "9:16",
+       "16:9",
+       "9:19.5",
+       "19.5:9",
+       "9:20",
+       "20:9",
+       "9:21",
+       "21:9",
+       "auto"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 14
+     },
+     "seed": {
+      "type": "boolean"
+     }
+    },
+    "endpoints": "/api/v1/images/models/bytedance-seed/seedream-5-0-flash/endpoints"
+   },
+   {
+    "id": "black-forest-labs/flux-3-image",
+    "name": "Black Forest Labs: FLUX 3 Image",
+    "created": 1790885807,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "768",
+       "1K",
+       "1.5K",
+       "2K",
+       "4K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "21:9",
+       "2:1",
+       "16:9",
+       "3:2",
+       "7:5",
+       "4:3",
+       "5:4",
+       "1:1",
+       "4:5",
+       "3:4",
+       "5:7",
+       "2:3",
+       "9:16",
+       "1:2",
+       "9:21",
+       "auto"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 10
+     }
+    },
+    "endpoints": "/api/v1/images/models/black-forest-labs/flux-3-image/endpoints"
+   },
+   {
+    "id": "openai/gpt-image-2.5-sunburst",
+    "name": "OpenAI: GPT Image 2.5 Sunburst",
+    "created": 1788916368,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "3:2",
+       "2:3",
+       "4:3",
+       "3:4",
+       "16:9",
+       "9:16",
+       "21:9",
+       "auto"
+      ]
+     },
+     "quality": {
+      "type": "enum",
+      "values": [
+       "auto",
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     },
+     "background": {
+      "type": "enum",
+      "values": [
+       "auto",
+       "transparent",
+       "opaque"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 10
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 16
+     },
+     "output_compression": {
+      "type": "range",
+      "min": 0,
+      "max": 100
+     }
+    },
+    "endpoints": "/api/v1/images/models/openai/gpt-image-2.5-sunburst/endpoints"
+   },
+   {
+    "id": "openai/gpt-image-2.5-flare",
+    "name": "OpenAI: GPT Image 2.5 Flare",
+    "created": 1788916350,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "3:2",
+       "2:3",
+       "4:3",
+       "3:4",
+       "16:9",
+       "9:16",
+       "21:9",
+       "auto"
+      ]
+     },
+     "quality": {
+      "type": "enum",
+      "values": [
+       "auto",
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     },
+     "background": {
+      "type": "enum",
+      "values": [
+       "auto",
+       "transparent",
+       "opaque"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 10
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 16
+     },
+     "output_compression": {
+      "type": "range",
+      "min": 0,
+      "max": 100
+     }
+    },
+    "endpoints": "/api/v1/images/models/openai/gpt-image-2.5-flare/endpoints"
+   },
+   {
+    "id": "microsoft/mai-image-2.6-flash",
+    "name": "Microsoft AI: MAI-Image-2.6 Flash",
+    "created": 1788550735,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "4:3",
+       "3:4",
+       "16:9",
+       "9:16",
+       "3:2",
+       "2:3",
+       "auto"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 5
+     }
+    },
+    "endpoints": "/api/v1/images/models/microsoft/mai-image-2.6-flash/endpoints"
+   },
+   {
+    "id": "meta/muse-image",
+    "name": "Meta: Muse Image",
+    "created": 1787764532,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {},
+    "endpoints": "/api/v1/images/models/meta/muse-image/endpoints"
+   },
+   {
+    "id": "bytedance-seed/seedream-5-0-pro",
+    "name": "ByteDance Seed: Seedream 5.0 Pro",
+    "created": 1786578139,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "1:2",
+       "2:1",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:3",
+       "4:5",
+       "5:4",
+       "9:16",
+       "16:9",
+       "9:19.5",
+       "19.5:9",
+       "9:20",
+       "20:9",
+       "9:21",
+       "21:9",
+       "auto"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 14
+     },
+     "seed": {
+      "type": "boolean"
+     }
+    },
+    "endpoints": "/api/v1/images/models/bytedance-seed/seedream-5-0-pro/endpoints"
+   },
+   {
+    "id": "google/gemini-3.1-flash-lite-image",
+    "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+    "created": 1782837225,
+    "architecture": {
+     "input_modalities": [
+      "image",
+      "text"
+     ],
+     "output_modalities": [
+      "image",
+      "text"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "1:4",
+       "1:8",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:1",
+       "4:3",
+       "4:5",
+       "5:4",
+       "8:1",
+       "9:16",
+       "16:9",
+       "21:9"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 14
+     }
+    },
+    "endpoints": "/api/v1/images/models/google/gemini-3.1-flash-lite-image/endpoints"
+   },
+   {
+    "id": "google/gemini-3.1-flash-image",
+    "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+    "created": 1781754065,
+    "architecture": {
+     "input_modalities": [
+      "image",
+      "text"
+     ],
+     "output_modalities": [
+      "image",
+      "text"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "512",
+       "1K",
+       "2K",
+       "4K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "1:4",
+       "1:8",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:1",
+       "4:3",
+       "4:5",
+       "5:4",
+       "8:1",
+       "9:16",
+       "16:9",
+       "21:9"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 14
+     }
+    },
+    "endpoints": "/api/v1/images/models/google/gemini-3.1-flash-image/endpoints"
+   },
+   {
+    "id": "google/gemini-3-pro-image",
+    "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)",
+    "created": 1781754054,
+    "architecture": {
+     "input_modalities": [
+      "image",
+      "text"
+     ],
+     "output_modalities": [
+      "image",
+      "text"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K",
+       "4K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:3",
+       "4:5",
+       "5:4",
+       "9:16",
+       "16:9",
+       "21:9"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 14
+     }
+    },
+    "endpoints": "/api/v1/images/models/google/gemini-3-pro-image/endpoints"
+   },
+   {
+    "id": "sourceful/riverflow-v2.5-fast",
+    "name": "Sourceful: Riverflow V2.5 Fast",
+    "created": 1780584983,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "resolution": {
+      "type": "enum",
+      "values": [
+       "1K",
+       "2K"
+      ]
+     },
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "4:3",
+       "3:4",
+       "3:2",
+       "2:3",
+       "16:9",
+       "9:16",
+       "21:9",
+       "auto"
+      ]
+     },
+     "output_format": {
+      "type": "enum",
+      "values": [
+       "jpeg"
+      ]
+     },
+     "background": {
+      "type": "enum",
+      "values": [
+       "auto",
+       "transparent",
+       "opaque"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 4
+     }
+    },
+    "endpoints": "/api/v1/images/models/sourceful/riverflow-v2.5-fast/endpoints"
+   },
+   {
+    "id": "black-forest-labs/flux.2-pro",
+    "name": "Black Forest Labs: FLUX.2 Pro",
+    "created": 1764030274,
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    },
+    "supported_parameters": {
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "4:3",
+       "3:4",
+       "3:2",
+       "2:3",
+       "16:9",
+       "9:16",
+       "21:9",
+       "auto"
+      ]
+     },
+     "output_format": {
+      "type": "enum",
+      "values": [
+       "png",
+       "jpeg"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 8
+     },
+     "seed": {
+      "type": "boolean"
+     }
+    },
+    "endpoints": "/api/v1/images/models/black-forest-labs/flux.2-pro/endpoints"
+   },
+   {
+    "id": "google/gemini-2.5-flash-image",
+    "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
+    "created": 1759870431,
+    "architecture": {
+     "input_modalities": [
+      "image",
+      "text"
+     ],
+     "output_modalities": [
+      "image",
+      "text"
+     ]
+    },
+    "supported_parameters": {
+     "aspect_ratio": {
+      "type": "enum",
+      "values": [
+       "1:1",
+       "2:3",
+       "3:2",
+       "3:4",
+       "4:3",
+       "4:5",
+       "5:4",
+       "9:16",
+       "16:9",
+       "21:9"
+      ]
+     },
+     "n": {
+      "type": "range",
+      "min": 1,
+      "max": 1
+     },
+     "input_references": {
+      "type": "range",
+      "min": 0,
+      "max": 3
+     }
+    },
+    "endpoints": "/api/v1/images/models/google/gemini-2.5-flash-image/endpoints"
+   }
+  ]
+ },
+ "imageEndpoints": {
+  "google/gemini-nano-banana-2.1": {
+   "id": "google/gemini-nano-banana-2.1",
+   "endpoints": [
+    {
+     "provider_name": "Google AI Studio",
+     "provider_slug": "google-ai-studio",
+     "provider_tag": "google-ai-studio",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K",
+        "4K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:4",
+        "1:8",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "8:1",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 3e-05
+      }
+     ]
+    }
+   ]
+  },
+  "google/gemini-3-pro-image": {
+   "id": "google/gemini-3-pro-image",
+   "endpoints": [
+    {
+     "provider_name": "Google AI Studio",
+     "provider_slug": "google-ai-studio/global",
+     "provider_tag": "google-ai-studio/global",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K",
+        "4K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_image",
+       "unit": "token",
+       "cost_usd": 2e-06
+      },
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 0.00012
+      }
+     ]
+    },
+    {
+     "provider_name": "Google Vertex",
+     "provider_slug": "google-vertex/global",
+     "provider_tag": "google-vertex/global",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_image",
+       "unit": "token",
+       "cost_usd": 2e-06
+      },
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 0.00012
+      }
+     ]
+    }
+   ]
+  },
+  "google/gemini-3.1-flash-image": {
+   "id": "google/gemini-3.1-flash-image",
+   "endpoints": [
+    {
+     "provider_name": "Google Vertex",
+     "provider_slug": "google-vertex/us",
+     "provider_tag": "google-vertex/us",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "512",
+        "1K",
+        "2K",
+        "4K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:4",
+        "1:8",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "8:1",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 6.6e-05
+      }
+     ]
+    },
+    {
+     "provider_name": "Google AI Studio",
+     "provider_slug": "google-ai-studio",
+     "provider_tag": "google-ai-studio",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "512",
+        "1K",
+        "2K",
+        "4K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:4",
+        "1:8",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "8:1",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 6e-05
+      }
+     ]
+    },
+    {
+     "provider_name": "Google Vertex",
+     "provider_slug": "google-vertex/global",
+     "provider_tag": "google-vertex/global",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "512",
+        "1K",
+        "2K",
+        "4K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:4",
+        "1:8",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "8:1",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 6e-05
+      }
+     ]
+    }
+   ]
+  },
+  "google/gemini-3.1-flash-lite-image": {
+   "id": "google/gemini-3.1-flash-lite-image",
+   "endpoints": [
+    {
+     "provider_name": "Google Vertex",
+     "provider_slug": "google-vertex/global",
+     "provider_tag": "google-vertex/global",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:4",
+        "1:8",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "8:1",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 3e-05
+      }
+     ]
+    },
+    {
+     "provider_name": "Google AI Studio",
+     "provider_slug": "google-ai-studio",
+     "provider_tag": "google-ai-studio",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:4",
+        "1:8",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "8:1",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 3e-05
+      }
+     ]
+    }
+   ]
+  },
+  "openai/gpt-image-2.5-sunburst": {
+   "id": "openai/gpt-image-2.5-sunburst",
+   "endpoints": [
+    {
+     "provider_name": "OpenAI",
+     "provider_slug": "openai",
+     "provider_tag": "openai",
+     "supported_parameters": {
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "3:2",
+        "2:3",
+        "4:3",
+        "3:4",
+        "16:9",
+        "9:16",
+        "21:9",
+        "auto"
+       ]
+      },
+      "quality": {
+       "type": "enum",
+       "values": [
+        "auto",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+       ]
+      },
+      "background": {
+       "type": "enum",
+       "values": [
+        "auto",
+        "transparent",
+        "opaque"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 10
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 16
+      },
+      "output_compression": {
+       "type": "range",
+       "min": 0,
+       "max": 100
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_image",
+       "unit": "token",
+       "cost_usd": 8e-06
+      },
+      {
+       "billable": "input_text",
+       "unit": "token",
+       "cost_usd": 5e-06
+      },
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 3e-05
+      }
+     ]
+    }
+   ]
+  },
+  "openai/gpt-image-2.5-flare": {
+   "id": "openai/gpt-image-2.5-flare",
+   "endpoints": [
+    {
+     "provider_name": "OpenAI",
+     "provider_slug": "openai",
+     "provider_tag": "openai",
+     "supported_parameters": {
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "3:2",
+        "2:3",
+        "4:3",
+        "3:4",
+        "16:9",
+        "9:16",
+        "21:9",
+        "auto"
+       ]
+      },
+      "quality": {
+       "type": "enum",
+       "values": [
+        "auto",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+       ]
+      },
+      "background": {
+       "type": "enum",
+       "values": [
+        "auto",
+        "transparent",
+        "opaque"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 10
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 16
+      },
+      "output_compression": {
+       "type": "range",
+       "min": 0,
+       "max": 100
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_image",
+       "unit": "token",
+       "cost_usd": 8e-06
+      },
+      {
+       "billable": "input_text",
+       "unit": "token",
+       "cost_usd": 5e-06
+      },
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 3e-05
+      }
+     ]
+    }
+   ]
+  },
+  "black-forest-labs/flux-3-image": {
+   "id": "black-forest-labs/flux-3-image",
+   "endpoints": [
+    {
+     "provider_name": "Black Forest Labs",
+     "provider_slug": "black-forest-labs",
+     "provider_tag": "black-forest-labs",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "768",
+        "1K",
+        "1.5K",
+        "2K",
+        "4K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "21:9",
+        "2:1",
+        "16:9",
+        "3:2",
+        "7:5",
+        "4:3",
+        "5:4",
+        "1:1",
+        "4:5",
+        "3:4",
+        "5:7",
+        "2:3",
+        "9:16",
+        "1:2",
+        "9:21",
+        "auto"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 10
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.041,
+       "variant": "768"
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.048,
+       "variant": "1k"
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.07,
+       "variant": "1.5k"
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.1,
+       "variant": "2k"
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.607,
+       "variant": "4k"
+      }
+     ]
+    }
+   ]
+  },
+  "bytedance-seed/seedream-5-0-pro": {
+   "id": "bytedance-seed/seedream-5-0-pro",
+   "endpoints": [
+    {
+     "provider_name": "Seed",
+     "provider_slug": "seed",
+     "provider_tag": "seed",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:2",
+        "2:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "9:19.5",
+        "19.5:9",
+        "9:20",
+        "20:9",
+        "9:21",
+        "21:9",
+        "auto"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      },
+      "seed": {
+       "type": "boolean"
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.045
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.09,
+       "variant": "high_resolution"
+      },
+      {
+       "billable": "input_image",
+       "unit": "image",
+       "cost_usd": 0.003
+      }
+     ]
+    }
+   ]
+  },
+  "google/gemini-2.5-flash-image": {
+   "id": "google/gemini-2.5-flash-image",
+   "endpoints": [
+    {
+     "provider_name": "Google Vertex",
+     "provider_slug": "google-vertex/global",
+     "provider_tag": "google-vertex/global",
+     "supported_parameters": {
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 3
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_image",
+       "unit": "token",
+       "cost_usd": 3e-07
+      },
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 3e-05
+      }
+     ]
+    }
+   ]
+  },
+  "krea/k3-edit": {
+   "id": "krea/k3-edit",
+   "endpoints": [
+    {
+     "provider_name": "Krea",
+     "provider_slug": "krea",
+     "provider_tag": "krea",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "4:3",
+        "3:2",
+        "16:9",
+        "4:5",
+        "2:3",
+        "9:16"
+       ]
+      },
+      "input_references": {
+       "type": "range",
+       "min": 1,
+       "max": 8
+      },
+      "seed": {
+       "type": "boolean"
+      }
+     },
+     "pricing": []
+    }
+   ]
+  },
+  "sourceful/riverflow-v2.5-fast": {
+   "id": "sourceful/riverflow-v2.5-fast",
+   "endpoints": [
+    {
+     "provider_name": "Sourceful",
+     "provider_slug": "sourceful",
+     "provider_tag": "sourceful",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "16:9",
+        "9:16",
+        "21:9",
+        "auto"
+       ]
+      },
+      "output_format": {
+       "type": "enum",
+       "values": [
+        "jpeg"
+       ]
+      },
+      "background": {
+       "type": "enum",
+       "values": [
+        "auto",
+        "transparent",
+        "opaque"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 4
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.019
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.021,
+       "variant": "2k"
+      }
+     ]
+    }
+   ]
+  },
+  "black-forest-labs/flux.2-pro": {
+   "id": "black-forest-labs/flux.2-pro",
+   "endpoints": [
+    {
+     "provider_name": "Black Forest Labs",
+     "provider_slug": "black-forest-labs",
+     "provider_tag": "black-forest-labs",
+     "supported_parameters": {
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "16:9",
+        "9:16",
+        "21:9",
+        "auto"
+       ]
+      },
+      "output_format": {
+       "type": "enum",
+       "values": [
+        "png",
+        "jpeg"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 8
+      },
+      "seed": {
+       "type": "boolean"
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "megapixel",
+       "cost_usd": 0.03
+      }
+     ]
+    }
+   ]
+  },
+  "microsoft/mai-image-2.6-flash": {
+   "id": "microsoft/mai-image-2.6-flash",
+   "endpoints": [
+    {
+     "provider_name": "Azure",
+     "provider_slug": "azure",
+     "provider_tag": "azure",
+     "supported_parameters": {
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "4:3",
+        "3:4",
+        "16:9",
+        "9:16",
+        "3:2",
+        "2:3",
+        "auto"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 5
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_text",
+       "unit": "token",
+       "cost_usd": 1.75e-06
+      },
+      {
+       "billable": "input_image",
+       "unit": "token",
+       "cost_usd": 2.5e-06
+      },
+      {
+       "billable": "output_image",
+       "unit": "token",
+       "cost_usd": 1.9e-05
+      }
+     ]
+    }
+   ]
+  },
+  "meta/muse-image": {
+   "id": "meta/muse-image",
+   "endpoints": []
+  },
+  "bytedance-seed/seedream-5-0-flash": {
+   "id": "bytedance-seed/seedream-5-0-flash",
+   "endpoints": [
+    {
+     "provider_name": "Seed",
+     "provider_slug": "seed",
+     "provider_tag": "seed",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:2",
+        "2:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "9:19.5",
+        "19.5:9",
+        "9:20",
+        "20:9",
+        "9:21",
+        "21:9",
+        "auto"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 1
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 14
+      },
+      "seed": {
+       "type": "boolean"
+      }
+     },
+     "pricing": [
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.018
+      },
+      {
+       "billable": "input_image",
+       "unit": "image",
+       "cost_usd": 0
+      }
+     ]
+    }
+   ]
+  },
+  "qwen/qwen-image-2.1-turbo": {
+   "id": "qwen/qwen-image-2.1-turbo",
+   "endpoints": [
+    {
+     "provider_name": "Alibaba Cloud Int.",
+     "provider_slug": "alibaba",
+     "provider_tag": "alibaba",
+     "supported_parameters": {
+      "resolution": {
+       "type": "enum",
+       "values": [
+        "1K",
+        "2K"
+       ]
+      },
+      "aspect_ratio": {
+       "type": "enum",
+       "values": [
+        "1:1",
+        "1:2",
+        "1:4",
+        "2:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:1",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9"
+       ]
+      },
+      "n": {
+       "type": "range",
+       "min": 1,
+       "max": 6
+      },
+      "input_references": {
+       "type": "range",
+       "min": 0,
+       "max": 4
+      },
+      "seed": {
+       "type": "boolean"
+      }
+     },
+     "pricing": [
+      {
+       "billable": "input_image",
+       "unit": "image",
+       "cost_usd": 0
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.0184,
+       "variant": "1k"
+      },
+      {
+       "billable": "output_image",
+       "unit": "image",
+       "cost_usd": 0.0184,
+       "variant": "2k"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "modelEndpoints": {
+  "google/gemini-nano-banana-2.1": {
+   "data": {
+    "id": "google/gemini-nano-banana-2.1",
+    "name": "Google: Nano Banana 2.1",
+    "created": 1791300825,
+    "endpoints": [
+     {
+      "name": "Google AI Studio | google/gemini-nano-banana-2.1-20261006",
+      "model_id": "google/gemini-nano-banana-2.1",
+      "provider_name": "Google AI Studio",
+      "tag": "google-ai-studio",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": 97.72209567198178,
+      "pricing": {
+       "prompt": "0.0000015",
+       "completion": "0.0000075",
+       "image_output": "0.00003",
+       "web_search": "0.014",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "google/gemini-3-pro-image": {
+   "data": {
+    "id": "google/gemini-3-pro-image",
+    "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)",
+    "created": 1781754054,
+    "endpoints": [
+     {
+      "name": "Google AI Studio | google/gemini-3-pro-image-20260528",
+      "model_id": "google/gemini-3-pro-image",
+      "provider_name": "Google AI Studio",
+      "tag": "google-ai-studio/global",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": 98.33333333333333,
+      "pricing": {
+       "prompt": "0.000002",
+       "completion": "0.000012",
+       "image": "0.000002",
+       "image_output": "0.00012",
+       "audio": "0.000002",
+       "input_audio_cache": "0.0000002",
+       "web_search": "0.014",
+       "internal_reasoning": "0.000012",
+       "input_cache_read": "0.0000002",
+       "input_cache_write": "0.000000375",
+       "discount": 0
+      }
+     },
+     {
+      "name": "Google | google/gemini-3-pro-image-20260528",
+      "model_id": "google/gemini-3-pro-image",
+      "provider_name": "Google",
+      "tag": "google-vertex/global",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0.000002",
+       "completion": "0.000012",
+       "image": "0.000002",
+       "image_output": "0.00012",
+       "audio": "0.000002",
+       "input_audio_cache": "0.0000002",
+       "web_search": "0.014",
+       "internal_reasoning": "0.000012",
+       "input_cache_read": "0.0000002",
+       "input_cache_write": "0.000000375",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "google/gemini-3.1-flash-image": {
+   "data": {
+    "id": "google/gemini-3.1-flash-image",
+    "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+    "created": 1781754065,
+    "endpoints": [
+     {
+      "name": "Google AI Studio | google/gemini-3.1-flash-image-20260528",
+      "model_id": "google/gemini-3.1-flash-image",
+      "provider_name": "Google AI Studio",
+      "tag": "google-ai-studio",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 93.24324324324324,
+      "pricing": {
+       "prompt": "0.0000005",
+       "completion": "0.000003",
+       "image_output": "0.00006",
+       "web_search": "0.014",
+       "discount": 0
+      }
+     },
+     {
+      "name": "Google | google/gemini-3.1-flash-image-20260528",
+      "model_id": "google/gemini-3.1-flash-image",
+      "provider_name": "Google",
+      "tag": "google-vertex/global",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0.0000005",
+       "completion": "0.000003",
+       "image_output": "0.00006",
+       "web_search": "0.014",
+       "discount": 0
+      }
+     },
+     {
+      "name": "Google | google/gemini-3.1-flash-image-20260528",
+      "model_id": "google/gemini-3.1-flash-image",
+      "provider_name": "Google",
+      "tag": "google-vertex/us",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": null,
+      "pricing": {
+       "prompt": "0.00000055",
+       "completion": "0.0000033",
+       "image_output": "0.000066",
+       "web_search": "0.014",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "google/gemini-3.1-flash-lite-image": {
+   "data": {
+    "id": "google/gemini-3.1-flash-lite-image",
+    "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+    "created": 1782837225,
+    "endpoints": [
+     {
+      "name": "Google | google/gemini-3.1-flash-lite-image-20260630",
+      "model_id": "google/gemini-3.1-flash-lite-image",
+      "provider_name": "Google",
+      "tag": "google-vertex/global",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0.00000025",
+       "completion": "0.0000015",
+       "image_output": "0.00003",
+       "web_search": "0.014",
+       "discount": 0
+      }
+     },
+     {
+      "name": "Google AI Studio | google/gemini-3.1-flash-lite-image-20260630",
+      "model_id": "google/gemini-3.1-flash-lite-image",
+      "provider_name": "Google AI Studio",
+      "tag": "google-ai-studio",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 73.68421052631578,
+      "pricing": {
+       "prompt": "0.00000025",
+       "completion": "0.0000015",
+       "image_output": "0.00003",
+       "web_search": "0.014",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "openai/gpt-image-2.5-sunburst": {
+   "data": {
+    "id": "openai/gpt-image-2.5-sunburst",
+    "name": "OpenAI: GPT Image 2.5 Sunburst",
+    "created": 1788916368,
+    "endpoints": [
+     {
+      "name": "OpenAI | openai/gpt-image-2.5-sunburst-20260908",
+      "model_id": "openai/gpt-image-2.5-sunburst",
+      "provider_name": "OpenAI",
+      "tag": "openai",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0.000008",
+       "completion": "0.000008",
+       "image_output": "0.00003",
+       "web_search": "0.01",
+       "input_cache_read": "0.000002",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "openai/gpt-image-2.5-flare": {
+   "data": {
+    "id": "openai/gpt-image-2.5-flare",
+    "name": "OpenAI: GPT Image 2.5 Flare",
+    "created": 1788916350,
+    "endpoints": [
+     {
+      "name": "OpenAI | openai/gpt-image-2.5-flare-20260908",
+      "model_id": "openai/gpt-image-2.5-flare",
+      "provider_name": "OpenAI",
+      "tag": "openai",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0.000008",
+       "completion": "0.000008",
+       "image_output": "0.00003",
+       "web_search": "0.01",
+       "input_cache_read": "0.000002",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "black-forest-labs/flux-3-image": {
+   "data": {
+    "id": "black-forest-labs/flux-3-image",
+    "name": "Black Forest Labs: FLUX 3 Image",
+    "created": 1790885807,
+    "endpoints": [
+     {
+      "name": "Black Forest Labs | black-forest-labs/flux-3-image-20261001",
+      "model_id": "black-forest-labs/flux-3-image",
+      "provider_name": "Black Forest Labs",
+      "tag": "black-forest-labs",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image_token": "0.00000982035928143713",
+       "image_output": "0.00000982035928143713",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "bytedance-seed/seedream-5-0-pro": {
+   "data": {
+    "id": "bytedance-seed/seedream-5-0-pro",
+    "name": "ByteDance Seed: Seedream 5.0 Pro",
+    "created": 1786578139,
+    "endpoints": [
+     {
+      "name": "Seed | bytedance-seed/seedream-5-0-pro-20260812",
+      "model_id": "bytedance-seed/seedream-5-0-pro",
+      "provider_name": "Seed",
+      "tag": "seed",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 99.46808510638297,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image": "0.003",
+       "image_token": "0.0000107784431137725",
+       "image_output": "0.0000107784431137725",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "google/gemini-2.5-flash-image": {
+   "data": {
+    "id": "google/gemini-2.5-flash-image",
+    "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
+    "created": 1759870431,
+    "endpoints": [
+     {
+      "name": "Google | google/gemini-2.5-flash-image",
+      "model_id": "google/gemini-2.5-flash-image",
+      "provider_name": "Google",
+      "tag": "google-vertex/global",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0.0000003",
+       "completion": "0.0000025",
+       "image": "0.0000003",
+       "image_output": "0.00003",
+       "audio": "0.000001",
+       "input_audio_cache": "0.0000001",
+       "web_search": "0.014",
+       "internal_reasoning": "0.0000025",
+       "input_cache_read": "0.00000003",
+       "input_cache_write": "0.0000000833333333333333",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "krea/k3-edit": {
+   "data": {
+    "id": "krea/k3-edit",
+    "name": "Krea: K3 Edit",
+    "created": 1792103728,
+    "endpoints": [
+     {
+      "name": "Krea | krea/k3-edit-20260914",
+      "model_id": "krea/k3-edit",
+      "provider_name": "Krea",
+      "tag": "krea",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image": "0.02",
+       "image_token": "0.00000718562874251497",
+       "image_output": "0.00000718562874251497",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "sourceful/riverflow-v2.5-fast": {
+   "data": {
+    "id": "sourceful/riverflow-v2.5-fast",
+    "name": "Sourceful: Riverflow V2.5 Fast",
+    "created": 1780584983,
+    "endpoints": [
+     {
+      "name": "Sourceful | sourceful/riverflow-v2.5-fast-20260605",
+      "model_id": "sourceful/riverflow-v2.5-fast",
+      "provider_name": "Sourceful",
+      "tag": "sourceful",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": null,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image_token": "0.00000455089820359281",
+       "image_output": "0.00000455089820359281",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "black-forest-labs/flux.2-pro": {
+   "data": {
+    "id": "black-forest-labs/flux.2-pro",
+    "name": "Black Forest Labs: FLUX.2 Pro",
+    "created": 1764030274,
+    "endpoints": [
+     {
+      "name": "Black Forest Labs | black-forest-labs/flux.2-pro",
+      "model_id": "black-forest-labs/flux.2-pro",
+      "provider_name": "Black Forest Labs",
+      "tag": "black-forest-labs",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image_output": "0.00000732421875",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "microsoft/mai-image-2.6-flash": {
+   "data": {
+    "id": "microsoft/mai-image-2.6-flash",
+    "name": "Microsoft AI: MAI-Image-2.6 Flash",
+    "created": 1788550735,
+    "endpoints": [
+     {
+      "name": "Azure | microsoft/mai-image-2.6-flash-20260904",
+      "model_id": "microsoft/mai-image-2.6-flash",
+      "provider_name": "Azure",
+      "tag": "azure",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": 98.54014598540147,
+      "pricing": {
+       "prompt": "0.00000175",
+       "completion": "0",
+       "image_token": "0.000019",
+       "image_output": "0.000019",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "meta/muse-image": {
+   "data": {
+    "id": "meta/muse-image",
+    "name": "Meta: Muse Image",
+    "created": 1787764532,
+    "endpoints": [
+     {
+      "name": "Meta | meta/muse-image-1.0-eval-20260824",
+      "model_id": "meta/muse-image",
+      "provider_name": "Meta",
+      "tag": "meta",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image_token": "0.00000239520958083832",
+       "image_output": "0.00000239520958083832",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "bytedance-seed/seedream-5-0-flash": {
+   "data": {
+    "id": "bytedance-seed/seedream-5-0-flash",
+    "name": "ByteDance Seed: Seedream 5.0 Flash",
+    "created": 1790889880,
+    "endpoints": [
+     {
+      "name": "Seed | bytedance-seed/seedream-5-0-flash-20261001",
+      "model_id": "bytedance-seed/seedream-5-0-flash",
+      "provider_name": "Seed",
+      "tag": "seed",
+      "status": 0,
+      "uptime_last_30m": 100,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image": "0",
+       "image_token": "0.00000431137724550898",
+       "image_output": "0.00000431137724550898",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  },
+  "qwen/qwen-image-2.1-turbo": {
+   "data": {
+    "id": "qwen/qwen-image-2.1-turbo",
+    "name": "Qwen: Qwen Image 2.1 Turbo",
+    "created": 1792194104,
+    "endpoints": [
+     {
+      "name": "Alibaba | qwen/qwen-image-2.1-turbo-20261016",
+      "model_id": "qwen/qwen-image-2.1-turbo",
+      "provider_name": "Alibaba",
+      "tag": "alibaba",
+      "status": 0,
+      "uptime_last_30m": null,
+      "uptime_last_1d": 100,
+      "pricing": {
+       "prompt": "0",
+       "completion": "0",
+       "image": "0",
+       "image_token": "0.00000440718562874251",
+       "image_output": "0.00000440718562874251",
+       "discount": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "canonical": {
+  "qwen/qwen-image-2.1-turbo": {
+   "id": "qwen/qwen-image-2.1-turbo",
+   "canonical_slug": "qwen/qwen-image-2.1-turbo-20261016",
+   "created": 1792194104,
+   "name": "Qwen: Qwen Image 2.1 Turbo"
+  },
+  "krea/k3-edit": {
+   "id": "krea/k3-edit",
+   "canonical_slug": "krea/k3-edit-20260914",
+   "created": 1792103728,
+   "name": "Krea: K3 Edit"
+  },
+  "google/gemini-nano-banana-2.1": {
+   "id": "google/gemini-nano-banana-2.1",
+   "canonical_slug": "google/gemini-nano-banana-2.1-20261006",
+   "created": 1791300825,
+   "name": "Google: Nano Banana 2.1"
+  },
+  "bytedance-seed/seedream-5-0-flash": {
+   "id": "bytedance-seed/seedream-5-0-flash",
+   "canonical_slug": "bytedance-seed/seedream-5-0-flash-20261001",
+   "created": 1790889880,
+   "name": "ByteDance Seed: Seedream 5.0 Flash"
+  },
+  "black-forest-labs/flux-3-image": {
+   "id": "black-forest-labs/flux-3-image",
+   "canonical_slug": "black-forest-labs/flux-3-image-20261001",
+   "created": 1790885807,
+   "name": "Black Forest Labs: FLUX 3 Image"
+  },
+  "openai/gpt-image-2.5-sunburst": {
+   "id": "openai/gpt-image-2.5-sunburst",
+   "canonical_slug": "openai/gpt-image-2.5-sunburst-20260908",
+   "created": 1788916368,
+   "name": "OpenAI: GPT Image 2.5 Sunburst"
+  },
+  "openai/gpt-image-2.5-flare": {
+   "id": "openai/gpt-image-2.5-flare",
+   "canonical_slug": "openai/gpt-image-2.5-flare-20260908",
+   "created": 1788916350,
+   "name": "OpenAI: GPT Image 2.5 Flare"
+  },
+  "microsoft/mai-image-2.6-flash": {
+   "id": "microsoft/mai-image-2.6-flash",
+   "canonical_slug": "microsoft/mai-image-2.6-flash-20260904",
+   "created": 1788550735,
+   "name": "Microsoft AI: MAI-Image-2.6 Flash"
+  },
+  "meta/muse-image": {
+   "id": "meta/muse-image",
+   "canonical_slug": "meta/muse-image-1.0-eval-20260824",
+   "created": 1787764532,
+   "name": "Meta: Muse Image"
+  },
+  "bytedance-seed/seedream-5-0-pro": {
+   "id": "bytedance-seed/seedream-5-0-pro",
+   "canonical_slug": "bytedance-seed/seedream-5-0-pro-20260812",
+   "created": 1786578139,
+   "name": "ByteDance Seed: Seedream 5.0 Pro"
+  },
+  "google/gemini-3.1-flash-lite-image": {
+   "id": "google/gemini-3.1-flash-lite-image",
+   "canonical_slug": "google/gemini-3.1-flash-lite-image-20260630",
+   "created": 1782837225,
+   "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)"
+  },
+  "google/gemini-3.1-flash-image": {
+   "id": "google/gemini-3.1-flash-image",
+   "canonical_slug": "google/gemini-3.1-flash-image-20260528",
+   "created": 1781754065,
+   "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)"
+  },
+  "google/gemini-3-pro-image": {
+   "id": "google/gemini-3-pro-image",
+   "canonical_slug": "google/gemini-3-pro-image-20260528",
+   "created": 1781754054,
+   "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)"
+  },
+  "sourceful/riverflow-v2.5-fast": {
+   "id": "sourceful/riverflow-v2.5-fast",
+   "canonical_slug": "sourceful/riverflow-v2.5-fast-20260605",
+   "created": 1780584983,
+   "name": "Sourceful: Riverflow V2.5 Fast"
+  },
+  "black-forest-labs/flux.2-pro": {
+   "id": "black-forest-labs/flux.2-pro",
+   "canonical_slug": "black-forest-labs/flux.2-pro",
+   "created": 1764030274,
+   "name": "Black Forest Labs: FLUX.2 Pro"
+  },
+  "google/gemini-2.5-flash-image": {
+   "id": "google/gemini-2.5-flash-image",
+   "canonical_slug": "google/gemini-2.5-flash-image",
+   "created": 1759870431,
+   "name": "Google: Nano Banana (Gemini 2.5 Flash Image)"
+  }
+ }
+}
