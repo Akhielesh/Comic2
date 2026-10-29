@@ -156,6 +156,7 @@ const round4 = (n: number) => Math.round(n * 10000) / 10000;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const finiteOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const routeKey = (route: ImageRoute, model: string) => `${route}|${model}`;
+const STATE_RANK: Record<HealthState, number> = { ok: 0, unknown: 1, degraded: 2, down: 3 };
 
 /** Does a failure code count against the model (an upstream failure) rather than against the caller? */
 export const isUpstreamFailureCode = (code: string | undefined): boolean => {
@@ -426,7 +427,17 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
         checkedAt = pub.checkedAt;
       }
       const assessed = override(route, model, assessRouteHealth({ providers, observed, now: at }));
-      const source: RouteHealth['source'] = providers?.length ? 'openrouter' : observed ? 'observed' : 'none';
+      // The source NAMES what decided the state (the UI says "OpenRouter status, 2 min ago" or "our recent calls,
+      // 1 min ago"): our own observations when they are the worse (or only) signal, else the public data.
+      const pubState = assessRouteHealth({ providers, now: at }).state;
+      const obsState = assessRouteHealth({ observed, now: at }).state;
+      const source: RouteHealth['source'] =
+        obsState !== 'unknown' && (pubState === 'unknown' || STATE_RANK[obsState] > STATE_RANK[pubState])
+          ? 'observed'
+          : pubState !== 'unknown' || providers?.length
+            ? 'openrouter'
+            : 'none';
+      const observedAt = Math.max(observed?.lastFailureAt ?? 0, observed?.lastSuccessAt ?? 0) || at;
       routes.push({
         route,
         model,
@@ -434,7 +445,7 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
         ...(providers ? { providers } : {}),
         ...(observed ? { observed } : {}),
         ...(assessed.reason ? { reason: assessed.reason } : {}),
-        checkedAt: source === 'openrouter' ? checkedAt : at,
+        checkedAt: source === 'openrouter' ? checkedAt : source === 'observed' ? observedAt : at,
         source
       });
     }
@@ -453,26 +464,27 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
     const fallbackBook = registryPriceBook();
     const targets = drawnTargets(input.doc);
     const redrawCount = targets.pages.length + (targets.cover ? 1 : 0);
-    const candidates: { spec: ImageModelSpec; usdPerImage: number }[] = [];
-    for (const cand of pickableImageModels()) {
-      if (cand.id === blockedSpec.id) continue;
-      if (!primaryRouteFor(cand, input.keys)) continue;
-      if (modelFit(cand, input.doc, caps).some((r) => r.severity === 'block')) continue;
-      const health = await getModelHealth(cand, { keys: input.keys, now: at });
-      if (health.state === 'down') continue;
+    const fitting = pickableImageModels().filter(
+      (cand) => cand.id !== blockedSpec.id && !!primaryRouteFor(cand, input.keys) && !modelFit(cand, input.doc, caps).some((r) => r.severity === 'block')
+    );
+    // Candidates' health in parallel (each public read is cached and bounded by the 4 s timeout).
+    const healths = await Promise.all(fitting.map((cand) => getModelHealth(cand, { keys: input.keys, now: at })));
+    const candidates: { spec: ImageModelSpec; usdPerImage: number; redrawUsd: number }[] = [];
+    fitting.forEach((cand, i) => {
+      if (healths[i].state === 'down') return;
       const res = redrawResolution(input.doc, cand.id, 'page');
       const unit = book.unit(cand.id, res, 'page').usd ?? fallbackBook.unit(cand.id, res, 'page').usd;
-      if (unit === null || !Number.isFinite(unit)) continue; // nothing real to show (models.md §4.6: never a guess)
-      candidates.push({ spec: cand, usdPerImage: round4(unit * markup) });
-    }
+      const redraw = redrawQuote(input.doc, cand.id, 'pages_cover', book, byok).usd ?? redrawQuote(input.doc, cand.id, 'pages_cover', fallbackBook, byok).usd;
+      // Nothing real to show → not offered (models.md §4.6: never a guessed number).
+      if (unit === null || !Number.isFinite(unit) || redraw === null || !Number.isFinite(redraw)) return;
+      candidates.push({ spec: cand, usdPerImage: round4(unit * markup), redrawUsd: round4(redraw) });
+    });
     candidates.sort((a, b) => {
       const fa = a.spec.vendor === blockedSpec.vendor ? 0 : 1;
       const fb = b.spec.vendor === blockedSpec.vendor ? 0 : 1;
       return fa - fb || a.usdPerImage - b.usdPerImage || a.spec.id.localeCompare(b.spec.id);
     });
-    return candidates.slice(0, MAX_SWITCH_OPTIONS).map(({ spec, usdPerImage }) => {
-      const quote = redrawQuote(input.doc, spec.id, 'pages_cover', book, byok);
-      const redrawUsd = quote.usd ?? redrawQuote(input.doc, spec.id, 'pages_cover', fallbackBook, byok).usd ?? 0;
+    return candidates.slice(0, MAX_SWITCH_OPTIONS).map(({ spec, usdPerImage, redrawUsd }) => {
       return {
         kind: 'switch_model',
         modelId: spec.id,
@@ -480,7 +492,7 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
         usdPerImage,
         consistency: spec.vendor === blockedSpec.vendor ? 'same_family' : 'different',
         redrawCount,
-        redrawUsd: round4(redrawUsd)
+        redrawUsd
       };
     });
   };

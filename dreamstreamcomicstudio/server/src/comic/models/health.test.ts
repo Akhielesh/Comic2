@@ -261,6 +261,17 @@ describe('getModelHealth', () => {
     expect(all.routes).toHaveLength(2);
     expect(f.calls).toHaveLength(1); // one public fetch for all three reads (cached)
   });
+
+  it('names the source that decided the state, with that source’s own time', async () => {
+    const f = scriptedFetch(); // OpenRouter says the provider is serving fine…
+    const h = createModelHealth({ fetch: f.fetchImpl, now: () => T0 });
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT', at: T0 - 60_000 });
+    const [route] = (await h.getModelHealth(NB21, { keys: PLATFORM })).routes;
+    // …but our own calls are failing: the state is down and the source says so ("our recent calls, 1 min ago").
+    expect(route).toMatchObject({ state: 'down', source: 'observed', checkedAt: T0 - 60_000, providers: serving });
+    const quiet = createModelHealth({ fetch: f.fetchImpl, now: () => T0 });
+    expect((await quiet.getModelHealth(NB21, { keys: PLATFORM })).routes[0]).toMatchObject({ state: 'ok', source: 'openrouter', checkedAt: T0 });
+  });
 });
 
 describe('preflightImageRun', () => {
