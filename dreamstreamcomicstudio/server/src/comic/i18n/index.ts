@@ -107,8 +107,9 @@ export const supportedLanguagesText = (doc: ComicDoc): string =>
 const UNKNOWN_PRICE = { input: 1, output: 5 };
 /**
  * In-memory price calibration per language: an EMA of what a finished run was BILLED ÷ what its plan priced
- * (translator + review, so a chunk's repair round — a second call that re-sends the conversation, §8.6 —
- * and every token-count drift show up in the next quote). Logged, never persisted.
+ * (translator + review). The plan already carries an expected repair round per chunk (REPAIR_SHARE, §8.6);
+ * the real repair rate and every token-count drift show up here and correct the next quote. Logged, never
+ * persisted — so a cold process quotes with the allowance alone.
  */
 const calibration = new Map<string, number>();
 export const resetTranslationCalibration = () => calibration.clear();

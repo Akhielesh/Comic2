@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Line, type Page, type TextTranslation } from './doc';
 import { editionProgress, editionReadiness, i18nOf, lineSourceHash, textSourceHash } from './i18n';
+import { languageSpec } from './languages';
 import { applyOps } from './ops';
 import {
   AUTO_CORRECTED_NOTE,
   carryTrailingMark,
   editionTextSource,
   chunkTranslation,
+  estimateTranslationTokens,
   freeTranslationOps,
   glossaryRenameOps,
   localizePunctuation,
   planIsFree,
   planLineCount,
   planTranslation,
+  REPAIR_SHARE,
   replaceWholeToken,
+  sourceTokens,
   syncGlossaryOps,
   TRANSLATE_CHUNK_LINES,
   TRANSLATE_CHUNK_PAGES,
@@ -194,10 +198,37 @@ describe('planTranslation — the software-first paths', () => {
     const hi = planTranslation(doc, 'hi');
     const te = planTranslation(doc, 'te');
     expect(te.tokens.output).toBeGreaterThan(hi.tokens.output); // Telugu 3.2 vs Hindi 2.2
-    expect(te.tokens.input).toBe(hi.tokens.input); // same source
+    // Same source, but the expected repair round re-sends the (longer Telugu) first answer as input.
+    expect(te.tokens.input).toBeGreaterThan(hi.tokens.input);
     const fewer = planTranslation(doc, 'te', { pageIds: ['pg_1'] });
     expect(fewer.tokens.output).toBeLessThan(te.tokens.output);
     expect(fewer.tokens.reviewInput).toBeLessThan(te.tokens.reviewInput);
+  });
+});
+
+describe('the quote covers the repair round (§8.6)', () => {
+  it("every translator chunk carries the expected cost of its one repair round; the review's tokens do not change", () => {
+    const doc = sixPages();
+    const text = 'Where did the moon go, Frog?';
+    const t = sourceTokens(text, 'en');
+    const tf = languageSpec('te')!.tokenFactor;
+    const fixed = 1450 + 120 + 45 * doc.cast.length + 10 * i18nOf(doc).glossary.length + 60 * doc.pages.length;
+    // The first call alone, by the §8.4 formula.
+    const firstIn = fixed + t + 22;
+    const firstOut = (80 + t * tf + 16) * 1.15;
+    const one = estimateTranslationTokens({ doc, lang: 'te', chunks: [[text]], review: [] });
+    // Without the allowance the estimate was exactly the first call: a repaired chunk billed far above it.
+    expect(one.input).toBeGreaterThan(Math.round(firstIn));
+    expect(one.output).toBeGreaterThan(Math.round(firstOut));
+    // A repair re-sends the conversation (input + first answer) and answers only the failing lines.
+    expect(REPAIR_SHARE).toBeGreaterThan(0);
+    expect(one.input).toBe(Math.round(firstIn + REPAIR_SHARE * (firstIn + firstOut)));
+    expect(one.output).toBe(Math.round(firstOut * (1 + REPAIR_SHARE * 0.15)));
+    // Per chunk: two chunks carry two allowances.
+    expect(estimateTranslationTokens({ doc, lang: 'te', chunks: [[text], [text]], review: [] }).input).toBe(Math.round(2 * (firstIn + REPAIR_SHARE * (firstIn + firstOut))));
+    // The review is one call per batch with no repair: its estimate is unchanged.
+    const reviewOnly = estimateTranslationTokens({ doc, lang: 'te', chunks: [], review: [text] });
+    expect(reviewOnly).toEqual({ input: 0, output: 0, reviewInput: Math.round(900 + t + t * tf + 30), reviewOutput: Math.round(24 + t * tf * 0.4), reviewCalls: 1 });
   });
 });
 
