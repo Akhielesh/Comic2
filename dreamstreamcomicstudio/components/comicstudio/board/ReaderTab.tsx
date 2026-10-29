@@ -37,6 +37,7 @@ import { ImmersiveReader } from '../immersive/ImmersiveReader';
 import { LanguageSwitch, languageSwitchOptions } from '../i18n/LanguageSwitch';
 import { useReaderLanguage } from '../i18n/readerLanguage';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
+import { useFormFactor } from '../mobile/useFormFactor';
 import { ComicReaderView } from '../reader/ComicReaderView';
 import { ShareSheet } from '../share/ShareSheet';
 import { useShareCapabilities } from '../share/useShareCapabilities';
@@ -173,6 +174,11 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const abort = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   const shareCaps = useShareCapabilities();
+  // Phone landscape (ui-findings 2026-10-29, board/read at 734×343): the board pane is ~100 px tall,
+  // so this tab's action row plus the reader's toolbar left the toolbar clipped under the pane. At a
+  // compact height the actions fold into the reader's own toolbar (one row) and the reader's browser
+  // full-screen button steps aside for "Read full screen".
+  const compactH = useFormFactor().heightClass === 'compact';
   // The studio preview offers draft editions too (marked by their percentage), always opens in the
   // comic's own language (never the browser's or a reader's stored choice) and never touches the URL.
   const L = useReaderLanguage({ doc, includeDrafts: true, persist: false, env: STUDIO_LANGUAGE_ENV });
@@ -327,24 +333,31 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
     set(ok ? { kind: 'done', tone: 'success', text: 'Link copied — anyone with it can read (never edit) this comic.' } : { kind: 'error', text: `Couldn’t copy the link. Here it is: ${shareUrl}` });
   };
 
+  // The actions: their own row at regular heights; icon-only inside the reader's toolbar at a compact height.
+  const actions = (dense: boolean) => (
+    <>
+      <PrimaryButton size="sm" onClick={() => openFullScreen(false)} aria-label="Read full screen" title="Read full screen (page turns, Guided View, your languages)">
+        <Expand className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Read full screen</span>
+      </PrimaryButton>
+      <span ref={sheetAnchor} className="inline-flex shrink-0">
+        <GhostButton size="sm" onClick={() => setSheetOpen((v) => !v)} aria-haspopup="dialog" aria-expanded={sheetOpen} aria-label="Share & export" disabled={working}>
+          <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Share &amp; export</span>
+        </GhostButton>
+      </span>
+      <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic (free)">
+        <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden md:inline'}>Reader look</span>
+      </GhostButton>
+      {switchOptions.length > 1 && (
+        <LanguageSwitch className={dense ? 'min-w-0 max-w-[9rem]' : 'ml-auto min-w-0 max-w-[60%]'} options={switchOptions} value={L.lang} onChange={L.setLang} label="Reading language" />
+      )}
+    </>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-reader-tab>
-      {drawn && (
+      {drawn && !compactH && (
         <div className="flex min-w-0 shrink-0 items-center gap-1.5 px-3 pt-2" role="toolbar" aria-label="Reader actions">
-          <PrimaryButton size="sm" onClick={() => openFullScreen(false)} aria-label="Read full screen" title="Read full screen (page turns, Guided View, your languages)">
-            <Expand className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Read full screen</span>
-          </PrimaryButton>
-          <span ref={sheetAnchor} className="inline-flex shrink-0">
-            <GhostButton size="sm" onClick={() => setSheetOpen((v) => !v)} aria-haspopup="dialog" aria-expanded={sheetOpen} aria-label="Share & export" disabled={working}>
-              <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className="hidden sm:inline">Share &amp; export</span>
-            </GhostButton>
-          </span>
-          <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic (free)">
-            <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden /> <span className="hidden md:inline">Reader look</span>
-          </GhostButton>
-          {switchOptions.length > 1 && (
-            <LanguageSwitch className="ml-auto min-w-0 max-w-[60%]" options={switchOptions} value={L.lang} onChange={L.setLang} label="Reading language" />
-          )}
+          {actions(false)}
         </div>
       )}
       {L.fallback.length > 0 && (
@@ -399,7 +412,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
         </div>
       )}
       <div className="min-h-0 flex-1">
-        <ComicReaderView doc={localized} urlFor={studio.urlFor} autoFocus={false} />
+        <ComicReaderView doc={localized} urlFor={studio.urlFor} autoFocus={false} toolbarExtra={drawn && compactH ? actions(true) : undefined} fullscreenControl={!compactH} />
       </div>
 
       <AdaptiveSheet
