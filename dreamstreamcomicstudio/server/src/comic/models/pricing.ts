@@ -168,20 +168,30 @@ const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolu
   return out;
 };
 
+/**
+ * True when OpenRouter can be told which endpoints may serve a call: only the Images-API transport sends
+ * `provider.only` (models.md §2.4 R3.4). On the chat transport (the default) OpenRouter may route a call to any
+ * endpoint of the model, so a quote must cover the dearest one (§2.3 "never under-quotes").
+ */
+export const pinsEndpoints = (spec?: ImageModelSpec): boolean => spec?.api?.openrouter === 'images';
+
 /** Per-reference charge from the endpoints' `input_image` lines (null = unpublished / per token with no table). */
 const perReferenceUsd = (endpoints: OrImageEndpoint[], spec?: ImageModelSpec): number | null => {
   const lines = endpoints.flatMap((ep) => (Array.isArray(ep.pricing) ? ep.pricing : [])).filter((l) => l && l.billable === 'input_image');
   const perImage = lines.filter((l) => l.unit === 'image' && isFiniteNumber(l.cost_usd)).map((l) => l.cost_usd as number);
-  if (perImage.length) return round6(Math.min(...perImage));
+  if (perImage.length) return round6(pinsEndpoints(spec) ? Math.min(...perImage) : Math.max(...perImage));
   if (isFiniteNumber(spec?.perRefUsd)) return spec!.perRefUsd as number; // Google's 560-token table (registry, dated)
   return null;
 };
 
 /**
- * Live OpenRouter endpoint pricing → one price per resolution. Several endpoints of one model can differ
- * (Nano Banana 2: $60/M on AI Studio, $66/M on Vertex-US): the quote uses the lowest — OpenRouter routes to
- * it by default and the transport (§2.4 R3.4) excludes dearer endpoints with `provider.only` — and the note
- * carries every value with its provider so nothing is smoothed over (§4.6 "data sources disagree").
+ * Live OpenRouter endpoint pricing → one price per resolution. Only endpoints that serve a resolution are its
+ * candidates (an endpoint's `resolution` enum, when it has one, must list it: Nano Banana Pro on Vertex lists
+ * no 4K). Several endpoints of one model can differ (Nano Banana 2: $60/M on AI Studio, $66/M on Vertex-US):
+ * on the Images-API transport the quote uses the lowest, because the transport pins `provider.only` to the
+ * endpoints at or under the quote (§2.4 R3.4); on the chat transport nothing is pinned and OpenRouter may route
+ * to any endpoint, so the quote is the highest (§2.3 never under-quotes). The note carries every value with its
+ * provider so nothing is smoothed over (§4.6 "data sources disagree").
  */
 export const mapEndpointPricing = (input: EndpointPricingInput): EndpointPricingResult => {
   const endpoints = Array.isArray(input.endpoints) ? input.endpoints : [];
@@ -193,18 +203,25 @@ export const mapEndpointPricing = (input: EndpointPricingInput): EndpointPricing
   const price: Partial<Record<Resolution, CatalogPrice>> = {};
   const providers = new Set<string>();
   const when = input.fetchedAt ? ` (OpenRouter, ${input.fetchedAt})` : ' (OpenRouter)';
+  const pinned = pinsEndpoints(input.spec);
   for (const r of wanted) {
-    const candidates = endpoints.map((ep) => endpointCandidates(input.modelId, ep, wanted).get(r)).filter((c): c is Candidate => !!c);
+    const serving = endpoints.filter((ep) => {
+      const served = endpointResolutions(ep);
+      return !served.length || served.includes(r);
+    });
+    const candidates = serving.map((ep) => endpointCandidates(input.modelId, ep, wanted).get(r)).filter((c): c is Candidate => !!c);
     const priced = candidates.filter((c) => isFiniteNumber(c.usd));
     if (priced.length) {
       priced.forEach((c) => providers.add(c.provider));
-      const best = priced.reduce((a, b) => ((b.usd as number) < (a.usd as number) ? b : a));
+      const best = priced.reduce((a, b) => (pinned ? (b.usd as number) < (a.usd as number) : (b.usd as number) > (a.usd as number)) ? b : a);
       const distinct = new Set(priced.map((c) => c.usd as number));
       const differ = distinct.size > 1 ? ` · endpoints differ: ${priced.map((c) => `${c.provider} ${money(c.usd as number)}`).join(' · ')}; we quote ${money(best.usd as number)}` : '';
       price[r] = { usd: best.usd, basis: best.basis, note: `${best.note ? `${best.note}` : `${best.provider} endpoint price`}${when}${differ}` };
     } else if (candidates.length) {
       const notes = [...new Set(candidates.map((c) => c.note).filter(Boolean))];
       price[r] = { usd: null, basis: 'openrouter_endpoint', note: notes.join(' · ') || NO_OPENROUTER_PRICE_COPY };
+    } else if (endpoints.length) {
+      price[r] = { usd: null, basis: 'openrouter_endpoint', note: `No OpenRouter endpoint lists ${r}` };
     }
   }
   return { price, perRefUsd: perReferenceUsd(endpoints, input.spec), providers: [...providers] };

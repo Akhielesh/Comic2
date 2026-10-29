@@ -72,17 +72,44 @@ describe('mapEndpointPricing (models.md §4.3 mapping rules, 17:51Z data)', () =
     expect(r.price['2K']).toMatchObject({ usd: 0.041943, basis: 'derived_mp' });
   });
 
-  it('two endpoints at different prices: quote the lower and name both (never smoothed over)', () => {
-    const r = mapEndpointPricing({
-      modelId: 'google/gemini-3.1-flash-image',
-      endpoints: [
-        { provider_name: 'Google AI Studio', supported_parameters: { resolution: { values: ['1K'] } }, pricing: [{ billable: 'output_image', unit: 'token', cost_usd: 0.00006 }] },
-        { provider_name: 'Google Vertex (US)', supported_parameters: { resolution: { values: ['1K'] } }, pricing: [{ billable: 'output_image', unit: 'token', cost_usd: 0.000066 }] }
-      ]
-    });
+  const twoEndpoints = [
+    { provider_name: 'Google AI Studio', supported_parameters: { resolution: { values: ['1K'] } }, pricing: [{ billable: 'output_image', unit: 'token', cost_usd: 0.00006 }] },
+    { provider_name: 'Google Vertex (US)', supported_parameters: { resolution: { values: ['1K'] } }, pricing: [{ billable: 'output_image', unit: 'token', cost_usd: 0.000066 }] }
+  ];
+
+  it('two endpoints at different prices on the Images API (provider.only pins them): quote the lower and name both', () => {
+    const spec = { ...getImageModel('nano-banana-2')!, api: { openrouter: 'images' as const } };
+    const r = mapEndpointPricing({ modelId: 'google/gemini-3.1-flash-image', endpoints: twoEndpoints, spec });
     expect(r.price['1K']!.usd).toBe(0.0672);
     expect(r.price['1K']!.note).toContain('endpoints differ');
     expect(r.price['1K']!.note).toContain('Google Vertex (US)');
+  });
+
+  it('on the chat transport (nothing pinned, OpenRouter may route anywhere) the quote is the dearest endpoint: Nano Banana 2 at 1K is 0.0739', () => {
+    const spec = getImageModel('nano-banana-2')!;
+    expect(spec.api?.openrouter).not.toBe('images');
+    const r = mapEndpointPricing({ modelId: 'google/gemini-3.1-flash-image', endpoints: eps('google/gemini-3.1-flash-image'), spec, fetchedAt: at });
+    expect(r.price['1K']!.basis).toBe('vendor_table');
+    expect(r.price['1K']!.usd).toBeCloseTo(0.0739, 4); // 1120 tokens × $66/M (Vertex-US) = 0.07392
+    expect(r.price['2K']!.usd).toBeCloseTo(0.1109, 4);
+    expect(r.price['1K']!.note).toContain('endpoints differ');
+    expect(r.price['1K']!.note).toContain('we quote $0.0739');
+    expect(mapEndpointPricing({ modelId: 'google/gemini-3.1-flash-image', endpoints: twoEndpoints }).price['1K']!.usd).toBeCloseTo(0.0739, 4); // no spec: never under-quote
+  });
+
+  it("an endpoint is a candidate only for the resolutions its enum lists (Nano Banana Pro's Vertex endpoint has no 4K)", () => {
+    const pinned = { ...getImageModel('nano-banana-pro')!, api: { openrouter: 'images' as const } };
+    const endpoints = [
+      { provider_name: 'Google AI Studio', supported_parameters: { resolution: { values: ['1K', '2K', '4K'] } }, pricing: [{ billable: 'output_image', unit: 'token', cost_usd: 0.00012 }] },
+      { provider_name: 'Google Vertex', supported_parameters: { resolution: { values: ['1K', '2K'] } }, pricing: [{ billable: 'output_image', unit: 'token', cost_usd: 0.0001 }] }
+    ];
+    const r = mapEndpointPricing({ modelId: 'google/gemini-3-pro-image', endpoints, spec: pinned });
+    expect(r.price['1K']!.usd).toBe(0.112); // Vertex is cheaper and serves 1K
+    expect(r.price['4K']!.usd).toBe(0.24); // only AI Studio serves 4K: 2000 tokens × $120/M
+    expect(r.price['4K']!.note).not.toContain('Google Vertex');
+    const onlyVertex = mapEndpointPricing({ modelId: 'google/gemini-3-pro-image', endpoints: [endpoints[1]], spec: pinned });
+    expect(onlyVertex.price['4K']).toEqual({ usd: null, basis: 'openrouter_endpoint', note: 'No OpenRouter endpoint lists 4K' });
+    expect(mergeWithRegistry(onlyVertex.price, pinned)['4K']!.note).toContain('No OpenRouter endpoint lists 4K');
   });
 
   it('maps OpenRouter resolution spellings and nothing else', () => {
