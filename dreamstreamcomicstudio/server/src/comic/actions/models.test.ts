@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc, ImageModelLock } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { getImageModel } from '../../../../shared/comic/models.js';
-import { redrawQuote } from '../../../../shared/comic/modelLock.js';
+import { redrawQuote, type PriceBook } from '../../../../shared/comic/modelLock.js';
 import { makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.js';
-import { JOB_TIMINGS, startAction, type RunActionOptions } from '../jobs.js';
+import { JOB_TIMINGS, estimateSpendAction, startAction, type RunActionOptions } from '../jobs.js';
 import { registryPriceBook } from '../models/index.js';
-import { newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
+import { fakeImages, newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
 import { checkRenderSafety, onRenderVerdict } from '../safety/index.js';
 import { StudioError, type StudioKeys } from '../types.js';
 import { analyzePageRender } from '../vision.js';
@@ -51,6 +51,7 @@ const setup = (doc: ComicDoc, opts: Parameters<typeof testContext>[1] = {}) => {
 };
 const change = (modelId: string, redraw: 'none' | 'pages_cover' | 'all', quotedUsd: number) => ({ type: 'change_image_model' as const, modelId, redraw, quotedUsd, ack: true as const });
 const quoteFor = (doc: ComicDoc, modelId: string, scope: 'none' | 'pages_cover' | 'all') => redrawQuote(doc, modelId, scope, registryPriceBook(), false).usd ?? 0;
+const round2 = (n: number) => Math.round(n * 100) / 100;
 const failure = async (p: Promise<unknown>) => (await p.then(() => null, (e: unknown) => e)) as StudioError | null;
 
 describe('change_image_model (models.md §3.4 item 7)', () => {
@@ -164,15 +165,99 @@ describe('change_image_model (models.md §3.4 item 7)', () => {
     expect(session.doc.settings.imageModelOverride).toBe('nano-banana-pro');
   });
 
-  it('the redraw goes through the normal budget gate (the switch itself is free)', async () => {
+  it('a switch-and-redraw over the budget switches NOTHING (§3.4 7.8): it says by how much and offers the ways forward', async () => {
     const doc = lake((d) => (d.settings.budgetUsd = d.spend.totalUsd + 0.05));
     const { session, ctx } = setup(doc);
     const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'pages_cover');
     const started = await startAction(ctx, change('nano-banana-pro', 'pages_cover', quotedUsd), UI);
-    expect(started.outcome.status).toBe('gated');
-    expect(session.doc.gate).toMatchObject({ reason: 'budget', status: 'open' });
-    expect(session.doc.imageModel?.modelId).toBe('nano-banana-pro');
+    expect(started.outcome).toMatchObject({ status: 'blocked', code: 'BUDGET_EXCEEDED' });
+    expect(session.doc.imageModel).toBeUndefined(); // the derived lock is still the comic's model
+    expect(session.doc.gate?.status).not.toBe('open');
     expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+    const msg = session.doc.conversation.at(-1)!;
+    // A governed user reads no dollars.
+    expect(msg.text).toMatch(/^Switching to Nano Banana Pro and redrawing 5 pages and the cover \(.+\) would go over the budget set for this comic\. Nothing was switched — raise the budget, or switch without redrawing\.$/);
+    expect(msg.text).not.toContain('$');
+    expect(msg.nextSteps?.map((s) => s.label)).toEqual(['Raise the budget', 'Switch without redrawing']);
+    expect(msg.nextSteps?.[1]).toMatchObject({ client: { type: 'open_model_picker', suggest: 'nano-banana-pro' } });
+    // A dollar view says by how much.
+    const admin = { ...PAID, admin: true };
+    const dollars = setup(lake((d) => (d.settings.budgetUsd = d.spend.totalUsd + 0.05)), { caps: admin });
+    const blocked = await startAction(dollars.ctx, change('nano-banana-pro', 'pages_cover', quotedUsd), { ...UI, caps: admin });
+    expect(blocked.outcome).toMatchObject({ status: 'blocked', code: 'BUDGET_EXCEEDED' });
+    const real = estimateSpendAction({ ...dollars.session.doc, imageModel: { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' } }, { type: 'render_pages', pageIds: dollars.session.doc.pages.map((p) => p.id), force: true, includeCover: true }, false, registryPriceBook()).usd;
+    const over = dollars.session.doc.spend.totalUsd + real - dollars.session.doc.settings.budgetUsd!;
+    expect(dollars.session.doc.conversation.at(-1)!.text).toBe(
+      `Switching to Nano Banana Pro and redrawing 5 pages and the cover (≈ $${real.toFixed(2)}) would go over this comic's budget by ≈ $${over.toFixed(2)}. Nothing was switched — raise the budget, or switch without redrawing.`
+    );
+    expect(dollars.session.doc.imageModel).toBeUndefined();
+    // Approving the overage (the budget gate's own approval) lets it through.
+    const approved = await startAction(ctx, change('nano-banana-pro', 'pages_cover', quotedUsd), { ...UI, budgetApproved: true });
+    expect(approved.outcome.status).toBe('started');
+    expect(session.doc.imageModel?.modelId).toBe('nano-banana-pro');
+    await approved.done;
+  });
+});
+
+describe("change_image_model 'all': sheets first, pages only on new-model sheets", () => {
+  const pageRuns = (ctx: ReturnType<typeof setup>['ctx']) =>
+    ctx.events.filter((e) => e.type === 'activity' && e.phase === 'start' && e.cost === 'image' && /^Drawing pages/.test(e.label));
+
+  it('every sheet ready on the new model → the pages and cover are drawn after them, all on the new model', async () => {
+    const { session, ctx } = setup(lake());
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    expect(session.doc.cast.every((c) => c.sheet.status === 'ready' && c.sheet.asset?.model === 'nano-banana-pro')).toBe(true);
+    expect(pageRuns(ctx)).toHaveLength(1);
+    expect(ctx.imagesFake.calls).toHaveLength(session.doc.cast.length + 6); // 4 sheets, then 5 pages + the cover
+    expect(new Set(ctx.imagesFake.calls.map((c) => c.spec.id))).toEqual(new Set(['nano-banana-pro']));
+  });
+
+  it('the sheets action is budget-gated → no pages are drawn and the sheets gate stays the open gate', async () => {
+    // The real sheet price moves up the moment the switch lands (a catalog refresh between confirm and start).
+    const base = registryPriceBook();
+    const doc = lake();
+    const session = newSession(doc);
+    const prices: PriceBook = {
+      qcUsd: base.qcUsd,
+      unit: (id, res, kind, refs) => {
+        const u = base.unit(id, res, kind, refs);
+        const switched = (session.doc.imageModel as ImageModelLock | undefined)?.origin === 'user_change';
+        return switched && (kind === 'sheet' || kind === 'place') && u.usd !== null ? { ...u, usd: u.usd * 10 } : u;
+      }
+    };
+    const ctx = testContext(session, { keys: OR, caps: PAID, prices });
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    session.doc.settings.budgetUsd = round2(session.doc.spend.totalUsd + quotedUsd * 1.3 + 0.05);
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    expect(started.outcome.status).toBe('gated');
+    await started.done;
+    expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'budget', action: { type: 'render_sheets' } });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(pageRuns(ctx)).toHaveLength(0);
+    const notice = session.doc.conversation.at(-1)!;
+    expect(notice.text).toBe('Redrawing 5 pages and the cover waits for the new character sheets, so it hasn\'t started and nothing was charged for it. Start it once the sheets are drawn.');
+    expect(notice.nextSteps?.[0]).toMatchObject({ label: expect.stringMatching(/^Redraw 5 pages and the cover · /), action: { type: 'render_pages', force: true, includeCover: true, quotedUsd: expect.any(Number) } });
+  });
+
+  it('a sheet that fails upstream → the pages do not start; one honest notice offers them as a priced chip', async () => {
+    const images = fakeImages(() => new StudioError('PROVIDER_ERROR', 'The image model rejected the request.', { status: 400, retryable: false }));
+    const { session, ctx } = setup(lake(), { images });
+    const quotedUsd = quoteFor(session.doc, 'nano-banana-pro', 'all');
+    const started = await startAction(ctx, change('nano-banana-pro', 'all', quotedUsd), UI);
+    expect(started.outcome.status).toBe('started');
+    const sheetCalls = () => ctx.imagesFake.calls.length;
+    await started.done;
+    expect(pageRuns(ctx)).toHaveLength(0);
+    expect(sheetCalls()).toBe(session.doc.cast.length + session.doc.places.length);
+    expect(session.doc.pages.every((p) => p.render.asset?.model === 'nano-banana-2.1')).toBe(true);
+    const notices = session.doc.conversation.filter((m) => /so I didn't start 5 pages and the cover/.test(m.text));
+    expect(notices).toHaveLength(1);
+    expect(notices[0].text).toMatch(/^The character sheets weren't redrawn on Nano Banana Pro, so I didn't start 5 pages and the cover: they use the sheets to keep your characters consistent\. Nothing was charged for 5 pages and the cover\.$/);
+    expect(notices[0].nextSteps?.[0]).toMatchObject({ action: { type: 'render_pages', force: true, quotedUsd: expect.any(Number) } });
   });
 });
 

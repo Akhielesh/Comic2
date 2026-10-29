@@ -530,7 +530,8 @@ const inflightFor = (session: StudioSessionApi) => {
 // back-to-back requests on the single-threaded server each see the other's reservation
 // (otherwise concurrent runs each quote against a stale `doc.spend.totalUsd` and overshoot).
 const pendingSpend = new WeakMap<StudioSessionApi, number>();
-const pendingUsdOf = (s: StudioSessionApi) => pendingSpend.get(s) || 0;
+/** Spend reserved by runs still under way on this session (budget checks count it). */
+export const pendingUsdOf = (s: StudioSessionApi) => pendingSpend.get(s) || 0;
 const addPending = (s: StudioSessionApi, delta: number) => pendingSpend.set(s, Math.max(0, round4(pendingUsdOf(s) + delta)));
 
 // ── Billed text calls ────────────────────────────────────────────────────────
@@ -947,7 +948,7 @@ export const hasActiveRun = (session: StudioSessionApi): boolean => {
 };
 
 /** The chip a budget-cap notice carries: opens this comic's settings at the budget cap (ClientAction open_settings). */
-const RAISE_BUDGET_STEP: NextStep = { label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } };
+export const RAISE_BUDGET_STEP: NextStep = { label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } };
 
 const blocked = (ctx: StudioContext, opts: RunActionOptions, message: string, tone: 'info' | 'warn' | 'error' = 'warn', steps?: NextStep[] | string[]) => {
   deliver(ctx, opts, message, [noticeCard(tone, message)], steps);

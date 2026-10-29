@@ -10,15 +10,18 @@
 //   5. no `block` fit reason (4:5 on GPT Image is one)                                           → 422
 //   6. no render run under way                                                                   → 409 RUN_ACTIVE
 //   7. the server's own redrawQuote within 15% + $0.01 of the confirmed quotedUsd, else a requote → nothing changes
-//   8. budget: a redraw over the budget gets the normal budget gate (the redraw is its own spend action)
+//   8. budget: the redraw, priced on the post-switch pin, would go over budgetUsd (not approved) → nothing
+//      changes; the answer says by how much and offers Raise the budget / switch without redrawing
 // On success, one batch: the new lock (origin 'user_change', a changes[] entry) + the §3.6 F notice. A redraw runs
 // as the normal render action(s) for the drawn targets with `force` and the confirmed quote (re-gated as usual).
+// 'all' draws the character sheets first and starts the pages + cover only once every sheet is ready on the new
+// model (the pages use them as identity anchors); otherwise the rest is offered as a priced chip, never started.
 // The switch itself is free: nothing is reserved or spent by this action.
 
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
 import { REDRAW_SCOPES, type ComicDoc, type ImageModelLock, type NextStep, type RedrawScope } from '../../../../shared/comic/doc.js';
-import { FREE_PLAN_IMAGE_MODEL, drawnTargets, modelFit, redrawQuote, type RedrawQuote } from '../../../../shared/comic/modelLock.js';
+import { FREE_PLAN_IMAGE_MODEL, drawnTargets, modelFit, redrawQuote, type PriceBook, type RedrawQuote } from '../../../../shared/comic/modelLock.js';
 import { IMAGE_MODELS, type ImageModelSpec } from '../../../../shared/comic/models.js';
 import type { SpendAction, StudioAction } from '../../../../shared/comic/ops.js';
 import { BILLING_ENABLED } from '../../config.js';
@@ -26,12 +29,17 @@ import { logger } from '../../lib/logger.js';
 import { costFormatterFor } from '../costText.js';
 import type { ActionHandler } from '../extensions.js';
 import {
+  RAISE_BUDGET_STEP,
   RUN_ACTIVE,
   commitWithMessage,
+  estimateSpendAction,
+  gateDecision,
   hasActiveRun,
   imageRouteFor,
   lockOf,
   lockedSpecId,
+  noticeCard,
+  pendingUsdOf,
   priceBookFor,
   startAction,
   type RunActionOptions,
@@ -61,6 +69,14 @@ const drawnPhrase = (doc: ComicDoc, scope: RedrawScope | 'mention'): { text: str
 };
 
 const bad = (message: string, status = 400) => new StudioError('BAD_REQUEST', message, { status });
+
+/** A character sheet or place sheet that is drawn (ready, with an asset) on `modelId`. */
+const sheetReadyOn = (doc: ComicDoc, id: string, modelId: string): boolean => {
+  const render = doc.cast.find((c) => c.id === id)?.sheet ?? doc.places.find((p) => p.id === id)?.sheet;
+  if (!render || render.status !== 'ready' || !render.asset) return false;
+  const model = render.asset.model ?? render.model;
+  return !!model && lockedSpecId(model) === modelId;
+};
 
 /** The render action(s) that redraw `scope` on the (new) locked model, each carrying its share of the confirmed quote. */
 export const redrawActions = (doc: ComicDoc, scope: RedrawScope, quote: RedrawQuote, quotedUsd: number): SpendAction[] => {
@@ -149,7 +165,6 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
     return finished({ status: 'blocked', code: 'CONFLICT', message: text, requote: { usd: quote.usd, quotedUsd: action.quotedUsd, lines: quote.lines } });
   }
 
-  // Success: the new lock and its history, with the notice, in one batch.
   const at = Date.now();
   const lock: ImageModelLock = {
     modelId: spec.id,
@@ -159,9 +174,23 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
     changes: [{ from: priorId!, to: spec.id, at, redraw: action.redraw, quotedUsd: round4(action.quotedUsd) }, ...(prior.changes ?? [])].slice(0, DOC_LIMITS.modelChanges)
   };
   const fromName = modelName(prior.modelId);
+  const actions = redrawActions(doc, action.redraw, quote, action.quotedUsd);
+
+  // 8. Budget (before anything changes): the redraw priced on the post-switch pin, at real prices. A switch the
+  // budget can't redraw would leave the book mixed — the very thing "Switch and redraw" was chosen to avoid.
+  if (actions.length) {
+    const switched: ComicDoc = { ...doc, imageModel: lock };
+    const estimates = actions.map((a) => estimateSpendAction(switched, a, route.byok, prices));
+    const usd = round4(estimates.reduce((sum, e) => sum + e.usd, 0));
+    const estimate = { usd, imageCount: estimates.reduce((n, e) => n + e.imageCount, 0), model: spec.nickname, lines: estimates.flatMap((e) => e.lines) };
+    if (gateDecision(doc, estimate, true, { budgetApproved: opts.budgetApproved, pendingUsd: pendingUsdOf(ctx.session) }) === 'budget') {
+      return overBudget(ctx, opts, doc, spec, action.redraw, usd);
+    }
+  }
+
+  // Success: the new lock and its history, with the notice, in one batch.
   const steps: NextStep[] = [];
   let text: string;
-  const actions = redrawActions(doc, action.redraw, quote, action.quotedUsd);
   if (actions.length) {
     const parts = drawnPhrase(doc, action.redraw);
     text = `Switched to ${spec.nickname}. Redrawing ${parts.text} (${cost.approx(action.quotedUsd)})…`;
@@ -180,18 +209,86 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
   logger.info('comic_model_changed', { projectId: ctx.projectId, from: priorId, to: spec.id, redraw: action.redraw, quotedUsd: action.quotedUsd });
 
   if (!actions.length) return finished({ status: 'done', message: text, nextSteps: steps });
-  // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render (sheets first).
+  // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render.
   const redrawOpts: RunActionOptions = { ...opts, confirmed: true };
   const first = await startAction(ctx, actions[0], redrawOpts);
   if (actions.length === 1) return first;
-  const rest = actions.slice(1);
-  const done = first.done.then(async () => {
-    for (const next of rest) {
-      const started = await startAction(ctx, next, redrawOpts);
+  return chainAfterSheets(ctx, opts, redrawOpts, spec, actions, first, prices, route.byok);
+}
+
+/**
+ * 'all' = sheets first, then the pages + cover. The pages start only when the sheets run started AND every sheet in
+ * it ended ready on the new model; otherwise the rest is offered as one priced chip (never started on old-model
+ * anchors, never over a still-open sheets gate), and an error is said, never swallowed.
+ */
+function chainAfterSheets(
+  ctx: StudioContext,
+  opts: RunActionOptions,
+  redrawOpts: RunActionOptions,
+  spec: ImageModelSpec,
+  actions: SpendAction[],
+  first: StartedAction,
+  prices: PriceBook,
+  byok: boolean
+): StartedAction {
+  const sheets = actions[0];
+  const rest = actions[1];
+  const cost = costFormatterFor(ctx);
+  const what = drawnPhrase(ctx.session.doc, 'pages_cover').text || 'the pages';
+  const restChip = (): NextStep => {
+    const usd = estimateSpendAction(ctx.session.doc, rest, byok, prices).usd;
+    const { quotedUsd: _old, ...fresh } = rest as SpendAction & { quotedUsd?: number };
+    return { label: `Redraw ${what} · ${cost.approx(usd)}`, action: { ...(fresh as SpendAction), quotedUsd: usd }, usd };
+  };
+  if (first.outcome.status !== 'started') {
+    // Gated (its gate stays the open one), blocked (an outage card says why) or nothing to draw: the rest waits.
+    const text = `Redrawing ${what} waits for the new character sheets, so it hasn't started and nothing was charged for it. Start it once the sheets are drawn.`;
+    commitWithMessage(ctx, opts, [], text, [noticeCard('info', text)], [restChip()]);
+    return first;
+  }
+  // Later messages are this run's own (the director turn that started it is over by then).
+  const later: RunActionOptions = { ...redrawOpts, collectCard: undefined, collectNextSteps: undefined };
+  const ids = sheets.type === 'render_sheets' ? sheets.characterIds ?? [] : [];
+  const done = first.done
+    .then(async () => {
+      const missing = ids.filter((id) => !sheetReadyOn(ctx.session.doc, id, spec.id));
+      if (missing.length) {
+        const n = missing.length;
+        const text = `${n === ids.length ? 'The character sheets weren' : `${n} of the ${ids.length} character sheets weren`}'t redrawn on ${spec.nickname}, so I didn't start ${what}: they use the sheets to keep your characters consistent. Nothing was charged for ${what}.`;
+        commitWithMessage(ctx, { ...later, origin: 'job' }, [], text, [noticeCard('warn', text)], [restChip()]);
+        return;
+      }
+      const started = await startAction(ctx, rest, later);
       await started.done;
-    }
-  });
-  return { outcome: first.outcome, done: done.catch(() => undefined) };
+    })
+    .catch((err: unknown) => {
+      logger.warn('comic_model_change_redraw_failed', { projectId: ctx.projectId, to: spec.id, message: (err as Error)?.message });
+      const reason = err instanceof StudioError ? ` (${err.userMessage.replace(/[.\s]+$/, '')})` : '';
+      const text = `I couldn't start redrawing ${what} on ${spec.nickname}${reason}, so nothing was charged for it. You can start it here.`;
+      try {
+        commitWithMessage(ctx, { ...later, origin: 'job' }, [], text, [noticeCard('warn', text)], [restChip()]);
+      } catch (inner) {
+        logger.warn('comic_model_change_notice_failed', { projectId: ctx.projectId, message: (inner as Error)?.message });
+      }
+    });
+  return { outcome: first.outcome, done };
+}
+
+/**
+ * models.md §3.4 item 7.8: the switch-and-redraw would go over the comic's budget. Nothing is switched (no lock,
+ * no changes[] entry); the answer says by how much and offers the ways forward (raise the budget, or the confirm
+ * again to switch without redrawing).
+ */
+function overBudget(ctx: StudioContext, opts: RunActionOptions, doc: ComicDoc, spec: ImageModelSpec, scope: RedrawScope, usd: number): StartedAction {
+  const cost = costFormatterFor(ctx);
+  const budget = typeof doc.settings.budgetUsd === 'number' ? doc.settings.budgetUsd : 0;
+  const over = round4(Math.max(0, doc.spend.totalUsd + pendingUsdOf(ctx.session) + usd - budget));
+  const what = drawnPhrase(doc, scope).text;
+  const by = cost.governed ? 'would go over the budget set for this comic' : `would go over this comic's budget by ${cost.approx(over)}`;
+  const text = `Switching to ${spec.nickname} and redrawing ${what} (${cost.approx(usd)}) ${by}. Nothing was switched — raise the budget, or switch without redrawing.`;
+  const steps: NextStep[] = [RAISE_BUDGET_STEP, { label: 'Switch without redrawing', client: { type: 'open_model_picker', suggest: spec.id } }];
+  commitWithMessage(ctx, opts, [], text, [noticeCard('info', text)], steps);
+  return finished({ status: 'blocked', code: 'BUDGET_EXCEEDED', message: text });
 }
 
 export const changeImageModelAction: ActionHandler<ChangeImageModel> = {
