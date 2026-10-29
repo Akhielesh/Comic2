@@ -107,6 +107,37 @@ describe('accept_translation_issue', () => {
     expect(none.outcome).toMatchObject({ status: 'blocked', code: 'NOT_FOUND' });
   });
 
+  it('a stale_edited line: "Keep my wording" re-hashes the author\'s text for free (still theirs); a stale machine line is refused honestly', async () => {
+    let doc = translated();
+    doc = applyOps(doc, [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'చంద్రుడు ఎటు పోయాడు?', status: 'edited' } }]);
+    doc = applyOps(doc, [{ op: 'edition_text', lang: 'te', field: 'brief.title', value: { text: 'మైలో, చంద్రుడు', status: 'edited', sourceHash: textSourceHash(doc.brief.title), at: 1 } }]);
+    // Real word changes to the originals (not punctuation): the edit is still right, but publishing is blocked.
+    doc = applyOps(doc, [
+      { op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'l1', patch: { text: 'Where did our moon go?' } },
+      { op: 'brief', patch: { title: 'Milo and the Big Moon' } }
+    ]);
+    expect(editionProgress(doc, 'te').staleEdited).toBe(1);
+    expect(editionReadiness(doc, 'te').publishable).toBe(false);
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    const kept = await startAction(ctx, { type: 'accept_translation_issue', lang: 'te', lineId: 'l1', useSuggestion: false }, { confirmed: true, origin: 'user' });
+    // Without the fix: blocked CONFLICT "translate it again first" — untrue, a run skips edited lines.
+    expect(kept.outcome).toMatchObject({ status: 'done', message: 'Kept your wording for the changed line.' });
+    const l1 = lines(session.doc).find((l) => l.id === 'l1')!;
+    expect(i18nOf(session.doc).editions.te.lines.l1).toMatchObject({ text: 'చంద్రుడు ఎటు పోయాడు?', status: 'edited', sourceHash: lineSourceHash(l1) });
+    const title = await startAction(ctx, { type: 'accept_translation_issue', lang: 'te', lineId: 'brief.title', useSuggestion: false }, { confirmed: true, origin: 'user' });
+    expect(title.outcome.status).toBe('done');
+    expect(i18nOf(session.doc).editions.te.brief?.title).toMatchObject({ text: 'మైలో, చంద్రుడు', status: 'edited', sourceHash: textSourceHash('Milo and the Big Moon') });
+    expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    expect(session.doc.conversation).toHaveLength(doc.conversation.length); // no chat noise
+    // A stale MACHINE/reviewed line is still refused — naming the real way out, not "translate it again".
+    const stale = applyOps(session.doc, [{ op: 'line', pageId: 'pg_5', panelId: 'pn_5', id: 'l9', patch: { text: 'Found it!' } }]);
+    const refused = await startAction(testContext(newSession(stale)), { type: 'accept_translation_issue', lang: 'te', lineId: 'l9', useSuggestion: false }, { confirmed: true, origin: 'user' });
+    expect(refused.outcome).toMatchObject({ status: 'blocked', code: 'CONFLICT' });
+    expect(refused.outcome.message).toContain('"Translate missing" brings it up to date');
+  });
+
   it('works for cover/brief texts too', async () => {
     let doc = translated();
     doc = applyOps(doc, [{ op: 'edition_text', lang: 'te', field: 'brief.title', value: { text: 'te:title', status: 'machine', sourceHash: textSourceHash(doc.brief.title), at: 1, issue: { severity: 'minor', note: 'n', suggestion: 'మైలో చంద్రుడు' } } }]);

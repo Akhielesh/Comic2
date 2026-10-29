@@ -173,17 +173,30 @@ async function acceptIssue(ctx: StudioContext, action: Accept, opts: RunActionOp
   const now = Date.now();
 
   let cur: TextTranslation | undefined;
-  let current = false;
+  /** The hash of the CURRENT original ('' when the line or field is gone). */
+  let hash = '';
   if (isField(id)) {
     cur = editionTextEntry(doc, lang, id);
-    current = !!cur && cur.sourceHash === textSourceHash(editionTextSource(doc, id));
+    hash = textSourceHash(editionTextSource(doc, id));
   } else {
     const line = linesInOrder(doc).find(({ line: l }) => l.id === id)?.line;
     cur = line ? edition.lines[id] : undefined;
-    current = !!cur && !!line && cur.sourceHash === lineSourceHash(line);
+    hash = line ? lineSourceHash(line) : '';
   }
   if (!cur) return finished({ status: 'blocked', message: 'That line has no translation to review.', code: 'NOT_FOUND' });
-  if (!current) return finished({ status: 'blocked', message: 'That line changed since it was translated — translate it again first.', code: 'CONFLICT' });
+  if (cur.sourceHash !== hash) {
+    // The author's own wording whose original changed (stale_edited): a translation run never touches an
+    // edited line, so "Keep my wording" is the free way back to current — the words stay theirs ('edited').
+    if (cur.status === 'edited' && !action.useSuggestion) {
+      const kept: TextTranslation = { ...cur, sourceHash: hash, at: now };
+      const keep: DocOp = isField(id) ? { op: 'edition_text', lang, field: id, value: kept } : { op: 'translations', lang, lines: { [id]: kept } };
+      ctx.session.commit([keep], { origin: opts.origin ?? 'user', label: 'Keep my wording' });
+      const message = 'Kept your wording for the changed line.';
+      if (opts.collectCard) opts.collectCard({ type: 'notice', id: newId('card'), tone: 'success', text: message });
+      return finished({ status: 'done', message });
+    }
+    return finished({ status: 'blocked', message: 'The original of that line changed since it was translated — "Translate missing" brings it up to date, or edit the line yourself.', code: 'CONFLICT' });
+  }
 
   const next: TextTranslation = { ...cur, status: 'reviewed', at: now };
   delete next.issue;

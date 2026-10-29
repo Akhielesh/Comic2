@@ -235,6 +235,43 @@ describe('TranslationReview', () => {
   });
 });
 
+describe('a stale_edited line (the author edited it, then the original changed)', () => {
+  function staleEdited() {
+    let doc = withTelugu();
+    const first = allLines(doc)[0];
+    doc = applyOps(doc, [{ op: 'translation', lang: 'te', lineId: first.id, patch: { text: 'నా అనువాదం', status: 'edited' } }]);
+    const page = doc.pages.find((p) => p.panels.some((pn) => pn.lines.some((l) => l.id === first.id)))!;
+    const panel = page.panels.find((pn) => pn.lines.some((l) => l.id === first.id))!;
+    doc = applyOps(doc, [{ op: 'line', pageId: page.id, panelId: panel.id, id: first.id, patch: { text: `${first.text} Really.` } }]);
+    return { doc, first };
+  }
+
+  it('the row points to the review (no translation to price); the Review tab offers "Keep my wording" and Enter on the unchanged wording means the same', async () => {
+    const { doc, first } = staleEdited();
+    const studio = makeFakeStudio({ doc });
+    render(<LanguagesTab studio={studio} />);
+    expect(screen.getByText('1 changed')).toBeTruthy();
+    expect(screen.getByText('1 line changed since translating.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^(Translate missing|Finish the review)/ })).toBeNull();
+    expect(quoteMock).not.toHaveBeenCalled(); // nothing for the translator or the reviewer → no price request
+    // Without the fix there is no button at all: a dead end for an Easy user.
+    fireEvent.click(screen.getByRole('button', { name: 'Review 1 changed' }));
+    expect(screen.getByText('Original changed (your edit kept)')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Keep my wording' }));
+    });
+    expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: first.id, useSuggestion: false });
+    studio.act.mockClear();
+    const field = screen.getByRole('textbox', { name: (n) => n.startsWith(`Telugu translation of: ${first.text} Really.`) });
+    expect((field as HTMLTextAreaElement).value).toBe('నా అనువాదం');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: first.id, useSuggestion: false });
+    expect(studio.patch).not.toHaveBeenCalled(); // the wording did not change, so nothing is re-saved
+  });
+});
+
 describe('TranslationCard', () => {
   it('shows live progress per language with Review and (when ready) Publish', () => {
     const studio = makeFakeStudio({ doc: withTelugu() });
