@@ -167,3 +167,36 @@ describe('runDelegation never drops nested spend', () => {
     expect((res.usage as { partialProviderCostUsd?: number }).partialProviderCostUsd).toBeCloseTo(0.15, 9);
   });
 });
+
+describe('runSwarm in free-only mode (noPaidRetry)', () => {
+  it('sends no paid retry on any call and never falls back to a paid worker pick', async () => {
+    const { pickTextModel } = await import('../autoRouter.js');
+    // No verified-free model in the catalog: the planner and agents run the caller's own model.
+    vi.mocked(pickTextModel).mockRejectedValueOnce(new Error('no free model'));
+    runChatMock
+      .mockResolvedValueOnce(plan)
+      .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Synthesized.', model: 'user/model', usage: u(0, 100) });
+    await runSwarm({ ...swarmParams, noPaidRetry: true, fallbackModel: 'fallback/model' });
+    expect(vi.mocked(pickTextModel)).toHaveBeenLastCalledWith({ costPref: 'free-only' });
+    expect(runChatMock).toHaveBeenCalledTimes(3);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBeUndefined();
+      expect(req.noPaidRetry).toBe(true);
+      expect(req.model).toBe('user/model');
+    }
+  });
+
+  it('off: the planner/agents keep the free-first pick and every call keeps the paid net', async () => {
+    runChatMock
+      .mockResolvedValueOnce(plan)
+      .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Synthesized.', model: 'user/model', usage: u(0, 100) });
+    await runSwarm(swarmParams);
+    expect(runChatMock.mock.calls.map(([req]) => req.model)).toEqual(['free/worker', 'free/worker', 'user/model']);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBe('fallback/model');
+      expect(req.noPaidRetry).toBeUndefined();
+    }
+  });
+});

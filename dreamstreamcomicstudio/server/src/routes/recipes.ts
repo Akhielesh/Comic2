@@ -202,7 +202,10 @@ recipesRouter.post('/run', async (req, res, next) => {
       priorMessages: p.messages.slice(0, -1),
       systemPrompt: p.systemPrompt,
       clientContext: p.clientContext,
-      fallbackModel: TEXT_FALLBACK,
+      // Free-only (X-Free-Only) means no paid retry anywhere in the run (UB-2 class); the hold
+      // above still prices the paid net, so it never under-reserves what can run.
+      fallbackModel: p.noPaidRetry ? undefined : TEXT_FALLBACK,
+      ...(p.noPaidRetry ? { noPaidRetry: true } : {}),
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });
@@ -320,7 +323,8 @@ recipesRouter.post('/distill', async (req, res, next) => {
       apiKey: p.resolved.apiKey,
       model: p.model,
       clientContext: p.clientContext,
-      fallbackModel: TEXT_FALLBACK,
+      fallbackModel: p.noPaidRetry ? undefined : TEXT_FALLBACK,
+      ...(p.noPaidRetry ? { noPaidRetry: true } : {}),
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS
     });
 

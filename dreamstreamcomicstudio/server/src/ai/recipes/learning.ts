@@ -23,6 +23,8 @@ export interface DistillParams {
   model: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /** Free-only: the reflection gets no paid retry (RunRecipeParams.noPaidRetry). */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -61,6 +63,7 @@ export const distillRecipe = async (params: DistillParams): Promise<DistillResul
       model: params.model,
       clientContext: params.clientContext,
       fallbackModel: params.fallbackModel,
+      ...(params.noPaidRetry ? { noPaidRetry: true } : {}),
       timeoutMs: params.timeoutMs,
       signal: params.signal
     });

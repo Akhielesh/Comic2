@@ -150,3 +150,27 @@ describe('runDeepResearch', () => {
     });
   });
 });
+
+describe('runDeepResearch in free-only mode (noPaidRetry)', () => {
+  beforeEach(() => {
+    runChatMock.mockReset();
+    webSearchMock.mockReset().mockResolvedValue({ results: [{ title: 'T', url: 'https://a.com', snippet: 's' }], provider: 'duckduckgo', tried: ['duckduckgo'], status: 'ok' });
+    fetchReadableMock.mockReset().mockResolvedValue(null);
+  });
+
+  it('plans on a verified-free model (else the caller’s) and never sends a paid retry', async () => {
+    const { pickTextModel } = await import('../autoRouter.js');
+    vi.mocked(pickTextModel).mockRejectedValueOnce(new Error('no free model'));
+    runChatMock
+      .mockResolvedValueOnce({ text: '["Q?"]', usage: { totalTokens: 10 } })
+      .mockResolvedValueOnce({ text: 'Brief [1].', model: 'user/model', usage: { totalTokens: 20 } });
+    await runDeepResearch({ ...base, topic: 'X', depth: 'quick', noPaidRetry: true, fallbackModel: 'fallback/model' });
+    expect(vi.mocked(pickTextModel)).toHaveBeenLastCalledWith({ costPref: 'free-only' });
+    expect(runChatMock).toHaveBeenCalledTimes(2);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBeUndefined();
+      expect(req.noPaidRetry).toBe(true);
+      expect(req.model).toBe('user/model');
+    }
+  });
+});

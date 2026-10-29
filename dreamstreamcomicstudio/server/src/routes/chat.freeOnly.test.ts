@@ -97,7 +97,12 @@ vi.mock('../ai/gateway.js', async (importOriginal) => {
   };
   return { ...actual, getProvider: () => provider };
 });
-vi.mock('../ai/agents/orchestrator.js', () => ({ runSwarm: vi.fn() }));
+// A spy over the REAL agent team: tests that need the team's own provider calls run it for real
+// (through the fake gateway above); the others stub its answer.
+vi.mock('../ai/agents/orchestrator.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai/agents/orchestrator.js')>();
+  return { ...actual, runSwarm: vi.fn(actual.runSwarm) };
+});
 vi.mock('../ai/image.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ai/image.js')>()),
   generateGeminiImage: vi.fn(async () => ({ dataUrl: 'data:image/png;base64,AAAA' }))
@@ -139,6 +144,7 @@ const { errorHandler } = await import('../middleware/errors.js');
 const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
 const { runSwarm } = await import('../ai/agents/orchestrator.js');
 const swarm = vi.mocked(runSwarm);
+const { runSwarm: realRunSwarm } = await vi.importActual<typeof import('../ai/agents/orchestrator.js')>('../ai/agents/orchestrator.js');
 
 const used = (userId: string) => db.events.filter((e) => e.userId === userId && (e.status === 'SETTLED' || e.status === 'RESERVED')).reduce((s, e) => s + e.costUsd, 0);
 
@@ -279,8 +285,9 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     expect(turnEvents(user)[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
   });
 
-  it('/swarm: the agent team (which always carries the paid TEXT_FALLBACK retry) is not run — one free model answers, settled at $0, and the reply says so', async () => {
+  it('/swarm: the agent team runs with no paid model anywhere (planner, agents, synthesis) and settles at $0', async () => {
     const user = freshUser();
+    swarm.mockImplementation(realRunSwarm);
     const res = await fetch(`${base}/api/chat/swarm`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-test-user': user, 'X-Free-Only': 'true' },
@@ -288,12 +295,15 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     });
     const body = await res.text();
     expect(res.status).toBe(200);
-    // Without the fix: runSwarm is called with fallbackModel === TEXT_FALLBACK (planner, agents and
-    // the timeout retry on the paid model, settled against the governed user's usage).
-    expect(swarm).not.toHaveBeenCalled();
+    // Without the fix: the team is swapped for one free model (runSwarm never called) — or, before
+    // that, run with fallbackModel === TEXT_FALLBACK on every call.
+    expect(swarm).toHaveBeenCalledTimes(1);
+    expect(swarm.mock.calls[0][0]).toMatchObject({ noPaidRetry: true, fallbackModel: undefined });
+    expect(body).toContain('event: trace');
     expect(body).toContain('event: final');
     const calls = turnCalls();
-    expect(calls.length).toBeGreaterThan(0);
+    // The planner, at least one agent and the synthesis.
+    expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const c of calls) {
       expect(isPaid(c.model)).toBe(false);
       expect(c.fallbackModel).toBeUndefined();
@@ -302,11 +312,24 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     const events = turnEvents(user);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
-    // Honest about the swap: the reply names why the agent team didn't run, never in dollars.
-    const final = body.split('event: final')[1] || '';
-    expect(final).toMatch(/instead of the agent team/);
-    expect(final).toMatch(/Free-Only mode/);
-    expect(final).not.toMatch(/\$|usd|dollar/i);
+    expect(body).not.toMatch(/instead of the agent team/);
+  });
+
+  it('/swarm: a slow free model in the team is never retried on the paid model', async () => {
+    const user = freshUser();
+    swarm.mockImplementation(realRunSwarm);
+    // The planner times out (the heuristic plan takes over), then everything else answers.
+    engine.script = [{ timeout: true }];
+    const res = await fetch(`${base}/api/chat/swarm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': user, 'X-Free-Only': 'true' },
+      body: JSON.stringify(ASK)
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('event: final');
+    expect(turnCalls().some((c) => c.model === TEXT_FALLBACK || isPaid(c.model))).toBe(false);
+    // The turn itself settles at $0 (the auto-memory helper is metered on its own, as documented).
+    expect(turnEvents(user)).toEqual([expect.objectContaining({ status: 'SETTLED', costUsd: 0 })]);
   });
 });
 

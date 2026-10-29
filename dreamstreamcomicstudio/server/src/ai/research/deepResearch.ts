@@ -46,6 +46,8 @@ export interface DeepResearchParams {
   /** Durable user memory/persona to thread into synthesis. */
   systemPrompt?: string;
   fallbackModel?: string;
+  /** Free-only: no paid retry and a verified-free planner (else `model`) — as RunSwarmParams.noPaidRetry. */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   onDelta?: (delta: { content?: string; reasoning?: string }) => void;
@@ -156,11 +158,15 @@ const runDeepResearchWith = async (p: DeepResearchParams, usageParts: ApiUsage[]
   const cfg = DEPTH[p.depth ?? 'standard'] ?? DEPTH.standard;
   const topic = p.topic.trim();
   const toolEvents: ChatToolEvent[] = [];
-  const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+  const freeOnly = p.noPaidRetry === true;
+  const workerModel = freeOnly
+    ? await pickTextModel({ costPref: 'free-only' }).catch(() => p.model)
+    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
   const baseReq = {
     provider: p.provider,
     apiKey: p.apiKey,
-    fallbackModel: p.fallbackModel ?? TEXT_FALLBACK,
+    fallbackModel: freeOnly ? undefined : (p.fallbackModel ?? TEXT_FALLBACK),
+    ...(freeOnly ? { noPaidRetry: true } : {}),
     timeoutMs: p.timeoutMs,
     signal: p.signal
   };
