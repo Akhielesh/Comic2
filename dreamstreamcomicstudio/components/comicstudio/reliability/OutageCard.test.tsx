@@ -6,7 +6,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Card, ComicDoc } from '../../../shared/comic/doc';
+import { normalizeDoc, type Card, type ComicDoc } from '../../../shared/comic/doc';
 import type { HealthState, ModelHealth, OutageOption } from '../../../shared/comic/modelHealth';
 import type { StudioAction } from '../../../shared/comic/ops';
 import { CardRenderer } from '../conversation/cards/CardRenderer';
@@ -159,6 +159,27 @@ describe('OutageCard', () => {
     expect(container.textContent).toContain(
       `Google AI Studio is rate-limiting Nano Banana 2.1 right now (OpenRouter · 429 · upstream Google). Page ${target.n} wasn't drawn, and you weren't charged for it. Your comic stays on Nano Banana 2.1 so every page matches.`
     );
+  });
+
+  it('the money claim survives a reload (normalizeDoc) and follows the contract: preflight, or a mid-run part that cost $0', async () => {
+    const cases: { facts: OutageCardFacts; claims: boolean }[] = [
+      { facts: { origin: 'preflight' }, claims: true },
+      { facts: { origin: 'mid_run', chargedUsd: 0 }, claims: true },
+      { facts: { origin: 'mid_run', chargedUsd: 0.04 }, claims: false },
+      { facts: { chargedUsd: 0 }, claims: false },
+      { facts: {}, claims: false }
+    ];
+    for (const [i, { facts, claims }] of cases.entries()) {
+      // As stored and loaded again: the contract keeps origin / chargedUsd on the card.
+      const stored = normalizeDoc({ ...makeSampleDoc(), conversation: [{ ...msg, cards: [{ ...outage({ id: `card_${i}` }), ...facts }] }] });
+      const card = stored.conversation[0].cards![0] as Extract<Card, { type: 'model_outage' }>;
+      expect(card.origin).toBe(facts.origin);
+      expect(card.chargedUsd).toBe(facts.chargedUsd);
+      const { container, unmount } = await renderCard(card);
+      if (claims) expect(container.textContent, JSON.stringify(facts)).toMatch(/weren't charged|nothing was charged/);
+      else expect(container.textContent, JSON.stringify(facts)).not.toMatch(/charged/);
+      unmount();
+    }
   });
 
   it('a preflight card on a model that is unavailable (not rate-limited): models.md §3.6 H', async () => {

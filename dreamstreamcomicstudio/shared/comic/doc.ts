@@ -730,7 +730,18 @@ export type Card =
    *  the preflight refused (re-sent once by "wait and retry" when the model is ok again). normalizeOutageCard
    *  keeps it only when its `type` is a known StudioAction type; the server validates the whole action when the
    *  client re-sends it, exactly as it does for every action it receives. */
-  | { type: 'model_outage'; id: string; modelId: string; options: OutageOption[]; blockedAction?: import('./ops.js').StudioAction };
+  | {
+      type: 'model_outage';
+      id: string;
+      modelId: string;
+      options: OutageOption[];
+      blockedAction?: import('./ops.js').StudioAction;
+      /** Where the card came from: the preflight (nothing ran, nothing was charged) or a run that failed part-way. */
+      origin?: 'preflight' | 'mid_run';
+      /** Mid-run: what the failed part cost (finite, ≥ 0). The card says "you weren't charged" only when it is 0
+       *  (or for a preflight card); a card without an origin makes no money claim. */
+      chargedUsd?: number;
+    };
 
 /** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
@@ -989,7 +1000,8 @@ const isStudioActionType = (type: unknown): type is string => typeof type === 's
 /**
  * A well-formed `model_outage` card (malformed options dropped; no valid option → undefined). A `blockedAction`
  * whose `type` is not a StudioAction type is dropped (the card stays): the client re-sends it as the "wait and
- * retry" action, and the server validates the full action on receipt like every other action.
+ * retry" action, and the server validates the full action on receipt like every other action. `origin` and
+ * `chargedUsd` are kept only when valid (an invalid one is dropped, so the card makes no money claim).
  */
 export const normalizeOutageCard = (value: unknown): Extract<Card, { type: 'model_outage' }> | undefined => {
   if (!isObject(value) || value.type !== 'model_outage') return undefined;
@@ -998,6 +1010,8 @@ export const normalizeOutageCard = (value: unknown): Extract<Card, { type: 'mode
   if (!options.length) return undefined;
   const out: Extract<Card, { type: 'model_outage' }> = { type: 'model_outage', id: value.id, modelId: value.modelId, options };
   if (isObject(value.blockedAction) && isStudioActionType(value.blockedAction.type)) out.blockedAction = value.blockedAction as never;
+  if (value.origin === 'preflight' || value.origin === 'mid_run') out.origin = value.origin;
+  if (typeof value.chargedUsd === 'number' && Number.isFinite(value.chargedUsd) && value.chargedUsd >= 0) out.chargedUsd = value.chargedUsd;
   return out;
 };
 

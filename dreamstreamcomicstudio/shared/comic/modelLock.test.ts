@@ -525,6 +525,20 @@ describe('model_outage card', () => {
     expect(normalizeOutageCard({ type: 'model_outage', id: 'x', modelId: '', options: [{ kind: 'wait_and_retry' }] })).toBeUndefined();
   });
 
+  it('origin and chargedUsd (what the card may say about money) survive normalizeDoc; invalid values are dropped', () => {
+    const preflight = { ...card, origin: 'preflight' as const };
+    const midRun = { ...card, id: 'card_o2', origin: 'mid_run' as const, chargedUsd: 0 };
+    const paidPart = { ...card, id: 'card_o3', origin: 'mid_run' as const, chargedUsd: 0.04 };
+    expect(normalizeOutageCard(preflight)).toEqual(preflight);
+    expect(normalizeOutageCard(midRun)).toEqual(midRun);
+    expect(normalizeOutageCard(paidPart)).toEqual(paidPart);
+    const stored = normalizeDoc({ ...makeLakeComic(), conversation: [{ id: 'm', role: 'assistant', text: 'paused', at: 1, cards: [preflight, midRun, paidPart] }] });
+    expect(stored.conversation[0].cards).toEqual([preflight, midRun, paidPart]);
+    for (const bad of [{ origin: 'later' }, { origin: 1 }, { chargedUsd: -1 }, { chargedUsd: Number.NaN }, { chargedUsd: '0' }, { chargedUsd: Infinity }]) {
+      expect(normalizeOutageCard({ ...card, ...bad }), JSON.stringify(bad)).toEqual(card);
+    }
+  });
+
   it('blockedAction is kept only when its type is a StudioAction type; anything else is dropped, the card stays', () => {
     const { blockedAction: _b, ...bare } = card;
     for (const bad of [{ type: 'drop_tables' }, { type: '' }, { type: 42 }, 'render_pages', null, { pageIds: ['pg_1'] }]) {
