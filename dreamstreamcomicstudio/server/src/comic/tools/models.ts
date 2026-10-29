@@ -573,7 +573,12 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
       : `, and ${what} would look different unless redrawn (${c.approx(o.redrawPagesCoverUsd)}${a.drawn.pages.length && a.drawn.cover ? ' with the cover' : ''})`;
   };
   if (troubled(a)) {
-    const why = a.streak.count >= R5_FAILURES ? `${a.streak.provider ? `${a.streak.provider} is` : "It's"} failing on ${name} right now (${plural(a.streak.count, 'drawing')} in the last 10 minutes${a.streak.code ? `, ${a.streak.code}` : ''})` : `${name} isn't drawing right now`;
+    const limited = /^(?:RATE_LIMIT|429)$/i.test(a.streak.code || '');
+    const detail = [a.streak.provider, a.streak.code].filter(Boolean).join(' · ');
+    const why =
+      a.streak.count >= R5_FAILURES
+        ? `${name} ${limited ? 'is being rate-limited upstream' : 'keeps failing upstream'} right now (${plural(a.streak.count, 'drawing')} failed in the last 10 minutes${detail ? ` · ${detail}` : ''})`
+        : `${name} isn't drawing right now`;
     out.push(`${why}. Your comic stays on ${name} so every page matches — waiting is free, so I'd try again in a minute first.`);
   }
   if (a.want === 'cheaper') {
@@ -605,6 +610,12 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
   }
   const priceThem = `${priceWords(pick.perPageUsd, c)} a page${pick.perPageUsd !== null ? ` at ${pick.res}` : ''}`;
   const priceUs = cur.perPageUsd !== null ? c.approx(cur.perPageUsd) : null;
+  if (troubled(a) && !a.named && !pick.blocks.length && a.want !== 'characters') {
+    // R5 / outage: waiting comes first; another model is the alternative, never the advice (§2.4 R5).
+    out.push(`If you'd rather not wait, ${pick.nickname} is ${priceWords(pick.perPageUsd, c)} a page${priceUs ? ` instead of ${priceUs}` : ''}${redrawClause(pick)} — ${lower1(consistency)}`);
+    steps.push(pickerStep('See other models', pick.id));
+    return { text: out.join(' '), steps };
+  }
   if (a.want === 'characters' && a.crowd && !a.named) {
     out.push(
       `${name} keeps up to ${cur.characters} characters on model, and page ${a.crowd.n} has ${a.crowd.count}. ${pick.nickname} holds ${pick.characters}. It costs ${priceWords(pick.perPageUsd, c)} a page${priceUs ? ` instead of ${priceUs}` : ''}${redrawClause(pick)}. ${consistency} Want to see the options?`
@@ -725,28 +736,30 @@ export interface ReplyGuardInput {
 /**
  * The reply never claims what did not happen (models.md §3.1 rule 4; reliability.md §2): a switch of the image
  * model (no director tool can), or a drawing that started when the studio paused the run. Claims are dropped and
- * the honest line leads; a reply that already says it plainly is kept as written.
+ * the honest line leads (with the picker chip after a false switch); a reply that already says it plainly is kept.
  */
-export function guardModelReply(text: string, i: ReplyGuardInput): string {
+export function guardModelReply(text: string, i: ReplyGuardInput): { text: string; steps: NextStep[] } {
   let out = text.trim();
+  const steps: NextStep[] = [];
   const cur = currentImageModel(i.doc);
   const claims = out ? falseSwitchClaims(out, cur.spec.id) : [];
   if (claims.length) {
     const kept = sentencesOf(out).filter((s) => !claims.includes(s));
     out = [`Your comic stays on ${cur.name} — only you can change the image model, in the model picker, and switching can affect character consistency.`, ...kept].join(' ').trim();
+    steps.push(pickerStep('See models'));
   }
   const outage = i.outages[i.outages.length - 1];
   if (outage) {
     const line = outageReplyLine(outage, i.cost);
-    if (!out) return line;
+    if (!out) return { text: line, steps };
     const sentences = sentencesOf(out);
     const claimsStart = (s: string) => START_CLAIM_RE.test(s) && !NEGATED_RE.test(s);
     // Something else this turn did start: keep its sentences, only make sure the pause is said.
     const kept = i.queued > 0 ? sentences : sentences.filter((s) => !claimsStart(s));
-    if (kept.length === sentences.length && PAUSE_ACK_RE.test(out)) return out;
+    if (kept.length === sentences.length && PAUSE_ACK_RE.test(out)) return { text: out, steps };
     out = [line, ...kept].join(' ').trim();
   }
-  return out;
+  return { text: out, steps };
 }
 
 // ── DOC SUMMARY facts (director.ts) ──────────────────────────────────────────

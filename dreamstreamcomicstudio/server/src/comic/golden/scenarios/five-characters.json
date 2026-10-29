@@ -1,0 +1,25 @@
+{
+  "name": "five-characters",
+  "about": "A page holds more characters than the locked model keeps on model (models.md §3.8 trigger 1): the director suggests Nano Banana Pro with real numbers — price per page, characters held, the redraw cost — and the picker chip; nothing switches, nothing is drawn.",
+  "doc": "lake-five",
+  "caps": "byok",
+  "turns": [
+    {
+      "say": "redraw page 3 with all five friends together",
+      "expectTools": ["model_options", "suggest_model", "render_pages"],
+      "systemIncludes": ["MODEL FIT: page 3 has 5 characters but Nano Banana 2.1 keeps up to 4 on model per image."],
+      "director": [
+        { "text": "", "toolCalls": [{ "name": "model_options", "args": { "want": "characters" } }, { "name": "suggest_model", "args": { "model": "nano-banana-pro" } }] },
+        { "text": "" }
+      ],
+      "expect": {
+        "toolResultIncludes": { "model_options": ["PAGE 3 has 5 characters; Nano Banana 2.1 keeps up to 4 on model per image.", "OPTION 1: Nano Banana Pro", "holds 5 characters per image", "Redraw to match: pages + cover ≈ $0.82; everything ≈ $1.36."] },
+        "reply": "Nano Banana 2.1 keeps up to 4 characters on model, and page 3 has 5. Nano Banana Pro holds 5. It costs ≈ $0.14 a page instead of ≈ $0.04, and your 5 drawn pages would look different unless redrawn (≈ $0.82 with the cover). Switching models can affect character consistency. Want to see the options?",
+        "nextSteps": [{ "label": "See models", "client": { "type": "open_model_picker", "suggest": "nano-banana-pro" } }],
+        "imageModel": "nano-banana-2.1",
+        "quality": "draft",
+        "newImageCalls": 0
+      }
+    }
+  ]
+}

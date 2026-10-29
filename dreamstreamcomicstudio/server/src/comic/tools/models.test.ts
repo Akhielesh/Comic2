@@ -2,21 +2,26 @@
 // M1-DIRECTOR-MODELS (models.md §3.8, §3.4 #6; reliability.md §2 Director): the director suggests image models
 // with real numbers and never switches. Fakes only: the merged catalog over the public 17:51Z OpenRouter fixture,
 // the fake model-health port, scripted model replies. No network, $0.
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveStudioCaps, type StudioCaps } from '../../../../shared/comic/capabilities.js';
-import { emptyRender, type ComicDoc } from '../../../../shared/comic/doc.js';
-import { getImageModel } from '../../../../shared/comic/models.js';
-import type { DocOp } from '../../../../shared/comic/ops.js';
+import { emptyRender, newId, type ComicDoc, type NextStep } from '../../../../shared/comic/doc.js';
+import { getImageModel, resolveImageJob } from '../../../../shared/comic/models.js';
+import type { DocOp, StudioAction } from '../../../../shared/comic/ops.js';
 import { makeLakeComic, LAKE_NOW } from '../../../../shared/comic/__fixtures__/lakeComic.js';
 import { costFormatter, costViewFor, DOLLAR_VIEW } from '../costText.js';
-import { JOB_TIMINGS } from '../jobs.js';
+import { DIRECTOR_SYSTEM_PROMPT, runDirectorTurn } from '../director.js';
+import { JOB_TIMINGS, startAction } from '../jobs.js';
 import { FAKE_BASE, FIXTURE_NOW, fakeOpenRouterFetch, memoryCatalogStore } from '../models/__fixtures__/catalogFakes.js';
-import { fakeModelHealth } from '../models/health.fakes.js';
-import { createModelCatalog, createQualitySource, setModelCatalog, type ModelCatalog } from '../models/index.js';
-import { newSession, plannedDoc, testContext, type TestContext } from '../orchestrator.fakes.js';
-import { buildDirectorTools, createDirectorTurn, type DirectorTool, type DirectorTurn } from '../tools.js';
+import { fakeModelHealth, type FakeModelHealth } from '../models/health.fakes.js';
+import { __setModelHealthForTests } from '../models/health.js';
+import { createModelCatalog, createPriceBook, createQualitySource, setModelCatalog, type ModelCatalog } from '../models/index.js';
+import { newSession, plannedDoc, scriptedLlm, testContext, type ScriptStep, type TestContext } from '../orchestrator.fakes.js';
+import { buildDirectorTools, buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from '../tools.js';
 import type { StudioKeys } from '../types.js';
-import { toolGroupById } from './index.js';
+import { toolGroupById, toolGroups } from './index.js';
 import {
   falseSwitchClaims,
   guardModelReply,
@@ -360,7 +365,7 @@ describe('R5 and outages (reliability.md §2 Director)', () => {
     const now = LAKE_NOW + 3_600_000;
     const doc = lakeLocked((d) => d.conversation.push({ id: 'm_out', role: 'assistant', text: 'Paused.', at: now - 120_000, cards: [outageCard()] }));
     expect(recentOutageCard(doc, now)?.card.id).toBe('card_out_1');
-    expect(recentOutageCard(doc, now + OUTAGE_MS())).toBeNull();
+    expect(recentOutageCard(doc, now + 31 * 60_000)).toBeNull();
     doc.pages[0].render = { ...doc.pages[0].render, updatedAt: now - 1_000 };
     expect(recentOutageCard(doc, now)).toBeNull();
     expect(outageCardText(outageCard())).toBe('[paused: Nano Banana 2.1 — nothing started, nothing charged; options offered: wait and retry / switch to Nano Banana Pro]');
@@ -442,30 +447,295 @@ describe('reply guards: never a switch, never a start that did not happen', () =
   it('replaces a false switch claim with the lock line', () => {
     const doc = lakeLocked();
     const out = guardModelReply("Done — I've switched your comic to GPT Image 2.5. The next page will look sharper.", { doc, outages: [], queued: 0, cost: dollars });
-    expect(out).toBe(
+    expect(out.steps).toEqual([{ label: 'See models', client: { type: 'open_model_picker' } }]);
+    expect(out.text).toBe(
       'Your comic stays on Nano Banana 2.1 — only you can change the image model, in the model picker, and switching can affect character consistency. The next page will look sharper.'
     );
   });
 
   it('a paused run: drops "it\'s on its way", says nothing started or was charged, and offers the options in words with real prices', () => {
     const doc = lakeLocked();
-    const out = guardModelReply("Drawing page 5 now — it's on its way! It will appear on the board soon.", { doc, outages: [outageCard()], queued: 0, cost: dollars });
+    const out = guardModelReply("Drawing page 5 now — it's on its way! It will appear on the board soon.", { doc, outages: [outageCard()], queued: 0, cost: dollars }).text;
     expect(out).toBe(
       "Nano Banana 2.1 isn't drawing right now, so I paused — nothing was started and nothing was charged. You can tap “Wait and retry” and it tries again once it's back, while this page is open (free, about 2 min), or switch to Nano Banana Pro (≈ $0.17 per image; redrawing 6 images to match ≈ $1.07 — character consistency can be affected)."
     );
     // An honest reply is kept as written; an empty one gets the line; a mid-run card without cost says so, one without an origin makes no money claim.
-    expect(guardModelReply("Google is rate-limiting Nano Banana 2.1, so I paused — nothing was charged.", { doc, outages: [outageCard()], queued: 0, cost: dollars })).toBe(
+    expect(guardModelReply("Google is rate-limiting Nano Banana 2.1, so I paused — nothing was charged.", { doc, outages: [outageCard()], queued: 0, cost: dollars }).text).toBe(
       'Google is rate-limiting Nano Banana 2.1, so I paused — nothing was charged.'
     );
-    expect(guardModelReply('', { doc, outages: [outageCard({ origin: 'mid_run', chargedUsd: 0, options: [{ kind: 'wait_and_retry' }] })], queued: 0, cost: dollars })).toBe(
+    expect(guardModelReply('', { doc, outages: [outageCard({ origin: 'mid_run', chargedUsd: 0, options: [{ kind: 'wait_and_retry' }] })], queued: 0, cost: dollars }).text).toBe(
       "Nano Banana 2.1 isn't drawing right now, so I paused — the part that didn't draw wasn't charged. You can tap “Wait and retry” and it tries again once it's back, while this page is open (free)."
     );
-    expect(guardModelReply('', { doc, outages: [outageCard({ origin: undefined, options: [] })], queued: 0, cost: dollars })).toBe("Nano Banana 2.1 isn't drawing right now, so I paused.");
+    expect(guardModelReply('', { doc, outages: [outageCard({ origin: undefined, options: [] })], queued: 0, cost: dollars }).text).toBe("Nano Banana 2.1 isn't drawing right now, so I paused.");
     // Governed: the same line in usage terms.
-    const governed = guardModelReply('', { doc, outages: [outageCard()], queued: 0, cost: costFormatter(costViewFor(GOVERNED_CAPS)) });
+    const governed = guardModelReply('', { doc, outages: [outageCard()], queued: 0, cost: costFormatter(costViewFor(GOVERNED_CAPS)) }).text;
     expect(governed).not.toMatch(/\$/);
     expect(governed).toMatch(/switch to Nano Banana Pro \(≈[\d.]+% of your usage per image/);
   });
 });
 
-const OUTAGE_MS = () => 31 * 60_000;
+
+describe('director wiring (director.ts): rule, facts, history', () => {
+  it('the system prompt carries the lock rule; a locked comic\'s Settings line names its real model; the model facts sit in the summary', async () => {
+    // Locked to Nano Banana Pro on the Standard tier: the tier no longer picks the model (models.md §3.4 #1).
+    const doc = lakeLocked((d) => {
+      d.settings = { ...d.settings, quality: 'standard' };
+      d.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
+      d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle', 'c_owl');
+    });
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [{ text: 'Hi!' }] });
+    const health = fakeModelHealth();
+    const prev = __setModelHealthForTests(health);
+    try {
+      await runDirectorTurn(testContext(session, { llm, caps: BYOK_CAPS, keys: BYOK_KEYS }), { text: 'hello', attachments: [] });
+    } finally {
+      __setModelHealthForTests(prev);
+    }
+    const system = llm.calls[0].messages[0].content as string;
+    expect(DIRECTOR_SYSTEM_PROMPT).toContain('9. The image model is locked per comic: never say you switched it (no tool can)');
+    expect(DIRECTOR_SYSTEM_PROMPT).toContain('A drawing tool that says it paused or did not start means nothing started and nothing was charged');
+    // ($0.1344 + $0.003) on the user's own key → ≈ $0.14 a page; before the fix this line said "Nano Banana 2.1 2K".
+    expect(system).toContain('Settings: standard quality (Nano Banana Pro (locked) 2K, ≈ $0.14/page');
+    expect(system).toContain('MODEL FIT: page 3 has 6 characters but Nano Banana Pro keeps up to 5 on model per image.');
+    // Nothing was wrong with the model: no health read at all.
+    expect(health.fetches).toEqual([]);
+  });
+
+  it('an outage card in the history reads as "paused — nothing started"; prices stay out of the history', async () => {
+    const doc = lakeLocked((d) =>
+      d.conversation.push(
+        { id: 'm_ask', role: 'user', text: 'draw pages 3 to 5', at: Date.now() - 9_000 },
+        { id: 'm_out', role: 'assistant', text: 'Paused.', at: Date.now() - 5_000, cards: [outageCard()] }
+      )
+    );
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [{ text: 'Still paused — want to wait?' }] });
+    const health = fakeModelHealth({ now: Date.now() });
+    const prev = __setModelHealthForTests(health);
+    try {
+      await runDirectorTurn(testContext(session, { llm, caps: BYOK_CAPS, keys: BYOK_KEYS }), { text: 'ok', attachments: [] });
+    } finally {
+      __setModelHealthForTests(prev);
+    }
+    const history = JSON.stringify(llm.calls[0].messages.slice(1));
+    expect(history).toContain('[paused: Nano Banana 2.1 — nothing started, nothing charged; options offered: wait and retry / switch to Nano Banana Pro]');
+    expect(history).not.toContain('$');
+    // The recent card makes the status a fact (with its real options) and offers the group.
+    const system = llm.calls[0].messages[0].content as string;
+    expect(system).toContain("OUTAGE OPTIONS (the studio's own check, real prices): wait and retry (free, about 2 min) · Nano Banana Pro ≈ $0.17 per image");
+    expect(llm.calls[0].tools!.map((t) => t.function.name)).toContain('model_options');
+  });
+});
+
+// ── Golden scenarios: golden/scenarios/{model-switch,model-429,five-characters}.json ──────────────────────────
+
+interface GoldenTurn {
+  say?: string;
+  about?: string;
+  action?: StudioAction;
+  expectTools?: string[];
+  systemIncludes?: string[];
+  outageDuringTurn?: 'preflight';
+  director?: Array<{ text?: string; toolCalls?: { name: string; args: unknown }[] }>;
+  expect?: {
+    toolResultIncludes?: Record<string, string[]>;
+    reply?: string;
+    replyStartsWith?: string;
+    replyIncludes?: string[];
+    replyExcludes?: string[];
+    nextSteps?: NextStep[];
+    nextStepLabels?: string[];
+    /** The chips' labels, exactly and in order. */
+    nextStepOrder?: string[];
+    imageModel?: string;
+    quality?: string;
+    newImageCalls?: number;
+  };
+}
+interface GoldenScenario {
+  name: string;
+  about: string;
+  doc: 'lake-standard' | 'lake-429' | 'lake-five';
+  caps?: 'byok';
+  health?: 'rate-limited';
+  turns: GoldenTurn[];
+}
+
+const SCENARIO_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'golden', 'scenarios');
+const GOLDEN_FILES = ['model-switch.json', 'model-429.json', 'five-characters.json'];
+const goldens: GoldenScenario[] = GOLDEN_FILES.map((f) => JSON.parse(readFileSync(join(SCENARIO_DIR, f), 'utf8')) as GoldenScenario);
+const NB21_OPENROUTER = 'google/gemini-nano-banana-2.1';
+
+/** The 16:52 incident on the fake health port: OpenRouter's only provider failing and our last 3 calls 429s. */
+const rateLimitedHealth = (now: number): FakeModelHealth => {
+  const health = fakeModelHealth({ now });
+  health.setPublic(NB21_OPENROUTER, [{ name: 'Google AI Studio', status: -1, uptime30m: 40, uptime1d: 90 }]);
+  for (let i = 0; i < 3; i += 1) health.recordImageOutcome({ route: 'openrouter', model: NB21_OPENROUTER, ok: false, code: 'RATE_LIMIT', at: now - 30_000 + i });
+  return health;
+};
+
+/** A model_outage card built by the studio's own preflight (M1-RELIABILITY's options builder, live PriceBook). */
+const preflightCard = async (health: FakeModelHealth, doc: ComicDoc, keys: StudioKeys, caps: StudioCaps, origin: 'preflight' | 'mid_run'): Promise<OutageCard> => {
+  const spec = resolveImageJob('page', doc.settings.quality, undefined, doc.imageModel).spec;
+  const pre = await health.preflightImageRun({ specs: [spec], keys, doc, caps, prices: await createPriceBook({ userId: 'user-1' }), now: health.now() });
+  expect(pre.ok).toBe(false);
+  return { type: 'model_outage', id: newId('card'), modelId: pre.blocked![0].modelId, options: pre.options, origin, ...(origin === 'mid_run' ? { chargedUsd: 0 } : {}) };
+};
+
+const goldenDoc = async (s: GoldenScenario, env: { health: FakeModelHealth; keys: StudioKeys; caps: StudioCaps }): Promise<ComicDoc> => {
+  if (s.doc === 'lake-standard') return lakeLocked((d) => (d.settings = { ...d.settings, quality: 'standard' }));
+  if (s.doc === 'lake-five') {
+    return lakeLocked((d) => {
+      d.cast.push({ id: 'c_turtle', name: 'Grandpa Turtle', tier: 'support', kind: 'animal', look: { summary: 'An old green turtle with round glasses' }, refs: [], sheet: emptyRender() });
+      d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle');
+    });
+  }
+  // lake-429: pages 3–5 failed upstream (429) in the last 3 minutes; the run ended with the studio's outage card.
+  const now = env.health.now();
+  const doc = lakeLocked((d) => withUpstreamFailures(d, now));
+  const card = await preflightCard(env.health, doc, env.keys, env.caps, 'mid_run');
+  doc.conversation.push({ id: 'm_out', role: 'assistant', text: "Pages 3–5 weren't drawn: the provider is rate-limiting Nano Banana 2.1.", at: now - 20_000, cards: [card] });
+  return doc;
+};
+
+/** Ops that change (or try to change) the comic's image model: the acceptance counts them across the golden set. */
+const modelChangingOps = (ops: DocOp[], userTurn: boolean) =>
+  ops.filter((op) => {
+    if ((op.op as string) === 'image_model') return true;
+    if (op.op !== 'settings') return false;
+    const patch = op.patch as Record<string, unknown>;
+    return 'imageModelOverride' in patch || (!userTurn && 'quality' in patch);
+  });
+
+const toolResults = (calls: { messages: { role: string; content?: unknown; tool_call_id?: string; tool_calls?: { id: string; function: { name: string } }[] }[] }[]): Record<string, string> => {
+  const last = calls[calls.length - 1];
+  const names = new Map<string, string>();
+  const out: Record<string, string> = {};
+  for (const m of last?.messages || []) {
+    for (const call of m.tool_calls || []) names.set(call.id, call.function.name);
+    if (m.role === 'tool' && m.tool_call_id) {
+      const name = names.get(m.tool_call_id) ?? m.tool_call_id;
+      out[name] = `${out[name] ?? ''}${String(m.content)}\n`;
+    }
+  }
+  return out;
+};
+
+let goldenModelChanges = 0;
+let goldenModelAttempts = 0;
+let goldenTurnsRun = 0;
+
+describe('golden: director model behaviour (models.md §5.1 M1-DIRECTOR-MODELS)', () => {
+  it('ships the three scenarios', () => {
+    expect(goldens.map((g) => g.name)).toEqual(['model-switch', 'model-429', 'five-characters']);
+  });
+
+  for (const scenario of goldens) {
+    it(`${scenario.name}: ${scenario.about.slice(0, 90)}…`, async () => {
+      const caps = scenario.caps === 'byok' ? BYOK_CAPS : GOVERNED_CAPS;
+      const keys = scenario.caps === 'byok' ? BYOK_KEYS : { openrouter: { key: 'sk-or-platform-test', byok: false } };
+      const health = scenario.health === 'rate-limited' ? rateLimitedHealth(Date.now()) : fakeModelHealth({ now: Date.now() });
+      const prev = __setModelHealthForTests(health);
+      try {
+        const session = newSession(await goldenDoc(scenario, { health, keys, caps }));
+        let images: TestContext['imagesFake'] | undefined;
+        for (const [i, turn] of scenario.turns.entries()) {
+          const label = `${scenario.name} turn ${i + 1}`;
+          const ops: DocOp[] = [];
+          const unsubscribe = session.subscribe((e) => {
+            if (e.type === 'ops') ops.push(...e.ops);
+          });
+          const e = turn.expect || {};
+          try {
+            if (turn.action) {
+              const tctx = testContext(session, { caps, keys, ...(images ? { images } : {}) });
+              await (await startAction(tctx, turn.action, { confirmed: true, origin: 'user' })).done;
+              await tctx.settled();
+            } else {
+              const steps: ScriptStep[] = (turn.director || []).map((s, k) => ({
+                text: s.text ?? '',
+                ...(s.toolCalls?.length ? { toolCalls: s.toolCalls.map((c, j) => ({ id: `t${k}_${j}`, name: c.name, arguments: JSON.stringify(c.args) })) } : {})
+              }));
+              if (turn.outageDuringTurn) {
+                // The studio's preflight pauses a run while the model is still writing (jobs.ts commits the card).
+                const first = steps[0];
+                steps[0] = async () => {
+                  const card = await preflightCard(health, session.doc, keys, caps, 'preflight');
+                  session.commit([{ op: 'message', msg: { id: newId('msg'), role: 'assistant', text: 'The image provider is busy, so nothing was drawn.', at: Date.now(), cards: [card] } }]);
+                  return first;
+                };
+              }
+              const llm = scriptedLlm({ director: steps });
+              const tctx = testContext(session, { llm, caps, keys, ...(images ? { images } : {}) });
+              images = tctx.imagesFake;
+              const imagesBefore = tctx.imagesFake.calls.length;
+              await runDirectorTurn(tctx, { text: turn.say || '', attachments: [] });
+              await tctx.settled();
+
+              const director = llm.calls.filter((c) => c.role === 'director');
+              const offered = director[0]?.tools?.map((t) => t.function.name) || [];
+              for (const tool of turn.expectTools || []) expect(offered, `${label}: ${tool} offered`).toContain(tool);
+              const system = String(director[0]?.messages[0]?.content ?? '');
+              for (const line of turn.systemIncludes || []) expect(system, `${label}: system`).toContain(line);
+              const results = toolResults(director as never);
+              for (const [tool, wants] of Object.entries(e.toolResultIncludes || {})) for (const want of wants) expect(results[tool], `${label}: ${tool} result`).toContain(want);
+              goldenModelAttempts += (turn.director || []).flatMap((s) => s.toolCalls || []).filter((c) => c.name === 'set_settings').length;
+              if (e.newImageCalls !== undefined) expect(tctx.imagesFake.calls.length - imagesBefore, `${label}: image calls`).toBe(e.newImageCalls);
+
+              const reply = [...session.doc.conversation].reverse().find((m) => m.role === 'assistant')!;
+              expect(reply.text.trim().length, `${label}: never silent`).toBeGreaterThan(0);
+              if (e.reply !== undefined) expect(reply.text, label).toBe(e.reply);
+              if (e.replyStartsWith) expect(reply.text.startsWith(e.replyStartsWith), `${label}: "${reply.text}"`).toBe(true);
+              for (const want of e.replyIncludes || []) expect(reply.text, label).toContain(want);
+              for (const not of e.replyExcludes || []) expect(reply.text.toLowerCase(), label).not.toContain(not.toLowerCase());
+              if (e.nextSteps) expect(reply.nextSteps, label).toEqual(expect.arrayContaining(e.nextSteps.map((s) => expect.objectContaining(s))));
+              if (e.nextStepLabels) expect((reply.nextSteps || []).map((s) => s.label), label).toEqual(expect.arrayContaining(e.nextStepLabels));
+              if (e.nextStepOrder) expect((reply.nextSteps || []).map((s) => s.label), label).toEqual(e.nextStepOrder);
+            }
+          } finally {
+            unsubscribe();
+          }
+          goldenTurnsRun += 1;
+          goldenModelChanges += modelChangingOps(ops, !!turn.action).length;
+          if (e.imageModel) expect(session.doc.imageModel?.modelId, `${label}: the lock`).toBe(e.imageModel);
+          if (e.quality) expect(session.doc.settings.quality, `${label}: the tier`).toBe(e.quality);
+          expect(session.doc.settings.imageModelOverride, `${label}: no override`).toBeUndefined();
+        }
+        // Never silent across the whole scenario.
+        expect(session.doc.conversation.filter((m) => m.role === 'assistant' && !m.text.trim() && !m.cards?.some((c) => c.type === 'renders'))).toEqual([]);
+      } finally {
+        __setModelHealthForTests(prev);
+      }
+    });
+  }
+
+  it('acceptance: zero tool calls that change the model across the golden set (a misbehaving model tried)', () => {
+    expect(goldenTurnsRun).toBe(goldens.reduce((n, g) => n + g.turns.length, 0));
+    expect(goldenModelAttempts).toBeGreaterThan(0);
+    expect(goldenModelChanges).toBe(0);
+  });
+
+  it('tool-choice accuracy: every tool a golden turn needs is offered within the per-turn budget', async () => {
+    let needed = 0;
+    let offered = 0;
+    for (const scenario of goldens) {
+      const caps = scenario.caps === 'byok' ? BYOK_CAPS : GOVERNED_CAPS;
+      const keys = scenario.caps === 'byok' ? BYOK_KEYS : { openrouter: { key: 'sk-or-platform-test', byok: false } };
+      const health = scenario.health === 'rate-limited' ? rateLimitedHealth(Date.now()) : fakeModelHealth({ now: Date.now() });
+      const doc = await goldenDoc(scenario, { health, keys, caps });
+      for (const turn of scenario.turns) {
+        if (!turn.say) continue;
+        const set = buildTurnToolset(testContext(newSession(doc), { caps, keys }), createDirectorTurn({ userText: turn.say }), toolGroups());
+        expect(set.tools.length).toBeLessThanOrEqual(30);
+        const names = new Set(set.tools.map((t) => t.spec.function.name));
+        for (const tool of turn.expectTools || []) {
+          needed += 1;
+          if (names.has(tool)) offered += 1;
+        }
+      }
+    }
+    expect(needed).toBeGreaterThanOrEqual(8);
+    expect(offered / needed).toBe(1);
+  });
+});
