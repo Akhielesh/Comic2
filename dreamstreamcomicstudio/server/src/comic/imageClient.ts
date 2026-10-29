@@ -30,8 +30,19 @@ import { GoogleGenAI } from '@google/genai';
 import { GEMINI_BASE_URL, OPENROUTER_APP_TITLE, OPENROUTER_APP_URL, OPENROUTER_BASE_URL } from '../config.js';
 import { markSharedKeyCapped } from '../ai/providerCircuit.js';
 import { logger } from '../lib/logger.js';
-import { nearestAspect, type ImageModelSpec, type ImageRoute } from '../../../shared/comic/models.js';
+import { imagePriceUsd, nearestAspect, type ImageModelSpec, type ImageRoute } from '../../../shared/comic/models.js';
 import type { AspectRatio, Resolution } from '../../../shared/comic/doc.js';
+import type { OrImageEndpoint } from './models/catalog.js';
+import {
+  acquireRouteCall,
+  isRoutePausedError,
+  outcomeFromError,
+  recordImageOutcome,
+  routePausedError,
+  routeState,
+  type ModelHealthPort
+} from './models/health.js';
+import { mapEndpointPricing, variantToResolution } from './models/pricing.js';
 import {
   StudioError,
   type ImageGenerator,
@@ -42,6 +53,30 @@ import {
   type StudioKeys
 } from './types.js';
 import { prefersGeminiDirect } from './keys.js';
+
+// ── Request / result extras (types.ts ImageRequest / ImageResult gain these: wave note) ──
+
+/** What the job runner may add to an ImageRequest. */
+export interface ImageRequestExtras {
+  /**
+   * The route the money-safe preflight chose (reliability.md §2): the same model on the other route, used ONLY when
+   * that route's key has the same payer as the primary's (pickAlternateRoute); anything else is ignored.
+   */
+  preferRoute?: ImageRoute;
+  /** Images-API transport: the per-image provider price the run was quoted at (`provider.only` keeps endpoints ≤ it). */
+  maxUsd?: number;
+}
+
+/** What the transport reports beyond ImageResult. */
+export interface ImageResultExtras {
+  /** The upstream provider that served the call (OpenRouter's `provider`), when reported. */
+  providerName?: string;
+  /** The model version the provider reported (OpenRouter `model`, Gemini `modelVersion`; models.md §2.5). */
+  modelVersion?: string;
+}
+
+export type ImageRequestPlus = ImageRequest & ImageRequestExtras;
+export type ImageResultPlus = ImageResult & ImageResultExtras;
 
 // ── Dependencies (injectable for tests) ──────────────────────────────────────
 
@@ -56,6 +91,14 @@ export interface ImageClientDeps {
   /** Abortable backoff sleep. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
+  /**
+   * OpenRouter's public endpoint list for an Images-API model (`/images/models/{id}/endpoints`: price lines, resolution
+   * enums, reference caps). null = unknown (the request then pins nothing it cannot justify). Default: a cached, key-less
+   * GET (6 h; a failure is not retried for 5 min).
+   */
+  imageEndpoints?: (openrouterModelId: string) => Promise<OrImageEndpoint[] | null>;
+  /** The provider-health breaker (reliability.md §2). Default: the process-wide one in models/health.ts. */
+  health?: Pick<ModelHealthPort, 'acquireRouteCall' | 'recordImageOutcome' | 'routeState'>;
 }
 
 const defaultCreateGemini = (apiKey: string): GeminiModelsLike =>
@@ -466,7 +509,10 @@ const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } | nul
 interface AttemptResult {
   dataUrl?: string;
   text?: string;
+  /** The model (version) the provider reported. */
   model?: string;
+  /** The upstream provider that served it (OpenRouter's top-level `provider`). */
+  provider?: string;
   costUsd?: number;
   /** Provider said it refused on safety grounds. */
   blocked?: boolean;
@@ -571,6 +617,12 @@ const textOf = (content: unknown): string => {
   return '';
 };
 
+/** OpenRouter names the upstream that served a call in the top-level `provider` field. */
+const providerOf = (payload: unknown): string | undefined => {
+  const p = (payload as { provider?: unknown })?.provider;
+  return typeof p === 'string' && p ? p.replace(/[^\w .()/-]/g, '').slice(0, 60) || undefined : undefined;
+};
+
 const costOf = (payload: unknown): number | undefined => {
   const cost = (payload as { usage?: { cost?: unknown } })?.usage?.cost;
   return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
@@ -599,6 +651,106 @@ const cooldownKey = (picked: PickedImageRoute): string =>
 export const __resetImageClientForTests = (): void => {
   imagesApiUnavailableUntil.clear();
   rateLimitedUntil.clear();
+  endpointCache.clear();
+};
+
+// ── Images-API transport (models.md §2.4 R3.4, §3.4 item 8) ─────────────────
+
+/** OpenRouter's Images API for this model (registry `api.openrouter === 'images'`); everything else keeps today's path. */
+export const usesImagesApi = (spec: ImageModelSpec): boolean => spec.api?.openrouter === 'images';
+
+const ENDPOINTS_TTL_MS = 6 * 60 * 60_000;
+const ENDPOINTS_RETRY_MS = 5 * 60_000;
+const ENDPOINTS_TIMEOUT_MS = 4_000;
+const endpointCache = new Map<string, { at: number; value: OrImageEndpoint[] | null }>();
+
+/** Key-less, cached read of OpenRouter's public endpoint list for an Images-API model (never sends a key). */
+const defaultImageEndpoints = async (openrouterModelId: string): Promise<OrImageEndpoint[] | null> => {
+  const cached = endpointCache.get(openrouterModelId);
+  const at = Date.now();
+  if (cached && at - cached.at < (cached.value ? ENDPOINTS_TTL_MS : ENDPOINTS_RETRY_MS)) return cached.value;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ENDPOINTS_TIMEOUT_MS);
+  try {
+    const id = openrouterModelId.split('/').map((p) => encodeURIComponent(p)).join('/');
+    const res = await fetch(`${OPENROUTER_BASE_URL}/images/models/${id}/endpoints`, { method: 'GET', signal: controller.signal });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const body = (await res.json()) as { endpoints?: unknown; data?: { endpoints?: unknown } };
+    const raw = Array.isArray(body?.endpoints) ? body.endpoints : body?.data?.endpoints;
+    const value = Array.isArray(raw) ? (raw.filter((e) => e && typeof e === 'object') as OrImageEndpoint[]) : null;
+    endpointCache.set(openrouterModelId, { at, value });
+    return value;
+  } catch (err) {
+    logger.warn('comic_image_endpoints_unavailable', { model: openrouterModelId, message: String((err as Error)?.message || err).slice(0, 80) });
+    endpointCache.set(openrouterModelId, { at, value: cached?.value ?? null });
+    return cached?.value ?? null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const firstNumber = (...values: unknown[]): number | undefined => {
+  for (const v of values) if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
+  return undefined;
+};
+
+/** OpenRouter's `input_references` cap as an endpoint or model lists it (tolerant of the documented shapes). */
+export const openRouterReferenceCap = (params: Record<string, unknown> | undefined): number | undefined => {
+  const p = params?.input_references as Record<string, unknown> | number | undefined;
+  if (typeof p === 'number') return firstNumber(p);
+  if (!p || typeof p !== 'object') return undefined;
+  return firstNumber(p.max, p.max_items, p.maxItems, p.maximum, (p.items as Record<string, unknown> | undefined)?.max);
+};
+
+/** Resolutions an endpoint serves (its `resolution` enum); empty when it takes no resolution parameter. */
+const endpointResolutionsOf = (ep: OrImageEndpoint): Resolution[] => {
+  const values = (ep.supported_parameters?.resolution as { values?: unknown[] } | undefined)?.values;
+  return Array.isArray(values) ? values.map(variantToResolution).filter((r): r is Resolution => !!r) : [];
+};
+
+/** How `provider.only` names an endpoint: its tag (e.g. google-vertex/us) when it has one, else its slug or name. */
+const endpointRef = (ep: OrImageEndpoint): string | undefined => {
+  const ref = ep.provider_tag || ep.provider_slug || ep.provider_name;
+  return typeof ref === 'string' && ref ? ref.slice(0, 80) : undefined;
+};
+
+export interface ImagesApiPlan {
+  /** Endpoints allowed to serve the call (absent = no restriction could be justified). */
+  only?: string[];
+  /** The resolution to send (only if an allowed endpoint lists it). */
+  resolution?: Resolution;
+  /** min(OpenRouter's input_references cap, the vendor cap). */
+  referenceCap: number;
+}
+
+/**
+ * models.md §2.4 R3.4: the same model may fail over between ITS endpoints (`allow_fallbacks: true`, the model fixed),
+ * but only to endpoints that list the requested resolution and cost no more than the quote; `resolution` is sent only
+ * when such an endpoint lists it; references are capped at the lower of OpenRouter's and the vendor's limits. Pure.
+ */
+export const planImagesApi = (spec: ImageModelSpec, endpoints: OrImageEndpoint[] | null, want: Resolution | undefined, quoteUsd: number | undefined): ImagesApiPlan => {
+  const vendorCap = Math.max(0, spec.refs.total);
+  if (!endpoints?.length) return { ...(want ? { resolution: want } : {}), referenceCap: vendorCap };
+  const res: Resolution = want ?? '1K';
+  const serving = endpoints.filter((ep) => {
+    const served = endpointResolutionsOf(ep);
+    return !want || !served.length || served.includes(want);
+  });
+  const ceiling = typeof quoteUsd === 'number' && Number.isFinite(quoteUsd) && quoteUsd > 0 ? quoteUsd : imagePriceUsd(spec, res);
+  const affordable = serving.filter((ep) => {
+    const usd = mapEndpointPricing({ modelId: spec.routes.openrouter || spec.id, endpoints: [ep], spec }).price[res]?.usd;
+    return typeof usd === 'number' && Number.isFinite(usd) && usd <= ceiling + 1e-9;
+  });
+  const allowed = affordable.length ? affordable : [];
+  const only = [...new Set(allowed.map(endpointRef).filter((r): r is string => !!r))];
+  const caps = (allowed.length ? allowed : endpoints).map((ep) => openRouterReferenceCap(ep.supported_parameters)).filter((n): n is number => typeof n === 'number');
+  const orCap = caps.length ? Math.min(...caps) : undefined;
+  const listsWant = !!want && allowed.some((ep) => endpointResolutionsOf(ep).includes(want));
+  return {
+    ...(only.length ? { only } : {}),
+    ...(want && (listsWant || !allowed.length) ? { resolution: want } : {}),
+    referenceCap: orCap !== undefined ? Math.min(orCap, vendorCap) : vendorCap
+  };
 };
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -608,6 +760,17 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
   const createGemini = deps.createGemini || defaultCreateGemini;
   const sleep = deps.sleep || defaultSleep;
   const now = deps.now || (() => Date.now());
+  const imageEndpoints = deps.imageEndpoints || defaultImageEndpoints;
+  // Resolved per call, so a swapped process-wide port (tests) is the one used.
+  const health = (): NonNullable<ImageClientDeps['health']> => deps.health || { acquireRouteCall, recordImageOutcome, routeState };
+  /** Every provider answer is recorded (it also releases a half-open probe); recording never fails a call. */
+  const record = (outcome: Parameters<typeof recordImageOutcome>[0]) => {
+    try {
+      health().recordImageOutcome(outcome);
+    } catch (err) {
+      logger.warn('comic_image_health_record_failed', { message: String((err as Error)?.message || err).slice(0, 120) });
+    }
+  };
 
   const openRouterHeaders = (key: ResolvedKey): Record<string, string> => ({
     'Content-Type': 'application/json',
@@ -686,20 +849,27 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
 
   const openRouterImagesApi = async (
     picked: PickedImageRoute,
-    req: ImageRequest,
+    req: ImageRequestPlus,
     prepared: PreparedImageRequest,
     prompt: string
   ): Promise<AttemptResult | 'unavailable'> => {
+    // models.md §3.4 item 8: an Images-API model gets the model FIXED (never a `models` list), its pinned quality,
+    // `provider.allow_fallbacks: true` between ITS endpoints, limited by `provider.only` to the endpoints that list
+    // the resolution and cost no more than the quote, and references capped at min(OpenRouter, vendor).
+    const pinned = usesImagesApi(req.spec);
+    const plan = pinned ? planImagesApi(req.spec, await imageEndpoints(picked.model).catch(() => null), prepared.resolution, req.maxUsd) : null;
+    const references = plan ? prepared.references.slice(0, plan.referenceCap) : prepared.references;
+    const resolution = plan ? plan.resolution : prepared.resolution;
     const body = stripUnsupported(
       {
         model: picked.model,
         prompt,
         aspect_ratio: prepared.aspect,
-        ...(prepared.resolution ? { resolution: prepared.resolution } : {}),
+        ...(resolution ? { resolution } : {}),
         n: 1,
-        ...(prepared.references.length
-          ? { input_references: prepared.references.map((ref) => ({ type: 'image_url', image_url: { url: ref.dataUrl } })) }
-          : {})
+        ...(references.length ? { input_references: references.map((ref) => ({ type: 'image_url', image_url: { url: ref.dataUrl } })) } : {}),
+        ...(pinned && req.spec.fixedQuality ? { quality: req.spec.fixedQuality } : {}),
+        ...(pinned ? { provider: { allow_fallbacks: true, ...(plan?.only?.length ? { only: plan.only } : {}) } } : {})
       },
       req.spec.unsupported
     );
@@ -722,6 +892,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       return {
         dataUrl,
         model: typeof json?.model === 'string' ? json.model : undefined,
+        provider: providerOf(json),
         costUsd: costOf(json),
         blocked: !dataUrl && isSafetyFinish(finish),
         blockReason: typeof finish === 'string' ? finish : undefined
@@ -773,6 +944,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         dataUrl,
         text: textOf(message?.content) || undefined,
         model: typeof json?.model === 'string' ? json.model : undefined,
+        provider: providerOf(json),
         costUsd: costOf(json),
         blocked: !dataUrl && isSafetyFinish(finish),
         blockReason: typeof finish === 'string' ? finish : undefined
@@ -782,7 +954,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
 
   const openRouterAttempt = async (
     picked: PickedImageRoute,
-    req: ImageRequest,
+    req: ImageRequestPlus,
     prepared: PreparedImageRequest,
     prompt: string
   ): Promise<AttemptResult> => {
@@ -861,7 +1033,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
   };
 
   /** One image on one route: transient retry, text-only nudge, honest classification. */
-  const runOnRoute = async (picked: PickedImageRoute, req: ImageRequest, prepared: PreparedImageRequest): Promise<ImageResult> => {
+  const runOnRoute = async (picked: PickedImageRoute, req: ImageRequestPlus, prepared: PreparedImageRequest): Promise<ImageResultPlus> => {
     await waitForCooldown(picked, req.signal);
     const errCtx = { route: picked.route, byok: picked.key.byok, model: req.spec.nickname };
     const started = now();
@@ -885,6 +1057,14 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     };
 
     for (;;) {
+      // reliability.md §2: ask the breaker before EVERY provider attempt (each retry and nudge too). A refused
+      // attempt makes no call and costs nothing; the caller may still try the same model on a same-payer route.
+      if (!health().acquireRouteCall(picked.route, picked.model).allowed) {
+        const paused = routePausedError({ route: picked.route, model: picked.model, nickname: req.spec.nickname, reason: health().routeState(picked.route, picked.model).reason });
+        if (spent) paused.spentUsd = spent;
+        logger.warn('comic_image_route_paused', { route: picked.route, model: picked.model });
+        throw paused;
+      }
       let attempt: AttemptResult;
       try {
         attempt =
@@ -914,6 +1094,8 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
           if (hinted !== undefined) failure.retryAfterMs = hinted;
           Object.assign(error, { imageFailure: failure });
         }
+        // Every answer is recorded (key-scoped and our-side ones are not counted, but they release a probe).
+        record(outcomeFromError(error, picked));
         if (error.code === 'RATE_LIMIT') {
           // Everyone on this route+model+key waits at least this long before their next call.
           const ck = cooldownKey(picked);
@@ -936,17 +1118,22 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         return fail(error);
       }
 
+      // The route answered (with or without a picture): the serving path works.
+      record({ route: picked.route, model: picked.model, ok: true });
       if (typeof attempt.costUsd === 'number') spent = (spent || 0) + attempt.costUsd;
       if (attempt.dataUrl) {
-        return {
+        const out: ImageResultPlus = {
           dataUrl: attempt.dataUrl,
           model: picked.model,
           route: picked.route,
           byok: picked.key.byok,
           costUsd: spent,
           text: attempt.text || lastText,
-          latencyMs: Math.max(0, now() - started)
+          latencyMs: Math.max(0, now() - started),
+          ...(attempt.provider ? { providerName: attempt.provider } : {}),
+          ...(attempt.model ? { modelVersion: attempt.model.slice(0, 160) } : {})
         };
+        return out;
       }
       // A structured block (finish reason / prompt feedback) is final — retrying the same
       // prompt would just pay for the same refusal.
@@ -967,9 +1154,19 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     }
   };
 
-  return async (req: ImageRequest): Promise<ImageResult> => {
-    const picked = pickImageRoute(req.spec, keys);
+  return async (input: ImageRequest): Promise<ImageResult> => {
+    const req = input as ImageRequestPlus;
+    const primary = pickImageRoute(req.spec, keys);
     const prepared = prepareImageRequest(req);
+    // The SAME model on the other route, only with a key of the same payer (never another model, never another payer).
+    const sibling = pickAlternateRoute(req.spec, keys, primary);
+    // Start on the sibling when the preflight said so, or when the breaker has the primary down and the sibling not.
+    const startOnSibling =
+      !!sibling &&
+      (req.preferRoute === sibling.route ||
+        (health().routeState(primary.route, primary.model).state === 'down' && health().routeState(sibling.route, sibling.model).state !== 'down'));
+    const picked = startOnSibling ? sibling! : primary;
+    const fallback = startOnSibling ? primary : sibling;
     if (prepared.droppedReferences) {
       logger.warn('comic_image_references_capped', {
         model: picked.model,
@@ -989,8 +1186,8 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       const fallbackable =
         err instanceof StudioError &&
         !error.abandoned &&
-        (error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && error.retryable));
-      const alt = fallbackable && !req.signal?.aborted ? pickAlternateRoute(req.spec, keys, picked) : null;
+        (error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && (error.retryable || isRoutePausedError(err))));
+      const alt = fallbackable && !req.signal?.aborted ? fallback : null;
       if (!alt) throw err;
       logger.warn('comic_image_route_fallback', { from: picked.route, to: alt.route, model: req.spec.id, code: error.code });
       const primarySpent = typeof error.spentUsd === 'number' && error.spentUsd > 0 ? error.spentUsd : 0;
@@ -1002,13 +1199,15 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         // money spent on either route so the job still bills it.
         const altSpent = (altErr as { spentUsd?: unknown })?.spentUsd;
         const total = primarySpent + (typeof altSpent === 'number' && altSpent > 0 ? altSpent : 0);
-        if (total > 0) error.spentUsd = total;
         logger.warn('comic_image_route_fallback_failed', {
           to: alt.route,
           model: req.spec.id,
           code: (altErr as StudioError)?.code
         });
-        throw err;
+        // The first route was only paused (no call was made): the answer the user needs is the one the other route gave.
+        const reported = isRoutePausedError(err) && altErr instanceof StudioError ? (altErr as StudioError & { spentUsd?: number }) : error;
+        if (total > 0) reported.spentUsd = total;
+        throw reported;
       }
     }
   };
