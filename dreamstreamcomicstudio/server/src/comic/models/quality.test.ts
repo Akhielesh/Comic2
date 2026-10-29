@@ -171,6 +171,40 @@ describe('the LMArena pull (documented datasets-server endpoints)', () => {
     expect(failed.snapshot.boards.lmarena_edit!.asOf).toBe('2026-10-20');
   });
 
+  it('a datasets-server that never answers is cut off (per request and per pull), and a later get() pulls again', async () => {
+    let t = Date.parse('2026-10-29T10:00:00Z');
+    let calls = 0;
+    // Ignores the abort signal entirely: only the raced abort can end the request.
+    const hang: CatalogFetch = () => {
+      calls += 1;
+      return new Promise(() => undefined);
+    };
+    const q = createQualitySource({ fetch: hang, now: () => t, snapshot: smallSnap(), timeouts: { requestMs: 30, pullMs: 200, failRetryMs: 3_600_000 } });
+    const t0 = Date.now();
+    const failed = await q.get({ wait: true });
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(failed.stale).toBe(true);
+    expect(failed.snapshot.boards.lmarena_edit!.asOf).toBe('2026-10-20'); // the dated snapshot is kept
+    expect(calls).toBe(1);
+    t += 60_000;
+    await q.get({ wait: true }); // inside the retry window: no new pull
+    expect(calls).toBe(1);
+    t += 3_600_000;
+    const ds = datasetsServer(tracked());
+    let pulls = 0;
+    const q2 = createQualitySource({
+      fetch: (url, init) => (pulls++ === 0 ? hang(url, init) : ds.fetch(url, init)),
+      now: () => t,
+      snapshot: smallSnap(),
+      timeouts: { requestMs: 30, pullMs: 200, failRetryMs: 60_000 }
+    });
+    expect((await q2.get({ wait: true })).stale).toBe(true);
+    t += 61_000;
+    const healed = await q2.get({ wait: true }); // the next get() after the retry window starts a new pull
+    expect(healed.stale).toBe(false);
+    expect(healed.snapshot.boards.lmarena_edit!.asOf).toBe('2026-10-27');
+  });
+
   it('fetch: null never fetches (the bundled snapshot only)', async () => {
     const q = createQualitySource({ fetch: null });
     expect((await q.get({ wait: true })).snapshot).toBe(bundledQualitySnapshot);

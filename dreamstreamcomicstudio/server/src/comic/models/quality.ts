@@ -15,6 +15,7 @@
 // tsx, vitest and the esbuild bundle all need `with { type: 'json' }`; tsc still emits it and copies the JSON.
 // @ts-ignore TS2823
 import snapshotJson from './qualitySnapshot.json' with { type: 'json' };
+import { logger } from '../../lib/logger.js';
 import type { CatalogFetch } from './catalog.js';
 
 export type QualityBoard = 'lmarena_t2i' | 'lmarena_edit' | 'lmarena_multi_image' | 'aa_t2i' | 'aa_edit' | 'design_arena';
@@ -27,6 +28,12 @@ export const HF_DATASETS_SERVER = 'https://datasets-server.huggingface.co';
 export const LMARENA_DATASET = 'lmarena-ai/leaderboard-dataset';
 /** A refreshed board replaces the snapshot's only when at least this share of the tracked models is found. */
 export const MIN_MATCH_SHARE = 0.5;
+/** One datasets-server request may take at most this long (aborted after). */
+export const HF_REQUEST_TIMEOUT_MS = 6_000;
+/** A whole on-demand LMArena pull (splits + every page) may take at most this long. */
+export const LMARENA_PULL_TIMEOUT_MS = 30_000;
+/** After a failed pull, try again after this long (not a whole TTL; never a hot loop either). */
+export const QUALITY_FAIL_RETRY_MS = 3_600_000;
 const PAGE = 100;
 const MAX_PAGES = 40;
 
@@ -240,32 +247,69 @@ export const mergeLmarenaBoards = (snap: QualitySnapshot, boards: Partial<Record
 
 const encode = (s: string) => encodeURIComponent(s);
 
+/** How a pull talks to datasets-server: its base URL, a per-request timeout and an overall deadline (epoch ms). */
+export interface PullOptions {
+  base?: string;
+  requestMs?: number;
+  /** Wall-clock time (Date.now()) after which no further request starts and a running one is cut short. */
+  deadline?: number;
+}
+
+const pullOptions = (opts: string | PullOptions | undefined): PullOptions => (typeof opts === 'string' ? { base: opts } : (opts ?? {}));
+
+/**
+ * One datasets-server GET, bounded: its own AbortController (requestMs, or what is left of the deadline), and
+ * the answer raced against that abort, so even a fetch that ignores the signal can never hang a pull.
+ */
+const hfJson = async (fetchImpl: CatalogFetch, url: string, opts: PullOptions, what: string): Promise<unknown> => {
+  const left = opts.deadline !== undefined ? opts.deadline - Date.now() : Number.POSITIVE_INFINITY;
+  if (left <= 0) throw new Error(`datasets-server ${what}: the pull ran out of time`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.min(opts.requestMs ?? HF_REQUEST_TIMEOUT_MS, left)); // per request, never at import
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new Error(`datasets-server ${what} timed out`)), { once: true });
+  });
+  aborted.catch(() => undefined); // settled by the race below when it matters
+  try {
+    return await Promise.race([
+      (async () => {
+        const res = await fetchImpl(url, { signal: controller.signal, headers: { accept: 'application/json' } });
+        if (!res.ok) throw new Error(`datasets-server ${what} ${res.status}`);
+        return res.json();
+      })(),
+      aborted
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /** Configs/splits of the dataset (documented datasets-server endpoint). */
-export const fetchLmarenaSplits = async (fetchImpl: CatalogFetch, base = HF_DATASETS_SERVER): Promise<{ config: string; split: string }[]> => {
-  const res = await fetchImpl(`${base}/splits?dataset=${encode(LMARENA_DATASET)}`);
-  if (!res.ok) throw new Error(`datasets-server splits ${res.status}`);
-  const body = (await res.json()) as { splits?: { config?: string; split?: string }[] };
-  return (body.splits ?? []).filter((s) => typeof s.config === 'string' && typeof s.split === 'string').map((s) => ({ config: s.config as string, split: s.split as string }));
+export const fetchLmarenaSplits = async (fetchImpl: CatalogFetch, opts?: string | PullOptions): Promise<{ config: string; split: string }[]> => {
+  const o = pullOptions(opts);
+  const body = (await hfJson(fetchImpl, `${o.base ?? HF_DATASETS_SERVER}/splits?dataset=${encode(LMARENA_DATASET)}`, o, 'splits')) as { splits?: { config?: string; split?: string }[] };
+  return (body?.splits ?? []).filter((s) => typeof s.config === 'string' && typeof s.split === 'string').map((s) => ({ config: s.config as string, split: s.split as string }));
 };
 
 /** Every row of one config/split, paged through the documented `/rows` endpoint. */
-export const fetchLmarenaRows = async (fetchImpl: CatalogFetch, config: string, split: string, base = HF_DATASETS_SERVER): Promise<LmarenaRow[]> => {
+export const fetchLmarenaRows = async (fetchImpl: CatalogFetch, config: string, split: string, opts?: string | PullOptions): Promise<LmarenaRow[]> => {
+  const o = pullOptions(opts);
   const rows: LmarenaRow[] = [];
   let offset = 0;
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const res = await fetchImpl(`${base}/rows?dataset=${encode(LMARENA_DATASET)}&config=${encode(config)}&split=${encode(split)}&offset=${offset}&length=${PAGE}`);
-    if (!res.ok) throw new Error(`datasets-server rows ${res.status}`);
-    const body = (await res.json()) as { rows?: { row?: unknown }[]; num_rows_total?: number };
-    const batch = (body.rows ?? []).map((r) => asRow(r?.row)).filter((r): r is LmarenaRow => !!r);
+    const url = `${o.base ?? HF_DATASETS_SERVER}/rows?dataset=${encode(LMARENA_DATASET)}&config=${encode(config)}&split=${encode(split)}&offset=${offset}&length=${PAGE}`;
+    const body = (await hfJson(fetchImpl, url, o, 'rows')) as { rows?: { row?: unknown }[]; num_rows_total?: number };
+    const batch = (body?.rows ?? []).map((r) => asRow(r?.row)).filter((r): r is LmarenaRow => !!r);
     rows.push(...batch);
-    offset += body.rows?.length ?? 0;
-    if (!body.rows?.length || typeof body.num_rows_total !== 'number' || offset >= body.num_rows_total) break;
+    offset += body?.rows?.length ?? 0;
+    if (!body?.rows?.length || typeof body.num_rows_total !== 'number' || offset >= body.num_rows_total) break;
   }
   return rows;
 };
 
 /** The three LMArena boards from the live dataset (null for a board whose config/split is missing). */
-export const fetchLmarenaBoards = async (fetchImpl: CatalogFetch, aliases: Record<string, string[]>, base = HF_DATASETS_SERVER): Promise<Partial<Record<QualityBoard, QualityBoardSnapshot | null>>> => {
+export const fetchLmarenaBoards = async (fetchImpl: CatalogFetch, aliases: Record<string, string[]>, opts?: string | PullOptions): Promise<Partial<Record<QualityBoard, QualityBoardSnapshot | null>>> => {
+  const base = pullOptions(opts);
   const splits = await fetchLmarenaSplits(fetchImpl, base);
   const find = (needle: string) => splits.find((s) => s.config.includes(needle) && s.split === 'latest') ?? splits.find((s) => s.config.includes(needle));
   const t2i = find('text_to_image');
@@ -295,6 +339,8 @@ export interface QualitySourceDeps {
   snapshot?: QualitySnapshot;
   ttlMs?: number;
   base?: string;
+  /** Overrides for HF_REQUEST_TIMEOUT_MS / LMARENA_PULL_TIMEOUT_MS / QUALITY_FAIL_RETRY_MS (tests). */
+  timeouts?: { requestMs?: number; pullMs?: number; failRetryMs?: number };
 }
 
 export interface QualityState {
@@ -320,20 +366,29 @@ export const createQualitySource = (deps: QualitySourceDeps = {}): QualitySource
   const now = deps.now ?? (() => Date.now());
   const ttl = deps.ttlMs ?? QUALITY_TTL_MS;
   const fetchImpl = deps.fetch === undefined ? (globalThis.fetch as unknown as CatalogFetch | undefined) ?? null : deps.fetch;
+  const pullMs = deps.timeouts?.pullMs ?? LMARENA_PULL_TIMEOUT_MS;
+  const requestMs = deps.timeouts?.requestMs ?? HF_REQUEST_TIMEOUT_MS;
+  const failRetryMs = deps.timeouts?.failRetryMs ?? QUALITY_FAIL_RETRY_MS;
   let state: QualityState = { snapshot: deps.snapshot ?? bundledQualitySnapshot, stale: false };
+  /** When the last pull succeeded / failed (deps.now clock). */
   let refreshedAt = 0;
+  let failedAt = 0;
   let inflight: Promise<QualityState> | null = null;
 
   const refresh = async (): Promise<QualityState> => {
     try {
-      const boards = await fetchLmarenaBoards(fetchImpl as CatalogFetch, state.snapshot.aliases, deps.base);
+      // Every request is bounded and no request starts after the deadline, so this always settles.
+      const boards = await fetchLmarenaBoards(fetchImpl as CatalogFetch, state.snapshot.aliases, { base: deps.base, requestMs, deadline: Date.now() + pullMs });
       const at = new Date(now()).toISOString();
       const merged = mergeLmarenaBoards(state.snapshot, boards, at);
       state = { snapshot: merged.snapshot, fetchedAt: at, stale: false };
-    } catch {
+      refreshedAt = now();
+      failedAt = 0;
+    } catch (err) {
       state = { ...state, stale: true };
+      failedAt = now();
+      logger.warn('comic_model_quality_refresh_failed', { message: (err as Error)?.message });
     }
-    refreshedAt = now();
     return state;
   };
 
@@ -341,7 +396,9 @@ export const createQualitySource = (deps: QualitySourceDeps = {}): QualitySource
     current: () => state,
     get: async (opts = {}) => {
       if (!fetchImpl) return state;
-      if (refreshedAt && now() - refreshedAt < ttl) return state;
+      const t = now();
+      if (failedAt && t - failedAt < failRetryMs) return state; // a recent failure: the dated snapshot, marked stale
+      if (!failedAt && refreshedAt && t - refreshedAt < ttl) return state;
       if (!inflight) inflight = refresh().finally(() => (inflight = null));
       return opts.wait ? inflight : state;
     }
