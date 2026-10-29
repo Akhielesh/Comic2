@@ -1223,11 +1223,26 @@ const withFreeModelsNotice = <T extends { notices?: CapabilityNotice[] }>(
   payload: T,
   gate: ChatGate,
   servedModel: string | undefined,
-  opts: { swarm?: boolean } = {}
+  opts: { swarm?: boolean; freeOnlySwarm?: boolean } = {}
 ): T => {
-  const notice = freeModelsNotice(gate, servedModel, opts);
+  const notice = freeModelsNotice(gate, servedModel, opts) ?? (opts.freeOnlySwarm ? freeOnlySwarmNotice(servedModel) : null);
   return notice ? { ...payload, notices: [...(payload.notices || []), notice] } : payload;
 };
+
+/**
+ * A free-only (X-Free-Only) /swarm request is answered by one free model, because the agent team
+ * always keeps a paid retry. Said plainly, so the missing agent traces aren't a mystery.
+ */
+const freeOnlySwarmNotice = (servedModel: string | undefined): CapabilityNotice | null =>
+  servedModel && !hasFreeSuffix(servedModel)
+    ? null
+    : {
+        tool: 'free_only',
+        level: 'info',
+        message:
+          'Free-Only mode is on, so one free model answered instead of the agent team — the team keeps a paid model as its backup. Turn Free-Only mode off in Settings to use the agent team.',
+        at: new Date().toISOString()
+      };
 
 // ── Usage budget: background chat helpers ───────────────────────────────────────────────────────
 // Enhance / title / memory / follow-ups (and the server's auto-memory) run paid models on the
@@ -2023,13 +2038,14 @@ const startHeartbeat = (res: any) =>
 /**
  * One streamed chat turn on an already-reserved gate: `delta`/`reasoning`/`reset`/`agent_step`
  * events, then `final` (with billing) or `error`. Shared by /stream and by /swarm when the
- * usage budget re-planned the turn onto free models (the agent team needs paid models).
+ * usage budget re-planned the turn onto free models or the turn is free-only (the agent team
+ * always keeps a paid retry).
  */
 const streamChatTurn = async (
   req: any,
   res: any,
   gate: Extract<ChatGate, { ok: true }>,
-  opts: { swarm?: boolean } = {}
+  opts: { swarm?: boolean; freeOnlySwarm?: boolean } = {}
 ): Promise<void> => {
   const { p, reserve } = gate;
   const send = openEventStream(res);
@@ -2146,9 +2162,13 @@ chatRouter.post('/swarm', async (req, res, next) => {
     return next(err);
   }
 
-  // The agent team always keeps a paid retry, so a free-models-only turn is answered by one free
-  // model instead (same SSE events; the client renders a final without traces).
-  if (gate.p.freeModelsOnly) return streamChatTurn(req, res, gate, { swarm: true });
+  // The agent team always keeps a paid retry (runSwarm's TEXT_FALLBACK), so a free-models-only
+  // turn (the budget re-plan) and a free-only turn (X-Free-Only: no paid retry, ever) are answered
+  // by one free model instead (same SSE events; the client renders a final without traces, and the
+  // reply carries a note saying why).
+  if (gate.p.freeModelsOnly || gate.p.noPaidRetry) {
+    return streamChatTurn(req, res, gate, { swarm: true, freeOnlySwarm: !gate.p.freeModelsOnly });
+  }
 
   const { p, reserve } = gate;
   const send = openEventStream(res);

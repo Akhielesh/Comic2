@@ -137,6 +137,8 @@ const allowance = await import('../services/platformAllowance.js');
 const { chatRouter } = await import('./chat.js');
 const { errorHandler } = await import('../middleware/errors.js');
 const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
+const { runSwarm } = await import('../ai/agents/orchestrator.js');
+const swarm = vi.mocked(runSwarm);
 
 const used = (userId: string) => db.events.filter((e) => e.userId === userId && (e.status === 'SETTLED' || e.status === 'RESERVED')).reduce((s, e) => s + e.costUsd, 0);
 
@@ -178,6 +180,11 @@ beforeEach(() => {
   db.events = [];
   engine.providerCalls = [];
   engine.script = [];
+  swarm.mockReset().mockImplementation(async () => ({
+    text: 'The team answer.',
+    model: 'meta-llama/llama-3.3-70b-instruct:free',
+    usage: { promptTokens: 10, completionTokens: 10, totalTokens: 20, costUsd: 0 }
+  }) as unknown as Awaited<ReturnType<typeof runSwarm>>);
   ledger.reserveUsageTokens.mockReset().mockImplementation(async (input: { reservationId?: string; estimate: unknown; governed?: boolean; skipWalletLimits?: boolean; byok?: boolean }) => ({
     allowed: true,
     reservation: {
@@ -271,6 +278,36 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     }
     expect(turnEvents(user)[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
   });
+
+  it('/swarm: the agent team (which always carries the paid TEXT_FALLBACK retry) is not run — one free model answers, settled at $0, and the reply says so', async () => {
+    const user = freshUser();
+    const res = await fetch(`${base}/api/chat/swarm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': user, 'X-Free-Only': 'true' },
+      body: JSON.stringify(ASK)
+    });
+    const body = await res.text();
+    expect(res.status).toBe(200);
+    // Without the fix: runSwarm is called with fallbackModel === TEXT_FALLBACK (planner, agents and
+    // the timeout retry on the paid model, settled against the governed user's usage).
+    expect(swarm).not.toHaveBeenCalled();
+    expect(body).toContain('event: final');
+    const calls = turnCalls();
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(isPaid(c.model)).toBe(false);
+      expect(c.fallbackModel).toBeUndefined();
+      expect(c.freeOnly).toBe(true);
+    }
+    const events = turnEvents(user);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
+    // Honest about the swap: the reply names why the agent team didn't run, never in dollars.
+    const final = body.split('event: final')[1] || '';
+    expect(final).toMatch(/instead of the agent team/);
+    expect(final).toMatch(/Free-Only mode/);
+    expect(final).not.toMatch(/\$|usd|dollar/i);
+  });
 });
 
 describe('free-only OFF (the user opted into paid models): unchanged', () => {
@@ -281,5 +318,20 @@ describe('free-only OFF (the user opted into paid models): unchanged', () => {
     const first = turnCalls()[0];
     expect(first.fallbackModel).toBe(TEXT_FALLBACK);
     expect(first.freeOnly).toBeUndefined();
+  });
+
+  it('/swarm still runs the agent team with its paid net, and adds no free-only note', async () => {
+    const user = freshUser();
+    const res = await fetch(`${base}/api/chat/swarm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': user },
+      body: JSON.stringify(ASK)
+    });
+    const body = await res.text();
+    expect(res.status).toBe(200);
+    expect(swarm).toHaveBeenCalledTimes(1);
+    expect(swarm.mock.calls[0][0]).toMatchObject({ fallbackModel: TEXT_FALLBACK });
+    expect(body).toContain('The team answer.');
+    expect(body).not.toMatch(/Free-Only mode/);
   });
 });
