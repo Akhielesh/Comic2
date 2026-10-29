@@ -205,7 +205,9 @@ describe('PageImageCache', () => {
     const { result } = renderHook(() => useCachedImage('u/t.webp', 'https://x/t', 'now', c));
     await waitFor(() => expect(result.current).toMatchObject({ state: 'error', retrying: true }), { interval: 5 });
     expect(d.fetch).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(result.current.src).toBe('blob:1'));
+    // The retry fires after its 250 ms delay plus the load scheduler; on a busy CI runner that can pass the
+    // default 1 s, so wait with headroom (the assertion is that it retries, not how fast).
+    await waitFor(() => expect(result.current.src).toBe('blob:1'), { timeout: 4000 });
     expect(result.current.retrying).toBe(false);
     expect(d.fetch).toHaveBeenCalledTimes(2);
   });
