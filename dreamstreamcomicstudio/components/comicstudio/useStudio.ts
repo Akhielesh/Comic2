@@ -83,7 +83,7 @@ import {
 } from './studioReducer';
 import { useStudioMode } from './useStudioMode';
 import { requestOpenSettings, settingsSectionOf } from './openSettings';
-import { API_KEYS_HREF } from '../usage/UsageMeter';
+import { API_KEYS_HREF } from '../usage/links';
 import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from './useUndo';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').

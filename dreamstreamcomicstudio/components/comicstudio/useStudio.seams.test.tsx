@@ -2,6 +2,8 @@
 // next-step chips, client actions, ref uploads and the lazy publication. Undo/redo flows live in
 // useStudio.undo.test.tsx.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { StreamRequest, StudioEvent } from '../../shared/comic/events';
@@ -25,7 +27,8 @@ vi.mock('./studioApi', async (importOriginal) => {
 import { StudioApiError } from './studioApi';
 import { MODE_STORAGE_KEY, focusFromSelection, resolveStudioMode, useStudio } from './useStudio';
 import { OPEN_SETTINGS_EVENT } from './openSettings';
-import { API_KEYS_HREF } from '../usage/UsageMeter';
+import { API_KEYS_HREF } from '../usage/links';
+import { API_KEYS_HREF as METER_API_KEYS_HREF } from '../usage/UsageMeter';
 
 let requests: StreamRequest[] = [];
 
@@ -171,6 +174,10 @@ describe('next steps and client actions', () => {
       // The shell does not handle the account's API keys: the studio goes to Settings → API keys.
       act(() => result.current.runClientAction({ type: 'open_settings', section: 'keys' }));
       expect(assign).toHaveBeenCalledWith(API_KEYS_HREF);
+      // One link: the meter re-exports it unchanged, and the controller hook reads it from the tiny links module
+      // rather than pulling the UsageMeter component into its import graph.
+      expect(METER_API_KEYS_HREF).toBe(API_KEYS_HREF);
+      expect(readFileSync(join(__dirname, 'useStudio.ts'), 'utf8')).not.toMatch(/usage\/UsageMeter/);
       // A section from a model-written chip that is not a known one opens the comic settings, nothing else.
       act(() => result.current.runClientAction({ type: 'open_settings', section: 'billing' } as never));
       expect(seen.at(-1)).toEqual({});
