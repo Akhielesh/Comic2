@@ -112,7 +112,7 @@ describe('writer prompts', () => {
     ]) {
       expect(prompt).toContain(needle);
     }
-    expect(prompt).toContain('choose 3–6 by pacing');
+    expect(prompt).toContain('Panels per page: usually 3 big panels (2–4)');
     expect(writerSystemPrompt(baseDoc((d) => (d.settings.quality = 'pro')))).toContain('At most 5 recurring named characters');
     expect(writerSystemPrompt(baseDoc((d) => (d.format.panelsPerPage = 4)))).toContain('exactly 4 on every page');
     const manga = writerSystemPrompt(baseDoc((d) => ((d.format.kind = 'manga'), (d.format.readingDirection = 'rtl'))));
@@ -430,7 +430,8 @@ describe('writePagePlan — long plans', () => {
       return {
         pages: Array.from({ length: to - from + 1 }, (_, i) =>
           rawPage(from + i, [
-            rawPanel({ action: `Page ${from + i} action.`, castIds: ['ch_maya', 'Inspector Kale'], lines: [{ kind: 'speech', speakerId: 'Inspector Kale', text: `Line ${from + i}` }] })
+            rawPanel({ action: `Page ${from + i} action.`, castIds: ['ch_maya', 'Inspector Kale'], lines: [{ kind: 'speech', speakerId: 'Inspector Kale', text: `Line ${from + i}` }] }),
+            rawPanel({ n: 2, action: `Page ${from + i} reaction.` })
           ])
         ),
         newCast: [kale]
@@ -467,7 +468,7 @@ describe('writePagePlan — long plans', () => {
     });
     const { llm, calls } = scriptedLlm((_req, user) => {
       const nums = /Return exactly \d+ pages? in "pages", each with its original n \(([\d, ]+)\)/.exec(user)![1].split(', ').map(Number);
-      return { pages: nums.map((n) => rawPage(n, [rawPanel({ action: `New ${n}` })])), newCast: [] };
+      return { pages: nums.map((n) => rawPage(n, [rawPanel({ action: `New ${n}` }), rawPanel({ n: 2, action: `After ${n}` })])), newCast: [] };
     });
     const ids = doc.pages.slice(1).map((p) => p.id); // pages 2–9
     const out = await writePagePlan({ doc, llm, pageIds: ids, instructions: 'Darker tone' });
@@ -757,5 +758,146 @@ describe('writer v5', () => {
     const out = await analyzeSource({ doc: baseDoc(), llm, text: 'The red kite flew. '.repeat(40) });
     expect(out.cast[0]).toMatchObject({ name: 'Red Kite', kind: 'object', look: { species: 'kite', markings: 'patched' } });
     expect(out.cast[0].count).toBeUndefined();
+  });
+});
+
+// ── Plan fit (A1): fewer, larger panels; words that fit their panels ─────────
+
+describe('writer plan fit', () => {
+  const WORDS = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning which means someone wants us watching it closely tonight'.split(' ');
+  const words = (n: number, seed = 0) => Array.from({ length: n }, (_, i) => WORDS[(seed + i) % WORDS.length]).join(' ');
+  const say = (who: string, n: number, seed = 0) => ({ kind: 'speech', speakerId: who, text: words(n, seed) });
+
+  it('the system prompt carries the panel-count and word-budget lines', () => {
+    const prompt = writerSystemPrompt(baseDoc());
+    expect(prompt).toContain(
+      'Panels per page: usually 3 big panels (2–4) — fewer, larger panels give the art and the words room; let the dialogue and the beats decide. Use 5 only for a fast, nearly silent sequence (12 words or fewer on the whole page). Never more than 5.'
+    );
+    expect(prompt).toContain(
+      'Word budget by panel size (every balloon and caption in the panel together): a full-width row holds about 40 words, a half-width panel on a two-row page about 32, a half-width panel on a three-row page about 20, a third-width small panel about 11.'
+    );
+    expect(prompt).toContain('Small panels are silent or carry one line of 12 words or fewer; conversations go in wide or medium panels.');
+    expect(prompt).toContain('pov and insert shots carry at most 1 line of 12 words or fewer.');
+    expect(prompt).toContain('At most 1 splash (one dominant panel) per 4 pages, never on two pages in a row');
+    expect(prompt).toContain('Open every scene (a new place or a jump in time) with an establishing panel in a full-width row.');
+    expect(prompt).toContain('Begin each action with the one thing the panel must show');
+    expect(prompt).toContain('except an off-panel voice in a pov, insert or establishing shot');
+    expect(prompt).not.toContain('Never more than 7');
+    const webtoon = writerSystemPrompt(baseDoc((d) => (d.format.kind = 'webtoon')));
+    expect(webtoon).toContain('Panels per page: 2–5 (usually 3).');
+    expect(webtoon).toContain('segment of 2–5 full-width panels');
+    // Character-counted scripts get the same budgets in their own unit (lineLengthRule's ratio).
+    const ja = writerSystemPrompt(baseDoc((d) => (d.format.language = 'ja')));
+    expect(ja).toContain('a full-width row holds about 64 characters, a half-width panel on a two-row page about 51, a half-width panel on a three-row page about 32, a third-width small panel about 17.');
+    expect(ja).toContain('Small panels are silent or carry one line of 19 characters or fewer');
+  });
+
+  it('the validator flags 6 panels on auto, 29 words in a 0.084 panel no layout can fit and a 2-line pov panel — in one repair round', async () => {
+    const doc = baseDoc((d) => (d.format.pageCount = 1));
+    const crowded = rawPage(
+      1,
+      [
+        rawPanel({ n: 1, castIds: ['ch_maya', 'ch_arjun'], lines: [say('ch_maya', 20)] }),
+        rawPanel({ n: 2, castIds: ['ch_maya', 'ch_arjun'], lines: [say('ch_arjun', 20, 3)] }),
+        rawPanel({ n: 3, size: 'wide', shot: 'wide', castIds: ['ch_maya', 'ch_arjun'], lines: [say('ch_maya', 20, 6)] }),
+        rawPanel({ n: 4, size: 'small', castIds: ['ch_maya'], lines: [say('ch_maya', 20, 9)] }),
+        rawPanel({ n: 5, size: 'small', castIds: ['ch_arjun'], lines: [say('ch_arjun', 20, 12)] }),
+        rawPanel({ n: 6, size: 'small', shot: 'pov', castIds: ['ch_maya'], lines: [say('ch_arjun', 15, 5), say('ch_maya', 14, 9)] })
+      ],
+      { layout: 'Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.' }
+    );
+    const fixed = rawPage(1, [rawPanel({ n: 1, size: 'wide', shot: 'establishing' }), rawPanel({ n: 2 }), rawPanel({ n: 3 })], { layout: 'Row 1: one wide panel. Row 2: two equal panels.' });
+    const { llm, calls } = fakeLlm([json(plan([crowded])), json(plan([fixed]))]);
+    const out = await writePagePlan({ doc, llm });
+    expect(calls).toHaveLength(2);
+    const repair = String(calls[1].messages[calls[1].messages.length - 1].content);
+    expect(repair).toContain('Page 1 has 6 panels; plan 2–4 big panels (usually 3).');
+    expect(repair).toContain('Page 1, panel 6: 29 words in a small panel (8% of the page; it holds about 9 in 2 balloons) — give it a full-width row');
+    expect(repair).toContain('Page 1, panel 6 is a point-of-view shot with 2 lines (29 words)');
+    expect(out.pages[0].panels).toHaveLength(3);
+    expect(out.notes).toBeUndefined();
+  });
+
+  it('the validator applies a layout that fits in code and names it, without a writer repair', async () => {
+    const doc = baseDoc((d) => (d.format.pageCount = 1));
+    const page = rawPage(
+      1,
+      [
+        rawPanel({ n: 1, size: 'wide', shot: 'establishing' }),
+        rawPanel({ n: 2, size: 'small', castIds: ['ch_maya', 'ch_arjun'], lines: [say('ch_maya', 14), say('ch_arjun', 14, 4)] }),
+        rawPanel({ n: 3, size: 'small', shot: 'close_up' }),
+        rawPanel({ n: 4, size: 'small', shot: 'close_up', castIds: ['ch_arjun'] })
+      ],
+      { layout: 'Row 1: one wide panel. Row 2: three small panels.' }
+    );
+    const { llm, calls } = fakeLlm([json(plan([page]))]);
+    const out = await writePagePlan({ doc, llm });
+    expect(calls).toHaveLength(1);
+    const [p1] = out.pages;
+    expect(p1.layout).not.toBe('Row 1: one wide panel. Row 2: three small panels.');
+    expect(p1.layout.startsWith('Row 1: one wide panel.')).toBe(true); // the establishing panel keeps its full-width row
+    expect(p1.panels[1].size).toBe('wide');
+    expect(out.notes).toEqual(["Page 1's layout changed so the conversation fits: panel 2 now has a full-width row."]);
+    // normalizePlan itself (the validator) applies the same fix and asks for no repair.
+    const check = normalizePlan(plan([page]), { doc, targets: null, pageCount: 1 });
+    expect(check.problems).toEqual([]);
+    expect(check.value!.pages[0].layout).toBe(p1.layout);
+  });
+
+  it('a storybook set to 4 panels per page plans at most 3, with a note', async () => {
+    const doc = baseDoc((d) => {
+      d.format.kind = 'storybook';
+      d.format.panelsPerPage = 4;
+      d.format.pageCount = 1;
+    });
+    const prompt = writerSystemPrompt(doc);
+    expect(prompt).toContain('Panels per page: exactly 3 on every page — a storybook page holds at most 3 large panels (the format asks for 4).');
+    expect(prompt).not.toContain('exactly 4 on every page');
+    const four = rawPage(1, [1, 2, 3, 4].map((n) => rawPanel({ n, size: n === 1 ? 'wide' : 'medium' })), { layout: 'Row 1: one wide panel. Row 2: three small panels.' });
+    const three = rawPage(1, [1, 2, 3].map((n) => rawPanel({ n })));
+    const { llm, calls } = fakeLlm([json(plan([four])), json(plan([three]))]);
+    const out = await writePagePlan({ doc, llm });
+    expect(calls).toHaveLength(2);
+    expect(String(calls[1].messages[calls[1].messages.length - 1].content)).toContain('Page 1 has 4 panels; plan exactly 3 (storybook pages hold at most 3).');
+    expect(out.pages.every((p) => p.panels.length <= 3)).toBe(true);
+    expect(out.notes).toEqual([
+      'Storybook pages hold at most 3 large panels, so new pages are planned with 3 (your format asks for 4). Pages already planned keep theirs.'
+    ]);
+  });
+
+  it('a pov speaker is not pushed into castIds (heard off-panel), while a non-pov speaker still is', async () => {
+    const doc = baseDoc((d) => (d.format.pageCount = 1));
+    const reply = plan([
+      rawPage(1, [
+        rawPanel({ n: 1, shot: 'pov', castIds: ['ch_maya'], action: "From Maya's view, a cart waits.", lines: [{ kind: 'speech', speakerId: 'ch_arjun', text: 'Over there.' }] }),
+        rawPanel({ n: 2, shot: 'medium', castIds: ['ch_maya'], lines: [{ kind: 'speech', speakerId: 'ch_arjun', text: 'Now run.' }] }),
+        rawPanel({ n: 3, shot: 'insert', castIds: [], action: 'A ledger.', lines: [{ kind: 'whisper', speakerId: 'Vendor', text: 'Mine.' }] })
+      ])
+    ]);
+    const out = await writePagePlan({ doc, llm: fakeLlm([json(reply)]).llm });
+    const [pov, medium, insert] = out.pages[0].panels;
+    expect(pov.castIds).toEqual(['ch_maya']);
+    expect(pov.lines[0].speakerId).toBe('ch_arjun');
+    expect(medium.castIds).toEqual(['ch_maya', 'ch_arjun']);
+    const vendor = out.newCast.find((c) => c.name === 'Vendor')!;
+    expect(vendor).toBeTruthy(); // an off-panel voice is still a character (kept in newCast)
+    expect(insert.castIds).toEqual([]);
+    expect(insert.lines[0].speakerId).toBe(vendor.id);
+  });
+
+  it('promotes an extra seen in 3 panels on 2 pages to support (it gets a sheet); a one-page walk-on stays an extra', async () => {
+    const doc = baseDoc((d) => (d.format.pageCount = 2));
+    const pip = { name: 'Pip', role: 'duckling', tier: 'extra', kind: 'animal', count: 1, look: { summary: 'A fluffy yellow duckling' }, personality: '', voice: '' };
+    const crow = { name: 'Crow', role: '', tier: 'extra', kind: 'animal', count: 1, look: { summary: 'A black crow' }, personality: '', voice: '' };
+    const reply = plan(
+      [
+        rawPage(1, [rawPanel({ n: 1, castIds: ['ch_maya', 'Pip'] }), rawPanel({ n: 2, castIds: ['ch_maya', 'Pip', 'Crow'] }), rawPanel({ n: 3, castIds: ['Crow'] })]),
+        rawPage(2, [rawPanel({ n: 1, castIds: ['ch_maya', 'Pip'] }), rawPanel({ n: 2, castIds: ['ch_maya'] })])
+      ],
+      [pip, crow]
+    );
+    const out = await writePagePlan({ doc, llm: fakeLlm([json(reply)]).llm });
+    expect(out.newCast.find((c) => c.name === 'Pip')!.tier).toBe('support');
+    expect(out.newCast.find((c) => c.name === 'Crow')!.tier).toBe('extra');
   });
 });

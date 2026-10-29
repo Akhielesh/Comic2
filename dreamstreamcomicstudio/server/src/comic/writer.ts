@@ -24,8 +24,12 @@ import {
   type PanelSize,
   type ShotType
 } from '../../../shared/comic/doc.js';
+import { needMeter, wordBudget, type NeedMeter } from '../../../shared/comic/density.js';
 import { languageSpec, lineLengthRule } from '../../../shared/comic/languages.js';
+import { letteringAspect } from '../../../shared/comic/lettering/layout.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
+import { checkPagePlan, splashIssues, type LayoutChoice } from '../../../shared/comic/pagePlanCheck.js';
+import { OFF_PANEL_SHOTS, PANEL_LIMITS, RECURRING, panelCountNote, panelCountRule } from '../../../shared/comic/panelRules.js';
 import { ALWAYS_RULE, RATING_RULES, effectiveRating, isKidsAudience, isLittleKidsAudience, softenAction, type ContentRating } from '../../../shared/comic/safety.js';
 import { STYLE_PRESETS, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
@@ -36,7 +40,7 @@ import { StudioError, type LlmClient, type LlmResult, type TextRole } from './ty
 
 // ── Limits ───────────────────────────────────────────────────────────────────
 
-export const MAX_PANELS_PER_PAGE = 9;
+export const MAX_PANELS_PER_PAGE = PANEL_LIMITS.codeMax;
 export const MAX_LINES_PER_PANEL = 4;
 export const MAX_PAGES = 40;
 /** Source text sent to the writer (head + tail kept when longer). */
@@ -264,7 +268,7 @@ const kindRules = (doc: ComicDoc): string[] => {
       break;
     case 'webtoon':
       rules.push(
-        'Webtoon: each "page" is one vertical-scroll segment of 3–6 full-width panels stacked top to bottom. layout is "Stacked vertically: N full-width panels." Use size "tall" for long vertical beats (falls, towers, reveals) and "wide" for short ones; one beat per panel; use vertical space between panels for timing.'
+        `Webtoon: each "page" is one vertical-scroll segment of 2–${PANEL_LIMITS.webtoonMax} full-width panels stacked top to bottom (usually 3). layout is "Stacked vertically: N full-width panels." Use size "tall" for long vertical beats (falls, towers, reveals) and "wide" for short ones; one beat per panel; use vertical space between panels for timing.`
       );
       break;
     case 'strip':
@@ -272,8 +276,11 @@ const kindRules = (doc: ComicDoc): string[] => {
       break;
     case 'storybook':
       rules.push(
-        'Storybook: 1–3 large panels per page. The narration is read aloud, so carry the story in short caption lines (2 sentences max each); dialogue is optional and sparing.'
+        `Storybook: 1–${PANEL_LIMITS.storybookMax} large panels per page (usually ${PANEL_LIMITS.storybookTypical}). The narration is read aloud, so carry the story in short caption lines (2 sentences max each); dialogue is optional and sparing.`
       );
+      if (panelCountRule(f).clampedFrom !== undefined) {
+        rules.push(`The format asks for ${panelCountRule(f).clampedFrom} panels per page, but a storybook page holds at most ${PANEL_LIMITS.storybookMax}: plan every page with exactly ${PANEL_LIMITS.storybookMax}.`);
+      }
       break;
     default:
       break;
@@ -322,15 +329,41 @@ const languageRule = (doc: ComicDoc, language: string): string => {
   return isKidsAudience(doc) && !code.toLowerCase().startsWith('en') ? `${native} For children: short, simple, warm words a parent would read aloud.` : native;
 };
 
+/** The panel-count line of the writer prompt (shared/comic/panelRules.ts is the one table). */
 const panelsRule = (doc: ComicDoc): string => {
-  const ppp = doc.format.panelsPerPage;
-  if (typeof ppp === 'number' && ppp > 0) {
-    const n = clamp(Math.round(ppp), 1, MAX_PANELS_PER_PAGE);
-    return `Panels per page: exactly ${n} on every page (a splash page only if the author asks for one).`;
+  const rule = panelCountRule(doc.format);
+  if (rule.exact !== undefined) {
+    return rule.clampedFrom !== undefined
+      ? `Panels per page: exactly ${rule.exact} on every page — a storybook page holds at most ${PANEL_LIMITS.storybookMax} large panels (the format asks for ${rule.clampedFrom}).`
+      : `Panels per page: exactly ${rule.exact} on every page (a splash page only if the author asks for one).`;
   }
-  if (doc.format.kind === 'strip') return 'Panels per page: 3–4.';
-  if (doc.format.kind === 'storybook') return 'Panels per page: 1–3.';
-  return 'Panels per page: choose 3–6 by pacing — fewer, bigger panels (3–4) for action and big moments, more (5–6) for conversation. Never more than 7.';
+  if (doc.format.kind === 'strip') return `Panels per page: ${rule.min}–${rule.max}.`;
+  if (doc.format.kind === 'storybook') return `Panels per page: ${rule.min}–${rule.max} large panels (usually ${rule.typical}).`;
+  if (doc.format.kind === 'webtoon') return `Panels per page: ${rule.min}–${rule.max} (usually ${rule.typical}).`;
+  const fast = rule.fast!;
+  return (
+    `Panels per page: usually ${rule.typical} big panels (${rule.min}–${rule.max}) — fewer, larger panels give the art and the words room; let the dialogue and the beats decide. ` +
+    `Use ${fast.panels} only for a fast, nearly silent sequence (${fast.maxWords} words or fewer on the whole page). Never more than ${fast.panels}. When the story needs more moments, compress the smaller ones.`
+  );
+};
+
+/**
+ * The word-budget lines of the writer prompt: what a panel holds by its size (density.ts wordBudget, the speech
+ * oracle). Other scripts scale by the same per-balloon ratio lineLengthRule already uses (Japanese counts
+ * characters, Dravidian languages fewer, longer words); the plan check itself measures every script with the
+ * lettering engine.
+ */
+const budgetRules = (doc: ComicDoc): string[] => {
+  const base = lineLengthRule(doc.format.language, false);
+  const k = base.perLine / 25;
+  const unit = base.unit === 'chars' ? 'characters' : 'words';
+  const n = (area: number) => Math.floor(wordBudget(area) * k);
+  const quiet = Math.round(PANEL_LIMITS.quietShotMaxWords * k);
+  return [
+    `- Word budget by panel size (every balloon and caption in the panel together): a full-width row holds about ${n(0.451)} ${unit}, a half-width panel on a two-row page about ${n(0.221)}, a half-width panel on a three-row page about ${n(0.144)}, a third-width small panel about ${n(0.084)}. Each extra balloon costs about ${Math.max(1, Math.round(2 * k))} ${unit}.`,
+    `- Small panels are silent or carry one line of ${quiet} ${unit} or fewer; conversations go in wide or medium panels.`,
+    `- pov and insert shots carry at most ${PANEL_LIMITS.quietShotMaxLines} line of ${quiet} ${unit} or fewer.`
+  ];
 };
 
 export const writerSystemPrompt = (doc: ComicDoc, rating?: ContentRating): string => {
@@ -352,14 +385,16 @@ export const writerSystemPrompt = (doc: ComicDoc, rating?: ContentRating): strin
     'PAGES',
     '- Every page ends on a turn-hook: its last panel raises a question, reveals something or tightens tension so the reader turns the page. The final page lands the ending. Write it in turnHook (one sentence).',
     `- ${panelsRule(doc)}`,
-    '- At most 1 splash (one dominant panel) per 6 pages, saved for the biggest moment.',
+    `- At most 1 splash (one dominant panel) per ${PANEL_LIMITS.splashEvery} pages, never on two pages in a row, saved for the biggest moment.`,
+    '- Open every scene (a new place or a jump in time) with an establishing panel in a full-width row.',
     '- summary: 1–2 sentences of what happens on the page.',
     '- layout: a row blueprint covering every panel in reading order, in exactly this vocabulary: "Row 1: one wide panel. Row 2: two equal panels. Row 3: three small panels." A tall panel spanning two rows: "Rows 2–3: one tall panel on the left beside two stacked panels on the right." A single-panel page: "One full-page splash panel."',
     '- Panel sizes must agree with the layout: wide or large = a full-width row, tall = spans two rows, small/medium = shares a row, splash = dominant.',
     '',
     'PANELS',
-    '- One frozen moment per panel. action = what is visibly in the frame: who is where (left/right, foreground/background), doing what, with which expression and key props, plus light or weather when it matters. Present tense, concrete, at most 45 words; call characters by their CAST names. No inner thoughts, backstory, dialogue or "then" sequences — if it can\'t be drawn, it doesn\'t belong in action.',
+    '- One frozen moment per panel. Begin each action with the one thing the panel must show (one short sentence), then add who is where (left/right, foreground/background), doing what, with which expression and key props, plus light or weather when it matters. Present tense, concrete, at most 45 words; call characters by their CAST names. No inner thoughts, backstory, dialogue or "then" sequences — if it can\'t be drawn, it doesn\'t belong in action.',
     '- Open with an establishing (or wide) shot whenever the scene changes place or time.',
+    '- A pov shot shows what a character sees, so that character is not in the frame; in pov, insert and establishing shots a speaker may be heard off-panel.',
     '- Vary the camera: never more than 2 panels in a row with the same shot type. Close-ups for emotion, inserts for important objects, wide shots for geography and action.',
     '- Keep the 180° rule within a scene: characters keep their screen sides (say "on the left"/"on the right") unless the action motivates a change.',
     '- angle: "" or one of eye level, low angle, high angle, bird\'s-eye view, worm\'s-eye view, dutch tilt.',
@@ -370,8 +405,9 @@ export const writerSystemPrompt = (doc: ComicDoc, rating?: ContentRating): strin
     '',
     'DIALOGUE & LETTERING',
     '- lines are in reading order. kind: speech | thought | whisper | shout | caption | sfx.',
-    '- speakerId: the character id for speech/thought/whisper/shout, "" for caption and sfx. Every speaker must be in that panel\'s castIds.',
+    '- speakerId: the character id for speech/thought/whisper/shout, "" for caption and sfx. Every speaker must be in that panel\'s castIds, except an off-panel voice in a pov, insert or establishing shot (keep its speakerId, leave it out of castIds: it is heard, not drawn).',
     `- At most ${len.perLine} ${unit} per balloon, at most 3 balloons per panel, at most ${len.perPage} ${unit} of lettering per page.${inArt ? ' The artist letters these by hand, so keep lines short and plain.' : ''}`,
+    ...budgetRules(doc),
     '- Natural, in-character lines (use each character\'s voice). Never put stage directions, panel descriptions or prompt text in a line.',
     '- Captions only when they earn their place: a time/place jump ("Old Mumbai. Monsoon season.") or narration voice-over. Never describe what the art already shows. Silent panels are good — use them for reactions, atmosphere and action.',
     '- sfx: short onomatopoeia ("KRAK!") only for sounds that matter.',
@@ -806,7 +842,45 @@ export const softenPlanPages = (pages: Page[], rating: ContentRating): Page[] =>
 interface NormalizedPlan {
   pages: Page[];
   newCast: Character[];
+  /** Pages whose blueprint the validator re-chose so their words fit ($0), by page id. */
+  layoutFixes: Map<string, LayoutFix>;
 }
+
+/** A blueprint re-chosen in code so a page's dialogue fits (named to the user, never silent). */
+interface LayoutFix {
+  layout: string;
+  /** The 1-based panel that did not fit, and whether it now has a full-width row. */
+  panel: number;
+  fullWidth: boolean;
+}
+
+/**
+ * The free plan-fit pass on one page (plan §4.1): when the page is overfull and a same-count, same-order
+ * blueprint fits, apply it (sizes harmonized to it) and return the fix; the page's repair problems (count, an
+ * overfull panel no blueprint can fit, a talkative pov/insert panel) come back for the single repair round.
+ */
+const fitPage = (doc: ComicDoc, page: Page, meter: NeedMeter): { page: Page; fix?: LayoutFix; problems: string[] } => {
+  const check = checkPagePlan(doc, page, { meter });
+  const problems = check.issues.filter((i) => i.severity === 'repair').map((i) => i.text);
+  const choice: LayoutChoice | undefined = check.layoutFix;
+  if (!choice) return { page, problems };
+  const parsed = parseLayout(choice.layout);
+  if (!parsed) return { page, problems };
+  const panels = harmonizePanelSizes(page.panels, parsed, doc.format.readingDirection === 'rtl');
+  const fitted: Page = { ...page, panels, layout: choice.layout };
+  fitted.layout = effectiveLayout(fitted, doc.format);
+  const n = check.worstPanel ?? 1;
+  const after = checkPagePlan(doc, fitted, { meter, fixLayout: false });
+  if (after.state === 'overfull') return { page, problems: [...problems, ...after.issues.filter((i) => i.kind === 'overfull').map((i) => i.text)] };
+  return { page: fitted, fix: { layout: fitted.layout, panel: n, fullWidth: (after.panels[n - 1]?.box.w ?? 0) >= 0.9 }, problems };
+};
+
+/** "Page 2's layout changed so the conversation fits: panel 6 now has a full-width row." */
+const layoutFixNote = (page: Page, fix: LayoutFix): string =>
+  `Page ${page.n}'s layout changed so the conversation fits: panel ${fix.panel} now has ${fix.fullWidth ? 'a full-width row' : 'more room'}.`;
+
+/** Plan-wide meter for the fit check (one engine sizer per doc). */
+const planMeter = (doc: ComicDoc): NeedMeter => needMeter(doc, { aspect: letteringAspect(doc, null) });
 
 const reuseIds = (target: Page | undefined, panels: Panel[]): Panel[] => {
   if (!target) return panels;
@@ -861,6 +935,8 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
 
   const speakingPanels = new Map<string, number>();
   const pages: Page[] = [];
+  const meter = planMeter(doc);
+  const layoutFixes = new Map<string, LayoutFix>();
   for (const raw of ordered) {
     const target = targets ? assignments.get(raw) : undefined;
     if (targets && !target) continue;
@@ -875,6 +951,7 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
         if (id && !castIds.includes(id)) castIds.push(id);
       }
       const action = clean(rp.action);
+      const shot = normalizeShot(rp.shot);
       const lines: Line[] = [];
       for (const rl of asArray(rp.lines).filter(isObject)) {
         const speakerToken = clean(rl.speakerId);
@@ -884,7 +961,8 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
         else if (!speakerId && castIds.length === 1) speakerId = castIds[0];
         const text = cleanLineText(rl.text, nameOf(speakerId));
         if (!text) continue;
-        if (speakerId && !castIds.includes(speakerId)) castIds.push(speakerId); // speakers are visible
+        // Speakers are visible — except a voice heard off-panel in a pov, insert or establishing shot (§3 C6).
+        if (speakerId && !castIds.includes(speakerId) && !OFF_PANEL_SHOTS.has(shot)) castIds.push(speakerId);
         lines.push({ id: newId('ln'), kind, text, ...(speakerId ? { speakerId } : {}) });
       }
       if (!action && !lines.length) continue;
@@ -902,7 +980,7 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
         id: newId('pn'),
         n: panels.length + 1,
         size: normalizeSize(rp.size),
-        shot: normalizeShot(rp.shot),
+        shot,
         ...(angle && !/^(none|n\/a|eye level|eye-level)$/i.test(angle) ? { angle } : {}),
         action,
         castIds,
@@ -934,24 +1012,45 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
       balloons: []
     };
     page.layout = effectiveLayout({ ...page, layout: rawLayout }, doc.format);
-    pages.push(page);
+    const fitted = fitPage(doc, page, meter);
+    problems.push(...fitted.problems);
+    if (fitted.fix) layoutFixes.set(fitted.page.id, fitted.fix);
+    pages.push(fitted.page);
   }
 
   if (!pages.length) return { problems: problems.length ? problems : ['No usable pages were returned.'] };
+  // Splash spacing across the book (a revision is checked against the pages it sits between).
+  const returned = new Set(pages.map((p) => p.id));
+  const book = targets ? [...doc.pages.filter((p) => !returned.has(p.id)), ...pages] : pages;
+  problems.push(...splashIssues(doc, book).filter((s) => returned.has(s.pageId)).map((s) => s.issue.text));
   problems.push(...ratingProblems(pages, ctx.rating ?? effectiveRating(doc).rating));
   if (!targets && pages.length !== ctx.pageCount) {
     problems.push(`Return exactly ${ctx.pageCount} page${ctx.pageCount > 1 ? 's' : ''} (you returned ${pages.length}).`);
   }
 
-  // New characters: keep only the ones actually used; promote frequent speakers.
+  // New characters: keep only the ones actually used; promote frequent speakers and recurring extras
+  // (on ≥ 2 pages and in ≥ 3 panels: they get a model sheet, so they stay on model from page to page).
   const used = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => [...panel.castIds, ...panel.lines.map((l) => l.speakerId || '')])));
+  const presence = new Map<string, { panels: number; pages: Set<string> }>();
+  for (const page of pages) {
+    for (const panel of page.panels) {
+      for (const id of new Set(panel.castIds)) {
+        const seen = presence.get(id) ?? { panels: 0, pages: new Set<string>() };
+        seen.panels += 1;
+        seen.pages.add(page.id);
+        presence.set(id, seen);
+      }
+    }
+  }
   const actions = pages.flatMap((p) => p.panels.map((panel) => panel.action));
   const newCast: Character[] = [];
   for (const draft of resolver.drafts.values()) {
     if (!used.has(draft.id)) continue;
     const { auto, ...character } = draft;
     const speaks = speakingPanels.get(draft.id) || 0;
-    if (character.tier === 'extra' && speaks >= 3) character.tier = 'support';
+    const seen = presence.get(draft.id);
+    const recurring = !!seen && seen.panels >= RECURRING.minPanels && seen.pages.size >= RECURRING.minPages;
+    if (character.tier === 'extra' && (speaks >= 3 || recurring)) character.tier = 'support';
     if (auto && !character.look.summary) {
       for (const action of actions) {
         const hit = mentionSentence(action, character.name);
@@ -963,7 +1062,7 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
     }
     newCast.push(character);
   }
-  return { value: { pages, newCast }, problems };
+  return { value: { pages, newCast, layoutFixes }, problems };
 };
 
 /** Make a full plan exactly `target` pages long: split the densest pages, merge the sparsest neighbors. */
@@ -1136,7 +1235,15 @@ export async function writePagePlan(args: {
   signal?: AbortSignal;
   /** Effective content rating (ctx.rating); default effectiveRating(doc). */
   rating?: ContentRating;
-}): Promise<{ pages: Page[]; newCast: Character[]; costUsd?: number; model: string }> {
+}): Promise<{
+  pages: Page[];
+  newCast: Character[];
+  costUsd?: number;
+  model: string;
+  /** Plain notes for the plan card (present only when there is something to say): layouts the validator
+   *  re-chose so the words fit, and the storybook panel clamp. */
+  notes?: string[];
+}> {
   const { doc } = args;
   const rating = args.rating ?? effectiveRating(doc).rating;
   const revising = Array.isArray(args.pageIds) && args.pageIds.length > 0;
@@ -1263,14 +1370,30 @@ export async function writePagePlan(args: {
     normalized = check.value;
   }
 
-  const pages = softenPlanPages(targets ? normalized.pages : enforcePageCount(normalized.pages, pageCount, doc), rating);
+  const softened = softenPlanPages(targets ? normalized.pages : enforcePageCount(normalized.pages, pageCount, doc), rating);
+  // Pages that page-count enforcement re-made get the same free fit pass (never another writer call).
+  const meter = planMeter(doc);
+  const fixes = new Map(normalized.layoutFixes);
+  const pages = softened.map((page) => {
+    const prior = fixes.get(page.id);
+    if (prior && prior.layout === page.layout) return page;
+    fixes.delete(page.id);
+    const fitted = fitPage(doc, page, meter);
+    if (fitted.fix) fixes.set(page.id, fitted.fix);
+    return fitted.page;
+  });
+  const notes = [
+    ...(panelCountNote(doc.format) ? [panelCountNote(doc.format)!] : []),
+    ...pages.filter((p) => fixes.has(p.id)).map((p) => layoutFixNote(p, fixes.get(p.id)!))
+  ];
   // Drop new characters that page-count enforcement removed from every page.
   const stillUsed = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => [...panel.castIds, ...panel.lines.map((l) => l.speakerId || '')])));
   return {
     pages,
     newCast: normalized.newCast.filter((c) => stillUsed.has(c.id)),
     ...(costUsd !== undefined ? { costUsd } : {}),
-    model
+    model,
+    ...(notes.length ? { notes } : {})
   };
 }
 

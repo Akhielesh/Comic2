@@ -345,27 +345,39 @@ const better = (
 const isSplashPage = (page: Pick<Page, 'panels' | 'layout'>): boolean =>
   page.panels.length === 1 || page.panels.some((p) => p.size === 'splash');
 
+/**
+ * The splash rule over a run of pages in reading order: at most one splash page per `splashEvery` pages, never two
+ * in a row (comics and manga; storybooks, strips and webtoons are exempt). One repair issue per offending page.
+ */
+export function splashIssues(doc: Pick<ComicDoc, 'format'>, pages: Pick<Page, 'id' | 'n' | 'panels' | 'layout'>[]): { pageId: string; issue: PlanIssue }[] {
+  if (doc.format.kind !== 'comic' && doc.format.kind !== 'manga') return [];
+  const out: { pageId: string; issue: PlanIssue }[] = [];
+  let last: Pick<Page, 'n'> | undefined;
+  for (const page of [...pages].sort((a, b) => a.n - b.n)) {
+    if (!isSplashPage(page)) continue;
+    if (last && page.n - last.n < PANEL_LIMITS.splashEvery) {
+      out.push({
+        pageId: page.id,
+        issue: {
+          kind: 'splash',
+          severity: 'repair',
+          text: `Page ${page.n} is a splash only ${plural(page.n - last.n, 'page')} after the splash on page ${last.n}: use at most one splash per ${PANEL_LIMITS.splashEvery} pages, never two in a row.`
+        }
+      });
+    }
+    last = page;
+  }
+  return out;
+}
+
 /** Check every page plus the book rules (splash spacing; establishing panels opening scenes). */
 export function checkBookPlan(doc: ComicDoc, opts: { pages?: Page[]; measure?: Measure; fixLayout?: boolean } = {}): PagePlanCheck[] {
   const pages = [...(opts.pages ?? doc.pages)].sort((a, b) => a.n - b.n);
   const meter = needMeter(doc, { aspect: letteringAspect(doc, null), measure: opts.measure });
   const checks = pages.map((p) => checkPagePlan(doc, p, { meter, fixLayout: opts.fixLayout }));
 
-  // At most one splash per `splashEvery` pages, never two in a row (comics and manga; storybooks are big-panel books).
-  if (doc.format.kind === 'comic' || doc.format.kind === 'manga') {
-    let last: Page | undefined;
-    pages.forEach((page, i) => {
-      if (!isSplashPage(page)) return;
-      if (last && page.n - last.n < PANEL_LIMITS.splashEvery) {
-        checks[i].issues.push({
-          kind: 'splash',
-          severity: 'repair',
-          text: `Page ${page.n} is a splash only ${plural(page.n - last.n, 'page')} after the splash on page ${last.n}: use at most one splash per ${PANEL_LIMITS.splashEvery} pages, never two in a row.`
-        });
-      }
-      last = page;
-    });
-  }
+  const byId = new Map(pages.map((p, i) => [p.id, i]));
+  for (const issue of splashIssues(doc, pages)) checks[byId.get(issue.pageId)!].issues.push(issue.issue);
 
   // An establishing panel in a full-width row opens each scene (a new place).
   let place: string | undefined;
