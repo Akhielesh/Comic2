@@ -493,6 +493,19 @@ describe('publish', () => {
     expect(second.publishedRev).toBeGreaterThan(first.publishedRev);
   });
 
+  it('the public snapshot’s doc.id is the stored row id and survives an update (readers key their place and the intro on it)', async () => {
+    const first = await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    const firstDoc = store.rpcPayload(first.slug!)!.doc!;
+    expect(firstDoc.id).toBe(row.id);
+    expect(firstDoc.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    ctx.session.commit([{ op: 'brief', patch: { logline: 'edited' } }], { origin: 'user' });
+    clock += 1000;
+    const second = await publish(ctx, { visibility: 'unlisted' });
+    expect(second.slug).toBe(first.slug);
+    expect(store.rpcPayload(second.slug!)!.doc!.id).toBe(firstDoc.id);
+  });
+
   it('regenerate: new slug + new key, old link dead at once, old objects deleted', async () => {
     const first = await publish(ctx, { visibility: 'unlisted' });
     const oldKey = store.rows.get('proj-1')!.assetKey!;
