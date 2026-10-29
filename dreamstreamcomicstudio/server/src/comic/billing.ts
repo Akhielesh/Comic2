@@ -50,7 +50,7 @@ export interface BillingDeps {
 
 /**
  * A settle that fails leaves a RESERVED row the budget stops counting after 20 minutes
- * (user_usage_budgets.sql) and nothing revisits — paid spend that silently stops counting.
+ * (user_usage_budgets.sql) until the nightly sweep settles it at its hold (jobs/strandedHolds.ts).
  * The provider call already happened, so a failed settle is retried before it is given up on —
  * but ONLY where the ledger's settle cannot move money twice: a hold that skipped the wallet
  * (usage budgets on) or a BYOK bypass settles by reservation id. The wallet branch runs
