@@ -3,9 +3,9 @@
 // writer-class translator per chunk, validation + one repair round, the safety hook, the linguist
 // review (always), duplicates copied for free, spend, the appended completion message, gating.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { editionReadiness, editionProgress, i18nOf, lineSourceHash } from '../../../../shared/comic/i18n.js';
+import { editionReadiness, editionProgress, i18nOf, lineSourceHash, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps, type StudioAction } from '../../../../shared/comic/ops.js';
-import { AUTO_CORRECTED_NOTE, planTranslation } from '../../../../shared/comic/translationPlan.js';
+import { AUTO_CORRECTED_NOTE, editionTextEntry, planTranslation } from '../../../../shared/comic/translationPlan.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { GOLDEN_DOCS } from '../golden/fixtures.js';
 import { JOB_TIMINGS, startAction } from '../jobs.js';
@@ -136,8 +136,12 @@ describe('software first: caching and misses', () => {
     let calls = 0;
     const translator = (req: LlmRequest) => {
       calls += 1;
-      // Chunk 1 (pages 1–3) is with the model: the author types the Telugu for l9 (page 5 → chunk 2).
-      if (calls === 1) edit('l9', 'నా స్వంత అనువాదం తొమ్మిది');
+      // Chunk 1 (pages 1–3) is with the model: the author types the Telugu for l9 (page 5 → chunk 2), and
+      // their own Telugu title (the title rides in chunk 1's extras, so chunk 1's commit is the one to beat).
+      if (calls === 1) {
+        edit('l9', 'నా స్వంత అనువాదం తొమ్మిది');
+        session.commit([{ op: 'edition_text', lang: 'te', field: 'brief.title', value: { text: 'నా శీర్షిక', status: 'edited', sourceHash: textSourceHash(session.doc.brief.title), at: Date.now() } }], { origin: 'user', label: 'Edit translation' });
+      }
       // Chunk 2 is with the model: the author rewrites l1 (committed as machine text by chunk 1).
       if (calls === 2) edit('l1', 'నా స్వంత అనువాదం ఒకటి');
       return tr.step(req);
@@ -153,10 +157,13 @@ describe('software first: caching and misses', () => {
     expect(e.lines.l9).toMatchObject({ text: 'నా స్వంత అనువాదం తొమ్మిది', status: 'edited' });
     expect(e.lines.l1).toMatchObject({ text: 'నా స్వంత అనువాదం ఒకటి', status: 'edited' });
     expect(e.lines.l1.issue).toBeUndefined();
-    // The author's lines were not sent to the linguist either (their words are not up for review).
+    // Without the fix the title is chunk 1's machine text, then reviewed.
+    expect(editionTextEntry(session.doc, 'te', 'brief.title')).toMatchObject({ text: 'నా శీర్షిక', status: 'edited' });
+    // The author's lines and title were not sent to the linguist either (their words are not up for review).
     const reviewed = String(roles(ctx, 'linguist')[0].messages[1].content);
     expect(reviewed).not.toContain('"id":"l1"');
     expect(reviewed).not.toContain('"id":"l9"');
+    expect(reviewed).not.toContain('"id":"brief.title"');
     expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
   });
 
