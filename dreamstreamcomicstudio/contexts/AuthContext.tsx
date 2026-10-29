@@ -49,6 +49,12 @@ export const SIGN_OUT_SERVER_UNREACHABLE_NOTICE =
 /** A login sync whose read of the account snapshot failed is run again once after this pause. */
 const LOGIN_SYNC_RETRY_MS = 5_000;
 
+/**
+ * How long a sign-out waits for the auth server before signing this device out without it.
+ * auth-js puts no timeout on POST /logout and keeps the session stored until it settles.
+ */
+const SIGN_OUT_SERVER_TIMEOUT_MS = 8_000;
+
 const AuthContext = createContext<AuthContextType>({
     user: null,
     session: null,
@@ -93,6 +99,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const userIdRef = useRef<string | null>(null);
     const syncedUserRef = useRef<string | null>(null);
     const loginSyncRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /** The account whose sign-out is still being settled with the auth server (see signOutSession). */
+    const signingOutRef = useRef<{ userId: string | null } | null>(null);
 
     const applyAuthState = (nextSession: Session | null) => {
         // Chat rows are tagged by THIS tab's account (not the device-wide owner marker, which
@@ -193,7 +201,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             if (session && inactivitySignOutPending) {
                 applyAuthState(null);
                 setLoading(false);
-                void signOutSession('local').finally(() => {
+                void signOutSession('local', session.user?.id ?? null).finally(() => {
                     inactivitySignOutPending = false;
                 });
                 return;
@@ -221,6 +229,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 return;
             }
             if (inactivitySignOutPending) return; // this session is being signed out (see above)
+            // A token refresh for the account being signed out comes from that sign-out's own call
+            // (auth-js refreshes an expired session before POST /logout), finishing after this
+            // device stopped waiting for it: it must not sign that account back in here. A new
+            // sign-in (SIGNED_IN) is a person's choice and is acted on as ever.
+            const leaving = signingOutRef.current?.userId;
+            if (event === 'TOKEN_REFRESHED' && leaving && session?.user?.id?.toLowerCase() === leaving.toLowerCase()) return;
             // supabase-js announces every auth event to every tab without storing the session
             // there. With "Remember me" off each tab keeps its own session, so a session another
             // tab announced is not this tab's: acting on it would flip this tab to that account and
@@ -329,18 +343,37 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
      * 401/403/404 (offline, a flaky network): no SIGNED_OUT fires, its refresh timer keeps the
      * session alive, and the next refresh tick or reload would sign the account straight back
      * in after "Signed out" was shown — on a shared device, as the previous person, with the
-     * keys restored by the login sync. So on a failure this does what SIGNED_OUT would have:
-     * the stored session and the cached token go, the purge runs, and the person is told that
-     * the server did not record it. Never throws.
+     * keys restored by the login sync. auth-js also sets no timeout on that request, and the
+     * session stays stored until it settles. So when the server says no, or gives no answer
+     * within SIGN_OUT_SERVER_TIMEOUT_MS, this does what SIGNED_OUT would have: the stored
+     * session and the cached token go, the purge runs, the person is told that the server did
+     * not record it, and the sign-out is announced to every tab of this browser. Never throws.
      */
-    const signOutSession = async (scope: 'local' | 'global') => {
-        let failed = false;
-        try {
-            failed = Boolean((await supabase.auth.signOut({ scope })).error);
-        } catch {
-            failed = true;
+    const signOutSession = async (scope: 'local' | 'global', leavingUserId: string | null = userIdRef.current) => {
+        const mark = { userId: leavingUserId };
+        signingOutRef.current = mark;
+        const settled = () => {
+            if (signingOutRef.current === mark) signingOutRef.current = null;
+        };
+        const server = (async () => {
+            try {
+                return !(await supabase.auth.signOut({ scope })).error;
+            } catch {
+                return false;
+            }
+        })();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const answer = await Promise.race([
+            server,
+            new Promise<'timeout'>((resolve) => {
+                timer = setTimeout(() => resolve('timeout'), SIGN_OUT_SERVER_TIMEOUT_MS);
+            })
+        ]);
+        clearTimeout(timer);
+        if (answer === true) {
+            settled();
+            return;
         }
-        if (!failed) return;
         dropStoredSession();
         clearCachedAuthToken();
         userIdRef.current = null;
@@ -348,6 +381,34 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         cancelLoginSyncRetry();
         clearLocalAuthState();
         appStatus.report('warn', SIGN_OUT_SERVER_UNREACHABLE_NOTICE, { source: 'auth' });
+        if (answer === false) {
+            await announceSignOut();
+            settled();
+            return;
+        }
+        // No answer in time: the call still holds auth-js's lock, so an announcement made now
+        // would only queue behind it. Once it settles: a sign-out it recorded announced itself;
+        // otherwise this device is signed out again (a refresh inside that call may have stored
+        // the session anew) and announced — unless someone has signed in here since.
+        void server.then(async (recorded) => {
+            if (!recorded && !userIdRef.current) await announceSignOut();
+            settled();
+        });
+    };
+
+    /**
+     * Tell this browser's tabs (this one too) that the session ended, as a recorded sign-out does:
+     * with nothing stored, auth-js skips POST /logout and its _removeSession fires SIGNED_OUT here
+     * and broadcasts it to every tab of the origin — the main app's, Stream Studio's, and the
+     * caches that listen for it (apiClient's token, productAccess). Never throws.
+     */
+    const announceSignOut = async () => {
+        dropStoredSession();
+        try {
+            if ((await supabase.auth.signOut({ scope: 'local' })).error) dropStoredSession();
+        } catch {
+            dropStoredSession();
+        }
     };
 
     const signOut = async () => {

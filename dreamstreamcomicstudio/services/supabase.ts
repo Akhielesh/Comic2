@@ -223,7 +223,10 @@ export const forgetTabSession = (): void => {
  * /logout fails with anything but 401/403/404 (offline, a flaky network), fires no SIGNED_OUT,
  * and its refresh timer keeps that session alive: the next refresh tick or reload signs the
  * account straight back in. supabase-js reads the session from storage on every getSession and
- * refresh, so once it is gone this device has none. Nothing is announced to other tabs.
+ * refresh, so once it is gone this device has none. This announces nothing itself:
+ * contexts/AuthContext then calls supabase.auth.signOut again, which — with nothing stored —
+ * skips POST /logout and fires SIGNED_OUT here and in the browser's other tabs, as a recorded
+ * sign-out does.
  */
 export const dropStoredSession = (): void => {
     if (typeof window === 'undefined') return;

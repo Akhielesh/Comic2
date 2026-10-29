@@ -6,13 +6,15 @@
 //    dashboard, drop every direct Supabase save and sign out on reload).
 //  - Sign out while POST /logout cannot be reached: auth-js keeps the stored session and fires no
 //    SIGNED_OUT, so the next refresh tick or reload would sign the account straight back in after
-//    "Signed out" was shown. The local session must go regardless, and the person be told.
+//    "Signed out" was shown. The local session must go regardless, the person be told, and the
+//    browser's other tabs hear SIGNED_OUT as they do for a recorded sign-out. A POST /logout that
+//    never answers (auth-js sets no timeout) must not keep the session stored meanwhile.
 // Real AuthContext and the REAL services/supabase module (isStoredSession, dropStoredSession,
 // forgetTabSession, the inactivity clock); only the Supabase client is a fake that keeps the
 // session in this tab's real storage the way supabase-js does, and apiClient is faked.
 import React from 'react';
 import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -20,9 +22,33 @@ type FakeSession = { user: { id: string; email: string }; access_token: string; 
 
 const h = vi.hoisted(() => {
   const KEY = 'dreamstream_auth_token';
+  const OFFLINE = { error: { name: 'AuthRetryableFetchError', message: 'Failed to fetch', status: 0 } };
   const state = {
     /** POST /logout cannot be reached. */
     offline: false,
+    /** POST /logout gets no answer until the test gives one with `answerLogout`. */
+    hang: false,
+    answerLogout: null as null | ((answer: 'ok' | 'error') => void),
+    /** auth-js runs one auth call at a time (its lock): a call waits for the one before it to settle. */
+    lock: Promise.resolve() as Promise<unknown>,
+    /** auth-js _signOut, run under the lock: POST /logout only when a session is stored. */
+    async signOut(scope: 'local' | 'global' | 'others') {
+      if (state.stored()) {
+        // A failed POST /logout (anything but 401/403/404) returns the error and keeps the stored session.
+        if (state.hang) {
+          const answer = await new Promise<'ok' | 'error'>((resolve) => (state.answerLogout = resolve));
+          state.answerLogout = null;
+          if (answer === 'error') return OFFLINE;
+        } else if (state.offline) return OFFLINE;
+      }
+      // _removeSession: whatever is stored goes, and SIGNED_OUT is announced here and to every other tab.
+      if (scope !== 'others') {
+        sessionStorage.removeItem(KEY);
+        localStorage.removeItem(KEY);
+        state.emit('SIGNED_OUT', null);
+      }
+      return { error: null };
+    },
     listeners: [] as ((event: string, session: unknown) => void)[],
     emit(event: string, session: unknown) {
       for (const l of [...state.listeners]) l(event, session);
@@ -62,16 +88,10 @@ vi.mock('../services/supabase', async (importOriginal) => {
           queueMicrotask(() => cb('INITIAL_SESSION', h.stored()));
           return { data: { subscription: { unsubscribe: () => (h.listeners = h.listeners.filter((l) => l !== cb)) } } };
         }),
-        // auth-js _signOut: a failed POST /logout (anything but 401/403/404) returns the error and
-        // keeps the stored session; a successful one removes it and announces SIGNED_OUT.
-        signOut: vi.fn(async ({ scope }: { scope: 'local' | 'global' | 'others' }) => {
-          if (h.offline) return { error: { name: 'AuthRetryableFetchError', message: 'Failed to fetch', status: 0 } };
-          if (scope !== 'others') {
-            sessionStorage.removeItem('dreamstream_auth_token');
-            localStorage.removeItem('dreamstream_auth_token');
-            h.emit('SIGNED_OUT', null);
-          }
-          return { error: null };
+        signOut: vi.fn(({ scope }: { scope: 'local' | 'global' | 'others' }) => {
+          const call = h.lock.then(() => h.signOut(scope));
+          h.lock = call.catch(() => undefined);
+          return call;
         }),
       },
     },
@@ -121,9 +141,15 @@ beforeEach(() => {
   sessionStorage.clear();
   appStatus.clear();
   h.offline = false;
+  h.hang = false;
+  h.answerLogout = null;
+  h.lock = Promise.resolve();
   h.listeners = [];
   net.gets = [];
   vi.mocked(clearCachedAuthToken).mockClear();
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('AuthProvider — "Remember me" off: a session another tab signed in to is not this tab’s', () => {
@@ -204,6 +230,104 @@ describe('AuthProvider — sign out while the auth server cannot be reached', ()
     expect(screen.getAllByTestId('who').at(-1)?.textContent).toBe('signed-out');
   });
 
+  it('tells the browser’s other tabs, as a recorded sign-out does: they hear SIGNED_OUT', async () => {
+    await startAsA();
+    // Another tab of this browser ("Remember me" on: the same stored session): its auth client and
+    // apiClient act on what supabase-js broadcasts to it.
+    const otherTab: string[] = [];
+    h.listeners.push((event) => otherTab.push(event));
+    h.offline = true;
+    await act(async () => { await auth!.signOut(); });
+    await flush();
+    // Without the fix: [] — the other tab keeps showing A and sending A's token, which the server
+    // still accepts (the sign-out was never recorded there).
+    expect(otherTab).toContain('SIGNED_OUT');
+    expect(h.stored()).toBeNull();
+    expect(who()).toBe('signed-out');
+    expect(appStatus.getSnapshot().events[0]).toMatchObject({ level: 'warn', message: SIGN_OUT_SERVER_UNREACHABLE_NOTICE });
+  });
+
+  it('a POST /logout that never answers: after 8 s this device is signed out anyway — the stored session goes, the person is told — and the other tabs hear it once the call settles', async () => {
+    vi.useFakeTimers();
+    await startAsA();
+    const otherTab: string[] = [];
+    h.listeners.push((event) => otherTab.push(event));
+    h.hang = true; // a captive portal, a lossy mobile link: auth-js sets no timeout on the request
+    let returned = false;
+    await act(async () => { void auth!.signOut().then(() => { returned = true; }); });
+    await flush();
+    expect(who()).toBe('signed-out'); // the screen clears at once…
+    expect(h.stored()).not.toBeNull(); // …while the server is still being asked
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    // Without the fix: still stored after any wait — closing the tab or reloading resumes A.
+    expect(returned).toBe(true);
+    expect(h.stored()).toBeNull();
+    expect(clearCachedAuthToken).toHaveBeenCalled();
+    expect(listKeys()).toEqual([]);
+    expect(getLocalOwner()).toBeNull();
+    expect(appStatus.getSnapshot().events[0]).toMatchObject({ level: 'warn', message: SIGN_OUT_SERVER_UNREACHABLE_NOTICE });
+    // auth-js runs one call at a time: the announcement waits for the abandoned call.
+    expect(otherTab).not.toContain('SIGNED_OUT');
+    await act(async () => h.answerLogout!('error'));
+    await flush();
+    expect(otherTab).toContain('SIGNED_OUT');
+    expect(h.stored()).toBeNull();
+    expect(who()).toBe('signed-out');
+  });
+
+  it('a token refresh finishing inside the abandoned call (auth-js refreshes an expired session before POST /logout) does not sign the account back in', async () => {
+    vi.useFakeTimers();
+    await startAsA();
+    const otherTab: string[] = [];
+    h.listeners.push((event) => otherTab.push(event));
+    h.hang = true;
+    await act(async () => { void auth!.signOut(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(h.stored()).toBeNull();
+    const readsBefore = settingsReads().length;
+    // The refresh retried inside the abandoned call gets through: auth-js stores it and announces it.
+    const late = { ...session(A), access_token: 't-A-refreshed-late' };
+    h.store(late);
+    await act(async () => h.emit('TOKEN_REFRESHED', late));
+    await flush();
+    expect(who()).toBe('signed-out');
+    expect(getLocalOwner()).toBeNull();
+    expect(settingsReads()).toHaveLength(readsBefore); // no login sync pulling A's keys back
+    // POST /logout then fails as well: the session it stored goes too, and every tab is told.
+    await act(async () => h.answerLogout!('error'));
+    await flush();
+    expect(h.stored()).toBeNull();
+    expect(otherTab).toContain('SIGNED_OUT');
+    expect(who()).toBe('signed-out');
+  });
+
+  it('signing in again while the abandoned call is still pending works, and that call’s late failure leaves the new session alone', async () => {
+    vi.useFakeTimers();
+    await startAsA();
+    const otherTab: string[] = [];
+    h.listeners.push((event) => otherTab.push(event));
+    h.hang = true;
+    await act(async () => { void auth!.signOut(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(who()).toBe('signed-out');
+    // signInWithPassword in this tab (it takes no lock): stored, then announced.
+    const again = { ...session(A), access_token: 't-A-signed-in-again' };
+    h.store(again);
+    await act(async () => h.emit('SIGNED_IN', again));
+    await flush();
+    expect(who()).toBe(A);
+    await act(async () => h.answerLogout!('error'));
+    await flush();
+    expect(who()).toBe(A);
+    expect(h.stored()?.access_token).toBe('t-A-signed-in-again');
+    expect(otherTab).not.toContain('SIGNED_OUT');
+    // Its own token refresh is acted on as ever.
+    await act(async () => h.refreshTick());
+    await flush();
+    expect(who()).toBe(A);
+    expect(auth!.session?.access_token).toBe('t-A-signed-in-again-refreshed');
+  });
+
   it('"Sign out everywhere" while unreachable: the same on this device, and the notice says other devices stay signed in', async () => {
     await startAsA();
     h.offline = true;
@@ -231,10 +355,13 @@ describe('AuthProvider — sign out while the auth server cannot be reached', ()
     setLocalOwner(A);
     addKey({ provider: 'openai', key: 'sk-A-secret' });
     localStorage.setItem('dreamstream_last_active_at', String(Date.now() - INACTIVITY_SIGNOUT_MS - 1));
+    const otherTab: string[] = [];
+    h.listeners.push((event) => otherTab.push(event));
     h.offline = true;
     await mount();
     expect(who()).toBe('signed-out');
     expect(h.stored()).toBeNull();
+    expect(otherTab).toContain('SIGNED_OUT');
     expect(listKeys()).toEqual([]);
     expect(getLocalOwner()).toBeNull();
     expect(settingsReads()).toEqual([]); // no login sync for a session on its way out
