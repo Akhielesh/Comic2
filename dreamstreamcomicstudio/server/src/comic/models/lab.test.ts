@@ -86,6 +86,8 @@ const harness = (over: Partial<ModelLabDeps> = {}): Harness => {
     prices: async () => registryPriceBook(),
     health,
     network,
+    // No endpoint data (unknown): the transport pins nothing and the test never reaches OpenRouter's public list.
+    imageEndpoints: async () => null,
     now,
     audit: vi.fn(),
     ...over
@@ -130,10 +132,11 @@ describe('the checks and their quotes', () => {
     expect(d1.quote).toEqual({ usd: 0.113, source: 'pricebook', basis: 'price list from 2026-10-22 · reference cost unpublished', refsUnpriced: true });
     expect(d1).toMatchObject({ res: '4K', aspect: '2:3', refs: 4, canRun: true });
     expect(items.find((i) => i.id === 'd2-gpt-image-2.5-sunburst')!.quote!.usd).toBe(0.2107);
-    // D2 is quoted at quality max, but our Images-API transport sends no quality yet: the check says so before a click.
-    expect(o.checks.find((c) => c.id === 'D2')!.note).toContain(
-      'Until our Images-API transport sends quality (M1-LOCK-SERVER), this run uses OpenAI’s default quality: it answers whether a page comes back, not the max-quality price.'
-    );
+    // D2 is quoted at quality max and the transport now sends it (fixedQuality, models.md §3.4 item 8): the note says
+    // so instead of the old "default quality" caveat.
+    const d2Note = o.checks.find((c) => c.id === 'D2')!.note;
+    expect(d2Note).toContain('The studio’s Images-API transport sends quality max; the result’s “Sent” line shows the quality that went out.');
+    expect(d2Note).not.toMatch(/default quality|Until our Images-API transport/);
     // D3: the registry has no 2K price for Seedream 5.0 Pro → the §2.6 upper estimate with its label.
     const d3 = items.find((i) => i.id === 'd3-seedream-5-pro-2k')!;
     expect(d3.quote!.usd).toBe(0.102);
@@ -277,8 +280,11 @@ describe('running a check', () => {
     h.setScript(() => new Response('not found', { status: 404 }));
     const noImagesApi = (await runItem(h, 'd2-gpt-image-2.5-sunburst')).run as LabRunView;
     expect(h.calls.map((c) => c.url.replace(/^.*\/api\/v1/, ''))).toEqual(['/images']); // never /chat/completions
-    expect(noImagesApi.facts).toMatchObject({ errorCode: 'IMAGES_API_UNAVAILABLE', httpStatus: 404, stoppedSecondCall: true });
-    expect(noImagesApi.facts.message).toMatch(/Images API answered 404/);
+    // An Images-API model never goes to chat (models.md §3.4 item 8): the transport itself stops after the 404, so there
+    // is no second attempt for the lab to stop.
+    expect(noImagesApi.facts).toMatchObject({ callMade: true, errorCode: 'IMAGES_API_UNAVAILABLE', httpStatus: 404, stoppedSecondCall: false, costReported: false });
+    expect(noImagesApi.costUsd).toBe(0);
+    expect(noImagesApi.facts.message).toBe("OpenRouter's Images API answered 404 for this model. The studio never sends this model through chat instead, so nothing else was sent.");
 
     // A paid answer whose hosted image cannot be downloaded: the money is recorded, the retry is stopped.
     h.calls.length = 0;
@@ -300,14 +306,15 @@ describe('running a check', () => {
     h.setScript(() => new Response('not found', { status: 404 }));
     const first = (await runItem(h, 'd2-gpt-image-2.5-sunburst')).run as LabRunView;
     expect(first.facts).toMatchObject({ callMade: true, errorCode: 'IMAGES_API_UNAVAILABLE', httpStatus: 404 });
-    // No __resetImageClientForTests here: the studio transport now skips /images for this model and would go to chat.
+    // No __resetImageClientForTests here: the studio transport now skips /images for this model and, being an
+    // Images-API model, refuses without sending anything (never chat).
     h.setScript(() => imageAnswer(png2x3.toString('base64')));
     const second = (await runItem(h, 'd2-gpt-image-2.5-sunburst')).run as LabRunView;
     expect(h.calls.map((c) => c.url.replace(/^.*\/api\/v1/, ''))).toEqual(['/images']); // the first click's only call
     expect(second).toMatchObject({ status: 'failed', costUsd: 0 });
     expect(second.facts).toMatchObject({ callMade: false, errorCode: 'IMAGES_API_SKIPPED', stoppedSecondCall: false, endpoint: null, httpStatus: null, sent: null, refsSent: 0 });
     expect(second.facts.message).toBe(
-      "Our transport is skipping OpenRouter's Images API for this model for up to 15 minutes after its last 404 or 405, so the lab didn't send this D2 call to chat. Nothing was charged."
+      "Our transport is skipping OpenRouter's Images API for this model for up to 15 minutes after its last 404 or 405, and it never sends this model through chat, so this D2 call wasn't sent. Nothing was charged."
     );
     expect(h.store.imageCalls).toHaveLength(1); // only the 404 that reached the provider is a comic_image_calls row
     expect(h.store.runs.find((r) => r.id === second.id)).toMatchObject({ status: 'failed', costUsd: 0 });
@@ -316,7 +323,7 @@ describe('running a check', () => {
     const sunburst = d2.find((i) => i.id === 'd2-gpt-image-2.5-sunburst')!;
     expect(sunburst.canRun).toBe(true);
     expect(sunburst.note).toBe(
-      "OpenRouter's Images API answered 404 for this model at 12:00 UTC. Until about 12:15 UTC our transport may skip it; if it does, the lab stops before sending this call and nothing is charged."
+      "OpenRouter's Images API answered 404 for this model at 12:00 UTC. Until about 12:15 UTC our transport may skip it; if it does, this call isn't sent and nothing is charged."
     );
     expect(d2.find((i) => i.id === 'd2-gpt-image-2.5-flare')!.note).toBeUndefined(); // the other model is unaffected
     // ...and its own click still goes to /images.
@@ -324,6 +331,26 @@ describe('running a check', () => {
     const flare = (await runItem(h, 'd2-gpt-image-2.5-flare')).run as LabRunView;
     expect(h.calls.map((c) => c.url.replace(/^.*\/api\/v1/, ''))).toEqual(['/images']);
     expect(flare.status).toBe('ok');
+    // What went out is the D2 question exactly: the model fixed, quality max, fallbacks only between ITS endpoints.
+    expect(h.calls[0].body).toMatchObject({ model: 'openai/gpt-image-2.5-flare', quality: 'max', provider: { allow_fallbacks: true } });
+    expect(h.calls[0].body).not.toHaveProperty('models');
+    expect(flare.facts.sent).toMatchObject({ quality: 'max', allowFallbacks: true });
+  });
+
+  it('D2 reads the endpoint list through the lab, never the network; a list with no endpoint within the quote is stopped unsent at $0', async () => {
+    const lookups: string[] = [];
+    const h = harness({
+      imageEndpoints: async (id) => {
+        lookups.push(id);
+        return [{ provider_name: 'OpenAI', provider_slug: 'openai', pricing: [{ billable: 'output_image', unit: 'image', cost_usd: 9 }], supported_parameters: {} }];
+      }
+    });
+    const run = (await runItem(h, 'd2-gpt-image-2.5-flare')).run as LabRunView;
+    expect(lookups).toEqual(['openai/gpt-image-2.5-flare']);
+    expect(h.calls).toEqual([]); // neither the endpoint list nor a provider call reached the network
+    expect(run).toMatchObject({ status: 'failed', costUsd: 0 });
+    expect(run.facts).toMatchObject({ callMade: false, httpStatus: null, costReported: false });
+    expect(h.store.imageCalls).toEqual([]); // nothing reached a provider, so no comic_image_calls row
   });
 
   it('the transport wrapper with a required endpoint: a first POST anywhere else is stopped unsent, and so is everything after it', async () => {

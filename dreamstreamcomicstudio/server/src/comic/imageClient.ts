@@ -158,6 +158,8 @@ class ImageDownloadError extends ImageHttpError {}
 
 /** models.md §3.6 H reason for a 404 on the model call: the provider no longer serves this model. */
 export const MODEL_GONE_REASON = 'the provider no longer serves it';
+/** The H reason when an Images-API model's /images answered 404/405 (or is skipped after one): never sent to chat. */
+export const IMAGES_API_GONE_REASON = "OpenRouter's image service doesn't offer it right now";
 
 /**
  * The §3.6 H reason when the comic's model can't be drawn at all on this route (the provider no longer serves it,
@@ -1000,7 +1002,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       if (result !== 'unavailable') return result;
     }
     // An Images-API model never goes to chat: that path has no quality pin and no provider pin (§3.4 item 8).
-    if (usesImagesApi(req.spec)) throw modelUnavailableError(picked.route, req.spec.nickname, "OpenRouter's image service doesn't offer it right now", 404);
+    if (usesImagesApi(req.spec)) throw modelUnavailableError(picked.route, req.spec.nickname, IMAGES_API_GONE_REASON, 404);
     return openRouterChat(picked, req, prepared, prompt);
   };
 

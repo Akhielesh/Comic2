@@ -38,7 +38,15 @@ import { logger } from '../../lib/logger.js';
 import { recordAudit, type AuditInput } from '../../observability/auditLog.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from '../../services/supabase.js';
 import { createSupabaseAssetStore, decodeImageDataUrl, previewImage } from '../assets.js';
-import { classifyImageError, createImageGenerator, imageFailureInfo, providerDetail } from '../imageClient.js';
+import {
+  IMAGES_API_GONE_REASON,
+  classifyImageError,
+  createImageGenerator,
+  imageFailureInfo,
+  modelUnavailableReason,
+  providerDetail,
+  type ImageClientDeps
+} from '../imageClient.js';
 import { measureImage, withSharpSlot } from '../imageMeasure.js';
 import { platformStudioKeys } from '../keys.js';
 import { buildRefPath } from '../storagePaths.js';
@@ -213,7 +221,7 @@ export const LAB_CHECKS: readonly LabCheck[] = [
     title: 'GPT Image 2.5 Sunburst and Flare as Experimental',
     decision: 'Offer both as Experimental only if a page comes back through our Images-API transport.',
     answers: 'Whether one 2:3 page with 4 references comes back through OpenRouter, what it costs, and what our transport actually sent (quality, references).',
-    note: '2:3 at 1024×1536 is ≈ $0.1646 in output tokens at quality max (OpenAI calculator, models.md §1.1); reference input is unpublished. The lab reserves the higher 1024² price so the cap never under-counts. Until our Images-API transport sends quality (M1-LOCK-SERVER), this run uses OpenAI’s default quality: it answers whether a page comes back, not the max-quality price. The result’s “Sent” line shows the quality that went out.',
+    note: '2:3 at 1024×1536 is ≈ $0.1646 in output tokens at quality max (OpenAI calculator, models.md §1.1); reference input is unpublished. The lab reserves the higher 1024² price so the cap never under-counts. The studio’s Images-API transport sends quality max; the result’s “Sent” line shows the quality that went out.',
     items: [
       { id: 'd2-gpt-image-2.5-sunburst', check: 'D2', title: 'GPT Image 2.5 Sunburst · 2:3 page', modelId: 'gpt-image-2.5', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1', transport: '/images' },
       { id: 'd2-gpt-image-2.5-flare', check: 'D2', title: 'GPT Image 2.5 Flare · 2:3 page', modelId: 'gpt-image-2.5-flare', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1', transport: '/images' }
@@ -1073,6 +1081,11 @@ export interface ModelLabDeps {
   health: Pick<ModelHealthPort, 'getModelHealth'>;
   /** The network the studio transport uses; wrapped so one provider call goes out per click. */
   network: typeof fetch;
+  /**
+   * The Images-API transport's endpoint list (price lines, resolutions, reference caps) for `provider.only`. Absent =
+   * the transport's own cached, key-less read; a GET, never a provider call, so it is not the click's one call.
+   */
+  imageEndpoints?: ImageClientDeps['imageEndpoints'];
   now: () => number;
   newId?: () => string;
   audit?: (input: AuditInput) => unknown;
@@ -1136,7 +1149,7 @@ const imagesApiSkipNote = (item: LabItem, runs: LabRunRow[], now: number): strin
   const last = runs.find((r) => r.modelId === item.modelId && r.result.errorCode === 'IMAGES_API_UNAVAILABLE' && r.finishedAt); // newest first
   const at = last?.finishedAt ? Date.parse(last.finishedAt) : NaN;
   if (!Number.isFinite(at) || now - at >= IMAGES_API_SKIP_MS) return undefined;
-  return `OpenRouter's Images API answered ${last!.result.httpStatus ?? 404} for this model at ${hhmm(at)} UTC. Until about ${hhmm(at + IMAGES_API_SKIP_MS)} UTC our transport may skip it; if it does, the lab stops before sending this call and nothing is charged.`;
+  return `OpenRouter's Images API answered ${last!.result.httpStatus ?? 404} for this model at ${hhmm(at)} UTC. Until about ${hhmm(at + IMAGES_API_SKIP_MS)} UTC our transport may skip it; if it does, this call isn't sent and nothing is charged.`;
 };
 
 /** A D4 side whose pair is drawn and waiting for the vote: a redraw now would change one image and give A/B away. */
@@ -1419,7 +1432,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       createGemini: () => ({ generateContent: async () => Promise.reject(oneCallStop()) }),
       // No waiting on shared cooldowns or retry backoff: a second attempt is stopped anyway.
       sleep: async () => undefined,
-      now: deps.now
+      now: deps.now,
+      ...(deps.imageEndpoints ? { imageEndpoints: deps.imageEndpoints } : {})
     });
     const cap = transport.capture;
     const base = (): LabResultFacts => ({
@@ -1473,6 +1487,18 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
         const info = imageFailureInfo(err);
         if (info?.status && !facts.httpStatus) facts.httpStatus = info.status;
         if (info?.providerName && !facts.providerName) facts.providerName = info.providerName;
+        // An Images-API model never goes to chat (models.md §3.4 item 8): after a 404/405 on /images the transport
+        // itself stops, and inside its 15-minute skip it sends nothing at all. Name both, so the D2 answer is exact.
+        if (item.transport === '/images' && modelUnavailableReason(err) === IMAGES_API_GONE_REASON) {
+          const status = cap.status ?? 0;
+          if (facts.callMade && cap.endpoint === '/images' && (status === 404 || status === 405)) {
+            facts.errorCode = 'IMAGES_API_UNAVAILABLE';
+            facts.message = `OpenRouter's Images API answered ${status} for this model. The studio never sends this model through chat instead, so nothing else was sent.`;
+          } else if (!facts.callMade) {
+            facts.errorCode = 'IMAGES_API_SKIPPED';
+            facts.message = `Our transport is skipping OpenRouter's Images API for this model for up to 15 minutes after its last 404 or 405, and it never sends this model through chat, so this D2 call wasn't sent. ${NOTHING_CHARGED}`;
+          }
+        }
       } else {
         facts.errorCode = 'INTERNAL';
         facts.message = 'The lab could not finish this call.';
@@ -1480,7 +1506,9 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       }
       if (cap.said) facts.providerSaid = cap.said;
       const spentOnFailure = (err as { spentUsd?: unknown })?.spentUsd;
-      const reported = cap.costUsd ?? (isFiniteNumber(spentOnFailure) ? spentOnFailure : undefined);
+      // imageClient tags a failure with the provider's cost only when money was spent (> 0); its `spentUsd: 0` on a
+      // refusal that made no paid call means "nothing spent", not a cost the provider reported.
+      const reported = cap.costUsd ?? (isFiniteNumber(spentOnFailure) && spentOnFailure > 0 ? spentOnFailure : undefined);
       facts.costReported = reported !== undefined;
       // Cost: what the provider reported; else $0 when no call left the server, or when the provider answered with an
       // HTTP error (OpenRouter bills no failed generation); otherwise unknown (null), so the cap keeps the quote.
