@@ -16,15 +16,16 @@
 // corner, w = its width as a fraction of the page width; tailX/tailY = the tail tip.
 // Height is derived from the text by the renderer; estimateBalloonHeight() mirrors it.
 
-import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, LineKind, Page, Panel, QcReport, ShotType, SpeakerMark } from '../../../shared/comic/doc.js';
+import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, LineKind, Page, Panel, QcReport, SpeakerMark } from '../../../shared/comic/doc.js';
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
-import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
+import { placeBalloonsWholeWords } from '../../../shared/comic/lettering/place.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
 import { estimatePanelBoxes as sharedPanelBoxes } from '../../../shared/comic/pageGeometry.js';
 import { SAFETY_CATEGORIES, effectiveRating, type SafetyCategory, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout.js';
 import type { MessagePart } from '../ai/providers/types.js';
-import { pageAspectFor, stagePanel, upperName } from './prompts.js';
+import { OFF_PANEL_SHOTS } from '../../../shared/comic/panelRules.js';
+import { drawnCastIds, pageAspectFor, povViewerOf, stagePanel, upperName } from './prompts.js';
 import { fenced, fenceTag } from './safety/check.js';
 import { prefilterText, verdictFromVision } from './safety/index.js';
 import { completeStructured, type StructuredCheck } from './writer.js';
@@ -99,7 +100,11 @@ export const estimateBalloonHeight = (text: string, w: number, pageAspect = 2 / 
 /** Doc-less sizing: the engine falls back to its own textLayout estimates (outline = text box + the kind's bleed). */
 const ESTIMATE_SIZER = () => ({ h: 0, bounds: { x: 0, y: 0, w: 0, h: 0 } });
 
-/** One call into the shared engine with this module's defaults. */
+/**
+ * One call into the shared engine with this module's defaults. Every caller here SAVES what it places (the page
+ * check's balloons, the fallback, the free re-layout), so it uses placeBalloonsWholeWords: a balloon never keeps a
+ * split word ("EXPLANATI / ON"); a page that splits no word is placed exactly as placeBalloonsDetailed places it.
+ */
 const place = (
   page: Page,
   boxes: Box[],
@@ -109,7 +114,7 @@ const place = (
   const aspect = pageAspectOf(page, opts);
   const doc = opts.doc;
   const ls = doc?.letterStyle as { safeMargin?: number } | undefined;
-  return placeBalloonsDetailed({
+  return placeBalloonsWholeWords({
     page,
     boxes,
     aspect,
@@ -382,7 +387,9 @@ export const visionSpecText = (doc: ComicDoc, page: Page): string => {
     );
   }
   for (const panel of page.panels) {
-    const staged = stagePanel(page, panel)
+    // The cast the page PROMPT asked to be drawn (prompts.ts drawnCastIds: a POV viewer the action names is not
+    // drawn), so correct POV art never reads as "VIEWER missing".
+    const staged = stagePanel(page, { ...panel, castIds: drawnCastIds(doc, panel) })
       .map((s) => {
         const c = doc.cast.find((x) => x.id === s.id);
         return c ? `${upperName(c.name)}${s.word ? ` (${s.word})` : ''}` : '';
@@ -391,9 +398,11 @@ export const visionSpecText = (doc: ComicDoc, page: Page): string => {
     const action = clean(panel.action);
     const offPanel = qcOffPanelSpeakerIds(panel);
     const voices = [...offPanel].map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is ComicDoc['cast'][number] => !!c);
+    const viewer = povViewerOf(doc, panel);
     out.push(
       `Panel ${panel.n} [${panel.size}, ${panel.shot.replace(/_/g, ' ')}]: ${action.length > 220 ? `${action.slice(0, 219)}…` : action} Characters: ${staged.join(', ') || 'none'}.` +
-        (voices.length ? ` Off-panel voices (heard, may be out of frame — never missing): ${voices.map((c) => upperName(c.name)).join(', ')}.` : '')
+        (voices.length ? ` Off-panel voices (heard, may be out of frame — never missing): ${voices.map((c) => upperName(c.name)).join(', ')}.` : '') +
+        (viewer && !offPanel.has(viewer.id) ? ` Seen through ${upperName(viewer.name)}'s eyes (the viewer is not drawn — never missing).` : '')
     );
     for (const line of panel.lines) {
       if (!clean(line.text)) continue;
@@ -439,8 +448,8 @@ export interface QcPanelChecks {
 /** A page check result carrying the Ship 1 panel checks. */
 export type CheckedQcReport = QcReport & QcPanelChecks;
 
-/** Shots where a speaker may stay off-panel (heard, not drawn) — plan §3 C6. */
-const OFF_PANEL_SHOTS: ReadonlySet<ShotType> = new Set<ShotType>(['pov', 'insert', 'establishing']);
+// Shots where a speaker may stay off-panel (heard, not drawn) — plan §3 C6: OFF_PANEL_SHOTS from panelRules.ts
+// (one set for the writer, the prompt, the director's tools and this check).
 /** Line kinds spoken by someone (captions and SFX are not). */
 const VOICE_KINDS: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
 
@@ -561,6 +570,8 @@ export const readMissingSpeakers = (
   notes: string[],
   heads: SpeakerMark[] = []
 ): { missingSpeakers: MissingSpeaker[]; excused: string[] } => {
+  // The viewer of a POV shot ("through MAYA's eyes") is not drawn: a note about nothing but them is excused too.
+  const viewerOf = (panel: Panel) => povViewerOf({ cast } as ComicDoc, panel as Panel);
   const found = new Map<string, MissingSpeaker>();
   const excused: string[] = [];
   const located = new Set(heads.filter((h) => h.characterId).map((h) => `${h.panel}:${h.characterId}`));
@@ -574,6 +585,8 @@ export const readMissingSpeakers = (
     if (!named.ids.length) continue;
     const speakers = new Set(panelSpeakerIds(panel));
     const offPanel = qcOffPanelSpeakerIds(panel);
+    const viewer = viewerOf(panel);
+    if (viewer) offPanel.add(viewer.id);
     if (named.ids.every((id) => offPanel.has(id))) {
       if (named.only) excused.push(note);
       continue;

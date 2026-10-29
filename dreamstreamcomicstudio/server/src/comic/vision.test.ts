@@ -21,7 +21,10 @@ import {
   placeStoredBalloons,
   visionSpecText
 } from './vision.js';
-import { outlineBounds } from '../../../shared/comic/lettering/place.js';
+import { outlineBounds, placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
+import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
+import { panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
+import { makeSampleDoc } from '../../../components/comicstudio/board/__fixtures__/sampleDoc.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult } from './types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -1013,5 +1016,56 @@ describe('A3 missing speakers (structured; off-panel voices never reported)', ()
       { panel: 2, castId: 'meera' }
     ]);
     expect(readMissingSpeakers(pg, cast, ['Panel 2: an extra unnamed man beside Meera', 'MEERA missing']).missingSpeakers).toEqual([]);
+  });
+});
+
+// ── K1 wiring (ship1 wave notes): drawn cast in the spec, POV viewers excused, whole-word placement ──
+
+describe('K1: the check reads the cast the prompt drew, and saved balloons keep whole words', () => {
+  const povPanel = () =>
+    panel(2, ['maya', 'arjun'], [line('l2', 'speech', 'You found it.', 'arjun')], { shot: 'pov', action: "Through Maya's eyes, Arjun holds out the brass key." });
+
+  it("visionSpecText lists drawnCastIds: a POV viewer is not asked to be drawn, and is named as the viewer", () => {
+    const text = visionSpecText(doc(), page([panel(1, ['arjun']), povPanel()]));
+    expect(text).toContain("Panel 2 [medium, pov]: Through Maya's eyes, Arjun holds out the brass key. Characters: ARJUN");
+    expect(text).not.toMatch(/Panel 2 [^\n]*Characters: [^\n.]*MAYA/);
+    expect(text).toContain("Seen through MAYA's eyes (the viewer is not drawn — never missing).");
+    // A plain panel lists its cast exactly as before.
+    expect(visionSpecText(doc(), page([panel(1, ['maya', 'arjun'])]))).toContain('Characters: MAYA (left), ARJUN (right).');
+  });
+
+  it('a note that only says the POV viewer is missing is excused: no missing speaker, no 0.75 cap', async () => {
+    const pg = page([panel(1, ['arjun'], [line('l1', 'speech', 'Late again.', 'arjun')]), povPanel()]);
+    expect(readMissingSpeakers(pg, doc().cast, ['Panel 2: MAYA missing from the art']).excused).toEqual(['Panel 2: MAYA missing from the art']);
+    const reply = {
+      panels: [
+        { n: 1, box: { x: 0.03, y: 0.03, w: 0.94, h: 0.46 }, beat: 1, crosses: false },
+        { n: 2, box: { x: 0.03, y: 0.52, w: 0.94, h: 0.45 }, beat: 2, crosses: false }
+      ],
+      issues: [],
+      textFound: [],
+      extraOrMissingCharacters: ['Panel 2: MAYA missing from the art'],
+      score: 0.95,
+      balloons: []
+    };
+    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:x', llm: fakeLlm([{ json: reply }]).llm });
+    expect(out.qc.missingSpeakers).toBeUndefined();
+    expect(out.qc.score).toBe(0.95);
+  });
+
+  it('free placement never saves a split word (placeBalloonsWholeWords), where the plain pass would split one', () => {
+    const d = makeSampleDoc();
+    const pg = d.pages[0];
+    // Every stored balloon pinned: the free re-layout keeps them and places the rest around them.
+    pg.balloons = pg.balloons.map((b) => ({ ...b, pinned: true }));
+    const aspect = letteringAspect(d, pg);
+    const sizer = letteringSizer(d, pg, aspect, estimateMeasure);
+    const args = { page: pg, boxes: panelBoxesFor(d, pg), aspect, rtl: false, plansFor: sizer, safeMargin: 0.03, existing: pg.balloons, keep: 'pinned' as const };
+    // The fixture: the first pass alone would letter pg_1_l4 at a width that splits a word.
+    expect(placeBalloonsDetailed(args).split).toEqual(['pg_1_l4']);
+    const placed = placeStoredBalloons(d, pg);
+    const l4 = pg.panels.flatMap((p) => p.lines).find((l) => l.id === 'pg_1_l4')!;
+    const b = placed.find((x) => x.lineId === 'pg_1_l4')!;
+    expect(b.w).toBeGreaterThanOrEqual(sizer(l4, b.w).minW! - 1e-4);
   });
 });
