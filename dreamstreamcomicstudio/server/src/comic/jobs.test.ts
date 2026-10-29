@@ -524,6 +524,25 @@ describe('spend gating', () => {
     expect(cardsOf(session.doc)).toContainEqual(expect.objectContaining({ type: 'gate', gateId: gate.id }));
   });
 
+  it('approving a gate whose page was deleted meanwhile closes the gate and says which page is gone — never "Approved — drawing now."', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    for (const c of doc.cast) c.sheet = { ...c.sheet, status: 'ready', asset: { path: `${c.id}.webp`, source: 'generated', at: 1 } };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages', pageIds: ['pg_3'] }, { confirmed: false });
+    const gate = session.doc.gate!;
+    expect(gate.status).toBe('open');
+    // The user deletes page 3 in the timeline, then taps Approve on the still-visible card.
+    session.commit([{ op: 'page_delete', id: 'pg_3', deletedAt: Date.now() }], { origin: 'user' });
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true, origin: 'user' });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined' });
+    const last = session.doc.conversation.at(-1)!;
+    expect(last.text).toMatch(/^Page 3 is no longer in the plan\./);
+    expect(last.text).toContain('Nothing was spent.');
+  });
+
   it('an open-ended render gate is pinned to the pages it quoted', async () => {
     const doc = plannedDoc();
     doc.settings.confirm = 'always';

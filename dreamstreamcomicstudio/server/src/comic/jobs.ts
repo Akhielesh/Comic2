@@ -38,6 +38,7 @@ import {
   normalizeErrorDetail,
   renderTargetKey,
   specHashFor,
+  trashOf,
   versionsOf,
   type AspectRatio,
   type AssetRef,
@@ -856,10 +857,17 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     const cur = ctx.session.doc.gate;
     if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'open' } }], origin);
   };
+  // Nothing left to do (the quoted page was deleted, the cover got drawn meanwhile): the gate is
+  // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent".
+  const close = () => {
+    const cur = ctx.session.doc.gate;
+    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined' } }], origin);
+  };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
     const started = handler ? await handler.run(ctx, gate.action, next) : await startSpend(ctx, gate.action, next);
     if (started.outcome.status === 'blocked') reopen();
+    else if (started.outcome.status === 'nothing') close();
     return started;
   } catch (err) {
     reopen();
@@ -1126,6 +1134,13 @@ const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: 
   const empty = asked.filter((p) => !p.panels.length);
   const ready = asked.filter((p) => p.render.status === 'ready' && !isPageStale(doc, p));
   const parts: string[] = [];
+  // Pages the request named that are no longer in the plan (deleted since the quote): say so by their old number.
+  const gone = ids ? [...ids].filter((id) => !doc.pages.some((p) => p.id === id)) : [];
+  if (gone.length) {
+    const numbers = gone.map((id) => trashOf(doc).find((t) => t.page.id === id)?.fromN).filter((n): n is number => typeof n === 'number');
+    const label = numbers.length === gone.length ? capitalize(pagesPhrase(numbers.map((n) => ({ n })))) : gone.length === 1 ? 'The page you approved' : `${gone.length} of the pages you approved`;
+    parts.push(`${label} ${gone.length === 1 ? 'is' : 'are'} no longer in the plan.`);
+  }
   if (ready.length) {
     parts.push(
       ready.length === doc.pages.length && !ids
