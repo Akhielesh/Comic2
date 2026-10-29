@@ -618,7 +618,8 @@ describe('BalloonLayer — touch (mobile.md §5.4)', () => {
       const { hit, onBalloonChange } = setup({ editable: true, onBalloonMenu });
       fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 1 });
       act(() => {
-        vi.advanceTimersByTime(460);
+        // 450 ms, then the menu opens on the next frame (after any moves still queued from a busy frame).
+        vi.advanceTimersByTime(490);
       });
       expect(onBalloonMenu).toHaveBeenCalledWith('pg_1_l2', { x: 100, y: 100 });
       expect(hit('pg_1_l2')).toHaveAttribute('aria-pressed', 'true');
@@ -638,7 +639,7 @@ describe('BalloonLayer — touch (mobile.md §5.4)', () => {
       onBalloonMenu.mockClear();
       fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 5 });
       act(() => {
-        vi.advanceTimersByTime(460);
+        vi.advanceTimersByTime(490);
       });
       expect(onBalloonMenu).toHaveBeenCalledTimes(1);
       fireEvent.pointerUp(window, { clientX: 100, clientY: 100, pointerId: 5 });

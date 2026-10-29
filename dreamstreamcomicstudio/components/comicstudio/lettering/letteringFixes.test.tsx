@@ -7,7 +7,7 @@
 
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { makeQaDoc } from '../testing/qaFixtures';
 import { applyOps } from '../../../shared/comic/ops';
@@ -199,5 +199,38 @@ describe('a drag re-plans only the dragged balloon', () => {
     expect(hit(a).style.left).not.toBe(`${pa.x / 6}%`);
     fireEvent.pointerUp(window, { clientX: pb.x, clientY: pb.y });
     expect(onBalloonChange).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('long-press vs lift-and-drag on a busy frame', () => {
+  it('a drag whose first moves arrive just after the 450 ms mark (held up by a busy frame) moves the balloon, never opens the menu', () => {
+    vi.useFakeTimers();
+    try {
+      const doc = makeSampleDoc();
+      const onBalloonMenu = vi.fn();
+      const onBalloonChange = vi.fn();
+      const { container } = render(
+        <div style={{ position: 'relative', width: 600, height: 900 }}>
+          <BalloonLayer doc={doc} page={doc.pages[0]} pageWidth={600} pageHeight={900} editable onBalloonChange={onBalloonChange} onBalloonMenu={onBalloonMenu} />
+        </div>
+      );
+      const hit = container.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l3"]')!;
+      fireEvent.pointerDown(hit, { clientX: 300, clientY: 300, pointerType: 'touch', pointerId: 3 });
+      // The hold lifts the balloon at 220 ms; the long-press timer is due at 450 ms…
+      act(() => {
+        vi.advanceTimersByTime(451);
+      });
+      // …and the finger's moves, queued behind the busy frame, are handled before the next frame.
+      fireEvent.pointerMove(window, { clientX: 330, clientY: 300, pointerId: 3 });
+      fireEvent.pointerMove(window, { clientX: 360, clientY: 300, pointerId: 3 });
+      act(() => {
+        vi.advanceTimersByTime(40);
+      });
+      fireEvent.pointerUp(window, { clientX: 360, clientY: 300, pointerId: 3 });
+      expect(onBalloonMenu).not.toHaveBeenCalled();
+      expect(onBalloonChange).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

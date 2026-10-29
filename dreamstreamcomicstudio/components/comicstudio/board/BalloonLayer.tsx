@@ -499,18 +499,24 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     }
     // Long-press (still finger) on a balloon: its action menu. Never edits.
     let menuTimer: ReturnType<typeof setTimeout> | null = null;
+    let ended = false;
     if (touch && mode === 'move' && onBalloonMenu) {
       menuTimer = setTimeout(() => {
         menuTimer = null;
-        if (st.moved) return;
-        const at = { x: st.origin.x, y: st.origin.y };
-        finish(false);
-        select(id);
-        haptic(8);
-        menuAt.current = Date.now();
-        // The finger is still down: the click its release makes must not land on the menu's scrim.
-        swallowNextClick();
-        onBalloonMenu(id, at);
+        // Decide on the next frame: a busy frame (the lift re-rendering the editor) can hold the finger's
+        // first moves in the input queue past the long-press time; a frame runs queued input first, so a
+        // drag that already started is never mistaken for a still hold (it would open the menu mid-drag).
+        nextFrame(() => {
+          if (ended || st.moved) return;
+          const at = { x: st.origin.x, y: st.origin.y };
+          finish(false);
+          select(id);
+          haptic(8);
+          menuAt.current = Date.now();
+          // The finger is still down: the click its release makes must not land on the menu's scrim.
+          swallowNextClick();
+          onBalloonMenu(id, at);
+        });
       }, longPressMs);
     }
     const startPlans = ids.map((x) => basePlanById.get(x)!).filter(Boolean);
@@ -614,6 +620,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       if (ev.pointerId === pid) cancel();
     };
     const stop = () => {
+      ended = true;
       if (liftTimer) clearTimeout(liftTimer);
       if (menuTimer) clearTimeout(menuTimer);
       liftTimer = null;
@@ -1027,6 +1034,12 @@ const swallowNextClick = (): void => {
   window.addEventListener('pointerdown', off, true);
   window.addEventListener('keydown', off, true);
   const timer = setTimeout(off, 5000);
+};
+
+/** Run on the next animation frame (after the frame's queued input); synchronously where there are no frames. */
+const nextFrame = (fn: () => void): void => {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(() => fn());
+  else fn();
 };
 
 const isCoarsePointer = (): boolean => {
