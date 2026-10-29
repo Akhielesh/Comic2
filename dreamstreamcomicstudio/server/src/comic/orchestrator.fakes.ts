@@ -9,6 +9,11 @@ import type { StudioEvent } from '../../../shared/comic/events.js';
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import { REF_LIMITS, UPLOAD_MIME } from '../../../shared/comic/refs.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
+import type { PriceBook } from '../../../shared/comic/modelLock.js';
+import { setImageCallRecorder, type ImageCallRecord, type ImageCallRecorder } from './billing.js';
+import { __setModelHealthForTests } from './models/health.js';
+import { fakeModelHealth, type FakeModelHealth } from './models/health.fakes.js';
+import { registryPriceBook } from './models/index.js';
 import { StudioSession } from './session.js';
 import { buildQuarantinePath, buildRefPath } from './storagePaths.js';
 import {
@@ -488,6 +493,26 @@ export function newSession(doc: ComicDoc, store: DocStore = fakeDocStore(), user
   return new StudioSession({ projectId: doc.id, userId, doc, store, saveDebounceMs: 5 });
 }
 
+// ── Per-call recording (comic_image_calls) ──────────────────────────────────
+
+export interface FakeImageCalls extends ImageCallRecorder {
+  rows: ImageCallRecord[];
+  /** Make record() throw (sync) or the write fail — recording must never fail a job. */
+  failWith?: 'throw' | null;
+}
+
+export function fakeImageCalls(): FakeImageCalls {
+  const fake: FakeImageCalls = {
+    rows: [],
+    failWith: null,
+    record(row) {
+      if (fake.failWith === 'throw') throw new Error('comic_image_calls is down');
+      fake.rows.push({ ...row });
+    }
+  };
+  return fake;
+}
+
 export interface TestContext extends StudioContext {
   events: StudioEvent[];
   settled(): Promise<void>;
@@ -496,6 +521,12 @@ export interface TestContext extends StudioContext {
   llmFake: ScriptedLlm;
   billingFake: FakeBilling;
   qualityDenied?: string;
+  /** The model-health port installed for this context (preflight, breaker): a fake, never the network. */
+  healthFake: FakeModelHealth;
+  /** comic_image_calls rows the run recorded. */
+  callsFake: FakeImageCalls;
+  /** The PriceBook quotes use (registry list prices unless a test passes its own): no I/O. */
+  prices: () => Promise<PriceBook>;
 }
 
 export function testContext(
@@ -510,9 +541,22 @@ export function testContext(
     /** v5: request caps / resolved rating (absent ⇒ DEFAULT_CAPS / computed from the doc). */
     caps?: StudioCaps;
     rating?: ContentRating;
+    /** Model health (preflight + breaker); default a fresh fake with no public data (state unknown = never blocks). */
+    health?: FakeModelHealth;
+    /** comic_image_calls recorder; default a fresh capturing fake. */
+    calls?: FakeImageCalls;
+    /** Quote prices; default the registry list (no catalog fetch, no observed costs). */
+    prices?: PriceBook;
   } = {}
 ): TestContext {
   const events: StudioEvent[] = [];
+  // The job runner reaches process-wide ports (health, call recording): a test context installs fakes so no test
+  // ever touches the network or the database through them.
+  const health = opts.health || fakeModelHealth();
+  __setModelHealthForTests(health);
+  const calls = opts.calls || fakeImageCalls();
+  setImageCallRecorder(calls);
+  const prices = opts.prices || registryPriceBook();
   session.subscribe((e) => events.push(e));
   const assets = opts.assets || fakeAssetStore();
   const images = opts.images || fakeImages();
@@ -534,6 +578,9 @@ export function testContext(
     imagesFake: images,
     llmFake: llm,
     billingFake: billing,
+    healthFake: health,
+    callsFake: calls,
+    prices: async () => prices,
     ...(opts.caps ? { caps: opts.caps } : {}),
     ...(opts.rating ? { rating: opts.rating } : {}),
     async publishUrls(paths) {
