@@ -463,7 +463,10 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
 
 type SpendKind = 'pages' | 'cover' | 'sheets' | 'edit' | 'style';
 
-/** The comic has at least one generated image (style test, sheet, page or cover): its image model is locked. */
+/**
+ * The comic has at least one drawn image of any kind, style swatches included. Not a lock test: style swatches
+ * never lock the model (models.md §3.1) — set_settings uses hasLockedImage. Kept for callers that ask "anything drawn?".
+ */
 export const hasComicImage = (doc: ComicDoc): boolean => {
   const drawn = (r?: { status?: string; asset?: unknown; history?: unknown[] }) => !!r && (r.status === 'ready' || !!r.asset || !!r.history?.length);
   return (
