@@ -117,26 +117,32 @@ import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
 describe('features registry', () => {
   it('folds feature modules: built-ins win, first registration wins, sorted by order', () => {
     // breakdown (mock) wins over timeline's duplicate; refs is the real P1-REFS card.
-    expect(registeredCardTypes()).toEqual(['breakdown', 'refs']);
+    // model_outage is the real W-M reliability card (registered last, lowest precedence).
+    expect(registeredCardTypes()).toEqual(['breakdown', 'refs', 'model_outage']);
     expect(registeredCard('notice')).toBeUndefined();
     expect(BUILTIN_CARD_TYPES.has('recap')).toBe(true);
     expect(registeredTabs().map((t) => t.id)).toEqual(['languages', 'media']);
     // usage (real, P1-LIMITS) sits at 220: after the mocked mode/broken slots, before the mocked share (250).
-    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'share']);
+    // …and M1-RELIABILITY's model-status banner (1000) after every header control.
+    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'share', 'model-status']);
     expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
     // Admin sections keep feature order: safety (real) before library (mock).
-    expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library']);
+    expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library', 'provider-status']);
   });
 
-  it('W-M seams: models, insights and reliability are registered last (lowest precedence), valid and still empty', () => {
+  it('W-M seams: models, insights and reliability are registered last (lowest precedence); models and insights are still empty, reliability is real', () => {
     const mods = featureModules();
     expect(mods.slice(-3)).toEqual([modelsFeature, insightsFeature, reliabilityFeature]);
-    for (const mod of [modelsFeature, insightsFeature, reliabilityFeature]) {
-      expect(mod).toEqual({}); // M1-* fill them; an empty module contributes nothing
+    for (const mod of [modelsFeature, insightsFeature]) {
+      expect(mod).toEqual({}); // M1-PICKER-UI / M1-INSIGHTS-UI fill them; an empty module contributes nothing
     }
-    // `model_outage` is not a built-in: the reliability feature may register its card without being ignored.
+    // M1-RELIABILITY: the outage card, the status banner under the header and the admin Provider status section.
+    expect(reliabilityFeature.cards?.map((c) => c.type)).toEqual(['model_outage']);
+    expect(reliabilityFeature.headerSlots?.map((h) => h.id)).toEqual(['model-status']);
+    expect(reliabilityFeature.adminSections?.map((a) => a.id)).toEqual(['provider-status']);
+    // `model_outage` is not a built-in, so the reliability feature's card is not ignored.
     expect(BUILTIN_CARD_TYPES.has('model_outage')).toBe(false);
-    expect(registeredCard('model_outage')).toBeUndefined();
+    expect(registeredCard('model_outage')?.Component).toBe(reliabilityFeature.cards?.[0]?.Component);
   });
 });
 

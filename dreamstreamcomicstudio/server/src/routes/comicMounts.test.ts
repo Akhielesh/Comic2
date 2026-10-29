@@ -144,10 +144,9 @@ describe('owner mounts', () => {
     expect(await call('/api/comic/models', { headers: user })).toEqual({ status: 200, body: { route: 'studio', path: '/models' } });
     expect(text.hits).toEqual(['GET /api/comic/models']);
     text.hits.length = 0;
-    expect(await call('/api/comic/models/status?ids=nano-banana-2.1', { headers: user })).toEqual({ status: 501, body: { error: 'not built yet' } });
-    // The real catalog router (M1-CATALOG) answers its own paths. This harness's stand-in auth sets no req.user,
-    // so the router's own sign-in guard answers — before any catalog work, and never the studio.
-    for (const path of ['/api/comic/models/catalog?projectId=p1', '/api/comic/models/trends?range=30d', '/api/comic/models/nano-banana-2.1']) {
+    // The real status (M1-RELIABILITY) and catalog (M1-CATALOG) routers answer their own paths. This harness's
+    // stand-in auth sets no req.user, so each router's own sign-in guard answers — before any work, never the studio.
+    for (const path of ['/api/comic/models/status?ids=nano-banana-2.1', '/api/comic/models/catalog?projectId=p1', '/api/comic/models/trends?range=30d', '/api/comic/models/nano-banana-2.1']) {
       const r = await call(path, { headers: user });
       expect(r, path).toEqual({ status: 401, body: { error: { message: 'Sign in to use the comic studio.', code: 'FORBIDDEN' } } });
     }
