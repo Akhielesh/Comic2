@@ -1044,6 +1044,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!hasStory) throw argError('Nothing to plan yet — capture the story (brief, cast or source) first.');
         guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions: text(args.instructions, 4000) }, { collectCard: (c) => state.cards.push(c) });
+        // A refused plan (budget cap, drawn pages) is not a plan: nothing for the user to review.
+        if (outcome.status === 'blocked') return outcome.message;
         state.plannedThisTurn = true;
         const cast = castUncastBeings(ctx);
         return `${outcome.message}${cast} The user reviews the plan on the board before any page is drawn.`;
@@ -1064,6 +1066,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!pages.length) throw argError('Pass the page numbers to rewrite.');
         guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions, pageIds: pages.map((p) => p.id) }, { collectCard: (c) => state.cards.push(c) });
+        if (outcome.status === 'blocked') return outcome.message;
         state.plannedThisTurn = true;
         return `${outcome.message}${castUncastBeings(ctx)}`;
       }

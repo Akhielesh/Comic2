@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { castNoun, createEmptyDoc, emptyRender, pageSpecHash, type AssetRef } from '../../../shared/comic/doc.js';
 import { lakeDrawnDoc } from './golden/fixtures.js';
-import { JOB_TIMINGS } from './jobs.js';
+import { JOB_TIMINGS, startAction } from './jobs.js';
 import { newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
 import { GROUP_HINTS, buildDirectorTools, buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
 import type { ToolGroup } from './extensions.js';
@@ -192,6 +192,43 @@ describe('plan tools', () => {
     doc.spend = { ...doc.spend, totalUsd: 1 };
     setup(doc);
     expect(await call('plan_pages', {})).toMatch(/^Error: The comic is at its budget cap/);
+  });
+
+  it('a plan the budget cap blocks (spend in flight) is returned as blocked, never as planned', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, budgetUsd: 1 };
+    doc.spend = { ...doc.spend, totalUsd: 0.99 };
+    setup(doc);
+    // A cover the user approved past the cap is still drawing: its hold counts as pending spend,
+    // so the writer's own cap check (spent + pending ≥ budget) refuses while guardPaidText passes.
+    let release!: () => void;
+    const held = new Promise<undefined>((resolve) => (release = () => resolve(undefined)));
+    ctx.imagesFake.behave = () => held;
+    const started = await startAction(ctx, { type: 'render_cover' }, { confirmed: true, budgetApproved: true, origin: 'user' });
+    expect(started.outcome.status).toBe('started');
+
+    const planned = await call('plan_pages', {});
+    expect(planned).toContain('at its budget cap');
+    expect(planned).not.toContain('The user reviews the plan on the board');
+    const revised = await call('revise_pages', { pages: [2], instructions: 'make it a splash' });
+    expect(revised).toContain('at its budget cap');
+    expect(turn.plannedThisTurn).toBe(false);
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
+
+    release();
+    await ctx.settled();
+  });
+
+  it('a plan refused for drawn pages is not treated as planned', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 } };
+    doc.format = { ...doc.format, pageCount: 5 };
+    setup(doc);
+    const out = await call('plan_pages', {});
+    expect(out).toContain('revise_pages');
+    expect(out).not.toContain('The user reviews the plan on the board');
+    expect(turn.plannedThisTurn).toBe(false);
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
   });
 
   it('revise_pages maps page numbers and validates them', async () => {
