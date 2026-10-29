@@ -1099,7 +1099,12 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       // attempt makes no call and costs nothing; the caller may still try the same model on a same-payer route.
       if (!health().acquireRouteCall(picked.route, picked.model).allowed) {
         const paused = routePausedError({ route: picked.route, model: picked.model, nickname: req.spec.nickname, reason: health().routeState(picked.route, picked.model).reason });
-        if (spent) paused.spentUsd = spent;
+        if (spent) {
+          paused.spentUsd = spent;
+          // The refused retry sent nothing, but an earlier attempt on this route was paid: never say "nothing was charged".
+          const text = `The image provider is busy with ${req.spec.nickname} on ${ROUTE_LABEL[picked.route]} right now, so the retry wasn't sent. The earlier attempt was charged.`;
+          Object.assign(paused, { message: text, userMessage: text });
+        }
         logger.warn('comic_image_route_paused', { route: picked.route, model: picked.model });
         throw paused;
       }

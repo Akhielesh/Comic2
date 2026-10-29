@@ -779,6 +779,23 @@ describe('provider-health breaker wiring', () => {
     expect(health.outcomes).toHaveLength(0); // nothing was called, so nothing is recorded
   });
 
+  it('a refusal after a paid attempt on that route carries the spend and never says nothing was charged', async () => {
+    const textOnly = json({ choices: [{ message: { content: 'Sure! I will draw it.' } }], usage: { cost: 0.001 } });
+    const { generate, fetchMock } = setup(OR, [
+      json({}, 405),
+      async () => {
+        health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down'); // the breaker opens before the nudge
+        return textOnly;
+      }
+    ]);
+    const err = await generate(baseReq()).catch((e) => e);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(isRoutePausedError(err)).toBe(true);
+    expect(err.spentUsd).toBeCloseTo(0.001, 6);
+    expect(err.userMessage).toBe("The image provider is busy with Nano Banana 2.1 on OpenRouter right now, so the retry wasn't sent. The earlier attempt was charged.");
+    expect(err.userMessage).not.toMatch(/nothing was charged/);
+  });
+
   it('preferRoute is honoured only for the same model with a key of the same payer', async () => {
     const generateContent = vi.fn().mockResolvedValue(geminiImage());
     const same = setup(PLATFORM_BOTH, [], { generateContent });
