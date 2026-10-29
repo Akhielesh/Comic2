@@ -29,6 +29,10 @@ import {
   type ScriptedLlm
 } from '../comic/orchestrator.fakes.js';
 import { JOB_TIMINGS, noticeCard } from '../comic/jobs.js';
+import { __setModelHealthForTests, type ModelHealthPort } from '../comic/models/health.js';
+import { fakeModelHealth } from '../comic/models/health.fakes.js';
+import { registryPriceBook } from '../comic/models/index.js';
+import { setImageCallRecorder, type ImageCallRecorder } from '../comic/billing.js';
 import { StudioError } from '../comic/types.js';
 import { encodeUploadBuffer as realEncodeUploadBuffer } from '../comic/assets.js';
 import {
@@ -74,6 +78,9 @@ let publicLoads: string[];
 let usage: StudioUsage | undefined;
 /** COMIC_FAST_INTENTS for the router under test. */
 let fast: boolean;
+/** The process-wide model-health port and image-call recorder the run wiring reads, swapped for fakes per test. */
+let realHealth: ModelHealthPort;
+let realRecorder: ImageCallRecorder | null;
 
 const ALLOW: ScreenResult = { decision: 'allow', categories: [], strike: 0, blockedAttachmentPaths: [] };
 
@@ -98,7 +105,10 @@ app.use('/api/comic', (req, res, next) =>
   createComicRouter({
     store,
     assets,
-    contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling() }),
+    // A real context (context.ts), so spends run the money-safe preflight and price with the request's PriceBook
+    // (M1-LOCK-SERVER): registry prices here, and the process health port is a fake (beforeEach) — no test reaches
+    // openrouter.ai, whose live status would otherwise decide whether these spends start.
+    contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling(), prices: async () => registryPriceBook() }),
     qualityAccess: async () => ({ ok: true }),
     capsDeps: {
       billingEnabled: true,
@@ -157,6 +167,8 @@ beforeEach(() => {
   usage = undefined;
   fast = false;
   __resetAccessCacheForTests();
+  realHealth = __setModelHealthForTests(fakeModelHealth());
+  realRecorder = setImageCallRecorder({ record() {} });
   vi.mocked(runDirectorTurn).mockClear();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -164,6 +176,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   __resetSessionsForTests();
+  __setModelHealthForTests(realHealth);
+  setImageCallRecorder(realRecorder);
   vi.restoreAllMocks();
 });
 
@@ -1300,7 +1314,7 @@ describe('allowance notices', () => {
     local.use('/api/comic', createComicRouter({
       store,
       assets,
-      contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling() }),
+      contextDeps: () => ({ keys: KEYS, llm, images: images.generate, billing: fakeBilling(), prices: async () => registryPriceBook() }),
       qualityAccess: async () => ({ ok: true }),
       capsDeps: { billingEnabled: false, isAdminFor: async () => false, accountCeilingFor: async () => 'PG-13' },
       requireActive: (_req, _res, next) => next(),
