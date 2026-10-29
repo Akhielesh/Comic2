@@ -69,7 +69,11 @@ export interface LetterPlan {
   locked: boolean;
   linkTo?: string;
   outOfSafeArea: boolean; // inspector warning
-  overflow: boolean; // text did not fit even at the floor (never clipped)
+  /**
+   * The text does not fit: not even at the floor (never clipped), or only by breaking a word across lines
+   * ("EXPLANATI / ON" in a balloon stored too narrow). The editor says so and offers Widen.
+   */
+  overflow: boolean;
   /** Absolute tail tip (page units) after the render-time page fit; absent when the balloon has no tail (P2-AMEND). */
   tip?: { x: number; y: number };
   /** A software-placed line that could not avoid an overlap / face / the safe area (the editor's free-fix chip).
@@ -315,6 +319,10 @@ const layoutText = (
   });
   return { w: fit.w * PLAN_W, h: fit.heightPx, fontSize: fit.fontPx, lines: fit.lines, overflow: fit.overflow };
 };
+
+/** A line's lettering breaks a word across lines (a sound effect is sized to its box and never does). */
+const splitsWord = (setup: LineSetup, lines: readonly string[]): boolean =>
+  setup.line.kind !== 'sfx' && lines.length > 1 && splitsUnit(lines, wrapUnits(setup.text, setup.lang));
 
 /** The wrapped lines break inside a wrap unit (a word, or an unspaced script's unbreakable cluster). */
 const splitsUnit = (lines: readonly string[], units: readonly WrapUnit[]): boolean => {
@@ -858,7 +866,7 @@ function planAtDensity(
     // Read after a later line the owner fixed in its panel (no room before it): flagged `order`, counted apart.
     const isLate = !level && !s0 && (nextOf.get(p.line.id) ?? []).some((id) => !readsBefore(t, textOf.get(id)!));
     // Lettered so narrow that a word splits (the placement found no wider spot): not finished either.
-    if (!s0 && narrowed.has(p.line.id) && p.t.lines.length > 1 && splitsUnit(p.t.lines, wrapUnits(p.setup.text, p.setup.lang))) split.push(p.line.id);
+    if (!s0 && narrowed.has(p.line.id) && splitsWord(p.setup, p.t.lines)) split.push(p.line.id);
     if (level === 3) farEarly += 1;
     else if (level === 2) early += 1;
     else if (level === 1) spilled += 1;
@@ -908,7 +916,8 @@ function planAtDensity(
         z: typeof b.z === 'number' && Number.isFinite(b.z) ? b.z : p.order,
         locked: !!b.locked,
         outOfSafeArea,
-        overflow: t.overflow,
+        // A word broken across lines is text that does not fit either (whoever stored the balloon that narrow).
+        overflow: t.overflow || splitsWord(setup, t.lines),
         order: p.order
       };
       if (rotate || skewX) plan.transform = { rotate, skewX, cx: r2(x + w / 2), cy: r2(y + h / 2) };

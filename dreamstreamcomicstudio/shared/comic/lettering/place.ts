@@ -16,8 +16,12 @@
 //  - Reading order is part of a clean spot: a line is read after the previous line of its panel (below it,
 //    or after it on its row) AND before every later line of its panel the owner already fixed there (a stored
 //    or pinned balloon): it tucks in between them, or beside one on its row, never below a line read after
-//    it. A full panel packs again compactly before anything leaves it. Whole words first: a width that
-//    splits a word ("EXPLANATI / ON") is tried only when no whole-word width has a clean spot.
+//    it. Order is judged where the balloon is STORED (rounded), so a clean spot stays in turn once saved.
+//    A full panel packs again compactly before anything leaves it. Whole words first: a width that
+//    splits a word ("EXPLANATI / ON") is tried only when no whole-word width has a clean spot, and is
+//    reported in `split`; a spot read out of turn anyway keeps the widest whole-word width. A caller that
+//    SAVES the placement uses placeBalloonsWholeWords(), which never keeps a split word (the planner
+//    makes the same retry before it draws).
 //  - A tail is part of the footprint, so a tail aimed across a stored balloon would close the room between
 //    two lines: the balloon then takes a shorter tail toward the speaker, else a short stub on the speaker's
 //    side (both cost a little more than an aimed tail, so an aimed one wins wherever it fits).
@@ -50,6 +54,18 @@ const round4 = (n: number) => Math.round(n * 10000) / 10000;
  */
 const readsBefore = (ax: number, ay: number, bx: number, by: number, rtl: boolean, tol: number): boolean =>
   ay < by - tol || (Math.abs(ay - by) < tol && (rtl ? ax > bx : ax < bx));
+/**
+ * How far a stored balloon may sit from the spot that was scored: rounding to the stored precision (4 decimals)
+ * moves it by at most half of 1e-4. Reading order is judged with this margin, so a spot the placement calls
+ * read in turn is still read in turn once stored (a spot on a row's edge is judged out of turn either way).
+ */
+const ORDER_MARGIN = 1e-4;
+/** (ax, ay) is read before (bx, by) wherever rounding to the stored precision puts it. */
+const surelyBefore = (ax: number, ay: number, bx: number, by: number, rtl: boolean, tol: number): boolean =>
+  ay < by - tol - ORDER_MARGIN || (Math.abs(ay - by) < tol - ORDER_MARGIN && (rtl ? ax > bx + ORDER_MARGIN : ax < bx - ORDER_MARGIN));
+/** (ax, ay) may be read before (bx, by) once rounded to the stored precision. */
+const mayReadBefore = (ax: number, ay: number, bx: number, by: number, rtl: boolean, tol: number): boolean =>
+  ay < by - tol + ORDER_MARGIN || (Math.abs(ay - by) < tol + ORDER_MARGIN && (rtl ? ax > bx - ORDER_MARGIN : ax < bx + ORDER_MARGIN));
 const clampP = (n: number, lo: number, hi: number) => (Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo);
 
 export interface PlaceArgs {
@@ -75,7 +91,7 @@ export interface PlaceArgs {
   /**
    * Lines lettered in whole words only: never narrower than their longest word (nor than their first width,
    * when even that splits one), even if that costs reading order or a clean spot (the planner's retry of a
-   * `split` line).
+   * `split` line, and placeBalloonsWholeWords').
    */
   wholeWords?: readonly string[];
   /** Lettering language (estimates); default the line's own `lang`, else 'en'. */
@@ -514,9 +530,10 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           for (const a of busy) busyHit += covered(outline, a);
           let otherHit = 0;
           for (const a of other) otherHit += covered(outline, a);
-          // Read in turn: after the previous line of the panel, and before every later line fixed in it.
-          let order = prevAt && readsBefore(x, y, prevAt.x, prevAt.y, rtl, ROW_TOLERANCE) ? 1 : 0;
-          for (const a of ahead) if (!readsBefore(x, y, a.x, a.y, rtl, ROW_TOLERANCE)) order = 1;
+          // Read in turn: after the previous line of the panel, and before every later line fixed in it — as
+          // stored (rounded), so judged with a hair of margin.
+          let order = prevAt && mayReadBefore(x, y, prevAt.x, prevAt.y, rtl, ROW_TOLERANCE) ? 1 : 0;
+          for (const a of ahead) if (!surelyBefore(x, y, a.x, a.y, rtl, ROW_TOLERANCE)) order = 1;
           const cx = x + w / 2;
           const dist = spill ? distToRegion(outline, box, aspect) : 0;
           let aim = 0;
@@ -551,10 +568,20 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         let bestClean: Pick | undefined;
         /** Clear of everything but read out of order inside the panel: better than an overlap, worse than a spill. */
         let bestRoomy: Pick | undefined;
+        /**
+         * Among roomy spots (all read out of turn, so a narrower width gains nothing): whole words first, then the
+         * widest width — the way the clean search goes widest first — then the cheapest spot at that width.
+         */
+        const roomier = (p: Pick, q: Pick): boolean => {
+          const pw = p.w >= noSplit - 1e-9;
+          if (pw !== (q.w >= noSplit - 1e-9)) return pw;
+          if (Math.abs(p.w - q.w) > 1e-9) return p.w > q.w;
+          return p.cost < q.cost - 1e-9;
+        };
         const consider = (p: Pick) => {
           if (!best || p.cost < best.cost - 1e-9) best = p;
           if (p.clean && (!bestClean || p.cost < bestClean.cost - 1e-9)) bestClean = p;
-          if (p.roomy && !p.spill && (!bestRoomy || p.cost < bestRoomy.cost - 1e-9)) bestRoomy = p;
+          if (p.roomy && !p.spill && (!bestRoomy || roomier(p, bestRoomy))) bestRoomy = p;
         };
         /** The panel's own search over `reg`: a grid, then flush against every balloon near it; widest first, the first width with a clean spot wins. */
         const searchPanel = (reg: Box, bendable: boolean, ws: readonly number[]): void => {
@@ -612,6 +639,13 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
                   flush.push({ x: clampP(right, xLo, xHi), y: clampP(y, yLo, yHi), bias: 0 }, { x: clampP(left, xLo, xHi), y: clampP(y, yLo, yHi), bias: 0 });
                 }
                 for (const x of [xLo, xHi]) flush.push({ x, y: clampP(above, yLo, yHi), bias: 0 });
+              }
+              // Just above the row of each later line fixed in the panel (read before it): the grid's rows can
+              // straddle that row's edge, and a spot on the edge is not read in turn.
+              for (const a of ahead) {
+                const y = a.y - ROW_TOLERANCE - 2 * ORDER_MARGIN;
+                if (y < yLo) continue;
+                for (const x of xs) flush.push({ x, y: Math.min(y, yHi), bias: 0 });
               }
             }
             place(flush);
@@ -761,6 +795,20 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     split.push(...first.split);
   });
   return { balloons: result, placed: placedIds, crowded, split };
+}
+
+/**
+ * The placement for a caller that SAVES what it places (tidy, the AI's arrange and relayout tools, a page's free
+ * re-lettering): a line the first pass could only letter in turn at a width that splits a word ("EXPLANATI /
+ * ON") is placed again in whole words only, wherever that puts it (read out of turn, it is reported crowded).
+ * The planner makes the same retry before it draws a page, so a saved balloon never splits a word that the
+ * drawn page would have lettered whole. A page whose placement splits no word is placed exactly as
+ * `placeBalloonsDetailed` places it.
+ */
+export function placeBalloonsWholeWords(args: PlaceArgs): PlaceResult {
+  const first = placeBalloonsDetailed(args);
+  if (!first.split.length) return first;
+  return placeBalloonsDetailed({ ...args, wholeWords: [...new Set([...(args.wholeWords ?? []), ...first.split])] });
 }
 
 /** Two text boxes whose tops are this close (page heights) share a row: the reader takes them left to right (rtl: right to left). */

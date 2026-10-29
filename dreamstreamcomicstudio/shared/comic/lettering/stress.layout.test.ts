@@ -12,9 +12,10 @@ import { describe, expect, it } from 'vitest';
 import { makeQaDoc } from '../../../components/comicstudio/testing/qaFixtures';
 import { makeSampleDoc } from '../../../components/comicstudio/board/__fixtures__/sampleDoc';
 import type { Box, ComicDoc, Page } from '../doc';
-import { DENSITY_STEPS, estimateMeasure, letteringAspect, letteringSizer, planLettering, type LetterPlan, type Measure } from './layout';
+import { DENSITY_STEPS, estimateMeasure, letteringAspect, planLettering, type LetterPlan, type Measure } from './layout';
 import { panelBoxesFor } from '../pageGeometry';
-import { balloonFootprint, placeBalloonsDetailed } from './place';
+import { estimateWidthForText } from '../textLayout';
+import { balloonFootprint } from './place';
 
 /** Real fonts run wider than the estimates: 1.2× the registry numbers. */
 const wideMeasure: Measure = (text, font) => estimateMeasure(text, font) * 1.2;
@@ -29,6 +30,12 @@ const overlapFraction = (a: Box, b: Box): number => {
   const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
   if (w <= 0 || h <= 0) return 0;
   return (w * h) / Math.min(a.w * a.h, b.w * b.h);
+};
+
+/** The drawn lettering breaks a word across lines ("EXPLANATI / ON"): the words of the runs are not the text's. */
+const splitsWord = (p: LetterPlan, text: string): boolean => {
+  const words = (s: string) => s.toUpperCase().split(/\s+/).filter(Boolean).join(' ');
+  return p.kind !== 'sfx' && words(p.runs.map((r) => r.text).join(' ')) !== words(text);
 };
 
 const check = (doc: ComicDoc, measure: Measure) => {
@@ -311,6 +318,9 @@ describe('a placed line is read before the later lines the owner fixed in its pa
           for (const page of drawnPages(doc)) {
             const plans = planLettering(doc, page, letteringAspect(doc, page), measure);
             expect(nextFixedBreaks(doc, page, plans), `${label} ${page.id}`).toEqual([]);
+            // Never a silent split word: lettering that breaks one is flagged (the editor offers Widen).
+            const textOf = new Map(page.panels.flatMap((pn) => pn.lines).map((l) => [l.id, l.text]));
+            for (const p of plans) if (splitsWord(p, textOf.get(p.lineId) ?? '')) expect(p.overflow, `${label} ${page.id} ${p.lineId} splits a word`).toBe(true);
             const aspect = letteringAspect(doc, page);
             const H = 1000 / aspect;
             const owner = new Set(page.balloons.filter((b) => b.pinned || b.locked).map((b) => b.lineId));
@@ -349,26 +359,15 @@ describe('a placed line is read before the later lines the owner fixed in its pa
 });
 
 describe('the sample page: a new line before one the owner stored, with no whole-word room in turn', () => {
-  it('pg_1_l4 is lettered whole and flagged `order`; nothing the owner lettered moves', () => {
+  it('pg_1_l4 is lettered in whole words and read in turn or flagged; nothing the owner lettered moves', () => {
     // Panel 3: l3 pinned at y .50 (its tail reaches down to .75), l4 has no balloon, l5 stored (unpinned) at
-    // y .80. The placement tucks l4 in on l3's row (the board's fallback spot), but that gap is too narrow for
-    // "EXPLANATION," — it letters "EXPLANATI / ON". The planner places l4 again in whole words only: after
-    // l5 (read out of turn, and flagged so the editor says so), and it never moves or shrinks the owner's
-    // balloons to make room. Before the fix l4 was drawn after l5 with no flag.
+    // y .80. Between l3's tail and l5 there is no room for "EXPLANATION," at full size; a word-splitting
+    // width ("EXPLANATI / ON") is never what the page draws. Wherever l4 goes, the reader meets it in turn or
+    // the editor says it does not (crowded). The owner's balloons are not moved or shrunk to make room.
     const doc = makeSampleDoc();
     const page = doc.pages[0];
     const aspect = letteringAspect(doc, page);
-    const placed = placeBalloonsDetailed({
-      page,
-      boxes: panelBoxesFor(doc, page),
-      aspect,
-      rtl: false,
-      plansFor: letteringSizer(doc, page, aspect, estimateMeasure),
-      safeMargin: 0.03,
-      existing: page.balloons,
-      keep: 'all'
-    });
-    expect(placed.split).toEqual(['pg_1_l4']);
+    const text = page.panels[2].lines[1].text;
     for (const measure of [estimateMeasure, wideMeasure]) {
       const H = 1000 / aspect;
       const plans = planLettering(doc, page, aspect, measure);
@@ -377,11 +376,13 @@ describe('the sample page: a new line before one the owner stored, with no whole
       const tol = 0.02 * H;
       expect(l4.fallback).toBe(true);
       expect(l4.runs.map((r) => r.text).join(' '), 'no word split').toBe('YOU OWE ME AN EXPLANATION, MAYA.');
+      expect(l4.overflow).toBe(false);
       expect(l4.densityScale).toBeUndefined();
       expect(l4.y, 'l4 is read after l3').toBeGreaterThan(l3.y + tol);
       const inTurn = l4.y < l5.y - tol || (Math.abs(l4.y - l5.y) < tol && l4.x < l5.x);
       expect(inTurn || l4.crowdedReason === 'order', 'read in turn, or flagged').toBe(true);
-      expect(l4.crowdedReason).toBe('order');
+      // Out of turn anyway, it keeps its own width (no narrower wrap with an orphan "AN").
+      if (!inTurn) expect(l4.w, 'its own width').toBeCloseTo(estimateWidthForText(text, 'en') * 1000, 0);
       for (const id of ['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l5']) {
         const s = page.balloons.find((b) => b.lineId === id)!;
         const p = by(id);
@@ -414,5 +415,25 @@ describe('the sample page: a new line before one the owner stored, with no whole
     expect(l4.runs.map((r) => r.text).join(' ')).toBe('YOU OWE ME AN EXPLANATION, MAYA.');
     expect(plans.filter((p) => p.crowded).map((p) => p.lineId)).toEqual([]);
     expect(l5.y).toBeCloseTo(0.9 * H, 1);
+  });
+
+  it('a balloon stored at a width that splits a word (as tidy or an AI tool may save it) is flagged, so the editor offers Widen', () => {
+    // The narrow spot right of l3's tail, saved as is and pinned: "YOU OWE / ME AN / EXPLANATI / ON, MAYA."
+    // is drawn where the owner put it, and says the text does not fit instead of splitting a word silently.
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].balloons.push({ lineId: 'pg_1_l4', x: 0.8395, y: 0.5138, w: 0.1279, tailX: 0.85, tailY: 0.62, pinned: true });
+    });
+    const page = doc.pages[0];
+    const aspect = letteringAspect(doc, page);
+    const textOf = new Map(page.panels.flatMap((pn) => pn.lines).map((l) => [l.id, l.text]));
+    for (const measure of [estimateMeasure, wideMeasure]) {
+      const plans = planLettering(doc, page, aspect, measure);
+      const l4 = plans.find((p) => p.lineId === 'pg_1_l4')!;
+      expect(l4.fallback).toBe(false);
+      expect(l4.w).toBeCloseTo(127.9, 1);
+      expect(splitsWord(l4, textOf.get('pg_1_l4')!), 'the stored width splits a word').toBe(true);
+      expect(l4.overflow).toBe(true);
+      for (const p of plans.filter((q) => q.lineId !== 'pg_1_l4')) expect(p.overflow, p.lineId).toBe(false);
+    }
   });
 });
