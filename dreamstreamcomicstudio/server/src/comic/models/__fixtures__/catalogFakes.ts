@@ -105,10 +105,14 @@ export const memoryCatalogStore = (): MemoryCatalogStore => {
 
 /**
  * comic_image_calls in memory. `platformStats` mirrors the SQL function comic_image_model_stats: it groups by
- * (model, kind, res) and SUPPRESSES groups with fewer than 5 distinct users, so tests exercise the same rule.
+ * (model, kind, res), SUPPRESSES groups with fewer than 5 distinct users, and reports cost figures over the newest
+ * ≤ 20 priced calls only when those come from ≥ 5 distinct users — so tests exercise the same rules.
  */
-export const memoryImageCalls = (rows: (ImageCallRow & { userId: string })[] = [], monthly: MonthlyUsageRow[] = []): ImageCallsDb & { rows: (ImageCallRow & { userId: string })[] } => ({
+export const memoryImageCalls = (rows: (ImageCallRow & { userId: string })[] = [], monthly: MonthlyUsageRow[] = []): ImageCallsDb & { rows: (ImageCallRow & { userId: string })[]; statsCalls: string[] } => {
+  const statsCalls: string[] = [];
+  return {
   rows,
+  statsCalls,
   async callsForUser(userId, opts) {
     return rows
       .filter((r) => r.userId === userId && r.createdAt >= opts.sinceIso)
@@ -116,6 +120,7 @@ export const memoryImageCalls = (rows: (ImageCallRow & { userId: string })[] = [
       .slice(0, opts.limit);
   },
   async platformStats(sinceIso) {
+    statsCalls.push(sinceIso);
     const groups = new Map<string, (ImageCallRow & { userId: string })[]>();
     for (const r of rows) {
       if (r.createdAt < sinceIso || r.outcome === 'blocked') continue;
@@ -126,7 +131,10 @@ export const memoryImageCalls = (rows: (ImageCallRow & { userId: string })[] = [
     for (const g of groups.values()) {
       const users = new Set(g.map((r) => r.userId)).size;
       if (users < 5) continue;
-      const costs = g.filter((r) => r.outcome === 'ok' && typeof r.providerCostUsd === 'number').map((r) => r.providerCostUsd as number).sort((a, b) => a - b);
+      const priced = g.filter((r) => r.outcome === 'ok' && typeof r.providerCostUsd === 'number');
+      const recent = [...priced].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20);
+      const shown = new Set(recent.map((r) => r.userId)).size >= 5;
+      const costs = recent.map((r) => r.providerCostUsd as number).sort((a, b) => a - b);
       const mid = Math.floor(costs.length / 2);
       const med = costs.length ? (costs.length % 2 ? costs[mid] : (costs[mid - 1] + costs[mid]) / 2) : null;
       out.push({
@@ -138,9 +146,13 @@ export const memoryImageCalls = (rows: (ImageCallRow & { userId: string })[] = [
         failed: g.filter((r) => r.outcome === 'failed').length,
         rateLimited: g.filter((r) => r.outcome === 'failed' && (r.httpStatus === 429 || r.errorCode === 'RATE_LIMIT')).length,
         distinctUsers: users,
-        medianCostUsd: med,
-        minCostUsd: costs.length ? costs[0] : null,
-        maxCostUsd: costs.length ? costs[costs.length - 1] : null,
+        pricedCalls: priced.length,
+        costN: shown ? recent.length : null,
+        medianCostUsd: shown ? med : null,
+        minCostUsd: shown && costs.length ? costs[0] : null,
+        maxCostUsd: shown && costs.length ? costs[costs.length - 1] : null,
+        costFrom: shown ? (recent.at(-1)?.createdAt ?? null) : null,
+        costTo: shown ? (recent[0]?.createdAt ?? null) : null,
         firstAt: g.map((r) => r.createdAt).sort()[0] ?? null,
         lastAt: g.map((r) => r.createdAt).sort().at(-1) ?? null
       });
@@ -150,7 +162,8 @@ export const memoryImageCalls = (rows: (ImageCallRow & { userId: string })[] = [
   async monthlyUsage(product, sinceMonth) {
     return monthly.filter((m) => m.product === product && m.month >= sinceMonth);
   }
-});
+  };
+};
 
 /** One synthetic call row (defaults: an ok Nano Banana 2.1 1K page). */
 export const callRow = (over: Partial<ImageCallRow> & { userId?: string; at: number }): ImageCallRow & { userId: string } => {

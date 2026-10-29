@@ -10,8 +10,9 @@
 --   * Inserts, updates and deletes come only from the service role (it bypasses RLS); every client
 --     privilege except that owner SELECT is revoked.
 --   * Platform aggregates go through the security-definer comic_image_model_stats(p_since), which drops every
---     (model, kind, resolution) group with fewer than 5 distinct users, and reports a cost only when at least
---     5 distinct users have a priced call in the group. Executable by the service role only.
+--     (model, kind, resolution) group with fewer than 5 distinct users, and reports a cost (median / min / max
+--     of the newest ≤ 20 priced calls, with that n) only when those calls come from at least 5 distinct users.
+--     Executable by the service role only.
 --   * Retention: 180 days (purge_comic_image_calls(), daily through pg_cron when it is installed).
 --
 -- Idempotent and guarded: safe to re-run; columns and named checks converge on this file. Apply BEFORE the
@@ -105,6 +106,13 @@ create policy comic_image_calls_select_own
 -- ── 3. Platform aggregate (≥ 5 distinct users per group) ─────────────────────────────────────
 
 drop function if exists public.comic_image_model_stats(timestamptz);
+-- Per (model, kind, resolution) since p_since (never past the 180-day retention):
+--   calls / ok / failed / rate_limited / distinct_users  — counts over every call that reached a provider;
+--   priced_calls                                         — ok calls with a provider-reported cost;
+--   cost_n, median / min / max, cost_from / cost_to      — over the NEWEST ≤ 20 priced calls of the group
+--                                                          (models.md §2.3 "the last ≤ 20 calls"), and only
+--                                                          when those ≤ 20 calls come from ≥ 5 distinct users.
+-- Groups with fewer than 5 distinct users are not returned at all.
 create function public.comic_image_model_stats(p_since timestamptz)
 returns table (
   model_id text,
@@ -115,9 +123,13 @@ returns table (
   failed bigint,
   rate_limited bigint,
   distinct_users bigint,
+  priced_calls bigint,
+  cost_n bigint,
   median_cost_usd numeric,
   min_cost_usd numeric,
   max_cost_usd numeric,
+  cost_from timestamptz,
+  cost_to timestamptz,
   first_at timestamptz,
   last_at timestamptz
 )
@@ -141,15 +153,30 @@ as $$
            count(*) filter (where s.outcome = 'failed') as failed,
            count(*) filter (where s.outcome = 'failed' and (s.http_status = 429 or s.error_code = 'RATE_LIMIT')) as rate_limited,
            count(distinct s.user_id) as distinct_users,
-           count(distinct s.user_id) filter (where s.outcome = 'ok' and s.provider_cost_usd is not null) as priced_users,
-           (percentile_cont(0.5) within group (order by s.provider_cost_usd)
-              filter (where s.outcome = 'ok' and s.provider_cost_usd is not null))::numeric as median_cost,
-           min(s.provider_cost_usd) filter (where s.outcome = 'ok') as min_cost,
-           max(s.provider_cost_usd) filter (where s.outcome = 'ok') as max_cost,
+           count(*) filter (where s.outcome = 'ok' and s.provider_cost_usd is not null) as priced_calls,
            min(s.created_at) as first_at,
            max(s.created_at) as last_at
       from scoped s
      group by s.model_id, s.kind, s.res
+  ), recent as (
+    select s.model_id, s.kind, s.res, s.user_id, s.provider_cost_usd, s.created_at,
+           row_number() over (partition by s.model_id, s.kind, s.res order by s.created_at desc, s.id desc) as rn
+      from scoped s
+     where s.outcome = 'ok' and s.provider_cost_usd is not null
+  ), costs as (
+    select r.model_id,
+           r.kind,
+           r.res,
+           count(*) as cost_n,
+           count(distinct r.user_id) as cost_users,
+           (percentile_cont(0.5) within group (order by r.provider_cost_usd))::numeric as median_cost,
+           min(r.provider_cost_usd) as min_cost,
+           max(r.provider_cost_usd) as max_cost,
+           min(r.created_at) as cost_from,
+           max(r.created_at) as cost_to
+      from recent r
+     where r.rn <= 20
+     group by r.model_id, r.kind, r.res
   )
   select g.model_id,
          g.kind,
@@ -159,12 +186,18 @@ as $$
          g.failed,
          g.rate_limited,
          g.distinct_users,
-         case when g.priced_users >= 5 then round(g.median_cost, 6) end,
-         case when g.priced_users >= 5 then g.min_cost end,
-         case when g.priced_users >= 5 then g.max_cost end,
+         g.priced_calls,
+         case when c.cost_users >= 5 then c.cost_n end,
+         case when c.cost_users >= 5 then round(c.median_cost, 6) end,
+         case when c.cost_users >= 5 then c.min_cost end,
+         case when c.cost_users >= 5 then c.max_cost end,
+         case when c.cost_users >= 5 then c.cost_from end,
+         case when c.cost_users >= 5 then c.cost_to end,
          g.first_at,
          g.last_at
     from grouped g
+    left join costs c
+      on c.model_id = g.model_id and c.kind is not distinct from g.kind and c.res is not distinct from g.res
    where g.distinct_users >= 5
    order by g.calls desc, g.model_id, g.kind, g.res;
 $$;

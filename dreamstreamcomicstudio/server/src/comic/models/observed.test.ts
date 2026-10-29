@@ -76,10 +76,35 @@ describe('platform aggregates are hidden below 5 distinct users (AT-9)', () => {
   });
 
   it('belt and braces: a group that slipped through with < 5 users is still ignored', () => {
-    const leaked = [{ modelId: 'nano-banana-2.1', kind: 'page', res: '1K', calls: 9, ok: 9, failed: 0, rateLimited: 0, distinctUsers: 2, medianCostUsd: 0.05, minCostUsd: 0.05, maxCostUsd: 0.05, firstAt: null, lastAt: null }];
+    const leaked = [{ modelId: 'nano-banana-2.1', kind: 'page', res: '1K', calls: 9, ok: 9, failed: 0, rateLimited: 0, distinctUsers: 2, pricedCalls: 9, costN: 9, medianCostUsd: 0.05, minCostUsd: 0.05, maxCostUsd: 0.05, costFrom: null, costTo: null, firstAt: null, lastAt: null }];
     expect(observedEntriesFor([], leaked, 'nano-banana-2.1')).toEqual([]);
     expect(platformTopModels(leaked)).toBeNull();
     expect(platformReliabilityFor(leaked, 'nano-banana-2.1')).toBeNull();
+  });
+
+  it('platform n counts only priced calls (never ok calls with no reported cost) and covers the newest ≤ 20', async () => {
+    // 7 users, 30 ok calls: 10 without a reported cost, 20 priced (the 4 oldest of those at $1).
+    const rows = Array.from({ length: 30 }, (_, i) =>
+      callRow({ at: NOW - i * MIN, userId: `u${i % 7}`, providerCostUsd: i % 3 === 2 ? null : i >= 24 ? 1 : 0.05 })
+    );
+    const db = memoryImageCalls(rows);
+    const stats = await db.platformStats(new Date(NOW - 86_400_000).toISOString());
+    expect(stats[0]).toMatchObject({ ok: 30, pricedCalls: 20, costN: 20 });
+    const [entry] = observedEntriesFor([], stats, 'nano-banana-2.1');
+    expect(entry).toMatchObject({ scope: 'platform', n: 20, medianUsd: 0.05 });
+    // 25 priced calls: the newest 20 are the window, so the $1 outliers fall out of it.
+    const more = Array.from({ length: 25 }, (_, i) => callRow({ at: NOW - i * MIN, userId: `u${i % 6}`, providerCostUsd: i >= 20 ? 1 : 0.05 }));
+    const [windowed] = observedEntriesFor([], await memoryImageCalls(more).platformStats(new Date(NOW - 86_400_000).toISOString()), 'nano-banana-2.1');
+    expect(windowed).toMatchObject({ n: 20, medianUsd: 0.05, maxUsd: 0.05 });
+    expect(windowed.from).toBe(new Date(NOW - 19 * MIN).toISOString());
+    // A group whose cost window has fewer than 5 users publishes no cost, so no platform entry.
+    const fourInWindow = [
+      ...Array.from({ length: 20 }, (_, i) => callRow({ at: NOW - i * MIN, userId: `u${i % 4}`, providerCostUsd: 0.05 })),
+      callRow({ at: NOW - 3_600_000, userId: 'u9', providerCostUsd: 0.05 })
+    ];
+    const stats4 = await memoryImageCalls(fourInWindow).platformStats(new Date(NOW - 86_400_000).toISOString());
+    expect(stats4[0]).toMatchObject({ distinctUsers: 5, costN: null, medianCostUsd: null });
+    expect(observedEntriesFor([], stats4, 'nano-banana-2.1')).toEqual([]);
   });
 
   it("the user's own entry wins over the platform's for the same kind and resolution", async () => {

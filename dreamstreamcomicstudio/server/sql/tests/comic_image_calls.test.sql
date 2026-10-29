@@ -78,6 +78,19 @@ insert into public.comic_image_calls (user_id, model_id, route, kind, res, outco
 select ('00000000-0000-0000-0000-00000000000' || n)::uuid, 'nano-banana-2.1', 'openrouter', 'cover', '2K',
        case when n <= 2 then 'ok' else 'failed' end, case when n <= 2 then 0.054 else 0 end, now() - interval '3 hours'
   from generate_series(1, 5) n;
+-- Group D: seedream-5-pro · page · 1K — 25 priced calls from 6 users. The 5 OLDEST cost $1 (outliers); the cost
+-- figures cover only the newest 20 ($0.05 each), and n is 20 of 25 priced calls.
+insert into public.comic_image_calls (user_id, model_id, route, kind, res, outcome, provider_cost_usd, created_at)
+select ('00000000-0000-0000-0000-00000000000' || (n % 6 + 1))::uuid, 'seedream-5-pro', 'openrouter', 'page', '1K', 'ok',
+       case when n > 20 then 1.0 else 0.05 end, now() - n * interval '1 minute'
+  from generate_series(1, 25) n;
+-- Group E: flux-3 · page · 1K — 5 distinct users (shown), but the newest 20 priced calls come from 4 of them:
+-- no cost may be shown for that window.
+insert into public.comic_image_calls (user_id, model_id, route, kind, res, outcome, provider_cost_usd, created_at)
+select ('00000000-0000-0000-0000-00000000000' || (n % 4 + 1))::uuid, 'flux-3', 'openrouter', 'page', '1K', 'ok', 0.048, now() - n * interval '1 minute'
+  from generate_series(1, 20) n;
+insert into public.comic_image_calls (user_id, model_id, route, kind, res, outcome, provider_cost_usd, created_at)
+values ('00000000-0000-0000-0000-000000000005', 'flux-3', 'openrouter', 'page', '1K', 'ok', 0.048, now() - interval '2 hours');
 -- Preflight-blocked rows never count; a 200-day-old row is outside every window and purged.
 insert into public.comic_image_calls (user_id, model_id, kind, res, outcome, created_at)
 select ('00000000-0000-0000-0000-00000000000' || n)::uuid, 'gpt-image-2.5', 'page', '1K', 'blocked', now() - interval '1 hour' from generate_series(1, 6) n;
@@ -110,6 +123,16 @@ begin
   assert a.calls = 6 and a.ok = 5 and a.failed = 1 and a.rate_limited = 1, format('group A counts %s/%s/%s/%s', a.calls, a.ok, a.failed, a.rate_limited);
   assert a.median_cost_usd = 0.043, format('group A median %s', a.median_cost_usd);
   assert a.min_cost_usd = 0.041 and a.max_cost_usd = 0.045, 'group A min/max';
+  assert a.priced_calls = 5 and a.cost_n = 5, format('group A n counts priced calls only: %s / %s', a.priced_calls, a.cost_n);
+  assert a.cost_from is not null and a.cost_to >= a.cost_from, 'group A cost window';
+
+  select * into a from public.comic_image_model_stats(now() - interval '1 day') where model_id = 'seedream-5-pro';
+  assert a.priced_calls = 25 and a.cost_n = 20, format('group D: 25 priced calls, costs over the newest 20 (got %s / %s)', a.priced_calls, a.cost_n);
+  assert a.median_cost_usd = 0.05 and a.max_cost_usd = 0.05, format('the 5 oldest $1 outliers are outside the last-20 window (median %s, max %s)', a.median_cost_usd, a.max_cost_usd);
+
+  select * into a from public.comic_image_model_stats(now() - interval '1 day') where model_id = 'flux-3';
+  assert a.distinct_users = 5 and a.priced_calls = 21, 'group E counts are shown';
+  assert a.cost_n is null and a.median_cost_usd is null and a.min_cost_usd is null, 'costs from fewer than 5 users in the last-20 window must not be shown';
 
   select count(*) into n from public.comic_image_model_stats(now() - interval '1 day') where model_id = 'nano-banana-pro';
   assert n = 0, 'a group with 4 distinct users must be suppressed';
@@ -117,6 +140,7 @@ begin
   select * into a from public.comic_image_model_stats(now() - interval '1 day') where model_id = 'nano-banana-2.1' and kind = 'cover';
   assert a.distinct_users = 5 and a.calls = 5, 'group C counts are shown';
   assert a.median_cost_usd is null and a.min_cost_usd is null and a.max_cost_usd is null, 'a cost from fewer than 5 priced users must not be shown';
+  assert a.priced_calls = 2 and a.cost_n is null, 'group C: 2 priced calls, no cost window';
 
   select count(*) into n from public.comic_image_model_stats(now() - interval '1 day') where model_id = 'gpt-image-2.5';
   assert n = 0, 'preflight-blocked rows are not calls';
@@ -134,7 +158,7 @@ declare
   n int;
 begin
   select count(*) into n from public.comic_image_calls;
-  assert n = 5, format('user 1 sees only their own 5 rows, saw %s', n);
+  assert n = 14, format('user 1 sees only their own 14 rows (5 in groups A–C and blocked, 4 in D, 5 in E), saw %s', n);
   select count(*) into n from public.comic_image_calls where user_id <> '00000000-0000-0000-0000-000000000001';
   assert n = 0, 'no other user''s row is visible';
   begin

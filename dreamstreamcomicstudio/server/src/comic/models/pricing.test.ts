@@ -187,6 +187,7 @@ describe('PriceBook (models.md §2.3)', () => {
   it('platform aggregate is the fallback when the user has no own observation', () => {
     const book = priceBookFromSources({ rows: liveRows(), observed: [obs({ scope: 'platform', n: 30, medianUsd: 0.05, minUsd: 0.04, maxUsd: 0.06 })] });
     expect(book.unit('nano-banana-2.1', '1K', 'page').basis).toContain("DreamStream creators' last 30 pages");
+    expect(book.quote('nano-banana-2.1', '1K', 'page').observed).toMatchObject({ scope: 'platform', n: 30 });
     const both = priceBookFromSources({ rows: liveRows(), observed: [obs({ scope: 'platform', n: 30, medianUsd: 0.05 }), obs({})] });
     expect(both.unit('nano-banana-2.1', '1K', 'page').usd).toBe(0.047); // the user's own first
   });

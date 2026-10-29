@@ -177,9 +177,13 @@ export const platformStatFromDb = (r: Record<string, unknown>): PlatformStatRow 
     failed: num(r.failed) ?? 0,
     rateLimited: num(r.rate_limited) ?? 0,
     distinctUsers: num(r.distinct_users) ?? 0,
+    pricedCalls: num(r.priced_calls) ?? 0,
+    costN: num(r.cost_n),
     medianCostUsd: num(r.median_cost_usd),
     minCostUsd: num(r.min_cost_usd),
     maxCostUsd: num(r.max_cost_usd),
+    costFrom: str(r.cost_from),
+    costTo: str(r.cost_to),
     firstAt: str(r.first_at),
     lastAt: str(r.last_at)
   };

@@ -97,7 +97,9 @@ describe('database rows', () => {
       createdAt: '2026-10-22T18:00:00.000Z'
     });
     expect(imageCallFromDb({ model_id: 'x', outcome: 'weird', created_at: '2026-10-22T18:00:00Z' })).toBeNull();
-    expect(platformStatFromDb({ model_id: 'nano-banana-2.1', kind: 'page', res: '1K', calls: '12', ok: 10, failed: 2, rate_limited: 1, distinct_users: 6, median_cost_usd: '0.047', min_cost_usd: null, max_cost_usd: 0.06, first_at: null, last_at: null })).toMatchObject({ calls: 12, distinctUsers: 6, medianCostUsd: 0.047, minCostUsd: null });
+    expect(
+      platformStatFromDb({ model_id: 'nano-banana-2.1', kind: 'page', res: '1K', calls: '12', ok: 10, failed: 2, rate_limited: 1, distinct_users: 6, priced_calls: '9', cost_n: 9, median_cost_usd: '0.047', min_cost_usd: null, max_cost_usd: 0.06, cost_from: '2026-10-22T17:00:00Z', cost_to: null, first_at: null, last_at: null })
+    ).toMatchObject({ calls: 12, distinctUsers: 6, pricedCalls: 9, costN: 9, medianCostUsd: 0.047, minCostUsd: null, costFrom: '2026-10-22T17:00:00Z', costTo: null });
   });
 
   it('without a service-role key there is no store and no calls database (nothing is attempted)', async () => {

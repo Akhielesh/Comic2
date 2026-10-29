@@ -48,9 +48,16 @@ export interface PlatformStatRow {
   failed: number;
   rateLimited: number;
   distinctUsers: number;
+  /** ok calls with a provider-reported cost. */
+  pricedCalls: number;
+  /** How many of the newest ≤ 20 priced calls the cost figures cover (null = no cost shown: < 5 users there). */
+  costN: number | null;
   medianCostUsd: number | null;
   minCostUsd: number | null;
   maxCostUsd: number | null;
+  /** The time span of those ≤ 20 priced calls. */
+  costFrom: string | null;
+  costTo: string | null;
   firstAt: string | null;
   lastAt: string | null;
 }
@@ -131,19 +138,23 @@ export const observedFor = (rows: ImageCallRow[], q: { modelId: string; kind: st
   };
 };
 
-/** Platform entries for a model: only groups the function already published (≥ 5 users) with enough priced calls. */
+/**
+ * Platform entries for a model: only groups the function already published (≥ 5 users) whose cost figures it
+ * reported. `n` is the number of priced calls those figures cover (the newest ≤ 20, models.md §2.3), never the
+ * group's ok count (which includes calls with no reported cost); from/to are that window's span.
+ */
 export const platformObservedFor = (stats: PlatformStatRow[], modelId: string): ObservedEntry[] =>
   stats
-    .filter((s) => s.modelId === modelId && s.distinctUsers >= MIN_PLATFORM_USERS && s.ok >= OBSERVED_MIN_N && isNum(s.medianCostUsd) && asResolution(s.res))
+    .filter((s) => s.modelId === modelId && s.distinctUsers >= MIN_PLATFORM_USERS && isNum(s.costN) && s.costN >= OBSERVED_MIN_N && isNum(s.medianCostUsd) && asResolution(s.res))
     .map((s) => ({
       kind: s.kind as ObservedKind,
       res: asResolution(s.res)!,
-      n: s.ok,
+      n: s.costN as number,
       medianUsd: round4(s.medianCostUsd as number),
       minUsd: round4(isNum(s.minCostUsd) ? s.minCostUsd : (s.medianCostUsd as number)),
       maxUsd: round4(isNum(s.maxCostUsd) ? s.maxCostUsd : (s.medianCostUsd as number)),
-      from: s.firstAt ?? '',
-      to: s.lastAt ?? '',
+      from: s.costFrom ?? s.firstAt ?? '',
+      to: s.costTo ?? s.lastAt ?? '',
       scope: 'platform' as const
     }));
 
