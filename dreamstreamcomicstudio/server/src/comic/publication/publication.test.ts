@@ -493,6 +493,25 @@ describe('publish', () => {
     expect(second.publishedRev).toBeGreaterThan(first.publishedRev);
   });
 
+  it('the owner view carries the frozen card (default-language title, description, cover copy), unchanged by edits made since', async () => {
+    const { getPublicationView } = await import('./index.js');
+    const view = await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    expect(view.card).toEqual({ title: 'Spice Run', description: expect.any(String), coverUrl: (row.card as ShareCard).coverUrl });
+    expect(view.card!.coverUrl).toMatch(/^https:\/\/cdn\.test\/pub\//);
+    ctx.session.commit([{ op: 'brief', patch: { title: 'Brand new title nobody has seen', logline: 'Not published yet.' } }], { origin: 'user' });
+    const later = await getPublicationView(ctx);
+    expect(later.behind).toBe(true);
+    expect(later.card).toEqual(view.card);
+    // A paused link's copies are taken down: the card text stays, the cover goes.
+    store.forcePrivate('proj-1');
+    const paused = await getPublicationView(ctx);
+    expect(paused.status).toBe('suspended');
+    expect(paused.card).toEqual({ title: 'Spice Run', description: view.card!.description });
+    await unpublish(ctx);
+    expect((await getPublicationView(ctx)).card).toBeUndefined();
+  });
+
   it('the public snapshot’s doc.id is the stored row id and survives an update (readers key their place and the intro on it)', async () => {
     const first = await publish(ctx, { visibility: 'unlisted' });
     const row = store.rows.get('proj-1')!;

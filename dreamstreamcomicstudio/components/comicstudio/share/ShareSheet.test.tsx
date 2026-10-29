@@ -235,6 +235,24 @@ describe('ShareSheet', () => {
     expect(screen.queryByRole('button', { name: 'Update published version' })).toBeNull();
   });
 
+  it('the preview mock shows the FROZEN card with its rating (what chat apps render), never the live, unpublished text', () => {
+    const previewFigure = () => screen.getByText('This is what people see before they tap.').closest('figure') as HTMLElement;
+    const studio = studioWith(view({ behind: true, rating: 'PG', card: { title: 'The Saffron Thief', description: 'A courier races through a spice market.' } }));
+    studio.doc!.brief.title = 'Brand new title nobody has seen';
+    studio.doc!.brief.logline = 'A logline that is not published yet.';
+    const { unmount } = render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(previewFigure()).toHaveTextContent('The Saffron Thief');
+    expect(previewFigure()).toHaveTextContent('A courier races through a spice market. · Rated PG');
+    expect(previewFigure()).not.toHaveTextContent('Brand new title nobody has seen');
+    expect(previewFigure()).not.toHaveTextContent('A logline that is not published yet.');
+    expect(previewFigure().querySelector('img')?.getAttribute('src')).toBe(view().ogImageUrl);
+    unmount();
+    // No software-made card (its render failed): the cover, as og:image falls back to it.
+    const COVER = `https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/pub/K1234567890abcdefghijk/cover-abc-w1080.webp`;
+    render(<ShareSheet studio={studioWith(view({ ogImageUrl: undefined, card: { title: 'T', description: '', coverUrl: COVER } }))} open onClose={vi.fn()} />);
+    expect(previewFigure().querySelector('img')?.getAttribute('src')).toBe(COVER);
+  });
+
   it('a long title at 360 px never forces horizontal scroll (truncating title, min-w-0 rows)', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
     setViewport(true);

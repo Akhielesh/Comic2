@@ -13,7 +13,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } from 'lucide-react';
-import type { PublicationOwnerView, PublishRequest } from '../../../shared/comic/publication';
+import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
 import { cx } from '../conversation/ui';
@@ -333,8 +333,15 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     </div>
   );
 
+  // "This is what people see before they tap": the FROZEN card (title, description, rating, cover
+  // fallback), never the live doc's text — edits stay private until Update (functions/_shared/shareHead.ts).
   const preview = live && view && (
-    <LinkPreviewMock title={title} description={doc.brief?.logline || doc.cover?.tagline || undefined} imageUrl={view.ogImageUrl} url={url} />
+    <LinkPreviewMock
+      title={view.card?.title || title}
+      description={ratedDescription(view.card ? view.card.description : doc.brief?.logline || doc.cover?.tagline || '', view.rating) || undefined}
+      imageUrl={view.ogImageUrl || view.card?.coverUrl}
+      url={url}
+    />
   );
 
   const controls = (

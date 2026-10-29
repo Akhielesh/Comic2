@@ -468,6 +468,14 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     if (row.publishedAt) view.publishedAt = row.publishedAt;
     if (row.startPage !== undefined) view.startPage = row.startPage ?? null;
     if (publishedRating) view.rating = publishedRating;
+    // The frozen card: what chat apps show for the link (the sheet's preview mock must not show live, unpublished text).
+    const card = isRecord(row.card) && (row.card as unknown as ShareCard).v === 1 ? (row.card as unknown as ShareCard) : null;
+    if (card) {
+      const text = (isRecord(card.i18n) && card.i18n[row.defaultLang || row.languages[0]]) || { title: card.title, description: card.description };
+      view.card = { title: String(text.title ?? card.title ?? ''), description: String(text.description ?? card.description ?? '') };
+      // A suspended link's copies are taken down: no broken cover either.
+      if (row.status === 'live' && typeof card.coverUrl === 'string' && /^https:\/\//.test(card.coverUrl)) view.card.coverUrl = card.coverUrl;
+    }
     // The consented exclusions, so an Update from the sheet can resend them (a blocked verdict stays blocked).
     const excluded = Array.isArray(row.safety?.excludedPageIds) ? (row.safety.excludedPageIds as unknown[]).filter((id): id is string => typeof id === 'string' && PAGE_ID_RE.test(id)) : [];
     if (excluded.length) view.excludedPageIds = excluded;

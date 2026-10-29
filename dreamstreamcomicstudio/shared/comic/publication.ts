@@ -114,7 +114,16 @@ export interface PublicationOwnerView {
    * sheet's Update resends them as `excludePageIds`, since the gate keeps a blocked verdict.
    */
   excludedPageIds?: string[];
+  /**
+   * What link previews actually show (live rows): the FROZEN card's title and description in the
+   * default language, and the published cover copy (the og:image fallback). Not the live doc's text.
+   */
+  card?: { title: string; description: string; coverUrl?: string };
 }
+
+/** The preview text with the rating appended ("… · Rated PG-13"): what every link preview carries. */
+export const ratedDescription = (description: string, rating?: ContentRating): string =>
+  rating ? (description ? `${description} · Rated ${rating}` : `Rated ${rating}`) : description;
 /** doc.publication — server-written mirror for UI + the director context line. */
 export interface PublicationMirror {
   visibility: 'unlisted' | 'public';
