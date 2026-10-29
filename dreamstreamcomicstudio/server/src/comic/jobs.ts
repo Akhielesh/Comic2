@@ -52,6 +52,7 @@ import {
   type ConfirmPolicy,
   type Format,
   type Gate,
+  type ImageModelLock,
   type LetteringMode,
   type LineKind,
   type Msg,
@@ -96,7 +97,9 @@ import {
   aspectMatches,
   estimateJobs,
   formatUsd,
+  getImageModel,
   imagePriceUsd,
+  nearestAspect,
   resolveImageJob,
   styleDirectionsUsd,
   type ImageJobKind,
@@ -104,6 +107,7 @@ import {
   type ImageRoute,
   type SpendEstimate
 } from '../../../shared/comic/models.js';
+import { FREE_PLAN_IMAGE_MODEL, deriveLock, type PriceBook } from '../../../shared/comic/modelLock.js';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -135,6 +139,7 @@ import {
 } from './types.js';
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
+import { MODEL_LOCKED_CODE, assertSettingsPatchAllowed, modelLockedError, modelName } from './sanitize/models.js';
 import { LINE_STYLE_MAX_BYTES } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
@@ -347,6 +352,45 @@ const imageOperation: Record<ImageJobKind, string> = {
   edit: 'comic.image.edit',
   cover: 'comic.image.cover'
 };
+
+// ── Image-model lock (models.md §3) ──────────────────────────────────────────
+
+/** models.md §3.4 codes (types.ts StudioErrorCode gains them: wave note). Casts keep the runtime code exact. */
+export const MODEL_LOCKED: StudioErrorCode = MODEL_LOCKED_CODE;
+export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE' as string as StudioErrorCode;
+
+/**
+ * The comic's image-model lock: the persisted one, else the migration lock of a legacy doc drawn before the lock
+ * existed (deriveLock: reads never write; it is persisted with the next image commit). undefined = nothing drawn.
+ */
+export const lockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
+
+/** What a run pins at its start (models.md §3.4 item 4): the tier (resolution), the pre-lock override and the lock. */
+export interface RunPin extends Pick<Settings, 'quality' | 'imageModelOverride'> {
+  lock?: ImageModelLock;
+}
+
+export const runPinOf = (doc: ComicDoc): RunPin => {
+  const lock = lockOf(doc);
+  return { quality: doc.settings.quality, imageModelOverride: doc.settings.imageModelOverride, ...(lock ? { lock } : {}) };
+};
+
+/**
+ * models.md §3.4 item 1: every image job resolves through the lock. With a lock the spec is the locked model for
+ * EVERY kind (style swatches included) and the tier only picks the resolution; before the lock the tier preset or
+ * the override decides (swatches stay on the cheap style model and never lock).
+ */
+export const resolveJobFor = (pin: RunPin, kind: ImageJobKind) => resolveImageJob(kind, pin.quality, pin.imageModelOverride, pin.lock);
+
+/** The override that makes the shared quote helpers (override-only) price exactly what resolveJobFor draws. */
+const quoteOverride = (pin: RunPin): string | undefined => pin.lock?.modelId ?? pin.imageModelOverride;
+
+/** models.md §3.6 H, exact copy. */
+export const modelUnavailableText = (model: string, reason: string): string =>
+  `${model} isn't available for this comic right now (${reason.replace(/[.\s]+$/, '')}). Nothing was drawn. You can wait, or switch models. Switching can affect consistency.`;
+
+/** The chip under G and H: opens the picker (changing still needs the confirm). */
+export const SEE_OTHER_MODELS_STEP: NextStep = { label: 'See other models', client: { type: 'open_model_picker' } };
 
 // ── Per-project image concurrency ────────────────────────────────────────────
 
@@ -590,12 +634,60 @@ const styleDirectionCount = (action: Extract<SpendAction, { type: 'render_style_
 /** The page re-check's display name (a vision text call, not an image model). */
 export const RECHECK_MODEL_LABEL = 'Page check';
 
-/** Registry estimate for a spend action (counts what would actually be drawn now). */
-export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: boolean): SpendEstimate {
+/**
+ * Price image jobs on this doc's lock / tier / override: the registry list (exactly estimateJobs) or, with a
+ * PriceBook, its unit prices (live list or observed median, never under list; models.md §2.3) + QC for pages and
+ * edits, × PLATFORM_MARKUP unless BYOK. A unit the book cannot price falls back to the registry list.
+ */
+export const priceImageJobs = (
+  doc: ComicDoc,
+  jobs: { kind: ImageJobKind; count: number; label?: string }[],
+  byok: boolean,
+  prices?: PriceBook,
+  pin: RunPin = runPinOf(doc)
+): SpendEstimate => {
+  const base = estimateJobs(jobs, pin.quality, { override: pin.imageModelOverride, byok, ...(pin.lock ? { lock: pin.lock } : {}) });
+  if (!prices) return base;
+  const markup = byok ? 1 : PLATFORM_MARKUP;
+  const lines = jobs
+    .filter((j) => j.count > 0)
+    .map((j) => {
+      const { spec, resolution } = resolveJobFor(pin, j.kind);
+      let unit: number | null = null;
+      try {
+        unit = prices.unit(spec.id, resolution, j.kind).usd;
+      } catch {
+        unit = null;
+      }
+      const list = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
+      const qc = j.kind === 'page' || j.kind === 'edit' ? (Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE) : 0;
+      return { label: j.label || j.kind, count: j.count, usd: round4((list + qc) * j.count * markup) };
+    });
+  return { ...base, usd: round4(lines.reduce((s, l) => s + l.usd, 0)), lines };
+};
+
+/**
+ * Estimate for a spend action (counts what would actually be drawn now), on the comic's locked model. Registry
+ * prices by default (what chips and the client quote with); with a PriceBook, real prices (gates, budget, run).
+ */
+export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: boolean, prices?: PriceBook): SpendEstimate {
+  const pin = runPinOf(doc);
   if (action.type === 'render_pages') {
     // One quote for the chat card, the board and the gate (shared/comic/plan.ts; plan.parity.test.ts).
-    const q = quoteRenderPages(doc, { ...action, byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
-    return { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines };
+    const q = quoteRenderPages(doc, { ...action, byok, tier: pin.quality, modelOverride: quoteOverride(pin) });
+    if (!prices) return { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines };
+    const priced = priceImageJobs(
+      doc,
+      [
+        { kind: 'page', count: q.pageIds.length, label: 'pages' },
+        { kind: 'sheet', count: q.sheetIds.length, label: 'character sheets' },
+        { kind: 'cover', count: q.cover ? 1 : 0, label: 'cover' }
+      ],
+      byok,
+      prices,
+      pin
+    );
+    return { usd: priced.usd, imageCount: q.imageCount, model: q.model, lines: priced.lines };
   }
   if (action.type === 'recheck_page') {
     // TEXT-priced: one vision call re-reads the page (lettering.md §9). No image is drawn.
@@ -622,7 +714,7 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
     default:
       break;
   }
-  const est = estimateJobs(jobs, doc.settings.quality, { override: doc.settings.imageModelOverride, byok });
+  const est = priceImageJobs(doc, jobs, byok, prices, pin);
   // When no directions are passed the runner also makes a writer call to propose them; the
   // image-only estimate would understate the quote and the budget gate. Add that text line.
   if (action.type === 'render_style_options' && !styleDirections(action).length) {
@@ -958,7 +1050,7 @@ const describeSpend = (doc: ComicDoc, action: SpendAction): SpendPlan => {
 };
 
 const modelLabel = (doc: ComicDoc, kind: ImageJobKind) => {
-  const { spec, resolution } = resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride);
+  const { spec, resolution } = resolveJobFor(runPinOf(doc), kind);
   return { nickname: spec.nickname, resolution, spec };
 };
 
@@ -1194,6 +1286,9 @@ const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageM
   const caps = opts.caps ?? ctx.caps;
   const doc = ctx.session.doc;
   if (caps) {
+    // A locked comic's model is judged by the model access rule alone (models.md §3.4 item 10): the caller
+    // turns this into the honest H notice — never a fallback to another model.
+    if (lockOf(doc) && spec.id !== FREE_PLAN_IMAGE_MODEL && !caps.modelOverride) return LOCKED_MODEL_ACCESS_REASON;
     const overridden = !!doc.settings.imageModelOverride && spec.id !== TIER_PRESETS[doc.settings.quality]?.model;
     if (overridden && !caps.modelOverride) {
       return BILLING_ENABLED
@@ -1211,6 +1306,19 @@ const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageM
   return qualityDenied && spec.id !== TIER_PRESETS.standard.model ? qualityDenied : null;
 };
 
+/** qualityProblem's answer when a LOCKED comic's model is outside this user's plan (models.md §3.9). */
+const LOCKED_MODEL_ACCESS_REASON = 'needs a paid plan or your own key';
+
+/**
+ * models.md §3.6 H: the locked model can't run for this comic right now (access lost, retired, no transport).
+ * Nothing is drawn and nothing falls back to another model; the way out is the picker (and its confirm).
+ */
+const modelUnavailable = (ctx: StudioContext, opts: RunActionOptions, model: string, reason: string): StartedAction => {
+  const text = modelUnavailableText(model, reason);
+  deliver(ctx, opts, text, [noticeCard('warn', text)], [SEE_OTHER_MODELS_STEP]);
+  return finished({ status: 'blocked', message: text, code: MODEL_LOCKED });
+};
+
 async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
   // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
   if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
@@ -1218,6 +1326,9 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   const problem = validateSpendAction(doc, action);
   if (problem) return blocked(ctx, opts, problem, 'info');
 
+  const lock = lockOf(doc);
+  // A comic locked to a model the registry no longer lists: never re-pointed at another one (§3.9).
+  if (lock && !getImageModel(lock.modelId)) return modelUnavailable(ctx, opts, lock.modelId, "it's no longer offered in Comic Studio");
   const plan = describeSpend(doc, action);
   const { spec } = modelLabel(doc, plan.kind);
   if (!ctx.keys.openrouter?.key && !ctx.keys.gemini?.key) {
@@ -1225,9 +1336,12 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   }
   const picked = imageRouteFor(spec, ctx.keys);
   if (!picked) {
-    return blocked(ctx, opts, `${spec.nickname} needs ${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key. Add one in Settings → API keys.`, 'error');
+    const needs = `${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key`;
+    if (lock) return modelUnavailable(ctx, opts, spec.nickname, `it needs ${needs}`);
+    return blocked(ctx, opts, `${spec.nickname} needs ${needs}. Add one in Settings → API keys.`, 'error');
   }
   const denied = qualityProblem(ctx, opts, spec);
+  if (denied === LOCKED_MODEL_ACCESS_REASON) return modelUnavailable(ctx, opts, spec.nickname, denied);
   if (denied) {
     return blocked(ctx, opts, /\bStandard\b/.test(denied) ? denied : `${denied} Switch to Standard quality to keep going.`, 'warn', [
       { label: 'Switch to Standard quality', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'standard' } }] }, usd: 0 }
@@ -1264,7 +1378,7 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
 
   // Pin the model/quality now so mid-run settings changes can't move this spend off the
   // quoted/authorised price (the latest sheets and pages are still used — see prepare()).
-  const pinned: Pick<Settings, 'quality' | 'imageModelOverride'> = { quality: doc.settings.quality, imageModelOverride: doc.settings.imageModelOverride };
+  const pinned = runPinOf(doc);
   const runner = new RenderRun(ctx, estimate, pinned, opts, byok);
   runner.reserve();
   const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish; I'll post when they're ready.`;
@@ -1553,7 +1667,7 @@ class RenderRun {
   constructor(
     private readonly ctx: StudioContext,
     private readonly estimate: SpendEstimate,
-    private readonly pinned: Pick<Settings, 'quality' | 'imageModelOverride'>,
+    private readonly pinned: RunPin,
     private readonly opts: RunActionOptions,
     private readonly byok: boolean
   ) {
@@ -1598,7 +1712,7 @@ class RenderRun {
 
   /** What one image of this job would cost at the pinned quality (savedUsd, reservation shares, chip quotes). */
   private priceOf(kind: ImageJobKind): number {
-    return estimateJobs([{ kind, count: 1 }], this.pinned.quality, { override: this.pinned.imageModelOverride, byok: this.byok }).usd;
+    return priceImageJobs(this.session.doc, [{ kind, count: 1 }], this.byok, undefined, this.pinned).usd;
   }
 
   private commit(ops: DocOp[], label?: string) {
@@ -2180,6 +2294,9 @@ class RenderRun {
     const doc = this.session.doc;
     const match = findSpecHashVersion(doc, job.target);
     if (!match) return false;
+    // A locked comic is drawn on its model only: a version from another model is never put back silently (§3.1).
+    const lock = lockOf(doc);
+    if (lock && match.version.model && match.version.model !== lock.modelId) return false;
     const saved = this.priceOf(job.kind);
     const balloonsBefore = job.target.kind === 'page' ? findPage(doc, job.target.id)?.balloons : undefined;
     // Un-busy first (render_use is a no-op on a busy target), then swap in the version.
@@ -2340,7 +2457,9 @@ class RenderRun {
             updatedAt: Date.now()
           }
         },
-        this.reuseSpend(job, saved, model)
+        this.reuseSpend(job, saved, model),
+        // The copy has the same job hash, so the same model: it is this comic's image like a fresh one.
+        ...this.lockOps(job, prepared.compiled.spec)
       ],
       'Reuse drawing'
     );
@@ -2362,6 +2481,8 @@ class RenderRun {
     const { ctx, session } = this;
     let prepared = initial;
     let safe = !!job.safe;
+    // The lock invariant comes first: a mismatching job makes no reservation and no provider call.
+    this.assertLockedModel(job, prepared.compiled.spec);
     const picked = imageRouteFor(prepared.compiled.spec, ctx.keys);
     if (!picked) {
       end(false);
@@ -2533,7 +2654,8 @@ class RenderRun {
             ...(safe && !job.note ? { note: 'Safer take' } : {})
           }
         },
-        ...(job.landedOps ? job.landedOps() : [])
+        ...(job.landedOps ? job.landedOps() : []),
+        ...this.lockOps(job, compiled.spec, picked.model, result.model)
       ],
       { origin: 'job' }
     );
@@ -2655,6 +2777,46 @@ class RenderRun {
     return { blocked: false, previousBack: false };
   }
 
+  /**
+   * models.md §3.4 item 1: the job runs on resolveJobFor(pin, kind). The compilers resolve swatches on the cheap
+   * style model whatever the lock says; once a comic is locked its swatches use the locked model at its nearest 1K
+   * (§2.1), so the compiled job is re-targeted (same prompt, the locked spec's resolution and nearest aspect).
+   */
+  private onLockedModel(job: ImageJob, compiled: CompiledImageJob): CompiledImageJob {
+    const want = resolveJobFor(this.pinned, job.kind);
+    if (compiled.spec.id === want.spec.id && compiled.resolution === want.resolution) return compiled;
+    if (!this.pinned.lock) return compiled; // unlocked: the compilers' choice IS the tier/override resolution
+    return { ...compiled, spec: want.spec, resolution: want.resolution, aspect: nearestAspect(want.spec, compiled.aspect) };
+  }
+
+  /**
+   * models.md §3.4 item 2: the invariant before ANY provider call. A job whose model is not the comic's lock (the
+   * live one: a lock that changed under a running job wins) makes no call, is never billed, and is logged.
+   */
+  private assertLockedModel(job: ImageJob, spec: ImageModelSpec): void {
+    const lock = lockOf(this.session.doc);
+    if (!lock || lock.modelId === spec.id) return;
+    logger.error('comic_model_lock_violation', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), kind: job.kind, model: spec.id, locked: lock.modelId });
+    throw modelLockedError(`This comic is locked to ${modelName(lock.modelId)}, so ${job.label.toLowerCase()} wasn't drawn on ${spec.nickname}. Nothing was charged.`);
+  }
+
+  /**
+   * models.md §3.4 item 3: the op that sets the lock, committed in the SAME batch as the comic's first image (a
+   * legacy doc's derived lock is persisted the same way, origin 'migrated'). Style swatches never lock.
+   */
+  private lockOps(job: ImageJob, spec: ImageModelSpec, providerModel?: string, reported?: string): DocOp[] {
+    if (job.kind === 'style_option') return [];
+    const live = this.session.doc;
+    if (live.imageModel) return [];
+    const derived = deriveLock(live);
+    if (derived && derived.modelId !== spec.id) return []; // never re-point a legacy comic (the invariant refuses such jobs)
+    const canonical = reported && providerModel && reported !== providerModel && reported.startsWith(providerModel) ? reported : undefined;
+    const lock: ImageModelLock = derived
+      ? { ...derived, ...(providerModel && !derived.providerModel ? { providerModel } : {}) }
+      : { modelId: spec.id, ...(providerModel ? { providerModel } : {}), ...(canonical ? { canonicalSlug: canonical } : {}), lockedAt: Date.now(), origin: 'first_render' };
+    return [{ op: 'image_model', lock }];
+  }
+
   /** Compile with references we can actually load; recompile without any that are missing or blocked. */
   private async prepare(
     job: ImageJob,
@@ -2663,12 +2825,14 @@ class RenderRun {
     // Use the live doc (freshly drawn sheets/pages) but pin the model/quality to what was
     // quoted and authorised, so a mid-run settings change can't pick a pricier/gated model.
     const live = this.session.doc;
-    const pinnedDoc: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: this.pinned.imageModelOverride } };
+    // The prompt compilers resolve the model from settings (override-only): on a locked comic they get the locked
+    // id as the override, so pages, sheets, places, covers and edits compile for the locked model's own limits.
+    const pinnedDoc: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: quoteOverride(this.pinned) } };
     const docAtCompile = job.docFor ? job.docFor(pinnedDoc) : pinnedDoc;
     // Blocked or quarantined images are never sent to a model (safety.md §3.2 reference gate).
     const missing = blockedPaths(docAtCompile);
     // The compilers apply the safe take (SAFE TAKE line + softened actions) and the rating ceiling themselves.
-    const compileWith = (doc: ComicDoc) => job.compile(doc, opts);
+    const compileWith = (doc: ComicDoc) => this.onLockedModel(job, job.compile(doc, opts));
     let regionDataUrl: string | undefined;
     let result: { compiled: CompiledImageJob; references: ImageReference[]; attached: string[] } | null = null;
     let lazyChecked = false;
@@ -3626,9 +3790,13 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
       case 'format':
         out.push({ op: 'format', patch: sanitizeFormatPatch(raw.patch) });
         break;
-      case 'settings':
-        out.push({ op: 'settings', patch: sanitizeSettingsPatch(raw.patch) });
+      case 'settings': {
+        const patch = sanitizeSettingsPatch(raw.patch);
+        // models.md §3.4 item 5: imageModelOverride is a pre-lock preference only (409 MODEL_LOCKED after the lock).
+        assertSettingsPatchAllowed(doc, patch);
+        out.push({ op: 'settings', patch });
         break;
+      }
       case 'source': {
         // The script is kept as typed (line breaks, spacing); only what jsonb rejects goes, and the clip never splits a pair.
         const patch = pick(raw.patch, { script: clearable((v) => (typeof v === 'string' ? clipText(storableText(v), LONG_TEXT_LIMIT) : undefined)) }, 'source');

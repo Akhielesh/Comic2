@@ -78,7 +78,7 @@ const makeReq = (over: Record<string, unknown> = {}) =>
     ...over
   }) as unknown as Request;
 
-const pageCall = { operation: 'comic.image.page', provider: 'openrouter', model: 'google/gemini-nano-banana-2.1', stage: 'page', imageUnits: 1, resolution: '1K' as const };
+const pageCall = { operation: 'comic.image.page', provider: 'openrouter', model: 'google/gemini-nano-banana-2.1', stage: 'page', imageUnits: 1, resolution: '1K' } as const;
 const rows = (table: string, op?: string) => sb.calls.filter((c) => c.table === table && (!op || c.op === op));
 const ledgerRows = (type: string) => rows('token_ledger_entries', 'insert').filter((c) => c.payload?.entry_type === type);
 
