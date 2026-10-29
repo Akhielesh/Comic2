@@ -11,12 +11,13 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { resolveImageJob } from '../../../shared/comic/models';
 import { deriveLock, drawnModels } from '../../../shared/comic/modelLock';
 import { byModel } from '../../../shared/comic/modelInsights';
-import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
+import type { CatalogPrice, ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { ModelHealthDot, useModelStatus } from '../reliability';
 import { GhostButton, cx, plural } from '../conversation/ui';
 import { CHANGE_MODEL_LINK, CHOOSE_MODEL_LINK, LOCK_ICON_LABEL, NO_UPTIME_COPY, couldntRefreshCopy, lockedLine, mixedModelsCopy, priceListCopy, recentLabel, unlockedLine } from './copy';
 import {
   RESOLUTION_ORDER,
+  catalogSourceLabel,
   clockText,
   dateText,
   nicknameOf,
@@ -44,15 +45,16 @@ export interface ModelsTabProps {
   now?: number;
 }
 
-const listWords = (list: ListPrice | null, live: number | null | undefined, money: InsightsMoney): string => {
+/** The list price beside a size's real cost, labelled with its own source (a registry fallback is never "OpenRouter"). */
+const listWords = (list: ListPrice | null, live: CatalogPrice | undefined, money: InsightsMoney): string => {
   if (list?.source === 'recorded') return `list ${money.price(list.usd)} at the time`;
-  if (typeof live === 'number') return `list ${money.price(live)} (OpenRouter)`;
+  if (live && typeof live.usd === 'number' && Number.isFinite(live.usd)) return `list ${money.price(live.usd)} (${catalogSourceLabel(live)})`;
   if (list) return `list ${money.price(list.usd)} (${priceListCopy(list.factsAsOf)})`;
   return 'no list price';
 };
 
 const sizeLine = (s: SizeCost, row: ModelCatalogRow | undefined, money: InsightsMoney): string => {
-  const live = s.res ? row?.price[s.res]?.usd : undefined;
+  const live = s.res ? row?.price[s.res] : undefined;
   const list = listWords(s.list, live, money);
   const size = s.res ?? 'Size not recorded';
   if (!s.observed) return `${size}: ${plural(s.images, 'image')} · ${list}`;
@@ -101,8 +103,13 @@ const LiveFacts: React.FC<{ modelId: string; row?: ModelCatalogRow; state: Loada
     );
   }
   const stale = row.stale || state.stale;
-  const fetched = row.fetchedAt.catalog ?? (state.fetchedAt ? new Date(state.fetchedAt).toISOString() : undefined);
   const prices = RESOLUTION_ORDER.map((res) => ({ res, view: priceView(row.price[res], money) })).filter((p) => !!p.view);
+  // Only a live price carries OpenRouter's fetch time (the server never dates a registry fallback, catalog.ts
+  // pricesFor). Prices that all fell back to the registry name no OpenRouter and no time: each Fact already says
+  // "from our price list, {factsAsOf}" (§4.6 "Fetch failed, no cache").
+  const fetched = row.fetchedAt.catalog;
+  const live = prices.some(({ res }) => row.price[res]?.basis !== 'registry');
+  const priceSource = fetched && live ? (stale ? couldntRefreshCopy(clockText(fetched, now)) : `Prices: OpenRouter, ${clockText(fetched, now)}`) : null;
   const uptime = uptimeLines(row.endpoints);
   const observed = observedLines(row.observed, money);
   const reliability = reliabilityText(row.reliability);
@@ -116,7 +123,7 @@ const LiveFacts: React.FC<{ modelId: string; row?: ModelCatalogRow; state: Loada
           ))}
           {!prices.length && <Fact label="Price" value="—" note="No price for any size yet" />}
         </dl>
-        <Source>{stale && fetched ? couldntRefreshCopy(clockText(fetched, now)) : fetched ? `Prices: OpenRouter, ${clockText(fetched, now)}` : 'Prices: our price list'}</Source>
+        {priceSource && <Source>{priceSource}</Source>}
       </div>
       <div className="min-w-0">
         <ul className="min-w-0 space-y-0.5 text-[11.5px] text-[var(--ds-ink)]" aria-label="Providers and uptime">

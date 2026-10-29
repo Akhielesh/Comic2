@@ -55,6 +55,19 @@ describe('Pages tab', () => {
     expect(document.body).toHaveTextContent(/OpenRouter, (Oct 29, )?\d\d:00/);
   });
 
+  it('the redraw source names OpenRouter only for a live price; a registry fallback is the dated list; a failed refresh says so', () => {
+    const spec = getImageModel(LAKE_MODEL)!;
+    const registryRow = [{ id: LAKE_MODEL, price: { '1K': { usd: 0.0336, basis: 'registry', note: `from our price list, ${spec.factsAsOf}` } }, fetchedAt: { catalog: '2026-10-29T10:00:00Z' }, stale: false }] as never;
+    const { unmount } = render(<PagesTab doc={makeLakeComic()} money={dollars} byok rows={registryRow} />);
+    expect(document.body).not.toHaveTextContent('OpenRouter');
+    expect(document.body).toHaveTextContent(`from our price list, ${spec.factsAsOf}`);
+    unmount();
+    const staleRow = [{ id: LAKE_MODEL, price: { '1K': { usd: 0.05, basis: 'openrouter_endpoint' } }, fetchedAt: { catalog: '2026-10-29T10:00:00Z' }, stale: true }] as never;
+    render(<PagesTab doc={makeLakeComic()} money={dollars} byok rows={staleRow} />);
+    expect(document.body).toHaveTextContent(/as of (Oct 29, )?\d\d:00 · couldn't refresh/);
+    expect(document.body).not.toHaveTextContent(/OpenRouter, /);
+  });
+
   it('governed viewers never see dollars; platform redraws carry the markup into the share', () => {
     const doc = makeLakeComic((d) => {
       d.spend.entries = d.spend.entries.map((e) => ({ ...e, byok: false }));

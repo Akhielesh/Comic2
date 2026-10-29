@@ -339,6 +339,18 @@ export const BASIS_LABEL: Record<CatalogPrice['basis'], string> = {
   registry: 'our price list'
 };
 
+/**
+ * Where a catalog price comes from, in a few words: "OpenRouter", "vendor token table", or — when the catalog fell
+ * back to the registry (never fetched, fetch failed with no cache, or OpenRouter has no data) — the dated price list
+ * ("from our price list, 2026-10-22"). A registry fallback is never labelled OpenRouter, and only the dated
+ * "from our price list" part of its note is used (it never names a dollar amount).
+ */
+export const catalogSourceLabel = (p: CatalogPrice): string => {
+  if (p.basis !== 'registry') return BASIS_LABEL[p.basis];
+  const m = /^from our price list, [^·$]+/.exec(typeof p.note === 'string' ? p.note.trim() : '');
+  return m ? m[0].trim() : BASIS_LABEL.registry;
+};
+
 export interface PriceView {
   /** The figure, or the §4.6 copy. */
   text: string;

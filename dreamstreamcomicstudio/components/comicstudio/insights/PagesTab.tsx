@@ -8,11 +8,11 @@ import React, { useMemo } from 'react';
 import type { ComicDoc, Resolution } from '../../../shared/comic/doc';
 import { MAX_SPEND_ENTRIES } from '../../../shared/comic/limits';
 import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type ImageJobKind } from '../../../shared/comic/models';
-import { lockedModelId, type PriceBook } from '../../../shared/comic/modelLock';
+import { lockedModelId, redrawResolution, type PriceBook } from '../../../shared/comic/modelLock';
 import { byTarget } from '../../../shared/comic/modelInsights';
 import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { cx, plural } from '../conversation/ui';
-import { priceListCopy, recentLabel } from './copy';
+import { couldntRefreshCopy, priceListCopy, recentLabel } from './copy';
 import { OBSERVED_MIN_N, clockText, nicknameOf, observedCost, rowFor, type InsightsMoney } from './insightsModel';
 import { Badge, Section, Source, WRAP } from './ui';
 
@@ -51,8 +51,14 @@ export const PagesTab: React.FC<PagesTabProps> = ({ doc, money, byok, rows = nul
   const spec = locked ? getImageModel(locked) : undefined;
   const capped = !doc.spend.byTarget && doc.spend.entries.length >= MAX_SPEND_ENTRIES;
   if (!targets.length) return <p className="text-[12.5px] text-[var(--ds-muted)]">Nothing drawn yet. Each page, sheet and the cover get a row here once they are.</p>;
-  const priceSource = lockedRow?.fetchedAt.catalog
-    ? `OpenRouter, ${clockText(lockedRow.fetchedAt.catalog, now)}`
+  // OpenRouter and its fetch time only for a live price at the size a page redraws at; a registry fallback is the
+  // dated price list, and a row whose refresh failed says so (§4.6 "as of {time} · couldn't refresh").
+  const livePrice = lockedRow && locked ? lockedRow.price[redrawResolution(doc, locked, 'page')] : undefined;
+  const liveAt = livePrice && typeof livePrice.usd === 'number' && livePrice.basis !== 'registry' ? lockedRow?.fetchedAt.catalog : undefined;
+  const priceSource = liveAt
+    ? lockedRow?.stale
+      ? couldntRefreshCopy(clockText(liveAt, now))
+      : `OpenRouter, ${clockText(liveAt, now)}`
     : spec
       ? priceListCopy(spec.factsAsOf)
       : 'no price list for this model';

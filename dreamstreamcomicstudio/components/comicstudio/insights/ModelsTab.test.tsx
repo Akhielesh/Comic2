@@ -84,8 +84,8 @@ describe('Models tab — this comic (acceptance)', () => {
     expect(nb).toHaveTextContent('15 images · $0.7513');
     expect(within(nb).getByText('Current')).toBeInTheDocument();
     const sizes = within(nb).getByRole('list', { name: 'Nano Banana 2.1 by size' });
-    // 2K: page 1 + the five v1 pages; observed n = 6 with its range, vs the live OpenRouter list price.
-    expect(sizes).toHaveTextContent('2K: real ≈$0.06 per image (n = 6, $0.0579–$0.06) · list $0.0504 (OpenRouter)');
+    // 2K: page 1 + the five v1 pages; observed n = 6 with its range, vs the live list price labelled with its basis.
+    expect(sizes).toHaveTextContent('2K: real ≈$0.06 per image (n = 6, $0.0579–$0.06) · list $0.0504 (vendor token table)');
     expect(sizes).toHaveTextContent('1K: real ≈');
   });
 
@@ -164,6 +164,33 @@ describe('Models tab — live facts, with source and time', () => {
     await mount();
     now.mockRestore();
     expect(item('Nano Banana 2.1')).toHaveTextContent(/couldn't refresh/);
+  });
+
+  it('a server-side registry fallback row (no fetch time) never claims OpenRouter or a refresh time', async () => {
+    serve([lakeRow({ price: { '1K': { usd: 0.0336, basis: 'registry', note: 'from our price list, 2026-10-22' } }, fetchedAt: {}, stale: true })]);
+    await mount();
+    const nb = item('Nano Banana 2.1');
+    expect(nb).not.toHaveTextContent('OpenRouter');
+    expect(nb).not.toHaveTextContent("couldn't refresh");
+    expect(nb).toHaveTextContent('from our price list, 2026-10-22');
+    // The size line labels the fallback list price with its own source.
+    expect(within(nb).getByRole('list', { name: 'Nano Banana 2.1 by size' })).toHaveTextContent('1K: real ≈$0.0428 per image (n = 9, $0.0373–$0.0538) · list $0.0336 (from our price list, 2026-10-22)');
+  });
+
+  it('a live row whose sizes fell back to the registry names each source; the footer dates only live prices', async () => {
+    serve([
+      lakeRow({
+        price: {
+          '1K': { usd: 0.0336, basis: 'registry', note: 'from our price list, 2026-10-22 · OpenRouter: billed per token; tokens per image not published' },
+          '2K': { usd: 0.0504, basis: 'vendor_table', note: '1680 tokens × $30/M (Google token table)' }
+        }
+      })
+    ]);
+    await mount();
+    const sizes = within(item('Nano Banana 2.1')).getByRole('list', { name: 'Nano Banana 2.1 by size' });
+    expect(sizes).toHaveTextContent('list $0.0336 (from our price list, 2026-10-22)');
+    expect(sizes).toHaveTextContent('list $0.0504 (vendor token table)');
+    expect(item('Nano Banana 2.1')).toHaveTextContent(/Prices: OpenRouter, (Oct 29, )?\d\d:30/);
   });
 
   it('fetch failed, no cache → registry facts "from our price list, {factsAsOf}" and "No uptime data right now"', async () => {
