@@ -1,7 +1,7 @@
-import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
-import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles, MoreHorizontal, Library, LayoutDashboard, Info, Rows3, LogIn } from 'lucide-react';
 import { PanelDialogue } from './PanelDialogue';
 import { derivePanelTitle } from '../services/panelDescription';
 import { loadReaderState, saveReaderState } from '../services/db';
@@ -13,6 +13,61 @@ import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
+import {
+  IOS_FULLSCREEN_NOTE,
+  enterFullscreen,
+  exitFullscreen,
+  isFullscreenActive,
+  markIosFullscreenNoteSeen,
+  onFullscreenChange,
+  shouldShowIosFullscreenNote
+} from '../services/fullscreen';
+
+// Phones read in a "phone reading mode": no site header or footer inside the reader, Close and Full screen pinned
+// as 44 px controls, everything else in one "⋯" menu, chrome that gets out of the way. Coarse pointer covers
+// phones and tablets; the width test covers narrow desktop windows.
+const PHONE_QUERY = '(pointer: coarse), (max-width: 639.98px)';
+const CHROME_AUTO_HIDE_MS = 2500;
+const PHONE_BTN =
+  'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const PHONE_MENU_ITEM =
+  'flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+/** Chrome that fades away (reduced motion: no animation, it just goes). */
+const chromeFade = (hidden: boolean) =>
+  `transition-[opacity,transform,visibility] duration-200 motion-reduce:transition-none ${hidden ? 'invisible opacity-0 pointer-events-none' : 'visible opacity-100'}`;
+
+const useMediaQuery = (query: string): boolean => {
+  const read = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, [query]);
+  return matches;
+};
+
+/** A full-screen sheet for Story / Info on phones (desktop keeps its inline panels). */
+const PhoneSheet: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => (
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-label={title}
+    className="fixed inset-0 z-40 flex flex-col bg-white text-slate-900"
+    style={{ paddingTop: 'var(--sa-top)', paddingBottom: 'var(--sa-bottom)', paddingLeft: 'var(--sa-left)', paddingRight: 'var(--sa-right)' }}
+  >
+    <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--ds-hairline)] pl-4 pr-1">
+      <h2 className="min-w-0 truncate py-3 text-[17px] font-semibold tracking-tight">{title}</h2>
+      <button type="button" onClick={onClose} className={PHONE_BTN} aria-label={`Close ${title}`}>
+        <X className="h-5 w-5" />
+      </button>
+    </div>
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">{children}</div>
+  </div>
+);
 
 // Comic Studio v4 comics (state.studioVersion === 4) keep their pages in a server-side
 // ComicDoc, not in the legacy panels this reader draws — they read in the v4 reader.
@@ -170,7 +225,17 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
   const [pageIndex, setPageIndex] = useState(0);
   const [flipDirection, setFlipDirection] = useState<'next' | 'prev' | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Full screen: native state comes only from fullscreenchange; the reading mode is the fallback when the
+  // browser has no API (iPhone) or refuses. Either one counts as "full screen" for the button label.
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  const [readingMode, setReadingMode] = useState(false);
+  const isFullscreen = nativeFullscreen || readingMode;
+  const [showIosNote, setShowIosNote] = useState(false);
+  const phoneUi = useMediaQuery(PHONE_QUERY);
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [chromeTick, setChromeTick] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const chromeHidden = phoneUi && !chromeVisible;
   // On phones, multi-column comic grids (3-up splash, golden-ratio, etc.) are unreadable,
   // so we collapse every layout to a single vertical column — the standard way comics are
   // read on mobile. Tracked reactively so rotating the device re-flows immediately.
@@ -205,11 +270,34 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     });
   }, [project.id]);
 
+  useEffect(() => onFullscreenChange(() => setNativeFullscreen(isFullscreenActive(readerRef.current))), []);
+
+  // Entering native full screen on a phone is a "just let me read" gesture: get the chrome out of the way.
   useEffect(() => {
-    const handleChange = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', handleChange);
-    return () => document.removeEventListener('fullscreenchange', handleChange);
-  }, []);
+    if (nativeFullscreen && phoneUi) setChromeVisible(false);
+  }, [nativeFullscreen, phoneUi]);
+
+  // Reading mode locks the page behind the reader (no rubber-band scrolling of the site underneath).
+  useEffect(() => {
+    if (!readingMode) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = [html.style.overflow, body.style.overflow];
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prev[0];
+      body.style.overflow = prev[1];
+    };
+  }, [readingMode]);
+
+  // Phone chrome hides itself after a moment of reading, unless a menu or sheet is open.
+  const chromePinned = menuOpen || showInfo || showStory || showComments || showReviewModal || showIosNote;
+  useEffect(() => {
+    if (!phoneUi || !chromeVisible || chromePinned) return;
+    const timer = window.setTimeout(() => setChromeVisible(false), CHROME_AUTO_HIDE_MS);
+    return () => window.clearTimeout(timer);
+  }, [phoneUi, chromeVisible, chromePinned, chromeTick, readerMode, pageIndex]);
 
 	  const pages = useMemo(() => {
 	    const list: Array<{ type: 'cover' | 'panel' | 'page'; panel?: ComicPanel; imageUrl?: string }> = [];
@@ -366,7 +454,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (e.key === 'Escape') { handleAttemptClose(); return; }
+      if (e.key === 'Escape') {
+        // Esc peels one layer at a time: the menu, then the reading mode, then the comic.
+        if (menuOpen) { setMenuOpen(false); return; }
+        if (readingMode) { exitReadingMode(); return; }
+        handleAttemptClose();
+        return;
+      }
       if (readerMode === 'flip') {
         if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
         else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); goPrev(); }
@@ -386,20 +480,133 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [readerMode, pageIndex, pages.length]);
+  }, [readerMode, pageIndex, pages.length, menuOpen, readingMode]);
 
-  const toggleFullscreen = async () => {
-    if (!document.fullscreenElement && readerRef.current) {
-      await readerRef.current.requestFullscreen().catch(() => null);
-      setIsFullscreen(true);
-    } else {
-      await document.exitFullscreen().catch(() => null);
-      setIsFullscreen(false);
+  const enterReadingMode = useCallback(() => {
+    setReadingMode(true);
+    setMenuOpen(false);
+    setChromeVisible(false);
+    if (shouldShowIosFullscreenNote()) {
+      markIosFullscreenNoteSeen();
+      setShowIosNote(true);
     }
+  }, []);
+
+  // Leaving the reading mode brings the controls back (that is what the reader asked for by tapping Exit).
+  const exitReadingMode = () => {
+    setReadingMode(false);
+    setChromeVisible(true);
+    setChromeTick((n) => n + 1);
   };
 
+  // Called synchronously from the tap (the browser only grants full screen inside the user gesture). The label
+  // never flips optimistically: native state arrives as fullscreenchange, the fallback sets readingMode.
+  const toggleFullscreen = () => {
+    if (readingMode) {
+      exitReadingMode();
+      return;
+    }
+    if (isFullscreenActive(readerRef.current)) {
+      exitFullscreen();
+      return;
+    }
+    enterFullscreen(readerRef.current, { onFallback: enterReadingMode });
+  };
+
+  // Phones: a tap on the art shows or hides the chrome (a tap with the menu open just closes the menu).
+  const onArtTap = (e: React.MouseEvent) => {
+    if (!phoneUi) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, a, input, textarea, select, [role="menu"]')) return;
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    setChromeVisible((v) => !v);
+  };
+  const showChrome = () => {
+    setChromeVisible(true);
+    setChromeTick((n) => n + 1);
+  };
+  const menuSelect = (fn: () => void) => () => {
+    setMenuOpen(false);
+    fn();
+  };
+
+  const infoDetails = (
+    <div className="space-y-3 text-sm">
+      <div>
+        <div className="text-xs uppercase font-bold text-slate-500">Title</div>
+        <div className="font-semibold">{project.name}</div>
+      </div>
+      <div>
+        <div className="text-xs uppercase font-bold text-slate-500">Author</div>
+        <div>{project.authorName || 'Unknown creator'}</div>
+      </div>
+      <div>
+        <div className="text-xs uppercase font-bold text-slate-500">Published</div>
+        <div>
+          {project.isPublic
+            ? new Date(project.publishedAt || project.createdAt).toLocaleDateString()
+            : 'Not public yet'}
+        </div>
+      </div>
+      <div>
+        <div className="text-xs uppercase font-bold text-slate-500">Overview</div>
+        <p className="text-slate-700 whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="border border-slate-200 rounded p-2">
+          <div className="text-xs uppercase font-bold text-slate-500">Panels</div>
+          <div>{project.state.panels.length}</div>
+        </div>
+        <div className="border border-slate-200 rounded p-2">
+          <div className="text-xs uppercase font-bold text-slate-500">Layout</div>
+          <div>{project.state.layoutType || 'grid'}</div>
+        </div>
+      </div>
+      {project.state.storyMood && (
+        <div className="border border-slate-200 rounded p-2">
+          <div className="text-xs uppercase font-bold text-slate-500">Mood the AI read</div>
+          <div className="font-semibold">{project.state.storyMood.label}</div>
+          <div className="text-xs text-slate-500 mt-0.5">{project.state.storyMood.summary}</div>
+        </div>
+      )}
+    </div>
+  );
+
+  const storyText = (
+    <pre className="whitespace-pre-wrap font-comic text-sm text-slate-700">{project.state.script || "No story text yet."}</pre>
+  );
+
   return (
-    <div ref={readerRef} className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col">
+    <div
+      ref={readerRef}
+      className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col"
+      data-testid="classic-reader"
+      data-phone={phoneUi ? 'true' : 'false'}
+      data-reading-mode={readingMode ? 'true' : 'false'}
+      data-chrome={chromeHidden || (!phoneUi && readingMode) ? 'hidden' : 'visible'}
+      style={
+        phoneUi
+          ? {
+              // Edge-to-edge on notched phones (viewport-fit=cover): keep the art out of the cut-outs.
+              paddingLeft: 'var(--sa-left)',
+              paddingRight: 'var(--sa-right)',
+              ...(readingMode ? { height: '100dvh', bottom: 'auto' } : null)
+            }
+          : readingMode
+            ? { height: '100dvh', bottom: 'auto' }
+            : undefined
+      }
+    >
+      {phoneUi && (
+        // Screen readers and keyboards can always bring the chrome back, even while it is hidden.
+        <button type="button" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-full focus:bg-white focus:px-3 focus:py-2" onClick={showChrome}>
+          Show reader controls
+        </button>
+      )}
+      {!phoneUi && !readingMode && (
       <StaticSiteHeader
         isAuthenticated={!!user}
         onGoHome={() => onNavigate?.('home')}
@@ -409,8 +616,117 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         onOpenProfile={() => onNavigate?.('settings')}
         onNavigate={onNavigate || (() => undefined)}
       />
+      )}
+
+      {phoneUi && (
+        <header
+          data-testid="reader-phone-bar"
+          aria-hidden={chromeHidden || undefined}
+          className={`absolute inset-x-0 top-0 z-30 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md ${chromeFade(chromeHidden)} ${chromeHidden ? '-translate-y-full' : 'translate-y-0'}`}
+          style={{ paddingTop: 'var(--sa-top)', paddingLeft: 'calc(var(--sa-left) + 12px)', paddingRight: 'calc(var(--sa-right) + 4px)' }}
+          onPointerDown={() => setChromeTick((n) => n + 1)}
+        >
+          <div className="flex min-h-[48px] items-center gap-1">
+            <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">{project.name}</h1>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              className={PHONE_BTN}
+              aria-label="More reader options"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              <MoreHorizontal className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className={PHONE_BTN}
+              aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+              aria-pressed={isFullscreen}
+            >
+              {isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+            </button>
+            <button type="button" onClick={handleAttemptClose} className={PHONE_BTN} aria-label="Close reader">
+              <X className="h-6 w-6" />
+            </button>
+          </div>
+        </header>
+      )}
+
+      {phoneUi && menuOpen && (
+        <div
+          role="menu"
+          aria-label="Reader options"
+          className="absolute right-2 z-40 w-60 max-w-[calc(100%-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1 shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-md"
+          style={{ top: 'calc(var(--sa-top) + 52px)', maxHeight: 'calc(100dvh - var(--sa-top) - 64px)' }}
+        >
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => onNavigate?.('gallery'))}>
+            <Library className="h-4 w-4 shrink-0" aria-hidden /> Library
+          </button>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => onNavigate?.('dashboard'))}>
+            <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden /> Dashboard
+          </button>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setShowStory(true))}>
+            <BookOpen className="h-4 w-4 shrink-0" aria-hidden /> Story
+          </button>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setShowInfo(true))}>
+            <Info className="h-4 w-4 shrink-0" aria-hidden /> Info
+          </button>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setShowComments(true))}>
+            <MessageSquareText className="h-4 w-4 shrink-0" aria-hidden /> Comments
+          </button>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll'))}>
+            {readerMode === 'scroll' ? <BookOpen className="h-4 w-4 shrink-0" aria-hidden /> : <Rows3 className="h-4 w-4 shrink-0" aria-hidden />}
+            {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
+          </button>
+          <button type="button" role="menuitemcheckbox" aria-checked={fxOn} className={PHONE_MENU_ITEM} onClick={toggleFx}>
+            <Sparkles className="h-4 w-4 shrink-0" aria-hidden /> FX (halftone texture)
+            <span className="ml-auto text-[12px] text-[var(--ds-muted)]">{fxOn ? 'On' : 'Off'}</span>
+          </button>
+          <button type="button" role="menuitemcheckbox" aria-checked={soundOn} className={PHONE_MENU_ITEM} onClick={toggleSound}>
+            {soundOn ? <Volume2 className="h-4 w-4 shrink-0" aria-hidden /> : <VolumeX className="h-4 w-4 shrink-0" aria-hidden />} Page-turn sound
+            <span className="ml-auto text-[12px] text-[var(--ds-muted)]">{soundOn ? 'On' : 'Off'}</span>
+          </button>
+          {!user && (
+            <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => onNavigate?.('auth'))}>
+              <LogIn className="h-4 w-4 shrink-0" aria-hidden /> Sign in
+            </button>
+          )}
+        </div>
+      )}
+
+      {readingMode && (!phoneUi || chromeHidden) && (
+        // The reading mode's way out: always on screen while the chrome is away (the bar's own toggle takes over
+        // when the chrome is showing).
+        <button
+          type="button"
+          onClick={exitReadingMode}
+          aria-label="Exit full screen"
+          className="absolute z-40 inline-flex h-11 min-w-[44px] items-center justify-center gap-1.5 rounded-full bg-black/60 px-3 text-[13px] font-semibold text-white backdrop-blur-md hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          style={{ top: 'calc(var(--sa-top) + 8px)', right: 'calc(var(--sa-right) + 8px)' }}
+        >
+          <Minimize2 className="h-4 w-4" aria-hidden /> Exit
+        </button>
+      )}
+
+      {showIosNote && (
+        <div
+          role="status"
+          className="absolute inset-x-3 z-40 mx-auto max-w-sm rounded-2xl bg-black/80 p-3 text-[13px] leading-snug text-white shadow-lg backdrop-blur-md"
+          style={{ bottom: 'calc(var(--sa-bottom) + 16px)' }}
+        >
+          <p>{IOS_FULLSCREEN_NOTE}</p>
+          <div className="mt-1 flex justify-end">
+            <button type="button" onClick={() => setShowIosNote(false)} className="min-h-[44px] rounded-full bg-white/15 px-4 text-[13px] font-semibold hover:bg-white/25">
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Reader Controls */}
+      {!phoneUi && !readingMode && (
       <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between gap-2 px-3 sm:px-6 shadow-lg shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="font-display text-lg sm:text-2xl text-black truncate">{project.name}</h1>
@@ -475,23 +791,26 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             {isFullscreen ? 'Exit' : 'Full'}
           </button>
-          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
+          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0" aria-label="Close reader">
             <X className="w-6 h-6" />
           </button>
         </div>
       </header >
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* Main Comic Area */}
-        <div className="flex-1 overflow-hidden bg-slate-200">
+        <div className="flex-1 overflow-hidden bg-slate-200" onClick={onArtTap}>
           {readerMode === 'scroll' ? (
             <div
               ref={scrollRef}
               onScroll={handleScroll}
-              className="h-full overflow-y-auto custom-scrollbar p-4 md:p-8 flex justify-center"
+              className={phoneUi ? 'h-full overflow-y-auto overscroll-contain custom-scrollbar flex justify-center' : 'h-full overflow-y-auto custom-scrollbar p-4 md:p-8 flex justify-center'}
+              // Phones: the art runs edge to edge under the floating bar (which hides itself while reading).
+              style={phoneUi ? { paddingTop: 52, paddingBottom: 'calc(var(--sa-bottom) + 12px)' } : undefined}
             >
               <div className="max-w-4xl w-full bg-white shadow-2xl min-h-full">
-                {showStory && (
+                {showStory && !phoneUi && (
                   <div className="p-6 border-b-4 border-black bg-white">
                     <div className="border-2 border-black rounded-lg p-4 bg-slate-50">
                       <div className="text-xs font-bold uppercase text-slate-500 mb-2">Story</div>
@@ -506,7 +825,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 )}
-	                <div className={`p-4 sm:p-8 ${getLayoutClass()}`}>
+	                <div className={`${phoneUi ? 'p-2' : 'p-4 sm:p-8'} ${getLayoutClass()}`}>
 	                  {allPanelsMissingArt && (
 	                    <div className="col-span-full text-center py-6 text-amber-700 font-bold border-2 border-amber-400 bg-amber-50 rounded-lg">
 	                      All panel artwork is currently missing for this comic.
@@ -551,9 +870,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
               </div>
             </div>
           ) : (
-            <div className="h-full flex flex-col items-center p-2 sm:p-4">
-              <div className="flex flex-col w-full max-w-5xl flex-1 min-h-0 bg-white shadow-2xl border-4 border-black rounded-xl overflow-hidden">
-                {showStory && (
+            <div className={phoneUi ? 'h-full flex flex-col' : 'h-full flex flex-col items-center p-2 sm:p-4'}>
+              <div className={phoneUi ? 'relative flex flex-col w-full flex-1 min-h-0 bg-slate-100 overflow-hidden' : 'flex flex-col w-full max-w-5xl flex-1 min-h-0 bg-white shadow-2xl border-4 border-black rounded-xl overflow-hidden'}>
+                {showStory && !phoneUi && (
                   <div className="p-4 border-b-4 border-black bg-white shrink-0 max-h-40 overflow-y-auto custom-scrollbar">
                     <div className="border-2 border-black rounded-lg p-3 bg-slate-50">
                       <div className="text-xs font-bold uppercase text-slate-500 mb-2">Story</div>
@@ -566,7 +885,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   // by BOTH max-h-full and max-w-full so it always scales to fit the viewport on
                   // either axis — never oversized, never leaving dead space.
                   <div
-                    className="flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 sm:p-3 select-none"
+                    className={phoneUi ? 'flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 select-none' : 'flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 sm:p-3 select-none'}
                     onTouchStart={onTouchStart}
                     onTouchEnd={onTouchEnd}
                   >
@@ -591,7 +910,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                 ) : (
                   <div className="flex-1 flex items-center justify-center p-10 text-center text-slate-400 font-display text-2xl">This comic hasn't been drawn yet!</div>
                 )}
-                <div className="shrink-0 border-t-4 border-black bg-slate-50">
+                <div
+                  className={phoneUi ? `absolute inset-x-0 bottom-0 z-20 border-t-4 border-black bg-slate-50 ${chromeFade(chromeHidden)} ${chromeHidden ? 'translate-y-full' : 'translate-y-0'}` : 'shrink-0 border-t-4 border-black bg-slate-50'}
+                  style={phoneUi ? { paddingBottom: 'var(--sa-bottom)' } : undefined}
+                  aria-hidden={chromeHidden || undefined}
+                  onPointerDown={phoneUi ? () => setChromeTick((n) => n + 1) : undefined}
+                >
                   <div className="h-1.5 bg-slate-200" aria-hidden>
                     <div className="h-full bg-brand-yellow transition-all duration-300" style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
                   </div>
@@ -605,13 +929,19 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     </button>
                   </div>
                 </div>
+                {phoneUi && chromeHidden && (
+                  // While the chrome is away, a hairline progress bar keeps your place.
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-1 bg-black/10" aria-hidden>
+                    <div className="h-full bg-brand-yellow" style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
+                  </div>
+                )}
               </div>
-              <div className="text-[11px] text-slate-500 font-comic mt-1.5 hidden sm:block">← → or space to turn · Home/End to jump · Esc to close · swipe on touch</div>
+              {!phoneUi && <div className="text-[11px] text-slate-500 font-comic mt-1.5 hidden sm:block">← → or space to turn · Home/End to jump · Esc to close · swipe on touch</div>}
             </div>
           )}
         </div>
 
-        {showInfo && (
+        {showInfo && !phoneUi && (
           <aside className="w-full md:w-80 shrink-0 border-l-4 border-black bg-white p-4 overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-display text-xl">Comic Info</h2>
@@ -619,60 +949,46 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="space-y-3 text-sm">
-              <div>
-                <div className="text-xs uppercase font-bold text-slate-500">Title</div>
-                <div className="font-semibold">{project.name}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase font-bold text-slate-500">Author</div>
-                <div>{project.authorName || 'Unknown creator'}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase font-bold text-slate-500">Published</div>
-                <div>
-                  {project.isPublic
-                    ? new Date(project.publishedAt || project.createdAt).toLocaleDateString()
-                    : 'Not public yet'}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs uppercase font-bold text-slate-500">Overview</div>
-                <p className="text-slate-700 whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="border border-slate-200 rounded p-2">
-                  <div className="text-xs uppercase font-bold text-slate-500">Panels</div>
-                  <div>{project.state.panels.length}</div>
-                </div>
-                <div className="border border-slate-200 rounded p-2">
-                  <div className="text-xs uppercase font-bold text-slate-500">Layout</div>
-                  <div>{project.state.layoutType || 'grid'}</div>
-                </div>
-              </div>
-              {project.state.storyMood && (
-                <div className="border border-slate-200 rounded p-2">
-                  <div className="text-xs uppercase font-bold text-slate-500">Mood the AI read</div>
-                  <div className="font-semibold">{project.state.storyMood.label}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">{project.state.storyMood.summary}</div>
-                </div>
-              )}
-            </div>
+            {infoDetails}
           </aside>
         )}
       </div>
 
+      {!phoneUi && !readingMode && (
       <LegalMicroLinks
         onOpenPrivacy={onOpenPrivacy}
         onOpenTerms={onOpenTerms}
         onOpenFaq={onOpenFaq}
       />
+      )}
+
+      {phoneUi && showInfo && (
+        <PhoneSheet title="Comic Info" onClose={() => setShowInfo(false)}>
+          {infoDetails}
+          {/* The site footer is not drawn inside the phone reader: its links live here. */}
+          <div className="mt-5 border-t border-slate-200 pt-3">
+            <div className="text-xs uppercase font-bold text-slate-500">DreamStream</div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-1 text-[13px] font-semibold text-slate-600">
+              <button type="button" onClick={onOpenPrivacy} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
+              <button type="button" onClick={onOpenTerms} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
+              <button type="button" onClick={onOpenFaq} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
+              <a href="mailto:contact@dreamstream.com" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
+            </div>
+          </div>
+        </PhoneSheet>
+      )}
+
+      {phoneUi && showStory && (
+        <PhoneSheet title="Story" onClose={() => setShowStory(false)}>
+          {storyText}
+        </PhoneSheet>
+      )}
 
       {showComments && (
         <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col">
           <div className="p-4 border-b-4 border-black flex items-center justify-between bg-white shrink-0">
             <div className="font-display text-xl">Comments</div>
-            <button onClick={() => setShowComments(false)} className="p-2 rounded-full hover:bg-slate-100">
+            <button onClick={() => setShowComments(false)} className="p-2 coarse:p-3 rounded-full hover:bg-slate-100" aria-label="Close comments">
               <X className="w-5 h-5" />
             </button>
           </div>
