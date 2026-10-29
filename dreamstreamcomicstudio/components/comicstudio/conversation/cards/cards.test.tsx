@@ -500,6 +500,8 @@ describe('RendersCard', () => {
     doc.pages[1] = { ...doc.pages[1], render: { ...doc.pages[1].render, status: 'rendering' } };
     renderCard(card, doc);
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+    // A progressbar always has a name (renders-progressbar-name).
+    expect(screen.getByRole('progressbar')).toHaveAccessibleName(/ready/);
     expect(screen.getByText('Drawing…')).toBeInTheDocument();
   });
 

@@ -1,10 +1,11 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import type { ClientAction, Msg, NextStep } from '../../../shared/comic/doc';
 import { AssistantMessage } from './MessageItem';
 import { chipLabel, chipUsd, chipsFor, fallbackNextSteps, freeTitle, priceBadge, stepToRun } from './cards/NextStepChips';
+import { labelInName } from '../mobile/testing/labelInName';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
 
 // Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
@@ -85,6 +86,16 @@ describe('AssistantMessage — next-step chips', () => {
     expect(studio.send).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Read it, Free' }));
     await waitFor(() => expect(studio.setTab).toHaveBeenCalledWith('read'));
+  });
+
+  it('every next-step chip is named by exactly what it shows (nextstep-chip-names, WCAG 2.5.3)', () => {
+    render(<AssistantMessage msg={msg('Page 1 is ready.', { nextSteps: steps })} showSuggestions studio={dispatchingStudio()} />);
+    const chips = within(screen.getByRole('group', { name: 'Next steps' })).getAllByRole('button');
+    expect(chips.length).toBe(3);
+    for (const c of chips) {
+      const r = labelInName(c);
+      expect(r.ok, `"${r.visible}" ⊄ "${r.name}"`).toBe(true);
+    }
   });
 
   it('a say chip sends its text to the director', async () => {

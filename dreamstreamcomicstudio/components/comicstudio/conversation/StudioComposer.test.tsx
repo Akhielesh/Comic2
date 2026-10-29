@@ -43,6 +43,7 @@ import { deleteInboxRef } from '../studioApi';
 import { composeInStudio } from './composerBus';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { labelInName } from '../mobile/testing/labelInName';
 import { enterAction, selectionLabel, sendArgs } from './StudioComposer';
 import type { ComicStudioController } from '../useStudio';
 
@@ -352,6 +353,18 @@ const renderAt = (ff: ReturnType<typeof formFactorFor>, studio: ComicStudioContr
       <StudioComposer studio={studio} {...props} />
     </FormFactorProvider>
   );
+
+describe('StudioComposer — option chips say what they show (composer-chip-names, WCAG 2.5.3)', () => {
+  it('each chip’s accessible name contains its visible text', () => {
+    renderAt(TABLET, makeFakeStudio());
+    const chips = within(screen.getByRole('toolbar', { name: 'Comic options' })).getAllByRole('button');
+    expect(chips.length).toBeGreaterThanOrEqual(2);
+    for (const c of chips) {
+      const r = labelInName(c);
+      expect(r.ok, `"${r.visible}" ⊄ "${r.name}"`).toBe(true);
+    }
+  });
+});
 
 describe('StudioComposer — short windows (phones in landscape)', () => {
   const LANDSCAPE = formFactorFor({ w: 844, h: 390, coarse: true });
