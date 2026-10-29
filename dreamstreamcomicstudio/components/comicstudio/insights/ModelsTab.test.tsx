@@ -162,7 +162,7 @@ describe('Models tab — live facts, with source and time', () => {
     expect(uptime).toHaveTextContent('Google AI Studio · 97.72% up (24 h)');
     expect(uptime).not.toHaveTextContent('30 min');
     expect(within(nb).getByRole('list', { name: 'Leaderboards' })).toHaveTextContent('LMArena edit #2 of 60 · score 1220 (Oct 20, 2026)');
-    expect(within(nb).getByRole('list', { name: 'Observed cost' })).toHaveTextContent('Real cost, pages at 1K: $0.047 median (n = 4, $0.0428–$0.0538) · your calls');
+    expect(within(nb).getByRole('list', { name: 'Observed cost' })).toHaveTextContent('Real cost, pages at 1K: $0.047 median (n = 4, $0.0428–$0.0538) · your calls · Oct 22, 2026');
   });
 
   it.each([

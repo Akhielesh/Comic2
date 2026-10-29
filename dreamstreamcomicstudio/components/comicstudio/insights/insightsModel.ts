@@ -424,14 +424,23 @@ export const qualityText = (quality: readonly QualityEntry[]): string[] =>
 
 const OBSERVED_KIND_LABEL: Record<string, string> = { page: 'pages', sheet: 'character sheets', cover: 'covers', edit: 'page edits', style_option: 'style tests', place: 'places', qc: 'quality checks' };
 
-/** Real cost lines from the catalog's observations — only groups with n ≥ 3 (§4.6); range and n always shown. */
+/** The days observed calls span: " · Oct 20, 2026–Oct 22, 2026", one date when they share a day, '' when unknown. */
+const observedWindow = (o: Pick<ObservedEntry, 'from' | 'to'>): string => {
+  const from = dateText(o.from);
+  const to = dateText(o.to);
+  if (!from || !to) return '';
+  return from === to ? ` · ${from}` : ` · ${from}–${to}`;
+};
+
+/** Real cost lines from the catalog's observations — only groups with n ≥ 3 (§4.6); n, range and the days they
+ *  span always shown (§4.7: every figure carries its source and time). */
 export const observedLines = (observed: readonly ObservedEntry[], money: InsightsMoney): string[] =>
   observed
     .filter((o) => o.n >= OBSERVED_MIN_N && finite(o.medianUsd))
     .map((o) => {
       const range = [money.priceShort(o.minUsd), money.priceShort(o.maxUsd)];
       const spread = range[0] && range[1] ? `, ${range[0]}–${range[1]}` : '';
-      return `Real cost, ${OBSERVED_KIND_LABEL[o.kind] ?? o.kind} at ${o.res}: ${money.price(o.medianUsd)} median (n = ${o.n}${spread}) · ${o.scope === 'you' ? 'your calls' : 'all creators'}`;
+      return `Real cost, ${OBSERVED_KIND_LABEL[o.kind] ?? o.kind} at ${o.res}: ${money.price(o.medianUsd)} median (n = ${o.n}${spread}) · ${o.scope === 'you' ? 'your calls' : 'all creators'}${observedWindow(o)}`;
     });
 
 /** "Last 24 h, your calls: 12 calls · 1 failed · 1 rate-limited". */

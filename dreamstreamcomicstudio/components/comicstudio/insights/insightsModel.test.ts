@@ -189,6 +189,14 @@ describe('catalog words (§4.6 — exact copy, no invented number)', () => {
     expect(observedLines([{ ...base, n: 4 }], dollars)).toEqual(['Real cost, pages at 1K: $0.047 median (n = 4, $0.0428–$0.0538) · your calls']);
   });
 
+  it('observed lines carry the days their calls span (one date when they share a day)', () => {
+    const base = { kind: 'page' as const, res: '1K' as const, n: 4, medianUsd: 0.047, minUsd: 0.0428, maxUsd: 0.0538, scope: 'platform' as const };
+    expect(observedLines([{ ...base, from: '2026-10-20T08:00:00Z', to: '2026-10-22T18:00:00Z' }], dollars)).toEqual([
+      'Real cost, pages at 1K: $0.047 median (n = 4, $0.0428–$0.0538) · all creators · Oct 20, 2026–Oct 22, 2026'
+    ]);
+    expect(observedLines([{ ...base, from: '2026-10-22', to: '2026-10-22' }], dollars)[0]).toMatch(/ · all creators · Oct 22, 2026$/);
+  });
+
   it('times and dates are the real ones', () => {
     const now = new Date(2026, 9, 29, 15, 0).getTime();
     expect(clockText(new Date(2026, 9, 29, 14, 5).getTime(), now)).toBe('14:05');
