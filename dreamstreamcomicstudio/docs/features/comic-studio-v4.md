@@ -232,9 +232,14 @@ tier only picks the resolution on the locked model.
   action answers `blocked` and the conversation gets one `model_outage` card (origin `preflight`) with real
   alternatives. An upstream 429 mid-run ends with the same card and "Try again" / "See other models" chips; a model
   this comic can no longer use (access lost, retired, no transport) fails honestly with "See other models".
-- **Prices.** Every quote, gate and reservation in a request reads one PriceBook (`ctx.prices`, built on the first
-  quote and memoised per request): the live OpenRouter price, or our observed median when it is higher, plus QC,
-  × the platform markup unless the user's own key pays.
+- **Prices.** Gates, reservations and the model change (`jobs.ts`, `actions/models.ts`) read the request's
+  PriceBook (`ctx.prices`, built on the first quote and memoised per request): the live OpenRouter price, or our
+  observed median when it is higher, plus QC, × the platform markup unless the user's own key pays. Chips on free
+  actions wait up to 800 ms for it, else quote the registry list. `model_options` builds the same live PriceBook for
+  its numbers. Chip quotes in director replies (`priceOf` in `tools.ts`, `estimateOf` in `replies.ts`,
+  `intents.ts`, the breakdown tool's `quote`) still use the registry estimate rather than the PriceBook, and most of
+  them ignore the lock, until the lock-aware-quote package lands. Gates re-quote before anything is reserved, so
+  money stays safe.
 - **Recording.** Every image attempt, paid or failed, writes a SpendEntry and a fire-and-forget
   `comic_image_calls` row (route, provider, resolution, references, outcome, provider-reported cost and model
   version) and bumps `model_usage_monthly`. Recording never blocks or fails a job; until
