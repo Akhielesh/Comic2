@@ -27,6 +27,7 @@ import {
   ChevronDown,
   Download,
   LayoutGrid,
+  Lock,
   MessageSquare,
   MoreHorizontal,
   RefreshCw,
@@ -36,7 +37,8 @@ import {
 } from 'lucide-react';
 import type { ComicDoc, ConfirmPolicy, SpendKind } from '../../shared/comic/doc';
 import type { DocOp } from '../../shared/comic/ops';
-import { PLATFORM_MARKUP, TIER_PRESETS } from '../../shared/comic/models';
+import { PLATFORM_MARKUP, TIER_PRESETS, getImageModel, resolveImageJob } from '../../shared/comic/models';
+import { deriveLock } from '../../shared/comic/modelLock';
 import type { StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
@@ -307,6 +309,10 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const close = () => setOpen(null);
   const tier = doc.settings.quality;
   const tierLabel = TIER_PRESETS[tier]?.label || 'Standard';
+  // models.md §4.1 L0: the quality chip reads "{Tier} · {Model}", with a lock glyph once the comic is locked.
+  const lock = deriveLock(doc);
+  const chipModel = lock ? (getImageModel(lock.modelId)?.nickname ?? lock.modelId) : resolveImageJob('page', tier, doc.settings.imageModelOverride).spec.nickname;
+  const qualityText = `${tierLabel} · ${chipModel}`;
   const install = useInstallPrompt();
   const saved = savedTotal(doc);
   // Governed users never see dollars (P1-LIMITS): the pill, the menu row and the sheet speak in usage.
@@ -344,7 +350,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
       id: 'quality',
       label: 'Quality',
       icon: <Sparkles className="h-4 w-4" />,
-      detail: tierLabel,
+      detail: qualityText,
       opensSheet: true,
       onSelect: () => setOpen('quality')
     });
@@ -430,12 +436,13 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
               onClick={() => toggle('quality')}
               aria-haspopup="dialog"
               aria-expanded={open === 'quality'}
-              aria-label={`Quality: ${tierLabel}`}
+              aria-label={`Quality: ${qualityText}${lock ? ', locked for this comic' : ''}`}
               className={headerBtn}
               title="Quality"
             >
               <span className={cx('h-2 w-2 rounded-full', QUALITY_DOT[tier] || QUALITY_DOT.standard)} aria-hidden />
-              {variant === 'regular' && <span>{tierLabel}</span>}
+              {variant === 'regular' && <span className="min-w-0 max-w-[13rem] truncate">{qualityText}</span>}
+              {variant === 'regular' && lock && <Lock className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" aria-hidden />}
               <ChevronDown className="h-3 w-3 text-[var(--ds-muted)]" aria-hidden />
             </button>
           </div>
