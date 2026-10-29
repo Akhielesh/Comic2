@@ -94,6 +94,10 @@ describe('publish tool group', () => {
     expect(await tools.unpublish_comic.execute({})).toMatch(/keeps working until the user confirms/);
     expect(await tools.update_publication.execute({ regenerate_link: true })).toMatch(/until the user confirms/);
     expect(turn.cards.map((c) => (c.type === 'publish' ? c.mode : c.type))).toEqual(['unpublish', 'regenerate']);
+    // Embedding and the username can be changed from the director too (never only by unpublishing).
+    expect(await tools.update_publication.execute({ allow_embed: false, show_creator: false })).toMatch(/Update card shown \(public, embedding off, username hidden\)/);
+    expect(turn.cards.at(-1)).toMatchObject({ type: 'publish', mode: 'update', request: { visibility: 'public', languages: ['en'], allowEmbed: false, showCreator: false } });
+    expect(await tools.update_publication.execute({})).toMatch(/^Nothing to change\. Settings: .*allow_embed, show_creator/);
     expect(publicationSummary(doc)[0]).toMatch(/^Published: public · \/c\/Ab3…/);
     expect(publicationSummary(doc)[0]).not.toContain('Ab3dEf6hIj9kLm2nP');
   });

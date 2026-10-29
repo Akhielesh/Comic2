@@ -35,13 +35,14 @@ const Row: React.FC<{ ok: boolean | 'warn'; children: React.ReactNode }> = ({ ok
   </li>
 );
 
-const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChange(v: boolean): void }> = ({ label, hint, checked, onChange }) => (
-  <label className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded-xl px-1 text-[13px] text-[var(--ds-ink)]">
+/** A labelled switch row (also the Share sheet's live "Link settings"). */
+export const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; disabled?: boolean; onChange(v: boolean): void }> = ({ label, hint, checked, disabled, onChange }) => (
+  <label className={cx('flex min-h-[44px] items-center justify-between gap-3 rounded-xl px-1 text-[13px] text-[var(--ds-ink)]', disabled ? 'opacity-60' : 'cursor-pointer')}>
     <span className="min-w-0">
       <span className="block font-medium">{label}</span>
       {hint && <span className="block text-[12px] text-[var(--ds-muted)]">{hint}</span>}
     </span>
-    <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 shrink-0 accent-[#D97757]" />
+    <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 shrink-0 accent-[#D97757]" />
   </label>
 );
 

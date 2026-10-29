@@ -213,6 +213,28 @@ describe('ShareSheet', () => {
     await waitFor(() => expect(api.publishComic).toHaveBeenLastCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'], excludePageIds: ['pg_3'] }));
   });
 
+  it('once live, downloads / embedding / username change in place (one PATCH field each), and languages open the panel in update mode', async () => {
+    const studio = studioWith(view());
+    studio.doc!.i18n = { editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    vi.mocked(api.updatePublication).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Update published version/ })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow embedding/ }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenLastCalledWith(studio.doc!.id, { allowEmbed: false }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show my username/ }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenLastCalledWith(studio.doc!.id, { showCreator: true }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Readers can download/ }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenLastCalledWith(studio.doc!.id, { allowDownload: false }));
+    expect(api.updatePublication).toHaveBeenCalledTimes(3);
+    expect(api.publishComic).not.toHaveBeenCalled();
+    // Languages need a republish (the snapshot must carry the edition): the panel, in update mode.
+    fireEvent.click(screen.getByRole('button', { name: /Edit languages/ }));
+    expect(screen.getByRole('checkbox', { name: /हिन्दी/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update published version' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('button', { name: 'Update published version' })).toBeNull();
+  });
+
   it('a long title at 360 px never forces horizontal scroll (truncating title, min-w-0 rows)', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
     setViewport(true);
