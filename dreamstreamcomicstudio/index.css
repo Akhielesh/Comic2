@@ -452,7 +452,7 @@
   --ds-danger-text: #b91c1c;
   --ds-info: #2563eb;
   --ds-info-text: #1d4ed8;
-  --ds-ring: rgba(217,119,87,0.45);          /* focus ring (= ring-[#D97757]/45) */
+  --ds-ring: #c2643f;                        /* focus ring: the accent hover, ≥ 3:1 (non-text) on paper, glass and wells (the old 45 % tint was 1.6:1) */
   --ds-font-sans: Inter, sans-serif;         /* = tailwind `font-sans` */
   --ds-font-display: Inter, sans-serif;      /* headings inherit the body face today */
   --ds-radius-panel: 1rem;                   /* = rounded-2xl */
@@ -501,7 +501,7 @@
   --ds-danger-text: #fb8b8b;       /* red-400 lifted: ≥ 4.5:1 on dark glass and its tint */
   --ds-info: #60a5fa;
   --ds-info-text: #93c5fd;
-  --ds-ring: rgba(217,119,87,0.50);
+  --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
   --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
 }
 .dark { color-scheme: dark; }

@@ -55,7 +55,7 @@ export const DS_COLOR_TOKENS: ReadonlyArray<{ name: string; initialValue: string
   { name: '--ds-warning', initialValue: '#d97706' },
   { name: '--ds-danger', initialValue: '#dc2626' },
   { name: '--ds-info', initialValue: '#2563eb' },
-  { name: '--ds-ring', initialValue: 'rgba(217,119,87,0.45)' }
+  { name: '--ds-ring', initialValue: '#c2643f' }
 ];
 
 type PropertyRegistry = { registerProperty(def: { name: string; syntax: string; inherits: boolean; initialValue: string }): void };

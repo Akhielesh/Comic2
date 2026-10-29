@@ -136,7 +136,15 @@ interface Pair {
   bg: string;
   ratio: number;
   min: number;
+  /** Why this pair may stay below `min` — enforced elsewhere in this file, never a free pass. */
+  exempt?: string;
 }
+/**
+ * --ds-faint is the lowest-emphasis ink (≈ 2:1 light, ≈ 3:1 dark): far below 4.5:1 by design. It is
+ * measured with the rest, and exempt ONLY where text contrast does not apply — a placeholder, or a
+ * glyph hidden from assistive tech. The source scan below holds every use to that.
+ */
+const FAINT_EXEMPTION = 'placeholder or aria-hidden glyph only (see the --ds-faint scan)';
 function pairs(): Pair[] {
   const out: Pair[] = [];
   for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
@@ -146,6 +154,7 @@ function pairs(): Pair[] {
         out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), c), min: 4.5 });
       }
     }
+    for (const [bg, c] of surfaces(ctx)) out.push({ ctx, fg: '--ds-faint', bg, ratio: ratio(over(token('--ds-faint', ctx), c), c), min: 4.5, exempt: FAINT_EXEMPTION });
     for (const [bg, c] of accentTextSurfaces(ctx)) out.push({ ctx, fg: '--ds-accent-text', bg, ratio: ratio(token('--ds-accent-text', ctx), c), min: 4.5 });
     for (const fill of ['--ds-accent-fill', '--ds-accent-fill-hover']) {
       const bg = over(token(fill, ctx), token('--ds-canvas', ctx));
@@ -172,8 +181,17 @@ describe('token contrast — every text token on every surface it is used on (WC
   });
 
   it('body and label text reach 4.5:1 everywhere (light, dark, Atlas light, Atlas dark) — no exceptions', () => {
-    const failing = measure().filter((p) => p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`);
+    const failing = measure().filter((p) => !p.exempt && p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);
+  });
+
+  it('--ds-faint is in the matrix too: below 4.5:1 everywhere, and the only exempt token', () => {
+    const faint = measure().filter((p) => p.fg === '--ds-faint');
+    for (const ctx of Object.keys(CONTEXTS)) expect(faint.filter((p) => p.ctx === ctx).length, ctx).toBeGreaterThan(30);
+    expect(faint.every((p) => p.exempt === FAINT_EXEMPTION)).toBe(true);
+    // If faint ever reaches 4.5:1 it is just another text token and the exemption must go.
+    expect(Math.max(...faint.map((p) => p.ratio))).toBeLessThan(4.5);
+    expect(measure().filter((p) => p.exempt && p.fg !== '--ds-faint').map(label)).toEqual([]);
   });
 
   it('clears the exact rows the device matrix reported', () => {
@@ -510,5 +528,186 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
       const values = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
       for (const v of values) for (const t of textTokens(v)) expect(measured.has(t), `${name} uses ${t}`).toBe(true);
     }
+  });
+});
+
+// ── --ds-faint: only placeholders and glyphs hidden from assistive tech ─────────────────────────
+type FaintUse = 'placeholder' | 'glyph' | 'readable';
+
+/** The index just past the `>` that ends the JSX opening tag whose attributes start at `i` (-1 if none). */
+function openingTagEnd(src: string, i: number): number {
+  const stack: Array<'brace' | 'tmpl'> = [];
+  for (; i < src.length; i++) {
+    const ch = src[i];
+    const top = stack[stack.length - 1];
+    if (top === 'tmpl') {
+      if (ch === '\\') i += 1;
+      else if (ch === '`') stack.pop();
+      else if (ch === '$' && src[i + 1] === '{') {
+        stack.push('brace');
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      for (i += 1; i < src.length && src[i] !== ch; i++) if (src[i] === '\\') i += 1;
+      continue;
+    }
+    if (ch === '`') stack.push('tmpl');
+    else if (ch === '{') stack.push('brace');
+    else if (ch === '}') stack.pop();
+    else if (ch === '>' && stack.length === 0) return i + 1;
+  }
+  return -1;
+}
+
+/** Classify one `…text-[var(--ds-faint)]` occurrence at `at` in a TSX source. */
+function classifyFaint(src: string, at: number, variants: string, lucide: Set<string>): FaintUse {
+  if (variants.split(':').includes('placeholder')) return 'placeholder';
+  for (let lt = src.lastIndexOf('<', at); lt >= 0; lt = src.lastIndexOf('<', lt - 1)) {
+    const m = /^<([A-Za-z][\w.]*)/.exec(src.slice(lt, lt + 80));
+    if (!m) continue;
+    const end = openingTagEnd(src, lt + m[0].length);
+    if (end < at) continue; // a sibling / attribute-expression tag that closed before the class
+    const tag = src.slice(lt, end);
+    const selfClosing = /\/\s*>$/.test(tag);
+    const labelled = /\s(?:aria-label|aria-labelledby|title)=/.test(tag);
+    const hidden = /\saria-hidden(?:\s|=\{?(?:true|"true")\}?|\/?>)/.test(tag);
+    // A lucide icon with no label renders aria-hidden="true" (lucide-react ≥ 0.4xx).
+    if (selfClosing) return hidden || (lucide.has(m[1]) && !labelled) ? 'glyph' : 'readable';
+    if (!hidden) return 'readable';
+    // aria-hidden with children: a glyph only when no text is inside (just elements or `{identifier}`).
+    const close = src.indexOf('</', end);
+    const inner = src.slice(end, close < 0 ? end : close);
+    const left = inner.replace(/<[A-Za-z][\s\S]*?\/>/g, '').replace(/<[A-Za-z][^>]*>/g, '').replace(/\{\s*[\w.]+\s*\}/g, '');
+    return left.trim() ? 'readable' : 'glyph';
+  }
+  return 'readable';
+}
+
+const FAINT_UTILITY = /(?<![\w-])((?:[\w/-]+:)*)text-\[var\(--ds-faint\)\]/g;
+function faintUses(src: string): FaintUse[] {
+  const lucide = new Set<string>();
+  for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]lucide-react['"]/g)) {
+    for (const name of m[1].split(',')) {
+      const local = name.trim().split(/\s+as\s+/).pop()!.trim();
+      if (local) lucide.add(local);
+    }
+  }
+  return [...src.matchAll(FAINT_UTILITY)].map((m) => classifyFaint(src, m.index!, m[1], lucide));
+}
+
+/**
+ * Readable uses of --ds-faint (≈ 2:1) that are neither a placeholder nor hidden from assistive tech:
+ * real text (hints, captions, counts, empty-cell dashes, "·" separators) and labelled or meaningful
+ * glyphs. These files belong to other packages; each owner switches the use to --ds-muted (text), or
+ * marks a purely decorative glyph aria-hidden (wave notes list every line). The map is exact, so it
+ * fails on a NEW faint text use and when one is fixed (drop it here then).
+ */
+const FAINT_READABLE_USES: Record<string, number> = {
+  'components/chat/ComposerSlashMenu.tsx': 1,
+  'components/chat/MarkdownTable.tsx': 1,
+  'components/chat/artifacts/AgentActivityCard.tsx': 1,
+  'components/chat/artifacts/CalendarAgenda.tsx': 3,
+  'components/chat/artifacts/CalendarEventDraft.tsx': 1,
+  'components/chat/artifacts/DashboardCard.tsx': 2,
+  'components/chat/artifacts/DataTableCard.tsx': 3,
+  'components/chat/artifacts/EmailCompose.tsx': 1,
+  'components/chat/artifacts/EmailTerminal.tsx': 6,
+  'components/chat/artifacts/FlightResults.tsx': 4,
+  'components/chat/artifacts/NewsDigest.tsx': 2,
+  'components/chat/artifacts/PlacesResults.tsx': 2,
+  'components/chat/artifacts/ResearchReport.tsx': 1,
+  'components/chat/artifacts/games/BreakoutGame.tsx': 2,
+  'components/chat/artifacts/kit/game/GameShell.tsx': 1,
+  'components/comicstudio/timeline/TimelineClip.tsx': 1
+};
+
+describe('token contrast — --ds-faint only paints placeholders and glyphs hidden from assistive tech', () => {
+  it('classifies the forms it meets', () => {
+    const lucide = 'import { Search, Plug } from "lucide-react";\n';
+    expect(faintUses('<input className="placeholder:text-[var(--ds-faint)]" />')).toEqual(['placeholder']);
+    expect(faintUses(`${lucide}<Search className="h-3 w-3 text-[var(--ds-faint)]" />`)).toEqual(['glyph']);
+    expect(faintUses(`${lucide}<Search className="text-[var(--ds-faint)]" aria-label="Find" />`)).toEqual(['readable']);
+    expect(faintUses('<Custom className="text-[var(--ds-faint)]" aria-hidden />')).toEqual(['glyph']);
+    expect(faintUses('<Custom className="text-[var(--ds-faint)]" />')).toEqual(['readable']);
+    expect(faintUses('<div className="mb-3 text-[var(--ds-faint)]" aria-hidden>{icon}</div>')).toEqual(['glyph']);
+    expect(faintUses("<span className=\"text-[var(--ds-faint)]\" aria-hidden>{kind === 'cover' ? 'No cover yet' : 'Empty'}</span>")).toEqual(['readable']);
+    expect(faintUses('<span className="text-[var(--ds-faint)]" aria-hidden>\n  <Glyph size={4} />\n</span>')).toEqual(['glyph']);
+    expect(faintUses('<p className="text-[11px] text-[var(--ds-faint)]">Hint</p>')).toEqual(['readable']);
+    expect(faintUses("<b onClick={() => go(a > b)} className={`x ${on ? 'y' : 'text-[var(--ds-faint)]'}`}>·</b>")).toEqual(['readable']);
+  });
+
+  it('every text-[var(--ds-faint)] in the tree is a placeholder, an aria-hidden glyph, or a tracked readable use', () => {
+    const readable: Record<string, number> = {};
+    let placeholders = 0;
+    let glyphs = 0;
+    for (const file of listSourceFiles(ROOT).filter((f: string) => /\.tsx?$/.test(f))) {
+      const src = readFileSync(file, 'utf8');
+      if (!src.includes('--ds-faint')) continue;
+      for (const use of faintUses(src)) {
+        if (use === 'placeholder') placeholders += 1;
+        else if (use === 'glyph') glyphs += 1;
+        else {
+          const rel = file.slice(ROOT.length).replace(/^\/+/, '');
+          readable[rel] = (readable[rel] ?? 0) + 1;
+        }
+      }
+    }
+    expect(placeholders).toBeGreaterThan(5);
+    expect(glyphs).toBeGreaterThan(5);
+    expect(readable, 'a faint TEXT use: use --ds-muted (or aria-hidden for a purely decorative glyph)').toEqual(FAINT_READABLE_USES);
+  });
+});
+
+// ── Non-text contrast (WCAG 1.4.11): the focus ring and accent state borders ────────────────────
+/**
+ * axe-core has no non-text-contrast rule, so the device harness cannot assert 1.4.11; this asserts it
+ * on the tokens, against every backdrop a ring or a state border is drawn on.
+ */
+const NON_TEXT_BACKDROPS = ['canvas', 'sidebar', 'raised', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas', 'surface/sidebar', 'well on canvas', 'hover on canvas'];
+
+/**
+ * The brand terracotta stays the brand (the spec: never darken the brand accent), and on the LIGHT
+ * paper it is a little under 3:1 (2.96 on the canvas, 2.79 on the sidebar, 2.65 on a hover row). It
+ * is the decorative accent: a brand-coloured border accompanies
+ * another cue (the accent-soft fill, an ink label, a check). A border that is the ONLY cue for a state
+ * uses the readable accent, `border-[var(--ds-accent-text)]`, which clears 3:1 everywhere (below).
+ */
+const BRAND_BORDER_ON_LIGHT_PAPER = [
+  'default light: --ds-accent on canvas',
+  'default light: --ds-accent on sidebar',
+  'default light: --ds-accent on well on canvas',
+  'default light: --ds-accent on hover on canvas'
+];
+
+describe('token contrast — non-text: the focus ring and accent state borders reach 3:1 (WCAG 1.4.11)', () => {
+  const measureNonText = (fg: string) =>
+    (Object.keys(CONTEXTS) as ContextName[]).flatMap((ctx) => {
+      const s = surfaces(ctx);
+      return NON_TEXT_BACKDROPS.map((bg) => {
+        const c = s.get(bg)!;
+        return { name: `${ctx}: ${fg} on ${bg}`, ratio: ratio(over(token(fg, ctx), c), c) };
+      });
+    });
+
+  it('the focus ring (--ds-ring) is ≥ 3:1 on every backdrop in all four contexts', () => {
+    const ring = measureNonText('--ds-ring');
+    expect(ring.length).toBe(4 * NON_TEXT_BACKDROPS.length);
+    expect(ring.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+    // The old translucent rings really failed (45 % / 50 % terracotta: 1.6 and 2.2:1).
+    expect(ratio(over(resolveColor('rgba(217,119,87,0.45)'), token('--ds-canvas', 'default light')), token('--ds-canvas', 'default light'))).toBeLessThan(3);
+    expect(ratio(over(resolveColor('rgba(217,119,87,0.50)'), token('--ds-canvas', 'default dark')), token('--ds-canvas', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('a state border in the readable accent is ≥ 3:1 everywhere', () => {
+    expect(measureNonText('--ds-accent-text').filter((p) => p.ratio < 3).map((p) => p.name)).toEqual([]);
+  });
+
+  it('the brand accent as a border is ≥ 3:1 everywhere except the documented light-paper near-miss', () => {
+    const brand = measureNonText('--ds-accent');
+    const under = brand.filter((p) => p.ratio < 3);
+    expect(under.map((p) => p.name).sort()).toEqual([...BRAND_BORDER_ON_LIGHT_PAPER].sort());
+    for (const p of under) expect(p.ratio, p.name).toBeGreaterThanOrEqual(2.6); // 2.65 (hover row) … 2.96 (paper)
   });
 });
