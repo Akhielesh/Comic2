@@ -39,7 +39,7 @@ export const DS_COLOR_TOKENS: ReadonlyArray<{ name: string; initialValue: string
   { name: '--ds-surface-strong', initialValue: 'rgba(255,255,255,0.95)' },
   { name: '--ds-raised', initialValue: '#ffffff' },
   { name: '--ds-ink', initialValue: '#1a1915' },
-  { name: '--ds-muted', initialValue: '#6e6a60' },
+  { name: '--ds-muted', initialValue: '#67635a' },
   { name: '--ds-hairline', initialValue: 'rgba(0,0,0,0.10)' },
   { name: '--ds-hairline-soft', initialValue: 'rgba(0,0,0,0.05)' },
   { name: '--ds-well', initialValue: 'rgba(0,0,0,0.03)' },
@@ -48,14 +48,14 @@ export const DS_COLOR_TOKENS: ReadonlyArray<{ name: string; initialValue: string
   { name: '--ds-faint', initialValue: 'rgba(0,0,0,0.28)' },
   { name: '--ds-accent', initialValue: '#D97757' },
   { name: '--ds-accent-hover', initialValue: '#c2643f' },
-  { name: '--ds-on-accent', initialValue: '#ffffff' },
+  { name: '--ds-on-accent', initialValue: '#1a1915' },
   { name: '--ds-accent-soft', initialValue: 'rgba(217,119,87,0.10)' },
   { name: '--ds-active', initialValue: 'rgba(0,0,0,0.07)' },
   { name: '--ds-success', initialValue: '#16a34a' },
   { name: '--ds-warning', initialValue: '#d97706' },
   { name: '--ds-danger', initialValue: '#dc2626' },
   { name: '--ds-info', initialValue: '#2563eb' },
-  { name: '--ds-ring', initialValue: 'rgba(217,119,87,0.45)' }
+  { name: '--ds-ring', initialValue: '#c2643f' }
 ];
 
 type PropertyRegistry = { registerProperty(def: { name: string; syntax: string; inherits: boolean; initialValue: string }): void };

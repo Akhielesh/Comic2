@@ -7,7 +7,8 @@
  *       values for the core colours, fonts, radii and motion;
  *   (b) the NEW tokens' defaults reproduce today's look (panel 1rem, control .75rem, the old soft
  *       shadow, 200 ms, blur-md) and studioDesign's constants read them, so nothing changes outside
- *       the skin;
+ *       the skin except the contrast fixes tokenContrast.test.ts measures (the ink label on an
+ *       accent fill, the readable status text);
  *   (c) ink and muted text stay ≥ 4.5:1 on canvas, surface, surface-soft and well in both Atlas
  *       themes;
  *   plus the fonts, the cross-fade mechanism (registered tokens = :root defaults) and the base rules.
@@ -15,85 +16,15 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { ATLAS_PRELOAD_FONTS, DS_COLOR_TOKENS } from '../../services/dsSkin';
+import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, tokenBlocks } from './cssTokens';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const css = readFileSync(path.join(ROOT, 'index.css'), 'utf8');
-
-// ── A small rule parser: every `selector { declarations }` at any nesting depth ───────────────
-interface Rule {
-  selector: string;
-  body: string;
-  /** The enclosing at-rules, outermost first (e.g. ['@media (prefers-reduced-motion: no-preference)']). */
-  parents: string[];
-}
-const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '');
-const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
-
-function parseRules(source: string): Rule[] {
-  const text = stripComments(source);
-  const rules: Rule[] = [];
-  const stack: string[] = [];
-  let i = 0;
-  let pending = '';
-  while (i < text.length) {
-    const ch = text[i];
-    if (ch === '{') {
-      const selector = norm(pending);
-      pending = '';
-      // Find the matching brace; if the body has nested blocks it is an at-rule / nesting container.
-      let depth = 1;
-      let j = i + 1;
-      while (j < text.length && depth > 0) {
-        if (text[j] === '{') depth += 1;
-        else if (text[j] === '}') depth -= 1;
-        j += 1;
-      }
-      const body = text.slice(i + 1, j - 1);
-      if (body.includes('{')) {
-        stack.push(selector);
-        i += 1; // descend
-        continue;
-      }
-      rules.push({ selector, body: body.trim(), parents: [...stack] });
-      i = j;
-      continue;
-    }
-    if (ch === '}') {
-      stack.pop();
-      pending = '';
-      i += 1;
-      continue;
-    }
-    pending += ch;
-    i += 1;
-  }
-  return rules;
-}
-
+const ROOT = APP_ROOT;
+const css = indexCss;
 const rules = parseRules(css);
-
-/** Merge the custom-property declarations of every rule whose selector matches. */
-function tokensOf(match: (selector: string) => boolean): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const r of rules) {
-    if (!match(r.selector)) continue;
-    for (const decl of r.body.split(';')) {
-      const m = /^\s*(--[\w-]+)\s*:\s*([\s\S]+?)\s*$/.exec(decl);
-      if (m) out.set(m[1], norm(m[2]));
-    }
-  }
-  return out;
-}
-const dsOnly = (m: Map<string, string>) => new Map([...m].filter(([k]) => k.startsWith('--ds-')));
-
-const ROOT_TOKENS = dsOnly(tokensOf((s) => s === ':root'));
-const DARK_TOKENS = dsOnly(tokensOf((s) => s === '.dark'));
-const ATLAS_LIGHT = dsOnly(tokensOf((s) => s === '[data-ds-skin="atlas"]'));
-const ATLAS_DARK = dsOnly(tokensOf((s) => s.startsWith('.dark[data-ds-skin="atlas"]') && s.includes('.dark [data-ds-skin="atlas"]')));
+const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(rules);
 const isReader = (name: string) => name.startsWith('--ds-reader-');
 /** The semantic tokens Phase D0 added (brief item 1); everything else in :root pre-dates the skin. */
 const NEW_TOKENS = [
@@ -105,28 +36,8 @@ const NEW_TOKENS = [
   '--ds-motion-fast', '--ds-motion-medium', '--ds-motion-slow', '--ds-motion-panel', '--ds-motion-modal', '--ds-motion-theme',
   '--ds-ease', '--ds-ease-spring', '--ds-tooltip-delay', '--ds-surface-blur'
 ];
-
-// ── WCAG contrast (sRGB relative luminance) ───────────────────────────────────────────────────
-type Rgb = [number, number, number];
-function parseColor(v: string): Rgb {
-  const hex = /^#([0-9a-f]{6})$/i.exec(v);
-  if (hex) return [parseInt(hex[1].slice(0, 2), 16), parseInt(hex[1].slice(2, 4), 16), parseInt(hex[1].slice(4, 6), 16)];
-  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*1(?:\.0*)?\s*)?\)$/.exec(v);
-  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
-  throw new Error(`contrast check needs an opaque hex/rgb colour, got "${v}"`);
-}
-const lum = ([r, g, b]: Rgb) => {
-  const f = (c: number) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
-};
-export const contrastRatio = (fg: string, bg: string): number => {
-  const a = lum(parseColor(fg));
-  const b = lum(parseColor(bg));
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-};
+// The WCAG helper lives in cssTokens.ts (shared with tokenContrast.test.ts); re-exported for old importers.
+export { contrastRatio };
 
 describe('Atlas skin — (a) every token has a skin override, with the Atlas values', () => {
   it('parses the four token blocks', () => {
@@ -200,7 +111,10 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
     expect(ATLAS_DARK.get('--ds-danger')).toBe('oklch(0.396 0.141 25.723)');
     for (const block of [ATLAS_LIGHT, ATLAS_DARK]) {
       for (const tone of ['success', 'warning', 'danger', 'info']) {
-        expect(block.get(`--ds-${tone}-text`)).toBe(`color-mix(in srgb, var(--ds-${tone}) 60%, var(--ds-ink))`);
+        // Dark danger mixes 55 %: Atlas's deep dark red at 60 % measures 4.36:1 on a hover row
+        // (tests/config/tokenContrast.test.ts measures every status text on its surfaces).
+        const pct = block === ATLAS_DARK && tone === 'danger' ? 55 : 60;
+        expect(block.get(`--ds-${tone}-text`)).toBe(`color-mix(in srgb, var(--ds-${tone}) ${pct}%, var(--ds-ink))`);
       }
     }
   });
@@ -229,7 +143,7 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
   });
 });
 
-describe('Atlas skin — (b) the defaults reproduce today’s look outside the skin', () => {
+describe('Atlas skin — (b) the defaults reproduce today’s look outside the skin (contrast fixes aside)', () => {
   it('defines every new semantic token in :root (brief item 1)', () => {
     expect(NEW_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
   });
@@ -243,7 +157,9 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(ROOT_TOKENS.get('--ds-ease')).toBe('cubic-bezier(0.4, 0, 0.2, 1)'); // tailwind's default curve
     expect(ROOT_TOKENS.get('--ds-surface-blur')).toBe('12px'); // backdrop-blur-md
     expect(ROOT_TOKENS.get('--ds-motion-theme')).toBe('0ms'); // no cross-fade outside a skin
-    expect(ROOT_TOKENS.get('--ds-on-accent')).toBe('#ffffff'); // text-white
+    // The one deliberate change: the label on a solid accent fill is ink (5.6:1 on the brand
+    // terracotta; the old text-white measured 3.1:1). tests/config/tokenContrast.test.ts.
+    expect(ROOT_TOKENS.get('--ds-on-accent')).toBe('#1a1915');
     expect(ROOT_TOKENS.get('--ds-accent-soft')).toBe('rgba(217,119,87,0.10)'); // bg-[#D97757]/10
     expect(ROOT_TOKENS.get('--ds-font-sans')).toBe('Inter, sans-serif'); // font-sans
     expect(ROOT_TOKENS.get('--ds-font-display')).toBe('Inter, sans-serif'); // headings inherit
@@ -320,6 +236,17 @@ describe('Atlas skin — (c) text contrast in both skin themes', () => {
   it('on-accent text on the accent fill ≥ 4.5:1', () => {
     expect(contrastRatio(ATLAS_LIGHT.get('--ds-on-accent')!, ATLAS_LIGHT.get('--ds-accent')!)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(ATLAS_DARK.get('--ds-on-accent')!, ATLAS_DARK.get('--ds-accent')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('the readable accent tokens (accent text, text-bearing fill) are the ink accent under the skin, so they fade with it', () => {
+    // Outside the skin they are deeper terracottas (tokenContrast.test.ts); inside it nothing changes.
+    expect(ATLAS_LIGHT.get('--ds-accent-text')).toBe('var(--ds-accent)');
+    expect(ATLAS_LIGHT.get('--ds-accent-fill')).toBe('var(--ds-accent)');
+    expect(ATLAS_LIGHT.get('--ds-accent-fill-hover')).toBe('var(--ds-accent-hover)');
+    expect(ATLAS_DARK.get('--ds-accent-text')).toBe('var(--ds-accent)');
+    // A selection inside a text-bearing fill flips like one inside the accent fill.
+    const flip = rules.find((r) => r.selector.startsWith('[data-ds-skin="atlas"] :is(.bg-\\[var\\(--ds-ink\\)\\]') && r.selector.includes('::selection'));
+    expect(flip?.selector).toContain('.bg-\\[var\\(--ds-accent-fill\\)\\]');
   });
 
   it('the helper itself is right (white on black = 21, white on #767676 ≈ 4.54)', () => {
