@@ -69,6 +69,146 @@ const PhoneSheet: React.FC<{ title: string; onClose: () => void; children: React
   </div>
 );
 
+// ── Back closes the reader ──────────────────────────────────────────────────────────────────────────────────
+// The app pushes ?view=read&id=… when a comic opens but never listens for Back, so on phones the Back gesture
+// changed the URL under an open reader and a second Back left the site. The reader now pushes ONE entry of its
+// own (same URL, state[READER_KEY] = project id); popping it (Back) closes the reader. The reading mode adds a
+// second entry so Back leaves it first. Every exit the reader controls (Close, the review prompt, Library, the
+// header, legal links) pops the reader's entries before acting, so a later Back never lands on a stale entry.
+const READER_KEY = '__dsReader';
+const READING_KEY = '__dsReadingMode';
+/** If a requested traversal never reports back (no popstate), the exit still happens after this long. */
+const HISTORY_SETTLE_MS = 800;
+
+const historyState = (): Record<string, unknown> => {
+  try {
+    const s: unknown = window.history.state;
+    return s && typeof s === 'object' ? (s as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
+
+interface ReaderHistory {
+  /** Leave the reader (close or navigate away): pop the reader's entries first, then run `action` once. */
+  leave: (action: () => void) => void;
+  /** The reading mode gets its own entry so the Back gesture leaves it before it closes the comic. */
+  pushReadingMode: () => void;
+  /** Leaving the reading mode with a control pops its entry (no-op when Back already did). */
+  popReadingMode: () => void;
+}
+
+const useReaderHistory = (id: string, onBack: () => void, onReadingModeBack?: () => void): ReaderHistory => {
+  const onBackRef = useRef(onBack);
+  const onReadingModeBackRef = useRef(onReadingModeBack);
+  onBackRef.current = onBack;
+  onReadingModeBackRef.current = onReadingModeBack;
+  const pendingRef = useRef<(() => void) | null>(null);
+  const inFlightRef = useRef(false);
+  const doneRef = useRef(false);
+  const settleTimerRef = useRef<number | null>(null);
+
+  const ours = (s = historyState()) => s[READER_KEY] === id;
+
+  const runPending = useCallback(() => {
+    const action = pendingRef.current;
+    if (!action) return;
+    pendingRef.current = null;
+    doneRef.current = true;
+    if (settleTimerRef.current != null) window.clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = null;
+    action();
+  }, []);
+
+  const goBack = useCallback(() => {
+    inFlightRef.current = true;
+    try {
+      window.history.back();
+    } catch {
+      inFlightRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.history) return;
+    doneRef.current = false;
+    // StrictMode (mount, unmount, mount) or a re-render with the same comic adopts the entry it already pushed.
+    if (!ours()) {
+      try {
+        const next: Record<string, unknown> = { ...historyState(), [READER_KEY]: id };
+        delete next[READING_KEY];
+        window.history.pushState(next, '', window.location.href);
+      } catch {
+        /* history unavailable (sandboxed frame): exits still work, Back just isn't intercepted */
+      }
+    }
+    const onPop = () => {
+      inFlightRef.current = false;
+      const s = historyState();
+      if (pendingRef.current) {
+        // Still on one of ours (the reading-mode entry, then the reader entry): keep unwinding, one step at a time.
+        if (ours(s)) goBack();
+        else runPending();
+        return;
+      }
+      if (doneRef.current) return;
+      if (!ours(s)) {
+        // The reader's entry was popped by Back: close (no review prompt in the way of a Back gesture).
+        doneRef.current = true;
+        onBackRef.current();
+        return;
+      }
+      if (s[READING_KEY] !== true) onReadingModeBackRef.current?.();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  useEffect(
+    () => () => {
+      if (settleTimerRef.current != null) window.clearTimeout(settleTimerRef.current);
+    },
+    []
+  );
+
+  const leave = useCallback(
+    (action: () => void) => {
+      if (doneRef.current) return;
+      pendingRef.current = action;
+      if (inFlightRef.current) return; // the traversal already under way continues the unwinding when it lands
+      if (!ours()) {
+        runPending();
+        return;
+      }
+      if (settleTimerRef.current == null) settleTimerRef.current = window.setTimeout(runPending, HISTORY_SETTLE_MS);
+      goBack();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id, goBack, runPending]
+  );
+
+  const pushReadingMode = useCallback(() => {
+    const s = historyState();
+    if (!ours(s) || s[READING_KEY] === true || doneRef.current) return;
+    try {
+      window.history.pushState({ ...s, [READING_KEY]: true }, '', window.location.href);
+    } catch {
+      /* ignore */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const popReadingMode = useCallback(() => {
+    if (inFlightRef.current || doneRef.current) return;
+    const s = historyState();
+    if (ours(s) && s[READING_KEY] === true) goBack();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, goBack]);
+
+  return { leave, pushReadingMode, popReadingMode };
+};
+
 // Comic Studio v4 comics (state.studioVersion === 4) keep their pages in a server-side
 // ComicDoc, not in the legacy panels this reader draws — they read in the v4 reader.
 const PublicComicReader = lazyImportWithRetry(() =>
@@ -148,22 +288,25 @@ interface ComicReaderProps {
  * unpublished one) from /api/comic/public/:id.
  */
 export const ComicReader: React.FC<ComicReaderProps> = (props) => {
-  if (isStudioV4Project(props.project)) {
-    return (
-      <div className="fixed inset-0 z-50 overflow-y-auto bg-[var(--ds-canvas)]" data-testid="studio-comic-reader">
-        <Suspense
-          fallback={
-            <div className="flex h-full items-center justify-center text-sm text-[var(--ds-muted)]" role="status">
-              Opening the comic…
-            </div>
-          }
-        >
-          <PublicComicReader projectId={props.project.id} onClose={props.onClose} />
-        </Suspense>
-      </div>
-    );
-  }
+  if (isStudioV4Project(props.project)) return <StudioComicReader projectId={props.project.id} onClose={props.onClose} />;
   return <ClassicComicReader {...props} />;
+};
+
+const StudioComicReader: React.FC<{ projectId: string; onClose: () => void }> = ({ projectId, onClose }) => {
+  const history = useReaderHistory(projectId, onClose);
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-[var(--ds-canvas)]" data-testid="studio-comic-reader">
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center text-sm text-[var(--ds-muted)]" role="status">
+            Opening the comic…
+          </div>
+        }
+      >
+        <PublicComicReader projectId={projectId} onClose={() => history.leave(onClose)} />
+      </Suspense>
+    </div>
+  );
 };
 
 const ClassicComicReader: React.FC<ComicReaderProps> = ({
@@ -211,7 +354,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     if (shouldPrompt) {
       setShowReviewModal(true);
     } else {
-      onClose();
+      readerHistory.leave(onClose);
     }
   };
 
@@ -220,7 +363,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       ...data,
       projectId: project.id
     });
-    onClose(); // Close after review
+    readerHistory.leave(onClose); // Close after review
   };
 
   const [pageIndex, setPageIndex] = useState(0);
@@ -236,6 +379,16 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const [chromeTick, setChromeTick] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const chromeHidden = phoneUi && !chromeVisible;
+  // Back pops the reading mode first (its controls come back), then closes the comic.
+  const readerHistory = useReaderHistory(project.id, onClose, () => {
+    setReadingMode(false);
+    setChromeVisible(true);
+    setChromeTick((n) => n + 1);
+  });
+  /** Navigation out of the reader pops the reader's history entries first. */
+  const leaveTo = (fn: () => void) => () => readerHistory.leave(fn);
+  const navigate = (view: string, id?: string) =>
+    readerHistory.leave(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)));
   // On phones, multi-column comic grids (3-up splash, golden-ratio, etc.) are unreadable,
   // so we collapse every layout to a single vertical column — the standard way comics are
   // read on mobile. Tracked reactively so rotating the device re-flows immediately.
@@ -486,14 +639,17 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     setReadingMode(true);
     setMenuOpen(false);
     setChromeVisible(false);
+    readerHistory.pushReadingMode();
     if (shouldShowIosFullscreenNote()) {
       markIosFullscreenNoteSeen();
       setShowIosNote(true);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readerHistory.pushReadingMode]);
 
   // Leaving the reading mode brings the controls back (that is what the reader asked for by tapping Exit).
   const exitReadingMode = () => {
+    readerHistory.popReadingMode();
     setReadingMode(false);
     setChromeVisible(true);
     setChromeTick((n) => n + 1);
@@ -609,12 +765,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       {!phoneUi && !readingMode && (
       <StaticSiteHeader
         isAuthenticated={!!user}
-        onGoHome={() => onNavigate?.('home')}
-        onViewComics={() => onNavigate?.('gallery')}
-        onEnterStudio={() => onNavigate?.('dashboard')}
-        onSignIn={() => onNavigate?.('auth')}
-        onOpenProfile={() => onNavigate?.('settings')}
-        onNavigate={onNavigate || (() => undefined)}
+        onGoHome={() => navigate('home')}
+        onViewComics={() => navigate('gallery')}
+        onEnterStudio={() => navigate('dashboard')}
+        onSignIn={() => navigate('auth')}
+        onOpenProfile={() => navigate('settings')}
+        onNavigate={navigate}
       />
       )}
 
@@ -661,10 +817,10 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           className="absolute right-2 z-40 w-60 max-w-[calc(100%-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1 shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-md"
           style={{ top: 'calc(var(--sa-top) + 52px)', maxHeight: 'calc(100dvh - var(--sa-top) - 64px)' }}
         >
-          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => onNavigate?.('gallery'))}>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => navigate('gallery'))}>
             <Library className="h-4 w-4 shrink-0" aria-hidden /> Library
           </button>
-          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => onNavigate?.('dashboard'))}>
+          <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => navigate('dashboard'))}>
             <LayoutDashboard className="h-4 w-4 shrink-0" aria-hidden /> Dashboard
           </button>
           <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => setShowStory(true))}>
@@ -689,7 +845,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             <span className="ml-auto text-[12px] text-[var(--ds-muted)]">{soundOn ? 'On' : 'Off'}</span>
           </button>
           {!user && (
-            <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => onNavigate?.('auth'))}>
+            <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => navigate('auth'))}>
               <LogIn className="h-4 w-4 shrink-0" aria-hidden /> Sign in
             </button>
           )}
@@ -733,13 +889,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
-            onClick={() => onNavigate?.('gallery')}
+            onClick={() => navigate('gallery')}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Library
           </button>
           <button
-            onClick={() => onNavigate?.('dashboard')}
+            onClick={() => navigate('dashboard')}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Dashboard
@@ -956,9 +1112,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
       {!phoneUi && !readingMode && (
       <LegalMicroLinks
-        onOpenPrivacy={onOpenPrivacy}
-        onOpenTerms={onOpenTerms}
-        onOpenFaq={onOpenFaq}
+        onOpenPrivacy={leaveTo(onOpenPrivacy)}
+        onOpenTerms={leaveTo(onOpenTerms)}
+        onOpenFaq={leaveTo(onOpenFaq)}
       />
       )}
 
@@ -969,9 +1125,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           <div className="mt-5 border-t border-slate-200 pt-3">
             <div className="text-xs uppercase font-bold text-slate-500">DreamStream</div>
             <div className="mt-1 flex flex-wrap items-center gap-x-1 text-[13px] font-semibold text-slate-600">
-              <button type="button" onClick={onOpenPrivacy} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
-              <button type="button" onClick={onOpenTerms} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
-              <button type="button" onClick={onOpenFaq} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
+              <button type="button" onClick={leaveTo(onOpenPrivacy)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
+              <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
+              <button type="button" onClick={leaveTo(onOpenFaq)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
               <a href="mailto:contact@dreamstream.com" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
             </div>
           </div>
@@ -993,14 +1149,14 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             </button>
           </div>
           <div className="flex-1 overflow-y-auto bg-slate-50">
-            <CommentSection projectId={project.id} onNavigate={onNavigate} />
+            <CommentSection projectId={project.id} onNavigate={onNavigate ? navigate : undefined} />
           </div>
         </div>
       )}
       {/* Review Modal */}
       <ReviewModal
         isOpen={showReviewModal}
-        onClose={onClose} // If they skip/close modal, we just close the reader
+        onClose={() => readerHistory.leave(onClose)} // If they skip/close modal, we just close the reader
         onSubmit={handleReviewSubmit}
         projectName={project.name}
       />

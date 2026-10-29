@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project } from '../types';
 import { ComicReader } from './ComicReader';
@@ -143,7 +143,7 @@ describe('phone reading mode', () => {
     }
   });
 
-  it('puts every other control in one "⋯" menu (sign-in included)', () => {
+  it('puts every other control in one "⋯" menu (sign-in included)', async () => {
     const p = renderReader();
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     const menu = screen.getByRole('menu');
@@ -157,18 +157,19 @@ describe('phone reading mode', () => {
     expect(screen.getByText(/1 \/ 3/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Library/ }));
-    expect(p.onNavigate).toHaveBeenCalledWith('gallery');
+    // Leaving pops the reader's history entry first (Back closes the reader), then navigates.
+    await waitFor(() => expect(p.onNavigate).toHaveBeenCalledWith('gallery'));
   });
 
-  it('moves the legal links into the Info sheet', () => {
+  it('moves the legal links into the Info sheet', async () => {
     const p = renderReader();
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Info/ }));
     const sheet = screen.getByRole('dialog', { name: 'Comic Info' });
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Privacy Policy' }));
-    expect(p.onOpenPrivacy).toHaveBeenCalled();
     expect(within(sheet).getByRole('button', { name: 'Terms & Conditions' })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'FAQs' })).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Privacy Policy' }));
+    await waitFor(() => expect(p.onOpenPrivacy).toHaveBeenCalled());
   });
 
   it('tapping the art toggles the chrome, which also hides itself after 2.5 s', () => {
