@@ -44,7 +44,7 @@ import { SnapGuides, computeSnap, snapTargets, type SnapGuide } from '../letteri
 import { useLetterPlans } from '../lettering/useLetterPlans';
 import { nextSelection } from '../lettering/useLetteringSelection';
 import { planText } from '../lettering/svgMarkup';
-import { deleteLinesOps, duplicateLineOps, findLineRef, lockOps, outlineFractions, textEditOps, zOrderOps } from '../lettering/styleOps';
+import { deleteLinesOps, duplicateLineOps, findLineRef, keepDrawnSizeOps, keptSizes, lockOps, outlineFractions, textEditOps, zOrderOps } from '../lettering/styleOps';
 import { useZoom } from '../mobile/touch/TouchCanvas';
 import { useGestureArbiter } from '../mobile/touch/GestureArbiter';
 import { haptic, longPressMs } from '../mobile/touch/pointerPolicy';
@@ -61,8 +61,12 @@ export interface BalloonLayerProps {
   /** Page aspect (w/h) the plans use; default pageWidth/pageHeight, else the doc's. */
   aspect?: number;
   editable?: boolean;
-  /** A finished move/resize/tail change. `lang` is set when editing a translated edition's geometry. */
-  onBalloonChange?: (lineId: string, patch: Partial<Balloon>, opts?: { lang?: string }) => void;
+  /**
+   * A finished move/resize/tail change of ONE balloon. `lang` is set when editing a translated edition's
+   * geometry; `label` names the undo entry ("Move balloon", "Resize balloon", "Aim tail") and `gesture`
+   * keeps a resize and a move made within the coalesce window two separate entries.
+   */
+  onBalloonChange?: (lineId: string, patch: Partial<Balloon>, opts?: BalloonChangeOptions) => void;
   /** Batched edits (multi-move, delete, duplicate, z-order, lock, inline text) — one undo entry each. */
   onOps?: (ops: DocOp[], opts?: PatchOptions) => void;
   /** Controlled single selection (legacy). */
@@ -90,6 +94,14 @@ export interface BalloonLayerProps {
   /** Editing a translated edition: inline text edits are reported here (a `translation`, never a source `line`). */
   onEditionTextChange?: (lineId: string, text: string) => void;
 }
+
+/** What a single balloon change reports besides the patch (see `onBalloonChange`). */
+export interface BalloonChangeOptions {
+  lang?: string;
+  label?: string;
+  gesture?: BalloonGesture;
+}
+export type BalloonGesture = 'move' | 'resize' | 'tail';
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 const clamp = (n: number, lo: number, hi: number): number => (Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo);
@@ -191,10 +203,18 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   const aspect = aspectProp && aspectProp > 0 ? aspectProp : pageWidth > 0 && pageHeight > 0 ? pageWidth / pageHeight : pageAspectOf(doc, page);
   // Live drafts while dragging (full balloons), drawn by re-planning the page with them applied.
   const [drafts, setDrafts] = useState<Map<string, Balloon> | null>(null);
+  /** Dense page: the size (style sizeScale) each dragged balloon is drawn at, kept while it moves (pinned = full size). */
+  const draftSizes = useRef<Map<string, number>>(new Map());
   const draftPage = useMemo(() => {
     if (!drafts || !drafts.size) return page;
     const balloons = page.balloons.filter((b) => !drafts.has(b.lineId)).concat([...drafts.values()]);
-    return { ...page, balloons };
+    const sizes = draftSizes.current;
+    if (!sizes.size) return { ...page, balloons };
+    const panels = page.panels.map((panel) => ({
+      ...panel,
+      lines: panel.lines.map((l) => (sizes.has(l.id) ? { ...l, style: { ...(l.style || {}), sizeScale: sizes.get(l.id) } } : l))
+    }));
+    return { ...page, balloons, panels };
   }, [page, drafts]);
   const base = useLetterPlans(doc, page, aspect, { placements: editable });
   const { H } = base;
@@ -320,23 +340,42 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     // pinning it must keep the size the user sees.
     const stored = page.balloons.find((b) => b.lineId === id);
     if (plan && stored && out.w === undefined && Math.abs(plan.w / 1000 - stored.w) > 1e-4) out.w = r4(plan.w / 1000);
+    // An unpinned stored balloon the render-time settle / repack drew elsewhere: pinning it keeps the tail
+    // the user sees too (resolvedOf is the drawn balloon), never the stored tail of the old spot.
+    if (stored && !stored.pinned && !stored.locked && plan?.crowded && out.tailX === undefined && out.tailY === undefined) {
+      const r = resolvedOf(id);
+      if (r && typeof r.tailX === 'number' && typeof r.tailY === 'number' && (r.tailX !== stored.tailX || r.tailY !== stored.tailY)) {
+        out.tailX = r.tailX;
+        out.tailY = r.tailY;
+      }
+    }
     return out;
   };
 
-  const commitMany = (changes: { id: string; patch: Partial<Balloon> }[], label: string) => {
+  /**
+   * Dense page: the engine letters software-placed balloons a step smaller (LetterPlan.densityScale) and a
+   * pinned balloon at its style's size — so a balloon the user drags, nudges, aims or locks keeps the size
+   * it is drawn at through a line-style size override (one undo entry with the move). Never in a translated
+   * edition (line styles belong to the original there).
+   */
+  const keepSizeOps = (ids: readonly string[]): DocOp[] => (editionLang ? [] : keepDrawnSizeOps(page, base.plans, ids));
+
+  /**
+   * One undo entry per gesture, named for what it did (LE-8): a resize is "Resize balloon", a tail aim
+   * "Aim tail". Several balloons (a multi-selection move, also in a translated edition — LE-9) or a move
+   * that also keeps a dense balloon's size go as ONE batched patch; a single plain change goes through
+   * onBalloonChange with its label and gesture.
+   */
+  const commitMany = (changes: { id: string; patch: Partial<Balloon> }[], label: string, gesture: BalloonGesture = 'move') => {
     if (!changes.length) return;
-    if (changes.length > 1 && onOps && !editionLang) {
-      onOps(
-        changes.map((c) => ({ op: 'balloon', pageId: page.id, lineId: c.id, patch: fullPatch(c.id, c.patch) }) as DocOp),
-        { label, coalesce: `move:${page.id}` }
-      );
+    const ops = changes.map((c) => ({ op: 'balloon', pageId: page.id, lineId: c.id, patch: fullPatch(c.id, c.patch) }) as DocOp);
+    const keep = keepSizeOps(changes.map((c) => c.id));
+    if (onOps && (changes.length > 1 || keep.length || !onBalloonChange)) {
+      onOps([...ops, ...keep], { label, coalesce: `${gesture}:${editionLang ?? 'src'}:${page.id}:${changes.map((c) => c.id).join(',')}` });
       return;
     }
-    for (const c of changes) {
-      if (!onBalloonChange) continue;
-      if (lang) onBalloonChange(c.id, fullPatch(c.id, c.patch), lang);
-      else onBalloonChange(c.id, fullPatch(c.id, c.patch));
-    }
+    if (!onBalloonChange) return;
+    for (const c of changes) onBalloonChange(c.id, fullPatch(c.id, c.patch), { ...(lang || {}), label, gesture });
   };
 
   /** Allowed move of a plan's outline: [lo, hi] for dx and dy (page fractions). */
@@ -451,6 +490,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       }, longPressMs);
     }
     const startPlans = ids.map((x) => basePlanById.get(x)!).filter(Boolean);
+    draftSizes.current = editionLang ? new Map() : keptSizes(startPlans);
     const others: Box[] = base.plans.filter((p) => !ids.includes(p.lineId)).map((p) => outlineFractions(p, H));
     const targets = snapTargets({ panels: boxes, others, safe });
     let latest: Map<string, Balloon> | null = null;
@@ -540,7 +580,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         else if (mode === 'tail') changes.push({ id: lineId, patch: { tailX: b.tailX, tailY: b.tailY, pinned: true } });
         else changes.push({ id: lineId, patch: { w: b.w, pinned: true } });
       }
-      commitMany(changes, mode === 'move' ? (changes.length > 1 ? 'Move balloons' : 'Move balloon') : mode === 'tail' ? 'Aim tail' : 'Resize balloon');
+      commitMany(changes, mode === 'move' ? (changes.length > 1 ? 'Move balloons' : 'Move balloon') : mode === 'tail' ? 'Aim tail' : 'Resize balloon', mode === 'width' ? 'resize' : mode);
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId === pid) finish(true);
@@ -624,7 +664,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     if ((e.key === 'l' || e.key === 'L') && !mod && onOps && !editionLang) {
       handled();
       const locked = !basePlanById.get(id)?.locked;
-      onOps(lockOps(page, ids, locked, base.placements.balloons), { label: locked ? 'Lock balloon' : 'Unlock balloon' });
+      onOps([...lockOps(page, ids, locked, base.placements.balloons), ...(locked ? keepSizeOps(ids) : [])], { label: locked ? 'Lock balloon' : 'Unlock balloon' });
       return;
     }
     const dir: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -635,7 +675,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     if (e.altKey) {
       const tip = planTip(plan, H, resolvedOf(id));
       if (!tip || plan.locked) return;
-      commitMany([{ id, patch: { tailX: r4(clamp01(tip.x + d[0] * step)), tailY: r4(clamp01(tip.y + d[1] * step)), pinned: true } }], 'Aim tail');
+      commitMany([{ id, patch: { tailX: r4(clamp01(tip.x + d[0] * step)), tailY: r4(clamp01(tip.y + d[1] * step)), pinned: true } }], 'Aim tail', 'tail');
       return;
     }
     const movers = ids.map((x) => basePlanById.get(x)).filter((p): p is LetterPlan => !!p && !p.locked);
@@ -665,7 +705,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     if (mode === 'tail') {
       const tip = planTip(plan, H, resolvedOf(plan.lineId));
       if (!tip) return;
-      commitMany([{ id: plan.lineId, patch: { tailX: r4(clamp01(tip.x + d[0] * step)), tailY: r4(clamp01(tip.y + d[1] * step)), pinned: true } }], 'Aim tail');
+      commitMany([{ id: plan.lineId, patch: { tailX: r4(clamp01(tip.x + d[0] * step)), tailY: r4(clamp01(tip.y + d[1] * step)), pinned: true } }], 'Aim tail', 'tail');
       return;
     }
     // Slider semantics: Right/Up widen, Left/Down narrow.
@@ -673,7 +713,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     const x0 = plan.x / 1000;
     const w = r4(clamp(plan.w / 1000 + delta * step, 0.06, Math.max(0.06, 1 - PAGE_MARGIN - x0)));
     if (Math.abs(w - plan.w / 1000) < 1e-4) return;
-    commitMany([{ id: plan.lineId, patch: { w, pinned: true } }], 'Resize balloon');
+    commitMany([{ id: plan.lineId, patch: { w, pinned: true } }], 'Resize balloon', 'resize');
   };
 
   // ── Background: add mode; nearest balloon (22 px on touch); marquee (mouse/pen); else clear ──
@@ -916,11 +956,24 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               if (text.trim() && text !== editingLine.text) onEditionTextChange?.(editingPlan.lineId, text);
             } else {
               const ops = textEditOps(page, editingPlan.lineId, text);
-              if (ops.length) onOps?.(ops, { label: 'Edit balloon text' });
+              if (ops.length) onOps?.(ops, { label: text ? 'Edit balloon text' : 'Clear balloon text' });
             }
             onEditingChange?.(null);
           }}
           onCancel={() => onEditingChange?.(null)}
+          // A cleared balloon keeps its line EMPTY (the script still lists it; no balloon is drawn) — a
+          // translation can't be empty, so an edition keeps its text (the editor says so).
+          allowEmpty={!editionLang}
+          onDelete={
+            !editionLang && onOps
+              ? () => {
+                  const id = editingPlan.lineId;
+                  onOps(deleteLinesOps(page, [id]), { label: 'Delete balloon' });
+                  select(null);
+                  onEditingChange?.(null);
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -959,12 +1012,26 @@ const isCoarsePointer = (): boolean => {
   }
 };
 
+/** The selected balloon's touch target (layer px): its outline grown to ≥ `hit` on each axis, centred. */
+export const balloonHitRect = (outline: Box, page: { w: number; h: number }, hit: number): Box => {
+  const bw = outline.w * page.w;
+  const bh = outline.h * page.h;
+  const w = Math.max(bw, hit);
+  const h = Math.max(bh, hit);
+  return { x: outline.x * page.w + bw / 2 - w / 2, y: outline.y * page.h + bh / 2 - h / 2, w, h };
+};
+
 /**
  * Where the tail dot and the width grip sit (layer px at zoom 1, before the canvas transform). Both are
- * proxies — drags are relative — so they may be nudged: each keeps its whole 44 px hit area inside the
- * page (the page box clips nothing in the editor, but the harness and a finger both want the area on the
- * page), and the grip slides along the balloon's right edge to its top or bottom when the tail dot would
- * sit on it, so the two never steal each other's taps. Pure; tested.
+ * proxies — drags are relative — so they may be nudged:
+ *  - each handle's centre stays on the page (its 44 px area may reach 22 px past the edge: the editor
+ *    stage keeps 24 px around the page on touch, so nothing clips it);
+ *  - on touch (`avoid` = the selected balloon's own 44 px target) neither handle's area overlaps the
+ *    balloon's: the dot moves out along the tail's direction (else to the nearest clear side), the grip
+ *    just past the balloon's right side — a finger on the balloon moves it, a finger on a handle aims or
+ *    resizes, and no probe of one lands on the other;
+ *  - the grip slides up or down when the tail dot would sit on it, so the two never steal each other's taps.
+ * Pure; tested.
  */
 export const handlePositions = (
   plan: Pick<LetterPlan, 'x' | 'y' | 'w' | 'h'>,

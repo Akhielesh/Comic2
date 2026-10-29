@@ -190,6 +190,11 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
             )}
           </ul>
         )}
+        {one && !one.text.trim() && (
+          <p data-testid="empty-line-note" role="status" className="rounded-lg bg-[var(--ds-well)] px-2 py-1.5 text-[11.5px] leading-snug text-[var(--ds-ink)]">
+            This line is empty, so no balloon is drawn. Type it in the script (Page tools), or Delete it below.
+          </p>
+        )}
         {view === 'pro' ? <ProLetteringPanel {...props} lines={lines} /> : <EasyLetteringPanel {...props} lines={lines} />}
       </div>
       <p className="border-t border-[var(--ds-hairline)] px-3 py-1.5 text-[10.5px] text-[var(--ds-muted)]">Free — done by the editor, no AI cost.</p>

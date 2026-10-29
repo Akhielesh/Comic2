@@ -54,11 +54,14 @@ import type { DocOp, StudioAction } from '../../../shared/comic/ops';
 import { aspectMismatch } from '../../../shared/comic/book';
 import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
+import { DOC_LIMITS } from '../../../shared/comic/limits';
+import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, TRANSITION } from '../../chat/studioDesign';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
 import { useDialogA11y } from '../../studio/kit/useDialogA11y';
 import { ComicPageView } from './ComicPageView';
+import type { BalloonChangeOptions } from './BalloonLayer';
 import { isSpokenKind, pageAspectOf } from './balloonGeometry';
 import {
   CLEAR,
@@ -83,6 +86,7 @@ import type { PatchOptions } from '../types';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import { LetteringInspector, type Rect } from '../lettering/LetteringInspector';
 import { LetteringToolbar } from '../lettering/LetteringToolbar';
+import { LINE_TEXT_MAX } from '../lettering/BalloonTextEditor';
 import { PresetGallery } from '../lettering/PresetGallery';
 import { useLetterPlans } from '../lettering/useLetterPlans';
 import { useLetteringSelection } from '../lettering/useLetteringSelection';
@@ -377,6 +381,39 @@ interface EditionLineProps {
   onCommit(text: string): void;
 }
 
+/** Show the count when this close to the cap (and always once at it). */
+const COUNT_FROM = 40;
+
+/**
+ * A text field with a live "n / max" count once the text is within COUNT_FROM characters of `max` (the
+ * field itself carries maxLength). Reads the length from the field's own input events, so it counts the
+ * draft as it is typed, not just the committed value.
+ */
+export const CountedField: React.FC<{ max: number; value: string; testId?: string; children: React.ReactNode }> = ({ max, value, testId, children }) => {
+  const [len, setLen] = useState(value.length);
+  useEffect(() => setLen(value.length), [value]);
+  const near = len >= max - COUNT_FROM;
+  return (
+    <div
+      onInput={(e) => {
+        const t = e.target as HTMLInputElement | HTMLTextAreaElement;
+        if (typeof t.value === 'string') setLen(t.value.length);
+      }}
+      onBlur={(e) => {
+        const t = e.target as HTMLInputElement | HTMLTextAreaElement;
+        if (typeof t.value === 'string') setLen(t.value.length);
+      }}
+    >
+      {children}
+      {near && (
+        <p data-testid={testId} className={cx('px-2 text-right text-[11px] tabular-nums', len >= max ? 'font-medium text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')}>
+          {len >= max ? `${max} / ${max} — the limit` : `${len} / ${max}`}
+        </p>
+      )}
+    </div>
+  );
+};
+
 const LineRow: React.FC<{
   doc: ComicDoc;
   page: Page;
@@ -451,27 +488,35 @@ const LineRow: React.FC<{
           {castName(doc, line.speakerId)} isn’t in this panel — the line reads as off-panel.
         </p>
       )}
-      <InlineField
-        label={`Line text (${LINE_KIND_LABEL[line.kind]})`}
-        multiline
-        rows={1}
-        autoFocus={autoFocus}
-        value={line.text}
-        placeholder="Type the line…"
-        onCommit={(text) => patch([lineOp({ text })])}
-        inputClassName="text-[13px]"
-      />
+      {/* The server stores at most LINE_TEXT_MAX characters (LE-6): the field stops there and counts down
+          near the cap, so what the editor shows is what is saved. */}
+      <CountedField max={LINE_TEXT_MAX} value={line.text} testId="line-text-count">
+        <InlineField
+          label={`Line text (${LINE_KIND_LABEL[line.kind]})`}
+          multiline
+          rows={1}
+          autoFocus={autoFocus}
+          value={line.text}
+          maxLength={LINE_TEXT_MAX}
+          placeholder="Type the line…"
+          onCommit={(text) => patch([lineOp({ text: text.slice(0, LINE_TEXT_MAX) })])}
+          inputClassName="text-[13px]"
+        />
+      </CountedField>
       {edition && (
         <div lang={edition.lang} dir={dirOf(edition.lang)} style={{ fontFamily: cssFontFamily(edition.lang, line.kind === 'sfx' ? 'sfx' : 'dialogue') }}>
-          <InlineField
-            label={`${languageLabel(edition.lang)} translation`}
-            multiline
-            rows={1}
-            value={edition.text ?? ''}
-            placeholder={`Not translated yet — type the ${languageLabel(edition.lang)} line`}
-            onCommit={(text) => text.trim() && text !== edition.text && edition.onCommit(text)}
-            inputClassName="text-[13px]"
-          />
+          <CountedField max={DOC_LIMITS.translationChars} value={edition.text ?? ''} testId="translation-text-count">
+            <InlineField
+              label={`${languageLabel(edition.lang)} translation`}
+              multiline
+              rows={1}
+              value={edition.text ?? ''}
+              maxLength={DOC_LIMITS.translationChars}
+              placeholder={`Not translated yet — type the ${languageLabel(edition.lang)} line`}
+              onCommit={(text) => text.trim() && text !== edition.text && edition.onCommit(text.slice(0, DOC_LIMITS.translationChars))}
+              inputClassName="text-[13px]"
+            />
+          </CountedField>
         </div>
       )}
     </div>
@@ -648,17 +693,26 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         return;
       }
       void studio.patch(ops, { undo: true, ...opts });
+      // A balloon whose text was cleared keeps its (empty) line: say so, and where it went (LE-11).
+      if (ops.some((o) => o.op === 'line' && !!o.patch && typeof o.patch.text === 'string' && !o.patch.text.trim()))
+        setNotice('The balloon’s text is empty, so it is hidden — its line stays in the script (Page tools). Type it again there, Delete it, or Undo.');
     },
     [studio, lang, doc, sourceName]
   );
+  /**
+   * One balloon's move / resize / tail aim: the undo entry is named for what it did (LE-8) and a resize
+   * then a move within the coalesce window stay two entries (the gesture is part of the coalesce key).
+   */
   const onBalloonChange = useCallback(
-    (lineId: string, p: Partial<Balloon>, opts?: { lang?: string }) => {
+    (lineId: string, p: Partial<Balloon>, opts?: BalloonChangeOptions) => {
+      const label = opts?.label || 'Move balloon';
+      const gesture = opts?.gesture || 'move';
       if (opts?.lang) {
         const r = editionOps([{ op: 'balloon', pageId: sourcePage.id, lineId, patch: p }], opts.lang, doc);
-        if (r.ops.length) void studio.patch(r.ops, { undo: true, label: 'Move balloon', coalesce: `edition_balloon:${opts.lang}:${sourcePage.id}:${lineId}` });
+        if (r.ops.length) void studio.patch(r.ops, { undo: true, label, coalesce: `edition_balloon:${gesture}:${opts.lang}:${sourcePage.id}:${lineId}` });
         return;
       }
-      void studio.patch([{ op: 'balloon', pageId: sourcePage.id, lineId, patch: p }], { undo: true, label: 'Move balloon', coalesce: `balloon:${sourcePage.id}:${lineId}` });
+      void studio.patch([{ op: 'balloon', pageId: sourcePage.id, lineId, patch: p }], { undo: true, label, coalesce: `balloon:${gesture}:${sourcePage.id}:${lineId}` });
     },
     [studio, sourcePage.id, doc]
   );
