@@ -233,6 +233,28 @@ describe('the models tool group (registration, phase gate)', () => {
       expect(set.tools.map((t) => t.spec.function.name), say).toEqual(expect.arrayContaining(['model_options', 'suggest_model']));
     }
   });
+
+  it('price or quality words on a page action do not push the timeline tools out of the budget (only a model ask is a hint)', () => {
+    // GROUP_HINTS.models is MODEL_ASK_RE, not the wider MODEL_HINT_RE: "too expensive" or "consistent" made the models
+    // group hot, it sorted ahead of the timeline and the 30-tool cap trimmed delete_page / insert_page / use_version.
+    const cases: [string, string][] = [
+      ['delete page 4, it is too expensive', 'delete_page'],
+      ['insert a page after page 3 and keep the style consistent', 'insert_page'],
+      ['duplicate page 2 with sharper art', 'duplicate_page'],
+      ['restore the previous version of page 2, the faces were more consistent', 'list_versions']
+    ];
+    for (const [say, tool] of cases) {
+      const doc = lakeLocked();
+      const set = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText: say, drawIntent: drawIntentInContext(doc, say) }), toolGroups());
+      expect(set.tools.length, say).toBeLessThanOrEqual(30);
+      expect(set.groups, say).toContain('timeline');
+      expect(set.tools.map((t) => t.spec.function.name), say).toEqual(expect.arrayContaining([tool, 'move_page', 'use_version']));
+    }
+    // A price word without a page action still offers the models group (modelsGroupWanted reads MODEL_HINT_RE).
+    const doc = lakeLocked();
+    const set = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText: 'can it be cheaper', drawIntent: drawIntentInContext(doc, 'can it be cheaper') }), toolGroups());
+    expect(set.groups).toContain('models');
+  });
 });
 
 describe('model names', () => {

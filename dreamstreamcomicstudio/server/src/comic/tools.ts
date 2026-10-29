@@ -97,7 +97,7 @@ import {
 } from './extensions.js';
 import { addRefs } from './refs/index.js';
 import { LETTERING_STYLE_ARGS_SCHEMA, balloonAtPosition, styleArgsToPatch } from './tools/lettering.js';
-import { MODEL_HINT_RE } from './tools/models.js';
+import { MODEL_ASK_RE } from './tools/models.js';
 import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
@@ -1579,10 +1579,12 @@ export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
   reader: /\b(reader|page turn|chapters?|dedication|credits|guided)\b/i,
   breakdown: /\b(pages?|panels?|breakdown|plan|cost|price|quote|how much|status|left)\b/i,
   // models.md §3.8: a model ask ("just switch it to GPT") also wakes the timeline ("switch"); the models group must stay
-  // in the budget so model_options is offered. A getter: tools/models.ts imports this module, so its hint is read when a
-  // turn is built, never while the two modules load.
+  // in the budget so model_options is offered. Only an explicit model ask (MODEL_ASK_RE): the wider MODEL_HINT_RE
+  // ("too expensive", "consistent", "sharper") put models ahead of the timeline on page actions and the cap trimmed
+  // move/insert/duplicate/delete_page and use_version. A getter: tools/models.ts imports this module, so its hint is
+  // read when a turn is built, never while the two modules load.
   get models() {
-    return MODEL_HINT_RE;
+    return MODEL_ASK_RE;
   }
 };
 

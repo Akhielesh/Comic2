@@ -53,9 +53,20 @@ export type ModelWant = (typeof MODEL_WANTS)[number];
 
 const TIERS: QualityTier[] = ['draft', 'standard', 'pro'];
 
+/**
+ * An explicit model ask: the word "model" or a model / vendor name. tools.ts GROUP_HINTS.models uses only this, so a
+ * model ask outranks the timeline in the 30-tool budget (models.md §3.8) while "delete page 4, it is too expensive" or
+ * "insert a page and keep the style consistent" keep the timeline tools they need.
+ */
+export const MODEL_ASK_RE =
+  /\b(?:(?:image|ai|art|drawing) )?models?\b|\b(?:gpt|openai|dall-?e|chatgpt|gemini|nano ?banana|imagen|flux|seedream|bytedance|midjourney|stable diffusion)\b/i;
+
+/** Price, quality and provider words: they make the group relevant but are no model ask on their own. */
+const MODEL_WANT_RE =
+  /\b(?:cheaper|cheapest|less expensive|too expensive|costs? less|lower (?:the )?(?:price|cost)|save (?:money|credits)|better (?:quality|images?|art|pictures?|faces?)|higher quality|best quality|sharper|consisten\w*|rate[- ]?limit\w*|throttl\w*|outage|providers?)\b/i;
+
 /** Words that make the group relevant to this turn (the group stays out of the 30-tool budget otherwise). */
-export const MODEL_HINT_RE =
-  /\b(?:(?:image|ai|art|drawing) )?models?\b|\b(?:gpt|openai|dall-?e|chatgpt|gemini|nano ?banana|imagen|flux|seedream|bytedance|midjourney|stable diffusion)\b|\b(?:cheaper|cheapest|less expensive|too expensive|costs? less|lower (?:the )?(?:price|cost)|save (?:money|credits)|better (?:quality|images?|art|pictures?|faces?)|higher quality|best quality|sharper|consisten\w*|rate[- ]?limit\w*|throttl\w*|outage|providers?)\b/i;
+export const MODEL_HINT_RE = new RegExp(`${MODEL_ASK_RE.source}|${MODEL_WANT_RE.source}`, 'i');
 
 /** The user asks about a problem (status line even when nothing is known to be wrong). */
 const STATUS_ASK_RE = /\b(?:down|busy|slow|stuck|broken|outage|status|rate[- ]?limit\w*|429|throttl\w*|fail\w*|errors?|not working|what happened|why (?:did|didn'?t|is|isn'?t|does|doesn'?t))\b/i;
