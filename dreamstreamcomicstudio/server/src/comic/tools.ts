@@ -670,6 +670,20 @@ const tooLong = (doc: ComicDoc, lines: Pick<Line, 'text'>[]): number => {
 
 // ── Tool set ─────────────────────────────────────────────────────────────────
 
+/**
+ * Plan §4.1/§4.7: a director line edit reports the panel's word budget, measured on the boxes the words are lettered
+ * into ("That makes panel 6 about 34 words; it holds about 32."). Free; never blocks the edit (undefined on failure).
+ */
+const panelBudgetNote = (d: ComicDoc, pageId: string, panelId: string): string | undefined => {
+  try {
+    const page = findPage(d, pageId);
+    const index = page ? page.panels.findIndex((p) => p.id === panelId) : -1;
+    return page && index >= 0 ? panelBudgetSentence(d, page, index) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): DirectorTool[] {
   const state =
     turn ||
@@ -1247,16 +1261,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const kept = reused.filter(Boolean).length;
         const long = tooLong(d, wanted);
         captured(`page ${page.n} panel ${panel.n}'s text`);
-        // Plan §4.7: the panel's word budget, measured on the boxes the words are lettered into ("That makes panel 6
-        // about 34 words; it holds about 32."). Free; never blocks the edit.
-        const after = findPage(doc(), page.id);
-        const index = after ? after.panels.findIndex((p) => p.id === panel.id) : -1;
-        let budget: string | undefined;
-        try {
-          budget = after && index >= 0 ? panelBudgetSentence(doc(), after, index) : undefined;
-        } catch {
-          budget = undefined;
-        }
+        const budget = panelBudgetNote(doc(), page.id, panel.id);
         const voices = [...offPanel].map((id) => doc().cast.find((c) => c.id === id)?.name).filter((n): n is string => !!n);
         return `Page ${page.n} panel ${panel.n} now has ${wanted.length} line${wanted.length === 1 ? '' : 's'}${kept ? ` (${kept} kept in place)` : ''}.${addCast.size ? ' Added the speaker to the panel.' : ''}${voices.length ? ` ${joinList(voices.map(upper))} ${voices.length === 1 ? 'speaks' : 'speak'} off-panel (heard, not drawn — a ${panel.shot} shot).` : ''}${budget ? ` ${budget}` : ''}${long ? ' Some lines are long for a balloon — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ''}`;
       }
@@ -1313,7 +1318,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         commit(ops, `Page ${page.n} panel ${panel.n} line ${n}`);
         captured(`page ${page.n} panel ${panel.n} line ${n}`);
         const inArt = d.format.lettering === 'in_art' && page.render.status === 'ready';
-        return `Updated page ${page.n} panel ${panel.n} line ${n}${patch.kind ? ` (now ${patch.kind})` : ''}.${inArt ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ' Free — no redraw needed.'}`;
+        // A changed text or kind changes what the panel must hold: report its budget like edit_panel_text (plan §4.1).
+        const budget = 'text' in patch || 'kind' in patch ? panelBudgetNote(doc(), page.id, panel.id) : undefined;
+        return `Updated page ${page.n} panel ${panel.n} line ${n}${patch.kind ? ` (now ${patch.kind})` : ''}.${budget ? ` ${budget}` : ''}${inArt ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ' Free — no redraw needed.'}`;
       }
     ),
 

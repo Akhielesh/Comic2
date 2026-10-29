@@ -122,6 +122,14 @@ describe('K1: set_format 2–6, panel budgets, off-panel voices, lock-aware quot
     expect(out).toMatch(/That makes panel 3 about \d+ words; it holds about \d+\. That's too much text for this panel\./);
   });
 
+  it('set_line reports the panel budget when its text or kind changes (and says when it overfills); a speaker-only change does not', async () => {
+    const long = Array.from({ length: 70 }, () => 'spice').join(' ');
+    const out = await call('set_line', { page: 2, panel: 2, line: 1, text: long });
+    expect(out).toMatch(/^Updated page 2 panel 2 line 1\. That makes panel 2 about 70 words; it holds about \d+\. That's too much text for this panel\. Free — no redraw needed\.$/);
+    expect(await call('set_line', { page: 2, panel: 2, line: 1, text: 'Short now.' })).toMatch(/That makes panel 2 about 2 words; it holds about \d+\./);
+    expect(await call('set_line', { page: 2, panel: 2, line: 1, speaker: 'Arjun' })).toBe('Updated page 2 panel 2 line 1. Free — no redraw needed.');
+  });
+
   it('an off-panel voice in a pov / insert / establishing shot is never pushed into castIds', async () => {
     const doc = plannedDoc();
     doc.pages[2].panels[1].shot = 'pov';
@@ -800,7 +808,10 @@ describe('lettering edits keep ids, pins and translations', () => {
 
   it('set_line changes one line in place (kind, speaker, text)', async () => {
     setup(lakeWithText());
-    expect(await call('set_line', { page: 1, panel: 3, line: 1, kind: 'thought' })).toBe('Updated page 1 panel 3 line 1 (now thought). Free — no redraw needed.');
+    // A changed kind or text reports the panel's budget, like edit_panel_text (plan §4.1).
+    expect(await call('set_line', { page: 1, panel: 3, line: 1, kind: 'thought' })).toBe(
+      'Updated page 1 panel 3 line 1 (now thought). That makes panel 3 about 2 words; it holds about 32. Free — no redraw needed.'
+    );
     const line = () => ctx.session.doc.pages[0].panels[2].lines[0];
     expect(line()).toMatchObject({ id: 'ln_l3', kind: 'thought', speakerId: 'c_baby' });
     await call('set_line', { page: 1, panel: 3, line: 1, kind: 'caption' });
