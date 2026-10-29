@@ -13,6 +13,8 @@
 import type { FeatureModule } from '../extensions';
 import { MODEL_PICKER_SLOT_ORDER, ModelPickerHost } from './ModelPickerHost';
 
+// One `feature` object for the whole folder. M1-MODEL-LAB's admin section joins THIS object
+// (`adminSections: [labAdminSection]`, imported from './lab') — never a second `feature` export.
 export const feature: FeatureModule = {
   headerSlots: [{ id: 'model-picker', order: MODEL_PICKER_SLOT_ORDER, Component: ModelPickerHost }]
 };
