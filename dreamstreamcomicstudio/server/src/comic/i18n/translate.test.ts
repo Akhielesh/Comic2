@@ -284,6 +284,9 @@ describe('the linguist review (always)', () => {
     const mixed = linguistSystemPrompt(doc, 'hi');
     expect(mixed).toMatch(/code-mixed|mixed with English|English words/i);
     expect(mixed).not.toContain('or the wrong script');
+    // …in both spellings the translator may use: Devanagari (as the translator prompt asks) or Latin letters.
+    expect(mixed).toContain('common English words, written in Devanagari script or in Latin letters, are correct here');
+    expect(mixed).toContain('a script other than Devanagari (English words excepted)');
     expect(linguistSystemPrompt(doc, 'hi', 'code_mixed')).toBe(mixed); // the edition's own voice is the default
     expect(linguistSystemPrompt(sixPageKidsDoc(), 'hi')).toContain('or the wrong script');
     expect(linguistSystemPrompt(doc, 'hi', 'formal')).toContain('polished written Hindi');

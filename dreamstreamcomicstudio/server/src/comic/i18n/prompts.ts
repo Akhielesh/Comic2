@@ -239,10 +239,12 @@ const LINGUIST_REGISTER: Record<TranslationRegister, (target: string, script: st
     wrongScript: 'the wrong script',
     note: `\nThis edition is written in polished, formal ${t}: judge it against that register, not against casual speech.`
   }),
+  // The translator is told English words "may stay (written in <script> script)"; models also keep them in
+  // Latin letters, which the code-mixed script check accepts. The reviewer is told both are the voice.
   code_mixed: (t, s) => ({
     voice: `natural code-mixed ${t} as urban speakers talk`,
-    wrongScript: `a script other than ${s} or the English words this voice allows`,
-    note: `\nThis edition is deliberately code-mixed ${t} ("mixed with English"), the voice the author chose: common English words, in Latin script, are correct here, not a wrong script. Judge meaning, grammar, speaker fit and safety only; never "correct" the English words into pure ${t}.`
+    wrongScript: `a script other than ${s} (English words excepted)`,
+    note: `\nThis edition is deliberately code-mixed ${t} ("mixed with English"), the voice the author chose: common English words, written in ${s} script or in Latin letters, are correct here, not a wrong script. Judge meaning, grammar, speaker fit and safety only; never "correct" the English words into pure ${t}.`
   })
 };
 
