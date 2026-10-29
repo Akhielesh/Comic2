@@ -26,10 +26,12 @@
 import type { Request } from 'express';
 import type { LimitExceededDetails } from '../../../shared/types/billing.js';
 import type { Resolution } from '../../../shared/comic/doc.js';
-import { getImageModel, imagePriceUsd, type ImageRoute } from '../../../shared/comic/models.js';
+import { getImageModel, imagePriceUsd, type ImageJobKind, type ImageRoute } from '../../../shared/comic/models.js';
 import { METERING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { recordModelUsage } from '../services/modelStats.js';
 import { ownKeyPath, usageUnavailableMessage } from '../services/platformAllowance.js';
+import { getSupabaseAdmin, getSupabaseCapabilityStatus } from '../services/supabase.js';
 import { releaseReservedOperation, reserveForOperation, settleReservedOperation } from '../services/usageEnforcer.js';
 import type { UsagePayload } from '../services/costEstimator.js';
 import { studioKeysFromRequest } from './keys.js';
@@ -314,3 +316,153 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
 
   return { reserve };
 }
+
+// ── Per-call facts: comic_image_calls + model_usage_monthly (models.md §3.4 item 9, §4.5 S7) ──────────────
+//
+// Every image attempt (and every vision-QC call, kind 'qc') becomes one row in comic_image_calls, written with
+// the service role (RLS: owners read their own rows; inserts are service-role only). A successful image also bumps
+// the aggregate counter model_usage_monthly (product 'comic_studio'). Recording is fire-and-forget: it never
+// blocks a render, never throws into one, and a failed write is logged and dropped — the money facts that matter
+// for billing live in the usage ledger (above) and the doc's spend entries, not here.
+
+/** One provider call as comic_image_calls stores it (column meanings: server/sql/comic_image_calls.sql). */
+export interface ImageCallRecord {
+  userId: string;
+  projectId?: string;
+  /** Registry id (the vision model id for kind 'qc'). */
+  modelId: string;
+  /** The provider's model id that was requested. */
+  providerModel?: string;
+  route?: ImageRoute;
+  /** Which upstream provider served (or refused) the call, when the transport reports it. */
+  providerName?: string;
+  kind: ImageJobKind | 'qc';
+  /** '512' | '1K' | '2K' | '4K'; null for QC rows. */
+  res?: Resolution | null;
+  aspect?: string;
+  refs?: number;
+  /** 'blocked' = stopped before any provider call (the money-safe preflight). */
+  outcome: 'ok' | 'failed' | 'blocked';
+  httpStatus?: number;
+  /** StudioError code ('RATE_LIMIT' for 429s) or the preflight's 'MODEL_DOWN'. */
+  errorCode?: string;
+  /** Provider-reported cost before markup; null = not reported. */
+  providerCostUsd?: number | null;
+  /** What this user was charged for it (markup applied unless BYOK). */
+  billedUsd?: number;
+  byok?: boolean;
+  latencyMs?: number;
+  /** The model version the provider reported (models.md §2.5; audit of a provider-side redirect). */
+  modelVersion?: string;
+}
+
+export interface ImageCallRecorder {
+  /** Fire-and-forget: must never throw and never be awaited by a render. */
+  record(row: ImageCallRecord): void;
+}
+
+/** The product name the comic studio's calls are counted under in model_usage_monthly. */
+export const COMIC_USAGE_PRODUCT = 'comic_studio';
+
+const ROUTES: ReadonlySet<string> = new Set(['openrouter', 'gemini']);
+const RESOLUTIONS: ReadonlySet<string> = new Set(['512', '1K', '2K', '4K']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const clip = (v: unknown, max: number): string | null => (typeof v === 'string' && v ? v.slice(0, max) : null);
+const money6 = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v * 1_000_000) / 1_000_000 : null);
+const int = (v: unknown, lo: number, hi: number): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : null;
+
+/** The snake_case row for comic_image_calls (bounded values only; anything malformed becomes null). */
+export const imageCallRow = (r: ImageCallRecord): Record<string, unknown> => {
+  const row: Record<string, unknown> = {
+    user_id: r.userId,
+    project_id: typeof r.projectId === 'string' && UUID_RE.test(r.projectId) ? r.projectId : null,
+    model_id: clip(r.modelId, 120),
+    provider_model: clip(r.providerModel, 160),
+    route: r.route && ROUTES.has(r.route) ? r.route : null,
+    provider_name: clip(r.providerName, 80),
+    kind: clip(r.kind, 20),
+    res: typeof r.res === 'string' && RESOLUTIONS.has(r.res) ? r.res : null,
+    aspect: clip(r.aspect, 10),
+    refs: int(r.refs, 0, 32),
+    outcome: r.outcome,
+    http_status: int(r.httpStatus, 0, 999),
+    error_code: clip(r.errorCode, 40),
+    provider_cost_usd: money6(r.providerCostUsd),
+    billed_usd: money6(r.billedUsd),
+    byok: typeof r.byok === 'boolean' ? r.byok : null,
+    latency_ms: int(r.latencyMs, 0, 3_600_000)
+  };
+  const version = clip(r.modelVersion, 160);
+  if (version) row.model_version = version;
+  return row;
+};
+
+export interface ImageCallRecorderDeps {
+  /** The service-role client (default: getSupabaseAdmin, only when storage is configured). */
+  db?: () => { from(table: string): { insert(row: Record<string, unknown>): PromiseLike<{ error: { message?: string } | null }> } };
+  /** model_usage_monthly bump (default: services/modelStats recordModelUsage). */
+  bumpUsage?: (product: string, source: string, model: string) => void;
+  /** Override the storage check (tests). */
+  enabled?: boolean;
+}
+
+/**
+ * comic_image_calls writer (service role) + the model_usage_monthly bump. A row with `model_version` is retried
+ * once without it when the column does not exist yet (server/sql/comic_image_calls_model_version.sql not applied),
+ * so recording keeps working before that PROD STEP.
+ */
+export function createImageCallRecorder(deps: ImageCallRecorderDeps = {}): ImageCallRecorder {
+  const enabled = () => deps.enabled ?? getSupabaseCapabilityStatus().storagePersistenceEnabled;
+  const db = deps.db ?? (() => getSupabaseAdmin() as unknown as ReturnType<NonNullable<ImageCallRecorderDeps['db']>>);
+  const bump = deps.bumpUsage ?? recordModelUsage;
+  const insert = async (row: Record<string, unknown>): Promise<void> => {
+    const first = await db().from('comic_image_calls').insert(row);
+    if (!first.error) return;
+    if ('model_version' in row && /model_version/i.test(String(first.error.message || ''))) {
+      const { model_version: _drop, ...rest } = row;
+      const second = await db().from('comic_image_calls').insert(rest);
+      if (!second.error) return;
+      throw new Error(String(second.error.message || 'insert failed'));
+    }
+    throw new Error(String(first.error.message || 'insert failed'));
+  };
+  return {
+    record(r) {
+      try {
+        if (!enabled() || !r || typeof r.userId !== 'string' || !UUID_RE.test(r.userId)) return;
+        const row = imageCallRow(r);
+        void insert(row).catch((err: unknown) => {
+          logger.warn('comic_image_call_record_failed', { kind: row.kind, outcome: row.outcome, message: String((err as Error)?.message || err).slice(0, 200) });
+        });
+        if (r.outcome === 'ok' && r.kind !== 'qc') bump(COMIC_USAGE_PRODUCT, row.route ? String(row.route) : 'openrouter', String(row.provider_model || row.model_id || ''));
+      } catch (err) {
+        logger.warn('comic_image_call_record_failed', { message: String((err as Error)?.message || err).slice(0, 200) });
+      }
+    }
+  };
+}
+
+/** Records nothing (tests, scripts). */
+export const noopImageCallRecorder: ImageCallRecorder = { record() {} };
+
+let processRecorder: ImageCallRecorder | null = null;
+
+/** The process-wide recorder (built lazily: importing this module writes and schedules nothing). */
+export const imageCallRecorder = (): ImageCallRecorder => (processRecorder ??= createImageCallRecorder());
+
+/** Swap the process-wide recorder (tests; null = rebuild lazily). Returns the previous one. */
+export const setImageCallRecorder = (recorder: ImageCallRecorder | null): ImageCallRecorder | null => {
+  const previous = processRecorder;
+  processRecorder = recorder;
+  return previous;
+};
+
+/** Record one call. Never throws, never awaits: a recording failure can never fail a job. */
+export const recordImageCall = (row: ImageCallRecord): void => {
+  try {
+    imageCallRecorder().record(row);
+  } catch (err) {
+    logger.warn('comic_image_call_record_failed', { message: String((err as Error)?.message || err).slice(0, 200) });
+  }
+};

@@ -5,10 +5,14 @@ import { __resetSharedKeyCircuit, isSharedKeyCapped } from '../ai/providerCircui
 import {
   __resetImageClientForTests,
   classifyImageError,
+  planImagesApi,
+  type ImageRequestPlus,
   createImageGenerator,
   imageFailureDetail,
   imageFailureInfo,
   looksLikeRefusal,
+  MODEL_GONE_REASON,
+  modelUnavailableReason,
   pickAlternateRoute,
   pickImageRoute,
   providerDetail,
@@ -17,6 +21,10 @@ import {
   type GeminiModelsLike
 } from './imageClient.js';
 import { StudioError, type ImageRequest, type StudioKeys } from './types.js';
+import { __setModelHealthForTests } from './models/health.js';
+import { fakeModelHealth, type FakeModelHealth } from './models/health.fakes.js';
+import { isRoutePausedError } from './models/health.js';
+import type { OrImageEndpoint } from './models/catalog.js';
 
 const NB21 = getImageModel('nano-banana-2.1')!;
 const PRO = getImageModel('nano-banana-pro')!;
@@ -69,16 +77,21 @@ const setup = (keys: StudioKeys, responses: Array<Response | Error | (() => Prom
     fetch: fetchMock as unknown as typeof fetch,
     sleep,
     createGemini: () => gemini || { generateContent: vi.fn() },
-    now: () => Date.now()
+    now: () => Date.now(),
+    imageEndpoints: async () => null
   });
   const bodyOf = (i: number) => JSON.parse(String(fetchMock.mock.calls[i][1]?.body));
   const urlOf = (i: number) => String(fetchMock.mock.calls[i][0]);
   return { generate, fetchMock, sleep, bodyOf, urlOf };
 };
 
+// Every test gets its own breaker (the process-wide one would carry 429s from test to test).
+let health: FakeModelHealth;
 beforeEach(() => {
   __resetImageClientForTests();
   __resetSharedKeyCircuit();
+  health = fakeModelHealth({ now: Date.now() });
+  __setModelHealthForTests(health);
 });
 afterEach(() => vi.useRealTimers());
 
@@ -605,5 +618,202 @@ describe('failure facts for the job runner (incident follow-up)', () => {
     expect(imageFailureDetail(err)).toBe('Gemini · PROVIDER_ERROR · your integration key');
     expect(imageFailureInfo(new Error('plain'))).toBeUndefined();
     expect(imageFailureDetail(new Error('plain'))).toBeUndefined();
+  });
+});
+
+// ── Images-API transport (models.md §2.4 R3.4, §3.4 item 8) ──────────────────
+
+describe('Images-API transport (api.openrouter === images)', () => {
+  const endpoint = (name: string, usd: number, extra: Partial<OrImageEndpoint> = {}): OrImageEndpoint => ({
+    provider_name: name,
+    provider_slug: name.toLowerCase().replace(/\s+/g, '-'),
+    pricing: [{ billable: 'output_image', unit: 'image', cost_usd: usd }],
+    supported_parameters: { input_references: { max: 8 } },
+    ...extra
+  });
+  const imagesSetup = (endpoints: OrImageEndpoint[] | null, responses: Response[]) => {
+    const queue = [...responses];
+    const fetchMock = vi.fn(async () => queue.shift() ?? json({}, 500));
+    const lookups: string[] = [];
+    const generate = createImageGenerator(OR, {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: vi.fn(async () => undefined),
+      imageEndpoints: async (id) => {
+        lookups.push(id);
+        return endpoints;
+      }
+    });
+    const bodyOf = (i: number) => JSON.parse(String((fetchMock.mock.calls[i] as unknown as [string, RequestInit])[1]?.body));
+    return { generate, fetchMock, bodyOf, lookups };
+  };
+  const gptOk = () =>
+    json({ model: 'openai/gpt-image-2.5-sunburst-2026-09-08', provider: 'OpenAI', data: [{ b64_json: 'R1BU', media_type: 'image/png' }], usage: { cost: 0.1646 } });
+
+  it('sends the model fixed (no models list), the pinned quality, allow_fallbacks between ITS endpoints only up to the quote, and ≤ min(OpenRouter, vendor) references', async () => {
+    const { generate, bodyOf, lookups } = imagesSetup([endpoint('OpenAI', 0.2107), endpoint('Azure', 0.31)], [gptOk()]);
+    const refs = Array.from({ length: 20 }, (_, i) => ref(`REF ${i + 1}`));
+    const result = await generate(baseReq({ spec: GPT, aspect: '2:3', references: refs }));
+    expect(lookups).toEqual(['openai/gpt-image-2.5-sunburst']);
+    const body = bodyOf(0);
+    expect(body).not.toHaveProperty('models');
+    expect(body.model).toBe('openai/gpt-image-2.5-sunburst');
+    expect(body.quality).toBe('max');
+    expect(body.provider).toEqual({ allow_fallbacks: true, only: ['openai'] }); // Azure costs more than the quote
+    expect(body.input_references).toHaveLength(Math.min(8, GPT.refs.total)); // OpenRouter lists 8, the vendor 16
+    expect(body.resolution).toBeUndefined(); // fixed-size model
+    // Who served it and the version the provider reported are kept for the call record (models.md §2.5).
+    expect(result as ImageRequestPlus & typeof result).toMatchObject({ costUsd: 0.1646, providerName: 'OpenAI', modelVersion: 'openai/gpt-image-2.5-sunburst-2026-09-08' });
+  });
+
+  it('pins provider.only to endpoints that list the requested resolution, and sends the resolution only when one does', () => {
+    const imagesPro = { ...PRO, api: { openrouter: 'images' as const } };
+    const vertex = endpoint('Google Vertex', 0.1344, { provider_tag: 'google-vertex/global', supported_parameters: { resolution: { values: ['1K', '2K'] } } });
+    const studio = endpoint('Google AI Studio', 0.24, { supported_parameters: { resolution: { values: ['1k', '2k', '4k'] }, input_references: { max: 14 } } });
+    const at4k = planImagesApi(imagesPro, [vertex, studio], '4K', 0.24);
+    expect(at4k).toEqual({ only: ['google-ai-studio'], resolution: '4K', referenceCap: 14 });
+    // No endpoint data: nothing is pinned that can't be justified; the vendor cap still applies.
+    expect(planImagesApi(imagesPro, null, '2K', 0.1344)).toEqual({ resolution: '2K', referenceCap: imagesPro.refs.total });
+    // Nothing at or under the quote: a refusal (an unpinned call could be served dearer than the quote).
+    expect(planImagesApi(imagesPro, [studio], '2K', 0.1)).toEqual({ refuse: 'no provider serves 2K at the quoted price', referenceCap: 14 });
+    // No endpoint lists the resolution at all.
+    expect(planImagesApi(imagesPro, [vertex], '4K', 1)).toEqual({ refuse: 'no provider serves 4K for it', referenceCap: imagesPro.refs.total });
+  });
+
+  it('endpoint data but none within the quote: NO call, a classified non-retryable refusal with the H reason', async () => {
+    const { generate, fetchMock } = imagesSetup([endpoint('OpenAI', 0.2107), endpoint('Azure', 0.31)], [gptOk()]);
+    const err = await generate({ ...baseReq({ spec: GPT, aspect: '2:3' }), maxUsd: 0.15 } as ImageRequestPlus).catch((e) => e);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(StudioError);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR', status: 422, retryable: false });
+    expect(imageFailureInfo(err)).toMatchObject({ route: 'openrouter' });
+    expect(modelUnavailableReason(err)).toBe('no provider serves it at the quoted price');
+    expect(health.outcomes.every((o) => o.code === 'NOT_UPSTREAM' || o.keyScoped)).toBe(true); // never counted against the model
+  });
+
+  it('an Images-API model whose /images answers 404 never falls back to chat (no quality or provider pin there)', async () => {
+    const { generate, fetchMock } = imagesSetup([endpoint('OpenAI', 0.2107)], [json({ error: { message: 'Not Found' } }, 404), gptOk()]);
+    const err = await generate(baseReq({ spec: GPT, aspect: '2:3' })).catch((e) => e);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String((fetchMock.mock.calls[0] as unknown as [string])[0])).toMatch(/\/images$/);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false });
+    expect(modelUnavailableReason(err)).toBe("OpenRouter's image service doesn't offer it right now");
+    // The next call skips /images (recently unavailable) and still never calls chat.
+    const again = await generate(baseReq({ spec: GPT, aspect: '2:3' })).catch((e) => e);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(modelUnavailableReason(again)).toBeDefined();
+  });
+
+  it('a 404 on the model call marks H (the provider no longer serves it); a 404 downloading the picture does not', async () => {
+    const gone = setup(OR, [json({ error: { message: 'No endpoints found for google/gemini-nano-banana-2.1' } }, 404), json({ error: { message: 'Not Found' } }, 404)]);
+    const err = await gone.generate(baseReq()).catch((e) => e);
+    expect(imageFailureInfo(err)).toMatchObject({ status: 404 });
+    expect(modelUnavailableReason(err)).toBe(MODEL_GONE_REASON);
+    __resetImageClientForTests();
+    const download = setup(OR, [imagesOk({ data: [{ url: 'https://cdn.example/x.png' }] }), new Response('', { status: 404 })]);
+    const dl = await download.generate(baseReq()).catch((e) => e);
+    expect(download.fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(['https://openrouter.ai/api/v1/images', 'https://cdn.example/x.png']);
+    expect(dl).toBeInstanceOf(StudioError);
+    expect(imageFailureInfo(dl)).toMatchObject({ status: 404 });
+    expect(modelUnavailableReason(dl)).toBeUndefined();
+  });
+
+  it('chat-transport models keep today\'s request exactly (no provider pinning, no endpoint lookup)', async () => {
+    const lookups: string[] = [];
+    const fetchMock = vi.fn(async () => imagesOk());
+    const generate = createImageGenerator(OR, { fetch: fetchMock as unknown as typeof fetch, sleep: vi.fn(async () => undefined), imageEndpoints: async (id) => (lookups.push(id), null) });
+    await generate(baseReq());
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]?.body));
+    expect(body).not.toHaveProperty('provider');
+    expect(body).not.toHaveProperty('models');
+    expect(lookups).toEqual([]);
+  });
+});
+
+// ── Breaker wiring (reliability.md §2) ───────────────────────────────────────
+
+describe('provider-health breaker wiring', () => {
+  const PLATFORM_BOTH: StudioKeys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-platform', byok: false } };
+  const geminiImage = () => ({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'R0VN' } }] }, finishReason: 'STOP' }], modelVersion: 'gemini-nano-banana-2.1-001' });
+
+  it('asks the breaker before EVERY attempt and records every answer (success and the 429 before it)', async () => {
+    const { generate } = setup(OR, [json({ error: { message: 'Provider returned error' } }, 429), imagesOk()]);
+    await generate(baseReq());
+    expect(health.acquires.map((a) => [a.route, a.model, a.allowed])).toEqual([
+      ['openrouter', 'google/gemini-nano-banana-2.1', true],
+      ['openrouter', 'google/gemini-nano-banana-2.1', true]
+    ]);
+    expect(health.outcomes.map((o) => [o.ok, o.code])).toEqual([
+      [false, 'RATE_LIMIT'],
+      [true, undefined]
+    ]);
+  });
+
+  it('a key-scoped failure is recorded (it releases a probe) but never counted against the model', async () => {
+    const { generate } = setup(OR_BYOK, [json({ error: { message: 'No auth credentials found' } }, 401)]);
+    await expect(generate(baseReq())).rejects.toMatchObject({ code: 'PROVIDER_ERROR' });
+    expect(health.outcomes).toHaveLength(1);
+    expect(health.outcomes[0]).toMatchObject({ ok: false, keyScoped: true });
+    expect(health.routeState('openrouter', 'google/gemini-nano-banana-2.1').state).not.toBe('down');
+  });
+
+  it('starts on the same model through the same-payer route when the primary route is down; never calls the down route', async () => {
+    health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down');
+    const generateContent = vi.fn().mockResolvedValue(geminiImage());
+    const { generate, fetchMock } = setup(PLATFORM_BOTH, [], { generateContent });
+    const result = await generate(baseReq());
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(generateContent.mock.calls[0][0]).toMatchObject({ model: 'gemini-nano-banana-2.1' });
+    expect(result).toMatchObject({ route: 'gemini', byok: false, modelVersion: 'gemini-nano-banana-2.1-001' });
+  });
+
+  it('when every same-payer route is down: no provider call at all, a calm paused error, nothing spent', async () => {
+    health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down');
+    health.forceRoute('gemini', 'gemini-nano-banana-2.1', 'down');
+    const generateContent = vi.fn();
+    const { generate, fetchMock } = setup(PLATFORM_BOTH, [], { generateContent });
+    const err = await generate(baseReq()).catch((e) => e);
+    expect(isRoutePausedError(err)).toBe(true);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false, spentUsd: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(generateContent).not.toHaveBeenCalled();
+    expect(health.outcomes).toHaveLength(0); // nothing was called, so nothing is recorded
+  });
+
+  it('a refusal after a paid attempt on that route carries the spend and never says nothing was charged', async () => {
+    const textOnly = json({ choices: [{ message: { content: 'Sure! I will draw it.' } }], usage: { cost: 0.001 } });
+    const { generate, fetchMock } = setup(OR, [
+      json({}, 405),
+      async () => {
+        health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down'); // the breaker opens before the nudge
+        return textOnly;
+      }
+    ]);
+    const err = await generate(baseReq()).catch((e) => e);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(isRoutePausedError(err)).toBe(true);
+    expect(err.spentUsd).toBeCloseTo(0.001, 6);
+    expect(err.userMessage).toBe("The image provider is busy with Nano Banana 2.1 on OpenRouter right now, so the retry wasn't sent. The earlier attempt was charged.");
+    expect(err.userMessage).not.toMatch(/nothing was charged/);
+  });
+
+  it('preferRoute is honoured only for the same model with a key of the same payer', async () => {
+    const generateContent = vi.fn().mockResolvedValue(geminiImage());
+    const same = setup(PLATFORM_BOTH, [], { generateContent });
+    await expect(same.generate({ ...baseReq(), preferRoute: 'gemini' } as ImageRequestPlus)).resolves.toMatchObject({ route: 'gemini' });
+    expect(same.fetchMock).not.toHaveBeenCalled();
+    // The user's own Gemini key draws first; the platform OpenRouter key is another payer — that hint is ignored.
+    const mixed = setup({ openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-mine', byok: true } }, [imagesOk()], { generateContent });
+    await expect(mixed.generate({ ...baseReq(), preferRoute: 'openrouter' } as ImageRequestPlus)).resolves.toMatchObject({ route: 'gemini', byok: true });
+    expect(mixed.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('the breaker opens after three upstream 429s and the next attempt makes no call', async () => {
+    const limited = () => json({ error: { message: 'Provider returned error', metadata: { provider_name: 'Google AI Studio' } } }, 429);
+    const { generate, fetchMock } = setup(OR, [limited(), limited(), limited(), limited()]);
+    await expect(generate(baseReq())).rejects.toMatchObject({ code: 'RATE_LIMIT' }); // 2 calls
+    const second = await generate(baseReq()).catch((e) => e); // 1 call (the 3rd failure opens it), then refused
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(isRoutePausedError(second)).toBe(true);
+    expect(health.acquires.filter((a) => !a.allowed)).toHaveLength(1);
   });
 });

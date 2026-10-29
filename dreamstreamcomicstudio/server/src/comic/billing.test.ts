@@ -2,7 +2,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
 import { logger } from '../lib/logger.js';
-import { billingDenialMessage, createBillingHooks, noopBillingHooks } from './billing.js';
+import {
+  billingDenialMessage,
+  createBillingHooks,
+  createImageCallRecorder,
+  imageCallRow,
+  noopBillingHooks,
+  recordImageCall,
+  setImageCallRecorder,
+  type ImageCallRecord
+} from './billing.js';
 import type { BillingHooks } from './types.js';
 
 type ReserveArgs = Parameters<BillingHooks['reserve']>[0];
@@ -383,5 +392,129 @@ describe('usage budget (P1-LIMITS)', () => {
       else process.env.METERING_ENABLED = saved.metering;
       vi.resetModules();
     }
+  });
+});
+
+describe('comic_image_calls recording (models.md §3.4 item 9)', () => {
+  const USER = '0b2f5a3e-1c4d-4e8f-9a0b-1c2d3e4f5a6b';
+  const PROJECT = '7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6';
+  const page429: ImageCallRecord = {
+    userId: USER,
+    projectId: PROJECT,
+    modelId: 'nano-banana-2.1',
+    providerModel: 'google/gemini-nano-banana-2.1',
+    route: 'openrouter',
+    providerName: 'Google AI Studio',
+    kind: 'page',
+    res: '1K',
+    aspect: '4:5',
+    refs: 3,
+    outcome: 'failed',
+    httpStatus: 429,
+    errorCode: 'RATE_LIMIT',
+    providerCostUsd: null,
+    billedUsd: 0,
+    byok: false,
+    latencyMs: 812
+  };
+  const fakeDb = (answers: Array<{ error: { message: string } | null }> = []) => {
+    const inserts: Record<string, unknown>[] = [];
+    const db = () => ({
+      from: (table: string) => ({
+        insert: async (row: Record<string, unknown>) => {
+          inserts.push({ table, ...row });
+          return answers.shift() ?? { error: null };
+        }
+      })
+    });
+    return { db, inserts };
+  };
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('writes the column meanings M1-CATALOG reads (registry id, provider id, route, res, outcome, RATE_LIMIT, cost before markup)', async () => {
+    const { db, inserts } = fakeDb();
+    const bump = vi.fn();
+    createImageCallRecorder({ db, bumpUsage: bump, enabled: true }).record(page429);
+    await flush();
+    expect(inserts).toEqual([
+      {
+        table: 'comic_image_calls',
+        user_id: USER,
+        project_id: PROJECT,
+        model_id: 'nano-banana-2.1',
+        provider_model: 'google/gemini-nano-banana-2.1',
+        route: 'openrouter',
+        provider_name: 'Google AI Studio',
+        kind: 'page',
+        res: '1K',
+        aspect: '4:5',
+        refs: 3,
+        outcome: 'failed',
+        http_status: 429,
+        error_code: 'RATE_LIMIT',
+        provider_cost_usd: null,
+        billed_usd: 0,
+        byok: false,
+        latency_ms: 812
+      }
+    ]);
+    // A failed attempt is not an image: model_usage_monthly only counts what was drawn.
+    expect(bump).not.toHaveBeenCalled();
+  });
+
+  it('bumps model_usage_monthly (product comic_studio) for a drawn image, never for QC rows', async () => {
+    const { db } = fakeDb();
+    const bump = vi.fn();
+    const rec = createImageCallRecorder({ db, bumpUsage: bump, enabled: true });
+    rec.record({ ...page429, outcome: 'ok', httpStatus: 200, errorCode: undefined, providerCostUsd: 0.0386, billedUsd: 0.0502 });
+    rec.record({ userId: USER, modelId: 'google/gemini-3.5-flash', kind: 'qc', res: null, outcome: 'ok', providerCostUsd: 0.0049, billedUsd: 0.0064 });
+    await flush();
+    expect(bump).toHaveBeenCalledTimes(1);
+    expect(bump).toHaveBeenCalledWith('comic_studio', 'openrouter', 'google/gemini-nano-banana-2.1');
+  });
+
+  it('keeps writing before the model_version column exists (one retry without it)', async () => {
+    const { db, inserts } = fakeDb([{ error: { message: 'column "model_version" of relation "comic_image_calls" does not exist' } }, { error: null }]);
+    createImageCallRecorder({ db, bumpUsage: () => undefined, enabled: true }).record({ ...page429, modelVersion: 'google/gemini-nano-banana-2.1-20261006' });
+    await flush();
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0].model_version).toBe('google/gemini-nano-banana-2.1-20261006');
+    expect('model_version' in inserts[1]).toBe(false);
+  });
+
+  it('never throws: a failed write, a throwing client, a bad user id and a broken recorder are all swallowed', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const { db, inserts } = fakeDb([{ error: { message: 'permission denied' } }]);
+    const rec = createImageCallRecorder({ db, bumpUsage: () => undefined, enabled: true });
+    expect(() => rec.record(page429)).not.toThrow();
+    const throwing = createImageCallRecorder({
+      db: () => {
+        throw new Error('service role missing');
+      },
+      bumpUsage: () => undefined,
+      enabled: true
+    });
+    expect(() => throwing.record(page429)).not.toThrow();
+    expect(() => rec.record({ ...page429, userId: 'not-a-uuid' })).not.toThrow();
+    await flush();
+    expect(inserts).toHaveLength(1); // the bad user id never reached the table (FK to auth.users)
+    const prev = setImageCallRecorder({
+      record() {
+        throw new Error('boom');
+      }
+    });
+    try {
+      expect(() => recordImageCall(page429)).not.toThrow();
+    } finally {
+      setImageCallRecorder(prev);
+    }
+  });
+
+  it('records nothing when storage is not configured, and bounds every value', () => {
+    const { db, inserts } = fakeDb();
+    createImageCallRecorder({ db, enabled: false }).record(page429);
+    expect(inserts).toHaveLength(0);
+    const row = imageCallRow({ ...page429, projectId: 'proj-1', route: 'bogus' as never, res: '8K' as never, refs: 99, latencyMs: -5, providerCostUsd: Number.NaN });
+    expect(row).toMatchObject({ project_id: null, route: null, res: null, refs: 32, latency_ms: 0, provider_cost_usd: null });
   });
 });

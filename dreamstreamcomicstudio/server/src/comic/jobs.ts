@@ -52,6 +52,7 @@ import {
   type ConfirmPolicy,
   type Format,
   type Gate,
+  type ImageModelLock,
   type LetteringMode,
   type LineKind,
   type Msg,
@@ -71,6 +72,7 @@ import {
   type VersionMeta
 } from '../../../shared/comic/doc.js';
 import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import type { OutageOption, RunPreflight } from '../../../shared/comic/modelHealth.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
@@ -96,7 +98,9 @@ import {
   aspectMatches,
   estimateJobs,
   formatUsd,
+  getImageModel,
   imagePriceUsd,
+  nearestAspect,
   resolveImageJob,
   styleDirectionsUsd,
   type ImageJobKind,
@@ -104,6 +108,7 @@ import {
   type ImageRoute,
   type SpendEstimate
 } from '../../../shared/comic/models.js';
+import { FREE_PLAN_IMAGE_MODEL, deriveLock, type PriceBook } from '../../../shared/comic/modelLock.js';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -114,7 +119,10 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo, pickImageRoute } from './imageClient.js';
+import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute, type ImageRequestPlus, type ImageResultPlus } from './imageClient.js';
+import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
+import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
+import { recordImageCall } from './billing.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
@@ -135,6 +143,7 @@ import {
 } from './types.js';
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
+import { MODEL_LOCKED_CODE, assertSettingsPatchAllowed, modelLockedError, modelName } from './sanitize/models.js';
 import { LINE_STYLE_MAX_BYTES } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
@@ -348,6 +357,109 @@ const imageOperation: Record<ImageJobKind, string> = {
   cover: 'comic.image.cover'
 };
 
+// ── Image-model lock (models.md §3) ──────────────────────────────────────────
+
+/** models.md §3.4 codes (types.ts StudioErrorCode gains them: wave note). Casts keep the runtime code exact. */
+export const MODEL_LOCKED: StudioErrorCode = MODEL_LOCKED_CODE;
+export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE' as string as StudioErrorCode;
+
+/**
+ * The comic's image-model lock: the persisted one, else the migration lock of a legacy doc drawn before the lock
+ * existed (deriveLock: reads never write; it is persisted with the next image commit). undefined = nothing drawn.
+ */
+export const lockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
+
+/**
+ * The registry id a lock names. Older assets may carry a provider id ('google/gemini-2.5-flash-image') as their
+ * model; the registry resolves those to the same entry, so the lock means that entry, never another one.
+ */
+export const lockedSpecId = (modelId: string): string => getImageModel(modelId)?.id ?? modelId;
+
+/** What a run pins at its start (models.md §3.4 item 4): the tier (resolution), the pre-lock override and the lock. */
+export interface RunPin extends Pick<Settings, 'quality' | 'imageModelOverride'> {
+  lock?: ImageModelLock;
+}
+
+export const runPinOf = (doc: ComicDoc): RunPin => {
+  const lock = lockOf(doc);
+  return { quality: doc.settings.quality, imageModelOverride: doc.settings.imageModelOverride, ...(lock ? { lock } : {}) };
+};
+
+/**
+ * models.md §3.4 item 1: every image job resolves through the lock. With a lock the spec is the locked model for
+ * EVERY kind (style swatches included) and the tier only picks the resolution; before the lock the tier preset or
+ * the override decides (swatches stay on the cheap style model and never lock).
+ */
+export const resolveJobFor = (pin: RunPin, kind: ImageJobKind) => resolveImageJob(kind, pin.quality, pin.imageModelOverride, pin.lock);
+
+/** The override that makes the shared quote helpers (override-only) price exactly what resolveJobFor draws. */
+const quoteOverride = (pin: RunPin): string | undefined => pin.lock?.modelId ?? pin.imageModelOverride;
+
+/** models.md §3.6 H, exact copy. */
+export const modelUnavailableText = (model: string, reason: string): string =>
+  `${model} isn't available for this comic right now (${reason.replace(/[.\s]+$/, '')}). Nothing was drawn. You can wait, or switch models. Switching can affect consistency.`;
+
+/** The chip under G and H: opens the picker (changing still needs the confirm). */
+export const SEE_OTHER_MODELS_STEP: NextStep = { label: 'See other models', client: { type: 'open_model_picker' } };
+
+// ── Real prices (models.md §2.3) ─────────────────────────────────────────────
+
+/** A context that brings its own PriceBook (tests; OrchestratorContext gains `prices`: wave note). */
+type PricedContext = StudioContext & { prices?: () => Promise<PriceBook> };
+
+const priceBooks = new WeakMap<StudioContext, Promise<PriceBook>>();
+
+/**
+ * The PriceBook for this request (memoised per request context): live OpenRouter list prices and this user's
+ * observed costs (createPriceBook: bounded wait, never throws), else the registry's dated price list.
+ */
+export const priceBookFor = (ctx: StudioContext): Promise<PriceBook> => {
+  let book = priceBooks.get(ctx);
+  if (!book) {
+    const own = (ctx as PricedContext).prices;
+    book = Promise.resolve()
+      .then(() => (own ? own() : createPriceBook({ userId: ctx.userId })))
+      .catch((err: unknown) => {
+        logger.warn('comic_price_book_unavailable', { message: (err as Error)?.message });
+        return registryPriceBook();
+      });
+    priceBooks.set(ctx, book);
+  }
+  return book;
+};
+
+/** How long a FREE action (pick a style, restore a version, plan) waits for real prices for its chips. */
+const CHIP_PRICES_WAIT_MS = 800;
+
+/**
+ * The request's PriceBook if it is ready within `ms` (else undefined: the chips quote the registry list, and a tap
+ * whose real price outgrew that quote gets a fresh real-price gate). Free actions never stall on a cold catalog.
+ */
+const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_MS): Promise<PriceBook | undefined> => {
+  const timer = delay(ms);
+  try {
+    const won = await Promise.race([priceBookFor(ctx), timer.promise]);
+    return won === 'timeout' ? undefined : won;
+  } finally {
+    timer.cancel();
+  }
+};
+
+/** "your recent real costs" / "OpenRouter's current price" — the basis of a quote above the price list (no dollars). */
+const basisPhrase = (prices: PriceBook | undefined, pin: RunPin, kind: ImageJobKind): string | null => {
+  const quote = (prices as Partial<ServerPriceBook> | undefined)?.quote;
+  if (typeof quote !== 'function') return null;
+  try {
+    const { spec, resolution } = resolveJobFor(pin, kind);
+    const detail = quote(spec.id, resolution, kind).basisDetail;
+    if (detail.source === 'observed') return detail.scope === 'platform' ? "DreamStream creators' recent real costs" : 'your recent real costs';
+    if (detail.source === 'list') return "OpenRouter's current price";
+  } catch {
+    /* no phrase */
+  }
+  return null;
+};
+
 // ── Per-project image concurrency ────────────────────────────────────────────
 
 class Semaphore {
@@ -418,7 +530,8 @@ const inflightFor = (session: StudioSessionApi) => {
 // back-to-back requests on the single-threaded server each see the other's reservation
 // (otherwise concurrent runs each quote against a stale `doc.spend.totalUsd` and overshoot).
 const pendingSpend = new WeakMap<StudioSessionApi, number>();
-const pendingUsdOf = (s: StudioSessionApi) => pendingSpend.get(s) || 0;
+/** Spend reserved by runs still under way on this session (budget checks count it). */
+export const pendingUsdOf = (s: StudioSessionApi) => pendingSpend.get(s) || 0;
 const addPending = (s: StudioSessionApi, delta: number) => pendingSpend.set(s, Math.max(0, round4(pendingUsdOf(s) + delta)));
 
 // ── Billed text calls ────────────────────────────────────────────────────────
@@ -590,12 +703,60 @@ const styleDirectionCount = (action: Extract<SpendAction, { type: 'render_style_
 /** The page re-check's display name (a vision text call, not an image model). */
 export const RECHECK_MODEL_LABEL = 'Page check';
 
-/** Registry estimate for a spend action (counts what would actually be drawn now). */
-export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: boolean): SpendEstimate {
+/**
+ * Price image jobs on this doc's lock / tier / override: the registry list (exactly estimateJobs) or, with a
+ * PriceBook, its unit prices (live list or observed median, never under list; models.md §2.3) + QC for pages and
+ * edits, × PLATFORM_MARKUP unless BYOK. A unit the book cannot price falls back to the registry list.
+ */
+export const priceImageJobs = (
+  doc: ComicDoc,
+  jobs: { kind: ImageJobKind; count: number; label?: string }[],
+  byok: boolean,
+  prices?: PriceBook,
+  pin: RunPin = runPinOf(doc)
+): SpendEstimate => {
+  const base = estimateJobs(jobs, pin.quality, { override: pin.imageModelOverride, byok, ...(pin.lock ? { lock: pin.lock } : {}) });
+  if (!prices) return base;
+  const markup = byok ? 1 : PLATFORM_MARKUP;
+  const lines = jobs
+    .filter((j) => j.count > 0)
+    .map((j) => {
+      const { spec, resolution } = resolveJobFor(pin, j.kind);
+      let unit: number | null = null;
+      try {
+        unit = prices.unit(spec.id, resolution, j.kind).usd;
+      } catch {
+        unit = null;
+      }
+      const list = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
+      const qc = j.kind === 'page' || j.kind === 'edit' ? (Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE) : 0;
+      return { label: j.label || j.kind, count: j.count, usd: round4((list + qc) * j.count * markup) };
+    });
+  return { ...base, usd: round4(lines.reduce((s, l) => s + l.usd, 0)), lines };
+};
+
+/**
+ * Estimate for a spend action (counts what would actually be drawn now), on the comic's locked model. Registry
+ * prices by default (what chips and the client quote with); with a PriceBook, real prices (gates, budget, run).
+ */
+export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: boolean, prices?: PriceBook): SpendEstimate {
+  const pin = runPinOf(doc);
   if (action.type === 'render_pages') {
     // One quote for the chat card, the board and the gate (shared/comic/plan.ts; plan.parity.test.ts).
-    const q = quoteRenderPages(doc, { ...action, byok, tier: doc.settings.quality, modelOverride: doc.settings.imageModelOverride });
-    return { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines };
+    const q = quoteRenderPages(doc, { ...action, byok, tier: pin.quality, modelOverride: quoteOverride(pin) });
+    if (!prices) return { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines };
+    const priced = priceImageJobs(
+      doc,
+      [
+        { kind: 'page', count: q.pageIds.length, label: 'pages' },
+        { kind: 'sheet', count: q.sheetIds.length, label: 'character sheets' },
+        { kind: 'cover', count: q.cover ? 1 : 0, label: 'cover' }
+      ],
+      byok,
+      prices,
+      pin
+    );
+    return { usd: priced.usd, imageCount: q.imageCount, model: q.model, lines: priced.lines };
   }
   if (action.type === 'recheck_page') {
     // TEXT-priced: one vision call re-reads the page (lettering.md §9). No image is drawn.
@@ -622,7 +783,7 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
     default:
       break;
   }
-  const est = estimateJobs(jobs, doc.settings.quality, { override: doc.settings.imageModelOverride, byok });
+  const est = priceImageJobs(doc, jobs, byok, prices, pin);
   // When no directions are passed the runner also makes a writer call to propose them; the
   // image-only estimate would understate the quote and the budget gate. Add that text line.
   if (action.type === 'render_style_options' && !styleDirections(action).length) {
@@ -728,7 +889,13 @@ export type ActionOutcome =
   | { status: 'done'; message: string; nextSteps?: NextStep[] }
   | { status: 'started'; message: string; estimate: SpendEstimate }
   | { status: 'gated'; message: string; gate: Gate }
-  | { status: 'blocked'; message: string; code?: StudioErrorCode }
+  | {
+      status: 'blocked';
+      message: string;
+      code?: StudioErrorCode;
+      /** change_image_model: the server's fresh redraw quote when the confirmed one drifted (nothing was changed). */
+      requote?: { usd: number | null; quotedUsd: number; lines: { label: string; count: number; usd: number | null }[] };
+    }
   /** Everything requested is already ready and fresh ($0). */
   | { status: 'nothing'; message: string; nextSteps: NextStep[] };
 
@@ -754,8 +921,34 @@ const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards
   commitAs(ctx, [{ op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], 'job');
 };
 
+/**
+ * Commit `ops` and an assistant message in ONE batch (one rev bump), the message in this user's cost terms. A
+ * director turn gets the cards and chips in its own message instead (the ops are committed on their own then).
+ */
+export const commitWithMessage = (ctx: StudioContext, opts: RunActionOptions, ops: DocOp[], text: string, cards: Card[], steps?: NextStep[], label?: string): void => {
+  if (opts.collectCard) {
+    if (ops.length) commitAs(ctx, ops, originOf(opts), label);
+    deliver(ctx, opts, text, cards, steps);
+    return;
+  }
+  commitAs(ctx, [...ops, { op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], opts.origin ?? 'job', label);
+};
+
+/** A render run is under way for this comic: a target is queued or drawing, or a run still holds pending spend. */
+export const hasActiveRun = (session: StudioSessionApi): boolean => {
+  if (pendingUsdOf(session) > 0) return true;
+  const doc = session.doc;
+  return (
+    doc.pages.some((p) => isBusy(p.render)) ||
+    doc.cast.some((c) => isBusy(c.sheet)) ||
+    doc.places.some((p) => isBusy(p.sheet)) ||
+    isBusy(doc.cover.render) ||
+    doc.style.options.some((o) => isBusy(o.render))
+  );
+};
+
 /** The chip a budget-cap notice carries: opens this comic's settings at the budget cap (ClientAction open_settings). */
-const RAISE_BUDGET_STEP: NextStep = { label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } };
+export const RAISE_BUDGET_STEP: NextStep = { label: 'Raise the budget', client: { type: 'open_settings', section: 'budget' } };
 
 const blocked = (ctx: StudioContext, opts: RunActionOptions, message: string, tone: 'info' | 'warn' | 'error' = 'warn', steps?: NextStep[] | string[]) => {
   deliver(ctx, opts, message, [noticeCard(tone, message)], steps);
@@ -789,7 +982,7 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
     case 'decline_gate':
       return finished(declineGate(ctx, action.gateId, opts));
     case 'pick_style':
-      return finished(pickStyle(ctx, action.optionId, opts));
+      return finished(pickStyle(ctx, action.optionId, opts, await priceBookWithin(ctx)));
     case 'plan_pages':
       return finished(await planPages(ctx, { instructions: action.instructions }, opts));
     case 'approve_plan':
@@ -797,7 +990,7 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
     case 'patch':
       return finished(applyPatch(ctx, action.ops, opts));
     case 'restore_render':
-      return finished(restoreRender(ctx, action.target, action.path, opts));
+      return finished(restoreRender(ctx, action.target, action.path, opts, await priceBookWithin(ctx)));
     case 'relayout_balloons':
       return relayoutBalloons(ctx, action.pageId, opts, { useVision: action.useVision === true });
     case 'cancel':
@@ -841,6 +1034,8 @@ export const sanitizeCtxFor = (ctx: StudioContext, opts: Pick<RunActionOptions, 
 // ── Gates ────────────────────────────────────────────────────────────────────
 
 async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOptions): Promise<StartedAction> {
+  // Before anything reads the doc: the gate was quoted with real prices, so it is re-checked with them.
+  const prices = await priceBookFor(ctx);
   const gate = ctx.session.doc.gate;
   if (!gate || gate.id !== gateId || gate.status !== 'open') {
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
@@ -848,7 +1043,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
   const handler = actionHandlerFor(gate.action.type);
-  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys));
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys), gate.action.type === 'recheck_page' ? undefined : prices);
   const nickname = handler ? gate.model : gateModelName(doc, gate.action, estimate);
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
@@ -958,7 +1153,7 @@ const describeSpend = (doc: ComicDoc, action: SpendAction): SpendPlan => {
 };
 
 const modelLabel = (doc: ComicDoc, kind: ImageJobKind) => {
-  const { spec, resolution } = resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride);
+  const { spec, resolution } = resolveJobFor(runPinOf(doc), kind);
   return { nickname: spec.nickname, resolution, spec };
 };
 
@@ -1005,7 +1200,7 @@ function createGate(
   estimate: SpendEstimate,
   reason: Gate['reason'],
   opts: RunActionOptions,
-  extra: { staleFrom?: number } = {}
+  extra: { staleFrom?: number; prices?: PriceBook } = {}
 ): StartedAction {
   const doc = ctx.session.doc;
   const action = withoutQuote(bindSpendAction(doc, rawAction));
@@ -1022,7 +1217,10 @@ function createGate(
       ? '. That would go over the budget set for this comic.'
       : `. That would bring this comic to ${formatUsd(after)} — over your ${formatUsd(budget)} budget.`
     : '.';
-  const summary = `${plan.what}${textSpend ? '' : ` on ${nickname} (${resolution})`} · ${price}${overBudget}`;
+  // models.md §2.3: a quote above the price list says which basis it used (no dollar figure in the phrase).
+  const listQuote = textSpend ? null : estimateSpendAction(doc, action, spendActionIsByok(doc, action, ctx.keys));
+  const basis = listQuote && estimate.usd > listQuote.usd + 0.0005 ? basisPhrase(extra.prices, runPinOf(doc), plan.kind) : null;
+  const summary = `${plan.what}${textSpend ? '' : ` on ${nickname} (${resolution})`} · ${price}${basis ? `, priced from ${basis}` : ''}${overBudget}`;
   const gate: Gate = {
     id: newId('gate'),
     action,
@@ -1134,15 +1332,24 @@ const replacesCurrentArt = (doc: ComicDoc, action: SpendAction): boolean => {
   }
 };
 
-/** The quote for a single new take of one page / the cover (chip prices). */
-const quoteOf = (doc: ComicDoc, action: SpendAction, byok: boolean) => estimateSpendAction(doc, action, byok).usd;
+/**
+ * The quote for a single new take of one page / the cover (chip prices). With the request's PriceBook the chip
+ * carries the real price the run is reserved and charged at, so its tap is not re-gated for nothing.
+ */
+const quoteOf = (doc: ComicDoc, action: SpendAction, byok: boolean, prices?: PriceBook) => estimateSpendAction(doc, action, byok, prices).usd;
 
 /** A spend that would draw nothing: what exists, what's next ($0). */
-const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: CostFormatter): { message: string; steps: NextStep[]; breakdown: boolean } => {
+const nothingToDraw = (
+  doc: ComicDoc,
+  action: SpendAction,
+  byok: boolean,
+  cost: CostFormatter,
+  prices?: PriceBook
+): { message: string; steps: NextStep[]; breakdown: boolean } => {
   if (action.type === 'render_sheets') {
-    return { message: 'All character sheets are already drawn and up to date — nothing was spent.', steps: nextStepsFor(doc, { byok }), breakdown: false };
+    return { message: 'All character sheets are already drawn and up to date — nothing was spent.', steps: nextStepsFor(doc, { byok, prices }), breakdown: false };
   }
-  if (action.type !== 'render_pages') return { message: 'Nothing to draw right now — nothing was spent.', steps: nextStepsFor(doc, { byok }), breakdown: false };
+  if (action.type !== 'render_pages') return { message: 'Nothing to draw right now — nothing was spent.', steps: nextStepsFor(doc, { byok, prices }), breakdown: false };
   const ids = action.pageIds?.length ? new Set(action.pageIds) : null;
   const asked = doc.pages.filter((p) => !ids || ids.has(p.id)).sort((a, b) => a.n - b.n);
   const busy = asked.filter((p) => isBusy(p.render));
@@ -1169,14 +1376,14 @@ const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: 
   if (empty.length) parts.push(`${capitalize(pagesPhrase(empty))} ${empty.length === 1 ? 'has' : 'have'} no panels yet — write ${empty.length === 1 ? 'it' : 'them'} first.`);
   const cover = doc.cover.render;
   if (cover.status === 'ready') parts.push(coverNeedsDraw(doc) ? 'The cover is out of date.' : 'The cover is drawn too.');
-  else if (!isBusy(cover)) parts.push(`The cover isn't drawn yet (${cost.approx(quoteOf(doc, { type: 'render_cover' }, byok))}).`);
+  else if (!isBusy(cover)) parts.push(`The cover isn't drawn yet (${cost.approx(quoteOf(doc, { type: 'render_cover' }, byok, prices))}).`);
   parts.push('Nothing was spent.');
-  const steps = nextStepsFor(doc, { byok });
+  const steps = nextStepsFor(doc, { byok, prices });
   // "A new take" is the honest paid alternative (a click is a confirmation; the chip carries its quote).
   const first = ready[0];
   if (first) {
     const take: SpendAction = { type: 'render_pages', pageIds: [first.id], force: true };
-    const usd = quoteOf(doc, take, byok);
+    const usd = quoteOf(doc, take, byok, prices);
     steps.push({ label: `New take of page ${first.n}`, action: { ...take, quotedUsd: usd }, usd });
   }
   return { message: parts.join(' '), steps: dedupeSteps(steps).slice(0, MAX_NEXT_STEPS), breakdown: true };
@@ -1194,6 +1401,9 @@ const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageM
   const caps = opts.caps ?? ctx.caps;
   const doc = ctx.session.doc;
   if (caps) {
+    // A locked comic's model is judged by the model access rule alone (models.md §3.4 item 10): the caller
+    // turns this into the honest H notice — never a fallback to another model.
+    if (lockOf(doc) && spec.id !== FREE_PLAN_IMAGE_MODEL && !caps.modelOverride) return LOCKED_MODEL_ACCESS_REASON;
     const overridden = !!doc.settings.imageModelOverride && spec.id !== TIER_PRESETS[doc.settings.quality]?.model;
     if (overridden && !caps.modelOverride) {
       return BILLING_ENABLED
@@ -1211,42 +1421,73 @@ const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageM
   return qualityDenied && spec.id !== TIER_PRESETS.standard.model ? qualityDenied : null;
 };
 
-async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
-  // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
-  if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
+/** qualityProblem's answer when a LOCKED comic's model is outside this user's plan (models.md §3.9). */
+const LOCKED_MODEL_ACCESS_REASON = 'needs a paid plan or your own key';
+
+/**
+ * models.md §3.6 H: the locked model can't run for this comic right now (access lost, retired, no transport).
+ * Nothing is drawn and nothing falls back to another model; the way out is the picker (and its confirm).
+ */
+const modelUnavailable = (ctx: StudioContext, opts: RunActionOptions, model: string, reason: string): StartedAction => {
+  const text = modelUnavailableText(model, reason);
+  deliver(ctx, opts, text, [noticeCard('warn', text)], [SEE_OTHER_MODELS_STEP]);
+  return finished({ status: 'blocked', message: text, code: MODEL_LOCKED });
+};
+
+type SpendDecision =
+  | { kind: 'done'; started: StartedAction }
+  | { kind: 'go'; plan: SpendPlan; spec: ImageModelSpec; byok: boolean; estimate: SpendEstimate };
+
+/**
+ * Everything startSpend decides before money moves, synchronously (validation, the lock, keys, access, the quote,
+ * the gate). Terminal answers are delivered here; 'go' commits nothing.
+ */
+function decideSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions, prices: PriceBook): SpendDecision {
+  const done = (started: StartedAction): SpendDecision => ({ kind: 'done', started });
   const doc = ctx.session.doc;
   const problem = validateSpendAction(doc, action);
-  if (problem) return blocked(ctx, opts, problem, 'info');
+  if (problem) return done(blocked(ctx, opts, problem, 'info'));
 
+  const lock = lockOf(doc);
+  // A comic locked to a model the registry no longer lists: never re-pointed at another one (§3.9).
+  if (lock && !getImageModel(lock.modelId)) return done(modelUnavailable(ctx, opts, lock.modelId, "it's no longer offered in Comic Studio"));
   const plan = describeSpend(doc, action);
   const { spec } = modelLabel(doc, plan.kind);
   if (!ctx.keys.openrouter?.key && !ctx.keys.gemini?.key) {
-    return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error');
+    return done(blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error'));
   }
   const picked = imageRouteFor(spec, ctx.keys);
   if (!picked) {
-    return blocked(ctx, opts, `${spec.nickname} needs ${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key. Add one in Settings → API keys.`, 'error');
+    const needs = `${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key`;
+    if (lock) return done(modelUnavailable(ctx, opts, spec.nickname, `it needs ${needs}`));
+    return done(blocked(ctx, opts, `${spec.nickname} needs ${needs}. Add one in Settings → API keys.`, 'error'));
   }
   const denied = qualityProblem(ctx, opts, spec);
+  if (denied === LOCKED_MODEL_ACCESS_REASON) return done(modelUnavailable(ctx, opts, spec.nickname, denied));
   if (denied) {
-    return blocked(ctx, opts, /\bStandard\b/.test(denied) ? denied : `${denied} Switch to Standard quality to keep going.`, 'warn', [
-      { label: 'Switch to Standard quality', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'standard' } }] }, usd: 0 }
-    ]);
+    return done(
+      blocked(ctx, opts, /\bStandard\b/.test(denied) ? denied : `${denied} Switch to Standard quality to keep going.`, 'warn', [
+        { label: 'Switch to Standard quality', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'standard' } }] }, usd: 0 }
+      ])
+    );
   }
 
-  // Priced for the key that will draw (the quote, the markup and the reserve agree).
+  // Priced for the key that will draw (the quote, the markup and the reserve agree), at real prices.
   const byok = picked.byok;
-  const estimate = estimateSpendAction(doc, action, byok);
+  const estimate = estimateSpendAction(doc, action, byok, prices);
   if (estimate.imageCount <= 0) {
     // Everything requested is ready and current (R1): $0, with what exists and what's next.
-    const nothing = nothingToDraw(doc, action, byok, costOf(ctx));
+    const nothing = nothingToDraw(doc, action, byok, costOf(ctx), prices);
     const cards: Card[] = nothing.breakdown
       ? [{ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(action.type === 'render_pages' && action.pageIds?.length ? { pageIds: action.pageIds } : {}) }]
       : [noticeCard('info', nothing.message)];
     deliver(ctx, opts, nothing.message, cards, nothing.steps);
-    return finished({ status: 'nothing', message: nothing.message, nextSteps: nothing.steps });
+    return done(finished({ status: 'nothing', message: nothing.message, nextSteps: nothing.steps }));
   }
 
+  // Staleness is judged on the estimate that is reserved and charged (models.md §2.3: never under-quote; §3.4 7.7
+  // tolerance). Server chips carry PriceBook quotes and start directly; a quote on another basis (the client's
+  // registry-priced plan cards) that the real price outgrew by more than 15% + $0.01 gets a fresh real-price gate.
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
@@ -1256,16 +1497,114 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     redraw: !opts.confirmed && replacesCurrentArt(doc, action),
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
+  if (reason) return done(createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom, prices }));
+  return { kind: 'go', plan, spec, byok, estimate };
+}
+
+/** The image kinds a spend action can draw (its run's models, for the preflight). */
+const runKinds = (action: SpendAction): ImageJobKind[] => {
+  switch (action.type) {
+    case 'render_style_options':
+      return ['style_option'];
+    case 'render_sheets':
+      return ['sheet', 'place'];
+    case 'render_pages':
+      return ['page', 'sheet', 'cover'];
+    case 'edit_page':
+      return ['edit'];
+    case 'render_cover':
+      return ['cover'];
+    default:
+      return [];
+  }
+};
+
+/** reliability.md §2: the money-safe preflight. Our own failure to check never blocks a run (null = go). */
+const preflightFor = async (ctx: StudioContext, opts: RunActionOptions, action: SpendAction, prices: PriceBook): Promise<RunPreflight | null> => {
+  const pin = runPinOf(ctx.session.doc);
+  const specs = [...new Map(runKinds(action).map((k) => resolveJobFor(pin, k).spec).map((spec) => [spec.id, spec] as const)).values()];
+  if (!specs.length) return null;
+  try {
+    return await preflightImageRun({ specs, keys: ctx.keys, doc: ctx.session.doc, caps: opts.caps ?? ctx.caps ?? DEFAULT_CAPS, prices });
+  } catch (err) {
+    logger.warn('comic_preflight_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    return null;
+  }
+};
+
+/** A health reason inside a sentence: "Our last 3 calls failed…" → "our last 3 calls failed…" (names stay as they are). */
+const lowerLead = (reason: string): string => (/^(Our|Every|Provider|Retrying)\b/.test(reason) ? reason[0].toLowerCase() + reason.slice(1) : reason);
+
+/** "OpenRouter" / "Gemini" for a route. */
+const ROUTE_NAMES: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemini: 'Gemini' };
+
+/**
+ * The preflight found the model down on every route this user can reach: start NOTHING (no reservation, no job,
+ * no failed tiles, no spend), post ONE calm outage card with real options and a short honest line.
+ */
+const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: SpendAction, go: Extract<SpendDecision, { kind: 'go' }>, pre: RunPreflight): StartedAction => {
+  const doc = ctx.session.doc;
+  const first = pre.blocked?.[0];
+  const spec = getImageModel(first?.modelId) ?? go.spec;
+  const reason = (first?.reason || `${spec.nickname} isn't being served right now`).replace(/[.\s]+$/, '');
+  const card: Card = {
+    type: 'model_outage',
+    id: newId('card'),
+    modelId: spec.id,
+    options: pre.options.length ? pre.options : [{ kind: 'wait_and_retry' }],
+    blockedAction: bindSpendAction(doc, action),
+    origin: 'preflight'
+  };
+  const why = reason.includes(spec.nickname) ? reason : `${spec.nickname} is down right now (${lowerLead(reason)})`;
+  const text = `I haven't started ${go.plan.what}: ${why}. Nothing was charged — your comic stays on ${spec.nickname} so every page matches.`;
+  deliver(ctx, opts, text, [card]);
+  for (const b of pre.blocked || [go.spec].map((s) => ({ modelId: s.id }))) {
+    const blockedSpec = getImageModel(b.modelId);
+    const route = blockedSpec ? imageRouteFor(blockedSpec, ctx.keys) : null;
+    recordImageCall({
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+      modelId: b.modelId,
+      ...(route ? { providerModel: route.model, route: route.route, byok: route.byok } : {}),
+      kind: go.plan.kind,
+      outcome: 'blocked',
+      errorCode: 'MODEL_DOWN',
+      providerCostUsd: null,
+      billedUsd: 0
+    });
+  }
+  logger.warn('comic_preflight_blocked', { projectId: ctx.projectId, action: action.type, models: (pre.blocked || []).map((b) => b.modelId) });
+  const options = card.options.map((o) => (o.kind === 'switch_model' ? `switch to ${o.nickname}` : o.kind === 'other_route' ? o.label : o.kind === 'add_key' ? o.label : 'wait and retry automatically')).join(', ');
+  return finished({
+    status: 'blocked',
+    code: 'PROVIDER_ERROR',
+    message: `Not started: ${spec.nickname} is down on every route this account can use (${lowerLead(reason)}). Nothing was drawn and nothing was charged; the outage card offers: ${options}. Do not say the drawing is under way.`
+  });
+};
+
+async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
+  // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
+  if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
+  const prices = await priceBookFor(ctx);
+  const first = decideSpend(ctx, action, opts, prices);
+  if (first.kind === 'done') return first.started;
+  // reliability.md §2: check before spending — no paid run starts on a model that is down everywhere we can reach.
+  const pre = await preflightFor(ctx, opts, action, prices);
+  if (pre && !pre.ok) return preflightBlocked(ctx, opts, action, first, pre);
+  // The doc may have moved while the health check ran: decide again, synchronously up to the reservation.
+  const go = decideSpend(ctx, action, opts, prices);
+  if (go.kind === 'done') return go.started;
+  const { plan, spec, byok, estimate } = go;
+  const doc = ctx.session.doc;
 
   // Proceeding: retire any open gate for the same kind of spend (it is now moot).
-  const open = ctx.session.doc.gate;
+  const open = doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
-  // Pin the model/quality now so mid-run settings changes can't move this spend off the
-  // quoted/authorised price (the latest sheets and pages are still used — see prepare()).
-  const pinned: Pick<Settings, 'quality' | 'imageModelOverride'> = { quality: doc.settings.quality, imageModelOverride: doc.settings.imageModelOverride };
-  const runner = new RenderRun(ctx, estimate, pinned, opts, byok);
+  // Pin the model (the lock), quality and override now so mid-run settings changes can't move this spend off
+  // the quoted/authorised price (the latest sheets and pages are still used — see prepare()).
+  const pinned = runPinOf(doc);
+  const runner = new RenderRun(ctx, estimate, pinned, opts, byok, prices, pre?.useRoute, action);
   runner.reserve();
   const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish; I'll post when they're ready.`;
   let done: Promise<void>;
@@ -1403,6 +1742,8 @@ interface ImageJob {
   landedOps?: () => DocOp[];
   /** Already re-queued once after a provider rate limit. */
   requeued?: boolean;
+  /** What failed attempts before a re-queue were charged (carried into the final failure). */
+  failedCharged?: number;
 }
 
 interface JobResult {
@@ -1426,6 +1767,11 @@ interface JobResult {
   detail?: string;
   /** Drawn on the safe-take retry after the image model's filter declined the first take. */
   saferTake?: boolean;
+  /** Failure: the last error as thrown (provider facts for the outage card) and its code. */
+  raw?: unknown;
+  code?: StudioErrorCode;
+  /** Failure: what this target's failed attempts were charged (0 when the provider billed nothing). */
+  chargedUsd?: number;
 }
 
 type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
@@ -1553,9 +1899,15 @@ class RenderRun {
   constructor(
     private readonly ctx: StudioContext,
     private readonly estimate: SpendEstimate,
-    private readonly pinned: Pick<Settings, 'quality' | 'imageModelOverride'>,
+    private readonly pinned: RunPin,
     private readonly opts: RunActionOptions,
-    private readonly byok: boolean
+    private readonly byok: boolean,
+    /** Real prices (live list + observed; listUsd on every spend entry). */
+    private readonly prices?: PriceBook,
+    /** The preflight found the primary route down and the same model up on a same-payer route. */
+    private readonly preferRoute?: ImageRoute,
+    /** The action this run carries out (the mid-run outage card narrows it to what failed). */
+    private readonly action?: SpendAction
   ) {
     this.session = ctx.session;
     this.signal = ctx.session.abort.signal;
@@ -1598,7 +1950,8 @@ class RenderRun {
 
   /** What one image of this job would cost at the pinned quality (savedUsd, reservation shares, chip quotes). */
   private priceOf(kind: ImageJobKind): number {
-    return estimateJobs([{ kind, count: 1 }], this.pinned.quality, { override: this.pinned.imageModelOverride, byok: this.byok }).usd;
+    // The basis the run was reserved at (its PriceBook), so shares and chip quotes agree with the reservation.
+    return priceImageJobs(this.session.doc, [{ kind, count: 1 }], this.byok, this.prices, this.pinned).usd;
   }
 
   private commit(ops: DocOp[], label?: string) {
@@ -1609,7 +1962,7 @@ class RenderRun {
   private priced(step: NextStep): NextStep {
     const action = step.action;
     if (!action || !isSpendAction(action) || typeof action.quotedUsd === 'number' || actionHandlerFor(action.type)) return step;
-    const usd = estimateSpendAction(this.session.doc, action, this.byok).usd;
+    const usd = estimateSpendAction(this.session.doc, action, this.byok, this.prices).usd;
     return { ...step, action: { ...action, quotedUsd: usd }, usd };
   }
 
@@ -1919,7 +2272,7 @@ class RenderRun {
 
   /** Background work always posts its own message, after a running director turn's reply. */
   private async post(text: string, cards: Card[]) {
-    await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, cards, nextStepsFor(this.session.doc, { byok: this.byok }))) }]));
+    await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, cards, nextStepsFor(this.session.doc, { byok: this.byok, prices: this.prices }))) }]));
   }
 
   /** Anything still queued/rendering that this run owns goes back to its previous state (or failed). */
@@ -1944,7 +2297,12 @@ class RenderRun {
     const drawn = this.results.filter((r) => r.ok && !r.reuse && !r.blocked);
     const reused = this.results.filter((r) => r.ok && !!r.reuse);
     const blockedR = this.results.filter((r) => r.ok && r.blocked);
-    const failed = this.results.filter((r) => !r.ok && !r.skipped);
+    const failedAll = this.results.filter((r) => !r.ok && !r.skipped);
+    // reliability.md §2: a provider-side failure is said calmly (§3.6 G) and gets the outage card, never raw error text.
+    const upstream = failedAll.filter(isUpstreamResult);
+    // §3.6 H: the model itself can't be drawn (no longer served, nothing within the quote): the H notice says why.
+    const unavailable = failedAll.filter((r) => !!unavailableReasonOf(r));
+    const failed = failedAll.filter((r) => !isUpstreamResult(r) && !unavailableReasonOf(r));
     const skipped = this.results.filter((r) => r.skipped);
     const noun = (list: JobResult[]) => describeJobs(list.map((r) => r.job));
     const are = (list: JobResult[]) => (list.length === 1 ? 'is' : 'are');
@@ -1990,6 +2348,12 @@ class RenderRun {
       );
       if (limited.length) parts.push(`I already waited for the provider and tried ${limited.length === 1 ? 'it' : 'them'} once more.`);
     }
+    if (unavailable.length) parts.push(`${capitalize(noun(unavailable))} ${unavailable.length === 1 ? "wasn't" : "weren't"} drawn.`);
+    if (upstream.length) {
+      parts.push(this.upstreamText(upstream));
+      const limited = upstream.filter((r) => r.rateLimited && r.job.requeued);
+      if (limited.length) parts.push(`I already waited for the provider and tried ${limited.length === 1 ? 'it' : 'them'} once more.`);
+    }
     if (skipped.length) {
       parts.push(
         this.stopReason
@@ -1999,14 +2363,94 @@ class RenderRun {
             : `${capitalize(noun(skipped))} did not start.`
       );
     }
-    if (!drawn.length && !reused.length && !blockedR.length && !failed.length && !skipped.length) parts.push('Nothing was drawn.');
+    if (!drawn.length && !reused.length && !blockedR.length && !failedAll.length && !skipped.length) parts.push('Nothing was drawn.');
     if (failed.length && !this.stopReason) parts.push('Retry from the board or ask me to try again.');
     const doc = this.session.doc;
     const drewPages = [...drawn, ...reused].some((r) => r.job.kind === 'page');
-    if (drewPages && !failed.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
+    if (drewPages && !failedAll.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
       parts.push('Want the cover next?');
     }
     return parts.join(' ');
+  }
+
+  /**
+   * models.md §3.6 H / §3.9: the provider no longer serves the comic's model (a 404 for it), or the comic is locked to
+   * a model its vendor deprecated. Jobs never fall back to another model; the notice offers the picker (and its confirm).
+   */
+  private modelUnavailableNotice(failed: JobResult[]): Card | null {
+    const gone = failed.find((r) => !!unavailableReasonOf(r));
+    if (gone) return noticeCard('warn', modelUnavailableText(this.specOf(gone.job).nickname, unavailableReasonOf(gone)!));
+    // §3.9 row 1: a legacy comic on a deprecated or now-hidden model keeps drawing on it, with one notice.
+    const locked = this.pinned.lock ? getImageModel(this.pinned.lock.modelId) : undefined;
+    if (!locked || (locked.lifecycle !== 'deprecated' && locked.pickable)) return null;
+    const text = `This comic is drawn with ${locked.nickname}, which is no longer offered for new comics. It keeps working while the provider serves it; you can switch in the model picker (switching can affect consistency).`;
+    const said = this.session.doc.conversation.some((m) => m.cards?.some((c) => c.type === 'notice' && c.text === text));
+    return said ? null : noticeCard('info', text);
+  }
+
+  /** The model a job of this run draws on (the lock, else the tier/override at the run's start). */
+  private specOf(job: ImageJob): ImageModelSpec {
+    return resolveJobFor(this.pinned, job.kind).spec;
+  }
+
+  /**
+   * models.md §3.6 G (exact for a 429): "{Upstream} is rate-limiting {Model} right now ({detail}). Page {p} wasn't
+   * drawn{, and you weren't charged for it}. Your comic stays on {Model} so every page matches." The charge clause
+   * appears only when the provider billed nothing for the failed part.
+   */
+  private upstreamText(list: JobResult[]): string {
+    const first = list[0];
+    const info = imageFailureInfo(first.raw);
+    const model = this.specOf(first.job).nickname;
+    const provider = info?.providerName ? info.providerName.replace(/[^\w .()-]/g, '').slice(0, 40) : '';
+    const upstream = provider || (info?.route ? ROUTE_NAMES[info.route] : 'The image provider');
+    const detail = imageFailureDetail(first.raw);
+    const charged = round4(list.reduce((sum, r) => sum + (r.chargedUsd || 0), 0));
+    const it = list.length === 1 ? 'it' : 'them';
+    const lead = list.some((r) => r.code === 'RATE_LIMIT')
+      ? `${upstream} is rate-limiting ${model} right now`
+      : list.every((r) => isRoutePausedError(r.raw))
+        ? `${model} is paused on ${info?.route ? ROUTE_NAMES[info.route] : 'its provider'} after repeated provider failures`
+        : `${upstream} couldn't serve ${model} right now`;
+    return `${lead}${detail ? ` (${detail})` : ''}. ${capitalize(describeJobs(list.map((r) => r.job)))} ${list.length === 1 ? "wasn't" : "weren't"} drawn${charged === 0 ? `, and you weren't charged for ${it}` : ''}. Your comic stays on ${model} so every page matches.`;
+  }
+
+  /**
+   * reliability.md §2: a run whose targets failed on the provider's side ends with ONE outage card (real options
+   * from a fresh preflight — the breaker may be open now; at least "wait and retry"), its re-send narrowed to what
+   * failed, what that part cost, and the §3.6 G chips. render.error / errorDetail keep the precise reason.
+   */
+  private async midRunOutage(upstream: JobResult[]): Promise<{ card: Card; steps: NextStep[] } | null> {
+    if (!upstream.length) return null;
+    const doc = this.session.doc;
+    const spec = this.specOf(upstream[0].job);
+    let options: OutageOption[] = [{ kind: 'wait_and_retry' }];
+    try {
+      const pre = await preflightImageRun({ specs: [spec], keys: this.ctx.keys, doc, caps: this.opts.caps ?? this.ctx.caps ?? DEFAULT_CAPS, ...(this.prices ? { prices: this.prices } : {}) });
+      if (!pre.ok && pre.options.length) options = pre.options;
+    } catch (err) {
+      logger.warn('comic_outage_options_failed', { projectId: this.ctx.projectId, message: (err as Error)?.message });
+    }
+    const blockedAction = this.action ? narrowBlockedAction(this.action, upstream.map((r) => r.job.target), doc) : undefined;
+    const chargedUsd = round4(upstream.reduce((sum, r) => sum + (r.chargedUsd || 0), 0));
+    const card: Card = {
+      type: 'model_outage',
+      id: newId('card'),
+      modelId: spec.id,
+      options,
+      ...(blockedAction ? { blockedAction } : {}),
+      origin: 'mid_run',
+      chargedUsd
+    };
+    const steps: NextStep[] = [];
+    if (blockedAction && isSpendAction(blockedAction)) {
+      const waitMs = imageFailureInfo(upstream[0].raw)?.retryAfterMs;
+      const seconds = typeof waitMs === 'number' && Number.isFinite(waitMs) && waitMs >= 1000 ? Math.round(waitMs / 1000) : 0;
+      const { quotedUsd: _old, ...fresh } = blockedAction as SpendAction & { quotedUsd?: number };
+      steps.push(this.priced({ label: `Try again${seconds ? ` in ${seconds}s` : ''}`, action: fresh as SpendAction }));
+    }
+    steps.push(SEE_OTHER_MODELS_STEP);
+    return { card, steps };
   }
 
   /**
@@ -2029,7 +2473,17 @@ class RenderRun {
     // over-the-rating notice ride on THIS summary, so the run stays one message.
     const safety = takeRenderSafetyFollowups(this.session);
     if (safety.notices.length) this.notices.push(...safety.notices);
-    const steps = dedupeSteps([...safety.steps.map((s) => this.priced(s)), ...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
+    const outage = await this.midRunOutage(failed.filter(isUpstreamResult));
+    if (outage) this.notices.push(outage.card);
+    const unavailable = this.modelUnavailableNotice(failed);
+    if (unavailable) this.notices.push(unavailable);
+    const steps = dedupeSteps([
+      ...(outage?.steps ?? []),
+      ...(unavailable ? [SEE_OTHER_MODELS_STEP] : []),
+      ...safety.steps.map((s) => this.priced(s)),
+      ...this.extraSteps,
+      ...nextStepsFor(this.session.doc, { byok: this.byok, prices: this.prices })
+    ]).slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, [...lead, ...this.notices], steps)) }]));
@@ -2122,8 +2576,10 @@ class RenderRun {
         patch: { status, error: message, updatedAt: Date.now(), ...(attempts ? { attempts } : {}), ...(errorDetail ? { errorDetail } : {}) }
       }
     ]);
-    this.results.push({ job, ok: false, error: message, ...extra });
-    if (job.keepStatusOnFailure) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
+    const result: JobResult = { job, ok: false, error: message, ...extra };
+    this.results.push(result);
+    // Provider pauses get the outage card and an unavailable model gets H: neither is a red error line.
+    if (job.keepStatusOnFailure && !isUpstreamResult(result) && !unavailableReasonOf(result)) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
   }
 
   private async runJob(job: ImageJob): Promise<void> {
@@ -2180,6 +2636,9 @@ class RenderRun {
     const doc = this.session.doc;
     const match = findSpecHashVersion(doc, job.target);
     if (!match) return false;
+    // A locked comic is drawn on its model only: a version from another model is never put back silently (§3.1).
+    const lock = lockOf(doc);
+    if (lock && match.version.model && lockedSpecId(match.version.model) !== lockedSpecId(lock.modelId)) return false;
     const saved = this.priceOf(job.kind);
     const balloonsBefore = job.target.kind === 'page' ? findPage(doc, job.target.id)?.balloons : undefined;
     // Un-busy first (render_use is a no-op on a busy target), then swap in the version.
@@ -2237,7 +2696,7 @@ class RenderRun {
     else if (job.target.kind === 'cover') action = { type: 'render_cover' };
     else if (job.target.kind === 'sheet') action = { type: 'render_sheets', characterIds: [job.target.id], force: true };
     if (!action) return;
-    const usd = quoteOf(doc, action, this.byok);
+    const usd = quoteOf(doc, action, this.byok, this.prices);
     if (usd <= 0) return;
     this.extraSteps.push({ label: `Fresh take of ${job.label.toLowerCase()}`, action: { ...action, quotedUsd: usd }, usd });
   }
@@ -2340,7 +2799,9 @@ class RenderRun {
             updatedAt: Date.now()
           }
         },
-        this.reuseSpend(job, saved, model)
+        this.reuseSpend(job, saved, model),
+        // The copy has the same job hash, so the same model: it is this comic's image like a fresh one.
+        ...this.lockOps(job, prepared.compiled.spec)
       ],
       'Reuse drawing'
     );
@@ -2362,6 +2823,14 @@ class RenderRun {
     const { ctx, session } = this;
     let prepared = initial;
     let safe = !!job.safe;
+    // The lock invariant comes first: a mismatching job makes no reservation and no provider call. Its "Drawing…"
+    // activity ends with the failure (the live status line never keeps drawing after the job failed).
+    try {
+      this.assertLockedModel(job, prepared.compiled.spec);
+    } catch (err) {
+      end(false);
+      throw err;
+    }
     const picked = imageRouteFor(prepared.compiled.spec, ctx.keys);
     if (!picked) {
       end(false);
@@ -2391,7 +2860,7 @@ class RenderRun {
     }
     const reservation = reserved.reservation;
 
-    let result: ImageResult | undefined;
+    let result: ImageResultPlus | undefined;
     let lastError: StudioError | undefined;
     let lastRaw: unknown;
     let attempts = 0;
@@ -2402,34 +2871,57 @@ class RenderRun {
     // A deadline-abort hits a non-streaming request the provider keeps generating (and
     // billing); it is flagged `abandoned` so we settle an estimate instead of releasing.
     let abandonedUsd = 0;
+    // What the failed attempts of this job were charged (the mid-run outage card's chargedUsd).
+    let failedCharged = 0;
     while (attempts < MAX_IMAGE_ATTEMPTS) {
       attempts += 1;
+      const startedAt = Date.now();
       try {
-        // No abort signal: a call that has started is paid and is always kept.
-        result = await ctx.images({
+        // No abort signal: a call that has started is paid and is always kept. preferRoute: the preflight found
+        // the primary route down and the same model on a same-payer route up (reliability.md §2).
+        const request: ImageRequestPlus = {
           spec: prepared.compiled.spec,
           resolution: prepared.compiled.resolution,
           aspect: prepared.compiled.aspect,
           prompt: prepared.compiled.prompt,
-          references: prepared.references
-        });
+          references: prepared.references,
+          ...(this.preferRoute ? { preferRoute: this.preferRoute } : {}),
+          // Images-API models pin `provider.only` to endpoints at or under this per-image quote (models.md §2.4 R3.4).
+          ...(this.unitQuoteUsd(prepared.compiled, job.kind) !== null ? { maxUsd: this.unitQuoteUsd(prepared.compiled, job.kind)! } : {})
+        };
+        result = (await ctx.images(request)) as ImageResultPlus;
         if (safe && safeRetried) saferTake = true;
         break;
       } catch (err) {
         lastRaw = err;
         lastError = asStudioError(err, 'The image could not be drawn. Please try again.');
-        const spent = (err as { spentUsd?: unknown })?.spentUsd;
-        if (typeof spent === 'number' && Number.isFinite(spent) && spent > 0) failedSpend += spent;
+        const spentRaw = (err as { spentUsd?: unknown })?.spentUsd;
+        const spent = typeof spentRaw === 'number' && Number.isFinite(spentRaw) && spentRaw > 0 ? spentRaw : 0;
+        failedSpend += spent;
+        const abandoned = !!(err as { abandoned?: boolean })?.abandoned;
+        // Our own deadline fired after dispatch: the provider still bills it (registry price, estimated).
+        const owedNow = abandoned ? imagePriceUsd(prepared.compiled.spec, prepared.compiled.resolution) : 0;
+        abandonedUsd += owedNow;
+        // models.md §3.4 item 9: EVERY attempt is recorded — a failed one with what the provider reported (usually $0).
+        failedCharged = round4(
+          failedCharged +
+            this.recordAttempt(job, prepared, picked, {
+              ok: false,
+              providerUsd: spent + owedNow,
+              reported: spent > 0 ? spent : null,
+              estimated: abandoned,
+              byok: picked.byok,
+              error: lastError,
+              raw: err,
+              latencyMs: Date.now() - startedAt,
+              suffix: abandoned ? ' (timed out)' : ' (failed attempt)'
+            })
+        );
         if (lastError.code === 'RATE_LIMIT') {
           rateLimited = true;
           this.noteRateLimit(job);
         }
-        if ((err as { abandoned?: boolean })?.abandoned) {
-          // Our own deadline fired after dispatch: the provider still bills it, so do not
-          // retry (that would pay twice) — bill the registry price and stop.
-          abandonedUsd += imagePriceUsd(prepared.compiled.spec, prepared.compiled.resolution);
-          break;
-        }
+        if (abandoned) break; // retrying would pay twice
         if (this.signal.aborted || lastError.code === 'CANCELLED') break;
         // Safe take: the image model's filter declined this take (not billed) — recompile one
         // notch gentler and try once more, within the approved spend (safety.md §3.2).
@@ -2460,12 +2952,8 @@ class RenderRun {
     if (!result) {
       end(false);
       const owed = round4(failedSpend + abandonedUsd);
-      if (owed > 0) {
-        await reservation.settle({ costUsd: owed, imageUnits: 0 });
-        this.recordImageSpend(job, prepared.compiled, owed, abandonedUsd > 0, picked.byok, abandonedUsd > 0 ? ' (timed out)' : ' (failed attempt)');
-      } else {
-        await reservation.release(lastError?.code || 'image_failed');
-      }
+      if (owed > 0) await reservation.settle({ costUsd: owed, imageUnits: 0 });
+      else await reservation.release(lastError?.code || 'image_failed');
       if (lastError?.code === 'CANCELLED') {
         this.restore(job);
         return { outcome: { kind: 'done' }, asset: null };
@@ -2481,11 +2969,18 @@ class RenderRun {
       // Incident follow-up: a rate-limited image is re-queued once after the provider's
       // Retry-After (or 45 s) before it is marked failed.
       if (lastError?.code === 'RATE_LIMIT' && !job.requeued && !this.signal.aborted && !this.stopReason) {
+        job.failedCharged = round4((job.failedCharged || 0) + failedCharged);
         this.commit([{ op: 'render', target: job.target, patch: { status: 'queued', error: undefined, updatedAt: Date.now() } }]);
         return { outcome: { kind: 'requeue', afterMs: this.requeueDelay(lastRaw) }, asset: null };
       }
       const message = lastError?.userMessage || 'The image could not be drawn.';
-      this.fail(job, message, attempts, { rateLimited, ...(detail ? { detail } : {}) }, this.errorDetailOf(lastRaw, lastError, detail));
+      this.fail(
+        job,
+        message,
+        attempts,
+        { rateLimited, ...(detail ? { detail } : {}), raw: lastRaw, ...(lastError ? { code: lastError.code } : {}), chargedUsd: round4((job.failedCharged || 0) + failedCharged) },
+        this.errorDetailOf(lastRaw, lastError, detail)
+      );
       return { outcome: { kind: 'done' }, asset: null };
     }
 
@@ -2494,6 +2989,17 @@ class RenderRun {
     const imageUsd = providerUsd ?? imagePriceUsd(compiled.spec, compiled.resolution);
     // Earlier paid-but-failed attempts of this same job are billed alongside the image.
     const settleUsd = failedSpend > 0 ? round4(imageUsd + failedSpend) : providerUsd;
+    const success = (suffix: string) =>
+      this.recordAttempt(job, prepared, picked, {
+        ok: true,
+        providerUsd: imageUsd,
+        reported: providerUsd ?? null,
+        estimated: providerUsd === undefined,
+        byok: result!.byok,
+        result,
+        latencyMs: typeof result!.latencyMs === 'number' ? result!.latencyMs : 0,
+        suffix
+      });
     let saved: AssetRef;
     try {
       saved = await this.saveImage(result.dataUrl, compiled.spec.id);
@@ -2501,15 +3007,13 @@ class RenderRun {
       // Paid but lost: bill it honestly and say so.
       end(false);
       await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
-      if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
-      this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, ' (not saved)');
+      success(' (not saved)');
       logger.error('comic_image_save_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
       this.fail(job, "The image was drawn but couldn't be saved. Please retry.", attempts);
       return { outcome: { kind: 'done' }, asset: null };
     }
     await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
-    if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
-    const usd = this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, '');
+    const usd = success('');
 
     // Shape check (free): never an automatic redraw or fit — offer them.
     const aspect = this.checkAspect(job, compiled, saved, result.route);
@@ -2533,7 +3037,8 @@ class RenderRun {
             ...(safe && !job.note ? { note: 'Safer take' } : {})
           }
         },
-        ...(job.landedOps ? job.landedOps() : [])
+        ...(job.landedOps ? job.landedOps() : []),
+        ...this.lockOps(job, compiled.spec, picked.model, result.modelVersion)
       ],
       { origin: 'job' }
     );
@@ -2655,6 +3160,46 @@ class RenderRun {
     return { blocked: false, previousBack: false };
   }
 
+  /**
+   * models.md §3.4 item 1: the job runs on resolveJobFor(pin, kind). The compilers resolve swatches on the cheap
+   * style model whatever the lock says; once a comic is locked its swatches use the locked model at its nearest 1K
+   * (§2.1), so the compiled job is re-targeted (same prompt, the locked spec's resolution and nearest aspect).
+   */
+  private onLockedModel(job: ImageJob, compiled: CompiledImageJob): CompiledImageJob {
+    const want = resolveJobFor(this.pinned, job.kind);
+    if (compiled.spec.id === want.spec.id && compiled.resolution === want.resolution) return compiled;
+    if (!this.pinned.lock) return compiled; // unlocked: the compilers' choice IS the tier/override resolution
+    return { ...compiled, spec: want.spec, resolution: want.resolution, aspect: nearestAspect(want.spec, compiled.aspect) };
+  }
+
+  /**
+   * models.md §3.4 item 2: the invariant before ANY provider call. A job whose model is not the comic's lock (the
+   * live one: a lock that changed under a running job wins) makes no call, is never billed, and is logged.
+   */
+  private assertLockedModel(job: ImageJob, spec: ImageModelSpec): void {
+    const lock = lockOf(this.session.doc);
+    if (!lock || lockedSpecId(lock.modelId) === spec.id) return;
+    logger.error('comic_model_lock_violation', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), kind: job.kind, model: spec.id, locked: lock.modelId });
+    throw modelLockedError(`This comic is locked to ${modelName(lock.modelId)}, so ${job.label.toLowerCase()} wasn't drawn on ${spec.nickname}. Nothing was charged.`);
+  }
+
+  /**
+   * models.md §3.4 item 3: the op that sets the lock, committed in the SAME batch as the comic's first image (a
+   * legacy doc's derived lock is persisted the same way, origin 'migrated'). Style swatches never lock.
+   */
+  private lockOps(job: ImageJob, spec: ImageModelSpec, providerModel?: string, reported?: string): DocOp[] {
+    if (job.kind === 'style_option') return [];
+    const live = this.session.doc;
+    if (live.imageModel) return [];
+    const derived = deriveLock(live);
+    if (derived && lockedSpecId(derived.modelId) !== spec.id) return []; // never re-point a legacy comic (the invariant refuses such jobs)
+    const canonical = reported && providerModel && reported !== providerModel && reported.startsWith(providerModel) ? reported : undefined;
+    const lock: ImageModelLock = derived
+      ? { ...derived, modelId: spec.id, ...(providerModel && !derived.providerModel ? { providerModel } : {}) }
+      : { modelId: spec.id, ...(providerModel ? { providerModel } : {}), ...(canonical ? { canonicalSlug: canonical } : {}), lockedAt: Date.now(), origin: 'first_render' };
+    return [{ op: 'image_model', lock }];
+  }
+
   /** Compile with references we can actually load; recompile without any that are missing or blocked. */
   private async prepare(
     job: ImageJob,
@@ -2663,12 +3208,14 @@ class RenderRun {
     // Use the live doc (freshly drawn sheets/pages) but pin the model/quality to what was
     // quoted and authorised, so a mid-run settings change can't pick a pricier/gated model.
     const live = this.session.doc;
-    const pinnedDoc: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: this.pinned.imageModelOverride } };
+    // The prompt compilers resolve the model from settings (override-only): on a locked comic they get the locked
+    // id as the override, so pages, sheets, places, covers and edits compile for the locked model's own limits.
+    const pinnedDoc: ComicDoc = { ...live, settings: { ...live.settings, quality: this.pinned.quality, imageModelOverride: quoteOverride(this.pinned) } };
     const docAtCompile = job.docFor ? job.docFor(pinnedDoc) : pinnedDoc;
     // Blocked or quarantined images are never sent to a model (safety.md §3.2 reference gate).
     const missing = blockedPaths(docAtCompile);
     // The compilers apply the safe take (SAFE TAKE line + softened actions) and the rating ceiling themselves.
-    const compileWith = (doc: ComicDoc) => job.compile(doc, opts);
+    const compileWith = (doc: ComicDoc) => this.onLockedModel(job, job.compile(doc, opts));
     let regionDataUrl: string | undefined;
     let result: { compiled: CompiledImageJob; references: ImageReference[]; attached: string[] } | null = null;
     let lazyChecked = false;
@@ -2808,33 +3355,119 @@ class RenderRun {
     }
   }
 
-  /** Commit a spend entry for one image call; returns the charged USD. */
-  private recordImageSpend(job: ImageJob, compiled: CompiledImageJob, providerUsd: number, estimated: boolean, byok: boolean, suffix: string): number {
-    const usd = chargedUsd(providerUsd, byok);
-    this.spentUsd = round4(this.spentUsd + usd);
-    // Move this amount out of the pending reservation in the same tick it is committed.
-    const settled = Math.min(usd, this.reservedLeft);
-    if (settled > 0) {
-      this.reservedLeft = round4(this.reservedLeft - settled);
-      addPending(this.session, -settled);
+  /**
+   * models.md §3.4 item 9: one image ATTEMPT, recorded — a SpendEntry with what was requested (res, route, refs),
+   * how it ended (outcome) and the list price at the time (listUsd, same unit as usd) that also feeds the running
+   * totals (byModel / byTarget / failed, kept by the spend op), plus a fire-and-forget comic_image_calls row.
+   * Recording never blocks or fails the job. Returns the charged USD.
+   */
+  private recordAttempt(
+    job: ImageJob,
+    prepared: { compiled: CompiledImageJob; references: ImageReference[] },
+    picked: { route: ImageRoute; model: string; byok: boolean },
+    a: {
+      ok: boolean;
+      /** Provider cost to bill for this attempt (reported, or the registry price when estimated). */
+      providerUsd: number;
+      /** What the provider reported (null = nothing reported). */
+      reported: number | null;
+      estimated: boolean;
+      byok: boolean;
+      result?: ImageResultPlus;
+      error?: StudioError;
+      raw?: unknown;
+      latencyMs: number;
+      suffix: string;
     }
-    this.commit([
-      {
-        op: 'spend',
-        entry: {
-          id: newId('sp'),
-          at: Date.now(),
-          kind: job.spend,
-          label: `${job.label}${suffix}`,
-          usd,
-          model: compiled.spec.id,
-          byok,
-          estimated,
-          target: renderTargetKey(job.target)
-        }
+  ): number {
+    const { compiled } = prepared;
+    // A breaker refusal that cost nothing never reached a provider: not an attempt, only a 'blocked' call row (below).
+    // One that carries money an earlier attempt on that route already spent (e.g. a charged text-only answer
+    // before the refused retry) is a failed, billed attempt: the ledger settles it, so the comic records it too.
+    const refused = !a.ok && isRoutePausedError(a.raw);
+    const paused = refused && !(a.providerUsd > 0);
+    const usd = chargedUsd(a.providerUsd, a.byok);
+    const info = a.ok ? undefined : imageFailureInfo(a.raw);
+    const route: ImageRoute = a.result?.route ?? info?.route ?? picked.route;
+    const refs = prepared.references.length;
+    if (!paused) {
+      this.spentUsd = round4(this.spentUsd + usd);
+      // Move this amount out of the pending reservation in the same tick it is committed.
+      const settled = Math.min(usd, this.reservedLeft);
+      if (settled > 0) {
+        this.reservedLeft = round4(this.reservedLeft - settled);
+        addPending(this.session, -settled);
       }
-    ]);
-    return usd;
+      const list = this.listUnitUsd(compiled, job.kind, refs);
+      this.commit([
+        {
+          op: 'spend',
+          entry: {
+            id: newId('sp'),
+            at: Date.now(),
+            kind: job.spend,
+            label: `${job.label}${a.suffix}`,
+            usd,
+            model: compiled.spec.id,
+            byok: a.byok,
+            estimated: a.estimated,
+            target: renderTargetKey(job.target),
+            res: compiled.resolution,
+            route,
+            outcome: a.ok ? 'ok' : 'failed',
+            ...(list !== null ? { listUsd: chargedUsd(list, a.byok) } : {}),
+            refs
+          }
+        }
+      ]);
+    }
+    const status = a.ok ? 200 : info?.status;
+    recordImageCall({
+      userId: this.ctx.userId,
+      projectId: this.ctx.projectId,
+      modelId: compiled.spec.id,
+      providerModel: a.result?.model || picked.model,
+      route,
+      ...((a.result?.providerName || info?.providerName) ? { providerName: a.result?.providerName || info?.providerName } : {}),
+      kind: job.kind,
+      res: compiled.resolution,
+      aspect: compiled.aspect,
+      refs,
+      outcome: paused ? 'blocked' : a.ok ? 'ok' : 'failed',
+      ...(typeof status === 'number' && Number.isFinite(status) && status > 0 ? { httpStatus: status } : {}),
+      ...(a.ok ? {} : { errorCode: refused ? 'ROUTE_PAUSED' : a.error?.code || 'PROVIDER_ERROR' }),
+      providerCostUsd: a.reported,
+      billedUsd: paused ? 0 : usd,
+      byok: a.byok,
+      latencyMs: Math.max(0, Math.round(a.latencyMs)),
+      ...(a.result?.modelVersion ? { modelVersion: a.result.modelVersion } : {})
+    });
+    return paused ? 0 : usd;
+  }
+
+  /** The provider price one image of this job was quoted at (the PriceBook's unit price, else the registry list). */
+  private unitQuoteUsd(compiled: CompiledImageJob, kind: ImageJobKind): number | null {
+    try {
+      const usd = this.prices?.unit(compiled.spec.id, compiled.resolution, kind).usd;
+      if (typeof usd === 'number' && Number.isFinite(usd) && usd > 0) return usd;
+    } catch {
+      /* the registry below */
+    }
+    const list = compiled.spec.priceUsd[compiled.resolution];
+    return typeof list === 'number' && Number.isFinite(list) && list > 0 ? list : null;
+  }
+
+  /** The provider's list price for one image of this job right now (live list when the PriceBook has it, else the registry). */
+  private listUnitUsd(compiled: CompiledImageJob, kind: ImageJobKind, refs: number): number | null {
+    try {
+      const book = this.prices as (PriceBook & { quote?: (m: string, r: CompiledImageJob['resolution'], k: ImageJobKind, n?: number) => { list: { usd: number | null }; refsUsd: number } }) | undefined;
+      const q = book?.quote?.(compiled.spec.id, compiled.resolution, kind, refs);
+      if (q && typeof q.list.usd === 'number' && Number.isFinite(q.list.usd)) return round4(q.list.usd + (q.refsUsd || 0));
+    } catch {
+      /* the registry below */
+    }
+    const usd = compiled.spec.priceUsd[compiled.resolution];
+    return typeof usd === 'number' && Number.isFinite(usd) ? round4(usd + (compiled.spec.perRefUsd ?? 0) * refs) : null;
   }
 }
 
@@ -2849,6 +3482,22 @@ const findAsset = (doc: ComicDoc, path: string): AssetRef | undefined => {
 };
 
 const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+/**
+ * reliability.md §2: did this target fail on the MODEL's serving path (a 429, a 5xx, a timeout, a breaker refusal)
+ * rather than on our request, the content or a key? Those end the run with the outage card.
+ */
+const isUpstreamResult = (r: JobResult): boolean => {
+  if (r.ok || r.skipped || r.raw === undefined) return false;
+  if (isRoutePausedError(r.raw)) return true;
+  return UPSTREAM_FAILURE_CODES.has(String(r.code)) && !isOwnSideFailure(r.raw) && !isKeyScopedFailure(r.raw);
+};
+
+/** models.md §3.6 H: the model itself can't be drawn here (no longer served, no endpoint within the quote), else undefined. */
+const unavailableReasonOf = (r: JobResult): string | undefined => {
+  if (r.ok || r.skipped || r.raw === undefined || isUpstreamResult(r)) return undefined;
+  return modelUnavailableReason(r.raw);
+};
 
 const describeJobs = (jobs: ImageJob[]): string => {
   const count = (kind: ImageJobKind | ImageJobKind[]) => jobs.filter((j) => (Array.isArray(kind) ? kind.includes(j.kind) : j.kind === kind)).length;
@@ -2951,6 +3600,23 @@ export async function letterPage(
     } finally {
       if (tracker.calls && !tracker.usd && tracker.estimated) tracker.usd = chargedUsd(QC_USD_PER_PAGE, tracker.byok);
       recordTextSpend(ctx, tracker, 'qc', `Check page ${page.n}`);
+      // M1-CATALOG's observed QC median reads these rows (kind 'qc', the vision model, no resolution).
+      if (tracker.calls) {
+        const route = resolveTextRoute('vision', ctx.keys)?.route;
+        recordImageCall({
+          userId: ctx.userId,
+          projectId: ctx.projectId,
+          modelId: tracker.model || 'vision',
+          ...(route ? { route } : {}),
+          kind: 'qc',
+          res: null,
+          outcome: visionRan ? 'ok' : 'failed',
+          // The provider's own figure only when it reported one (the tracker holds the charged amount).
+          providerCostUsd: tracker.estimated ? null : round4(tracker.usd / (tracker.byok ? 1 : PLATFORM_MARKUP)),
+          billedUsd: tracker.usd,
+          byok: tracker.byok
+        });
+      }
     }
   }
   // Re-read: lines may have been edited while the check ran.
@@ -3003,7 +3669,7 @@ const sanitizeBox = (raw: unknown): Box | undefined => {
   return { x: round4(x), y: round4(y), w: round4(w), h: round4(h) };
 };
 
-function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions): ActionOutcome {
+function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions, prices?: PriceBook): ActionOutcome {
   const doc = ctx.session.doc;
   const option = doc.style.options.find((o) => o.id === optionId);
   if (!option) throw badRequest('That style option is no longer available.');
@@ -3011,7 +3677,7 @@ function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions)
   const board = option.render.status === 'ready' ? option.render.asset : undefined;
   const origin = originOf(opts);
   commitAs(ctx, [{ op: 'style', patch: { status: 'locked', name: option.name, spec: option.spec, board, presetId: undefined, palette: undefined, linework: undefined } }], origin, 'Pick style');
-  const steps = nextStepsFor(ctx.session.doc, { byok: spendIsByok(ctx.keys) });
+  const steps = nextStepsFor(ctx.session.doc, { byok: spendIsByok(ctx.keys), prices });
   deliver(ctx, opts, `Locked “${option.name}”. Every sheet and page now follows it.`, [], steps);
   return { status: 'done', message: `Locked the style “${option.name}”.`, nextSteps: steps };
 }
@@ -3069,9 +3735,11 @@ export async function planPages(
   const origin = originOf(opts);
   const runOpts = { ...opts, confirmed: false } as RunActionOptions;
   const byok = spendIsByok(ctx.keys);
+  // Real prices for the chips (the draw chips start at the price they show): fetched while the writer works.
+  void priceBookFor(ctx);
 
   if (!pageIds && !instructions && before.pages.length && before.planStatus !== 'none' && knownPlanHash(ctx.session) === planInputHashOf(before)) {
-    const steps = nextStepsFor(before, { byok });
+    const steps = nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) });
     const text = `Nothing changed since the plan was written, so here it is again — ${plural(before.pages.length, 'page')}, no writer call (${costOf(ctx).governed ? 'free' : '$0'}).`;
     deliver(ctx, runOpts, text, [breakdownCardFor(before, { view: 'plan' })], steps);
     return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
@@ -3082,7 +3750,7 @@ export async function planPages(
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
     const text = 'This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again. Nothing was spent.';
-    deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok })]);
+    deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) })]);
     return { status: 'blocked', message: 'The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings. Nothing was spent.', code: 'BUDGET_EXCEEDED' };
   }
 
@@ -3095,7 +3763,7 @@ export async function planPages(
         `${drawn.length === 1 ? `Page ${drawn[0].n} is` : `${capitalize(pagesPhrase(drawn))} are`} already drawn, so I won't re-plan the whole book from scratch — ` +
         `the art could land on the wrong story beat. Use revise_pages for the pages to change, insert_page to add a page or delete_page to remove one. Nothing was spent.`;
       const userText = `${drawn.length === 1 ? `Page ${drawn[0].n} is` : 'Some pages are'} already drawn, so I won't re-plan the whole book from scratch (the art could end up on the wrong page). Tell me which pages to change, or add/remove pages in the timeline — nothing was spent.`;
-      deliver(ctx, runOpts, userText, [noticeCard('info', userText)], nextStepsFor(before, { byok }));
+      deliver(ctx, runOpts, userText, [noticeCard('info', userText)], nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) }));
       return { status: 'blocked', message, code: 'CONFLICT' };
     }
     // Same page count: rewrite every page in place, by id (the writer returns the target ids).
@@ -3185,7 +3853,7 @@ export async function planPages(
   const text = revising && !rewroteAll
     ? `Rewrote ${plural(result.pages.length, 'page')}.${drawnNote}${castNote}`
     : `Here's the plan: ${plural(after.pages.length, 'page')}${result.newCast.length ? `, plus ${plural(result.newCast.length, 'new character')}` : ''}. Read it here — edit anything, then draw the pages.${drawnNote}${castNote}`;
-  const steps = nextStepsFor(after, { byok });
+  const steps = nextStepsFor(after, { byok, prices: await priceBookWithin(ctx) });
   deliver(ctx, runOpts, text, [card], steps);
   return { status: 'done', message: `${headline}${castNote}`, nextSteps: steps };
 }
@@ -3202,7 +3870,7 @@ export const planHeadline = (doc: ComicDoc, onlyIds?: string[]): string => {
  * meta, so a version made for another spec or shape stays "out of date" honestly; blocked or
  * quarantined versions are refused.
  */
-function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, opts: RunActionOptions): ActionOutcome {
+function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, opts: RunActionOptions, prices?: PriceBook): ActionOutcome {
   const doc = ctx.session.doc;
   if (!isObject(target) || typeof (target as { kind?: unknown }).kind !== 'string') throw badRequest('Unknown render target.');
   const render = getRender(doc, target);
@@ -3233,7 +3901,7 @@ function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, o
   if (shapeOff) {
     notes.push(`note it's ${got}, your pages are ${want}`);
     const redraw: SpendAction = target.kind === 'cover' ? { type: 'render_cover' } : { type: 'render_pages', pageIds: [target.id], force: true };
-    const usd = quoteOf(after, redraw, byok);
+    const usd = quoteOf(after, redraw, byok, prices);
     steps.push(
       { label: `Fit to ${want} (Free)`, action: { type: 'fit_render', target, mode: 'auto' }, usd: 0 },
       { label: `Switch book to ${got} (Free)`, action: { type: 'patch', ops: [{ op: 'format', patch: { pageAspect: got } }] }, usd: 0 },
@@ -3626,9 +4294,13 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
       case 'format':
         out.push({ op: 'format', patch: sanitizeFormatPatch(raw.patch) });
         break;
-      case 'settings':
-        out.push({ op: 'settings', patch: sanitizeSettingsPatch(raw.patch) });
+      case 'settings': {
+        const patch = sanitizeSettingsPatch(raw.patch);
+        // models.md §3.4 item 5: imageModelOverride is a pre-lock preference only (409 MODEL_LOCKED after the lock).
+        assertSettingsPatchAllowed(doc, patch);
+        out.push({ op: 'settings', patch });
         break;
+      }
       case 'source': {
         // The script is kept as typed (line breaks, spacing); only what jsonb rejects goes, and the clip never splits a pair.
         const patch = pick(raw.patch, { script: clearable((v) => (typeof v === 'string' ? clipText(storableText(v), LONG_TEXT_LIMIT) : undefined)) }, 'source');
@@ -3980,22 +4652,24 @@ const publicationBehind = (doc: ComicDoc): boolean => {
 /**
  * 2–4 acting chips from doc state (deterministic, $0). They follow the forward motion
  * idea → style → cast → plan → draw → cover → read → share, and they act: a spend chip
- * carries its action and quote (a tap is the confirmation; a stale quote re-gates),
+ * carries its action and quote (a tap is the confirmation; a stale quote re-gates), at the request's PriceBook
+ * when given (real prices, so the tap starts at the price shown) else the registry list,
  * navigation is a client action, everything else is said to the director.
  * - Never "draw all" when every page is drawn and current.
  * - "Make the cover" as soon as page 1 is ready.
  * - "Compare versions" before "Redraw" when a low-QC page has ≥ 2 versions.
  * - "Share it" after the last page; "Update the published version" when the comic is behind.
  */
-export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean } = {}): NextStep[] {
+export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean; prices?: PriceBook } = {}): NextStep[] {
   const byok = !!opts.byok;
+  const prices = opts.prices;
   const out: NextStep[] = [];
   const add = (s: NextStep | null) => {
     if (s && !out.some((o) => o.label === s.label)) out.push(s);
   };
   const say = (label: string): NextStep => ({ label });
   const spend = (label: string, action: SpendAction): NextStep | null => {
-    const est = estimateSpendAction(doc, action, byok);
+    const est = estimateSpendAction(doc, action, byok, prices);
     if (est.imageCount <= 0) return null;
     return { label, action: { ...action, quotedUsd: est.usd }, usd: est.usd };
   };
