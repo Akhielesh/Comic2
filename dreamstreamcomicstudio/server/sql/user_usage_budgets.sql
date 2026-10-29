@@ -21,7 +21,9 @@
 -- reservation_id (i.e. metered through the reserve/settle path) and not flagged
 -- metadata.platformPaid (safety checks and the asset library are platform overhead).
 -- RESERVED rows older than 20 minutes are ignored, so holds stranded by a container restart
--- can never eat a user's budget.
+-- can never eat a user's budget — until the reconciliation sweep (jobs/strandedHolds.ts) settles
+-- comic studio, /api/text and /api/image usage holds within its 7-day look-back when it runs (a hold
+-- whose reserve never completed is released, not charged). Comment-only change: nothing to re-apply.
 
 -- ── 1. Table ────────────────────────────────────────────────────────────────────────────────
 create table if not exists public.user_usage_budgets (

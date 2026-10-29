@@ -73,9 +73,10 @@ type SettleResult = Awaited<ReturnType<typeof settleReservedOperation>>;
 
 /**
  * Settle a call whose provider spend already happened. Never throws: a failed settle leaves the
- * RESERVED hold in place (it keeps counting for its 20-minute window, server/sql/user_usage_budgets.sql,
- * and no job repairs it yet), is logged with the reservation for repair, and the user still gets
- * the result they paid for.
+ * RESERVED hold in place (it keeps counting for its 20-minute window, server/sql/user_usage_budgets.sql),
+ * is logged with the reservation, and the reconciliation sweep (jobs/strandedHolds.ts,
+ * `npm run billing:reconcile`) settles it at its held cost when it runs; the user still gets the
+ * result they paid for.
  */
 const settleSpentQuietly = async (operation: string, reservationId: string | undefined, settle: () => Promise<SettleResult>): Promise<SettleResult | null> => {
   try {

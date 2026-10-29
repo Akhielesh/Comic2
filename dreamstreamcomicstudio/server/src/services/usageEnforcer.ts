@@ -357,7 +357,8 @@ const releaseUsageReservation = async (
       walletSkipped: true
     });
   } catch {
-    // The RESERVED row stops counting after 20 minutes on its own.
+    // The RESERVED row stops counting after 20 minutes; the reconciliation sweep (jobs/strandedHolds.ts)
+    // releases it when it runs (no RESERVE ledger entry, so nothing ran), never charges it.
   } finally {
     invalidateAllowanceStatus(userId);
   }

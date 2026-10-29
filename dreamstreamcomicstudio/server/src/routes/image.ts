@@ -387,10 +387,9 @@ type SettleResult = Awaited<ReturnType<typeof settleReservedOperation>>;
  * Settle a call whose provider spend already happened. Never throws: a failed settle leaves the
  * RESERVED hold in place — it is never released (a release would erase real platform spend from
  * the user's usage), and the user still gets the image they paid for. The stale RESERVED row
- * keeps counting for its 20-minute window and then stops on its own
- * (server/sql/user_usage_budgets.sql); no job repairs it yet, so the failure is logged with the
- * operation for a manual repair. (jobs/dailyBillingReconciliation.ts reconciles Stripe payment
- * intents, not these rows.)
+ * keeps counting for its 20-minute window (server/sql/user_usage_budgets.sql); the failure is logged
+ * with the operation, and the reconciliation sweep (jobs/strandedHolds.ts, `npm run billing:reconcile`)
+ * settles the hold at its held cost when it runs.
  */
 const settleSpentQuietly = async (operation: string, settle: () => Promise<SettleResult>): Promise<SettleResult | null> => {
   try {
