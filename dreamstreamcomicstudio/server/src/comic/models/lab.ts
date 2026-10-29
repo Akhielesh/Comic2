@@ -662,6 +662,11 @@ export interface ImageCallInsert {
   billed_usd: number;
   byok: false;
   latency_ms: number | null;
+  /**
+   * models.md §2.5: the provider-reported model version (server/sql/comic_image_calls_model_version.sql). Sent only
+   * when reported; the Supabase store retries once without it while that column does not exist yet.
+   */
+  model_version?: string;
 }
 
 export interface LabStore {
@@ -814,9 +819,16 @@ export const labRunFromDb = (r: Record<string, unknown>): LabRunRow | null => {
 };
 
 /** The lab's persistence on Supabase (service role). Null when storage is not configured on this server. */
-export function createSupabaseLabStore(): LabStore | null {
-  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return null;
-  const db = () => getSupabaseAdmin();
+export interface SupabaseLabStoreDeps {
+  /** The service-role client (tests pass a fake; default getSupabaseAdmin). */
+  db?: () => ReturnType<typeof getSupabaseAdmin>;
+  /** Override the storage check (tests). */
+  enabled?: boolean;
+}
+
+export function createSupabaseLabStore(deps: SupabaseLabStoreDeps = {}): LabStore | null {
+  if (!(deps.enabled ?? getSupabaseCapabilityStatus().storagePersistenceEnabled)) return null;
+  const db = deps.db ?? (() => getSupabaseAdmin());
   const signal = () => AbortSignal.timeout(LAB_DB_TIMEOUT_MS);
   const one = (data: unknown): LabRunRow => {
     const row = labRunFromDb((data ?? {}) as Record<string, unknown>);
@@ -914,7 +926,16 @@ export function createSupabaseLabStore(): LabStore | null {
     },
     async recordImageCall(row) {
       const { error } = await db().from(LAB_TABLES.imageCalls).insert(row).abortSignal(signal());
-      if (error) throw new Error(error.message);
+      if (!error) return;
+      // The model_version column is a separate PROD STEP (comic_image_calls_model_version.sql): until it is applied,
+      // keep the row without it, exactly as billing.ts's recorder does. The lab run's own row keeps the version.
+      if ('model_version' in row && /model_version/i.test(String(error.message || ''))) {
+        const { model_version: _version, ...rest } = row;
+        const retry = await db().from(LAB_TABLES.imageCalls).insert(rest).abortSignal(signal());
+        if (!retry.error) return;
+        throw new Error(retry.error.message);
+      }
+      throw new Error(error.message);
     }
   };
 }
@@ -1605,7 +1626,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
             provider_cost_usd: facts.costReported ? outcome.costUsd : null,
             billed_usd: 0, // nobody is billed: the platform pays for the owner's checks
             byok: false,
-            latency_ms: facts.latencyMs ?? facts.providerMs ?? null
+            latency_ms: facts.latencyMs ?? facts.providerMs ?? null,
+            ...(facts.providerModelVersion ? { model_version: facts.providerModelVersion.slice(0, 160) } : {})
           });
           facts.recordedCall = true;
         } catch (err) {

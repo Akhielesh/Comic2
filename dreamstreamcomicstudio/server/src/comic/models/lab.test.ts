@@ -15,6 +15,7 @@ import {
   LAB_STORAGE_PROJECT,
   createMemoryLabStore,
   createModelLab,
+  createSupabaseLabStore,
   isLabError,
   labItem,
   labItems,
@@ -24,6 +25,7 @@ import {
   oneCallTransport,
   quoteLabItem,
   type BlindPairView,
+  type ImageCallInsert,
   type LabBlindRunView,
   type LabRunView,
   type LabStorage,
@@ -249,7 +251,9 @@ describe('running a check', () => {
         provider_cost_usd: 0.0756,
         billed_usd: 0,
         byok: false,
-        latency_ms: run.facts.latencyMs
+        latency_ms: run.facts.latencyMs,
+        // models.md §2.5: the version the provider reported is stored with the call (comic_image_calls.model_version).
+        model_version: 'google/gemini-nano-banana-2.1-20261006'
       }
     ]);
     expect(h.store.runs[0]).toMatchObject({ status: 'ok', costUsd: 0.0756, quotedUsd: 0.113, refs: 4, providerModel: 'google/gemini-nano-banana-2.1' });
@@ -651,6 +655,51 @@ describe('the D4 click answer', () => {
     const failed = (await runItem(h, 'd4-qwen-image-2.1-turbo-sheet-1')).run as LabBlindRunView;
     expect(failed).toMatchObject({ status: 'failed', costUsd: 0, callMade: true, costReported: false });
     expect(Object.keys(failed).sort()).toEqual(['callMade', 'checkId', 'costReported', 'costUsd', 'id', 'itemId', 'message', 'pair', 'quotedUsd', 'status']);
+  });
+});
+
+describe('the Supabase store: comic_image_calls', () => {
+  const callRow = (over: Partial<ImageCallInsert> = {}): ImageCallInsert => ({
+    user_id: ADMIN, project_id: null, model_id: 'nano-banana-2.1', provider_model: 'google/gemini-nano-banana-2.1', route: 'openrouter', provider_name: 'Google AI Studio',
+    kind: 'page', res: '4K', aspect: '2:3', refs: 4, outcome: 'ok', http_status: 200, error_code: null, provider_cost_usd: 0.0756, billed_usd: 0, byok: false, latency_ms: 900, ...over
+  });
+  /** A service-role client whose comic_image_calls insert answers `error(row)`; every insert is kept. */
+  const fakeDb = (error: (row: Record<string, unknown>) => { message: string } | null) => {
+    const inserts: { table: string; row: Record<string, unknown> }[] = [];
+    const db = () => ({
+      from: (table: string) => ({
+        insert: (row: Record<string, unknown>) => ({
+          abortSignal: async () => {
+            inserts.push({ table, row: { ...row } });
+            return { error: error(row) };
+          }
+        })
+      })
+    });
+    return { inserts, db: db as unknown as NonNullable<Parameters<typeof createSupabaseLabStore>[0]>['db'] };
+  };
+  const NO_COLUMN = { message: 'Could not find the \'model_version\' column of \'comic_image_calls\' in the schema cache' };
+
+  it('stores the reported model version; before comic_image_calls_model_version.sql is applied the row is kept without it (one retry)', async () => {
+    const withColumn = fakeDb(() => null);
+    await createSupabaseLabStore({ db: withColumn.db, enabled: true })!.recordImageCall(callRow({ model_version: 'v-1' }));
+    expect(withColumn.inserts).toEqual([{ table: 'comic_image_calls', row: expect.objectContaining({ model_version: 'v-1', provider_cost_usd: 0.0756 }) }]);
+
+    const before = fakeDb((row) => ('model_version' in row ? NO_COLUMN : null));
+    await createSupabaseLabStore({ db: before.db, enabled: true })!.recordImageCall(callRow({ model_version: 'v-1' }));
+    expect(before.inserts).toHaveLength(2);
+    expect(before.inserts[1].row).not.toHaveProperty('model_version');
+    expect(before.inserts[1].row).toMatchObject({ model_id: 'nano-banana-2.1', provider_cost_usd: 0.0756, outcome: 'ok' });
+  });
+
+  it('any other insert error is thrown after one attempt (the run keeps its facts and says the call was not recorded)', async () => {
+    const down = fakeDb(() => ({ message: 'permission denied for table comic_image_calls' }));
+    await expect(createSupabaseLabStore({ db: down.db, enabled: true })!.recordImageCall(callRow({ model_version: 'v-1' }))).rejects.toThrow(/permission denied/);
+    expect(down.inserts).toHaveLength(1);
+    const noVersion = fakeDb((row) => (row.model_version === undefined ? NO_COLUMN : null));
+    await expect(createSupabaseLabStore({ db: noVersion.db, enabled: true })!.recordImageCall(callRow())).rejects.toThrow(/model_version/);
+    expect(noVersion.inserts).toHaveLength(1); // nothing to drop, so no retry
+    expect(createSupabaseLabStore({ enabled: false })).toBeNull();
   });
 });
 
