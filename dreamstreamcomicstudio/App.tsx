@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from 'react';
+import { clearReaderUrlParams, setReaderUrlParams } from './services/readerUrl';
 import { HomePage } from './components/HomePage';
 import { lazyImportWithRetry } from './services/lazyImportWithRetry';
 // Lazy Load Heavy Components
@@ -335,21 +336,6 @@ const App: React.FC = () => {
   const [pendingStudioTarget, setPendingStudioTarget] = useState<PendingStudioTarget | null>(null);
   const [shareToken, setShareToken] = useState<string | null>(null);
   const hasWarnedDobProfileCheckRef = useRef(false);
-
-  const setReaderUrlParams = (id: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('view', 'read');
-    url.searchParams.set('id', id);
-    url.searchParams.delete('board');
-    window.history.pushState({}, '', url);
-  };
-
-  const clearReaderUrlParams = () => {
-    const url = new URL(window.location.href);
-    url.searchParams.delete('view');
-    url.searchParams.delete('id');
-    window.history.pushState({}, '', url);
-  };
 
   const handleBackToHome = () => {
     setCurrentView('home');
@@ -916,7 +902,7 @@ const App: React.FC = () => {
     const nextView = returnView && returnView !== 'reader' ? returnView : fallbackView;
     setCurrentView(nextView);
     setActiveProjectId(null);
-    clearReaderUrlParams();
+    clearReaderUrlParams({ replace: true });
   };
 
   // Stable identities: AccountSettings keys data-loading effects on these callbacks, so
