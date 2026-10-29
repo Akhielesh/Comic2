@@ -17,6 +17,30 @@ import type { Card } from '../../../shared/comic/doc';
 export type OutageCardData = Extract<Card, { type: 'model_outage' }>;
 export type SwitchOption = Extract<OutageOption, { kind: 'switch_model' }>;
 
+/** Where the outage card came from: the money-safe preflight (nothing ran) or a run that failed part-way. */
+export type OutageOrigin = 'preflight' | 'mid_run';
+
+/**
+ * Facts the copy needs to be honest about money (AMENDMENT requested for the `model_outage` card in
+ * shared/comic/doc.ts: `origin?: 'preflight' | 'mid_run'` and `chargedUsd?: number`, kept by normalizeOutageCard).
+ * Until a card carries them they are absent, and the card makes NO charge claim at all: a mid-run card may follow
+ * targets that were drawn and paid for.
+ */
+export interface OutageCardFacts {
+  origin?: OutageOrigin;
+  /** What the failed part of a mid-run cost (0 = the provider reported no cost). */
+  chargedUsd?: number;
+}
+
+export const outageFacts = (card: unknown): OutageCardFacts => {
+  if (!card || typeof card !== 'object') return {};
+  const c = card as { origin?: unknown; chargedUsd?: unknown };
+  const out: OutageCardFacts = {};
+  if (c.origin === 'preflight' || c.origin === 'mid_run') out.origin = c.origin;
+  if (typeof c.chargedUsd === 'number' && Number.isFinite(c.chargedUsd) && c.chargedUsd >= 0) out.chargedUsd = c.chargedUsd;
+  return out;
+};
+
 /** The banner shows at most this many buttons (reliability.md §3). */
 export const MAX_BANNER_OPTIONS = 3;
 /** Same as the server (health.ts MAX_SWITCH_OPTIONS). */
@@ -41,21 +65,26 @@ export const registrySwitchOptions = (input: {
   caps: StudioCaps;
   /** Latest health per candidate id (a known-down candidate is never offered). */
   health?: Record<string, ModelHealth | undefined>;
+  /** Price book (default: registry list prices; tests inject one). */
+  prices?: PriceBook;
 }): SwitchOption[] => {
   const blocked = getImageModel(input.blockedModelId);
   const byok = !!input.caps.byok;
   const markup = byok ? 1 : PLATFORM_MARKUP;
-  const book = registryPriceBook();
+  const book = input.prices || registryPriceBook();
   const targets = drawnTargets(input.doc);
   const redrawCount = targets.pages.length + (targets.cover ? 1 : 0);
-  const candidates: { id: string; nickname: string; vendor: string; usdPerImage: number }[] = [];
+  const candidates: { id: string; nickname: string; vendor: string; usdPerImage: number; redrawUsd: number }[] = [];
   for (const spec of pickableImageModels()) {
     if (spec.id === input.blockedModelId) continue;
     if (modelFit(spec, input.doc, input.caps).some((r) => r.severity === 'block')) continue;
     if (input.health?.[spec.id]?.state === 'down') continue;
     const unit = book.unit(spec.id, redrawResolution(input.doc, spec.id, 'page'), 'page').usd;
     if (unit === null || !Number.isFinite(unit)) continue;
-    candidates.push({ id: spec.id, nickname: spec.nickname, vendor: spec.vendor, usdPerImage: round4(unit * markup) });
+    // A redraw we can't price is never shown as $0 ("Free"): the candidate is left out (same rule as the server).
+    const redraw = redrawQuote(input.doc, spec.id, 'pages_cover', book, byok).usd;
+    if (redraw === null || !Number.isFinite(redraw)) continue;
+    candidates.push({ id: spec.id, nickname: spec.nickname, vendor: spec.vendor, usdPerImage: round4(unit * markup), redrawUsd: round4(redraw) });
   }
   candidates.sort((a, b) => {
     const fa = a.vendor === blocked?.vendor ? 0 : 1;
@@ -69,7 +98,7 @@ export const registrySwitchOptions = (input: {
     usdPerImage: c.usdPerImage,
     consistency: c.vendor === blocked?.vendor ? 'same_family' : 'different',
     redrawCount,
-    redrawUsd: round4(redrawQuote(input.doc, c.id, 'pages_cover', book, byok).usd ?? 0)
+    redrawUsd: c.redrawUsd
   }));
 };
 

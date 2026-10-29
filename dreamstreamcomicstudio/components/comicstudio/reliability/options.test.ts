@@ -6,10 +6,12 @@ import type { Card, ComicDoc } from '../../../shared/comic/doc';
 import { PLATFORM_MARKUP, getImageModel, imagePriceUsd } from '../../../shared/comic/models';
 import { drawnTargets, redrawQuote } from '../../../shared/comic/modelLock';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
-import { bannerOptions, cleanOptions, latestOutageCard, registryPriceBook, registrySwitchOptions } from './options';
+import type { PriceBook } from '../../../shared/comic/modelLock';
+import type { ModelHealth } from '../../../shared/comic/modelHealth';
+import { bannerOptions, cleanOptions, latestOutageCard, outageFacts, registryPriceBook, registrySwitchOptions } from './options';
 import { optionText } from './OptionButtons';
 import { asModelHealth, asProviderStatusReport } from './statusApi';
-import { blockedWhat, friendlyReason, outageSentence, timeAgo } from './copy';
+import { blockedWhat, friendlyReason, isRateLimited, notDrawnSentence, outageSentence, timeAgo } from './copy';
 
 const paid = resolveStudioCaps({ planId: 'pro', byok: false, isAdmin: false });
 const byokCaps = resolveStudioCaps({ byok: true, isAdmin: false });
@@ -34,6 +36,14 @@ describe('registrySwitchOptions', () => {
     expect(sw.redrawCount).toBe(t.pages.length + 1);
     expect(sw.redrawCount).toBe(4); // 3 drawn pages + cover
     expect(sw.redrawUsd).toBeCloseTo(redrawQuote(doc, PRO.id, 'pages_cover', registryPriceBook(), false).usd!, 4);
+  });
+
+  it('a candidate whose redraw has no price is left out (never shown as a $0 "Free" redraw)', () => {
+    const doc = drawnDoc(); // a drawn cover: the redraw needs a cover price
+    const list = registryPriceBook();
+    const noCoverPrice: PriceBook = { ...list, unit: (id, res, kind, refs) => (kind === 'cover' ? { usd: null, basis: 'not published' } : list.unit(id, res, kind, refs)) };
+    expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, prices: noCoverPrice })).toEqual([]);
+    expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, prices: list })).toHaveLength(1);
   });
 
   it('BYOK prices carry no markup; the free plan gets no switch; a down candidate is never offered', () => {
@@ -83,7 +93,7 @@ describe('bannerOptions', () => {
 describe('copy', () => {
   const dollars = { governed: false, exact: (u: number) => `$${u.toFixed(2)}`, approx: (u: number) => `≈ $${u.toFixed(2)}`, badge: String, spoken: String, saved: String };
   it('option labels carry the price and the consistency cost', () => {
-    expect(optionText({ kind: 'wait_and_retry', etaHint: 'about 2 min' }, dollars)).toEqual({ label: 'Wait and retry automatically', price: 'Free', detail: 'usually about 2 min' });
+    expect(optionText({ kind: 'wait_and_retry', etaHint: 'about 2 min' }, dollars)).toEqual({ label: 'Wait and retry automatically', price: 'Free', detail: 'checks again in about 2 min' });
     expect(
       optionText({ kind: 'switch_model', modelId: 'x', nickname: 'X', usdPerImage: 0.17, consistency: 'different', redrawCount: 1, redrawUsd: 0.2 }, dollars)
     ).toEqual({ label: 'Try X instead', price: '≈ $0.17 per image', detail: 'a different look · redraw 1 drawn image ≈ $0.20 to keep the book consistent' });
@@ -95,10 +105,63 @@ describe('copy', () => {
     expect(friendlyReason('Provider uptime 41% in the last 30 min')).toBe('provider uptime 41% in the last 30 min');
     expect(blockedWhat({ type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.1 }, () => 2)).toEqual({ label: 'Page 2', plural: false });
     expect(blockedWhat({ type: 'render_sheets', quotedUsd: 0.1 })).toEqual({ label: 'The character sheets', plural: true });
-    expect(outageSentence({ modelId: 'nano-banana-2.1' })).toBe("Google isn't serving Nano Banana 2.1 right now. Nothing was drawn and nothing was charged. Your comic stays on Nano Banana 2.1 so every page matches.");
+    expect(outageSentence({ modelId: 'nano-banana-2.1', origin: 'preflight' })).toBe(
+      "Nano Banana 2.1 isn't available for this comic right now. Nothing was drawn, and nothing was charged. You can wait, or switch models. Switching can affect consistency."
+    );
+    expect(outageSentence({ modelId: 'nano-banana-2.1' })).toBe(
+      "Nano Banana 2.1 isn't available for this comic right now. Some images weren't drawn. You can wait, or switch models. Switching can affect consistency."
+    );
     expect(timeAgo(1000, 1000 + 30_000)).toBe('just now');
     expect(timeAgo(1000, 1000 + 2 * 60_000)).toBe('2 min ago');
     expect(timeAgo(undefined)).toBe('time unknown');
+  });
+});
+
+describe('outage copy (models.md §3.6 G/H) and money honesty', () => {
+  const throttled: ModelHealth = {
+    modelId: 'nano-banana-2.1',
+    state: 'down',
+    checkedAt: 1,
+    routes: [
+      {
+        route: 'gemini',
+        model: 'gemini-nano-banana-2.1',
+        state: 'down',
+        reason: 'Our last 3 calls failed (RATE_LIMIT)',
+        observed: { ok: 0, upstreamFailures: 3, lastCode: 'RATE_LIMIT', lastFailureAt: 1 },
+        checkedAt: 1,
+        source: 'observed'
+      }
+    ]
+  };
+  const page2: Parameters<typeof notDrawnSentence>[0]['action'] = { type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.05 };
+
+  it('G when our calls were rate-limited, H otherwise', () => {
+    expect(isRateLimited(throttled)).toBe(true);
+    expect(isRateLimited(undefined, '429')).toBe(true);
+    expect(isRateLimited(undefined, 'PROVIDER_ERROR')).toBe(false);
+    expect(outageSentence({ modelId: 'nano-banana-2.1', health: throttled, action: page2, pageNumber: () => 2, origin: 'mid_run', chargedUsd: 0 })).toBe(
+      "Google is rate-limiting Nano Banana 2.1 right now (Gemini · 429). Page 2 wasn't drawn, and you weren't charged for it. Your comic stays on Nano Banana 2.1 so every page matches."
+    );
+  });
+
+  it('the charge clause appears only when it is known: preflight, or a mid-run part the provider billed $0', () => {
+    expect(notDrawnSentence({ action: page2, pageNumber: () => 2, origin: 'preflight' })).toBe("Page 2 wasn't drawn, and you weren't charged for it.");
+    expect(notDrawnSentence({ action: page2, pageNumber: () => 2, origin: 'mid_run', chargedUsd: 0 })).toBe("Page 2 wasn't drawn, and you weren't charged for it.");
+    expect(notDrawnSentence({ action: page2, pageNumber: () => 2, origin: 'mid_run', chargedUsd: 0.04 })).toBe("Page 2 wasn't drawn.");
+    expect(notDrawnSentence({ action: page2, pageNumber: () => 2, origin: 'mid_run' })).toBe("Page 2 wasn't drawn.");
+    expect(notDrawnSentence({ action: page2, pageNumber: () => 2 })).toBe("Page 2 wasn't drawn.");
+    expect(notDrawnSentence({ action: { type: 'render_style_options', quotedUsd: 0.1 }, origin: 'preflight' })).toBe(
+      "The style tests weren't drawn, and you weren't charged for them."
+    );
+  });
+
+  it('reads origin / chargedUsd off a card and ignores anything malformed', () => {
+    expect(outageFacts({ origin: 'preflight' })).toEqual({ origin: 'preflight' });
+    expect(outageFacts({ origin: 'mid_run', chargedUsd: 0 })).toEqual({ origin: 'mid_run', chargedUsd: 0 });
+    expect(outageFacts({ origin: 'later', chargedUsd: -1 })).toEqual({});
+    expect(outageFacts({ chargedUsd: Number.NaN })).toEqual({});
+    expect(outageFacts(null)).toEqual({});
   });
 });
 

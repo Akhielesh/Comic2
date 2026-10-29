@@ -1,6 +1,7 @@
 // useModelStatus + useAutoRetry (reliability.md §3/§5): no polling while everything is ok; one re-check per
 // 60 s only while something is wrong AND the tab is visible; stops when hidden, ok, or after 30 min; an armed
-// "wait and retry" re-sends its blocked action exactly once when the model is back, never while hidden.
+// "wait and retry" re-sends its blocked action exactly once when the model reads ok (never on unsteady or "no
+// data"), never while hidden, and keeps checking while it waits.
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HealthState, ModelHealth } from '../../../shared/comic/modelHealth';
@@ -21,7 +22,8 @@ const healthOf = (modelId: string, state: HealthState, at = Date.now()): ModelHe
 });
 
 let states: Record<string, HealthState>;
-const fetcher = vi.fn(async (ids: readonly string[]) => ids.map((id) => healthOf(id, states[id] ?? 'ok')));
+const answerFromStates = async (ids: readonly string[]) => ids.map((id) => healthOf(id, states[id] ?? 'ok'));
+const fetcher = vi.fn(answerFromStates);
 
 let visibility: DocumentVisibilityState = 'visible';
 const setVisibility = (v: DocumentVisibilityState) => {
@@ -33,7 +35,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-10-22T16:52:00Z'));
   states = {};
-  fetcher.mockClear();
+  fetcher.mockReset();
+  fetcher.mockImplementation(answerFromStates);
   __resetStatusStore();
   __resetRetries();
   __setStatusFetcherForTests(fetcher);
@@ -119,6 +122,18 @@ describe('useModelStatus', () => {
     expect(result.current.watching).toBe(true);
   });
 
+  it('the incident is seen since the earliest server evidence, never later than this page’s first look', async () => {
+    const now = Date.now();
+    const failedAt = now - 38 * 60_000;
+    putStatus([
+      { modelId: NB21, state: 'down', checkedAt: now, routes: [{ route: 'openrouter', model: OR_MODEL, state: 'down', observed: { ok: 0, upstreamFailures: 3, lastCode: 'RATE_LIMIT', lastFailureAt: failedAt }, checkedAt: failedAt, source: 'observed' }] }
+    ]);
+    expect(incidentSince(NB21)).toBe(failedAt);
+    // A later read with a newer failure keeps the earliest evidence; a server clock ahead of ours never moves it later.
+    putStatus([{ modelId: NB21, state: 'down', checkedAt: now, routes: [{ route: 'openrouter', model: OR_MODEL, state: 'down', observed: { ok: 0, upstreamFailures: 4, lastFailureAt: now + 60_000 }, checkedAt: now, source: 'observed' }] }], now + 1000);
+    expect(incidentSince(NB21)).toBe(failedAt);
+  });
+
   it('shares one request between components and remembers when the incident started', async () => {
     states = { [NB21]: 'down' };
     renderHook(() => useModelStatus([NB21]));
@@ -147,12 +162,54 @@ describe('useModelStatus', () => {
 describe('useAutoRetry (wait and retry automatically)', () => {
   const action: StudioAction = { type: 'render_style_options', quotedUsd: 0.12 };
 
-  it('isBack: anything but down lets the run through', () => {
+  it('isBack: only ok (unsteady may be a half-open probe; unknown is no data)', () => {
     expect(isBack('ok')).toBe(true);
-    expect(isBack('degraded')).toBe(true);
-    expect(isBack('unknown')).toBe(true);
+    expect(isBack('degraded')).toBe(false);
+    expect(isBack('unknown')).toBe(false);
     expect(isBack('down')).toBe(false);
     expect(isBack(undefined)).toBe(false);
+  });
+
+  it('never fires on an unsteady or "no data" read; keeps checking every 60 s while it waits, even when a check fails', async () => {
+    states = { [NB21]: 'down' };
+    const send = vi.fn(async () => undefined);
+    renderHook(() => useAutoRetry({ act: send }));
+    await flush();
+    act(() => void armRetry('card_5', NB21, action));
+    states = { [NB21]: 'degraded' };
+    await flush(STATUS_POLL_MS);
+    states = { [NB21]: 'unknown' };
+    await flush(STATUS_POLL_MS);
+    expect(send).not.toHaveBeenCalled();
+    const calls = fetcher.mock.calls.length;
+    fetcher.mockRejectedValueOnce(new Error('offline'));
+    await flush(STATUS_POLL_MS);
+    await flush(STATUS_POLL_MS); // unknown + a failed check: still re-checking (no silent hang)
+    expect(fetcher.mock.calls.length).toBe(calls + 2);
+    states = { [NB21]: 'ok' };
+    await flush(STATUS_POLL_MS);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(getRetry('card_5')?.state).toBe('sent');
+  });
+
+  it('a waiting intent re-checks for at most 30 min, and two runners make one request per check', async () => {
+    states = { [NB21]: 'unknown' };
+    renderHook(() => useAutoRetry({ act: vi.fn(async () => undefined) }));
+    const { result } = renderHook(() => useAutoRetry({ act: vi.fn(async () => undefined) }));
+    await flush();
+    act(() => void armRetry('card_6', NB21, action));
+    await flush();
+    const start = fetcher.mock.calls.length;
+    fetcher.mockRejectedValue(new Error('offline'));
+    await flush(5 * STATUS_POLL_MS);
+    expect(fetcher.mock.calls.length - start).toBe(5); // two pollers, one request a minute (even while failing)
+    fetcher.mockImplementation(answerFromStates);
+    expect(result.current.watching).toBe(true);
+    await flush(STATUS_POLL_MAX_MS);
+    expect(result.current.expired).toBe(true);
+    const calls = fetcher.mock.calls.length;
+    await flush(10 * STATUS_POLL_MS);
+    expect(fetcher.mock.calls.length).toBe(calls);
   });
 
   it('re-sends the blocked action exactly once when the model is back (two runners mounted)', async () => {

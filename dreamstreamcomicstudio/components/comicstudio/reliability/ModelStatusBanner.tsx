@@ -1,6 +1,8 @@
 // ModelStatusBanner (reliability.md §3): one calm line under the studio header (header-slot banner tier,
 // order ≥ 1000) when the comic's image model — or the style-test model — is unsteady or paused. It says what
-// is affected, since when, the source and age of the data, that nothing is charged while new images are paused,
+// is affected, since when it has been seen ("Seen since 16:52": the earliest evidence — the server's own failure
+// time or the public data's time — never just when this page opened), the source and age of the data, that
+// nothing is charged while new images are paused,
 // and offers up to 3 real options with real prices. Dismissable per incident (it comes back if the trouble
 // gets worse, or after the model has been fine and fails again). No red: warning tokens, a word next to every
 // colour, aria-live polite, wraps cleanly from 320 px.
@@ -139,7 +141,7 @@ export const ModelStatusBanner: React.FC<{ studio: StudioController; compact: bo
               ? ` — ${who} isn't serving it right now${reason ? ` (${reason})` : ''}. New images wait, so nothing is charged.`
               : ` — ${who} is answering slowly or failing sometimes${reason ? ` (${reason})` : ''}. Images may take longer or need a retry.`}{' '}
             <span className="text-[var(--ds-muted)]">
-              {since ? `Since ${since} · ` : ''}
+              {since ? `Seen since ${since} · ` : ''}
               {sourceLine(worst, now)}
             </span>
             {!compact && status.watching && <span className="text-[var(--ds-muted)]"> · checking every minute while this page is open</span>}

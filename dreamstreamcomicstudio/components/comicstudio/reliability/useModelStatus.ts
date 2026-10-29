@@ -6,11 +6,15 @@
 //   - while a watched model is degraded or down AND the tab is visible: one re-check every 60 s, stopping
 //     when the tab is hidden, when everything is fine again, or 30 min after the trouble started
 //     (`expired`; a manual `refresh()` starts a new 30-min window);
-//   - when a hidden tab becomes visible during trouble: one immediate re-check, then every 60 s again.
+//   - when a hidden tab becomes visible during trouble: one immediate re-check, then every 60 s again;
+//   - `keepChecking` (only a waiting "wait and retry" intent sets it) keeps the same bounded 60 s rhythm while
+//     the model hasn't read ok yet, even on "no data" or a failed request.
 //
 // useAutoRetry is the "wait and retry automatically" runner: an armed intent (retryIntents.ts) re-sends its
 // blocked action ONCE, and only while this page is open and visible, as soon as a status received after the
-// click says the model is no longer down (exactly when the server's preflight lets the run through).
+// click says the model is ok (reliability.md §3 "flips to ok": never on a half-open/unsteady read, whose single
+// probe usually fails, and never on "no data"). While an intent waits, its model is re-checked every 60 s
+// (visible, ≤ 30 min) even when the last read was missing or not trouble, so a waiting intent never hangs silently.
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { HealthState, ModelHealth } from '../../../shared/comic/modelHealth';
@@ -23,8 +27,8 @@ export const STATUS_POLL_MAX_MS = 30 * 60_000;
 
 const RANK: Record<HealthState, number> = { ok: 0, unknown: 1, degraded: 2, down: 3 };
 
-/** The model answers again as far as a run is concerned (ok, recovering or no data — never `down`). */
-export const isBack = (state: HealthState | undefined): boolean => !!state && state !== 'down';
+/** The model answers again: only `ok` (unsteady may be a half-open probe; unknown is no data, never "back"). */
+export const isBack = (state: HealthState | undefined): boolean => state === 'ok';
 
 /** A StudioActOutcome that says the action did not go through (void = an older controller: assume it did). */
 const refused = (result: unknown): boolean => !!result && typeof result === 'object' && (result as { ok?: unknown }).ok === false;
@@ -48,7 +52,7 @@ export interface ModelStatusView {
   byId: Record<string, ModelHealth | undefined>;
   /** When this page received each answer. */
   receivedAt: Record<string, number | undefined>;
-  /** When this page first saw each id's current incident. */
+  /** The earliest evidence of each id's current incident (statusStore.incidentSince; shown as "Seen since"). */
   since: Record<string, number | undefined>;
   /** The watched model in the worst state (down before degraded), when any is in trouble. */
   worst?: ModelHealth;
@@ -58,7 +62,7 @@ export interface ModelStatusView {
   error: string | null;
   /** A re-check timer is armed right now. */
   watching: boolean;
-  /** Trouble lasted 30 min, so re-checks stopped until `refresh()`. */
+  /** Re-checks lasted 30 min, so they stopped until `refresh()`. */
   expired: boolean;
   /** Check now (and start a new 30-min window). */
   refresh(): void;
@@ -72,6 +76,11 @@ export interface ModelStatusOptions {
   enabled?: boolean;
   /** false: read once, never re-check on a timer (side data such as switch candidates). Default true. */
   poll?: boolean;
+  /**
+   * true: keep the 60 s re-check running (visible only, ≤ 30 min) even while nothing reads as trouble or the last
+   * request failed — a "wait and retry" intent is waiting for `ok` (useAutoRetry).
+   */
+  keepChecking?: boolean;
 }
 
 export function useModelStatus(modelIds: readonly (string | null | undefined)[], opts: ModelStatusOptions = {}): ModelStatusView {
@@ -81,7 +90,7 @@ export function useModelStatus(modelIds: readonly (string | null | undefined)[],
   const visible = usePageVisible();
   const enabled = opts.enabled !== false && ids.length > 0;
 
-  const trouble = enabled && opts.poll !== false && ids.some((id) => isTrouble(readStatus(id)?.health.state));
+  const trouble = enabled && opts.poll !== false && (opts.keepChecking === true || ids.some((id) => isTrouble(readStatus(id)?.health.state)));
   const [watchStart, setWatchStart] = useState<number | null>(null);
   const [expired, setExpired] = useState(false);
   const wasHidden = useRef(!visible);
@@ -175,13 +184,17 @@ export function useModelStatus(modelIds: readonly (string | null | undefined)[],
  * when a status received AFTER the click says its model is no longer down. Mount once per studio (the banner
  * slot does; outage cards call it too — `claimRetry` makes a double mount harmless).
  */
-export function useAutoRetry(studio: Pick<StudioController, 'act'>): void {
+export function useAutoRetry(studio: Pick<StudioController, 'act'>): ModelStatusView {
   useSyncExternalStore(subscribeRetries, retriesVersion, retriesVersion);
   const statusTick = useSyncExternalStore(subscribeStatus, statusVersion, statusVersion);
   const retryTick = retriesVersion();
   const waiting = waitingRetries();
-  // Keep checking the models someone is waiting for (the hook polls only while they are in trouble).
-  useModelStatus(waiting.map((i) => i.modelId));
+  // Keep checking the models someone is waiting for until they read ok (visible only, ≤ 30 min), whatever the
+  // last read said — a missing or "no data" answer must not leave the intent hanging with nothing polling.
+  const view = useModelStatus(
+    waiting.map((i) => i.modelId),
+    { keepChecking: true }
+  );
   const visible = usePageVisible();
   const actRef = useRef(studio.act);
   actRef.current = studio.act;
@@ -201,4 +214,5 @@ export function useAutoRetry(studio: Pick<StudioController, 'act'>): void {
         );
     }
   }, [statusTick, retryTick, visible]);
+  return view;
 }

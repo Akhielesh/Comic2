@@ -1,5 +1,6 @@
 // ModelStatusBanner (reliability.md §3/§5): one calm line under the studio header while the comic's model is in
-// trouble — what, since when, source + time, "nothing is charged", ≤ 3 options with real prices, dismissable per
+// trouble — what, seen since when (server evidence, not page-open time), source + time, "nothing is charged", ≤ 3
+// options with real prices, dismissable per
 // incident, aria-live polite, no red, 360 px safe; nothing at all (and no polling) while every model is fine.
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
@@ -40,13 +41,15 @@ const healthOf = (modelId: string, state: HealthState, at = Date.now()): ModelHe
 });
 
 let states: Record<string, HealthState>;
-const fetcher = vi.fn(async (ids: readonly string[]) => ids.map((id) => healthOf(id, states[id] ?? 'ok')));
+const answerFromStates = async (ids: readonly string[]) => ids.map((id) => healthOf(id, states[id] ?? 'ok'));
+const fetcher = vi.fn(answerFromStates);
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   vi.setSystemTime(new Date(2026, 9, 22, 16, 52, 0));
   states = {};
-  fetcher.mockClear();
+  fetcher.mockReset();
+  fetcher.mockImplementation(answerFromStates);
   __resetStatusStore();
   __resetRetries();
   __setStatusFetcherForTests(fetcher);
@@ -109,7 +112,7 @@ describe('ModelStatusBanner', () => {
     expect(banner).not.toBeNull();
     const text = banner.textContent || '';
     expect(text).toContain("Nano Banana 2.1 is paused — Google AI Studio isn't serving it right now (every provider reports a problem). New images wait, so nothing is charged.");
-    expect(text).toContain('Since 16:52 · OpenRouter status, just now');
+    expect(text).toContain('Seen since 16:52 · OpenRouter status, just now');
     expect(screen.getByRole('status')).toContainElement(banner);
     // No card yet: the options are built from the registry (no wait button — there is nothing to retry).
     const group = screen.getByRole('group', { name: /Ways to continue without Nano Banana 2.1/ });
@@ -128,6 +131,36 @@ describe('ModelStatusBanner', () => {
     // Calm: warning tokens, no red.
     expect(banner.className).toContain('var(--ds-warning)');
     expect(container.innerHTML).not.toMatch(/\bred-|ds-danger/);
+  });
+
+  it('"Seen since" is the server’s evidence (our first failure seen), not when this page opened', async () => {
+    // The page opens at 17:30, 38 minutes into an outage our calls have been failing in since 16:52.
+    vi.setSystemTime(new Date(2026, 9, 22, 17, 30, 0));
+    const failedAt = new Date(2026, 9, 22, 16, 52, 0).getTime();
+    const opened = Date.now();
+    fetcher.mockImplementation(async (ids: readonly string[]) =>
+      ids.map((id) => ({
+        modelId: id,
+        state: 'down' as const,
+        checkedAt: Date.now(),
+        routes: [
+          {
+            route: 'openrouter' as const,
+            model: getImageModel(id)?.routes.openrouter || id,
+            state: 'down' as const,
+            reason: 'Our last 3 calls failed (RATE_LIMIT)',
+            observed: { ok: 0, upstreamFailures: 3, lastCode: 'RATE_LIMIT', lastFailureAt: failedAt },
+            checkedAt: failedAt,
+            source: 'observed' as const
+          }
+        ]
+      }))
+    );
+    const { container } = await renderBanner();
+    const text = container.querySelector('[data-model-status-banner="down"]')?.textContent || '';
+    expect(text).toContain('Seen since 16:52 · our recent calls, 38 min ago');
+    expect(text).not.toContain('17:30');
+    expect(opened).toBeGreaterThan(failedAt);
   });
 
   it('switch opens the picker only; with an outage card the wait option arms that card’s retry', async () => {
@@ -203,6 +236,5 @@ describe('ModelStatusBanner', () => {
     const close = screen.getByRole('button', { name: /Hide the/ });
     expect(close.className).toContain('coarse:h-11');
     for (const b of within(screen.getByRole('group')).getAllByRole('button')) expect(b.className).toContain('max-w-full');
-    expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
   });
 });

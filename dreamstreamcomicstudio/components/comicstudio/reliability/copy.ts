@@ -1,12 +1,15 @@
 // Words for model health (reliability.md §3; models.md §3.6 G/H for the outage wording). Pure: every time
 // reads through `now`. Honest by construction: a state always names its source and age ("OpenRouter status,
-// 2 min ago"); no data reads as "no live data", never as fine.
+// 2 min ago"); no data reads as "no live data", never as fine; money is mentioned only when we know it (a
+// preflight card ran nothing; a mid-run card says "you weren't charged" only when the provider reported $0).
 
+import type { ComicDoc, RenderState } from '../../../shared/comic/doc';
 import type { HealthState, ModelHealth, RouteHealth } from '../../../shared/comic/modelHealth';
 import { getImageModel, type ImageModelSpec, type ImageRoute } from '../../../shared/comic/models';
 import type { StudioAction } from '../../../shared/comic/ops';
 import type { StatusTone } from '../../chat/studioDesign';
 import { formatFailedAt } from '../conversation/cards/failure';
+import type { OutageCardFacts } from './options';
 
 export const ROUTE_NAME: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemini: 'Gemini' };
 
@@ -118,7 +121,7 @@ export const blockedWhat = (action: StudioAction | undefined, pageNumber?: (page
   if (!action) return one('That run');
   switch (action.type) {
     case 'render_style_options':
-      return many('The style tests');
+      return action.directions?.length === 1 ? one('The style test') : many('The style tests');
     case 'render_sheets':
       return action.characterIds?.length === 1 ? one('The character sheet') : many('The character sheets');
     case 'render_pages': {
@@ -145,16 +148,114 @@ export const blockedWhat = (action: StudioAction | undefined, pageNumber?: (page
   }
 };
 
-/** The outage sentence (models.md §3.6 G/H in our words): who, what, and that nothing was charged. */
-export const outageSentence = (input: { modelId: string; health?: ModelHealth; action?: StudioAction; pageNumber?: (id: string) => number | undefined }): string => {
-  const name = modelName(input.modelId);
-  const who = whoServes(input.health, input.modelId);
-  const reason = troubleReason(input.health);
+const RATE_LIMIT_CODES: ReadonlySet<string> = new Set(['RATE_LIMIT', '429']);
+
+/** The failed renders an outage card's action names (pages, cover, sheets, style tests), for their Details facts. */
+const blockedRenders = (doc: ComicDoc | null | undefined, action: StudioAction | undefined): RenderState[] => {
+  if (!doc || !action) return [];
+  switch (action.type) {
+    case 'render_pages': {
+      const ids = action.pageIds?.length ? new Set(action.pageIds) : null;
+      const pages = doc.pages.filter((p) => !ids || ids.has(p.id)).map((p) => p.render);
+      return action.includeCover ? [...pages, doc.cover.render] : pages;
+    }
+    case 'edit_page':
+      return doc.pages.filter((p) => p.id === action.pageId).map((p) => p.render);
+    case 'render_cover':
+      return [doc.cover.render];
+    case 'render_sheets': {
+      const ids = action.characterIds?.length ? new Set(action.characterIds) : null;
+      return doc.cast.filter((c) => !ids || ids.has(c.id)).map((c) => c.sheet);
+    }
+    case 'render_style_options': {
+      const names = action.directions?.length ? new Set(action.directions.map((d) => d.name)) : null;
+      return doc.style.options.filter((o) => !names || names.has(o.name)).map((o) => o.render);
+    }
+    default:
+      return [];
+  }
+};
+
+/** "OpenRouter · 429 · upstream Google" from a failed target's Details (the trailing "· 17:42 UTC" dropped). */
+export const blockedFailureDetail = (doc: ComicDoc | null | undefined, action: StudioAction | undefined): { code: string; text: string } | undefined => {
+  for (const render of blockedRenders(doc, action)) {
+    const d = render?.status === 'failed' ? render.errorDetail : undefined;
+    if (d?.code && d.text) return { code: d.code, text: d.text.replace(/\s*·\s*\d{1,2}:\d{2}(?:\s*UTC)?\s*$/i, '').trim() };
+  }
+  return undefined;
+};
+
+/** Is the model being rate-limited (models.md §3.6 G) rather than unavailable (H)? Our calls' last code says so. */
+export const isRateLimited = (health: ModelHealth | undefined, failedCode?: string): boolean => {
+  const code = keyRoute(health)?.observed?.lastCode ?? failedCode;
+  return !!code && RATE_LIMIT_CODES.has(code.toUpperCase());
+};
+
+/** "OpenRouter · 429 · upstream Google AI Studio" from the status itself (when no failed tile carries one). */
+const healthDetail = (health: ModelHealth | undefined): string | undefined => {
+  const route = keyRoute(health);
+  if (!route) return undefined;
+  const code = route.observed?.lastCode;
+  const upstream = route.providers?.find((p) => p.status !== null && p.status !== 0)?.name || route.providers?.[0]?.name;
+  return [ROUTE_NAME[route.route], code ? (RATE_LIMIT_CODES.has(code.toUpperCase()) ? '429' : code) : '', upstream ? `upstream ${upstream}` : ''].filter(Boolean).join(' · ');
+};
+
+/** The charge clause is allowed only when we KNOW nothing was charged (models.md §3.6 G). */
+const knownFree = (facts: OutageCardFacts): boolean => facts.origin === 'preflight' || (facts.origin === 'mid_run' && facts.chargedUsd === 0);
+
+/** "Page 3 wasn't drawn, and you weren't charged for it." — the charge clause only when we know it. */
+export const notDrawnSentence = (input: { action?: StudioAction; pageNumber?: (id: string) => number | undefined } & OutageCardFacts): string => {
+  const free = knownFree(input);
+  if (!input.action) {
+    if (input.origin === 'preflight') return 'Nothing was drawn, and nothing was charged.';
+    return `Some images weren't drawn${free ? ", and you weren't charged for them" : ''}.`;
+  }
   const what = blockedWhat(input.action, input.pageNumber);
-  const started = input.action
-    ? `${what.label} ${what.plural ? "weren't" : "wasn't"} started, and nothing was charged.`
-    : 'Nothing was drawn and nothing was charged.';
-  return `${who} isn't serving ${name} right now${reason ? ` (${reason})` : ''}. ${started} Your comic stays on ${name} so every page matches.`;
+  return `${what.label} ${what.plural ? "weren't" : "wasn't"} drawn${free ? `, and you weren't charged for ${what.plural ? 'them' : 'it'}` : ''}.`;
+};
+
+/**
+ * The outage sentence, models.md §3.6 exactly:
+ *  G (rate-limited): "{Upstream} is rate-limiting {Model} right now ({detail}). Page {p} wasn't drawn{, and you
+ *    weren't charged for it}. Your comic stays on {Model} so every page matches."
+ *  H (otherwise): "{Model} isn't available for this comic right now ({reason}). Nothing was drawn. You can wait, or
+ *    switch models. Switching can affect consistency."
+ * A preflight card ran nothing, so it says so ("nothing was charged"); a mid-run card names only what wasn't drawn
+ * and adds the charge clause only when the provider reported no cost; a card without an origin makes no money claim.
+ */
+export const outageSentence = (
+  input: { modelId: string; health?: ModelHealth; action?: StudioAction; pageNumber?: (id: string) => number | undefined; doc?: ComicDoc | null } & OutageCardFacts
+): string => {
+  const name = modelName(input.modelId);
+  const failed = blockedFailureDetail(input.doc, input.action);
+  const facts: OutageCardFacts = { ...(input.origin ? { origin: input.origin } : {}), ...(input.chargedUsd !== undefined ? { chargedUsd: input.chargedUsd } : {}) };
+  if (isRateLimited(input.health, failed?.code)) {
+    const who = whoServes(input.health, input.modelId);
+    const detail = failed?.text || healthDetail(input.health);
+    const drawn = notDrawnSentence({ action: input.action, pageNumber: input.pageNumber, ...facts });
+    return `${who} is rate-limiting ${name} right now${detail ? ` (${detail})` : ''}. ${drawn} Your comic stays on ${name} so every page matches.`;
+  }
+  const reason = troubleReason(input.health);
+  const drawn = input.origin === 'preflight' ? 'Nothing was drawn, and nothing was charged.' : notDrawnSentence({ action: input.action, pageNumber: input.pageNumber, ...facts });
+  return `${name} isn't available for this comic right now${reason ? ` (${reason})` : ''}. ${drawn} You can wait, or switch models. Switching can affect consistency.`;
+};
+
+/** Once the model answers again: what happened, with the same money honesty as the outage sentence. */
+export const recoveredSentence = (input: { modelId: string; action?: StudioAction; pageNumber?: (id: string) => number | undefined } & OutageCardFacts): string => {
+  const name = modelName(input.modelId);
+  if (input.origin === 'preflight') {
+    const what = blockedWhat(input.action, input.pageNumber);
+    const held = input.action ? `${what.label} ${what.plural ? "weren't" : "wasn't"} started while it was paused, and nothing was charged.` : 'Nothing was drawn while it was paused, and nothing was charged.';
+    return `${name} is answering again. ${held} Your comic stays on ${name}.`;
+  }
+  return `${name} is answering again. ${notDrawnSentence(input)} Your comic stays on ${name}.`;
+};
+
+/** No live status (state unknown): say so, never "answering again". */
+export const noLiveStatusSentence = (input: { modelId: string; action?: StudioAction; pageNumber?: (id: string) => number | undefined } & OutageCardFacts): string => {
+  const name = modelName(input.modelId);
+  const drawn = notDrawnSentence(input);
+  return `There's no live status for ${name} right now, so we can't tell whether it's answering again. ${drawn} You can try again now, wait, or switch models. Switching can affect consistency.`;
 };
 
 /** Settings → API keys (App.tsx restores ?view=settings&tab=settings); opened in a new tab so a waiting retry survives. */
