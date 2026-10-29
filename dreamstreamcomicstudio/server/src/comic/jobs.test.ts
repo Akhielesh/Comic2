@@ -1590,7 +1590,9 @@ describe('safety hooks', () => {
     expect(images.calls[0].prompt).not.toContain('SAFE TAKE');
     expect(images.calls[1].prompt).toContain('SAFE TAKE');
     expect(session.doc.pages[0].render).toMatchObject({ status: 'ready', note: 'Safer take' });
-    expect(session.doc.spend.entries.filter((e) => e.kind === 'page')).toHaveLength(1);
+    // The image is billed once; the declined take is recorded as a failed $0 attempt (models.md §3.4 item 9).
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'page' && e.outcome !== 'failed')).toHaveLength(1);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'page' && e.outcome === 'failed')).toEqual([expect.objectContaining({ usd: 0, model: 'nano-banana-2.1' })]);
     expect(session.doc.conversation.at(-1)!.text).toContain('a little tamer');
   });
 });
@@ -1649,13 +1651,14 @@ describe('provider rate limits', () => {
     const ctx = testContext(session, { images });
     await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
     expect(images.calls).toHaveLength(4); // 2 attempts × (first try + one re-queue)
-    expect(session.doc.pages[0].render).toMatchObject({ status: 'failed', error: expect.stringContaining('rate limited') });
+    // The tile keeps the precise reason and the provider facts for its Details row.
+    expect(session.doc.pages[0].render).toMatchObject({ status: 'failed', error: expect.stringContaining('rate limited'), errorDetail: { code: '429', provider: 'OpenRouter' } });
+    expect(session.doc.pages[0].render.errorDetail!.text).toMatch(/^OpenRouter · 429 · upstream Google · \d\d:\d\d UTC$/);
+    // The message is the calm §3.6 G copy (never the raw error), with what was already tried.
     const text = session.doc.conversation.at(-1)!.text;
-    expect(text).toMatch(/^Page 1 failed — The image model is busy right now/);
-    expect(text).toMatch(/\[OpenRouter · 429 · upstream Google · \d\d:\d\d UTC\]/);
+    expect(text).toMatch(/^Google is rate-limiting Nano Banana 2\.1 right now \(OpenRouter · 429 · upstream Google\)\. Page 1 wasn't drawn, and you weren't charged for it\. Your comic stays on Nano Banana 2\.1 so every page matches\./);
     expect(text).toContain('I already waited for the provider and tried it once more.');
-    expect(text).toContain('Retry from the board');
-    expect(text).not.toMatch(/sk-|Bearer/);
+    expect(text).not.toMatch(/sk-|Bearer|failed —/);
   });
 
   it('cancelling while waiting for the provider stops honestly (not failed, nothing left queued)', async () => {

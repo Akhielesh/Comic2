@@ -72,6 +72,7 @@ import {
   type VersionMeta
 } from '../../../shared/comic/doc.js';
 import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import type { OutageOption, RunPreflight } from '../../../shared/comic/modelHealth.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
@@ -118,7 +119,10 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo, pickImageRoute } from './imageClient.js';
+import { imageFailureDetail, imageFailureInfo, pickImageRoute, type ImageRequestPlus, type ImageResultPlus } from './imageClient.js';
+import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
+import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
+import { recordImageCall } from './billing.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
@@ -391,6 +395,47 @@ export const modelUnavailableText = (model: string, reason: string): string =>
 
 /** The chip under G and H: opens the picker (changing still needs the confirm). */
 export const SEE_OTHER_MODELS_STEP: NextStep = { label: 'See other models', client: { type: 'open_model_picker' } };
+
+// ── Real prices (models.md §2.3) ─────────────────────────────────────────────
+
+/** A context that brings its own PriceBook (tests; OrchestratorContext gains `prices`: wave note). */
+type PricedContext = StudioContext & { prices?: () => Promise<PriceBook> };
+
+const priceBooks = new WeakMap<StudioContext, Promise<PriceBook>>();
+
+/**
+ * The PriceBook for this request (memoised per request context): live OpenRouter list prices and this user's
+ * observed costs (createPriceBook: bounded wait, never throws), else the registry's dated price list.
+ */
+export const priceBookFor = (ctx: StudioContext): Promise<PriceBook> => {
+  let book = priceBooks.get(ctx);
+  if (!book) {
+    const own = (ctx as PricedContext).prices;
+    book = Promise.resolve()
+      .then(() => (own ? own() : createPriceBook({ userId: ctx.userId })))
+      .catch((err: unknown) => {
+        logger.warn('comic_price_book_unavailable', { message: (err as Error)?.message });
+        return registryPriceBook();
+      });
+    priceBooks.set(ctx, book);
+  }
+  return book;
+};
+
+/** "your recent real costs" / "OpenRouter's current price" — the basis of a quote above the price list (no dollars). */
+const basisPhrase = (prices: PriceBook | undefined, pin: RunPin, kind: ImageJobKind): string | null => {
+  const quote = (prices as Partial<ServerPriceBook> | undefined)?.quote;
+  if (typeof quote !== 'function') return null;
+  try {
+    const { spec, resolution } = resolveJobFor(pin, kind);
+    const detail = quote(spec.id, resolution, kind).basisDetail;
+    if (detail.source === 'observed') return detail.scope === 'platform' ? "DreamStream creators' recent real costs" : 'your recent real costs';
+    if (detail.source === 'list') return "OpenRouter's current price";
+  } catch {
+    /* no phrase */
+  }
+  return null;
+};
 
 // ── Per-project image concurrency ────────────────────────────────────────────
 
@@ -933,6 +978,8 @@ export const sanitizeCtxFor = (ctx: StudioContext, opts: Pick<RunActionOptions, 
 // ── Gates ────────────────────────────────────────────────────────────────────
 
 async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOptions): Promise<StartedAction> {
+  // Before anything reads the doc: the gate was quoted with real prices, so it is re-checked with them.
+  const prices = await priceBookFor(ctx);
   const gate = ctx.session.doc.gate;
   if (!gate || gate.id !== gateId || gate.status !== 'open') {
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
@@ -940,7 +987,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
   const handler = actionHandlerFor(gate.action.type);
-  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys));
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys), gate.action.type === 'recheck_page' ? undefined : prices);
   const nickname = handler ? gate.model : gateModelName(doc, gate.action, estimate);
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
@@ -1097,7 +1144,7 @@ function createGate(
   estimate: SpendEstimate,
   reason: Gate['reason'],
   opts: RunActionOptions,
-  extra: { staleFrom?: number } = {}
+  extra: { staleFrom?: number; prices?: PriceBook } = {}
 ): StartedAction {
   const doc = ctx.session.doc;
   const action = withoutQuote(bindSpendAction(doc, rawAction));
@@ -1114,7 +1161,10 @@ function createGate(
       ? '. That would go over the budget set for this comic.'
       : `. That would bring this comic to ${formatUsd(after)} — over your ${formatUsd(budget)} budget.`
     : '.';
-  const summary = `${plan.what}${textSpend ? '' : ` on ${nickname} (${resolution})`} · ${price}${overBudget}`;
+  // models.md §2.3: a quote above the price list says which basis it used (no dollar figure in the phrase).
+  const listQuote = textSpend ? null : estimateSpendAction(doc, action, spendActionIsByok(doc, action, ctx.keys));
+  const basis = listQuote && estimate.usd > listQuote.usd + 0.0005 ? basisPhrase(extra.prices, runPinOf(doc), plan.kind) : null;
+  const summary = `${plan.what}${textSpend ? '' : ` on ${nickname} (${resolution})`} · ${price}${basis ? `, priced from ${basis}` : ''}${overBudget}`;
   const gate: Gate = {
     id: newId('gate'),
     action,
@@ -1319,38 +1369,47 @@ const modelUnavailable = (ctx: StudioContext, opts: RunActionOptions, model: str
   return finished({ status: 'blocked', message: text, code: MODEL_LOCKED });
 };
 
-async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
-  // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
-  if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
+type SpendDecision =
+  | { kind: 'done'; started: StartedAction }
+  | { kind: 'go'; plan: SpendPlan; spec: ImageModelSpec; byok: boolean; estimate: SpendEstimate };
+
+/**
+ * Everything startSpend decides before money moves, synchronously (validation, the lock, keys, access, the quote,
+ * the gate). Terminal answers are delivered here; 'go' commits nothing.
+ */
+function decideSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions, prices: PriceBook): SpendDecision {
+  const done = (started: StartedAction): SpendDecision => ({ kind: 'done', started });
   const doc = ctx.session.doc;
   const problem = validateSpendAction(doc, action);
-  if (problem) return blocked(ctx, opts, problem, 'info');
+  if (problem) return done(blocked(ctx, opts, problem, 'info'));
 
   const lock = lockOf(doc);
   // A comic locked to a model the registry no longer lists: never re-pointed at another one (§3.9).
-  if (lock && !getImageModel(lock.modelId)) return modelUnavailable(ctx, opts, lock.modelId, "it's no longer offered in Comic Studio");
+  if (lock && !getImageModel(lock.modelId)) return done(modelUnavailable(ctx, opts, lock.modelId, "it's no longer offered in Comic Studio"));
   const plan = describeSpend(doc, action);
   const { spec } = modelLabel(doc, plan.kind);
   if (!ctx.keys.openrouter?.key && !ctx.keys.gemini?.key) {
-    return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error');
+    return done(blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error'));
   }
   const picked = imageRouteFor(spec, ctx.keys);
   if (!picked) {
     const needs = `${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key`;
-    if (lock) return modelUnavailable(ctx, opts, spec.nickname, `it needs ${needs}`);
-    return blocked(ctx, opts, `${spec.nickname} needs ${needs}. Add one in Settings → API keys.`, 'error');
+    if (lock) return done(modelUnavailable(ctx, opts, spec.nickname, `it needs ${needs}`));
+    return done(blocked(ctx, opts, `${spec.nickname} needs ${needs}. Add one in Settings → API keys.`, 'error'));
   }
   const denied = qualityProblem(ctx, opts, spec);
-  if (denied === LOCKED_MODEL_ACCESS_REASON) return modelUnavailable(ctx, opts, spec.nickname, denied);
+  if (denied === LOCKED_MODEL_ACCESS_REASON) return done(modelUnavailable(ctx, opts, spec.nickname, denied));
   if (denied) {
-    return blocked(ctx, opts, /\bStandard\b/.test(denied) ? denied : `${denied} Switch to Standard quality to keep going.`, 'warn', [
-      { label: 'Switch to Standard quality', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'standard' } }] }, usd: 0 }
-    ]);
+    return done(
+      blocked(ctx, opts, /\bStandard\b/.test(denied) ? denied : `${denied} Switch to Standard quality to keep going.`, 'warn', [
+        { label: 'Switch to Standard quality', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'standard' } }] }, usd: 0 }
+      ])
+    );
   }
 
-  // Priced for the key that will draw (the quote, the markup and the reserve agree).
+  // Priced for the key that will draw (the quote, the markup and the reserve agree), at real prices.
   const byok = picked.byok;
-  const estimate = estimateSpendAction(doc, action, byok);
+  const estimate = estimateSpendAction(doc, action, byok, prices);
   if (estimate.imageCount <= 0) {
     // Everything requested is ready and current (R1): $0, with what exists and what's next.
     const nothing = nothingToDraw(doc, action, byok, costOf(ctx));
@@ -1358,10 +1417,12 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
       ? [{ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(action.type === 'render_pages' && action.pageIds?.length ? { pageIds: action.pageIds } : {}) }]
       : [noticeCard('info', nothing.message)];
     deliver(ctx, opts, nothing.message, cards, nothing.steps);
-    return finished({ status: 'nothing', message: nothing.message, nextSteps: nothing.steps });
+    return done(finished({ status: 'nothing', message: nothing.message, nextSteps: nothing.steps }));
   }
 
-  const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
+  // A chip carries the list-price quote it was shown with (shared/comic/plan.ts): judge staleness on that basis,
+  // so a real-price quote above the list never re-gates a click by itself; budget and policy use the real price.
+  const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimateSpendAction(doc, action, byok));
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
     pendingUsd: pendingUsdOf(ctx.session),
@@ -1370,16 +1431,110 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     redraw: !opts.confirmed && replacesCurrentArt(doc, action),
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
+  if (reason) return done(createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom, prices }));
+  return { kind: 'go', plan, spec, byok, estimate };
+}
+
+/** The image kinds a spend action can draw (its run's models, for the preflight). */
+const runKinds = (action: SpendAction): ImageJobKind[] => {
+  switch (action.type) {
+    case 'render_style_options':
+      return ['style_option'];
+    case 'render_sheets':
+      return ['sheet', 'place'];
+    case 'render_pages':
+      return ['page', 'sheet', 'cover'];
+    case 'edit_page':
+      return ['edit'];
+    case 'render_cover':
+      return ['cover'];
+    default:
+      return [];
+  }
+};
+
+/** reliability.md §2: the money-safe preflight. Our own failure to check never blocks a run (null = go). */
+const preflightFor = async (ctx: StudioContext, opts: RunActionOptions, action: SpendAction, prices: PriceBook): Promise<RunPreflight | null> => {
+  const pin = runPinOf(ctx.session.doc);
+  const specs = [...new Map(runKinds(action).map((k) => resolveJobFor(pin, k).spec).map((spec) => [spec.id, spec] as const)).values()];
+  if (!specs.length) return null;
+  try {
+    return await preflightImageRun({ specs, keys: ctx.keys, doc: ctx.session.doc, caps: opts.caps ?? ctx.caps ?? DEFAULT_CAPS, prices });
+  } catch (err) {
+    logger.warn('comic_preflight_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    return null;
+  }
+};
+
+/** "OpenRouter" / "Gemini" for a route. */
+const ROUTE_NAMES: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemini: 'Gemini' };
+
+/**
+ * The preflight found the model down on every route this user can reach: start NOTHING (no reservation, no job,
+ * no failed tiles, no spend), post ONE calm outage card with real options and a short honest line.
+ */
+const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: SpendAction, go: Extract<SpendDecision, { kind: 'go' }>, pre: RunPreflight): StartedAction => {
+  const doc = ctx.session.doc;
+  const first = pre.blocked?.[0];
+  const spec = getImageModel(first?.modelId) ?? go.spec;
+  const reason = (first?.reason || `${spec.nickname} isn't being served right now`).replace(/[.\s]+$/, '');
+  const card: Card = {
+    type: 'model_outage',
+    id: newId('card'),
+    modelId: spec.id,
+    options: pre.options.length ? pre.options : [{ kind: 'wait_and_retry' }],
+    blockedAction: bindSpendAction(doc, action),
+    origin: 'preflight'
+  };
+  const text = `${spec.nickname} isn't available right now (${reason}), so I haven't started ${go.plan.what} — nothing was charged. Your comic stays on ${spec.nickname} so every page matches.`;
+  deliver(ctx, opts, text, [card]);
+  for (const b of pre.blocked || [go.spec].map((s) => ({ modelId: s.id }))) {
+    const blockedSpec = getImageModel(b.modelId);
+    const route = blockedSpec ? imageRouteFor(blockedSpec, ctx.keys) : null;
+    recordImageCall({
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+      modelId: b.modelId,
+      ...(route ? { providerModel: route.model, route: route.route, byok: route.byok } : {}),
+      kind: go.plan.kind,
+      outcome: 'blocked',
+      errorCode: 'MODEL_DOWN',
+      providerCostUsd: null,
+      billedUsd: 0
+    });
+  }
+  logger.warn('comic_preflight_blocked', { projectId: ctx.projectId, action: action.type, models: (pre.blocked || []).map((b) => b.modelId) });
+  const options = card.options.map((o) => (o.kind === 'switch_model' ? `switch to ${o.nickname}` : o.kind === 'other_route' ? o.label : o.kind === 'add_key' ? o.label : 'wait and retry automatically')).join(', ');
+  return finished({
+    status: 'blocked',
+    code: 'PROVIDER_ERROR',
+    message: `Not started: ${spec.nickname} is down on every route this account can use (${reason}). Nothing was drawn and nothing was charged; the outage card offers: ${options}. Never say the drawing started.`
+  });
+};
+
+async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
+  // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
+  if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
+  const prices = await priceBookFor(ctx);
+  const first = decideSpend(ctx, action, opts, prices);
+  if (first.kind === 'done') return first.started;
+  // reliability.md §2: check before spending — no paid run starts on a model that is down everywhere we can reach.
+  const pre = await preflightFor(ctx, opts, action, prices);
+  if (pre && !pre.ok) return preflightBlocked(ctx, opts, action, first, pre);
+  // The doc may have moved while the health check ran: decide again, synchronously up to the reservation.
+  const go = decideSpend(ctx, action, opts, prices);
+  if (go.kind === 'done') return go.started;
+  const { plan, spec, byok, estimate } = go;
+  const doc = ctx.session.doc;
 
   // Proceeding: retire any open gate for the same kind of spend (it is now moot).
-  const open = ctx.session.doc.gate;
+  const open = doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
-  // Pin the model/quality now so mid-run settings changes can't move this spend off the
-  // quoted/authorised price (the latest sheets and pages are still used — see prepare()).
+  // Pin the model (the lock), quality and override now so mid-run settings changes can't move this spend off
+  // the quoted/authorised price (the latest sheets and pages are still used — see prepare()).
   const pinned = runPinOf(doc);
-  const runner = new RenderRun(ctx, estimate, pinned, opts, byok);
+  const runner = new RenderRun(ctx, estimate, pinned, opts, byok, prices, pre?.useRoute, action);
   runner.reserve();
   const message = `Started drawing ${plan.what} (${costOf(ctx).approx(estimate.usd)} on ${spec.nickname}). They appear on the board as they finish; I'll post when they're ready.`;
   let done: Promise<void>;
@@ -1517,6 +1672,8 @@ interface ImageJob {
   landedOps?: () => DocOp[];
   /** Already re-queued once after a provider rate limit. */
   requeued?: boolean;
+  /** What failed attempts before a re-queue were charged (carried into the final failure). */
+  failedCharged?: number;
 }
 
 interface JobResult {
@@ -1540,6 +1697,11 @@ interface JobResult {
   detail?: string;
   /** Drawn on the safe-take retry after the image model's filter declined the first take. */
   saferTake?: boolean;
+  /** Failure: the last error as thrown (provider facts for the outage card) and its code. */
+  raw?: unknown;
+  code?: StudioErrorCode;
+  /** Failure: what this target's failed attempts were charged (0 when the provider billed nothing). */
+  chargedUsd?: number;
 }
 
 type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
@@ -1669,7 +1831,13 @@ class RenderRun {
     private readonly estimate: SpendEstimate,
     private readonly pinned: RunPin,
     private readonly opts: RunActionOptions,
-    private readonly byok: boolean
+    private readonly byok: boolean,
+    /** Real prices (live list + observed; listUsd on every spend entry). */
+    private readonly prices?: PriceBook,
+    /** The preflight found the primary route down and the same model up on a same-payer route. */
+    private readonly preferRoute?: ImageRoute,
+    /** The action this run carries out (the mid-run outage card narrows it to what failed). */
+    private readonly action?: SpendAction
   ) {
     this.session = ctx.session;
     this.signal = ctx.session.abort.signal;
@@ -2058,7 +2226,10 @@ class RenderRun {
     const drawn = this.results.filter((r) => r.ok && !r.reuse && !r.blocked);
     const reused = this.results.filter((r) => r.ok && !!r.reuse);
     const blockedR = this.results.filter((r) => r.ok && r.blocked);
-    const failed = this.results.filter((r) => !r.ok && !r.skipped);
+    const failedAll = this.results.filter((r) => !r.ok && !r.skipped);
+    // reliability.md §2: a provider-side failure is said calmly (§3.6 G) and gets the outage card, never raw error text.
+    const upstream = failedAll.filter(isUpstreamResult);
+    const failed = failedAll.filter((r) => !isUpstreamResult(r));
     const skipped = this.results.filter((r) => r.skipped);
     const noun = (list: JobResult[]) => describeJobs(list.map((r) => r.job));
     const are = (list: JobResult[]) => (list.length === 1 ? 'is' : 'are');
@@ -2104,6 +2275,11 @@ class RenderRun {
       );
       if (limited.length) parts.push(`I already waited for the provider and tried ${limited.length === 1 ? 'it' : 'them'} once more.`);
     }
+    if (upstream.length) {
+      parts.push(this.upstreamText(upstream));
+      const limited = upstream.filter((r) => r.rateLimited && r.job.requeued);
+      if (limited.length) parts.push(`I already waited for the provider and tried ${limited.length === 1 ? 'it' : 'them'} once more.`);
+    }
     if (skipped.length) {
       parts.push(
         this.stopReason
@@ -2113,14 +2289,79 @@ class RenderRun {
             : `${capitalize(noun(skipped))} did not start.`
       );
     }
-    if (!drawn.length && !reused.length && !blockedR.length && !failed.length && !skipped.length) parts.push('Nothing was drawn.');
+    if (!drawn.length && !reused.length && !blockedR.length && !failedAll.length && !skipped.length) parts.push('Nothing was drawn.');
     if (failed.length && !this.stopReason) parts.push('Retry from the board or ask me to try again.');
     const doc = this.session.doc;
     const drewPages = [...drawn, ...reused].some((r) => r.job.kind === 'page');
-    if (drewPages && !failed.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
+    if (drewPages && !failedAll.length && doc.cover.render.status !== 'ready' && !isBusy(doc.cover.render) && !jobs.some((j) => j.kind === 'cover')) {
       parts.push('Want the cover next?');
     }
     return parts.join(' ');
+  }
+
+  /** The model a job of this run draws on (the lock, else the tier/override at the run's start). */
+  private specOf(job: ImageJob): ImageModelSpec {
+    return resolveJobFor(this.pinned, job.kind).spec;
+  }
+
+  /**
+   * models.md §3.6 G (exact for a 429): "{Upstream} is rate-limiting {Model} right now ({detail}). Page {p} wasn't
+   * drawn{, and you weren't charged for it}. Your comic stays on {Model} so every page matches." The charge clause
+   * appears only when the provider billed nothing for the failed part.
+   */
+  private upstreamText(list: JobResult[]): string {
+    const first = list[0];
+    const info = imageFailureInfo(first.raw);
+    const model = this.specOf(first.job).nickname;
+    const provider = info?.providerName ? info.providerName.replace(/[^\w .()-]/g, '').slice(0, 40) : '';
+    const upstream = provider || (info?.route ? ROUTE_NAMES[info.route] : 'The image provider');
+    const detail = imageFailureDetail(first.raw);
+    const charged = round4(list.reduce((sum, r) => sum + (r.chargedUsd || 0), 0));
+    const it = list.length === 1 ? 'it' : 'them';
+    const lead = list.some((r) => r.code === 'RATE_LIMIT')
+      ? `${upstream} is rate-limiting ${model} right now`
+      : list.every((r) => isRoutePausedError(r.raw))
+        ? `${model} is paused on ${info?.route ? ROUTE_NAMES[info.route] : 'its provider'} after repeated provider failures`
+        : `${upstream} couldn't serve ${model} right now`;
+    return `${lead}${detail ? ` (${detail})` : ''}. ${capitalize(describeJobs(list.map((r) => r.job)))} ${list.length === 1 ? "wasn't" : "weren't"} drawn${charged === 0 ? `, and you weren't charged for ${it}` : ''}. Your comic stays on ${model} so every page matches.`;
+  }
+
+  /**
+   * reliability.md §2: a run whose targets failed on the provider's side ends with ONE outage card (real options
+   * from a fresh preflight — the breaker may be open now; at least "wait and retry"), its re-send narrowed to what
+   * failed, what that part cost, and the §3.6 G chips. render.error / errorDetail keep the precise reason.
+   */
+  private async midRunOutage(upstream: JobResult[]): Promise<{ card: Card; steps: NextStep[] } | null> {
+    if (!upstream.length) return null;
+    const doc = this.session.doc;
+    const spec = this.specOf(upstream[0].job);
+    let options: OutageOption[] = [{ kind: 'wait_and_retry' }];
+    try {
+      const pre = await preflightImageRun({ specs: [spec], keys: this.ctx.keys, doc, caps: this.opts.caps ?? this.ctx.caps ?? DEFAULT_CAPS, ...(this.prices ? { prices: this.prices } : {}) });
+      if (!pre.ok && pre.options.length) options = pre.options;
+    } catch (err) {
+      logger.warn('comic_outage_options_failed', { projectId: this.ctx.projectId, message: (err as Error)?.message });
+    }
+    const blockedAction = this.action ? narrowBlockedAction(this.action, upstream.map((r) => r.job.target), doc) : undefined;
+    const chargedUsd = round4(upstream.reduce((sum, r) => sum + (r.chargedUsd || 0), 0));
+    const card: Card = {
+      type: 'model_outage',
+      id: newId('card'),
+      modelId: spec.id,
+      options,
+      ...(blockedAction ? { blockedAction } : {}),
+      origin: 'mid_run',
+      chargedUsd
+    };
+    const steps: NextStep[] = [];
+    if (blockedAction && isSpendAction(blockedAction)) {
+      const waitMs = imageFailureInfo(upstream[0].raw)?.retryAfterMs;
+      const seconds = typeof waitMs === 'number' && Number.isFinite(waitMs) && waitMs >= 1000 ? Math.round(waitMs / 1000) : 0;
+      const { quotedUsd: _old, ...fresh } = blockedAction as SpendAction & { quotedUsd?: number };
+      steps.push(this.priced({ label: `Try again${seconds ? ` in ${seconds}s` : ''}`, action: fresh as SpendAction }));
+    }
+    steps.push(SEE_OTHER_MODELS_STEP);
+    return { card, steps };
   }
 
   /**
@@ -2143,7 +2384,9 @@ class RenderRun {
     // over-the-rating notice ride on THIS summary, so the run stays one message.
     const safety = takeRenderSafetyFollowups(this.session);
     if (safety.notices.length) this.notices.push(...safety.notices);
-    const steps = dedupeSteps([...safety.steps.map((s) => this.priced(s)), ...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
+    const outage = await this.midRunOutage(failed.filter(isUpstreamResult));
+    if (outage) this.notices.push(outage.card);
+    const steps = dedupeSteps([...(outage?.steps ?? []), ...safety.steps.map((s) => this.priced(s)), ...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, [...lead, ...this.notices], steps)) }]));
@@ -2236,8 +2479,9 @@ class RenderRun {
         patch: { status, error: message, updatedAt: Date.now(), ...(attempts ? { attempts } : {}), ...(errorDetail ? { errorDetail } : {}) }
       }
     ]);
-    this.results.push({ job, ok: false, error: message, ...extra });
-    if (job.keepStatusOnFailure) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
+    const result: JobResult = { job, ok: false, error: message, ...extra };
+    this.results.push(result);
+    if (job.keepStatusOnFailure && !isUpstreamResult(result)) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
   }
 
   private async runJob(job: ImageJob): Promise<void> {
@@ -2512,7 +2756,7 @@ class RenderRun {
     }
     const reservation = reserved.reservation;
 
-    let result: ImageResult | undefined;
+    let result: ImageResultPlus | undefined;
     let lastError: StudioError | undefined;
     let lastRaw: unknown;
     let attempts = 0;
@@ -2523,34 +2767,57 @@ class RenderRun {
     // A deadline-abort hits a non-streaming request the provider keeps generating (and
     // billing); it is flagged `abandoned` so we settle an estimate instead of releasing.
     let abandonedUsd = 0;
+    // What the failed attempts of this job were charged (the mid-run outage card's chargedUsd).
+    let failedCharged = 0;
     while (attempts < MAX_IMAGE_ATTEMPTS) {
       attempts += 1;
+      const startedAt = Date.now();
       try {
-        // No abort signal: a call that has started is paid and is always kept.
-        result = await ctx.images({
+        // No abort signal: a call that has started is paid and is always kept. preferRoute: the preflight found
+        // the primary route down and the same model on a same-payer route up (reliability.md §2).
+        const request: ImageRequestPlus = {
           spec: prepared.compiled.spec,
           resolution: prepared.compiled.resolution,
           aspect: prepared.compiled.aspect,
           prompt: prepared.compiled.prompt,
-          references: prepared.references
-        });
+          references: prepared.references,
+          ...(this.preferRoute ? { preferRoute: this.preferRoute } : {}),
+          // Images-API models pin `provider.only` to endpoints at or under this per-image quote (models.md §2.4 R3.4).
+          ...(this.unitQuoteUsd(prepared.compiled, job.kind) !== null ? { maxUsd: this.unitQuoteUsd(prepared.compiled, job.kind)! } : {})
+        };
+        result = (await ctx.images(request)) as ImageResultPlus;
         if (safe && safeRetried) saferTake = true;
         break;
       } catch (err) {
         lastRaw = err;
         lastError = asStudioError(err, 'The image could not be drawn. Please try again.');
-        const spent = (err as { spentUsd?: unknown })?.spentUsd;
-        if (typeof spent === 'number' && Number.isFinite(spent) && spent > 0) failedSpend += spent;
+        const spentRaw = (err as { spentUsd?: unknown })?.spentUsd;
+        const spent = typeof spentRaw === 'number' && Number.isFinite(spentRaw) && spentRaw > 0 ? spentRaw : 0;
+        failedSpend += spent;
+        const abandoned = !!(err as { abandoned?: boolean })?.abandoned;
+        // Our own deadline fired after dispatch: the provider still bills it (registry price, estimated).
+        const owedNow = abandoned ? imagePriceUsd(prepared.compiled.spec, prepared.compiled.resolution) : 0;
+        abandonedUsd += owedNow;
+        // models.md §3.4 item 9: EVERY attempt is recorded — a failed one with what the provider reported (usually $0).
+        failedCharged = round4(
+          failedCharged +
+            this.recordAttempt(job, prepared, picked, {
+              ok: false,
+              providerUsd: spent + owedNow,
+              reported: spent > 0 ? spent : null,
+              estimated: abandoned,
+              byok: picked.byok,
+              error: lastError,
+              raw: err,
+              latencyMs: Date.now() - startedAt,
+              suffix: abandoned ? ' (timed out)' : ' (failed attempt)'
+            })
+        );
         if (lastError.code === 'RATE_LIMIT') {
           rateLimited = true;
           this.noteRateLimit(job);
         }
-        if ((err as { abandoned?: boolean })?.abandoned) {
-          // Our own deadline fired after dispatch: the provider still bills it, so do not
-          // retry (that would pay twice) — bill the registry price and stop.
-          abandonedUsd += imagePriceUsd(prepared.compiled.spec, prepared.compiled.resolution);
-          break;
-        }
+        if (abandoned) break; // retrying would pay twice
         if (this.signal.aborted || lastError.code === 'CANCELLED') break;
         // Safe take: the image model's filter declined this take (not billed) — recompile one
         // notch gentler and try once more, within the approved spend (safety.md §3.2).
@@ -2581,12 +2848,8 @@ class RenderRun {
     if (!result) {
       end(false);
       const owed = round4(failedSpend + abandonedUsd);
-      if (owed > 0) {
-        await reservation.settle({ costUsd: owed, imageUnits: 0 });
-        this.recordImageSpend(job, prepared.compiled, owed, abandonedUsd > 0, picked.byok, abandonedUsd > 0 ? ' (timed out)' : ' (failed attempt)');
-      } else {
-        await reservation.release(lastError?.code || 'image_failed');
-      }
+      if (owed > 0) await reservation.settle({ costUsd: owed, imageUnits: 0 });
+      else await reservation.release(lastError?.code || 'image_failed');
       if (lastError?.code === 'CANCELLED') {
         this.restore(job);
         return { outcome: { kind: 'done' }, asset: null };
@@ -2602,11 +2865,18 @@ class RenderRun {
       // Incident follow-up: a rate-limited image is re-queued once after the provider's
       // Retry-After (or 45 s) before it is marked failed.
       if (lastError?.code === 'RATE_LIMIT' && !job.requeued && !this.signal.aborted && !this.stopReason) {
+        job.failedCharged = round4((job.failedCharged || 0) + failedCharged);
         this.commit([{ op: 'render', target: job.target, patch: { status: 'queued', error: undefined, updatedAt: Date.now() } }]);
         return { outcome: { kind: 'requeue', afterMs: this.requeueDelay(lastRaw) }, asset: null };
       }
       const message = lastError?.userMessage || 'The image could not be drawn.';
-      this.fail(job, message, attempts, { rateLimited, ...(detail ? { detail } : {}) }, this.errorDetailOf(lastRaw, lastError, detail));
+      this.fail(
+        job,
+        message,
+        attempts,
+        { rateLimited, ...(detail ? { detail } : {}), raw: lastRaw, ...(lastError ? { code: lastError.code } : {}), chargedUsd: round4((job.failedCharged || 0) + failedCharged) },
+        this.errorDetailOf(lastRaw, lastError, detail)
+      );
       return { outcome: { kind: 'done' }, asset: null };
     }
 
@@ -2615,6 +2885,17 @@ class RenderRun {
     const imageUsd = providerUsd ?? imagePriceUsd(compiled.spec, compiled.resolution);
     // Earlier paid-but-failed attempts of this same job are billed alongside the image.
     const settleUsd = failedSpend > 0 ? round4(imageUsd + failedSpend) : providerUsd;
+    const success = (suffix: string) =>
+      this.recordAttempt(job, prepared, picked, {
+        ok: true,
+        providerUsd: imageUsd,
+        reported: providerUsd ?? null,
+        estimated: providerUsd === undefined,
+        byok: result!.byok,
+        result,
+        latencyMs: typeof result!.latencyMs === 'number' ? result!.latencyMs : 0,
+        suffix
+      });
     let saved: AssetRef;
     try {
       saved = await this.saveImage(result.dataUrl, compiled.spec.id);
@@ -2622,15 +2903,13 @@ class RenderRun {
       // Paid but lost: bill it honestly and say so.
       end(false);
       await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
-      if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
-      this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, ' (not saved)');
+      success(' (not saved)');
       logger.error('comic_image_save_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
       this.fail(job, "The image was drawn but couldn't be saved. Please retry.", attempts);
       return { outcome: { kind: 'done' }, asset: null };
     }
     await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
-    if (failedSpend > 0) this.recordImageSpend(job, compiled, failedSpend, false, picked.byok, ' (failed attempt)');
-    const usd = this.recordImageSpend(job, compiled, imageUsd, providerUsd === undefined, result.byok, '');
+    const usd = success('');
 
     // Shape check (free): never an automatic redraw or fit — offer them.
     const aspect = this.checkAspect(job, compiled, saved, result.route);
@@ -2972,33 +3251,116 @@ class RenderRun {
     }
   }
 
-  /** Commit a spend entry for one image call; returns the charged USD. */
-  private recordImageSpend(job: ImageJob, compiled: CompiledImageJob, providerUsd: number, estimated: boolean, byok: boolean, suffix: string): number {
-    const usd = chargedUsd(providerUsd, byok);
-    this.spentUsd = round4(this.spentUsd + usd);
-    // Move this amount out of the pending reservation in the same tick it is committed.
-    const settled = Math.min(usd, this.reservedLeft);
-    if (settled > 0) {
-      this.reservedLeft = round4(this.reservedLeft - settled);
-      addPending(this.session, -settled);
+  /**
+   * models.md §3.4 item 9: one image ATTEMPT, recorded — a SpendEntry with what was requested (res, route, refs),
+   * how it ended (outcome) and the list price at the time (listUsd, same unit as usd) that also feeds the running
+   * totals (byModel / byTarget / failed, kept by the spend op), plus a fire-and-forget comic_image_calls row.
+   * Recording never blocks or fails the job. Returns the charged USD.
+   */
+  private recordAttempt(
+    job: ImageJob,
+    prepared: { compiled: CompiledImageJob; references: ImageReference[] },
+    picked: { route: ImageRoute; model: string; byok: boolean },
+    a: {
+      ok: boolean;
+      /** Provider cost to bill for this attempt (reported, or the registry price when estimated). */
+      providerUsd: number;
+      /** What the provider reported (null = nothing reported). */
+      reported: number | null;
+      estimated: boolean;
+      byok: boolean;
+      result?: ImageResultPlus;
+      error?: StudioError;
+      raw?: unknown;
+      latencyMs: number;
+      suffix: string;
     }
-    this.commit([
-      {
-        op: 'spend',
-        entry: {
-          id: newId('sp'),
-          at: Date.now(),
-          kind: job.spend,
-          label: `${job.label}${suffix}`,
-          usd,
-          model: compiled.spec.id,
-          byok,
-          estimated,
-          target: renderTargetKey(job.target)
-        }
+  ): number {
+    const { compiled } = prepared;
+    // A breaker refusal never reached a provider: not an attempt, only a 'blocked' call row (below).
+    const paused = !a.ok && isRoutePausedError(a.raw);
+    const usd = chargedUsd(a.providerUsd, a.byok);
+    const info = a.ok ? undefined : imageFailureInfo(a.raw);
+    const route: ImageRoute = a.result?.route ?? info?.route ?? picked.route;
+    const refs = prepared.references.length;
+    if (!paused) {
+      this.spentUsd = round4(this.spentUsd + usd);
+      // Move this amount out of the pending reservation in the same tick it is committed.
+      const settled = Math.min(usd, this.reservedLeft);
+      if (settled > 0) {
+        this.reservedLeft = round4(this.reservedLeft - settled);
+        addPending(this.session, -settled);
       }
-    ]);
-    return usd;
+      const list = this.listUnitUsd(compiled, job.kind, refs);
+      this.commit([
+        {
+          op: 'spend',
+          entry: {
+            id: newId('sp'),
+            at: Date.now(),
+            kind: job.spend,
+            label: `${job.label}${a.suffix}`,
+            usd,
+            model: compiled.spec.id,
+            byok: a.byok,
+            estimated: a.estimated,
+            target: renderTargetKey(job.target),
+            res: compiled.resolution,
+            route,
+            outcome: a.ok ? 'ok' : 'failed',
+            ...(list !== null ? { listUsd: chargedUsd(list, a.byok) } : {}),
+            refs
+          }
+        }
+      ]);
+    }
+    const status = a.ok ? 200 : info?.status;
+    recordImageCall({
+      userId: this.ctx.userId,
+      projectId: this.ctx.projectId,
+      modelId: compiled.spec.id,
+      providerModel: a.result?.model || picked.model,
+      route,
+      ...((a.result?.providerName || info?.providerName) ? { providerName: a.result?.providerName || info?.providerName } : {}),
+      kind: job.kind,
+      res: compiled.resolution,
+      aspect: compiled.aspect,
+      refs,
+      outcome: paused ? 'blocked' : a.ok ? 'ok' : 'failed',
+      ...(typeof status === 'number' && Number.isFinite(status) && status > 0 ? { httpStatus: status } : {}),
+      ...(a.ok ? {} : { errorCode: paused ? 'ROUTE_PAUSED' : a.error?.code || 'PROVIDER_ERROR' }),
+      providerCostUsd: a.reported,
+      billedUsd: paused ? 0 : usd,
+      byok: a.byok,
+      latencyMs: Math.max(0, Math.round(a.latencyMs)),
+      ...(a.result?.modelVersion ? { modelVersion: a.result.modelVersion } : {})
+    });
+    return paused ? 0 : usd;
+  }
+
+  /** The provider price one image of this job was quoted at (the PriceBook's unit price, else the registry list). */
+  private unitQuoteUsd(compiled: CompiledImageJob, kind: ImageJobKind): number | null {
+    try {
+      const usd = this.prices?.unit(compiled.spec.id, compiled.resolution, kind).usd;
+      if (typeof usd === 'number' && Number.isFinite(usd) && usd > 0) return usd;
+    } catch {
+      /* the registry below */
+    }
+    const list = compiled.spec.priceUsd[compiled.resolution];
+    return typeof list === 'number' && Number.isFinite(list) && list > 0 ? list : null;
+  }
+
+  /** The provider's list price for one image of this job right now (live list when the PriceBook has it, else the registry). */
+  private listUnitUsd(compiled: CompiledImageJob, kind: ImageJobKind, refs: number): number | null {
+    try {
+      const book = this.prices as (PriceBook & { quote?: (m: string, r: CompiledImageJob['resolution'], k: ImageJobKind, n?: number) => { list: { usd: number | null }; refsUsd: number } }) | undefined;
+      const q = book?.quote?.(compiled.spec.id, compiled.resolution, kind, refs);
+      if (q && typeof q.list.usd === 'number' && Number.isFinite(q.list.usd)) return round4(q.list.usd + (q.refsUsd || 0));
+    } catch {
+      /* the registry below */
+    }
+    const usd = compiled.spec.priceUsd[compiled.resolution];
+    return typeof usd === 'number' && Number.isFinite(usd) ? round4(usd + (compiled.spec.perRefUsd ?? 0) * refs) : null;
   }
 }
 
@@ -3013,6 +3375,16 @@ const findAsset = (doc: ComicDoc, path: string): AssetRef | undefined => {
 };
 
 const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+/**
+ * reliability.md §2: did this target fail on the MODEL's serving path (a 429, a 5xx, a timeout, a breaker refusal)
+ * rather than on our request, the content or a key? Those end the run with the outage card.
+ */
+const isUpstreamResult = (r: JobResult): boolean => {
+  if (r.ok || r.skipped || r.raw === undefined) return false;
+  if (isRoutePausedError(r.raw)) return true;
+  return UPSTREAM_FAILURE_CODES.has(String(r.code)) && !isOwnSideFailure(r.raw) && !isKeyScopedFailure(r.raw);
+};
 
 const describeJobs = (jobs: ImageJob[]): string => {
   const count = (kind: ImageJobKind | ImageJobKind[]) => jobs.filter((j) => (Array.isArray(kind) ? kind.includes(j.kind) : j.kind === kind)).length;
