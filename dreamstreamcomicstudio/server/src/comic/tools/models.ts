@@ -18,7 +18,7 @@
 
 import { isPageStale, type Card, type ComicDoc, type NextStep, type QualityTier, type RenderState, type RenderTarget, type Resolution } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
-import { IMAGE_MODELS, TIER_PRESETS, getImageModel, resolveImageJob, type ImageModelSpec, type ImageRoute } from '../../../../shared/comic/models.js';
+import { IMAGE_MODELS, TIER_PRESETS, estimateJobs, getImageModel, resolveImageJob, type ImageJobKind, type ImageModelSpec, type ImageRoute } from '../../../../shared/comic/models.js';
 import { deriveLock, drawnTargets, modelFit, redrawQuote, redrawResolution, type DrawnTargets } from '../../../../shared/comic/modelLock.js';
 import type { HealthState, ModelHealth, OutageOption } from '../../../../shared/comic/modelHealth.js';
 import type { ModelCatalogRow, QualityBoard } from '../../../../shared/comic/modelCatalog.js';
@@ -508,6 +508,19 @@ export async function buildModelAdvice(ctx: StudioContext, input: { want: ModelW
 
 // ── Words ────────────────────────────────────────────────────────────────────
 
+const CODE_WORDS: Record<string, string> = { RATE_LIMIT: '429', TIMEOUT: 'timed out', PROVIDER_ERROR: 'provider error', NETWORK: 'network error', UPSTREAM: 'upstream error' };
+
+/** A failure code in words ("429", "timed out"): never the studio's internal code (RATE_LIMIT) in what anyone reads. */
+export const failureCodeWords = (code?: string): string => {
+  const c = (code || '').trim();
+  if (!c) return '';
+  if (/^\d{3}$/.test(c)) return c;
+  return CODE_WORDS[c.toUpperCase()] ?? 'upstream error';
+};
+
+/** "OpenRouter · 429" (models.md §3.6 G detail: who answered, then what). */
+const streakDetail = (st: Pick<UpstreamStreak, 'provider' | 'code'>): string => [st.provider, failureCodeWords(st.code)].filter(Boolean).join(' · ');
+
 /** "your last 4 pages" / "OpenRouter list price" / "price list from 2026-10-22" — never a dollar figure. */
 const basisWords = (b?: QuoteBasis): string => {
   if (!b) return 'no price basis';
@@ -578,7 +591,7 @@ export function describeModelAdvice(a: ModelAdvice, c: CostFormatter): string {
   if (a.crowd) lines.push(`PAGE ${a.crowd.n} has ${a.crowd.count} characters; ${a.currentName} keeps up to ${cur.characters} on model per image.`);
   if (a.streak.count >= R5_FAILURES || a.outage) {
     lines.push(
-      `RIGHT NOW: ${a.streak.count >= R5_FAILURES ? `${a.streak.count} drawings failed upstream in the last 10 min${a.streak.code ? ` (${a.streak.code}${a.streak.provider ? ` · ${a.streak.provider}` : ''})` : ''}` : `the studio paused ${a.currentName}`}. Suggest waiting first — it's free and the comic stays on ${a.currentName}.`
+      `RIGHT NOW: ${a.streak.count >= R5_FAILURES ? `${a.streak.count} drawings failed upstream in the last 10 min${streakDetail(a.streak) ? ` (${streakDetail(a.streak)})` : ''}` : `the studio paused ${a.currentName}`}. Suggest waiting first — it's free and the comic stays on ${a.currentName}.`
     );
   }
   if (a.tier) {
@@ -666,7 +679,7 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
   };
   if (troubled(a)) {
     const limited = /^(?:RATE_LIMIT|429)$/i.test(a.streak.code || '');
-    const detail = [a.streak.provider, a.streak.code].filter(Boolean).join(' · ');
+    const detail = streakDetail(a.streak);
     const why =
       a.streak.count >= R5_FAILURES
         ? `${name} ${limited ? 'is being rate-limited upstream' : 'keeps failing upstream'} right now (${plural(a.streak.count, 'drawing')} failed in the last 10 minutes${detail ? ` · ${detail}` : ''})`
@@ -1033,7 +1046,8 @@ export async function modelStatusLine(
   const route = mh?.routes.find((r) => r.state === state) ?? mh?.routes[0];
   const source = route?.source === 'openrouter' ? 'OpenRouter status' : route?.source === 'observed' ? 'our recent calls' : 'no live data';
   const ago = route ? agoWords(now - route.checkedAt) : '';
-  const head = `MODEL STATUS (${cur.name}): ${STATE_WORDS[state]}${route?.reason ? ` — ${clip(route.reason, 80)}` : ''} (${source}${ago ? `, ${ago}` : ''}).`;
+  const reason = route?.reason ? clip(route.reason.replace(/\b(?:RATE_LIMIT|PROVIDER_ERROR|TIMEOUT)\b/g, (code) => failureCodeWords(code)), 80) : '';
+  const head = `MODEL STATUS (${cur.name}): ${STATE_WORDS[state]}${reason ? ` — ${reason}` : ''} (${source}${ago ? `, ${ago}` : ''}).`;
   const guidance =
     state === 'down'
       ? 'New drawing pauses before anything is charged; never say a drawing started unless a tool says so. Suggest waiting first (free).'
@@ -1046,7 +1060,7 @@ export async function modelStatusLine(
   const lines = [head, guidance].filter(Boolean);
   const fits = (extra: string) => [...lines, extra].join(' ').length <= 400;
   if (streak.count) {
-    const said = `${plural(streak.count, 'drawing')} in this comic failed upstream in the last 10 min${streak.code ? ` (${streak.code}${streak.provider ? ` · ${streak.provider}` : ''})` : ''}.`;
+    const said = `${plural(streak.count, 'drawing')} in this comic failed upstream in the last 10 min${streakDetail(streak) ? ` (${streakDetail(streak)})` : ''}.`;
     if (fits(said)) lines.push(said);
   }
   if (outage) {
@@ -1214,17 +1228,54 @@ export const modelsToolGroup: ToolGroup = {
   }
 };
 
-/** Chips that go with a reply about the comic's model when the provider keeps failing (models.md §3.6 G). */
+/** A retry chip's price for the comic's model: the lock decides the model at every tier (models.md §3.4 #1). */
+const lockedRetryStep = (doc: ComicDoc, step: NextStep, byok: boolean): NextStep => {
+  const lock = deriveLock(doc);
+  const a = step.action;
+  if (!lock || !a) return step;
+  const job: { kind: ImageJobKind; count: number } | null =
+    a.type === 'render_pages'
+      ? { kind: 'page', count: a.pageIds?.length ?? 0 }
+      : a.type === 'render_sheets'
+        ? { kind: 'sheet', count: a.characterIds?.length ?? 0 }
+        : a.type === 'render_cover'
+          ? { kind: 'cover', count: 1 }
+          : a.type === 'render_style_options'
+            ? { kind: 'style_option', count: a.directions?.length ?? 0 }
+            : null;
+  if (!job || !job.count) return step;
+  const usd = estimateJobs([job], doc.settings.quality, { override: doc.settings.imageModelOverride, byok, lock }).usd;
+  return { ...step, action: { ...a, quotedUsd: usd } as typeof a, usd };
+};
+
+/**
+ * Chips that go with a reply about the comic's model when the provider keeps failing (models.md §3.6 G): "Try
+ * again" for what failed (priced on the comic's model), then "See other models".
+ */
 export const outageNextSteps = (doc: ComicDoc, byok: boolean, now = Date.now()): NextStep[] => {
   const streak = upstreamStreak(doc, now);
   const steps: NextStep[] = [];
   if (streak.targets.length) {
     try {
-      steps.push(...retryNextSteps(doc, streak.targets, byok));
+      const retries = retryNextSteps(doc, streak.targets, byok).map((s) => lockedRetryStep(doc, s, byok));
+      // One retry chip reads exactly as §3.6 G says; several keep their own labels so each stays tappable.
+      steps.push(...(retries.length === 1 ? [{ ...retries[0], label: 'Try again' }] : retries));
     } catch {
       /* no retry chip without a quote */
     }
   }
   steps.push(pickerStep('See other models'));
   return steps;
+};
+
+/**
+ * The §3.6 G chips with a reply: the retry chips first, then the reply's own chips, then "See other models" only
+ * when no picker chip is there yet (one picker chip per turn).
+ */
+export const pushOutageSteps = (turn: DirectorTurn, doc: ComicDoc, byok: boolean, replySteps: NextStep[] = [], now = Date.now()): void => {
+  const isPicker = (s: NextStep) => s.client?.type === 'open_model_picker';
+  const steps = outageNextSteps(doc, byok, now);
+  pushNextSteps(turn, steps.filter((s) => !isPicker(s)));
+  pushNextSteps(turn, turn.nextSteps.some(isPicker) ? replySteps.filter((s) => !isPicker(s)) : replySteps);
+  if (!turn.nextSteps.some(isPicker)) pushNextSteps(turn, steps.filter(isPicker));
 };

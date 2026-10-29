@@ -37,7 +37,7 @@ import {
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { toolGroups } from './tools/index.js';
-import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, outageNextSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
+import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, pushOutageSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
@@ -797,9 +797,9 @@ async function directorTurnBody(
       // The model asked model_options and wrote nothing: the studio says the trade-off from the same numbers.
       const said = modelAdviceReply(advice, cost);
       text = said.text;
-      // R5 / an outage: waiting comes first, so the retry chips lead (models.md §3.6 G).
-      if (advice.streak.count >= R5_FAILURES || advice.outage) pushNextSteps(turn, outageNextSteps(after, byok));
-      pushNextSteps(turn, said.steps);
+      // R5 / an outage: waiting comes first, so the retry chips lead (models.md §3.6 G); one picker chip.
+      if (advice.streak.count >= R5_FAILURES || advice.outage) pushOutageSteps(turn, after, byok, said.steps);
+      else pushNextSteps(turn, said.steps);
     } else if (failure) {
       // Never claim work "keeps drawing" when it already failed (b4b5774f): say what really happened.
       const runLine = runFailureLine(after, runOutcome(after, turn));
@@ -818,7 +818,7 @@ async function directorTurnBody(
     if (advice) {
       // model_options ran: the picker is always one tap away; a failing provider also gets its retry chips (§3.6 G).
       const troubled = advice.streak.count >= R5_FAILURES || !!advice.outage;
-      if (troubled) pushNextSteps(turn, outageNextSteps(after, byok));
+      if (troubled) pushOutageSteps(turn, after, byok);
       else if (!turn.nextSteps.some((s) => s.client?.type === 'open_model_picker')) pushNextSteps(turn, modelAdviceReply(advice, cost).steps.filter((s) => s.client));
     }
   }

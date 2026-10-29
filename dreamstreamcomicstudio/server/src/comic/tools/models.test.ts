@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveStudioCaps, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { emptyRender, newId, type ComicDoc, type NextStep } from '../../../../shared/comic/doc.js';
-import { getImageModel, resolveImageJob } from '../../../../shared/comic/models.js';
+import { estimateJobs, getImageModel, resolveImageJob } from '../../../../shared/comic/models.js';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops.js';
 import { makeLakeComic, LAKE_NOW } from '../../../../shared/comic/__fixtures__/lakeComic.js';
 import { costFormatter, costViewFor, DOLLAR_VIEW } from '../costText.js';
@@ -32,6 +32,8 @@ import {
   modelStatusLine,
   modelsToolGroup,
   outageCardText,
+  outageNextSteps,
+  pushOutageSteps,
   recentOutageCard,
   resolveModelName,
   upstreamStreak,
@@ -458,6 +460,32 @@ describe('R5 and outages (reliability.md §2 Director)', () => {
     expect(upstreamStreak(safety, now).count).toBe(0);
   });
 
+  it('§3.6 G chips: "Try again" priced on the comic\'s locked model, and one picker chip per turn', () => {
+    const now = LAKE_NOW;
+    // Locked to Nano Banana Pro on the Standard tier: the tier alone would price Nano Banana 2.1 pages.
+    const doc = lakeLocked((d) => {
+      d.settings = { ...d.settings, quality: 'standard' };
+      d.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
+      withUpstreamFailures(d, now);
+    });
+    const lockedUsd = estimateJobs([{ kind: 'page', count: 3 }], 'standard', { byok: true, lock: doc.imageModel }).usd;
+    expect(lockedUsd).toBeGreaterThan(estimateJobs([{ kind: 'page', count: 3 }], 'standard', { byok: true }).usd);
+    const steps = outageNextSteps(doc, true, now);
+    expect(steps).toEqual([
+      { label: 'Try again', action: { type: 'render_pages', pageIds: ['pg_3', 'pg_4', 'pg_5'], quotedUsd: lockedUsd }, usd: lockedUsd },
+      { label: 'See other models', client: { type: 'open_model_picker' } }
+    ]);
+    // The switch guard already offered "See models": the outage chips add only the retry.
+    const t = createDirectorTurn({ userText: 'ok', drawIntent: 'none' });
+    t.nextSteps.push({ label: 'See models', client: { type: 'open_model_picker' } });
+    pushOutageSteps(t, doc, true, [], now);
+    expect(t.nextSteps.map((s) => s.label)).toEqual(['See models', 'Try again']);
+    // With the reply's own picker chip (a suggestion), that one is kept and the generic one is not added.
+    const u = createDirectorTurn({ userText: 'ok', drawIntent: 'none' });
+    pushOutageSteps(u, doc, true, [{ label: 'See other models', client: { type: 'open_model_picker', suggest: 'nano-banana-2.1' } }], now);
+    expect(u.nextSteps).toEqual([steps[0], { label: 'See other models', client: { type: 'open_model_picker', suggest: 'nano-banana-2.1' } }]);
+  });
+
   it('a recent outage card is news until an image draws after it', () => {
     const now = LAKE_NOW + 3_600_000;
     const doc = lakeLocked((d) => d.conversation.push({ id: 'm_out', role: 'assistant', text: 'Paused.', at: now - 120_000, cards: [outageCard()] }));
@@ -490,8 +518,9 @@ describe('R5 and outages (reliability.md §2 Director)', () => {
     const line = await modelStatusLine(ctx, doc, 'what happened?', { health, now: health.now() });
     expect(getModelHealth).toHaveBeenCalledTimes(1);
     expect(health.fetches.every((f) => Object.keys(f.headers).length === 0)).toBe(true);
-    expect(line).toMatch(/^MODEL STATUS \(Nano Banana 2\.1\): not serving \(down\) — Our last 3 calls failed \(RATE_LIMIT\) \(OpenRouter status, just now\)\./);
-    expect(line).toContain('3 drawings in this comic failed upstream in the last 10 min (RATE_LIMIT · OpenRouter).');
+    expect(line).toMatch(/^MODEL STATUS \(Nano Banana 2\.1\): not serving \(down\) — Our last 3 calls failed \(429\) \(OpenRouter status, just now\)\./);
+    expect(line).toContain('3 drawings in this comic failed upstream in the last 10 min (OpenRouter · 429).');
+    expect(line).not.toContain('RATE_LIMIT ·');
     expect(line).toContain('The studio paused a run — its options are in OUTAGE OPTIONS.');
     const facts = await modelFactLines(ctx, doc, 'what happened?', { health, now: health.now() });
     expect(facts).toEqual([

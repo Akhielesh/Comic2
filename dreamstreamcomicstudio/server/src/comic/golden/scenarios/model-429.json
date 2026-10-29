@@ -11,7 +11,7 @@
       "systemIncludes": [
         "MODEL STATUS (Nano Banana 2.1): not serving (down)",
         "Suggest waiting first (free).",
-        "3 drawings in this comic failed upstream in the last 10 min (RATE_LIMIT · OpenRouter).",
+        "3 drawings in this comic failed upstream in the last 10 min (OpenRouter · 429).",
         "OUTAGE OPTIONS (the studio's own check, real prices): wait and retry (free, about 2 min) · Add a Gemini key to reach Nano Banana 2.1 directly · Nano Banana Pro ≈ $0.13 per image (redraw 6 images ≈ $0.82; same family)"
       ],
       "director": [
@@ -19,10 +19,11 @@
         { "text": "" }
       ],
       "expect": {
-        "toolResultIncludes": { "model_options": ["RIGHT NOW: 3 drawings failed upstream in the last 10 min (RATE_LIMIT · OpenRouter). Suggest waiting first"] },
-        "replyStartsWith": "Nano Banana 2.1 is being rate-limited upstream right now (3 drawings failed in the last 10 minutes · OpenRouter · RATE_LIMIT). Your comic stays on Nano Banana 2.1 so every page matches — waiting is free, so I'd try again in a minute first.",
+        "toolResultIncludes": { "model_options": ["RIGHT NOW: 3 drawings failed upstream in the last 10 min (OpenRouter · 429). Suggest waiting first"] },
+        "replyStartsWith": "Nano Banana 2.1 is being rate-limited upstream right now (3 drawings failed in the last 10 minutes · OpenRouter · 429). Your comic stays on Nano Banana 2.1 so every page matches — waiting is free, so I'd try again in a minute first.",
         "replyIncludes": ["If you'd rather not wait, Nano Banana Pro is ≈ $0.14 a page instead of ≈ $0.04", "switching models can affect character consistency"],
-        "nextStepOrder": ["Try the pages again", "See other models"],
+        "nextStepOrder": ["Try again", "See other models"],
+        "nextSteps": [{ "label": "See other models", "client": { "type": "open_model_picker", "suggest": "nano-banana-pro" } }],
         "imageModel": "nano-banana-2.1",
         "quality": "draft",
         "newImageCalls": 0
