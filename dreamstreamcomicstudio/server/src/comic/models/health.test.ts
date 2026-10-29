@@ -332,6 +332,26 @@ describe('getModelHealth', () => {
     expect(f.calls).toHaveLength(1); // one public fetch for all three reads (cached)
   });
 
+  it('agrees with the preflight when the two keys have different payers (own Gemini key + platform OpenRouter key)', async () => {
+    const f = scriptedFetch(); // OpenRouter itself is serving fine…
+    const h = createModelHealth({ fetch: f.fetchImpl, now: () => T0 });
+    // …but the user's own Gemini key routes Google models to Gemini direct (keys.ts prefersGeminiDirect), and that
+    // route is failing. The platform OpenRouter key has another payer, so a run never silently moves there.
+    const mixed: StudioKeys = { gemini: { key: 'AIza-user', byok: true }, openrouter: { key: 'sk-or-platform', byok: false } };
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'gemini', model: GEM_ID, ok: false, code: 'RATE_LIMIT', at: T0 - 10_000 });
+    const pre = await h.preflightImageRun({ specs: [NB21], keys: mixed, doc: lockedDoc(), caps: resolveStudioCaps({ byok: true, isAdmin: false }) });
+    expect(pre.ok).toBe(false);
+    const health = await h.getModelHealth(NB21, { keys: mixed });
+    expect(health.routes.map((r) => `${r.route}:${r.state}`)).toEqual(['gemini:down']);
+    expect(health.state).toBe('down');
+    // Same payer on both routes: the alternate is a real way round, so both routes count and the best one wins.
+    const sameUser: StudioKeys = { gemini: { key: 'AIza-user', byok: true }, openrouter: { key: 'sk-or-user', byok: true } };
+    const both = await h.getModelHealth(NB21, { keys: sameUser });
+    expect(both.routes.map((r) => `${r.route}:${r.state}`)).toEqual(['openrouter:ok', 'gemini:down']);
+    expect(both.state).toBe('ok');
+    expect((await h.preflightImageRun({ specs: [NB21], keys: sameUser, doc: lockedDoc(), caps: paidCaps })).ok).toBe(true);
+  });
+
   it('names the source that decided the state, with that source’s own time', async () => {
     const f = scriptedFetch(); // OpenRouter says the provider is serving fine…
     const h = createModelHealth({ fetch: f.fetchImpl, now: () => T0 });

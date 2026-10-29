@@ -442,9 +442,13 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
     const at = opts.now ?? now();
     const keys = opts.keys;
     const all = IMAGE_ROUTES.filter((route) => !!spec.routes[route]);
-    // With keys, only the routes this caller can reach count (a model that is fine on a route the user has no key
-    // for is still down FOR THEM). Without any reachable route, report every route (informational).
-    const reachable = keys ? all.filter((route) => !!keys[route]?.key) : all;
+    // With keys, only the routes a RUN can take count: the primary route, plus the same model on the other route
+    // when that key has the SAME payer (exactly what preflightImageRun and imageClient may use). A route the user
+    // holds a key of ANOTHER payer for is never taken silently, so it is not "reachable" either — otherwise the
+    // status would say ok while the preflight blocks. Without any usable key, report every route (informational).
+    const primary = keys ? primaryRouteFor(spec, keys) : null;
+    const alternate = keys && primary ? alternateRouteFor(spec, keys, primary) : null;
+    const reachable: ImageRoute[] = primary ? [primary.route, ...(alternate ? [alternate.route] : [])] : [];
     const routes: RouteHealth[] = [];
     for (const route of reachable.length ? reachable : all) {
       const model = spec.routes[route] as string;

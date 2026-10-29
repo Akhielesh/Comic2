@@ -84,6 +84,19 @@ describe('GET /api/comic/models/status', () => {
     expect(health.fetches[0].headers).toEqual({});
   });
 
+  it('a key of another payer is not a reachable route: the status agrees with the preflight', async () => {
+    const GEM_ID = NB21.routes.gemini!;
+    // The user's own Gemini key (primary for Google models) next to the platform OpenRouter key.
+    keys = { gemini: { key: 'AIza-user', byok: true }, openrouter: { key: 'sk-or-platform', byok: false } };
+    health.setPublic(OR_ID, [{ name: 'Google AI Studio', status: 0, uptime30m: 99, uptime1d: 99 }]);
+    for (let i = 0; i < 3; i += 1) health.recordImageOutcome({ route: 'gemini', model: GEM_ID, ok: false, code: 'RATE_LIMIT' });
+    const r = await get('/api/comic/models/status?ids=nano-banana-2.1', { 'x-user': 'u1' });
+    const [m] = r.body as ModelHealth[];
+    expect(m.routes.map((x) => `${x.route}:${x.state}`)).toEqual(['gemini:down']);
+    expect(m.state).toBe('down');
+    expect(JSON.stringify(r.body)).not.toMatch(/AIza|sk-or/);
+  });
+
   it('/status/admin is admin-only and lists every registry model plus the breaker events since boot', async () => {
     expect((await get('/api/comic/models/status/admin', { 'x-user': 'u1' })).status).toBe(403);
     for (let i = 0; i < 3; i += 1) health.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT' });

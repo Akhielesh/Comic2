@@ -6,8 +6,10 @@
 //   GET /api/comic/models/status?ids=a,b   ModelHealth[] for registry ids (auth; unknown ids dropped; no ids = pickable)
 //   GET /api/comic/models/status/admin     { models, breakerEvents, bootedAt, now } for EVERY registry model (requireAdmin)
 //
-// `routes` in a status answer are the ones THIS caller can reach with their keys (a model that is fine only on a
-// route they have no key for is still down for them); the admin answer lists every route.
+// `routes` in a status answer are the ones a run of THIS caller can take: the primary route for their keys plus the
+// same model on the other route only when that key has the same payer (health.ts getModelHealth), so the status
+// always agrees with the money-safe preflight. A model that is fine only on a route they can't use is still down
+// for them. The admin answer lists every route.
 
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { IMAGE_MODELS, getImageModel, pickableImageModels, type ImageModelSpec } from '../../../shared/comic/models.js';
