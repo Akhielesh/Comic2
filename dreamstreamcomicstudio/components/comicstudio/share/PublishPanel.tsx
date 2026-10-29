@@ -78,7 +78,11 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
   const editions = useMemo(() => Object.keys(doc.i18n?.editions || {}), [doc.i18n]);
   const readiness = view?.readiness;
   const publishable = new Set((readiness?.languages || []).filter((l) => l.publishable).map((l) => l.lang));
-  const [languages, setLanguages] = useState<string[]>(view?.languages?.length ? view.languages : [source]);
+  // The original is always published (readers always get it; the server adds it even when left out).
+  const [languages, setLanguages] = useState<string[]>(() => {
+    const chosen = view?.languages?.length ? view.languages : [];
+    return [source, ...chosen.filter((l) => l !== source)];
+  });
   const [allowDownload, setAllowDownload] = useState(view?.allowDownload ?? true);
   const [allowEmbed, setAllowEmbed] = useState(view?.allowEmbed ?? true);
   const [showCreator, setShowCreator] = useState(view?.showCreator ?? false);
@@ -88,7 +92,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
 
   const request = (exclude?: number[]): PublishRequest => ({
     visibility,
-    languages,
+    languages: [source, ...languages.filter((l) => l !== source)],
     allowDownload,
     allowEmbed,
     showCreator,
@@ -118,8 +122,9 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
           <legend className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Languages</legend>
           <div className="flex flex-wrap gap-2">
             {[source, ...editions.filter((e) => e !== source)].map((lang) => {
-              const ready = lang === source || publishable.has(lang);
-              const on = languages.includes(lang);
+              const isSource = lang === source;
+              const ready = isSource || publishable.has(lang);
+              const on = isSource || languages.includes(lang);
               return (
                 <label
                   key={lang}
@@ -128,21 +133,23 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
                     on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
                     !ready && 'opacity-60'
                   )}
-                  title={ready ? undefined : 'Finish and review this translation first'}
+                  title={isSource ? 'The original is always published' : ready ? undefined : 'Finish and review this translation first'}
                 >
                   <input
                     type="checkbox"
                     checked={on}
-                    disabled={!ready || (on && languages.length === 1)}
-                    onChange={(e) => setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)))}
+                    disabled={isSource || !ready}
+                    onChange={(e) => !isSource && setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)))}
                     className="h-4 w-4 accent-[#D97757]"
                   />
                   {languageSpec(lang)?.endonym || lang}
+                  {isSource && <span className="text-[11px] text-[var(--ds-muted)]">original</span>}
                   {!ready && <span className="text-[11px] text-[var(--ds-muted)]">not ready</span>}
                 </label>
               );
             })}
           </div>
+          <p className="m-0 mt-1.5 text-[12px] text-[var(--ds-muted)]">Readers always get the original and can switch to any language you publish.</p>
         </fieldset>
       )}
       <div className="divide-y divide-[var(--ds-hairline-soft)]">

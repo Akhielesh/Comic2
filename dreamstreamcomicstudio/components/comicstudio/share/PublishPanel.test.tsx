@@ -89,6 +89,26 @@ describe('PublishPanel language chips', () => {
     expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'unlisted', languages: ['en', 'hi'] }));
   });
 
+  it('the original is always published: its chip stays ticked and cannot be unticked, and the request lists it first even when an old row left it out', () => {
+    const doc = withHindi(makeSampleDoc());
+    const onPublish = vi.fn();
+    const view = { ...unpublishedView([{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: true, blocking: [], requested: true }]), languages: ['hi'] };
+    render(<PublishPanel doc={doc} view={view} visibility="unlisted" onPublish={onPublish} />);
+    const english = screen.getByRole('checkbox', { name: /English/ });
+    expect(english).toBeChecked();
+    expect(english).toBeDisabled();
+    expect(english.closest('label')?.textContent).toMatch(/original/);
+    expect(screen.getByText(/Readers always get the original/)).toBeInTheDocument();
+    fireEvent.click(english);
+    expect(english).toBeChecked();
+    // Editions can still be unticked (the original keeps the publication valid on its own).
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).toBeChecked();
+    expect(hindi).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ languages: ['en', 'hi'] }));
+  });
+
   it('an unfinished edition stays "not ready" and cannot be ticked', () => {
     const doc = withHindi(makeSampleDoc());
     const view = unpublishedView([

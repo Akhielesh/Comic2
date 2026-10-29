@@ -106,7 +106,7 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       type: 'object',
       properties: {
         visibility: { type: 'string', enum: ['unlisted', 'public'] },
-        languages: { type: 'array', items: { type: 'string' }, description: 'Editions to publish (source language and/or finished translations).' },
+        languages: { type: 'array', items: { type: 'string' }, description: 'Editions to publish: finished translations beside the original, which is always published.' },
         default_language: { type: 'string' },
         start_page: { type: 'integer', minimum: 1 },
         allow_download: { type: 'boolean' }

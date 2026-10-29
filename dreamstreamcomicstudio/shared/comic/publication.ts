@@ -57,7 +57,11 @@ export function parseShareParams(search: string | URLSearchParams): ShareLinkOpt
 
 export interface PublishRequest {
   visibility: 'unlisted' | 'public';
-  /** Published editions; each must be the source or pass editionReadiness().publishable. Default [format.language]. */
+  /**
+   * Published editions; each must pass editionReadiness().publishable. The source language is ALWAYS
+   * published, first (readers always get the original; i18n.md §11.1, sharing.md §3 languages[0]),
+   * whether or not it is named here. Default [format.language].
+   */
   languages?: string[];
   defaultLang?: string;
   startPage?: number | null;

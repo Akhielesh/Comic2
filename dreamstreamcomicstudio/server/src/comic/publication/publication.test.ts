@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { DEFAULT_SETTINGS, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, fallbackLineIds, lineSourceHash, localizeDoc } from '../../../../shared/comic/i18n.js';
 import { ASSET_KEY_RE, SLUG_RE, type ShareCard } from '../../../../shared/comic/publication.js';
-import { effectiveRating, publishableText, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { effectiveRating, publishableText, safetyStatusOf, type SafetyStatus } from '../../../../shared/comic/safety.js';
 import { __resetSharpSlotPeakForTests, sharpSlotStats, withSharpSlot } from '../imageMeasure.js';
 import { fakeAssetStore, newSession, plannedDoc, testContext, type FakeAssetStore, type TestContext } from '../orchestrator.fakes.js';
 import { runPublishGate, type PublishGateResult } from '../safety/index.js';
@@ -590,6 +590,31 @@ describe('publish', () => {
     await expect(updatePublication(ctx, { languages: ['en'] } as never)).rejects.toMatchObject({ status: 400 });
   });
 
+  it('"Make it public" gates the PUBLISHED art: a page redrawn since (not yet updated) does not block it, while publishing that redraw still does', async () => {
+    // A gate that judges the asset it is handed (verdict → status), like the real one minus the network.
+    const judging = async (_ctx: unknown, doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
+      const statusOf = (a?: AssetRef): SafetyStatus => (safetyStatusOf(a?.safety, 'PG') === 'pass' ? 'pass' : 'blocked');
+      const pages = Object.fromEntries(opts.pageIds.map((id) => [id, { status: statusOf(doc.pages.find((p) => p.id === id)?.render.asset), reasons: [] }]));
+      const anyBad = Object.values(pages).some((p) => p.status === 'blocked');
+      return { status: anyBad ? 'blocked' : 'cleared', rating: 'PG', pages, cover: opts.includeCover ? { status: statusOf(doc.cover.render.asset), reasons: [] } : null, text: { status: 'pass', reasons: [] }, checkedHash: 'h2', costUsd: 0 };
+    };
+    restore();
+    restore = configurePublication({ store, gate: judging as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    await publish(ctx, { visibility: 'unlisted' });
+    // Page 3 is redrawn into something the check blocks; the owner has not tapped Update, so readers still see the cleared art.
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-redrawn', { safety: { assessed: 'X', at: 2, categories: ['graphic_gore'] } }) } }], { origin: 'job' });
+    expect(ctx.session.doc.pages[2].render.history[0].path).toMatch(/\/p3\.webp$/); // the published version is still in the doc
+    const view = await updatePublication(ctx, { visibility: 'public' });
+    expect([view.visibility, view.behind]).toEqual(['public', true]);
+    expect(store.projects.get('proj-1')!.isPublic).toBe(true);
+    // …and the redraw itself cannot be published as it is.
+    await expect(publish(ctx, { visibility: 'public' })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+    // A published version that has left the doc entirely falls back to gating the current render (as before).
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { history: [] } }], { origin: 'job' });
+    await updatePublication(ctx, { visibility: 'unlisted' });
+    await expect(updatePublication(ctx, { visibility: 'public' })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+  });
+
   it('going public when the published pages are gone from the live doc: blocked words say so (422), an outage is 503', async () => {
     await publish(ctx, { visibility: 'unlisted' });
     const row = store.rows.get('proj-1')!;
@@ -656,6 +681,19 @@ describe('publish', () => {
     // …and adding it later is a plain update of the same link.
     const both = await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'] });
     expect([both.slug, both.languages]).toEqual([after.slug, ['en', 'hi']]);
+    expect((await getPublicationView(ctx)).readiness.languages.map((l) => [l.lang, l.requested])).toEqual([['en', true], ['hi', true]]);
+  });
+
+  it('the original is always published, first: a request naming only an edition still publishes the source (readers, downloads and the card agree)', async () => {
+    const { getPublicationView } = await import('./index.js');
+    setup(withReviewedEdition(richDoc(), 'hi'));
+    const view = await publish(ctx, { visibility: 'unlisted', languages: ['hi'], defaultLang: 'hi' });
+    expect(view.languages).toEqual(['en', 'hi']);
+    expect(view.defaultLang).toBe('hi'); // the author's choice of default edition stands
+    const payload = store.rpcPayload(view.slug!)!;
+    expect(payload.publication.languages).toEqual(['en', 'hi']);
+    expect(Object.keys((payload.publication.card as ShareCard).i18n)).toEqual(['en', 'hi']);
+    expect((await getReadiness(ctx, ctx.session.doc, { visibility: 'unlisted', languages: ['hi'] })).languages.map((l) => l.lang)).toEqual(['en', 'hi']);
     expect((await getPublicationView(ctx)).readiness.languages.map((l) => [l.lang, l.requested])).toEqual([['en', true], ['hi', true]]);
   });
 

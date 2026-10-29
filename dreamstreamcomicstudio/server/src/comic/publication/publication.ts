@@ -21,7 +21,7 @@
 //    suspended row after the hold is lifted copies everything again under a fresh asset key.
 
 import crypto from 'node:crypto';
-import { newId, type AssetRef, type Card, type ComicDoc, type Msg, type SafetyBlocker } from '../../../../shared/comic/doc.js';
+import { newId, versionsOf, type AssetRef, type Card, type ComicDoc, type Msg, type RenderState, type SafetyBlocker } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { editionReadiness } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
@@ -51,6 +51,7 @@ import {
   buildSnapshot,
   cleanText,
   contentFingerprint,
+  copiesFor,
   coverUrlOf,
   drawnPages,
   hasPublishableArt,
@@ -368,6 +369,9 @@ function outsideImageError(pages: number[], cover: boolean): PublishError {
   return new PublishError('NOT_READY', message, { status: 422, code: 'NOT_READY', details: { outsideImages: { pages, cover } } });
 }
 
+/** The published languages: the source first, always (readers always get the original), then the requested editions. */
+const withSource = (source: string, requested: readonly string[]): string[] => [source, ...requested.filter((l) => !sameLanguage(l, source))];
+
 /** Live readiness from the doc (no network, no spend): drives the sheet and the publish card. */
 export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: PublishRequest): Promise<PublishReadiness> {
   const rating = ratingOf(ctx, doc);
@@ -399,7 +403,7 @@ export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: Publ
   if (hasPublishableArt(doc.cover?.render)) look(safetyStatusOf(doc.cover.render.asset?.safety, rating), doc.cover.render.asset?.safety?.categories);
 
   const source = doc.format?.language || 'en';
-  const wanted = req?.languages?.length ? req.languages : doc.publication?.languages?.length ? doc.publication.languages : [source];
+  const wanted = withSource(source, req?.languages?.length ? req.languages : doc.publication?.languages?.length ? doc.publication.languages : [source]);
   // Every edition the doc holds is listed (the Share sheet offers a finished translation that is not
   // published yet); only the requested ones decide `ok`.
   const listed: string[] = [];
@@ -732,9 +736,10 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     // been taken down (removePublicationObjects): everything is copied again under a fresh key.
     const fresh = !live || live.status === 'suspended';
 
-    // Languages: each the source or a publishable edition.
+    // Languages: the source is always published, first (i18n.md §11.1: readers always get the original;
+    // sharing.md: languages[0] is the source), then each requested edition must be publishable.
     const source = doc.format?.language || 'en';
-    const languages = req.languages?.length ? req.languages : live?.languages?.length ? live.languages : [source];
+    const languages = withSource(source, req.languages?.length ? req.languages : live?.languages?.length ? live.languages : [source]);
     const incomplete = languages
       .map((lang) => ({ lang, r: editionReadiness(doc, lang) }))
       .filter((x) => !x.r.publishable)
@@ -894,6 +899,32 @@ export async function publish(ctx: StudioContext, req: PublishRequest): Promise<
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
+/**
+ * The live doc with each published page's (and the cover's) render pointed back at the asset its
+ * snapshot copy was made from — the current asset, an earlier version in render.history, or an
+ * archived one — found by the copy's deterministic path (copiesFor). A settings change is gated on
+ * what readers see, not on art drawn since (that stays private until Update). A published version
+ * no longer anywhere in the doc leaves the current render in place. Never committed.
+ */
+function publishedArtDoc(doc: ComicDoc, row: PublicationRow & { assetKey: string }): ComicDoc {
+  const snapshot = row.snapshot;
+  if (!snapshot) return doc;
+  const sourceOf = (render: RenderState | undefined, slot: 'cover' | 'page', targetKey: string, copy: AssetRef | undefined): AssetRef | undefined => {
+    if (!render || !copy?.path) return undefined;
+    const candidates: AssetRef[] = [...versionsOf(render), ...(doc.archive || []).filter((a) => a.targetKey === targetKey)];
+    return candidates.find((a) => typeof a.path === 'string' && copiesFor(row.assetKey, slot, a)[a.path] === copy.path);
+  };
+  const swap = (render: RenderState, published: AssetRef | undefined): RenderState => (published && published.path !== render.asset?.path ? { ...render, status: 'ready', asset: published } : render);
+  const copies = new Map((snapshot.pages || []).map((p) => [p.id, p.render?.asset]));
+  const pages = doc.pages.map((p) => {
+    const render = swap(p.render, sourceOf(p.render, 'page', `page:${p.id}`, copies.get(p.id)));
+    return render === p.render ? p : { ...p, render };
+  });
+  const coverRender = swap(doc.cover.render, sourceOf(doc.cover?.render, 'cover', 'cover', snapshot.cover?.render?.asset));
+  const cover = coverRender === doc.cover.render ? doc.cover : { ...doc.cover, render: coverRender };
+  return pages.some((p, i) => p !== doc.pages[i]) || cover !== doc.cover ? { ...doc, pages, cover } : doc;
+}
+
 export async function updatePublication(ctx: StudioContext, rawPatch: PublicationSettingsPatch): Promise<PublicationOwnerView> {
   const patch = parseSettingsPatch(rawPatch);
   takePublishBudget(ctx.userId, deps().now());
@@ -910,10 +941,12 @@ export async function updatePublication(ctx: StudioContext, rawPatch: Publicatio
         if (flags.forcedPrivate) {
           throw new PublishError('FORBIDDEN', 'This comic is paused by DreamStream moderation, so it can’t go public right now.', { status: 403, code: 'FORBIDDEN' });
         }
-        // Going to the public gallery re-runs the gate (it may hold public-only rules).
-        const pageIds = (row.snapshot?.pages || []).map((p) => p.id).filter((id) => doc.pages.some((p) => p.id === id));
-        const gate = await d.gate(ctx, doc, { pageIds, includeCover: !!row.snapshot?.cover?.render?.asset, languages: row.languages });
-        if (pageIds.length) interpretGate(doc, gate, pageIds, false, new Set());
+        // Going to the public gallery re-runs the gate (it may hold public-only rules) — over the art
+        // readers see (the published versions), not renders drawn since, which stay private until Update.
+        const gateDoc = publishedArtDoc(doc, row);
+        const pageIds = (row.snapshot?.pages || []).map((p) => p.id).filter((id) => gateDoc.pages.some((p) => p.id === id));
+        const gate = await d.gate(ctx, gateDoc, { pageIds, includeCover: !!row.snapshot?.cover?.render?.asset, languages: row.languages });
+        if (pageIds.length) interpretGate(gateDoc, gate, pageIds, false, new Set());
         else if (BAD.has(gate.text?.status)) {
           // Same honest refusal as a publish: the words, not an outage, are the problem.
           throw new PublishError('SAFETY_BLOCKED', "Some of the comic's words don't fit the content rules, so it can't go public yet. Edit the flagged text and try again.", {
