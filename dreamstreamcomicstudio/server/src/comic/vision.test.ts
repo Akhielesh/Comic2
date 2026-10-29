@@ -24,7 +24,6 @@ import {
 import { outlineBounds, placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
-import { makeSampleDoc } from '../../../components/comicstudio/board/__fixtures__/sampleDoc.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult } from './types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -1054,10 +1053,26 @@ describe('K1: the check reads the cast the prompt drew, and saved balloons keep 
   });
 
   it('free placement never saves a split word (placeBalloonsWholeWords), where the plain pass would split one', () => {
-    const d = makeSampleDoc();
-    const pg = d.pages[0];
-    // Every stored balloon pinned: the free re-layout keeps them and places the rest around them.
-    pg.balloons = pg.balloons.map((b) => ({ ...b, pinned: true }));
+    // Shaped like the board's sample page 1: a wide establishing row over two panels; the right panel holds a
+    // shout, a long speech line with no balloon yet and an SFX. Every stored balloon is pinned, so the free
+    // re-layout keeps them and must fit the speech line around them.
+    const d = doc((x) => x.cast.push({ id: 'vendor', name: 'Vendor', tier: 'extra', look: { summary: 'Portly spice seller' }, refs: [], sheet: emptyRender() }));
+    const pg = page(
+      [
+        panel(1, [], [line('pg_1_l1', 'caption', 'Old Delhi. Before the heat.')], { size: 'wide', shot: 'establishing' }),
+        panel(2, ['maya'], [line('pg_1_l2', 'whisper', 'Just one more…', 'maya')], { shot: 'close_up' }),
+        panel(3, ['maya', 'arjun', 'vendor'], [line('pg_1_l3', 'shout', 'Thief!', 'vendor'), line('pg_1_l4', 'speech', 'You owe me an explanation, Maya.', 'arjun'), line('pg_1_l5', 'sfx', 'GRAB')])
+      ],
+      {
+        layout: 'Row 1: one wide panel (panel 1). Row 2: two equal panels side by side (panels 2–3).',
+        balloons: [
+          { lineId: 'pg_1_l1', x: 0.04, y: 0.04, w: 0.3, pinned: true },
+          { lineId: 'pg_1_l2', x: 0.06, y: 0.5, w: 0.22, tailX: 0.2, tailY: 0.7, pinned: true },
+          { lineId: 'pg_1_l3', x: 0.55, y: 0.5, w: 0.2, tailX: 0.8, tailY: 0.75, pinned: true },
+          { lineId: 'pg_1_l5', x: 0.6, y: 0.8, w: 0.2, pinned: true }
+        ]
+      }
+    );
     const aspect = letteringAspect(d, pg);
     const sizer = letteringSizer(d, pg, aspect, estimateMeasure);
     const args = { page: pg, boxes: panelBoxesFor(d, pg), aspect, rtl: false, plansFor: sizer, safeMargin: 0.03, existing: pg.balloons, keep: 'pinned' as const };
