@@ -71,7 +71,7 @@ export const ACCENT_FILL_HEX = '#AE5132';
 
 /**
  * Accent utilities (terracotta by default; ink under the Atlas skin). ACCENT_BG is the brand fill
- * for marks that carry no text (dots, bars, toggles, the send glyph); a fill that carries a label
+ * for marks that carry no text (dots, bars, toggle tracks); a fill that carries a label or a glyph
  * uses ACCENT_FILL (+ ACCENT_FILL_HOVER) with ON_ACCENT_TEXT, which is ≥ 4.5:1 in both themes
  * (index.css routes the older `bg-[var(--ds-accent)] text-white` pairing there too).
  */
