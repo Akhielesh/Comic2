@@ -16,6 +16,7 @@ import { getImageModel } from '../../../shared/comic/models.js';
 import { RATING_RULES, SAFE_TAKE_LINE } from '../../../shared/comic/safety.js';
 import {
   DEFAULT_STYLE_SPEC,
+  LAYOUT_REFERENCE_PATH,
   LETTERING_LOOK,
   REGION_REFERENCE_PATH,
   SAFETY_AVOID,
@@ -30,13 +31,18 @@ import {
   compilePage,
   compilePlaceSheet,
   compileStyleOption,
+  PAGE_PROMPT_CHAR_BUDGET,
+  drawnCastIds,
   effectiveLayout,
+  identityAnchor,
   harmonizePanelSizes,
   layoutConflicts,
   layoutPanelCount,
+  offPanelSpeakerIds,
   paletteWords,
   parseLayout,
   planPageReferences,
+  povViewerOf,
   quoteForPrompt,
   rankPageCast,
   stagePanel,
@@ -175,13 +181,13 @@ const crowdedPage = () =>
 // ── References ───────────────────────────────────────────────────────────────
 
 describe('planPageReferences', () => {
-  it('caps characters at 4 on Nano Banana 2.1, ranked by panel appearances then tier, extras text-only', () => {
+  it('caps characters at 4 on Nano Banana 2.1, ranked by panel appearances then tier (an extra competes by presence)', () => {
     const doc = crowdedDoc('standard');
     const pg = crowdedPage();
     const spec = getImageModel('nano-banana-2.1')!;
     const refs = planPageReferences(doc, pg, spec);
     const chars = refs.filter((r) => r.slot === 'character');
-    // a: 5 panels, b: 3 (lead), c: 2, d: 2 (c first by cast order), e/f: 1 each.
+    // a: 5 panels, b: 3 (lead), c: 2, d: 2 (c first by cast order), x: 2 (extra: after the tied supports), e/f: 1 each.
     expect(chars.map((r) => r.characterId)).toEqual(['a', 'b', 'c', 'd']);
     expect(chars.every((r) => r.label.startsWith('CHARACTER SHEET: '))).toBe(true);
     expect(refs.some((r) => r.characterId === 'x')).toBe(false);
@@ -195,7 +201,8 @@ describe('planPageReferences', () => {
     const doc = crowdedDoc('pro');
     const spec = getImageModel('nano-banana-pro')!;
     const refs = planPageReferences(doc, crowdedPage(), spec);
-    expect(refs.filter((r) => r.slot === 'character').map((r) => r.characterId)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    // Presence, not tier (plan C7): the extra x (2 panels, ready sheet) outranks e and f (1 panel each).
+    expect(refs.filter((r) => r.slot === 'character').map((r) => r.characterId)).toEqual(['a', 'b', 'c', 'd', 'x']);
     const style = refs.filter((r) => r.slot === 'style');
     expect(style.map((r) => r.path)).toEqual(['style/board.png', 'style/u1.png', 'style/u2.png']);
     expect(style.map((r) => r.label)).toEqual(['STYLE BOARD', 'STYLE REFERENCE 1', 'STYLE REFERENCE 2']);
@@ -232,6 +239,40 @@ describe('planPageReferences', () => {
     const refs = planPageReferences(doc, pg, spec, prev);
     expect(refs.map((r) => r.label)).toEqual(['CHARACTER SHEET: MAYA', 'CHARACTER SHEET: ARJUN', 'STYLE BOARD']);
     expect(refs.length).toBeLessThanOrEqual(spec.refs.total);
+  });
+
+  it('presence, not tier: any being on the page with a ready sheet is ranked into the character slots (plan C7)', () => {
+    const doc = baseDoc((d) => {
+      d.cast.push(
+        character('tot', 'Tot', 'extra', { kind: 'person', look: { summary: 'Toddler in a yellow raincoat' } }),
+        character('kite', 'Kite', 'extra', { kind: 'object', look: { summary: 'A red kite' } }),
+        character('crow', 'Crow', 'extra', { kind: 'animal', sheet: emptyRender(), look: { summary: 'A crow' } })
+      );
+    });
+    const pg = page(1, [
+      panel(1, ['tot', 'arjun', 'kite', 'crow']),
+      panel(2, ['tot', 'arjun']),
+      panel(3, ['tot', 'maya']),
+      panel(4, ['tot'])
+    ]);
+    const std = planPageReferences(doc, pg, getImageModel('nano-banana-2.1')!).filter((r) => r.slot === 'character');
+    // Tot (extra, 4 panels) leads; the extra prop and the sheetless crow never take a slot.
+    expect(std.map((r) => r.characterId)).toEqual(['tot', 'arjun', 'maya']);
+    expect(std[0]).toMatchObject({ label: 'CHARACTER SHEET: TOT', path: 'sheets/tot.png' });
+    // Tight slots (legacy: 2 characters): presence decides who is drawn from a sheet.
+    const legacy = getImageModel('nano-banana-legacy')!;
+    const tight = planPageReferences(doc, pg, legacy).filter((r) => r.slot === 'character');
+    expect(tight.map((r) => r.characterId)).toEqual(['tot', 'arjun']);
+    expect(tight.length).toBeLessThanOrEqual(legacy.refs.characters);
+    // The page prompt names Tot's image in the cast block and in every panel's Who line.
+    const prompt = compilePage(doc, pg).prompt;
+    expect(prompt).toContain('- TOT (Image 1): Toddler in a yellow raincoat.');
+    expect(prompt).toContain('Who: TOT (Image 1 — toddler in a yellow raincoat)');
+    // A blocked sheet is never attached, whatever the tier.
+    const blocked = baseDoc((d) => {
+      d.cast.push(character('tot', 'Tot', 'extra', { sheet: ready('sheets/tot.png', { asset: { path: 'sheets/tot.png', source: 'generated', at: 1, safety: { assessed: 'X', at: 1 } } }) }));
+    });
+    expect(planPageReferences(blocked, pg, getImageModel('nano-banana-2.1')!).some((r) => r.characterId === 'tot')).toBe(false);
   });
 
   it('uses no character references when the model has no character slots', () => {
@@ -294,7 +335,8 @@ describe('compilePage', () => {
   });
 
   it('lists every character once with a full visual lock, Image index or a text lock', () => {
-    const doc = baseDoc();
+    // The vendor has no sheet or photo: text-locked (an extra WITH one is attached by presence).
+    const doc = baseDoc((d) => (d.cast[2].sheet = emptyRender()));
     const pg = page(1, [
       panel(1, ['maya', 'vendor'], { placeId: 'market' }),
       panel(2, ['maya', 'arjun']),
@@ -304,31 +346,254 @@ describe('compilePage', () => {
     expect(job.prompt).toContain('- MAYA (Image 1): Wiry courier with restless eyes; 19-year-old female; hair: black bun with a pencil through it; outfit: faded red kurta, cargo pants; always visible: thin scar through left eyebrow.');
     expect(job.prompt).toMatch(/- ARJUN \(Image 2\): Broad spice merchant in his fifties; face: grey stubble beard\./);
     expect(job.prompt).toContain('- VENDOR (no reference — follow this description exactly): Toothless fruit seller in a green turban.');
-    // Traits are stated once — never repeated in the panel lines.
-    expect(job.prompt.split('thin scar through left eyebrow')).toHaveLength(2);
-    expect(job.prompt.split('green turban')).toHaveLength(2);
+    // The full look is stated once; panels only restate a short identity anchor in their Who line.
+    const outsideWho = job.prompt.split('\n').filter((l) => !l.startsWith('Who: ')).join('\n');
+    expect(outsideWho.split('thin scar through left eyebrow')).toHaveLength(2);
+    expect(outsideWho.split('green turban')).toHaveLength(2);
+    expect(job.prompt).not.toMatch(/^Who: .*thin scar through left eyebrow/m);
     // Pronouns follow the look.
     expect(job.prompt).toContain('CHARACTER SHEET: MAYA. Match her face');
     expect(job.prompt).toContain('CHARACTER SHEET: ARJUN. Match his face, facial hair');
   });
 
-  it('writes panel lines with size, shot, angle, place, staged characters and mood', () => {
+  it('writes one block per panel: box N with its measured size, Camera, Place, Must show, Who with anchors, Speaks, Detail', () => {
     const doc = baseDoc();
-    const pg = page(1, [
-      panel(1, ['maya'], { size: 'wide', shot: 'establishing', placeId: 'market', mood: 'frantic dawn' }),
-      panel(2, ['maya', 'arjun'], { shot: 'over_shoulder', angle: 'low angle', action: 'Maya slams the ledger down.' }),
-      panel(3, [], { size: 'small', shot: 'insert', action: 'The brass lotus lock.' }),
-      panel(4, ['arjun', 'maya'], { action: 'Arjun steps to the left of Maya.' })
-    ]);
+    const pg = page(
+      1,
+      [
+        panel(1, ['maya'], { size: 'wide', shot: 'establishing', placeId: 'market', mood: 'frantic dawn', action: 'Maya sprints into the market. Shoppers scatter.' }),
+        panel(2, ['maya', 'arjun'], {
+          shot: 'over_shoulder',
+          angle: 'low angle',
+          action: 'Maya slams the ledger down.',
+          lines: [line('speech', 'Here.', 'maya'), line('speech', 'Late.', 'arjun'), line('whisper', 'Again.', 'arjun')]
+        }),
+        panel(3, [], { size: 'small', shot: 'insert', action: 'The brass lotus lock.', lines: [line('sfx', 'KLIK')] }),
+        panel(4, ['arjun', 'maya'], { size: 'wide', action: 'Arjun steps to the left of Maya.', lines: [line('speech', 'Run!', 'maya')] })
+      ],
+      { layout: 'Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.' }
+    );
     const prompt = compilePage(doc, pg).prompt;
-    expect(prompt).toContain('Panel 1 — wide, establishing shot (the whole location). SPICE MARKET: Action of panel 1. Characters: MAYA. Mood: frantic dawn.');
-    expect(prompt).toContain('Panel 2 — medium, over-the-shoulder shot, low angle. Maya slams the ledger down. Characters: MAYA (left), ARJUN (right).');
-    expect(prompt).toContain('Panel 3 — small, insert shot (close detail of an object). The brass lotus lock. No characters.');
-    // The action already places people → no conflicting position hints.
-    expect(prompt).toContain('Arjun steps to the left of Maya. Characters: MAYA, ARJUN.');
+    expect(prompt).toContain(
+      [
+        'PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).',
+        'Camera: establishing shot (the whole location). Place: SPICE MARKET.',
+        'Must show: Maya sprints into the market.',
+        'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar).',
+        'Speaks: nobody (a silent panel); fill the panel with art to its borders.',
+        'Detail: Shoppers scatter; frantic dawn.'
+      ].join('\n')
+    );
+    expect(prompt).toContain(
+      [
+        'PANEL 2 of 4 — box 2 in the layout (row 2, left; 47% wide × 31% tall).',
+        'Camera: over-the-shoulder shot, low angle.',
+        'Must show: Maya slams the ledger down.',
+        'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.',
+        "Speaks: MAYA — 1 balloon; ARJUN — 2 balloons; compose open background (sky, wall, floor or shadow) beside each speaker's head for their balloons."
+      ].join('\n')
+    );
+    expect(prompt).toContain(
+      [
+        'PANEL 3 of 4 — box 3 in the layout (row 2, right; 47% wide × 31% tall).',
+        'Camera: insert shot (close detail of an object).',
+        'Must show: The brass lotus lock.',
+        'Who: no characters.',
+        'Speaks: nobody (sound effects only); fill the panel with art to its borders.'
+      ].join('\n')
+    );
+    // The action already places people → no conflicting position hints; one visible speaker gets room beside her head.
+    expect(prompt).toContain(
+      'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar); ARJUN (Image 2 — grey stubble beard).\nSpeaks: MAYA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.'
+    );
+    // Measured proportions under the blueprint.
+    expect(prompt).toContain(
+      'Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.\nMeasured proportions: Row 1 (top 31% of the page): panel 1, full width. Row 2 (next 31%): panels 2 and 3 side by side, 47% wide each. Row 3 (next 31%): panel 4, full width.'
+    );
+    // The old one-line panel format is gone.
+    expect(prompt).not.toMatch(/^Panel \d — (small|medium|wide)/m);
+    expect(prompt).not.toContain('Characters: ');
   });
 
-  it('overlay lettering: text-free instruction with balloon space, and no dialogue in the prompt', () => {
+  it('a speaker who is not drawn is an OFF-PANEL VOICE; a POV viewer named in the action is heard, not seen', () => {
+    const doc = baseDoc();
+    const pg = page(1, [
+      panel(1, ['maya'], { lines: [line('speech', 'Who goes there?', 'arjun'), line('speech', 'Me.', 'maya'), line('shout', 'Halt!')] }),
+      panel(2, ['maya', 'arjun'], { shot: 'pov', action: "From Arjun's view, Maya backs away from the stall.", lines: [line('speech', 'Stop!', 'arjun')] }),
+      panel(3, ['maya', 'arjun'], { shot: 'pov', action: 'A blur of tarps and sacks.', lines: [line('speech', 'Left!', 'arjun')] })
+    ]);
+    const prompt = compilePage(doc, pg).prompt;
+    expect(prompt).toContain(
+      'Speaks: MAYA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it. OFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon. OFF-PANEL VOICE: unnamed (do not draw) — 1 balloon.'
+    );
+    // Panel 2: the action names Arjun as the viewer → he leaves the drawn cast and speaks off-panel.
+    expect(prompt).toContain(
+      "Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar); seen through ARJUN's eyes (do not draw ARJUN; at most a hand at the frame edge).\nOFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon."
+    );
+    // Panel 3: a POV shot that names no viewer keeps the planned cast.
+    expect(prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.\nSpeaks: ARJUN — 1 balloon;');
+    // In-art pages: the off-panel balloon's tail points out of the panel.
+    const inArt = compilePage(baseDoc((d) => (d.format.lettering = 'in_art')), pg).prompt;
+    expect(inArt).toContain('OFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon; its tail points out of the panel.');
+    // A talking prop listed in the panel is drawn (Props), so it speaks on-panel.
+    const shell = baseDoc((d) => d.cast.push(character('shell', 'Magic Shell', 'support', { kind: 'object', look: { summary: 'A glowing pink conch' } })));
+    const talking = compilePage(shell, page(1, [panel(1, ['maya', 'shell'], { lines: [line('speech', 'Listen…', 'shell')] })])).prompt;
+    expect(talking).toContain('Props: MAGIC SHELL (Image 2 — glowing pink conch).');
+    expect(talking).toContain('Speaks: MAGIC SHELL — 1 balloon;');
+    expect(talking).not.toContain('OFF-PANEL VOICE: MAGIC SHELL');
+  });
+
+  it('drawnCastIds / offPanelSpeakerIds / povViewerOf are the rule the panel block uses (exported for QC)', () => {
+    const doc = baseDoc((d) => d.cast.push(character('shell', 'Magic Shell', 'support', { kind: 'object', look: { summary: 'A glowing pink conch' } })));
+    const p1 = panel(1, ['maya'], { lines: [line('speech', 'Who goes there?', 'arjun'), line('speech', 'Me.', 'maya'), line('shout', 'Halt!'), line('whisper', 'Again?', 'arjun')] });
+    const p2 = panel(2, ['maya', 'arjun'], { shot: 'pov', action: "From Arjun's view, Maya backs away from the stall.", lines: [line('speech', 'Stop!', 'arjun')] });
+    const p3 = panel(3, ['maya', 'arjun'], { shot: 'pov', action: 'A blur of tarps and sacks.', lines: [line('speech', 'Left!', 'arjun')] });
+    const p4 = panel(4, ['maya', 'shell'], {
+      action: 'Through Maya’s eyes the conch glows.',
+      lines: [line('speech', 'Listen…', 'shell'), line('caption', 'Later.', 'vendor'), line('sfx', 'HUM', 'vendor'), line('speech', '  ', 'arjun'), line('speech', 'Psst.', 'ghost')]
+    });
+    const p5 = panel(5, ['maya', 'arjun'], { shot: 'pov', action: 'Arjun’s POV: Maya waves.', lines: [line('thought', 'Late again.', 'arjun')] });
+    // Panel 1: a speaker missing from castIds is off-panel (each once; unnamed lines have no id).
+    expect(drawnCastIds(doc, p1)).toEqual(['maya']);
+    expect(offPanelSpeakerIds(doc, p1)).toEqual(['arjun']);
+    expect(povViewerOf(doc, p1)).toBeUndefined();
+    // Panel 2: the named POV viewer is heard, not drawn.
+    expect(povViewerOf(doc, p2)?.id).toBe('arjun');
+    expect(drawnCastIds(doc, p2)).toEqual(['maya']);
+    expect(offPanelSpeakerIds(doc, p2)).toEqual(['arjun']);
+    // Panel 3: a POV shot naming nobody keeps its cast; panel 4: only a pov shot has a viewer.
+    expect(drawnCastIds(doc, p3)).toEqual(['maya', 'arjun']);
+    expect(offPanelSpeakerIds(doc, p3)).toEqual([]);
+    expect(povViewerOf(doc, p4)).toBeUndefined();
+    // Captions, SFX, blank lines and unknown speakers never make an off-panel voice; a listed talking prop is drawn.
+    expect(drawnCastIds(doc, p4)).toEqual(['maya', 'shell']);
+    expect(offPanelSpeakerIds(doc, p4)).toEqual([]);
+    expect(drawnCastIds(doc, p5)).toEqual(['maya']);
+    expect(offPanelSpeakerIds(doc, p5)).toEqual(['arjun']);
+    // The prompt says the same thing.
+    const prompt = compilePage(doc, page(1, [p1, p2, p3, p4, p5])).prompt;
+    for (const p of [p1, p2, p3, p4, p5]) {
+      const start = prompt.indexOf(`PANEL ${p.n} of 5`);
+      const end = prompt.indexOf(p.n < 5 ? `PANEL ${p.n + 1} of 5` : '\n\n', start);
+      const block = prompt.slice(start, end);
+      const who = block.split('\n').find((l) => l.startsWith('Who: '))!;
+      for (const id of drawnCastIds(doc, p)) expect(who, block).toContain(`${castLabel(doc.cast.find((c) => c.id === id)!)} (`);
+      for (const id of offPanelSpeakerIds(doc, p)) expect(block).toContain(`OFF-PANEL VOICE: ${castLabel(doc.cast.find((c) => c.id === id)!)} (do not draw)`);
+      expect(block.match(/OFF-PANEL VOICE: (?!unnamed)/g)?.length ?? 0, block).toBe(offPanelSpeakerIds(doc, p).length);
+    }
+  });
+
+  it('Must show is the first real sentence: a title or an initial never ends it, and a one-word exclamation is not split off', () => {
+    const blockOf = (action: string): string => {
+      const prompt = compilePage(baseDoc(), page(1, [panel(1, ['maya'], { action })])).prompt;
+      const start = prompt.indexOf('PANEL 1 of 1');
+      return prompt.slice(start, prompt.indexOf('\n\n', start));
+    };
+    const mustShow = (action: string) => blockOf(action).split('\n').find((l) => l.startsWith('Must show: '));
+    const detail = (action: string) => blockOf(action).split('\n').find((l) => l.startsWith('Detail: '));
+    // Reviewer repro (courier-p4): "Dr." used to end the first sentence ("Must show: Dr.").
+    expect(mustShow('Dr. Rao opens the vault. Gold spills out.')).toBe('Must show: Dr. Rao opens the vault.');
+    expect(detail('Dr. Rao opens the vault. Gold spills out.')).toBe('Detail: Gold spills out.');
+    expect(mustShow('Dr. Rao opens the vault with Isha and Dev behind him. Gold spills out.')).toBe(
+      'Must show: Dr. Rao opens the vault with Isha and Dev behind him.'
+    );
+    // One sentence with two titles: nothing is split off.
+    expect(mustShow('Mr. Iyer waves from St. Mary’s gate.')).toBe('Must show: Mr. Iyer waves from St. Mary’s gate.');
+    expect(detail('Mr. Iyer waves from St. Mary’s gate.')).toBeUndefined();
+    // Initials, numbers and the rest of the list.
+    expect(mustShow('J. R. Rao checks platform No. 5 for Prof. Sen. The train is late.')).toBe('Must show: J. R. Rao checks platform No. 5 for Prof. Sen.');
+    expect(mustShow('Capt. Noor and Sgt. Bala climb Mt. Abu at dawn. Mist rolls in.')).toBe('Must show: Capt. Noor and Sgt. Bala climb Mt. Abu at dawn.');
+    // A one-word first sentence stays with the next one; with no valid boundary the whole action is shown.
+    expect(mustShow('Boom! The door falls.')).toBe('Must show: Boom! The door falls.');
+    expect(mustShow('Boom! The door falls. Dust everywhere.')).toBe('Must show: Boom! The door falls.');
+    expect(mustShow('“Run!” Maya shouts. The stall collapses.')).toBe('Must show: “Run!” Maya shouts.');
+    // Ordinary sentences split exactly as before.
+    expect(mustShow('Maya sprints into the market. Shoppers scatter.')).toBe('Must show: Maya sprints into the market.');
+    expect(mustShow('Is it him? 3 shadows answer.')).toBe('Must show: Is it him?');
+    expect(mustShow('The lock clicks… “Now,” she breathes.')).toBe('Must show: The lock clicks…');
+  });
+
+  it('every block with more action or a mood has one Detail line: the rest of the action, then the mood (plan §4.2)', () => {
+    const detailOf = (action: string, mood?: string): string | undefined => {
+      const prompt = compilePage(baseDoc(), page(1, [panel(1, ['maya'], { action, ...(mood ? { mood } : {}) })])).prompt;
+      const start = prompt.indexOf('PANEL 1 of 1');
+      const block = prompt.slice(start, prompt.indexOf('\n\n', start));
+      // The mood never sits on a bare line of its own.
+      expect(block).not.toMatch(/^Mood: /m);
+      return block.split('\n').find((l) => l.startsWith('Detail: '));
+    };
+    // One-sentence action (A1's "begin with the one thing the panel must show"): the mood still has its Detail.
+    expect(detailOf('Dev kneels by the drain.', 'focused')).toBe('Detail: focused.');
+    expect(detailOf('Dev kneels by the drain.', 'Worried, cold blue')).toBe('Detail: worried, cold blue.');
+    expect(detailOf('Dev kneels by the drain.', 'LED glow')).toBe('Detail: LED glow.');
+    // The rest of the action, then the mood.
+    expect(detailOf('Isha and Dev weave between stalls. Crowds part around them.', 'busy, warm lantern light')).toBe(
+      'Detail: Crowds part around them; busy, warm lantern light.'
+    );
+    expect(detailOf('Dr. Rao opens the vault. Gold spills out!', 'tense')).toBe('Detail: Gold spills out! Tense.');
+    expect(detailOf('Isha and Dev weave between stalls. Crowds part around them.')).toBe('Detail: Crowds part around them.');
+    // Neither: no Detail line at all.
+    expect(detailOf('Dev kneels by the drain.')).toBeUndefined();
+  });
+
+  it('identity anchors: ≤ 12 words from hair, outfit, marks and props (people) or what it is, markings and colours (non-humans)', () => {
+    const doc = baseDoc();
+    expect(identityAnchor(doc.cast[0])).toBe('black bun with a pencil through it, faded red kurta, thin scar');
+    // No hair/outfit/marks/props: the face, else the summary's head.
+    expect(identityAnchor(doc.cast[1])).toBe('grey stubble beard');
+    expect(identityAnchor(doc.cast[2])).toBe('toothless fruit seller in a green turban');
+    const duck = character('pip', 'Pip', 'support', {
+      kind: 'animal',
+      look: { summary: 'A tiny fluffy yellow duckling with a bright orange bill', marks: 'a little tuft of down sticking up on top of the head', palette: '#ffd60a, orange' }
+    });
+    // Hex palette entries are named ("#ffd60a" → "yellow").
+    expect(identityAnchor(duck)).toBe('tiny fluffy yellow duckling, little tuft of down sticking up, yellow, orange');
+    expect(identityAnchor(character('z', 'Zed', 'extra', { look: { summary: '' } }))).toBe('');
+    for (const c of [...doc.cast, duck]) expect(identityAnchor(c).split(/\s+/).length).toBeLessThanOrEqual(12);
+    const long = character('k', 'Kavi', 'lead', {
+      look: {
+        summary: 'x',
+        hair: 'long silver braid wrapped twice around her neck like a scarf',
+        outfit: 'indigo monsoon raincoat with brass buttons and a hood',
+        marks: 'tattoo of a lotus on the back of her right hand',
+        props: 'battered brass compass on a cord'
+      }
+    });
+    const anchor = identityAnchor(long);
+    expect(anchor.split(/\s+/).length).toBeLessThanOrEqual(12);
+    expect(anchor).toMatch(/^long silver braid/);
+  });
+
+  it('black-and-white pages: Who lines name no palette colours (the CAST block states none either)', () => {
+    const duck = character('pip', 'Pip', 'support', {
+      kind: 'animal',
+      look: { summary: 'A small fluffy duckling', marks: 'white crown feather', palette: 'butter yellow, #e76f51' }
+    });
+    const withDuck = (bw: boolean) =>
+      baseDoc((d) => {
+        d.cast.push(duck);
+        if (bw) d.format.colorMode = 'bw';
+      });
+    const pg = page(1, [panel(1, ['maya', 'pip']), panel(2, ['pip'])]);
+    const whoLines = (prompt: string) => prompt.split('\n').filter((l) => l.startsWith('Who: '));
+    // Colour page: the anchor restates the palette in words.
+    const color = whoLines(compilePage(withDuck(false), pg).prompt);
+    expect(color).toHaveLength(2);
+    for (const who of color) expect(who).toContain('PIP (Image 1 — small fluffy duckling, white crown feather, butter yellow, burnt orange)');
+    // Black and white: the same anchor without the palette, on every Who line and in the CAST block.
+    const bwPrompt = compilePage(withDuck(true), pg).prompt;
+    const bw = whoLines(bwPrompt);
+    expect(bw).toHaveLength(2);
+    for (const who of bw) {
+      expect(who).toContain('PIP (Image 1 — small fluffy duckling, white crown feather)');
+      expect(who).not.toMatch(/butter yellow|burnt orange|#e76f51/);
+    }
+    expect(bwPrompt).not.toMatch(/butter yellow|burnt orange|#e76f51/);
+    expect(identityAnchor(duck, { colors: false })).toBe('small fluffy duckling, white crown feather');
+    expect(identityAnchor(duck)).toBe('small fluffy duckling, white crown feather, butter yellow, burnt orange');
+  });
+
+  it('overlay lettering: text-free, open background beside speakers, never blank bars, and no dialogue in the prompt', () => {
     const doc = baseDoc();
     const pg = page(1, [
       panel(1, ['maya'], { lines: [line('speech', 'SECRET-DIALOGUE-ONE', 'maya')] }),
@@ -337,10 +602,19 @@ describe('compilePage', () => {
     ]);
     const prompt = compilePage(doc, pg).prompt;
     expect(prompt).toContain('Do not draw any text, letters, speech balloons, captions or sound effects.');
-    expect(prompt).toContain('Leave natural empty space near the top of panels 1 and 3 for balloons that will be added later; keep faces and key action out of that space.');
+    // The blank-bar wording (panels challenge R4) is gone; open background beside the speaker replaces it.
+    expect(prompt).not.toContain('Leave natural empty space');
+    expect(prompt).not.toContain('keep faces and key action out of that space');
+    // Plan §4.2's three sentences, verbatim.
+    expect(prompt).toContain(
+      "Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips."
+    );
     expect(prompt).not.toContain('SECRET-DIALOGUE-ONE');
     expect(prompt).not.toContain('SECRET-CAPTION');
     expect(prompt).not.toContain('Spell every line');
+    // A wordless overlay page still forbids empty shapes (b4b5774f p5's bar sat on a panel with no lines).
+    const wordless = compilePage(doc, page(2, [panel(1, ['maya']), panel(2, ['arjun'])])).prompt;
+    expect(wordless).toContain('This page is wordless. Never draw blank boxes, empty bars or white strips.');
   });
 
   it('in-art lettering: every line verbatim per panel with speaker and kind, quotes escaped', () => {
@@ -362,12 +636,13 @@ describe('compilePage', () => {
     expect(prompt).toContain('Panel 2 — SFX: "KRAK!"');
     expect(prompt).toContain('Panel 3 — MAYA (shout): "MOVE!"');
     expect(prompt).toContain('Panel 3 — ARJUN (thought): "Too slow…"');
-    expect(prompt).toContain('No other text anywhere on the page.');
+    expect(prompt).toContain('No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips.');
     expect(prompt).toContain('UPPERCASE');
     expect(prompt).toContain('spiky burst balloons');
     expect(prompt).not.toContain('Do not draw any text');
     // The blank line is dropped, not lettered as an empty balloon.
-    expect(prompt.match(/^Panel 2 — /gm)).toHaveLength(3); // panel line + 2 lettered lines
+    expect(prompt.match(/^Panel 2 — /gm)).toHaveLength(2); // the 2 lettered lines (the panel block opens with "PANEL 2 of 3")
+    expect(prompt).toContain('Speaks: ARJUN — 1 balloon;');
   });
 
   it('in-art lettering in a caseless language drops UPPERCASE and names the language', () => {
@@ -461,7 +736,10 @@ describe('compilePage', () => {
 
   // 3,500 → 4,000 (P1-RENDER): the content-rating paragraph, the rating negatives on the
   // "Never:" line and the frame-shape sentence are required on every page (~550 chars).
-  it('keeps a typical 6-panel page under 4,000 characters excluding dialogue', () => {
+  // 4,000 → 6,000 (A2): one block per panel (box N with its measured size, Must show, Who with
+  // identity anchors, Speaks) plus measured proportions, ~200 chars per panel; the hard ceiling
+  // is PAGE_PROMPT_CHAR_BUDGET (plan C18: 9,000).
+  it('keeps a typical 6-panel page under 6,000 characters excluding dialogue', () => {
     const doc = baseDoc((d) => {
       d.cast[0].look = {
         summary: 'Wiry 19-year-old courier with a sharp jaw and restless eyes',
@@ -498,12 +776,59 @@ describe('compilePage', () => {
     );
     const prev = page(1, [panel(1, ['maya'])], { render: ready('pages/p1.png') });
     const job = compilePage(doc, pg, { previousPage: prev });
-    expect(job.references).toHaveLength(5);
-    expect(job.prompt.length).toBeLessThan(4000);
+    // Maya, Arjun, the vendor (an extra with a ready sheet joins by presence), the market, the board, the previous page.
+    expect(job.references).toHaveLength(6);
+    expect(job.prompt.length).toBeLessThan(6000);
+    expect(job.prompt.length).toBeLessThan(PAGE_PROMPT_CHAR_BUDGET);
     expect(job.prompt).toContain('CONTENT RATING PG-13');
-    // No duplicated sentences.
-    const sentences = job.prompt.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 25);
+    // No duplicated sentences (a panel's Who and Speaks lines restate anchors on purpose).
+    const sentences = job.prompt
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 25 && !/^(Who|Speaks):/.test(s));
     expect(new Set(sentences).size).toBe(sentences.length);
+  });
+
+  it('over the 9,000-character budget, panels drop the restated anchors first (the CAST block keeps every look)', () => {
+    const doc = baseDoc();
+    const long = 'Maya vaults a stack of crates while saffron dust hangs in the air like smoke. ' + 'Then the alley narrows. '.repeat(20);
+    const crowded = page(1, Array.from({ length: 9 }, (_, i) => panel(i + 1, ['maya', 'arjun'], { action: long })));
+    const job = compilePage(doc, crowded);
+    expect(job.prompt).toContain('Who: MAYA (Image 1), on the left; ARJUN (Image 2), on the right.');
+    expect(job.prompt).not.toContain('Image 1 — black bun');
+    expect(job.prompt).toContain('hair: black bun with a pencil through it');
+    // A normal page keeps them.
+    expect(compilePage(doc, page(1, [panel(1, ['maya'])])).prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar).');
+  });
+
+  it('layout guide (COMIC_LAYOUT_GUIDE, off by default): Image 1 is PAGE LAYOUT GUIDE in one object slot, boxes are named in the guide', () => {
+    const doc = crowdedDoc('standard');
+    const prev = page(0, [panel(1, ['a'])], { render: ready('pages/p0.png') });
+    const off = compilePage(doc, crowdedPage(), { previousPage: prev });
+    expect(off.references.some((r) => r.path === LAYOUT_REFERENCE_PATH)).toBe(false);
+    expect(off.prompt).not.toContain('LAYOUT GUIDE');
+    expect(off.prompt).toContain('PANEL 1 of 6 — box 1 in the layout (');
+
+    const on = compilePage(doc, crowdedPage(), { previousPage: prev, layoutGuide: true });
+    expect(on.references[0]).toEqual({ label: 'PAGE LAYOUT GUIDE', path: LAYOUT_REFERENCE_PATH });
+    expect(on.prompt).toContain(
+      'Image 1 — PAGE LAYOUT GUIDE. Draw the panel borders exactly on its black lines and keep its white gutters; it shows layout only — never copy its flat fill, and it holds no characters or text.'
+    );
+    expect(on.prompt).toContain('Panel borders: follow the PAGE LAYOUT GUIDE (Image 1) exactly');
+    expect(on.prompt).toContain('PANEL 1 of 6 — box 1 in the layout guide (');
+    expect(legendLabels(on.prompt)).toEqual(on.references.map((r) => r.label));
+    // Everything else shifts by one and keeps its order; caps hold.
+    expect(on.references.slice(1)).toEqual(off.references);
+    const spec = getImageModel('nano-banana-2.1')!;
+    const planned = planPageReferences(doc, crowdedPage(), spec, prev, { layoutGuide: true });
+    expect(planned.length).toBeLessThanOrEqual(spec.refs.total);
+    expect(planned.filter((r) => r.slot === 'object').length).toBeLessThanOrEqual(spec.refs.objects);
+    expect(planned.filter((r) => r.slot === 'character').length).toBeLessThanOrEqual(spec.refs.characters);
+    // Never a model's only object slot: the legacy model keeps its style anchor and states the layout in words.
+    const legacy = getImageModel('nano-banana-legacy')!;
+    const tight = planPageReferences(doc, crowdedPage(), legacy, prev, { layoutGuide: true });
+    expect(tight.some((r) => r.kind === 'layout')).toBe(false);
+    expect(tight.map((r) => r.label)).toContain('STYLE BOARD');
   });
 
   it('is deterministic', () => {
@@ -705,7 +1030,8 @@ describe('compileEdit', () => {
   it('without a region: names the panel, scopes sheets to its cast plus characters the instruction names', () => {
     const doc = baseDoc();
     const job = compileEdit(doc, rendered(doc), { instruction: 'Put Arjun behind the vendor', panelN: 3, hasRegion: false });
-    expect(job.references.map((r) => r.label)).toEqual(['CURRENT PAGE', 'CHARACTER SHEET: ARJUN']);
+    // The named vendor is an extra with a ready sheet: attached by presence, as on pages (plan C7).
+    expect(job.references.map((r) => r.label)).toEqual(['CURRENT PAGE', 'CHARACTER SHEET: ARJUN', 'CHARACTER SHEET: VENDOR']);
     expect(job.prompt).toContain('The change is in panel 3, which shows: Action of panel 3.');
     expect(job.prompt).not.toContain('red outline');
   });
@@ -774,7 +1100,7 @@ const lakeDoc = () =>
   });
 
 describe('ranked references (refs.md §5)', () => {
-  it('docs without photos keep exactly today’s references (standard and pro)', () => {
+  it('docs without photos keep exactly today’s references (standard and pro; extras by presence, plan C7)', () => {
     const prev = page(0, [panel(1, ['a'])], { render: ready('pages/p0.png') });
     const std = planPageReferences(crowdedDoc('standard'), crowdedPage(), getImageModel('nano-banana-2.1')!, prev);
     expect(std.map((r) => [r.label, r.path])).toEqual([
@@ -793,7 +1119,7 @@ describe('ranked references (refs.md §5)', () => {
       ['CHARACTER SHEET: BRAVO', 'sheets/b.png'],
       ['CHARACTER SHEET: CHARLIE', 'sheets/c.png'],
       ['CHARACTER SHEET: DELTA', 'sheets/d.png'],
-      ['CHARACTER SHEET: ECHO', 'sheets/e.png'],
+      ['CHARACTER SHEET: EXTRA GUY', 'sheets/x.png'],
       ['LOCATION: SPICE MARKET', 'places/market.png'],
       ['LOCATION: ROOFTOP', 'places/roof.png'],
       ['STYLE BOARD', 'style/board.png'],
@@ -984,7 +1310,9 @@ describe('non-human cast, groups and props (director.md §3.5)', () => {
     expect(job.prompt).toContain('- DUCKLINGS ×3 (Image 2): a group of exactly 3, all drawn to this one design: fluffy yellow ducklings; species: mallard duckling.');
     expect(job.prompt).toContain('- FROG (no reference — follow this description exactly): small green frog; kind: animal.');
     expect(job.prompt).toContain('PROPS — the same object, colors and details every time it appears:\n- RED KITE (no reference — follow this description exactly): a red diamond kite with a long tail.');
-    expect(job.prompt).toContain('Characters: BABY ANU (far left), DUCKLINGS ×3 (center-left), FROG (center-right). Props: RED KITE.');
+    expect(job.prompt).toContain(
+      'Who: BABY ANU (Image 1 — chubby toddler in a yellow romper), on the far left; DUCKLINGS ×3 (Image 2 — fluffy yellow ducklings), left of center; FROG (small green frog), right of center. Props: RED KITE (red diamond kite with a long tail).'
+    );
     expect(job.prompt).toContain('CHARACTER SHEET: DUCKLINGS. Match their species, face, markings, proportions and colors exactly. It shows one member of the group of 3: draw all 3 to this exact design.');
     expect(legendLabels(job.prompt)).toEqual(labelsOf(job.references));
     // People-only pages keep the original cast header.
@@ -1171,9 +1499,11 @@ describe('content rating in every image prompt (safety.md §3.2)', () => {
     const safe = compilePage(baseDoc(), pg, { safe: true });
     expect(safe.prompt).toContain('CONTENT RATING PG —');
     expect(safe.prompt).toContain(SAFE_TAKE_LINE);
-    const panelText = safe.prompt.split('\n').find((l) => l.startsWith('Panel 1 —'))!;
+    const start = safe.prompt.indexOf('PANEL 1 of');
+    const panelText = safe.prompt.slice(start, safe.prompt.indexOf('\n\n', start));
+    expect(start).toBeGreaterThan(0);
     expect(panelText).toContain('Maya lunges at the thug');
-    expect(panelText).toContain('Mood: chaos.');
+    expect(panelText).toContain('Detail: chaos.');
     expect(panelText).not.toMatch(/\bstabs\b|\bblood\b|\bbloody\b/);
     const edit = compileEdit(baseDoc(), page(3, [panel(1, ['maya'])], { render: ready('pages/p3.png') }), { instruction: 'add a corpse on the floor', hasRegion: false, safe: true });
     expect(edit.prompt).toContain('Change only this: add a fallen figure on the floor.');
@@ -1255,8 +1585,8 @@ describe('review: safety and reference-gate hardening', () => {
     expect(labelsOf(job.references)[0]).toBe('CHARACTER REFERENCE: BABY');
     expect(job.prompt).toContain('featuring BABY (Image 1)');
     expect(job.refPaths).toEqual(['uploads/baby.png']);
-    // Pages still text-lock extras.
-    expect(planPageReferences(doc, doc.pages[0], getImageModel('nano-banana-2.1')!).some((r) => r.characterId === 'baby')).toBe(false);
+    // Pages attach it too, by presence (plan C7): an on-page being with a photo or sheet is eligible whatever its tier.
+    expect(planPageReferences(doc, doc.pages[0], getImageModel('nano-banana-2.1')!).find((r) => r.characterId === 'baby')?.path).toBe('uploads/baby.png');
   });
 
   it('a group of people is "their" in the legend, whatever its gender', () => {

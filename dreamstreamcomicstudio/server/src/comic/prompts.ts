@@ -9,10 +9,12 @@
 //  - The PAGE is the unit: one image per page with panels, gutters and lettering space.
 //  - Every reference image is LABELED by index in a legend whose order matches the
 //    attachment order exactly, and never exceeds the model's caps (refs in models.ts).
-//  - One source of truth per fact: a character's look is stated once (cast block);
-//    panels only name who is in them.
-//  - Lettering never leaks prompt text: overlay pages are text-free with room left for
-//    balloons; in-art pages letter the script's lines verbatim and nothing else.
+//  - One source of truth per fact: a character's full look is stated once (cast block);
+//    each panel block names who is in it with a short identity anchor (≤ 12 words) and the
+//    box it fills, what it must show, and who speaks or is heard off-panel (plan §4.2).
+//  - Lettering never leaks prompt text: overlay pages are text-free with open background
+//    beside each speaker (never blank bars); in-art pages letter the script's lines verbatim
+//    and nothing else.
 //  - Non-humans are first-class cast: animals, creatures, robots and groups ("DUCKLINGS ×3")
 //    get the same identity lock as people; recurring props get a PROPS lock.
 //  - Every image carries the comic's content rating (PG-13 ceiling, kids lower) as an art
@@ -28,6 +30,7 @@ import {
   letterStyleOf,
   type AspectRatio,
   type AssetRef,
+  type Box,
   type Character,
   type ComicDoc,
   type ComicKind,
@@ -53,7 +56,14 @@ import {
   type ResolvedImageJob
 } from '../../../shared/comic/models.js';
 import { isPhotoLikeness, pickRefs, type RefContext } from '../../../shared/comic/refRanking.js';
-import { layoutPanelCount, parseLayout, synthesizeLayout, type LayoutCell, type ParsedLayout } from '../../../shared/comic/pageGeometry.js';
+import {
+  estimatePanelBoxes,
+  layoutPanelCount,
+  parseLayout,
+  synthesizeLayout,
+  type LayoutCell,
+  type ParsedLayout
+} from '../../../shared/comic/pageGeometry.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import {
   ALWAYS_ART_AVOID,
@@ -106,6 +116,16 @@ const DEFAULT_AVOID = ['photorealism', 'muddy or blurry rendering', 'warped anat
 /** Path placeholder for the red-outlined copy of the page; the job runner substitutes the real image. */
 export const REGION_REFERENCE_PATH = '__region__';
 
+/**
+ * Path placeholder for the page layout guide (plan C9; panelize/wireframe.ts renders it from
+ * pageLayoutBoxes at prepare time; nothing is stored). Attached only when the caller asks for it
+ * (`layoutGuide`, set by the job runner while COMIC_LAYOUT_GUIDE is on — off until the A/B).
+ */
+export const LAYOUT_REFERENCE_PATH = '__layout__';
+export const LAYOUT_GUIDE_LABEL = 'PAGE LAYOUT GUIDE';
+const LAYOUT_GUIDE_INSTRUCTION =
+  'Draw the panel borders exactly on its black lines and keep its white gutters; it shows layout only — never copy its flat fill, and it holds no characters or text.';
+
 export const SHOT_TEXT: Record<ShotType, string> = {
   establishing: 'establishing shot (the whole location)',
   wide: 'wide shot',
@@ -116,15 +136,6 @@ export const SHOT_TEXT: Record<ShotType, string> = {
   over_shoulder: 'over-the-shoulder shot',
   insert: 'insert shot (close detail of an object)',
   pov: 'point-of-view shot'
-};
-
-const SIZE_TEXT: Record<PanelSize, string> = {
-  small: 'small',
-  medium: 'medium',
-  large: 'large',
-  wide: 'wide',
-  tall: 'tall',
-  splash: 'splash'
 };
 
 const KIND_TEXT: Record<ComicKind, string> = {
@@ -610,6 +621,89 @@ export const describeLook = (c: Character, opts: { colors?: boolean } = {}): str
   return `${n > 1 ? `a group of exactly ${n}, all drawn to this one design: ` : ''}${parts.join('; ')}.`;
 };
 
+// ── Identity anchors (plan §4.2: every panel's Who line restates ≤ 12 words of the look) ──
+
+const ANCHOR_WORDS = 12;
+const ANCHOR_PIECE_WORDS = 7;
+/** Words a fragment never ends on ("black bun with a" → "black bun"). */
+const ANCHOR_TAIL_WORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'with', 'of', 'on', 'in', 'at', 'to', 'for', 'from', 'by', 'over', 'under', 'through',
+  'across', 'around', 'near', 'beside', 'its', 'his', 'her', 'their', 'that', 'which', 'who'
+]);
+const ANCHOR_CUT = /\s(?:with|on|in|at|of|over|under|through|across|around|near|beside|from|that|which|who)\s/gi;
+
+const wordCount = (text: string): number => (text ? text.split(/\s+/).filter(Boolean).length : 0);
+
+/** Drop trailing filler words and punctuation; keep at most `max` words. */
+const trimFragment = (text: string, max: number): string => {
+  const words = text.split(/\s+/).filter(Boolean).slice(0, max);
+  while (words.length > 1 && ANCHOR_TAIL_WORDS.has(words[words.length - 1].toLowerCase().replace(/[^\p{L}]/gu, ''))) words.pop();
+  return words.join(' ').replace(/[\s,;:]+$/, '');
+};
+
+/** The fragment before its first prepositional phrase that leaves ≥ `minHead` words ("" when none). */
+const headBeforePreposition = (text: string, minHead: number): string => {
+  for (const m of text.matchAll(ANCHOR_CUT)) {
+    const head = text.slice(0, m.index);
+    if (wordCount(head) >= minHead) return head;
+  }
+  return '';
+};
+
+/**
+ * One short visual fragment of a look field: its first clause (comma parts join until the fragment
+ * holds ≥ 3 words, so "fine, soft brown hair" stays whole), without a leading article, cut before
+ * a prepositional tail when longer than 7 words, at most 7 words.
+ */
+const anchorPiece = (value?: string): string => {
+  const clause = stripEnd(clean(value)).split(/\s*;\s*/)[0] || '';
+  let text = '';
+  for (const part of clause.split(/\s*,\s*/)) {
+    text = text ? `${text}, ${part}` : part;
+    if (wordCount(text) >= 3) break;
+  }
+  text = text.replace(/^(?:a|an|the)\s+/i, '');
+  if (wordCount(text) > ANCHOR_PIECE_WORDS) text = headBeforePreposition(text, 3) || text;
+  return trimFragment(text, ANCHOR_PIECE_WORDS);
+};
+
+/** Palette entries in words ("#e63946, cream" → "red, cream"). */
+const paletteText = (value?: string): string =>
+  clean(value)
+    .split(/\s*,\s*/)
+    .map((entry) => hexToName(entry))
+    .filter(Boolean)
+    .join(', ');
+
+/**
+ * A being's identity anchor: ≤ 12 words picked from its look in the plan's order — people: hair,
+ * outfit, marks, markings, always-visible props (then the face, when room is left); non-humans and props: what it is (the summary's
+ * head), markings, marks, colours, props. A fragment that does not fit is shortened to its core
+ * ("thin scar through left eyebrow" → "thin scar") or skipped; the summary's head is the fallback;
+ * '' when the look is empty. The full look is still stated once, in the CAST block. `colors: false`
+ * (black-and-white pages) leaves the palette out, exactly as describeLook does for the CAST block.
+ */
+export const identityAnchor = (c: Character, opts: { colors?: boolean } = {}): string => {
+  const look = c.look || { summary: '' };
+  const fields =
+    castKindOf(c) === 'person'
+      ? [look.hair, look.outfit, look.marks, look.markings, look.props, look.face]
+      : [look.summary, look.markings, look.marks, opts.colors === false ? '' : paletteText(look.palette), look.props];
+  const pieces: string[] = [];
+  let used = 0;
+  for (const field of fields) {
+    let piece = anchorPiece(field);
+    if (!piece || pieces.some((p) => p.toLowerCase().includes(piece.toLowerCase()))) continue;
+    if (used + wordCount(piece) > ANCHOR_WORDS) piece = trimFragment(headBeforePreposition(piece, 2), ANCHOR_PIECE_WORDS);
+    if (!piece || used + wordCount(piece) > ANCHOR_WORDS) continue;
+    pieces.push(piece);
+    used += wordCount(piece);
+  }
+  const anchor = pieces.length ? pieces.join(', ') : trimFragment(anchorPiece(look.summary), ANCHOR_WORDS);
+  // "Broad spice merchant" → "broad spice merchant" (an acronym or a name such as "LEGO" stays).
+  return /^\p{Lu}\p{Ll}/u.test(anchor) ? anchor[0].toLowerCase() + anchor.slice(1) : anchor;
+};
+
 // ── Staging (left/right hints, shared with the balloon fallback) ─────────────
 
 export interface StagedCharacter {
@@ -720,7 +814,7 @@ export const effectiveLayout = (page: Page, format: Pick<Format, 'kind' | 'readi
 
 // ── References ───────────────────────────────────────────────────────────────
 
-export type ReferenceKind = 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art';
+export type ReferenceKind = 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art' | 'layout';
 
 export interface PlannedReference {
   kind: ReferenceKind;
@@ -775,7 +869,7 @@ const LABEL_WORDS: Record<RefLabel, string> = {
 };
 
 /** Legend keywords a note must never spell in capitals (labels are matched downstream, e.g. PREVIOUS PAGE). */
-const RESERVED_LABEL_WORDS = /\b(?:previous page|current page|story page|style board|style reference|character sheet|character reference|author reference|location photo|location|photo of|reference images|same page)\b/gi;
+const RESERVED_LABEL_WORDS = /\b(?:previous page|current page|story page|style board|style reference|character sheet|character reference|author reference|location photo|location|photo of|reference images|same page|page layout guide|layout guide)\b/gi;
 
 /** The author's note as quoted DATA: one line, ≤ 140 chars, never instructions, never a legend keyword. */
 const noteText = (ref: RefAsset): string => {
@@ -862,9 +956,10 @@ const likenessWanted = (c: Character, spare: number): boolean => {
  *  - pass 1: one ref each (sheet, else the best photo) — unchanged ordering and budget;
  *  - pass 2: spare slots add "PHOTO OF MAYA (likeness)" next to a photo-based character's sheet;
  *  - pass 3: spare slots add a second, different photo for characters that have no sheet.
- * Extras are text-locked on pages; a cover references whoever it features (coverCastOf only
- * features extras when the book has no leads, supports or companions). Counts against
- * characters AND total caps.
+ * On pages every BEING with a ready sheet or photo is eligible whatever its tier (an extra prop
+ * stays text-locked), in the page's rank order; a cover references whoever it features
+ * (coverCastOf only features extras when the book has no leads, supports or companions). Counts
+ * against characters AND total caps.
  */
 const castReferences = (
   cast: Character[],
@@ -877,7 +972,10 @@ const castReferences = (
   const groups: { c: Character; refs: PlannedReference[] }[] = [];
   for (const c of cast) {
     if (slots <= 0) break;
-    if (c.tier === 'extra' && purpose === 'page') continue;
+    // Presence, not tier (plan C7): on a page an extra competes like anyone else when it is a being
+    // with a ready, servable sheet or photo (the f8312c86 protagonist is an extra in 20 of 20 panels).
+    // The page's rank order (rankPageCast) decides who fits the model's character slots.
+    if (c.tier === 'extra' && purpose === 'page' && isProp(c)) continue;
     const ref = characterReference(c, ctxFor(c), purpose);
     if (!ref) continue;
     groups.push({ c, refs: [ref] });
@@ -975,13 +1073,24 @@ const styleReferences = (doc: ComicDoc, spec: ImageModelSpec, budget: { total: n
   return out;
 };
 
+/** Page-render options beyond CompileOptions. */
+export interface PageCompileOptions extends CompileOptions {
+  /**
+   * Attach the PAGE LAYOUT GUIDE as Image 1 (plan C9, C19): it takes one object slot before
+   * anything else and the panel blocks name their box "in the layout guide". The job runner sets
+   * it while COMIC_LAYOUT_GUIDE is on and substitutes LAYOUT_REFERENCE_PATH with the rendered guide.
+   */
+  layoutGuide?: boolean;
+}
+
 /**
  * Reference images for a page render, ordered exactly as they must be attached:
- * characters → locations → style → previous page.
+ * (layout guide, when asked) → characters → locations → style → previous page.
  *
- * Budget priority (when caps bind): characters (≤ refs.characters, the page's lead/support
- * cast ranked by panel appearances; extras and overflow are text-locked only; spare slots
- * add a likeness photo or a second photo next to their character), then the style anchor,
+ * Budget priority (when caps bind): characters (≤ refs.characters, every being on the page with a
+ * ready sheet or photo — extras included — ranked by rankPageCast; overflow and extra props are
+ * text-locked only; spare slots add a likeness photo or a second photo next to their character),
+ * then the style anchor,
  * then location sheets by how many panels use them, then the previous page for continuity —
  * all within refs.objects and refs.total. Blocked images are never attached.
  */
@@ -990,9 +1099,17 @@ export const planPageReferences = (
   page: Page,
   spec: ImageModelSpec,
   previousPage?: Page,
-  opts: CompileOptions = {}
+  opts: PageCompileOptions = {}
 ): PlannedReference[] => {
   const budget = { total: Math.max(0, spec.refs.total), objects: Math.max(0, spec.refs.objects) };
+  const guide: PlannedReference[] = [];
+  // One object slot, first in the legend (C19) — never a model's ONLY object slot (a legacy-locked
+  // comic keeps its style anchor; the layout is still stated in words).
+  if (opts.layoutGuide && spec.refs.objects >= 2 && budget.objects > 0 && budget.total > 1) {
+    guide.push({ kind: 'layout', slot: 'object', label: LAYOUT_GUIDE_LABEL, path: LAYOUT_REFERENCE_PATH, instruction: LAYOUT_GUIDE_INSTRUCTION });
+    budget.objects -= 1;
+    budget.total -= 1;
+  }
   const effective = artRatingFor(doc, opts);
   const shotsOf = (id: string) => page.panels.filter((p) => p.castIds.includes(id)).map((p) => p.shot);
   const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }));
@@ -1034,7 +1151,7 @@ export const planPageReferences = (
     });
   }
 
-  return [...characters, ...places, ...style, ...previous];
+  return [...guide, ...characters, ...places, ...style, ...previous];
 };
 
 const toJobReferences = (refs: PlannedReference[]) => refs.map((r) => ({ label: r.label, path: r.path }));
@@ -1054,28 +1171,303 @@ const finishJob = (resolved: ResolvedImageJob, aspect: AspectRatio, prompt: stri
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-const panelLine = (
-  doc: ComicDoc,
-  page: Page,
-  panel: Panel,
-  names: Map<string, string>,
-  props: ReadonlySet<string> = new Set(),
-  opts: CompileOptions = {}
-): string => {
+// ── Panel geometry in words (plan §4.2: "box N", measured proportions) ─────────
+
+/**
+ * The page's panel rectangles as the prompt (and the layout guide) describe them: the effective
+ * blueprint's estimate, in reading order. Never the previous take's measured boxes — the prompt
+ * describes the PLAN, so a drifted drawing is not copied into the next one.
+ */
+export const pageLayoutBoxes = (doc: ComicDoc, page: Page): Box[] =>
+  estimatePanelBoxes(
+    { panels: page.panels, layout: effectiveLayout(page, doc.format) },
+    { readingDirection: doc.format.readingDirection, kind: doc.format.kind }
+  );
+
+const ROW_EPS = 0.005;
+const pct = (v: number): number => Math.max(1, Math.min(100, Math.round(v * 100)));
+
+/** Distinct row tops (sorted): a tall panel beside a stack starts one row and runs into the next. */
+const rowTopsOf = (boxes: Box[]): number[] => {
+  const tops: number[] = [];
+  for (const b of boxes) if (!tops.some((t) => Math.abs(t - b.y) < ROW_EPS)) tops.push(b.y);
+  return tops.sort((a, b) => a - b);
+};
+
+/** [first, last] row index a box covers. */
+const rowSpanOf = (tops: number[], b: Box): [number, number] => {
+  const first = Math.max(0, tops.findIndex((t) => Math.abs(t - b.y) < ROW_EPS));
+  let last = first;
+  tops.forEach((t, i) => {
+    if (i > first && t < b.y + b.h - ROW_EPS) last = i;
+  });
+  return [first, last];
+};
+
+const FULL_WIDTH = 0.9;
+
+/** "left" / "center" / "right" / "full width" from a box's horizontal extent. */
+const sideOf = (b: Box): string => {
+  if (b.w >= FULL_WIDTH) return 'full width';
+  const cx = b.x + b.w / 2;
+  return cx < 0.4 ? 'left' : cx > 0.6 ? 'right' : 'center';
+};
+
+/** "(row 2, left; 47% wide × 31% tall)" — where box i sits and how big it is. */
+const boxWhere = (boxes: Box[], i: number): string => {
+  const b = boxes[i];
+  if (!b) return '';
+  const size = `${pct(b.w)}% wide × ${pct(b.h)}% tall`;
+  if (boxes.length === 1) return `the whole page; ${size}`;
+  const tops = rowTopsOf(boxes);
+  const [first, last] = rowSpanOf(tops, b);
+  const rows = first === last ? `row ${first + 1}` : `rows ${first + 1}–${last + 1}`;
+  return `${rows}, ${sideOf(b)}; ${size}`;
+};
+
+/**
+ * The measured line under the blueprint: "Row 1 (top 31% of the page): panel 1, full width. Row 2
+ * (next 31%): panels 2 and 3 side by side, 47% wide each." A webtoon segment gives heights only.
+ */
+const measuredLayout = (doc: ComicDoc, page: Page, boxes: Box[]): string => {
+  const n = page.panels.length;
+  if (n < 2 || boxes.length !== n || boxes.some((b) => !b)) return '';
+  const label = (i: number) => String(page.panels[i]?.n ?? i + 1);
+  if (doc.format.kind === 'webtoon') {
+    return `Measured heights, top to bottom: ${boxes.map((b, i) => `panel ${label(i)} ${pct(b.h)}%`).join(', ')} of the image height.`;
+  }
+  const tops = rowTopsOf(boxes);
+  const spans = boxes.map((b) => rowSpanOf(tops, b));
+  const rows: string[] = [];
+  tops.forEach((_, r) => {
+    const items = boxes.map((b, i) => ({ b, i })).filter(({ i }) => spans[i][0] === r);
+    if (!items.length) return;
+    const single = items.filter(({ i }) => spans[i][1] === r);
+    const height = Math.min(...(single.length ? single : items).map(({ b }) => b.h));
+    const head = `Row ${r + 1} (${r === 0 ? `top ${pct(height)}% of the page` : `next ${pct(height)}%`})`;
+    const equal = items.length > 1 && single.length === items.length && items.every(({ b }) => Math.abs(b.w - items[0].b.w) < 0.01);
+    let body: string;
+    if (items.length === 1 && single.length === 1 && items[0].b.w >= FULL_WIDTH) body = `panel ${label(items[0].i)}, full width`;
+    else if (equal) body = `panels ${joinList(items.map(({ i }) => label(i)))} side by side, ${pct(items[0].b.w)}% wide each`;
+    else {
+      body = items
+        .map(({ b, i }) => {
+          const tall = spans[i][1] > r ? `, ${pct(b.h)}% tall (rows ${r + 1}–${spans[i][1] + 1})` : '';
+          return `panel ${label(i)} on the ${sideOf(b)}, ${pct(b.w)}% wide${tall}`;
+        })
+        .join('; ');
+    }
+    rows.push(`${head}: ${body}.`);
+  });
+  return rows.length ? `Measured proportions: ${rows.join(' ')}` : '';
+};
+
+// ── Per-panel block (plan §4.2 / C18 step 1) ─────────────────────────────────
+
+/** Line kinds the software letters as balloons beside a speaker (captions and SFX are not spoken by anyone drawn). */
+const BALLOON_KINDS: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
+
+const escapeName = (name: string) => clean(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The viewer of a point-of-view panel when the action names them ("From Kalyani's view…",
+ * "through Ravi's eyes", "Ravi's POV"). They are heard, not seen: never in the drawn cast.
+ * Old plans forced every speaker into the cast ("speakers are visible", writer R8). Names in
+ * scripts the pattern cannot match fail safe: the viewer stays drawn.
+ */
+export const povViewerOf = (doc: ComicDoc, panel: Panel): Character | undefined => {
+  if (panel.shot !== 'pov') return undefined;
+  const action = clean(panel.action);
+  if (!action) return undefined;
+  const ids = new Set([...panel.castIds, ...panel.lines.map((l) => l.speakerId).filter((id): id is string => !!id)]);
+  return doc.cast.find((c) => {
+    if (!ids.has(c.id) || !clean(c.name)) return false;
+    const name = escapeName(c.name);
+    return new RegExp(
+      `(?:\\b(?:from|through)\\s+(?:the\\s+)?${name}['’]s\\s+(?:point of view|view|eyes|perspective|pov)\\b|\\b${name}['’]s\\s+(?:pov|point of view)\\b)`,
+      'iu'
+    ).test(action);
+  });
+};
+
+/**
+ * The cast ids the page prompt asks to be DRAWN in a panel: its castIds without a POV viewer the
+ * action names (the panel block's Who line). QC should check the art against these, not castIds,
+ * or correct art reads as "VIEWER missing" (plan §4.3; vision wave note).
+ */
+export const drawnCastIds = (doc: ComicDoc, panel: Panel): string[] => {
+  const viewer = povViewerOf(doc, panel);
+  return viewer ? panel.castIds.filter((id) => id !== viewer.id) : [...panel.castIds];
+};
+
+/**
+ * Cast ids the page prompt names as an "OFF-PANEL VOICE … (do not draw)": anyone with a balloon line
+ * (speech, thought, whisper, shout) in the panel who is not drawn there — a speaker missing from
+ * castIds, or the POV viewer. In first-line order, each once. QC must never report them as missing.
+ */
+export const offPanelSpeakerIds = (doc: ComicDoc, panel: Panel): string[] => {
+  const drawn = new Set(drawnCastIds(doc, panel));
+  const out: string[] = [];
+  for (const line of panel.lines) {
+    const id = line.speakerId;
+    if (!id || !clean(line.text) || !BALLOON_KINDS.has(line.kind) || drawn.has(id) || out.includes(id)) continue;
+    if (doc.cast.some((c) => c.id === id)) out.push(id);
+  }
+  return out;
+};
+
+/** "on the left" / "in the center" / "left of center" for a stagePanel position word. */
+const positionPhrase = (word: string): string => {
+  if (word === 'center') return 'in the center';
+  if (word === 'center-left') return 'left of center';
+  if (word === 'center-right') return 'right of center';
+  return `on the ${word}`;
+};
+
+/** "Image 2" / "Images 2 and 3" (no parentheses); '' when nothing is attached. */
+const imageWords = (indexes?: number[]): string =>
+  indexes?.length ? (indexes.length > 1 ? `Images ${joinList(indexes.map(String))}` : `Image ${indexes[0]}`) : '';
+
+/** A sentence end followed by the start of another sentence (a capital, a digit, a quote or a bracket). */
+const SENTENCE_BOUNDARY = /[.!?…]["'”’)\]]*(?=\s+[\p{Lu}\p{N}"“'‘(])/gu;
+/** A full stop that ends a title or a single initial ("Dr.", "St.", "J."), not a sentence. */
+const ABBREVIATION_END = /(?:^|[^\p{L}\p{N}])(?:Mr|Mrs|Ms|Dr|Prof|St|Mt|Sr|Jr|Capt|Lt|Sgt|Col|Gen|No|vs|etc|\p{Lu})\.$/u;
+
+/**
+ * First sentence of an action, and the rest ("Must show" / "Detail"). A boundary after a title or
+ * an initial ("Dr. Rao opens the vault.") is not a sentence end, and a one-word first sentence
+ * ("Boom! The door falls.") is not split off; with no valid boundary the whole action is the first.
+ */
+const splitAction = (text: string): { first: string; rest: string } => {
+  const t = clean(text);
+  for (const m of t.matchAll(SENTENCE_BOUNDARY)) {
+    const end = (m.index ?? 0) + m[0].length;
+    const first = t.slice(0, end);
+    if (ABBREVIATION_END.test(first) || wordCount(first) < 2) continue;
+    const rest = t.slice(end).trim();
+    if (rest) return { first, rest };
+  }
+  return { first: t, rest: '' };
+};
+
+/**
+ * "Detail: <the rest of the action>; <mood>." (plan §4.2: "Detail: her face is worried …; anxious, cold
+ * blue light."). Every block with either part has one, so a one-sentence action still carries its
+ * mood ("Detail: focused."); '' only when the panel has neither.
+ */
+const detailLine = (rest: string, mood: string): string => {
+  const body = stripEnd(clean(rest));
+  const feel = stripEnd(clean(mood)).replace(/^\p{Lu}(?=\p{Ll})/u, (ch) => ch.toLowerCase());
+  if (!body && !feel) return '';
+  if (!feel) return `Detail: ${sentence(body)}`;
+  if (!body) return `Detail: ${sentence(feel)}`;
+  // "Gold spills out!" keeps its own ending; the mood follows as its own sentence.
+  if (/[!?…]["'”’)\]]*$/.test(body)) return `Detail: ${body} ${sentence(feel[0].toUpperCase() + feel.slice(1))}`;
+  return `Detail: ${body}; ${sentence(feel)}`;
+};
+
+interface PanelBlockContext {
+  names: Map<string, string>;
+  props: ReadonlySet<string>;
+  index: Map<string, number[]>;
+  boxes: Box[];
+  /** The layout guide is attached (COMIC_LAYOUT_GUIDE): boxes are named "in the layout guide". */
+  guide: boolean;
+  /** Restate identity anchors in Who (dropped only when the page prompt runs over budget). */
+  anchors: boolean;
+  /** Colour page: anchors may name palette colours (a black-and-white page states none, like its CAST block). */
+  colors: boolean;
+}
+
+/**
+ * "Speaks: MEERA — 1 balloon; compose open background … beside her head for it." Speakers drawn in
+ * the panel get room beside their heads; anyone not drawn is an "OFF-PANEL VOICE: NAME (do not
+ * draw)". Captions and SFX are laid on later and need no room; a panel without balloons says so,
+ * so its art fills the frame (no blank bars).
+ */
+const speaksLine = (doc: ComicDoc, panel: Panel, drawn: ReadonlySet<string>, ctx: PanelBlockContext): string => {
+  const counts = new Map<string, number>();
+  let captions = 0;
+  let sfx = 0;
+  for (const line of panel.lines) {
+    if (!clean(line.text)) continue;
+    if (line.kind === 'caption') captions += 1;
+    else if (line.kind === 'sfx') sfx += 1;
+    else if (BALLOON_KINDS.has(line.kind)) {
+      const key = line.speakerId && doc.cast.some((c) => c.id === line.speakerId) ? line.speakerId : '';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const balloons = (k: number) => `${k} balloon${k === 1 ? '' : 's'}`;
+  const nameOf = (id: string) => ctx.names.get(id) || castLabel(doc.cast.find((c) => c.id === id)!);
+  const visible = [...counts].filter(([id]) => id && drawn.has(id));
+  const offPanel = [...counts].filter(([id]) => !id || !drawn.has(id));
+  if (!visible.length && !offPanel.length) {
+    const why = captions ? 'narration only' : sfx ? 'sound effects only' : 'a silent panel';
+    return `Speaks: nobody (${why}); fill the panel with art to its borders.`;
+  }
+  const parts: string[] = [];
+  if (visible.length) {
+    const who = visible.map(([id, k]) => `${nameOf(id)} — ${balloons(k)}`).join('; ');
+    const room =
+      visible.length === 1
+        ? `compose open background (sky, wall, floor or shadow) beside ${possessive(doc.cast.find((c) => c.id === visible[0][0])!)} head for ${visible[0][1] === 1 ? 'it' : 'them'}`
+        : "compose open background (sky, wall, floor or shadow) beside each speaker's head for their balloons";
+    parts.push(`Speaks: ${who}; ${room}.`);
+  }
+  const tail = doc.format.lettering === 'in_art' ? '; its tail points out of the panel' : '';
+  for (const [id, k] of offPanel) {
+    parts.push(`OFF-PANEL VOICE: ${id ? `${nameOf(id)} (do not draw)` : 'unnamed (do not draw)'} — ${balloons(k)}${tail}.`);
+  }
+  return parts.join(' ');
+};
+
+/**
+ * One block per panel, naming everything the panel must carry (replaces the old one-line panel):
+ *   PANEL 2 of 3 — box 2 in the layout (row 2, left; 47% wide × 46% tall).
+ *   Camera: close-up (head and shoulders), high angle. Place: GATE.
+ *   Must show: <the action's first sentence>
+ *   Who: MEERA (Image 3 — <identity anchor>), on the left.
+ *   Speaks: MEERA — 1 balloon; compose open background … beside her head for it.
+ *   Detail: <the rest of the action>; <mood>.
+ */
+const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: PanelBlockContext, opts: CompileOptions = {}): string => {
+  const count = page.panels.length;
+  const where = ctx.boxes[i] ? ` (${boxWhere(ctx.boxes, i)})` : '';
+  const head = `PANEL ${panel.n} of ${count} — box ${i + 1} in the layout${ctx.guide ? ' guide' : ''}${where}.`;
+
   const angle = clean(panel.angle);
-  const head = `Panel ${panel.n} — ${SIZE_TEXT[panel.size] || 'medium'}, ${SHOT_TEXT[panel.shot] || SHOT_TEXT.medium}${angle ? `, ${angle}` : ''}.`;
   const place = findPlace(doc, panel.placeId);
-  const action = sentence(safeText(panel.action, opts)) || 'A quiet beat that continues the scene.';
-  const staged = stagePanel(page, panel).filter((s) => names.has(s.id));
-  const people = staged.filter((s) => !props.has(s.id));
-  const things = staged.filter((s) => props.has(s.id));
+  const camera = `Camera: ${SHOT_TEXT[panel.shot] || SHOT_TEXT.medium}${angle ? `, ${stripEnd(angle)}` : ''}.${place ? ` Place: ${upperName(place.name)}.` : ''}`;
+
+  const action = clean(safeText(panel.action, opts));
+  const { first, rest } = splitAction(action);
+  const mustShow = `Must show: ${sentence(first) || 'A quiet beat that continues the scene.'}`;
+
+  const viewer = povViewerOf(doc, panel);
+  const drawnPanel = viewer ? { ...panel, castIds: drawnCastIds(doc, panel) } : panel;
+  const staged = stagePanel(page, drawnPanel).filter((s) => ctx.names.has(s.id));
+  const people = staged.filter((s) => !ctx.props.has(s.id));
+  const things = staged.filter((s) => ctx.props.has(s.id));
   const solo = people.length === 1 && things.length > 0;
-  const who = people.length
-    ? `Characters: ${people.map((s) => (s.word && !solo ? `${names.get(s.id)} (${s.word})` : names.get(s.id))).join(', ')}.`
-    : 'No characters.';
-  const propText = things.length ? ` Props: ${things.map((s) => names.get(s.id)).join(', ')}.` : '';
-  const mood = clean(panel.mood) ? ` Mood: ${sentence(safeText(panel.mood!, opts))}` : '';
-  return `${head} ${place ? `${upperName(place.name)}: ` : ''}${action} ${who}${propText}${mood}`;
+  const describe = (id: string): string => {
+    const c = doc.cast.find((x) => x.id === id)!;
+    const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors }) : ''].filter(Boolean).join(' — ');
+    return `${ctx.names.get(id)}${inner ? ` (${inner})` : ''}`;
+  };
+  const peopleText = people.map((s) => `${describe(s.id)}${s.word && !solo ? `, ${positionPhrase(s.word)}` : ''}`).join('; ');
+  const viewerText = viewer
+    ? `seen through ${upperName(viewer.name)}'s eyes (do not draw ${upperName(viewer.name)}; at most a hand at the frame edge)`
+    : '';
+  const whoBody = [peopleText || (viewerText ? '' : 'no characters'), viewerText].filter(Boolean).join('; ');
+  const who = `Who: ${whoBody}.${things.length ? ` Props: ${things.map((s) => describe(s.id)).join('; ')}.` : ''}`;
+
+  const drawn = new Set(staged.map((s) => s.id)); // a talking prop listed under Props is drawn too
+  const speaks = speaksLine(doc, panel, drawn, ctx);
+
+  const detail = detailLine(rest, clean(panel.mood) ? safeText(panel.mood!, opts) : '');
+
+  return [head, camera, mustShow, who, speaks, detail].filter(Boolean).join('\n');
 };
 
 const speakerLabel = (doc: ComicDoc, line: Line): string => {
@@ -1089,13 +1481,23 @@ const speakerLabel = (doc: ComicDoc, line: Line): string => {
 const stripCaseWords = (hint: string): string =>
   clean(hint.replace(/\s*\bin\s+upper-?case\b/gi, '').replace(/\b(?:upper-?case|lower-?case|mixed-?case)\s+/gi, ''));
 
+/**
+ * The no-blank-bars rule (plan §4.2; panels challenge R4): the old "leave natural empty space near the
+ * top of each panel" produced flat white bars that balloons never filled — even on panels with no
+ * lines. Overlay pages now ask for open BACKGROUND beside each speaker (the panel's Speaks line) and
+ * forbid empty shapes. Both sentences are the plan's words verbatim (§4.2, design §3.4(d)); the white
+ * gutters are asked for separately, by name, in the PAGE LAYOUT block.
+ */
+export const NO_BLANK_SHAPES = 'Never draw blank boxes, empty bars or white strips.';
+const OVERLAY_BALLOONS =
+  "Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head.";
+
 const letteringBlock = (doc: ComicDoc, page: Page): string => {
   const lettered = page.panels.filter((p) => p.lines.some((l) => clean(l.text)));
   if (doc.format.lettering !== 'in_art') {
     const base = 'LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects.';
-    if (!lettered.length) return `${base} This page is wordless.`;
-    const which = lettered.length === page.panels.length ? 'each panel' : `panel${lettered.length > 1 ? 's' : ''} ${joinList(lettered.map((p) => String(p.n)))}`;
-    return `${base} Leave natural empty space near the top of ${which} for balloons that will be added later; keep faces and key action out of that space.`;
+    if (!lettered.length) return `${base} This page is wordless. ${NO_BLANK_SHAPES}`;
+    return `${base} ${OVERLAY_BALLOONS} ${NO_BLANK_SHAPES}`;
   }
   if (!lettered.length) return 'LETTERING: This page is wordless — draw no text, balloons, captions or sound effects anywhere.';
   const kinds = new Set<LineKind>();
@@ -1128,34 +1530,49 @@ const letteringBlock = (doc: ComicDoc, page: Page): string => {
   return [
     `LETTERING: Letter the page like a professional comic: ${joinList(shapes)}. ${font}${language} Place balloons in ${order} reading order within each panel and never over faces. Spell every line exactly as written:`,
     ...lines,
-    'No other text anywhere on the page.'
+    'No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips.'
   ].join('\n');
 };
 
-const layoutBlock = (doc: ComicDoc, page: Page): string => {
+/** Legend line of the layout guide image (Image 1 when COMIC_LAYOUT_GUIDE is on; plan C9, C19). */
+const LAYOUT_GUIDE_LINE = 'Panel borders: follow the PAGE LAYOUT GUIDE (Image 1) exactly — its black lines are the borders, its white bands the gutters.';
+
+const layoutBlock = (doc: ComicDoc, page: Page, boxes: Box[] = [], guide = false): string => {
   const n = page.panels.length;
   const rtl = doc.format.readingDirection === 'rtl';
   const blueprint = effectiveLayout(page, doc.format);
+  const measured = measuredLayout(doc, page, boxes);
+  const guideLine = guide ? LAYOUT_GUIDE_LINE : '';
   if (doc.format.kind === 'webtoon') {
     return [
       `PAGE LAYOUT — webtoon segment, ${n} panel${n === 1 ? '' : 's'} read top to bottom:`,
       blueprint,
-      'Each panel spans the full width of the image; separate panels with generous vertical white space. No page border grid, no side-by-side panels.'
-    ].join('\n');
+      measured,
+      'Each panel spans the full width of the image; separate panels with generous vertical white space. No page border grid, no side-by-side panels.',
+      guideLine
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
   const order = rtl ? 'right-to-left, top-to-bottom (manga order: panel 1 is at the top right)' : 'left-to-right, top-to-bottom';
   return [
     n === 1 ? 'PAGE LAYOUT — a single full-page panel:' : `PAGE LAYOUT — ${n} panels, read ${order}:`,
     blueprint,
+    measured,
     n === 1
       ? 'One clean black border around the art.'
-      : 'Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.'
-  ].join('\n');
+      : 'Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.',
+    guideLine
+  ]
+    .filter(Boolean)
+    .join('\n');
 };
 
 /** "(Image 2)" / "(Images 1 and 2)" for a cast or place line; undefined when nothing is attached. */
-const imageTag = (indexes?: number[]): string | undefined =>
-  indexes?.length ? `(${indexes.length > 1 ? `Images ${joinList(indexes.map(String))}` : `Image ${indexes[0]}`})` : undefined;
+const imageTag = (indexes?: number[]): string | undefined => {
+  const words = imageWords(indexes);
+  return words ? `(${words})` : undefined;
+};
 
 /** Attachment indexes (1-based) per character / place, in legend order. */
 const indexReferences = (refs: PlannedReference[]): Map<string, number[]> => {
@@ -1192,8 +1609,15 @@ const castBlocks = (cast: Character[], names: Map<string, string>, index: Map<st
   ];
 };
 
+/**
+ * Character budget for a page prompt (plan C18: 9,000 with a fixed drop order). Ship 1's only
+ * droppable text is the identity anchors restated in each panel's Who line (the CAST block keeps
+ * every full look), so a crowded page drops those first and never loses a panel or a rule.
+ */
+export const PAGE_PROMPT_CHAR_BUDGET = 9000;
+
 /** Compile the image job for one comic page (one image containing every panel). */
-export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Page } & CompileOptions = {}): CompiledRenderJob => {
+export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Page } & PageCompileOptions = {}): CompiledRenderJob => {
   if (!page.panels.length) throw new StudioError('BAD_REQUEST', `Page ${page.n} has no panels to draw yet.`, { status: 400 });
   const resolved = resolveJob(doc, 'page');
   const { spec } = resolved;
@@ -1201,6 +1625,8 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
   const rating = artRatingFor(doc, opts);
   const refs = planPageReferences(doc, page, spec, opts.previousPage, opts);
   const index = indexReferences(refs);
+  const guide = refs.some((r) => r.kind === 'layout');
+  const boxes = pageLayoutBoxes(doc, page);
 
   const cast = rankPageCast(doc, page);
   const names = new Map(cast.map((c) => [c.id, castLabel(c)]));
@@ -1221,25 +1647,30 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
     });
   const placeBlock = placeLines.length ? ['LOCATIONS:', ...placeLines].join('\n') : '';
 
-  const panelsBlock = ['PANELS:', ...page.panels.map((panel) => panelLine(doc, page, panel, names, props, opts))].join('\n');
   const footer = cast.length
-    ? 'Only the characters listed for a panel appear in it (unnamed background figures only where the action mentions them).'
+    ? "Only the characters named in a panel's Who line appear in it (unnamed background figures only where the action mentions them)."
     : '';
 
-  const prompt = [
-    header,
-    `ART STYLE — apply identically in every panel:\n${styleParagraph(doc, { rating })}`,
-    contentParagraph(doc, opts),
-    referenceLegend(refs),
-    ...castBlocks(cast, names, index, bw),
-    placeBlock,
-    layoutBlock(doc, page),
-    panelsBlock,
-    letteringBlock(doc, page),
-    footer
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+  const build = (anchors: boolean): string => {
+    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw };
+    const panelsBlock = ['PANELS:', ...page.panels.map((panel, i) => panelBlock(doc, page, panel, i, ctx, opts))].join('\n');
+    return [
+      header,
+      `ART STYLE — apply identically in every panel:\n${styleParagraph(doc, { rating })}`,
+      contentParagraph(doc, opts),
+      referenceLegend(refs),
+      ...castBlocks(cast, names, index, bw),
+      placeBlock,
+      layoutBlock(doc, page, boxes, guide),
+      panelsBlock,
+      letteringBlock(doc, page),
+      footer
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  };
+  const full = build(true);
+  const prompt = full.length > PAGE_PROMPT_CHAR_BUDGET ? build(false) : full;
 
   return finishJob(resolved, aspect, prompt, refs);
 };
@@ -1518,7 +1949,7 @@ export const compileEdit = (
   for (const c of candidates) {
     if (characterSlots <= 0 || total <= 0) break;
     if (scope && !scope.has(c.id)) continue;
-    if (c.tier === 'extra') continue;
+    if (c.tier === 'extra' && isProp(c)) continue; // presence, not tier (plan C7), as on pages
     const ref = characterReference(c, { effectiveRating: rating });
     if (!ref) continue;
     refs.push({ ...ref, instruction: `Keep ${possessive(c)} identity exactly as on this ${ref.kind === 'character' ? 'sheet' : 'reference'} wherever ${upperName(c.name)} is redrawn.` });
