@@ -3,7 +3,8 @@
 //   translate                 SPEND — estimate (estimateTranslation) → jobs.ts gateDecision → runTranslation
 //   swap_source_language      free — a COMPLETE edition becomes the source; the old source becomes a
 //                             reviewed edition; every other edition stays current (no re-translation)
-//   accept_translation_issue  free — "Use suggestion" or "Looks right" on a reviewed line
+//   accept_translation_issue  free — "Use suggestion" or "Looks right" on a reviewed line, and "Keep my
+//                             wording" on a stale_edited line (the author's text, re-hashed to the new original)
 //
 // Handlers commit with the caller's ops origin and never post chat noise for inline review taps.
 
@@ -134,10 +135,11 @@ export function swapSourceOps(doc: ComicDoc, lang: string, now = Date.now()): Do
   // Glossary: the new source form becomes the term; the old term becomes the old source's form. The cast
   // member or place a term names takes that form as its name too (the comic is written in `lang` now), so
   // the next run's glossary seed (syncGlossaryOps) sees term === name and keeps every language's forms.
-  // The title term follows the swapped title even when no form was stored for it.
+  // The title term is exactly what brief.title becomes (the edition's title text, patched above) — never a
+  // stored form, which a run or the glossary drawer may have worded differently; no translated title, no rename.
   for (const term of i18n.glossary) {
     if (term.policy === 'keep') continue;
-    const form = term.forms[lang] || (term.kind === 'title' ? editionTextEntry(doc, lang, 'brief.title')?.text : undefined);
+    const form = term.kind === 'title' ? editionTextEntry(doc, lang, 'brief.title')?.text : term.forms[lang];
     if (!form) continue;
     const next = normalizeSource(form).slice(0, GLOSSARY_TERM_CHARS);
     ops.push({ op: 'glossary_term', id: term.id, patch: { term: next, forms: { [oldSource]: term.term, [lang]: null as unknown as string } } });

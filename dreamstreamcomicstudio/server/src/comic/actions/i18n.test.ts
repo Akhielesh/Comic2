@@ -102,6 +102,26 @@ describe('swap_source_language', () => {
     // The old source's edition carries the old names as its forms and reads as reviewed.
     expect(editionReadiness(swapped, 'en').publishable).toBe(true);
   });
+
+  it('the title term is what brief.title becomes: a stored form worded differently does not win, and no translated title means no rename', () => {
+    let doc = translated(translated(), 'hi');
+    doc = applyOps(doc, syncGlossaryOps(doc));
+    // A Telugu form coined by a run or typed in the glossary drawer that is NOT the edition's title text.
+    doc = applyOps(doc, [{ op: 'glossary_term', id: 'gl_title', patch: { forms: { te: 'మైలో చంద్రుడు', hi: 'माइलो और चाँद' } } }]);
+    const swapped = applyOps(doc, swapSourceOps(doc, 'te'));
+    expect(swapped.brief.title).toBe('te:title');
+    expect(i18nOf(swapped).glossary.find((g) => g.id === 'gl_title')).toMatchObject({ term: 'te:title', forms: { en: 'Milo and the Moon', hi: 'माइलो और चाँद' } });
+    // Without the fix the term took the stored form ('మైలో చంద్రుడు') and the next run emitted
+    // {term:'te:title', forms:{hi:null, en:null}} — every title form wiped.
+    expect(syncGlossaryOps(swapped)).toEqual([]);
+
+    // The edition has a title form but no translated brief.title: the title stays, and so does the term.
+    const untitled = applyOps(doc, [{ op: 'edition_text', lang: 'te', field: 'brief.title', value: null }]);
+    const kept = applyOps(untitled, swapSourceOps(untitled, 'te'));
+    expect(kept.brief.title).toBe('Milo and the Moon');
+    expect(i18nOf(kept).glossary.find((g) => g.id === 'gl_title')).toMatchObject({ term: 'Milo and the Moon', forms: { te: 'మైలో చంద్రుడు', hi: 'माइलो और चाँद' } });
+    expect(syncGlossaryOps(kept)).toEqual([]);
+  });
 });
 
 describe('accept_translation_issue', () => {
