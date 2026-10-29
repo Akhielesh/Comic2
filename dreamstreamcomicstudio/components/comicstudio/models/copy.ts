@@ -75,6 +75,8 @@ export const TRY_AGAIN = 'Try again';
 
 // Pro table extras (models.md §3.7).
 export const pricesByRes = (parts: string[]) => `Per page: ${parts.join(' · ')}`;
+/** The resolutions without a price, with the §4.6 copy for why: "2K: Price per image isn't published · …". */
+export const pricesMissingAt = (resolutions: string[], missing: string) => `${resolutions.join(', ')}: ${missing}`;
 export const observedLine = (n: number, kind: string, price: string, range?: string) =>
   `Real cost, your last ${plural(n, kind)}: ${price}${range ? ` (${range})` : ''}`;
 export const observedPlatformLine = (n: number, kind: string, price: string, range?: string) =>
@@ -173,12 +175,16 @@ export const SCOPE_ALL = {
 /** Price of a redraw option we cannot price (never a number, never a "$"). */
 export const CANT_PRICE_YET = "Can't price yet";
 
-/** "{New}: ≈{$} per page at {res} · holds up to {k} characters per image · {providers line}". */
-export const newModelFacts = (next: string, price: string | null, res: Resolution | string, k: number, providers: string) =>
-  `${next}: ${price ? `${price} per page at ${res}` : `no published price per page at ${res}`} · holds up to ${plural(k, 'character')} per image · ${providers}`;
-/** "{Current}: ≈{$} per page at {res}". */
-export const currentModelFacts = (current: string, price: string | null, res: Resolution | string) =>
-  `${current}: ${price ? `${price} per page at ${res}` : `no published price per page at ${res}`}`;
+/**
+ * "{New}: ≈{$} per page at {res} · holds up to {k} characters per image · {providers line}". Without a price the
+ * price part is the §4.6 copy for the reason (`missing`: PRICE_UNPUBLISHED by default, or NO_OPENROUTER_PRICE), as
+ * the picker row's price line words it — never a number and never a "$".
+ */
+export const newModelFacts = (next: string, price: string | null, res: Resolution | string, k: number, providers: string, missing: string = PRICE_UNPUBLISHED) =>
+  `${next}: ${price ? `${price} per page at ${res}` : missing} · holds up to ${plural(k, 'character')} per image · ${providers}`;
+/** "{Current}: ≈{$} per page at {res}" (the §4.6 copy without a price, as newModelFacts). */
+export const currentModelFacts = (current: string, price: string | null, res: Resolution | string, missing: string = PRICE_UNPUBLISHED) =>
+  `${current}: ${price ? `${price} per page at ${res}` : missing}`;
 
 export const WARN = {
   /** modelFit 'characters' writes exactly this. */
@@ -229,6 +235,11 @@ export const tierConfirmBody = (model: string, drawnPages: number, oldRes: Resol
       : ''
   }`;
 export const TIER_CANCEL = 'Cancel';
+/** QualityPanel, after the lock (not §3.6 copy): each tier is a resolution on the locked model. */
+export const sameModelTierLine = (res: Resolution | string) => `Same model, ${res} pages.`;
+/** QualityPanel footer, after the lock (§2.1: swatches of a locked comic use the locked model at its nearest 1K). */
+export const STYLE_OPTIONS_LOCKED = 'Style options use a quick 1K draft on the same model.';
+export const STYLE_OPTIONS_UNLOCKED = 'Style options always use a quick 1K draft.';
 export const tierUseButton = (tier: string) => `Use ${tier}`;
 
 // ── F. Notice after a switch (posted by the server; the chip labels live here so both sides agree) ──────────

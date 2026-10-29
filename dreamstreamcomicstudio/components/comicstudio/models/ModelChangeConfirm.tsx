@@ -52,7 +52,7 @@ import {
   useButton,
   type DrawnCounts
 } from './copy';
-import { uptimeLine } from './ModelRow';
+import { missingPriceText, uptimeLine } from './ModelRow';
 import { registryCatalogRows } from './modelsApi';
 import { buildPickerRows, currentModelId, isLocked, modelNickname } from './pickerRows';
 import { clientPriceBook } from './priceBook';
@@ -230,6 +230,7 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
   const nextRes = next?.pageRes ?? '1K';
   const nextPrice = next?.pageUsd ?? null;
   const currentPrice = current?.pageUsd ?? null;
+  const currentRes = current?.pageRes ?? nextRes;
   const providers = next ? uptimeLine(next) : '';
   const labels = [
     ...new Set([
@@ -366,8 +367,12 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
         )}
 
         <div className="mt-3 space-y-0.5 text-[12px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]" data-confirm="facts">
-          <p className="tabular-nums">{newModelFacts(nextName, nextPrice === null ? null : cost.badge(nextPrice), nextRes, spec.refs.characters, providers)}</p>
-          <p className="tabular-nums">{currentModelFacts(currentName, currentPrice === null ? null : cost.badge(currentPrice), current?.pageRes ?? nextRes)}</p>
+          <p className="tabular-nums">
+            {newModelFacts(nextName, nextPrice === null ? null : cost.badge(nextPrice), nextRes, spec.refs.characters, providers, missingPriceText(next?.row, nextRes))}
+          </p>
+          <p className="tabular-nums">
+            {currentModelFacts(currentName, currentPrice === null ? null : cost.badge(currentPrice), currentRes, missingPriceText(current?.row, currentRes))}
+          </p>
         </div>
 
         {(warnings.length > 0 || blocks.length > 0) && (

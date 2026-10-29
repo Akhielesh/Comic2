@@ -10,6 +10,7 @@
 
 import React, { useId } from 'react';
 import { AlertTriangle, Ban, Info } from 'lucide-react';
+import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import type { ModelHealth } from '../../../shared/comic/modelHealth';
 import { formatUsd, PLATFORM_MARKUP } from '../../../shared/comic/models';
 import { ACCENT_SOFT_BG, HAIRLINE, RADIUS_CONTROL, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
@@ -32,6 +33,7 @@ import {
   observedPlatformLine,
   perPage,
   pricesByRes,
+  pricesMissingAt,
   providersLine,
   providersNoUptime,
   reliabilityLine,
@@ -57,9 +59,19 @@ export interface ModelRowProps {
   onDetails(id: string): void;
 }
 
+const NO_LISTED_PRICE = /doesn't list a price|publishes no price/i;
+
+/**
+ * Why a resolution has no price, in the §4.6 words: OpenRouter lists no price for the model (an empty pricing
+ * array — the catalog's note says so), else the per-image price is not published (billed per token, an unmapped
+ * variant, or no figure at all).
+ */
+export const missingPriceText = (row: Pick<ModelCatalogRow, 'price'> | undefined, res: Resolution): string =>
+  NO_LISTED_PRICE.test(row?.price?.[res]?.note ?? '') ? NO_OPENROUTER_PRICE : PRICE_UNPUBLISHED;
+
 /** The price line: a worded price, or the §4.6 copy (never a "$" when there is no basis). */
 export const priceText = (model: PickerRowModel, cost: CostFormat): string => {
-  if (model.pageUsd === null) return model.row.price[model.pageRes]?.note === NO_OPENROUTER_PRICE ? NO_OPENROUTER_PRICE : PRICE_UNPUBLISHED;
+  if (model.pageUsd === null) return missingPriceText(model.row, model.pageRes);
   return perPage(cost.badge(model.pageUsd), model.pageRes);
 };
 
@@ -94,13 +106,21 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
   // modelFit never marks the comic's own model 'hidden', so only real blockers (plan, page shape, transport) show.
   const reasons = [...model.blocks, ...warns];
 
+  // Pro table: one cell per resolution with a price; the resolutions without one are named with the §4.6 copy
+  // for why (only next to priced ones — when none is priced the price line above already says so).
   const perRes: string[] = [];
+  const missingByReason = new Map<string, string[]>();
   if (detailed && model.spec) {
     for (const res of (model.spec.resolutions.length ? model.spec.resolutions : ['1K']) as Resolution[]) {
       const usd = prices.pagePrice(model.id, res, byok);
-      perRes.push(`${res} ${usd === null ? 'not published' : cost.badge(usd)}`);
+      if (usd !== null) perRes.push(`${res} ${cost.badge(usd)}`);
+      else {
+        const why = missingPriceText(model.row, res);
+        missingByReason.set(why, [...(missingByReason.get(why) ?? []), res]);
+      }
     }
   }
+  const perResMissing = perRes.length ? [...missingByReason].map(([why, list]) => pricesMissingAt(list, why)) : [];
   const obs = detailed ? model.quote.observed : undefined;
   const obsText = obs
     ? (obs.scope === 'you' ? observedLine : observedPlatformLine)(
@@ -172,6 +192,11 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
                 {pricesByRes(perRes)}
               </span>
             )}
+            {perResMissing.map((line) => (
+              <span key={line} className={LINE} data-line="prices-missing">
+                {line}
+              </span>
+            ))}
             {model.characters > 0 && (
               <span className={LINE} data-line="characters">
                 {holdsCharacters(model.characters)}

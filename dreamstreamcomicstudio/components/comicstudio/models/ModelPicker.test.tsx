@@ -5,7 +5,7 @@
 // fake time passes with no fetch); axe clean, 44 px targets, nothing wider than a 320 px phone.
 
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities';
@@ -181,6 +181,26 @@ describe('prices', () => {
     const s = rowOf('seedream-5-pro');
     expect(s.querySelector('[data-line="price"]')).toHaveTextContent("Price per image isn't published · you'll see the real cost after the first image");
     expect(s.textContent).not.toMatch(/\$/);
+  });
+
+  it('Pro: a resolution without a price is named with the §4.6 words, never "not published" or a number', () => {
+    const doc = lakeDoc();
+    doc.settings = { ...doc.settings, quality: 'standard' };
+    panel({ doc, mode: 'pro' });
+    const s = rowOf('seedream-5-pro');
+    expect(s.querySelector('[data-line="price"]')).toHaveTextContent("Price per image isn't published · you'll see the real cost after the first image");
+    expect(s.querySelector('[data-line="prices"]')).toHaveTextContent(/^Per page: 1K ≈\$0\.06$/);
+    expect(s.querySelector('[data-line="prices-missing"]')).toHaveTextContent("2K: Price per image isn't published · you'll see the real cost after the first image");
+    expect(s.textContent).not.toMatch(/not published/);
+    // When OpenRouter lists no price for the model, the row says exactly that.
+    const rows = catalogRows().map((r) =>
+      r.id === 'seedream-5-pro' ? { ...r, price: { ...r.price, '2K': { usd: null, basis: 'openrouter_endpoint' as const, note: "OpenRouter doesn't list a price for this model" } } } : r
+    );
+    cleanup();
+    panel({ doc, mode: 'pro', catalog: view(rows) });
+    const t = rowOf('seedream-5-pro');
+    expect(t.querySelector('[data-line="price"]')).toHaveTextContent(/^OpenRouter doesn't list a price for this model$/);
+    expect(t.querySelector('[data-line="prices-missing"]')).toHaveTextContent("2K: OpenRouter doesn't list a price for this model");
   });
 
   it('a governed user sees usage shares, never dollars', () => {

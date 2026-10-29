@@ -24,6 +24,7 @@ import { useCostFormat } from '../cost';
 import { cx } from '../ui';
 import { LockLine } from '../../models/LockLine';
 import { TierChangeConfirm } from '../../models/TierChangeConfirm';
+import { STYLE_OPTIONS_LOCKED, STYLE_OPTIONS_UNLOCKED, sameModelTierLine } from '../../models/copy';
 
 export const QUALITY_ORDER: QualityTier[] = ['draft', 'standard', 'pro'];
 
@@ -129,7 +130,7 @@ export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = f
                   </span>
                 </span>
                 <span className="mt-0.5 block text-[11.5px] leading-snug text-[var(--ds-muted)]">
-                  {lock ? `Same model, ${resolution} pages.` : preset.blurb}
+                  {lock ? sameModelTierLine(resolution) : preset.blurb}
                 </span>
                 <span className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-[var(--ds-muted)]">
                   <Gauge className="h-3 w-3" aria-hidden />
@@ -147,7 +148,7 @@ export const QualityPanel: React.FC<QualityPanelProps> = ({ doc, patch, byok = f
           : cost.governed
             ? 'Shown as a share of your DreamStream usage.'
             : 'Estimates include DreamStream’s platform fee.'}{' '}
-        {lock ? 'Style options use a quick 1K draft on the same model.' : 'Style options always use a quick 1K draft.'}
+        {lock ? STYLE_OPTIONS_LOCKED : STYLE_OPTIONS_UNLOCKED}
       </p>
       <LockLine doc={doc} onRequested={onDone} className="border-t border-[var(--ds-hairline-soft)] px-3 pt-1.5" />
     </div>

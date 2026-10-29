@@ -34,6 +34,9 @@ describe('B. picker sheet', () => {
     expect(copy.providersLine(3, '99.1')).toBe('3 providers · 99.1% up (24 h)');
     expect(copy.leaderboardsLine([copy.lmarenaEdit(5), copy.aaEdit(4)])).toBe('Leaderboards: LMArena edit #5 · AA edit #4');
     expect(copy.COMPARE_ALL).toBe('Compare all models');
+    // Pro table: priced resolutions, then the ones without a price with the §4.6 reason.
+    expect(copy.pricesByRes(['1K ≈$0.06', '4K ≈$0.15'])).toBe('Per page: 1K ≈$0.06 · 4K ≈$0.15');
+    expect(copy.pricesMissingAt(['2K'], copy.PRICE_UNPUBLISHED)).toBe("2K: Price per image isn't published · you'll see the real cost after the first image");
   });
 
   it('disabled reasons, the warning and the footer', () => {
@@ -89,8 +92,12 @@ describe('C. confirm after the lock', () => {
       'Nano Banana Pro: ≈$0.18 per page at 1K · holds up to 5 characters per image · 3 providers · 99.1% up (24 h)'
     );
     expect(copy.currentModelFacts('Nano Banana 2.1', '≈$0.05', '1K')).toBe('Nano Banana 2.1: ≈$0.05 per page at 1K');
-    // No price: no number and no "$".
-    expect(copy.currentModelFacts('X', null, '2K')).toBe('X: no published price per page at 2K');
+    // No price: the §4.6 words for why — no number and no "$".
+    expect(copy.currentModelFacts('X', null, '2K')).toBe("X: Price per image isn't published · you'll see the real cost after the first image");
+    expect(copy.currentModelFacts('X', null, '2K', copy.NO_OPENROUTER_PRICE)).toBe("X: OpenRouter doesn't list a price for this model");
+    expect(copy.newModelFacts('Seedream 5 Pro', null, '2K', 4, copy.NO_UPTIME)).toBe(
+      "Seedream 5 Pro: Price per image isn't published · you'll see the real cost after the first image · holds up to 4 characters per image · No uptime data right now"
+    );
     expect(copy.WARN.characters('Nano Banana 2.1', 4, 3, 5)).toBe('Nano Banana 2.1 holds up to 4 characters per image; page 3 has 5.');
     expect(copy.WARN.resolution('GPT Image 2.5', '2K', { w: 1024, h: 1536, w0: 1696, h0: 2528 })).toBe(
       'GPT Image 2.5 has no 2K option here. Pages come back 1024×1536 (yours are 1696×2528).'
@@ -142,6 +149,10 @@ describe('E. tier change after the lock', () => {
     );
     expect(copy.tierConfirmBody('Nano Banana 2.1', 0, '1K')).toBe('Same model (Nano Banana 2.1), so characters stay consistent.');
     expect(copy.TIER_CANCEL).toBe('Cancel');
+    // QualityPanel lines after the lock (not §3.6 copy).
+    expect(copy.sameModelTierLine('2K')).toBe('Same model, 2K pages.');
+    expect(copy.STYLE_OPTIONS_LOCKED).toBe('Style options use a quick 1K draft on the same model.');
+    expect(copy.STYLE_OPTIONS_UNLOCKED).toBe('Style options always use a quick 1K draft.');
     expect(copy.tierUseButton('Standard')).toBe('Use Standard');
   });
 });

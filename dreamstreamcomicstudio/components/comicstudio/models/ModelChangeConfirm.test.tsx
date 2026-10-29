@@ -190,11 +190,27 @@ describe('no number without a price basis; no dollars for a governed user', () =
     expect(priceOf('all')).toBe("Can't price yet");
     expect(radio(/Redraw the pages and cover/)).toBeDisabled();
     expect(screen.getByText("We can't price this redraw yet. The first image will show the real cost.")).toBeInTheDocument();
-    expect(screen.getByText(/^Seedream 5 Pro: no published price per page at 2K/).textContent).not.toMatch(/\$/);
+    // The facts use the §4.6 words for the missing price (the same line the picker row shows).
+    const facts = document.querySelector('[data-confirm="facts"]')!;
+    expect(facts.firstElementChild).toHaveTextContent(
+      "Seedream 5 Pro: Price per image isn't published · you'll see the real cost after the first image · holds up to 4 characters per image · No uptime data right now"
+    );
+    expect(facts.textContent).not.toMatch(/no published price/);
+    expect(facts.firstElementChild!.textContent).not.toMatch(/\$/);
     for (const el of document.querySelectorAll('[data-scope] [data-price]')) expect(el.textContent).not.toMatch(/\$/);
     // A model that cannot be picked here is never sent (its reason is shown, the primary is off).
     expect(screen.getByText('Not available in Comic Studio yet')).toBeInTheDocument();
     expect(primary()).toBeDisabled();
+  });
+
+  it('a model OpenRouter lists no price for says exactly that (§4.6)', () => {
+    const doc: ComicDoc = lakeDoc();
+    doc.settings = { ...doc.settings, quality: 'standard' };
+    const rows = catalogRows().map((r) =>
+      r.id === 'seedream-5-pro' ? { ...r, price: { '1K': { usd: null, basis: 'openrouter_endpoint' as const, note: "OpenRouter doesn't list a price for this model" }, '2K': { usd: null, basis: 'openrouter_endpoint' as const, note: "OpenRouter doesn't list a price for this model" } } } : r
+    );
+    open({ doc, targetId: 'seedream-5-pro', rows });
+    expect(document.querySelector('[data-confirm="facts"]')!.firstElementChild).toHaveTextContent(/^Seedream 5 Pro: OpenRouter doesn't list a price for this model · holds up to 4/);
   });
 
   it('a governed user reads usage shares only', () => {
