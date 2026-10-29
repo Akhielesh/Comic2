@@ -24,12 +24,22 @@ import {
   type PanelSize,
   type ShotType
 } from '../../../shared/comic/doc.js';
-import { needMeter, wordBudget, type NeedMeter } from '../../../shared/comic/density.js';
+import { needMeter, type NeedMeter } from '../../../shared/comic/density.js';
 import { languageSpec, lineLengthRule } from '../../../shared/comic/languages.js';
 import { letteringAspect } from '../../../shared/comic/lettering/layout.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
 import { checkPagePlan, splashIssues, type LayoutChoice } from '../../../shared/comic/pagePlanCheck.js';
-import { OFF_PANEL_SHOTS, PANEL_LIMITS, RECURRING, panelCountNote, panelCountRule } from '../../../shared/comic/panelRules.js';
+import {
+  OFF_PANEL_SHOTS,
+  PANEL_LIMITS,
+  RECURRING,
+  panelCountNote,
+  panelCountRule,
+  revisionPanelLimit,
+  scaledLimit,
+  textBudget,
+  textUnitFor
+} from '../../../shared/comic/panelRules.js';
 import { ALWAYS_RULE, RATING_RULES, effectiveRating, isKidsAudience, isLittleKidsAudience, softenAction, type ContentRating } from '../../../shared/comic/safety.js';
 import { STYLE_PRESETS, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
@@ -333,19 +343,29 @@ const languageRule = (doc: ComicDoc, language: string): string => {
 const panelsRule = (doc: ComicDoc): string => {
   const rule = panelCountRule(doc.format);
   if (rule.exact !== undefined) {
-    return rule.clampedFrom !== undefined
-      ? `Panels per page: exactly ${rule.exact} on every page — a storybook page holds at most ${PANEL_LIMITS.storybookMax} large panels (the format asks for ${rule.clampedFrom}).`
+    if (rule.clampedFrom !== undefined) {
+      return `Panels per page: exactly ${rule.exact} on every page — a storybook page holds at most ${PANEL_LIMITS.storybookMax} large panels (the format asks for ${rule.clampedFrom}).`;
+    }
+    return rule.exact === 1
+      ? 'Panels per page: exactly 1 on every page — the author chose single-panel pages, so every page is one full-page panel.'
       : `Panels per page: exactly ${rule.exact} on every page (a splash page only if the author asks for one).`;
   }
   if (doc.format.kind === 'strip') return `Panels per page: ${rule.min}–${rule.max}.`;
   if (doc.format.kind === 'storybook') return `Panels per page: ${rule.min}–${rule.max} large panels (usually ${rule.typical}).`;
   if (doc.format.kind === 'webtoon') return `Panels per page: ${rule.min}–${rule.max} (usually ${rule.typical}).`;
   const fast = rule.fast!;
+  const unit = textUnitFor(doc.format.language);
   return (
     `Panels per page: usually ${rule.typical} big panels (${rule.min}–${rule.max}) — fewer, larger panels give the art and the words room; let the dialogue and the beats decide. ` +
-    `Use ${fast.panels} only for a fast, nearly silent sequence (${fast.maxWords} words or fewer on the whole page). Never more than ${fast.panels}. When the story needs more moments, compress the smaller ones.`
+    `Use ${fast.panels} only for a fast, nearly silent sequence (${scaledLimit(fast.maxWords, unit)} ${unit.noun}s or fewer on the whole page). Never more than ${fast.panels}. When the story needs more moments, compress the smaller ones.`
   );
 };
+
+/** The splash line of PAGES, or none when the author fixed one panel per page (every page is single-panel by choice). */
+const splashRule = (doc: ComicDoc): string[] =>
+  panelCountRule(doc.format).exact === 1
+    ? []
+    : [`- At most 1 splash (one dominant panel) per ${PANEL_LIMITS.splashEvery} pages, never on two pages in a row, saved for the biggest moment.`];
 
 /**
  * The word-budget lines of the writer prompt: what a panel holds by its size (density.ts wordBudget, the speech
@@ -354,11 +374,12 @@ const panelsRule = (doc: ComicDoc): string => {
  * lettering engine.
  */
 const budgetRules = (doc: ComicDoc): string[] => {
-  const base = lineLengthRule(doc.format.language, false);
-  const k = base.perLine / 25;
-  const unit = base.unit === 'chars' ? 'characters' : 'words';
-  const n = (area: number) => Math.floor(wordBudget(area) * k);
-  const quiet = Math.round(PANEL_LIMITS.quietShotMaxWords * k);
+  // The same unit, ratio and rounding the page-plan check states (shared/comic/panelRules.ts textUnitFor).
+  const tu = textUnitFor(doc.format.language);
+  const k = tu.k;
+  const unit = `${tu.noun}s`;
+  const n = (area: number) => textBudget(area, 1, tu);
+  const quiet = scaledLimit(PANEL_LIMITS.quietShotMaxWords, tu);
   return [
     `- Word budget by panel size (every balloon and caption in the panel together): a full-width row holds about ${n(0.451)} ${unit}, a half-width panel on a two-row page about ${n(0.221)}, a half-width panel on a three-row page about ${n(0.144)}, a third-width small panel about ${n(0.084)}. Each extra balloon costs about ${Math.max(1, Math.round(2 * k))} ${unit}.`,
     `- Small panels are silent or carry one line of ${quiet} ${unit} or fewer; conversations go in wide or medium panels.`,
@@ -385,7 +406,7 @@ export const writerSystemPrompt = (doc: ComicDoc, rating?: ContentRating): strin
     'PAGES',
     '- Every page ends on a turn-hook: its last panel raises a question, reveals something or tightens tension so the reader turns the page. The final page lands the ending. Write it in turnHook (one sentence).',
     `- ${panelsRule(doc)}`,
-    `- At most 1 splash (one dominant panel) per ${PANEL_LIMITS.splashEvery} pages, never on two pages in a row, saved for the biggest moment.`,
+    ...splashRule(doc),
     '- Open every scene (a new place or a jump in time) with an establishing panel in a full-width row.',
     '- summary: 1–2 sentences of what happens on the page.',
     '- layout: a row blueprint covering every panel in reading order, in exactly this vocabulary: "Row 1: one wide panel. Row 2: two equal panels. Row 3: three small panels." A tall panel spanning two rows: "Rows 2–3: one tall panel on the left beside two stacked panels on the right." A single-panel page: "One full-page splash panel."',
@@ -555,6 +576,15 @@ export const writerUserMessage = (
     const fixed = doc.pages.filter((p) => !targets.some((t) => t.id === p.id));
     if (fixed.length) parts.push(`FIXED PAGES (context only — do not return them; keep continuity with them)\n${fixed.map((p) => pageHeadline(doc, p)).join('\n')}`);
     parts.push(`PAGES TO REWRITE (current version)\n${targets.map((p) => pageDetail(doc, p)).join('\n\n')}`);
+    // PD-2: the storybook clamp is for new pages; a page planned before it may keep its own panel count.
+    const keep = targets.filter((t) => revisionPanelLimit(f, t.panels.length) > (panelCountRule(f).exact ?? Infinity));
+    if (keep.length) {
+      parts.push(
+        `PANEL COUNT FOR THESE PAGES (planned before storybook pages were limited to ${PANEL_LIMITS.storybookMax} panels): ${keep
+          .map((t) => `page ${t.n} may keep up to ${revisionPanelLimit(f, t.panels.length)} (it has ${t.panels.length})`)
+          .join('; ')}. Keep each page's panel count unless the author's instructions ask to change the panels; the ${PANEL_LIMITS.storybookMax}-panel rule is for new pages.`
+      );
+    }
   } else if (doc.pages.length) {
     parts.push(`PREVIOUS PLAN (headlines — revise per the instructions and keep what works)\n${doc.pages.map((p) => pageHeadline(doc, p)).join('\n')}`);
   }
@@ -859,8 +889,8 @@ interface LayoutFix {
  * blueprint fits, apply it (sizes harmonized to it) and return the fix; the page's repair problems (count, an
  * overfull panel no blueprint can fit, a talkative pov/insert panel) come back for the single repair round.
  */
-const fitPage = (doc: ComicDoc, page: Page, meter: NeedMeter): { page: Page; fix?: LayoutFix; problems: string[] } => {
-  const check = checkPagePlan(doc, page, { meter });
+const fitPage = (doc: ComicDoc, page: Page, meter: NeedMeter, existingPanels?: number): { page: Page; fix?: LayoutFix; problems: string[] } => {
+  const check = checkPagePlan(doc, page, { meter, existingPanels });
   const problems = check.issues.filter((i) => i.severity === 'repair').map((i) => i.text);
   const choice: LayoutChoice | undefined = check.layoutFix;
   if (!choice) return { page, problems };
@@ -870,7 +900,7 @@ const fitPage = (doc: ComicDoc, page: Page, meter: NeedMeter): { page: Page; fix
   const fitted: Page = { ...page, panels, layout: choice.layout };
   fitted.layout = effectiveLayout(fitted, doc.format);
   const n = check.worstPanel ?? 1;
-  const after = checkPagePlan(doc, fitted, { meter, fixLayout: false });
+  const after = checkPagePlan(doc, fitted, { meter, fixLayout: false, existingPanels });
   if (after.state === 'overfull') return { page, problems: [...problems, ...after.issues.filter((i) => i.kind === 'overfull').map((i) => i.text)] };
   return { page: fitted, fix: { layout: fitted.layout, panel: n, fullWidth: (after.panels[n - 1]?.box.w ?? 0) >= 0.9 }, problems };
 };
@@ -969,7 +999,9 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
       if (!action) problems.push(`${label}, panel ${panels.length + 1} has no action.`);
       if (lines.length > MAX_LINES_PER_PANEL) problems.push(`${label}, panel ${panels.length + 1} has ${lines.length} lines; use at most 3 balloons.`);
       const keptLines = lines.slice(0, MAX_LINES_PER_PANEL);
-      for (const id of new Set(keptLines.map((l) => l.speakerId).filter((v): v is string => !!v))) {
+      // Speaking panels count only where the speaker is drawn: an off-panel voice (pov/insert/establishing, not in
+      // castIds) is heard, never drawn, so it never earns a model sheet by talking.
+      for (const id of new Set(keptLines.map((l) => l.speakerId).filter((v): v is string => !!v && castIds.includes(v)))) {
         speakingPanels.set(id, (speakingPanels.get(id) || 0) + 1);
       }
       const placeToken = clean(rp.placeId);
@@ -1012,7 +1044,8 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
       balloons: []
     };
     page.layout = effectiveLayout({ ...page, layout: rawLayout }, doc.format);
-    const fitted = fitPage(doc, page, meter);
+    // A revised page is checked against its own earlier count where the storybook clamp would cut it (PD-2).
+    const fitted = fitPage(doc, page, meter, target?.panels.length);
     problems.push(...fitted.problems);
     if (fitted.fix) layoutFixes.set(fitted.page.id, fitted.fix);
     pages.push(fitted.page);
@@ -1374,16 +1407,19 @@ export async function writePagePlan(args: {
   // Pages that page-count enforcement re-made get the same free fit pass (never another writer call).
   const meter = planMeter(doc);
   const fixes = new Map(normalized.layoutFixes);
+  const before = new Map((targets ?? []).map((t) => [t.id, t.panels.length]));
   const pages = softened.map((page) => {
     const prior = fixes.get(page.id);
     if (prior && prior.layout === page.layout) return page;
     fixes.delete(page.id);
-    const fitted = fitPage(doc, page, meter);
+    const fitted = fitPage(doc, page, meter, before.get(page.id));
     if (fitted.fix) fixes.set(page.id, fitted.fix);
     return fitted.page;
   });
+  // The storybook clamp note is about new pages: only a full plan states it (revised pages keep their count).
+  const countNote = revising ? undefined : panelCountNote(doc.format);
   const notes = [
-    ...(panelCountNote(doc.format) ? [panelCountNote(doc.format)!] : []),
+    ...(countNote ? [countNote] : []),
     ...pages.filter((p) => fixes.has(p.id)).map((p) => layoutFixNote(p, fixes.get(p.id)!))
   ];
   // Drop new characters that page-count enforcement removed from every page.

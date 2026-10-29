@@ -790,6 +790,7 @@ describe('writer plan fit', () => {
     const ja = writerSystemPrompt(baseDoc((d) => (d.format.language = 'ja')));
     expect(ja).toContain('a full-width row holds about 64 characters, a half-width panel on a two-row page about 51, a half-width panel on a three-row page about 32, a third-width small panel about 17.');
     expect(ja).toContain('Small panels are silent or carry one line of 19 characters or fewer');
+    expect(ja).toContain('Use 5 only for a fast, nearly silent sequence (19 characters or fewer on the whole page).');
   });
 
   it('the validator flags 6 panels on auto, 29 words in a 0.084 panel no layout can fit and a 2-line pov panel — in one repair round', async () => {
@@ -899,5 +900,101 @@ describe('writer plan fit', () => {
     const out = await writePagePlan({ doc, llm: fakeLlm([json(reply)]).llm });
     expect(out.newCast.find((c) => c.name === 'Pip')!.tier).toBe('support');
     expect(out.newCast.find((c) => c.name === 'Crow')!.tier).toBe('extra');
+  });
+
+  it('a format fixed at 1 panel per page is not a splash problem: no repair, exactly one writer call', async () => {
+    const doc = baseDoc((d) => {
+      d.format.panelsPerPage = 1;
+      d.format.pageCount = 3;
+    });
+    const prompt = writerSystemPrompt(doc);
+    expect(prompt).toContain('Panels per page: exactly 1 on every page — the author chose single-panel pages, so every page is one full-page panel.');
+    expect(prompt).not.toContain('At most 1 splash');
+    const reply = plan([1, 2, 3].map((n) => rawPage(n, [rawPanel({ size: 'splash', shot: 'wide', lines: [say('ch_maya', 6, n)] })], { layout: 'One full-page splash panel.' })));
+    expect(normalizePlan(reply, { doc, targets: null, pageCount: 3 }).problems).toEqual([]);
+    const { llm, calls } = fakeLlm([json(reply)]);
+    const out = await writePagePlan({ doc, llm });
+    expect(calls).toHaveLength(1);
+    expect(out.pages.map((p) => p.panels.length)).toEqual([1, 1, 1]);
+    // An auto comic still spaces its splashes.
+    const auto = baseDoc((d) => (d.format.pageCount = 3));
+    expect(writerSystemPrompt(auto)).toContain('At most 1 splash (one dominant panel) per 4 pages');
+    expect(normalizePlan(reply, { doc: auto, targets: null, pageCount: 3 }).problems).toContain(
+      'Page 2 is a splash only 1 page after the splash on page 1: use at most one splash per 4 pages, never two in a row.'
+    );
+  });
+
+  it('revising a storybook page planned with 4 panels before the clamp keeps its 4 panels: one writer call, no clamp note', async () => {
+    const existing: Page = {
+      id: 'pg_story1',
+      n: 1,
+      summary: 'The ducklings cross the road.',
+      layout: 'Row 1: two equal panels. Row 2: two equal panels.',
+      panels: [1, 2, 3, 4].map((n) => ({
+        id: `pn_s${n}`,
+        n,
+        size: 'medium' as const,
+        shot: 'medium' as const,
+        action: `Beat ${n}.`,
+        castIds: ['ch_maya'],
+        lines: [{ id: `ln_s${n}`, kind: 'caption' as const, text: `Old caption ${n}.` }]
+      })),
+      render: emptyRender(),
+      balloons: []
+    };
+    const doc = baseDoc((d) => {
+      d.format.kind = 'storybook';
+      d.format.panelsPerPage = 4;
+      d.format.pageCount = 1;
+      d.pages = [existing];
+    });
+    const reworded = rawPage(
+      1,
+      [1, 2, 3, 4].map((n) => rawPanel({ n, action: `Beat ${n}, reworded.`, lines: [{ kind: 'caption', speakerId: '', text: `New caption ${n}.` }] })),
+      { layout: existing.layout }
+    );
+    expect(normalizePlan(plan([reworded]), { doc, targets: [existing], pageCount: 1 }).problems).toEqual([]);
+    const { llm, calls } = fakeLlm([json(plan([reworded]))]);
+    const out = await writePagePlan({ doc, llm, pageIds: ['pg_story1'], instructions: 'Reword the captions' });
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0].messages[1].content)).toContain('page 1 may keep up to 4 (it has 4)');
+    expect(out.pages[0].panels).toHaveLength(4);
+    expect(out.pages[0].panels.map((p) => p.id)).toEqual(['pn_s1', 'pn_s2', 'pn_s3', 'pn_s4']);
+    expect(out.notes).toBeUndefined(); // "Pages already planned keep theirs" is a full-plan note
+    // More than it had is still a problem, and a NEW page is still clamped to 3.
+    const five = rawPage(1, [1, 2, 3, 4, 5].map((n) => rawPanel({ n })));
+    expect(normalizePlan(plan([five]), { doc, targets: [existing], pageCount: 1 }).problems).toContain(
+      'Page 1 has 5 panels; keep at most 4 (a page planned before the 3-panel storybook limit keeps up to its own count).'
+    );
+    expect(normalizePlan(plan([reworded]), { doc, targets: null, pageCount: 1 }).problems).toContain('Page 1 has 4 panels; plan exactly 3 (storybook pages hold at most 3).');
+  });
+
+  it('a voice heard only in pov and insert panels (never drawn) stays an extra: no model sheet for it', async () => {
+    const doc = baseDoc((d) => (d.format.pageCount = 2));
+    const radio = { name: 'Radio', role: 'dispatcher voice', tier: 'extra', kind: 'object', count: 1, look: { summary: 'A crackling handheld radio' }, personality: '', voice: '' };
+    const hear = (text: string) => ({ kind: 'speech', speakerId: 'Radio', text });
+    const reply = plan(
+      [
+        rawPage(1, [
+          rawPanel({ n: 1, shot: 'pov', castIds: ['ch_maya'], action: "From Maya's seat, the road ahead.", lines: [hear('Unit four, respond.')] }),
+          rawPanel({ n: 2 }),
+          rawPanel({ n: 3, shot: 'insert', castIds: [], action: 'The radio on the dash.', lines: [hear('Respond now.')] })
+        ]),
+        rawPage(2, [rawPanel({ n: 1, shot: 'pov', castIds: ['ch_maya'], action: 'The gate, from Maya.', lines: [hear('Last call.')] }), rawPanel({ n: 2 })])
+      ],
+      [radio]
+    );
+    const out = await writePagePlan({ doc, llm: fakeLlm([json(reply)]).llm });
+    const voice = out.newCast.find((c) => c.name === 'Radio')!;
+    expect(voice).toBeTruthy();
+    expect(voice.tier).toBe('extra');
+    expect(out.pages.flatMap((p) => p.panels.flatMap((panel) => panel.castIds))).not.toContain(voice.id);
+    // Control: the same voice speaking in 3 panels where it is drawn is still promoted for speaking.
+    const drawnReply = plan(
+      [rawPage(1, [1, 2, 3].map((n) => rawPanel({ n, castIds: ['ch_maya'], lines: [hear(`Line ${n}.`)] }))), rawPage(2, [rawPanel({ n: 1 }), rawPanel({ n: 2 })])],
+      [radio]
+    );
+    const drawn = await writePagePlan({ doc, llm: fakeLlm([json(drawnReply)]).llm });
+    expect(drawn.newCast.find((c) => c.name === 'Radio')!.tier).toBe('support');
   });
 });
