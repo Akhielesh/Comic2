@@ -7,17 +7,21 @@
 // chip shows the comic's language by its own name plus its editions and opens Languages; spend
 // prints through formatCostForUser (governed users see shares of their usage, never dollars),
 // with the "saved by software" amount shown quietly; long values wrap; 44 px controls on touch.
+// W-M (M1-INSIGHTS-UI): the spend list is the shared SpendByKindList over the shared spend summary — the same
+// kinds (Translate included), order and own-key split as the header's Spending sheet and the cost card.
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Coins, FileText, Languages, NotebookPen, Plus, ScrollText, X } from 'lucide-react';
-import type { Brief, ComicDoc, SpendKind } from '../../../shared/comic/doc';
+import type { Brief, ComicDoc } from '../../../shared/comic/doc';
 import { TIER_PRESETS } from '../../../shared/comic/models';
 import { i18nOf } from '../../../shared/comic/i18n';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { languagesTabVisible } from '../i18n/index';
 import { StudioRatingPicker } from '../safety/RatingPicker';
-import { KIND_LABEL, SPEND_KIND_LABEL, plural } from './boardModel';
+import { KIND_LABEL, plural } from './boardModel';
+import { spendSummary } from '../insights/insightsModel';
+import { SpendByKindList } from '../insights/OverviewTab';
 import { useCostFormat, type CostFormat } from './costFormat';
 import { Chip, InlineField, SectionTitle, Surface, cx } from './ui';
 
@@ -216,11 +220,12 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat; caps?:
   const cost = costProp ?? fallback;
   const [all, setAll] = useState(false);
   const spend = doc.spend;
-  const kinds = (Object.entries(spend.byKind) as [SpendKind, number][]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-  const max = Math.max(0.0001, ...kinds.map(([, v]) => v));
-  const byokTotal = spend.entries.filter((e) => e.byok).reduce((s, e) => s + e.usd, 0);
+  // One summary for every Spending view (insights/insightsModel.ts over shared/comic/modelInsights.ts): the kinds
+  // in the shared order (Translate included, unknown kinds kept), the own-key split, failed attempts, savings.
+  const summary = useMemo(() => spendSummary(doc), [doc]);
+  const byokTotal = summary.byok.usd;
   const entries = all ? spend.entries : spend.entries.slice(0, RECENT_SPEND);
-  const saved = spend.savedUsd ?? 0;
+  const saved = summary.savedUsd;
   if (!spend.totalUsd && !spend.entries.length) {
     return <p className="text-[12.5px] text-[var(--ds-muted)]">Nothing spent yet. Every paid step shows an estimate first, and lands here with its real cost.</p>;
   }
@@ -242,17 +247,12 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat; caps?:
           Saved by software: {cost.spent(saved)} — done by the editor, no AI cost.
         </p>
       )}
-      <ul className="space-y-1.5" aria-label="Spend by kind">
-        {kinds.map(([kind, usd]) => (
-          <li key={kind} className="grid grid-cols-[minmax(0,7.5rem)_minmax(2rem,1fr)_auto] items-center gap-2 text-[12px]">
-            <span className="truncate text-[var(--ds-muted)]">{SPEND_KIND_LABEL[kind] || kind}</span>
-            <span className="h-2 overflow-hidden rounded-full bg-[var(--ds-well-strong)]">
-              <span className="block h-full rounded-full bg-[var(--ds-accent)]" style={{ width: `${Math.max(3, (usd / max) * 100)}%` }} />
-            </span>
-            <span className="max-w-[9rem] text-right tabular-nums text-[var(--ds-ink)]">{cost.spent(usd)}</span>
-          </li>
-        ))}
-      </ul>
+      <SpendByKindList rows={summary.kinds} format={(usd) => cost.spent(usd)} bars className="space-y-1.5" />
+      {summary.failed.count > 0 && (
+        <p className="text-[11.5px] text-[var(--ds-muted)]">
+          Failed attempts: {summary.failed.count} · {summary.failed.usd > 0 ? cost.spent(summary.failed.usd) : 'nothing charged'}
+        </p>
+      )}
       {entries.length > 0 && (
         <div>
           <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Recent</p>

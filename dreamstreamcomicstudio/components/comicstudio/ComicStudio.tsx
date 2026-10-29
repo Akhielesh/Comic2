@@ -45,7 +45,7 @@ import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN } from '../../services/productHost';
 import { BoardPane } from './board/BoardPane';
 import { registerStudioRefresh } from './board/ui';
-import { pageProgress } from './board/boardModel';
+import { SPEND_KIND_LABEL, pageProgress } from './board/boardModel';
 import { ConversationPane } from './conversation/ConversationPane';
 import { StudioComposer, type StudioComposerHandle } from './conversation/StudioComposer';
 import { COMPOSE_EVENT } from './conversation/composerBus';
@@ -72,6 +72,10 @@ import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
 import { useOpenSettingsRequests } from './openSettings';
+import { INSIGHTS_KIND_ORDER } from '../../shared/comic/modelInsights';
+import { recentLabel } from './insights/copy';
+import { spendSummary } from './insights/insightsModel';
+import { SpendByKindList } from './insights/OverviewTab';
 
 export { SPLIT_STORAGE_KEY };
 
@@ -128,28 +132,20 @@ const TitleField: React.FC<{ title: string; onCommit: (title: string) => void }>
   );
 };
 
-export const SPEND_KIND_LABELS: Record<SpendKind, string> = {
-  chat: 'Director',
-  plan: 'Page planning',
-  style: 'Style options',
-  sheet: 'Character sheets',
-  page: 'Pages',
-  edit: 'Page edits',
-  cover: 'Cover',
-  qc: 'Quality checks',
-  translate: 'Translations'
-};
+/** Spend kind names — one vocabulary for every Spending view (the board's, the breakdown card's, this sheet's). */
+export const SPEND_KIND_LABELS: Record<SpendKind, string> = SPEND_KIND_LABEL;
 
-const SPEND_ORDER: SpendKind[] = ['page', 'edit', 'sheet', 'style', 'cover', 'translate', 'plan', 'chat', 'qc'];
-
-/** Every kind with spend, in display order — a kind this build doesn't know yet still shows (never a silent gap). */
+/**
+ * Every kind with spend, in display order (the shared insights order — Translate included) — a kind this build
+ * doesn't know yet still shows (never a silent gap).
+ */
 export const spendKindsShown = (byKind: Partial<Record<string, number>>): string[] => {
   const positive = (k: string) => {
     const v = byKind[k];
     return typeof v === 'number' && Number.isFinite(v) && v > 0;
   };
-  const known = SPEND_ORDER.filter(positive);
-  const other = Object.keys(byKind).filter((k) => !(SPEND_ORDER as string[]).includes(k) && positive(k));
+  const known = INSIGHTS_KIND_ORDER.filter(positive);
+  const other = Object.keys(byKind).filter((k) => !(INSIGHTS_KIND_ORDER as readonly string[]).includes(k) && positive(k));
   return [...known, ...other];
 };
 
@@ -179,11 +175,12 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({
   // usage status — and, until that loads, usage terms (fail closed: never a dollar figure by default).
   const fallback = useCostFormat({ caps: null });
   const cost = costProp ?? fallback;
+  // The shared spend summary (insights/insightsModel.ts over shared/comic/modelInsights.ts): the same kinds,
+  // own-key split, estimates and failed attempts the cost card and the board's Story tab show.
+  const summary = useMemo(() => spendSummary(doc), [doc]);
   const spend = doc.spend;
-  const byKind = spend.byKind as Partial<Record<string, number>>;
-  const kinds = spendKindsShown(byKind);
-  const byokUsd = spend.entries.filter((e) => e.byok).reduce((n, e) => n + (Number.isFinite(e.usd) ? e.usd : 0), 0);
-  const anyEstimated = spend.entries.some((e) => e.estimated);
+  const byokUsd = summary.byok.usd;
+  const recent = summary.exact ? '' : ` ${recentLabel(summary.recentN ?? spend.entries.length)}`;
   const budget = typeof doc.settings.budgetUsd === 'number' && doc.settings.budgetUsd > 0 ? doc.settings.budgetUsd : null;
   const pct = budget ? Math.min(100, (spend.totalUsd / budget) * 100) : 0;
   const row = (usd: number) => shortSpend(cost, usd) ?? '—';
@@ -197,35 +194,33 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({
       {budget && (
         <div className="mt-2">
           <div className="h-1.5 overflow-hidden rounded-full bg-[var(--ds-well-strong)]">
-            <div className={cx('h-full rounded-full', pct >= 90 ? 'bg-amber-500' : 'bg-[var(--ds-accent)]')} style={{ width: `${pct}%` }} />
+            <div className={cx('h-full rounded-full', pct >= 90 ? 'bg-[var(--ds-warning)]' : 'bg-[var(--ds-accent)]')} style={{ width: `${pct}%` }} />
           </div>
           <div className="mt-1 text-[11.5px] text-[var(--ds-muted)]">
             {cost.governed ? `${Math.round(pct)}% of this comic's spending cap` : `${cost.exact(spend.totalUsd)} of your ${cost.exact(budget)} budget`}
           </div>
         </div>
       )}
-      {kinds.length ? (
-        <dl className="mt-3 space-y-1.5 border-t border-[var(--ds-hairline-soft)] pt-3">
-          {kinds.map((k) => (
-            <div key={k} className="flex items-center justify-between gap-3 text-[13px]">
-              <dt className="min-w-0 truncate text-[var(--ds-muted)]">{SPEND_KIND_LABELS[k as SpendKind] || k.replace(/_/g, ' ')}</dt>
-              <dd className="shrink-0 font-medium tabular-nums text-[var(--ds-ink)]">{row(byKind[k] || 0)}</dd>
-            </div>
-          ))}
-        </dl>
+      {summary.kinds.length ? (
+        <SpendByKindList rows={summary.kinds} format={row} className="mt-3 space-y-1.5 border-t border-[var(--ds-hairline-soft)] pt-3" />
       ) : (
         <p className="mt-3 text-[12.5px] text-[var(--ds-muted)]">
           {cost.governed ? 'Nothing spent yet. Planning and chatting use very little; you approve every image spend.' : 'Nothing spent yet. Planning and chatting cost cents; you approve every image spend.'}
         </p>
       )}
+      {summary.failed.count > 0 && (
+        <p className="mt-2 text-[11.5px] leading-snug text-[var(--ds-muted)]">
+          Failed attempts: {summary.failed.count} · {summary.failed.usd > 0 ? amountInSentence(cost.exact(summary.failed.usd)) : 'nothing charged'}
+        </p>
+      )}
       {byokUsd > 0 && (
         <p className="mt-3 rounded-lg bg-[var(--ds-well)] px-2.5 py-2 text-[11.5px] leading-snug text-[var(--ds-muted)]">
           {cost.governed
-            ? 'Some of this ran on your own API key — tracked here so you see it, but not taken from your usage.'
-            : `${cost.exact(byokUsd)} of this was paid with your own API key — tracked here so you see the real cost, but not billed by DreamStream.`}
+            ? `Some of this ran on your own API key — tracked here so you see it, but not taken from your usage.${recent}`
+            : `${cost.exact(byokUsd)} of this was paid with your own API key — tracked here so you see the real cost, but not billed by DreamStream.${recent}`}
         </p>
       )}
-      {anyEstimated && (
+      {summary.estimated > 0 && (
         <p className="mt-2 text-[11px] leading-snug text-[var(--ds-muted)]">Some amounts are list-price estimates where the provider didn’t report a cost.</p>
       )}
     </div>
