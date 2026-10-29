@@ -65,7 +65,7 @@ describe('golden page prompts (Ship 1)', () => {
           .map((id) => f.doc.cast.find((c) => c.id === id)!)
           .filter((c) => c.name !== viewer);
         for (const c of drawn) {
-          const anchor = identityAnchor(c);
+          const anchor = identityAnchor(c, { colors: f.doc.format.colorMode !== 'bw' });
           expect(anchor.length, c.name).toBeGreaterThan(0);
           // "NAME (Image k — anchor)" or "NAME (anchor)".
           expect(who).toMatch(new RegExp(`${upperName(c.name)} \\((?:Images? [\\d, and]+ — )?${anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));

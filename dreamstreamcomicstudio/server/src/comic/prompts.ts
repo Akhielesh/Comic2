@@ -680,14 +680,15 @@ const paletteText = (value?: string): string =>
  * outfit, marks, markings, always-visible props (then the face, when room is left); non-humans and props: what it is (the summary's
  * head), markings, marks, colours, props. A fragment that does not fit is shortened to its core
  * ("thin scar through left eyebrow" → "thin scar") or skipped; the summary's head is the fallback;
- * '' when the look is empty. The full look is still stated once, in the CAST block.
+ * '' when the look is empty. The full look is still stated once, in the CAST block. `colors: false`
+ * (black-and-white pages) leaves the palette out, exactly as describeLook does for the CAST block.
  */
-export const identityAnchor = (c: Character): string => {
+export const identityAnchor = (c: Character, opts: { colors?: boolean } = {}): string => {
   const look = c.look || { summary: '' };
   const fields =
     castKindOf(c) === 'person'
       ? [look.hair, look.outfit, look.marks, look.markings, look.props, look.face]
-      : [look.summary, look.markings, look.marks, paletteText(look.palette), look.props];
+      : [look.summary, look.markings, look.marks, opts.colors === false ? '' : paletteText(look.palette), look.props];
   const pieces: string[] = [];
   let used = 0;
   for (const field of fields) {
@@ -1331,6 +1332,8 @@ interface PanelBlockContext {
   guide: boolean;
   /** Restate identity anchors in Who (dropped only when the page prompt runs over budget). */
   anchors: boolean;
+  /** Colour page: anchors may name palette colours (a black-and-white page states none, like its CAST block). */
+  colors: boolean;
 }
 
 /**
@@ -1406,7 +1409,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const solo = people.length === 1 && things.length > 0;
   const describe = (id: string): string => {
     const c = doc.cast.find((x) => x.id === id)!;
-    const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c) : ''].filter(Boolean).join(' — ');
+    const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors }) : ''].filter(Boolean).join(' — ');
     return `${ctx.names.get(id)}${inner ? ` (${inner})` : ''}`;
   };
   const peopleText = people.map((s) => `${describe(s.id)}${s.word && !solo ? `, ${positionPhrase(s.word)}` : ''}`).join('; ');
@@ -1606,7 +1609,7 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
     : '';
 
   const build = (anchors: boolean): string => {
-    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors };
+    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw };
     const panelsBlock = ['PANELS:', ...page.panels.map((panel, i) => panelBlock(doc, page, panel, i, ctx, opts))].join('\n');
     return [
       header,

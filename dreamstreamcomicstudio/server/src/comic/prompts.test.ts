@@ -498,6 +498,35 @@ describe('compilePage', () => {
     expect(anchor).toMatch(/^long silver braid/);
   });
 
+  it('black-and-white pages: Who lines name no palette colours (the CAST block states none either)', () => {
+    const duck = character('pip', 'Pip', 'support', {
+      kind: 'animal',
+      look: { summary: 'A small fluffy duckling', marks: 'white crown feather', palette: 'butter yellow, #e76f51' }
+    });
+    const withDuck = (bw: boolean) =>
+      baseDoc((d) => {
+        d.cast.push(duck);
+        if (bw) d.format.colorMode = 'bw';
+      });
+    const pg = page(1, [panel(1, ['maya', 'pip']), panel(2, ['pip'])]);
+    const whoLines = (prompt: string) => prompt.split('\n').filter((l) => l.startsWith('Who: '));
+    // Colour page: the anchor restates the palette in words.
+    const color = whoLines(compilePage(withDuck(false), pg).prompt);
+    expect(color).toHaveLength(2);
+    for (const who of color) expect(who).toContain('PIP (Image 1 — small fluffy duckling, white crown feather, butter yellow, burnt orange)');
+    // Black and white: the same anchor without the palette, on every Who line and in the CAST block.
+    const bwPrompt = compilePage(withDuck(true), pg).prompt;
+    const bw = whoLines(bwPrompt);
+    expect(bw).toHaveLength(2);
+    for (const who of bw) {
+      expect(who).toContain('PIP (Image 1 — small fluffy duckling, white crown feather)');
+      expect(who).not.toMatch(/butter yellow|burnt orange|#e76f51/);
+    }
+    expect(bwPrompt).not.toMatch(/butter yellow|burnt orange|#e76f51/);
+    expect(identityAnchor(duck, { colors: false })).toBe('small fluffy duckling, white crown feather');
+    expect(identityAnchor(duck)).toBe('small fluffy duckling, white crown feather, butter yellow, burnt orange');
+  });
+
   it('overlay lettering: text-free, open background beside speakers, never blank bars, and no dialogue in the prompt', () => {
     const doc = baseDoc();
     const pg = page(1, [
