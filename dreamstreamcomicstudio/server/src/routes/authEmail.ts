@@ -14,6 +14,7 @@ import {
 } from '../services/authEmailLinks.js';
 import { countRecentAuthEmails, latestAuthEmailAt, normalizeEmail } from '../services/emailStore.js';
 import { getEmailUsageStatus, mailerConfigured, sendEmail } from '../services/mailer.js';
+import { kickAccountEverywhere, type KickOutcome } from '../services/liveKick.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { turnstileConfigured, verifyTurnstile } from '../services/turnstile.js';
 
@@ -636,10 +637,14 @@ authEmailRouter.post('/magiclink', async (req, res, next) => {
 // token (7 days, single use, only its hash stored) proves the mailbox. Steps:
 //   1. live_secure_account (service role): spends the token, ends EVERY session of the account
 //      (each device must sign in again; refresh tokens die with them), revokes devices added
-//      since that sign-in, records a 'secured' event;
-//   2. mails a password-reset link to the account's address (same throttle as /recovery).
-// The answer says honestly what happened; a reset email that couldn't go out is reported, and
-// the app then offers "Forgot password".
+//      since that sign-in, removes authenticators switched on since then (an intruder can't
+//      lock the parent out with two-step sign-in), records a 'secured' event;
+//   2. asks the live Worker to close every monitor, call-line and admin socket of the account
+//      and drop its alert subscriptions (services/liveKick.ts) — with our own signed credential,
+//      because the account's tokens died in step 1;
+//   3. mails a password-reset link to the account's address (same throttle as /recovery).
+// The answer says honestly what happened; a reset email that couldn't go out, or a kick the
+// Worker didn't confirm, is reported, and the app says what to do instead.
 authEmailRouter.post('/secure', async (req, res, next) => {
   try {
     const raw = bodyOf(req).token;
@@ -665,9 +670,11 @@ authEmailRouter.post('/secure', async (req, res, next) => {
       secured_at?: string;
       sessions_ended?: number;
       devices_revoked?: unknown[];
+      factors_removed?: number;
       email?: string | null;
       user_id?: string | null;
       email_hint?: string | null;
+      nurseries?: unknown[];
     };
     if (!r.ok) {
       if (r.error === 'used') {
@@ -683,7 +690,10 @@ authEmailRouter.post('/secure', async (req, res, next) => {
 
     const sessionsEnded = typeof r.sessions_ended === 'number' ? r.sessions_ended : null;
     const devicesRevoked = Array.isArray(r.devices_revoked) ? r.devices_revoked.length : 0;
+    const factorsRemoved = typeof r.factors_removed === 'number' ? r.factors_removed : null;
     const email = readEmail(r.email);
+    // Close what's open while the reset email goes out (never waits on, or fails, securing).
+    const kick = r.user_id ? kickAccountEverywhere(r.user_id, r.nurseries) : Promise.resolve<KickOutcome>({ kicked: false, reason: 'bad_input' });
     let resetEmail: 'sent' | 'throttled' | 'unavailable' | 'failed' = 'unavailable';
     if (email && (await emailReady())) {
       const limit = await checkThrottle(email);
@@ -701,8 +711,9 @@ authEmailRouter.post('/secure', async (req, res, next) => {
         }
       }
     }
+    const kicked = await kick;
     console.log(
-      `[auth-email] secure: account secured${email ? ` (${maskEmail(email)})` : ''} — sessions ended: ${sessionsEnded ?? '?'}, devices revoked: ${devicesRevoked}, reset email: ${resetEmail}`
+      `[auth-email] secure: account secured${email ? ` (${maskEmail(email)})` : ''} — sessions ended: ${sessionsEnded ?? '?'}, devices revoked: ${devicesRevoked}, authenticators removed: ${factorsRemoved ?? '?'}, sockets closed: ${kicked.kicked ? 'yes' : `no (${kicked.reason})`}, reset email: ${resetEmail}`
     );
     return res.json({
       ok: true,
@@ -710,6 +721,10 @@ authEmailRouter.post('/secure', async (req, res, next) => {
       sessionsEnded: sessionsEnded != null && sessionsEnded >= 0 ? sessionsEnded : null,
       signedOutEverywhere: sessionsEnded != null && sessionsEnded >= 0,
       devicesRevoked,
+      // Authenticators an intruder switched on since that sign-in (null: couldn't tell).
+      factorsRemoved: factorsRemoved != null && factorsRemoved >= 0 ? factorsRemoved : null,
+      // The live Worker confirmed every open monitor, call and alert subscription is closed.
+      kicked: kicked.kicked,
       resetEmail,
       emailHint: r.email_hint ?? null
     });

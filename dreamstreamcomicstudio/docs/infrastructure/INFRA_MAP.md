@@ -145,15 +145,42 @@ sign-in handoff: `docs/features/accounts-and-access.md` § One address per app.
    keeps GoTrue from falling back to the Site URL for any `redirectTo`). If Turnstile's widget
    lists hostnames explicitly, make sure the host is covered.
 4. Lead: `npm run ops:live-smoke:stream-host` — all PASS (app shell, bundle, `/live.html?e=` →
-   `/?e=`, live worker JSON, API health). **Blocker before the flip:** devices that turned alerts on
-   at `dreamstreamstudio.ai/live` keep that subscription, so turning alerts on again at the new
-   host would deliver each alert twice, and signing out on the new host wouldn't stop the old
-   one. Ship the de-duplication first (the server replaces an account's older subscription from
-   the same device, or the new host clears the old `/live` registration on enable and sign-out).
+   `/?e=`, live worker JSON, API health). Then open `https://dreamstreamstudio.ai/stream-alerts-bridge`
+   once: a blank page (it has no UI) with `Content-Security-Policy: … frame-ancestors
+   https://stream.dreamstreamstudio.ai` and no `X-Frame-Options`.
+   *The former blocker — the same alert twice once a device turns alerts on at both addresses —
+   is resolved (ADR 0006 WS-5, 2026-10-29), see "Alerts across the two addresses" below.*
 5. Lead: set `STREAM_HOST_ON = true` in `shared/streamHost.ts`, ship (Pages + backend +
    email Worker redeploy from the same push), then `npm run ops:live-smoke` (now includes the
    host and expects the apex 301s).
 Undo: set it back to `false` and ship; browsers forget the apex 301 within a day.
+
+**Alerts across the two addresses (the flip blocker, resolved 2026-10-29 — ADR 0006 WS-5).** A
+push subscription belongs to the origin that made it, so a device that turned alerts on at
+`dreamstreamstudio.ai/live` and again at the new host would get every alert twice, and signing
+out on the new host wouldn't stop the old one. Three pieces make it one alert per device:
+- **A same-site bridge page on the apex**, `public/stream-alerts-bridge.html` + `.js` (outside
+  `/live`, so the apex's 301 and frame block never touch it). The middleware gives it its own
+  enforced CSP (one same-origin script, `frame-ancestors https://stream.dreamstreamstudio.ai`,
+  nothing else) and the Stream Studio CSP may frame exactly that URL (`frame-src`), so it keeps
+  working once either policy is enforced (`tests/edge/alertsBridge.test.ts`). It answers only
+  the stream host (message origin + source checked), only in a frame, and never acts for
+  another account (`uid` must match the apex's `ds-live-owner`).
+- **The new host asks it** (`live/monitor/push.ts`, hidden iframe): the old subscription's
+  endpoint goes to the rooms with the new subscription as `sub.was`; MonitorRoom (alerts and
+  nursery call rings) and UserLine (direct-call rings) drop that endpoint **for the same
+  account only** when they store the new one (`live-worker/src/pushReplace.ts`). The old
+  subscription itself is unsubscribed (`retire`) only once this host covers *everything* it
+  alerted for — every nursery with alerts on at the old address, and call ringing — so no
+  nursery ever goes quiet on the device mid-move. Checked when alerts are turned on and at
+  start-up (start-up skips the frame for a week after the old address was found empty).
+- **Signing out on the new host** (this device or everywhere, `live/sync.ts`) also retires the
+  old subscription and wipes that account's Stream Studio data on the apex, as signing out
+  there would have. An unsubscribed endpoint answers 410 at its next push and every room drops
+  it, so the server side is clean even where `was` never arrived.
+Limits, stated honestly: where a browser isolates the frame's storage (some privacy modes and
+extensions) or an iPhone Home Screen app (its own storage), the bridge sees nothing and nothing
+changes — no worse than before; those devices turn alerts off at the old address themselves.
 
 Known limits: one handoff runs per page (`services/liveLink.ts` `once`), because each handoff
 link replaces the account's previous one-time token — so a handoff also cancels a password-reset
@@ -389,3 +416,4 @@ no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 | 2026-10-21 | Baby monitor v3: MonitorRoom moved its log from KV-style storage to its SQLite (`monitorStore.ts`: events, minutes, incidents, sleep; one-time migration of the old log), DO alarm drives incident escalation + retention purge, new `/api/monitor/:nid/export` route, `public/keep-awake.mp4` (2 KB) for the screen-on fallback. No new paid resources (DO SQLite storage is within the plan's included storage). |
 | 2026-10-22 | **Stream Studio host** `stream.dreamstreamstudio.ai` prepared (§2a): middleware serves it, Worker routes `stream.dreamstreamstudio.ai/api/*` + `/live-api/*`, CORS/`ALLOWED_ORIGINS`, `POST /api/auth/handoff`; apex `/live*` 301 behind `STREAM_HOST_ON` (off until the domain is attached). No new paid resources. |
 | 2026-10-22 | **Code Studio retired** (ADR 0005): `dreamstream-studio` Worker (Container `Sandbox`, `standard-3`, `*.dreamstreamstudio.ai/*`) removed from the repo with its deploy workflow and `STUDIO_WORKER_URL`; owner deletes the deployed Worker + route + `STUDIO_HMAC_SECRET`. Ventures set admin-only with no tick loop (`VENTURES_ENABLED`/`VENTURES_PILOT_INLINE` = `false`). Workers Paid stays (backend container). |
+| 2026-10-29 | **Stream host flip blocker resolved** (§2a, ADR 0006 WS-5): apex page `/stream-alerts-bridge` (own enforced CSP, framable by the stream host only; its script excluded from Pages Functions in `_routes.json`), Stream Studio CSP `frame-src` gains that one URL, rooms drop the replaced `/live` subscription (`sub.was`, same account only). No new paid resources. |
