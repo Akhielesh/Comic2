@@ -30,7 +30,9 @@ import {
   compilePage,
   compilePlaceSheet,
   compileStyleOption,
+  PAGE_PROMPT_CHAR_BUDGET,
   effectiveLayout,
+  identityAnchor,
   harmonizePanelSizes,
   layoutConflicts,
   layoutPanelCount,
@@ -312,20 +314,113 @@ describe('compilePage', () => {
     expect(job.prompt).toContain('CHARACTER SHEET: ARJUN. Match his face, facial hair');
   });
 
-  it('writes panel lines with size, shot, angle, place, staged characters and mood', () => {
+  it('writes one block per panel: box N with its measured size, Camera, Place, Must show, Who with anchors, Speaks, Detail', () => {
+    const doc = baseDoc();
+    const pg = page(
+      1,
+      [
+        panel(1, ['maya'], { size: 'wide', shot: 'establishing', placeId: 'market', mood: 'frantic dawn', action: 'Maya sprints into the market. Shoppers scatter.' }),
+        panel(2, ['maya', 'arjun'], {
+          shot: 'over_shoulder',
+          angle: 'low angle',
+          action: 'Maya slams the ledger down.',
+          lines: [line('speech', 'Here.', 'maya'), line('speech', 'Late.', 'arjun'), line('whisper', 'Again.', 'arjun')]
+        }),
+        panel(3, [], { size: 'small', shot: 'insert', action: 'The brass lotus lock.', lines: [line('sfx', 'KLIK')] }),
+        panel(4, ['arjun', 'maya'], { size: 'wide', action: 'Arjun steps to the left of Maya.', lines: [line('speech', 'Run!', 'maya')] })
+      ],
+      { layout: 'Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.' }
+    );
+    const prompt = compilePage(doc, pg).prompt;
+    expect(prompt).toContain(
+      [
+        'PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).',
+        'Camera: establishing shot (the whole location). Place: SPICE MARKET.',
+        'Must show: Maya sprints into the market.',
+        'Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar).',
+        'Speaks: nobody (a silent panel); fill the panel with art to its borders.',
+        'Detail: Shoppers scatter. Mood: frantic dawn.'
+      ].join('\n')
+    );
+    expect(prompt).toContain(
+      [
+        'PANEL 2 of 4 — box 2 in the layout (row 2, left; 47% wide × 31% tall).',
+        'Camera: over-the-shoulder shot, low angle.',
+        'Must show: Maya slams the ledger down.',
+        'Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.',
+        "Speaks: MAYA — 1 balloon; ARJUN — 2 balloons; compose open background (sky, wall, floor or shadow) beside each speaker's head for their balloons."
+      ].join('\n')
+    );
+    expect(prompt).toContain(
+      [
+        'PANEL 3 of 4 — box 3 in the layout (row 2, right; 47% wide × 31% tall).',
+        'Camera: insert shot (close detail of an object).',
+        'Must show: The brass lotus lock.',
+        'Who: no characters.',
+        'Speaks: nobody (sound effects only); fill the panel with art to its borders.'
+      ].join('\n')
+    );
+    // The action already places people → no conflicting position hints; one visible speaker gets room beside her head.
+    expect(prompt).toContain(
+      'Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar); ARJUN (Image 2 — grey stubble beard).\nSpeaks: MAYA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.'
+    );
+    // Measured proportions under the blueprint.
+    expect(prompt).toContain(
+      'Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.\nMeasured proportions: Row 1 (top 31% of the page): panel 1, full width. Row 2 (next 31%): panels 2 and 3 side by side, 47% wide each. Row 3 (next 31%): panel 4, full width.'
+    );
+    // The old one-line panel format is gone.
+    expect(prompt).not.toMatch(/^Panel \d — (small|medium|wide)/m);
+    expect(prompt).not.toContain('Characters: ');
+  });
+
+  it('a speaker who is not drawn is an OFF-PANEL VOICE; a POV viewer named in the action is heard, not seen', () => {
     const doc = baseDoc();
     const pg = page(1, [
-      panel(1, ['maya'], { size: 'wide', shot: 'establishing', placeId: 'market', mood: 'frantic dawn' }),
-      panel(2, ['maya', 'arjun'], { shot: 'over_shoulder', angle: 'low angle', action: 'Maya slams the ledger down.' }),
-      panel(3, [], { size: 'small', shot: 'insert', action: 'The brass lotus lock.' }),
-      panel(4, ['arjun', 'maya'], { action: 'Arjun steps to the left of Maya.' })
+      panel(1, ['maya'], { lines: [line('speech', 'Who goes there?', 'arjun'), line('speech', 'Me.', 'maya'), line('shout', 'Halt!')] }),
+      panel(2, ['maya', 'arjun'], { shot: 'pov', action: "From Arjun's view, Maya backs away from the stall.", lines: [line('speech', 'Stop!', 'arjun')] }),
+      panel(3, ['maya', 'arjun'], { shot: 'pov', action: 'A blur of tarps and sacks.', lines: [line('speech', 'Left!', 'arjun')] })
     ]);
     const prompt = compilePage(doc, pg).prompt;
-    expect(prompt).toContain('Panel 1 — wide, establishing shot (the whole location). SPICE MARKET: Action of panel 1. Characters: MAYA. Mood: frantic dawn.');
-    expect(prompt).toContain('Panel 2 — medium, over-the-shoulder shot, low angle. Maya slams the ledger down. Characters: MAYA (left), ARJUN (right).');
-    expect(prompt).toContain('Panel 3 — small, insert shot (close detail of an object). The brass lotus lock. No characters.');
-    // The action already places people → no conflicting position hints.
-    expect(prompt).toContain('Arjun steps to the left of Maya. Characters: MAYA, ARJUN.');
+    expect(prompt).toContain(
+      'Speaks: MAYA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it. OFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon. OFF-PANEL VOICE: unnamed (do not draw) — 1 balloon.'
+    );
+    // Panel 2: the action names Arjun as the viewer → he leaves the drawn cast and speaks off-panel.
+    expect(prompt).toContain(
+      "Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar); seen through ARJUN's eyes (do not draw ARJUN; at most a hand at the frame edge).\nOFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon."
+    );
+    // Panel 3: a POV shot that names no viewer keeps the planned cast.
+    expect(prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.\nSpeaks: ARJUN — 1 balloon;');
+    // In-art pages: the off-panel balloon's tail points out of the panel.
+    const inArt = compilePage(baseDoc((d) => (d.format.lettering = 'in_art')), pg).prompt;
+    expect(inArt).toContain('OFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon; its tail points out of the panel.');
+  });
+
+  it('identity anchors: ≤ 12 words from hair, outfit, marks and props (people) or what it is, markings and colours (non-humans)', () => {
+    const doc = baseDoc();
+    expect(identityAnchor(doc.cast[0])).toBe('black bun with a pencil, faded red kurta, thin scar');
+    // No hair/outfit/marks/props: the face, else the summary's head.
+    expect(identityAnchor(doc.cast[1])).toBe('grey stubble beard');
+    expect(identityAnchor(doc.cast[2])).toBe('toothless fruit seller');
+    const duck = character('pip', 'Pip', 'support', {
+      kind: 'animal',
+      look: { summary: 'A tiny fluffy yellow duckling with a bright orange bill', marks: 'a little tuft of down sticking up on top of the head', palette: '#ffd60a, orange' }
+    });
+    // Hex palette entries are named ("#ffd60a" → "yellow").
+    expect(identityAnchor(duck)).toBe('tiny fluffy yellow duckling, little tuft of down sticking up, yellow, orange');
+    expect(identityAnchor(character('z', 'Zed', 'extra', { look: { summary: '' } }))).toBe('');
+    for (const c of [...doc.cast, duck]) expect(identityAnchor(c).split(/\s+/).length).toBeLessThanOrEqual(12);
+    const long = character('k', 'Kavi', 'lead', {
+      look: {
+        summary: 'x',
+        hair: 'long silver braid wrapped twice around her neck like a scarf',
+        outfit: 'indigo monsoon raincoat with brass buttons and a hood',
+        marks: 'tattoo of a lotus on the back of her right hand',
+        props: 'battered brass compass on a cord'
+      }
+    });
+    const anchor = identityAnchor(long);
+    expect(anchor.split(/\s+/).length).toBeLessThanOrEqual(12);
+    expect(anchor).toMatch(/^long silver braid/);
   });
 
   it('overlay lettering: text-free, open background beside speakers, never blank bars, and no dialogue in the prompt', () => {
@@ -369,12 +464,13 @@ describe('compilePage', () => {
     expect(prompt).toContain('Panel 2 — SFX: "KRAK!"');
     expect(prompt).toContain('Panel 3 — MAYA (shout): "MOVE!"');
     expect(prompt).toContain('Panel 3 — ARJUN (thought): "Too slow…"');
-    expect(prompt).toContain('No other text anywhere on the page.');
+    expect(prompt).toContain('No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips inside a panel.');
     expect(prompt).toContain('UPPERCASE');
     expect(prompt).toContain('spiky burst balloons');
     expect(prompt).not.toContain('Do not draw any text');
     // The blank line is dropped, not lettered as an empty balloon.
-    expect(prompt.match(/^Panel 2 — /gm)).toHaveLength(3); // panel line + 2 lettered lines
+    expect(prompt.match(/^Panel 2 — /gm)).toHaveLength(2); // the 2 lettered lines (the panel block opens with "PANEL 2 of 3")
+    expect(prompt).toContain('Speaks: ARJUN — 1 balloon;');
   });
 
   it('in-art lettering in a caseless language drops UPPERCASE and names the language', () => {
@@ -468,7 +564,10 @@ describe('compilePage', () => {
 
   // 3,500 → 4,000 (P1-RENDER): the content-rating paragraph, the rating negatives on the
   // "Never:" line and the frame-shape sentence are required on every page (~550 chars).
-  it('keeps a typical 6-panel page under 4,000 characters excluding dialogue', () => {
+  // 4,000 → 6,000 (A2): one block per panel (box N with its measured size, Must show, Who with
+  // identity anchors, Speaks) plus measured proportions, ~200 chars per panel; the hard ceiling
+  // is PAGE_PROMPT_CHAR_BUDGET (plan C18: 9,000).
+  it('keeps a typical 6-panel page under 6,000 characters excluding dialogue', () => {
     const doc = baseDoc((d) => {
       d.cast[0].look = {
         summary: 'Wiry 19-year-old courier with a sharp jaw and restless eyes',
@@ -506,11 +605,27 @@ describe('compilePage', () => {
     const prev = page(1, [panel(1, ['maya'])], { render: ready('pages/p1.png') });
     const job = compilePage(doc, pg, { previousPage: prev });
     expect(job.references).toHaveLength(5);
-    expect(job.prompt.length).toBeLessThan(4000);
+    expect(job.prompt.length).toBeLessThan(6000);
+    expect(job.prompt.length).toBeLessThan(PAGE_PROMPT_CHAR_BUDGET);
     expect(job.prompt).toContain('CONTENT RATING PG-13');
-    // No duplicated sentences.
-    const sentences = job.prompt.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 25);
+    // No duplicated sentences (a panel's Who and Speaks lines restate anchors on purpose).
+    const sentences = job.prompt
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 25 && !/^(Who|Speaks):/.test(s));
     expect(new Set(sentences).size).toBe(sentences.length);
+  });
+
+  it('over the 9,000-character budget, panels drop the restated anchors first (the CAST block keeps every look)', () => {
+    const doc = baseDoc();
+    const long = 'Maya vaults a stack of crates while saffron dust hangs in the air like smoke. ' + 'Then the alley narrows. '.repeat(20);
+    const crowded = page(1, Array.from({ length: 9 }, (_, i) => panel(i + 1, ['maya', 'arjun'], { action: long })));
+    const job = compilePage(doc, crowded);
+    expect(job.prompt).toContain('Who: MAYA (Image 1), on the left; ARJUN (Image 2), on the right.');
+    expect(job.prompt).not.toContain('Image 1 — black bun');
+    expect(job.prompt).toContain('hair: black bun with a pencil through it');
+    // A normal page keeps them.
+    expect(compilePage(doc, page(1, [panel(1, ['maya'])])).prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar).');
   });
 
   it('is deterministic', () => {
@@ -991,7 +1106,9 @@ describe('non-human cast, groups and props (director.md §3.5)', () => {
     expect(job.prompt).toContain('- DUCKLINGS ×3 (Image 2): a group of exactly 3, all drawn to this one design: fluffy yellow ducklings; species: mallard duckling.');
     expect(job.prompt).toContain('- FROG (no reference — follow this description exactly): small green frog; kind: animal.');
     expect(job.prompt).toContain('PROPS — the same object, colors and details every time it appears:\n- RED KITE (no reference — follow this description exactly): a red diamond kite with a long tail.');
-    expect(job.prompt).toContain('Characters: BABY ANU (far left), DUCKLINGS ×3 (center-left), FROG (center-right). Props: RED KITE.');
+    expect(job.prompt).toContain(
+      'Who: BABY ANU (Image 1 — chubby toddler in a yellow romper), on the far left; DUCKLINGS ×3 (Image 2 — fluffy yellow ducklings), left of center; FROG (small green frog), right of center. Props: RED KITE (red diamond kite).'
+    );
     expect(job.prompt).toContain('CHARACTER SHEET: DUCKLINGS. Match their species, face, markings, proportions and colors exactly. It shows one member of the group of 3: draw all 3 to this exact design.');
     expect(legendLabels(job.prompt)).toEqual(labelsOf(job.references));
     // People-only pages keep the original cast header.
@@ -1178,7 +1295,9 @@ describe('content rating in every image prompt (safety.md §3.2)', () => {
     const safe = compilePage(baseDoc(), pg, { safe: true });
     expect(safe.prompt).toContain('CONTENT RATING PG —');
     expect(safe.prompt).toContain(SAFE_TAKE_LINE);
-    const panelText = safe.prompt.split('\n').find((l) => l.startsWith('Panel 1 —'))!;
+    const start = safe.prompt.indexOf('PANEL 1 of');
+    const panelText = safe.prompt.slice(start, safe.prompt.indexOf('\n\n', start));
+    expect(start).toBeGreaterThan(0);
     expect(panelText).toContain('Maya lunges at the thug');
     expect(panelText).toContain('Mood: chaos.');
     expect(panelText).not.toMatch(/\bstabs\b|\bblood\b|\bbloody\b/);
