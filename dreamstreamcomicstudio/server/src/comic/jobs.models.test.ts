@@ -14,6 +14,7 @@ import { fakeImageCalls, fakeImages, newSession, plannedDoc, testContext, type T
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
 import { StudioError, type ImageRequest, type StudioKeys } from './types.js';
 import { fakeModelHealth } from './models/health.fakes.js';
+import { makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic.js';
 import { analyzePageRender } from './vision.js';
 
 vi.mock('./vision.js', async (importOriginal) => {
@@ -470,5 +471,66 @@ describe('replays with the real image client over fake transports', () => {
     expect(cards).toEqual([expect.objectContaining({ type: 'model_outage', origin: 'preflight', modelId: 'nano-banana-2.1' })]);
     expect(session.doc.spend.totalUsd).toBe(0);
     expect(session.doc.conversation.some((m) => /Started drawing/.test(m.text))).toBe(false);
+  });
+});
+
+// ── §3.9 edge cases and the §5.1 acceptance ──────────────────────────────────
+
+describe('locked model edge cases (models.md §3.9)', () => {
+  it('the provider no longer serving the locked model ends with H — no other model is tried', async () => {
+    const gone = () =>
+      Object.assign(new StudioError('PROVIDER_ERROR', "That image model isn't available on OpenRouter right now. Please try again later.", { status: 502, retryable: false }), {
+        imageFailure: { route: 'openrouter', status: 404 }
+      });
+    const images = fakeImages(() => gone());
+    const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    const last = lastMsg(session.doc);
+    expect(cardsOf(session.doc).some((c) => c.type === 'notice' && c.text.startsWith("Nano Banana 2.1 isn't available for this comic right now (the provider no longer serves it). Nothing was drawn."))).toBe(true);
+    expect(last.nextSteps).toEqual(expect.arrayContaining([{ label: 'See other models', client: { type: 'open_model_picker' } }]));
+    expect(new Set(images.calls.map((c) => c.spec.id))).toEqual(new Set(['nano-banana-2.1']));
+  });
+
+  it('a legacy comic on a deprecated model keeps drawing on it, with one notice that offers the picker', async () => {
+    const { session, ctx } = setup(drawnDoc(undefined, 'nano-banana-2'));
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_2'] }, UI);
+    expect(ctx.imagesFake.calls.map((c) => c.spec.id)).toEqual(['nano-banana-2', 'nano-banana-2']);
+    expect(session.doc.imageModel).toMatchObject({ modelId: 'nano-banana-2', origin: 'migrated' });
+    const notices = cardsOf(session.doc).filter((c) => c.type === 'notice' && /maker has retired/.test(c.text));
+    expect(notices).toHaveLength(1);
+  });
+});
+
+describe('acceptance (models.md §5.1 M1-LOCK-SERVER): the f8312c86 replay with a tier change mid-book', () => {
+  it('every render stays on nano-banana-2.1 and the model never changes without the action', async () => {
+    const own: StudioKeys = { openrouter: { key: 'sk-or-mine', byok: true } };
+    const session = newSession(makeLakeComic());
+    const ctx = testContext(session, { keys: own, caps: DEFAULT_CAPS });
+    const opts: RunActionOptions = { confirmed: true, caps: DEFAULT_CAPS, origin: 'user' };
+    expect(session.doc.imageModel).toBeUndefined(); // legacy: derived, not yet persisted
+
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_2'], force: true }, opts);
+    expect(session.doc.imageModel).toMatchObject({ modelId: 'nano-banana-2.1', origin: 'migrated' });
+
+    // The tier changes mid-book: Pro's preset model is Nano Banana Pro, but on a locked comic the tier is resolution only.
+    const tierOps = sanitizePatchOps(session.doc, [{ op: 'settings', patch: { quality: 'pro' } }]);
+    session.commit(tierOps, { origin: 'user' });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_3', 'pg_4', 'pg_5'], force: true, includeCover: true }, opts);
+    await runAction(ctx, { type: 'edit_page', pageId: 'pg_1', instruction: 'Make the sky a little brighter.' }, opts);
+    await runAction(ctx, { type: 'render_sheets', characterIds: ['c_frog'], force: true }, opts);
+    await runAction(ctx, { type: 'render_style_options', directions: [{ name: 'Sunset', spec: 'Warm sunset wash.' }] }, opts);
+    // A model change by settings is refused; nothing else can change it.
+    expect(() => sanitizePatchOps(session.doc, [{ op: 'settings', patch: { imageModelOverride: 'nano-banana-pro' } }])).toThrow(/locked to Nano Banana 2\.1/);
+
+    const doc = session.doc;
+    expect(new Set(ctx.imagesFake.calls.map((c) => c.spec.id))).toEqual(new Set(['nano-banana-2.1']));
+    const renders = [...doc.pages.map((p) => p.render), ...doc.cast.map((c) => c.sheet), doc.cover.render, ...doc.style.options.map((o) => o.render)];
+    expect(renders.every((r) => r.model === 'nano-banana-2.1')).toBe(true);
+    expect(doc.pages.slice(2).every((p) => p.render.resolution === '2K')).toBe(true); // the tier picked the size only
+    expect(doc.imageModel).toMatchObject({ modelId: 'nano-banana-2.1', origin: 'migrated' });
+    expect(doc.imageModel?.changes ?? []).toEqual([]);
+    const lockOps = ctx.events.flatMap((e) => (e.type === 'ops' ? e.ops : [])).filter((o) => o.op === 'image_model');
+    expect(lockOps).toHaveLength(1);
   });
 });

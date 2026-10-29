@@ -2335,6 +2335,20 @@ class RenderRun {
     return parts.join(' ');
   }
 
+  /**
+   * models.md §3.6 H / §3.9: the provider no longer serves the comic's model (a 404 for it), or the comic is locked to
+   * a model its vendor deprecated. Jobs never fall back to another model; the notice offers the picker (and its confirm).
+   */
+  private modelUnavailableNotice(failed: JobResult[]): Card | null {
+    const gone = failed.find((r) => !isUpstreamResult(r) && imageFailureInfo(r.raw)?.status === 404);
+    if (gone) return noticeCard('warn', modelUnavailableText(this.specOf(gone.job).nickname, 'the provider no longer serves it'));
+    const locked = this.pinned.lock ? getImageModel(this.pinned.lock.modelId) : undefined;
+    if (locked?.lifecycle !== 'deprecated') return null;
+    const text = `This comic is drawn with ${locked.nickname}, which its maker has retired. It keeps working while the provider still serves it; you can switch in the model picker (switching can affect consistency).`;
+    const said = this.session.doc.conversation.some((m) => m.cards?.some((c) => c.type === 'notice' && c.text === text));
+    return said ? null : noticeCard('info', text);
+  }
+
   /** The model a job of this run draws on (the lock, else the tier/override at the run's start). */
   private specOf(job: ImageJob): ImageModelSpec {
     return resolveJobFor(this.pinned, job.kind).spec;
@@ -2422,7 +2436,15 @@ class RenderRun {
     if (safety.notices.length) this.notices.push(...safety.notices);
     const outage = await this.midRunOutage(failed.filter(isUpstreamResult));
     if (outage) this.notices.push(outage.card);
-    const steps = dedupeSteps([...(outage?.steps ?? []), ...safety.steps.map((s) => this.priced(s)), ...this.extraSteps, ...nextStepsFor(this.session.doc, { byok: this.byok })]).slice(0, MAX_NEXT_STEPS);
+    const unavailable = this.modelUnavailableNotice(failed);
+    if (unavailable) this.notices.push(unavailable);
+    const steps = dedupeSteps([
+      ...(outage?.steps ?? []),
+      ...(unavailable ? [SEE_OTHER_MODELS_STEP] : []),
+      ...safety.steps.map((s) => this.priced(s)),
+      ...this.extraSteps,
+      ...nextStepsFor(this.session.doc, { byok: this.byok })
+    ]).slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
       await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, [...lead, ...this.notices], steps)) }]));
