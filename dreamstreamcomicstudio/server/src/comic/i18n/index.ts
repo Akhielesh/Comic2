@@ -125,13 +125,18 @@ const calibrate = (lang: string, estimated: number, actual: number) => {
 const modelPriceUsd = (model: string, input: number, output: number): number =>
   estimateTextCostUsd(model, input, output) ?? (input * UNKNOWN_PRICE.input + output * UNKNOWN_PRICE.output) / 1_000_000;
 
-/** The uncalibrated price of one language plan (translator + review) in the user's terms: markup unless BYOK. */
+/** Whether a text role runs on the user's own key: the key of its own route (text routes are OpenRouter-first). */
+const textRoleIsByok = (role: 'translator' | 'linguist', keys: StudioKeys): boolean => resolveTextRoute(role, keys)?.key.byok ?? spendIsByok(keys);
+
+/** The uncalibrated price of one language plan (translator + review) in the user's terms: markup unless that role runs on the user's key. */
 const planUsd = (plan: TranslationPlan, keys: StudioKeys): number => {
-  const markup = spendIsByok(keys) ? 1 : PLATFORM_MARKUP;
+  const markup = (role: 'translator' | 'linguist') => (textRoleIsByok(role, keys) ? 1 : PLATFORM_MARKUP);
   const trModel = resolveTextRoute('translator', keys)?.model ?? TEXT_ROLE_DEFAULTS.translator.models[0];
   const lnModel = resolveTextRoute('linguist', keys)?.model ?? TEXT_ROLE_DEFAULTS.linguist.models[0];
-  const raw = (plan.calls ? modelPriceUsd(trModel, plan.tokens.input, plan.tokens.output) : 0) + (plan.reviewCalls ? modelPriceUsd(lnModel, plan.tokens.reviewInput, plan.tokens.reviewOutput) : 0);
-  return raw * markup;
+  return (
+    (plan.calls ? modelPriceUsd(trModel, plan.tokens.input, plan.tokens.output) * markup('translator') : 0) +
+    (plan.reviewCalls ? modelPriceUsd(lnModel, plan.tokens.reviewInput, plan.tokens.reviewOutput) * markup('linguist') : 0)
+  );
 };
 
 /** Friendly model name for the gate ("Claude Sonnet 5.5 + review"). */
@@ -165,7 +170,8 @@ export interface TranslationQuote {
 
 /** Pure quote for languages that are already resolved codes (no ctx: the quote route uses it too). */
 export function quoteTranslation(doc: ComicDoc, keys: StudioKeys, action: Pick<TranslateAction, 'languages' | 'pageIds' | 'force' | 'overwriteEdits'>): TranslationQuote {
-  const byok = spendIsByok(keys);
+  // Priced for the key the translator will run on (not the images' key).
+  const byok = textRoleIsByok('translator', keys);
   const trModel = resolveTextRoute('translator', keys)?.model ?? TEXT_ROLE_DEFAULTS.translator.models[0];
   const plans: TranslationPlan[] = [];
   const perLanguage: LanguageQuote[] = [];
@@ -388,7 +394,10 @@ export function textlessCoverQuote(doc: ComicDoc, byok: boolean): number | null 
  * price for the user (costViewFor(caps)): a governed user reads "≈1% of your usage", never dollars.
  */
 export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys: StudioKeys, view: CostView = DOLLAR_VIEW): { text: string; nextSteps: NextStep[] } {
+  // The image quotes below (overlay redraw, textless cover) stay keys-level; the translation's own
+  // cost line names the translator's key.
   const byok = spendIsByok(keys);
+  const textByok = textRoleIsByok('translator', keys);
   const fmt = costFormatter(view);
   const parts: string[] = [];
   const ready: string[] = [];
@@ -423,7 +432,7 @@ export function completionMessage(doc: ComicDoc, results: LanguageResult[], keys
       ? ` Used ${fmt(usd)}.`
       : ' Free — done by the editor, no AI needed.'
     : usd > 0
-      ? ` Cost ${formatUsd(usd)}${byok ? ' on your key' : ''}.`
+      ? ` Cost ${formatUsd(usd)}${textByok ? ' on your key' : ''}.`
       : ' Cost $0 — done by the editor, no AI cost.';
   const lines = [head, ...parts];
   if (errors.length) lines.push(`${errors[0]}${/[.!?]$/.test(errors[0]) ? '' : '.'} Translate again to retry — only the missing lines are charged.`);

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { castNoun, createEmptyDoc, emptyRender, pageSpecHash, type AssetRef } from '../../../shared/comic/doc.js';
 import { lakeDrawnDoc } from './golden/fixtures.js';
-import { JOB_TIMINGS, startAction } from './jobs.js';
+import { JOB_TIMINGS, imageRouteFor, startAction } from './jobs.js';
+import { estimateJobs, formatUsd, resolveImageJob } from '../../../shared/comic/models.js';
 import { newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
 import { GROUP_HINTS, buildDirectorTools, buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
 import type { ToolGroup } from './extensions.js';
@@ -492,6 +493,22 @@ describe('render_pages semantics (bug: re-render of a ready page)', () => {
     expect(ctx.session.doc.gate).toBeNull();
     // Without page numbers too.
     expect(await call('render_pages', {})).toMatch(/^Nothing to draw: every page/);
+  });
+
+  it('an own Gemini key beside the platform OpenRouter key: the cover quote is priced for the key that draws it (as its gate)', async () => {
+    const doc = drawnLake();
+    const keys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'g-own', byok: true } };
+    ctx = testContext(newSession(doc), { keys });
+    turn = createDirectorTurn({ attachments: [], userText: 'generate all pages', drawIntent: 'explicit' });
+    tools = new Map(buildDirectorTools(ctx, turn).map((t) => [t.spec.function.name, t]));
+    const { spec } = resolveImageJob('cover', doc.settings.quality, doc.settings.imageModelOverride);
+    // Precondition: the cover's model draws on the user's own Gemini key (no markup, no usage).
+    expect(imageRouteFor(spec, keys)).toMatchObject({ route: 'gemini', byok: true });
+    const own = estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: true }).usd;
+    const marked = estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: false }).usd;
+    expect(formatUsd(own)).not.toBe(formatUsd(marked));
+    const out = await call('render_pages', { pages: [1] });
+    expect(out).toContain(`The cover isn't drawn yet (≈ ${formatUsd(own)})`);
   });
 
   it('redraw:true without the user asking for another take is refused with an offer', async () => {

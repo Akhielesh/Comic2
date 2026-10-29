@@ -75,6 +75,7 @@ import {
   LINE_KINDS,
   QUALITY_TIERS,
   billedLlm,
+  imageRouteFor,
   newTextSpendTracker,
   planPages,
   recordTextSpend,
@@ -535,9 +536,23 @@ function guardPaidText(ctx: StudioContext, turn: DirectorTurn): void {
   turn.paidText += 1;
 }
 
+/**
+ * Whether an image of this kind draws on the user's own key: the route of the model that will draw it,
+ * exactly as its gate prices it (an own Gemini key draws Google models even beside the platform
+ * OpenRouter key). Keys-level when the route can't be resolved.
+ */
+const imageQuoteIsByok = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet'): boolean => {
+  const doc = ctx.session.doc;
+  try {
+    return imageRouteFor(resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride).spec, ctx.keys)?.byok ?? spendIsByok(ctx.keys);
+  } catch {
+    return spendIsByok(ctx.keys);
+  }
+};
+
 const priceOf = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet', count = 1): number => {
   const doc = ctx.session.doc;
-  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: spendIsByok(ctx.keys) }).usd;
+  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: imageQuoteIsByok(ctx, kind) }).usd;
 };
 
 const pageWord = (pages: Page[]) => (pages.length === 1 ? `Page ${pages[0].n}` : `Pages ${joinList(pages.map((p) => String(p.n)))}`);
