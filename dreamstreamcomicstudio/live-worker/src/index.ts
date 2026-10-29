@@ -21,28 +21,53 @@
  *   GET  /api/monitor/:nurseryId/ws        WebSocket → MonitorRoom (auth = first frame)
  *   GET  /api/monitor/:nurseryId/export    CSV history (Authorization: Bearer; parents & caregivers)
  *   POST /api/monitor/:nurseryId/guest     share link + passcode → guest pass (no account)
+ *   GET  /api/monitor/:nurseryId/glance    Glance v1 for a watch or widget; If-None-Match → 304 (room: ADR 0006 WS-9)
+ *   POST /api/monitor/:nurseryId/act       "I'm on it", soothe, duty — idempotent by `id`, role-gated in the room
+ *   GET  /api/monitor/:nurseryId/peek      one encrypted still for a watch (Phase 2; the room says 501 until then)
+ *   POST /api/monitor/:nurseryId/members   add / change / remove a member (members.ts; aal2)
+ *
+ * Account, devices and ops (ADR 0006 §1):
+ *   POST   /api/me/kick                    close every socket of mine, everywhere (kick.ts)
+ *   POST   /api/devices/enroll|token|push  watch and native device grants (devices.ts; dormant until keyed)
+ *   DELETE /api/devices/:id                revoke a device everywhere (devices.ts)
+ *   POST   /api/ops/apns-probe             the APNs HTTP/2 probe (ops.ts; x-ops-key)
+ *   POST   /x/user/:userId/notify          signed security notice → that person's call line (ops.ts)
  *
  * Direct calls (Calls → search → call anyone on Stream Studio):
  *   GET  /api/calls/u/:userId/ws           WebSocket → that member's UserLine (auth = first frame, own token)
  *   GET  /api/calls/c/:callId/ws           WebSocket → the call's CallRoom (auth = first frame, call ticket)
  *   (Nothing else under /api/calls: the Durable Objects' /x/* endpoints are internal.)
  *
+ * Edge gates (origin.ts): every socket upgrade must come from one of our sites, the API's own
+ * origin or no Origin at all (native); monitor and call upgrades are rate limited per address
+ * (RL_WS, refused with close code 4008), share-link joins per address and per nursery
+ * (RL_GUEST, RL_GUEST_NID), event creation per account (RL_EVENT). The Durable Objects' own
+ * /x/* endpoints are never routed from outside — only the signed /x/user/:id/notify above.
+ *
  * Creating an event requires a signed-in Stream Studio member (welcome-code
  * gated; verified against Supabase with the caller's own token). Watching
  * never needs an account.
  */
 
+import { parseActRequest } from '../../packages/monitor-core/src/wire';
+import { actFrom, verifyActToken, type ActTokenEnv } from './auth/actToken';
+import { proofPath, type DeviceTokenEnv, type NonceStore } from './auth/deviceToken';
 import { CallRoom } from './callRoom';
 import { CLOUD_COPY_PART_BYTES, cloudCopyUsageFor, copyCompleteRoom, copyPartRoom, oversizeCopy, startCloudCopy, usageBody } from './cloudCopyQuota';
+import { handleDevices } from './devices';
 import { userLineName } from './directCalls';
 import { EventRoom } from './eventRoom';
+import { handleKick, parseJson, readBody } from './kick';
+import { handleMembers } from './members';
 import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
+import { handleOps, handleUserNotify } from './ops';
+import { clientKey, corsHeaders, isUpgrade, noteRefusedOrigin, originAllowed, refuseOrigin, refuseRateLimited, tooMany, withinLimit, LIMIT_PERIOD_S, type RateLimiterLike } from './origin';
 import { bearerFrom, verifyMember } from './supabaseAuth';
 import { UserLine } from './userLine';
 
 export { CallRoom, EventRoom, MonitorRoom, UserLine };
 
-export interface Env {
+export interface Env extends DeviceTokenEnv, ActTokenEnv {
   EVENT_ROOM: DurableObjectNamespace;
   MONITOR_ROOM: DurableObjectNamespace;
   /** Direct calls: one line per member, one room per call. */
@@ -54,8 +79,18 @@ export interface Env {
   SUPABASE_PUBLISHABLE_KEY?: string;
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
+  TURN_TAG_SALT?: string;
   /** Workers Analytics Engine dataset `stream_usage` (optional): Stream Studio usage points (usageMeter.ts). */
   STREAM_USAGE?: AnalyticsEngineDataset;
+  /** Workers Rate Limiting bindings (wrangler.jsonc `ratelimits`; origin.ts). All optional: absent = no limit. */
+  RL_WS?: RateLimiterLike;
+  RL_GUEST?: RateLimiterLike;
+  RL_GUEST_NID?: RateLimiterLike;
+  RL_EVENT?: RateLimiterLike;
+  /** Secret: x-ops-key for /api/ops/* (ops.ts). */
+  OPS_KEY?: string;
+  /** Secret: signs /x/user/:uid/notify (ops.ts); the email Worker's and Supabase Vault's value. */
+  SECURITY_HOOK_SECRET?: string;
 }
 
 const MAX_SEGMENT_BYTES = 32 * 1024 * 1024; // hard cap; ~6.8 Mbps * 10 s is well under this
@@ -120,25 +155,111 @@ const json = (data: unknown, status = 200, extra: Record<string, string> = {}) =
     headers: { 'content-type': 'application/json', ...extra },
   });
 
-function corsHeaders(req: Request, env: Env): Record<string, string> {
-  const origin = req.headers.get('Origin');
-  if (!origin) return {};
-  const allowed = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim());
-  if (!allowed.includes('*') && !allowed.includes(origin)) return {};
-  return {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
-    'Access-Control-Allow-Headers': 'content-type,x-host-key,authorization',
-    'Access-Control-Max-Age': '86400',
-    Vary: 'Origin',
-  };
-}
-
 const withCors = (res: Response, cors: Record<string, string>) => {
+  // A socket upgrade passes through untouched (its 101 can't be re-wrapped, and CORS doesn't apply).
+  if (res.status === 101) return res;
   const out = new Response(res.body, res);
   for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
   return out;
 };
+
+/* ------------------------------------------------- monitor: glance, act, peek */
+// The room decides who may read and do what (ADR 0006 WS-9: Supabase token, device token with
+// DS-Proof, or a single-use DS-Act token). The Worker checks what it can without state, so junk
+// never costs a Durable Object request, and hands the room only what it needs.
+
+const monitor = (env: Env, nid: string) => env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(nid));
+
+/**
+ * The headers the room may see: who is asking, their proof and the conditional — never cookies or
+ * anything else the client sent. `x-ds-path` is the path a DS-Proof signs (as the Worker routes it,
+ * without /live-api); the Worker always sets it itself, so a client can't choose it.
+ */
+function roomHeaders(req: Request, url: URL): Headers {
+  const h = new Headers();
+  for (const k of ['authorization', 'ds-proof', 'if-none-match', 'content-type']) {
+    const v = req.headers.get(k);
+    if (v) h.set(k, v.slice(0, 8192));
+  }
+  h.set('x-ds-path', proofPath(url));
+  return h;
+}
+
+/**
+ * A room that doesn't serve this route yet (before WS-9 deploys) answers its catch-all
+ * `{"error":"not found"}` 404. Say "not available yet" instead (501), so a watch never mistakes
+ * it for "this nursery is gone" and forgets it. The room's own answers pass through.
+ */
+async function featureAnswer(res: Response, extra: Record<string, string>): Promise<Response> {
+  if (res.status === 404) {
+    const text = await res.text();
+    if (/^\{"error":"not found"\}$/.test(text.trim())) return json({ ok: false, error: 'not_enabled' }, 501, { 'cache-control': 'no-store', ...extra });
+    return new Response(text, { status: 404, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
+  }
+  // A glance may be revalidated with its ETag; nothing else is ever kept.
+  const ok = res.status === 200 || res.status === 304;
+  const headers: Record<string, string> = { 'cache-control': ok ? 'private, no-cache' : 'no-store', ...extra };
+  for (const k of ['content-type', 'etag', 'retry-after']) {
+    const v = res.headers.get(k);
+    if (v) headers[k] = v;
+  }
+  return new Response(res.status === 304 ? null : res.body, { status: res.status, headers });
+}
+
+/** A DS-Act check that never spends the token: the room spends it (its memory is the one that counts). */
+const NO_SPEND: NonceStore = { checkAndSet: () => false };
+
+const ACT_MAX_BYTES = 2048;
+
+/**
+ * POST /api/monitor/:nid/act. Refused here, before any room is asked: a body that isn't an act
+ * (wire.ts parseActRequest), no credentials, and a DS-Act token that isn't valid for this nursery
+ * and incident or asks for anything but "I'm on it". The room does the rest — who may, and the
+ * `id` that makes a repeat answer the first answer instead of acting twice.
+ */
+async function act(req: Request, env: Env, url: URL, nid: string, cors: Record<string, string>): Promise<Response> {
+  const raw = await readBody(req, ACT_MAX_BYTES);
+  if (raw == null) return withCors(json({ ok: false, error: 'bad_request' }, 413), cors);
+  const a = parseActRequest(parseJson(raw));
+  if (!a) return withCors(json({ ok: false, error: 'bad_request' }, 400), cors);
+  const actToken = actFrom(req);
+  if (!actToken && !bearerFrom(req)) return withCors(json({ ok: false, error: 'unauthorized' }, 401), cors);
+  if (actToken) {
+    // A notification's action token only ever acknowledges, and only its own incident.
+    if (a.a !== 'ack' || !a.inc) return withCors(json({ ok: false, error: 'forbidden' }, 403), cors);
+    const v = await verifyActToken(env, actToken, { nid, inc: a.inc }, NO_SPEND);
+    if (!v.ok) return withCors(json({ ok: false, error: 'unauthorized' }, 401), cors);
+  }
+  const headers = roomHeaders(req, url);
+  headers.set('content-type', 'application/json');
+  // The exact bytes the client sent: a DS-Proof signs them.
+  const res = await monitor(env, nid).fetch(new Request(`https://monitor.internal/act?nid=${nid}`, { method: 'POST', body: raw, headers }));
+  return withCors(await featureAnswer(res, { 'cache-control': 'no-store' }), cors);
+}
+
+/** GET /glance and /peek: the room answers (200 with an ETag, 304, or its refusal). */
+async function readFromRoom(req: Request, env: Env, url: URL, nid: string, what: 'glance' | 'peek', cors: Record<string, string>): Promise<Response> {
+  if (!req.headers.get('authorization')) return withCors(json({ ok: false, error: 'unauthorized' }, 401, { 'cache-control': 'no-store' }), cors);
+  const res = await monitor(env, nid).fetch(new Request(`https://monitor.internal/${what}?nid=${nid}`, { method: 'GET', headers: roomHeaders(req, url) }));
+  return withCors(await featureAnswer(res, {}), cors);
+}
+
+const methodNotAllowed = (allow: string, cors: Record<string, string>) => withCors(json({ error: 'method not allowed' }, 405, { allow }), cors);
+
+/**
+ * The edge gates in front of every monitor and call socket: our origins (or none), and the
+ * per-address upgrade allowance. null = go ahead.
+ */
+async function socketGate(req: Request, env: Env, url: URL, limited: boolean): Promise<Response | null> {
+  if (!isUpgrade(req)) return null; // not a socket: the room answers (426)
+  const origin = req.headers.get('Origin');
+  if (!originAllowed(origin, url, env)) {
+    noteRefusedOrigin(origin);
+    return refuseOrigin();
+  }
+  if (limited && !(await withinLimit(env.RL_WS, clientKey(req)))) return refuseRateLimited(req);
+  return null;
+}
 
 const room = (env: Env, id: string) => env.EVENT_ROOM.get(env.EVENT_ROOM.idFromName(id));
 
@@ -157,28 +278,59 @@ export default {
     // Behind the site route the worker is mounted at /live-api/* — strip the prefix.
     const pathname = url.pathname.replace(/^\/live-api(?=\/)/, '');
 
+    // ------------------------------------------------- account, devices, ops
+    if (pathname === '/api/me/kick' || pathname.startsWith('/api/devices/') || pathname.startsWith('/api/ops/') || pathname.startsWith('/x/')) {
+      try {
+        if (pathname === '/api/me/kick') return withCors(await handleKick(req, env, ctx), cors);
+        const dev = pathname.match(/^\/api\/devices\/([A-Za-z0-9-]{1,40})$/);
+        if (dev) return withCors(await handleDevices(req, env, ctx, dev[1]), cors);
+        // Machinery, never a browser: no CORS.
+        const ops = pathname.match(/^\/api\/ops\/([a-z0-9-]{1,40})$/);
+        if (ops) return await handleOps(req, env, ops[1]);
+        const notify = pathname.match(/^\/x\/user\/([0-9a-f-]{36})\/notify$/);
+        if (notify) return await handleUserNotify(req, env, notify[1]);
+      } catch (err) {
+        console.error('account route error', err);
+        return withCors(json({ error: 'internal error' }, 500), cors);
+      }
+      return withCors(json({ error: 'not found' }, 404), cors);
+    }
+
     // ---------------------------------------------------------- baby monitor
-    const mon = pathname.match(/^\/api\/monitor\/(vapid|[0-9a-f-]{36})(?:\/(ws|export|guest))?$/);
+    const mon = pathname.match(/^\/api\/monitor\/(vapid|[0-9a-f-]{36})(?:\/(ws|export|guest|glance|act|peek|members))?$/);
     if (mon) {
       try {
-        if (mon[1] === 'vapid' && req.method === 'GET') {
+        const nid = mon[1];
+        const sub = mon[2];
+        if (sub && !UUID_RE.test(nid)) return withCors(json({ error: 'not found' }, 404), cors);
+        if (sub === 'members') return withCors(await handleMembers(req, env, ctx, nid), cors);
+        if (sub === 'act') return req.method === 'POST' ? await act(req, env, url, nid, cors) : methodNotAllowed('POST', cors);
+        if (sub === 'glance' || sub === 'peek') return req.method === 'GET' ? await readFromRoom(req, env, url, nid, sub, cors) : methodNotAllowed('GET', cors);
+        if (nid === 'vapid' && !sub && req.method === 'GET') {
           if (!env.MONITOR_ROOM) return withCors(json({ error: 'monitor unavailable' }, 503), cors);
           const res = await env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(KEY_HOLDER)).fetch(new Request('https://monitor.internal/vapid'));
           const keys = (await res.json()) as { publicKey?: string };
           return withCors(json({ publicKey: keys.publicKey ?? null }, res.ok ? 200 : 503, { 'cache-control': 'public, max-age=3600' }), cors);
         }
-        if (mon[2] === 'export' && UUID_RE.test(mon[1]) && req.method === 'GET') {
-          const res = await env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(mon[1])).fetch(
+        if (sub === 'export' && req.method === 'GET') {
+          const res = await monitor(env, nid).fetch(
             new Request(`https://monitor.internal/export${url.search}`, { headers: { authorization: req.headers.get('authorization') ?? '' } }),
           );
           return withCors(res, cors);
         }
-        if (mon[2] === 'guest' && UUID_RE.test(mon[1]) && req.method === 'POST') {
-          // Share link + passcode → a guest pass. The room rate-limits and locks out guessing.
+        if (sub === 'guest' && req.method === 'POST') {
+          // Share link + passcode → a guest pass. Per address and per nursery at the edge (no room
+          // woken for a flood); the room still rate-limits and locks out guessing behind that.
+          const ipKey = clientKey(req);
+          const [byAddress, byNursery] = await Promise.all([withinLimit(env.RL_GUEST, ipKey && `ip:${ipKey}`), withinLimit(env.RL_GUEST_NID, `n:${nid}`)]);
+          if (!byAddress || !byNursery) {
+            // The app's own words for it ("Too many tries — wait until …"), live/monitor/guest.ts.
+            return withCors(tooMany({ ok: false, reason: 'slow_down', retryAt: Date.now() + LIMIT_PERIOD_S * 1000, left: null }), cors);
+          }
           const body = await req.text();
           if (body.length > 2048) return withCors(json({ ok: false, reason: 'bad_link' }, 413), cors);
-          const res = await env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(mon[1])).fetch(
-            new Request(`https://monitor.internal/guest?nid=${mon[1]}`, {
+          const res = await monitor(env, nid).fetch(
+            new Request(`https://monitor.internal/guest?nid=${nid}`, {
               method: 'POST',
               body,
               // A signed-in person's own token (optional): the room asks Supabase who they are.
@@ -187,12 +339,13 @@ export default {
           );
           return withCors(new Response(res.body, { status: res.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), cors);
         }
-        if (mon[2] === 'ws' && UUID_RE.test(mon[1])) {
+        if (sub === 'ws') {
+          const refused = await socketGate(req, env, url, true);
+          if (refused) return refused;
           // Auth happens on the first frame inside the room (no tokens in URLs/logs).
-          return env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(mon[1])).fetch(
-            new Request(`https://monitor.internal/ws?nid=${mon[1]}`, req),
-          );
+          return monitor(env, nid).fetch(new Request(`https://monitor.internal/ws?nid=${nid}`, req));
         }
+        if (sub === 'export' || sub === 'guest') return methodNotAllowed(sub === 'export' ? 'GET' : 'POST', cors);
       } catch (err) {
         console.error('monitor route error', err);
         return withCors(json({ error: 'internal error' }, 500), cors);
@@ -207,9 +360,13 @@ export default {
       const call = pathname.match(/^\/api\/calls\/c\/([0-9a-f]{16})\/ws$/);
       try {
         if (line && UUID_RE.test(line[1]) && env.USER_LINE) {
+          const refused = await socketGate(req, env, url, true);
+          if (refused) return refused;
           return env.USER_LINE.get(env.USER_LINE.idFromName(userLineName(line[1]))).fetch(new Request(`https://line.internal/ws?uid=${line[1]}`, req));
         }
         if (call && env.CALL_ROOM) {
+          const refused = await socketGate(req, env, url, true);
+          if (refused) return refused;
           return env.CALL_ROOM.get(env.CALL_ROOM.idFromName(call[1])).fetch(new Request(`https://call.internal/ws?id=${call[1]}`, req));
         }
       } catch (err) {
@@ -234,6 +391,10 @@ export default {
             cors,
           );
         }
+        // Each event is a new Durable Object: a brake per account (RL_EVENT, 10 a minute).
+        if (!(await withinLimit(env.RL_EVENT, `ev:${who.userId}`))) {
+          return withCors(tooMany({ error: 'rate_limited', message: 'You’ve started a lot of events in the last minute — wait a moment and try again.' }), cors);
+        }
         const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const eventId = newEventId();
         const res = await roomCall(env, eventId, '/init', {
@@ -253,8 +414,12 @@ export default {
         return withCors(await roomCall(env, id, '/meta'), cors);
       }
 
-      // GET /api/events/:id/ws — hand the socket to the room (no CORS on WS)
+      // GET /api/events/:id/ws — hand the socket to the room (no CORS on WS). Our origins only, but
+      // no per-address limit: a venue's Wi-Fi or a carrier NAT puts a whole audience behind one
+      // address, and the EventRoom caps its own viewers.
       if (sub === 'ws') {
+        const refused = await socketGate(req, env, url, false);
+        if (refused) return refused;
         return room(env, id).fetch(new Request(`https://room.internal/ws${url.search}`, req));
       }
 
