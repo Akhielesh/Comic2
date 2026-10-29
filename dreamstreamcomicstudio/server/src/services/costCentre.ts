@@ -9,6 +9,9 @@
 //   streamCosts.ts                     Stream Studio's tab: measured DO / R2 / TURN month to date + the
 //                                      rooms' usage counters (Analytics Engine) → report.stream and the
 //                                      'stream' product row (marginal $ + list value). ADR 0007.
+//   securitySignals.ts                 Admin → Costs → Security (ADR 0006 WS-8): CSP report counts, sign-in
+//                                      alert counts (security_events) and the live Worker's refusal /
+//                                      disconnect signals — aggregate counts only → report.security.
 //   getCostCentreReport(days)          The route's entry point (60s cache, request-coalesced).
 //
 // Provenance (shown as badges in the UI):
@@ -45,6 +48,15 @@ import {
   topNurseryIds,
   type StreamAnalytics
 } from './streamCosts.js';
+import {
+  buildSecuritySection,
+  cspQueryDays,
+  fetchCspCounts,
+  loadSignInCounts,
+  type CountClient,
+  type CspCounts,
+  type SignInCounts
+} from './securitySignals.js';
 
 // ─── Constants (each documented with its source) ──────────────────────────────────────────
 
@@ -285,6 +297,11 @@ export interface CostCentreBuildOptions {
     namespaceLabels?: Record<string, string>;
     phase0Shipped?: boolean;
   };
+  /**
+   * Admin → Costs → Security: the CSP report counts and the sign-in alert counts (absent = not read).
+   * The live Worker's signals come from `stream.analytics` (the same Analytics Engine answer).
+   */
+  security?: { csp: CspCounts | null; signIns: SignInCounts | null };
 }
 
 // ─── Small helpers ─────────────────────────────────────────────────────────────────────────
@@ -928,7 +945,16 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
     products,
     cloudflare: opts.cloudflare ?? { configured: false },
     notes,
-    stream
+    stream,
+    security: buildSecuritySection({
+      nowMs,
+      range: { fromMs, toMs, prevFromMs, days },
+      csp: opts.security?.csp ?? null,
+      signIns: opts.security?.signIns ?? null,
+      // Analytics Engine answered → its signal rows (maybe none yet); didn't, or wasn't asked → unknown.
+      signals: opts.stream?.analytics?.ae !== undefined ? opts.stream.analytics.aeSignals ?? [] : null,
+      aeFromMs: opts.stream?.analytics?.aeFromMs ?? null
+    })
   };
 };
 
@@ -1277,13 +1303,18 @@ export const getCostCentreReport = async (days: CostRangeDays, options: { fresh?
   return reportCache.getOrSet(key, async () => {
     const now = new Date();
     const range = computeCostRange(days, now);
-    const [rows, cloudflare, streamAnalytics] = await Promise.all([
+    const [rows, cloudflare, streamAnalytics, csp, signIns] = await Promise.all([
       loadCostCentreRows(days, now),
       fetchCloudflareAnalytics({ fromMs: range.fromMs, toMs: range.toMs }).catch(
         (err): CloudflareSection => ({ configured: true, error: (err as Error)?.message || 'Cloudflare analytics unavailable' })
       ),
-      // Stream Studio: ≤ 4 GraphQL queries + 1 Analytics Engine query, month to date. Never throws.
-      fetchStreamAnalytics({ nowMs: now.getTime(), fromMs: range.prevFromMs }).catch((): StreamAnalytics | null => null)
+      // Stream Studio: ≤ 5 GraphQL queries + 1 Analytics Engine query, month to date. Never throws.
+      fetchStreamAnalytics({ nowMs: now.getTime(), fromMs: range.prevFromMs }).catch((): StreamAnalytics | null => null),
+      // Security: one Analytics Engine query (CSP counts) + five HEAD counts on security_events. Never throw.
+      fetchCspCounts({ nowMs: now.getTime(), days: cspQueryDays(days) }).catch((): CspCounts | null => null),
+      Promise.resolve()
+        .then(() => loadSignInCounts(getSupabaseAdmin() as unknown as CountClient, range.fromMs, range.toMs))
+        .catch((): SignInCounts | null => null)
     ]);
     const nurseryNames = await loadNurseryNames(topNurseryIds(streamAnalytics, range.fromMs, range.toMs), rows.profiles);
     return buildCostCentreReport(rows, {
@@ -1295,7 +1326,8 @@ export const getCostCentreReport = async (days: CostRangeDays, options: { fresh?
         nurseryNames,
         namespaceLabels: namespaceLabelsFromEnv(),
         phase0Shipped: process.env.STREAM_PHASE0_SHIPPED === '1'
-      }
+      },
+      security: { csp, signIns }
     });
   });
 };

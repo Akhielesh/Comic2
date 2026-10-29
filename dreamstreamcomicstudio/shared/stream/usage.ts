@@ -312,8 +312,8 @@ export const STREAM_ALLOWANCES = {
 } as const;
 
 /** Metered dimensions with a free allowance and a unit price beyond it. */
-export type MeterId = 'doRequests' | 'doGbSeconds' | 'doRowsWritten' | 'r2StoredGb' | 'r2ClassA' | 'r2ClassB' | 'turnGb' | 'workerRequests';
-export const METER_IDS: readonly MeterId[] = ['doRequests', 'doGbSeconds', 'doRowsWritten', 'r2StoredGb', 'r2ClassA', 'r2ClassB', 'turnGb', 'workerRequests'];
+export type MeterId = 'doRequests' | 'doGbSeconds' | 'doRowsWritten' | 'doStoredGb' | 'r2StoredGb' | 'r2ClassA' | 'r2ClassB' | 'turnGb' | 'workerRequests';
+export const METER_IDS: readonly MeterId[] = ['doRequests', 'doGbSeconds', 'doRowsWritten', 'doStoredGb', 'r2StoredGb', 'r2ClassA', 'r2ClassB', 'turnGb', 'workerRequests'];
 
 export interface MeterSpec {
   label: string;
@@ -327,6 +327,8 @@ export const STREAM_METERS: Readonly<Record<MeterId, MeterSpec>> = {
   doRequests: { label: 'Durable Object requests', unit: 'requests', allowance: STREAM_ALLOWANCES.doRequests, usdPerUnit: STREAM_UNIT_PRICES.doReqPerM / 1e6 },
   doGbSeconds: { label: 'Durable Object duration', unit: 'GB-s', allowance: STREAM_ALLOWANCES.doGbSeconds, usdPerUnit: STREAM_UNIT_PRICES.gbSecPerM / 1e6 },
   doRowsWritten: { label: 'Durable Object rows written', unit: 'rows', allowance: STREAM_ALLOWANCES.doRowsWritten, usdPerUnit: STREAM_UNIT_PRICES.rowsPerM / 1e6 },
+  // A level, not a running total (like R2 storage): the latest day's stored bytes, all Durable Objects on the account.
+  doStoredGb: { label: 'Durable Object storage', unit: 'GB-month', allowance: STREAM_ALLOWANCES.doStoredGb, usdPerUnit: STREAM_UNIT_PRICES.doStoredGbMonth },
   r2StoredGb: { label: 'R2 storage', unit: 'GB-month', allowance: STREAM_ALLOWANCES.r2StoredGb, usdPerUnit: STREAM_UNIT_PRICES.r2GbMonth },
   r2ClassA: { label: 'R2 Class A operations', unit: 'operations', allowance: STREAM_ALLOWANCES.r2ClassA, usdPerUnit: STREAM_UNIT_PRICES.r2APerM / 1e6 },
   r2ClassB: { label: 'R2 Class B operations', unit: 'operations', allowance: STREAM_ALLOWANCES.r2ClassB, usdPerUnit: STREAM_UNIT_PRICES.r2BPerM / 1e6 },
@@ -597,8 +599,10 @@ export interface StreamAlertInput {
   turnTopIdentifierGbDay?: number | null;
   /** DO GB-s per active nursery-day, oldest first (last few days). */
   gbSecPerNurseryDay?: number[] | null;
-  /** DO rows written per active nursery-day, latest (applies after ADR 0006 Phase 0 ships). */
+  /** DO rows written per active nursery-day — the 7-day median when known, else month to date (applies after ADR 0006 Phase 0 ships). */
   rowsPerNurseryDay?: number | null;
+  /** DO requests per active nursery-day — the 7-day median (applies after ADR 0006 Phase 0 ships). */
+  requestsPerNurseryDay?: number | null;
   phase0Shipped?: boolean;
   /** Our-server share (0–1) of monitor viewer-minutes over the last 7 days. */
   serverShare7d?: number | null;
@@ -617,6 +621,8 @@ export const ALERT_THRESHOLDS = {
   gbSecPerNurseryDay: 40,
   gbSecDaysInARow: 2,
   rowsPerNurseryDay: 1800,
+  /** ADR 0006 Phase 0 budget: DO requests per active nursery-day (7-day median). */
+  requestsPerNurseryDay: 1000,
   turnIdentifierGbDay: 20,
   turnGbBeforeThe15th: 500,
   serverShare7d: 0.1,
@@ -702,6 +708,15 @@ export function evaluateStreamAlerts(input: StreamAlertInput): StreamAlert[] {
       severity: 'warning',
       title: 'MonitorRoom write diet regressed',
       cause: `${fmtNum(input.rowsPerNurseryDay)} rows written per active nursery-day (budget ${fmtNum(t.rowsPerNurseryDay)}).`
+    });
+  }
+
+  if (input.phase0Shipped && input.requestsPerNurseryDay != null && input.requestsPerNurseryDay > t.requestsPerNurseryDay) {
+    out.push({
+      id: 'request_diet',
+      severity: 'warning',
+      title: 'MonitorRoom request budget exceeded',
+      cause: `${fmtNum(input.requestsPerNurseryDay)} Durable Object requests per active nursery-day (budget ${fmtNum(t.requestsPerNurseryDay)}) — look for a chatty client: status sent more often than on change, a reconnect loop, or relay frames to hidden viewers.`
     });
   }
 

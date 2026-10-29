@@ -7,6 +7,8 @@ import {
   buildStreamSection,
   failedDatasets,
   fetchStreamAnalytics,
+  kpiWindowStartMs,
+  median,
   namespaceLabelsFromEnv,
   parseAeActive,
   parseAeRows,
@@ -45,7 +47,9 @@ const healthyAccount = (query: string): Record<string, unknown> =>
       ? { workersInvocationsAdaptive: [], durableObjectsInvocationsAdaptiveGroups: [] }
       : query.includes('durableObjectsPeriodicGroups')
         ? { durableObjectsPeriodicGroups: [] }
-        : { r2OperationsAdaptiveGroups: [], r2StorageAdaptiveGroups: [] };
+        : query.includes('durableObjectsStorageGroups')
+          ? { durableObjectsStorageGroups: [] }
+          : { r2OperationsAdaptiveGroups: [], r2StorageAdaptiveGroups: [] };
 
 const range30 = () => {
   const r = computeCostRange(30, new Date(NOW));
@@ -79,6 +83,10 @@ const analytics = (over: Partial<StreamAnalytics> = {}): StreamAnalytics => ({
     { bucket: 'dreamstream-live', actionType: 'DeleteObject', requests: 50 }
   ],
   turnEgressBytes: 40e9,
+  doStorage: [
+    { date: '2026-10-19', storedBytes: 0.5e9 },
+    { date: '2026-10-20', storedBytes: 0.6e9 }
+  ],
   ae: [
     row('2026-10-19', 'monitor', 'nursery', N1, { relayFrames: 54_000, minutes: { server: 60, direct: 400, lan: 140 } }),
     row('2026-10-20', 'monitor', 'nursery', N1, { relayFrames: 540_000, minutes: { server: 600 } }),
@@ -94,7 +102,7 @@ const analytics = (over: Partial<StreamAnalytics> = {}): StreamAnalytics => ({
   ...over
 });
 
-describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', () => {
+describe('Stream costs — fetch (≤ 5 GraphQL + 1 Analytics Engine query)', () => {
   it('does nothing without credentials', async () => {
     const fetchImpl = vi.fn();
     const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW - 60 * 86_400_000, creds: null, fetchImpl });
@@ -102,7 +110,7 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('asks four GraphQL datasets month to date and Analytics Engine once, and parses them', async () => {
+  it('asks five GraphQL datasets month to date and Analytics Engine once, and parses them', async () => {
     const seen: { url: string; body: string }[] = [];
     const fetchImpl = vi.fn(async (url: string, init?: { body?: string }) => {
       seen.push({ url, body: String(init?.body) });
@@ -117,6 +125,8 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
         ? { workersInvocationsAdaptive: [{ dimensions: { scriptName: 'dreamstream-live' }, sum: { requests: 5 } }], durableObjectsInvocationsAdaptiveGroups: [{ dimensions: { date: '2026-10-20', namespaceId: 'ABC' }, sum: { requests: 7 } }] }
         : q.query.includes('durableObjectsPeriodicGroups')
           ? { durableObjectsPeriodicGroups: [{ dimensions: { date: '2026-10-20', namespaceId: 'abc' }, sum: { activeTime: 2e6, rowsWritten: 9 } }] }
+          : q.query.includes('durableObjectsStorageGroups')
+            ? { durableObjectsStorageGroups: [{ dimensions: { date: '2026-10-20' }, max: { storedBytes: 4e8 } }] }
           : q.query.includes('r2OperationsAdaptiveGroups')
             ? {
                 r2OperationsAdaptiveGroups: [{ dimensions: { actionType: 'PutObject', bucketName: 'dreamstream-live' }, sum: { requests: 3 } }],
@@ -129,13 +139,15 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
       return { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [account] } }, errors: null }) };
     });
     const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: NOW - 60 * 86_400_000, creds: { token: 't', accountId: 'acct' }, fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledTimes(5);
-    expect(seen.filter((s) => s.url.endsWith('/graphql'))).toHaveLength(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+    expect(seen.filter((s) => s.url.endsWith('/graphql'))).toHaveLength(5);
     expect(seen.find((s) => s.url.includes('/accounts/acct/analytics_engine/sql'))?.body).toContain('FROM stream_usage');
     // Month to date: the queries start on the 1st.
     expect(JSON.parse(seen[0].body).variables).toMatchObject({ start: '2026-10-01T00:00:00.000Z', startDate: '2026-10-01', endDate: '2026-10-21' });
     expect(a.doRequests).toEqual([{ date: '2026-10-20', namespaceId: 'abc', requests: 7 }]);
     expect(a.doPeriodic?.[0]).toMatchObject({ activeTimeUs: 2e6, rowsWritten: 9 });
+    expect(a.doStorage).toEqual([{ date: '2026-10-20', storedBytes: 4e8 }]);
+    expect(a.aeSignals).toEqual([]);
     expect(a.turnEgressBytes).toBe(123);
     expect(a.r2Storage).toEqual([{ bucket: 'dreamstream-live', payloadBytes: 9e9 }]); // latest sample per bucket
     expect(a.ae).toHaveLength(1);
@@ -186,12 +198,14 @@ describe('Stream costs — fetch (≤ 4 GraphQL + 1 Analytics Engine query)', ()
     expect(alertDatasets('turn_leak')).toEqual(['turn']);
     expect(alertDatasets('free_tier:turnGb')).toEqual(['turn']);
     expect(alertDatasets('free_tier:doRowsWritten')).toEqual(['periodic']);
+    expect(alertDatasets('free_tier:doStoredGb')).toEqual(['storage']);
+    expect(alertDatasets('request_diet')).toEqual(['requests', 'ae']);
     expect(alertDatasets('free_tier:workerRequests')).toEqual(['requests']);
     expect(alertDatasets('r2_near_free')).toEqual(['r2']);
     expect(alertDatasets('hibernation')).toEqual(['periodic', 'ae']);
     expect(alertDatasets('relay_creep')).toEqual(['ae']);
     expect(alertDatasets('email_near_free')).toEqual([]);
-    expect(alertDatasets('something_new')).toEqual(['requests', 'periodic', 'r2', 'turn', 'ae']);
+    expect(alertDatasets('something_new')).toEqual(['requests', 'periodic', 'storage', 'r2', 'turn', 'ae']);
   });
 
   it('builds one Analytics Engine query with every counter, capped at its retention', () => {
@@ -409,6 +423,115 @@ describe('Stream costs — the section (pure)', () => {
     expect(s.alerts).toEqual([]);
     expect(s.notes.some((n) => n.includes('CF_ANALYTICS_API_TOKEN'))).toBe(true);
     expect(streamVerdict(s, formatUsd)).toMatch(/^Not measured yet/);
+  });
+
+  it('early in a month reads the Durable Object days back to a week ago, but bills the allowances from the 1st', () => {
+    const third = Date.parse('2026-11-03T06:17:00Z');
+    expect(new Date(kpiWindowStartMs(third)).toISOString()).toBe('2026-10-27T00:00:00.000Z');
+    expect(new Date(kpiWindowStartMs(NOW)).toISOString()).toBe('2026-10-01T00:00:00.000Z'); // the 1st is earlier
+    const r = computeCostRange(7, new Date(third));
+    const days = ['2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02'];
+    const s = buildStreamSection({
+      nowMs: third,
+      range: { fromMs: r.fromMs, toMs: r.toMs, prevFromMs: r.prevFromMs, days: 7 },
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({
+        nowMs: third,
+        doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 900 })),
+        doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: (20 / 0.128) * 1e6, rowsWritten: 1500 })),
+        aeActive: days.map((d) => mark(d, N1))
+      })
+    });
+    // Month to date: only Nov 1 and 2.
+    expect(s.headroom.find((h) => h.id === 'doRequests')?.used).toBe(1800);
+    expect(s.headroom.find((h) => h.id === 'doRowsWritten')?.used).toBe(3000);
+    // The medians see all four complete days.
+    expect(s.kpis.median7d).toEqual({ days: 4, doRequests: 900, rowsWritten: 1500, gbSeconds: 20 });
+    expect(s.kpis.status).toEqual({ doRequests: 'ok', rowsWritten: 'ok', gbSeconds: 'ok' });
+  });
+
+  it('judges Phase 0 on the 7-day median, not the month-to-date mean one bad night pulls up', () => {
+    const days = ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'];
+    const reqs = [800, 900, 950, 700, 30_000, 850, 990, 1100]; // one reconnect storm on the 17th
+    const s = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      phase0Shipped: true,
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({
+        doRequests: days.map((date, i) => ({ date, namespaceId: MONITOR_NS, requests: reqs[i] })),
+        doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: (12 / 0.128) * 1e6, rowsWritten: 1000 })),
+        aeActive: days.map((d) => mark(d, N1)),
+        ae: []
+      })
+    });
+    // The last 7 complete days: 14th…20th → median of [900, 950, 700, 30000, 850, 990, 1100] = 950.
+    expect(s.kpis.median7d).toMatchObject({ days: 7, doRequests: 950, rowsWritten: 1000, gbSeconds: 12 });
+    expect(s.kpis.doRequests).toBeGreaterThan(4000); // the month-to-date mean
+    expect(s.kpis.status?.doRequests).toBe('ok');
+    expect(s.kpis.budgets).toEqual({ doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 });
+    expect(s.alerts.map((a) => a.id)).not.toContain('request_diet');
+    expect(s.notes.some((n) => n.includes('7-day MEDIAN'))).toBe(true);
+    // A week over budget does fire it.
+    const over = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      phase0Shipped: true,
+      namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+      analytics: analytics({ doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 1500 })), aeActive: days.map((d) => mark(d, N1)), ae: [] })
+    });
+    expect(over.kpis.status?.doRequests).toBe('over');
+    expect(over.alerts.map((a) => a.id)).toContain('request_diet');
+  });
+
+  it('reports DO storage as an account-wide level with its own headroom row, and per nursery', () => {
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics({ doStorage: [{ date: '2026-10-20', storedBytes: 6e9 }, { date: '2026-10-19', storedBytes: 1e9 }] }) });
+    const row = s.headroom.find((h) => h.id === 'doStoredGb')!;
+    expect(row).toMatchObject({ label: 'Durable Object storage', used: 6, projected: 6, allowance: 5, overageUsd: 0.2, source: 'measured' });
+    expect(row.note).toMatch(/Account-wide level/);
+    expect(s.kpis.doStoredGb).toBe(6);
+    expect(s.kpis.doStoredMbPerNursery).toBe(3000); // 6 GB over the 2 nurseries active this month
+    expect(s.alerts.map((a) => a.id)).toContain('free_tier:doStoredGb');
+  });
+
+  it('adds TURN GB and the relay share (TURN + our server) once monitor viewers report paths', () => {
+    const reported = analytics({ ae: [row('2026-10-19', 'monitor', 'nursery', N1, { minutes: { server: 100, turn: 100, direct: 600, lan: 200 } })] });
+    const s = buildStreamSection({ nowMs: NOW, range: range30(), analytics: reported });
+    expect(s.kpis.relayShare).toBeCloseTo(0.2, 6);
+    expect(s.kpis.serverShare).toBeCloseTo(0.1, 6);
+    expect(s.kpis.turnGbMonthToDate).toBe(40);
+    const unreported = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics({ ae: [row('2026-10-19', 'monitor', 'nursery', N1, { minutes: { server: 60 } })] }) });
+    expect(unreported.kpis.relayShare).toBeNull(); // not 100%
+  });
+
+  it('shows Glance bumps and pushes per nursery-night from the rooms’ signals — unknown until they count', () => {
+    const none = buildStreamSection({ nowMs: NOW, range: range30(), analytics: analytics() });
+    expect(none.kpis).toMatchObject({ glanceBumpsPerNight: null, pushesPerNight: null });
+    expect(none.notes.some((n) => n.includes('signal counters'))).toBe(true);
+    expect(none.features.find((f) => f.id === 'push')?.units).toEqual([]);
+    const sig = (day: string, name: 'glance_bump' | 'push_sent' | 'push_gone', count: number, surface: '' | 'webpush' = '') => ({ day, name, surface, count });
+    const s = buildStreamSection({
+      nowMs: NOW,
+      range: range30(),
+      analytics: analytics({
+        aeSignals: [sig('2026-10-19', 'glance_bump', 50), sig('2026-10-20', 'glance_bump', 100), sig('2026-10-20', 'push_sent', 9, 'webpush'), sig('2026-10-20', 'push_gone', 1), sig('2026-10-21', 'glance_bump', 999)]
+      })
+    });
+    // Complete marked days: 19th (N1) and 20th (N1, N2) = 3 nursery-nights; today (21st) is partial.
+    expect(s.kpis.glanceBumpsPerNight).toBe(50);
+    expect(s.kpis.pushesPerNight).toBe(3);
+    expect(s.features.find((f) => f.id === 'push')?.units).toEqual([
+      { label: 'Pushes handed to a provider (at least)', value: 9, unit: 'pushes' },
+      { label: 'Targets pruned as gone', value: 1, unit: 'targets' }
+    ]);
+    expect(s.notes.some((n) => n.includes('are floors'))).toBe(true);
+  });
+
+  it('takes a median of the middle values', () => {
+    expect(median([])).toBeNull();
+    expect(median([3, 1, 2])).toBe(2);
+    expect(median([4, 1, 2, 3])).toBe(2.5);
+    expect(median([Number.NaN, 5])).toBe(5);
   });
 
   it('adds the shared email allowance and its alert from email_log', () => {

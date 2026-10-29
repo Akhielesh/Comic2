@@ -525,10 +525,10 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 **Ruled out:** Capacitor; fully native phone apps; an SFU or cloud recording; WebRTC or sockets on the Apple Watch; certificate pinning; VoIP-mode or silent-audio background hacks; "unhackable" marketing.
 
 **Follow-ups**
-- ADR 0007 for the roster-log wire format (Phase 1).
-- Update `docs/features/baby-monitor.md` (security and connection sections) and `docs/infrastructure/` (secrets, rate limits, R2 lifecycle).
-- A privacy policy that matches D6.4.
-- `/.well-known/security.txt`.
+- ADR 0007 for the roster-log wire format (Phase 1). *(0007 has since been taken by Stream Studio cost transparency; the roster log takes the next free number.)*
+- Update `docs/features/baby-monitor.md` (security and connection sections) and `docs/infrastructure/` (secrets, rate limits, R2 lifecycle). *(Done 2026-10-29, WS-8: `live-security-runbook.md`, `phase0-owner-checklist.md`.)*
+- A privacy policy that matches D6.4. *(Draft paragraph for the owner's approval in `phase0-owner-checklist.md` §18; `components/PrivacyPolicy.tsx` doesn't mention the monitor yet.)*
+- `/.well-known/security.txt`. *(Done, WS-1.)*
 
 ---
 
@@ -575,7 +575,7 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - **Sensitivity:**
   - If cellular viewing is twice the assumption, TURN doubles ($8.9k at 100k after Phase 0). coturn removes about 90% of that.
   - **If hibernation breaks** (a stray timer or pending I/O), the worst case is 5,400 GB-s per nursery-day, which is **about $20k/month at 10k nurseries**. The Phase 0 duration KPI exists to catch this.
-- **KPIs to measure** (WS-8 adds these to the cost centre; acceptance requires 7 days of data):
+- **KPIs to measure** (WS-8 adds these to the cost centre — Admin → Costs → Stream Studio → *Baby monitor health*, built 2026-10-29; acceptance requires 7 days of data):
   - DO requests, rows, GB-s and storage per active nursery-day, from the GraphQL datasets `durableObjectsInvocationsAdaptiveGroups`, `durableObjectsPeriodicGroups` and `durableObjectsStorageGroups`.
   - TURN GB.
   - The share of viewer minutes on relay or TURN paths.
@@ -629,7 +629,7 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - [ ] A sign-in from a new browser produces an email within **2 minutes**. "Not you?" revokes all sessions, kicks all sockets and starts a password reset.
 - [ ] Relay binary frames seen by the DO contain no JPEG SOI marker (`FF D8`) (test). Replayed or stale frames are dropped. After removal plus 60 s, a removed device cannot decrypt new frames.
 - [ ] Between E2E-capable peers, forwarded `rtc.d` contains no plaintext `sdp` or `candidate` (test), and an unsealed offer to a key-holding camera is refused.
-- [ ] 7-day production median per active nursery-day: **DO requests ≤ 1,000, rows written ≤ 1,800, DO duration ≤ 40 GB-s**. Relay share is reported in the cost centre. *(Built 2026-10-23; a simulated 12 h night gives 542 / 1,040 / 3.6 GB-s — `live-worker/src/monitorRoom.night.test.ts`. Production median still to be read.)*
+- [ ] 7-day production median per active nursery-day: **DO requests ≤ 1,000, rows written ≤ 1,800, DO duration ≤ 40 GB-s**. Relay share is reported in the cost centre. *(Built 2026-10-23; a simulated 12 h night gives 542 / 1,040 / 3.6 GB-s — `live-worker/src/monitorRoom.night.test.ts`. Production median still to be read: Admin → Costs → Stream Studio → Baby monitor health shows the three 7-day medians, how many days they cover, and ok / over against these budgets, with the relay share beside them (WS-8, 2026-10-29).)*
 - [ ] GET `/glance` returns 200 with an ETag, then 304 when unchanged (p95 ≤ 150 ms when warm). `{t:'glance'}` frames are sent only on a bump. Replaying the fixture of a recorded night gives **60 bumps or fewer**. *(Bump rules and the night fixture built 2026-10-28 in `packages/monitor-core`: 57 bumps for a night with a second camera from 22:00, fed at the room's real cadence. The endpoint and the frames are WS-9's.)*
 - [ ] POST `/act` with the same `id` twice gives one acknowledgement. It is role-gated and writes the same log as a WebSocket acknowledgement.
 - [ ] The production APNs probe returns an APNs error body **with `apns-id`**, or the FCM-for-iOS fallback is recorded as the decision. The FCM sender passes against recorded fixtures. The service-worker "I'm on it" action acknowledges without opening the app.
@@ -716,6 +716,8 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 ---
 
 ## Owner actions (and when each is needed)
+
+Exact clicks and commands for every Phase 0 action, in order: `docs/infrastructure/phase0-owner-checklist.md`.
 
 | # | Action | Needed by | Lead time | Output, and where it goes |
 |---|---|---|---|---|
@@ -1010,18 +1012,23 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 - `docs/decisions/0006-native-apps-watch-local-first-security.md`
 
 **Tasks:**
-- [ ] `costCentre.ts`:
+- [x] `costCentre.ts`:
   - Query `durableObjectsInvocationsAdaptiveGroups`, `durableObjectsPeriodicGroups` (rows, GB-s) and `durableObjectsStorageGroups`.
   - Compute per-active-nursery-day KPIs (requests, rows, GB-s) with alert thresholds (1,000 / 1,800 / 40).
   - Add TURN GB and the relay-share field.
-- [ ] Runbook:
+  *(Done 2026-10-29. Extended, not duplicated: the Stream Studio cost work (ADR 0007 Phase A) had already put the first two datasets, the per-active-nursery-day KPIs (over the rooms' daily activity marks) and the hibernation / write-diet alerts in `server/src/services/streamCosts.ts`, which `costCentre.ts` calls — so they grew there. Added: `durableObjectsStorageGroups` as its own sixth dataset (`storage`: a level, its own headroom row and `free_tier:doStoredGb` alert, MB per nursery as an upper bound); the **7-day median** per active nursery-day over the last complete days with marks — what this ADR's acceptance reads — with `budgets` and `status` (ok / over / unknown) beside the month-to-date averages; a `request_diet` alert (> 1,000, after Phase 0) and `write_diet` on the median; the Durable Object datasets reach back 7 days before the 1st (`kpiWindowStartMs`) while monthly totals still start on the 1st, so neither the medians nor the hibernation check go blind early in a month; `turnGbMonthToDate`, `relayShare` (TURN + our server, of monitor viewer-minutes, once viewers report paths), and Glance bumps and pushes per nursery-night. Admin → Costs → Stream Studio → *Baby monitor health* shows them; the daily `stream-cost-watch` reads the sixth dataset too.)*
+  *Security observability (the same Cost centre, new **Security** tab; `server/src/services/securitySignals.ts`): CSP report counts from the Pages function's `CSP_REPORTS` Analytics Engine dataset (`csp_live_violations` warns while Stream Studio isn't clean for 48 h, `csp_live_blocked` is critical when the enforced policy blocks our own code there), sign-in alert counts from `security_events` (HEAD counts only; "not measured" until `live_security_v2.sql` is applied; `not_you_used` flags every "Not you?"), and the live Worker's refusal / disconnect counts. Everything is a count: no account, nursery, device, IP, token, email or URL is read for it.)*
+  *Contract note — room and edge signals (`shared/stream/signals.ts`, writer `live-worker/src/signals.ts`): `signal(env, name, surface?)` counts one of a fixed list — `kick`, `kick_closed`, `removed_closed`, `device_revoked_closed`, `mfa_refused`, `session_expired`, `session_revoked`, `reauth_ok`, `rate_limited`, `origin_refused`, `preauth_evicted`, `guest_lockout`, `camera_spoof_refused`, `glance_bump`, `push_sent`, `push_gone`, `push_failed` — with a surface word from a fixed list (`monitor`, `camera`, `line`, `call`, `glance`, `admin`, `guest`, `edge`, `account`, `device`, or a push kind). It writes into the existing `stream_usage` dataset (`STREAM_USAGE`, index `sig`; no new binding), coalesced to ≤ 1 point per minute per isolate per signal, never throws, never awaits; `flushSignals(env)` writes what is left (call it from the rooms' hourly usage flush). Producers to wire: WS-7 (`rate_limited`, `origin_refused`, `kick`, `mfa_refused`, `session_revoked` at the edge), WS-9 (`kick_closed`, `removed_closed`, `device_revoked_closed`, `session_expired`, `reauth_ok`, `mfa_refused`, `preauth_evicted`, `guest_lockout`, `camera_spoof_refused`, `glance_bump`, `push_*` with the transport as surface), WS-10 (the line and call-room equivalents). Until they do, the Security tab and the bumps/pushes KPIs say "not counted yet", never zero.)*
+- [x] Runbook:
   - Secrets list and rotation.
   - `wrangler r2 bucket lifecycle add`: `events/` expires after 9 days; incomplete multipart uploads aborted after 1 day.
   - Rate-limit settings.
   - The Supabase settings checklist (owner actions #3 and #4).
   - How to run the APNs probe.
   - Incident playbook for "suspected account takeover".
-- [ ] Docs: the Glance contract (copied from D2), the security and connection sections of the baby-monitor feature doc, and the ADR index row.
+  *(Done 2026-10-29: `docs/infrastructure/live-security-runbook.md` — every secret with where it lives, how to make it and the order to rotate it without an outage (`ACT_TOKEN_KEY` has one key, so never during an open incident; VAPID never); the three R2 lifecycle rules (`events/` 9 days, its unfinished multipart uploads 1 day, and the existing `quota/rec/` 8 days) with why each must outlast what we promise; edge and in-room limits; the Supabase checklist; the APNs probe (the manual workflow now, `POST /api/ops/apns-probe` after WS-7); what each Admin → Costs security / Phase 0 alert means and what to do; CSP flip and undo; the account-takeover playbook and a platform-compromise one. Every owner step, with exact clicks and commands in order, is in `docs/infrastructure/phase0-owner-checklist.md`, including a privacy-policy paragraph matching D6.4 for owner action #18.)*
+- [x] Docs: the Glance contract (copied from D2), the security and connection sections of the baby-monitor feature doc, and the ADR index row.
+  *(Done 2026-10-29: `docs/features/glance-contract.md` (D2 plus what WS-2 settled: `can` per role and guest, the 512 B budget and how it is kept, decoder rules, the ETag, the bump rules and the night fixture's 57 bumps, every transport and its status, privacy, how to change it); `baby-monitor.md` gains *Connection* and *Security and privacy* (true today / what our servers see / each Phase 0 change and when it goes live) and no longer contradicts the code (no Hugging Face fallback, TURN is on, liveness is the watchdog, a silent camera alerts within two minutes — the in-app guide said "a minute" and now says the same). The ADR index gains the missing 0004 row and 0003's real status. `docs/infrastructure/` (README, ENV_MATRIX, INFRA_MAP, COST_RUNBOOK, SECURITY_FINDINGS with F1–F18 and their status) and `docs/email/SECURITY.md` are brought up to date.)*
 
 ### 3. Wave 2 (parallel, after Wave 1 merges)
 
@@ -1115,4 +1122,4 @@ apps/wearos/                  Gradle: :app (Compose for Wear), :tile, :complicat
 2. Run the APNs probe (`POST /api/ops/apns-probe`) and record the result in this ADR's D3.
 3. Merge Wave 2 (WS-9, WS-10, WS-11), then deploy the Worker. The server now lists `reauth, view, eid, e2e1, glance1, stats5`, and the already-deployed clients turn the features on.
 4. After 48 h of clean CSP reports, set `ENFORCE_LIVE = true` (WS-1).
-5. Run the Phase 0 acceptance checklist on 7 days of production KPIs (WS-8) before Phase 1 cuts its first TestFlight build.
+5. Run the Phase 0 acceptance checklist on 7 days of production KPIs (WS-8: Admin → Costs → Stream Studio → *Baby monitor health* and the Security tab; owner checklist §R) before Phase 1 cuts its first TestFlight build. Set `STREAM_PHASE0_SHIPPED=1` on the backend and as a GitHub Actions variable when Wave 2 deploys, so the budget alerts apply.

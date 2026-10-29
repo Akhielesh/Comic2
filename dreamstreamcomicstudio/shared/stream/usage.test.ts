@@ -269,6 +269,19 @@ describe('stream usage — alerts', () => {
     expect(ids.sort()).toEqual(['container_awake', 'email_near_free', 'r2_near_free', 'relay_creep', 'write_diet']);
   });
 
+  it('checks the request budget (ADR 0006: ≤ 1,000 per active nursery-day) only after Phase 0', () => {
+    expect(evaluateStreamAlerts({ nowMs: now, requestsPerNurseryDay: 4000 })).toEqual([]);
+    expect(evaluateStreamAlerts({ nowMs: now, phase0Shipped: true, requestsPerNurseryDay: ALERT_THRESHOLDS.requestsPerNurseryDay })).toEqual([]);
+    expect(evaluateStreamAlerts({ nowMs: now, phase0Shipped: true, requestsPerNurseryDay: 1001 })).toEqual([
+      expect.objectContaining({ id: 'request_diet', severity: 'warning', title: 'MonitorRoom request budget exceeded' })
+    ]);
+  });
+
+  it('meters Durable Object storage against the included 5 GB as a level', () => {
+    const { meters } = allocateOverage({ doStoredGb: 6 }, {}, { doStoredGb: 1 });
+    expect(meters).toEqual([expect.objectContaining({ id: 'doStoredGb', allowance: 5, overage: 1, overageUsd: 0.2, productUsd: 0.2 })]);
+  });
+
   it('never fires on missing inputs', () => {
     expect(evaluateStreamAlerts({ nowMs: now })).toEqual([]);
   });

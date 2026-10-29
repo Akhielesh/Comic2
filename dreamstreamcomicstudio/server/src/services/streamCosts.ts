@@ -2,8 +2,10 @@
 //
 //   fetchStreamAnalytics(...)   Live reads, only when CF_ANALYTICS_API_TOKEN + CLOUDFLARE_ACCOUNT_ID exist
 //                               (the same read-only token as the Workers card; + Account Analytics Read
-//                               covers Analytics Engine). ≤ 4 GraphQL queries + 1 Analytics Engine
-//                               query per load, month to date; every dataset degrades on its own.
+//                               covers Analytics Engine). ≤ 5 GraphQL queries + 1 Analytics Engine
+//                               query per load, month to date (the Durable Object datasets reach back
+//                               7 days further early in a month, for the ADR 0006 7-day medians); every
+//                               dataset degrades on its own.
 //   buildStreamSection(...)     PURE: raw analytics in → StreamCostSection out (unit-tested).
 //
 // Provenance, as everywhere in the Cost centre:
@@ -52,6 +54,7 @@ import {
   type UsageKind,
   type UsageScope
 } from '../../../shared/stream/usage.js';
+import { parseAeSignals, sumSignal, type SignalRow } from '../../../shared/stream/signals.js';
 
 const DAY_MS = 86_400_000;
 const GB = 1e9;
@@ -64,6 +67,10 @@ export const AE_ROW_LIMIT = 10_000;
 export const AE_DATASET = 'stream_usage';
 export const LIVE_SCRIPT = 'dreamstream-live';
 export const LIVE_BUCKET = 'dreamstream-live';
+/** ADR 0006 acceptance: the per-active-nursery-day KPIs are judged on a 7-day production median. */
+export const KPI_MEDIAN_DAYS = 7;
+/** ADR 0006 Phase 0 budgets per active nursery-day (the same numbers the alerts use). */
+export const PHASE0_BUDGETS = { doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 } as const;
 /** The Durable Object classes that are Stream Studio (all in dreamstream-live). */
 export const STREAM_DO_CLASSES = ['MonitorRoom', 'EventRoom', 'UserLine', 'CallRoom'] as const;
 
@@ -127,6 +134,19 @@ const Q_DO_PERIODIC = `query StreamDoPeriodic($accountTag: string!, $startDate: 
   }
 }`;
 
+// Stored bytes of every Durable Object on the account, per day (a level; Cloudflare bills GB-month past
+// 5 GB). Per developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/.
+const Q_DO_STORAGE = `query StreamDoStorage($accountTag: string!, $startDate: Date!, $endDate: Date!) {
+  viewer {
+    accounts(filter: { accountTag: $accountTag }) {
+      durableObjectsStorageGroups(limit: 1000, filter: { date_geq: $startDate, date_leq: $endDate }) {
+        dimensions { date }
+        max { storedBytes }
+      }
+    }
+  }
+}`;
+
 const Q_R2 = `query StreamR2($accountTag: string!, $start: Time!, $end: Time!, $storageStart: Time!) {
   viewer {
     accounts(filter: { accountTag: $accountTag }) {
@@ -163,9 +183,9 @@ export type FetchLike = (
   init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text?: () => Promise<string> }>;
 
-const scrub = (message: string, token: string) => message.split(token).join('[redacted]').slice(0, 240);
+export const scrub = (message: string, token: string) => message.split(token).join('[redacted]').slice(0, 240);
 
-async function cfPost(creds: StreamCredentials, url: string, body: string, contentType: string, fetchImpl: FetchLike): Promise<unknown> {
+export async function cfPost(creds: StreamCredentials, url: string, body: string, contentType: string, fetchImpl: FetchLike): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -205,12 +225,13 @@ function rowsOf(account: Record<string, any>, field: string): any[] {
   return v;
 }
 
-/** The five reads (each fails alone). The daily watch keeps the last state of every alert a failed one feeds. */
-export const STREAM_DATASETS = ['requests', 'periodic', 'r2', 'turn', 'ae'] as const;
+/** The six reads (each fails alone). The daily watch keeps the last state of every alert a failed one feeds. */
+export const STREAM_DATASETS = ['requests', 'periodic', 'storage', 'r2', 'turn', 'ae'] as const;
 export type StreamDatasetId = (typeof STREAM_DATASETS)[number];
 export const STREAM_DATASET_LABEL: Readonly<Record<StreamDatasetId, string>> = {
   requests: 'Worker + Durable Object requests',
   periodic: 'Durable Object duration + rows written',
+  storage: 'Durable Object storage',
   r2: 'R2 operations + storage',
   turn: 'TURN egress',
   ae: `Analytics Engine (${AE_DATASET})`
@@ -294,6 +315,8 @@ export interface StreamAnalytics {
   workersMtd?: { script: string; requests: number }[];
   doRequests?: { date: string; namespaceId: string; requests: number }[];
   doPeriodic?: { date: string; namespaceId: string; activeTimeUs: number; rowsWritten: number }[];
+  /** Stored bytes of every Durable Object on the account, per UTC day (a level). */
+  doStorage?: { date: string; storedBytes: number }[];
   r2Ops?: { bucket: string; actionType: string; requests: number }[];
   /** Latest stored bytes per bucket. */
   r2Storage?: { bucket: string; payloadBytes: number }[];
@@ -301,6 +324,8 @@ export interface StreamAnalytics {
   ae?: AeUsageRow[];
   /** The rooms' daily activity marks (the per-active-nursery-day denominator), from the same query. */
   aeActive?: AeActiveMark[];
+  /** The live Worker's privacy-safe signal counts (shared/stream/signals.ts), from the same query. */
+  aeSignals?: SignalRow[];
   /** Per-dataset failures, already scrubbed of the token. */
   errors: string[];
   /** The same failures by dataset (absent from callers that predate it: failedDatasets() also reads the shape). */
@@ -316,6 +341,7 @@ export function failedDatasets(a: StreamAnalytics | null | undefined): StreamDat
   const missing: Record<StreamDatasetId, boolean> = {
     requests: a.doRequests === undefined || a.workersMtd === undefined,
     periodic: a.doPeriodic === undefined,
+    storage: a.doStorage === undefined,
     r2: a.r2Ops === undefined,
     turn: a.turnEgressBytes === undefined,
     ae: a.ae === undefined
@@ -331,10 +357,12 @@ export function alertDatasets(alertId: string): StreamDatasetId[] {
   const id = String(alertId);
   if (id === 'free_tier:doRequests' || id === 'free_tier:workerRequests') return ['requests'];
   if (id === 'free_tier:doGbSeconds' || id === 'free_tier:doRowsWritten') return ['periodic'];
+  if (id === 'free_tier:doStoredGb') return ['storage'];
   if (id === 'free_tier:r2ClassA' || id === 'free_tier:r2ClassB' || id === 'free_tier:r2StoredGb' || id === 'r2_near_free') return ['r2'];
   if (id === 'free_tier:turnGb' || id === 'turn_spend' || id === 'turn_leak') return ['turn'];
   // Per active nursery-day: Cloudflare's duration / rows over the rooms' activity marks.
   if (id === 'hibernation' || id === 'write_diet') return ['periodic', 'ae'];
+  if (id === 'request_diet') return ['requests', 'ae'];
   if (id === 'relay_creep') return ['ae'];
   // Not from Cloudflare (email_log, container hours): no Cloudflare outage hides them.
   if (id === 'free_tier:emails' || id === 'email_near_free' || id === 'container_awake') return [];
@@ -344,6 +372,22 @@ export function alertDatasets(alertId: string): StreamDatasetId[] {
 const iso = (ms: number) => new Date(ms).toISOString();
 const dayKey = (ms: number) => iso(ms).slice(0, 10);
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const dayStartMs = (ms: number) => Date.UTC(new Date(ms).getUTCFullYear(), new Date(ms).getUTCMonth(), new Date(ms).getUTCDate());
+
+/**
+ * First UTC day the Durable Object datasets are read from: the month's 1st, or KPI_MEDIAN_DAYS complete
+ * days back when that is earlier (early in a month), so the 7-day medians and the hibernation check never
+ * go blind on the 1st. Month-to-date totals filter back to the 1st.
+ */
+export const kpiWindowStartMs = (nowMs: number): number => Math.min(monthBounds(nowMs).startMs, dayStartMs(nowMs) - KPI_MEDIAN_DAYS * DAY_MS);
+
+/** Median of finite values (null for none). */
+export function median(values: readonly number[]): number | null {
+  const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
 
 export async function fetchStreamAnalytics(input: {
   nowMs: number;
@@ -358,11 +402,13 @@ export async function fetchStreamAnalytics(input: {
   const out: StreamAnalytics = { configured: !!creds, nowMs: input.nowMs, aeFromMs, errors: [] };
   if (!creds) return out;
   const fetchImpl = input.fetchImpl ?? (fetch as unknown as FetchLike);
-  const vars = { start: iso(startMs), end: iso(input.nowMs), startDate: dayKey(startMs), endDate: dayKey(input.nowMs) };
+  // Workers / R2 / TURN: month to date. Durable Object days: from kpiWindowStartMs (the 1st, or earlier).
+  const vars = { start: iso(startMs), end: iso(input.nowMs), startDate: dayKey(kpiWindowStartMs(input.nowMs)), endDate: dayKey(input.nowMs) };
 
-  const [requests, periodic, r2, turn, ae] = await Promise.allSettled([
+  const [requests, periodic, storage, r2, turn, ae] = await Promise.allSettled([
     graphql(creds, Q_REQUESTS, vars, fetchImpl),
     graphql(creds, Q_DO_PERIODIC, { startDate: vars.startDate, endDate: vars.endDate }, fetchImpl),
+    graphql(creds, Q_DO_STORAGE, { startDate: vars.startDate, endDate: vars.endDate }, fetchImpl),
     graphql(creds, Q_R2, { start: vars.start, end: vars.end, storageStart: iso(input.nowMs - DAY_MS) }, fetchImpl),
     graphql(creds, Q_TURN, { start: vars.start, end: vars.end }, fetchImpl),
     cfPost(creds, analyticsEngineSqlUrl(creds.accountId), aeUsageSql((input.nowMs - aeFromMs) / DAY_MS + 1), 'text/plain', fetchImpl)
@@ -401,6 +447,10 @@ export async function fetchStreamAnalytics(input: {
     }));
   });
 
+  settle('storage', storage, (v) => {
+    out.doStorage = rowsOf(v, 'durableObjectsStorageGroups').map((r) => ({ date: String(r?.dimensions?.date || ''), storedBytes: num(r?.max?.storedBytes) }));
+  });
+
   settle('r2', r2, (v) => {
     const r2Ops = rowsOf(v, 'r2OperationsAdaptiveGroups').map((r) => ({
       bucket: String(r?.dimensions?.bucketName || ''),
@@ -422,7 +472,7 @@ export async function fetchStreamAnalytics(input: {
 
   settle('ae', ae, (v) => {
     if (!Array.isArray((v as { data?: unknown })?.data)) throw new Error('unexpected answer (no data rows)');
-    Object.assign(out, { ae: parseAeRows(v), aeActive: parseAeActive(v) });
+    Object.assign(out, { ae: parseAeRows(v), aeActive: parseAeActive(v), aeSignals: parseAeSignals(v) });
   });
 
   return out;
@@ -556,6 +606,8 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
   const serverShare7d = minutes7 > 0 && offServer(monitor7) > 0 ? monitor7.minutes.server / minutes7 : null;
   const monitorMinutes = sumMinutes(monitor);
   const serverShare = monitorMinutes > 0 && monitorPathsReported ? monitor.minutes.server / monitorMinutes : null;
+  // ADR 0006 KPI: viewer minutes on a paid path (our TURN relay or our server relay), of all monitor minutes.
+  const relayShare = monitorMinutes > 0 && monitorPathsReported ? (monitor.minutes.turn + monitor.minutes.server) / monitorMinutes : null;
 
   // ---- features --------------------------------------------------------------------------
   const FEATURE_NOTES: Partial<Record<UsageKind, string>> = {
@@ -574,7 +626,22 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
     if (minutes > 0) units.unshift({ label: 'Minutes (all paths)', value: round(minutes, 1), unit: 'min' });
     return { id: kind, label: USAGE_KIND_LABEL[kind], units, listValueUsd: v.usd, source: 'estimated' as CostSource, note: FEATURE_NOTES[kind] };
   });
-  features.push({ id: 'push', label: 'Push alerts', units: [], listValueUsd: 0, source: 'fixed', note: 'Web Push is a Worker subrequest — not billed. Alerts and sound are never limited to save money.' });
+  const signals = a?.aeSignals ?? [];
+  const inRangeDay = (day: string) => day >= dayKey(input.range.fromMs) && day <= dayKey(Math.max(input.range.fromMs, input.range.toMs - 1));
+  const pushUnits = signals.some((r) => r.name === 'push_sent' || r.name === 'push_gone' || r.name === 'push_failed')
+    ? [
+        { label: 'Pushes handed to a provider (at least)', value: sumSignal(signals, 'push_sent', inRangeDay), unit: 'pushes' },
+        { label: 'Targets pruned as gone', value: sumSignal(signals, 'push_gone', inRangeDay), unit: 'targets' }
+      ]
+    : [];
+  features.push({
+    id: 'push',
+    label: 'Push alerts',
+    units: pushUnits,
+    listValueUsd: 0,
+    source: 'fixed',
+    note: 'Web Push, APNs and FCM cost nothing to send (a Worker subrequest). Alerts and sound are never limited to save money.'
+  });
 
   // ---- top consumers (admin console only; guests are counted inside their nursery/event) ----
   const consumer = (scope: UsageScope, x: { id: string; account: string; byKind: ByKind }): StreamConsumerRow => {
@@ -615,19 +682,32 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
   const monitorNs = Object.entries(labels).find(([, cls]) => cls === 'MonitorRoom')?.[0] ?? null;
   const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0);
 
-  if (a?.doRequests) {
-    const total = a.doRequests.reduce((s, r) => s + r.requests, 0);
+  // The Durable Object datasets can reach back before the 1st (kpiWindowStartMs); the allowances are monthly.
+  const monthDay = dayKey(monthStartMs);
+  const doRequestsMtd = a?.doRequests?.filter((r) => r.date >= monthDay);
+  const doPeriodicMtd = a?.doPeriodic?.filter((r) => r.date >= monthDay);
+  if (doRequestsMtd) {
+    const total = doRequestsMtd.reduce((s, r) => s + r.requests, 0);
     totals.doRequests = total;
-    shares.doRequests = share(a.doRequests.filter((r) => isStreamNs(r.namespaceId)).reduce((s, r) => s + r.requests, 0), total);
+    shares.doRequests = share(doRequestsMtd.filter((r) => isStreamNs(r.namespaceId)).reduce((s, r) => s + r.requests, 0), total);
   }
-  if (a?.doPeriodic) {
-    const gbs = a.doPeriodic.reduce((s, r) => s + (r.activeTimeUs / 1e6) * DO_GB, 0);
-    const rows = a.doPeriodic.reduce((s, r) => s + r.rowsWritten, 0);
+  if (doPeriodicMtd) {
+    const gbs = doPeriodicMtd.reduce((s, r) => s + (r.activeTimeUs / 1e6) * DO_GB, 0);
+    const rows = doPeriodicMtd.reduce((s, r) => s + r.rowsWritten, 0);
     totals.doGbSeconds = gbs;
     totals.doRowsWritten = rows;
-    const streamRows = a.doPeriodic.filter((r) => isStreamNs(r.namespaceId));
+    const streamRows = doPeriodicMtd.filter((r) => isStreamNs(r.namespaceId));
     shares.doGbSeconds = share(streamRows.reduce((s, r) => s + (r.activeTimeUs / 1e6) * DO_GB, 0), gbs);
     shares.doRowsWritten = share(streamRows.reduce((s, r) => s + r.rowsWritten, 0), rows);
+  }
+  // Storage is a level: the latest day Cloudflare reported. No namespace split exists for it, so it's all
+  // counted as Stream Studio's (its rooms are the only Durable Objects that store anything of note).
+  let doStoredBytes: number | null = null;
+  if (a?.doStorage) {
+    const latest = a.doStorage.reduce((m, r) => (r.date > m ? r.date : m), '');
+    doStoredBytes = latest ? a.doStorage.filter((r) => r.date === latest).reduce((s, r) => s + r.storedBytes, 0) : 0;
+    totals.doStoredGb = doStoredBytes / GB;
+    shares.doStoredGb = 1;
   }
   if (a?.r2Ops) {
     let classA = 0;
@@ -669,7 +749,7 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
   // Projections count at least PROJECTION_MIN_DAYS of the month as elapsed: one night on the 1st is not the month's trend.
   const projOpts = { minDays: PROJECTION_MIN_DAYS };
   const headroom: StreamHeadroomRow[] = allocation.meters.map((m) => {
-    const level = m.id === 'r2StoredGb'; // storage is a level, not a running total
+    const level = m.id === 'r2StoredGb' || m.id === 'doStoredGb'; // storage is a level, not a running total
     const p = projectMonthEnd(m.used, nowMs, m.allowance, projOpts);
     const projected = level ? m.used : p.projected;
     return {
@@ -683,7 +763,10 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
       crossesOn: level ? (m.used >= m.allowance ? dayKey(nowMs) : null) : p.crossesOn,
       overageUsd: m.overageUsd,
       source: 'measured',
-      note: `Account-wide: shared with every Worker on the Cloudflare account. Stream Studio ≈ ${Math.round(m.share * 100)}%.`
+      note:
+        m.id === 'doStoredGb'
+          ? 'Account-wide level (the latest day): every Durable Object on the account; no per-room split exists for storage.'
+          : `Account-wide: shared with every Worker on the Cloudflare account. Stream Studio ≈ ${Math.round(m.share * 100)}%.`
     };
   });
   if (input.emailsMonthToDate != null) {
@@ -712,15 +795,46 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
   const kpiRequests = a?.doRequests ? perND(onMarked(a.doRequests).reduce((s, r) => s + r.requests, 0)) : null;
   const kpiRows = a?.doPeriodic ? perND(onMarked(a.doPeriodic).reduce((s, r) => s + r.rowsWritten, 0)) : null;
   const kpiGbs = a?.doPeriodic ? perND(onMarked(a.doPeriodic).reduce((s, r) => s + (r.activeTimeUs / 1e6) * DO_GB, 0)) : null;
-  const gbSecSeries: number[] = [];
-  if (monitorNs && a?.doPeriodic) {
-    for (const day of [...mtdMarked].sort()) {
-      if (day >= dayKey(nowMs)) continue; // today is partial
-      const n = activeByDay.get(day)?.size ?? 0;
-      const gbs = a.doPeriodic.filter((r) => r.date === day && r.namespaceId === monitorNs).reduce((s, r) => s + (r.activeTimeUs / 1e6) * DO_GB, 0);
-      if (n > 0) gbSecSeries.push(gbs / n);
-    }
-  }
+
+  // ADR 0006 acceptance: the 7-day MEDIAN per active nursery-day, over the last complete days that carry
+  // marks (today is partial). Early in a month those days reach back into the previous one.
+  const todayKey = dayKey(nowMs);
+  const kpiFrom = dayKey(kpiWindowStartMs(nowMs));
+  const nOn = (day: string) => activeByDay.get(day)?.size ?? 0;
+  const kpiDays = [...markedDays].filter((d) => d < todayKey && d >= kpiFrom && nOn(d) > 0).sort().slice(-KPI_MEDIAN_DAYS);
+  const perDay = <T extends { date: string; namespaceId: string }>(rows: T[] | undefined, value: (r: T) => number): number[] | null =>
+    rows ? kpiDays.map((day) => rows.filter((r) => r.date === day && pickNs(r.namespaceId)).reduce((s, r) => s + value(r), 0) / nOn(day)) : null;
+  const reqSeries = perDay(a?.doRequests, (r) => r.requests);
+  const rowSeries = perDay(a?.doPeriodic, (r) => r.rowsWritten);
+  const gbsSeries = perDay(a?.doPeriodic, (r) => (r.activeTimeUs / 1e6) * DO_GB);
+  const med = (series: number[] | null) => {
+    const m = series ? median(series) : null;
+    return m == null ? null : round(m, 1);
+  };
+  const median7d = { days: kpiDays.length, doRequests: med(reqSeries), rowsWritten: med(rowSeries), gbSeconds: med(gbsSeries) };
+  const verdict = (v: number | null, budget: number): 'ok' | 'over' | 'unknown' => (v == null ? 'unknown' : v > budget ? 'over' : 'ok');
+  const kpiStatus = {
+    doRequests: verdict(median7d.doRequests, PHASE0_BUDGETS.doRequests),
+    rowsWritten: verdict(median7d.rowsWritten, PHASE0_BUDGETS.rowsWritten),
+    gbSeconds: verdict(median7d.gbSeconds, PHASE0_BUDGETS.gbSeconds)
+  };
+  // Hibernation: GB-s per active nursery-day, oldest first, from the MonitorRoom namespace only.
+  const gbSecSeries: number[] = monitorNs && gbsSeries ? gbsSeries : [];
+
+  // Watch readiness (ADR 0006 KPIs): Glance bumps and pushes per active nursery-night, from the rooms'
+  // signal counts over the same complete days. Unknown (null) until the rooms count them at all; a
+  // floor, since counts still in a room's memory when it is evicted are lost.
+  const nightsInWindow = kpiDays.reduce((s, d) => s + nOn(d), 0);
+  const inKpiDays = (day: string) => kpiDays.includes(day);
+  const counted = (names: string[]) => signals.some((r) => names.includes(r.name));
+  const perNight = (v: number) => (nightsInWindow > 0 ? round(v / nightsInWindow, 1) : null);
+  const glanceBumpsPerNight = counted(['glance_bump']) ? perNight(sumSignal(signals, 'glance_bump', inKpiDays)) : null;
+  const pushesPerNight = counted(['push_sent', 'push_gone', 'push_failed']) ? perNight(sumSignal(signals, 'push_sent', inKpiDays)) : null;
+
+  // Storage per nursery: the account's stored bytes over the nurseries with a camera on this month (an
+  // upper bound — event rooms, lines and call rooms store a little too).
+  const monthNurseries = new Set([...activeByDay].filter(([d]) => d >= monthDay).flatMap(([, ids]) => [...ids])).size;
+  const doStoredMbPerNursery = doStoredBytes != null && monthNurseries > 0 ? round(doStoredBytes / 1e6 / monthNurseries, 2) : null;
 
   // ---- projection at scale (list price, today's per-nursery cost) --------------------------
   const bookkeeping =
@@ -736,7 +850,9 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
     headroom: headroom.map((h) => ({ id: h.id, label: h.label, used: h.used, allowance: h.allowance, projected: h.projected })),
     turnGbMonthToDate: totals.turnGb ?? null,
     gbSecPerNurseryDay: gbSecSeries.length ? gbSecSeries : null,
-    rowsPerNurseryDay: monitorNs ? kpiRows : null,
+    // The 7-day median when there are days to take it over; month to date otherwise.
+    rowsPerNurseryDay: monitorNs ? median7d.rowsWritten ?? kpiRows : null,
+    requestsPerNurseryDay: monitorNs ? median7d.doRequests : null,
     phase0Shipped: input.phase0Shipped,
     serverShare7d,
     r2StoredGb,
@@ -770,6 +886,14 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
   notes.push(`Marginal cost is month to date: Stream Studio's share of what the account owes past each free allowance — $0 while the account stays inside them, whatever the list value.`);
   notes.push(`Month-end projections are straight-line, counting at least ${PROJECTION_MIN_DAYS} days of the month as elapsed, so one night early in the month isn't read as the month's trend. The TURN-leak alert uses actual GB, not a projection.`);
   if (!input.phase0Shipped) notes.push('The ADR 0006 per-nursery-day budgets (≤ 1,000 requests, ≤ 1,800 rows, ≤ 40 GB-s) apply after Phase 0 ships; until then the KPIs are the baseline.');
+  notes.push(
+    `Phase 0 acceptance reads the 7-day MEDIAN per active nursery-day (the last ${KPI_MEDIAN_DAYS} complete days with activity marks; ${kpiDays.length} so far) — the month-to-date averages beside it can be pulled up by one bad night. Acceptance needs all ${KPI_MEDIAN_DAYS} days.`
+  );
+  if (a?.configured && aeOk && glanceBumpsPerNight == null) {
+    notes.push('Glance bumps and pushes per night appear once the rooms count them (the live Worker’s signal counters, live-worker/src/signals.ts, wired by ADR 0006 WS-9); until then they show —.');
+  } else if (glanceBumpsPerNight != null || pushesPerNight != null) {
+    notes.push('Glance bumps and pushes per night are floors: a room counts them in memory and writes at most one point a minute, so counts held by a room that was evicted are lost.');
+  }
 
   const kpiSource: CostSource = monitorNs ? 'measured' : 'estimated';
   return {
@@ -800,6 +924,15 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
       rowsWritten: kpiRows,
       gbSeconds: kpiGbs,
       serverShare: serverShare == null ? null : round(serverShare, 4),
+      median7d,
+      budgets: { ...PHASE0_BUDGETS },
+      status: kpiStatus,
+      turnGbMonthToDate: totals.turnGb == null ? null : round(totals.turnGb, 3),
+      relayShare: relayShare == null ? null : round(relayShare, 4),
+      doStoredGb: doStoredBytes == null ? null : round(doStoredBytes / GB, 3),
+      doStoredMbPerNursery,
+      glanceBumpsPerNight,
+      pushesPerNight,
       source: kpiSource,
       note:
         (monitorNs

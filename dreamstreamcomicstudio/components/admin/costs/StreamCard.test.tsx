@@ -106,6 +106,42 @@ describe('StreamCard', () => {
     expect(screen.getByTestId('stream-projection')).toHaveTextContent('1k nurseries ≈ $210.00/mo · 10k ≈ $2,100/mo');
   });
 
+  it('judges Phase 0 on the 7-day medians when the server sends them, with the month average beside them', () => {
+    const base = stream();
+    render(
+      <StreamCard
+        days={30}
+        stream={stream({
+          kpis: {
+            ...base.kpis,
+            median7d: { days: 7, doRequests: 950, rowsWritten: 2100, gbSeconds: null },
+            budgets: { doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 },
+            status: { doRequests: 'ok', rowsWritten: 'over', gbSeconds: 'unknown' },
+            turnGbMonthToDate: 40,
+            relayShare: 0.08,
+            doStoredGb: 0.6,
+            doStoredMbPerNursery: 300,
+            glanceBumpsPerNight: 52,
+            pushesPerNight: null
+          }
+        })}
+      />
+    );
+    const req = screen.getByTestId('stream-kpi-doRequests');
+    expect(req).toHaveTextContent('950 requests');
+    expect(req).toHaveTextContent('7-day median · ≤ 1,000 · within budget · month avg 2,000 requests');
+    expect(within(req).queryByLabelText('over budget')).toBeNull(); // the month average is over, the median isn't
+    const rows = screen.getByTestId('stream-kpi-rowsWritten');
+    expect(within(rows).getByLabelText('over budget')).toBeInTheDocument();
+    expect(screen.getByTestId('stream-kpi-gbSeconds')).toHaveTextContent('not enough days yet');
+    const more = screen.getByTestId('stream-kpis-more');
+    expect(more).toHaveTextContent('40 GB');
+    expect(more).toHaveTextContent('≈ 300 MB per nursery');
+    expect(more).toHaveTextContent('52');
+    expect(within(more).getAllByText('—')).toHaveLength(1); // pushes not counted yet
+    expect(screen.getByTestId('stream-kpis')).toHaveTextContent('with TURN 8.0%');
+  });
+
   it('shows the setup steps when nothing is measured yet', () => {
     render(<StreamCard stream={stream({ sources: { graphql: false, analyticsEngine: false } })} days={30} />);
     expect(screen.getByText('Stream Studio costs — not measured yet')).toBeInTheDocument();
@@ -185,6 +221,26 @@ describe('CostCentre — Stream Studio tab', () => {
     render(<CostCentre />);
     const badge = await screen.findByTestId('stream-alert-badge');
     expect(badge).toHaveTextContent('Stream Studio: couldn’t measure 1 dataset');
+  });
+
+  it('opens the Security tab from its alert badge', async () => {
+    getCostCentre.mockResolvedValue({
+      ...report(),
+      security: {
+        range: { from: '2026-09-22T00:00:00.000Z', to: '2026-10-21T12:00:00.000Z', days: 30 },
+        csp: { measured: false, total: null, firstPartyLive48h: null, firstPartyLiveEnforced: null, firstPartyLiveReportOnly: null, extension: null, top: [], note: 'Not measured.' },
+        signIns: { measured: true, newSessions: 3, alertsEmailed: 3, secured: 1, devicesAdded: 0, devicesRevoked: 0, note: 'Hook.' },
+        signals: { measured: false, counted: false, rows: [], note: 'Not measured.' },
+        alerts: [{ id: 'not_you_used', severity: 'warning', title: '“Not you?” was used', cause: '1 person.' }],
+        notes: []
+      }
+    });
+    render(<CostCentre />);
+    const badge = await screen.findByTestId('security-alert-badge');
+    expect(badge).toHaveTextContent('1 security alert');
+    fireEvent.click(badge);
+    expect(await screen.findByTestId('security-card')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Security' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('opens the Stream Studio tab from the alert badge', async () => {

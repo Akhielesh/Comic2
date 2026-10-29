@@ -31,7 +31,9 @@ paid provider changes.
 | **Durable Objects — Stream Studio rooms** (`MonitorRoom`, `EventRoom`, `UserLine`, `CallRoom`) | Requests (incoming WebSocket messages 20:1, alarms), **rows written** (every KV put/delete and every `setAlarm`), duration only while busy (hibernation-eligible rooms aren't billed) | **$0** inside 1M requests · 50M rows · 400k GB-s a month (**account-wide**, shared with every Worker). At list price a monitored nursery is ≈ $0.32/month today, 93% of it `MonitorRoom` rows (≈ $0.044 after ADR 0006 Phase 0) | ADR 0006 Phase 0 write diet; never a timer or held-open fetch in a DO; Admin → Costs → Stream Studio per-nursery-day KPIs |
 | **Baby monitor server relay** (picture through our server) | DO requests (each camera frame = 1/20 request) + room duration while frames flow — no bandwidth charge | **≈ $0.0055 per all-night relay viewer-night** (≈ $0.16/month), $0 inside the free tiers | Direct / Home Wi-Fi first; hidden viewers → sound only; counted per nursery (`usageMeter.ts`) |
 | **Cloudflare Realtime TURN** (switched on 2026-10-22) | Edge → client egress bytes only | **$0** inside the first 1,000 GB a month (account-wide), then $0.05/GB. One all-night TURN viewer ≈ $4.66/month at list price | Per-socket, short-TTL credentials (P2 guardrails); TURN for the side that receives less; **alert at $10/month** (daily `stream-cost-watch` + Cloudflare budget alert) |
-| **Stream Studio metering** | Workers Analytics Engine points (≤ 1 per room per hour) | **$0** (10M points/month included; not billed yet) | Optional binding `STREAM_USAGE`; fails open |
+| **Stream Studio metering** | Workers Analytics Engine points (≤ 1 per room per hour, plus the security / watch-readiness signal counts: ≤ 1 per minute per isolate per signal) | **$0** (10M points/month included; not billed yet) | Optional binding `STREAM_USAGE`; fails open; signals coalesce in memory, so a flood is a point a minute, not a point a request |
+| **Durable Object storage** | GB-month stored by every DO on the account | **$0** inside 5 GB, then $0.20/GB-month | Rooms keep 90 days of events and packed minute blocks only; Admin → Costs → Stream Studio shows the level and its headroom (ADR 0006 WS-8) |
+| **CSP report counts** | Analytics Engine points from the Pages function (one per browser report) | **$0** (same 10M included) | Optional Pages binding `CSP_REPORTS`; reports are counts by origin only |
 | **Supabase** | Free plan | **$0** | Stay under 500 MB DB / 1 GB storage / 2 active projects |
 | **LLM / AI providers** | Per-token; platform-funded capped at **$5/user/mo** | **variable, capped** | Platform allowance + per-provider budgets (well-architected) |
 | **CoinGecko Basic** | Only if `COINGECKO_API_PLAN` = paid | **$35** if enabled | Keep on free/demo unless commercial crypto display is needed |
@@ -175,8 +177,14 @@ Then run this once a month (or when a bill looks off):
 - [ ] Cloudflare: no `dreamstream-studio` Worker left (Code Studio retired; delete it if it reappears).
 - [ ] Cloudflare: R2 `dreamstream-live` size near zero (janitor working).
 - [ ] Admin → Costs → **Stream Studio**: no alerts; every headroom meter projects < 80% of its
-      allowance (they are account-wide); per-nursery-day DO GB-s ≤ 40 (hibernation working);
-      our-server share of monitor minutes ≤ 10% (shown once viewers report their paths, Phase B).
+      allowance (they are account-wide, DO storage included); *Baby monitor health* shows the
+      **7-day medians** within the ADR 0006 budgets — DO requests ≤ 1,000, rows written ≤ 1,800,
+      DO GB-s ≤ 40 per active nursery-day (hibernation working) — with all 7 days counted;
+      our-server share of monitor minutes ≤ 10% (shown once viewers report their paths, Phase B);
+      Glance bumps ≤ 60 a night once the rooms count them.
+- [ ] Admin → Costs → **Security**: no alerts (CSP clean on Stream Studio, no unexplained “Not
+      you?” uses, no refusal floods). What each one means and what to do:
+      [`live-security-runbook.md`](./live-security-runbook.md) §6.
       The GitHub issue labelled `stream-cost-watch` is closed (the daily job opens it when an alert
       starts and closes it only when every dataset answered and nothing fires) and its last run is
       green. A red run or an open issue saying **"Couldn't measure"** means a Cloudflare dataset
@@ -210,3 +218,4 @@ Then run this once a month (or when a bill looks off):
 | 2026-10-21 | Admin Cost centre (real data, measured / estimated / fixed, cost-benefit per product, optional live Cloudflare analytics). |
 | 2026-10-22 | Stream Studio cost metering (ADR 0007 Phase A): rooms count usage in memory + WebSocket attachments and write ≤ 1 `use:YYYY-MM` row + 1 Analytics Engine point per room per hour; Admin → Costs gets a Stream Studio tab (measured DO / R2 / TURN month to date + estimated per-feature, per-path, top consumers, headroom, alerts); daily `stream-cost-watch` GitHub job (needs the read-only `CF_ANALYTICS_API_TOKEN` secret). §1 gains the DO rows, server relay and TURN lines. |
 | 2026-10-22 | Code Studio retired (ADR 0005): the `studio-worker` sandbox Containers (`standard-3`) — the old cost landmine — removed from the repo; Workers Paid stays for the backend container. Cost centre labels the sandbox line "(retired)" and keeps reading `studio_runs` as history. |
+| 2026-10-29 | ADR 0006 WS-8: the Stream Studio tab judges Phase 0 on **7-day medians** per active nursery-day (requests / rows / GB-s vs 1,000 / 1,800 / 40; new `request_diet` alert), reads Durable Object **storage** (`durableObjectsStorageGroups`, its own headroom row), and shows TURN GB, relay share, Glance bumps and pushes per night. The DO datasets reach back 7 days before the 1st so the medians and the hibernation check work early in a month. New **Security** tab (CSP counts, sign-in alerts, the live Worker's refusal / disconnect signals). The daily watch reads six datasets (storage added). |

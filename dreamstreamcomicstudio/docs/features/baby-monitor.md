@@ -6,7 +6,8 @@ One device in the nursery is the **camera**; any device the family signs in on c
 encrypted); the server relays signaling, status numbers and events — and, only for
 a viewer the direct picture can't reach (a network that blocks it, or a camera that's
 full) or for a moment while it connects, the relay picture and sound, passed through
-its memory and never stored, not end-to-end encrypted (see *Relay picture* below).
+its memory and never stored, not end-to-end encrypted until ADR 0006's Phase 0 relay
+encryption is live (see *Relay picture* and *Security and privacy* below).
 
 ## Pieces
 
@@ -104,9 +105,11 @@ analyser + alarm detector keep working ("Basic ears").
 ## Operations
 
 - **Model file** is served from Pages at `/models/yamnet/yamnet-v1.onnx` (16 MB,
-  cached forever via `public/_headers`); the worker falls back to the pinned
-  Hugging Face copy, and refuses any bytes that don't match the SHA-256.
-  Replacing it: add `yamnet-v2.onnx`, update `MODEL_URL` + `MODEL_SHA256`.
+  cached forever via `public/_headers`) — our own copy only (the Hugging Face fallback
+  was removed with ADR 0006 WS-1, so no third party can serve the model), and any bytes
+  that don't match the SHA-256 are refused (then the cry analyser and alarm detector
+  carry on as "Basic ears"). Replacing it: add `yamnet-v2.onnx`, update `MODEL_URL` +
+  `MODEL_SHA256`.
 - **ONNX Runtime WASM** (`ort-wasm-simd-threaded*.wasm`, 13 MB / 24 MB) is emitted
   by `vite build` into `/assets` — under Pages' 25 MiB per-file limit.
 - **Thresholds** live in `soundClasses.ts` (`ON`, `HITS_NEEDED`) and
@@ -137,9 +140,11 @@ analyser + alarm detector keep working ("Basic ears").
 
 Every viewer is its own encoder on the camera phone (a mesh), and without a TURN
 server a viewer whose network blocks peer-to-peer (often a guest on mobile data)
-can't connect directly at all. Production is **STUN-only until the owner sets
-`TURN_KEY_ID` / `TURN_KEY_API_TOKEN`** on `dreamstream-live` (`live-worker/src/ice.ts`);
-everything below works with or without it.
+can't connect directly at all. Cloudflare TURN is **on in production since
+2026-10-22** (`TURN_KEY_ID` / `TURN_KEY_API_TOKEN` on `dreamstream-live`,
+`live-worker/src/ice.ts`): a credential per room and person, members ≤ 4 h, guests ≤ 2 h
+and never past their pass, revoked when someone is removed. Everything below also works
+without it (STUN only), as it did before.
 
 **Direct (P2P) picture — `rtc.ts`:**
 - *One connection per viewer session.* Each `ViewerLink.connect()` mints a call id
@@ -621,8 +626,9 @@ reopened at once (backoff capped at 2 s while ringing / in a call). Placing or
 answering a call first checks a line that's been quiet for 30 s. In the room,
 `{"t":"ping"}` is answered by the runtime (`setWebSocketAutoResponse`) without
 waking the Durable Object — nothing depends on pings reaching it (camera
-liveness is the camera's 2-s status, presence is the socket list, a guest's
-"last seen" is set at sign-in). While a call is up the alarm checks its lines
+liveness is the camera's last message or its last keepalive ping, read back with
+`getWebSocketAutoResponseTimestamp` by the room's dead man's switch; presence is the
+socket list, a guest's "last seen" is set at sign-in). While a call is up the alarm checks its lines
 every 30 s and drops one that hasn't pinged or spoken for a minute (a phone that
 died mid-call), so the call can end instead of hanging.
 
@@ -727,10 +733,83 @@ pushes silently on it (the app tells it; an open camera screen counts too).
 with the app closed needs notifications (on iPhone, the Home Screen app). Family
 calls reach members of a nursery you share; direct calls reach any Stream Studio
 member whose app has been open in the last 30 days (unless they take calls only
-from their family, or blocked you). Without a TURN relay (production has
-none until the owner sets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN`), phones behind
-carrier or symmetric NAT can't reach each other — the call now says so within
-15 s instead of spinning, but only the relay makes those calls connect.
+from their family, or blocked you). Phones behind carrier or symmetric NAT reach
+each other only through the TURN relay (on in production since 2026-10-22); where
+it can't help either, the call says so within 15 s instead of spinning.
+
+## Connection: how the picture and sound travel
+
+Four paths, tried in this order, shown in the viewer's status pill with the same words
+everywhere (`shared/stream/usage.ts` `PATH_LABEL`):
+
+| Path | When | Who sees the media | Costs us |
+|---|---|---|---|
+| **Home Wi-Fi** | Both devices on the same network (`netPath()` in `rtc.ts`: both ends host candidates on one LAN — a carrier IPv6 host pair is *not* Home Wi-Fi) | Only the two devices (DTLS-SRTP) | Nothing |
+| **Direct** | Peer-to-peer over the internet | Only the two devices (DTLS-SRTP) | Nothing |
+| **Through our relay** (TURN) | The networks can't reach each other directly | Cloudflare relays **encrypted** packets it can't read | $0.05/GB past the free 1 TB a month |
+| **Through our server** (relay picture) | No path at all, while a direct picture connects (the instant picture), or the camera's direct slots are full | Passes through the room's memory, never stored — **not end-to-end encrypted** until the Phase 0 relay encryption below is live | Durable Object requests |
+
+- **Automatic** is the only setting on the web, and it is the default in the apps (ADR 0006 D5):
+  every path is tried at once and the best one wins, with no question asked. Browsers are
+  *LAN-resilient* — an established call survives the internet going down (see *When the internet
+  drops*) — but not *LAN-native*: they can't discover the camera or connect from scratch without
+  the internet. **Home Wi-Fi only** ("nothing leaves your home") needs the native camera app
+  (ADR 0006 Phase 4) and isn't offered on the web.
+- A hidden viewer (screen off, app in the background) gets **sound only** after 20 s (`view`);
+  sound and alerts are never cut to save money.
+- The pill is the only network UI: no dialogs, no network names.
+
+## Security and privacy
+
+What protects a family's monitor, what our servers can and can't see, and which ADR 0006 Phase 0
+changes are live. Operations, secrets and the account-takeover playbook:
+[`docs/infrastructure/live-security-runbook.md`](../infrastructure/live-security-runbook.md).
+
+**True today.**
+- The monitor **never records**: no video, audio or pictures are stored on our servers (R2 holds
+  only Stream Studio broadcast segments, never monitor media).
+- Direct and Home Wi-Fi media are end-to-end encrypted between the devices (WebRTC DTLS-SRTP).
+  TURN forwards encrypted packets it can't read. The **relay picture** (through our server) is the
+  exception: it passes through the room's memory unencrypted until the Phase 0 relay encryption is
+  live, and the pill says "via our server" while it is in use.
+- Every socket authenticates in its **first frame** (never a token in a URL); members are checked
+  against Supabase (`monitor_my_role`), roles are enforced in the room (viewers can't answer
+  alerts, run a camera or change settings), and share-link guests hold a hashed, expiring pass.
+- Passcodes are stored only as PBKDF2-SHA256 (100,000 rounds); guest passes, call tickets and the
+  "Not you?" token only as SHA-256.
+- Pages carry browser protections (ADR 0006 WS-1): HSTS, nosniff, a strict Referrer-Policy,
+  Permissions-Policy and framing blocked on Stream Studio; a Content-Security-Policy in
+  report-only mode everywhere, enforced on Stream Studio after 48 h of clean reports.
+- TURN credentials are per room and person, short-lived and revoked on removal.
+- The sound model and the vision models load only from our own site and only if their SHA-256
+  matches.
+
+**What our servers still see** (ADR 0006 D6.4, and we say so): account email, nursery and baby
+names, who is a member, alert and incident times and kinds, sleep and tracker summaries, the IP
+address a device connects from, and when the monitor is used. Push text is composed by our server.
+
+**Phase 0 changes (ADR 0006), each switched on by a capability the room lists in `hello`, so an
+app never depends on a server that doesn't have it yet:**
+
+| Change | Where | Live when |
+|---|---|---|
+| Sockets re-check the token (`reauth`) and close at expiry + 2 min; **Sign out everywhere** closes every monitor and call socket within 5 s | WS-5 (app), WS-7 (`/api/me/kick`), WS-9/10 (rooms) | Wave 2 deployed |
+| Removing a member closes their sockets, stops their pushes and rotates the nursery key; every parent is told | WS-7 (`/api/monitor/:nid/members`), WS-9 | Wave 2 deployed |
+| Two-step sign-in (TOTP); anyone with a factor must complete it (`aal2`); adding people, share links, export and device approval ask for it again | WS-4 (SQL), WS-5 (app) | Owner applies `live_security_v2.sql` and turns TOTP on (owner checklist §3–§4) |
+| An email for every new sign-in, with **Not you? Secure my account** (ends every session, starts a reset) | WS-4 (hook + email Worker), WS-5 (`#/secure`) | The hook is switched on (owner checklist §4) |
+| Removing a guest ends their pass; parents can also change the link and passcode in the same step ("Link and passcode changed — share the new link") | WS-4, WS-6, WS-9 | Wave 2 deployed |
+| **Relay picture encrypted end to end** (Nursery Media Key, AES-GCM frames the room can't read) and **sealed signaling** (the room can't read or swap the connection details); a device that holds the key refuses unsealed offers | WS-2, WS-6 (apps), WS-9 (room lists `e2e1`) | Wave 2 deployed |
+| Edge rate limits, an origin allowlist on sockets, a separate small pool for unauthenticated sockets | WS-7, WS-9 | Wave 2 deployed |
+| Only the same account may replace a running camera | WS-9 | Wave 2 deployed |
+| Watches and native apps hold device-bound grants, never an account token | WS-4, WS-7 | With the native apps (Phase 1–3) |
+
+Until a row is live, the app says what is true now; the claims we make follow the table in ADR 0006
+D6.4. We never say "unhackable", "military-grade", "zero-knowledge", or "end-to-end encrypted"
+without saying which path, and we make no medical claims.
+
+**Watching it:** Admin → Costs → Security (browser-protection reports, new sign-ins, "Not you?"
+uses, refusals and kicks — counts only) and Admin → Costs → Stream Studio → *Baby monitor health*.
+The watch / widget / push contract is [`glance-contract.md`](./glance-contract.md).
 
 ## Sound level, sleep and history
 
@@ -762,5 +841,7 @@ handles push — it never caches or intercepts media.
 Not a medical device and not FDA-cleared: it does not monitor breathing,
 heart rate, oxygen, temperature or sleep position, and nothing here replaces
 safe-sleep practice. Phones pause cameras in the background — the camera page
-must stay open (the screen dims itself); an offline or locked camera alerts
-everyone within about a minute.
+must stay open (the screen dims itself); a closed camera page alerts everyone about
+20 s later, and a camera that goes silent (locked, frozen, off Wi-Fi) within two
+minutes (75–105 s: the room's watchdog, `BEAT_STALE_MS` / `WATCH_MS`). Viewers on
+screen notice a frozen picture within 6 s.

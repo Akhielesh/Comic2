@@ -180,46 +180,84 @@ const KPI_ROWS: { key: 'doRequests' | 'rowsWritten' | 'gbSeconds'; label: string
   { key: 'gbSeconds', label: 'DO duration', budget: 40, unit: 'GB-s' }
 ];
 
-const Kpis: React.FC<{ s: StreamCostSection }> = ({ s }) => (
-  <div className="space-y-2 text-xs" data-testid="stream-kpis">
-    <div className="flex flex-wrap items-center gap-2 text-[var(--ds-muted)]">
-      Per active nursery-day · {fmtCount(s.kpis.activeNurseryDays)} this month <SourceBadge source={s.kpis.source} />
+/** One small figure in the health panel: a value, its unit, and a line of context under it. */
+const HealthTile: React.FC<{ label: string; value: string; sub: string; warn?: boolean; testId?: string }> = ({ label, value, sub, warn, testId }) => (
+  <li className="rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2.5 py-2" data-testid={testId}>
+    <div className="text-[11px] text-[var(--ds-muted)]">{label}</div>
+    <div className="flex items-center gap-1 text-sm font-semibold tabular-nums text-[var(--ds-ink)]">
+      {warn && <TriangleAlert className="h-3.5 w-3.5" style={{ color: STATUS.warning }} aria-label="over budget" />}
+      {value}
     </div>
-    <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {KPI_ROWS.map((k) => {
-        const v = s.kpis[k.key];
-        const over = v != null && v > k.budget;
-        return (
-          <li key={k.key} className="rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2.5 py-2">
-            <div className="text-[11px] text-[var(--ds-muted)]">{k.label}</div>
-            <div className="flex items-center gap-1 text-sm font-semibold tabular-nums text-[var(--ds-ink)]">
-              {over && <TriangleAlert className="h-3.5 w-3.5" style={{ color: STATUS.warning }} aria-label="over budget" />}
-              {v == null ? '—' : fmtUnits(v, k.unit)}
-            </div>
-            <div className="text-[10px] text-[var(--ds-muted)]">budget ≤ {fmtCount(k.budget)}</div>
-          </li>
-        );
-      })}
-      <li className="rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2.5 py-2">
-        <div className="text-[11px] text-[var(--ds-muted)]">Our-server share</div>
-        <div className="text-sm font-semibold tabular-nums text-[var(--ds-ink)]">{s.kpis.serverShare == null ? '—' : fmtPct(s.kpis.serverShare * 100, 1)}</div>
-        <div className="text-[10px] text-[var(--ds-muted)]">of monitor minutes · reported</div>
-      </li>
-    </ul>
-    <p className="text-[11px] text-[var(--ds-muted)]">{s.kpis.note}</p>
-    <p className="text-[11px] text-[var(--ds-muted)]" data-testid="stream-projection">
-      At today’s per-nursery cost (list price, est.):{' '}
-      {s.projection.at1k == null ? (
-        'not enough monitor data yet.'
-      ) : (
-        <>
-          <span className="font-semibold text-[var(--ds-ink)]">1k nurseries ≈ {fmtUsd(s.projection.at1k)}/mo</span> ·{' '}
-          <span className="font-semibold text-[var(--ds-ink)]">10k ≈ {fmtUsd(s.projection.at10k)}/mo</span>
-        </>
-      )}
-    </p>
-  </div>
+    <div className="text-[10px] text-[var(--ds-muted)]">{sub}</div>
+  </li>
 );
+
+const STATUS_WORD = { ok: 'within budget', over: 'over budget', unknown: 'not enough days yet' } as const;
+
+const Kpis: React.FC<{ s: StreamCostSection }> = ({ s }) => {
+  const k = s.kpis;
+  const med = k.median7d;
+  return (
+    <div className="space-y-2 text-xs" data-testid="stream-kpis">
+      <div className="flex flex-wrap items-center gap-2 text-[var(--ds-muted)]">
+        Per active nursery-day · {fmtCount(k.activeNurseryDays)} this month <SourceBadge source={k.source} />
+      </div>
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {KPI_ROWS.map((row) => {
+          const avg = k[row.key];
+          const budget = k.budgets?.[row.key] ?? row.budget;
+          // Phase 0 is judged on the 7-day median when the server reports it; the month-to-date average is context.
+          const m = med ? med[row.key] : null;
+          const status = k.status?.[row.key];
+          const shown = med ? m : avg;
+          return (
+            <HealthTile
+              key={row.key}
+              testId={`stream-kpi-${row.key}`}
+              label={row.label}
+              value={shown == null ? '—' : fmtUnits(shown, row.unit)}
+              warn={status ? status === 'over' : avg != null && avg > budget}
+              sub={
+                med
+                  ? `7-day median · ≤ ${fmtCount(budget)} · ${STATUS_WORD[status ?? 'unknown']}${avg == null ? '' : ` · month avg ${fmtUnits(avg, row.unit)}`}`
+                  : `budget ≤ ${fmtCount(budget)}`
+              }
+            />
+          );
+        })}
+        <HealthTile
+          label="Our-server share"
+          value={k.serverShare == null ? '—' : fmtPct(k.serverShare * 100, 1)}
+          sub={k.relayShare == null ? 'of monitor minutes · reported' : `of monitor minutes · with TURN ${fmtPct(k.relayShare * 100, 1)}`}
+        />
+      </ul>
+      {(k.turnGbMonthToDate !== undefined || k.doStoredGb !== undefined || k.glanceBumpsPerNight !== undefined) && (
+        <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="stream-kpis-more">
+          <HealthTile label="TURN this month" value={k.turnGbMonthToDate == null ? '—' : fmtUnits(k.turnGbMonthToDate, 'GB')} sub="account-wide · measured" />
+          <HealthTile
+            label="DO storage"
+            value={k.doStoredGb == null ? '—' : fmtUnits(k.doStoredGb, 'GB')}
+            sub={k.doStoredMbPerNursery == null ? 'account-wide level' : `≈ ${fmtUnits(k.doStoredMbPerNursery, 'MB')} per nursery (upper bound)`}
+          />
+          <HealthTile label="Glance bumps / night" value={k.glanceBumpsPerNight == null ? '—' : fmtCount(k.glanceBumpsPerNight)} sub="target ≤ 60 · at least" />
+          <HealthTile label="Pushes / night" value={k.pushesPerNight == null ? '—' : fmtCount(k.pushesPerNight)} sub="per active nursery · at least" />
+        </ul>
+      )}
+      <p className="text-[11px] text-[var(--ds-muted)]">{k.note}</p>
+      <p className="text-[11px] text-[var(--ds-muted)]" data-testid="stream-projection">
+        At today’s per-nursery cost (list price, est.):{' '}
+        {s.projection.at1k == null ? (
+          'not enough monitor data yet.'
+        ) : (
+          <>
+            <span className="font-semibold text-[var(--ds-ink)]">1k nurseries ≈ {fmtUsd(s.projection.at1k)}/mo</span> ·{' '}
+            <span className="font-semibold text-[var(--ds-ink)]">10k ≈ {fmtUsd(s.projection.at10k)}/mo</span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+};
 
 const Setup: React.FC<{ s: StreamCostSection }> = ({ s }) => (
   <Surface
