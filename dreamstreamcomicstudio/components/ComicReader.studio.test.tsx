@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 
 vi.mock('./comicstudio/PublicComicReader', () => ({
@@ -42,6 +42,10 @@ vi.mock('../contexts/AuthContext', () => ({
 }));
 
 import { ComicReader } from './ComicReader';
+import { resetBackStack } from './comicstudio/mobile/backStack';
+
+// v5: both readers are Back-stack layers; no layer (or its deferred history pop) outlives its test.
+afterEach(() => resetBackStack());
 
 const state = (extra: Record<string, unknown> = {}): ComicState =>
   ({
@@ -95,7 +99,8 @@ describe('ComicReader → v4 delegation', () => {
     expect(screen.queryByText("This comic hasn't been drawn yet!")).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'close v4' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // The reader pops its own history entry first (so Back never lands on a stale reader entry), then closes.
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     // A local project is the owner's: the v4 reader hides Report and sends no analytics.
     expect(screen.getByTestId('v4-reader')).toHaveAttribute('data-kind', 'project');
     expect(screen.getByTestId('v4-reader')).toHaveAttribute('data-owner', 'true');

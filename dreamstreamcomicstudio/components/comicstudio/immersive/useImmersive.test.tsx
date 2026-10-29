@@ -83,6 +83,38 @@ describe('useImmersive', () => {
     expect(release).toHaveBeenCalled();
   });
 
+  it('no API (iPhone): the host is told once that the overlay is the full screen it gets', async () => {
+    const onFullscreenFallback = vi.fn();
+    const FallbackHost: React.FC = () => {
+      const ref = useRef<HTMLDivElement>(null);
+      api = useImmersive(ref, { active: true, onExit: () => undefined, onFullscreenFallback });
+      return <div ref={ref} />;
+    };
+    render(<FallbackHost />);
+    await act(tick);
+    expect(onFullscreenFallback).toHaveBeenCalledTimes(1);
+    expect(onFullscreenFallback).toHaveBeenCalledWith('unsupported');
+    expect(api!.fullscreen).toBe(false);
+    expect(api!.fullscreenSupported).toBe(false);
+  });
+
+  it('a refused request falls back without an unhandled rejection, and never reports full screen', async () => {
+    const req = vi.fn(() => Promise.reject(new TypeError('Permissions check failed')));
+    HTMLElement.prototype.requestFullscreen = req as unknown as HTMLElement['requestFullscreen'];
+    const onFullscreenFallback = vi.fn();
+    const FallbackHost: React.FC = () => {
+      const ref = useRef<HTMLDivElement>(null);
+      api = useImmersive(ref, { active: true, onExit: () => undefined, onFullscreenFallback });
+      return <div ref={ref} />;
+    };
+    render(<FallbackHost />);
+    await act(tick);
+    expect(req).toHaveBeenCalledWith({ navigationUI: 'hide' });
+    expect(onFullscreenFallback).toHaveBeenCalledWith('rejected');
+    expect(api!.fullscreen).toBe(false);
+    delete (HTMLElement.prototype as Partial<HTMLElement>).requestFullscreen;
+  });
+
   it('uses the Fullscreen API when the browser has it', async () => {
     const el = document.documentElement as HTMLElement & { requestFullscreen?: unknown };
     let fsEl: Element | null = null;

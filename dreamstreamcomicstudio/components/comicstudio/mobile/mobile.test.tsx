@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { AssetRef, ComicDoc } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
-import { HISTORY_LAYERS_KEY, historyLayers, openLayers, popLayer, pushLayer, resetBackStack, useBackLayer } from './backStack';
+import { HISTORY_LAYERS_KEY, historyLayers, leaveLayer, openLayers, popLayer, pushLayer, resetBackStack, useBackLayer } from './backStack';
 import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetFor, variantWidthFor } from './media/imageVariants';
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
@@ -55,6 +55,104 @@ describe('backStack (the back gesture closes the top layer first)', () => {
     expect((window.history.state as Record<string, unknown>)[HISTORY_LAYERS_KEY]).toEqual(historyLayers());
     push.mockRestore();
     replace.mockRestore();
+  });
+
+  // Leaving from the UI and THEN acting (the readers' Close / Library / legal links, mobile-reading hotfix): the
+  // layer's entry — and every entry above it — goes first, in one traversal, and the action runs on the entry under it.
+  const settle = async () => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+  };
+  const openFrom = () => {
+    const opening = { __leaveTest: Math.random() };
+    window.history.pushState(opening, '');
+    return opening;
+  };
+
+  it('leaveLayer pops the layer and the layers above it in one traversal, then acts (instead of the back close)', async () => {
+    const opening = openFrom();
+    const before = window.history.length;
+    const closeReader = vi.fn();
+    const closeFull = vi.fn();
+    const reader = pushLayer('reader:c1', closeReader);
+    pushLayer('fullscreen', closeFull);
+    const go = vi.spyOn(window.history, 'go');
+    let stateAtAction: unknown = 'not called';
+    const action = vi.fn(() => {
+      stateAtAction = window.history.state;
+    });
+    leaveLayer(reader, action);
+    expect(go).toHaveBeenCalledTimes(1);
+    expect(go).toHaveBeenCalledWith(-2);
+    expect(action).not.toHaveBeenCalled(); // not before its entry is gone
+    await settle();
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(stateAtAction).toEqual(opening);
+    expect(closeFull).toHaveBeenCalledTimes(1); // the layer above closes as usual
+    expect(closeReader).not.toHaveBeenCalled(); // the action replaced the back-gesture close
+    expect(openLayers()).toEqual([]);
+    expect(window.history.length).toBe(before + 2);
+    go.mockRestore();
+  });
+
+  it('unwinds through an entry someone else pushed above the layer (the immersive reader), never further', async () => {
+    const opening = openFrom();
+    const reader = pushLayer('reader:c2', vi.fn());
+    // A foreign entry that copies the state (as useImmersive does): it still lists the reader's layer.
+    window.history.pushState({ ...(window.history.state as object), __foreign: 1 }, '');
+    const action = vi.fn();
+    leaveLayer(reader, action);
+    await settle();
+    await settle();
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(window.history.state).toEqual(opening);
+  });
+
+  it('leaving again while the traversal is under way swaps the action and never goes further back', async () => {
+    const opening = openFrom();
+    const reader = pushLayer('reader:c3', vi.fn());
+    const first = vi.fn();
+    const second = vi.fn();
+    leaveLayer(reader, first);
+    leaveLayer(reader, second);
+    await settle();
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(window.history.state).toEqual(opening);
+    // Already gone: a later leave acts at once, with no traversal.
+    const go = vi.spyOn(window.history, 'go');
+    const third = vi.fn();
+    leaveLayer(reader, third);
+    expect(third).toHaveBeenCalledTimes(1);
+    expect(go).not.toHaveBeenCalled();
+    go.mockRestore();
+  });
+
+  it('a traversal that never reports back still closes after the settle time', async () => {
+    vi.useFakeTimers();
+    try {
+      openFrom();
+      const reader = pushLayer('reader:c4', vi.fn());
+      const go = vi.spyOn(window.history, 'go').mockImplementation(() => undefined);
+      const action = vi.fn();
+      leaveLayer(reader, action, 800);
+      vi.advanceTimersByTime(799);
+      expect(action).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(action).toHaveBeenCalledTimes(1);
+      expect(openLayers()).toEqual([]);
+      go.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('useBackLayer returns leave(action): with no open layer the action runs at once', () => {
+    const action = vi.fn();
+    const { result } = renderHook(() => useBackLayer(false, vi.fn(), 'reader'));
+    result.current(action);
+    expect(action).toHaveBeenCalledTimes(1);
   });
 
   it('useBackLayer registers while open and survives a StrictMode double effect', () => {

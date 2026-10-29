@@ -8,9 +8,18 @@
 // immersive reader). Page modes turn with ←/→ (reading-direction aware), Space/PageUp/PageDown,
 // Home/End, swipes and taps on the outer thirds; pinch / ctrl+wheel zoom the page (TouchCanvas) and
 // turns pause while zoomed. Pages come through the shared page-image cache (decoded before they show,
-// the right size variant for the box, neighbours preloaded politely), and a withheld (safety-blocked)
-// page is a neutral tile that is never fetched. Deep links: `initialPage` in, `?p=` out (syncUrl).
+// the right size variant for the box, the next view preloaded once the current one has landed), and a
+// withheld (safety-blocked) page is a neutral tile that is never fetched. Deep links: `initialPage` in,
+// `?p=` out (syncUrl).
 // Chrome is docked (studio) or auto-hides (public reader). Everything is client-side and free.
+//
+// Phones (mobile-reading hotfix): the page on screen loads first — only then is the next view
+// preloaded, and only that one. "Full screen" always does something: native where the browser has it
+// (services/fullscreen.ts, the helper every reader shares), else this reader fills the viewport, with a
+// Back-stack layer of its own so Back leaves that mode before it closes the comic; on iPhone it says
+// once what does go edge-to-edge. Safe gestures: a pinch never turns a page (whichever finger lifts
+// first), and while the page is zoomed in — the reader's own zoom or the browser's — drags pan and
+// neither swipes nor taps turn it.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Columns2, Download, Expand, Flag, Maximize2, Minimize2, MoreHorizontal, Rows3, Share2, Square, X } from 'lucide-react';
@@ -31,11 +40,21 @@ import { SlotContentView, slotImageSource, type SlotImage } from '../immersive/R
 import { bookGeometry, bookViews, decideLayout, letterbox, viewIndexOfItem, type BookView, type LayoutPref } from '../immersive/readerLayout';
 import { effectiveReader, readLayoutPref, readPosition, readPrefs, shouldOfferResume, writeLayoutPref, writePosition } from '../immersive/readerPrefs';
 import { createUrlSync } from '../immersive/readerUrl';
+import { useBackLayer } from '../mobile/backStack';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { TouchCanvas } from '../mobile/touch/TouchCanvas';
 import { RatingBadge } from '../safety/RatingBadge';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { usePrefersReducedMotion } from '../../studio/kit/motion';
+import {
+  IOS_FULLSCREEN_NOTE,
+  enterFullscreen,
+  exitFullscreen,
+  isFullscreenActive,
+  markIosFullscreenNoteSeen,
+  onFullscreenChange,
+  shouldShowIosFullscreenNote
+} from '../../../services/fullscreen';
 import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
 
 export type ReaderChrome = 'docked' | 'auto-hide';
@@ -124,6 +143,22 @@ const READER_INK: React.CSSProperties = {
 
 const CHROME_IDLE_MS = 2500;
 const PAGE_SHADOW = 'shadow-[0_6px_30px_rgba(0,0,0,0.22)]';
+
+/** Pinch-zoomed in by the browser (its own page zoom): drags pan the page, swipes and taps never turn it. */
+const isViewportZoomed = (): boolean => typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01;
+
+const useViewportZoomed = (): boolean => {
+  const [zoomed, setZoomed] = useState(isViewportZoomed);
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const on = () => setZoomed(isViewportZoomed());
+    on();
+    vv.addEventListener('resize', on);
+    return () => vv.removeEventListener('resize', on);
+  }, []);
+  return zoomed;
+};
 
 type Pos = { key: string | null; end: boolean };
 
@@ -450,9 +485,20 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // ── Navigation ────────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
+  // Safe gestures: every pointer on the stage is tracked; once a second one touches down (a pinch) the swipe
+  // candidate is gone and nothing turns until every finger is up, whichever lifts first.
+  const pointers = useRef(new Set<number>());
+  const multiPointer = useRef(false);
+  // The browser's own zoom (where the reader has none of its own, e.g. fit to width): touch-action can only change
+  // between gestures, so it follows the zoom level — at 1x vertical pans and pinch-zoom go to the browser and
+  // horizontal swipes to us; zoomed in, the browser pans in every direction.
+  const viewportZoomed = useViewportZoomed();
+  /** The page is zoomed in (the reader's canvas or the browser): a drag pans, swipes and taps never turn. */
+  const zoomedIn = () => zoomRef.current > 1.05 || isViewportZoomed();
   // Swipes and taps pause while zoomed (a drag pans the page instead; the stage handlers check
-  // zoomRef). An explicit control — a toolbar arrow, a key, a side zone — always turns, and
-  // TouchCanvas snaps back to fit on the new page (resetKey), so no button is ever dead.
+  // zoomedIn()). An explicit control — a toolbar arrow, a key, a mouse side zone — always turns, and
+  // TouchCanvas snaps back to fit on the new page (resetKey), so no button is ever dead. (The invisible
+  // side zones pause only while the browser itself is pinch-zoomed: a click there is a pan.)
   const go = useCallback(
     (delta: number) => {
       if (!delta) return;
@@ -484,6 +530,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     // The immersive reader portals out of this box, but React still bubbles its keys here: it owns them.
     if (immersive) return;
     if (e.altKey || e.metaKey || e.ctrlKey) return;
+    if (e.key === 'Escape' && viewportFullscreen) {
+      e.preventDefault();
+      leaveViewportFullscreen();
+      return;
+    }
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if ((e.target as HTMLElement).closest?.('[role="menu"],[role="listbox"]')) return;
@@ -511,20 +562,52 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     if (autoFocus) rootRef.current?.focus({ preventScroll: true });
   }, [autoFocus]);
 
-  // Browser fullscreen of this box (only without the immersive entry).
-  const [fullscreen, setFullscreen] = useState(false);
+  // Full screen of this box (only without the immersive entry). Native state comes only from fullscreenchange; the
+  // viewport mode is the fallback when the browser has no API (iPhone) or refuses. Either counts as full screen.
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  const [viewportFullscreen, setViewportFullscreen] = useState(false);
+  const [showIosNote, setShowIosNote] = useState(false);
+  const fullscreen = nativeFullscreen || viewportFullscreen;
+  useEffect(() => onFullscreenChange(() => setNativeFullscreen(isFullscreenActive(rootRef.current))), []);
+  // The viewport mode is a layer on the Back stack: Back leaves it (the comic stays open); leaving it with a control
+  // (Exit, Esc) or unmounting in it pops its entry, so Back is never dead and never lands on a stale entry.
+  useBackLayer(viewportFullscreen, () => setViewportFullscreen(false), 'fullscreen');
+
+  // The viewport mode locks the page behind the reader (no rubber-band scrolling of the site underneath).
   useEffect(() => {
-    const onChange = () => setFullscreen(!!document.fullscreenElement && document.fullscreenElement === rootRef.current);
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) await rootRef.current?.requestFullscreen?.();
-      else await document.exitFullscreen?.();
-    } catch {
-      /* fullscreen refused (iframe / iOS) — keep reading inline */
+    if (!viewportFullscreen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = [html.style.overflow, body.style.overflow];
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prev[0];
+      body.style.overflow = prev[1];
+    };
+  }, [viewportFullscreen]);
+
+  const enterViewportFullscreen = useCallback(() => {
+    setViewportFullscreen(true);
+    if (shouldShowIosFullscreenNote()) {
+      markIosFullscreenNoteSeen();
+      setShowIosNote(true);
     }
+  }, []);
+  const leaveViewportFullscreen = useCallback(() => setViewportFullscreen(false), []);
+
+  // Called synchronously from the tap (full screen is only granted inside the user gesture); never throws, and the
+  // label never flips before the browser says so.
+  const toggleFullscreen = () => {
+    if (viewportFullscreen) {
+      leaveViewportFullscreen();
+      return;
+    }
+    if (isFullscreenActive(rootRef.current)) {
+      exitFullscreen();
+      return;
+    }
+    enterFullscreen(rootRef.current, { onFallback: enterViewportFullscreen });
   };
 
   // ── Immersive ─────────────────────────────────────────────────────────────
@@ -689,15 +772,19 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       .filter(Boolean) as string[];
     pageImageCache.retain(keep);
     const controller = new AbortController();
-    const ahead = img.saveData || net.slow ? [viewIdx + 1] : [viewIdx + 1, viewIdx - 1, viewIdx + 2];
-    for (const v of ahead) {
-      for (const i of views[v]?.items ?? []) {
-        const src = sourceOf(i);
-        if (src?.url) void pageImageCache.ensure(src.path, src.url, v === viewIdx + 1 ? 'next' : 'idle', controller.signal);
-      }
-    }
+    // The page on screen first: on a slow phone connection, parallel downloads made it arrive last. Only once the
+    // current view has landed (loaded or failed — a failed page never blocks the next) is the NEXT view preloaded,
+    // and only that one; the one after follows when you turn. The current view's own slots request the same
+    // paths at 'now', so this joins their downloads rather than adding any.
+    const sources = (v: number) =>
+      (views[v]?.items ?? []).map(sourceOf).filter((src): src is { path: string; url: string } => !!src?.url);
+    const preloadNext = () => {
+      if (controller.signal.aborted) return;
+      for (const src of sources(viewIdx + 1)) void pageImageCache.ensure(src.path, src.url, 'next', controller.signal);
+    };
+    void Promise.all(sources(viewIdx).map((src) => pageImageCache.ensure(src.path, src.url, 'now'))).then(preloadNext);
     return () => controller.abort();
-  }, [layout, geo, immersiveOn, items, views, viewIdx, aspectOf, img, net.slow]);
+  }, [layout, geo, immersiveOn, items, views, viewIdx, aspectOf, img]);
 
   // ── Download (client-side PDF from the images already served; withheld pages never included) ──
   const [downloading, setDownloading] = useState(false);
@@ -886,7 +973,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             <span className={cx(narrow && 'sr-only')}>{t('fullScreen')}</span>
           </button>
         ) : fullscreenControl ? (
-          <IconButton label={fullscreen ? t('exitFullScreen') : t('fullScreen')} onClick={() => void toggleFullscreen()}>
+          <IconButton label={fullscreen ? t('exitFullScreen') : t('fullScreen')} aria-pressed={fullscreen} onClick={toggleFullscreen}>
             {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </IconButton>
         ) : null}
@@ -1050,12 +1137,50 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       }}
       data-testid="comic-reader"
       data-layout={layout}
+      data-fullscreen={viewportFullscreen ? 'viewport' : nativeFullscreen ? 'native' : 'off'}
       aria-label={`Read ${localized.cover.title || localized.brief.title}`}
       role="region"
       className={cx('relative flex h-full min-h-0 flex-col bg-[var(--ds-canvas)] focus:outline-none', className)}
+      style={
+        viewportFullscreen
+          ? {
+              // The fallback "full screen": the whole viewport, clear of notches and the home indicator.
+              position: 'fixed',
+              inset: 0,
+              zIndex: 70,
+              width: '100%',
+              height: '100dvh',
+              paddingTop: 'var(--sa-top, 0px)',
+              paddingBottom: 'var(--sa-bottom, 0px)',
+              paddingLeft: 'var(--sa-left, 0px)',
+              paddingRight: 'var(--sa-right, 0px)'
+            }
+          : undefined
+      }
     >
       {toolbar}
       {!autoHide && !compactH && notices}
+
+      {showIosNote && (
+        // iPhone browsers have no element full screen: say once, honestly, what does work.
+        <div
+          role="status"
+          aria-label="Full screen on iPhone"
+          className="fixed inset-x-3 z-[71] mx-auto max-w-sm rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-3 text-[13px] leading-snug text-[var(--ds-ink)] shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-md"
+          style={{ bottom: 'calc(var(--sa-bottom, 0px) + 16px)' }}
+        >
+          <p>{IOS_FULLSCREEN_NOTE}</p>
+          <div className="mt-1 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowIosNote(false)}
+              className="min-h-[44px] rounded-full px-4 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
 
       {layout === 'scroll' ? (
         // The scroller is itself keyboard-reachable — a named region (axe `scrollable-region-focusable`):
@@ -1092,14 +1217,30 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           className="relative min-h-0 flex-1 select-none"
           // Flush with the screen's bottom edge: the home-indicator inset is kept clear (--sa-bottom-eff
           // collapses while a keyboard is up). The inner box is what the geometry measures.
-          style={frame.flushBottom ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
+          style={{ ...(frame.flushBottom ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : null), touchAction: viewportZoomed ? 'manipulation' : 'pan-y pinch-zoom' }}
+          data-zoomed={viewportZoomed ? 'true' : undefined}
           onPointerDown={(e) => {
+            if (e.isPrimary || pointers.current.size === 0) {
+              pointers.current.clear();
+              multiPointer.current = false;
+            }
+            pointers.current.add(e.pointerId);
+            if (pointers.current.size > 1) {
+              multiPointer.current = true;
+              swipe.current = null;
+              return;
+            }
             swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
           }}
           onPointerUp={(e) => {
+            pointers.current.delete(e.pointerId);
             const start = swipe.current;
             swipe.current = null;
-            if (!start || zoomRef.current > 1.05) return;
+            if (multiPointer.current) {
+              if (pointers.current.size === 0) multiPointer.current = false;
+              return;
+            }
+            if (!start || zoomedIn()) return;
             const dx = e.clientX - start.x;
             const dy = e.clientY - start.y;
             const s = swipeDelta(dx, dy, rtl);
@@ -1117,14 +1258,19 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
               else if (autoHide) pokeChrome(true);
             }
           }}
-          onPointerCancel={() => {
+          onPointerCancel={(e) => {
+            pointers.current.delete(e.pointerId);
+            if (pointers.current.size === 0) multiPointer.current = false;
             swipe.current = null;
           }}
         >
           <div
             ref={stageRef}
             data-testid="reader-stage-box"
-            className={cx('relative h-full w-full', decision.fit === 'width' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden', !canZoom && 'touch-pan-y')}
+            className={cx('relative h-full w-full', decision.fit === 'width' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden')}
+            // Without the reader's own zoom (fit to width, zoomable off) the browser may pinch-zoom the page; with it,
+            // the zoomable canvas owns two-finger gestures (touch-action: none) and this is the page around it.
+            style={canZoom ? undefined : { touchAction: viewportZoomed ? 'manipulation' : 'pan-y pinch-zoom' }}
           >
             {stageContent}
             {/* Mouse-only click zones on the page edges (the resize cursor is their affordance). Touch
@@ -1137,7 +1283,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
                   aria-label={prevLabel}
                   data-zone="prev"
                   tabIndex={-1}
-                  onClick={() => go(rtl ? 1 : -1)}
+                  onClick={() => !isViewportZoomed() && go(rtl ? 1 : -1)}
                   className="absolute inset-y-0 left-0 z-[6] hidden w-[12%] cursor-w-resize opacity-0 md:block coarse:hidden"
                 />
                 <button
@@ -1145,7 +1291,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
                   aria-label={nextLabel}
                   data-zone="next"
                   tabIndex={-1}
-                  onClick={() => go(rtl ? -1 : 1)}
+                  onClick={() => !isViewportZoomed() && go(rtl ? -1 : 1)}
                   className="absolute inset-y-0 right-0 z-[6] hidden w-[12%] cursor-e-resize opacity-0 md:block coarse:hidden"
                 />
               </>

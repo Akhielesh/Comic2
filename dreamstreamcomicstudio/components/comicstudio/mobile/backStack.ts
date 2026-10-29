@@ -8,9 +8,15 @@
 // never fills with dead entries; a layer opened right as another closes (menu → sheet) REUSES the
 // closing layer's entry (replaceState) instead of stacking a new one. The URL never changes.
 //
+// Leaving from the UI and THEN acting (a reader's Close, Library, a legal link — mobile-reading hotfix):
+// `leaveLayer` / the function `useBackLayer` returns pops the layer's entry (and every entry above it) FIRST
+// and runs the action once that traversal lands, so whatever the host does next (App rewriting its
+// ?view=read entry, a navigation) happens on the entry under the layer and a later Back never lands on a
+// stale one. If the traversal never reports back, the action still runs after a short settle time.
+//
 // StrictMode-safe: a dev double-mount revives the same layer instead of pushing twice.
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 interface Layer {
   id: string;
@@ -23,8 +29,12 @@ export const HISTORY_LAYERS_KEY = 'csLayers';
 const stack: Layer[] = [];
 /** Layers closed from the UI whose history entry is still waiting for its deferred back(). */
 const closing = new Map<string, { layer: Layer; timer: ReturnType<typeof setTimeout> }>();
+/** The layer being left with leaveLayer (its traversal is under way) and the action that runs when it lands. */
+let leaving: { id: string; action: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
 let listening = false;
 let seq = 0;
+/** How long a leave waits for its traversal to report back (popstate) before it closes anyway. */
+export const LEAVE_SETTLE_MS = 800;
 
 const canUseHistory = (): boolean => typeof window !== 'undefined' && !!window.history && typeof window.history.pushState === 'function';
 
@@ -55,7 +65,17 @@ const onPopState = () => {
       console.error('[comicstudio] closing a layer on back failed', err);
     }
   }
-  if (!stack.length && !closing.size) stopListening();
+  // A leave landed on an entry that still holds its layer (an entry someone else pushed sat above it, e.g. the
+  // immersive reader's): keep unwinding, one step at a time, until the layer's own entry is gone.
+  if (leaving && live.has(leaving.id)) {
+    try {
+      window.history.back();
+    } catch {
+      /* sandboxed: the settle timer finishes the leave */
+    }
+    return;
+  }
+  if (!stack.length && !closing.size && !leaving) stopListening();
 };
 
 const startListening = () => {
@@ -120,6 +140,79 @@ export const popLayer = (id: string, deferMs = 0): void => {
   closing.set(id, { layer, timer: setTimeout(() => finishClose(id), Math.max(0, deferMs)) });
 };
 
+/** Close stack layers from index `i` up, topmost first (each runs its close: a leaving layer runs its action). */
+const closeFrom = (i: number) => {
+  if (i < 0) return;
+  const gone = stack.splice(i);
+  for (let k = gone.length - 1; k >= 0; k -= 1) {
+    try {
+      gone[k].close();
+    } catch (err) {
+      console.error('[comicstudio] closing a layer failed', err);
+    }
+  }
+};
+
+/**
+ * Leave a layer from the UI and THEN run `action` (instead of the layer's back-gesture close): its history
+ * entry — and every entry above it — is popped first, in one traversal, and `action` runs once that lands.
+ * A layer already closed (Back, an earlier leave) or without an entry of its own runs `action` at once.
+ * Leaving the same layer again while its traversal is under way only swaps the action (never a second
+ * traversal, so it never goes further back than the layer's own entry).
+ */
+export const leaveLayer = (id: string, action: () => void, settleMs = LEAVE_SETTLE_MS): void => {
+  if (leaving?.id === id) {
+    leaving.action = action;
+    return;
+  }
+  const i = stack.findIndex((l) => l.id === id);
+  if (i < 0) {
+    action();
+    return;
+  }
+  const layers = canUseHistory() ? historyLayers() : [];
+  const at = layers.lastIndexOf(id);
+  const leave = { id, action, timer: setTimeout(() => finishLeave(), Math.max(0, settleMs)) };
+  // The traversal never reported back: close the layer (and those above it) now — its close runs the action. A
+  // layer that vanished meanwhile (its host unmounted) still gets its action: the user asked to leave.
+  const finishLeave = () => {
+    if (leaving !== leave) return;
+    const idx = stack.findIndex((l) => l.id === id);
+    if (idx >= 0) {
+      closeFrom(idx);
+      return;
+    }
+    leaving = null;
+    leave.action();
+  };
+  stack[i].close = () => {
+    if (leaving !== leave) return;
+    clearTimeout(leave.timer);
+    leaving = null;
+    leave.action();
+  };
+  leaving = leave;
+  if (at < 0) {
+    // No entry of its own (sandboxed, or the host replaced it): close it and everything above it now.
+    closeFrom(i);
+    return;
+  }
+  // Entries above it whose layers are already closing (an Exit tapped just before Close) go with this traversal.
+  for (const above of layers.slice(at)) {
+    const pending = closing.get(above);
+    if (!pending) continue;
+    clearTimeout(pending.timer);
+    closing.delete(above);
+  }
+  startListening();
+  try {
+    window.history.go(-(layers.length - at));
+  } catch {
+    clearTimeout(leave.timer);
+    closeFrom(stack.findIndex((l) => l.id === id));
+  }
+};
+
 /** Undo a pending close (StrictMode re-run). True when the layer was revived. */
 const revive = (id: string, close: () => void): boolean => {
   const pending = closing.get(id);
@@ -143,14 +236,17 @@ export const resetBackStack = (): void => {
   stack.splice(0, stack.length);
   closing.forEach((c) => clearTimeout(c.timer));
   closing.clear();
+  if (leaving) clearTimeout(leaving.timer);
+  leaving = null;
   stopListening();
 };
 
 /**
  * While `open`, the back gesture calls `onClose` (topmost layer first). `key` names the layer
- * (e.g. 'page-editor', 'sheet:settings').
+ * (e.g. 'page-editor', 'sheet:settings'). Returns `leave(action)`: leave the layer from the UI and run
+ * `action` once its history entry is gone (see leaveLayer); without an open layer `action` runs at once.
  */
-export function useBackLayer(open: boolean, onClose: () => void, key: string): void {
+export function useBackLayer(open: boolean, onClose: () => void, key: string): (action: () => void) => void {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const idRef = useRef<string | null>(null);
@@ -172,6 +268,12 @@ export function useBackLayer(open: boolean, onClose: () => void, key: string): v
   useEffect(() => {
     if (!open) idRef.current = null;
   }, [open]);
+
+  return useCallback((action: () => void) => {
+    const id = idRef.current;
+    if (!id) action();
+    else leaveLayer(id, action);
+  }, []);
 }
 
 export default useBackLayer;

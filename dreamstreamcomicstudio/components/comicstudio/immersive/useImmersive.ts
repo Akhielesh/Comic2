@@ -2,11 +2,17 @@
 // (iPhone Safari has no element fullscreen), page scroll lock, `theme-color` matched to the room, a
 // screen wake lock while reading, and a history entry so the phone's Back gesture closes the reader
 // instead of leaving the page. Everything degrades silently on older browsers.
+//
+// Full screen goes through the one helper every reader shares (services/fullscreen.ts): requested inside
+// the opening tap, standard then webkit, never throws; the state is the browser's own (fullscreenchange,
+// or the element it reports once a request succeeds), never a guess; when the browser has no API or
+// refuses, the overlay IS the fallback and the host hears about it (onFullscreenFallback).
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { enterFullscreen, exitFullscreen, fullscreenApi, fullscreenElement, onFullscreenChange, type FullscreenFallbackReason } from '../../../services/fullscreen';
 
-type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
-type FsDocument = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
+export { fullscreenElement };
+
 interface WakeLockSentinelLike {
   released?: boolean;
   release(): Promise<void>;
@@ -25,40 +31,8 @@ export const readerEntryOnTop = (): boolean => {
   }
 };
 
-export const fullscreenElement = (): Element | null => {
-  if (typeof document === 'undefined') return null;
-  const d = document as FsDocument;
-  return d.fullscreenElement ?? d.webkitFullscreenElement ?? null;
-};
-
-export const fullscreenSupported = (): boolean => {
-  if (typeof document === 'undefined') return false;
-  const el = document.documentElement as FsElement;
-  return typeof el.requestFullscreen === 'function' || typeof el.webkitRequestFullscreen === 'function';
-};
-
-const requestFs = async (el: HTMLElement): Promise<boolean> => {
-  const fe = el as FsElement;
-  try {
-    if (typeof fe.requestFullscreen === 'function') await fe.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions);
-    else if (typeof fe.webkitRequestFullscreen === 'function') await fe.webkitRequestFullscreen();
-    else return false;
-    return !!fullscreenElement();
-  } catch {
-    return false;
-  }
-};
-
-const exitFs = async () => {
-  const d = document as FsDocument;
-  try {
-    if (!fullscreenElement()) return;
-    if (typeof d.exitFullscreen === 'function') await d.exitFullscreen();
-    else if (typeof d.webkitExitFullscreen === 'function') await d.webkitExitFullscreen();
-  } catch {
-    /* already out */
-  }
-};
+/** The browser can show an element full screen here (standard or webkit; not in an iframe that forbids it). */
+export const fullscreenSupported = (): boolean => fullscreenApi() !== 'none';
 
 export interface ImmersiveOptions {
   /** The reader is open. */
@@ -69,6 +43,8 @@ export interface ImmersiveOptions {
   themeColor?: string;
   /** Try the Fullscreen API on open (default true; needs the opening user gesture). */
   fullscreenOnOpen?: boolean;
+  /** Native full screen is missing (iPhone) or was refused: the overlay is what the reader gets. */
+  onFullscreenFallback?(reason: FullscreenFallbackReason): void;
 }
 
 export interface ImmersiveApi {
@@ -85,6 +61,8 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
   const { active, themeColor, fullscreenOnOpen = true } = opts;
   const onExitRef = useRef(opts.onExit);
   onExitRef.current = opts.onExit;
+  const onFallbackRef = useRef(opts.onFullscreenFallback);
+  onFallbackRef.current = opts.onFullscreenFallback;
   const [fullscreen, setFullscreen] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const token = useRef(`r${Math.random().toString(36).slice(2, 10)}`);
@@ -100,18 +78,16 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
     html.style.overflow = 'hidden';
     body.style.overflow = 'hidden';
     const onFs = () => setFullscreen(!!fullscreenElement());
-    document.addEventListener('fullscreenchange', onFs);
-    document.addEventListener('webkitfullscreenchange', onFs);
+    const unsubscribe = onFullscreenChange(onFs);
     // Captured now: by cleanup time React has already detached the ref.
     const el = root.current;
-    if (fullscreenOnOpen && el) void requestFs(el).then(onFs);
+    if (fullscreenOnOpen && el) enterFullscreen(el, { onEntered: onFs, onFallback: (reason) => onFallbackRef.current?.(reason) });
     return () => {
-      document.removeEventListener('fullscreenchange', onFs);
-      document.removeEventListener('webkitfullscreenchange', onFs);
+      unsubscribe();
       html.style.overflow = prev.html;
       body.style.overflow = prev.body;
       const fs = fullscreenElement();
-      if (fs && el && (fs === el || el.contains(fs))) void exitFs();
+      if (fs && el && (fs === el || el.contains(fs))) exitFullscreen();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -208,16 +184,18 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
     };
   }, [active]);
 
+  // Called from the tap (the request stays inside the user gesture); the state follows the browser's events.
   const toggleFullscreen = useCallback(async () => {
-    if (fullscreenElement()) await exitFs();
-    else if (root.current) await requestFs(root.current);
-    setFullscreen(!!fullscreenElement());
+    const sync = () => setFullscreen(!!fullscreenElement());
+    if (fullscreenElement()) exitFullscreen();
+    else if (root.current) enterFullscreen(root.current, { onEntered: sync, onFallback: (reason) => onFallbackRef.current?.(reason) });
+    sync();
   }, [root]);
 
   const exit = useCallback(() => {
     if (closing.current) return;
     closing.current = true;
-    void exitFs();
+    exitFullscreen();
     try {
       if ((window.history.state as Record<string, unknown> | null)?.[HISTORY_KEY] === token.current) window.history.back();
     } catch {

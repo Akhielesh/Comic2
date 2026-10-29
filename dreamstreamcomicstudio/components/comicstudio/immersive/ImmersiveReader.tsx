@@ -56,6 +56,7 @@ import { ReaderHud } from './ReaderHud';
 import { ReaderSettingsSheet } from './ReaderSettingsSheet';
 import { ReaderShortcuts } from './ReaderShortcuts';
 import { readerEntryOnTop, useImmersive } from './useImmersive';
+import { IOS_FULLSCREEN_NOTE, markIosFullscreenNoteSeen, shouldShowIosFullscreenNote } from '../../../services/fullscreen';
 import { useLowPower } from './useLowPower';
 import { WebtoonStage, type WebtoonStageHandle } from './WebtoonStage';
 
@@ -348,7 +349,14 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     return averagePalette(ps);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eff.ambient, low.lowPower, views, view, items, pageImageCache.snapshot()]);
-  const immersive = useImmersive(rootRef, { active: true, onExit: exit, themeColor: themeColorFor(palette) });
+  // iPhone browsers have no element full screen: the reading room fills the viewport, and says once, honestly, what
+  // does go edge-to-edge (the mobile-reading hotfix's note, shown as this reader's own toast).
+  const onFullscreenFallback = useCallback(() => {
+    if (!shouldShowIosFullscreenNote()) return;
+    markIosFullscreenNoteSeen();
+    setToast((prev) => (prev ? `${prev} ${IOS_FULLSCREEN_NOTE}` : IOS_FULLSCREEN_NOTE));
+  }, []);
+  const immersive = useImmersive(rootRef, { active: true, onExit: exit, themeColor: themeColorFor(palette), onFullscreenFallback });
 
   // Focus: the dialog takes focus and gives it back on close; Tab stays inside.
   useEffect(() => {

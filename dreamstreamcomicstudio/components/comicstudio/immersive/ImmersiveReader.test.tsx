@@ -11,6 +11,7 @@ import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOp
 import { ExportError } from '../export/errors';
 import { pageImageCache } from './pageImageCache';
 import { LANG_KEY } from './readerPrefs';
+import { IOS_FULLSCREEN_NOTE, resetIosFullscreenNoteForTests } from '../../../services/fullscreen';
 import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 
 const pdfMock = vi.hoisted(() => ({ exportComicPdf: vi.fn() }));
@@ -422,5 +423,32 @@ describe('ImmersiveReader', () => {
   it('nothing drawn yet: an honest empty state', () => {
     render(<ImmersiveReader doc={makeSampleDoc((d) => d.pages.forEach((p) => (p.render = { status: 'none', history: [] })))} urlFor={fakeUrlFor} intro onExit={() => undefined} />);
     expect(screen.getByText('Nothing to read yet')).toBeInTheDocument();
+  });
+});
+
+// Mobile-reading hotfix: iPhone browsers have no element full screen. The reading room fills the viewport anyway
+// (the overlay is the fallback) and says once, honestly, what does go edge-to-edge — never on other phones.
+describe('ImmersiveReader on iPhone', () => {
+  const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/156.0 Mobile/15E148 Safari/604.1';
+  const realUA = window.navigator.userAgent;
+  beforeEach(() => resetIosFullscreenNoteForTests());
+  afterEach(() => {
+    Object.defineProperty(window.navigator, 'userAgent', { value: realUA, configurable: true });
+    resetIosFullscreenNoteForTests();
+  });
+
+  it('no Fullscreen API: the one-time note, exact copy, then never again', () => {
+    Object.defineProperty(window.navigator, 'userAgent', { value: IPHONE_UA, configurable: true });
+    const first = render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={vi.fn()} />);
+    expect(screen.getByText(IOS_FULLSCREEN_NOTE)).toBeInTheDocument();
+    expect(IOS_FULLSCREEN_NOTE).toBe('iPhone browsers keep their toolbars. Share → Add to Home Screen opens comics edge-to-edge.');
+    first.unmount();
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={vi.fn()} />);
+    expect(screen.queryByText(/keep their toolbars/)).toBeNull();
+  });
+
+  it('not on other phones', () => {
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={vi.fn()} />);
+    expect(screen.queryByText(/keep their toolbars/)).toBeNull();
   });
 });
