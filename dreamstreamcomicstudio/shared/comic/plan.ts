@@ -25,8 +25,12 @@ import {
   type RenderState,
   type ShotType
 } from './doc.js';
+import { needMeter, type FitState, type NeedMeter } from './density.js';
+import { letteringAspect } from './lettering/layout.js';
 import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type SpendEstimate } from './models.js';
+import { checkPagePlan, heldBackOf, splitHeldBack } from './pagePlanCheck.js';
 import { panelBoxesFor } from './pageGeometry.js';
+import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
 import { safetyStatusOf, type ContentRating, type SafetyStatus } from './safety.js';
 
 const isBusy = (r?: RenderState) => !!r && (r.status === 'queued' || r.status === 'rendering');
@@ -67,7 +71,14 @@ export function coverNeedsDraw(doc: ComicDoc): boolean {
   return !!r.specHash && r.specHash !== coverSpecHash(doc);
 }
 
-export interface RenderQuote extends SpendEstimate { pageIds: string[]; sheetIds: string[]; cover: boolean; nothing: boolean }
+export interface RenderQuote extends SpendEstimate {
+  pageIds: string[];
+  sheetIds: string[];
+  cover: boolean;
+  nothing: boolean;
+  /** With `holdBack`: overfull pages left out of the run and this quote (PD-1), when any. */
+  heldBackIds?: string[];
+}
 
 /**
  * Quote a render_pages action exactly as the server's gate would (same targets, same registry
@@ -76,9 +87,28 @@ export interface RenderQuote extends SpendEstimate { pageIds: string[]; sheetIds
  */
 export function quoteRenderPages(
   doc: ComicDoc,
-  opts: { pageIds?: string[]; force?: boolean; includeCover?: boolean; byok: boolean; tier: QualityTier; modelOverride?: string }
+  opts: {
+    pageIds?: string[];
+    force?: boolean;
+    includeCover?: boolean;
+    byok: boolean;
+    tier: QualityTier;
+    modelOverride?: string;
+    /** Leave overfull pages out of the run and the quote (the render gate's rule), except `drawOverfull`.
+     *  `meter` reuses a caller's need meter (same doc) so a summary measures each line once. */
+    holdBack?: { drawOverfull?: readonly string[]; meter?: NeedMeter };
+  }
 ): RenderQuote {
-  const pages = pageTargets(doc, opts);
+  let pages = pageTargets(doc, opts);
+  let heldBackIds: string[] | undefined;
+  if (opts.holdBack) {
+    const split = splitHeldBack(doc, pages.map((p) => p.id), opts.holdBack.drawOverfull ?? [], { meter: opts.holdBack.meter, fixLayout: false });
+    if (split.heldBack.length) {
+      const keep = new Set(split.draw);
+      pages = pages.filter((p) => keep.has(p.id));
+      heldBackIds = split.heldBack.map((h) => h.pageId);
+    }
+  }
   const sheets = missingSheetsFor(doc, pages);
   const cover = !!opts.includeCover && (opts.force ? !isBusy(doc.cover.render) : coverNeedsDraw(doc));
   const est = estimateJobs(
@@ -90,7 +120,14 @@ export function quoteRenderPages(
     opts.tier,
     { override: opts.modelOverride, byok: opts.byok }
   );
-  return { ...est, pageIds: pages.map((p) => p.id), sheetIds: sheets.map((c) => c.id), cover, nothing: !pages.length && !sheets.length && !cover };
+  return {
+    ...est,
+    pageIds: pages.map((p) => p.id),
+    sheetIds: sheets.map((c) => c.id),
+    cover,
+    nothing: !pages.length && !sheets.length && !cover,
+    ...(heldBackIds ? { heldBackIds } : {})
+  };
 }
 
 /** Registry price of ONE image of a kind for this doc right now (tier + model override; QC included for pages/edits). */
@@ -126,7 +163,31 @@ export function spendByTarget(doc: ComicDoc): Map<string, TargetSpend> {
   return out;
 }
 
-export interface PanelSummary { n: number; box: Box; shot: ShotType; size: PanelSize; castIds: string[]; speech: number; captions: number; sfx: number; words: number }
+export interface PanelSummary {
+  /** `box`: for a page "Render all" would draw (undrawn, failed or stale), its blueprint — the plan as it will be
+   *  drawn, the boxes the hold-back is decided on; for a drawn, current (or busy) page, its measured panels. */
+  n: number; box: Box; shot: ShotType; size: PanelSize; castIds: string[]; speech: number; captions: number; sfx: number; words: number;
+  /** How much of the panel its lettering covers (density.ts need ÷ area, on `box`), its state and what it holds
+   *  (in BookSummary.budgetUnit: words, or characters for Japanese and Chinese). Same boxes as the page's planFit. */
+  fit?: number;
+  fitState?: FitState;
+  budget?: number;
+}
+
+/** The page-plan check for a page (shared/comic/pagePlanCheck.ts): the worst panel's state, and whether
+ *  "Render all" holds the page back (overfull and not in `drawOverfull`). */
+export interface PagePlanFit {
+  state: FitState;
+  worst: number;
+  /** 1-based panel with the worst fit. */
+  panel?: number;
+  /** Left out of "Render all" and its quote until fixed or "Draw anyway" (PD-1). */
+  heldBack?: boolean;
+  /** "Page 2 is held back: …" with the free fixes. */
+  text?: string;
+  /** The blueprint that fits, when one exists (the first free fix). */
+  layoutFix?: string;
+}
 export interface PageSummary {
   id: string; n: number; summary: string; turnHook?: string; chapterTitle?: string;
   panels: PanelSummary[]; castIds: string[]; missingRefCastIds: string[];
@@ -139,6 +200,8 @@ export interface PageSummary {
   model?: string;
   /** Price of a forced new take of a drawn page (render_pages force, missing sheets included), for "New take · ≈$X". */
   redrawUsd?: number;
+  /** Plan fit (pages with panels): per-page state and the hold-back verdict for pages "Render all" would draw. */
+  planFit?: PagePlanFit;
 }
 export interface BookSummary {
   pages: PageSummary[];
@@ -149,9 +212,20 @@ export interface BookSummary {
     model?: string;
     safety?: SafetyStatus;
   };
-  totals: { pages: number; panels: number; lines: number; drawn: number; stale: number; spentUsd: number; savedUsd: number; toDrawUsd: number };
+  totals: {
+    pages: number; panels: number; lines: number; drawn: number; stale: number; spentUsd: number; savedUsd: number;
+    /** "Render all" right now: held-back (overfull) pages excluded unless in `drawOverfull`. */
+    toDrawUsd: number;
+    /** Pages "Render all" holds back (overfull), when any. */
+    heldBack?: number;
+  };
   /** What the next drawing runs on (registry facts, no guesses). */
   pricing?: { model: string; pageUsd: number; coverUsd: number; tier: QualityTier; byok: boolean; locked: boolean };
+  /** "6 pages · 19 panels. Want more moments? Add a page." — the page count stays the user's choice; the UI
+   *  formats `addPageUsd` (usage words for governed users). */
+  moments?: { pages: number; panels: number; addPageUsd: number; line: string };
+  /** What PanelSummary.budget counts: words, or characters for Japanese and Chinese (the book's language). */
+  budgetUnit?: 'words' | 'chars';
 }
 
 const statusOf = (r: RenderState, stale: boolean): PageSummary['status'] => {
@@ -173,7 +247,45 @@ const statusOf = (r: RenderState, stale: boolean): PageSummary['status'] => {
 const words = (t: string) => (t.trim() ? t.trim().split(/\s+/).length : 0);
 const modelNickname = (id?: string) => (id ? getImageModel(id)?.nickname : undefined);
 
-export function summarizeBook(doc: ComicDoc, opts: { pageIds?: string[]; byok: boolean; tier?: QualityTier; rating?: ContentRating }): BookSummary {
+/**
+ * Cast on a page who will be drawn without a reference: lead/support without a ready sheet or a photo, and —
+ * now that page renders attach any on-page being's ready sheet (presence-based references) — recurring extras
+ * (on ≥ 2 pages and in ≥ 3 panels of the book) without one either. One-off walk-ons stay text-only by design.
+ */
+export function missingRefCastIdsFor(doc: ComicDoc, castIds: string[], recurring: ReadonlySet<string> = recurringCastIds(doc)): string[] {
+  const on = new Set(castIds);
+  return doc.cast
+    .filter((c) => on.has(c.id) && c.sheet.status !== 'ready' && !c.refs.length && (c.tier !== 'extra' || recurring.has(c.id)))
+    .map((c) => c.id);
+}
+
+/** Beings on at least RECURRING.minPages pages and in at least RECURRING.minPanels panels of the book. */
+export function recurringCastIds(doc: Pick<ComicDoc, 'pages'>): Set<string> {
+  const seen = new Map<string, { panels: number; pages: Set<string> }>();
+  for (const page of doc.pages) {
+    for (const panel of page.panels) {
+      for (const id of new Set(panel.castIds)) {
+        const s = seen.get(id) ?? { panels: 0, pages: new Set<string>() };
+        s.panels += 1;
+        s.pages.add(page.id);
+        seen.set(id, s);
+      }
+    }
+  }
+  return new Set([...seen].filter(([, s]) => s.panels >= RECURRING.minPanels && s.pages.size >= RECURRING.minPages).map(([id]) => id));
+}
+
+export function summarizeBook(
+  doc: ComicDoc,
+  opts: {
+    pageIds?: string[];
+    byok: boolean;
+    tier?: QualityTier;
+    rating?: ContentRating;
+    /** Overfull pages the user chose to draw anyway (render_pages.drawOverfull): not held back. */
+    drawOverfull?: readonly string[];
+  }
+): BookSummary {
   const tier = opts.tier ?? doc.settings.quality;
   const override = doc.settings.imageModelOverride;
   const page1 = unitPrice(doc, 'page', { byok: opts.byok, tier, modelOverride: override });
@@ -181,32 +293,57 @@ export function summarizeBook(doc: ComicDoc, opts: { pageIds?: string[]; byok: b
   const ids = Array.isArray(opts.pageIds) && opts.pageIds.length ? new Set(opts.pageIds) : null;
   const drawable = new Set(pageTargets(doc).map((p) => p.id));
   const ledger = spendByTarget(doc);
+  const anyway = new Set(opts.drawOverfull ?? []);
+  const meter = needMeter(doc, { aspect: letteringAspect(doc, null) });
+  const recurring = recurringCastIds(doc);
   const pages: PageSummary[] = [...doc.pages]
     .sort((a, b) => a.n - b.n)
     .filter((p) => (ids ? ids.has(p.id) : true))
     .map((p) => {
-      const boxes = panelBoxesFor(doc, p);
       const castIds = [...new Set(p.panels.flatMap((panel) => panel.castIds))];
       const asset = p.render.asset;
+      // One plan check per page, on one set of boxes, feeds the per-panel dots AND the page verdict, so they never
+      // disagree: a page "Render all" would draw (undrawn, failed or stale) is checked on its blueprint — the plan
+      // as it will be drawn, the gate's boxes — even when an older take left measured boxes; a drawn, current (or
+      // busy) page on the panels it was drawn with, and is never held back.
+      const about = drawable.has(p.id);
+      const check = p.panels.length
+        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: panelBoxesFor(doc, p), fixLayout: false })
+        : undefined;
       const summary: PageSummary = {
         id: p.id,
         n: p.n,
         summary: p.summary,
-        panels: p.panels.map((panel, i) => ({
-          n: panel.n,
-          box: boxes[i] ?? { x: 0, y: 0, w: 1, h: 1 },
-          shot: panel.shot,
-          size: panel.size,
-          castIds: panel.castIds,
-          speech: panel.lines.filter((l) => l.kind !== 'caption' && l.kind !== 'sfx').length,
-          captions: panel.lines.filter((l) => l.kind === 'caption').length,
-          sfx: panel.lines.filter((l) => l.kind === 'sfx').length,
-          words: panel.lines.reduce((n, l) => n + words(l.text), 0)
-        })),
+        panels: p.panels.map((panel, i) => {
+          const fit = check?.panels[i];
+          return {
+            n: panel.n,
+            box: fit?.box ?? { x: 0, y: 0, w: 1, h: 1 },
+            shot: panel.shot,
+            size: panel.size,
+            castIds: panel.castIds,
+            speech: panel.lines.filter((l) => l.kind !== 'caption' && l.kind !== 'sfx').length,
+            captions: panel.lines.filter((l) => l.kind === 'caption').length,
+            sfx: panel.lines.filter((l) => l.kind === 'sfx').length,
+            words: panel.lines.reduce((n, l) => n + words(l.text), 0),
+            ...(fit ? { fit: fit.fit, fitState: fit.state, budget: fit.budget } : {})
+          };
+        }),
         castIds,
-        missingRefCastIds: doc.cast.filter((c) => castIds.includes(c.id) && c.tier !== 'extra' && c.sheet.status !== 'ready' && !c.refs.length).map((c) => c.id),
+        missingRefCastIds: missingRefCastIdsFor(doc, castIds, recurring),
         status: statusOf(p.render, isPageStale(doc, p))
       };
+      if (check) {
+        // About to be drawn: the hold-back follows the gate's rule (PD-1). Drawn and current: nothing is held back.
+        const back = about && PLAN_POLICY.holdBackOverfull && check.state === 'overfull' && !anyway.has(p.id) ? heldBackOf(check) : undefined;
+        summary.planFit = {
+          state: check.state,
+          worst: check.worst,
+          ...(check.worstPanel !== undefined ? { panel: check.worstPanel } : {}),
+          ...(back ? { heldBack: true, text: back.text } : {}),
+          ...(about && check.layoutFix ? { layoutFix: check.layoutFix.layout } : {})
+        };
+      }
       if (p.turnHook) summary.turnHook = p.turnHook;
       if (p.chapterTitle) summary.chapterTitle = p.chapterTitle;
       if (asset) {
@@ -252,8 +389,31 @@ export function summarizeBook(doc: ComicDoc, opts: { pageIds?: string[]; byok: b
       stale: all.filter((p) => isPageStale(doc, p)).length,
       spentUsd: doc.spend.totalUsd,
       savedUsd: doc.spend.savedUsd ?? 0,
-      toDrawUsd: quoteRenderPages(doc, { byok: opts.byok, tier, modelOverride: override }).usd
+      ...renderAllTotals(doc, { byok: opts.byok, tier, modelOverride: override, drawOverfull: [...anyway], meter })
     },
-    pricing: { model: page1.model, pageUsd: page1.usd, coverUsd: cover1.usd, tier, byok: opts.byok, locked: !!override }
+    pricing: { model: page1.model, pageUsd: page1.usd, coverUsd: cover1.usd, tier, byok: opts.byok, locked: !!override },
+    moments: momentsLine(doc, page1.usd),
+    budgetUnit: textUnitFor(doc.format.language).unit
   };
 }
+
+/** "Render all" for the totals: held-back pages excluded (and counted) unless the user chose to draw them anyway. */
+const renderAllTotals = (
+  doc: ComicDoc,
+  o: { byok: boolean; tier: QualityTier; modelOverride?: string; drawOverfull: string[]; meter: NeedMeter }
+): { toDrawUsd: number; heldBack?: number } => {
+  const q = quoteRenderPages(doc, { byok: o.byok, tier: o.tier, modelOverride: o.modelOverride, holdBack: { drawOverfull: o.drawOverfull, meter: o.meter } });
+  return { toDrawUsd: q.usd, ...(q.heldBackIds?.length ? { heldBack: q.heldBackIds.length } : {}) };
+};
+
+/** "6 pages · 19 panels. Want more moments? Add a page." (price-free text; the UI formats addPageUsd). */
+const momentsLine = (doc: ComicDoc, pageUsd: number): BookSummary['moments'] => {
+  const pages = doc.pages.length;
+  const panels = doc.pages.reduce((n, p) => n + p.panels.length, 0);
+  return {
+    pages,
+    panels,
+    addPageUsd: pageUsd,
+    line: `${pages} page${pages === 1 ? '' : 's'} · ${panels} panel${panels === 1 ? '' : 's'}. Want more moments? Add a page.`
+  };
+};
