@@ -1442,26 +1442,39 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             `Only the user can change ${loosened.join(', ')} (it raises what can be spent). Tell them to tap the quality chip under the message box or open Settings — one tap — and do not retry this call.`
           );
         }
-        // Model lock (decisions-final, owner 2026-10-22 evening; models.md §3.4 #6): once the comic has
-        // its first comic image (a sheet, place, page or cover — style swatches never lock), the director
-        // never changes the quality tier: on a locked comic it only changes the resolution of new pages
-        // (light confirm, §3.6 E); before the model is known it could change the model too. No director
-        // tool can change the image model.
-        if (patch.quality && patch.quality !== current.quality && hasLockedImage(doc())) {
+        // Model lock (decisions-final, owner 2026-10-22 evening; models.md §3.4 #6): no director tool can
+        // change the image model. Once the comic has its first comic image (a sheet, place, page or cover —
+        // style swatches never lock), the director never changes the quality tier: on a locked comic it only
+        // changes the resolution of new pages (light confirm, §3.6 E). Before the lock, a lower tier is allowed
+        // only when it keeps the same model (resolution only) — a tier that picks another model (Pro → Standard
+        // while Pro is Nano Banana Pro) would change the model the comic locks to.
+        if (patch.quality && patch.quality !== current.quality) {
           const lock = deriveLock(doc());
-          const locked = lock ? getImageModel(lock.modelId) : undefined;
           if (lock) {
-            const name = locked?.nickname ?? lock.modelId;
+            const name = getImageModel(lock.modelId)?.nickname ?? lock.modelId;
             const res = resolveImageJob('page', patch.quality, current.imageModelOverride, lock).resolution;
             throw argError(
               `Locked comic: resolution changes are the user's call. Offer the quality chip. The comic stays on ${name} (locked so every page matches); ${patch.quality} would only draw new pages at ${res}, and the user confirms that in the quality chip. No tool can change the image model — for another model, use model_options and offer the picker chip. Do not retry this call.`
             );
           }
-          const from = resolveImageJob('page', current.quality, current.imageModelOverride).spec.nickname;
-          const to = resolveImageJob('page', patch.quality, current.imageModelOverride).spec.nickname;
-          throw argError(
-            `Locked comic: its images are drawn on ${from}${from !== to ? ` and ${patch.quality} would switch to ${to}` : ` at ${current.quality} quality`}, which can change how the characters look. Quality changes are the user's call — tell them to tap the quality chip (it shows the consistency warning and the real redraw cost). Do not retry this call.`
-          );
+          const tierModels = (tier: typeof current.quality) =>
+            (['page', 'cover', 'sheet'] as const).map((kind) => resolveImageJob(kind, tier, current.imageModelOverride).spec);
+          const before = tierModels(current.quality);
+          const after = tierModels(patch.quality);
+          const changed = after.findIndex((spec, i) => spec.id !== before[i].id);
+          if (hasLockedImage(doc())) {
+            // A drawn comic image whose model is unknown: its model is fixed even though no lock names it.
+            const from = before[0].nickname;
+            const to = after[0].nickname;
+            throw argError(
+              `Locked comic: its images are drawn on ${from}${from !== to ? ` and ${patch.quality} would switch to ${to}` : ` at ${current.quality} quality`}, which can change how the characters look. Quality changes are the user's call — tell them to tap the quality chip (it shows the consistency warning and the real redraw cost). Do not retry this call.`
+            );
+          }
+          if (changed >= 0) {
+            throw argError(
+              `${patch.quality} would switch the image model from ${before[changed].nickname} to ${after[changed].nickname}, which can change how the characters look. The image model is the user's call (it locks at the first comic image) — tell them to tap the quality chip; it shows the model and asks first. No tool can change the image model. Do not retry this call.`
+            );
+          }
         }
         commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }], 'Money settings');
         const s = doc().settings;

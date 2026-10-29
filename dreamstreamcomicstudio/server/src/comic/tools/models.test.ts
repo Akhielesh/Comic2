@@ -142,6 +142,26 @@ describe('set_settings on a locked comic (models.md §3.4 #6)', () => {
     expect(ctx.session.doc.settings.quality).toBe('draft');
   });
 
+  it('before the lock, a lower tier that would pick another model is refused (Pro → Standard), swatches or not', async () => {
+    for (const swatches of [false, true]) {
+      const doc = plannedDoc();
+      doc.settings = { ...doc.settings, quality: 'pro' };
+      if (swatches) {
+        doc.style.options = [
+          { id: 'so_1', name: 'Ink', spec: 'Bold ink', render: { ...emptyRender(), status: 'ready', asset: { path: 'u/s1.webp', source: 'generated', at: 1, model: 'nano-banana-2.1' } } }
+        ];
+      }
+      setup(doc);
+      expect(await call('set_settings', { quality: 'standard' })).toMatch(
+        /^Error: standard would switch the image model from Nano Banana Pro to Nano Banana 2\.1, which can change how the characters look\. The image model is the user's call .*No tool can change the image model\./
+      );
+      expect(ctx.session.doc.settings.quality).toBe('pro');
+      expect(ops.filter((o) => o.op === 'settings')).toEqual([]);
+      // Other tightening still works.
+      expect(await call('set_settings', { budgetUsd: 3 })).toContain('budget $3.00');
+    }
+  });
+
   it('never takes a model argument: the schema has no model field and an extra one changes nothing', async () => {
     const doc = makeLakeComic();
     setup(doc);
@@ -412,7 +432,7 @@ describe('suggest_model: chips, never a change', () => {
     const fresh = plannedDoc();
     fresh.settings = { ...fresh.settings, quality: 'pro' };
     setup(fresh, 'cheaper');
-    expect(await call('suggest_model', { tier: 'draft' })).toMatch(/^Error: Draft would draw on Nano Banana 2\.1, not Nano Banana Pro\. Nothing is drawn yet, so set_settings can lower the tier directly\.$/);
+    expect(await call('suggest_model', { tier: 'draft' })).toMatch(/^Error: Draft would draw on Nano Banana 2\.1, not Nano Banana Pro: that changes the image model, which is the user's call/);
     expect(ops).toEqual([]);
   });
 });

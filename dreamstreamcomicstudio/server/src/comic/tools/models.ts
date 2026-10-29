@@ -1156,7 +1156,7 @@ function suggestModelTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool 
         }
         const job = resolveImageJob('page', tier, doc.settings.imageModelOverride, deriveLock(doc));
         if (job.spec.id !== cur.spec.id) {
-          throw toolArgError(`${TIER_PRESETS[tier].label} would draw on ${job.spec.nickname}, not ${cur.name}. Nothing is drawn yet, so set_settings can lower the tier directly.`);
+          throw toolArgError(`${TIER_PRESETS[tier].label} would draw on ${job.spec.nickname}, not ${cur.name}: that changes the image model, which is the user's call (the quality chip shows it and asks first). Offer the picker instead.`);
         }
         steps.push({ label: `Use ${TIER_PRESETS[tier].label} for new pages`, action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: tier } }] }, usd: 0 });
         said.push(`Offered “Use ${TIER_PRESETS[tier].label} for new pages”: one tap draws new pages with ${cur.name} at ${job.resolution}; drawn pages keep theirs.`);
